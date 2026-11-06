@@ -2989,18 +2989,9 @@ def _main() -> "Report | None":
     config_dir_problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
     if config_dir_problem is not None:
         print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
-        # #1653: under --json this path used to leave stdout EMPTY, so a
-        # `validate-config --json | jq` consumer got a parse error instead of
-        # a report. It now emits the same document shape as every other run —
-        # a list of rows — holding one caller-error row, and still exits 2.
-        # ⚠️ Routed through json_document, not hand-built, so the row carries
-        # exactly the entry keys the documented contract allows
-        # (docs/cli-reference.md, `#### validate-config`).
-        if args.json:
-            return Report(json_document([_make_result(
-                "config_dir", FAIL,
-                [config_dir_problem.message],
-                caller_error=True)]), EXIT_CALLER_ERROR)
+        # #3617: no row ran, so there is no answer: stdout stays empty under
+        # --json (#1653 had made it a one-row document; that row only
+        # restated this line).
         sys.exit(EXIT_CALLER_ERROR)
 
     # ADR-036 step 4 (#2906): no usable `da-guard parse-tree` — no row can
@@ -3010,8 +3001,10 @@ def _main() -> "Report | None":
     except ParseTreeError as exc:
         row = _parse_tree_failure_row("config_dir", exc, _PARSE_TREE_HINT)
         print(f"ERROR: {safe_label(' '.join(row['details']))}", file=sys.stderr)
-        if args.json:
-            return Report(json_document([row]), EXIT_CALLER_ERROR)
+        # #3617: the advice the row carried (rebuild da-guard, do not edit the
+        # tree, …) — no document carries it now.
+        if row["hint"]:
+            print(f"  hint: {safe_label(row['hint'])}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Ensure tools dir is in sys.path for imports
@@ -3132,17 +3125,19 @@ def _main() -> "Report | None":
     #   unreadable=T caller=T  reads_config_dir=T    → 1  ← downgraded, and
     #     this is the case the downgrade exists for
     input_unreadable = bool(_unusable_files(results))
-    caller_error = any(
-        r["status"] == FAIL and r.get("caller_error")
+    unanswered = [
+        r["check"] for r in results
+        if r["status"] == FAIL and r.get("caller_error")
         and not (input_unreadable and r.get("reads_config_dir", True))
-        for r in results
-    )
-    status = (EXIT_CALLER_ERROR if caller_error
+    ]
+    status = (EXIT_CALLER_ERROR if unanswered
               else EXIT_VIOLATION if has_fail else EXIT_OK)
 
-    # Report
+    # Report. #3617: rc 2 here is a partial answer — every row, the rows the
+    # caller's environment kept from answering named.
     if args.json:
-        return Report(json_document(results), status)  # #3216: run() encodes it
+        return Report(json_document(results), status,  # #3216: run() encodes it
+                      unanswered=unanswered if status == EXIT_CALLER_ERROR else None)
     print_report(results)
     sys.exit(status)
 

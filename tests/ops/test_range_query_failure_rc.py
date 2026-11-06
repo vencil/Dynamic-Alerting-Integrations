@@ -210,14 +210,13 @@ def test_good_matrix_is_rc0(tool, tmp_path):
 @pytest.mark.parametrize("shape", sorted(_SHAPES))
 @pytest.mark.parametrize("tool", ["alert_quality", "cardinality_forecasting"])
 def test_malformed_success_is_a_named_caller_error(tool, shape):
-    """alert_quality / cardinality_forecasting: one caller_error envelope,
-    reason ``prometheus_query_error``, rc 2, the defect named."""
+    """alert_quality / cardinality_forecasting: rc 2, the defect named on
+    stderr. #3617: an rc-2 early exit prints no document under ``--json``
+    (it used to be a caller_error envelope, reason ``prometheus_query_error``)."""
     with _fake(_SHAPES[shape](_GOOD_ROW[tool])) as url:
         proc = _run(tool, *_argv(tool, url))
     assert proc.returncode == 2, (shape, proc.returncode, proc.stdout, proc.stderr)
-    doc = json.loads(proc.stdout)
-    assert (doc["status"], doc["reason"]) == ("caller_error", "prometheus_query_error"), doc
-    assert "malformed Prometheus response" in doc["error"], doc
+    assert proc.stdout == "", proc.stdout
     assert "Traceback" not in proc.stderr, proc.stderr
     assert "malformed Prometheus response" in proc.stderr, proc.stderr
 
@@ -302,15 +301,18 @@ def test_cardinality_drops_and_discloses_non_finite(value):
 
 
 def test_cardinality_all_non_finite_is_no_data_and_says_how_many():
+    """#3617: the no-data exit is rc 2 with stdout empty under ``--json`` (it
+    used to be a ``no_data`` envelope carrying the dropped-sample count); the
+    cause — and how many samples were dropped (#3213) — is on stderr."""
     row = {"metric": {"tenant": "tenant-one"},
            "values": [[_NOW - d * 86400, "NaN"] for d in range(5, 0, -1)]}
     body = {"status": "success", "data": {"resultType": "matrix", "result": [row]}}
     with _fake(body) as url:
         proc = _run("cardinality_forecasting", *_argv("cardinality_forecasting", url))
     assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
-    doc = json.loads(proc.stdout)
-    assert (doc["status"], doc["reason"]) == ("no_data", "no_cardinality_data"), doc
-    assert doc["summary"]["non_finite_samples_dropped"] == 5, doc["summary"]
+    assert proc.stdout == "", proc.stdout
+    assert "No cardinality data retrieved" in proc.stderr, proc.stderr
+    assert "(5 non-finite sample(s) dropped)" in proc.stderr, proc.stderr
     assert "Traceback" not in proc.stderr
 
 
@@ -334,8 +336,8 @@ def _two_tenants(a_values, b_values):
 
 
 def test_cardinality_disclosure_counts_only_the_tenant_asked_for():
-    """--tenant a: only a's dropped samples, in the report and in the
-    no_data envelope alike."""
+    """--tenant a: only a's dropped samples in the report. #3617: the no-data
+    exit prints no document (stdout empty, the cause on stderr)."""
     good = [[_NOW - d * 86400, "10"] for d in range(10, 0, -1)]
     mixed = _two_tenants(good[:-2] + [[_NOW - 7200, "NaN"], [_NOW - 3600, "NaN"]],
                          good[:-1] + [[_NOW - 3600, "+Inf"]])
@@ -349,9 +351,9 @@ def test_cardinality_disclosure_counts_only_the_tenant_asked_for():
     with _fake(all_nan) as url:
         proc = _run("cardinality_forecasting", *_argv("cardinality_forecasting", url),
                     "--tenant", "a")
-    doc = json.loads(proc.stdout)
-    assert (proc.returncode, doc["reason"]) == (2, "no_cardinality_data"), doc
-    assert doc["summary"]["non_finite_samples_dropped"] == 3, doc["summary"]
+    assert (proc.returncode, proc.stdout) == (2, ""), proc.stdout
+    assert "No cardinality data retrieved" in proc.stderr, proc.stderr
+    assert "(3 non-finite sample(s) dropped)" in proc.stderr, proc.stderr  # a's only
 
 
 @pytest.mark.parametrize("tool", ["alert_quality", "cardinality_forecasting"])

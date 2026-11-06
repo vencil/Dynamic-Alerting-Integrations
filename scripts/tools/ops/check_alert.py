@@ -33,7 +33,7 @@ from _lib_python import add_prometheus_arg  # noqa: E402
 # #3133: the alerts are read by the lib; an answer that is not one raises
 # QueryError (rc 2) — never "inactive".
 from _lib_prometheus import QueryError, prometheus_alerts  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import CallerError, Report  # noqa: E402
 
 
 def check_alert(alert_name, tenant, prom_url) -> Report:
@@ -41,9 +41,10 @@ def check_alert(alert_name, tenant, prom_url) -> Report:
     try:
         alerts = prometheus_alerts(prom_url)
     except QueryError as err:
-        # #452: cannot reach Prometheus = caller/env error
-        return Report({"error": f"Cannot read Prometheus alerts ({prom_url}): {err}"},
-                      EXIT_CALLER_ERROR)
+        # #452: cannot reach Prometheus = caller/env error. #3617: stderr
+        # only — it was a {"error": …} document on stdout.
+        raise CallerError(f"cannot read Prometheus alerts ({prom_url}): {err}",
+                          "prometheus_unreadable") from err
 
     # 過濾出符合 Alert Name 且包含特定 Tenant 標籤的警報
     matched_alerts = []

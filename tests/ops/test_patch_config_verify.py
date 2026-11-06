@@ -473,9 +473,10 @@ class TestAfterTheWriteAborts:
     def test_v4_failed_patch_that_did_not_land_is_2(self, capsys):
         c = FakeCluster(_multi(), fail_patch={0})
         code = _run(c, "--json", "t-a", "mysql_connections", "65")
-        doc = json.loads(capsys.readouterr().out)
-        assert (code, doc["status"], doc["reason"]) == (
-            2, "caller_error", "kubectl_failed")
+        out = capsys.readouterr()
+        # #3617: a caller error prints no document; stderr names the cause.
+        assert (code, out.out) == (2, "")
+        assert "ERROR: KubectlError: patch refused" in out.err, out.err
         assert c.data["t-a.yaml"] == T_A and len(c.patches) == 1
 
     def test_v4_failed_patch_and_unreadable_configmap_is_state_unknown(self, capsys):
@@ -508,10 +509,14 @@ class TestRollbackAndEnvelopeEdges:
         assert "65" in c.data["t-a.yaml"]  # it really is still written
 
     def test_x5_caller_error_envelope_says_nothing_written(self, capsys):
+        """#3617: a caller error prints no document (it was an envelope with
+        `written: false`); rc 2 and the ConfigMap say nothing was written."""
         c = FakeCluster(_multi(), fail_patch={0})
         assert _run(c, "--json", "t-a", "mysql_connections", "65") == 2
-        doc = json.loads(capsys.readouterr().out)
-        assert (doc["status"], doc["written"]) == ("caller_error", False)
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert "ERROR: KubectlError: patch refused" in out.err, out.err
+        assert c.data["t-a.yaml"] == T_A
 
     def test_x6_failed_patch_leaving_neither_version_is_7(self, capsys):
         c = FakeCluster(_multi())
@@ -814,7 +819,9 @@ class TestRound6Pins:
                 mock.patch("patch_config._conclude", side_effect=RuntimeError("bug")):
             code = self._main(c, "t-a", "mysql_connections", "65")
         assert code == 2 and c.patches == []
-        assert json.loads(capsys.readouterr().out)["written"] is False
+        out = capsys.readouterr()
+        assert out.out == ""  # #3617: a caller error prints no document
+        assert "ERROR: internal error before the write" in out.err, out.err
 
     @staticmethod
     def _fail_on_success(text, out=False):
@@ -881,9 +888,11 @@ class TestCompareAndSwap:
     def test_the_write_conflicts_when_the_configmap_changed_since_read(self, capsys):
         c = FakeCluster(_multi(), concurrent=lambda n, cl: n == 0 and
                         cl.other_writer("t-b.yaml", self.T_B2))
-        code, doc = self._json_run(c, capsys=capsys)
-        assert (code, doc["status"], doc["reason"], doc["written"]) == (
-            2, "caller_error", "configmap_changed", False)
+        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        out = capsys.readouterr()
+        # #3617: a caller error prints no document; stderr names the cause.
+        assert (code, out.out) == (2, "")
+        assert "ERROR: threshold-config changed since it was read; nothing was written" in out.err, out.err
         assert c.data["t-a.yaml"] == T_A and c.data["t-b.yaml"] == self.T_B2
         assert len(c.patches) == 1  # no blind retry
 
@@ -968,8 +977,10 @@ class TestCompareAndSwap:
                                         "mysql_connections", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
                 run_main()
-        doc = json.loads(capsys.readouterr().out)
-        assert (exc.value.code, doc["reason"]) == (2, "configmap_shape")
+        out = capsys.readouterr()
+        # #3617: a caller error prints no document; stderr names the cause.
+        assert (exc.value.code, out.out) == (2, "")
+        assert "ERROR: ConfigMapShapeError: threshold-config as read has no metadata.resourceVersion" in out.err, out.err
         assert c.patches == []
 
 
@@ -1088,7 +1099,13 @@ class TestRollbackAccounting:
                 code = 0
             except SystemExit as exc:
                 code = exc.code
-        doc = json.loads(capsys.readouterr().out)
+        out = capsys.readouterr()
+        if status == "caller_error":
+            # #3617: a caller error prints no document; stderr names the cause.
+            assert (code, out.out, len(c.patches)) == (rc, "", n_patches)
+            assert "the write call failed and the key holds the old bytes (it did not land)" in out.err, out.err
+            return
+        doc = json.loads(out.out)
         assert (code, doc["status"], doc["written"], doc.get("rolled_back"),
                 len(c.patches)) == (rc, status, written, rolled_back, n_patches)
 

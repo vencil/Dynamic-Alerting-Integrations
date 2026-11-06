@@ -685,19 +685,13 @@ class TestQueryErrorIsCallerError:
 
     @pytest.mark.parametrize("extra", [[], ["--ci"]], ids=["plain", "ci"])
     def test_503_json_emits_caller_error_envelope(self, extra):
+        """#3617：rc 2 提早結束不印文件——stdout 留空、查詢失敗的原因在 stderr
+        （以前是沿用正常 schema、歸零的 caller_error envelope）。"""
         with _fake_prometheus("503") as url:
             proc = _run_aq(url, "--json", *extra)
         assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
-        doc = json.loads(proc.stdout)
-        assert doc["status"] == "caller_error"
-        assert doc["reason"] == "prometheus_query_error"
-        assert "503" in doc["error"], doc
-        # 沿用正常 schema 的鍵、歸零
-        assert doc["tenants"] == []
-        assert doc["summary"]["total_alertnames"] == 0
-        assert doc["period"] == "30d"
-        happy_keys = set(aq.asdict(aq.generate_report([], "30d")))
-        assert set(doc) == happy_keys | {"status", "reason", "error"}
+        assert proc.stdout == "", proc.stdout
+        assert "query failed" in proc.stderr and "503" in proc.stderr, proc.stderr
 
     def test_firing_series_is_reported_as_before(self):
         with _fake_prometheus("firing") as url:

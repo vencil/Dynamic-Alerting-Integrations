@@ -1127,16 +1127,6 @@ def main() -> None:
               "can be resolved — nothing was tested:", file=sys.stderr)
         for line in exc.lines:
             print(safe_label(line), file=sys.stderr)
-        if args.json_output:
-            return Report({  # #3216: run() encodes it
-                "tool": "test-notification",
-                "status": "caller_error",
-                "reason": "routing_tree_refused",
-                "policy_applied": policy.applied,
-                "tenants": [],
-                "summary": {"total_receivers": 0, "passed": 0,
-                            "failed": 0, "skipped": 0},
-            }, EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
     has_failure = any(r.failed > 0 for r in reports)

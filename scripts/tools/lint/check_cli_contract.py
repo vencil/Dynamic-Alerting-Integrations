@@ -2277,11 +2277,6 @@ def main() -> "int | Report":
     for doc in CLI_REFERENCE_DOCS:
         if not doc.is_file():
             print(f"ERROR: missing {doc}", file=sys.stderr)
-            if args.json:
-                # #3216: run() encodes it
-                return Report({"findings": [], "suppressed": 0, "ignored": 0,
-                               "stats": {}, "errors": [], "fatal": [f"missing {doc}"]},
-                              EXIT_CALLER_ERROR)
             return EXIT_CALLER_ERROR
 
     result = scan()
@@ -2314,10 +2309,12 @@ def main() -> "int | Report":
     else:
         status = EXIT_OK
     if args.json:
+        # #3617: under `fatal` the apparatus did not finish — the findings it
+        # got to are the partial answer, `fatal` names what did not run.
         return Report({"findings": [f._asdict() for f in open_findings],
                        "suppressed": len(suppressed), "ignored": len(ignored),
                        "stats": stats, "errors": errors, "fatal": fatal},
-                      status)  # #3216: run() encodes it
+                      status, unanswered=[str(e) for e in fatal] or None)  # #3216
     else:
         for e in fatal:
             print(f"[FATAL] {e}", file=sys.stderr)

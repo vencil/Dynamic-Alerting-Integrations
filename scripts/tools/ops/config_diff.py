@@ -50,7 +50,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538; #3276)
 from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3276)
 import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, die_caller_error)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, partial_answer)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 import _render_diff as rd  # noqa: E402
 
@@ -1751,9 +1751,15 @@ def _run(args):
     # Spelled out, not `sys.exit(code)`: the CLI-contract lint reads which
     # codes this tool can exit with from the literal arguments.
     if args.json_output or args.format == "json":
-        return Report(report_json(report, code),  # #3216: run() encodes it
-                      EXIT_CALLER_ERROR if code == EXIT_CALLER_ERROR
-                      else EXIT_VIOLATION if code == EXIT_VIOLATION else EXIT_OK)
+        # #3617: a view not computed is named; the views computed are the
+        # partial answer (none computed: rc 2, stdout empty).
+        return partial_answer(report_json(report, code),  # #3216: run() encodes it
+                              EXIT_CALLER_ERROR if code == EXIT_CALLER_ERROR
+                              else EXIT_VIOLATION if code == EXIT_VIOLATION else EXIT_OK,
+                              unanswered=[f"{VIEW_TITLES[n]}: {safe_label(v.reason)}"
+                                          for n, v in report["views"].items()
+                                          if v.status == "not_computed"],
+                              of=len(report["views"]))
     print(render_markdown(report))
     if code == EXIT_CALLER_ERROR:
         sys.exit(EXIT_CALLER_ERROR)

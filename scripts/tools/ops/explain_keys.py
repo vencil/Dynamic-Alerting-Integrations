@@ -34,12 +34,11 @@ Exit codes (dev-rules §13, `_lib_exitcodes`):
      or a verdict that cannot be given (no root platform file was read, so
      the threshold keys are `undecidable`; ADR-038 decision 7)
 
-`--json`: stdout is exactly one JSON document on every path the tool runs
-(schema ``da-tools.explain-keys/v1``; an argument argparse refuses exits 2
-before that, as everywhere). A caller error carries ``status:
-"caller_error"`` and ``reason`` with ``tenants`` empty; undecidable threshold
-keys exit 2 with ``status: "ok"`` and the whole result, ``undecidable``
-true. The `--assert` file is refused (exit 2) when an entry has a field this
+`--json`: stdout is one JSON document (schema ``da-tools.explain-keys/v1``)
+on every path that has an answer. A caller error leaves stdout empty, the
+cause on stderr (#3617: it was ``status: "caller_error"`` and ``reason``
+with ``tenants`` empty); undecidable threshold keys are a partial answer:
+exit 2 with ``status: "ok"`` and the whole result, ``undecidable`` true. The `--assert` file is refused (exit 2) when an entry has a field this
 document does not have or a tenant lists a key twice: either would let it
 pass without comparing what it seems to.
 """
@@ -258,11 +257,6 @@ def _fail(reason: str, as_json: bool) -> "int | Report":
     print(f"ERROR: {safe_label(first)}", file=sys.stderr)
     for line in rest:
         print(f"  {safe_label(line)}", file=sys.stderr)
-    if as_json:
-        # #3216: run() encodes it
-        return Report({"schema": SCHEMA, "status": "caller_error", "reason": reason,
-                       "at": None, "undecidable": False, "tenants": {}, "findings": []},
-                      EXIT_CALLER_ERROR)
     return EXIT_CALLER_ERROR
 
 
@@ -296,9 +290,12 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
               "(ADR-038 decision 7)", file=sys.stderr)
     if args.json:
         doc["assert_differences"] = diffs
-        # #3216: run() encodes it
-        return Report(doc, EXIT_CALLER_ERROR if doc["undecidable"]
-                      else EXIT_VIOLATION if diffs else EXIT_OK)
+        # #3216: run() encodes it. #3617: undecidable keys are a partial
+        # answer — every other key's verdict, the threshold keys named.
+        if doc["undecidable"]:
+            return Report(doc, EXIT_CALLER_ERROR, unanswered=[
+                "threshold keys (no root platform file was read)"])
+        return Report(doc, EXIT_VIOLATION if diffs else EXIT_OK)
     if doc["undecidable"]:
         return EXIT_CALLER_ERROR
     return EXIT_VIOLATION if diffs else EXIT_OK

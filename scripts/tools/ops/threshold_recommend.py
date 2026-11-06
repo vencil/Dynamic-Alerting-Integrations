@@ -1689,7 +1689,10 @@ def main() -> "Report | None":
               "report is partial", file=sys.stderr)
         status = EXIT_CALLER_ERROR
     if json_report:
-        return Report(json_document(reports), status)  # #3216: run() encodes it
+        # #3617: a key not measured is named; the rest is the partial answer.
+        return Report(json_document(reports), status,  # #3216: run() encodes it
+                      unanswered=[f"{r.tenant}/{k.key}" for r in reports
+                                  for k in r.keys + r.inherited if k.query_error] or None)
     if status:
         sys.exit(status)
 

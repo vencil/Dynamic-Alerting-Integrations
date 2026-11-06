@@ -601,14 +601,13 @@ def test_e2e_json_caller_error_prints_nothing_on_stdout(conf_d, tmp_path, case):
 
 
 def test_e2e_json_other_tenant_duplicated_is_its_own_one_document(tmp_path):
-    """Q2 with --json: exit 2 and the tool's own entry
-    (`merged_hash_unavailable`) as the one document — no envelope after it."""
-    import json as _json
+    """Q2 with --json: exit 2. #3617: nothing was verified, so no document —
+    stdout empty (it used to be the tool's own entry, `error:
+    merged_hash_unavailable`); stderr names the tenant and the cause."""
     proc = _run_tool("solo", "--conf-d", str(_dup_tree(tmp_path, "zz.yaml")), "--json")
     assert proc.returncode == 2, (proc.stdout, proc.stderr)
-    doc, end = _json.JSONDecoder().raw_decode(proc.stdout)
-    assert proc.stdout[end:].strip() == ""
-    assert doc["error"] == "merged_hash_unavailable", doc
+    assert proc.stdout == "", proc.stdout
+    assert "ERROR: solo: merged_hash_unavailable" in proc.stderr, proc.stderr
 
 
 def _crash_wrapper(tmp_path, argv):

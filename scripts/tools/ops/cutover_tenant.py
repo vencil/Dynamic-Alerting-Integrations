@@ -48,7 +48,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 from _lib_python import add_prometheus_arg  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3415)
 from _lib_prometheus import (  # noqa: E402
@@ -383,8 +384,14 @@ def main():
     # (rollback-worthy finding) → exit 1.
     if args.json_output:
         # #3216: run() encodes it, after the stderr summary above.
-        return Report(report, EXIT_OK if report["success"]
-                      else EXIT_CALLER_ERROR if report.get("caller_error") else EXIT_VIOLATION)
+        # #3617: the steps completed are the partial answer, the one that
+        # failed is named (none completed: rc 2, stdout empty).
+        return partial_answer(report, EXIT_OK if report["success"]
+                              else EXIT_CALLER_ERROR if report.get("caller_error")
+                              else EXIT_VIOLATION,
+                              unanswered=[f"{report.get('failed_step') or 'unknown'}: "
+                                          f"{report.get('message', '')}"],
+                              of=len(report.get("steps_completed") or []) + 1)
     if not report["success"]:
         if report.get("caller_error"):
             sys.exit(EXIT_CALLER_ERROR)

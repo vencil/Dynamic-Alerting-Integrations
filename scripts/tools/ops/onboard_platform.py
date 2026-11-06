@@ -1782,7 +1782,10 @@ def main():
         has_results = any(report["phases"].values())
         status = EXIT_OK if has_results else EXIT_VIOLATION
     if args.json:
-        return Report(report, status)  # #3216: run() encodes it
+        # #3617: the rule files not read are named; the phases' results are
+        # the partial answer.
+        return Report(report, status,  # #3216: run() encodes it
+                      unanswered=[str(e) for e in rule_errors] or None)
     sys.exit(status)
 
 

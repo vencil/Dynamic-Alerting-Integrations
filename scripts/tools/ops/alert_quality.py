@@ -569,17 +569,6 @@ def generate_markdown(report: QualityReport) -> str:
     return "\n".join(lines)
 
 
-def empty_report(period: str, status: str, reason: str, error: str) -> dict[str, Any]:
-    """沒有跑出報告的終端路徑用的 ``--json`` envelope（#3065）。
-
-    鍵沿用 :class:`QualityReport` 並全部歸零，追加 ``status`` / ``reason``
-    discriminator 與 ``error`` 錯誤原文（dev-rules §13 的 --json 契約）。
-    """
-    doc = asdict(generate_report([], period))
-    doc.update({"status": status, "reason": reason, "error": error})
-    return doc
-
-
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
@@ -641,9 +630,6 @@ def main() -> "int | Report":
         # #3065: Prometheus 沒量成，不是「沒有警報」— 不出報告、不走 CI gate。
         print(f"Error: {exc.source} query failed: {safe_label(str(exc))}",
               file=sys.stderr)
-        if args.json_output:
-            return Report(empty_report(  # #3216: run() encodes it
-                args.period, "caller_error", exc.reason, str(exc)), EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
     # 產生報告

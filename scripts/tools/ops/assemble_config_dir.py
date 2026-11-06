@@ -481,16 +481,12 @@ def main() -> "int | Report":
     )
     args = parser.parse_args()
 
-    def reject(reason: str, message: str) -> "int | Report":
-        """Contradictory or incomplete flags: exit 2 (dev-rules #13).
-
-        Not `parser.error`: under `--json` stdout still has to carry exactly
-        one document, so the rejection is answered there too.
-        """
+    def reject(reason: str, message: str) -> int:
+        """Contradictory or incomplete flags: exit 2 (dev-rules #13), the
+        usage and the cause on stderr; under `--json` stdout stays empty
+        (#3617: it was a `status: caller_error` document)."""
         parser.print_usage(sys.stderr)
         print(f"{parser.prog}: error: {message}", file=sys.stderr)
-        if args.json:
-            return Report({"status": "caller_error", "reason": reason}, EXIT_CALLER_ERROR)
         return EXIT_CALLER_ERROR
 
     # ⛔ `--check` returns before anything is assembled, so a flag that acts

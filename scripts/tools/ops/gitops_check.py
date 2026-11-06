@@ -200,13 +200,6 @@ def main() -> "Report | None":
         text = " ".join(str(exc).split())
         print(f"ERROR: cannot read {args.dir} through `da-guard parse-tree`: {text}",
               file=sys.stderr)
-        if args.json:
-            return Report(GitOpsReport(  # #3216: run() encodes it
-                overall_status="fail", timestamp=timestamp,
-                checks=[CheckResult(check="local", status="fail", message=text,
-                                    details={"directory": args.dir,
-                                             "reason": "da_guard_failed"})],
-            ).to_dict(), EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
     report = GitOpsReport(overall_status=check.status, checks=[check], timestamp=timestamp)

@@ -84,13 +84,15 @@ class TestGitDiffRemoved:
         assert captured.out == ""
 
     def test_json_envelope(self, monkeypatch, capsys, cli_argv):
+        """#3617: under `--json` an rc-2 early exit prints no document —
+        stdout stays empty, the replacement is named on stderr."""
         cli_argv("backtest_threshold", "--git-diff", "--prometheus", "http://prom:9090", "--json")
         with pytest.raises(SystemExit) as exc_info:
             _main_exit()
         assert exc_info.value.code == 2
-        doc = json.loads(capsys.readouterr().out)
-        assert (doc["status"], doc["reason"]) == ("caller_error", "git_diff_removed")
-        assert set(doc) == set(bt.generate_report([], doc["lookback"])) | {"status", "reason"}
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        assert bt.GIT_DIFF_REMOVED in captured.err.splitlines()
 
     @pytest.mark.parametrize("argv", [
         ("--git-diff", "--config-dir", "a", "--baseline", "b"),
@@ -110,7 +112,7 @@ class TestGitDiffRemoved:
         assert bt.GIT_DIFF_REMOVED in captured.err.splitlines()
         assert "not allowed with" not in captured.err
         if "--json" in argv:
-            assert json.loads(captured.out)["reason"] == "git_diff_removed"
+            assert captured.out == ""  # #3617: an rc-2 early exit prints no document
 
     def test_hidden_from_help(self, capsys, cli_argv):
         cli_argv("backtest_threshold", "--help")
@@ -1092,7 +1094,7 @@ class TestAlertComparisonCli:
 
 class TestObservedMapMissing:
     """#3017：observed-map 不能用 → rc 2（環境錯），在 Prometheus 檢查之前，
-    `--skip-if-unavailable` 也蓋不掉；`--json` 照樣拿到 caller_error envelope。"""
+    `--skip-if-unavailable` 也蓋不掉；`--json` 下 stdout 留空、原因只在 stderr（#3617）。"""
 
     def _argv(self, cli_argv, *extra):
         cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
@@ -1119,8 +1121,9 @@ class TestObservedMapMissing:
         with pytest.raises(SystemExit) as ei:
             _main_exit()
         assert ei.value.code == 2
-        doc = json.loads(capsys.readouterr().out)
-        assert (doc["status"], doc["reason"]) == ("caller_error", "observed_map_unavailable")
+        captured = capsys.readouterr()
+        assert captured.out == ""  # #3617: an rc-2 early exit prints no document
+        assert "observed-map not found" in captured.err
 
     def test_a_later_load_failure_is_still_rc_2(self, monkeypatch, capsys, cli_argv):
         """後援：main 的 decorator 讓任何一處 ObservedMapError 都是 rc 2，不是 traceback。"""
@@ -1263,7 +1266,8 @@ class TestWrittenValues:
 
     def test_tenant_without_da_guard_is_rc2_named(self, monkeypatch, capsys, cli_argv, tmp_path):
         """#3140 PR2：`--tenant` 的值由 da-guard 讀，找不到 da-guard 是結束碼 2
-        （`served_values_unavailable`），不是靜默回到 Python 自己讀。"""
+        （stderr 指名 da-guard 找不到；#3617：`--json` 下 stdout 留空），不是靜默回到
+        Python 自己讀。"""
         monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
         cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
@@ -1271,7 +1275,8 @@ class TestWrittenValues:
         with pytest.raises(SystemExit) as ei:
             _main_exit()
         out = capsys.readouterr()
-        assert (ei.value.code, json.loads(out.out)["reason"]) == (2, "served_values_unavailable"), out.err
+        assert (ei.value.code, out.out) == (2, ""), out.err
+        assert "da-guard binary not found" in out.err
 
     def test_disable_is_still_medium(self, monkeypatch, capsys, cli_argv):
         """對照組：寫 `disable` 是停用（`keys[].reason` "disabled"），維持 MEDIUM、rc 0。"""
@@ -1728,13 +1733,14 @@ class TestQueryError:
 
 
 class TestCallerErrorEnvelopes:
-    """#3059：三條 rc 2 路徑在 `--json` 下 stdout 恰一份 caller_error
-    envelope；參數錯在 Prometheus 檢查之前，`--skip-if-unavailable` 吃不掉。"""
+    """#3059：rc 2 路徑在 `--json` 下各自結束；參數錯在 Prometheus 檢查之前，
+    `--skip-if-unavailable` 吃不掉。#3617：rc 2 提早結束不印文件——stdout 留空，
+    原因只在 stderr（以前是一份 caller_error envelope，`reason` 區分路徑；現在由
+    各路徑的 stderr 字串區分）。"""
 
-    def _envelope(self, out, reason):
-        doc = json.loads(out.out)
-        assert (doc["status"], doc["reason"]) == ("caller_error", reason)
-        assert set(doc) == set(bt.generate_report([], doc["lookback"])) | {"status", "reason"}
+    def _envelope(self, out, said):
+        assert out.out == ""  # #3617: an rc-2 early exit prints no document
+        assert said in out.err, out.err
 
     def test_prometheus_unreachable_envelope(self, monkeypatch, cli_argv, capsys):
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
@@ -1742,8 +1748,7 @@ class TestCallerErrorEnvelopes:
                             "--old-value", "70", "--new-value", "50",
                             "--prometheus", "http://prom:9090", "--json")
         assert rc == 2
-        self._envelope(out, "prometheus_unavailable")
-        assert "not reachable" in out.err
+        self._envelope(out, "ERROR: Prometheus not reachable at http://prom:9090")
 
     @pytest.mark.parametrize("skip", [False, True], ids=["plain", "skip-if-unavailable"])
     def test_tenant_args_missing(self, monkeypatch, cli_argv, capsys, skip):
@@ -1751,7 +1756,8 @@ class TestCallerErrorEnvelopes:
         rc, out = _run_main(cli_argv, capsys, "--tenant", "t", "--prometheus", "http://prom:9090",
                             "--json", *(["--skip-if-unavailable"] if skip else []))
         assert rc == 2
-        self._envelope(out, "tenant_args_missing")
+        self._envelope(out, "ERROR: --tenant requires --metric and at least one of "
+                            "--old-value/--new-value")
 
     @pytest.mark.parametrize("tenant", ['a"b', "a\\b", "Upper", "a" * 64, "a-", "a\x1b[2Jb"])
     @pytest.mark.parametrize("skip", [False, True], ids=["plain", "skip-if-unavailable"])
@@ -1767,8 +1773,7 @@ class TestCallerErrorEnvelopes:
                             "--prometheus", "http://prom:9090", "--json",
                             *(["--skip-if-unavailable"] if skip else []))
         assert rc == 2
-        self._envelope(out, "invalid_tenant_id")
-        assert "is not a valid tenant id" in out.err
+        self._envelope(out, "is not a valid tenant id")
         assert "\x1b" not in out.err  # the id is printed through safe_label
 
     def test_a_valid_tenant_id_is_queried(self, monkeypatch, cli_argv, capsys):
@@ -1788,7 +1793,7 @@ class TestCallerErrorEnvelopes:
         rc, out = _run_main(cli_argv, capsys, "--prometheus", "http://prom:9090",
                             "--json", *(["--skip-if-unavailable"] if skip else []))
         assert rc == 2
-        self._envelope(out, "no_change_source")
+        self._envelope(out, "ERROR: Specify --config-dir (with --baseline) or --tenant")
 
 
 # ── 每一條結束路徑都寫出要求的檔、開工前先檢查輸出路徑（#3089）──────────
@@ -1903,13 +1908,26 @@ _EVERY_PATH = [
 ]
 
 
+# #3617: the stderr line that names each caller-error path (under `--json`
+# its stdout is empty; the not-run report goes only to `-o`).
+_CALLER_ERROR_SAID = {
+    "prometheus-unavailable": "ERROR: Prometheus not reachable at",
+    "observed-map": "observed-map not found",
+    "baseline-missing": "ERROR: --config-dir requires --baseline",
+    "served-values": "da-guard binary not found",
+}
+
+
 @pytest.mark.usefixtures("da_guard_env")
 class TestOutputsOnEveryPath:
     """#3089 (a)：preflight 之後每一條結束路徑都寫出 `-o` 與 `--markdown-output`。
 
     `-o` 是該路徑在 `--json` 時印的同一份 JSON；markdown 非空、寫出原因。
     rc 照舊（skip 0、no_changes 0、HIGH 1、其餘 2）。修前只有正常報告那條
-    寫 `-o`，skip／no_changes 只在有 recipe 租戶時寫 markdown。"""
+    寫 `-o`，skip／no_changes 只在有 recipe 租戶時寫 markdown。
+
+    #3617：caller_error（rc 2 提早結束）路徑在 `--json` 下 stdout 留空、原因在
+    stderr；`-o` 仍寫出那份 not-run 報告（status／reason 照舊）。"""
 
     @pytest.mark.parametrize("pid,build,rc,disc,words", _EVERY_PATH,
                              ids=[p[0] for p in _EVERY_PATH])
@@ -1922,13 +1940,20 @@ class TestOutputsOnEveryPath:
         got_rc, out = _run_main(cli_argv, capsys, *argv, "--json",
                                 "-o", str(out_json), "--markdown-output", str(out_md))
         assert got_rc == rc, out.err
-        doc = json.loads(out.out)
+        assert out_json.is_file(), f"{pid}: -o was not written"
+        written = json.loads(out_json.read_text(encoding="utf-8"))
+        if disc is not None and disc[0] == "caller_error":
+            # #3617: an rc-2 early exit prints no document; stderr names the path.
+            assert out.out == ""
+            assert _CALLER_ERROR_SAID[pid] in out.err, out.err
+            doc = written
+        else:
+            doc = json.loads(out.out)
+            assert written == doc
         if disc is None:
             assert "status" not in doc
         else:
             assert (doc["status"], doc["reason"]) == disc
-        assert out_json.is_file(), f"{pid}: -o was not written"
-        assert json.loads(out_json.read_text(encoding="utf-8")) == doc
         assert out_md.is_file(), f"{pid}: --markdown-output was not written"
         md = out_md.read_text(encoding="utf-8")
         assert md.strip(), f"{pid}: the markdown is empty"
@@ -1955,9 +1980,10 @@ class TestConfdRefusalWritesBothOutputs:
     """#3206: a tree da-guard validation names a path on (here a file that is
     not UTF-8) ends through the shared conf.d refusal before either tree is
     read — rc 2, the file named on stderr — and, #3089, still writes `-o`
-    and `--markdown-output` as a not-run report: the `--json` document (status
-    `caller_error`, reason `conf_d_not_servable`, `refused_paths`), the same
-    document in `-o`, and the markdown naming the reason and the path."""
+    and `--markdown-output` as a not-run report: `-o` holds the document
+    (status `caller_error`, reason `conf_d_not_servable`, `refused_paths`), and
+    the markdown names the reason and the path. #3617: under `--json` stdout
+    stays empty (an rc-2 early exit prints no document)."""
 
     @pytest.mark.parametrize("json_mode", [True, False])
     def test_refusal_names_the_file_and_writes_both_outputs(self, tmp_path, json_mode):
@@ -1980,7 +2006,7 @@ class TestConfdRefusalWritesBothOutputs:
             [{"path": "db.yaml", "verdict": "unservable"}]), doc
         assert doc["risk_summary"] == {"HIGH": 0, "MEDIUM": 0, "LOW": 0}, doc
         if json_mode:
-            assert json.loads(p.stdout) == doc
+            assert p.stdout == ""  # #3617: an rc-2 early exit prints no document
         else:
             assert "{" not in p.stdout, p.stdout
         md = out_md.read_text(encoding="utf-8")
@@ -2033,8 +2059,8 @@ def _unwritable(tmp, shape, name):
 class TestOutputPreflight:
     """#3089 (b)：參數檢查之後、git／served-values／observed-map／Prometheus
     之前，先確認 `-o` 與 `--markdown-output` 寫得進去。寫不進去 ⇒ 一行
-    `ERROR: cannot write …`、rc 2、`--json` 印 `output_unwritable` envelope；
-    什麼都還沒查，所以 stdout 不會先印一份正常報告。"""
+    `ERROR: cannot write …`、rc 2；#3617：`--json` 下 stdout 留空（以前印
+    `output_unwritable` envelope）。什麼都還沒查，所以 stdout 不會先印一份正常報告。"""
 
     @pytest.mark.parametrize("flag,named", [("-o", "-o/--output"),
                                             ("--markdown-output", "--markdown-output")])
@@ -2048,9 +2074,7 @@ class TestOutputPreflight:
         argv = build(monkeypatch, tmp_path, fake_prom)
         rc, out = _run_main(cli_argv, capsys, *argv, "--json", flag, str(bad))
         assert rc == 2
-        doc = json.loads(out.out)
-        assert (doc["status"], doc["reason"]) == ("caller_error", "output_unwritable")
-        assert set(doc) == set(bt.generate_report([], doc["lookback"])) | {"status", "reason"}
+        assert out.out == ""  # #3617: an rc-2 early exit prints no document
         lines = [ln for ln in out.err.splitlines() if ln.startswith("ERROR:")]
         assert len(lines) == 1, out.err
         assert lines[0].startswith(f"ERROR: cannot write {bad}: ")
@@ -2069,7 +2093,8 @@ class TestOutputPreflight:
                             str(tmp_path), "--prometheus", "http://prom:9090",
                             "--json", flag, str(bad))
         assert rc == 2
-        assert json.loads(out.out)["reason"] == "output_unwritable"
+        assert out.out == ""  # #3617: an rc-2 early exit prints no document
+        assert f"ERROR: cannot write {bad}: " in out.err, out.err
         assert not bad.parent.exists()
 
     def test_the_other_output_is_not_written_either(self, monkeypatch, tmp_path, cli_argv,
@@ -2119,12 +2144,15 @@ class TestOutputPreflight:
         assert bt._unwritable_output("/dev/null", "-o/--output") is None
 
     def test_argument_errors_still_come_first(self, monkeypatch, tmp_path, cli_argv, capsys):
-        """參數錯先於 preflight：reason 仍是 tenant_args_missing。"""
+        """參數錯先於 preflight：stderr 是 `--tenant requires …`，不是 `cannot write`
+        （#3617：stdout 留空）。"""
         bad = _unwritable(tmp_path, "missing_parent", "r.json")
         rc, out = _run_main(cli_argv, capsys, "--tenant", "t", "--prometheus", "http://prom:9090",
                             "--json", "-o", str(bad))
         assert rc == 2
-        assert json.loads(out.out)["reason"] == "tenant_args_missing"
+        assert out.out == ""  # #3617: an rc-2 early exit prints no document
+        assert "ERROR: --tenant requires --metric" in out.err, out.err
+        assert "cannot write" not in out.err, out.err
 
 
 # ── 以送出的 series 為單位分列（#3111）──────────────────────────────
@@ -2418,7 +2446,8 @@ class TestTwoTreesCompare:
         p = fake_prom()
         rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
                             "--prometheus", p.url, "--json")
-        return rc, json.loads(out.out), out.err
+        # #3617: an rc-2 early exit prints no document — None for an empty stdout.
+        return rc, (json.loads(out.out) if out.out else None), out.err
 
     def _changes(self, doc):
         return sorted((c["tenant"], c["metric"], c["old_value"], c["new_value"])
@@ -2490,7 +2519,7 @@ class TestTwoTreesCompare:
         cur, base = _dirs(tmp_path, empty if side == "baseline" else full,
                           empty if side == "current" else full)
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
-        assert (rc, doc["reason"]) == (2, "served_values_unavailable"), (doc, err)
+        assert (rc, doc) == (2, None), (doc, err)  # #3617: stdout empty
         assert "no .yaml files found" in err
 
     @pytest.mark.parametrize("name", [
@@ -2517,7 +2546,7 @@ class TestTwoTreesCompare:
             tmp_path, {**_D, name: _tenant_file("acme", "    mysql_connections: 80\n")},
             {**_D, name: _tenant_file("acme", "    mysql_connections: 50\n")})
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
-        assert (rc, doc["reason"]) == (2, "served_values_unavailable"), (doc, err)
+        assert (rc, doc) == (2, None), (doc, err)  # #3617: stdout empty
         assert r"legacy-\xff.yaml" in err and "not valid UTF-8" in err
 
 
@@ -3072,11 +3101,16 @@ class TestUnserializableDocument:
 class TestRunEndedCarriesTheStatus:
     """`_end_json` under `--json` ends the run with a `_RunEnded` whose
     `SystemExit` code is the Report's status — what a caller that does not go
-    through `main` reads; without `--json` it returns, for the caller's exit."""
+    through `main` reads; without `--json` it returns, for the caller's exit.
+    #3617: for the caller-error status it returns too (a run that measured
+    nothing has no answer, so stdout stays empty; the caller exits 2)."""
 
     @pytest.mark.parametrize("rc", [0, 1, 2])
     def test_the_code_is_the_status(self, rc):
         import argparse
+        if rc == 2:
+            assert bt._end_json(argparse.Namespace(json=True), {"d": 1}, rc) is None
+            return
         with pytest.raises(bt._RunEnded) as ei:
             bt._end_json(argparse.Namespace(json=True), {"d": 1}, rc)
         assert (ei.value.code, ei.value.report.status, ei.value.report.document) == (

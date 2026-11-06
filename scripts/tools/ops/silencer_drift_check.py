@@ -758,7 +758,9 @@ def main(argv: list[str] | None = None) -> "int | Report":
     else:
         status = compute_exit_code(report, ci=args.ci)
     if args.json:
-        return Report(report, status)  # #3216: run() encodes it
+        # #3617: the rule-source files not read are named; the report over
+        # the rest is the partial answer.
+        return Report(report, status, unanswered=[str(e) for e in errors] or None)  # #3216
     return status
 
 

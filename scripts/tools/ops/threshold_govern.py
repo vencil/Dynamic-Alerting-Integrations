@@ -716,7 +716,10 @@ def main() -> "Report | None":
     if args.json_output:
         return Report(json_document(  # #3216: run() encodes it
             result.plans, result.ungoverned, result.not_applicable,
-            result.force_manual, result.inherited, result.not_measured), status)
+            result.force_manual, result.inherited, result.not_measured), status,
+            # #3617: the thresholds not measured are named; the rest is the
+            # partial answer.
+            unanswered=[f"{m.tenant}/{m.key}" for m in result.not_measured] or None)
     sys.exit(status)
 
 

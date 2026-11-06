@@ -1728,8 +1728,10 @@ class TestManifestOnStdoutIsRefusedBeforeAnyWrite:
                  "--output", str(Path(config_dir) / "out"), "--manifest", "-",
                  "--json")
         assert main() == EXIT_CALLER_ERROR
-        assert json.loads(capsys.readouterr().out) == {
-            "status": "caller_error", "reason": "manifest_is_stdout"}
+        # #3617: a rejection prints no document; the cause is on stderr.
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert "error: --manifest cannot write to standard output" in out.err, out.err
 
     def test_a_file_manifest_still_assembles(self, config_dir, cli_argv):
         """CONTROL — a manifest path that is not stdout writes both."""
@@ -1769,9 +1771,11 @@ class TestCheckRefusesFlagsItCannotHonour:
         cli_argv("assemble", "--sources", str(s), "--check", "--manifest",
                  str(Path(config_dir) / "m.json"), "--json")
         assert main() == EXIT_CALLER_ERROR
-        doc = json.loads(capsys.readouterr().out)
-        assert doc == {"status": "caller_error",
-                       "reason": "check_with_manifest"}
+        # #3617: a rejection prints no document; the cause is on stderr.
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert "error: --manifest records an assembly and --check assembles nothing" \
+            in out.err, out.err
 
     def test_check_alone_refuses_the_source(self, config_dir, cli_argv, capsys):
         """CONTROL — `--check` by itself reads the source too, and the broken
@@ -1798,9 +1802,12 @@ class TestCheckRefusesFlagsItCannotHonour:
     def test_assembly_without_output_is_refused_with_a_document(
             self, config_dir, capsys, cli_argv):
         """Same family: assembly needs `--output`. Refused before the sources
-        are read, and `--json` still gets its one document."""
+        are read. #3617: under `--json` stdout stays empty (it used to get a
+        one-line `caller_error` document); the cause is on stderr."""
         cli_argv("assemble", "--sources", str(self._src(config_dir)),
                  "--json")
         assert main() == EXIT_CALLER_ERROR
-        assert json.loads(capsys.readouterr().out) == {
-            "status": "caller_error", "reason": "output_required"}
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert "error: --output is required for assembly" in out.err, out.err
+        assert "notmap.yaml" not in out.err  # refused before the sources are read

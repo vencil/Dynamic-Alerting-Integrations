@@ -56,7 +56,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report, exit_caller_error)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report, exit_caller_error,
+    partial_answer)
 
 # Exit-code contract: the #452 0/1/2 SSOT (scripts/tools/_lib_exitcodes.py).
 # Until #3393 this tool inverted 1 and 2; the codes are load-bearing in a
@@ -315,11 +316,21 @@ def main() -> int:
                   f"{', '.join(str(r['tenant_id']) for r in unavailable)}",
                   file=sys.stderr)
             status = EXIT_USAGE_ERROR
-        # #3216: run() encodes the --json document
-        return Report({"tenants": results}, status) if args.json else status
+        # #3216: run() encodes the --json document. #3617: a tenant with no
+        # merged_hash is named; the others are the partial answer (none: rc 2,
+        # stdout empty).
+        if not args.json:
+            return status
+        return partial_answer({"tenants": results}, status, of=len(results), unanswered=[
+            f"{r['tenant_id']}: {r.get('detail', r.get('error', ''))}" for r in unavailable])
 
     info, exit_code = verify_one(scanner, args.tenant_id, args.expect_merged_hash)
     if args.json:
+        if exit_code == EXIT_USAGE_ERROR:
+            # #3617: nothing verified, so no answer: the cause on stderr,
+            # stdout empty (it was the entry with `error`).
+            raise CallerError(f"{info['tenant_id']}: {info.get('error')}: "
+                              f"{info.get('detail', '')}")
         return Report(info, exit_code)
     _print_human(info)
     return exit_code

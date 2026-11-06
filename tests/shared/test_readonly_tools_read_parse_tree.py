@@ -257,9 +257,10 @@ def test_backtest_names_an_unreadable_conf_file(tmp_path):
 
 
 def test_backtest_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
-    """No da-guard at all is rc 2, `served_values_unavailable` — since #3206
-    the backtest reads the tree's index (`parse-tree`) first, and a missing
-    binary there is the same answer."""
+    """No da-guard at all is rc 2 — since #3206 the backtest reads the tree's
+    index (`parse-tree`) first, and a missing binary there is the same answer.
+    #3617: stdout stays empty under --json (it used to be the envelope with
+    reason `served_values_unavailable`); stderr names the missing binary."""
     _write(tmp_path / "new", _BT)
     _write(tmp_path / "base", _BT_BASE)
     bt = _tool("backtest_threshold")
@@ -268,7 +269,9 @@ def test_backtest_without_da_guard_is_exit_2(tmp_path, monkeypatch, capsys):
                                       "--baseline", str(tmp_path / "base"),
                                       "--prometheus", "http://127.0.0.1:9", "--json"])
     assert _exit_code(bt.main) == 2
-    assert json.loads(capsys.readouterr().out)["reason"] == "served_values_unavailable"
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert "da-guard binary not found" in out.err, out.err
 
 
 # ── policy_opa_bridge (`input.defaults`) ────────────────────────────────

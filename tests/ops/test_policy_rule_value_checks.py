@@ -134,7 +134,8 @@ def _run(path, rule, tmp_path, capsys, cli_argv):
             argv += ["--policy", str(side)]
         rc = emit_result(pe.main(argv))
         out = capsys.readouterr()
-        doc = json.loads(out.out)
+        # #3617: a caller error carries no document (stdout empty).
+        doc = json.loads(out.out) if out.out.strip() else None
         return rc, doc, out.err
     argv = ["validate_config", "--config-dir", str(tmp_path), "--json"]
     if not in_defaults:
@@ -153,7 +154,7 @@ def _run(path, rule, tmp_path, capsys, cli_argv):
 def test_rule_is_refused_on_every_path(rule, needle, path, tmp_path, capsys, cli_argv):
     rc, doc, text = _run(path, rule, tmp_path, capsys, cli_argv)
     if path.startswith("evaluate-policy"):
-        assert (rc, doc["reason"], doc["passed"]) == (2, "policy_rule_invalid", False), doc
+        assert (rc, doc) == (2, None), doc
     elif path.endswith("_defaults.yaml"):
         assert (rc, doc["status"], doc["caller_error"]) == (1, "fail", False), doc
     else:

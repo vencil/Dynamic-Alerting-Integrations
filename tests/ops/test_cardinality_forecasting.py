@@ -538,71 +538,50 @@ class TestCLI:
 
     @patch("_lib_prometheus.http_get_json")
     def test_main_valid_lookback_still_accepted(self, mock_get, capsys):
-        """control：`--lookback 30d` 通過 argparse（後續因無資料 exit 2，非 usage error）。"""
+        """control：`--lookback 30d` 通過 argparse（後續因無資料 exit 2，非 usage error）。
+        #3617：無資料路徑 stdout 留空，由 stderr 的無資料訊息證明走到了那裡。"""
         mock_get.return_value = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
         exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--lookback", "30d", "--json"]))
         assert exit_code == 2
-        doc = json.loads(capsys.readouterr().out)   # 走到了 no_data envelope，不是 usage error
-        assert doc["reason"] == "no_cardinality_data"
-        assert doc["lookback_days"] == 30
+        captured = capsys.readouterr()
+        assert captured.out == ""
+        # 走到了無資料路徑，不是 usage error
+        assert "No cardinality data retrieved" in captured.err or "未取得基數資料" in captured.err
+        assert "usage:" not in captured.err
 
     @patch("_lib_prometheus.http_get_json")
     def test_main_no_data_json_envelope(self, mock_get, capsys):
-        """#1112: 無資料 + --json → no_data envelope 的**形狀**（exit 仍是 2）。
+        """#1112 → #3617: 無資料 + --json → exit 2、stdout 留空、原因只在 stderr。
 
-        gate 只驗 json.loads 過得去；這裡逐鍵釘：discriminator 的確切值、
-        歸零的 summary 確實全 0、tenants 確實是 []、且 key set 與 happy path
-        的 generate_json_report() 一致（+ status/reason）——讓「happy path 新增
-        欄位、no-data envelope 沒跟上」直接紅。
+        以前這裡逐鍵釘 no_data envelope 的形狀（discriminator、歸零的 summary、
+        tenants 為 []）；#3617 起 rc 2 提早結束不印文件，改釘「stdout 是空的」
+        與 stderr 指名的無資料原因。
         """
         mock_get.return_value = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
         exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--json",
                              "--limit", "1000", "--warn-days", "14",
                              "--lookback", "30d"]))
 
-        assert exit_code == 2                    # EXIT_CALLER_ERROR — 形狀變、exit 語意不變
+        assert exit_code == 2                    # EXIT_CALLER_ERROR
         captured = capsys.readouterr()
-        doc = json.loads(captured.out)           # 全文 parse ⇒ stdout 只有 JSON
+        assert captured.out == ""                # #3617: no document
 
-        assert doc["status"] == "no_data"
-        assert doc["reason"] == "no_cardinality_data"
-        # caller 給的參數被回音，不是憑空捏造
-        assert doc["cardinality_limit"] == 1000
-        assert doc["warn_days"] == 14
-        assert doc["lookback_days"] == 30
-        # 設計上歸零的欄位確實是 0 / []
-        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0,
-                                  "non_finite_samples_dropped": 0}
-        assert doc["tenants"] == []
-        assert doc["generated_at"]
-
-        happy_keys = set(cf.generate_json_report(
-            cf.generate_forecast({}, limit=1000, warn_days=14, lookback_days=30)))
-        assert set(doc) == happy_keys | {"status", "reason"}
-
-        # 人類訊息在 stderr，stdout 不含散文
-        assert "cardinality data" in captured.err or "基數資料" in captured.err
-        assert "Check Prometheus" not in captured.out
+        # 人類訊息在 stderr
+        assert "No cardinality data retrieved" in captured.err or "未取得基數資料" in captured.err
 
     @patch("_lib_prometheus.http_get_json")
     def test_main_query_error_json_envelope(self, mock_get, capsys):
-        """#3065: 查詢失敗 + --json → caller_error envelope，key set 對齊 happy path。"""
+        """#3065: 查詢失敗 + --json → exit 2。#3617：stdout 留空（以前是
+        caller_error envelope），查詢失敗的原因只在 stderr。"""
         mock_get.return_value = (None, "connection error")
         exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--json",
                              "--limit", "1000", "--warn-days", "14",
                              "--lookback", "30d"]))
         assert exit_code == 2
         captured = capsys.readouterr()
-        doc = json.loads(captured.out)
-        assert doc["status"] == "caller_error"
-        assert doc["reason"] == "prometheus_query_error"
-        assert doc["error"] == "connection error"
-        assert doc["summary"] == {"critical": 0, "warning": 0, "safe": 0, "total": 0,
-                                  "non_finite_samples_dropped": 0}
-        assert doc["tenants"] == []
-        happy_keys = set(cf.generate_json_report(
-            cf.generate_forecast({}, limit=1000, warn_days=14, lookback_days=30)))
-        assert set(doc) == happy_keys | {"status", "reason", "error"}
+        assert captured.out == ""
+        assert ("Prometheus query failed" in captured.err
+                or "Prometheus 查詢失敗" in captured.err), captured.err
         assert "connection error" in captured.err
 
     @patch("_lib_prometheus.http_get_json")
@@ -748,12 +727,9 @@ class TestQueryErrorVsNoData:
         with _fake_prometheus("503") as url:
             proc = _run_cf(url, "--json")
         assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
-        doc = json.loads(proc.stdout)
-        assert doc["status"] == "caller_error"
-        assert doc["reason"] == "prometheus_query_error"
-        assert "503" in doc["error"], doc
-        assert doc["tenants"] == []
-        assert doc["summary"]["total"] == 0
+        # #3617: an rc-2 early exit prints no document; the query error is on stderr.
+        assert proc.stdout == "", proc.stdout
+        assert "Prometheus query failed" in proc.stderr and "503" in proc.stderr, proc.stderr
 
     @pytest.mark.parametrize(
         "extra", [[], ["--ci"], ["--markdown"], ["--markdown", "--ci"]],
@@ -780,10 +756,11 @@ class TestQueryErrorVsNoData:
         with _fake_prometheus("empty") as url:
             proc = _run_cf(url, "--json")
         assert proc.returncode == 2, (proc.returncode, proc.stdout, proc.stderr)
-        doc = json.loads(proc.stdout)
-        assert doc["status"] == "no_data"
-        assert doc["reason"] == "no_cardinality_data"
-        assert "error" not in doc
+        # #3617: an rc-2 early exit prints no document; stderr says no data,
+        # not a query error.
+        assert proc.stdout == "", proc.stdout
+        assert "No cardinality data retrieved" in proc.stderr, proc.stderr
+        assert "Prometheus query failed" not in proc.stderr, proc.stderr
 
 
 # ---------------------------------------------------------------------------

@@ -145,7 +145,7 @@ from __future__ import annotations
 import os
 import sys
 import traceback
-from typing import Any, Callable, Final, NoReturn, Optional
+from typing import Any, Callable, Final, NoReturn, Optional, Sequence
 
 
 def sanitize_std_fds():
@@ -496,15 +496,36 @@ class Report:
     stderr line, but the run keeps *status*: for a tool whose exit code
     states something a lost stdout does not change (patch-config's: what
     the ConfigMap holds after a write). Only the tools the gate lists
-    (tests/shared/test_json_stdout_contract.py) may ask for it."""
+    (tests/shared/test_json_stdout_contract.py) may ask for it.
 
-    __slots__ = ("document", "status", "on_stdout_failure", "delivery")
+    *unanswered* (#3617): ⛔ a caller error carries a document only as a
+    PARTIAL answer — what the run did answer, with *unanswered* naming
+    (non-empty strings) the parts it could not. ``EXIT_CALLER_ERROR``
+    without it is refused (``TypeError``), and so is *unanswered* with any
+    other status. An early exit has no answer to carry: it ends with
+    ``CallerError`` / ``die_caller_error`` — stdout empty, the reason on
+    stderr. (Before #3617 a tool answered one with its own schema emptied
+    plus ``status`` / ``reason``.)"""
+
+    __slots__ = ("document", "status", "on_stdout_failure", "delivery", "unanswered")
 
     def __init__(self, document: Any, status: int = 0, *,
+                 unanswered: "Optional[Sequence[str]]" = None,
                  on_stdout_failure: Optional[Callable[[str], str]] = None,
                  delivery: str = "all") -> None:
         if status != 0 or isinstance(status, bool):
             _check_code("Report status", status)
+        parts = tuple(unanswered or ())
+        if any(not (isinstance(u, str) and u) for u in parts):
+            raise TypeError("Report unanswered must name each part (a non-empty str)")
+        if status == EXIT_CALLER_ERROR and not parts:
+            raise TypeError(
+                "a Report with the caller-error status needs unanswered=[…] (#3617): a "
+                "caller error carries a document only as a partial answer — end an "
+                "early exit with CallerError / die_caller_error")
+        if parts and status != EXIT_CALLER_ERROR:
+            raise TypeError("Report unanswered=[…] goes with the caller-error status only "
+                            "(#3617): a part left unanswered is a caller error")
         if on_stdout_failure is not None and not callable(on_stdout_failure):
             raise TypeError("Report on_stdout_failure must be callable")
         if delivery not in DELIVERIES:
@@ -513,6 +534,25 @@ class Report:
         self.status = status
         self.on_stdout_failure = on_stdout_failure
         self.delivery = delivery
+        self.unanswered = parts
+
+
+def partial_answer(document: Any, status: int, *, unanswered: "Sequence[str]",
+                   of: int) -> Report:
+    """The ``Report`` of a run made of *of* parts, *unanswered* naming the
+    ones it could not answer (each ``"<part>: <why>"``) (#3617).
+
+    *status* other than the caller-error code: the plain ``Report``. The
+    caller-error code with some parts answered: a partial answer
+    (``Report(..., unanswered=...)``). With none answered there is no
+    answer: raises :class:`CallerError` naming every part — stdout empty."""
+    if status != EXIT_CALLER_ERROR:
+        return Report(document, status)
+    if not unanswered:
+        raise TypeError("partial_answer: the caller-error status with no unanswered part")
+    if len(unanswered) >= of:
+        raise CallerError("nothing was answered: " + "; ".join(unanswered))
+    return Report(document, status, unanswered=unanswered)
 
 
 #: Report's *delivery* values: stdout's failure ends the run at the

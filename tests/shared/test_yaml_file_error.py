@@ -502,19 +502,20 @@ def test_control_clean_bytes_keep_the_normal_rc(fx, label, script, bad, cwd, nam
      "conf_d_not_servable"),
 ], ids=["backtest --config-dir", "policy_engine tenant", "policy_engine _defaults"])
 def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cwd, reason):
-    """backtest answers this refusal with its own not-run report (one
-    document, its ``caller_error`` status). policy_engine's conf.d refusal
+    """backtest answers this refusal with its own not-run report — #3617:
+    only in ``-o`` / ``--markdown-output``; under ``--json`` stdout stays
+    empty (it used to be one document, its ``caller_error`` status) and the
+    shared refusal names the file on stderr. policy_engine's conf.d refusal
     is the shared one, which since #3558 carries no document: stdout empty."""
-    import json
     p = _run(script, argv(fx), fx[cwd] if cwd else None)
     assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
     assert "Traceback" not in p.stderr
     if label.startswith("policy_engine"):
         assert p.stdout == "", p.stdout
         return
-    doc = json.loads(p.stdout)
-    assert doc["status"] == "caller_error"
-    assert doc["reason"] == reason
+    assert p.stdout == "", p.stdout  # #3617: an rc-2 early exit prints no document
+    assert "ERROR: alpha.yaml:" in p.stderr, p.stderr[-500:]
+    assert "da-guard validation names" in p.stderr, p.stderr[-500:]
     assert "Traceback" not in p.stderr
 
 

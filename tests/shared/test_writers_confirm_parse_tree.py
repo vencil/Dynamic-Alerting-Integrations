@@ -207,13 +207,17 @@ def test_deprecate_rule_judges_a_carrier_by_yaml_v3(tmp_path):
 # ── patch_config ──────────────────────────────────────────────────────────
 
 def _pc(cm_data, *argv):
+    """rc, the --json document (None for an empty stdout: #3617, a caller
+    error prints no document), the cluster, and stderr's text."""
+    import io
     import patch_config as pc
     from _patch_config_fake import FakeCluster, run_main
     cluster = FakeCluster(cm_data)
     with mock.patch("patch_config.run_cmd", side_effect=cluster), \
             mock.patch("sys.argv", ["patch_config.py", "--json", *argv,
                                     "--poll-interval", "0.001"]), \
-            mock.patch("sys.stdout") as out:
+            mock.patch("sys.stdout") as out, \
+            mock.patch("sys.stderr", new_callable=io.StringIO) as err:
         try:
             run_main()  # #3558: main answers with a Report; run_main writes it
             rc = 0
@@ -225,15 +229,15 @@ def _pc(cm_data, *argv):
             # every later test's children would start with SIGTERM ignored
             # (#3249). The seam puts the caller's handlers back.
             pc.SIGNALS.reset()
-    doc = json.loads("".join(c.args[0] for c in out.write.call_args_list))
-    return rc, doc, cluster
+    text = "".join(c.args[0] for c in out.write.call_args_list)
+    return rc, (json.loads(text) if text else None), cluster, err.getvalue()
 
 
 _PC_DEFAULTS = "defaults:\n  cpu: 70\n"
 
 
 def test_patch_config_writes_what_reads_back():
-    rc, doc, c = _pc({"_defaults.yaml": _PC_DEFAULTS,
+    rc, doc, c, err = _pc({"_defaults.yaml": _PC_DEFAULTS,
                       "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n    mem: ~\n"},
                      "tenant-a", "cpu", "6")
     assert rc == 0, doc
@@ -247,12 +251,14 @@ def test_patch_config_refuses_a_rewrite_that_reads_back_differently():
     # as written (PyYAML wrote `1.0` and the confirmation refused it). What is
     # refused now is an edit da-guard cannot make without changing another
     # node: `mem: *v` aliases the scalar being replaced.
-    rc, doc, c = _pc({"_defaults.yaml": _PC_DEFAULTS,
+    rc, doc, c, err = _pc({"_defaults.yaml": _PC_DEFAULTS,
                       "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: &v '5'\n    mem: *v\n"},
                      "tenant-a", "cpu", "6")
-    assert (rc, doc["status"], doc["reason"]) == (2, "caller_error", "write_refused"), doc
+    # #3617: a caller error prints no document; stderr names the refusal.
+    assert (rc, doc) == (2, None), (doc, err)
+    assert "ERROR: _WriteRefused: tenant-a.yaml: da-guard write refused" in err, err
     assert c.patches == []
-    rc, doc, c = _pc({"_defaults.yaml": _PC_DEFAULTS,
+    rc, doc, c, err = _pc({"_defaults.yaml": _PC_DEFAULTS,
                       "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n    mem: !!float 1\n"},
                      "tenant-a", "cpu", "6")
     assert rc == 0, doc
@@ -260,19 +266,23 @@ def test_patch_config_refuses_a_rewrite_that_reads_back_differently():
 
 
 def test_patch_config_does_not_write_an_unreadable_key():
-    rc, doc, c = _pc({"_defaults.yaml": _PC_DEFAULTS,
+    rc, doc, c, err = _pc({"_defaults.yaml": _PC_DEFAULTS,
                       "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n    cpu: '6'\n"},
                      "tenant-a", "cpu", "7")
-    assert (rc, doc["reason"]) == (2, "configmap_shape"), doc
+    # #3617: a caller error prints no document; stderr names the cause.
+    assert (rc, doc) == (2, None), (doc, err)
+    assert "ERROR: ConfigMapShapeError: " in err and "duplicate_key" in err, err
     assert c.patches == []
 
 
 def test_patch_config_without_da_guard_is_exit_2(tmp_path, monkeypatch):
     monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
-    rc, doc, c = _pc({"_defaults.yaml": _PC_DEFAULTS,
+    rc, doc, c, err = _pc({"_defaults.yaml": _PC_DEFAULTS,
                       "tenant-a.yaml": "tenants:\n  tenant-a:\n    cpu: '5'\n"},
                      "tenant-a", "cpu", "6")
-    assert (rc, doc["reason"]) == (2, "da_guard_unavailable"), doc
+    # #3617: a caller error prints no document; stderr names the cause.
+    assert (rc, doc) == (2, None), (doc, err)
+    assert "ERROR: BinaryMissing: da-guard binary not found" in err, err
     assert c.patches == []
 
 

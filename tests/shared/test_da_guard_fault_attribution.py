@@ -74,6 +74,14 @@ def _cli(conf_d: Path, *extra: str) -> tuple[int, dict[str, dict]]:
     return p.returncode, {r["check"]: r for r in json.loads(p.stdout)}
 
 
+def _cli_no_document(conf_d: Path, *extra: str) -> tuple[int, str, str]:
+    """`_cli` for a run that answers nothing (#3617): rc, stdout, stderr."""
+    p = subprocess.run([sys.executable, str(OPS / "validate_config.py"), "--config-dir", str(conf_d),
+                        *extra, "--json"], capture_output=True, text=True, encoding="utf-8",
+                       errors="replace", timeout=300, check=False)
+    return p.returncode, p.stdout, p.stderr
+
+
 # ── 1：da-guard 本身失敗 → caller error，提示指向 binary ─────────────────────────
 
 def _not_executable(tmp_path: Path, da_guard: str) -> str:
@@ -117,14 +125,18 @@ def test_a_da_guard_without_the_subcommand_is_named_too_old(row, tmp_path, monke
 
 def test_cli_exits_2_for_a_da_guard_that_cannot_run(tmp_path, monkeypatch, da_guard_binary):
     """ADR-036 step 4 (#2906): every row reads the conf.d through `da-guard
-    parse-tree`, so a da-guard that cannot run stops the run before any row:
-    one caller-error row, the hint pointing at the binary."""
+    parse-tree`, so a da-guard that cannot run stops the run before any row.
+    #3617: no row ran, so there is no answer — stdout stays empty under
+    `--json` (it used to be one caller-error row with the binary hint); the
+    cause is on stderr."""
     conf_d = _tree(tmp_path / "t", _CLEAN)
     monkeypatch.setenv("DA_GUARD_BINARY", _not_executable(tmp_path, da_guard_binary))
-    rc, rows = _cli(conf_d, "--policy-dsl", _policy(tmp_path))
-    assert rc == 2, (rc, rows)
-    assert list(rows) == ["config_dir"], rows
-    assert rows["config_dir"]["suggested_action"] == vc._DA_GUARD_BROKEN_HINT, rows
+    rc, out, err = _cli_no_document(conf_d, "--policy-dsl", _policy(tmp_path))
+    assert rc == 2, (rc, out, err)
+    assert out == "", out
+    assert "da-guard could not be run" in err and "Permission denied" in err, err
+    # #3617: the row's advice is said on stderr — no document carries it
+    assert f"hint: {vc._DA_GUARD_BROKEN_HINT}" in err, err
 
 
 @pytest.mark.parametrize("other", ["none", "dangling", "bad-yaml"])
@@ -132,16 +144,19 @@ def test_cli_rc_for_a_too_old_da_guard_is_2_whatever_the_tree(other, tmp_path, m
     """Before ADR-036 step 4 a caller error was downgraded to rc 1 when the
     `yaml_syntax` row also named an unusable file. That row reads parse-tree
     now: with a da-guard older than this tool no row runs, nothing of the
-    tree was judged, so the run is rc 2 whatever the tree holds."""
+    tree was judged, so the run is rc 2 whatever the tree holds. #3617: and
+    it answers nothing — stdout empty under `--json`, the cause on stderr."""
     conf_d = _tree(tmp_path / "t", _CLEAN)
     if other == "dangling":
         symlink_or_skip("/nonexistent/x.yaml", conf_d / "zz.yaml")
     elif other == "bad-yaml":
         (conf_d / "bad.yaml").write_text("tenants:\n  b: [\n", encoding="utf-8")
     monkeypatch.setenv("DA_GUARD_BINARY", _script(tmp_path, "dg-old", _OLD))
-    rc, rows = _cli(conf_d, "--policy-dsl", _policy(tmp_path))
-    assert rows["config_dir"]["suggested_action"] == vc._DA_GUARD_TOO_OLD_HINT, rows
-    assert rc == 2, (rc, rows)
+    rc, out, err = _cli_no_document(conf_d, "--policy-dsl", _policy(tmp_path))
+    assert out == "", out
+    assert "older than this tool" in err, err
+    assert f"hint: {vc._DA_GUARD_TOO_OLD_HINT}" in err, err  # #3617
+    assert rc == 2, (rc, out, err)
 
 
 def test_a_da_guard_killed_by_a_signal_is_not_classified(tmp_path):

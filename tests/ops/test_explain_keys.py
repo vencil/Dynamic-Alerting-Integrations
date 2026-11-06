@@ -153,7 +153,8 @@ def test_an_assert_file_that_would_pass_vacuously_is_refused(conf_d, tmp_path, e
         doc = {"tenat": {"db-b": [{"key": "mysql_connections", "verdict": "unread"}]}, "tenants": {}}
     golden.write_text(json.dumps(doc), encoding="utf-8")
     p = _run("--config-dir", conf_d, "--assert", golden, "--json")
-    assert p.returncode == 2 and reason in _json(p)["reason"]
+    # #3617: a caller error prints no document; the reason is on stderr.
+    assert p.returncode == 2 and p.stdout == "" and reason in p.stderr, p.stderr
 
 
 @pytest.mark.parametrize("args, reason", [
@@ -161,15 +162,19 @@ def test_an_assert_file_that_would_pass_vacuously_is_refused(conf_d, tmp_path, e
     (["--assert", "/nonexistent/golden.json"], "--assert: cannot read"),
 ])
 def test_caller_errors_exit_2_with_one_json_document(conf_d, args, reason):
+    """#3617: a caller error leaves stdout empty, the reason on stderr (it
+    used to be one `status: caller_error` document with `tenants` empty)."""
     p = _run("--config-dir", conf_d, "--json", *args)
     assert p.returncode == 2
-    doc = _json(p)
-    assert doc["status"] == "caller_error" and reason in doc["reason"] and doc["tenants"] == {}
+    assert p.stdout == ""
+    assert reason in p.stderr, p.stderr
 
 
 def test_a_missing_config_dir_is_a_caller_error(tmp_path):
     p = _run("--config-dir", tmp_path / "nope", "--json")
-    assert p.returncode == 2 and _json(p)["status"] == "caller_error"
+    # #3617: a caller error prints no document; the cause is on stderr.
+    assert p.returncode == 2 and p.stdout == ""
+    assert "nope: No such file or directory" in p.stderr, p.stderr
 
 
 def test_undecidable_threshold_keys_exit_2(tmp_path):

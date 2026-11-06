@@ -1489,10 +1489,12 @@ class _RunEnded(SystemExit):
 def _end_json(args, document, rc):
     """Under `--json`, end the run here with *document* and exit status *rc*
     (`_RunEnded`; #3216: `run()` writes it with the one encoder, the tool
-    prints no JSON). Returns without `--json`: the caller's own
-    `sys.exit(<the same code>)` follows, spelled out so
+    prints no JSON). Returns without `--json`, and for the caller-error
+    status (#3617: a run that measured nothing has no answer, so stdout
+    stays empty; `-o` / `--markdown-output` still get the not-run report):
+    the caller's own `sys.exit(<the same code>)` follows, spelled out so
     `check_cli_contract` reads the code."""
-    if args.json:
+    if args.json and rc != EXIT_CALLER_ERROR:
         raise _RunEnded(Report(document, rc))
 
 
@@ -1651,36 +1653,24 @@ def _main():
     args = parser.parse_args()
 
     # #3059: argument errors first — before the Prometheus check, so
-    # `--skip-if-unavailable` cannot turn them into a green skip — and with
-    # the `--json` envelope (argparse's own usage errors still print none).
+    # `--skip-if-unavailable` cannot turn them into a green skip. #3617:
+    # stderr only; under --json stdout stays empty.
     if args.git_diff is not None:
         print(GIT_DIFF_REMOVED, file=sys.stderr)
-        if args.json:  # #3216: run() writes it
-            return Report(empty_report(args.lookback, "caller_error", "git_diff_removed"),
-                          EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
     if args.tenant:
         if not args.metric or (args.old_value is None and args.new_value is None):
             print("ERROR: --tenant requires --metric and at least one of --old-value/--new-value",
                   file=sys.stderr)
-            if args.json:  # #3216: run() writes it
-                return Report(empty_report(args.lookback, "caller_error", "tenant_args_missing"),
-                              EXIT_CALLER_ERROR)
             sys.exit(EXIT_CALLER_ERROR)
         # #3066: the id goes into `{tenant="..."}` as written; one the tenant
         # id rule refuses (`a"b`, `a\b`) would make the query invalid PromQL.
         if not is_valid_tenant_id(args.tenant):
             print(f"ERROR: --tenant '{safe_label(args.tenant)}' is not a valid tenant id. "
                   f"{tenant_id_rule()[1]}", file=sys.stderr)
-            if args.json:  # #3216: run() writes it
-                return Report(empty_report(args.lookback, "caller_error", "invalid_tenant_id"),
-                              EXIT_CALLER_ERROR)
             sys.exit(EXIT_CALLER_ERROR)
     elif not args.config_dir:
         print("ERROR: Specify --config-dir (with --baseline) or --tenant", file=sys.stderr)
-        if args.json:  # #3216: run() writes it
-            return Report(empty_report(args.lookback, "caller_error", "no_change_source"),
-                          EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
     # #3089 (b): after the argument checks, before any served-values,
@@ -1786,7 +1776,11 @@ def _main():
         print(f"ERROR: {report['query_error']} change(s) not measured: the Prometheus "
               "query failed (see each change's message)", file=sys.stderr)
         if args.json:
-            return Report(report, EXIT_CALLER_ERROR)  # #3216: run() writes it
+            # #3617: a partial answer — the changes measured, and the ones
+            # Prometheus did not answer named (#3216: run() writes it).
+            return Report(report, EXIT_CALLER_ERROR, unanswered=[
+                f"{c['tenant']} {c['metric']}" for c in report["changes"]
+                if c["status"] == "query_error"])
         sys.exit(EXIT_CALLER_ERROR)
     if args.json:
         return Report(report, EXIT_VIOLATION if high_count > 0 else EXIT_OK)

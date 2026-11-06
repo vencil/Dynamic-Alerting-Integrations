@@ -713,7 +713,12 @@ def main() -> Report:
         sys.exit(EXIT_CALLER_ERROR)
     # issue 1513: `status: error` used to exit 0, so `da-tools diagnose t && …`
     # passed on an unhealthy tenant. #3216: run() encodes the document.
-    return Report(result, exit_code(result))
+    # #3617: rc 2 (a Prometheus query not answered) is a partial answer —
+    # the rest of the check, the queries not answered named.
+    return Report(result, exit_code(result), unanswered=[
+        str(i) for i in result.get("issues", [])
+        if str(i).startswith(PROMETHEUS_FAILURE)] if exit_code(result) == EXIT_CALLER_ERROR
+        else None)
 
 
 if __name__ == "__main__":

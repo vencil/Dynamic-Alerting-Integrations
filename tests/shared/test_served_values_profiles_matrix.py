@@ -282,13 +282,13 @@ def test_da_guard_older_than_this_tool_is_a_caller_error(tmp_path, monkeypatch):
     p = subprocess.run([sys.executable, str(OPS / "validate_config.py"), "--config-dir", str(conf_d),
                         "--json"], capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=300)
-    rows = {r["check"]: r for r in json.loads(p.stdout)}
     # ADR-036 step 4 (#2906): the CLI reads the tree through `da-guard
     # parse-tree` first; this fake answers it with effective's document, so
-    # no row runs — one caller-error row naming the binary, rc 2.
-    assert p.returncode == 2, (p.returncode, rows)
-    assert list(rows) == ["config_dir"], rows
-    assert rows["config_dir"]["suggested_action"] == vc._DA_GUARD_BROKEN_HINT, rows
+    # no row runs — rc 2. #3617: nothing was answered, so stdout stays empty
+    # (it used to be one caller-error row naming the binary); stderr names it.
+    assert p.returncode == 2, (p.returncode, p.stdout, p.stderr)
+    assert p.stdout == "", p.stdout
+    assert "da-guard parse-tree wrote no document this tool can read" in p.stderr, p.stderr
 
 
 # ── 被丟掉的檔：原因取自 effective 自己的 stderr，不再補跑 served-values（#2115 F4）──
