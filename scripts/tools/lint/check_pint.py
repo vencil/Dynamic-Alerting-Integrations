@@ -38,26 +38,31 @@ see ``.pint.hcl``.
 Copies are sync-guarded by ``check_rulepack_sync.py``. Runs ``--offline`` (no
 Prometheus). Baseline = 0 blocking.
 
+The engine is REQUIRED with or without ``--ci`` (#3611, owner 2026-11-06):
+pint missing, timed out, or exiting without its ``entries=N`` summary is no
+verdict — exit 2, never a green run. ``--ci`` only decides whether findings
+(pint's own, or the entries floor below) exit 1.
+
 Usage:
     python3 scripts/tools/lint/check_pint.py [--ci]
 
 Exit codes:
-    0  no blocking findings (or pint unavailable in non-CI dev mode)
-    1  blocking findings, or pint engine unavailable in --ci mode
+    0  no blocking findings (findings without --ci are printed, exit 0)
+    1  blocking findings, or the entries floor tripped (only when --ci)
+    2  no verdict: pint unavailable (no binary, no docker), timed out, or
+       did not run (no ``entries=N`` in its output)
 """
 from __future__ import annotations
 
 import argparse
 import os
-import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+import _lib_engine  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 # Keep in sync with the pint install step in .github/workflows/ci.yml.
@@ -121,85 +126,51 @@ _MIN_PINT_ENTRIES = 368
 _PLATFORM_PACK_ENTRIES = 42
 _PINT_ENTRIES_AT_MEASURE = 376
 
-# pint colours its logs unconditionally — it does NOT check for a TTY — so under
-# `capture_output=True` the entries line arrives as
-# `\x1b[2mentries=\x1b[0m\x1b[94m393\x1b[0m`. A plain `entries=(\d+)` never matches
-# that, which is how the previous `entries == 0` guard came to be dead code. Strip
-# SGR sequences before matching; the raw (coloured) text is still what gets streamed
-# to the caller.
-_ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
-_ENTRIES_RE = re.compile(r"entries=(\d+)")
-
-
-def _build_cmd() -> list[str] | None:
-    """Prefer a pint binary on PATH; else the pinned docker image; else None."""
-    if shutil.which("pint"):
-        return ["pint", *_PINT_ARGS]
-    if shutil.which("docker"):
-        return ["docker", "run", "--rm",
-                "-v", f"{REPO_ROOT.as_posix()}:/work", "-w", "/work",
-                "--entrypoint", "pint", PINT_IMAGE, *_PINT_ARGS]
-    return None
-
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="pint Prometheus rule linter (Vibe wrapper)")
     parser.add_argument("--ci", action="store_true",
-                        help="CI mode: non-zero exit on findings / missing engine")
+                        help="CI mode: exit 1 on findings / a tripped entries floor")
     args = parser.parse_args()
 
-    cmd = _build_cmd()
-    if cmd is None:
-        msg = "pint engine unavailable (no `pint` binary on PATH and no docker)"
-        if args.ci:
-            print(f"ERROR: {msg}", file=sys.stderr)
-            return EXIT_VIOLATION
-        print(f"WARN: {msg}; skipping (install pint or docker for local linting)",
-              file=sys.stderr)
-        return EXIT_OK
+    located = _lib_engine.locate("pint", docker_image=PINT_IMAGE)
+    if isinstance(located, _lib_engine.NoVerdict):
+        print(f"ERROR: {located.reason}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
-    print(f"pint via: {cmd[0]} ({' '.join(_PINT_ARGS)})", file=sys.stderr)
-    try:
-        # generous: pint lint is seconds, but a first-run docker image pull is slow.
-        result = subprocess.run(cmd, cwd=REPO_ROOT, timeout=300,
-                                capture_output=True, text=True, encoding="utf-8", errors="replace")
-    except subprocess.TimeoutExpired:
-        print("ERROR: pint timed out after 300s", file=sys.stderr)
-        return EXIT_VIOLATION if args.ci else EXIT_OK
+    print(f"pint via: {located.describe()} ({' '.join(_PINT_ARGS)})", file=sys.stderr)
+    # generous: pint lint is seconds, but a first-run docker image pull is slow.
+    # pint logs `entries=N` (how many rule entries it checked; coloured
+    # unconditionally, so _lib_engine strips SGR before matching) whenever it
+    # parsed its rule files; its absence is the run not having happened.
+    result = _lib_engine.run(
+        located, "lint", _PINT_ARGS, timeout=300,
+        cwd=str(REPO_ROOT) if located.mode == "binary" else None,
+        docker_run=["-v", f"{REPO_ROOT.as_posix()}:/work", "-w", "/work"],
+        entrypoint="pint" if located.mode == "docker" else None)
+    if isinstance(result, _lib_engine.NoVerdict):
+        # ⛔ Do NOT name a single cause. The commonest are NOT a version
+        # bump: the docker fallback failing to pull (the binary install in
+        # ci.yml is continue-on-error), and .pint.hcl failing to parse.
+        print(f"ERROR: {result.message()}\nCheck, in this order: pint's own "
+              "output (its stderr tail above (a .pint.hcl parse error or a failed docker pull "
+              "stops the run before any summary)); then whether a PINT_VERSION "
+              "bump renamed the `entries=` field.", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     # Stream pint's own output through (captured only so we can inspect entries=).
-    if result.stdout:
-        sys.stdout.write(result.stdout)
-    if result.stderr:
-        sys.stderr.write(result.stderr)
+    if result.proc.stdout:
+        sys.stdout.write(result.proc.stdout)
+    if result.proc.stderr:
+        sys.stderr.write(result.proc.stderr)
 
-    # Robustness guard: pint logs `entries=N` for how many rule entries it checked. A
-    # rename / regex typo / path drift / pint parse-behaviour change silently shrinks
-    # that number while pint still exits 0 — a green check over a hollowed-out gate.
-    # Assert a FLOOR, not just non-emptiness (see _MIN_PINT_ENTRIES for the sizing).
-    m = _ENTRIES_RE.search(
-        _ANSI_SGR_RE.sub("", (result.stderr or "") + (result.stdout or "")))
+    # Robustness guard: a rename / regex typo / path drift / pint parse-behaviour
+    # change silently shrinks `entries` while pint still exits 0 — a green check
+    # over a hollowed-out gate. Assert a FLOOR, not just non-emptiness (see
+    # _MIN_PINT_ENTRIES for the sizing).
+    entries, returncode = result.data
     if args.ci:
-        if m is None:
-            # Not "can't check, carry on" — an unreadable count means the floor below
-            # is unenforceable, which is the same silent-green it exists to prevent.
-            # ⛔ Do NOT name a single cause here. This branch is reached by any
-            # failure that stops pint printing a summary, and the two commonest
-            # are NOT a version bump: the docker fallback failing to pull (the
-            # binary install in ci.yml is continue-on-error), and .pint.hcl
-            # itself failing to parse. Asserting "log format changed" sends the
-            # reader to re-measure a floor when the real fix is a pull or a
-            # syntax error a few lines up.
-            print("FAIL: could not read `entries=N` from pint's output, so the "
-                  "non-vacuity floor cannot be evaluated. Failing loud instead "
-                  "of skipping it. Check, in this order: pint's own output above "
-                  "(a .pint.hcl parse error or a failed docker pull prints there "
-                  "and stops the run before any summary); then whether a "
-                  "PINT_VERSION bump renamed the `entries=` field.",
-                  file=sys.stderr)
-            return EXIT_VIOLATION
-        entries = int(m.group(1))
         if entries < _MIN_PINT_ENTRIES:
             print(f"FAIL: pint checked {entries} rule entries, below the "
                   f"{_MIN_PINT_ENTRIES} floor — the gate has been (partly) hollowed "
@@ -239,7 +210,7 @@ def main() -> int:
                   file=sys.stderr)
             return EXIT_VIOLATION
 
-    if result.returncode != 0 and args.ci:
+    if returncode != 0 and args.ci:
         print("FAIL: pint reported blocking rule findings — see "
               "docs/internal/pint-lint-baseline.md for the policy + exemptions",
               file=sys.stderr)

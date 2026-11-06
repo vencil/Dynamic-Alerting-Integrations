@@ -49,7 +49,7 @@ updated_at: 2026-08-07
 >
 > 這個下界也是 **pint 版本 bump 後偵測解析行為改變的唯一機械手段**：若未來版本不再解析某個 rule 檔，其餘規則照樣掃綠，只有計數下降會紅。**每次動 `PINT_VERSION` 都要重量一次。**
 >
-> 同時修掉一個 **dead-code bug**：pint **無條件**上色（不偵測 TTY），wrapper 用 `capture_output=True` 收到的是 `\x1b[2mentries=\x1b[0m\x1b[94m393\x1b[0m`，原本的 `entries=(\d+)` **永遠 match 不到** → 舊的 `entries == 0` 守衛在 CI 其實從未生效。現在先剝 ANSI SGR 再比對，且 `--ci` 下**讀不到 `entries=` 即 fail**（不再靜默跳過守衛）。
+> 同時修掉一個 **dead-code bug**：pint **無條件**上色（不偵測 TTY），wrapper 用 `capture_output=True` 收到的是 `\x1b[2mentries=\x1b[0m\x1b[94m393\x1b[0m`，原本的 `entries=(\d+)` **永遠 match 不到** → 舊的 `entries == 0` 守衛在 CI 其實從未生效。現在先剝 ANSI SGR 再比對；**讀不到 `entries=` 代表 pint 沒跑成，結束碼 2**，帶不帶 `--ci` 都一樣。缺 pint（也沒有 docker）同樣回 2（#3611，見 [`iac-lint-baseline.md`](iac-lint-baseline.md) 的「引擎缺席或沒跑成」）。
 
 ## Disabled checks（idiom false-positives，非 bug）
 

@@ -42,9 +42,18 @@ def test_fallback_image_is_digest_pinned(name, image):
 
 
 def test_k8s_manifests_inherits_pinned_kube_linter():
-    # check_k8s_manifests.py imports KUBE_LINTER_IMAGE from check_iac_helm — make
-    # sure that shared import is the digest-pinned one (no separate mutable copy).
+    # check_k8s_manifests.py locates kube-linter through check_iac_helm's
+    # locate_kube_linter (#3611) — make sure its docker fallback is the
+    # digest-pinned image (no separate mutable copy).
     sys.path.insert(0, str(_REPO / "scripts" / "tools" / "lint"))
     import check_k8s_manifests  # noqa: E402
-    assert check_k8s_manifests.KUBE_LINTER_IMAGE == check_iac_helm.KUBE_LINTER_IMAGE
-    assert "@sha256:" in check_k8s_manifests.KUBE_LINTER_IMAGE
+    assert check_k8s_manifests.locate_kube_linter is check_iac_helm.locate_kube_linter
+    lib = check_k8s_manifests._lib_engine
+    real_which = lib.shutil.which
+    lib.shutil.which = lambda n: "/usr/bin/docker" if n == "docker" else None
+    try:
+        located = check_k8s_manifests.locate_kube_linter()
+    finally:
+        lib.shutil.which = real_which
+    assert located.image == check_iac_helm.KUBE_LINTER_IMAGE
+    assert "@sha256:" in located.image

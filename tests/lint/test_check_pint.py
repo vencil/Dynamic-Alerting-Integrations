@@ -19,7 +19,10 @@ can drift APART while CI stays green:
 """
 import importlib.util
 import re
+import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -176,15 +179,21 @@ def test_entries_floor_survives_pints_ansi_coloured_output():
         '"Checking Prometheus rules"\x1b[0m \x1b[2mentries=\x1b[0m\x1b[94m393\x1b[0m '
         '\x1b[2mworkers=\x1b[0m\x1b[94m10\x1b[0m\n'
     )
-    m = mod._ENTRIES_RE.search(mod._ANSI_SGR_RE.sub("", real_log_line))
-    assert m and m.group(1) == "393", (
+    # The probe lives in _lib_engine's pint proof since #3611: a pint run
+    # without `entries=` is no run at all (rc 2), not a floor to skip.
+    proof = mod._lib_engine.PROOFS[("pint", "lint")]
+
+    def _entries(stderr):
+        return proof(subprocess.CompletedProcess(["pint"], 0, "", stderr))[0]
+
+    assert _entries(real_log_line) == 393, (
         "the entries= probe must survive pint's ANSI colouring — otherwise the "
         "non-vacuity floor silently never runs"
     )
     # …and it must not depend on the colouring being there.
-    plain = mod._ENTRIES_RE.search(
-        mod._ANSI_SGR_RE.sub("", 'msg="Checking Prometheus rules" entries=393\n'))
-    assert plain and plain.group(1) == "393"
+    assert _entries('msg="Checking Prometheus rules" entries=393\n') == 393
+    with pytest.raises(mod._lib_engine.NoProof):
+        _entries('level=ERROR msg="Failed to parse .pint.hcl"\n')
 
     floor = mod._MIN_PINT_ENTRIES
     assert isinstance(floor, int)
@@ -221,3 +230,59 @@ def test_entries_floor_survives_pints_ansi_coloured_output():
         f"itself would fail. Ratchet _MIN_PINT_ENTRIES and _PINT_ENTRIES_AT_MEASURE "
         f"together — check_pint.py's own failure message prints both values."
     )
+
+
+# ---------------------------------------------------------------------------
+# main() exit codes, the wrapper as a process with a stand-in pint (#3611)
+# ---------------------------------------------------------------------------
+_PINT_SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "lint" / "check_pint.py"
+
+
+def _pint_wrapper(tmp_path, *, ci, rc=None, stderr=""):
+    """Run check_pint.py with PATH holding only a stand-in pint (``rc=None``:
+    no pint and no docker at all)."""
+    import os
+    import sys
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    if rc is not None:
+        exe = bin_dir / "pint"
+        exe.write_text(f"#!/bin/sh\nprintf '%s\\n' '{stderr}' >&2\nexit {rc}\n",
+                       encoding="utf-8")
+        exe.chmod(0o755)
+    env = dict(os.environ, PATH=str(bin_dir))
+    return subprocess.run([sys.executable, str(_PINT_SCRIPT), *(["--ci"] if ci else [])],
+                          capture_output=True, text=True, encoding="utf-8",
+                          timeout=120, env=env, stdin=subprocess.DEVNULL)
+
+
+@pytest.mark.parametrize("ci", [True, False], ids=["ci", "dev-box"])
+def test_no_pint_at_all_is_rc_2_with_or_without_ci(tmp_path, ci):
+    """#3611 Q1 (owner 2026-11-06): it was rc 1 under --ci (read as findings)
+    and a WARN with rc 0 without it."""
+    proc = _pint_wrapper(tmp_path, ci=ci)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "pint is not available" in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("ci", [True, False], ids=["ci", "dev-box"])
+def test_a_pint_run_without_its_summary_is_rc_2(tmp_path, ci):
+    """No `entries=N`: pint stopped before parsing its rules (.pint.hcl parse
+    error, failed pull). It was rc 1 under --ci and rc 0 without it."""
+    proc = _pint_wrapper(tmp_path, ci=ci, rc=1, stderr="level=ERROR msg=bad config")
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "bad config" in proc.stderr, proc.stderr
+
+
+def test_findings_are_rc_1_only_with_ci(tmp_path):
+    mod = _wrapper_module()
+    ok = f"entries={mod._MIN_PINT_ENTRIES + 1}"
+    assert _pint_wrapper(tmp_path, ci=True, rc=1, stderr=ok).returncode == 1
+    assert _pint_wrapper(tmp_path, ci=False, rc=1, stderr=ok).returncode == 0
+    assert _pint_wrapper(tmp_path, ci=True, rc=0, stderr=ok).returncode == 0
+
+
+def test_the_entries_floor_is_a_finding_under_ci(tmp_path):
+    mod = _wrapper_module()
+    low = f"entries={mod._MIN_PINT_ENTRIES - 1}"
+    assert _pint_wrapper(tmp_path, ci=True, rc=0, stderr=low).returncode == 1

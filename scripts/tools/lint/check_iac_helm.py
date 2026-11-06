@@ -31,12 +31,14 @@ them), and one audit surface (this dict + docs/internal/iac-lint-baseline.md)
 beats grepping every chart. There is therefore NO PR-body bypass for L2 —
 exemptions go through the registry (Critical is never exemptable).
 
-Engines are located as binary-on-PATH first (CI installs them), else Docker:
+Engines are located through _lib_engine, binary-on-PATH first (CI and
+session-start.sh install them), else Docker:
   helm        -> `helm` | docker run alpine/helm:<ver>
   kube-linter -> `kube-linter` | docker run stackrox/kube-linter:<ver>
-With --ci the engines are REQUIRED (exit 2 if missing) so Mode B can't silently
-skip in CI; without --ci, Mode B is skipped with a WARN when engines are
-absent (local dev without helm/kube-linter still gets Mode A).
+The engines are REQUIRED with or without --ci (#3611, owner 2026-11-06): an
+engine that is missing, or that ran without proving it linted something, is
+exit 2 — never a green Mode-B-less run. To skip the hook, use pre-commit's
+own `SKIP=iac-helm-sast-check` (shown as Skipped, not Passed).
 
 Usage:
     python3 scripts/tools/lint/check_iac_helm.py [--ci]
@@ -45,18 +47,15 @@ Usage:
 Exit codes:
     0  no BLOCK findings (WARN/INFO/baseline may be present)
     1  BLOCK findings present (only when --ci)
-    2  caller-error: could not RUN the check (helm render or kube-linter
-       failed/unparseable on a chart) — fix the chart/engine, then retry
-    3  engines required (--ci) but unavailable
+    2  no verdict: an engine is missing, or helm / kube-linter did not run on
+       a chart (failed, rendered nothing, printed no report) — fix the
+       chart / environment, then retry
 """
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -70,6 +69,7 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # Docker flat layout
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_engine  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 KUBE_LINTER_VERSION = "v0.7.4"
@@ -219,24 +219,19 @@ def find_capabilities_add(rendered_yaml: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Engines
 # ---------------------------------------------------------------------------
-def locate_helm() -> tuple[str | None, str | None]:
-    if shutil.which("helm"):
-        return ("binary", shutil.which("helm"))
-    if shutil.which("docker"):
-        return ("docker", None)
-    return (None, None)
+def locate_helm() -> "_lib_engine.Located | _lib_engine.NoVerdict":
+    return _lib_engine.locate("helm", docker_image=HELM_IMAGE)
 
 
-def locate_kube_linter() -> tuple[str | None, str | None]:
-    if shutil.which("kube-linter"):
-        return ("binary", shutil.which("kube-linter"))
-    if shutil.which("docker"):
-        return ("docker", None)
-    return (None, None)
+def locate_kube_linter() -> "_lib_engine.Located | _lib_engine.NoVerdict":
+    return _lib_engine.locate("kube-linter", docker_image=KUBE_LINTER_IMAGE)
 
 
-def engines_available() -> bool:
-    return locate_helm()[0] is not None and locate_kube_linter()[0] is not None
+def describe(located) -> str:
+    """One word for `--list`: where the engine runs from, or why it cannot."""
+    if isinstance(located, _lib_engine.NoVerdict):
+        return f"unavailable ({located.reason})"
+    return located.describe()
 
 
 # Values a chart refuses to render without, applied to every variant as
@@ -254,47 +249,33 @@ RENDER_BASE_SETS: dict[str, list[str]] = {
 }
 
 
-def helm_render(chart_dir: str, values_rel: str | None) -> tuple[str | None, str]:
-    """Render a chart (optionally with a -f values override). (text|None, err)."""
-    mode, binary = locate_helm()
+def helm_render(chart_dir: str, values_rel: str | None) -> "_lib_engine.Result":
+    """Render a chart (optionally with a -f values override): a Ran whose
+    ``data`` is the rendered text, or a NoVerdict (helm missing, failed, or
+    rendered nothing)."""
+    located = locate_helm()
+    if isinstance(located, _lib_engine.NoVerdict):
+        return located
     args = ["template", "r"]
     for kv in RENDER_BASE_SETS.get(chart_name(chart_dir), []):
         args += ["--set", kv]
-    if mode == "binary":
-        cmd = [binary, *args, str(REPO_ROOT / chart_dir)]
-        if values_rel:
-            cmd += ["-f", str(REPO_ROOT / values_rel)]
-        cmd += ["--namespace", LINT_NAMESPACE]
-        cwd: str | None = str(REPO_ROOT)
-    elif mode == "docker":
-        cmd = [
-            "docker", "run", "--rm", "-v", f"{REPO_ROOT.as_posix()}:/repo",
-            HELM_IMAGE, *args, f"/repo/{chart_dir}",
-        ]
-        if values_rel:
-            cmd += ["-f", f"/repo/{values_rel}"]
-        cmd += ["--namespace", LINT_NAMESPACE]
-        cwd = None
-    else:
-        return (None, "helm unavailable")
-    try:
-        # encoding/errors explicit: helm output carries UTF-8 (em-dashes, CJK
-        # in chart comments) which would crash text=True under a cp950/locale
-        # default on Windows hosts.
-        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=120)
-    except (subprocess.TimeoutExpired, OSError) as e:
-        return (None, f"helm invocation failed: {e}")
-    if proc.returncode != 0:
-        return (None, (proc.stderr or proc.stdout or "render failed").strip().splitlines()[0] if (proc.stderr or proc.stdout) else "render failed")
-    return (proc.stdout, "")
+    root = str(REPO_ROOT) if located.mode == "binary" else "/repo"
+    args.append(f"{root}/{chart_dir}")
+    if values_rel:
+        args += ["-f", f"{root}/{values_rel}"]
+    args += ["--namespace", LINT_NAMESPACE]
+    return _lib_engine.run(
+        located, "template", args, timeout=120,
+        cwd=str(REPO_ROOT) if located.mode == "binary" else None,
+        docker_run=["-v", f"{REPO_ROOT.as_posix()}:/repo"])
 
 
-def kube_linter_lint(rendered_yaml: str) -> list[dict] | None:
-    """Lint a rendered manifest. Returns kube-linter Reports, or None on error."""
-    mode, binary = locate_kube_linter()
-    if mode is None:
-        return None
+def kube_linter_lint(rendered_yaml: str) -> "_lib_engine.Result":
+    """Lint a rendered manifest: a Ran whose ``data`` is kube-linter's
+    Reports, or a NoVerdict (missing, failed, or printed no report)."""
+    located = locate_kube_linter()
+    if isinstance(located, _lib_engine.NoVerdict):
+        return located
     with tempfile.TemporaryDirectory() as td:
         manifest = Path(td) / "manifest.yaml"
         manifest.write_text(rendered_yaml, encoding="utf-8", newline="\n")
@@ -302,40 +283,20 @@ def kube_linter_lint(rendered_yaml: str) -> list[dict] | None:
         cfg_src = REPO_ROOT / ".kube-linter.yaml"
         if cfg_src.exists():
             cfg_local.write_text(cfg_src.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
-        if mode == "binary":
-            cmd = [binary, "lint", "--format", "json"]
-            if cfg_local.exists():
-                cmd += ["--config", str(cfg_local)]
-            cmd += [str(manifest)]
-        else:  # docker
-            cmd = [
-                "docker", "run", "--rm", "-v", f"{Path(td).as_posix()}:/scan",
-                KUBE_LINTER_IMAGE, "lint", "--format", "json",
-            ]
-            if cfg_local.exists():
-                cmd += ["--config", "/scan/.kube-linter.yaml"]
-            cmd += ["/scan/manifest.yaml"]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True,
-                                  encoding="utf-8", errors="replace", timeout=120)
-        except (subprocess.TimeoutExpired, OSError) as e:
-            print(f"ERROR: kube-linter invocation failed: {e}", file=sys.stderr)
-            return None
-        out = (proc.stdout or "").strip()
-        if not out:
-            return [] if proc.returncode in (0, 1) else None
-        try:
-            data = json.loads(out)
-        except json.JSONDecodeError:
-            print(f"ERROR: kube-linter JSON parse failed:\n{out[:300]}", file=sys.stderr)
-            return None
-        return data.get("Reports") or []
+        root = td if located.mode == "binary" else "/scan"
+        args = ["lint", "--format", "json"]
+        if cfg_local.exists():
+            args += ["--config", f"{root}/.kube-linter.yaml"]
+        args.append(f"{root}/manifest.yaml")
+        return _lib_engine.run(
+            located, "lint", args, timeout=120,
+            docker_run=["-v", f"{Path(td).as_posix()}:/scan"])
 
 
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-def collect_findings(charts: list[str], strict: bool) -> dict[str, list[str]]:
+def collect_findings(charts: list[str]) -> dict[str, list[str]]:
     findings: dict[str, list[str]] = {
         "BLOCK": [], "WARN": [], "INFO": [], "CALLER_ERROR": []}
 
@@ -354,44 +315,36 @@ def collect_findings(charts: list[str], strict: bool) -> dict[str, list[str]]:
                 )
 
     # --- Mode B: render-then-lint ---
-    if not engines_available():
-        msg = ("helm + kube-linter required for Mode B but unavailable "
-               "(install both, or Docker for the containerized fallback)")
-        if strict:
-            findings["BLOCK"].append(f"[engine] {msg}")
-            findings["__engine_error__"] = ["1"]
-        else:
-            findings["WARN"].append(f"[engine] Mode B skipped — {msg}")
+    # Required with or without --ci (#3611 Q1): no engine is no verdict.
+    missing = [loc for loc in (locate_helm(), locate_kube_linter())
+               if isinstance(loc, _lib_engine.NoVerdict)]
+    if missing:
+        for nv in missing:
+            findings["CALLER_ERROR"].append(f"[engine] Mode B cannot run: {nv.reason}")
+        findings["__engine_error__"] = ["1"]
         return findings
 
     for chart_dir in charts:
         cname = chart_name(chart_dir)
         for values_rel in values_variants(chart_dir):
             variant = values_rel.rsplit("/", 1)[-1] if values_rel else "values.yaml"
-            rendered, err = helm_render(chart_dir, values_rel)
-            if rendered is None:
-                # The engine (helm) failed to RUN the check — that's a
-                # caller-error ("couldn't run"), NOT a security finding. Route
-                # it to the caller-error sentinel (exit 2) instead of folding it
-                # into BLOCK (exit 1, which means "found a non-compliant chart").
+            render = helm_render(chart_dir, values_rel)
+            if isinstance(render, _lib_engine.NoVerdict):
+                # helm did not RUN the check — no verdict (exit 2), NOT a
+                # security finding (exit 1, "found a non-compliant chart").
                 findings["CALLER_ERROR"].append(
-                    f"{chart_dir} [{variant}] [render] helm template failed "
-                    f"(Mode B gap): {err}"
-                )
+                    f"{chart_dir} [{variant}] [render] {render.reason}")
                 findings["__caller_error__"] = ["1"]
                 continue
-            # kube-linter findings
-            reports = kube_linter_lint(rendered)
-            if reports is None:
-                # kube-linter failed to execute / its output was unparseable —
-                # again "couldn't run", not a finding → caller-error (exit 2).
+            rendered = render.data
+            lint = kube_linter_lint(rendered)
+            if isinstance(lint, _lib_engine.NoVerdict):
                 findings["CALLER_ERROR"].append(
-                    f"{chart_dir} [{variant}] [engine] kube-linter failed/unparseable"
-                )
+                    f"{chart_dir} [{variant}] [engine] {lint.reason}")
                 findings["__caller_error__"] = ["1"]
                 continue
             seen: set[tuple[str, str]] = set()
-            for r in reports:
+            for r in lint.data:
                 check = r.get("Check", "?")
                 msg = (r.get("Diagnostic", {}) or {}).get("Message", "")
                 _emit(findings, cname, chart_dir, variant, check, msg, seen)
@@ -432,7 +385,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--ci", action="store_true",
-                        help="Exit non-zero on BLOCK; require engines for Mode B")
+                        help="Exit 1 on BLOCK findings")
     parser.add_argument("--list", action="store_true",
                         help="List charts + values variants and exit")
     args = parser.parse_args()
@@ -444,10 +397,11 @@ def main() -> int:
             variants = [v.rsplit("/", 1)[-1] if v else "values.yaml"
                         for v in values_variants(c)]
             print(f"  {c}  ->  {', '.join(variants)}")
-        print(f"\nhelm: {locate_helm()[0]} | kube-linter: {locate_kube_linter()[0]}")
+        print(f"\nhelm: {describe(locate_helm())} | "
+              f"kube-linter: {describe(locate_kube_linter())}")
         return EXIT_OK
 
-    findings = collect_findings(charts, strict=args.ci)
+    findings = collect_findings(charts)
     engine_error = findings.pop("__engine_error__", None)
     caller_error = findings.pop("__caller_error__", None)
 

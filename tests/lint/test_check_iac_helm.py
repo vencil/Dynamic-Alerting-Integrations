@@ -134,56 +134,85 @@ class TestDiscovery:
 # ---------------------------------------------------------------------------
 class TestEngineLocate:
     def test_helm_binary(self, monkeypatch):
-        monkeypatch.setattr(helm.shutil, "which",
+        monkeypatch.setattr(helm._lib_engine.shutil, "which",
                             lambda n: "/usr/bin/helm" if n == "helm" else None)
-        assert helm.locate_helm() == ("binary", "/usr/bin/helm")
+        loc = helm.locate_helm()
+        assert (loc.mode, loc.path) == ("binary", "/usr/bin/helm")
 
-    def test_helm_docker_fallback(self, monkeypatch):
-        monkeypatch.setattr(helm.shutil, "which",
+    def test_helm_docker_fallback_uses_the_pinned_image(self, monkeypatch):
+        monkeypatch.setattr(helm._lib_engine.shutil, "which",
                             lambda n: "/usr/bin/docker" if n == "docker" else None)
-        assert helm.locate_helm() == ("docker", None)
+        loc = helm.locate_helm()
+        assert (loc.mode, loc.image) == ("docker", helm.HELM_IMAGE)
+        assert helm.locate_kube_linter().image == helm.KUBE_LINTER_IMAGE
 
     def test_none(self, monkeypatch):
-        monkeypatch.setattr(helm.shutil, "which", lambda n: None)
-        assert helm.locate_helm() == (None, None)
-        assert helm.locate_kube_linter() == (None, None)
-        assert helm.engines_available() is False
+        monkeypatch.setattr(helm._lib_engine.shutil, "which", lambda n: None)
+        assert isinstance(helm.locate_helm(), helm._lib_engine.NoVerdict)
+        assert isinstance(helm.locate_kube_linter(), helm._lib_engine.NoVerdict)
 
 
 # ---------------------------------------------------------------------------
 # collect_findings orchestration (helm/kube-linter stubbed)
 # ---------------------------------------------------------------------------
+_E = helm._lib_engine
+_LOCATED = _E.Located("stub", "binary", path="/stub")
+
+
+def _ran(data):
+    return _E.Ran(data, None)
+
+
+def _no_verdict(why="did not run: stub"):
+    return _E.NoVerdict(why)
+
+
+def _engines_present(monkeypatch):
+    monkeypatch.setattr(helm, "locate_helm", lambda: _LOCATED)
+    monkeypatch.setattr(helm, "locate_kube_linter", lambda: _LOCATED)
+
+
+def _engines_missing(monkeypatch):
+    monkeypatch.setattr(helm, "helm_source_files", lambda: [])
+    monkeypatch.setattr(helm, "locate_helm", lambda: _LOCATED)
+    monkeypatch.setattr(helm, "locate_kube_linter",
+                        lambda: _no_verdict("kube-linter is not available (stub)"))
+
+
 def _stub_engines(monkeypatch, reports, rendered="kind: Deployment\n"):
+    """helm rendered *rendered* and kube-linter ran with *reports*; ``None``
+    reports is a kube-linter run without a verdict."""
     monkeypatch.setattr(helm, "helm_source_files", lambda: [])  # skip Mode A
-    monkeypatch.setattr(helm, "engines_available", lambda: True)
-    monkeypatch.setattr(helm, "helm_render", lambda c, v: (rendered, ""))
-    monkeypatch.setattr(helm, "kube_linter_lint", lambda r: reports)
+    _engines_present(monkeypatch)
+    monkeypatch.setattr(helm, "helm_render", lambda c, v: _ran(rendered))
+    monkeypatch.setattr(helm, "kube_linter_lint",
+                        lambda r: _no_verdict() if reports is None else _ran(reports))
 
 
 class TestCollectFindings:
     def test_critical_blocks(self, monkeypatch):
         _stub_engines(monkeypatch, [
             {"Check": "host-network", "Diagnostic": {"Message": "uses host network"}}])
-        f = helm.collect_findings(["helm/anychart"], strict=True)
+        f = helm.collect_findings(["helm/anychart"])
         assert any("host-network" in x and "CRITICAL" in x for x in f["BLOCK"])
 
     def test_registered_high_is_baseline(self, monkeypatch):
         _stub_engines(monkeypatch, [
             {"Check": "run-as-non-root", "Diagnostic": {"Message": "not runAsNonRoot"}}])
-        f = helm.collect_findings(["helm/vector"], strict=True)
+        f = helm.collect_findings(["helm/vector"])
         assert any("run-as-non-root" in x and "baseline-exempt" in x for x in f["WARN"])
         assert f["BLOCK"] == []
 
     def test_unregistered_high_blocks(self, monkeypatch):
         _stub_engines(monkeypatch, [
             {"Check": "run-as-non-root", "Diagnostic": {"Message": "x"}}])
-        f = helm.collect_findings(["helm/some-new-chart"], strict=True)
+        f = helm.collect_findings(["helm/some-new-chart"])
         assert any("UNREGISTERED" in x for x in f["BLOCK"])
 
     def test_low_is_info(self, monkeypatch):
         _stub_engines(monkeypatch, [
             {"Check": "pdb-unhealthy-pod-eviction-policy", "Diagnostic": {"Message": "x"}}])
-        f = helm.collect_findings(["helm/anychart"], strict=True)
+        f = helm.collect_findings(["helm/anychart"])
         assert any("pdb-unhealthy" in x for x in f["INFO"])
         assert f["BLOCK"] == []
 
@@ -191,21 +220,15 @@ class TestCollectFindings:
         rendered = "spec:\n  capabilities:\n    add: [\"NET_ADMIN\"]\n"
         _stub_engines(monkeypatch, [], rendered=rendered)
         # unregistered chart + caps.add => BLOCK (HIGH unregistered)
-        f = helm.collect_findings(["helm/newchart"], strict=True)
+        f = helm.collect_findings(["helm/newchart"])
         assert any("capabilities-add" in x for x in f["BLOCK"])
 
-    def test_engine_unavailable_strict_sets_sentinel(self, monkeypatch):
-        monkeypatch.setattr(helm, "helm_source_files", lambda: [])
-        monkeypatch.setattr(helm, "engines_available", lambda: False)
-        f = helm.collect_findings(["helm/x"], strict=True)
+    def test_engine_unavailable_sets_sentinel_and_never_skips(self, monkeypatch):
+        _engines_missing(monkeypatch)
+        f = helm.collect_findings(["helm/x"])
         assert "__engine_error__" in f
-
-    def test_engine_unavailable_lenient_warns(self, monkeypatch):
-        monkeypatch.setattr(helm, "helm_source_files", lambda: [])
-        monkeypatch.setattr(helm, "engines_available", lambda: False)
-        f = helm.collect_findings(["helm/x"], strict=False)
-        assert "__engine_error__" not in f
-        assert any("Mode B skipped" in x for x in f["WARN"])
+        assert any("not available" in x for x in f["CALLER_ERROR"])
+        assert not any("skipped" in x for x in f["WARN"])
 
 
 # ---------------------------------------------------------------------------
@@ -229,30 +252,28 @@ class TestMainExitCodes:
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert helm.main() == 1
 
-    def test_engine_missing_is_a_caller_error(self, monkeypatch):
-        # #3577/#3611: the scan did not run — the contract's 2, not a third code
-        monkeypatch.setattr(helm, "helm_source_files", lambda: [])
-        monkeypatch.setattr(helm, "engines_available", lambda: False)
+    @pytest.mark.parametrize("argv", [["prog", "--ci"], ["prog"]])
+    def test_engine_missing_is_a_caller_error_with_or_without_ci(self, monkeypatch, argv):
+        # #3611 Q1 (owner 2026-11-06): Mode B did not run — the contract's 2
+        # whether or not --ci was passed; it used to be a WARN and rc 0.
+        _engines_missing(monkeypatch)
         monkeypatch.setattr(helm, "find_charts", lambda: ["helm/x"])
-        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+        monkeypatch.setattr(sys, "argv", argv)
         assert helm.main() == 2
 
     def test_render_failure_is_caller_error(self, monkeypatch):
         # helm render failing is "couldn't run the check" => caller-error (2),
         # NOT a non-compliant-chart finding (1). (#452 / CodeRabbit #737)
         monkeypatch.setattr(helm, "helm_source_files", lambda: [])
-        monkeypatch.setattr(helm, "engines_available", lambda: True)
-        monkeypatch.setattr(helm, "helm_render", lambda c, v: (None, "boom"))
+        _engines_present(monkeypatch)
+        monkeypatch.setattr(helm, "helm_render", lambda c, v: _no_verdict("boom"))
         monkeypatch.setattr(helm, "find_charts", lambda: ["helm/x"])
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert helm.main() == 2
 
     def test_kube_linter_unparseable_is_caller_error(self, monkeypatch):
         # kube-linter failing/unparseable is "couldn't run" => caller-error (2).
-        monkeypatch.setattr(helm, "helm_source_files", lambda: [])
-        monkeypatch.setattr(helm, "engines_available", lambda: True)
-        monkeypatch.setattr(helm, "helm_render", lambda c, v: ("kind: x\n", ""))
-        monkeypatch.setattr(helm, "kube_linter_lint", lambda r: None)
+        _stub_engines(monkeypatch, None, rendered="kind: x\n")
         monkeypatch.setattr(helm, "find_charts", lambda: ["helm/x"])
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert helm.main() == 2
@@ -261,13 +282,13 @@ class TestMainExitCodes:
         # If BOTH a real CRITICAL finding AND a render failure are present,
         # the caller-error (couldn't fully run) wins over the violation exit.
         def _render(chart_dir, values_rel):
-            return (None, "boom") if "broken" in chart_dir else ("kind: x\n", "")
+            return _no_verdict("boom") if "broken" in chart_dir else _ran("kind: x\n")
 
         monkeypatch.setattr(helm, "helm_source_files", lambda: [])
-        monkeypatch.setattr(helm, "engines_available", lambda: True)
+        _engines_present(monkeypatch)
         monkeypatch.setattr(helm, "helm_render", _render)
-        monkeypatch.setattr(helm, "kube_linter_lint", lambda r: [
-            {"Check": "privileged-container", "Diagnostic": {"Message": "p"}}])
+        monkeypatch.setattr(helm, "kube_linter_lint", lambda r: _ran([
+            {"Check": "privileged-container", "Diagnostic": {"Message": "p"}}]))
         monkeypatch.setattr(helm, "find_charts",
                             lambda: ["helm/ok", "helm/broken"])
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
