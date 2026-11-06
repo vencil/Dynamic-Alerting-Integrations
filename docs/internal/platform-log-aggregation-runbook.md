@@ -199,8 +199,8 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
   並同步更新消費端那份。
 - vmauth 的內部 port（`auth.internalPort`）不經認證提供 `/debug/pprof`、
   `/flags`；只靠 NetworkPolicy 只放行 Service port 擋住，`networkPolicy` 要
-  保持開啟。runbook 裡 `kubectl run … wget :9428` 這類除錯指令在
-enforce 下需要帶帳密。
+  保持開啟。
+- runbook 裡那些起 busybox 直接打 :9428 的除錯 pod，在 enforce 下需要帶帳密。
 
 ## 2. Smoke-test LogsQL（#539 §4 AC5）
 
