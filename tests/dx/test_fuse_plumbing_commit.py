@@ -32,6 +32,13 @@ def _init_tmp_repo(tmp_path: Path) -> Path:
     subprocess.run(  # subprocess-timeout: ignore
         ["git", "init", "-q", "-b", "main", str(tmp_path)], check=True
     )
+    # The repo's own identity, so a later `git commit` (the tool's) never
+    # depends on the machine's global config: CI runners have none, and a
+    # missing identity is git's fatal 128, not the refusal a test may want.
+    for key, value in (("user.name", "t"), ("user.email", "t@example.com")):
+        subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(tmp_path), "config", key, value], check=True
+        )
     (tmp_path / "seed.txt").write_text("seed\n")
     env = os.environ.copy()
     env.update(
