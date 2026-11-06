@@ -568,40 +568,37 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #
 # Measured today — generators 93 (chart 8 / scaffold 42 / init 42 / onboard 1),
 # artifacts 87 COUNTED (exporter conf.d 19 / try-local 4 / recipes 0 / golden
-# fixtures 60 / da-tools smoke fixtures 4) plus 13 read but NOT counted by the
-# key floor (e2e-bench, see `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`) — 100
-# scanned in all. Each floor sits below its class's value; what it would read
-# if a whole group stopped yielding:
+# fixtures 60 / da-tools smoke fixtures 4). (The two e2e-bench placeholder
+# trees were read but never counted, #1544, and are gone since #1443.) Each
+# floor sits below its class's value; what it would read if a whole group
+# stopped yielding:
 #
 #   generators   chart 85 / scaffold 51 / init 51 / onboard 92
 #   artifacts    exporter 68 / golden 27 / try-local 83 / recipes 87 /
-#                smoke 83 / e2e-bench 87 (unchanged — it was never in the total)
+#                smoke 83
 #
 # (issue 1196: init stopped rendering its own 51-key copy — 36 of whose keys no
 #  alert read — and now renders scaffold's 42, so the generator total went
 #  102 -> 93. The floor did not move: this was dead keys leaving, not a reader
 #  going quiet, and 93 still clears 80.)
 #
-# ⚠️ The e2e-bench row is kept rather than deleted, so the row count stays ten
-# and so the reader can see that this floor has NOTHING to say about that group
-# in either direction. Its owner is the fifth floor, below.
-#
 # ⚠️ Stated honestly, BOTH ways — an earlier revision claimed each floor sits
 # "above what that class would read if a whole group stopped yielding", and that
-# claim FAILS on SIX of the ten rows above: TWO under the generator floor and
-# FOUR under the artifact one. They are named below rather than counted,
+# claim FAILS on FIVE of the nine rows above: TWO under the generator floor and
+# THREE under the artifact one. They are named below rather than counted,
 # because this line said "two of the nine rows" while inviting the reader to
 # redo the arithmetic — and doing it yielded four, so the sentence refuted
 # itself. "Two" was the PER-FLOOR count wearing the whole grid's denominator.
 # (Four became five at #1544: e2e-bench left the artifact denominator, so its
 # row went from "caught, 57 < 60" to "unreachable, the total does not move".
-# Five became six at #3258, which added the da-tools smoke fixture row.)
+# Five became six at #3258, which added the da-tools smoke fixture row, and
+# six became five at #1443, which removed the e2e-bench trees with their row.)
 #
 # ⛔ Which grouping produced these nine rows matters as much as the count, and
 # it is not the grouping any other figure in this file uses: generators are one
-# row per PRODUCER FACE (4), artifacts one row per DIRECTORY GROUP (6 — the
-# golden-fixture roots collapse into one row, the two e2e-bench roots into
-# another, the two da-tools smoke roots into a third). It is NOT the per-conf.d-root grouping used elsewhere in this module.
+# row per PRODUCER FACE (4), artifacts one row per DIRECTORY GROUP (5 — the
+# golden-fixture roots collapse into one row, the two da-tools smoke roots into
+# another). It is NOT the per-conf.d-root grouping used elsewhere in this module.
 # ⚠️ "Elsewhere" is ONE other grouping, not two: the bracket test's
 # `_artifact_groups` (an rsplit on `/conf.d`) and `conf_d_root` (the fifth
 # floor's, and this module's, definition of a root) produce the IDENTICAL
@@ -627,17 +624,16 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     SHRANK without emptying ("init dropped 30 of its 42 keys"), which nothing
 #     else sees.
 #   * artifact floor 75 does NOT catch try-local (83), the recipes roots (87,
-#     they carry no keys) or the da-tools smoke roots (83) — and cannot catch
-#     e2e-bench (87) at all, its keys being outside the denominator. 4 of its
-#     6 rows. The first two are covered by `_SHIPPED_CONFD_ROOTS`; smoke and
-#     e2e-bench are covered by the fifth floor.
+#     they carry no keys) or the da-tools smoke roots (83) — 3 of its 5 rows.
+#     The first two are covered by `_SHIPPED_CONFD_ROOTS`; smoke is covered by
+#     the fifth floor.
 # The two mechanisms are complements, not belt-and-braces; neither covers the
 # whole grid, and pretending otherwise is how the next person stops checking.
 #
 # ⛔ AND THE ARTIFACT BULLET STOPPED ONE SENTENCE SHORT OF ITS SIBLING (#1434).
 # The generator bullet says what its floor UNIQUELY watches; the artifact one
 # only said who covers the rows it misses, so the reader was left to assume the
-# other three rows are its own. They are not — and this is structural rather
+# other two rows are its own. They are not — and this is structural rather
 # than a fact about today's numbers. `_assert_shipped_roots_intact` and
 # `_assert_every_root_contributes` both run BEFORE `_assert_keys_floor` (see the
 # call order at the end of `_defaults_faces`), and the fifth floor fires on ANY
@@ -677,8 +673,8 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
-#     (#1544 took the two e2e-bench trees OUT of the artifact denominator — see
-#      `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS` below — so the artifact total went
+#     (#1544 took the two e2e-bench trees OUT of the artifact denominator — an
+#      exclusion set retired with those trees in #1443 — so the artifact total went
 #      72 -> 59 and the floor 60 -> 47 in the same commit. Both artifact figures
 #      here are UNCHANGED by that move (+6 / 12), on purpose: the point of the
 #      pairing was to remove bench's influence on the boundary, not to retune
@@ -728,67 +724,6 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # measured against "biggest group gone", DOWN against the floor.
 _DEFAULTS_GENERATOR_KEYS_FLOOR = 80
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 74
-
-# ── the artifact floor's DENOMINATOR, and why it is smaller than the scan ────
-#
-# ⛔ These roots are still SCANNED, still placement-checked, and still judged by
-# every other floor — including the fifth (`_DEFAULTS_CONFD_ROOTS`), which is
-# what makes "the bench tree stopped yielding" a red at all. What they are out
-# of is one arithmetic: the global artifact KEY total this floor compares
-# against `_DEFAULTS_ARTIFACT_KEYS_FLOOR`.
-#
-# WHY (#1544): `tests/e2e-bench/fixture/synthetic-v*/conf.d` are benchmark
-# fixtures, sized by whatever the current bench scenario needs. They contributed
-# 13 of 72 artifact keys, so a bench resize moved a GLOBAL floor that is
-# supposed to be a statement about the platform's real defaults surface — either
-# masking erosion elsewhere (bench grows, the total absorbs a real loss) or
-# demanding a floor edit for a change that means nothing about the product.
-#
-# ⛔ WHY HERE AND NOT IN THE SCAN. Counterfactual, measured: deleting
-# `tests/e2e-bench/fixture/synthetic-v2/conf.d` from the tree and running the
-# real gate exits 1 out of `_assert_every_root_contributes` — "conf.d root(s)
-# [...] contributed no artifact at all". Excluding these trees from
-# `_tracked_defaults_artifacts` / `_defaults_artifacts` instead would take that
-# report away with it, i.e. would fix an arithmetic by deleting a guard. The
-# exclusion therefore lives at the one place that owns the arithmetic and
-# nothing else: the artifact half of `_assert_keys_floor`, via
-# `_artifact_floor_faces` below.
-#
-# ⚠️ Adding a root here COSTS detection: every key under it becomes invisible to
-# this floor for good. The bar is "this tree's size is not a fact about the
-# product", not "this tree is under tests/" — the golden-fixture roots are
-# also fixtures and they stay IN, because they are the placement corpus the
-# defaults reader is specified against and their size only moves when that
-# specification does.
-# ⛔ AND THE SET IS NOT SELF-JUSTIFYING — it needs an OWNER and a TREE (#1544
-# round 2). Measured on the first cut of this change, which shipped the set
-# below with no invariant at all: adding `try-local/seed/conf.d` (a root pinned
-# in `_SHIPPED_CONFD_ROOTS`) took the denominator 59 -> 55 and, once the paired
-# headroom figures were updated as that test's own message instructs, the suite
-# was 163 passed and the gate rc=0. Adding an unrelated fixture root
-# (`tests/golden/fixtures/mixed-mode/conf.d`, 2 keys) left the gate's stdout
-# BYTE-IDENTICAL at rc=0, with the only red anywhere being one hardcoded pair in
-# the suite — and the pre-commit hook for this module runs `--ci`, not pytest,
-# so that edit reaches a local commit unopposed.
-#
-# The remedy is `_assert_excluded_roots_still_have_an_owner`, which runs on the
-# `--ci` path (it is called from `_artifact_floor_faces`, which the floor calls
-# on every run) rather than living in the suite. Its clauses are written out
-# there; the ONE-LINE version is: a root may stop being counted here only while
-# some OTHER floor still speaks for it, and only from the tree named next.
-#
-# ⚠️ TWO SPELLINGS ON PURPOSE, the same "change both, in the same commit" shape
-# as `_artifact_face` / `_artifact_rel`. The tree is what makes a membership
-# edit loud; the enumerated set is what makes the derivation auditable. Neither
-# alone resists a one-sided edit, and this is not a claim that a two-sided edit
-# is impossible — it is a claim that it can no longer happen by accident or in
-# silence.
-_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE = "tests/e2e-bench"
-
-_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS: frozenset[str] = frozenset({
-    "tests/e2e-bench/fixture/synthetic-v1/conf.d",
-    "tests/e2e-bench/fixture/synthetic-v2/conf.d",
-})
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every
@@ -842,12 +777,6 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
 # that one is UPWARD, measured against "biggest root gone", and asks for a
 # HIGHER floor. Same word, opposite directions, different baselines.
 #
-# ⛔ COUNTED, and for the two e2e-bench roots the gap above is not a gap but a
-# TOTAL blind spot: `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS` (#1544) takes them out
-# of that 87, so no amount of erosion under them will ever reach the key floor.
-# This floor is the only one that speaks for them, which is why the exclusion
-# was written as a change to the key floor's denominator and NOT as a change to
-# the scan — a scan-level exclusion removes them from this floor too.
 #
 # ⚠️ TWO FROZEN HISTORICAL MEASUREMENTS, both of the four-floor subset as it ran
 # at `72fdaf56` — the commit before this floor existed. They are kept BECAUSE
@@ -1031,8 +960,6 @@ _DEFAULTS_CONFD_ROOTS: frozenset[str] = frozenset({
     "components/threshold-exporter/config/conf.d",
     "rule-packs/recipes/examples/conf.d",
     "try-local/seed/conf.d",
-    "tests/e2e-bench/fixture/synthetic-v1/conf.d",
-    "tests/e2e-bench/fixture/synthetic-v2/conf.d",
     "tests/fixtures/da-tools-smoke/new/conf.d",
     "tests/fixtures/da-tools-smoke/old/conf.d",
     "tests/golden/fixtures/array-replace/conf.d",
@@ -2495,30 +2422,16 @@ def _assert_every_root_stays_loader_readable(
     Why nothing else catches it: `_is_defaults_artifact` matches a PREFIX, so
     the renamed file is still counted — same artifact count, same key count,
     every file floor and both key floors satisfied. And the GLOBAL key floor
-    cannot see this root either — since #1544 not for want of slack but
-    STRUCTURALLY: both `tests/e2e-bench/` roots sit outside that floor's
-    denominator entirely (`_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`), so their keys
-    are not a small contribution that vanishes inside the rounding, they are
-    not in the sum at all. No erosion under either root will ever reach that
-    floor, at any size, in any direction. It is total blindness, not thin
-    margin, and the two want different words.
+    cannot see a small root either: its whole contribution can vanish inside
+    the floor's slack. (Those bench trees are gone since #1443 — they held only
+    a placeholder `_defaults.yaml` that the bench script deletes and
+    regenerates — but the shape is any small non-shipped root.)
 
-    ⛔ AND THE SENTENCE THIS REPLACED WAS ALREADY FALSE BEFORE THAT MOVE, which
-    is the more useful half. It read "`synthetic-v2` contributes 12 and WOULD
-    trip the global floor", i.e. that the global floor happened to protect the
-    bigger bench fixture and not the smaller one. Re-measured at the parent
-    commit `5b7f6c3`, on its own constants (denominator 72, floor 60): zeroing
-    `synthetic-v2` leaves exactly 60, the floor's test is a strict `<`, and
-    `60 < 60` is False — it does NOT trip. Off by the boundary from the day it
-    was written, and nothing was checking, because no test reads this
-    paragraph.
-
-    The ARGUMENT it was making survives both corrections and gets stronger.
-    "The global floor protects the bench fixtures" was never true of either
-    root — first by one key, now by construction — so per-root remains the only
-    formulation that does not depend on which fixture happens to be bigger, and
-    since #1544 it is the only formulation that speaks for these two roots at
-    all.
+    ⛔ Per-root is the only formulation that does not depend on which fixture
+    happens to be bigger. Measured at `5b7f6c3` (denominator 72, floor 60):
+    zeroing the bigger bench fixture left exactly 60, and the floor's strict
+    `<` did NOT trip — "the global floor protects the bigger root" was false
+    by the boundary.
 
     ⛔ COUNTS FILES, NOT KEYS, and that is deliberate. A key floor here would
     need a per-root number, and #1411 locked the project out of
@@ -2878,189 +2791,6 @@ def _assert_every_root_contributes(
     # them against this.
 
 
-def _assert_excluded_roots_still_have_an_owner(
-        artifacts: dict[str, dict[str, KeyInfo]]) -> None:
-    """A root may leave this floor's denominator only while ANOTHER floor speaks.
-
-    ⛔ ON THE `--ci` PATH, not in the suite. `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`
-    shipped for one round with no invariant anywhere in this module: the only
-    thing opposing a membership edit was a hardcoded pair in
-    `test_the_headroom_note_states_both_directions_and_both_are_current`, and
-    the pre-commit hook for this file runs `--ci` and not pytest. Measured on
-    that build — adding an unrelated 2-key fixture root left the gate's stdout
-    byte-identical at rc=0. So this is called from `_artifact_floor_faces`,
-    which the floor calls on every run, and it raises `_GateViolation` like any
-    other breach.
-
-    FIVE clauses, and each names a DIFFERENT owner that has to still be there.
-    ⛔ THE ORDER IS LOAD-BEARING and was corrected by measurement, not chosen:
-    the clauses SHADOW each other, because a shipped root is never under the
-    bench tree. Written tree-first, the round-1 reviewer's own `try-local`
-    tamper came back with "does not live under the tree" — true, useless, and
-    it left clause 2 unreachable by any tamper at all (measured: 1 failed, the
-    shipped case, on the wrong message). Most specific diagnosis first:
-
-      1. NOT in `_SHIPPED_CONFD_ROOTS` — a shipped tree is by definition a fact
-         about the product, so both clause 2's bar and this floor's whole
-         subject exclude it. First because it is the sharpest thing that can be
-         said about such a root, and because clause 2 would otherwise answer
-         for it with a vaguer sentence.
-      2. under `_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE` — the bar this exclusion
-         was argued from is "this tree's size is not a fact about the product",
-         which no predicate can read off a path. The tree constant is that
-         judgement, written once; a root from anywhere else is a NEW judgement
-         and has to be argued in the commit that makes it, not slipped into a
-         set literal. ⚠️ Not redundant with clause 1 in either direction:
-         clause 1 can be satisfied by widening the tree, and clause 2 catches
-         the unrelated NON-shipped root that clause 1 says nothing about —
-         which is the tamper measured to leave the gate byte-identical.
-      3. pinned in `_DEFAULTS_CONFD_ROOTS` — this is the OWNER. The fifth floor
-         is what still reports the excluded tree going quiet, and it only looks
-         at roots pinned there. Measured: dropping these two entries takes the
-         gate to rc=1 and 60 tests red, so the ownership is real and not a
-         story told in a comment.
-      4. NOT in `_DEFAULTS_ROOTS_MAY_BE_EMPTY` — that list stands the fifth
-         floor's KEY watch down for a root. A root on both lists is watched by
-         nobody in either direction, which is the one combination this whole
-         mechanism must not be able to produce. ⚠️ NOT REACHABLE BY EDITING
-         THE CONSTANTS, and the two ways of trying are stopped by two
-         DIFFERENT things. Both measured, because the first wording here
-         checked ONE path and then concluded over ALL of them — the exact
-         shape ("a comment asserts a specific cause; one measurement refutes
-         it") this file keeps paying for:
-           * putting a root that is ALREADY on `_DEFAULTS_ROOTS_MAY_BE_EMPTY`
-             into the exclusion set — that list holds only
-             `rule-packs/recipes/examples/conf.d` today, which is SHIPPED, so
-             clause 1 answers first. This is the path the old wording checked,
-             and for it the old wording was right.
-           * putting an ALREADY-EXCLUDED root onto
-             `_DEFAULTS_ROOTS_MAY_BE_EMPTY` — clause 1 has nothing to say here
-             and never runs: `_assert_every_root_contributes` answers first,
-             from a different rule entirely (that list must be EARNED, and a
-             root carrying keys is refused with "contributes N threshold
-             key(s) today"). Measured on `synthetic-v1`, which is non-shipped,
-             under the tree and pinned, i.e. clean on clauses 1-3.
-         ⛔ AND "unreachable" IS ABOUT THE CONSTANTS, not about the message.
-         An earlier wording said the suite would be "asserting a message
-         nobody can produce"; that is false and was measured false — creating
-         a NEW zero-key fixture root under the tree and registering it in all
-         three tables reaches this clause and prints it. That is a change to
-         the repo's CONTENTS rather than to a table, which is precisely the
-         future combination this clause exists for. It is therefore covered by
-         that measurement and deliberately not by a test: a test would have to
-         manufacture the fixture, and the parametrised table next to it stays
-         a statement about tampering with constants.
-      5. every SCANNED root under the tree is in the set — otherwise the tree
-         and the set drift into disagreeing, and the tree constant degrades
-         into decoration. A new bench fixture with a `conf.d` therefore
-         arrives as a decision to make, not as a silent addition to a total.
-
-    ⛔ The CONVERSE of clause 5 is deliberately absent: a set entry that is not
-    scanned is NOT an error here. `_assert_every_root_contributes` already owns
-    "a pinned root stopped contributing" (clause 3 forces the pinning), and a
-    second copy of that report would race it with a worse message.
-
-    ⚠️ WHAT THIS DOES NOT DO: it cannot stop a maintainer who edits the tree
-    AND the set together. Nothing in this file can — the same is true of every
-    hand-maintained pin here. What it removes is the SILENT and the ACCIDENTAL
-    edit, which is what was measured to be free.
-    """
-    scanned_under_tree = {
-        root for root in (
-            _artifact_root_of_face(face) for face in artifacts)
-        if root is not None and (
-            root == _ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE
-            or root.startswith(_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE + "/"))}
-
-    for root in sorted(_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS):
-        if root in _SHIPPED_CONFD_ROOTS:
-            raise _GateViolation(
-                f"conf.d root {root!r} is SHIPPED (_SHIPPED_CONFD_ROOTS) and "
-                "cannot be excluded from the artifact key floor's denominator. "
-                "A shipped tree is the platform-defaults surface this floor "
-                "exists to measure; taking one out does not re-base the floor, "
-                "it deletes the measurement.\n"
-                "  Measured on the build that had no such clause: excluding "
-                "`try-local/seed/conf.d` and updating the paired headroom "
-                "figures left the suite green and the gate at rc=0, with the "
-                "per-root floor still catching that root DISAPPEARING but "
-                "nothing left watching it ERODE. (#1544)")
-        under_tree = (root == _ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE
-                      or root.startswith(_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE + "/"))
-        if not under_tree:
-            raise _GateViolation(
-                f"conf.d root {root!r} is in _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS "
-                f"but does not live under _ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE "
-                f"({_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE!r}). Leaving the artifact "
-                "key floor's denominator is a claim that this tree's SIZE is not "
-                "a fact about the product; that claim is made once, by the tree "
-                "constant, and a root from anywhere else is a new one.\n"
-                "  ⛔ Widening the tree is not a shortcut around this — it is the "
-                "same claim, and it belongs in the commit message with the "
-                "measurement that supports it. (#1544)")
-        if root not in _DEFAULTS_CONFD_ROOTS:
-            raise _GateViolation(
-                f"conf.d root {root!r} is excluded from the artifact key floor "
-                "but is not pinned in _DEFAULTS_CONFD_ROOTS, so NO floor is "
-                "left watching it: the global one no longer counts its keys and "
-                "the fifth one only looks at pinned roots. Pin it there, or "
-                "stop excluding it — those are the two states this mechanism "
-                "has. (#1544)")
-        if root in _DEFAULTS_ROOTS_MAY_BE_EMPTY:
-            raise _GateViolation(
-                f"conf.d root {root!r} is excluded from the artifact key floor "
-                "AND listed in _DEFAULTS_ROOTS_MAY_BE_EMPTY. The first stops "
-                "its keys being counted globally; the second stands the fifth "
-                "floor's key watch down for it. Together they are the one "
-                "combination that leaves a root unwatched in both directions. "
-                "Drop one. (#1544)")
-
-    unlisted = sorted(scanned_under_tree - _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS)
-    if unlisted:
-        raise _GateViolation(
-            f"conf.d root(s) {unlisted} sit under "
-            f"{_ARTIFACT_KEYS_FLOOR_EXCLUDED_TREE!r} but are NOT in "
-            "_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS, so the tree and the set "
-            "disagree about what is counted. Decide, in this commit: add them "
-            "to the set (their keys stop moving the global floor — check the "
-            "paired headroom figures) or narrow the tree.\n"
-            "  ⛔ This is not a request to make the set derived. Two spellings "
-            "that must agree is what makes a one-sided membership edit loud; "
-            "one derived spelling would make it silent again. (#1544)")
-
-
-def _artifact_floor_faces(
-    artifacts: dict[str, dict[str, KeyInfo]],
-) -> dict[str, dict[str, KeyInfo]]:
-    """`artifacts` minus the faces `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS` names.
-
-    ⛔ ONE implementation, and every artifact-side figure in the floor's message
-    is taken from its output — the key total, the face count and the empty-face
-    count. A message that counted 18 faces while the total counted 16 of them
-    would hand the reader an average that is true of nothing.
-
-    ⛔ A label that is not one of ours (`_artifact_rel` returns None) is KEPT.
-    A hermetic caller passing `{"an artifact": ...}` is stating its own
-    denominator, and silently dropping it would make this floor untestable by
-    exactly the probes that are supposed to hold it.
-
-    ⛔ AND THE SET IS CHECKED BEFORE IT IS APPLIED. This is the single place the
-    exclusion happens, so it is the single place the exclusion's own invariant
-    can be made unskippable — put it in `_assert_keys_floor` instead and every
-    other caller of this helper applies an unvalidated set.
-    """
-    _assert_excluded_roots_still_have_an_owner(artifacts)
-    return {face: keys for face, keys in artifacts.items()
-            if _artifact_root_of_face(face)
-            not in _ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS}
-
-
-def _artifact_root_of_face(face: str) -> str | None:
-    """The conf.d root behind an artifact face label, else None."""
-    rel = _artifact_rel(face)
-    return conf_d_root(rel) if rel is not None else None
-
-
 def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
                        artifacts: dict[str, dict[str, KeyInfo]]) -> None:
     """The only non-vacuity signal that moves when a reader silently stops reading.
@@ -3088,11 +2818,7 @@ def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
             "got smaller, re-measure and update the floor in the same commit, "
             "saying what shrank and why. (TRK-344 / #1392)")
 
-    # ⛔ The DENOMINATOR, not the scan (see `_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS`).
-    # Every face here was still read, still placement-checked and still judged by
-    # the four floors that ran before this one; what the excluded roots are out
-    # of is this comparison alone.
-    counted = _artifact_floor_faces(artifacts)
+    counted = artifacts
     n_art = sum(len(v) for v in counted.values())
     if n_art < _DEFAULTS_ARTIFACT_KEYS_FLOOR:
         # ⛔ Do not assert what did or did not change. The previous wording said
@@ -3105,10 +2831,7 @@ def _assert_keys_floor(generators: dict[str, dict[str, KeyInfo]],
             f"{_DEFAULTS_ARTIFACT_KEYS_FLOOR} "
             f"({len(_DEFAULTS_ARTIFACT_EXEMPT)} exempted, "
             f"{sum(1 for v in counted.values() if not v)} counted face(s) "
-            f"empty; {len(artifacts) - len(counted)} face(s) under "
-            f"{sorted(_ARTIFACT_KEYS_FLOOR_EXCLUDED_ROOTS)} are outside this "
-            "floor's denominator by design and were NOT counted — they are "
-            "still scanned and still guarded by the per-root floors).\n"
+            "empty).\n"
             "  If the face count is UNCHANGED: a `defaults:` section was renamed "
             "or re-nested and that file is now a blind spot — empty is legal for "
             "an artifact, so EMPTY-FACE will not say so. Repair the reader or the "
