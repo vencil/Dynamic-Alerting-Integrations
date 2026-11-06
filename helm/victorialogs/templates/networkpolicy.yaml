@@ -28,16 +28,16 @@
 # unless explicitly allowed, and same-namespace workloads that are not
 # deliberately impersonating a consumer are blocked. What it does NOT buy
 # is protection against a principal who can already create pods in THIS
-# namespace — for them the port stays unauthenticated ingest + query +
-# DELETE. Note that such a principal is already highly privileged here
+# namespace — for them, while `auth.mode` is observe, the port is still
+# unauthenticated ingest + query (in enforce, vmauth requires a consumer's
+# credentials; see values.yaml `auth`). Note that such a principal is already highly privileged here
 # (mounting any ConfigMap in a namespace needs no RBAC at all), so read
 # this as "an attacker already inside can also erase the evidence", not as
 # "anyone can walk in".
 # ⚠️ This is also the ceiling on any ingest-time classification done in
 # Vector (#1288): binding producer identity inside the pipeline cannot
-# constrain someone who writes to the store directly. Both candidate fixes
-# (enable `-httpAuthKey`; or move consumers behind namespace boundaries and
-# use `allowedNamespaces` throughout) are tracked in #1295.
+# constrain someone who writes to the store directly. #1295 closes that with
+# the vmauth sidecar (only `vector` may write) once `auth.mode` is enforce.
 #
 # ⚠️ Every `allowedPodSelectors` row is a SAME-NAMESPACE match: a k8s
 # NetworkPolicy `podSelector` with no `namespaceSelector` beside it selects
@@ -50,13 +50,12 @@
 # ::test_networkpolicy_locks_to_the_declared_consumer_set, so this list and
 # the values.yaml enumeration must be edited together with that test.
 #
-# Building auth (`-httpAuthKey`) into the chart is the deeper fix and is
-# tracked in #1295 (it is the only candidate that is independent of where
-# the consumers are deployed). NetworkPolicy remains the minimum bar — it
-# closes the cross-namespace and the incidental-reachability paths without
-# forcing every consumer to learn a token-rotation story — but per the
-# correction above it is not a boundary against same-namespace pod
-# creation, so do not cite it as one.
+# Authentication now sits in the pod itself (#1295): a vmauth sidecar holds
+# each consumer to its paths (values.yaml `auth`). ⚠️ In `auth.mode: observe`
+# (the default until every consumer is wired) requests without credentials
+# still pass, so this NetworkPolicy is still the only perimeter; in `enforce`
+# it becomes the outer layer. Either way it is not a boundary against
+# same-namespace pod creation — do not cite it as one.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

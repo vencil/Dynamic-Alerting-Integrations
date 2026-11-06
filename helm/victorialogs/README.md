@@ -45,6 +45,21 @@ After install, the in-cluster URLs are:
 | LogsQL HTTP query | `http://victorialogs.<ns>.svc:9428/select/logsql/query` |
 | `/metrics` (Prometheus scrape) | same port; annotations on the Service |
 
+### Consumer authorization (#1295)
+
+A vmauth sidecar owns the Service port; VictoriaLogs listens on loopback only.
+`auth.consumers` lists who may connect and on which paths (`vector`: `/insert`
+only; the readers: `/select` only), with each password in an operator-created
+Secret (hex, no trailing newline: `--from-literal=password="$(openssl rand -hex 32)"`).
+
+| `auth.mode` | Requests without credentials |
+|---|---|
+| `observe` (default) | reach every path — the migration step, **not a boundary** |
+| `enforce` | only `/health`, `/ping`, `/metrics` |
+
+In `enforce`, every endpoint above needs the consumer's Basic Auth
+credentials. Migration steps: `docs/internal/platform-log-aggregation-runbook.md` §1.2.
+
 ## Install
 
 ```bash

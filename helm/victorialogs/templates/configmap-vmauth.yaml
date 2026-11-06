@@ -1,0 +1,39 @@
+{{- /*
+vmauth's auth config (#1295), rendered from .Values.auth.consumers. Passwords
+are %{ENV} placeholders resolved inside the vmauth container from Secret-backed
+env vars; the ConfigMap holds no secret.
+*/}}
+{{- $backend := printf "http://127.0.0.1:%d" (int .Values.auth.backendPort) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "victorialogs.name" . }}-vmauth
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "victorialogs.labels" . | nindent 4 }}
+data:
+  auth.yml: |
+    # Requests without credentials (or with wrong ones) land here.
+    unauthorized_user:
+      url_map:
+    {{- if eq .Values.auth.mode "enforce" }}
+        # enforce: only probes and the metrics scrape.
+        - src_paths: ["/health", "/ping", "/metrics"]
+          url_prefix: {{ $backend | quote }}
+    {{- else }}
+        # observe: everything still passes (migration step, NOT a boundary).
+        - src_paths: ["/.*"]
+          url_prefix: {{ $backend | quote }}
+    {{- end }}
+    {{- $consumers := include "victorialogs.authConsumers" . | fromYamlArray }}
+    {{- if $consumers }}
+    users:
+    {{- range $consumers }}
+      {{- $env := include "victorialogs.consumerPasswordEnv" .name }}
+      - username: {{ .name | quote }}
+        password: "%{ {{- $env -}} }"
+        url_map:
+          - src_paths: {{ toJson .paths }}
+            url_prefix: {{ $backend | quote }}
+    {{- end }}
+    {{- end }}

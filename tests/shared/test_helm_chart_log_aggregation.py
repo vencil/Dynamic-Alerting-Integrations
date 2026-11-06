@@ -97,8 +97,8 @@ class TestVictoriaLogs:
         kept this whole suite green while severing the ADR-028 detection plane at
         the network layer (verified: dropping that row passed all 49 tests in this
         file). Equality also means ADDING a consumer must come through review
-        here, which is the right friction: every entry is an unauthenticated
-        reader/writer of a store with no auth on its HTTP listener, and the
+        here, which is the right friction: every entry reaches a store whose
+        listener is unauthenticated until `auth.mode: enforce` (#1295), and the
         trust-boundary rule in values.yaml (platform-trusted, or the gateway as
         the sole tenant-facing authorization plane) has to be re-argued each
         time.
@@ -544,7 +544,7 @@ class TestChargebackAggregator:
     @_needs_helm
     def test_victorialogs_extra_env_renders(self, repo_root: Path) -> None:
         """#566 Q5: victorialogs accepts extraEnv too — needed for
-        future `-httpAuthKey` Secret-ref wiring without forking chart."""
+        Secret-ref env wiring without forking the chart."""
         docs = _render(repo_root / "helm/victorialogs", sets={
             "extraEnv[0].name": "HTTP_AUTH_KEY",
             "extraEnv[0].value": "k",
