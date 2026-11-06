@@ -885,7 +885,8 @@ docker-build-all: ## 建 8 個 self-built image（local --load，無 push；#474
 	@docker buildx build --load -t local-test:federation-audit-sidecar helm/federation-gateway/audit-sidecar
 	@docker buildx build --load -t local-test:vector-projection-gate helm/vector/projection-gate
 	@# try-local 的產生器服務 runtime（#2903）：只給 demo compose 用、從不發布。
-	@docker buildx build --load -t local-test:try-local-generator try-local/generator
+	@# build context 是 repo root：da-guard stage 從 exporter 的 Go 建置（#3530）。
+	@docker buildx build --load -t local-test:try-local-generator -f try-local/generator/Dockerfile .
 
 # Trivy 版本釘：與 .github/workflows/** 每個 trivy-action 的 `version:`、
 # .devcontainer/install-trivy.sh 同版（tests/shared/test_toolchain_pin_parity.py）。
