@@ -3721,7 +3721,8 @@ class TestDatoolsPinCapability:
         the loop, every one looks fine) and the release reports success.
         """
         monkeypatch.setattr(bump_docs, "parse_command_map", dict)
-        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        with pytest.raises(bump_docs.CapabilityNotChecked):
+            bump_docs._check_datools_pin_capability("9.9.9")
 
     def test_empty_tool_files_fails_closed(self, monkeypatch):
         """build.sh parsing that returns nothing must fail the bump too.
@@ -3730,14 +3731,16 @@ class TestDatoolsPinCapability:
         dispatched command look unshipped.
         """
         monkeypatch.setattr(bump_docs, "parse_build_sh_tools", set)
-        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        with pytest.raises(bump_docs.CapabilityNotChecked):
+            bump_docs._check_datools_pin_capability("9.9.9")
 
     def test_unreadable_entrypoint_fails_closed(self, monkeypatch):
         def _boom():
             raise OSError("simulated missing entrypoint")
 
         monkeypatch.setattr(bump_docs, "parse_command_map", _boom)
-        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        with pytest.raises(bump_docs.CapabilityNotChecked):
+            bump_docs._check_datools_pin_capability("9.9.9")
 
     def test_zero_extracted_invocations_fails_closed(self, monkeypatch):
         """A corpus that yields no invocations must fail, not pass.
@@ -3750,14 +3753,16 @@ class TestDatoolsPinCapability:
         """
         monkeypatch.setattr(bump_docs, "iter_pinned_invocations",
                             lambda *a, **kw: [])
-        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        with pytest.raises(bump_docs.CapabilityNotChecked):
+            bump_docs._check_datools_pin_capability("9.9.9")
 
     def test_unreadable_build_sh_fails_closed(self, monkeypatch):
         def _boom():
             raise OSError("simulated missing build.sh")
 
         monkeypatch.setattr(bump_docs, "parse_build_sh_tools", _boom)
-        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        with pytest.raises(bump_docs.CapabilityNotChecked):
+            bump_docs._check_datools_pin_capability("9.9.9")
 
     @pytest.mark.parametrize("exc", [RuntimeError("corpus lost a file"),
                                      OSError("docs tree unreadable")])
@@ -3773,7 +3778,8 @@ class TestDatoolsPinCapability:
             raise exc
 
         monkeypatch.setattr(bump_docs, "pin_capability_doc_files", _boom)
-        assert bump_docs._check_datools_pin_capability("9.9.9") == 1
+        with pytest.raises(bump_docs.CapabilityNotChecked):
+            bump_docs._check_datools_pin_capability("9.9.9")
         assert "corpus" in capsys.readouterr().err
 
     def test_findings_are_counted_not_just_printed(self, monkeypatch):
@@ -3805,9 +3811,24 @@ class TestDatoolsPinCapability:
         cli_argv("bump_docs", "--tools", "9.9.9", "--dry-run")
         with pytest.raises(SystemExit) as exc:
             bump_docs.main()
-        assert exc.value.code != 0, (
+        assert exc.value.code == bump_docs.EXIT_VIOLATION == 1, (
             "a documented invocation the released image cannot run must fail "
-            "the bump; otherwise the check prints and the release proceeds")
+            "the bump as a finding (1); otherwise the check prints and the "
+            "release proceeds")
+
+    def test_main_exits_2_when_the_check_could_not_run(self, monkeypatch,
+                                                       cli_argv):
+        """"Could not check" is not "found a problem" (#3577, #3611).
+
+        A source the check could not read means the bump did not do its job —
+        the contract's 2 — and it must not be summed into, or hidden by, the
+        issue tally: with a finding in the same run, 2 still wins.
+        """
+        monkeypatch.setattr(bump_docs, "parse_command_map", dict)
+        cli_argv("bump_docs", "--tools", "9.9.9", "--dry-run")
+        with pytest.raises(SystemExit) as exc:
+            bump_docs.main()
+        assert exc.value.code == bump_docs.EXIT_CALLER_ERROR == 2
 
     def test_main_is_green_when_the_check_is(self, monkeypatch, cli_argv):
         """The counterpart: the finding, not merely running it, is what fails."""
@@ -3993,7 +4014,8 @@ class TestPortalPlaygroundPinCapability:
 
         monkeypatch.setattr(bump_docs, "parse_portal_playground_commands", _boom)
         cm, tf = self._oracle()
-        assert bump_docs._check_portal_playground_capability(cm, tf, "9.9.9") == 1
+        with pytest.raises(bump_docs.CapabilityNotChecked):
+            bump_docs._check_portal_playground_capability(cm, tf, "9.9.9")
 
     def test_the_portal_half_runs_even_when_the_doc_half_is_red(self,
                                                                 monkeypatch):

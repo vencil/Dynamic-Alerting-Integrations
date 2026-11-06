@@ -129,7 +129,7 @@ bash try-local/chaos.sh <tamper|stale|drift|failopen|heal>
 | `chaos.sh tamper` | 🔴 **Tamper status** CRITICAL | 一筆「已撤銷但未過期」的 token 復活（un-revoke） |
 | `chaos.sh stale` | 🔴 **Reconciler freshness** Stale + fail-closed rate() 爬升 | 對帳器停擺（上次成功 ~2000s 前 > 1800s 門檻） |
 | `chaos.sh drift` | 🟡 **Coverage integrity** + 侵蝕率 | 撤銷日誌 schema 漂移，數列解析失敗（`events_dropped` > 0） |
-| `chaos.sh failopen` | 🟡 **Gateway fail-open** | Gateway 讀不到撤銷集合、fail-open 放行（降級，非被攻破） |
+| `chaos.sh failopen` | 🟡 **Gateway fail-open** | Gateway 讀不到撤銷集合、沿用前一份（此後的撤銷不生效；冷啟動的 worker 不執行任何撤銷）（降級，非被攻破） |
 | `chaos.sh heal` | ✅ 全部回綠 | 移除旗標 → 健康預設 |
 
 > 🧪 同樣的誠實框架：這些全是**合成的注入**，用來展示「壞掉長怎樣 + 偵測怎麼亮」。儀表板 JSON、門檻、alert 對齊仍是 production 正本，一個字都沒為 demo 改。

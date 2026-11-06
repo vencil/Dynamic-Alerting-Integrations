@@ -38,6 +38,7 @@ it); the shape, a11y, and drift-guard checks are pure JSON and run everywhere.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -557,3 +558,70 @@ def test_erosion_ratio_panel_maps_every_value():
             f"erosion ratio {v!r}: colour severity {csev} != text severity {tsev} "
             f"({text!r}) — colour and text contradict at this value"
         )
+
+
+# ── Read-failure posture wording (#2550) ─────────────────────────────────────────
+# revoked_check.lua's read-error path (pcall fails) never assigns `revoked`: the
+# worker keeps the set it had already loaded. Only a MISSING file empties it, and
+# only a worker whose FIRST load failed has nothing to keep. The panels used to
+# say the opposite ("revoked tokens ARE accepted", "ARE being let through"), which
+# sends an incident responder after the wrong posture. The alert's own wording is
+# pinned by tests/rulepacks/platform-federation-revocation_test.yaml
+# (exp_annotations); this pins the dashboard's.
+_LOAD_ERRORS = "federation_gateway_revocation_load_errors"
+
+
+def _panels_reading(panels: list[dict], metric: str) -> list[dict]:
+    return [
+        p for p in panels
+        if any(metric in t.get("expr", "") for t in p.get("targets", []))
+    ]
+
+
+def test_read_failure_panels_describe_the_kept_set_not_a_full_bypass():
+    panels = _panels_reading(_load_panels(), _LOAD_ERRORS)
+    assert len(panels) >= 2, (
+        f"expected the stat panel and the time-series panel to read {_LOAD_ERRORS}; "
+        f"found {[p.get('title') for p in panels]} — panel renamed or removed?"
+    )
+    for p in panels:
+        desc = p.get("description", "")
+        assert re.search(r"\b(the set it (had )?already (loaded|had)|"
+                         r"set it last loaded successfully)\b", desc), (
+            f"panel {p['title']!r} does not say a failed read KEEPS the set the "
+            f"gateway already loaded (revoked_check.lua read-error path, #2550)"
+        )
+        assert re.search(r"\bcold-start|\bFIRST load failed\b", desc), (
+            f"panel {p['title']!r} drops the cold-start exception: a worker whose "
+            f"first load failed has no previous set and enforces nothing"
+        )
+
+
+# Any phrasing of "revoked tokens are accepted / honoured / let through", any
+# case. Scoped to the panels that read the read-failure gauge: the MISSING
+# panel says exactly this, correctly — an absent file does empty the set.
+_FULL_BYPASS = re.compile(
+    r"revoked (federation )?tokens (are|ARE) (being )?"
+    r"(accepted|honou?red|let through)",
+    re.IGNORECASE,
+)
+
+
+def test_no_read_failure_panel_says_every_revoked_token_gets_through():
+    panels = _load_panels()
+    for p in _panels_reading(panels, _LOAD_ERRORS):
+        m = _FULL_BYPASS.search(p.get("description", ""))
+        assert m is None, (
+            f"panel {p['title']!r} says {m.group(0)!r}; a failed read keeps the "
+            f"set the gateway last loaded (#2550)"
+        )
+    # A panel that only CROSS-REFERENCES the read-failure case must not
+    # characterise it as a full bypass either.
+    for p in panels:
+        desc = p.get("description", "")
+        if "'Gateway fail-open'" in desc:
+            assert not re.search(r"Gateway fail-open'[^.]*" + _FULL_BYPASS.pattern,
+                                 desc, re.IGNORECASE), (
+                f"panel {p['title']!r} describes the read-failure case as a "
+                f"full bypass (#2550)"
+            )
