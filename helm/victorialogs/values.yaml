@@ -78,6 +78,85 @@ search:
 # Example: ["-loggerLevel=WARN", "-storage.minFreeDiskSpaceBytes=10GB"]
 extraArgs: []
 
+# ── Consumer authorization — #1295 ──────────────────────────────────────────
+# VictoriaLogs has one global Basic Auth credential at most, and anyone who can
+# POST /insert can write rows with any `log_type` — including the federation
+# evidence ADR-028 detects un-revokes from. So the store sits behind a vmauth
+# sidecar (VictoriaLogs' own recommendation): VictoriaLogs listens on
+# 127.0.0.1:<backendPort>, reachable only from inside this pod, and vmauth
+# takes the Service port and holds each consumer to its own paths.
+#
+# `consumers` is the single list of who may talk to the store and on which
+# paths. The username is the consumer's `name`; its password is key
+# `password` of `existingSecret`, a Secret in THIS namespace that the operator
+# creates (the chart never generates one: `helm template` / Argo CD cannot keep
+# a generated value stable across renders). Each consumer chart reads the same
+# password from its own namespace.
+# ⛔ Password format: hex only, no trailing newline —
+#   kubectl create secret generic <name> --from-literal=password="$(openssl rand -hex 32)"
+# vmauth substitutes the value into its YAML config as raw text before parsing
+# it: a `"` breaks the config (vmauth exits, the store goes down), a `\t`
+# style escape is silently rewritten, and a trailing newline (common with
+# --from-file) becomes part of the expected password.
+#
+# mode:
+#   observe  — consumers that present credentials are held to their paths;
+#              requests WITHOUT credentials (or with wrong ones) still reach
+#              every path, so an install whose consumers are not wired yet
+#              keeps working. A consumer with an empty existingSecret is not
+#              rendered. Use this to roll the credentials out.
+#   enforce  — only /health, /ping and /metrics pass without credentials, and
+#              every consumer must name its existingSecret (render fails
+#              otherwise). Switch once every consumer authenticates: the
+#              check is in docs/internal/platform-log-aggregation-runbook.md.
+# ⚠️ observe is NOT a security boundary — it is the migration step.
+auth:
+  mode: observe
+  # VictoriaLogs' own listener, on loopback only.
+  backendPort: 9429
+  # vmauth's own /health and /metrics (its per-user request counters).
+  # ⚠️ Also serves /debug/pprof and /flags without credentials; the
+  # NetworkPolicy admits only listenPort, so keep it enabled.
+  internalPort: 8426
+  # Concurrent requests vmauth forwards, globally and per user (the same
+  # value: in observe, every request without credentials is one user).
+  maxConcurrentRequests: 1000
+  image:
+    # renovate: datasource=docker depName=victoriametrics/vmauth
+    repository: victoriametrics/vmauth
+    tag: "v1.155.0"
+    digest: "sha256:dfeb63e5eff4bc32ed0fa2d43d8e85b717e8442c8b5c753e83c216669665a7de"
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+  consumers:
+    # Ingest. The ONLY writer: ADR-028's evidence rows must not be writable by
+    # anything but the shipper.
+    - name: vector
+      paths: ["/insert/.*"]
+      existingSecret: ""
+    # Query only.
+    - name: grafana
+      paths: ["/select/.*"]
+      existingSecret: ""
+    - name: chargeback-aggregator
+      paths: ["/select/.*"]
+      existingSecret: ""
+    # The tenant log-query authorization plane (ADR-021): it pins the verified
+    # AccountID header on every request it forwards.
+    - name: federation-gateway
+      paths: ["/select/.*"]
+      existingSecret: ""
+    # Reads the evidence stream (ADR-028).
+    - name: federation-reconciler
+      paths: ["/select/.*"]
+      existingSecret: ""
+
 # Persistent storage. The pod loses history without this — VictoriaLogs
 # stores indexed data on disk. Default size sized for federation audit
 # at ~50 RPS × 1 KB/line × 30d × 1.3 overhead ≈ 130 GB raw → ≈ 13 GB
@@ -136,8 +215,8 @@ service:
 prometheusScrapeAnnotations:
   enabled: true
 
-# NetworkPolicy — locks the :9428 HTTP API (ingest + query + DELETE,
-# all unauthenticated) to the legitimate consumers. T2-2 mitigation
+# NetworkPolicy — locks the :9428 HTTP API (ingest + query + DELETE;
+# unauthenticated unless auth.mode is enforce) to the legitimate consumers. T2-2 mitigation
 # from the #539 red-team: any in-cluster pod that can reach :9428 can
 # wipe history (`wget DELETE`), so the producer-side §2 hard rule is
 # necessary-but-not-sufficient — the store itself needs a perimeter.
@@ -170,7 +249,8 @@ prometheusScrapeAnnotations:
 # which SELF-DECLARED pod labels are admitted from THIS namespace. A pod
 # label is not an identity: any principal able to create a pod here can
 # wear one of these values, so this list does not hold against them —
-# and :9428 is unauthenticated ingest + query + DELETE. `allowedNamespaces`
+# and :9428 is unauthenticated ingest + query until `auth.mode: enforce`
+# (see `auth` above). `allowedNamespaces`
 # below is different in kind (namespace labels are control-plane assigned,
 # not self-declared) and IS a boundary. Treat the rows below as "which
 # workloads are supposed to talk to the store", i.e. a routing and

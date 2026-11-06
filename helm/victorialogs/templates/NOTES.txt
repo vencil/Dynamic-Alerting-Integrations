@@ -10,6 +10,16 @@ Ingest URL  (Vector elasticsearch sink, with /):
 Query URL (Grafana VictoriaLogs datasource):
   http://{{ include "victorialogs.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
 
+Consumer authorization (#1295): auth.mode={{ .Values.auth.mode }}.
+{{- if eq .Values.auth.mode "observe" }}
+  ⚠️ observe is the migration step, NOT a boundary: requests without
+  credentials still reach every path. Wire each consumer's Secret
+  (auth.consumers[].existingSecret), then set auth.mode=enforce.
+{{- else }}
+  Without credentials only /health, /ping and /metrics answer; each consumer
+  is held to its paths (vector: /insert, readers: /select).
+{{- end }}
+
 Hard rule (#539 §2): producers MUST NOT HTTP-push directly here. Logs
 arrive only via the Vector DaemonSet tailing container stdout. A
 log-store outage must never wedge the federation gateway.
