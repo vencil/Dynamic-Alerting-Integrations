@@ -1799,13 +1799,21 @@ groups:
           severity: warning
           alert_source: platform
         annotations:
-          summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
+          summary: "Federation gateway cannot read the revoked-set — it keeps enforcing the last set it loaded, so revocations made since are NOT in force (ADR-028 §fail-open)"
           description: |
             The federation-gateway is failing to read the revoked-set
-            (revoked.txt) and is failing OPEN by design — revoked federation
-            tokens ARE being accepted until their TTL (≤4h). This is the ADR-028
-            named Risk Acceptance (a deliberate availability trade-off) made
-            visible; the fail-closed hardening is tracked in #996. ACTION: check
+            (revoked.txt). A failed read does NOT clear the set: each gateway
+            worker keeps enforcing the set it last loaded successfully, so
+            tokens in that set are still rejected, but every revocation issued
+            after that load is NOT in force until a read succeeds (reloads are
+            request-driven, so on a quiet worker that load can predate the
+            failure by a long way).
+            ⛔ COLD START: a worker whose FIRST load failed has no previous set
+            and is enforcing NOTHING — revoked tokens are honoured there until
+            their TTL (≤4h). This is the ADR-028 named Risk Acceptance (a
+            deliberate availability trade-off: the gateway fails open rather
+            than erroring the request) made visible; the fail-closed hardening
+            is tracked in #996. ACTION: check
             the gateway's revoked.txt projected-volume mount and the
             tenant-federation-store ConfigMap; a persistent failure (vs a
             pod-start / remount blip) may indicate mount tampering (a DoS of the
@@ -1864,15 +1872,21 @@ groups:
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
 
       # --- Enforcement-plane staleness (ADR-028 D1 / #1235 / TRK-349) ---
-      # ⛔ These two are NOT the fail-open alert above, and must never be read
-      # as it. FederationGatewayRevocationLoadFailure means "the list could not
-      # be read, so revoked tokens ARE being let through". These two mean the
-      # opposite thing about traffic and a worse thing about coverage: the list
-      # WAS read and was REFUSED, so the gateway is still enforcing the set it
-      # had loaded before — nothing extra is being let through from THAT set,
-      # but every revocation issued since the offending line appeared is
-      # silently unenforced, and a worker whose FIRST load hit that line has no
-      # previous set and enforces nothing at all.
+      # ⛔ These two are NOT the read-failure alert above, and must never be
+      # read as it — the CAUSE differs, the posture does not.
+      # FederationGatewayRevocationLoadFailure means "the list could not be
+      # read". These two mean the list WAS read and was REFUSED. Either way the
+      # gateway is still enforcing the set it had loaded before — nothing extra
+      # is being let through from THAT set, but every revocation issued since
+      # is silently unenforced, and a worker whose FIRST load hit the problem
+      # has no previous set and enforces nothing at all (revoked_check.lua: a
+      # failed read and a refused reload both leave `revoked` unassigned; only
+      # a MISSING file empties it). What differs is the fix: a read failure is
+      # mount / ConfigMap reachability, a refusal is a bad line someone wrote.
+      # That is also why the severities differ despite the shared posture: a
+      # read failure is usually a transient I/O blip (pod start, remount) that
+      # clears on its own, so it is a debounced warning; a refusal persists
+      # until a human fixes the line and points at a write, so it is critical.
       #
       # ⛔ Neither shows up in FederationRevocationTamperSuspected. That
       # compares the audit log against the FILE, and the file does contain the
@@ -1922,7 +1936,7 @@ groups:
             on a pre-violation revoked set: every revocation issued after that
             line appeared is NOT in force, and a gateway worker whose first
             load hit it has no previous set and is enforcing nothing.
-            This is NOT the fail-open case
+            This is NOT the read-failure case
             (FederationGatewayRevocationLoadFailure): the list is readable, it
             is being refused. FederationRevocationTamperSuspected will NOT
             cover it either — that compares the audit log against the FILE, and

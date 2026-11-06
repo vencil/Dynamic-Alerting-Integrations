@@ -85,7 +85,7 @@ case "${scenario}" in
     ;;
   failopen)
     printf 'failopen\n' > "${MODE_FILE}"
-    echo "💥 Injected: FAIL-OPEN (gateway couldn't read the revoked set → allowed)."
+    echo "💥 Injected: FAIL-OPEN (gateway couldn't read the revoked set → keeps the previous set; newer revocations not in force)."
     echo "   Watch flip within ~${PUSH_INTERVAL}s at http://localhost:3000 :"
     echo "     • Gateway fail-open          →  🟡 (was ✓ OK)"
     echo "   Degraded, not breached — distinct from tamper. Rest stays green."
