@@ -198,10 +198,47 @@ tenants:
 tenants:
   db-a:
     _state_maintenance:
-      target: all
+      target: enable
 """)
             schedules = ms.load_recurring_schedules(d)
             assert schedules == {}
+
+    # #3620: the windows are the exporter's reading of the value
+    # (`da-guard effective` maintenance_recurring), switch included.
+    _RECURRING = """\
+      recurring:
+        - cron: "0 2 * * 0"
+          duration: "4h"
+          reason: "Weekly backup"
+"""
+
+    @pytest.mark.parametrize("head,want", [
+        ("", True),                                   # recurring only: the scheduler's
+        ("      enabled: true\n", True),
+        ("      target: enable\n", True),
+        ('      expires: "2099-01-01T00:00:00Z"\n', True),
+        ('      expires: "2020-01-01T00:00:00Z"\n', True),  # expires does not box the windows
+        ("      enabled: false\n", False),            # the switch says off
+        ("      target: disable\n", False),
+        ("      target: \"off\"\n", False),
+        ("      target: all\n", False),               # not a switch: a problem
+        ("      enabled: \"no\"\n", False),           # not a boolean: a problem
+        ("      target: enable\n      enabled: false\n", False),  # disagree: a problem
+        ('      expires: "2026-07-01"\n', False),     # #2000: the setting is ignored
+        ("      targt: enable\n", False),             # unknown field: a problem
+    ], ids=["recurring-only", "enabled-true", "target-enable", "expires-future",
+            "expires-past", "enabled-false", "target-disable", "target-off", "target-all",
+            "enabled-string", "contradiction", "expires-unparseable", "unknown-field"])
+    def test_the_switch_decides(self, head, want):
+        with tempfile.TemporaryDirectory() as d:
+            write_yaml(d, "db-a.yaml", "tenants:\n  db-a:\n    _state_maintenance:\n"
+                       + head + self._RECURRING)
+            schedules = ms.load_recurring_schedules(d)
+            if want:
+                assert schedules == {"db-a": [{"cron": "0 2 * * 0", "duration": "4h",
+                                               "reason": "Weekly backup"}]}
+            else:
+                assert schedules == {}
 
     def test_nonexistent_dir(self):
         schedules = ms.load_recurring_schedules("/nonexistent/path")

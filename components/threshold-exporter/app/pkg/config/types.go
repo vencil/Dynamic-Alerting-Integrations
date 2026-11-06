@@ -78,18 +78,25 @@ type silentModeStructured struct {
 	Reason  string `yaml:"reason"`
 }
 
-// maintenanceModeStructured is the intermediate struct for parsing structured _state_maintenance YAML.
+// maintenanceModeStructured is the intermediate struct for parsing
+// structured _state_maintenance YAML; stateValueOf (state_value.go) is its
+// one reader and decides what the fields mean (#3620).
 type maintenanceModeStructured struct {
-	Target    string              `yaml:"target"`  // "enable" (default if omitted)
-	Expires   string              `yaml:"expires"` // ISO 8601
+	Target string `yaml:"target"` // the switch: "enable" or a disable word; no default (#3620)
+	// Enabled is the boolean switch. stateValueOf checks its type on the
+	// generic decode first: decoded into a bool, yaml.v3 takes `off` / `yes`
+	// as booleans.
+	Enabled   *bool               `yaml:"enabled"`
+	Expires   string              `yaml:"expires"` // RFC3339
 	Reason    string              `yaml:"reason"`
 	Recurring []RecurringSchedule `yaml:"recurring"` // v1.11.0: periodic maintenance windows
 }
 
 // RecurringSchedule defines a periodic maintenance window (v1.11.0).
 // Used by da-tools maintenance-scheduler CronJob to create Alertmanager silences.
-// The Go exporter stores this data but does not act on it — the CronJob reads
-// conf.d/ and evaluates cron expressions at runtime.
+// The Go exporter does not act on it; it hands the windows to the CronJob
+// (`da-guard effective`'s maintenance_recurring, MaintenanceRecurringOf),
+// which evaluates the cron expressions at runtime.
 type RecurringSchedule struct {
 	Cron     string `yaml:"cron"`     // Standard 5-field cron expression
 	Duration string `yaml:"duration"` // Go-style duration (e.g., "4h", "30m")

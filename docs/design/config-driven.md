@@ -540,6 +540,21 @@ tenants:
       reason: "Scheduled maintenance window"
 ```
 
+**`_state_<filter>` 的值怎麼讀**（[#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620)；exporter、tenant-api 寫入閘門、`maintenance-scheduler` 共用同一個讀法）：
+
+| 寫法 | 結果 |
+|---|---|
+| `enable`（不分大小寫） | 開啟 |
+| `disable`（或 `disabled`／`off`／加引號的 `"false"`） | 關閉 |
+| 其他純量（`"yes"`、`"true"`、`"1"`、空字串、亂打的字） | **不開啟**，印 WARN 點名租戶、key 與值；tenant-api 拒收 |
+| 物件，開關說關（`target: disable` 或 `enabled: false`） | 關閉——不論有沒有 `expires`；`recurring:` 也不建 silence |
+| 物件，開關說開（`target: enable` 或 `enabled: true`） | 開啟，有 `expires` 就到期為止 |
+| 物件，沒寫開關、有 `expires` | 開啟到 `expires` 為止 |
+| 物件，沒寫開關、只有 `recurring:` | state filter **不開啟**；只由 `maintenance-scheduler` 在每個窗內建 silence |
+| 物件，`target` 與 `enabled` 互相矛盾、`target` 不是上面的字、`enabled` 不是 YAML 布林、有未知欄位，或什麼都沒說（只有 `reason`） | **不開啟**，印 WARN；tenant-api 拒收 |
+
+只有 `_state_maintenance` 接受物件；其他 `_state_<filter>` 寫成物件一律不開啟。沒寫這個 key 時照舊依 `state_filters` 的 `default_state`；寫了但讀不懂的值**不會**退回 `default_state`，而是不開啟——寧可多吵，不可靜默壓掉告警。檔案裡原本就有、這次寫入沒改動的值，tenant-api 只回 NOTICE。
+
 **Alertmanager inhibit_rules 範本**
 
 ```yaml

@@ -36,7 +36,8 @@ var operationalLogLines = []string{
 	`WARN: unknown silent mode "bogus" for tenant=ta, ignoring (valid: warning, critical, all, disable)`,
 	`WARN: failed to parse structured _silent_mode for tenant=tb`,
 	`WARN: invalid expires "nope" in _silent_mode for tenant=tc`,
-	`WARN: failed to parse structured _state_maintenance for tenant=td`,
+	// #3620: text that is no YAML mapping is a scalar the reader does not read.
+	`WARN: _state_maintenance for tenant=td: value "expires: [" is not read`,
 	`WARN: invalid expires "nope" in _state_maintenance for tenant=te`,
 	`WARN: unknown silent mode target "purple" in structured _silent_mode for tenant=tg, ignoring (valid: warning, critical, all, disable)`,
 }

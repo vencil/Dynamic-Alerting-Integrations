@@ -32,9 +32,11 @@ func scrapeWarnConfig(declared bool) *config.ThresholdConfig {
 	cfg := &config.ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]config.ScheduledValue{
-			"t-bad":      {"_state_maintenance": {Default: "target: all\nexpires: \"nope\"\n"}},
+			// #3620: `target: enable` — `all` is a _silent_mode target, which
+			// the state-value reader does not read (a problem of its own).
+			"t-bad":      {"_state_maintenance": {Default: "target: enable\nexpires: \"nope\"\n"}},
 			"t-bad-yaml": {"_state_maintenance": {Default: "expires: [\n"}},
-			"t-good":     {"_state_maintenance": {Default: "target: all\nexpires: \"2099-01-01T00:00:00Z\"\n"}},
+			"t-good":     {"_state_maintenance": {Default: "target: enable\nexpires: \"2099-01-01T00:00:00Z\"\n"}},
 			"t-silent":   {"_silent_mode": {Default: "target: all\nexpires: \"not-a-date\"\n"}},
 		},
 	}
@@ -86,7 +88,8 @@ func TestCollector_MaintenanceExpiresWarnOncePerScrape(t *testing.T) {
 				want int
 			}{
 				{`invalid expires "nope" in _state_maintenance for tenant=t-bad`, 1},
-				{`failed to parse structured _state_maintenance for tenant=t-bad-yaml`, 1},
+				// #3620: the one reader's WARN for a value that is not YAML.
+				{`_state_maintenance for tenant=t-bad-yaml: value "expires: [" is not read: it does not parse as YAML`, 1},
 				// Control: another expires WARN type, once per scrape before too.
 				{`invalid expires "not-a-date" in _silent_mode for tenant=t-silent`, 1},
 				// Control: a valid expires is not warned about.

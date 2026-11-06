@@ -341,14 +341,14 @@
       },
       "_state_maintenance": {
         "expires": "2026-12-31T23:59:59.5+08:00",
-        "target": "all"
+        "target": "enable"
       }
     },
     "fixture_dir": "mixed-mode",
-    "merged_hash": "36aacbc5f829c26c",
+    "merged_hash": "55d6e0ea40c5b5e4",
     "scenario": "yaml-date",
     "source_file": "yaml-date/tenants.yaml",
-    "source_hash": "a623de914a9c6a34",
+    "source_hash": "4c73eeadb45cbc3a",
     "tenant_id": "tenant-date"
   },
   {

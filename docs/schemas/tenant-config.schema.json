@@ -325,7 +325,7 @@
       ]
     },
     "stateFilterScalar": {
-      "$comment": "#3269: the scalar every _state_<filter> key takes (_state_maintenance's scalar branch too, via maintenanceMode). The enum is the exporter's state-filter reader (pkg/config/resolve.go resolveStateFiltersAt): 'enable', plus the words that switch a key off (pkg/config/parse.go disabledWords). TestStateFilterSchemaMatchesReader pins it in both directions. The reader also takes any other non-empty value as on; the schema names 'enable' alone for that (stricter, so it fails closed). A reserved key takes no schedule: the {default, overrides} / expires form is refused here as tenant-api's write gate refuses it, and the exporter reads its default alone.",
+      "$comment": "#3269: the scalar every _state_<filter> key takes (_state_maintenance's scalar branch too, via maintenanceMode). The enum is the exporter's state-filter reader (pkg/config/resolve.go resolveStateFiltersAt): 'enable', plus the words that switch a key off (pkg/config/parse.go disabledWords). TestStateFilterSchemaMatchesReader pins it in both directions. Since #3620 the reader takes no other value either: anything else is NOT on, with a WARN (pkg/config/state_value.go stateValueOf), and tenant-api's write gate refuses it. A reserved key takes no schedule: the {default, overrides} / expires form is refused here as tenant-api's write gate refuses it, and the exporter reads its default alone.",
       "type": "string",
       "title": "State Filter (Scalar)",
       "description": "'enable' turns this tenant's state filter on (for maintenance: the tenant is in maintenance, its alerts are suppressed via the user_state_filter{filter=\"maintenance\"} unless-join); 'disable' (or 'disabled', 'off', a quoted 'false') turns it off. A reserved key takes no time window or expires: the scheduled form ({default, overrides}) is not read and is refused (#3269). For one-time expiry or recurring windows of maintenance use _state_maintenance's structured object form.",
@@ -333,49 +333,67 @@
     },
     "maintenanceMode": {
       "title": "Maintenance Mode Configuration",
-      "description": "Suppress alerts at PromQL level (no TSDB records). Useful for planned maintenance. Distinct from silent_mode. Accepts the scalar state-filter shorthand ('enable'/'disable', like every other _state_* filter) OR the structured object (one-time expiry / recurring schedules).",
-      "$comment": "oneOf[scalar, object] mirrors silentMode. The scalar form is what the exporter actually accepts for any _state_* filter (resolve.go ResolveStateFiltersAt: any non-'disable' value enables; the structured branch is taken only when the value contains 'expires:'). Modelling it object-only previously rejected the valid scalar form at schema-validation time (#880 surfaced this on examples/redis-tenant.yaml).",
+      "description": "Suppress alerts at PromQL level (no TSDB records). Useful for planned maintenance. Distinct from silent_mode. Accepts the scalar state-filter shorthand ('enable'/'disable', like every other _state_* filter) OR the structured object (one-time expiry / recurring schedules). A value the exporter does not read is NOT maintenance (fail-closed: alerts keep firing) and logs a WARN (#3620).",
+      "$comment": "oneOf[scalar, object] mirrors silentMode. Both branches are the exporter's one reading of a _state_* value (pkg/config/state_value.go stateValueOf, #3620): the scalar branch is stateFilterScalar; the object branch is the structured form, read only for _state_maintenance. Its switch is target and/or enabled; with no switch the value is on exactly when it has expires, and recurring alone leaves the filter off (maintenance-scheduler silences the windows). The anyOf names the fields that make the object say something; the not refuses a target and an enabled that disagree. TestMaintenanceSchemaMatchesReader pins this branch to the reader. Modelling it object-only previously rejected the valid scalar form at schema-validation time (#880 surfaced this on examples/redis-tenant.yaml).",
       "oneOf": [
         { "$ref": "#/definitions/stateFilterScalar" },
         {
           "type": "object",
           "title": "Maintenance Mode (Structured)",
-          "description": "Structured form with optional one-time expiry and recurring schedules (cron).",
+          "description": "Structured form: a switch (target or enabled), an optional one-time expiry, and recurring schedules (cron). Switch off (target: disable, or enabled: false): maintenance is off, whatever else is written, and no recurring window is silenced. Switch on: maintenance is on until expires (indefinitely without one). No switch: maintenance is on until expires when expires is given; with recurring alone the filter stays off and only maintenance-scheduler's Alertmanager silences apply in each window.",
           "properties": {
             "target": {
               "type": "string",
               "title": "Target",
-              "description": "Status: 'enable' (default) or 'disable'. When 'disable', maintenance mode is inactive.",
-              "enum": ["enable", "disable"],
-              "default": "enable"
+              "description": "The switch, as a word: 'enable' turns maintenance on; 'disable' (or 'disabled', 'off', a quoted 'false') turns it off. No default: an object without target or enabled has no switch (see the object's description). Must agree with enabled when both are written.",
+              "enum": ["enable", "disable", "disabled", "off", "false"]
             },
             "enabled": {
               "type": "boolean",
               "title": "Enabled Flag",
-              "description": "Boolean equivalent of target field. true = 'enable', false = 'disable'. Use either 'target' (string) or 'enabled' (boolean).",
+              "description": "The switch, as a YAML boolean: true = 'enable', false = 'disable'. A string (e.g. 'off', 'no', a quoted 'true') is not read. Must agree with target when both are written.",
               "examples": [true, false]
             },
             "expires": {
               "type": "string",
               "title": "Expiration Timestamp (RFC3339)",
-              "description": "RFC3339 UTC timestamp (e.g. 2099-04-01T00:00:00Z). Maintenance mode auto-expires at this time. Optional; omit for indefinite maintenance. A value the exporter cannot parse as RFC3339 (e.g. a quoted date without time) logs a WARN and the whole _state_maintenance setting is ignored: maintenance is not active (#2000, fail-closed).",
+              "description": "RFC3339 UTC timestamp (e.g. 2099-04-01T00:00:00Z). Maintenance mode auto-expires at this time. With the switch on, omit it for indefinite maintenance; with no switch, expires is what turns maintenance on. A value the exporter cannot parse as RFC3339 (e.g. a quoted date without time) logs a WARN and the whole _state_maintenance setting is ignored, recurring included: maintenance is not active (#2000, fail-closed).",
               "format": "date-time",
               "examples": ["2099-03-15T06:00:00Z", "2099-03-20T18:00:00Z"]
             },
             "reason": {
               "type": "string",
               "title": "Reason",
-              "description": "Human-readable reason for maintenance. Optional; appears in observability logs.",
+              "description": "Human-readable reason for maintenance. Optional; appears in observability logs. Says nothing on its own: an object with reason alone is not read.",
               "examples": ["Planned DB migration", "Hardware upgrade", "System maintenance window"]
             },
             "recurring": {
               "type": "array",
               "title": "Recurring Maintenance Windows (v1.11.0+)",
-              "description": "List of periodic maintenance schedules (e.g., weekly backups). Processed by maintenance_scheduler.py CronJob to auto-generate Alertmanager silences.",
+              "description": "List of periodic maintenance schedules (e.g., weekly backups). Processed by maintenance_scheduler.py CronJob to auto-generate Alertmanager silences, unless the switch says off. Recurring alone does not turn the maintenance state filter on. At least one entry: an empty list says nothing (with no switch and no expires the exporter does not read the object).",
+              "minItems": 1,
               "items": {
                 "$ref": "#/definitions/recurringSchedule"
               }
             }
+          },
+          "anyOf": [
+            { "required": ["target"] },
+            { "required": ["enabled"] },
+            { "required": ["expires"] },
+            { "required": ["recurring"] }
+          ],
+          "not": {
+            "anyOf": [
+              {
+                "required": ["target", "enabled"],
+                "properties": { "target": { "enum": ["enable"] }, "enabled": { "enum": [false] } }
+              },
+              {
+                "required": ["target", "enabled"],
+                "properties": { "target": { "enum": ["disable", "disabled", "off", "false"] }, "enabled": { "enum": [true] } }
+              }
+            ]
           },
           "additionalProperties": false
         }

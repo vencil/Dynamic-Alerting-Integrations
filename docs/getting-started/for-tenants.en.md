@@ -147,6 +147,8 @@ tenants:
 
 In maintenance mode, alerts labelled `maintenance: mute` don't fire (PromQL-level suppression; threshold and custom alerts are all `mute`); cluster-survival, exporter-absent and single-instance critical down alerts (such as `PostgreSQLDown`) are `page` and keep firing — per alert see the *In maintenance* column of the [alert reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.en.md); for the scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes). Automatically resumes after expiry.
 
+The switch is `enabled: true` (a YAML boolean) or `target: enable`; to turn it off write `enabled: false` / `target: disable`, or `disable` as the whole value. A scalar is read only as `enable` or `disable` (and its aliases) — values such as `"yes"`, `"true"` or `"1"` do **not** turn maintenance mode on: the exporter logs a WARN and tenant-api refuses them. An object with `recurring:` and no switch gives only the Alertmanager silences inside each window; maintenance mode itself stays off. With no switch but an `expires`, maintenance mode is on from now until `expires` (outside the windows too), and the windows are still silenced. The full reading is in [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes) ([#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620)).
+
 > **Timezone:** The `expires` field uses RFC 3339 format (with timezone). Scheduled thresholds' `window` and recurring maintenance's `cron` both use **UTC timezone**.
 
 ### Silencing Specific Severities

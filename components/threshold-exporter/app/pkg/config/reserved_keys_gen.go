@@ -118,6 +118,13 @@ var reservedValueChecks = map[string]string{
 	"_silent_mode": "silent_mode",
 }
 
+// reservedPrefixValueChecks names, per prefix, the function that judges
+// the value of every key under it the registry does not list itself
+// (`prefixes.<p>.value.check`; bound in valueChecks).
+var reservedPrefixValueChecks = map[string]string{
+	"_state_": "state_filter",
+}
+
 // batchUnsettableKeys are the keys a tenant-api batch op's `unset` may
 // remove: `batch.unset`, and every retired key — on purpose: nothing
 // reads a retired key, and while it is on disk the write gate refuses

@@ -409,7 +409,8 @@ def _fake_da_guard(tmp_path: Path, stdout: str, rc: int = 0) -> str:
 def _doc(**tenant_over) -> dict:
     tenant = {"tenant_id": "t", "source_file": "t.yaml", "source_hash": "a", "merged_hash": "b",
               "defaults_chain": [], "effective_config": {"k": 1}, "profile": None,
-              "key_sources": {"k": {"layer": "tenant", "file": "t.yaml"}}, "not_served": {}}
+              "key_sources": {"k": {"layer": "tenant", "file": "t.yaml"}}, "not_served": {},
+              "maintenance_recurring": []}
     tenant.update(tenant_over)
     return {"schema": tv.EFFECTIVE_SCHEMA, "parse_failed": [], "unreadable": [], "tenants": {"t": tenant}}
 
@@ -451,6 +452,37 @@ def test_effective_without_not_served_is_named_too_old(tmp_path):
     with pytest.raises(tv.EffectiveError) as ei:
         tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
     assert ei.value.stale and "older than this tool" in str(ei.value)
+
+
+# #3620: maintenance_recurring — the windows maintenance-scheduler silences.
+
+def test_effective_without_maintenance_recurring_is_named_too_old(tmp_path):
+    doc = _doc()
+    del doc["tenants"]["t"]["maintenance_recurring"]
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert ei.value.stale and "maintenance_recurring" in str(ei.value)
+
+
+@pytest.mark.parametrize("rec", [{}, [1], [{"cron": 5}], [{"cron": "x", "extra": "y"}]],
+                         ids=["not-a-list", "not-a-mapping", "not-a-string", "unknown-field"])
+def test_maintenance_recurring_not_of_its_shape_is_refused(tmp_path, rec):
+    doc = _doc(maintenance_recurring=rec)
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert "maintenance_recurring" in str(ei.value) and ei.value.binary_fault and not ei.value.stale
+
+
+def test_real_da_guard_reports_maintenance_recurring(tmp_path, da_guard):
+    rec = "      recurring:\n        - cron: \"0 2 * * 0\"\n          duration: 4h\n"
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    (conf_d / "a.yaml").write_text("tenants:\n  a:\n    _state_maintenance:\n" + rec, encoding="utf-8")
+    (conf_d / "b.yaml").write_text("tenants:\n  b:\n    _state_maintenance:\n      enabled: false\n" + rec,
+                                   encoding="utf-8")
+    got = tv.load_effective(conf_d, binary=da_guard)
+    assert got["a"].maintenance_recurring == (tv.RecurringWindow("0 2 * * 0", "4h", ""),)
+    assert got["b"].maintenance_recurring == ()
 
 
 def test_missing_binary_raises_with_install_hint(tmp_path, monkeypatch):

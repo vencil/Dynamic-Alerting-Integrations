@@ -250,7 +250,7 @@ class TestRegistryShape:
         (lambda r: r["keys"]["_policies"].update({"batch": None}),
          "keys._policies.batch: allowed fields"),
         (lambda r: r["keys"]["_routing"]["value"].update({"check": "routing"}),
-         "only a key the exporter reads can name a check"),
+         "only a key or prefix the exporter reads can name a check"),
         (lambda r: r["keys"]["_silent_mode"]["value"].update({"check": ""}),
          "keys._silent_mode.value.check: must be a non-empty string"),
         (lambda r: r["keys"]["_profile"]["value"].update({"refers_to": "profiles"}),
@@ -263,8 +263,19 @@ class TestRegistryShape:
          "keys._profile.batch.unset: _profile decides the tenant's scope"),
         (lambda r: r["keys"]["_metadata"].update({"batch": {"unset": True}}),
          "keys._metadata.batch.unset: _metadata decides the tenant's scope"),
+        (lambda r: r["prefixes"]["_state_"].update({"batch": {"unset": True}}),
+         "prefixes._state_: allowed fields are read_by, description, note, value"),
+        # #3620: a prefix's value carries `check` alone, under the keys' rule.
         (lambda r: r["prefixes"]["_state_"].update({"value": {"shape": "scalar"}}),
-         "prefixes._state_: allowed fields are read_by, description, note"),
+         "prefixes._state_.value: a prefix's value carries check alone"),
+        (lambda r: r["prefixes"]["_state_"].update({"value": {"check": "state_filter", "shape": "scalar"}}),
+         "prefixes._state_.value: a prefix's value carries check alone"),
+        (lambda r: r["prefixes"]["_state_"].update({"value": None}),
+         "prefixes._state_.value: a prefix's value carries check alone"),
+        (lambda r: r["prefixes"]["_state_"].update({"value": {"check": ""}}),
+         "prefixes._state_.value.check: must be a non-empty string"),
+        (lambda r: r["prefixes"]["_routing"].update({"value": {"check": "routing"}}),
+         "prefixes._routing.value.check: only a key or prefix the exporter reads can name a check"),
     ])
     def test_refused(self, tmp_path, mutate, needle):
         reg = _registry()
@@ -297,6 +308,8 @@ class TestValueAndBatchDerivations:
         # #3227: `_silent_mode` is judged by the exporter's reader at the
         # write gate (valueChecks in pkg/config/reserved_values.go).
         assert d["value_checks"] == {"_silent_mode": "silent_mode"}
+        # #3620: every `_state_<filter>` by the exporter's one state-value reading.
+        assert d["prefix_value_checks"] == {"_state_": "state_filter"}
 
     def test_scope_follows_the_layers_the_exporter_reads_metadata_in(self):
         reg = _registry()
@@ -320,7 +333,15 @@ class TestValueAndBatchDerivations:
         go = _read(root, ss.GO_REL)
         assert '"_namespaces":       "scalar",' in go
         assert 'var reservedValueChecks = map[string]string{\n\t"_silent_mode": "silent_mode",\n}' in go
+        assert 'var reservedPrefixValueChecks = map[string]string{\n\t"_state_": "state_filter",\n}' in go
         assert "var scopeMetadataKeys = []string{}\n" in go
+
+    def test_a_prefix_check_reaches_the_go_file(self, tmp_path):
+        reg = _registry()
+        reg["prefixes"]["_state_"].pop("value")
+        root = _copy_tree(tmp_path, reg)
+        assert _cli("--root", str(root), "--update").returncode == 0
+        assert "var reservedPrefixValueChecks = map[string]string{}\n" in _read(root, ss.GO_REL)
 
 
 @pytest.mark.skipif(shutil.which("gofmt") is None, reason="gofmt not installed")

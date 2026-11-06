@@ -92,11 +92,18 @@ func TestValueShape_EveryTenantKeyHasOne(t *testing.T) {
 func TestValueChecks_BoundBothWays(t *testing.T) {
 	t.Parallel()
 	used := map[string]bool{}
+	named := map[string]string{}
 	for k, name := range reservedValueChecks {
+		named["keys."+k] = name
+	}
+	for p, name := range reservedPrefixValueChecks {
+		named["prefixes."+p] = name
+	}
+	for where, name := range named {
 		used[name] = true
 		c, ok := valueChecks[name]
 		if !ok || c.problem == nil || c.reading == nil || c.effect == "" {
-			t.Errorf("reserved_keys.json: %s names value.check %q, but valueChecks binds no complete check to it", k, name)
+			t.Errorf("reserved_keys.json: %s names value.check %q, but valueChecks binds no complete check to it", where, name)
 		}
 	}
 	for name := range valueChecks {
@@ -109,10 +116,13 @@ func TestValueChecks_BoundBothWays(t *testing.T) {
 func TestCheckReservedValue_UsesTheBinding(t *testing.T) {
 	t.Parallel()
 	names := map[string]string{"_probe": "probe"}
+	prefixNames := map[string]string{"_pfx_": "probe"}
 	fns := map[string]valueCheck{
-		"probe": {problem: func(sv ScheduledValue) string {
+		// The check is handed the key it judges (#3620: a prefix's check
+		// tells `_state_maintenance` from another filter by it).
+		"probe": {problem: func(k string, sv ScheduledValue) string {
 			if sv.Default == "bad" {
-				return "bad value"
+				return "bad value of " + k
 			}
 			return ""
 		}},
@@ -120,18 +130,68 @@ func TestCheckReservedValue_UsesTheBinding(t *testing.T) {
 	cases := []struct {
 		key, val, want string
 	}{
-		{"_probe", "bad", "bad value"},
+		{"_probe", "bad", "bad value of _probe"},
 		{"_probe", "good", ""},
 		{"_other", "bad", ""}, // no check named: nothing to judge
+		// #3620: a key under a prefix with a check is judged by it.
+		{"_pfx_x", "bad", "bad value of _pfx_x"},
+		{"_pfx_x", "good", ""},
+		{"_pfx_", "bad", ""}, // the bare prefix is no key under it
 	}
 	for _, c := range cases {
-		if got := checkReservedValue(c.key, ScheduledValue{Default: c.val}, names, fns); got != c.want {
+		if got := checkReservedValue(c.key, ScheduledValue{Default: c.val}, names, prefixNames, fns); got != c.want {
 			t.Errorf("checkReservedValue(%q, %q) = %q, want %q", c.key, c.val, got, c.want)
 		}
 	}
 	// A name with no function bound judges nothing (the test above keeps the
 	// real tables from reaching this).
-	if got := checkReservedValue("_probe", ScheduledValue{Default: "bad"}, names, nil); got != "" {
+	if got := checkReservedValue("_probe", ScheduledValue{Default: "bad"}, names, prefixNames, nil); got != "" {
 		t.Errorf("unbound check = %q", got)
+	}
+}
+
+// #3620: the real tables — every `_state_<filter>` is judged by the
+// state-value reading through the `_state_` prefix, and a `_silent_mode`
+// still by its own key's check.
+func TestCheckReservedValue_StateFilterThroughThePrefix(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		key, val string
+		problem  bool
+	}{
+		{"_state_maintenance", "enable", false},
+		{"_state_maintenance", "disable", false},
+		{"_state_maintenance", "garbage", true},
+		{"_state_maintenance", "target: disable\n", false},
+		{"_state_maintenance", "target: all\n", true},
+		{"_state_crashloop", "yes", true},
+		{"_state_crashloop", "enable", false},
+		{"_state_crashloop", "target: enable\n", true},
+		{"_silent_mode", "purple", true},
+		{"_silent_mode", "warning", false},
+	}
+	for _, c := range cases {
+		got := CheckReservedValue(c.key, ScheduledValue{Default: c.val})
+		if (got != "") != c.problem {
+			t.Errorf("CheckReservedValue(%q, %q) = %q, want problem=%v", c.key, c.val, got, c.problem)
+		}
+	}
+	if e := valueEffect("_state_maintenance"); e != "the state filter is not switched on while it is set" {
+		t.Errorf("valueEffect(_state_maintenance) = %q", e)
+	}
+	// Ratchet's comparison: quoting and key order fall away; a different
+	// reading does not.
+	a := ScheduledValue{Default: "target: enable\nreason: r\n"}
+	b := ScheduledValue{Default: "reason: \"r\"\ntarget: ENABLE\n"}
+	if !readAlike("_state_maintenance", a, b) {
+		t.Error("readAlike: the same reading spelt two ways is not alike")
+	}
+	if readAlike("_state_maintenance", a, ScheduledValue{Default: "disable"}) {
+		t.Error("readAlike: on and off are alike")
+	}
+	// A problem value compares without panicking, and alike with itself.
+	p := ScheduledValue{Default: "recurring:\n- cron: 0 2 * * *\n  duration: 1h\nenabled: off\n"}
+	if !readAlike("_state_maintenance", p, p) {
+		t.Error("readAlike: a problem value is not alike with itself")
 	}
 }

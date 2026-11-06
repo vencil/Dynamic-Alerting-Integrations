@@ -601,7 +601,9 @@ def s_served_disable():
 # the tenant's own value, ignores it with a WARN, and silences nothing — so
 # the exporter's key validation flags it and tenant-api's write gate would
 # refuse it as a new value (#3227). That is not what this row pins; it is
-# left as is so the golden rows stay byte-identical.
+# left as is so the golden rows stay byte-identical. `_state_maintenance`'s
+# switch is `target: "enable"` (#3620: `all` is a _silent_mode target, which
+# the state-value reader does not read and the write gate refuses).
 def s_yaml_date():
     d = reset("mixed-mode") / "yaml-date"
     write(d / "_defaults.yaml", """defaults:
@@ -612,7 +614,7 @@ def s_yaml_date():
     write(d / "tenants.yaml", """tenants:
   tenant-date:
     _state_maintenance:
-      target: "all"
+      target: "enable"
       expires: 2026-12-31T23:59:59.50+08:00
     _silent_mode:
       reason: "inherits an unquoted date"

@@ -932,8 +932,12 @@ func TestOperationalStatesAt_Maintenance(t *testing.T) {
 		{"ScalarEnable", declared, SV("enable"), true},
 		{"Expired", declared, SV("expires: " + past + "\ntarget: enable\n"), false},
 		{"NotExpiredYet", declared, SV("expires: " + future + "\ntarget: enable\n"), true},
-		{"EmptyString", declared, SV(""), true},
-		{"YAMLNull", declared, ScheduledValue{}, true},
+		// #3620: "" is neither `enable` nor a disable word — a value the
+		// reader does not read, so not on (fail-closed); it used to be on.
+		// A zero ScheduledValue reads as "" too (a null in a loaded tree is
+		// the null marker instead: no key, so default_state).
+		{"EmptyString", declared, SV(""), false},
+		{"YAMLNull", declared, ScheduledValue{}, false},
 		{"NoPlatformFilter", nil, SV("enable"), false},
 	}
 	for _, tt := range tests {

@@ -27,7 +27,11 @@ const deref = (s: any): any => (s && s.$ref ? deref(defs[s.$ref.replace('#/defin
 function step(schema: any, key: string, top: boolean): any[] {
   const s = deref(schema);
   const branches = s.oneOf || s.anyOf;
-  if (branches) return branches.flatMap((b: any) => step(b, key, top));
+  // A schema's own `properties` hold alongside its oneOf/anyOf (#3620:
+  // maintenanceMode's structured branch is an object whose anyOf only says
+  // which fields are required), so they are a candidate too.
+  const own = s.properties && key in s.properties ? [s.properties[key]] : [];
+  if (branches) return [...own, ...branches.flatMap((b: any) => step(b, key, top))];
   if (key === '[]') return s.items ? [s.items] : [];
   if (s.properties && key in s.properties) return [s.properties[key]];
   // Only thresholds (non-reserved keys listed under <tenant_name>) may fall

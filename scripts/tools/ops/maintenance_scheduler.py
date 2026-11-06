@@ -5,7 +5,9 @@ Alertmanager silences.
 
 Reads each tenant's _state_maintenance.recurring schedules as
 threshold-exporter resolves them (`da-guard effective`: platform-file
-`tenants:` overlays and subdirectory tenant files included, #2751),
+`tenants:` overlays and subdirectory tenant files included, #2751; its
+`maintenance_recurring` applies the exporter's reading of the value, so none
+when the switch says off or the value is not read, #3620),
 evaluates which maintenance windows are currently active, and
 creates/extends Alertmanager silences accordingly.
 
@@ -104,7 +106,9 @@ def load_recurring_schedules(config_dir):
     platform file's ``tenants:`` overlay or in a tenant file under a
     subdirectory is read as threshold-exporter reads it; one written at the
     top level of a ``_defaults`` file is not (the exporter does not inherit it
-    either).
+    either). The windows are effective's ``maintenance_recurring`` (#3620):
+    the exporter's one reading of the value decides whether its switch
+    (``target`` / ``enabled``) lets them through — not re-derived here.
 
     Raises ``DaGuardNotFoundError``, ``ParseFailedError`` or ``DaGuardError``
     (``_lib_tenant_values``) when da-guard is missing, fails, or a file the
@@ -137,22 +141,10 @@ def load_recurring_schedules(config_dir):
     schedules = {}
 
     for tenant, te in tree.tenants.items():
-        maint = te.effective_config.get("_state_maintenance")
-        if not isinstance(maint, dict):
-            continue
-
-        recurring = maint.get("recurring")
-        if not isinstance(recurring, list) or not recurring:
-            continue
-
         valid = []
-        for entry in recurring:
-            if not isinstance(entry, dict):
-                continue
-            cron = entry.get("cron")
-            duration = entry.get("duration")
-            cron = cron.strip() if isinstance(cron, str) else ""
-            duration = duration.strip() if isinstance(duration, str) else ""
+        for entry in te.maintenance_recurring:
+            cron = entry.cron.strip()
+            duration = entry.duration.strip()
             if not cron or not duration:
                 print(f"  WARN: {safe_label(tenant)}: recurring entry missing "
                       f"cron/duration, skipping",
@@ -161,7 +153,7 @@ def load_recurring_schedules(config_dir):
             valid.append({
                 "cron": cron,
                 "duration": duration,
-                "reason": entry.get("reason", "Recurring maintenance"),
+                "reason": entry.reason or "Recurring maintenance",
             })
 
         if valid:
