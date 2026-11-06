@@ -104,6 +104,26 @@ dir_rules:
     suite: tests/oauth2-proxy
     runner: "make dc-go-test MOD=oauth2-proxy"
     justification: "chart_test.go render 這個 chart（含 values.yaml）並以 oauth2-proxy 程式庫載入它產生的設定檔；version_test.go 讀 values.yaml 的 oauth2Proxy.image.tag"
+  - name: pss-self
+    source: "tests/pss/**"
+    suite: tests/pss
+    runner: "make dc-go-test MOD=pss"
+    justification: "#1018 Pod Security 閘門：以上游 pod-security-admission 程式庫判定每個 chart 與 k8s/ 渲染出的 pod，Go-only 套件、無 test_*.py；Go 僅 container 內可用"
+  - name: pss-input-charts
+    source: "helm/**"
+    suite: tests/pss
+    runner: "make dc-go-test MOD=pss"
+    justification: "pss_test.go render 每個 chart（預設值與 ci/*.yaml）並判定渲染出的 pod；Chart.yaml 的 pod-security-level 註記決定判定等級"
+  - name: pss-input-manifests
+    source: "k8s/**"
+    suite: tests/pss
+    runner: "make dc-go-test MOD=pss"
+    justification: "pss_test.go 以 restricted 判定 k8s/ 底下每個帶 pod spec 的 manifest"
+  - name: pss-input-node-image
+    source: "scripts/ops/kind-node-image.env"
+    suite: tests/pss
+    runner: "make dc-go-test MOD=pss"
+    justification: "判定版本取自 kind node image 的 minor，go.mod 的 pod-security-admission 版本也以它對齊"
   - name: da-read-self
     source: "components/da-read/**"
     suite: components/da-read

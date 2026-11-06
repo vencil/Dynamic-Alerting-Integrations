@@ -1,0 +1,19 @@
+# PSS gate value set (#1018): turns on every values path a workload template
+# branches on, so tests/pss judges the pods those branches shape. A new
+# if/with/range on .Values in a workload template needs a value here
+# (TestWorkloadConditionalsAreExercised). Not a deployment example.
+nodeSelector:
+  pss-gate: "1"
+tolerations:
+  - key: pss-gate
+    operator: Exists
+affinity:
+  nodeAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 1
+        preference:
+          matchExpressions:
+            - key: pss-gate
+              operator: Exists
+image:
+  digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
