@@ -51,6 +51,7 @@ EXPECTED_DEPNAMES = {
     "prometheuscommunity/prom-label-proxy",
     "timberio/vector",
     "victoriametrics/victoria-logs",
+    "victoriametrics/vmauth",
     # chargeback-aggregator; was `python` (3.14-slim) until #1243 moved it off
     # pip-carrying images. The `python` depName rules still govern Dockerfile FROMs.
     "gcr.io/distroless/python3-debian13",

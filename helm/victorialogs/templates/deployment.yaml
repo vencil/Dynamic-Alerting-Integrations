@@ -20,10 +20,12 @@ spec:
     metadata:
       labels:
         {{- include "victorialogs.labels" . | nindent 8 }}
-      {{- with .Values.podAnnotations }}
       annotations:
+        # vmauth reads auth.yml once at start: roll the pod when it changes.
+        checksum/vmauth: {{ include (print $.Template.BasePath "/configmap-vmauth.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-      {{- end }}
+        {{- end }}
     spec:
       serviceAccountName: {{ include "victorialogs.name" . }}
       automountServiceAccountToken: false
@@ -35,7 +37,9 @@ spec:
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - "-storageDataPath=/storage"
-            - "-httpListenAddr=:{{ .Values.listenPort }}"
+            # Loopback only (#1295): the vmauth container below is the only
+            # way in. The Service port belongs to vmauth.
+            - "-httpListenAddr=127.0.0.1:{{ .Values.auth.backendPort }}"
             - "-retentionPeriod={{ .Values.retentionPeriod }}"
             # Layer-1 query guardrails (ADR-021 §Blast radius Layer 1 / #609).
             # Rendered from .Values.search; only emit a flag when its value is
@@ -70,10 +74,6 @@ spec:
           envFrom:
             {{- toYaml . | nindent 12 }}
           {{- end }}
-          ports:
-            - name: http
-              containerPort: {{ .Values.listenPort }}
-              protocol: TCP
           volumeMounts:
             - name: storage
               mountPath: /storage
@@ -86,22 +86,86 @@ spec:
             httpGet:
               # /health returns 200 once the storage is mounted and the
               # HTTP listener is up — the right readiness gate for "can
-              # Vector start pushing".
+              # Vector start pushing". It goes through vmauth (which passes
+              # /health without credentials in both modes) to VictoriaLogs on
+              # loopback: kubelet probes the pod IP, which VictoriaLogs no
+              # longer listens on. VictoriaLogs down => vmauth answers 502.
+              # ⛔ A NUMBER, not the port name `http`: kubelet resolves a
+              # named port only among the probe's OWN container's ports, and
+              # `http` now belongs to the vmauth container — a name would
+              # fail every probe (pod never Ready) while rendering fine.
               path: /health
-              port: http
+              port: {{ .Values.listenPort }}
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
-              port: http
+              port: {{ .Values.listenPort }}
             initialDelaySeconds: 30
             periodSeconds: 15
             failureThreshold: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        # Consumer authorization in front of VictoriaLogs (#1295; values.yaml
+        # auth). Holds each consumer to its paths; see auth.mode.
+        - name: vmauth
+          image: "{{ .Values.auth.image.repository }}:{{ .Values.auth.image.tag }}{{ with .Values.auth.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.auth.image.pullPolicy }}
+          args:
+            - "-auth.config=/etc/vmauth/auth.yml"
+            - "-httpListenAddr=:{{ .Values.listenPort }}"
+            # vmauth's own /health and /metrics move here, so /health and
+            # /metrics on the Service port reach VictoriaLogs instead.
+            - "-httpInternalListenAddr=:{{ .Values.auth.internalPort }}"
+            # Per-user cap = the global cap: requests without credentials all
+            # share ONE user (unauthorized_user), and vmauth's default of 100
+            # per user would put a new ceiling on every unauthenticated
+            # consumer in observe mode.
+            - "-maxConcurrentRequests={{ .Values.auth.maxConcurrentRequests }}"
+            - "-maxConcurrentPerUserRequests={{ .Values.auth.maxConcurrentRequests }}"
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          {{- $consumers := include "victorialogs.authConsumers" . | fromYamlArray }}
+          {{- if $consumers }}
+          env:
+            {{- range $consumers }}
+            - name: {{ include "victorialogs.consumerPasswordEnv" .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .existingSecret }}
+                  key: password
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.listenPort }}
+              protocol: TCP
+            - name: vmauth-internal
+              containerPort: {{ .Values.auth.internalPort }}
+              protocol: TCP
+          volumeMounts:
+            - name: vmauth-config
+              mountPath: /etc/vmauth
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: vmauth-internal
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: vmauth-internal
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.auth.resources | nindent 12 }}
       volumes:
+        - name: vmauth-config
+          configMap:
+            name: {{ include "victorialogs.name" . }}-vmauth
         - name: storage
           {{- if .Values.persistence.enabled }}
           persistentVolumeClaim:

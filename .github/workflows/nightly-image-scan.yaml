@@ -47,7 +47,7 @@ name: Nightly Image CVE Scan
 #                        #1243 / #1058 failure (advice that cannot work teaches
 #                        the reader to ignore the issue) in a new place.
 #
-# Third-party images our helm charts AND k8s/ manifests pull (vector, victoria-logs,
+# Third-party images our helm charts AND k8s/ manifests pull (vector, victoria-logs, vmauth,
 # envoy, oauth2-proxy, prom-label-proxy, python, mariadb, mysqld-exporter, grafana,
 # prometheus, alertmanager, kube-state-metrics, prometheus-config-reloader, alpine/git,
 # busybox) are NOT
@@ -239,6 +239,8 @@ jobs:
             ref: "timberio/vector:0.61.0-distroless-libc@sha256:1a3451978644d5cd4b99a0b28c990791e2f7e1efbea4184122f1c59a56448143"
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
+          - name: vmauth # helm/victorialogs/values.yaml auth.image (#1295)
+            ref: "victoriametrics/vmauth:v1.155.0@sha256:dfeb63e5eff4bc32ed0fa2d43d8e85b717e8442c8b5c753e83c216669665a7de"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
             ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:1c32c3720dc4c7f0c7dbe998737f32c200add6511eca7cec705008be488b87d6"
           - name: envoy # helm/federation-gateway/values.yaml
@@ -589,7 +591,7 @@ jobs:
           bash scripts/ops/file_cve_report.sh frags-tp \
             nightly-cve-thirdparty \
             "🛡️ Nightly image scan — third-party upstream image CVEs on main" \
-            17 "third-party upstream image" \
+            18 "third-party upstream image" \
             "triage each image before assuming it is unfixable — #1243 cleared 58 of 120 this way. Four levers, in the order worth checking: (1) a DIGEST-only refresh, for images whose version tag is mutable and gets re-pushed from a fresh base (alpine/git rebuilds every Sunday); (2) a patch tag published AFTER Renovate's last weekly run — Renovate runs Mondays at 06:17 UTC, so anything released later that day waits nearly a full week (grafana 12.4.6 was built 8 hours after that run); (3) the same release published to a registry we do not pin (prom-label-proxy v0.14.0 shipped to Docker Hub, never to quay); (4) replacing a release-dormant image with a maintained equivalent (configmap-reload, last released 2025-04-09, -> prometheus-config-reloader). What is usually NOT the lever: a gated major on the Renovate Dashboard (#929) — verify it actually carries the fix first. What is left after those four splits three ways, and the split matters for the next triage: (a) FIXED ON MAIN, UNRELEASED — the project already bumped the dependency but has cut no release (mysqld-exporter, alertmanager); (b) NO FIX EXISTS ANYWHERE YET — the upstream dependency's own fix is newer than every release of the image, so no version of it can carry the fix (grafana's kin-openapi CRITICAL); (c) A MAJOR WOULD NOT HELP EITHER — the finding comes from a component the next major ships identically (mariadb's 15 findings are all a pre-compiled gosu binary that 12.x pins to the same version). Only (a) is a waiting game." || rc=1
           # Customer-delivered — its own issue BECAUSE THE LEVER IS DIFFERENT.
           # The other two buckets end in an action we can merge; this one mostly

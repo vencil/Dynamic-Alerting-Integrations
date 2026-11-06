@@ -140,6 +140,68 @@ kubectl logs -n monitoring deploy/grafana | grep -i 'victoriametrics-logs-dataso
 # 的 image，把 GF_PLUGINS_PREINSTALL_SYNC 拿掉。
 ```
 
+### 1.2 消費端認證：vmauth（#1295）
+
+chart 0.4.0 起，VictoriaLogs 只監聽 pod 內的 loopback，Service 的 :9428
+由 vmauth sidecar 接手，依 `auth.consumers` 把每個消費端限制在自己的路徑：
+`vector` 只能 `/insert`，Grafana、chargeback、federation-gateway、
+federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /insert` 的
+人都能寫入任意 `log_type`，包括 ADR-028 用來偵測 un-revoke 的證據列。
+
+**模式**
+
+| `auth.mode` | 沒帶帳密的請求 | 用途 |
+|---|---|---|
+| `observe`（預設） | 所有路徑照常通過 | 遷移期：逐一接上消費端，期間不斷線。⚠️ 不是安全邊界 |
+| `enforce` | 只有 `/health`、`/ping`、`/metrics` | 每個消費端都帶帳密後切換 |
+
+**遷移步驟**
+
+1. 每個消費端在 VictoriaLogs 的 namespace 建一個 Secret（key `password`），
+   填進 `auth.consumers[].existingSecret`。chart 不產生密碼：`helm template`
+   與 Argo CD 底下產生的值每次渲染都會變。消費端那一側用同一個密碼，建在它
+   自己的 namespace。
+   ⛔ 密碼只用十六進位、不帶換行：
+   `kubectl create secret generic <name> --from-literal=password="$(openssl rand -hex 32)"`。
+   vmauth 先把密碼以原文代入設定再解析：含 `"` 會讓 vmauth 起不來（整個
+   store 停擺）、`\t` 這類跳脫會被悄悄改寫、`--from-file` 常見的結尾換行
+   會變成密碼的一部分。
+   ⚠️ Secret 名稱填錯，連 observe 也會停擺：容器起不來
+   （CreateContainerConfigError），而 Recreate 策略已先刪掉舊 pod。
+2. 在 `observe` 下確認每個消費端都已用帳密進來：
+
+   ```bash
+   kubectl -n monitoring port-forward deploy/victorialogs 8426:8426 &
+   curl -s localhost:8426/metrics | grep '^vmauth_user_request_backend_requests_total'
+   # 每個 consumer 都要大於 0 且持續增加：這個計數只算真的轉到 VictoriaLogs 的
+   # 請求。⛔ 不要看 vmauth_user_requests_total：它在 vmauth 啟動時就以 0 出現，
+   # 而且連路徑不符被擋下（400）的請求也算。
+   ```
+
+   ⚠️ `vmauth_unauthorized_user_requests_total` 永遠不會歸零（probe 與
+   Prometheus 抓取也算在內），不能拿來判斷。要找沒接上的呼叫端，比對
+   VictoriaLogs 自己的分路徑計數與上面的總和：
+
+   ```bash
+   kubectl -n monitoring port-forward deploy/victorialogs 9428:9428 &
+   curl -s localhost:9428/metrics | grep -E '^vl_http_requests_total\{path="/(insert|select)/'
+   ```
+
+3. 切 `auth.mode: enforce`。沒帶帳密、或帳密錯誤的請求會收到 401；帳密對但
+   路徑不在允許範圍的，收到 400。
+
+**注意**：
+
+- observe 下帳密**錯誤**的請求會落到「未認證」那一支、照樣通過，切
+  enforce 才會被拒。
+- **輪替密碼不會自動生效**：密碼以 env 在容器啟動時讀入，換 Secret 後要
+  `kubectl rollout restart deploy/victorialogs`（Recreate 策略，會短暫斷線），
+  並同步更新消費端那份。
+- vmauth 的內部 port（`auth.internalPort`）不經認證提供 `/debug/pprof`、
+  `/flags`；只靠 NetworkPolicy 只放行 Service port 擋住，`networkPolicy` 要
+  保持開啟。
+- runbook 裡那些起 busybox 直接打 :9428 的除錯 pod，在 enforce 下需要帶帳密。
+
 ## 2. Smoke-test LogsQL（#539 §4 AC5）
 
 從 Grafana **Explore → VictoriaLogs** 跑這幾條。每條都應該有結果；
