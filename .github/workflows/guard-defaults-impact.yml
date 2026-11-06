@@ -156,6 +156,12 @@ on:
       - "scripts/tools/ops/generate_alertmanager_routes.py"
       - "scripts/tools/ops/_grar_*.py"
       - "scripts/tools/_lib_*.py"
+      # #3601: the scope helper the `Determine scope` step runs. It decides
+      # which trees da-guard validates, so a PR changing only it must run
+      # this workflow. (Its imports — `_lib_exitcodes` / `_lib_compat` —
+      # resolve to scripts/tools/ and are covered by the `_lib_*` entry
+      # above.) Pinned by invariant 4 of tests/ops/test_ci_path_filter_coverage.py.
+      - "scripts/ops/guard_defaults_scopes.py"
       - "requirements/ci-constraints.txt"
       - ".github/workflows/guard-defaults-impact.yml"
   workflow_dispatch:
