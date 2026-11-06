@@ -65,6 +65,9 @@ const (
 	SourceHumanHopB  = "human-hop-B" // trusted oauth2-proxy hop (X-Forwarded-* headers)
 	SourceMachineKSA = "machine-ksa" // Kubernetes ServiceAccount projected token
 	SourceHumanJWTA  = "human-jwt-A" // reserved: direct IdP JWT (PR-3)
+	// SourceDevBypass is the identity --dev-bypass-auth injects on the UDS
+	// plane when the request carried none (ADR-022, ADR-027 §3).
+	SourceDevBypass = "dev-bypass"
 )
 
 // Assurance-level constants. The human path uses a two-level scale
@@ -173,50 +176,63 @@ const (
 	scopeAxisMetadataWrite = "metadata_write"
 )
 
-// HeaderResolver wraps the pre-existing oauth2-proxy header-trust path in the
-// IdentityResolver shape. Its Resolve is byte-for-byte equivalent to the
-// header parsing the middleware performed inline before the seam existed:
-// X-Forwarded-Email (empty → error) and comma-split X-Forwarded-Groups.
-// ADR-027 / LD-6 P2 adds the ClaimHeaders declaration; the zero value keeps
-// the exact pre-P2 behavior (no claim axes → Claims stays nil).
+// HeaderResolver turns the identity headers the same pod's oauth2-proxy
+// injects into a VerifiedPrincipal (ADR-027 §2). It is used in exactly one
+// place, ResolveIdentity, which only the UDS router mounts: a request on the
+// TCP listener never has its headers read as identity (§9 item 2).
+//
+// The header names come from the oauth2-proxy config file
+// (--oauth2-proxy-config, read by proxyconfig.Load). An empty EmailHeader or
+// GroupsHeader reads the conventional X-Forwarded-Email / X-Forwarded-Groups;
+// tenant-api itself always fills both from the file.
 type HeaderResolver struct {
-	// ClaimHeaders maps a claim key to the trusted-hop header carrying its
-	// value (claim name → headerName), as the oauth2-proxy config file
-	// injects it (--oauth2-proxy-config, read by proxyconfig.Load). nil — the
-	// zero value — means no claim axes are declared: existing
-	// HeaderResolver{} construction sites stay valid and Resolve is
-	// byte-identical to the pre-P2 behavior.
+	// EmailHeader carries the session's email claim.
+	EmailHeader string
+	// GroupsHeader carries the session's groups claim, comma-joined.
+	GroupsHeader string
+	// ClaimHeaders maps a claim key to the header carrying its value
+	// (claim name → headerName), as the config file injects it. nil means no
+	// claim axes are declared and Claims stays nil.
 	ClaimHeaders map[string]string
 }
 
+func (h HeaderResolver) emailHeader() string {
+	if h.EmailHeader == "" {
+		return proxyconfig.DefaultEmailHeader
+	}
+	return h.EmailHeader
+}
+
+func (h HeaderResolver) groupsHeader() string {
+	if h.GroupsHeader == "" {
+		return proxyconfig.DefaultGroupsHeader
+	}
+	return h.GroupsHeader
+}
+
 // Resolve reads the oauth2-proxy identity headers into a VerifiedPrincipal.
-// An empty X-Forwarded-Email is an error (the middleware maps it to 401),
-// preserving the exact pre-seam semantics.
+// An empty email header is an error: there is no caller (ResolveIdentity
+// then attaches nothing and the RBAC gate answers 401).
 //
-// Named claims (ADR-027 / LD-6 P2): for each configured (key, header) pair,
-// the header value is trimmed and, if non-empty, stored as Claims[key]. An
-// absent or empty header means the key is simply not present — an empty
-// string is NOT a claim (it would be an empty-string match footgun for P3).
-// The value is carried verbatim after trimming — no comma-splitting;
-// multi-value semantics belong to P3/P4. Claims is allocated only when at
-// least one claim hits, so "no claims" has exactly one representation (nil).
+// Named claims: for each configured (key, header) pair, the header value is
+// trimmed and, if non-empty, stored as Claims[key]. An absent or empty header
+// means the key is simply not present — an empty string is NOT a claim. The
+// value is carried verbatim after trimming — no comma-splitting. Claims is
+// allocated only when at least one claim hits, so "no claims" has exactly one
+// representation (nil).
 //
 // A claim header that arrives with MORE THAN ONE line is refused (the claim
 // does not load) and logged loudly: Header.Get returns the FIRST of multiple
 // same-name lines, so if a hop ever APPENDS its trusted value instead of
 // strip-and-set, an attacker-supplied first line would win (first-value
-// hijacking). A declared claim header is set by exactly one trusted hop —
-// two lines mean injection or a broken proxy, and refusing is fail-closed
-// (a rule requiring the claim simply does not match). This is an in-platform
-// backstop; the transport-side strip-and-set requirement still stands.
+// hijacking). Refusing is fail-closed (a rule requiring the claim simply does
+// not match).
 func (h HeaderResolver) Resolve(r *http.Request) (*VerifiedPrincipal, error) {
-	// proxyconfig refuses a config file that injects email or groups under
-	// another name, so these two are the names the file uses.
-	email := r.Header.Get(proxyconfig.DefaultEmailHeader)
+	email := r.Header.Get(h.emailHeader())
 	if email == "" {
 		return nil, errMissingIdentity
 	}
-	groups := parseForwardedGroups(r.Header.Get(proxyconfig.DefaultGroupsHeader))
+	groups := parseForwardedGroups(r.Header.Get(h.groupsHeader()))
 	var claims map[string]string
 	for key, header := range h.ClaimHeaders {
 		vals := r.Header.Values(header)

@@ -448,7 +448,7 @@ func servePopulatingRBAC(t *testing.T, inner http.HandlerFunc, req *http.Request
 		req.Header.Set("X-Forwarded-Groups", joinGroups(idpGroups))
 	}
 	mgr, _ := rbac.NewManager("", nil)
-	wrapped := mgr.MiddlewareAuthenticated()(inner)
+	wrapped := rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.MiddlewareAuthenticated()(inner))
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, req)
 	return rec

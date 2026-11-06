@@ -143,7 +143,7 @@ func TestFullRouter_DiscoverMetrics_RBACBlocksCrossTenant(t *testing.T) {
 `)
 	r := chi.NewRouter()
 	r.Route("/api/v1/tenants/{id}", func(r chi.Router) {
-		r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
+		r.With(rbac.ResolveIdentity(rbacMgr.HeaderResolver()), rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
 			Get("/metrics", DiscoverMetrics(deps))
 	})
 

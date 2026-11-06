@@ -42,11 +42,11 @@ verified-at-version: v2.8.0
 
 按以下順序選 bucket key：
 
-1. `X-Forwarded-Email`（oauth2-proxy 注入；production 主要識別）
-2. `X-Real-IP`（unauthenticated 探針或 pre-auth 請求；以 source IP 限流）
-3. `RemoteAddr` 的 IP 部分（最後 fallback）
+1. 身分物件的 email（Unix socket 上由 oauth2-proxy 注入的 header 解析而來，或開發旁路注入；[ADR-027](../adr/027-tenant-api-caller-identity.md) §2）
+2. 真實 TCP peer（`RemoteAddr` 的 IP 部分）——沒有身分的請求；client 送的 `X-Real-IP`／`X-Forwarded-For` 不採用（可偽造）
+3. `_anonymous`（最後 fallback）
 
-> 與 `rbac.Middleware` 的 identity 來源完全一致 — 速率限制與授權層對「你是誰」永遠同步。
+> rate limiter 不讀任何 header：它與 RBAC 閘門、request log 讀的是同一個身分物件，三者對「你是誰」永遠同步。
 
 ### 1.4 豁免路徑（不計入限制）
 
@@ -220,7 +220,7 @@ v2.7.0 的 RBAC 透過 `rbacMgr.Middleware(perm, tenantIDFn)` 在路由層做 `P
 
 這個判斷**只看呼叫者自己的規則與他帶的 claim**，不看 conf.d 或 `_tenant_orgs.yaml`。所以規則列了一個不存在的租戶也過得了閘門，拿到的是空列表；閘門回 200 還是 403 不透露任何租戶存不存在、屬於哪個 org。過了閘門看得到什麼，全由上表的 handler 過濾決定。沒有規則命中，或根本沒有任何規則（沒設 `--rbac`、檔案不存在或零條規則，見 §3.5），照舊 403，訊息是 `insufficient permissions: no tenant grants read`（寫入端點為 `write`），不帶租戶 id。
 
-`GET /me` 不在這道閘門後：它只回答「我是誰、我的規則怎麼寫」（同 OIDC userinfo、GitHub `GET /user`），所以只要求身分——缺 `X-Forwarded-Email` 回 401，不要求任何授權。沒有規則命中、規則因呼叫者沒帶 org claim 而授不了權，或根本沒有任何規則（§3.5）的呼叫者都拿到 200：`permissions` 只列命中他的規則（可能是空的 `{}`，也可能是此刻授不了權的規則），`accessible_tenants` 只列這些規則自己寫的 pattern（可能是 `[]`）。它不讀任何租戶資料，也不列別人的規則，所以沒有規則時的 fail-closed 不受影響——那條管的是資料存取，而「你沒有任何授權」本來就是呼叫者自己該知道的事。
+`GET /me` 不在這道閘門後：它只回答「我是誰、我的規則怎麼寫」（同 OIDC userinfo、GitHub `GET /user`），所以只要求身分——沒有身分（oauth2-proxy 沒注入 email header）回 401，不要求任何授權。沒有規則命中、規則因呼叫者沒帶 org claim 而授不了權，或根本沒有任何規則（§3.5）的呼叫者都拿到 200：`permissions` 只列命中他的規則（可能是空的 `{}`，也可能是此刻授不了權的規則），`accessible_tenants` 只列這些規則自己寫的 pattern（可能是 `[]`）。它不讀任何租戶資料，也不列別人的規則，所以沒有規則時的 fail-closed 不受影響——那條管的是資料存取，而「你沒有任何授權」本來就是呼叫者自己該知道的事。
 
 相對先前版本的行為改變：先前這道閘門要求對 `*` 有權限，只有規則寫了 `tenants: ["*"]` 的呼叫者過得了；單租戶或前綴授權（如 `["db-a-*"]`）的呼叫者在 `/me`、`/tenants`、`/tenants/search`、`/groups`、`/tasks/{id}`、`/prs`、`/events`、`/federation/tokens`、`POST /tenants/batch` 一律 403。現在這些呼叫者拿得到自己租戶的內容；`/federation/tokens`、`POST /tenants/batch`、`POST /groups/{id}/batch`、`PUT`／`DELETE /groups/{id}` 照舊由 handler 逐租戶判寫入或管理權限。`GET /federation/policy`（平台的指標白名單，不點名任何租戶）也開放給至少能讀一個租戶的呼叫者，租戶管理員挑自己的子集時需要它。反方向收緊的只有一種情況：org-scoped 的 `tenants: ["*"]` 規則、呼叫者沒帶 org claim——它先前過得了閘門、拿到空列表，現在是 403。
 

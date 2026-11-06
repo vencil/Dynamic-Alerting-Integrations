@@ -61,7 +61,7 @@ func TestBatchTenants_PRMode_PreservesExistingKeys(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
-	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+	rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())

@@ -56,7 +56,7 @@ from _lib_validation import (  # noqa: E402  (#1560)
     is_secret_ref, receiver_secret_ref_fields, secret_ref_rule,
 )
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
-    OWN_SECRET_PREFIX,
+    OWN_NAME_PREFIX,
     SECRET_REF_OWN_ONLY_FIELDS,
     SharedSecret,
     ROOT_LEVEL,
@@ -960,11 +960,11 @@ def _load_shared_secrets(data: dict, policy_path: str) -> Mapping[str, SharedSec
             raise PolicyInputError(
                 f"{where}: entry {alias!r} secret {name!r} is not a Kubernetes "
                 "Secret name (DNS-1123 subdomain)")
-        if name.startswith(OWN_SECRET_PREFIX):
+        if name.startswith(OWN_NAME_PREFIX):
             raise PolicyInputError(
                 f"{where}: entry {alias!r} secret {name!r} starts with "
-                f"{OWN_SECRET_PREFIX!r}, the prefix of the tenants' own Secrets "
-                f"({OWN_SECRET_PREFIX}<tenant>); a shared Secret may not take a "
+                f"{OWN_NAME_PREFIX!r}, the prefix of the tenants' own Secrets "
+                f"({OWN_NAME_PREFIX}<tenant>); a shared Secret may not take a "
                 "name a tenant's own Secret can have")
         if (not isinstance(fields, list) or not fields
                 or not all(isinstance(f, str) for f in fields)):

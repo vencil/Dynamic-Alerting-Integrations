@@ -1,4 +1,5 @@
-# Email and groups headers carry each other's claim.
+# Email and groups headers carry each other's claim. Accepted: tenant-api
+# reads each attribute from the header the file injects it as.
 injectRequestHeaders:
 - name: X-Forwarded-Email
   values:

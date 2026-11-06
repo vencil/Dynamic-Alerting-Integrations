@@ -118,7 +118,7 @@ func asUnrestricted(mgr *rbac.Manager, h http.Handler) http.HandlerFunc {
 			r.Header.Set("X-Forwarded-Email", "platform-unrestricted@example.com")
 		}
 		r.Header.Set("X-Forwarded-Groups", unrestrictedGroup)
-		mgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, r)
+		rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, r)
 	})
 }
 
@@ -133,7 +133,7 @@ func asUnrestrictedOn(t *testing.T, h func(*Deps) http.HandlerFunc, d *Deps) htt
 // wrapWithRBACMiddleware wraps a handler with the RBAC middleware, setting
 // identity headers on the request.
 func wrapWithRBACMiddleware(handler http.HandlerFunc, mgr *rbac.Manager, perm rbac.Permission, tenantIDFn func(*http.Request) string) http.Handler {
-	return mgr.Middleware(perm, tenantIDFn)(handler)
+	return rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(perm, tenantIDFn)(handler))
 }
 
 // --- Health / Ready tests ---
@@ -1177,7 +1177,7 @@ func TestFullRouter_GetTenant(t *testing.T) {
 `)
 
 	r := chi.NewRouter()
-	r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
+	r.With(rbac.ResolveIdentity(rbacMgr.HeaderResolver()), rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
 		Get("/api/v1/tenants/{id}", GetTenant(&Deps{ConfigDir: configDir}))
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants/db-a", nil)
@@ -1204,7 +1204,7 @@ func TestFullRouter_GetTenant_Unauthorized(t *testing.T) {
 `)
 
 	r := chi.NewRouter()
-	r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
+	r.With(rbac.ResolveIdentity(rbacMgr.HeaderResolver()), rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
 		Get("/api/v1/tenants/{id}", GetTenant(&Deps{ConfigDir: configDir}))
 
 	// No identity headers
@@ -1230,7 +1230,7 @@ func TestFullRouter_GetTenant_Forbidden(t *testing.T) {
 `)
 
 	r := chi.NewRouter()
-	r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
+	r.With(rbac.ResolveIdentity(rbacMgr.HeaderResolver()), rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
 		Get("/api/v1/tenants/{id}", GetTenant(&Deps{ConfigDir: configDir}))
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants/db-a", nil)
@@ -1257,7 +1257,7 @@ func TestFullRouter_ListTenants(t *testing.T) {
 `)
 
 	r := chi.NewRouter()
-	r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
+	r.With(rbac.ResolveIdentity(rbacMgr.HeaderResolver()), rbacMgr.Middleware(rbac.PermRead, nil)).
 		Get("/api/v1/tenants", asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: configDir}))
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
@@ -1349,7 +1349,7 @@ groups:
 
 			// Wrap with RBAC middleware to inject identity into context
 			w := httptest.NewRecorder()
-			wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+			wrapped := rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(handler))
 			wrapped.ServeHTTP(w, req)
 
 			if w.Code != tt.expectStatus {
@@ -1385,7 +1385,7 @@ func TestMe_EmptyGroupsRendersAsArray(t *testing.T) {
 	w := httptest.NewRecorder()
 	// /me's production gate is identity-only (MiddlewareAuthenticated): a
 	// caller with no grant still reaches it.
-	wrapped := rbacMgr.MiddlewareAuthenticated()(handler)
+	wrapped := rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.MiddlewareAuthenticated()(handler))
 	wrapped.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -1419,7 +1419,7 @@ func TestMeMissingIdentity(t *testing.T) {
 	// Intentionally omit X-Forwarded-Email
 
 	w := httptest.NewRecorder()
-	wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+	wrapped := rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(handler))
 	wrapped.ServeHTTP(w, req)
 
 	if w.Code != http.StatusUnauthorized {

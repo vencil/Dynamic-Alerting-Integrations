@@ -292,7 +292,7 @@ func searchAs(t *testing.T, d *Deps, mw func(http.Handler) http.Handler, decorat
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 	decorate(req)
 	rec := httptest.NewRecorder()
-	mw(SearchTenants(d)).ServeHTTP(rec, req)
+	rbac.ResolveIdentity(d.RBAC.HeaderResolver())(mw(SearchTenants(d))).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("search status %d: %s", rec.Code, rec.Body.String())
 	}

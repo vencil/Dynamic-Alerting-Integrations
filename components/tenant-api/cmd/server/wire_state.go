@@ -153,11 +153,13 @@ func readStateSnapshot(f stateFlags) (map[string][]byte, error) {
 // read from the same flag or TA_OAUTH2_PROXY_CONFIG.
 func registerOAuth2ProxyConfigFlag(fs *flag.FlagSet) *string {
 	return fs.String("oauth2-proxy-config", envOrDefault("TA_OAUTH2_PROXY_CONFIG", ""),
-		"ADR-027 §2: path of the oauth2-proxy structured config file (--alpha-config) the same pod's oauth2-proxy runs with. Its injectRequestHeaders decide which headers carry email, groups and each extra claim; a file whose shape is ambiguous stops tenant-api. Empty = no extra claims, email and groups from X-Forwarded-Email / X-Forwarded-Groups.")
+		"ADR-027 §2: path of the oauth2-proxy structured config file (--alpha-config) the same pod's oauth2-proxy runs with. Its injectRequestHeaders decide which headers carry email, groups and each extra claim; a file whose shape is ambiguous stops tenant-api. Required by the server; for `config check` it is optional (empty = no extra claims).")
 }
 
 // loadProxyIdentity reads the identity headers from the oauth2-proxy config
-// file at path; "" gives proxyconfig.Default().
+// file at path; "" gives proxyconfig.Default(). Only the offline `config
+// check` commands pass ""; the server refuses to start without the file
+// (checkIdentityPlaneFlags).
 func loadProxyIdentity(path string) (proxyconfig.Identity, error) {
 	if path == "" {
 		return proxyconfig.Default(), nil

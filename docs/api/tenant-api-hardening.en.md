@@ -42,11 +42,11 @@ Special values:
 
 The bucket key is selected in this order:
 
-1. `X-Forwarded-Email` (injected by oauth2-proxy; primary identity in production)
-2. `X-Real-IP` (unauthenticated probes / pre-auth requests; rate-limit by source IP)
-3. `RemoteAddr` IP portion (last fallback)
+1. The email of the identity object (resolved on the Unix socket from the headers oauth2-proxy injects, or injected by the dev bypass; [ADR-027](../adr/027-tenant-api-caller-identity.en.md) §2)
+2. The true TCP peer (the IP portion of `RemoteAddr`) — a request without an identity; a client-sent `X-Real-IP` / `X-Forwarded-For` is not used (forgeable)
+3. `_anonymous` (last fallback)
 
-> Identical to how `rbac.Middleware` keys identity — rate limiter and authz layer always agree on "who's calling".
+> The rate limiter reads no header: it reads the same identity object as the RBAC gate and the request log, so the three always agree on "who's calling".
 
 ### 1.4 Skip paths (never counted)
 
@@ -220,7 +220,7 @@ v2.7.0 RBAC enforced `PermRead` / `PermWrite` at the route level via `rbacMgr.Mi
 
 The gate looks **only at the caller's own rules and the claims the caller carries**, never at conf.d or `_tenant_orgs.yaml`. A rule naming a tenant that does not exist therefore passes the gate and gets an empty list; whether the gate answers 200 or 403 reveals neither whether any tenant exists nor which org it belongs to. What a caller sees past the gate is decided entirely by the handler filters in the table above. No matching rule, or no rules at all (no `--rbac`, a missing file, or zero rules; see §3.5), is still 403, with the message `insufficient permissions: no tenant grants read` (`write` on write endpoints), naming no tenant.
 
-`GET /me` is not behind this gate: it answers only "who am I and what do my rules say" (like OIDC userinfo or GitHub `GET /user`), so it requires an identity only — 401 without `X-Forwarded-Email`, no grant required. A caller no rule matches, one whose rule grants nothing because the caller lacks the org claim, or one under no rules at all (§3.5) gets 200: `permissions` lists only the rules matching that caller (possibly `{}`, possibly rules that grant nothing right now), and `accessible_tenants` only those rules' own patterns (possibly `[]`). It reads no tenant data and lists no one else's rules, so the fail-closed behaviour with no rules is untouched — that is about data access, and "you hold no grant" is the caller's own business to know.
+`GET /me` is not behind this gate: it answers only "who am I and what do my rules say" (like OIDC userinfo or GitHub `GET /user`), so it requires an identity only — 401 without one (oauth2-proxy injected no email header), no grant required. A caller no rule matches, one whose rule grants nothing because the caller lacks the org claim, or one under no rules at all (§3.5) gets 200: `permissions` lists only the rules matching that caller (possibly `{}`, possibly rules that grant nothing right now), and `accessible_tenants` only those rules' own patterns (possibly `[]`). It reads no tenant data and lists no one else's rules, so the fail-closed behaviour with no rules is untouched — that is about data access, and "you hold no grant" is the caller's own business to know.
 
 Behaviour change from earlier versions: the gate used to require the permission on `*`, which only a rule listing `tenants: ["*"]` passes; a caller with single-tenant or prefix grants (such as `["db-a-*"]`) got 403 on `/me`, `/tenants`, `/tenants/search`, `/groups`, `/tasks/{id}`, `/prs`, `/events`, `/federation/tokens` and `POST /tenants/batch`. Such callers now get their own tenants' content; `/federation/tokens`, `POST /tenants/batch`, `POST /groups/{id}/batch` and `PUT` / `DELETE /groups/{id}` still judge write or admin permission per tenant in the handler. `GET /federation/policy` (the platform metric whitelist, which names no tenant) is open to any caller who can read a tenant too — a tenant admin needs it to choose its subset. One case is narrower than before: an org-scoped `tenants: ["*"]` rule and a caller without the org claim — that used to pass the gate and get empty lists, and now gets 403.
 

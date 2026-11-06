@@ -11,6 +11,9 @@
 # ON by hadolint default — we do NOT silence it. The blocks below only tune
 # severity for the wrapper's BLOCK/WARN reduction.
 
+# ⚠️ The wrapper runs hadolint with --no-fail (#3439: a non-zero exit means
+# the engine did not run) and turns levels into BLOCK/WARN itself, so this
+# threshold only governs a direct `hadolint` run like the one above.
 failure-threshold: error
 
 # Base-image registries we publish from / pull bases from. Keeps DL3026

@@ -153,10 +153,10 @@ func TestMiddlewareAnyTenant(t *testing.T) {
 	rec := newFakeScopeRecorder()
 	m.SetScopeAuditor(rec)
 	var seen *VerifiedPrincipal
-	h := m.MiddlewareAnyTenant(PermRead)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := ResolveIdentity(m.HeaderResolver())(m.MiddlewareAnyTenant(PermRead)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = RequestPrincipal(r)
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 	serve := func(group string) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
 		req.Header.Set("X-Forwarded-Email", "u@example.com")

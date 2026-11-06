@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // ─────────────────────────────────────────────────────────────────
@@ -77,9 +78,10 @@ func SlogRequestLogger(next http.Handler) http.Handler {
 			"latency_ms", latencyMs,
 			"remote", r.RemoteAddr,
 		}
-		// Caller identity if oauth2-proxy populated it.
-		if email := r.Header.Get("X-Forwarded-Email"); email != "" {
-			attrs = append(attrs, "caller", email)
+		// The caller ResolveIdentity attached (UDS plane only; ADR-027 §2) —
+		// never a header, which on the TCP plane anyone could set.
+		if p := rbac.RequestPrincipal(r); p != nil && p.Email != "" {
+			attrs = append(attrs, "caller", p.Email)
 		}
 
 		switch {

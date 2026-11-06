@@ -1,7 +1,7 @@
 """Tests for check_iac_vibe_rules.py — Container SAST Layer 1 (#448 / TRK-311).
 
-Pinned contracts (exercised without invoking hadolint / docker — the engine
-integration is covered when CI runs the iac-sast-check hook end-to-end):
+Pinned contracts (exercised without the real hadolint / docker; the engine's
+own run is the CI lint job, which installs the pinned binary):
 
 1. **Runtime base / distroless detection**: the LAST FROM is the runtime
    stage; distroless runtime => HEALTHCHECK auto-exempt.
@@ -12,11 +12,16 @@ integration is covered when CI runs the iac-sast-check hook end-to-end):
 4. **V3 .dockerignore baseline** (pathspec gitwildmatch): equivalent glob
    spellings cover the baseline; comment lines don't false-cover.
 5. **Level -> action mapping**: error=BLOCK, warning=WARN, info/style=INFO.
+6. **A run that does not show it ran is no run** (#3439): stand-ins for
+   hadolint / docker on PATH, the wrapper run as a process. A non-zero exit,
+   an empty stdout, or stdout that is no JSON array of findings is exit 3 —
+   `docker run` with no daemon (rc 1, nothing on stdout) printed OK, rc 0.
 """
 from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
 import sys
 
 import pytest
@@ -261,6 +266,86 @@ class TestMainExitCodes:
         monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert iac.main() == 3
+
+
+# ---------------------------------------------------------------------------
+# #3439: the engine's run, through stand-ins on PATH (the wrapper as a process)
+# ---------------------------------------------------------------------------
+_SCRIPT = os.path.join(_TOOLS_DIR, "check_iac_vibe_rules.py")
+#: A stand-in hadolint that keeps the real one's exit contract: one
+#: error-level finding, exit 1 for it unless --no-fail (failure-threshold
+#: error) — so the wrapper reads it as a finding only by passing --no-fail.
+_FAITHFUL = """#!/bin/sh
+echo '[{"file":"x/Dockerfile","line":1,"code":"DL3007","level":"error","message":"latest"}]'
+for a in "$@"; do [ "$a" = "--no-fail" ] && exit 0; done
+exit 1
+"""
+
+
+def _stand_in(tmp_path, name, body):
+    """A PATH holding only *name* (a shell script); returns that PATH."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    exe = bin_dir / name
+    exe.write_text(body, encoding="utf-8")
+    exe.chmod(0o755)
+    return str(bin_dir)
+
+
+def _wrapper(path):
+    env = {k: v for k, v in os.environ.items() if k != "PR_BODY"}
+    env["PATH"] = path
+    return subprocess.run([sys.executable, _SCRIPT, "--ci"], capture_output=True, text=True,
+                          encoding="utf-8", timeout=120, env=env, stdin=subprocess.DEVNULL)
+
+
+def _replies(rc, stdout):
+    return f"#!/bin/sh\nprintf '%s' '{stdout}'\necho 'engine said why' >&2\nexit {rc}\n"
+
+
+def test_docker_with_no_daemon_is_no_run(tmp_path):
+    """The ticket's case: hadolint not on PATH, docker is, its daemon is not."""
+    proc = _wrapper(_stand_in(tmp_path, "docker", (
+        "#!/bin/sh\necho 'failed to connect to the docker API at "
+        "unix:///var/run/docker.sock' >&2\nexit 1\n")))
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert "failed to connect to the docker API" in proc.stderr, proc.stderr
+    assert "OK Container SAST" not in proc.stdout, proc.stdout
+
+
+@pytest.mark.parametrize("rc, stdout", [
+    (0, ""),          # ran? nothing says so: a clean run prints []
+    (1, "[]"),        # under --no-fail a non-zero exit is no run, whatever stdout says
+    (2, "[]"),
+    (125, ""),        # docker's own failure
+    (0, "{}"),        # JSON, not an array of findings
+    (0, "null"),
+    (0, "[1]"),
+    (0, "not json"),
+    (0, '[{"message":"parse failed"}]'),   # no level: it would pass as INFO
+], ids=["rc0-empty", "rc1-array", "rc2-array", "rc125-empty", "object", "null",
+        "array-of-number", "not-json", "finding-without-level"])
+def test_an_engine_run_that_does_not_show_it_ran_is_exit_3(tmp_path, rc, stdout):
+    proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(rc, stdout)))
+    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert "did not run" in proc.stderr and "engine said why" in proc.stderr, proc.stderr
+    assert "OK Container SAST" not in proc.stdout, proc.stdout
+
+
+def test_a_clean_engine_run_passes(tmp_path):
+    """The control: the stand-in route itself reaches OK (rc 0) when hadolint
+    exits 0 with []: the rows above are not red for some other reason."""
+    proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(0, "[]")))
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert "OK Container SAST" in proc.stdout, proc.stdout
+
+
+def test_a_finding_is_a_finding_not_an_engine_failure(tmp_path):
+    """--no-fail is what lets an error-level finding (hadolint exit 1 without
+    it) reach the wrapper as a BLOCK, rc 1 — not exit 3."""
+    proc = _wrapper(_stand_in(tmp_path, "hadolint", _FAITHFUL))
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "[BLOCK] x/Dockerfile:1 [DL3007 error]" in proc.stdout, proc.stdout
 
 
 # ---------------------------------------------------------------------------

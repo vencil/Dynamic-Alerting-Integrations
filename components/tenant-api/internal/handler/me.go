@@ -75,7 +75,7 @@ func Me(d *Deps) http.HandlerFunc {
 		}
 		if email == "" {
 			WriteJSONError(w, r, http.StatusUnauthorized,
-				"missing identity: X-Forwarded-Email header required")
+				"missing identity: the request carries no authenticated caller (oauth2-proxy injected no email header)")
 			return
 		}
 		// TRK-228: schemathesis caught nil-vs-array drift. Normalise so JSON
