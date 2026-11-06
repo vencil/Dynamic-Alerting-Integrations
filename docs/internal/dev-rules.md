@@ -459,7 +459,7 @@ tools:
 1. **Git 歷史污染**：planning doc 在一個版本週期內被改 10-30 次，commit 汙染 `git log --oneline` / bisect / blame / release-notes 自動抽取。
 2. **Stale 污染下游**：被 doc-map / MkDocs / search index 收錄後讀者踩到「v2.6.x 時代的 plan」誤導。
 3. **決策雙軌化**：CHANGELOG 的 user-facing 敘述 vs planning 的 internal rationale 同步崩壞，SSOT 破壞。
-4. **隱私／戰略外洩**：決策矩陣、Claude × Gemini cross-review 對話脈絡不宜暴露 public repo。
+4. **隱私／戰略外洩**：決策矩陣、Claude × Gemini cross-review 對話脈絡不宜暴露 public repo。反方向（把內容送給外部模型）另有前置條件，見 [engagement-deid-policy §出站方向](engagement-deid-policy.md#出站方向送給外部模型之前)。
 
 ### A3. 現行 pattern 清冊（`.gitignore:63-71`）
 
