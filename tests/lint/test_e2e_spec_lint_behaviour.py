@@ -150,8 +150,11 @@ test('a spec with nothing parked', async () => {
 # spellings report, and this file is not a second copy of that table. These are
 # the spelling A-13 was written for and the two `.skip` shapes most often typed.
 _PARKED = {
-    "test.fixme": "test.fixme('parked', async () => {});\n",
     "test.skip": "test.skip('parked', async () => {});\n",
+    "test.skip(cond)": (
+        "test('env', async ({ browserName }) => {\n"
+        "  test.skip(browserName === 'webkit', 'env gate');\n"
+        "});\n"),
     "test.describe.skip": (
         "test.describe.skip('parked', () => {\n"
         "  test('inner', async () => {});\n"
@@ -231,7 +234,7 @@ def test_a_parked_spec_with_an_unforeseeable_name_fails_the_chain(
 
 
 def test_every_real_spec_name_is_still_linted(tmp_path: Path) -> None:
-    """Each real spec, with a `test.fixme()` appended, must be reported by name.
+    """Each real spec, with a `test.skip()` appended, must be reported by name.
 
     The random-name case above cannot see an exemption written for ONE
     existing file (an ignore entry naming `portal-home.spec.ts`). This one
@@ -248,12 +251,12 @@ def test_every_real_spec_name_is_still_linted(tmp_path: Path) -> None:
         dest.parent.mkdir(parents=True, exist_ok=True)
         body = spec.read_text(encoding="utf-8")
         dest.write_text(
-            body.rstrip("\n") + "\n\ntest.fixme('a13 probe', async () => {});\n",
+            body.rstrip("\n") + "\n\ntest.skip('a13 probe', async () => {});\n",
             encoding="utf-8", newline="\n")
 
     result = _run(root)
     assert result.returncode != 0, (
-        "every real spec carried an appended `test.fixme()` and the chain still "
+        "every real spec carried an appended `test.skip()` and the chain still "
         "exited 0.\n" + _report(result))
     # eslint prints absolute paths. Matched with the directory in front, because
     # bare names collide: `wizard.spec.ts` is a substring of
@@ -265,3 +268,166 @@ def test_every_real_spec_name_is_still_linted(tmp_path: Path) -> None:
         f"{unreported} carried a parked test and eslint did not report them — "
         "they are exempted somewhere between the script and the rule, by name "
         "or by pattern.\n" + _report(result))
+
+
+# ── #1449: fixme is allowed by the lint; the runner judges the register ──────
+
+_DECLARED_FIXME = (
+    "import { test } from '@playwright/test';\n\n"
+    "test('runs', async () => {});\n"
+    "test.fixme('parked with its issue',\n"
+    "  { annotation: { type: 'issue', description: '#1449' } }, async () => {});\n")
+
+
+def test_a_declared_fixme_passes_the_lint(tmp_path: Path) -> None:
+    """The form the policy offers for parking must not be a lint error."""
+    root = _tree(tmp_path)
+    (root / "tests/e2e/ok.spec.ts").write_text(
+        _DECLARED_FIXME, encoding="utf-8", newline="\n")
+    result = _run(root)
+    assert result.returncode == 0, (
+        "a declared `test.fixme(title, {annotation: issue}, fn)` failed the lint "
+        "chain, so the one route #1449 leaves for parking is closed.\n"
+        + _report(result))
+
+
+# Spellings no lint rule can enumerate (#1449 review, each measured to pass
+# eslint): the reporter must catch them from what the runner did.
+_UNREGISTERED_PARKING = {
+    "fixme without issue": "test.fixme('bare', async () => {});\n",
+    "testInfo.skip": "test('t', async ({}, ti) => { ti.skip(); });\n",
+    "alias": "const t = test;\nt('a', async () => { t.fixme(); });\n",
+    "computed": "test('c', async () => { (test as any)['sk' + 'ip'](); });\n",
+    "test.fail": "test.fail('f', async () => { throw new Error('x'); });\n",
+    "issue not a number": (
+        "test.fixme('n', { annotation: { type: 'issue', description: 'none' } },"
+        " async () => {});\n"),
+    "issue #0": (
+        "test.fixme('z', { annotation: { type: 'issue', description: '#0' } },"
+        " async () => {});\n"),
+    # Registered only at run time: `--list` cannot see it, so it is outside
+    # the register even though the annotation exists by the time the test ends.
+    "issue pushed at run time": (
+        "test('rt', async ({}, ti) => {\n"
+        "  ti.annotations.push({ type: 'issue', description: '#1' });\n"
+        "  ti.skip();\n});\n"),
+}
+
+
+def _run_playwright(root: Path, spec: str) -> subprocess.CompletedProcess[str]:
+    """The real runner with the copied config's reporters, CI branch.
+
+    ⛔ No `--reporter` flag: that would replace the config's list and drop the
+    reporter under test. CI=1 also turns off the config's webServer; none of
+    these specs open a page, so no browser is needed.
+    """
+    e2e = root / "tests/e2e"
+    return subprocess.run(
+        [str(e2e / "node_modules" / ".bin" / "playwright"), "test", spec],
+        cwd=e2e, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=180,
+        env=dict(os.environ, CI="1"))
+
+
+def test_the_reporter_accepts_parked_tests_that_name_their_issue(
+        tmp_path: Path) -> None:
+    """⛔ The negative control for the cases below."""
+    root = _tree(tmp_path)
+    (root / "tests/e2e/ok.spec.ts").write_text(
+        _DECLARED_FIXME, encoding="utf-8", newline="\n")
+    result = _run_playwright(root, "ok.spec.ts")
+    assert result.returncode == 0, _report(result)
+    assert "[A-13]" not in result.stderr, _report(result)
+
+
+@pytest.mark.parametrize("spelling", sorted(_UNREGISTERED_PARKING))
+def test_the_reporter_fails_a_run_with_unregistered_parking(
+        tmp_path: Path, spelling: str) -> None:
+    root = _tree(tmp_path)
+    name = _random_spec_name()
+    (root / "tests/e2e" / name).write_text(
+        "import { test } from '@playwright/test';\n\n"
+        "test('runs', async () => {});\n" + _UNREGISTERED_PARKING[spelling],
+        encoding="utf-8", newline="\n")
+    result = _run_playwright(root, name)
+    assert result.returncode != 0, (
+        f"`{spelling}` parked a test without a valid issue and the run still "
+        "exited 0 — the parked-tests reporter is not in the config's reporter "
+        "list, or no longer judges this shape.\n" + _report(result))
+    assert "[A-13] parked test" in result.stderr and name in result.stderr, (
+        "the run failed, but not through the parked-tests reporter naming this "
+        "spec.\n" + _report(result))
+
+
+def test_a_scratch_spec_is_neither_linted_nor_collected(tmp_path: Path) -> None:
+    """`_*` is scratch (dev-rules §11): eslint ignores it, so the runner must
+    not collect it either — before #1449 a `_x.spec.ts` holding `test.skip()`
+    passed the lint and still ran (measured)."""
+    root = _tree(tmp_path)
+    e2e = root / "tests/e2e"
+    (e2e / "ok.spec.ts").write_text(_LEGIT_SPEC, encoding="utf-8", newline="\n")
+    (e2e / "nested").mkdir()
+    (e2e / "nested" / "_deep.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n\ntest.skip('deep', async () => {});\n",
+        encoding="utf-8", newline="\n")
+    (e2e / "_dir").mkdir()
+    (e2e / "_dir" / "x.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n\ntest.skip('in dir', async () => {});\n",
+        encoding="utf-8", newline="\n")
+    (e2e / "_scratch.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n\n"
+        "test.skip('scratch', async () => {});\n",
+        encoding="utf-8", newline="\n")
+    result = subprocess.run(
+        [str(e2e / "node_modules" / ".bin" / "playwright"), "test", "--list"],
+        cwd=e2e, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+        encoding="utf-8", errors="replace", timeout=180,
+        env=dict(os.environ, CI="1"))
+    assert result.returncode == 0, _report(result)
+    assert "ok.spec.ts" in result.stdout, (
+        "the listing did not show the control spec, so it proves nothing.\n"
+        + _report(result))
+    for hidden in ("_scratch.spec.ts", "_deep.spec.ts", "_dir"):
+        assert hidden not in result.stdout, (
+            f"the runner collected `{hidden}`, a `_` scratch path eslint never "
+            "reads — the two ignore lists disagree.\n" + _report(result))
+    lint = _run(root)
+    assert lint.returncode == 0, (
+        "the lint chain read a `_` scratch path (it holds a test.skip) — "
+        "eslint.config.mjs and playwright.config.ts must ignore the same "
+        "paths.\n" + _report(lint))
+    assert "_scratch.spec.ts" not in result.stdout, (
+        "the runner collected a `_*` scratch spec that eslint never reads — "
+        "playwright.config.ts lost `testIgnore: ['**/_*']`.\n" + _report(result))
+
+
+# A first attempt that fails and a retry that passes is not parking. CI runs
+# with `retries: 1`; a hook or serial group failing once makes Playwright mark
+# siblings failed or skipped on attempt 0 (#1449 review measured the reporter
+# failing such a run under the A-13 message). Only the final attempt counts.
+_FLAKY_NOT_PARKED = {
+    "beforeAll fails once": (
+        "test.describe('g', () => {\n"
+        "  test.beforeAll(({}, ti) => { expect(ti.retry).toBe(1); });\n"
+        "  test('one', async () => {});\n  test('two', async () => {});\n});\n"),
+    "serial group fails once": (
+        "test.describe('s', () => {\n"
+        "  test.describe.configure({ mode: 'serial' });\n"
+        "  test('a', async ({}, ti) => { expect(ti.retry).toBe(1); });\n"
+        "  test('b', async () => {});\n});\n"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_FLAKY_NOT_PARKED))
+def test_a_retry_that_passes_is_not_reported_as_parking(
+        tmp_path: Path, shape: str) -> None:
+    root = _tree(tmp_path)
+    (root / "tests/e2e/flaky.spec.ts").write_text(
+        "import { test, expect } from '@playwright/test';\n\n"
+        + _FLAKY_NOT_PARKED[shape], encoding="utf-8", newline="\n")
+    result = _run_playwright(root, "flaky.spec.ts")
+    assert "flaky" in result.stdout, (
+        "the probe did not produce a flaky run, so it proves nothing.\n"
+        + _report(result))
+    assert "[A-13]" not in result.stderr, _report(result)
+    assert result.returncode == 0, _report(result)

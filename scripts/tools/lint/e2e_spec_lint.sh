@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# A-13 enforcement: keep `test.skip()` / `test.fixme()` out of the Playwright
-# E2E specs — every spelling, the rule does not distinguish them.
+# A-13 commit-time feedback: keep `test.skip()` out of the Playwright E2E
+# specs — every spelling. `test.fixme()` is allowed; whether a parked test
+# names its issue is judged at run time by tests/e2e/reporters/parked-tests.ts
+# (#1449), which sees spellings no lint can.
 # Policy: docs/internal/testing-playbook.md §v2.7.0 LL §2.
 # Rule: tests/e2e/eslint.config.mjs pins `playwright/no-skipped-test` with
-# `{ allowConditional: false, disallowFixme: true }`.
+# `{ allowConditional: false, disallowFixme: false }`.
 #
 # ⛔ SINGLE SOURCE OF TRUTH — three entry points run THIS file rather than each
 # spelling the command out themselves (same arrangement as
@@ -70,16 +72,13 @@ if [ ! -e node_modules/.bin/eslint ]; then
   created `git worktree add` tree starts without it. The main checkout has it
   already, which is why this passes there and fails here.
 
-  What the guard enforces: no `.skip()` and no `.fixme()` in
-  tests/e2e/*.spec.*, in ANY form — the conditional
-  `test.skip(cond, 'reason')` included. Measured, because an earlier draft of
-  this very message claimed the opposite: all seven spellings report against
-  this config. Environment differences go through a `--grep` tag or a
-  playwright.config.ts project, both of which this suite already uses.
+  What the guard enforces: no `.skip()` in tests/e2e/*.spec.*, in ANY form —
+  the conditional `test.skip(cond, 'reason')` included. Environment
+  differences go through a `--grep` tag or a playwright.config.ts project.
 
-  If you believe a spec genuinely needs to be parked, register it in
-  docs/internal/frontend-quality-backlog.md first — that is the route the
-  policy provides.
+  To park a test, use `test.fixme('title', { annotation: { type: 'issue',
+  description: '#<n>' } }, fn)`: the parked-tests reporter fails any run in
+  which a parked test names no issue (#1449).
 MSG
   exit 1
 fi

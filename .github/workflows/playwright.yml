@@ -236,10 +236,12 @@ jobs:
         #                  Local benchmark: workers=1 = 5.2 min, workers=2
         #                  = 3.5 min (1 flaky retry-pass), workers=4 =
         #                  1.5 min (192 / 192 clean). 4 wins on both axes.
-        #   --reporter=list,html  swap dots-only progress for inline test
-        #                  names so CI failures are tagged with the spec
-        #                  immediately; keep html for artifact upload.
-        run: npm test -- --workers=4 --reporter=list,html
+        # ⛔ NO `--reporter` here (#1449): it would replace the config's list
+        #   and drop the parked-tests reporter that fails a skipped / fixme
+        #   test naming no issue. Under CI=true playwright.config.ts already
+        #   picks list (inline names) + html (artifact upload) + that one.
+        #   Pinned by tests/lint/test_e2e_spec_lint.py.
+        run: npm test -- --workers=4
         env:
           CI: 'true'
           BASE_URL: 'http://localhost:8080/interactive/'

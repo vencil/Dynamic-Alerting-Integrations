@@ -10,19 +10,22 @@ lang: zh
 
 > **目的**：登記所有 `test.fixme()` / `test.skip()` / a11y waiver / axe exclude 等**故意放過的前端品質債務**，避免「先 fixme、之後再說」的雪球債（v2.7.0 Phase .e review 發現此 pattern 後定規於 [`testing-playbook.md` §v2.7.0 LL §2](testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具)）。
 >
-> **搭配的自動化**（v2.8.0 A-13，#1428 修正）：ESLint `eslint-plugin-playwright/no-skipped-test` 已在 `tests/e2e/eslint.config.mjs` 設 `disallowFixme: true` + `allowConditional: false`。執行點有兩個，強度不同：
+> **停下的 E2E 測試不在本表登記**（#1449）：登記就是測試上的 `issue` annotation。
 >
-> - **本機** `playwright-lint` pre-commit hook — 會擋，但**只在有 `tests/e2e/node_modules` 的 checkout 裡跑得起來**。`node_modules` 是 gitignored，所以每一棵新開的 `git worktree` 都要先 `cd tests/e2e && npm ci`（缺席時 hook 會 fail 並印出這行，不是靜默略過）。
-> - **CI** `.github/workflows/playwright.yml` 的 `E2E Spec Lint (A-13)` job — 會跑，但 ⚠️ **是 advisory 不是 blocking**：該 job 與 `Smoke Tests (Chromium)` 都不在 main 的 required status checks 內（2026-08-14 用 branch-protection API 實查 19 個 context），紅了不擋 merge。⛔ 它刻意是**獨立 job 而不是 smoke job 裡的一個 step**——當 step 時一支被 park 的 spec 會讓瀏覽器安裝、portal 啟動與整輪 smoke 全部不執行，等於拿「E2E 跑過而且綠」換成「E2E 從沒跑」，而且照樣不擋 merge。要變成 blocking 見 [#1428](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1428)。
->
-> ⛔ 這句原本寫的是「會被 pre-commit hook **或 CI** 直接拒」——CI 那半在 #1428 之前是假的（全 `.github/workflows/` grep `eslint` 零命中）。登記**必須**發生在放 fixme 的 commit 前或同一 commit 內。
+> - **寫法**：`test.fixme('title', { annotation: { type: 'issue', description: '#<n>' } }, fn)`。
+> - **判定**：`tests/e2e/reporters/parked-tests.ts` 讀 runner 實際跑出的結果。結果為 skipped、或預期狀態不是 passed 的測試，沒有掛 `#<數字>` 形式的 issue，整次執行就判為失敗。
+> - **涵蓋**：判的是執行結果而不是寫法，所以別名、計算式呼叫、`testInfo.skip()`、`test.fail` 都在範圍內。
+> - **列出全部**：`cd tests/e2e && npx playwright test --list --reporter=json` 列得出所有宣告式的停車測試。
+> - **ESLint 的角色**：只擋 `.skip()`（任何形式），作為 commit 時的快速回饋。
+> - **看不到的**：沒被收進或沒被執行的測試，例如 `--grep`、`--grep-invert`、`testIgnore`、`--shard` 排除的，以及刪掉的測試。也不檢查 issue 是否還 open。
+> - **執行點**：本機每次 `playwright test`，以及 CI 的 `Smoke Tests (Chromium)`。⚠️ 該 job 不在 main 的 required checks 內，紅了不擋 merge。
 
 ## 登記規則
 
-1. **新增 `test.fixme()` / `test.skip()`（任何形式）** — 此檔登記為**硬性條件**。⛔ 這一條原本寫「條件式 `test.skip(!isLinux, 'reason')` 不屬於債務，不需登記」——實測那種寫法**根本落不了地**（lint 對七種形式一律報錯，#1428），所以那句話描述的是一個不存在的通道。環境差異走 `--grep` tag 或 playwright.config.ts 的 project。
+1. **停下的 E2E 測試**：不在本表，見上方。`.skip()` 一律不准，環境差異走 `--grep` tag 或 playwright.config.ts 的 project。
 2. **axe-core violation 寫 `allowedNonCriticalViolations > 0`** — 同等登記，註明放過的 violation 類型 + 預計修復版本。
 3. **Playwright `exclude` / `route` stub 長期存在** — 超過 1 個 minor 版本未銷案者登記。
-4. **跨版本殘留**：任何項目跨超過 1 個 minor 版本（如 v2.7.0 引入、v2.8.0 還在）**必須**走 [`testing-playbook.md` §v2.7.0 LL §2](testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具) 的 knowledge annealing 三選一（calibrate / 刪測 + 在本表登記 / 用 `--grep` tag 或 playwright.config.ts 的 project 把它移出預設 run）。⛔ 第三項原本寫「改 `test.skip` 寫明放棄原因」——實測那個寫法會被 lint 擋（#1428），是個做不到的動作。
+4. **跨版本殘留**：任何項目跨超過 1 個 minor 版本（如 v2.7.0 引入、v2.8.0 還在）**必須**走 [`testing-playbook.md` §v2.7.0 LL §2](testing-playbook.md#2-testfixme-是債務標記不是先通過-ci的工具) 的 knowledge annealing 三選一（calibrate / 刪測，或改為帶 issue 的 `test.fixme` / 用 `--grep` tag 或 playwright.config.ts 的 project 把它移出預設 run）。⛔ 第三項原本寫「改 `test.skip` 寫明放棄原因」——實測那個寫法會被 lint 擋（#1428），是個做不到的動作。
 
 ## 登記 Template
 
@@ -32,11 +35,9 @@ lang: zh
 | ... | wizard.spec.ts:42 "validates deployment step" | test.fixme | locator 要 --ui 校準 | v2.7.0 | v2.8.0 | @maintainer |
 ```
 
-## v2.8.0 — 目前待辦（active）
+## 目前待辦（active）
 
-_無登記項目。v2.8.0 PR #57 A-7 清零後，`test.fixme()` / `test.skip()` 在 E2E specs 為零（任何寫法），ESLint 守關（執行點與各自的強度見本頁開頭那段，兩者不等價）。_
-
-> ⚠️ **「無登記項目」只對這張表的字面範圍成立**：登記義務綁在 `test.fixme()` / `test.skip()` 的出現，而 `tests/e2e/visual.spec.ts` 的 TRK-238 區塊用**整段 block comment** park 了 5 支 spec——理由逐字寫著是被 A-13 逼的。那是 lint 看不到、本表也沒收的第三種狀態（#1428 實查）。要不要把 block-comment parking 納入登記義務，是尚未拍板的事。
+停下的 E2E 測試以 `--list` 為準（見上方）。目前是 `visual.spec.ts` 的 5 支 baseline 測試，由 [#3642](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3642) 追蹤；它們原本以 block comment 停著，#1449 起改為宣告式 fixme。其他類型（axe waiver、長期 stub）：_無登記項目。_
 
 ## 歷史清零紀錄
 
