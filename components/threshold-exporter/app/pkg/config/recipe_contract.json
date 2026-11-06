@@ -66,7 +66,7 @@
   "horizon": {"enum": ["1h", "2h", "4h", "12h", "24h", "48h"]},
   "group_by": {"enum": ["persistentvolumeclaim"]},
   "quantile": {"default": "0.99", "exclusive_minimum": 0, "exclusive_maximum": 1},
-  "reserved_labels": ["tenant", "version", "__name__", "severity", "recipe", "recipe_id", "name", "mode"],
+  "reserved_labels": ["tenant", "version", "__name__", "severity", "recipe", "recipe_id", "name", "mode", "le"],
   "template_metachars": ["{{", "}}", "`"],
   "forecast": {"current_band": 0.5, "ratio_floor_exclusive_minimum": 0, "lookback_factor": 2, "lookback_floor": "1h"},
   "slo_burn_rate": {

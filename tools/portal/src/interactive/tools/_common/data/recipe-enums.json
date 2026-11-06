@@ -227,7 +227,8 @@
     "recipe",
     "recipe_id",
     "name",
-    "mode"
+    "mode",
+    "le"
   ],
   "patterns": {
     "name": "^[a-z][a-z0-9_]*$",
