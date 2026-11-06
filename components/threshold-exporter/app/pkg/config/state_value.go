@@ -241,7 +241,7 @@ func recurringAsWritten(typed []RecurringSchedule, generic any) []RecurringSched
 
 // onAt reports whether r turns its filter on at now.
 func (r stateValueReading) onAt(now time.Time) bool {
-	return r.kind == stateValueOn && !(r.hasExpires && now.After(r.expires))
+	return r.kind == stateValueOn && (!r.hasExpires || !now.After(r.expires))
 }
 
 // warn is the reader's WARN line for r ("" when there is none).
