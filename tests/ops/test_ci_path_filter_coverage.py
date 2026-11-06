@@ -1521,8 +1521,9 @@ GATE_OUTPUT = re.compile(r"needs\.[\w-]+\.outputs\.(\w+)_changed")
 INTERPRETERS = {"python", "python3", "py", "bash", "sh", "node", "ruby", "perl"}
 # Interpreter flags whose VALUE is a separate token. Without these, the
 # first-non-flag rule took the value as the script and lost the real one:
-# bench-probe-write-latency.yaml runs `python3 -X utf8 scripts/tools/dx/
-# analyze_probe.py`, and the scan saw `utf8` (#3601 review).
+# bench-probe-write-latency.yaml runs
+# `python3 -X utf8 scripts/tools/dx/analyze_probe.py`,
+# and the scan saw `utf8` (#3601 review).
 PYTHON_INTERPRETERS = {"python", "python3", "py"}
 SHELL_INTERPRETERS = {"bash", "sh"}
 INTERPRETER_VALUE_FLAGS = {
