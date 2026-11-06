@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	promparser "github.com/prometheus/prometheus/promql/parser"
 	"gopkg.in/yaml.v3"
 )
 
@@ -306,5 +307,100 @@ func TestCompileCustomAlertPack_MaintenanceLabelMatchesTheRule(t *testing.T) {
 	// proves nothing about one of them.
 	if seen[maintenanceMute] == 0 || seen[maintenancePage] == 0 {
 		t.Fatalf("label values seen %v; want both %q and %q", seen, maintenanceMute, maintenancePage)
+	}
+}
+
+// A tenant's `selectors:` pin a label on the tenant's own metric. A label the
+// compiled pipeline aggregates BY is a key the recipe depends on: pinning it
+// does not filter the data, it breaks the shape (pinning `le` on p99 leaves
+// histogram_quantile without its +Inf bucket, so the alert evaluates NaN and
+// never fires). Every such key must therefore be in reserved_labels, which
+// selectorItems refuses. The keys are read off the compiled rules, not
+// listed by hand, so a new recipe that aggregates by a new label turns this
+// red until the contract reserves it. group_by values are excluded: the
+// tenant chose them, and pinning one is a plain filter.
+func TestCompiledAggregationKeysOnTenantMetricsAreReserved(t *testing.T) {
+	specs := []string{
+		`- {recipe: threshold, name: a, metric: m_thr, op: ">", window: 5m, threshold: "1"}`,
+		`- {recipe: threshold, name: b, metric: m_eq, op: "==", window: 5m, threshold: "1"}`,
+		`- {recipe: rate, name: c, metric: m_rate, window: 5m, threshold: "1"}`,
+		`- {recipe: ratio, name: d, metric: m_num, denominator_metric: m_den, window: 5m, threshold: "0.1"}`,
+		`- {recipe: p99_latency, name: e, metric: m_lat, window: 5m, threshold: "1"}`,
+		`- {recipe: absence, name: f, metric: m_abs, window: 5m, threshold: "1"}`,
+		`- {recipe: forecast, name: g, metric: m_avail, horizon: 4h, capacity_metric: m_cap, threshold: "0.1", group_by: [persistentvolumeclaim]}`,
+		`- {recipe: forecast, name: i, metric: m_raw, op: "<", horizon: 4h, threshold: "10"}`,
+		`- {recipe: threshold, name: j, metric: m_thr_g, op: ">", window: 5m, threshold: "1", group_by: [persistentvolumeclaim]}`,
+		`- {recipe: p99_latency, name: k, metric: m_lat_g, window: 5m, threshold: "1", group_by: [persistentvolumeclaim]}`,
+		`- {recipe: slo_burn_rate, name: h, metric: m_err, denominator_metric: m_req, objective: "99.9", min_events: 20}`,
+	}
+	tenantMetric := map[string]bool{}
+	var entries []CustomAlertEntry
+	for _, y := range specs {
+		e := caEntry(t, CustomAlertServed, []string{"warning"}, y)
+		entries = append(entries, e)
+		for _, m := range []string{e.Spec.Metric, e.Spec.DenominatorMetric, e.Spec.CapacityMetric} {
+			if m != "" {
+				tenantMetric[m] = true
+				tenantMetric[m+"_bucket"] = true
+			}
+		}
+	}
+	p, err := CompileCustomAlertPack([]TenantCustomAlerts{{Tenant: "t", Entries: entries}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reserved := stringSet(contract.ReservedLabels)
+	tenantChosen := stringSet(contract.GroupBy.Enum)
+	keys := map[string]string{} // label -> a record that aggregates by it
+	readsTenantMetric := func(n promparser.Node) bool {
+		found := false
+		promparser.Inspect(n, func(c promparser.Node, _ []promparser.Node) error {
+			if vs, ok := c.(*promparser.VectorSelector); ok && tenantMetric[vs.Name] {
+				found = true
+			}
+			return nil
+		})
+		return found
+	}
+	records := 0
+	for _, g := range p.Groups {
+		for _, r := range g.get("rules").([]any) {
+			rule := r.(orderedMap)
+			name, ok := rule.get("record").(string)
+			if !ok {
+				name = rule.get("alert").(string)
+			}
+			records++
+			expr, err := promparser.NewParser(promparser.Options{}).ParseExpr(rule.get("expr").(string))
+			if err != nil {
+				t.Fatalf("%s: %v", name, err)
+			}
+			promparser.Inspect(expr, func(n promparser.Node, _ []promparser.Node) error {
+				if ag, ok := n.(*promparser.AggregateExpr); ok && !ag.Without && readsTenantMetric(ag.Expr) {
+					for _, l := range ag.Grouping {
+						keys[l] = name
+					}
+				}
+				// A join over a tenant metric matches on these labels too:
+				// pinning one would also change which series pair up.
+				// (`ignoring(...)` names labels left OUT of the match, so
+				// pinning those is a plain filter; only `on(...)` counts.)
+				if be, ok := n.(*promparser.BinaryExpr); ok && be.VectorMatching != nil &&
+					be.VectorMatching.On && (readsTenantMetric(be.LHS) || readsTenantMetric(be.RHS)) {
+					for _, l := range append(append([]string{}, be.VectorMatching.MatchingLabels...), be.VectorMatching.Include...) {
+						keys[l] = name
+					}
+				}
+				return nil
+			})
+		}
+	}
+	if records == 0 || len(keys) == 0 {
+		t.Fatalf("found %d records and %d aggregation keys; the walk read nothing", records, len(keys))
+	}
+	for l, rec := range keys {
+		if !reserved[l] && !tenantChosen[l] {
+			t.Errorf("%s aggregates a tenant metric by %q, which is not in recipe_contract.json reserved_labels: a tenant selector could pin it", rec, l)
+		}
 	}
 }

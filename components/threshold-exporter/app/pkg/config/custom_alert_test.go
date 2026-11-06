@@ -202,6 +202,7 @@ func TestCustomAlert_ValidationNegatives(t *testing.T) {
 	cases := map[string]string{
 		"metric injection":         "      - {recipe: threshold, name: x, metric: \"m} or vector(1)\", op: \">\", window: 5m, threshold: \"1:warning\"}\n",
 		"reserved selector":        "      - {recipe: rate, name: x, metric: m, selectors: {tenant: foo}, op: \">\", window: 5m, threshold: \"1:warning\"}\n",
+		"reserved le selector":     "      - {recipe: p99_latency, name: x, metric: m, selectors: {le: \"0.5\"}, window: 5m, threshold: \"1:warning\"}\n",
 		"bad severity":             "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"1:bogus\"}\n",
 		"missing window":           "      - {recipe: threshold, name: x, metric: m, op: \">\", threshold: \"1:warning\"}\n",
 		"non-numeric thresh":       "      - {recipe: threshold, name: x, metric: m, op: \">\", window: 5m, threshold: \"abc:warning\"}\n",
