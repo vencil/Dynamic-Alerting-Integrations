@@ -147,7 +147,7 @@ tenants:
 
 維護模式下，`maintenance: mute` 的告警不觸發（PromQL 層抑制；閾值類與自訂告警都是 `mute`）；叢集存活、exporter 缺席與單實例 critical 停機（如 `PostgreSQLDown`）這類告警是 `page`，照常觸發，逐條見[告警參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.md)的「維護期間」欄，範圍見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)。到期後自動恢復。
 
-開關寫 `enabled: true`（YAML 布林）或 `target: enable`；要關掉就寫 `enabled: false`／`target: disable`，或整個值寫 `disable`。純量只認 `enable` 與 `disable`（及其別名）——`"yes"`、`"true"`、`"1"` 這類值**不會**開啟維護模式，exporter 會印 WARN、tenant-api 會拒收；物件只寫 `recurring:` 不寫開關時，只有週期窗內的 Alertmanager silence，維護模式本身不開啟。完整讀法見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)（[#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620)）。
+開關寫 `enabled: true`（YAML 布林）或 `target: enable`；要關掉就寫 `enabled: false`／`target: disable`，或整個值寫 `disable`。純量只認 `enable` 與 `disable`（及其別名）——`"yes"`、`"true"`、`"1"` 這類值**不會**開啟維護模式，exporter 會印 WARN、tenant-api 會拒收；物件只寫 `recurring:` 不寫開關時，只有週期窗內的 Alertmanager silence，維護模式本身不開啟；不寫開關但同時寫了 `expires`，維護模式從現在開到 `expires` 為止（週期窗外也開），週期窗照樣建 silence。完整讀法見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)（[#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620)）。
 
 > **時區：** `expires` 使用 RFC 3339 格式（含時區），排程式閾值的 `window` 和 recurring maintenance 的 `cron` 均使用 **UTC 時區**。
 

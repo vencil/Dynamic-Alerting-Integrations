@@ -59,3 +59,33 @@ func TestEffective_MaintenanceRecurring(t *testing.T) {
 		}
 	}
 }
+
+// A `_state_maintenance` the exporter does not serve (here a root
+// `_defaults.yaml` with no `defaults:` mapping: root_defaults_unwrapped)
+// stays in effective_config as written, but has no windows — the scheduler
+// silences only what the exporter itself reads.
+func TestEffective_MaintenanceRecurring_NotServedHasNone(t *testing.T) {
+	t.Parallel()
+	dir := writeParityTree(t, map[string]string{
+		"_defaults.yaml": "mysql_connections: 80\n_state_maintenance:\n  recurring:\n    - cron: \"0 2 * * 0\"\n      duration: 2h\n",
+		"t1.yaml":        "tenants:\n  t1:\n    mysql_connections: \"70\"\n",
+	})
+	_, doc, _ := runEffectiveOn(t, dir)
+	var tv struct {
+		EffectiveConfig      map[string]any             `json:"effective_config"`
+		NotServed            map[string]json.RawMessage `json:"not_served"`
+		MaintenanceRecurring []recurringWindow          `json:"maintenance_recurring"`
+	}
+	if err := json.Unmarshal(doc.Tenants["t1"], &tv); err != nil {
+		t.Fatal(err)
+	}
+	if _, in := tv.EffectiveConfig["_state_maintenance"]; !in {
+		t.Fatalf("premise: effective_config has no _state_maintenance: %+v", tv.EffectiveConfig)
+	}
+	if _, ns := tv.NotServed["_state_maintenance"]; !ns {
+		t.Fatalf("premise: _state_maintenance is not in not_served: %v", tv.NotServed)
+	}
+	if tv.MaintenanceRecurring == nil || len(tv.MaintenanceRecurring) != 0 {
+		t.Errorf("maintenance_recurring = %+v, want []", tv.MaintenanceRecurring)
+	}
+}

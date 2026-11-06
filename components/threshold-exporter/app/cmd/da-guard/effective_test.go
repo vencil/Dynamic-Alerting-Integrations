@@ -113,7 +113,7 @@ func assertMatchesResolveEffective(t *testing.T, dir string, doc effectiveOut) {
 		delete(got, "key_sources")
 		// #3620: maintenance_recurring is not part of the body; it is the
 		// exporter's reading of the body's own `_state_maintenance`.
-		wantRec, _ := json.Marshal(maintenanceRecurring(ec.EffectiveConfig))
+		wantRec, _ := json.Marshal(maintenanceRecurringServed(*ec))
 		if string(got["maintenance_recurring"]) != string(wantRec) {
 			t.Errorf("tenant %q: maintenance_recurring = %s, want %s", id, got["maintenance_recurring"], wantRec)
 		}

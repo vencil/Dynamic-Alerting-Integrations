@@ -129,6 +129,18 @@ type recurringWindow struct {
 	Reason   string `json:"reason,omitempty"`
 }
 
+// maintenanceRecurringServed is effectiveTenant.MaintenanceRecurring for
+// ec: none when the exporter does not serve ec's `_state_maintenance`
+// (ec.NotServed names it — e.g. one a subdirectory `_defaults.yaml` writes,
+// which the exporter does not pass down to its tenants), so the scheduler
+// silences only windows the exporter itself reads.
+func maintenanceRecurringServed(ec config.EffectiveConfig) []recurringWindow {
+	if _, notServed := ec.NotServed["_state_maintenance"]; notServed {
+		return []recurringWindow{}
+	}
+	return maintenanceRecurring(ec.EffectiveConfig)
+}
+
 // maintenanceRecurring is effectiveTenant.MaintenanceRecurring for a
 // tenant's effective_config.
 func maintenanceRecurring(effective map[string]any) []recurringWindow {
@@ -302,7 +314,7 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 			ec = ec.AsWritten() // #2031: every key as its layer wrote it
 			t := effectiveTenant{EffectiveConfig: *ec, KeySources: ec.KeySources,
 				NotServed: ec.NotServed, ChainParseFailed: ec.ChainParseFailed,
-				MaintenanceRecurring: maintenanceRecurring(ec.EffectiveConfig)}
+				MaintenanceRecurring: maintenanceRecurringServed(*ec)}
 			// A YAML `.inf` / `.nan` is sent as text, as tenant-api sends it.
 			t.EffectiveConfig.EffectiveConfig = config.NonFiniteAsText(ec.EffectiveConfig)
 			if ec.BoundProfile != "" {

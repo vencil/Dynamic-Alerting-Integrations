@@ -104,7 +104,7 @@ const SCHEMA = [
     desc: t('維護模式：完全抑制告警', 'Maintenance mode: full alert suppression'),
     rulePack: 'all',
     children: [
-      { key: 'target', type: '"enable" | "disable"', desc: t('開關：enable 開、disable（或 disabled／off／false）關；與 enabled 擇一，兩者矛盾時整個值讀不懂、不開', 'Switch: enable turns it on, disable (or disabled / off / false) off; use it or enabled — if they disagree the whole value is not read and maintenance stays off'), rulePack: 'all', example: '"enable"' },
+      { key: 'target', type: '"enable" | "disable" | "disabled" | "off" | "false"', desc: t('開關：enable 開、disable（或 disabled／off／false）關；與 enabled 擇一，兩者矛盾時整個值讀不懂、不開', 'Switch: enable turns it on, disable (or disabled / off / false) off; use it or enabled — if they disagree the whole value is not read and maintenance stays off'), rulePack: 'all', example: '"enable"' },
       { key: 'enabled', type: 'boolean', desc: t('開關（布林）：true 開、false 關。沒寫開關時有 expires 就開到到期；只有 recurring 時不開維護模式，只在窗口內建 silence；開關說關時也不建 silence', 'Switch (boolean): true on, false off. With no switch, expires turns it on until it lapses; recurring alone does not turn maintenance on, it only silences the windows; a switch that says off creates no silences either'), rulePack: 'all', example: 'true' },
       { key: 'expires', type: 'string (date-time, RFC3339)', desc: t('自動失效時間（UTC，例如 now + 7 天）；無法解析時整個設定被忽略', 'Auto-expiry timestamp (UTC, e.g. now + 7 days); an unparseable value makes the whole setting ignored'), rulePack: 'all' },
       { key: 'reason', type: 'string', desc: t('原因', 'Reason'), rulePack: 'all', example: '"Planned DB migration"' },
