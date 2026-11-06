@@ -6,7 +6,7 @@
 #        ts frozen (stuck/erroring) OR the metric absent (pod down) — and NOT while
 #        the ts tracks time() (healthy). Guards the "detection silently blind" gap:
 #        a fail-closed pass never refreshes the ts, so staleness surfaces it.
-#   6-7) GatewayRevocationLoadFailure fires on a sustained fail-open read error
+#   6-7) GatewayRevocationLoadFailure fires on a sustained revoked-set read error
 #        (>0 for 2m), never at 0 (the 2m debounce rides out pod-start / remount blips).
 #   8-10) EvidenceChannelDown (#1234) fires when the heartbeat canary stops arriving
 #        (channel_up == 0 for 15m) and never while it arrives. BOTH EDGES of the
@@ -149,7 +149,9 @@ tests:
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
 
-  # 6) Gateway fail-open sustained → FIRES after for:2m (not before).
+  # 6) Gateway read failure sustained → FIRES after for:2m (not before).
+  #    exp_annotations pins the posture wording (#2550): a failed read KEEPS
+  #    the previous set — it does not let every revoked token through.
   - interval: 1m
     name: gateway-failopen-fires
     input_series:
@@ -168,17 +170,25 @@ tests:
             exp_annotations:
               description: |
                 The federation-gateway is failing to read the revoked-set
-                (revoked.txt) and is failing OPEN by design — revoked federation
-                tokens ARE being accepted until their TTL (≤4h). This is the ADR-028
-                named Risk Acceptance (a deliberate availability trade-off) made
-                visible; the fail-closed hardening is tracked in #996. ACTION: check
+                (revoked.txt). A failed read does NOT clear the set: each gateway
+                worker keeps enforcing the set it last loaded successfully, so
+                tokens in that set are still rejected, but every revocation issued
+                after that load is NOT in force until a read succeeds (reloads are
+                request-driven, so on a quiet worker that load can predate the
+                failure by a long way).
+                ⛔ COLD START: a worker whose FIRST load failed has no previous set
+                and is enforcing NOTHING — revoked tokens are honoured there until
+                their TTL (≤4h). This is the ADR-028 named Risk Acceptance (a
+                deliberate availability trade-off: the gateway fails open rather
+                than erroring the request) made visible; the fail-closed hardening
+                is tracked in #996. ACTION: check
                 the gateway's revoked.txt projected-volume mount and the
                 tenant-federation-store ConfigMap; a persistent failure (vs a
                 pod-start / remount blip) may indicate mount tampering (a DoS of the
                 defence). Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
-              summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
+              summary: "Federation gateway cannot read the revoked-set — it keeps enforcing the last set it loaded, so revocations made since are NOT in force (ADR-028 §fail-open)"
 
   # 7) Gateway clean (0) → never fires (the debounce rides out transients).
   - interval: 1m
@@ -297,7 +307,7 @@ tests:
                 on a pre-violation revoked set: every revocation issued after that
                 line appeared is NOT in force, and a gateway worker whose first
                 load hit it has no previous set and is enforcing nothing.
-                This is NOT the fail-open case
+                This is NOT the read-failure case
                 (FederationGatewayRevocationLoadFailure): the list is readable, it
                 is being refused. FederationRevocationTamperSuspected will NOT
                 cover it either — that compares the audit log against the FILE, and
