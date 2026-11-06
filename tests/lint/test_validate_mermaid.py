@@ -190,15 +190,16 @@ class TestValidateFile:
                "this assertion under docker-root.",
     )
     def test_file_read_error(self, tmp_path):
-        """Non-readable file returns error."""
+        """A non-readable file is not checked, not a diagram error (#3577)."""
         md = tmp_path / "unreadable.md"
         md.write_text("content", encoding="utf-8")
         os.chmod(str(md), 0o000)
         v = vm.MermaidValidator()
         try:
-            errors = v.validate_file(md)
-            assert len(errors) == 1
-            assert errors[0]["status"] == "error"
+            assert v.validate_file(md) == []
+            assert v.errors == []
+            assert len(v.not_checked) == 1
+            assert "Permission denied" in v.not_checked[0]
         finally:
             os.chmod(str(md), 0o644)
 
