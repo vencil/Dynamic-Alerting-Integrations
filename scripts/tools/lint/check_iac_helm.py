@@ -34,7 +34,7 @@ exemptions go through the registry (Critical is never exemptable).
 Engines are located as binary-on-PATH first (CI installs them), else Docker:
   helm        -> `helm` | docker run alpine/helm:<ver>
   kube-linter -> `kube-linter` | docker run stackrox/kube-linter:<ver>
-With --ci the engines are REQUIRED (exit 3 if missing) so Mode B can't silently
+With --ci the engines are REQUIRED (exit 2 if missing) so Mode B can't silently
 skip in CI; without --ci, Mode B is skipped with a WARN when engines are
 absent (local dev without helm/kube-linter still gets Mode A).
 
@@ -455,8 +455,8 @@ def main() -> int:
         for line in findings[action]:
             print(f"  [{action}] {line}")
 
-    if engine_error:
-        return 3
+    if engine_error:  # the scan did not run: a caller error (#3577, #3611)
+        return EXIT_CALLER_ERROR
 
     # A "couldn't run the check" condition (helm render / kube-linter failure)
     # is a caller-error (exit 2: fix the chart/environment, then retry), NOT a

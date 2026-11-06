@@ -32,6 +32,13 @@ def _init_tmp_repo(tmp_path: Path) -> Path:
     subprocess.run(  # subprocess-timeout: ignore
         ["git", "init", "-q", "-b", "main", str(tmp_path)], check=True
     )
+    # The repo's own identity, so a later `git commit` (the tool's) never
+    # depends on the machine's global config: CI runners have none, and a
+    # missing identity is git's fatal 128, not the refusal a test may want.
+    for key, value in (("user.name", "t"), ("user.email", "t@example.com")):
+        subprocess.run(  # subprocess-timeout: ignore
+            ["git", "-C", str(tmp_path), "config", key, value], check=True
+        )
     (tmp_path / "seed.txt").write_text("seed\n")
     env = os.environ.copy()
     env.update(
@@ -228,3 +235,52 @@ def test_cli_rejects_message_conflict(tmp_path: Path, monkeypatch) -> None:
     )
     assert proc.returncode != 0
     assert "not allowed with" in proc.stderr or "argument" in proc.stderr
+
+
+def test_a_hook_refusal_is_a_finding_and_no_repo_is_a_caller_error(tmp_path: Path) -> None:
+    """#3577: the normal path's `git commit` refused by a hook asks for a
+    change to the content (1); not being in a repository is the caller's
+    (2). Both used to be 1."""
+    repo = _init_tmp_repo(tmp_path)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'lint: forbidden content' >&2\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    proc = subprocess.run(  # subprocess-timeout: ignore
+        [sys.executable, str(_SCRIPT), "--auto", "-m", "test: x", "f.txt"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo,
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "forbidden content" in proc.stderr
+
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    proc = subprocess.run(  # subprocess-timeout: ignore
+        [sys.executable, str(_SCRIPT), "--show-locks"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=outside,
+        env={**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)},
+    )
+    assert proc.returncode == 2, proc.stderr
+
+
+def test_a_git_fatal_error_on_commit_is_a_caller_error(tmp_path: Path) -> None:
+    """git ends a fatal commit error (here: no author identity) at 128, not
+    the 1 of a refusal: the commit could not be made, which is 2 — not a
+    finding about the content (#3577, #3611 review)."""
+    repo = _init_tmp_repo(tmp_path)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
+    home = tmp_path / "home"
+    home.mkdir()
+    env.update(HOME=str(home), XDG_CONFIG_HOME=str(home), GIT_CONFIG_NOSYSTEM="1",
+               GIT_CONFIG_GLOBAL=os.devnull, EMAIL="")
+    subprocess.run(["git", "config", "--unset", "user.email"], cwd=repo, check=False, timeout=30)
+    subprocess.run(["git", "config", "--unset", "user.name"], cwd=repo, check=False, timeout=30)
+    subprocess.run(["git", "config", "user.useConfigOnly", "true"], cwd=repo, check=True,
+                   timeout=30)
+    proc = subprocess.run(  # subprocess-timeout: ignore
+        [sys.executable, str(_SCRIPT), "--auto", "-m", "test: x", "f.txt"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo, env=env,
+    )
+    assert proc.returncode == 2, proc.stderr

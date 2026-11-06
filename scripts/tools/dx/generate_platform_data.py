@@ -441,6 +441,17 @@ WIZARD_FIRST_PARTY = {
 }
 
 
+class WizardImagesInconsistent(Exception):
+    """The repo's own sources disagree about a wizard image (two tags for one
+    repo, a mapping the SSOT no longer holds, an appVersion off-convention): a
+    finding in the repo — main() exits 1 (scripts/tools/_lib_exitcodes.py)."""
+
+
+class WizardImagesUnreadable(Exception):
+    """A wizard image's source could not be read (chart gone, or not readable
+    the way Helm reads it): no verdict — main() exits 2 (#3577, #3611)."""
+
+
 def _deployed_third_party_tags() -> dict:
     """repo -> tag, from the deploy SSOT (digest stripped)."""
     spec = importlib.util.spec_from_file_location(
@@ -459,7 +470,7 @@ def _deployed_third_party_tags() -> dict:
         # win — silently, and differently between runs. That is the exact silent
         # drift this module exists to prevent, so make it a hard error instead.
         if repo in out and out[repo] != tag:
-            raise SystemExit(
+            raise WizardImagesInconsistent(
                 f"ERROR: {repo!r} is pinned at two different tags in the deploy "
                 f"SSOT: {out[repo]!r} and {tag!r}. The wizard cannot pick one for "
                 f"the customer — reconcile the manifests/values first."
@@ -473,7 +484,7 @@ def _chart_app_version(chart_dir: str) -> str:
     # Same fail-loud contract as the third-party path above: a renamed/removed
     # chart must say so, not surface as a bare FileNotFoundError traceback.
     if not chart.is_file():
-        raise SystemExit(
+        raise WizardImagesUnreadable(
             f"ERROR: {chart} not found — a wizard first-party image maps to "
             f"chart {chart_dir!r}. Update WIZARD_FIRST_PARTY if it was renamed."
         )
@@ -484,23 +495,23 @@ def _chart_app_version(chart_dir: str) -> str:
         docs = _lib_consumer_read.any_yaml_documents(str(chart))  # no manifest (#3426)
     except _lib_consumer_read.ConsumerReadError as e:
         detail = e.detail()
-        raise SystemExit(f"ERROR: cannot read {chart} the way Helm does: {detail}") from e
+        raise WizardImagesUnreadable(f"ERROR: cannot read {chart} the way Helm does: {detail}") from e
     data = docs[0] if len(docs) == 1 and isinstance(docs[0], dict) else None
     if data is None:
-        raise SystemExit(f"ERROR: {chart} is not one mapping in Helm's reading")
+        raise WizardImagesInconsistent(f"ERROR: {chart} is not one mapping in Helm's reading")
     app = data.get("appVersion", "")
     if not isinstance(app, str):
-        raise SystemExit(
+        raise WizardImagesInconsistent(
             f"ERROR: helm/{chart_dir}/Chart.yaml appVersion is {app!r} in Helm's reading, "
             f"not a string; quote it (appVersion: \"{app}\").")
     app = app.strip()
     if not app:
-        raise SystemExit(f"ERROR: helm/{chart_dir}/Chart.yaml has no appVersion")
+        raise WizardImagesInconsistent(f"ERROR: helm/{chart_dir}/Chart.yaml has no appVersion")
     # The caller prefixes "v". A chart that already carries one would yield
     # "vv2.9.0" — reject it rather than silently lstrip()-ing, because the repo
     # convention is a bare appVersion and a stray "v" is worth surfacing.
     if app.startswith("v"):
-        raise SystemExit(
+        raise WizardImagesInconsistent(
             f"ERROR: helm/{chart_dir}/Chart.yaml appVersion is {app!r}; the repo "
             f"convention is a bare version (the 'v' is added when composing the "
             f"image tag). Drop the leading 'v' or adjust build_wizard_images()."
@@ -516,7 +527,7 @@ def build_wizard_images() -> dict:
     for key, repo in WIZARD_THIRD_PARTY.items():
         tag = deployed.get(repo)
         if tag is None:
-            raise SystemExit(
+            raise WizardImagesInconsistent(
                 f"ERROR: wizard image {key!r} maps to {repo!r}, which the deploy "
                 f"SSOT no longer contains. The image was probably replaced or "
                 f"renamed — update WIZARD_THIRD_PARTY (and the wizard's offline "
@@ -697,6 +708,12 @@ def main():
             at = None  # the comparison below reports the file itself
     try:
         data = build_platform_data(at=at)
+    except WizardImagesInconsistent as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
+    except WizardImagesUnreadable as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     except _lib_consumer_read.ConsumerReadError as exc:
         # #3206: the rule files are read the way Prometheus reads them; a
         # missing da-read / da-crdecode or a refused rule file stops the

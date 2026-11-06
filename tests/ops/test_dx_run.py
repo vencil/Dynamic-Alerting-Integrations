@@ -23,7 +23,8 @@ def _load():
 
 
 def _fake_run_factory(docker_version_ok=True, ps_names=(), ps_a_names=(),
-                     start_ok=True, exec_rc=0, cat_stdout=b"", cat_rc="0"):
+                     start_ok=True, exec_rc=0, cat_stdout=b"", cat_rc="0",
+                     cat_out_returncode=0, cat_rc_returncode=0, detach_rc=0):
     """Build a side_effect callable for subprocess.run that mimics docker calls.
 
     Recognizes these command shapes:
@@ -53,12 +54,18 @@ def _fake_run_factory(docker_version_ok=True, ps_names=(), ps_a_names=(),
             out.returncode = 0 if start_ok else 1
             out.stderr = "" if start_ok else "no such container"
             return out
+        if cmd[:3] == ["docker", "exec", "-d"]:
+            out.returncode = detach_rc
+            return out
         if cmd[:2] == ["docker", "exec"]:
             if "cat" in cmd and cmd[-1].endswith(".rc"):
                 out.stdout = cat_rc
+                out.returncode = cat_rc_returncode
                 return out
             if "cat" in cmd:
                 out.stdout = cat_stdout
+                out.returncode = cat_out_returncode
+                out.stderr = b"cat: no such file" if cat_out_returncode else b""
                 return out
             out.returncode = exec_rc
             return out
@@ -77,7 +84,7 @@ class TestStatus:
             assert mod.cmd_status() == 0
         assert "running" in capsys.readouterr().out
 
-    def test_stopped_returns_3(self, capsys):
+    def test_stopped_is_a_caller_error(self, capsys):  # #3577: was 3
         mod = _load()
         with patch.object(
             mod.subprocess, "run",
@@ -86,7 +93,7 @@ class TestStatus:
                 ps_a_names=("vibe-dev-container",),  # exists
             ),
         ):
-            assert mod.cmd_status() == 3
+            assert mod.cmd_status() == 2
         out = capsys.readouterr().out
         assert "stopped" in out
         assert "--up" in out
@@ -100,13 +107,13 @@ class TestStatus:
             assert mod.cmd_status() == 2
         assert "does not exist" in capsys.readouterr().out
 
-    def test_docker_missing_returns_1(self, capsys):
+    def test_docker_missing_is_a_caller_error(self, capsys):  # #3577: was 1
         mod = _load()
         with patch.object(
             mod.subprocess, "run",
             side_effect=_fake_run_factory(docker_version_ok=False),
         ):
-            assert mod.cmd_status() == 1
+            assert mod.cmd_status() == 2
         assert "not available" in capsys.readouterr().err
 
 
@@ -151,7 +158,7 @@ class TestRun:
                 ps_names=(), ps_a_names=("vibe-dev-container",)
             ),
         ):
-            assert mod.cmd_run(["pytest"]) == 3
+            assert mod.cmd_run(["pytest"]) == 2
         assert "--up" in capsys.readouterr().err
 
     def test_happy_path_invokes_bash_c_with_redirect(self, capsys):
@@ -191,6 +198,53 @@ class TestRun:
         with patch.object(mod.subprocess, "run", side_effect=fake):
             rc = mod.cmd_run(["pytest"])
         assert rc == 1
+
+    @pytest.mark.parametrize("cat_rc", ["", "  ", "garbage"])
+    def test_an_unreadable_exit_status_is_no_verdict(self, capsys, cat_rc):
+        """#3609: the wrapped command's code could not be read back — no
+        verdict, the contract's 2, never a success (it was 0)."""
+        mod = _load()
+        fake = _fake_run_factory(
+            ps_names=("vibe-dev-container",),
+            ps_a_names=("vibe-dev-container",),
+            exec_rc=0,
+            cat_stdout=b"output\n",
+            cat_rc=cat_rc,
+        )
+        with patch.object(mod.subprocess, "run", side_effect=fake):
+            rc = mod.cmd_run(["pytest"])
+        assert rc == 2
+        assert "could not read the command's exit status back" in capsys.readouterr().err
+
+    def test_a_failed_status_read_is_no_verdict_even_if_it_printed_0(self, capsys):
+        """The `.rc` read failing while its stdout says 0 must not be read as
+        the command's 0 (#3609; review on #3626)."""
+        mod = _load()
+        fake = _fake_run_factory(
+            ps_names=("vibe-dev-container",), ps_a_names=("vibe-dev-container",),
+            cat_stdout=b"output\n", cat_rc="0", cat_rc_returncode=1)
+        with patch.object(mod.subprocess, "run", side_effect=fake):
+            assert mod.cmd_run(["pytest"]) == 2
+
+    def test_lost_output_is_the_wrappers_failure(self, capsys):
+        """The command ran but its output could not be read back: the caller
+        did not get what it asked for — 2, whatever the command's own code."""
+        mod = _load()
+        fake = _fake_run_factory(
+            ps_names=("vibe-dev-container",), ps_a_names=("vibe-dev-container",),
+            cat_rc="0", cat_out_returncode=1)
+        with patch.object(mod.subprocess, "run", side_effect=fake):
+            assert mod.cmd_run(["pytest"]) == 2
+        assert "could not read the command's output back" in capsys.readouterr().err
+
+    def test_a_detach_that_did_not_start_is_the_wrappers_failure(self, capsys):
+        mod = _load()
+        fake = _fake_run_factory(
+            ps_names=("vibe-dev-container",), ps_a_names=("vibe-dev-container",),
+            detach_rc=1)
+        with patch.object(mod.subprocess, "run", side_effect=fake):
+            assert mod.cmd_run(["long_task.sh"], detach=True) == 2
+        assert "docker exec -d failed" in capsys.readouterr().err
 
     def test_detach_uses_docker_exec_dash_d(self):
         mod = _load()
@@ -245,7 +299,7 @@ class TestCLI:
             capture_output=True, text=True, encoding="utf-8", errors="replace",
             timeout=30, env=env, cwd=empty,
         )
-        assert result.returncode == 1, result.stderr
+        assert result.returncode == 2, result.stderr
         assert "docker: not available on PATH" in result.stderr
         assert "Traceback" not in result.stderr
 
@@ -345,7 +399,7 @@ class TestDepDoctor:
 
         with patch("subprocess.run", side_effect=fake):
             rc = mod._run_dep_doctor("c", "/ws")
-        assert rc == 4
+        assert rc == 2  # #3577: was 4
         err = capsys.readouterr().err
         assert "croniter,pyyaml" in err
         assert "rebuild" in err.lower()

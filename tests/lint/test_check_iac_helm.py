@@ -229,12 +229,13 @@ class TestMainExitCodes:
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert helm.main() == 1
 
-    def test_engine_missing_three(self, monkeypatch):
+    def test_engine_missing_is_a_caller_error(self, monkeypatch):
+        # #3577/#3611: the scan did not run — the contract's 2, not a third code
         monkeypatch.setattr(helm, "helm_source_files", lambda: [])
         monkeypatch.setattr(helm, "engines_available", lambda: False)
         monkeypatch.setattr(helm, "find_charts", lambda: ["helm/x"])
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
-        assert helm.main() == 3
+        assert helm.main() == 2
 
     def test_render_failure_is_caller_error(self, monkeypatch):
         # helm render failing is "couldn't run the check" => caller-error (2),
