@@ -66,6 +66,8 @@ func TestStateValueOf_Rules(t *testing.T) {
 			"enabled must be true or false"},
 		{"enabled \"true\" quoted", "maintenance", "enabled: \"true\"\n", stateValueProblem, false, 0,
 			"enabled must be true or false"},
+		{"expires written empty", "maintenance", "target: enable\nexpires: \"\"\n", stateValueInvalidExpires, false, 0, "expires is written but empty"},
+		{"expires null", "maintenance", "target: enable\nexpires:\n", stateValueInvalidExpires, false, 0, "expires is written but empty"},
 		{"target and enabled agree on", "maintenance", "target: enable\nenabled: true\n", stateValueOn, true, 0, ""},
 		{"target and enabled agree off", "maintenance", "target: disable\nenabled: false\n", stateValueOff, false, 0, ""},
 		{"target enable, enabled false", "maintenance", "target: enable\nenabled: false\n", stateValueProblem, false, 0,
@@ -333,6 +335,13 @@ func TestKeyValidation_StateFilterValues(t *testing.T) {
 		if countWith(other.Errors, key) != 1 || countWith(other.Notices, key) != 0 {
 			t.Errorf("%s changed: errors %q notices %q, want a refusal", key, other.Errors, other.Notices)
 		}
+	}
+	// Two structured values the reader does not read, for the same reason:
+	// a write that swaps one for the other is refused, not a notice.
+	swapBase := head + "    _state_maintenance:\n      reason: a\n"
+	swapped := judge(t, swapBase, head+"    _state_maintenance:\n      reason: b\n").Tenants["t1"]
+	if countWith(swapped.Errors, "_state_maintenance") != 1 || countWith(swapped.Notices, "_state_maintenance") != 0 {
+		t.Errorf("swapped unread value: errors %q notices %q, want a refusal", swapped.Errors, swapped.Notices)
 	}
 	// SelfRatchet (what is on disk, GET): a notice.
 	self := gateDecode(t, head+"    _state_maintenance: {target: disable, enabled: true}\n").ValidateTenantKeysByTenant().SelfRatchet()

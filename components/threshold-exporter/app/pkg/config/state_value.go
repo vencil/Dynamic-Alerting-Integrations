@@ -84,6 +84,12 @@ type stateValueReading struct {
 // stateValueOf classifies sv, the value of `_state_<filterName>`.
 func stateValueOf(filterName string, sv ScheduledValue) stateValueReading {
 	raw := strings.TrimSpace(sv.Default)
+	// Every scrape reads every tenant's `_state_*` value: text that cannot
+	// be a YAML mapping or sequence (no `:`, `{`, `[` or newline) is read as
+	// the scalar it is, without a YAML decode.
+	if !strings.ContainsAny(raw, ":{[\n") {
+		return scalarStateValueOf(raw)
+	}
 	// A mapping reaches here as YAML text (ScheduledValue.UnmarshalYAML
 	// re-marshals a mapping without a `default` key), so the value is
 	// decoded and its kind looked at — never a substring of it: a `reason`
@@ -103,6 +109,11 @@ func stateValueOf(filterName string, sv ScheduledValue) stateValueReading {
 		return stateValueReading{kind: stateValueProblem, structured: true,
 			problem: fmt.Sprintf("the structured form takes only the fields %s", strings.Join(stateValueFields, ", "))}
 	}
+	return scalarStateValueOf(raw)
+}
+
+// scalarStateValueOf reads raw, a scalar value.
+func scalarStateValueOf(raw string) stateValueReading {
 	lower := strings.ToLower(raw)
 	switch {
 	case lower == "enable":
@@ -148,6 +159,12 @@ func structuredStateValueOf(filterName, raw string, m map[string]any) stateValue
 	}
 	if v, ok := m["expires"]; ok && v != nil && !isYAMLScalar(v) {
 		return bad("expires must be an RFC3339 timestamp (e.g. 2026-07-01T00:00:00Z)")
+	}
+	// An `expires:` written empty is #2000's case, not "no expires": a
+	// maintenance window must not lose its end to a blank field.
+	if v, ok := m["expires"]; ok && (v == nil || strings.TrimSpace(fmt.Sprint(v)) == "") {
+		return stateValueReading{kind: stateValueInvalidExpires, structured: true,
+			problem: "expires is written but empty"}
 	}
 	var parsed maintenanceModeStructured
 	if err := yaml.Unmarshal([]byte(raw), &parsed); err != nil {
@@ -312,7 +329,14 @@ func stateFilterValueReading(key string, sv ScheduledValue) any {
 	if sv.deleted {
 		return "deleted"
 	}
-	return stateValueOf(strings.TrimPrefix(key, "_state_"), sv).canonical()
+	r := stateValueOf(strings.TrimPrefix(key, "_state_"), sv)
+	if r.kind == stateValueProblem || r.kind == stateValueInvalidExpires {
+		// Two values the reader does not read are alike only when they are
+		// the same text: otherwise a write could replace one unread value
+		// with another and get a NOTICE instead of a refusal.
+		return r.canonical() + "|raw=" + strings.TrimSpace(sv.Default)
+	}
+	return r.canonical()
 }
 
 // MaintenanceRecurringOfValue is MaintenanceRecurringOf for a value as a
