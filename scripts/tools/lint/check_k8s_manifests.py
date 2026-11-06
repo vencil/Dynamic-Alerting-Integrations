@@ -48,10 +48,12 @@ block (--ci exit stays 0). Engine-independent (pure PyYAML parse; a
 missing PyYAML is surfaced as an explicit WARN, never a silent skip — CI
 installs it).
 
-Engine is binary-on-PATH first (CI installs it), else Docker:
+Engine is located through _lib_engine, binary-on-PATH first (CI and
+session-start.sh install it), else Docker:
   kube-linter -> `kube-linter` | docker run stackrox/kube-linter:<ver>
-With --ci the engine is REQUIRED (exit 2 if missing) so the scan can't silently
-skip in CI; without --ci it is skipped with a WARN when absent.
+The engine is REQUIRED with or without --ci (#3611, owner 2026-11-06): missing,
+or run without printing a report, is exit 2. To skip the hook, use
+pre-commit's own `SKIP=k8s-manifests-sast-check` (shown as Skipped).
 
 Usage:
     python3 scripts/tools/lint/check_k8s_manifests.py [--ci]
@@ -60,15 +62,13 @@ Usage:
 Exit codes:
     0  no BLOCK findings (WARN/INFO/baseline may be present)
     1  BLOCK findings present (only when --ci)
-    2  caller-error: could not RUN the check (kube-linter failed/unparseable on
-       k8s/) — fix the engine/manifests, then retry
-    3  engine required (--ci) but unavailable
+    2  no verdict: kube-linter is missing, or did not run on k8s/ (failed,
+       printed no report), or da-crdecode could not read the manifests —
+       fix the environment, then retry
 """
 from __future__ import annotations
 
 import argparse
-import json
-import subprocess
 import sys
 from pathlib import Path
 
@@ -84,10 +84,11 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: manifests read kubectl's way)
+import _lib_engine  # noqa: E402
 from check_iac_helm import (  # noqa: E402
-    KUBE_LINTER_IMAGE,
     SKIP_DIR_PARTS,
     classify_check,
+    describe,
     locate_kube_linter,
 )
 
@@ -231,56 +232,30 @@ def collect_pss_findings(files: list[Path] | None = None) -> list[str]:
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
-def engine_available() -> bool:
-    return locate_kube_linter()[0] is not None
-
-
-def kube_linter_lint_dir(target_rel: str = MANIFEST_ROOT) -> list[dict] | None:
-    """Lint a manifest directory with kube-linter. Returns Reports, or None on
-    engine/parse error. Uses the repo's .kube-linter.yaml when present."""
-    mode, binary = locate_kube_linter()
-    if mode is None:
-        return None
+def kube_linter_lint_dir(target_rel: str = MANIFEST_ROOT) -> "_lib_engine.Result":
+    """Lint a manifest directory with kube-linter: a Ran whose ``data`` is the
+    Reports, or a NoVerdict (missing, failed, or printed no report — kube-linter
+    prints nothing when it found no objects to lint). Uses the repo's
+    .kube-linter.yaml when present."""
+    located = locate_kube_linter()
+    if isinstance(located, _lib_engine.NoVerdict):
+        return located
     cfg = REPO_ROOT / ".kube-linter.yaml"
-    if mode == "binary":
-        cmd = [binary, "lint", "--format", "json"]
-        if cfg.exists():
-            cmd += ["--config", str(cfg)]
-        cmd += [str(REPO_ROOT / target_rel)]
-        cwd: str | None = str(REPO_ROOT)
-    else:  # docker — mount the repo, lint /repo/<target>
-        cmd = [
-            "docker", "run", "--rm",
-            "-v", f"{REPO_ROOT.as_posix()}:/repo",
-            KUBE_LINTER_IMAGE, "lint", "--format", "json",
-        ]
-        if cfg.exists():
-            cmd += ["--config", "/repo/.kube-linter.yaml"]
-        cmd += [f"/repo/{target_rel}"]
-        cwd = None
-    try:
-        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=180)
-    except (subprocess.TimeoutExpired, OSError) as e:
-        print(f"ERROR: kube-linter invocation failed: {e}", file=sys.stderr)
-        return None
-    out = (proc.stdout or "").strip()
-    if not out:
-        # kube-linter exits 1 when it finds issues, 0 when clean — both are
-        # "ran OK"; anything else (with no JSON) is a real failure.
-        return [] if proc.returncode in (0, 1) else None
-    try:
-        data = json.loads(out)
-    except json.JSONDecodeError:
-        print(f"ERROR: kube-linter JSON parse failed:\n{out[:300]}", file=sys.stderr)
-        return None
-    return data.get("Reports") or []
+    root = str(REPO_ROOT) if located.mode == "binary" else "/repo"
+    args = ["lint", "--format", "json"]
+    if cfg.exists():
+        args += ["--config", f"{root}/.kube-linter.yaml"]
+    args.append(f"{root}/{target_rel}")
+    return _lib_engine.run(
+        located, "lint", args, timeout=180,
+        cwd=str(REPO_ROOT) if located.mode == "binary" else None,
+        docker_run=["-v", f"{REPO_ROOT.as_posix()}:/repo"])
 
 
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-def collect_findings(strict: bool) -> dict[str, list[str]]:
+def collect_findings() -> dict[str, list[str]]:
     findings: dict[str, list[str]] = {
         "BLOCK": [], "WARN": [], "INFO": [], "CALLER_ERROR": []}
 
@@ -301,28 +276,16 @@ def collect_findings(strict: bool) -> dict[str, list[str]]:
             f"[pss] cannot read the manifests the way kubectl does: {exc}")
         findings["__caller_error__"] = ["1"]
 
-    if not engine_available():
-        msg = ("kube-linter required but unavailable "
-               "(install the binary, or Docker for the containerized fallback)")
-        if strict:
-            findings["BLOCK"].append(f"[engine] {msg}")
-            findings["__engine_error__"] = ["1"]
-        else:
-            findings["WARN"].append(f"[engine] L4 skipped — {msg}")
-        return findings
-
-    reports = kube_linter_lint_dir()
-    if reports is None:
-        # kube-linter failed to execute / its output was unparseable — a
-        # "couldn't run the check" condition (caller-error, exit 2), NOT a
-        # finding of a non-compliant manifest (which is BLOCK / exit 1).
-        findings["CALLER_ERROR"].append(
-            "[engine] kube-linter failed/unparseable on k8s/")
+    # Required with or without --ci (#3611 Q1). Absent, failed, or no report:
+    # no verdict (exit 2), NOT a non-compliant manifest (BLOCK / exit 1).
+    lint = kube_linter_lint_dir()
+    if isinstance(lint, _lib_engine.NoVerdict):
+        findings["CALLER_ERROR"].append(f"[engine] {lint.message()}")
         findings["__caller_error__"] = ["1"]
         return findings
 
     seen: set[tuple[str, str]] = set()
-    for r in reports:
+    for r in lint.data:
         check = r.get("Check", "?")
         msg = (r.get("Diagnostic", {}) or {}).get("Message", "")
         fp = ((r.get("Object", {}) or {}).get("Metadata", {}) or {}).get("FilePath", "")
@@ -360,7 +323,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--ci", action="store_true",
-                        help="Exit non-zero on BLOCK; require the engine")
+                        help="Exit 1 on BLOCK findings")
     parser.add_argument("--list", action="store_true",
                         help="List discovered raw manifests + engine status, then exit")
     args = parser.parse_args()
@@ -370,29 +333,25 @@ def main() -> int:
         print(f"Raw k8s manifests under {MANIFEST_ROOT}/ ({len(files)}):")
         for f in files:
             print(f"  {f.relative_to(REPO_ROOT).as_posix()}")
-        print(f"\nkube-linter: {locate_kube_linter()[0]}")
+        print(f"\nkube-linter: {describe(locate_kube_linter())}")
         print(f"EXEMPTIONS registered: {len(EXEMPTIONS)}")
         return EXIT_OK
 
-    findings = collect_findings(strict=args.ci)
-    engine_error = findings.pop("__engine_error__", None)
+    findings = collect_findings()
     caller_error = findings.pop("__caller_error__", None)
 
     for action in ("BLOCK", "WARN", "INFO", "CALLER_ERROR"):
         for line in findings[action]:
             print(f"  [{action}] {line}")
 
-    if engine_error:  # the scan did not run: a caller error (#3577, #3611)
-        return EXIT_CALLER_ERROR
-
     # "Couldn't run the check" (kube-linter failed/unparseable) is a
     # caller-error (exit 2: fix the engine/manifests, then retry), distinct from
     # a non-compliant-manifest finding (exit 1). Caller-error wins.
     if caller_error:
         print(
-            "\nERROR Container SAST Layer 4 (raw k8s) — could not run kube-linter "
-            "on k8s/ (engine failed or output unparseable). Fix the engine / "
-            "manifests and retry.",
+            "\nERROR Container SAST Layer 4 (raw k8s) — no verdict: the check "
+            "did not run on k8s/ (see [CALLER_ERROR] above). Fix the "
+            "environment and retry.",
             file=sys.stderr,
         )
         return EXIT_CALLER_ERROR

@@ -169,59 +169,57 @@ class TestClassify:
 class TestEngineLocate:
     def test_prefers_binary(self, monkeypatch):
         monkeypatch.setattr(
-            iac.shutil, "which",
+            iac._lib_engine.shutil, "which",
             lambda n: "/usr/bin/hadolint" if n == "hadolint" else None,
         )
-        assert iac.locate_engine() == ("binary", "/usr/bin/hadolint")
+        loc = iac.locate_engine()
+        assert (loc.mode, loc.path) == ("binary", "/usr/bin/hadolint")
 
     def test_docker_fallback(self, monkeypatch):
         monkeypatch.setattr(
-            iac.shutil, "which",
+            iac._lib_engine.shutil, "which",
             lambda n: "/usr/bin/docker" if n == "docker" else None,
         )
-        assert iac.locate_engine() == ("docker", None)
+        loc = iac.locate_engine()
+        assert (loc.mode, loc.image) == ("docker", iac.HADOLINT_IMAGE)
 
     def test_none_available(self, monkeypatch):
-        monkeypatch.setattr(iac.shutil, "which", lambda n: None)
-        assert iac.locate_engine() == (None, None)
+        monkeypatch.setattr(iac._lib_engine.shutil, "which", lambda n: None)
+        assert isinstance(iac.locate_engine(), iac._lib_engine.NoVerdict)
 
 
 # ---------------------------------------------------------------------------
 # collect_findings — aggregation + level->action, run_hadolint stubbed
 # ---------------------------------------------------------------------------
+def _ran(findings):
+    return iac._lib_engine.Ran(findings, None)
+
+
+_NO_RUN = iac._lib_engine.NoVerdict("hadolint lint did not run: stub")
+
+
 class TestCollectFindings:
     def test_hadolint_levels_classified(self, monkeypatch):
-        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _ran([
             {"file": "components/da-tools/app/Dockerfile", "line": 1,
              "code": "DL9999", "level": "error", "message": "boom"},
             {"file": "components/da-tools/app/Dockerfile", "line": 2,
              "code": "DL3018", "level": "warning", "message": "pin"},
             {"file": "components/da-tools/app/Dockerfile", "line": 3,
              "code": "DL3059", "level": "info", "message": "consolidate"},
-        ])
+        ]))
         f = iac.collect_findings(["components/da-tools/app/Dockerfile"])
         assert any("DL9999" in x for x in f["BLOCK"])
         assert any("DL3018" in x for x in f["WARN"])
         assert any("DL3059" in x for x in f["INFO"])
 
     def test_unregistered_dockerfile_blocks(self, monkeypatch):
-        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [])
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _ran([]))
         f = iac.collect_findings(["some/random/Dockerfile"])
         assert any("unregistered" in x.lower() for x in f["BLOCK"])
 
-    def test_a_skipped_engine_pass_still_runs_the_vibe_rules(self, monkeypatch):
-        """R2 skips only hadolint: V1-V3 still decide on a dev box with no
-        engine (review on #3626 — the skip used to return before them)."""
-        monkeypatch.setattr(iac, "locate_engine", lambda: (None, None))
-        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: pytest.fail("engine was run"))
-        monkeypatch.setattr(iac, "healthcheck_violation", lambda content: True)
-        f = iac.collect_findings(["components/da-tools/app/Dockerfile"], strict=False)
-        assert any("hadolint pass skipped" in w for w in f["WARN"]), f["WARN"]
-        assert any("[V1 healthcheck]" in b for b in f["BLOCK"]), f["BLOCK"]
-        assert "__engine_error__" not in f
-
     def test_engine_unavailable_sets_sentinel(self, monkeypatch):
-        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _NO_RUN)
         f = iac.collect_findings(["components/da-tools/app/Dockerfile"])
         assert "__engine_error__" in f
 
@@ -239,7 +237,7 @@ class TestCollectFindings:
         own.write_text("!scripts/ops/go_build.sh\n", encoding="utf-8")
         monkeypatch.setattr(iac, "REPO_ROOT", tmp_path)
         monkeypatch.setattr(iac, "DOCKERFILE_CONTEXTS", {df: "."})
-        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [])
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _ran([]))
         blocks = iac.collect_findings([df])["BLOCK"]
         assert any("app/Dockerfile.dockerignore" in b and "V3" in b for b in blocks), blocks
         own.write_text("*\n!scripts/ops/go_build.sh\n", encoding="utf-8")
@@ -261,20 +259,20 @@ class TestMainExitCodes:
         assert iac.main() == 0
 
     def test_clean_returns_zero(self, monkeypatch):
-        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [])
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _ran([]))
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert iac.main() == 0
 
     def test_block_returns_one_with_ci(self, monkeypatch):
-        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _ran([
             {"file": "x", "line": 1, "code": "DL3007",
-             "level": "error", "message": "no :latest"}])
+             "level": "error", "message": "no :latest"}]))
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         monkeypatch.delenv("PR_BODY", raising=False)
         assert iac.main() == 1
 
     def test_engine_unavailable_is_a_caller_error(self, monkeypatch):
-        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _NO_RUN)
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert iac.main() == 2
 
@@ -310,23 +308,22 @@ def _wrapper(path):
                           encoding="utf-8", timeout=120, env=env, stdin=subprocess.DEVNULL)
 
 
-@pytest.mark.parametrize("ci, rc", [(True, 2), (False, 0)], ids=["ci", "dev-box"])
-def test_no_engine_at_all_is_rc_2_only_under_ci(tmp_path, ci, rc):
-    """#3577 R2, the switch check_iac_helm / check_k8s_manifests already use:
-    no hadolint and no docker is a hard error under --ci, a WARN and exit 0
-    on a dev box. The non-engine rules still run either way."""
+@pytest.mark.parametrize("ci", [True, False], ids=["ci", "dev-box"])
+def test_no_engine_at_all_is_rc_2_with_or_without_ci(tmp_path, ci):
+    """#3611 Q1 (owner 2026-11-06): no hadolint and no docker is no verdict,
+    rc 2, on a dev box too — it used to be a WARN and rc 0 there. Skipping
+    the hook is pre-commit's own SKIP=iac-sast-check."""
     empty = tmp_path / "empty"
     empty.mkdir()
     proc = _wrapper(str(empty)) if ci else _wrapper_bare(str(empty))
-    assert proc.returncode == rc, proc.stdout + proc.stderr
-    if not ci:
-        assert "hadolint pass skipped" in proc.stdout, proc.stdout
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "hadolint is not available" in proc.stderr, proc.stderr
+    assert "OK Container SAST" not in proc.stdout, proc.stdout
 
 
 def test_a_broken_engine_is_rc_2_on_a_dev_box_too(tmp_path):
-    """R2 relaxes only "no engine at all": an engine that is there and does not
-    show it ran is no verdict, with or without --ci (as check_iac_helm's
-    render / kube-linter failures)."""
+    """An engine that is there and does not show it ran is no verdict, with or
+    without --ci (as check_iac_helm's render / kube-linter failures)."""
     proc = _wrapper_bare(_stand_in(tmp_path, "hadolint", _replies(1, "")))
     assert proc.returncode == 2, proc.stdout + proc.stderr
 

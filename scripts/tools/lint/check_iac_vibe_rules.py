@@ -44,12 +44,11 @@ The unified Critical/High/Medium/Low -> BLOCK/WARN/INFO table is finalised
 across all four layers in TRK-314; Layer 1 uses the BLOCK/WARN reduction
 above.
 
-hadolint is located as: ``hadolint`` on PATH, else
-``docker run hadolint/hadolint:<ver>``. If neither exists, ``--ci`` (CI and
-the pre-commit hook) aborts with exit 2, a caller error, rather than silently
-passing; without ``--ci`` the engine pass is skipped with a WARN and the other
-rules still decide — the same switch as check_iac_helm / check_k8s_manifests
-(#3577 R2).
+hadolint is located through ``_lib_engine``: ``hadolint`` on PATH, else
+``docker run hadolint/hadolint:<ver>``. If neither exists the run is exit 2
+(no verdict) with or without ``--ci`` (#3611, owner 2026-11-06) — never a
+green run that skipped the engine. To skip the hook, use pre-commit's own
+``SKIP=iac-sast-check`` (shown as Skipped, not Passed).
 
 ⛔ #3439: a hadolint run counts only when it shows that it ran. It is called
 with ``--no-fail``, so a run that read every file exits 0 whatever it found
@@ -68,8 +67,8 @@ Usage:
 Exit codes:
     0  no BLOCK findings (WARN / INFO may be present), or bypass matched
     1  BLOCK findings present (only when --ci)
-    3  hadolint engine unavailable (no binary, no docker) or did not run
-       (non-zero exit, no JSON array on stdout; see above)
+    2  no verdict: hadolint unavailable (no binary, no docker) or did not
+       run (non-zero exit, no JSON array on stdout; see above)
 
 Bypass (docs/internal/lint-policy.md §4): a BLOCK finding judged a
 legitimate exception can be waived from the PR body:
@@ -79,11 +78,8 @@ legitimate exception can be waived from the PR body:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
-import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -97,6 +93,7 @@ if hasattr(sys.stdout, "reconfigure"):
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+import _lib_engine  # noqa: E402
 from _lint_helpers import parse_bypass_tag  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -277,84 +274,32 @@ def classify_level(level: str) -> str:
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
-def locate_engine() -> tuple[str | None, str | None]:
-    """Return (mode, path). mode is 'binary' | 'docker' | None."""
-    binary = shutil.which("hadolint")
-    if binary:
-        return ("binary", binary)
-    if shutil.which("docker"):
-        return ("docker", None)
-    return (None, None)
+def locate_engine() -> "_lib_engine.Located | _lib_engine.NoVerdict":
+    return _lib_engine.locate("hadolint", docker_image=HADOLINT_IMAGE)
 
 
-def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
-    """Run hadolint over the given repo-relative Dockerfiles.
-
-    Returns the parsed findings, or None — the caller's hard error (exit 2) —
-    when the engine is unavailable or the run does not show that it ran
-    (#3439, see the module docstring): a non-zero exit, an empty stdout, or
-    stdout that is not a JSON array of objects. The reason and hadolint's /
-    docker's stderr are printed.
+def run_hadolint(dockerfiles: list[str]) -> "_lib_engine.Result":
+    """Run hadolint over the given repo-relative Dockerfiles: a Ran whose
+    ``data`` is the findings, or a NoVerdict — the caller's exit 2 — when
+    the engine is unavailable or the run does not show that it ran (#3439,
+    see the module docstring and ``_lib_engine._hadolint``).
     """
     if not dockerfiles:
         # hadolint with no file args reads stdin and would block until the
-        # subprocess timeout — short-circuit to an empty result instead.
-        return []
-    mode, binary = locate_engine()
-    cfg = REPO_ROOT / ".hadolint.yaml"
+        # subprocess timeout; nothing to lint is an empty, real answer.
+        return _lib_engine.Ran([], None)
+    located = locate_engine()
+    if isinstance(located, _lib_engine.NoVerdict):
+        return located
     # --no-fail: exit 0 means "ran", never "found nothing at the threshold";
     # what a finding is worth is classify_level's answer, not hadolint's.
     flags = ["--no-fail", "--format", "json"]
-    if mode == "binary":
-        cmd = [binary, "--config", str(cfg), *flags, *dockerfiles]
-        cwd: str | None = str(REPO_ROOT)
-    elif mode == "docker":
-        cmd = [
-            "docker", "run", "--rm",
-            "-v", f"{REPO_ROOT.as_posix()}:/repo",
-            "-w", "/repo",
-            HADOLINT_IMAGE,
-            "hadolint", "--config", ".hadolint.yaml",
-            *flags, *dockerfiles,
-        ]
-        cwd = None
-    else:
-        return None
-
-    try:
-        proc = subprocess.run(
-            cmd, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=180
-        )
-    except (subprocess.TimeoutExpired, OSError) as e:
-        print(f"ERROR: hadolint invocation failed: {e}", file=sys.stderr)
-        return None
-
-    out = (proc.stdout or "").strip()
-    stderr = (proc.stderr or "").strip()
-
-    def _no_run(why: str) -> None:
-        print(f"ERROR: hadolint ({mode}) did not run: {why}"
-              + (f"\n{stderr[:2000]}" if stderr else ""), file=sys.stderr)
-
-    if proc.returncode != 0:
-        _no_run(f"exit {proc.returncode} under --no-fail")
-        return None
-    if not out:
-        _no_run("exit 0 but no JSON on stdout (a clean run prints [])")
-        return None
-    try:
-        findings = json.loads(out)
-    except json.JSONDecodeError:
-        _no_run(f"stdout is not JSON: {out[:500]}")
-        return None
-    # The fields every hadolint finding carries: one without `level` would be
-    # classified INFO, a finding of any severity passed over (PR #3610 review).
-    required = {"file", "line", "code", "level", "message"}
-    if not (isinstance(findings, list)
-            and all(isinstance(f, dict) and required <= f.keys() for f in findings)):
-        _no_run(f"stdout is not a JSON array of findings: {out[:500]}")
-        return None
-    return findings
+    cfg = str(REPO_ROOT / ".hadolint.yaml") if located.mode == "binary" else ".hadolint.yaml"
+    return _lib_engine.run(
+        located, "lint", ["--config", cfg, *flags, *dockerfiles], timeout=180,
+        cwd=str(REPO_ROOT) if located.mode == "binary" else None,
+        docker_run=["-v", f"{REPO_ROOT.as_posix()}:/repo", "-w", "/repo"],
+        entrypoint="hadolint")
 
 
 # ---------------------------------------------------------------------------
@@ -370,13 +315,11 @@ def _read_pr_body(pr_body_file: str | None) -> str | None:
     return os.environ.get("PR_BODY") or None
 
 
-def collect_findings(dockerfiles: list[str], strict: bool = True) -> dict[str, list[str]]:
+def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
     """Run all rules; return {'BLOCK': [...], 'WARN': [...], 'INFO': [...]}.
 
-    *strict* is ``--ci``, the same switch as check_iac_helm / check_k8s_manifests
-    (#3577 R2): with no engine at all, strict is a hard error (exit 2) and
-    otherwise a WARN and a skipped engine pass (exit 0 on a dev box). An engine
-    that is there but does not show it ran is exit 2 either way."""
+    An engine that is missing, or that does not show it ran, is exit 2 with
+    or without ``--ci`` (#3611 Q1)."""
     findings: dict[str, list[str]] = {"BLOCK": [], "WARN": [], "INFO": []}
 
     # Unregistered Dockerfiles (governance) -> BLOCK.
@@ -390,13 +333,9 @@ def collect_findings(dockerfiles: list[str], strict: bool = True) -> dict[str, l
     registered = [df for df in dockerfiles if df in DOCKERFILE_CONTEXTS]
 
     # Engine (hadolint) findings.
-    skip_engine = bool(registered) and not strict and locate_engine() == (None, None)
-    if skip_engine:
-        findings["WARN"].append(
-            "[engine] hadolint pass skipped — neither the hadolint binary nor "
-            "docker is on PATH (with --ci this is exit 2)")
-    hl = [] if skip_engine else run_hadolint(registered)
-    if hl is None:
+    hl = run_hadolint(registered)
+    if isinstance(hl, _lib_engine.NoVerdict):
+        print(f"ERROR: {hl.message()}", file=sys.stderr)
         findings["BLOCK"].append(
             "[engine] hadolint unavailable or did not run (the ERROR line "
             "above says why) — install the hadolint binary, or Docker with a "
@@ -405,7 +344,7 @@ def collect_findings(dockerfiles: list[str], strict: bool = True) -> dict[str, l
         # Signal hard error to caller via a sentinel.
         findings["__engine_error__"] = ["1"]
         return findings
-    for f in hl:
+    for f in hl.data:
         action = classify_level(f.get("level", "info"))
         line = (
             f"{f.get('file')}:{f.get('line')} [{f.get('code')} "
@@ -464,7 +403,7 @@ def main() -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--ci", action="store_true",
-                        help="Exit non-zero on any BLOCK finding")
+                        help="Exit 1 on any BLOCK finding")
     parser.add_argument("--list", action="store_true",
                         help="List discovered Dockerfiles + contexts and exit")
     parser.add_argument("--pr-body-file", default=None,
@@ -480,7 +419,7 @@ def main() -> int:
             print(f"  {df}  ->  {ctx}")
         return EXIT_OK
 
-    findings = collect_findings(dockerfiles, strict=args.ci)
+    findings = collect_findings(dockerfiles)
     engine_error = findings.pop("__engine_error__", None)
 
     for action in ("BLOCK", "WARN", "INFO"):

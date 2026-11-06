@@ -146,25 +146,33 @@ class TestEmitRouting:
 # collect_findings orchestration (engine stubbed)
 # ---------------------------------------------------------------------------
 def _stub_engine(monkeypatch, reports):
+    """kube-linter "ran" with *reports*; ``None`` is a run without a verdict."""
+    result = (k8s._lib_engine.NoVerdict("kube-linter lint did not run: stub")
+              if reports is None else k8s._lib_engine.Ran(reports, None))
     monkeypatch.setattr(k8s, "manifest_root_exists", lambda: True)
-    monkeypatch.setattr(k8s, "engine_available", lambda: True)
-    monkeypatch.setattr(k8s, "kube_linter_lint_dir", lambda *a, **k: reports)
+    monkeypatch.setattr(k8s, "kube_linter_lint_dir", lambda *a, **k: result)
+
+
+def _no_engine(monkeypatch):
+    monkeypatch.setattr(k8s, "manifest_root_exists", lambda: True)
+    monkeypatch.setattr(k8s, "locate_kube_linter", lambda: k8s._lib_engine.NoVerdict(
+        "kube-linter is not available (stub)"))
 
 
 class TestCollectFindings:
     def test_real_report_shape_ships_at_zero(self, monkeypatch):
         """The repo's expected (empty) report => 0 BLOCK / 0 WARN."""
         _stub_engine(monkeypatch, _REAL_REPORTS)
-        f = k8s.collect_findings(strict=True)
+        f = k8s.collect_findings()
         assert f["BLOCK"] == []
         assert f["WARN"] == []
-        assert "__engine_error__" not in f
+        assert "__caller_error__" not in f
 
     def test_registered_two_container_report_is_one_warn(self, monkeypatch,
                                                          synthetic_exemption):
         """Two containers of one registered workload => 0 BLOCK / 1 WARN."""
         _stub_engine(monkeypatch, _TWO_CONTAINER_REPORTS)
-        f = k8s.collect_findings(strict=True)
+        f = k8s.collect_findings()
         assert f["BLOCK"] == []
         assert len(f["WARN"]) == 1
 
@@ -172,32 +180,26 @@ class TestCollectFindings:
         _stub_engine(monkeypatch, _REAL_REPORTS + [
             {"Check": "privileged-container", "Diagnostic": {"Message": "priv"},
              "Object": {"Metadata": {"FilePath": "/repo/k8s/03-monitoring/deployment-prometheus.yaml"}}}])
-        f = k8s.collect_findings(strict=True)
+        f = k8s.collect_findings()
         assert any("privileged-container" in x and "CRITICAL" in x for x in f["BLOCK"])
 
     def test_new_unregistered_high_blocks(self, monkeypatch):
         _stub_engine(monkeypatch, [
             {"Check": "run-as-non-root", "Diagnostic": {"Message": "x"},
              "Object": {"Metadata": {"FilePath": "/repo/k8s/03-monitoring/deployment-grafana.yaml"}}}])
-        f = k8s.collect_findings(strict=True)
+        f = k8s.collect_findings()
         assert any("UNREGISTERED" in x for x in f["BLOCK"])
 
-    def test_engine_unavailable_strict_sets_sentinel(self, monkeypatch):
-        monkeypatch.setattr(k8s, "manifest_root_exists", lambda: True)
-        monkeypatch.setattr(k8s, "engine_available", lambda: False)
-        f = k8s.collect_findings(strict=True)
-        assert "__engine_error__" in f
-
-    def test_engine_unavailable_lenient_warns(self, monkeypatch):
-        monkeypatch.setattr(k8s, "manifest_root_exists", lambda: True)
-        monkeypatch.setattr(k8s, "engine_available", lambda: False)
-        f = k8s.collect_findings(strict=False)
-        assert "__engine_error__" not in f
-        assert any("L4 skipped" in x for x in f["WARN"])
+    def test_engine_unavailable_is_a_caller_error(self, monkeypatch):
+        _no_engine(monkeypatch)
+        f = k8s.collect_findings()
+        assert "__caller_error__" in f
+        assert any("not available" in x for x in f["CALLER_ERROR"])
+        assert not any("skipped" in x for x in f["WARN"])
 
     def test_missing_manifest_root_is_idle(self, monkeypatch):
         monkeypatch.setattr(k8s, "manifest_root_exists", lambda: False)
-        f = k8s.collect_findings(strict=True)
+        f = k8s.collect_findings()
         assert f["BLOCK"] == []
         assert any("Layer 4 idle" in x for x in f["INFO"])
 
@@ -263,7 +265,7 @@ class TestPssLabelRule:
         with pytest.raises(k8s._lib_consumer_read.ConsumerReadError):
             k8s.collect_pss_findings()
         _stub_engine(monkeypatch, [])
-        f = k8s.collect_findings(strict=True)
+        f = k8s.collect_findings()
         assert any("[pss]" in x and "the way kubectl does" in x for x in f["CALLER_ERROR"])
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert k8s.main() == 2
@@ -349,7 +351,7 @@ class TestPssLabelRule:
         _stub_engine(monkeypatch, [])
         monkeypatch.setattr(k8s, "collect_pss_findings",
                             lambda files=None: ["[pss] k8s/x.yaml ns/x: missing ..."])
-        f = k8s.collect_findings(strict=True)
+        f = k8s.collect_findings()
         assert any("[pss]" in x for x in f["WARN"])
         assert f["BLOCK"] == []
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
@@ -393,18 +395,19 @@ class TestMainExitCodes:
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert k8s.main() == 1
 
-    def test_engine_missing_is_a_caller_error(self, monkeypatch):
-        # #3577/#3611: the scan did not run — the contract's 2, not a third code
-        monkeypatch.setattr(k8s, "manifest_root_exists", lambda: True)
-        monkeypatch.setattr(k8s, "engine_available", lambda: False)
-        monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+    @pytest.mark.parametrize("argv", [["prog", "--ci"], ["prog"]])
+    def test_engine_missing_is_a_caller_error_with_or_without_ci(self, monkeypatch, argv):
+        # #3611 Q1 (owner 2026-11-06): the scan did not run — the contract's
+        # 2 whether or not --ci was passed; it used to be a WARN and rc 0.
+        _no_engine(monkeypatch)
+        monkeypatch.setattr(sys, "argv", argv)
         assert k8s.main() == 2
 
     def test_kube_linter_unparseable_is_caller_error(self, monkeypatch):
         # kube-linter failing/unparseable is "couldn't run the check" =>
         # caller-error (2), NOT a non-compliant-manifest finding (1).
         # (#452 / CodeRabbit #737)
-        _stub_engine(monkeypatch, None)  # kube_linter_lint_dir -> None
+        _stub_engine(monkeypatch, None)  # kube_linter_lint_dir -> NoVerdict
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert k8s.main() == 2
 
@@ -413,9 +416,33 @@ class TestMainExitCodes:
 # Live baseline (engine-gated) — confirms the real repo ships at 0 BLOCK
 # ---------------------------------------------------------------------------
 class TestLiveBaseline:
-    @pytest.mark.skipif(not k8s.engine_available(),
-                        reason="kube-linter/docker unavailable — covered by CI L4 step")
+    @pytest.mark.skipif(
+        getattr(k8s.locate_kube_linter(), "mode", None) != "binary",
+        reason="no kube-linter binary — covered by the CI L4 step")
     def test_repo_ships_at_zero_block(self):
-        f = k8s.collect_findings(strict=True)
-        assert f.get("__engine_error__") is None
+        f = k8s.collect_findings()
+        assert f.get("__caller_error__") is None, f["CALLER_ERROR"]
         assert f["BLOCK"] == [], f"unexpected BLOCK findings: {f['BLOCK']}"
+
+
+# ---------------------------------------------------------------------------
+# #3607: docker on PATH, daemon down — the real subprocess path, not a stub
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("argv", [["prog", "--ci"], ["prog"]])
+def test_docker_with_no_daemon_is_no_verdict_not_ok(tmp_path, monkeypatch, capsys, argv):
+    """The ticket's repro: kube-linter not on PATH, docker is, and `docker run`
+    prints the daemon error to stderr and exits 1 with an empty stdout. That
+    was read as a clean kube-linter run (rc 0, "OK"); it is no verdict (2)."""
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    docker = bin_dir / "docker"
+    docker.write_text("#!/bin/sh\necho 'Cannot connect to the Docker daemon at "
+                      "unix:///var/run/docker.sock' >&2\nexit 1\n", encoding="utf-8")
+    docker.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setattr(k8s, "collect_pss_findings", lambda files=None: [])
+    monkeypatch.setattr(sys, "argv", argv)
+    assert k8s.main() == 2
+    out = capsys.readouterr()
+    assert "Cannot connect to the Docker daemon" in out.out
+    assert "OK Container SAST" not in out.out

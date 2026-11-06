@@ -88,6 +88,16 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 
 INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12`、`components/recipe-preview/Dockerfile:13`，皆為 DL3059（multiple consecutive RUN）。
 
+## 引擎缺席或沒跑成：一律 rc 2（#3611）
+
+L1／L2／L4 與 pint 都經 `scripts/tools/_lib_engine.py` 定位並執行引擎。只有引擎的輸出**證明**它真的檢查了輸入，才算有結論：hadolint 印出 JSON 陣列、helm 算繪出非空內容、kube-linter 印出含 `Reports`／`Summary` 的報告、pint 的日誌有 `entries=N`。
+
+引擎不在、起不來、逾時，或輸出不符上述證明（例如 docker daemon 沒開、kube-linter 找不到任何 object），結束碼一律是 **2**（沒得到結論），**帶不帶 `--ci` 都一樣**。`--ci` 只決定有發現時要不要回 1。
+
+要跳過某個 hook，用 pre-commit 自己的 `SKIP=<hook id>`。畫面上會顯示 Skipped，不會顯示 Passed。
+
+哪些呼叫點還沒經過 `_lib_engine`，由 `tests/shared/test_engine_call_sites.py` 從 AST 算出來，清單只准縮小。
+
 ## Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）
 
 跑法：`python3 scripts/tools/lint/check_iac_helm.py`（CI job「Container SAST L2 (Helm)」；本地 on-demand：`pre-commit run iac-helm-sast-check --hook-stage manual --all-files`）。引擎：**單一 kube-linter**（render-then-lint）+ Mode A 源碼掃描 + wrapper `capabilities.add` 規則。**trivy-config 不採用**（與 kube-linter 對 K8s misconfig 高度重疊、雙引擎會 desync；trivy 仍是既有的 image-CVE scan，不同關注點——**且它在 release 是阻擋的**，見上方 AC 5 勘誤）。
@@ -128,7 +138,7 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 
 ## Layer 4 — k8s raw manifest（TRK-314，kube-linter + Vibe wrapper）
 
-跑法：`python3 scripts/tools/lint/check_k8s_manifests.py [--ci]`（hook `k8s-manifests-sast-check`，**manual stage**，需 engine;CI 在「Container SAST (Helm L2 + raw k8s L4)」job hard-gate）。引擎：**與 L2 同一個 kube-linter**，但直接掃 raw manifest tree —— 不需 helm render（檔案已是 concrete k8s objects）。重用 L2 的 severity 分類（`classify_check`/`CRITICAL_CHECKS`/`HIGH_CHECKS`）與 `.kube-linter.yaml` config。
+跑法：`python3 scripts/tools/lint/check_k8s_manifests.py [--ci]`（hook `k8s-manifests-sast-check`，**manual stage**，需 engine——帶不帶 `--ci` 都一樣，見下方「引擎缺席」;CI 在「Container SAST (Helm L2 + raw k8s L4)」job hard-gate）。引擎：**與 L2 同一個 kube-linter**，但直接掃 raw manifest tree —— 不需 helm render（檔案已是 concrete k8s objects）。重用 L2 的 severity 分類（`classify_check`/`CRITICAL_CHECKS`/`HIGH_CHECKS`）與 `.kube-linter.yaml` config。
 
 > **ticket premise 已過時（pre-flight grep 修正）**：原 ticket 假設「repo 無 raw manifest → stub」，實際 `k8s/` 有 **42 個**真 manifest（prometheus / grafana / alertmanager Deployment、tenant-api Deployment、CronJob、ConfigMap、RBAC、NetworkPolicy、raw Secret）。故 Layer 4 是**真層**，非 stub。
 
