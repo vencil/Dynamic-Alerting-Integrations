@@ -15,9 +15,20 @@ spec:
       labels:
         app.kubernetes.io/name: mock-siem
     spec:
+      # Restricted Pod Security (#1018): `monitoring` enforces it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: collector
           image: python:3.14.10-slim
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command: ["python3", "-c"]
           args:
             - |

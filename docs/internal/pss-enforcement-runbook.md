@@ -74,8 +74,15 @@ PSS_REQUIRE_HELM=1 go test ./...`）。
 
 **判定不到的範圍**：`eq .Values.mode "x"` 這類列舉分支只會判到值檔選中的
 那幾個；`.Values` 經 `$var :=` 以外的方式取別名、或在 `with` 裡以 `.` 讀
-的分支；執行期才建的 pod（runbook 的 `kubectl run`、腳本）；客戶叢集的
-mutating webhook（在 admission 之前改 pod，例如 Istio 的 init container）。
+的分支；客戶叢集的 mutating webhook（在 admission 之前改 pod，例如 Istio
+的 init container）；以變數組出的指令（`K=kubectl; $K run …`）；以 `printf`
+等方式產生、無法對到 `kind:` 行數的 manifest 會讓測試轉紅而不是放行。
+
+**執行期才建的 pod 也有判定**（`tests/pss/lab_test.go`）：`scripts/**/*.sh`
+heredoc 裡的 manifest（帶 pod 的 `kind:` 行數必須等於判定筆數）；
+`docs/internal/**`、`components/*/README.md` 裡的 `kubectl run`（套用
+`--overrides` 後判定）與 `kubectl debug`（必須 `--profile=restricted`）；
+`docs/internal/examples/**` 的 manifest。
 
 **`ci/` 不出貨**：四個出貨 chart 的 `.helmignore` 排除 `ci/`；
 `tests/lint/test_chart_package_contents_at_pr.py` 在 PR 階段就 `helm package`
@@ -90,8 +97,7 @@ kubectl label --dry-run=server --overwrite ns --all \
   pod-security.kubernetes.io/enforce=restricted
 ```
 
-預期輸出：只有 Vector DaemonSet（hostPath ×3、root、DAC_READ_SEARCH）
-與尚未修完的 monitoring app-tier 元件。出現**預期外** violator → 先記
+預期輸出：只有 Vector DaemonSet（hostPath ×3、root、DAC_READ_SEARCH）。出現**預期外** violator → 先記
 issue、修掉或 carve，**不要**急著開豁免。
 
 ## 2. Step 1 — warn+audit soak（歷程；新 namespace 仍可沿用）
