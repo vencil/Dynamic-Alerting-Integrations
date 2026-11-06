@@ -57,9 +57,9 @@ echo "[bench-e2e] fixture_kind=$FIXTURE_KIND, tenants=$FIXTURE_TENANT_COUNT, run
 # Step 1: ensure fixture for the chosen kind exists.
 # ---------------------------------------------------------------------------
 FIXTURE_SOURCE_DIR="fixture/$FIXTURE_KIND/conf.d"
-# Count tenant YAMLs only (NOT _defaults.yaml — the placeholder
-# `_defaults.yaml` is shipped in PR-2 to give scanner a hierarchical-mode
-# root signal even before generation).
+# Count tenant YAMLs only (NOT _defaults.yaml). The synthetic trees are wholly
+# generated and gitignored; nothing under them is tracked since #1443, so on a
+# fresh checkout the directory does not exist and the count is 0.
 TENANT_FILE_COUNT=$(find "$FIXTURE_SOURCE_DIR" -name "*.yaml" -not -name "_defaults.yaml" 2>/dev/null | wc -l)
 if [[ "$TENANT_FILE_COUNT" -eq 0 ]]; then
     if [[ "$FIXTURE_KIND" == "customer-anon" ]]; then
@@ -72,10 +72,9 @@ if [[ "$TENANT_FILE_COUNT" -eq 0 ]]; then
         layout_arg="synthetic-v2"
     fi
     # generate_tenant_fixture.py refuses to write into a non-empty dir
-    # (sane guard against accidental clobber). The shipped placeholder
-    # `_defaults.yaml` would trigger that refusal even though we WANT
-    # to (re)generate. Clear the dir before invoking the generator;
-    # `--with-defaults` will reinstate `_defaults.yaml` correctly.
+    # (sane guard against accidental clobber). A tenant-less dir can still
+    # hold a leftover `_defaults.yaml` from an interrupted run, so clear it
+    # before invoking the generator; `--with-defaults` writes it afresh.
     #
     # `--extra-defaults bench_trigger=50` (v2.8.0 Phase B Track A A6,
     # replaces the post-staging inline-Python YAML rewrite, cycle-3 RCA)
@@ -83,7 +82,7 @@ if [[ "$TENANT_FILE_COUNT" -eq 0 ]]; then
     # in the generated root _defaults.yaml. Without this key, bench-run-N
     # tenants' overrides would be rejected as `unknown key not in
     # defaults` and T3/T4 anchors would never advance.
-    echo "[bench-e2e] fixture empty (only placeholder _defaults.yaml) — clearing + generating $FIXTURE_KIND ($FIXTURE_TENANT_COUNT tenants, seed=$SEED)..."
+    echo "[bench-e2e] fixture has no tenants — clearing + generating $FIXTURE_KIND ($FIXTURE_TENANT_COUNT tenants, seed=$SEED)..."
     rm -rf "$FIXTURE_SOURCE_DIR"
     python3 "$REPO_ROOT/scripts/tools/dx/generate_tenant_fixture.py" \
         --layout "$layout_arg" \
