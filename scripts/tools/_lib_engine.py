@@ -184,12 +184,23 @@ def run(located: Located, subcommand: str, args: Sequence[str], *,
 
 # ── proofs: what a real run of each (engine, subcommand) prints ─────────────
 
+def _requires(proc: subprocess.CompletedProcess, *flags: str) -> None:
+    """A proof reads the output a flag asks for; without the flag the same
+    output means something else (hadolint without ``--no-fail`` exits 1 on
+    a finding). A caller that drops the flag is a programming error."""
+    args = list(proc.args) if isinstance(proc.args, (list, tuple)) else []
+    missing = [f for f in flags if f not in args]
+    if missing:
+        raise ValueError(f"proof needs {missing} in the engine's argv: {args}")
+
+
 def _kube_linter_lint(proc: subprocess.CompletedProcess) -> list[dict]:
     """``kube-linter lint --format json``: rc 0 (clean) or 1 (findings), and
     stdout a JSON object carrying ``Reports`` and ``Summary`` (measured on
     v0.7.4: a clean run prints ``"Reports": null``). No objects found and an
     unloadable path both print nothing on stdout — rc 0 and 1 respectively —
     and neither linted anything."""
+    _requires(proc, "--format", "json")
     if proc.returncode not in (0, 1):
         raise NoProof("unexpected exit status")
     out = (proc.stdout or "").strip()
@@ -227,6 +238,7 @@ def _hadolint(proc: subprocess.CompletedProcess) -> list[dict]:
     and stdout is a JSON array (a clean run prints ``[]``) whose items carry
     the fields every finding has — one without ``level`` would be classified
     as the lowest severity (PR #3610 review)."""
+    _requires(proc, "--no-fail", "--format", "json")
     if proc.returncode != 0:
         raise NoProof("non-zero exit under --no-fail")
     out = (proc.stdout or "").strip()
@@ -251,7 +263,8 @@ def _pint_lint(proc: subprocess.CompletedProcess) -> tuple[int, int]:
     rule entries it checked (``entries=N``; coloured unconditionally, so SGR
     is stripped first). Returns ``(entries, returncode)``. A pint that stops
     before its summary — a ``.pint.hcl`` parse error, a failed image pull —
-    prints no ``entries=``."""
+    prints no ``entries=``, and one whose include matches nothing logs
+    ``entries=0`` (measured, 0.86.0): no rule was linted, so no verdict."""
     if proc.returncode not in (0, 1):
         raise NoProof("unexpected exit status")
     m = _PINT_ENTRIES_RE.search(
@@ -259,6 +272,8 @@ def _pint_lint(proc: subprocess.CompletedProcess) -> tuple[int, int]:
     if m is None:
         raise NoProof("no `entries=N` in its output (it logs one whenever it "
                       "parsed its rule files)")
+    if int(m.group(1)) == 0:
+        raise NoProof("entries=0: it parsed no rule entry")
     return int(m.group(1)), proc.returncode
 
 

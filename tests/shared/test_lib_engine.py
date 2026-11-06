@@ -40,11 +40,16 @@ def _stand_in(tmp_path: Path, name: str, rc: int, stdout: str = "",
     return bin_dir
 
 
+#: The argv each proof requires (it reads the output those flags ask for).
+_ARGS = {"kube-linter": ["lint", "--format", "json", "x"],
+         "hadolint": ["--no-fail", "--format", "json", "x"]}
+
+
 def _run(monkeypatch, bin_dir, engine, sub, *, timeout=30):
     monkeypatch.setenv("PATH", str(bin_dir))
     loc = E.locate(engine)
     assert isinstance(loc, E.Located), loc
-    return E.run(loc, sub, ["x"], timeout=timeout)
+    return E.run(loc, sub, _ARGS.get(engine, ["x"]), timeout=timeout)
 
 
 # ── kube-linter: the #3611 fake success ─────────────────────────────────────
@@ -109,6 +114,20 @@ def test_pint_without_entries_is_no_verdict(tmp_path, monkeypatch):
     assert isinstance(r, E.NoVerdict) and "entries=" in r.reason
 
 
+def test_pint_that_linted_no_entry_is_no_verdict(tmp_path, monkeypatch):
+    """An include that matches nothing: pint 0.86.0 logs entries=0, rc 0."""
+    r = _run(monkeypatch, _stand_in(tmp_path, "pint", 0, "", "entries=0"), "pint", "lint")
+    assert isinstance(r, E.NoVerdict) and "entries=0" in r.reason
+
+
+def test_a_proof_whose_flag_was_dropped_is_a_programming_error(tmp_path, monkeypatch):
+    """hadolint without --no-fail exits 1 on a finding: read through the
+    --no-fail proof that is a no-run, so the caller's slip must not pass."""
+    monkeypatch.setenv("PATH", str(_stand_in(tmp_path, "hadolint", 0, "[]")))
+    with pytest.raises(ValueError, match="--no-fail"):
+        E.run(E.locate("hadolint"), "lint", ["--format", "json", "x"], timeout=30)
+
+
 def test_pint_entries_and_rc_are_returned(tmp_path, monkeypatch):
     r = _run(monkeypatch, _stand_in(tmp_path, "pint", 1, "", "entries=400"), "pint", "lint")
     assert isinstance(r, E.Ran) and r.data == (400, 1)
@@ -139,7 +158,7 @@ def test_docker_without_a_daemon_is_no_verdict(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(bin_dir))
     loc = E.locate("kube-linter", docker_image="img@sha256:x")
     assert (loc.mode, loc.image) == ("docker", "img@sha256:x")
-    r = E.run(loc, "lint", ["lint"], timeout=30)
+    r = E.run(loc, "lint", _ARGS["kube-linter"], timeout=30)
     assert isinstance(r, E.NoVerdict) and "(docker)" in r.reason
     assert "Docker daemon" in r.detail
 
