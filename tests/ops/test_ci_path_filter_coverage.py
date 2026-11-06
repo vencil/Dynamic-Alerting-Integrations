@@ -1,4 +1,4 @@
-"""Drift guards for CI path filters — three invariants, one failure mode.
+"""Drift guards for CI path filters — four invariants, one failure mode.
 
 Renamed from `test_portal_path_filter_coverage.py` (#1373), because the old name
 needed a ⛔ note apologising that only one of its three halves was portal-
@@ -23,6 +23,11 @@ Read this list before assuming what is (and is not) enforced here:
      nothing about tests: `requirements/ci-constraints.txt` is not an input to
      the Python suite, it is the suite's ENVIRONMENT, so both scanners above
      were structurally blind to it.
+  4. workflow-level `on.pull_request.paths` vs the scripts the workflow runs —
+     every `scripts/**` file a step executes must be in the workflow's own
+     path gate (#3601). Same extraction as 3, one level up: a dorny filter
+     skips a JOB, an `on.paths` gate skips the WHOLE WORKFLOW. Scope and
+     refusals are spelled out at the invariant itself, at the end of this file.
 
 ⛔ What invariant 3 does NOT model, stated once here because every one of these
 was found by someone constructing a workflow that stayed green (blind review),
@@ -40,10 +45,11 @@ disclosed boundary, because all of this module's assertions are negative
   * DISCLOSED, still invisible: a file reached INDIRECTLY, through a script the
     job merely invokes (the filters themselves carry the entries this costs,
     found by tracing what those scripts read — see the ⛔ blocks in docs-ci.yaml
-    and validate.yaml); a directory-shaped dependency (`pytest tests/`); a
-    workflow-level `on.<event>.paths:`, which the docs-ci.yaml and
-    validate.yaml banners forbid but nothing enforces; and everything
-    `_command_verb` lists as a gap.
+    and validate.yaml); a directory-shaped dependency (`pytest tests/`); and
+    everything `_command_verb` lists as a gap. (A workflow-level
+    `on.<event>.paths:` used to be on this list; invariant 4 now grades the
+    `pull_request` one for `scripts/**`. The docs-ci.yaml / validate.yaml
+    banners forbidding one there are still unenforced.)
 
 The shared failure mode all three exist to prevent: `detect-changes` answers
 "not needed" for a leg that was needed and the leg is skipped; where an
@@ -1513,6 +1519,20 @@ GATE_OUTPUT = re.compile(r"needs\.[\w-]+\.outputs\.(\w+)_changed")
 # the third is the one no gated job exercises today, so a maintainer trusting
 # the count would find nothing using it and delete it.
 INTERPRETERS = {"python", "python3", "py", "bash", "sh", "node", "ruby", "perl"}
+# Interpreter flags whose VALUE is a separate token. Without these, the
+# first-non-flag rule took the value as the script and lost the real one:
+# bench-probe-write-latency.yaml runs
+# `python3 -X utf8 scripts/tools/dx/analyze_probe.py`,
+# and the scan saw `utf8` (#3601 review).
+PYTHON_INTERPRETERS = {"python", "python3", "py"}
+SHELL_INTERPRETERS = {"bash", "sh"}
+INTERPRETER_VALUE_FLAGS = {
+    "python": {"-X", "-W"},
+    "shell": {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"},
+}
+# `bash -eo pipefail x.sh`: a short-option cluster whose LAST letter is o/O
+# takes the next token as its value.
+SHELL_VALUE_CLUSTER = re.compile(r"[-+][A-Za-z]*[oO]")
 DEPENDENCY_FLAGS = {"-c", "--constraint", "-r", "--requirement"}
 PIP_COMMAND = re.compile(r"pip3?")
 # `python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py"` is a literal path
@@ -1824,13 +1844,27 @@ def _job_step_files(workflow_path: Path, job_id: str) -> set[str]:
                 "⛔ Do NOT silence this by widening a path filter or deleting "
                 "the step's condition; if the value has nothing to do with "
                 "path gating, NARROW this predicate to values that feed a gate.")
-        work_dir = str(step.get("working-directory") or "").strip("/")
-        for candidate in _run_script_files(step.get("run") or ""):
-            for resolved in (f"{work_dir}/{candidate}" if work_dir else None,
-                             candidate):
-                if resolved and _is_tracked_file(resolved):
-                    found.add(resolved)
-                    break
+        found |= _step_files(step)
+    return found
+
+
+def _step_files(step: dict) -> set[str]:
+    """Repo-relative tracked files ONE step's `run:` executes or installs from.
+
+    Shared by invariants 3 and 4 so "which file does this step run" has one
+    answer. Policy about the step (its `if:`, `continue-on-error`) is the
+    caller's business: invariant 3 must refuse those shapes because it grades
+    a job-level gate, while invariant 4 asks only whether the WORKFLOW starts,
+    which a step-level condition cannot change.
+    """
+    found: set[str] = set()
+    work_dir = str(step.get("working-directory") or "").strip("/")
+    for candidate in _run_script_files(step.get("run") or ""):
+        for resolved in (f"{work_dir}/{candidate}" if work_dir else None,
+                         candidate):
+            if resolved and _is_tracked_file(resolved):
+                found.add(resolved)
+                break
     return found
 
 
@@ -1888,18 +1922,21 @@ def _run_script_files(script: str):
 # which is why `timeout`/`nice`/`stdbuf` are not listed: every real spelling
 # carries the argument, so listing them would help in no case at all, the same
 # argument that removed the `[` branch), `source`/`.`, an interpreter flag with
-# a separate value (`bash -eo pipefail x.sh`), `-m pip` anywhere but
+# a separate value OTHER than those in `INTERPRETER_VALUE_FLAGS` (python's
+# `-X`/`-W`, the shells' `-o`/`-O`/`--rcfile`/`--init-file` and a `-eo`-style
+# cluster are modelled since #3601's review), `-m pip` anywhere but
 # immediately after the interpreter, `uv pip`, `case … in` bodies, a subshell
 # with no inner separator (`(bash x.sh)` — the pinned fixture uses
 # `(cd x && bash x.sh)`, which `SHELL_SEPARATORS` splits first, so the plain
 # form is untested), a lone `&` background operator, a nested command context
 # (`bash -c "bash x.sh"`), and a variable verb (`$PYTHON x.py`).
 #
-# ⚠️ One gap runs the OTHER way, so "all under-detection" would be wrong: the
-# flag-skipping loop takes a flag's VALUE as the script, so
-# `bash --rcfile scripts/ops/x.sh -c true` yields the rcfile and loses the real
-# argument. Weak in practice — a file handed to a flag is usually a real
-# dependency — but it is over-detection and belongs on the list.
+# ⚠️ One gap runs the OTHER way, so "all under-detection" would be wrong: for
+# a value-taking flag NOT in `INTERPRETER_VALUE_FLAGS`, the flag-skipping loop
+# takes the flag's VALUE as the script. Weak in practice — a file handed to a
+# flag is usually a real dependency — but it is over-detection and belongs on
+# the list. (`bash --rcfile x.sh -c true`, the example that used to stand here,
+# is now modelled.)
 #
 # Resolving these properly means parsing shell, which is not worth it here;
 # what matters is that the list does not pretend to be complete.
@@ -1996,8 +2033,14 @@ def _command_files(tokens: list[str]):
         # docs/runbook.md` from demanding the runbook — a false red whose
         # remedy would be to widen the filter. (`python3 -m pytest tests/`
         # yields `pytest`, not a tracked file.)
+        expects_value = False
         for following in tokens[verb_index + 1:]:
-            if following.startswith("-"):
+            if expects_value:
+                expects_value = False
+                continue
+            if following.startswith("-") or (
+                    verb in SHELL_INTERPRETERS and following.startswith("+")):
+                expects_value = _flag_takes_value(verb, following)
                 continue
             yield _normalise_token(following)
             break
@@ -2009,6 +2052,16 @@ def _command_files(tokens: list[str]):
             yield _normalise_token(tokens[index + 1])
         elif "=" in token and token.split("=", 1)[0] in DEPENDENCY_FLAGS:
             yield _normalise_token(token.split("=", 1)[1])
+
+
+def _flag_takes_value(verb: str, flag: str) -> bool:
+    """Does this interpreter flag consume the NEXT token as its value?"""
+    if verb in PYTHON_INTERPRETERS:
+        return flag in INTERPRETER_VALUE_FLAGS["python"]
+    if verb in SHELL_INTERPRETERS:
+        return (flag in INTERPRETER_VALUE_FLAGS["shell"]
+                or SHELL_VALUE_CLUSTER.fullmatch(flag) is not None)
+    return False
 
 
 def _logical_shell_lines(script: str) -> list[str]:
@@ -2122,6 +2175,7 @@ GATED_LEGS = {
     ("ci.yml", "go-tests-am-inhibit"),
     # ADR-027 §9 item 9: the oauth2-proxy module's leg, on the `go` filter.
     ("ci.yml", "go-tests-oauth2-proxy"),
+    ("ci.yml", "go-tests-pss"),
     # #3206: the da-read module's leg, gated on the `go` filter like its siblings.
     ("ci.yml", "go-tests-da-read"),
     ("ci.yml", "go-tests-e2e-bench-receiver"),
@@ -3708,3 +3762,358 @@ def test_the_version_check_filter_covers_the_trees_bump_docs_now_reads():
             f"{probe} is read by the version gate but matches no `validate` "
             f"path filter — a PR touching only it skips version-check, and a "
             f"skipped required check counts as satisfied.\npatterns={pats}")
+
+
+# ---------------------------------------------------------------------------
+# Invariant 4 — workflow-level `on.pull_request.paths` vs the scripts it runs.
+# ---------------------------------------------------------------------------
+#
+# The same failure mode one level up (#3601). Invariants 1–3 grade dorny's
+# `detect-changes` filters; a workflow can instead gate itself with GitHub's own
+# `on.pull_request.paths`, and then a PR touching only a script the workflow
+# runs never starts the workflow at all. guard-defaults-impact.yml ran
+# `scripts/ops/guard_defaults_scopes.py` for months without listing it, so a PR
+# breaking that helper merged with the guard never having looked.
+#
+# Invariant: **every `scripts/**` file a job's `run:` step executes (per
+# `_step_files`) is covered by that workflow's `on.pull_request.paths`.**
+#
+# ⛔ Scope, stated so nobody reads more into a green run:
+#   * `pull_request` and `pull_request_target` only. A `push.paths` gate fires
+#     after merge; the question here is whether the PR that breaks the script
+#     is checked.
+#   * `scripts/**` only. Six on.paths workflows install from
+#     `requirements/ci-constraints.txt` and five of them do not list it;
+#     whether it belongs in each is a CI-cost call, not drift.
+#   * Same extraction as invariant 3, so the same disclosed blind spots: files
+#     reached indirectly through a script (or a Makefile target), directories,
+#     a job-level reusable `uses:` and a local composite action
+#     (`uses: ./.github/actions/x`) — neither has `run:` steps to read here —
+#     `defaults.run.working-directory` (only step-level is honoured),
+#     `shell: python3 {0}`, a path held in a matrix value or `env:` variable,
+#     and `_command_verb`'s gaps. None of these occurs in a scanned workflow
+#     today (measured at #3601's review); they are named so a green run is not
+#     read as more than it is.
+#   * Step-level `if:` / `continue-on-error` are NOT refused here, unlike
+#     invariant 3: they change what a job reports, not whether the workflow
+#     starts.
+#   * `!` patterns ARE modelled, unlike invariants 1–3, because GitHub defines
+#     them for `on.paths` and bench-gate-pr.yaml uses one: patterns are read in
+#     order and the LAST one matching a path decides (`_on_paths_covers`).
+#     ⛔ The two kinds are matched in OPPOSITE approximations, each failing
+#     loud: a positive pattern through `_covers` (an unmodelled glob answers
+#     "no match" → uncovered → red), a negated one through
+#     `_negation_may_match` (an unmodelled glob answers "match" → excluded →
+#     red). Using `_covers` for both silently dropped any exclusion it could
+#     not parse — including bench-gate-pr's own `*_test.go` (#3601 review).
+#   * REFUSED (raise): `paths-ignore` (coverage would be the complement; none
+#     is in use, so it is refused rather than modelled speculatively).
+#   * A workflow that does not parse is LISTED and turns the test red — never
+#     skipped, because an unparsed workflow is one this guard did not look at.
+WORKFLOWS_DIR = ROOT / ".github" / "workflows"
+WORKFLOW_PATHS_SCOPE = "scripts/"
+
+# ⛔ Only shrinks. Each entry is a (workflow, script) the scan finds uncovered
+# today and nobody has yet decided on; `test_workflow_paths_pending_only_shrinks`
+# turns red the moment one becomes covered, so a fixed entry cannot linger and
+# hide a regression of the same pair. Adding an entry is the wrong fix for a red
+# invariant 4 unless the omission is a deliberate CI-cost decision — then write
+# that decision here.
+WORKFLOW_PATHS_PENDING: dict[tuple[str, str], str] = {
+    ("bench-workload-effect.yaml", "scripts/tools/dx/pair_bench_ratio.py"):
+        "undecided: primary trigger is workflow_dispatch; the pull_request "
+        "gate lists only the workflow file itself",
+    ("bench-workload-effect.yaml", "scripts/tools/ops/bench_interleave.sh"):
+        "undecided: same as pair_bench_ratio.py above",
+    ("bench-workload-record.yaml", "scripts/tools/ops/bench_gate_compare.sh"):
+        "undecided: gate is test-file shaped (bench inputs), the comparator "
+        "is also exercised by bench-gate-pr.yaml",
+    ("config-diff-advisory.yml", "scripts/ops/go_build.sh"):
+        "undecided: build-flag wrapper shared with guard-defaults-impact.yml",
+    ("guard-defaults-impact.yml", "scripts/ops/go_build.sh"):
+        "undecided: build-flag wrapper shared with config-diff-advisory.yml",
+}
+
+
+def _pull_request_paths(workflow: object, where: str) -> list[str] | None:
+    """The workflow's `on.pull_request.paths`, or None when it has none.
+
+    None means "not in scope": a workflow without a pull_request path gate
+    starts on every PR, so nothing it runs can be skipped by this mechanism.
+    """
+    if not isinstance(workflow, dict):
+        return None
+    on = workflow.get("on", workflow.get(True))
+    if not isinstance(on, dict):
+        return None
+    gates = [on[e] for e in ("pull_request", "pull_request_target")
+             if isinstance(on.get(e), dict)
+             and ("paths" in on[e] or "paths-ignore" in on[e])]
+    if not gates:
+        return None
+    if len(gates) > 1:
+        raise AssertionError(
+            f"{where}: both `pull_request` and `pull_request_target` carry a "
+            "path gate — not modelled (the scripts would need covering by "
+            "each). Model it before using it.")
+    pr = gates[0]
+    if "paths-ignore" in pr:
+        raise AssertionError(
+            f"{where}: `paths-ignore` on a pull_request event is not modelled — the "
+            "covered set is its complement, which an OR over positive patterns "
+            "cannot express. Model it before using it; do not drop it from the "
+            "scan.")
+    paths = pr.get("paths")
+    if paths is None:
+        return None
+    if not (isinstance(paths, list) and paths
+            and all(isinstance(p, str) for p in paths)):
+        raise AssertionError(
+            f"{where}: `on.pull_request.paths` is {paths!r}, not a non-empty "
+            "list of strings — refusing to grade a shape this guard does not "
+            "understand.")
+    if all(p.startswith("!") for p in paths):
+        raise AssertionError(
+            f"{where}: `on.pull_request.paths` holds only `!` patterns, which "
+            "match nothing — GitHub needs a positive pattern first.")
+    return paths
+
+
+def _on_paths_covers(patterns: list[str], path: str) -> bool:
+    """GitHub's `on.<event>.paths` rule: in order, the last match decides.
+
+    "A matching negative pattern (prefixed with `!`) after a positive match
+    will exclude the path. A matching positive pattern after a negative match
+    will include the path again." — GitHub workflow syntax docs.
+    """
+    covered = False
+    for pattern in patterns:
+        if pattern.startswith("!"):
+            if _negation_may_match(pattern[1:], path):
+                covered = False
+        elif _covers(pattern, path):
+            covered = True
+    return covered
+
+
+# Every character GitHub's filter cheat sheet gives a glob meaning to that can
+# sit inside one segment. `+` ("one or more of the preceding character") is
+# easy to forget — round 2 of #3601's review caught it missing.
+_GLOB_CHARS = re.compile(r"[*?\[+]")
+# Shapes refused outright in a `!` pattern rather than approximated: a brace or
+# extglob group can contain `/`, so splitting on `/` would cut it apart, and a
+# `./` prefix or trailing `/` has no documented meaning in `on.paths`.
+_NEGATION_REFUSED = re.compile(r"[{}()]|^\./|/$")
+
+
+def _negation_may_match(pattern: str, path: str) -> bool:
+    """An OVER-approximation of GitHub's match, for `!` patterns only.
+
+    A segment containing `**` anywhere (`**`, `**.py`, `ops**`) absorbs ANY
+    run of segments — GitHub's `**` matches any characters, `/` included. Any
+    other segment holding a glob character matches any single segment. A
+    literal segment must be equal. Every path GitHub's matcher accepts is
+    therefore accepted here, so an exclusion is never under-applied; the cost
+    is a possible false "excluded", the loud direction for a negative pattern.
+    """
+    if _NEGATION_REFUSED.search(pattern):
+        raise AssertionError(
+            f"`!{pattern}`: braces, extglob groups, a `./` prefix and a "
+            "trailing `/` are not modelled in a negated `on.paths` pattern — "
+            "an exclusion this guard cannot bound might hide an uncovered "
+            "script. Rewrite it as plain segments.")
+
+    def walk(pat: list[str], parts: list[str]) -> bool:
+        if not pat:
+            return not parts
+        head, rest = pat[0], pat[1:]
+        if "**" in head:
+            return any(walk(rest, parts[i:]) for i in range(len(parts) + 1))
+        if not parts:
+            return False
+        if not _GLOB_CHARS.search(head) and parts[0] != head:
+            return False
+        return walk(rest, parts[1:])
+    return walk(pattern.split("/"), path.split("/"))
+
+
+def _workflow_paths_scan(
+        directory: Path,
+) -> tuple[list[str], dict[str, tuple[list[str], set[str]]]]:
+    """(unparseable workflow names, {name: (paths, scoped files it runs)}).
+
+    Only workflows with `on.pull_request.paths` appear in the mapping.
+    """
+    unparseable: list[str] = []
+    scoped: dict[str, tuple[list[str], set[str]]] = {}
+    for path in sorted(directory.glob("*.y*ml")):
+        try:
+            workflow = yaml.safe_load(path.read_text(encoding="utf-8"))
+        except (yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
+            unparseable.append(f"{path.name}: {type(exc).__name__}")
+            continue
+        patterns = _pull_request_paths(workflow, path.name)
+        if patterns is None:
+            continue
+        files: set[str] = set()
+        jobs = workflow.get("jobs") or {}
+        if not isinstance(jobs, dict):
+            raise AssertionError(f"{path.name}: `jobs` is not a mapping")
+        for job in jobs.values():
+            for step in (job or {}).get("steps") or []:
+                if isinstance(step, dict):
+                    files |= {f for f in _step_files(step)
+                              if f.startswith(WORKFLOW_PATHS_SCOPE)}
+        scoped[path.name] = (patterns, files)
+    return unparseable, scoped
+
+
+def _workflow_paths_uncovered(
+        scoped: dict[str, tuple[list[str], set[str]]],
+) -> set[tuple[str, str]]:
+    return {
+        (name, f)
+        for name, (patterns, files) in scoped.items()
+        for f in files
+        if not _on_paths_covers(patterns, f)
+    }
+
+
+def test_workflow_paths_cover_every_script_their_jobs_run() -> None:
+    unparseable, scoped = _workflow_paths_scan(WORKFLOWS_DIR)
+    assert not unparseable, (
+        "workflows that do not parse were NOT checked by invariant 4 — fix "
+        "them, do not skip them:\n" + "\n".join(f"  {u}" for u in unparseable))
+    new = sorted(_workflow_paths_uncovered(scoped) - set(WORKFLOW_PATHS_PENDING))
+    assert not new, (
+        "a workflow gated by `on.pull_request.paths` runs a script that is NOT "
+        "in those paths — a PR changing only that script never starts the "
+        "workflow, so a break in it merges unchecked (#3601). Add each script "
+        "to the workflow's `on.pull_request.paths`:\n"
+        + "\n".join(f"  {wf}: {p!r}" for wf, p in new))
+
+
+def test_workflow_paths_pending_only_shrinks() -> None:
+    _, scoped = _workflow_paths_scan(WORKFLOWS_DIR)
+    stale = sorted(set(WORKFLOW_PATHS_PENDING) - _workflow_paths_uncovered(scoped))
+    assert not stale, (
+        "these WORKFLOW_PATHS_PENDING entries are no longer uncovered (fixed, "
+        "renamed or removed). Delete them — a stale entry would silently "
+        "excuse the same pair if it regressed:\n"
+        + "\n".join(f"  {wf}: {p!r}" for wf, p in stale))
+
+
+def test_workflow_paths_scan_still_sees_the_motivating_input() -> None:
+    """Vacuity tripwire: the scan must still find the #3601 helper.
+
+    Every assertion above is negative ("nothing uncovered"), so an extraction
+    that silently finds nothing would pass them all.
+    """
+    _, scoped = _workflow_paths_scan(WORKFLOWS_DIR)
+    assert "guard-defaults-impact.yml" in scoped, sorted(scoped)
+    _, files = scoped["guard-defaults-impact.yml"]
+    assert "scripts/ops/guard_defaults_scopes.py" in files, sorted(files)
+
+
+def _write_workflow(directory: Path, name: str, on_block: str,
+                    run: str) -> None:
+    (directory / name).write_text(
+        "name: synthetic\n" + on_block
+        + "jobs:\n  j:\n    runs-on: ubuntu-latest\n    steps:\n"
+        + f"      - if: github.event_name == 'pull_request'\n"
+        + f"        run: {run}\n",
+        encoding="utf-8")
+
+
+def test_workflow_paths_scan_grades_scope_and_coverage(tmp_path: Path) -> None:
+    """Positive, negative and control cases on synthetic workflows.
+
+    The scripts named must be TRACKED files, because `_step_files` only
+    resolves those; the workflow files themselves are synthetic.
+    """
+    script = "scripts/tools/lint/check_doc_links.py"
+    run = f"python3 {script} --ci && pip install -c requirements/ci-constraints.txt x"
+    _write_workflow(tmp_path, "uncovered.yml",
+                    "on:\n  pull_request:\n    paths:\n      - 'docs/**'\n", run)
+    _write_workflow(tmp_path, "covered.yml",
+                    "on:\n  pull_request:\n    paths:\n"
+                    "      - 'scripts/tools/lint/*.py'\n", run)
+    # Control: no workflow-level path gate ⇒ starts on every PR ⇒ out of scope.
+    _write_workflow(tmp_path, "ungated.yml", "on: [pull_request]\n", run)
+    # pull_request_target is a PR gate too.
+    _write_workflow(tmp_path, "target.yml",
+                    "on:\n  pull_request_target:\n    paths:\n      - 'docs/**'\n", run)
+    # Control: a push-only path gate is out of scope too.
+    _write_workflow(tmp_path, "push-only.yml",
+                    "on:\n  push:\n    paths:\n      - 'docs/**'\n", run)
+
+    unparseable, scoped = _workflow_paths_scan(tmp_path)
+    assert unparseable == []
+    assert sorted(scoped) == ["covered.yml", "target.yml", "uncovered.yml"]
+    # requirements/ is outside the scope even though the step installs from it.
+    assert scoped["uncovered.yml"][1] == {script}
+    assert _workflow_paths_uncovered(scoped) == {
+        ("uncovered.yml", script), ("target.yml", script)}
+
+
+def test_workflow_paths_scan_lists_unparseable_and_refuses_unmodelled(
+        tmp_path: Path) -> None:
+    (tmp_path / "broken.yml").write_text("on: [pull_request\n", encoding="utf-8")
+    unparseable, scoped = _workflow_paths_scan(tmp_path)
+    assert unparseable == ["broken.yml: ParserError"] and scoped == {}
+
+    for name, on_block in (
+        ("ignore.yml", "on:\n  pull_request:\n    paths-ignore:\n      - 'docs/**'\n"),
+        ("only-negated.yml", "on:\n  pull_request:\n    paths:\n"
+                             "      - '!scripts/tools/**'\n"),
+        ("empty.yml", "on:\n  pull_request:\n    paths: []\n"),
+    ):
+        directory = tmp_path / name.split(".")[0]
+        directory.mkdir()
+        _write_workflow(directory, name, on_block, "true")
+        with pytest.raises(AssertionError, match=name):
+            _workflow_paths_scan(directory)
+
+
+def test_on_paths_covers_follows_githubs_last_match_rule() -> None:
+    f = "scripts/tools/lint/check_doc_links.py"
+    assert _on_paths_covers(["scripts/**"], f)
+    assert not _on_paths_covers(["docs/**"], f)
+    # A later exclusion removes it — the shape an OR over all patterns misses.
+    assert not _on_paths_covers(["scripts/**", "!scripts/tools/**"], f)
+    # A later positive re-includes it.
+    assert _on_paths_covers(
+        ["scripts/**", "!scripts/tools/**", "scripts/tools/lint/*.py"], f)
+    # An exclusion that does not match leaves the earlier match standing.
+    assert _on_paths_covers(["scripts/**", "!scripts/ops/**"], f)
+    # ⛔ An exclusion `_covers` cannot parse must still EXCLUDE (review repro:
+    # `guard_*.py` / `?` were silently dropped and the file read as covered).
+    assert not _on_paths_covers(["scripts/**", "!scripts/tools/lint/check_*.py"], f)
+    assert not _on_paths_covers(["scripts/**", "!scripts/tools/lint/check_doc_link?.py"], f)
+    assert not _on_paths_covers(["scripts/**", "!scripts/**/*_links.py"], f)
+    # Round 2: `**` inside a segment crosses `/`; `+` is a glob character.
+    for neg in ("!**.py", "!scripts/**.py", "!scripts/tools**",
+                "!scripts**/*.py", "!scripts/tool+s/lint/*.py"):
+        assert not _on_paths_covers(["scripts/**", neg], f), neg
+    for neg in ("!{scripts,docs}/**", "!scripts/(tools)/**",
+                "!./scripts/**", "!scripts/tools/"):
+        with pytest.raises(AssertionError, match="not modelled"):
+            _on_paths_covers(["scripts/**", neg], f)
+    # …while its literal segments still bound it (bench-gate-pr.yaml's shape).
+    assert _on_paths_covers(
+        ["scripts/**", "!components/threshold-exporter/app/**/*_test.go"], f)
+    assert not _on_paths_covers(
+        ["components/**", "!components/threshold-exporter/app/**/*_test.go"],
+        "components/threshold-exporter/app/pkg/x_test.go")
+
+
+def test_interpreter_value_flags_do_not_hide_the_script() -> None:
+    """Review repro: `python3 -X utf8 x.py` yielded `utf8` and lost `x.py`."""
+    x = "scripts/x.py"
+    for spelling in (f"python3 -X utf8 {x}", f"python3 -W error -u {x}",
+                     f"bash -eo pipefail {x}", f"bash -o pipefail {x}",
+                     f"sh +o errexit {x}", f"bash --rcfile r.sh {x}"):
+        assert list(_run_script_files(spelling)) == [x], spelling
+    # Control: a flag that takes no value still lets the next token through.
+    assert list(_run_script_files(f"python3 -u {x}")) == [x]
+    assert list(_run_script_files(f"bash -x {x}")) == [x]

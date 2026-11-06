@@ -342,14 +342,14 @@ da-tools grafana-import \
 | 頂列 | **Tamper status** | `federation_revocation_tamper_suspected` | ✓ Clean (0)＝乾淨，但**僅在 Reconciler freshness 為綠時**才是即時 all-clear；fail-closed/stale 時保留舊值，需與 freshness 並讀 | 🔴 Tamper (>0)＝疑似 un-revoke |
 | 頂列 | **Reconciler freshness** | `time() - ..._last_reconcile_timestamp_seconds` | ✓ Fresh (<1800s) | 🔴 Stale (≥1800s)＝偵測瞎了 |
 | 頂列 | **Evidence channel** | `federation_revocation_channel_up` | ✓ Evidence flowing (1)＝通道活著，此時 Tamper status 的乾淨才有意義 | 🔴 Channel dead (0)＝證據路徑斷、偵測對著空 feed 報 all-clear |
-| 頂列 | **Gateway fail-open** | `federation_gateway_revocation_load_errors` | ✓ OK (0) | 🟡 Fail-open (>0)＝撤銷 token 被放行 |
+| 頂列 | **Gateway fail-open** | `federation_gateway_revocation_load_errors` | ✓ OK (0) | 🟡 Fail-open (>0)＝讀不到撤銷清單、沿用前一份：此後的撤銷不生效；冷啟動的 worker 不執行任何撤銷 |
 | 頂列 | **Coverage integrity** | `federation_revocation_events_dropped` | ✓ Intact (0) | 🟡 Schema drift (>0)＝覆蓋被侵蝕 |
 | 第二列 | **Revoked-set contract — file** | `federation_revocation_live_set_rejected_lines` | ✓ Conforming (0) | 🔴 Set not loading (>0)＝gateway 拒載整份撤銷集，**此後發出的撤銷都沒生效**；Tamper status **不會**顯示它（那比對的是檔案，檔案裡有新撤銷） |
 | 第二列 | **Revoked-set reload — gateway** | `federation_gateway_revoked_set_reload_rejected` | ✓ Loading (0) | 🔴 Reload refused (>0)＝gateway 自己記錄的拒載；⛔ **冷啟動**：pod 首次載入就撞到＝該 worker 完全沒有撤銷集（fail-open 姿態）。與左邊那格觀測**不同平面**（兩端讀的是同一 ConfigMap 的不同 kubelet 投影），任一格可單獨非零 |
 | 第二列 | **Revoked-set — MISSING** | `federation_gateway_revoked_set_missing` | ✓ Present (0) | 🔴 Absent — nothing enforced (>0)＝檔案**不見了**。⛔ 與左邊兩格**讀法不同**：那兩格是「凍結在舊集合」（stale but enforcing），這一格是**手上什麼都沒有**，每個已撤銷 token 都被放行至 TTL。成因＝ADR-028 §相鄰破口 點名的刪／卸載 projected key，或 namespace 錯配（[#1313](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1313)：ConfigMap 是 namespace-scoped，volume 只解析得到 gateway **自己 namespace** 的那個）。⚠️ **[#1316](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1316) 起有兩個產生者**：Envoy 容器（請求路徑觸發，閒置的 gateway 永遠不報）與 `federation-store-preflight` init container（**每次 pod 啟動發一次**，訊息直接寫出要修的 namespace）。preflight 那一列是單發樣本 ⇒ 本格與告警都可能在掛載仍然錯的情況下回落到 0 |
 | Row 1 | **Reconciler staleness / error rate / events checked** | staleness（含 1800 線）、`rate(...reconcile_errors_total[5m])`、`..._events_checked` | staleness 鋸齒近 0、error rate 平 0 | staleness 攀升＋error rate >0＝fail-closed |
 | Row 2 | **Events dropped / erosion ratio** | `..._events_dropped`、`dropped / clamp_min(checked + dropped, 1)` | 皆 0 | >0＝schema-drift；ratio 用 `clamp_min` 防 0/0=NaN |
-| Row 3 | **Gateway read failures** | `federation_gateway_revocation_load_errors`（含 >0 線） | 平 0 | >0＝fail-open；近 `for:2m` 邊界震盪＝拍頻 |
+| Row 3 | **Gateway read failures** | `federation_gateway_revocation_load_errors`（含 >0 線） | 平 0 | >0＝讀不到撤銷清單（沿用前一份）；近 `for:2m` 邊界震盪＝拍頻 |
 | Row 4 | **Suspected un-revokes（headline）** | `federation_revocation_tamper_suspected`（大圖，含 >0 線） | 平 0 | **任何**一次 >0＝critical 安全事件（#1238 起鎖存，不需持續） |
 | Row 5 | **Heartbeat canary — 30m window liveness** | `..._channel_up`（0/1）＋ `..._heartbeats_seen` | channel_up 平 1、heartbeats_seen 約 5-6 | heartbeats_seen 衰減→0 且 channel_up 落 0＝證據通道斷；**斷崖式歸零**多半是 producer 事件改名或 Vector selector 改動 |
 

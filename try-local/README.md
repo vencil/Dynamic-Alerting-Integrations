@@ -18,7 +18,7 @@ Give it ~1 minute, then open:
 |---|---|---|
 | **Tenant Manager**（da-portal） | <http://localhost:8081> | 2 個 demo 租戶 + 一個預存的 Saved View；改租戶閾值按 Save 會落一個**真實 git commit** |
 | **Tenant API**（經 oauth2-proxy） | <http://localhost:8080/api/v1/me> | file-based 設定 API（commit-on-write）；API 只在 tenant-api 的 Unix socket 上、經 pod 內 oauth2-proxy 進來（[ADR-027](../docs/adr/027-tenant-api-caller-identity.md) §2）。tenant-api 自己的 port <http://localhost:8083/health> 只有 `/health`、`/ready`、`/metrics` |
-| **產生器容器**（generator） | （無對外 port） | tenant-api 每筆寫入 commit 前問它整棵 conf.d 是否過得了 `generate-routes --validate --strict`（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）；從 `generator/Dockerfile` build（Python + PyYAML、git、amtool），跑本 checkout 的 `scripts/tools`；與 tenant-api 同 uid（10001）、共用 socket volume |
+| **產生器容器**（generator） | （無對外 port） | tenant-api 每筆寫入 commit 前問它整棵 conf.d 是否過得了 `generate-routes --validate --strict`（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）；以 repo root 為 context、從 `generator/Dockerfile` build（Python + PyYAML、git、amtool、da-guard；da-guard 從 exporter 的 Go 建置，[#3530](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3530)），跑本 checkout 的 `scripts/tools`；與 tenant-api 同 uid（10001）、共用 socket volume |
 | **Prometheus** | <http://localhost:9090/alerts> | `MariaDBHighConnectionsCritical` **正在 firing**（紅燈） |
 | **Alertmanager** | <http://localhost:9093> | 同一個 firing 告警，路由到 null receiver |
 
@@ -129,7 +129,7 @@ bash try-local/chaos.sh <tamper|stale|drift|failopen|heal>
 | `chaos.sh tamper` | 🔴 **Tamper status** CRITICAL | 一筆「已撤銷但未過期」的 token 復活（un-revoke） |
 | `chaos.sh stale` | 🔴 **Reconciler freshness** Stale + fail-closed rate() 爬升 | 對帳器停擺（上次成功 ~2000s 前 > 1800s 門檻） |
 | `chaos.sh drift` | 🟡 **Coverage integrity** + 侵蝕率 | 撤銷日誌 schema 漂移，數列解析失敗（`events_dropped` > 0） |
-| `chaos.sh failopen` | 🟡 **Gateway fail-open** | Gateway 讀不到撤銷集合、fail-open 放行（降級，非被攻破） |
+| `chaos.sh failopen` | 🟡 **Gateway fail-open** | Gateway 讀不到撤銷集合、沿用前一份（此後的撤銷不生效；冷啟動的 worker 不執行任何撤銷）（降級，非被攻破） |
 | `chaos.sh heal` | ✅ 全部回綠 | 移除旗標 → 健康預設 |
 
 > 🧪 同樣的誠實框架：這些全是**合成的注入**，用來展示「壞掉長怎樣 + 偵測怎麼亮」。儀表板 JSON、門檻、alert 對齊仍是 production 正本，一個字都沒為 demo 改。

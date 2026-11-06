@@ -585,27 +585,34 @@ data:
     \    expr: federation_gateway_revocation_load_errors > 0\n    for: 2m\n    labels:\n\
     \      alert_source: platform\n      severity: warning\n    annotations:\n   \
     \   description: 'The federation-gateway is failing to read the revoked-set\n\n\
-    \        (revoked.txt) and is failing OPEN by design — revoked federation\n\n\
-    \        tokens ARE being accepted until their TTL (≤4h). This is the ADR-028\n\
-    \n        named Risk Acceptance (a deliberate availability trade-off) made\n\n\
-    \        visible; the fail-closed hardening is tracked in #996. ACTION: check\n\
-    \n        the gateway''s revoked.txt projected-volume mount and the\n\n      \
-    \  tenant-federation-store ConfigMap; a persistent failure (vs a\n\n        pod-start\
-    \ / remount blip) may indicate mount tampering (a DoS of the\n\n        defence).\
-    \ Details:\n\n        docs/adr/028-federation-revocation-tamper-evidence.md.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md\n\
-    \      summary: Federation gateway cannot read the revoked-set — fail-open is\
-    \ allowing revoked tokens (ADR-028 §fail-open)\n  - alert: FederationGatewayRevokedSetMissing\n\
-    \    expr: max_over_time(federation_gateway_revoked_set_missing[1h]) > 0\n   \
-    \ for: 5m\n    labels:\n      alert_source: platform\n      severity: critical\n\
-    \    annotations:\n      description: 'The federation-gateway reports that its\
-    \ revoked-set file is\n\n        ABSENT. Unlike the read-failure and reload-refused\
-    \ alerts, the\n\n        gateway is NOT holding a previous set here — it has none,\
-    \ so every\n\n        revoked federation token is being accepted until its TTL\
-    \ (≤4h).\n\n        This is the ADR-028 §相鄰破口 attack shape (delete / unmount the\n\
-    \n        projected key) and it is also what a namespace misconfiguration\n\n\
-    \        looks like (#1313). ACTION: (1) confirm the store ConfigMap exists\n\n\
-    \        in the gateway''s OWN namespace — a ConfigMap is namespace-scoped\n\n\
+    \        (revoked.txt). A failed read does NOT clear the set: each gateway\n\n\
+    \        worker keeps enforcing the set it last loaded successfully, so\n\n  \
+    \      tokens in that set are still rejected, but every revocation issued\n\n\
+    \        after that load is NOT in force until a read succeeds (reloads are\n\n\
+    \        request-driven, so on a quiet worker that load can predate the\n\n  \
+    \      failure by a long way).\n\n        ⛔ COLD START: a worker whose FIRST load\
+    \ failed has no previous set\n\n        and is enforcing NOTHING — revoked tokens\
+    \ are honoured there until\n\n        their TTL (≤4h). This is the ADR-028 named\
+    \ Risk Acceptance (a\n\n        deliberate availability trade-off: the gateway\
+    \ fails open rather\n\n        than erroring the request) made visible; the fail-closed\
+    \ hardening\n\n        is tracked in #996. ACTION: check\n\n        the gateway''s\
+    \ revoked.txt projected-volume mount and the\n\n        tenant-federation-store\
+    \ ConfigMap; a persistent failure (vs a\n\n        pod-start / remount blip) may\
+    \ indicate mount tampering (a DoS of the\n\n        defence). Details:\n\n   \
+    \     docs/adr/028-federation-revocation-tamper-evidence.md.\n\n        '\n  \
+    \    runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md\n\
+    \      summary: Federation gateway cannot read the revoked-set — it keeps enforcing\
+    \ the last set it loaded, so revocations made since are NOT in force (ADR-028\
+    \ §fail-open)\n  - alert: FederationGatewayRevokedSetMissing\n    expr: max_over_time(federation_gateway_revoked_set_missing[1h])\
+    \ > 0\n    for: 5m\n    labels:\n      alert_source: platform\n      severity:\
+    \ critical\n    annotations:\n      description: 'The federation-gateway reports\
+    \ that its revoked-set file is\n\n        ABSENT. Unlike the read-failure and\
+    \ reload-refused alerts, the\n\n        gateway is NOT holding a previous set\
+    \ here — it has none, so every\n\n        revoked federation token is being accepted\
+    \ until its TTL (≤4h).\n\n        This is the ADR-028 §相鄰破口 attack shape (delete\
+    \ / unmount the\n\n        projected key) and it is also what a namespace misconfiguration\n\
+    \n        looks like (#1313). ACTION: (1) confirm the store ConfigMap exists\n\
+    \n        in the gateway''s OWN namespace — a ConfigMap is namespace-scoped\n\n\
     \        and the volume can only resolve one there; tenant-api''s\n\n        `federation.store.namespace`\
     \ must name that namespace. (2) If it\n\n        exists, check the projected volume\
     \ mount on the gateway pods and\n\n        whether the `revoked.txt` key is still\
@@ -624,7 +631,7 @@ data:
     \n        on a pre-violation revoked set: every revocation issued after that\n\
     \n        line appeared is NOT in force, and a gateway worker whose first\n\n\
     \        load hit it has no previous set and is enforcing nothing.\n\n       \
-    \ This is NOT the fail-open case\n\n        (FederationGatewayRevocationLoadFailure):\
+    \ This is NOT the read-failure case\n\n        (FederationGatewayRevocationLoadFailure):\
     \ the list is readable, it\n\n        is being refused. FederationRevocationTamperSuspected\
     \ will NOT\n\n        cover it either — that compares the audit log against the\
     \ FILE, and\n\n        the file does contain the newer revocations. ACTION: ⛔\

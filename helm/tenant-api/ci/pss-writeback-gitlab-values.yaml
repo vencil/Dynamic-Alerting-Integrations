@@ -1,0 +1,13 @@
+# PSS gate value set (#1018): turns on every values path a workload template
+# branches on, so tests/pss judges the pods those branches shape. A new
+# if/with/range on .Values in a workload template needs a value here
+# (TestWorkloadConditionalsAreExercised). Not a deployment example.
+# pr-gitlab arm of writeBack.mode.
+gitRepoUrl: "https://git.invalid/pss-gate/conf.git"
+writeBack:
+  mode: pr-gitlab
+  gitlab:
+    project: pss-gate/conf
+    apiUrl: "https://gitlab.invalid"
+  token:
+    secretName: pss-gate-forge-token

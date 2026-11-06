@@ -97,7 +97,10 @@ EXIT_QUOTED_INPUT = 2
 # truthful log line and a test that can tell the two refusals apart — not a
 # behaviour difference. Claiming more would be the kind of protection this
 # file's own history is made of.
-EXIT_UNREPRESENTABLE_PATH = 3
+# It is the contract's 1 (scripts/tools/_lib_exitcodes.py): renaming the file
+# is a change to the repo's content, which the user makes — and it stays apart
+# from the 2 above, the producer's fault (#3577, #3611).
+EXIT_UNREPRESENTABLE_PATH = 1
 
 # The output contract, named once so the refusal below is derived from the
 # same two constants the emitter interpolates. Enumerating the delimiters a

@@ -33,8 +33,11 @@ Usage
 Exit codes
 ----------
   0 — commit landed (either via normal path or plumbing fallback)
-  1 — generic failure (message unreadable, file missing, etc.)
-  2 — commit-tree succeeded but ref-write failed; new SHA in stderr for recovery
+  1 — the normal path's `git commit` refused it (a hook, or nothing to
+      commit): a change to the content is needed
+  2 — could not commit: not in a repo, a file or the message missing, a git
+      plumbing step failed, or commit-tree succeeded but the ref write failed
+      (new SHA in stderr for recovery) — scripts/tools/_lib_exitcodes.py (#3577)
 
 Design notes
 ------------
@@ -60,6 +63,14 @@ import tempfile
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 
+class CommandFailed(RuntimeError):
+    """A command `_run` ran ended non-zero; *returncode* is its status."""
+
+    def __init__(self, returncode: int, message: str) -> None:
+        super().__init__(message)
+        self.returncode = returncode
+
+
 def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True) -> str:
     """Run cmd, return stripped stdout; raise on non-zero if check=True."""
     merged_env = os.environ.copy()
@@ -74,7 +85,8 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
         timeout=60,
     )
     if check and result.returncode != 0:
-        raise RuntimeError(
+        raise CommandFailed(
+            result.returncode,
             f"cmd failed ({result.returncode}): {' '.join(cmd)}\n"
             f"stderr: {result.stderr.strip()}"
         )
@@ -201,6 +213,14 @@ def plumbing_commit(
             pass
 
 
+class CommitRefused(RuntimeError):
+    """The normal path's `git commit` refused the commit — a hook's refusal,
+    or nothing to commit, which git ends at 1: the content needs a change
+    (exit 1). git's fatal errors (no identity, signing failed, a held
+    index.lock) end at 128 and stay "could not commit" (exit 2), like a
+    failed plumbing step."""
+
+
 def normal_commit(
     repo_root: pathlib.Path,
     message: str,
@@ -214,7 +234,12 @@ def normal_commit(
     cmd = ["git", "commit", "-m", message]
     if amend:
         cmd = ["git", "commit", "--amend", "-m", message]
-    _run(cmd)
+    try:
+        _run(cmd)
+    except CommandFailed as exc:
+        if exc.returncode == 1:
+            raise CommitRefused(str(exc)) from exc
+        raise
     return _run(["git", "rev-parse", "HEAD"])
 
 
@@ -261,7 +286,7 @@ def main(argv: list[str] | None = None) -> int:
         repo_root = _repo_root()
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        return 1
+        return 2  # not in a repository: a caller error (#3577)
 
     if args.show_locks:
         locks = detect_phantom_lock(repo_root)
@@ -303,9 +328,12 @@ def main(argv: list[str] | None = None) -> int:
             sha = plumbing_commit(repo_root, message, args.files, amend=args.amend)
         else:
             sha = normal_commit(repo_root, message, args.files, amend=args.amend)
-    except (RuntimeError, FileNotFoundError) as exc:
+    except CommitRefused as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
+    except (RuntimeError, FileNotFoundError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2  # a plumbing step or a missing file: a caller error (#3577)
 
     branch = _run(["git", "symbolic-ref", "--short", "HEAD"], check=False) or "(detached)"
     print(f"committed: {sha}  (branch={branch})")

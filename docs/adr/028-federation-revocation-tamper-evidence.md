@@ -114,7 +114,7 @@ updated_at: 2026-07-04
 
 `revoked_check.lua`（[ADR-020](020-tenant-federation.md) Layer 2）讀 `revoked.txt` 失敗時 **fail-open**：檔案 missing → 空集（全放行）；mid-read raise → 保留上次 set；一律不 500。
 
-**攻擊者視角（外審 escalate）**：當 #924/#926 封住「改 store」與「偽造撤銷」，攻擊者的下一步是 **DoS 防禦本身**——弄壞 gateway 對 `revoked.txt` 的讀取（刪/卸載 projected-volume key、打滿相關資源、讓 Lua 逾時），fail-open 就放行**所有**本該撤銷的 token，最長 4h。
+**攻擊者視角（外審 escalate）**：當 #924/#926 封住「改 store」與「偽造撤銷」，攻擊者的下一步是 **DoS 防禦本身**——弄壞 gateway 對 `revoked.txt` 的讀取（刪/卸載 projected-volume key、打滿相關資源、讓 Lua 逾時），fail-open 的後果依破壞方式而定：刪／卸載 key 讓撤銷集變空，放行**所有**本該撤銷的 token，最長 4h；讀取中途失敗則凍結在上次成功載入的 set，之後發出的撤銷不生效，而首次載入就失敗的 worker 同樣沒有任何撤銷可執行。
 
 **判定：顯式 Risk Acceptance + 便宜偵測，不趕工 fail-closed**：
 - 這是**刻意權衡**：撤銷檢查套用**全部** federation 流量，天真 fail-closed = 任何 ConfigMap sync 抖動 / 新 pod 首載前 / volume remount 都造成**整個 federation 斷線**（自我 DoS）。同一支 Lua 對「跨租戶外洩」（VictoriaLogs mode 的 account_id）是 fail-**closed** ——證明 fail-open 是針對「撤銷 staleness ≤ 4h 可接受」的**局部、經思考**的選擇，非疏漏。

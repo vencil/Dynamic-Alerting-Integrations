@@ -37,6 +37,47 @@ mitigation 不是 app-TLS，而是用 PSS admission 讓「rogue tenant deploymen
 ⛔ **warn/audit 故意用不帶版本的 latest 形式**——soak 期要抓的是「對最新
 標準的偏移」；**pin minor 版是 enforce flip 那一步才做的事**（見 §3）。
 
+### 0.1 CI 閘門：每個出貨的 pod 都過得了它宣告的等級
+
+namespace label 只保護本 repo 自己的實驗叢集；客戶的 namespace 由客戶自己
+label。對客戶有意義的保證是「我們出貨的每個 pod 都能在 `restricted` 下
+跑」，這由 `tests/pss` 機械化守住（CI 的 `Go Tests — Pod Security gate`，
+併入必要檢查 `Go Tests`）：
+
+- **判準是上游程式碼**：以 `k8s.io/pod-security-admission`（API server 的
+  PodSecurity 外掛就是用它建的）判定，不自寫規則。版本取自
+  `scripts/ops/kind-node-image.env` 的 minor，go.mod 的函式庫版本由測試釘住
+  與它一致。
+- **判定範圍**：每個 chart 以預設值（能渲染時）與 `helm/<chart>/ci/*.yaml`
+  各渲染一次；`k8s/` 底下每個帶 pod spec 的 manifest。
+- **例外只在一個地方宣告**：chart 的 `Chart.yaml` 加
+  `annotations: {dynamic-alerting.io/pod-security-level: <level>}`；沒有就是
+  `restricted`。目前只有 `helm/vector` 宣告 `privileged`。
+- **chart 提供、但跑不了 restricted 的設定**：在 `ci/` 放一個檔名以
+  `pss-needs-privileged-` 開頭的值檔，以 privileged 判定，而且測試會要求它
+  **確實**違反 restricted；哪天這個設定變得合規或被拿掉，閘門轉紅、檔案要刪。
+  目前只有一個：tenant-api 的 `confDir.type=hostPath`（文件寫明是 kind 開發
+  用），它連 baseline 都過不了，不能裝在 enforce restricted 的 namespace。
+- **條件分支要被打開**：workload template 與 `.tpl` helper 裡每個 `if`／
+  `with`／`range`（以及 `$x := …` 指派）讀到的 `.Values` 路徑，必須在某個
+  受判定的值組裡是開的；寫在 `not` 後面的，還要有一組是關的。`fail`／
+  `required` 防呆的否定分支不算（它不渲染任何 pod）。例外值檔不算覆蓋。
+- **預設值渲染不出來**：只有列在 `defaultsDoNotRender` 的 chart 可以（目前
+  tenant-api，`writeBack.mode` 刻意沒有預設），而且錯誤訊息要對得上；清單
+  裡的 chart 若預設值又能渲染，測試要求把它移出清單。
+
+本地跑：`make dc-go-test MOD=pss`（或在有 Go 與 helm 的環境 `cd tests/pss &&
+PSS_REQUIRE_HELM=1 go test ./...`）。
+
+**判定不到的範圍**：`eq .Values.mode "x"` 這類列舉分支只會判到值檔選中的
+那幾個；`.Values` 經 `$var :=` 以外的方式取別名、或在 `with` 裡以 `.` 讀
+的分支；執行期才建的 pod（runbook 的 `kubectl run`、腳本）；客戶叢集的
+mutating webhook（在 admission 之前改 pod，例如 Istio 的 init container）。
+
+**`ci/` 不出貨**：四個出貨 chart 的 `.helmignore` 排除 `ci/`；
+`tests/lint/test_chart_package_contents_at_pr.py` 在 PR 階段就 `helm package`
+並跑發版時那支內容檢查。
+
 ## 1. Step 0 — 探測（非破壞，隨時可跑）
 
 ```sh
