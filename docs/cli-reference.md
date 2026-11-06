@@ -3315,7 +3315,7 @@ da-tools threshold-recommend --config-dir conf.d/ --prometheus http://prometheus
 
 ---
 
-**查詢沒得到回答**（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）：某個 key 的 Prometheus 查詢沒得到回答（連不上、HTTP 錯誤、`error` 狀態、回應不是讀得懂的 matrix）時，那個 key 標 `query_error`（原因寫在 `reason`）、沒有推薦值，其他 key 照常推薦；報告照印，`--json` 頂層加 `status: "partial"`、`reason: "prometheus_query_error"`，`summary.query_errors` 是沒量到的 key 數，stderr 印一行 `ERROR: Prometheus query failed for N key(s)`，結束碼 `2`（先前只寫成 `reason: query error: …`、結束碼 `0`）。每個 key 都沒量到時什麼都沒回答：`--json` 的 stdout 為空，stderr 寫 `nothing was answered: <每個租戶/key>`，結束碼仍是 `2`（[#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617)）。
+**查詢沒得到回答**（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）：某個 key 的 Prometheus 查詢沒得到回答（連不上、HTTP 錯誤、`error` 狀態、回應不是讀得懂的 matrix）時，那個 key 標 `query_error`（原因寫在 `reason`）、沒有推薦值，其他 key 照常推薦；報告照印，`--json` 頂層加 `status: "partial"`、`reason: "prometheus_query_error"`，`summary.query_errors` 是沒量到的 key 數，stderr 印一行 `ERROR: Prometheus query failed for N key(s)`，結束碼 `2`（先前只寫成 `reason: query error: …`、結束碼 `0`）。`--json` 的每個 key 帶 `queried`：查詢有送出（不論有沒有回答）為 `true`，inherited、observed-map 沒有對映、被 skip 或 `--dry-run` 的 key 為 `false`。送出的查詢都沒回答時什麼都沒回答（沒送出的 key 不算已回答）：`--json` 的 stdout 為空，stderr 寫 `nothing was answered: <每個租戶/key>`，結束碼仍是 `2`（[#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617)）。
 
 #### threshold-govern
 
@@ -3355,7 +3355,7 @@ da-tools threshold-govern --config-dir <PATH> [--prometheus <URL>] [--min-delta-
 >
 > **結束碼**：`0` = 報告完整，不論有沒有列出腐敗閾值；`2` = 呼叫端錯誤（參數、路徑、找不到可用的 da-guard、observed-map 不可用）或有閾值沒量成（見下一段）。本工具不產生 `1`。
 
-> **沒量成的閾值**（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）：只要有一個閾值的 Prometheus 查詢沒得到回答（連不上、回錯或回應格式不對），報告就不完整：文字報告另列「沒量成」一節，並在 Summary 計數；`--json` 多 `not_measured` 陣列與 `summary.not_measured`，頂層 `status` 為 `partial`、`reason` 為 `prometheus_query_error`；stderr 印一行 `ERROR: Prometheus query failed for N threshold(s); the report is partial`，結束碼 `2`。量到的閾值照常列入計畫；一個都沒量到時什麼都沒回答：`--json` 的 stdout 為空，stderr 寫 `nothing was answered: <每個租戶/key>`（[#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617)）。先前這些閾值會被靜默略過，Prometheus 整個連不上時印「No thresholds need governance」、結束碼 `0`。
+> **沒量成的閾值**（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）：只要有一個閾值的 Prometheus 查詢沒得到回答（連不上、回錯或回應格式不對），報告就不完整：文字報告另列「沒量成」一節，並在 Summary 計數；`--json` 多 `not_measured` 陣列與 `summary.not_measured`，頂層 `status` 為 `partial`、`reason` 為 `prometheus_query_error`；stderr 印一行 `ERROR: Prometheus query failed for N threshold(s); the report is partial`，結束碼 `2`。量到的閾值照常列入計畫；送出查詢的閾值一個都沒量到時什麼都沒回答（沒送出查詢的閾值不算已回答）：`--json` 的 stdout 為空，stderr 寫 `nothing was answered: <每個租戶/key>`（[#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617)）。先前這些閾值會被靜默略過，Prometheus 整個連不上時印「No thresholds need governance」、結束碼 `0`。
 
 #### test-notification
 

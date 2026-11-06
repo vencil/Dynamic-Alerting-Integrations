@@ -626,7 +626,7 @@ def run(args: argparse.Namespace) -> GovernanceResult:
         force_manual=collect_force_manual(reports),
         inherited=collect_inherited(reports),
         not_measured=collect_not_measured(reports),
-        queried=sum(len(r.keys) + len(r.inherited) for r in reports),
+        queried=sum(1 for r in reports for k in r.keys if k.queried),
     )
 
 

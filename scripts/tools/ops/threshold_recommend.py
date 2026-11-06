@@ -223,6 +223,10 @@ class KeyRecommendation:
     # #3133: the query for this key was not answered (QueryError's text); the
     # key has no measurement, and the run is partial (rc 2).
     query_error: str = ""
+    # #3617: the key's query was sent to Prometheus (answered or not). False
+    # for an inherited, unmapped, skipped or dry-run key — none of those can
+    # go unanswered, so they are not parts of the answer.
+    queried: bool = False
     # #2116: who owns the value, as `da-guard effective` reports it. `key` is
     # the spelling the config writes (the one a write-back must match);
     # `canonical_key` is set only when that spelling is a retired one.
@@ -967,6 +971,24 @@ def _recommend_key(
             promql=promql,
         )
 
+    rec = _query_key(key, current_value, entry, promql,
+                     prometheus_url=prometheus_url, min_samples=min_samples)
+    rec.promql = promql
+    rec.queried = True
+    return rec
+
+
+def _query_key(
+    key: str,
+    current_value: Any,
+    entry: dict[str, Any],
+    promql: str,
+    *,
+    prometheus_url: Optional[str],
+    min_samples: int,
+) -> KeyRecommendation:
+    """Query one key's observed series and grade it (#3617: every key that
+    reaches here was queried; `_recommend_key` marks it so)."""
     # #916 Item A: route by comparison direction. A per-key try/except keeps
     # one tenant's bad value (e.g. a Decimal/parse blow-up) from sinking the
     # whole run — that key degrades to force_manual, the rest continue.
@@ -1030,8 +1052,6 @@ def _recommend_key(
             reason=f"{what} → manual review: {str(exc)[:80]}",
             force_manual=True, guardrail_reason=str(exc)[:100], promql=promql,
         )
-
-    rec.promql = promql
     return rec
 
 
@@ -1692,10 +1712,10 @@ def main() -> "Report | None":
     if json_report:
         # #3617: a key not measured is named; the rest is the partial answer
         # — none measured is no answer (rc 2, stdout empty).
-        keys = [(r.tenant, k) for r in reports for k in r.keys + r.inherited]
+        queried = [(r.tenant, k) for r in reports for k in r.keys if k.queried]
         return partial_answer(json_document(reports), status,  # #3216: run() encodes it
-                              unanswered=[f"{t}/{k.key}" for t, k in keys if k.query_error],
-                              of=len(keys))
+                              unanswered=[f"{t}/{k.key}" for t, k in queried if k.query_error],
+                              of=len(queried))
     if status:
         sys.exit(status)
 
