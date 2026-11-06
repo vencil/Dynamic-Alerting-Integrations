@@ -122,6 +122,17 @@ jobs:
               - "helm/**"
               - "k8s/**"
               - "scripts/ops/kind-node-image.env"
+              #     It also judges the lab's run-time pods: manifests in
+              #     scripts/**/*.sh heredocs and the `kubectl run` debug pods
+              #     in docs/internal (they run in namespaces that enforce
+              #     restricted). Cost: an internal-doc edit runs the Go legs.
+              - "scripts/**/*.sh"
+              - "docs/internal/**/*.md"
+              #     ...and the manifests docs/internal/examples hands an operator,
+              #     and the debug commands in each component README. Held by
+              #     tests/pss TestGoFilterCoversWhatThisModuleReads.
+              - "docs/internal/examples/**"
+              - "components/*/README.md"
               #   - tests/e2e-bench/receiver/** — the receiver leg (#1280).
               #     `**/go.mod` above already woke the Go legs on a go.mod
               #     edit; this entry makes an edit to main.go / main_test.go

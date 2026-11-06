@@ -49,6 +49,7 @@ kubectl get pod -n vector -l app.kubernetes.io/name=vector    # 應該 Running, 
 #  的 same-ns podSelector 條目就是為這類 debug pod 保留的）
 kubectl run vlq --rm -i --restart=Never --image=busybox:1.36 -n monitoring \
   --labels='app.kubernetes.io/name=vector' \
+  --override-type=strategic --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"vlq","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' \
   -- wget -qO- 'http://victorialogs.monitoring.svc:9428/select/logsql/query?query=%2A+%7C+stats+count%28%29+as+n&limit=1'
 
 # 6) 清乾淨

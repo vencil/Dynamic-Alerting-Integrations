@@ -543,7 +543,8 @@ kubectl -n tenant-api exec -i deploy/tenant-api -c tenant-api -- \
 
   ```bash
   POD=$(kubectl -n tenant-api get pod -l app.kubernetes.io/name=tenant-api -o name | head -1)
-  kubectl -n tenant-api debug "$POD" -i --copy-to=tenant-api-restore --container=tenant-api -- \
+  # --profile=restricted：預設 profile 會加 SYS_PTRACE，在 enforce restricted 的 namespace 會被擋（#1018）
+  kubectl -n tenant-api debug "$POD" -i --copy-to=tenant-api-restore --container=tenant-api --profile=restricted -- \
     tenant-api state restore --from - --dry-run < tenant-api-state-backup.yaml
   kubectl -n tenant-api delete pod tenant-api-restore   # 用完刪掉
   ```

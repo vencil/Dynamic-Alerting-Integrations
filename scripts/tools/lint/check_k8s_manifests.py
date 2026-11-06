@@ -40,11 +40,11 @@ covered by L3 (its scope includes k8s/**/*.yaml).
 One native (non-kube-linter) rule rides along — PSS namespace labels (#1018):
 every `kind: Namespace` under k8s/ must carry BOTH
 `pod-security.kubernetes.io/warn` and `.../audit` labels with a value in
-{privileged, baseline, restricted}; `enforce` is OPTIONAL (the #1018 rollout is
-phased — enforce flips per-ns after soak) but validated when present.
-INFORMATIONAL ONLY: findings land in WARN and NEVER block (--ci exit stays 0)
-— soak-stage discipline so in-flight PRs are not retroactively gated; revisit
-the severity at enforce-flip time. Engine-independent (pure PyYAML parse; a
+{privileged, baseline, restricted}; `enforce` is validated when present.
+Whether every namespace ENFORCES, at which level and pinned to which version,
+is held by tests/pss (TestLabNamespacesEnforce, #1018) — not here, so the
+two cannot disagree. INFORMATIONAL ONLY: findings land in WARN and NEVER
+block (--ci exit stays 0). Engine-independent (pure PyYAML parse; a
 missing PyYAML is surfaced as an explicit WARN, never a silent skip — CI
 installs it).
 

@@ -339,27 +339,31 @@ func TestRawManifestsAreRestricted(t *testing.T) {
 	root := repoRoot(t)
 	_, minor := clusterVersion(t)
 	lv := api.LevelVersion{Level: api.LevelRestricted, Version: api.MajorMinorVersion(1, minor)}
+	// k8s/ is the lab's manifests; docs/internal/examples/ holds manifests the
+	// runbooks tell an operator to apply into the same namespaces.
 	var stream bytes.Buffer
-	err := filepath.WalkDir(filepath.Join(root, "k8s"), func(p string, d os.DirEntry, err error) error {
-		if err != nil || d.IsDir() || (!strings.HasSuffix(p, ".yaml") && !strings.HasSuffix(p, ".yml")) {
+	for _, dir := range []string{"k8s", filepath.Join("docs", "internal", "examples")} {
+		err := filepath.WalkDir(filepath.Join(root, dir), func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() || (!strings.HasSuffix(p, ".yaml") && !strings.HasSuffix(p, ".yml")) {
+				return err
+			}
+			b, err := os.ReadFile(p)
+			stream.Write(b)
+			stream.WriteString("\n---\n")
 			return err
+		})
+		if err != nil {
+			t.Fatal(err)
 		}
-		b, err := os.ReadFile(p)
-		stream.Write(b)
-		stream.WriteString("\n---\n")
-		return err
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
 	v := evaluate(t, stream.Bytes(), lv)
 	if v.evaluated == 0 {
-		t.Fatal("no pod spec found under k8s/: nothing was checked")
+		t.Fatal("no pod spec found under k8s/ or docs/internal/examples/: nothing was checked")
 	}
 	for _, msg := range v.violations {
-		t.Errorf("k8s/ at %s: %s", lv.String(), msg)
+		t.Errorf("k8s/ or docs/internal/examples/ at %s: %s", lv.String(), msg)
 	}
-	t.Logf("k8s/: %d pod specs evaluated", v.evaluated)
+	t.Logf("k8s/ + docs/internal/examples/: %d pod specs evaluated", v.evaluated)
 }
 
 var (

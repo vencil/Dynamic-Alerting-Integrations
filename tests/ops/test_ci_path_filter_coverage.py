@@ -3547,6 +3547,9 @@ GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
         ("go", "tests/oauth2-proxy/**"),
         # ...and builds tenant-api through scripts/ops/go_build.sh (#3425).
         ("go", "scripts/ops/go_build.sh"),
+        # go-tests-pss judges the manifests scripts/**/*.sh apply from
+        # heredocs (#1018); the scanner sees the job's scripts/ops/*.sh steps.
+        ("go", "scripts/**/*.sh"),
         ("portal", "scripts/tools/lint/check_portal_bundle_size.py"),
         ("python", "requirements/**"),
         ("python", "scripts/**"),
