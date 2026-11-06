@@ -413,62 +413,10 @@ federation:
   # operator may safely raise this.
   tokenTTL: 4h
 
-# ── Machine-identity audit baseline (ADR-027, issue #962) ───────────────────
-# Disabled by default. When enabled, tenant-api verifies a machine caller's
-# projected ServiceAccount token via the Kubernetes TokenReview API and AUDITs
-# (structured log + `tenant_api_identity_audit_total{result}` metric) which
-# workload is behind each Bearer-bearing request. This is AUDIT-ONLY — it never
-# blocks authz (authz still runs on the oauth2-proxy hop headers) — it exists to
-# establish the ADR-027 Phase-1 rollout baseline before any enforcement.
-#
-# Opt-out by default because enabling adds an apiserver coupling: the chart
-# grants a `tokenreviews:create` ClusterRole (rbac-machine-identity.yaml) and
-# flips automountServiceAccountToken on, so tenant-api can reach the K8s API.
-#
-# Enabling on an existing deployment:
-#   helm upgrade <release> helm/tenant-api --set machineIdentity.enabled=true
-# The chart then adds the ClusterRole/ClusterRoleBinding, enables token
-# automount, and sets TA_MACHINE_IDENTITY_AUDIT + TA_MACHINE_IDENTITY_AUDIENCE
-# (--machine-identity-audit / --machine-identity-audience, passed as env so
-# `kubectl exec` subcommands see them too; ADR-036 §12).
-#
-# ⚠ PREREQUISITE: the running tenant-api image must already contain the audit
-# code (the --machine-identity-* flags). The image tag derives from appVersion;
-# the settings are TA_* variables (ADR-036 §12). An image from this chart's
-# release on refuses a TA_* variable it does not read (exit 2, the name
-# printed: "the image may be older than the Helm chart"); an image older than
-# that check still ignores it and silently runs no audit. Enable only once the
-# deployed image supports it.
-# ⚠ Do NOT enable via `helm upgrade --reuse-values`: it can carry a stale
-# audience past the required-gate. Pass machineIdentity values explicitly.
-machineIdentity:
-  enabled: false
-
-  # TokenReview audience — REQUIRED whenever machineIdentity.enabled=true (the
-  # deployment template `required`s it, so an empty value fails the render).
-  # TokenReview accepts a token only if its audience list contains this value;
-  # an empty/unset audience would accept ANY ServiceAccount token, including the
-  # default kube-apiserver-audience token every pod already mounts (ADR-027 G4).
-  # Callers (PR-1b-ii: recipe-preview) must mint their
-  # projected token with `audience: tenant-api` to match.
-  audience: tenant-api
-
-# ADR-027 §2: the Unix domain socket tenant-api serves its API on. The
-# oauth2-proxy sidecar's upstream (in its config file) is this socket; the
-# network port 8080 serves only /health, /ready and /metrics and refuses
-# identity headers. tenant-api refuses to start without the socket, so
-# `enabled` must stay true: false fails the render. The key itself is
-# removed later (ADR-027 §6: the switches go; the schema then refuses it).
-# An overridden image.tag must be a tenant-api build that serves its API on
-# TA_HUMAN_SOCKET: an older build serves the API on 8080 and never opens the
-# socket, so oauth2-proxy has no upstream and every API request fails.
-humanSocket:
-  enabled: true
-  # Pod-internal socket path on a shared emptyDir mounted into both the
-  # tenant-api and oauth2-proxy containers. Both run under the pod-level uid/gid
-  # 65534 (podSecurityContext below), so the 0660 socket is reachable by the
-  # sidecar and nothing else.
-  path: /run/ta-human/human.sock
+# ADR-027 §2, §6: tenant-api serves its API only on a pod-internal Unix socket
+# (the oauth2-proxy sidecar's upstream); its path is fixed by the chart, so
+# there is no key for it. `machineIdentity` and `humanSocket` are gone: the
+# schema refuses both, so a values file that still sets them fails the render.
 
 # Generator container (ADR-036 §3–§5, #2902, #2903): a da-tools sidecar
 # running `da-tools generator-service`. tenant-api asks it before EVERY write
@@ -638,13 +586,11 @@ networkPolicy:
   enabled: true
   # Namespace that Prometheus is in (allowed to scrape internal port)
   prometheusNamespace: monitoring
-  # Pod-level allow-list for the internal port (8080). ns-level alone over-grants
-  # every pod in prometheusNamespace to a header-trusting port — these podSelector
-  # matchLabels narrow it to exactly the three legitimate 8080 clients (incl.
-  # recipe-preview's GET /tenants/{id}/access authz probe, #1004, and da-portal's
-  # relay of the human's /api/v1 requests with an audience-bound SA token,
-  # ADR-027 D2-B O1). Change only if you relabel Prometheus / recipe-preview /
-  # da-portal.
+  # Pod-level allow-list for the internal port (8080), which serves only
+  # /health, /ready and /metrics (ADR-027 §3): the Prometheus scrapers. The
+  # recipe-preview and da-portal entries are gone with the relay topology
+  # (ADR-027 §5, §6); the schema refuses them. Change only if you relabel
+  # Prometheus.
   internalPortAllow:
     # This repo's raw Prometheus (k8s/03-monitoring/deployment-prometheus.yaml).
     prometheus:
@@ -656,13 +602,6 @@ networkPolicy:
     # Same namespace scoping (prometheusNamespace) as every entry here.
     prometheusOperator:
       app.kubernetes.io/name: prometheus
-    recipePreview:
-      app.kubernetes.io/name: recipe-preview
-    # da-portal (ADR-027 D2-B O1): its nginx forwards the human's oauth2-proxy
-    # identity to tenant-api on 8080 with a per-request audience-bound SA token.
-    # pod-scoped like the others; audits as the third kindRelay workload.
-    daPortal:
-      app.kubernetes.io/name: da-portal
   # Egress restriction (ADR-024 §S6). DEFAULT false = egress stays
   # UNrestricted (the policy is Ingress-only), which is the historical
   # posture and lets tenant-api reach Prometheus (metric discovery),

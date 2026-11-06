@@ -120,7 +120,7 @@ default:                  → 直接 commit
 
 ## 案例二：`envBool`（已修，並觸發本 ADR 的修訂條件）
 
-`components/tenant-api/cmd/server/main.go` 的 `envBool` 是一支自己寫的 6 行 switch，接受 `true`/`1`/`yes`/`on`，**其餘一律回 `false`，不報錯也不記錄**。修法時它被當成五個 `flag.Bool` 的預設值用；其中三個（`TA_RBAC_METADATA_SCOPE_ENFORCE`、`TA_RBAC_ORG_SCOPE_ENFORCE`、`TA_RBAC_EMPTY_OPEN`）後來依 [ADR-027](027-tenant-api-caller-identity.md) §7 刪除（範圍軸一律強制、沒有 open mode），現在只剩 `TA_MACHINE_IDENTITY_AUDIT` 與 `TA_DEV_BYPASS_AUTH`。下表與下文的計數描述的是修法時的五個。
+`components/tenant-api/cmd/server/main.go` 的 `envBool` 是一支自己寫的 6 行 switch，接受 `true`/`1`/`yes`/`on`，**其餘一律回 `false`，不報錯也不記錄**。修法時它被當成五個 `flag.Bool` 的預設值用；其中三個（`TA_RBAC_METADATA_SCOPE_ENFORCE`、`TA_RBAC_ORG_SCOPE_ENFORCE`、`TA_RBAC_EMPTY_OPEN`）後來依 [ADR-027](027-tenant-api-caller-identity.md) §7 刪除（範圍軸一律強制、沒有 open mode），`TA_MACHINE_IDENTITY_AUDIT` 依同一份 ADR 的 §4、§6 刪除（沒有機器呼叫端），現在只剩 `TA_DEV_BYPASS_AUTH`。下表與下文的計數描述的是修法時的五個。
 
 | 條件 | 判定 |
 |:--|:--|

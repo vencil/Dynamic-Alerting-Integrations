@@ -20,8 +20,6 @@ oauth2Proxy:
   cookieRefresh: "1h"
 federation:
   enabled: true
-machineIdentity:
-  enabled: true
 generator:
   image:
     digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"

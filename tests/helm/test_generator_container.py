@@ -210,8 +210,7 @@ def test_no_pod_uid_fails_the_render() -> None:
 
 # ── the socket directory: exactly two containers ─────────────────────────────
 # Every optional container the chart can render, switched on at once.
-_EVERYTHING = (*_ON, "humanSocket.enabled=true", "federation.enabled=true",
-               "machineIdentity.enabled=true", "oauth2Proxy.enabled=true",
+_EVERYTHING = (*_ON, "federation.enabled=true", "oauth2Proxy.enabled=true",
                "generator.policy.existingConfigMap=da-policy")
 
 

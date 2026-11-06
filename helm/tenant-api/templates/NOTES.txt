@@ -4,7 +4,7 @@ tenant-api installed — ADR-009 Tenant Manager CRUD API.
   Write mode: single-writer (replicaCount={{ .Values.replicaCount }}, strategy Recreate)
 
 IDENTITY (ADR-027 §2, §3; GHSA-3g2h-rf85-5rrv) — the API is served only on a
-  pod-internal Unix socket ({{ .Values.humanSocket.path }}) behind the oauth2-proxy
+  pod-internal Unix socket ({{ include "tenant-api.humanSocketPath" . }}) behind the oauth2-proxy
   sidecar, which reads the same config file tenant-api does. Port 8080 serves
   only /health, /ready and /metrics; a request there carrying an identity header
   (X-Forwarded-Email, X-Forwarded-Groups or a configured claim header) is
