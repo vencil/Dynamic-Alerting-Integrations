@@ -7,9 +7,10 @@ package config
 // back to Go's randomised map iteration and served-values printed the same
 // tree differently from run to run.
 //
-// Go randomises map iteration on every range, so with two timestamp keys an
-// unfixed re-serialisation picks the other order about half the time; 200
-// runs that all agree are the evidence the order no longer comes from the map.
+// Go randomises map iteration, so with two timestamp keys an unfixed
+// re-serialisation picks the other order in roughly one run in seven (42 of
+// 300 measured); 200 runs that all agree happen by chance about once in 10^13,
+// so agreement is the evidence the order no longer comes from the map.
 
 import (
 	"testing"
@@ -125,4 +126,16 @@ func TestScheduledValue_ComparableKeys_OutputUnchanged(t *testing.T) {
 			assertSameEveryRun(t, tc.doc, tc.want)
 		})
 	}
+}
+
+// Two timestamp keys can print the same text and still be two map keys:
+// `Z` decodes to time.UTC and `+00:00` to a fixed zone, so the time.Time
+// values differ while both render as 2026-01-01T00:00:00Z (and the duplicate-
+// key check compares the source text, which differs). Key text alone ties
+// them; the value's text breaks the tie.
+func TestScheduledValue_TimestampKeysWithSameText_StableOrder(t *testing.T) {
+	t.Parallel()
+	doc := "2026-01-01T00:00:00+00:00: b\n2026-01-01T00:00:00Z: a\n"
+	want := "2026-01-01T00:00:00Z: a\n2026-01-01T00:00:00Z: b\n"
+	assertSameEveryRun(t, doc, want)
 }

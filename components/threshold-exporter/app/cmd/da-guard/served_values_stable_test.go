@@ -4,10 +4,10 @@ package main
 //
 // tests/golden/fixtures/mixed-mode/conf.d carries a tenant (`tenant-keys`)
 // whose `_x` is a mapping with two timestamp keys. Before the fix, yaml.v3 left
-// those two keys in Go's map-iteration order, and about one run in fifteen
-// printed them the other way round; at that rate 100 identical runs in a row
-// happen by chance well under one time in a thousand, so this test reliably
-// goes red if the fixed order is lost.
+// those two keys in Go's map-iteration order, and at least one run in fifteen
+// printed them the other way round (2 of 30 measured from the CLI); at that
+// rate 100 identical runs in a row happen by chance about once in a thousand.
+// Reverting the fix turned this test red in 40 of 40 runs.
 
 import (
 	"bytes"

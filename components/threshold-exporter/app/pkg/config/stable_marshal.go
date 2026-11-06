@@ -22,6 +22,11 @@ import (
 // then sorts each run of timestamp keys by the key's YAML text, leaving every
 // other pair where yaml.v3 put it. The vendored yaml.v3 is pinned byte for
 // byte (tests/ops/test_vendored_yaml_v3.py), so the tie-break lives here.
+//
+// Not covered: a `.nan` key ties with every number in that comparator, so a
+// mapping that mixes `.nan` with numeric keys still has no fixed order (and
+// yaml.v3 drops the NaN key's value). That predates #3323 and has no known
+// use in conf.d.
 func marshalStable(v interface{}) ([]byte, error) {
 	var n yaml.Node
 	if err := n.Encode(v); err != nil {
@@ -63,14 +68,37 @@ func isTimestampKey(k *yaml.Node) bool {
 	return k.Kind == yaml.ScalarNode && k.ShortTag() == "!!timestamp"
 }
 
-// sortPairsByKeyText sorts a flat [k0, v0, k1, v1, …] slice by key text.
+// sortPairsByKeyText sorts a flat [k0, v0, k1, v1, …] slice by key text, then
+// by the value's YAML text. The second key matters: `Z` and `+00:00` decode to
+// two different time.Time keys (different Location) that print the same text,
+// so key text alone can tie. Pairs equal on both print identically, so their
+// relative order cannot show in the output.
 func sortPairsByKeyText(kv []*yaml.Node) {
-	type pair struct{ k, v *yaml.Node }
+	type pair struct {
+		k, v  *yaml.Node
+		vText string
+	}
 	ps := make([]pair, len(kv)/2)
 	for i := range ps {
-		ps[i] = pair{kv[2*i], kv[2*i+1]}
+		ps[i] = pair{k: kv[2*i], v: kv[2*i+1]}
 	}
-	sort.SliceStable(ps, func(i, j int) bool { return ps[i].k.Value < ps[j].k.Value })
+	seen := make(map[string]int, len(ps))
+	for _, p := range ps {
+		seen[p.k.Value]++
+	}
+	for i := range ps {
+		if seen[ps[i].k.Value] > 1 {
+			if b, err := yaml.Marshal(ps[i].v); err == nil {
+				ps[i].vText = string(b)
+			}
+		}
+	}
+	sort.SliceStable(ps, func(i, j int) bool {
+		if ps[i].k.Value != ps[j].k.Value {
+			return ps[i].k.Value < ps[j].k.Value
+		}
+		return ps[i].vText < ps[j].vText
+	})
 	for i, p := range ps {
 		kv[2*i], kv[2*i+1] = p.k, p.v
 	}
