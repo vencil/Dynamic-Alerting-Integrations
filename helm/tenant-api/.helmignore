@@ -12,3 +12,9 @@
 # NB: Helm's .helmignore matcher does NOT support `**` (it errors and aborts
 # `helm template` / `helm install`). A bare basename already matches at any
 # depth. (Same constraint documented in helm/da-portal/.helmignore.)
+
+# #1018: the Pod Security gate's value sets (tests/pss). They are inputs to
+# that test, not deployment profiles, and must not ship in the .tgz
+# (check_chart_package_contents.py DECLARED_SUBTREES lists templates only).
+# helm template/-f reads them from the source tree regardless of this line.
+ci/
