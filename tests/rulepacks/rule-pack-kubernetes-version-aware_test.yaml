@@ -59,6 +59,7 @@ tests:
         exp_alerts:
           # db-a v1 → exact match vs v1 threshold (80), value 90.
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-a
@@ -75,6 +76,7 @@ tests:
               tier: gold
           # db-a v2 → exact match vs tightened v2 threshold (60), value 65.
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-a
@@ -91,6 +93,7 @@ tests:
               tier: gold
           # db-b v3 → FALLBACK to default threshold (80), real version=v3 preserved.
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-b

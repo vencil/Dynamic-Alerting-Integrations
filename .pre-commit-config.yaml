@@ -1910,6 +1910,20 @@ repos:
         # `unless`), or 2 copies one-per-arm and byte-canonical.
         files: (?:^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_maintenance_symmetry\.py|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
+      - id: rulepack-derived-check
+        name: "rule-pack maintenance label → clause (every tenant alert's `maintenance: mute|page` decides its PromQL clause; #3309)"
+        # The label is the one written decision; the clause is generated from it.
+        # Fails when an alert has no label / another value, when a hand edit or a
+        # new alert left the clause out of step with the label (fix: run
+        # scripts/tools/dx/generate_rulepack_derived.py), or when a maintenance
+        # reference is not the canonical clause. Reads the packs the way
+        # Prometheus' rule loader reads them (da-read; ADR-036 §12).
+        entry: bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/dx/generate_rulepack_derived.py --check
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/dx/generate_rulepack_derived\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+
       - id: orphan-recordings-check
         name: "orphan recording rules — every record must have a consumer across trees/dashboards/observed-map (TRK-339 WS2a / #1200)"
         # #3206 (ADR-036 §12): rule files are read the way Prometheus' rule

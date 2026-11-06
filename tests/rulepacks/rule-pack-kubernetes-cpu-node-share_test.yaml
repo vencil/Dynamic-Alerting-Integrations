@@ -44,6 +44,7 @@ tests:
         alertname: PodContainerHighCPU
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-x
@@ -100,6 +101,7 @@ tests:
         alertname: PodContainerHighCPU
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-z
@@ -135,6 +137,7 @@ tests:
         alertname: PodContainerHighCPU
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-w
@@ -178,6 +181,7 @@ tests:
         alertname: PodContainerHighCPU
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-m

@@ -211,13 +211,13 @@ def test_annotations_and_pairs_under_promtool(tmp_path):
                 {"eval_time": "15m", "alertname": "CustomRedisQueueTooLong",
                  "exp_alerts": [{"exp_labels": {"tenant": "t1", "severity": "critical",
                                                 "source": "legacy",
-                                                "migration_status": "shadow"},
+                                                "migration_status": "shadow", "maintenance": "mute"},
                                  "exp_annotations": {
                                      "summary": "Redis queue order-processing is too long"}}]},
                 {"eval_time": "15m", "alertname": "CustomRedisHighMemory",
                  "exp_alerts": [{"exp_labels": {"tenant": "t1", "severity": "warning",
                                                 "source": "legacy",
-                                                "migration_status": "shadow"},
+                                                "migration_status": "shadow", "maintenance": "mute"},
                                  "exp_annotations": {
                                      "summary": "Redis memory usage too high on t1"
                                                 "（原為 instance，已依租戶聚合）"}}]},

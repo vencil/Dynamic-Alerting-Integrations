@@ -38,6 +38,7 @@ tests:
         alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: critical
               tenant: shop-a
@@ -55,6 +56,7 @@ tests:
               owner: team-shop
               tier: gold
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: warning
               tenant: shop-a
@@ -127,6 +129,7 @@ tests:
         alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: critical
               tenant: shop-a
@@ -144,6 +147,7 @@ tests:
               owner: team-shop
               tier: gold
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: warning
               tenant: shop-a
@@ -166,6 +170,7 @@ tests:
         alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: warning
               tenant: shop-a
@@ -203,6 +208,7 @@ tests:
         alertname: Custom_slo_burn_rate__checkout_requests_errors_total__gt__den_checkout_requests_total__minev10__for1m
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: warning
               tenant: shop-a

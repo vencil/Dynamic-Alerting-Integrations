@@ -107,6 +107,7 @@ lang: zh
 | `generate_rule_pack_readme.py` | Generate rule-packs/README.md from actual YAML rule pack files. |
 | `generate_rule_pack_stats.py` | Rule Pack 統計單一來源產生器 |
 | `generate_rulepack_configmaps.py` | Generate k8s/03-monitoring/configmap-rules-<pack>.yaml from rule-packs/. |
+| `generate_rulepack_derived.py` | Write the parts of a tenant rule-pack alert that are derived from its labels (#3309). |
 | `generate_tenant_fixture.py` | Synthetic tenant fixture generator — produce N-tenant conf.d/ for benchmark & integration testing. |
 | `generate_tenant_metadata.py` | 租戶元資料產生器 — 讀 exporter 實際發出的值（da-guard served-values），推斷 rule_packs、owner、tier、routing_channel；db_type 只取 `_metadata` 宣告值。 |
 | `generate_tool_map.py` | 工具導覽自動生成 |

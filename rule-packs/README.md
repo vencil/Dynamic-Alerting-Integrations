@@ -94,7 +94,11 @@ groups:
           (
             tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>
           )
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        labels:
+          severity: warning
+          maintenance: mute   # 必填：mute｜page；上面兩行維護條件由 generate_rulepack_derived.py 依它寫入
         annotations:
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"

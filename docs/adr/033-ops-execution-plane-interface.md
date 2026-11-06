@@ -104,7 +104,7 @@ Alertmanager silence 必須帶 `tenant` matcher（既有 builder 在 `scripts/to
 
 ### 順帶更正草稿的兩處錯誤
 
-- 草稿寫「⛔ 對整個 tenant 開一張 silence ＝ 手刻 curl 的失敗模式本身」。但**產品自己出貨的 `maintenance_scheduler` 開的就是整租戶 silence**（matcher `{tenant, alert_source=""}`）。這條「護欄」與既有行為直接矛盾，草稿沒處理。
+- 草稿寫「⛔ 對整個 tenant 開一張 silence ＝ 手刻 curl 的失敗模式本身」。但**產品自己出貨的 `maintenance_scheduler` 開的就是租戶級 silence**（matcher `{tenant, alert_source="", maintenance="mute"}`，擋該租戶所有可在維護期間靜音的告警）。這條「護欄」與既有行為直接矛盾，草稿沒處理。
 - 草稿在替代方案表寫「走 `PUT /api/v1/tenants/{id}` 要過 GitOps commit ＋ owner 核可」。**預設模式是 direct commit-on-write（[ADR-009](009-tenant-manager-crud-api.md)），沒有 PR、沒有核可**；要 PR 核可是 PR write-back 模式才有。這個 reject 理由本身是錯的。
 
 ## 決策

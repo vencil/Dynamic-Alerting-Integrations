@@ -1,0 +1,122 @@
+# promtool unit test — the `maintenance: mute|page` label decides what a one-shot
+# `_state_maintenance` mutes (#3309; the label is the one written decision,
+# scripts/tools/dx/generate_rulepack_derived.py writes the PromQL clause from it).
+#
+# The cases are the alerts whose behaviour #3309 decided:
+#   M1-M2  PostgreSQLRecentRestart        mute   (new: no clause before #3309)
+#   M3-M4  MariaDBRecentRestart           mute   (new)
+#   M5-M6  ClickHouseHighFailedQueryRate  mute   (new)
+#   P1     PostgreSQLDown                 page   (single-instance critical stays
+#                                                 critical and pages; #1200 D-B (i))
+# Each `mute` pair: fires without maintenance, silent with it. Revert an alert's
+# label to `page` and regenerate, and its "silent with maintenance" case fails.
+# Run: promtool test rules tests/rulepacks/maintenance-label_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-postgresql.yaml
+  - ../../rule-packs/rule-pack-mariadb.yaml
+  - ../../rule-packs/rule-pack-clickhouse.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    name: M1-pg-restart-fires-without-maintenance
+    input_series:
+      - series: 'pg_postmaster_start_time_seconds{job="tenant-exporters", tenant="t1"}'
+        values: '0x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PostgreSQLRecentRestart
+        exp_alerts:
+          - exp_labels: {severity: info, maintenance: mute, tenant: t1, job: tenant-exporters}
+            exp_annotations:
+              description: "PostgreSQL uptime is only 120s (< 5 min)"
+              description_zh: "PostgreSQL 運行時間僅 120s（少於 5 分鐘）"
+              summary: " restarted recently"
+              summary_zh: " 最近已重新啟動"
+
+  - interval: 1m
+    name: M2-pg-restart-silent-in-maintenance
+    input_series:
+      - series: 'pg_postmaster_start_time_seconds{job="tenant-exporters", tenant="t1"}'
+        values: '0x5'
+      - series: 'user_state_filter{filter="maintenance", tenant="t1"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PostgreSQLRecentRestart
+        exp_alerts: []
+
+  - interval: 1m
+    name: M3-mariadb-restart-fires-without-maintenance
+    input_series:
+      - series: 'mysql_global_status_uptime{job="tenant-exporters", tenant="t1"}'
+        values: '60x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MariaDBRecentRestart
+        exp_alerts:
+          - exp_labels: {severity: info, maintenance: mute, tenant: t1, job: tenant-exporters}
+            exp_annotations:
+              description: "Uptime is only 60s (< 5 min)"
+              description_zh: "運行時間僅 60s（少於 5 分鐘）"
+              summary: " restarted recently"
+              summary_zh: " 最近已重新啟動"
+
+  - interval: 1m
+    name: M4-mariadb-restart-silent-in-maintenance
+    input_series:
+      - series: 'mysql_global_status_uptime{job="tenant-exporters", tenant="t1"}'
+        values: '60x5'
+      - series: 'user_state_filter{filter="maintenance", tenant="t1"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: MariaDBRecentRestart
+        exp_alerts: []
+
+  - interval: 1m
+    name: M5-clickhouse-failed-queries-fire-without-maintenance
+    input_series:
+      - series: 'ClickHouseProfileEvents_FailedQuery{job="tenant-exporters", tenant="t1"}'
+        values: '0+1200x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ClickHouseHighFailedQueryRate
+        exp_alerts:
+          - exp_labels: {severity: warning, maintenance: mute, tenant: t1}
+            exp_annotations:
+              description: "Failed query rate: 20.0 queries/sec"
+              description_zh: "查詢失敗率：20.0 次查詢/秒"
+              summary: "ClickHouse failed query rate > 10/s"
+              summary_zh: "ClickHouse 查詢失敗率 > 10/秒"
+
+  - interval: 1m
+    name: M6-clickhouse-failed-queries-silent-in-maintenance
+    input_series:
+      - series: 'ClickHouseProfileEvents_FailedQuery{job="tenant-exporters", tenant="t1"}'
+        values: '0+1200x20'
+      - series: 'user_state_filter{filter="maintenance", tenant="t1"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: ClickHouseHighFailedQueryRate
+        exp_alerts: []
+
+  - interval: 1m
+    name: P1-pg-down-pages-in-maintenance
+    input_series:
+      - series: 'pg_up{job="tenant-exporters", tenant="t1"}'
+        values: '0x5'
+      - series: 'user_state_filter{filter="maintenance", tenant="t1"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: PostgreSQLDown
+        exp_alerts:
+          - exp_labels: {severity: critical, maintenance: page, tenant: t1, job: tenant-exporters}
+            exp_annotations:
+              description: "pg_up=0 for 15s on "
+              description_zh: "pg_up=0，持續 15 秒，實例："
+              summary: "PostgreSQL instance  is DOWN"
+              summary_zh: "PostgreSQL 實例  已關閉"

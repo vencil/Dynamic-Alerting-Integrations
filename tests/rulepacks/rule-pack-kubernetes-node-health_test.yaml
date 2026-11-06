@@ -60,6 +60,7 @@ tests:
         exp_alerts:
           # db-a: enriched (branch A) — carries runbook_url/owner/tier + node.
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
               node: node-1
@@ -75,6 +76,7 @@ tests:
               tier: gold
           # db-b: bare (branch B) — no metadata, fan-out still fires.
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
               node: node-1
@@ -162,6 +164,7 @@ tests:
         alertname: NodeNotReady
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
               node: node-1
@@ -176,6 +179,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
               node: node-3

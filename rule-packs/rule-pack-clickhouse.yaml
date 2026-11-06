@@ -133,6 +133,7 @@ groups:
         for: 2m
         labels:
           severity: critical
+          maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse instance is DOWN"
@@ -142,16 +143,16 @@ groups:
       - alert: ClickHouseHighQueryRate
         expr: |
           (
-            (
-              tenant:clickhouse_queries:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_queries_rate
-            )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            tenant:clickhouse_queries:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:clickhouse_queries_rate
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse query rate exceeds threshold"
@@ -168,16 +169,16 @@ groups:
       - alert: ClickHouseHighConnections
         expr: |
           (
-            (
-              tenant:clickhouse_active_connections:max
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_active_connections
-            )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            tenant:clickhouse_active_connections:max
+            > on(tenant) group_left
+            tenant:alert_threshold:clickhouse_active_connections
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse active connections exceed threshold"
@@ -194,16 +195,16 @@ groups:
       - alert: ClickHouseHighPartCount
         expr: |
           (
-            (
-              tenant:clickhouse_max_part_count:max
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_max_part_count
-            )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            tenant:clickhouse_max_part_count:max
+            > on(tenant) group_left
+            tenant:alert_threshold:clickhouse_max_part_count
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 10m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse max part count per partition exceeds threshold (merge pressure)"
@@ -220,16 +221,16 @@ groups:
       - alert: ClickHouseReplicationLag
         expr: |
           (
-            (
-              tenant:clickhouse_replication_queue:max
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_replication_queue
-            )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            tenant:clickhouse_replication_queue:max
+            > on(tenant) group_left
+            tenant:alert_threshold:clickhouse_replication_queue
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse replication queue size exceeds threshold"
@@ -246,16 +247,16 @@ groups:
       - alert: ClickHouseHighMemoryUsage
         expr: |
           (
-            (
-              tenant:clickhouse_memory_tracking:max
-              > on(tenant) group_left
-              tenant:alert_threshold:clickhouse_memory_tracking_bytes
-            )
-            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            tenant:clickhouse_memory_tracking:max
+            > on(tenant) group_left
+            tenant:alert_threshold:clickhouse_memory_tracking_bytes
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse memory tracking exceeds threshold"
@@ -272,9 +273,12 @@ groups:
       - alert: ClickHouseHighFailedQueryRate
         expr: |
           tenant:clickhouse_failed_queries:rate5m > 10
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse failed query rate > 10/s"

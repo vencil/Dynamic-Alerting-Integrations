@@ -67,6 +67,7 @@ groups:
         expr: max without(instance, pod) (user_silent_mode{target_severity="warning"}) == 1
         labels:
           severity: none
+          maintenance: page
           component: sentinel
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -81,6 +82,7 @@ groups:
         expr: max without(instance, pod) (user_silent_mode{target_severity="critical"}) == 1
         labels:
           severity: none
+          maintenance: page
           component: sentinel
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -97,6 +99,7 @@ groups:
         expr: max without(instance, pod) (user_severity_dedup{mode="enable"}) == 1
         labels:
           severity: none
+          maintenance: page
           component: sentinel
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -115,6 +118,7 @@ groups:
         for: 0s
         labels:
           severity: warning
+          maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Config expired for {{ $labels.tenant }}: {{ $labels.event }}"

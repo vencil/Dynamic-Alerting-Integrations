@@ -111,6 +111,7 @@ groups:
         for: 15s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -137,6 +138,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          maintenance: page
           metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -176,6 +178,7 @@ groups:
         for: 2m
         labels:
           severity: critical
+          maintenance: page
           metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -187,17 +190,16 @@ groups:
       - alert: MongoDBHighConnections
         expr: |
           (
-            (
-              tenant:mongodb_connections_current:max
-              > on(tenant) group_left
-              tenant:alert_threshold:mongodb_connections_current
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mongodb_connections_current:max
+            > on(tenant) group_left
+            tenant:alert_threshold:mongodb_connections_current
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB high connection count on {{ $labels.tenant }}"
@@ -213,17 +215,16 @@ groups:
       - alert: MongoDBReplicationLag
         expr: |
           (
-            (
-              tenant:mongodb_replication_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:mongodb_replication_lag
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mongodb_replication_lag:max
+            > on(tenant) group_left
+            tenant:alert_threshold:mongodb_replication_lag
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 2m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB replication lag on {{ $labels.tenant }}"
@@ -239,17 +240,16 @@ groups:
       - alert: MongoDBHighOperations
         expr: |
           (
-            (
-              tenant:mongodb_opcounters:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:mongodb_opcounters_rate
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mongodb_opcounters:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:mongodb_opcounters_rate
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB high operation rate on {{ $labels.tenant }}"
@@ -264,14 +264,13 @@ groups:
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: MongoDBHighPageFaults
         expr: |
-          (
-            tenant:mongodb_page_faults:rate5m > 100
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
-          )
+          tenant:mongodb_page_faults:rate5m > 100
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB high page faults on {{ $labels.tenant }}"
@@ -286,14 +285,13 @@ groups:
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: MongoDBConnectionSaturation
         expr: |
-          (
-            tenant:mongodb_connection_usage:ratio > 0.8
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
-          )
+          tenant:mongodb_connection_usage:ratio > 0.8
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB connection pool near saturation on {{ $labels.tenant }}"

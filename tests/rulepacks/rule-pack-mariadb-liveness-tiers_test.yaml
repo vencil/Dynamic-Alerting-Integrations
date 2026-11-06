@@ -40,6 +40,7 @@ tests:
         alertname: MariaDBDown
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: liveness
               tenant: db-a
@@ -87,6 +88,7 @@ tests:
         alertname: MariaDBClusterDown
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: liveness
               tenant: db-a
@@ -119,6 +121,7 @@ tests:
         alertname: MariaDBNoPrimary
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: liveness
               tenant: db-a
@@ -196,6 +199,7 @@ tests:
         alertname: MariaDBDown
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: liveness
               tenant: db-b

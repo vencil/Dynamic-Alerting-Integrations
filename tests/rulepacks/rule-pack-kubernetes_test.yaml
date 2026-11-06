@@ -70,6 +70,7 @@ tests:
         exp_alerts:
           # db-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-a
@@ -86,6 +87,7 @@ tests:
               tier: gold
           # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
           - exp_labels:
+              maintenance: mute
               metric_group: container_cpu
               severity: warning
               tenant: db-b
@@ -172,6 +174,7 @@ tests:
         exp_alerts:
           # db-a: enriched arm (branch A).
           - exp_labels:
+              maintenance: mute
               metric_group: container_oom_killed
               severity: warning
               tenant: db-a
@@ -187,6 +190,7 @@ tests:
               tier: gold
           # db-b: VACUUM-FIRE (branch B) — warning tier only.
           - exp_labels:
+              maintenance: mute
               metric_group: container_oom_killed
               severity: warning
               tenant: db-b
@@ -202,6 +206,7 @@ tests:
               tier: ""
           # db-e: 2 real kills across two short-lived cgroups — warning only.
           - exp_labels:
+              maintenance: mute
               metric_group: container_oom_killed
               severity: warning
               tenant: db-e
@@ -223,6 +228,7 @@ tests:
           # ONLY db-a clears the storm bar. db-b (2 kills) is the near-miss that
           # pins the threshold; db-d is suppressed by maintenance.
           - exp_labels:
+              maintenance: mute
               metric_group: container_oom_killed
               severity: critical
               tenant: db-a

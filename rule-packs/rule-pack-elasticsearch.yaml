@@ -57,8 +57,9 @@ groups:
     rules:
       # Cluster health (0=green, 1=yellow, 2=red)
       - record: tenant:es_cluster_health:status
-        expr: max by(tenant) (elasticsearch_cluster_health_status{color="red"}) * 2
-              + max by(tenant) (elasticsearch_cluster_health_status{color="yellow"})
+        expr: |
+          max by(tenant) (elasticsearch_cluster_health_status{color="red"}) * 2
+          + max by(tenant) (elasticsearch_cluster_health_status{color="yellow"})
 
       # JVM heap usage percent
       - record: tenant:es_heap_usage_percent:max
@@ -126,6 +127,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch cluster RED on {{ $labels.tenant }}"
@@ -135,14 +137,13 @@ groups:
 
       - alert: ElasticsearchClusterYellow
         expr: |
-          (
-            tenant:es_cluster_health:status == 1
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
-          )
+          tenant:es_cluster_health:status == 1
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch cluster YELLOW on {{ $labels.tenant }}"
@@ -158,17 +159,16 @@ groups:
       - alert: ElasticsearchHighHeapUsage
         expr: |
           (
-            (
-              tenant:es_heap_usage_percent:max
-              > on(tenant) group_left
-              tenant:alert_threshold:es_heap_usage_percent
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:es_heap_usage_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:es_heap_usage_percent
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch high heap usage on {{ $labels.tenant }}"
@@ -184,17 +184,16 @@ groups:
       - alert: ElasticsearchHighDiskUsage
         expr: |
           (
-            (
-              tenant:es_disk_usage_percent:max
-              > on(tenant) group_left
-              tenant:alert_threshold:es_disk_usage_percent
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:es_disk_usage_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:es_disk_usage_percent
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch high disk usage on {{ $labels.tenant }}"
@@ -210,17 +209,16 @@ groups:
       - alert: ElasticsearchHighSearchLatency
         expr: |
           (
-            (
-              tenant:es_search_latency_ms:avg
-              > on(tenant) group_left
-              tenant:alert_threshold:es_search_latency_ms
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:es_search_latency_ms:avg
+            > on(tenant) group_left
+            tenant:alert_threshold:es_search_latency_ms
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch high search latency on {{ $labels.tenant }}"
@@ -235,14 +233,13 @@ groups:
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: ElasticsearchUnassignedShards
         expr: |
-          (
-            tenant:es_unassigned_shards:count > 0
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
-          )
+          tenant:es_unassigned_shards:count > 0
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 10m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch has unassigned shards on {{ $labels.tenant }}"
@@ -258,17 +255,16 @@ groups:
       - alert: ElasticsearchPendingTasks
         expr: |
           (
-            (
-              tenant:es_pending_tasks:max
-              > on(tenant) group_left
-              tenant:alert_threshold:es_pending_tasks
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:es_pending_tasks:max
+            > on(tenant) group_left
+            tenant:alert_threshold:es_pending_tasks
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Elasticsearch pending cluster tasks on {{ $labels.tenant }}"

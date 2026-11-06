@@ -160,6 +160,9 @@ def extract_alerts(yaml_content: Dict[str, Any]) -> List[Dict[str, Any]]:
 
             alert_name = rule["alert"]
             severity = rule.get("labels", {}).get("severity", "unknown")
+            # #3309: the one written maintenance decision; absent on platform
+            # self-monitoring alerts (no tenant to put in maintenance).
+            maintenance = rule.get("labels", {}).get("maintenance", "")
             annotations = rule.get("annotations", {})
 
             # Extract description from annotations
@@ -178,6 +181,7 @@ def extract_alerts(yaml_content: Dict[str, Any]) -> List[Dict[str, Any]]:
                 {
                     "name": alert_name,
                     "severity": severity,
+                    "maintenance": maintenance,
                     "summary": summary,
                     "description": description,
                     "platform_summary": platform_summary,
@@ -332,6 +336,13 @@ def _escape_table_cell(text: str) -> str:
     return flattened.replace("\\|", "|").replace("|", "\\|")
 
 
+#: How the `maintenance` label reads in the table (#3309).
+MAINTENANCE_CELL = {
+    "zh": {"mute": "靜音", "page": "照常觸發"},
+    "en": {"mute": "muted", "page": "fires"},
+}
+
+
 def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
     """Generate Chinese ALERT-REFERENCE.md."""
     lines = [
@@ -350,6 +361,8 @@ def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
         "",
         "**注意**: 本指南僅涵蓋**使用者導向的閾值告警** (threshold alerts)。Operational Rule Pack 的 sentinel 告警為平台內部控制機制，不需要租戶操作。",
         "",
+        "「維護期間」一欄取自每條告警的 `maintenance` label：`靜音` 表示租戶開啟 `_state_maintenance`（含 `recurring:` 週期窗）時這條不觸發，`照常觸發` 表示維護期間仍會通知。",
+        "",
         "---",
         "",
     ]
@@ -361,9 +374,9 @@ def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
         lines.append(f"## {display_name['zh']}")
         lines.append("")
         lines.append(
-            "| 告警名稱 | 嚴重度 | 觸發條件 | 建議動作 | 相關指標 |"
+            "| 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |"
         )
-        lines.append("|---|---|---|---|---|")
+        lines.append("|---|---|---|---|---|---|")
 
         for alert in alerts:
             name = alert["name"]
@@ -380,13 +393,14 @@ def generate_markdown_zh(alerts_by_pack: Dict[str, List[Dict]]) -> str:
             trigger_condition = _escape_table_cell(trigger_condition)
 
             recommended_action = get_recommended_action(name)["zh"]
+            in_maintenance = MAINTENANCE_CELL["zh"].get(alert.get("maintenance", ""), "—")
 
             # Related metric: the primary series from the rule's PromQL expr
             # (computed in extract_alerts).
             metric = alert.get("metric", "")
 
             lines.append(
-                f"| {name} | {severity} | {trigger_condition} | {recommended_action} | {metric} |"
+                f"| {name} | {severity} | {in_maintenance} | {trigger_condition} | {recommended_action} | {metric} |"
             )
 
         lines.append("")
@@ -414,6 +428,8 @@ def generate_markdown_en(alerts_by_pack: Dict[str, List[Dict]]) -> str:
         "",
         "**Note**: This guide covers only **user-facing threshold alerts**. Sentinel alerts in the Operational Rule Pack are platform-internal control mechanisms and do not require tenant action.",
         "",
+        "The *In maintenance* column is each alert's `maintenance` label: `muted` means the rule does not fire while the tenant has `_state_maintenance` on (a `recurring:` window included); `fires` means it still notifies during maintenance.",
+        "",
         "---",
         "",
     ]
@@ -424,8 +440,8 @@ def generate_markdown_en(alerts_by_pack: Dict[str, List[Dict]]) -> str:
 
         lines.append(f"## {display_name['en']}")
         lines.append("")
-        lines.append("| Alert Name | Severity | Trigger Condition | Recommended Action | Related Metric |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |")
+        lines.append("|---|---|---|---|---|---|")
 
         for alert in alerts:
             name = alert["name"]
@@ -442,13 +458,14 @@ def generate_markdown_en(alerts_by_pack: Dict[str, List[Dict]]) -> str:
             trigger_condition = _escape_table_cell(trigger_condition)
 
             recommended_action = get_recommended_action(name)["en"]
+            in_maintenance = MAINTENANCE_CELL["en"].get(alert.get("maintenance", ""), "—")
 
             # Related metric: the primary series from the rule's PromQL expr
             # (computed in extract_alerts).
             metric = alert.get("metric", "")
 
             lines.append(
-                f"| {name} | {severity} | {trigger_condition} | {recommended_action} | {metric} |"
+                f"| {name} | {severity} | {in_maintenance} | {trigger_condition} | {recommended_action} | {metric} |"
             )
 
         lines.append("")

@@ -256,3 +256,55 @@ func TestRecipeShapeIDIsRecipeID(t *testing.T) {
 		}
 	}
 }
+
+// #3309: every compiled alert carries the `maintenance` label, and the label
+// says what the rule does: `mute` exactly when the :core record it reads ends
+// in maintenanceTail, `page` (the silent-mode sentinel) when nothing does.
+// The recurring-maintenance silences select on this label, so a compiled
+// alert without it would stop being muted in a recurring window.
+func TestCompileCustomAlertPack_MaintenanceLabelMatchesTheRule(t *testing.T) {
+	var tenants []TenantCustomAlerts
+	for i, y := range []string{
+		thrSpec,
+		`- {recipe: absence, name: hb, metric: hb_total, window: 5m, threshold: "1"}`,
+		`- {recipe: slo_burn_rate, name: s, metric: err, denominator_metric: req, objective: "99.9", min_events: 20}`,
+	} {
+		e := caEntry(t, CustomAlertServed, []string{"warning", "critical"}, y)
+		tenants = append(tenants, TenantCustomAlerts{Tenant: string(rune('a' + i)), Entries: []CustomAlertEntry{e}})
+	}
+	p, err := CompileCustomAlertPack(tenants)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := map[string]string{}
+	var alerts []orderedMap
+	for _, g := range p.Groups {
+		for _, r := range g.get("rules").([]any) {
+			rule := r.(orderedMap)
+			if name, ok := rule.get("record").(string); ok {
+				records[name] = rule.get("expr").(string)
+			} else {
+				alerts = append(alerts, rule)
+			}
+		}
+	}
+	seen := map[string]int{}
+	for _, a := range alerts {
+		name := a.get("alert").(string)
+		expr := a.get("expr").(string)
+		got, _ := a.get("labels").(orderedMap).get("maintenance").(string)
+		want := maintenancePage
+		if strings.HasSuffix(expr, maintenanceTail) || strings.HasSuffix(records[expr], maintenanceTail) {
+			want = maintenanceMute
+		}
+		if got != want {
+			t.Errorf("%s: maintenance=%q, want %q (expr %q)", name, got, want, expr)
+		}
+		seen[got]++
+	}
+	// Guard the guard: both values must actually occur, or the loop above
+	// proves nothing about one of them.
+	if seen[maintenanceMute] == 0 || seen[maintenancePage] == 0 {
+		t.Fatalf("label values seen %v; want both %q and %q", seen, maintenanceMute, maintenancePage)
+	}
+}

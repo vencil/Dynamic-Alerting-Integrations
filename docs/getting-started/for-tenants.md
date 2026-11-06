@@ -145,7 +145,7 @@ tenants:
       reason: "Planned DB migration"
 ```
 
-維護模式下，帶維護條件的閾值類與自訂告警不觸發（PromQL 層抑制）；停機、叢集存活、exporter 缺席這類告警照常觸發，範圍見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)。到期後自動恢復。
+維護模式下，`maintenance: mute` 的告警不觸發（PromQL 層抑制；閾值類與自訂告警都是 `mute`）；叢集存活、exporter 缺席與單實例 critical 停機（如 `PostgreSQLDown`）這類告警是 `page`，照常觸發，逐條見[告警參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.md)的「維護期間」欄，範圍見 [config-driven §2.7](../design/config-driven.md#27-三態運營模式-operational-modes)。到期後自動恢復。
 
 > **時區：** `expires` 使用 RFC 3339 格式（含時區），排程式閾值的 `window` 和 recurring maintenance 的 `cron` 均使用 **UTC 時區**。
 

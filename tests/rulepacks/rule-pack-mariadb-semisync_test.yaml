@@ -50,6 +50,7 @@ tests:
         alertname: MariaDBSemiSyncDegraded
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: liveness
               tenant: db-a
@@ -62,6 +63,7 @@ tests:
         alertname: MariaDBSemiSyncReplicasGone
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: liveness
               tenant: db-b
@@ -104,6 +106,7 @@ tests:
         alertname: MariaDBSemiSyncReplicasGone
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: liveness
               tenant: db-e
@@ -155,6 +158,7 @@ tests:
         alertname: MariaDBSemiSyncDegraded
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: liveness
               tenant: db-f
@@ -167,6 +171,7 @@ tests:
         alertname: MariaDBSemiSyncReplicasGone
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: liveness
               tenant: db-f

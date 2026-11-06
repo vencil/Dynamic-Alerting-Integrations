@@ -213,7 +213,11 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("          (")
     lines.append("            tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>")
     lines.append("          )")
-    lines.append("          unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)")
+    lines.append("          unless on(tenant)")
+    lines.append("          (user_state_filter{filter=\"maintenance\"} == 1)")
+    lines.append("        labels:")
+    lines.append("          severity: warning")
+    lines.append("          maintenance: mute   # 必填：mute｜page；上面兩行維護條件由 generate_rulepack_derived.py 依它寫入")
     lines.append("        annotations:")
     for label, tpl in METADATA_ANNOTATIONS.items():
         lines.append(f"          {label}: \"{tpl}\"")

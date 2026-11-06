@@ -110,6 +110,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Kafka exporter target missing"
@@ -120,17 +121,16 @@ groups:
       - alert: KafkaHighConsumerLag
         expr: |
           (
-            (
-              tenant:kafka_consumer_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_consumer_lag
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:kafka_consumer_lag:max
+            > on(tenant) group_left
+            tenant:alert_threshold:kafka_consumer_lag
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "kafka_consumer_lag"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -148,17 +148,16 @@ groups:
       - alert: KafkaHighConsumerLagCritical
         expr: |
           (
-            (
-              tenant:kafka_consumer_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_consumer_lag_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:kafka_consumer_lag:max
+            > on(tenant) group_left
+            tenant:alert_threshold:kafka_consumer_lag_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "kafka_consumer_lag"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -175,17 +174,16 @@ groups:
       - alert: KafkaUnderReplicatedPartitions
         expr: |
           (
-            (
-              tenant:kafka_under_replicated_partitions:max
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_under_replicated_partitions
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:kafka_under_replicated_partitions:max
+            > on(tenant) group_left
+            tenant:alert_threshold:kafka_under_replicated_partitions
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "kafka_under_replicated_partitions"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -203,17 +201,16 @@ groups:
       - alert: KafkaUnderReplicatedPartitionsCritical
         expr: |
           (
-            (
-              tenant:kafka_under_replicated_partitions:max
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_under_replicated_partitions_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:kafka_under_replicated_partitions:max
+            > on(tenant) group_left
+            tenant:alert_threshold:kafka_under_replicated_partitions_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "kafka_under_replicated_partitions"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -230,17 +227,16 @@ groups:
       - alert: KafkaNoActiveController
         expr: |
           (
-            (
-              tenant:kafka_active_controllers:max
-              < on(tenant) group_left
-              tenant:alert_threshold:kafka_active_controllers
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:kafka_active_controllers:max
+            < on(tenant) group_left
+            tenant:alert_threshold:kafka_active_controllers
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "kafka_active_controllers"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -257,17 +253,16 @@ groups:
       - alert: KafkaLowBrokerCount
         expr: |
           (
-            (
-              tenant:kafka_broker_count:max
-              < on(tenant) group_left
-              tenant:alert_threshold:kafka_broker_count
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:kafka_broker_count:max
+            < on(tenant) group_left
+            tenant:alert_threshold:kafka_broker_count
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "kafka_broker_count"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -284,17 +279,16 @@ groups:
       - alert: KafkaHighRequestRate
         expr: |
           (
-            (
-              tenant:kafka_request_rate:sum
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_request_rate
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:kafka_request_rate:sum
+            > on(tenant) group_left
+            tenant:alert_threshold:kafka_request_rate
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "kafka_request_rate"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -312,17 +306,16 @@ groups:
       - alert: KafkaHighRequestRateCritical
         expr: |
           (
-            (
-              tenant:kafka_request_rate:sum
-              > on(tenant) group_left
-              tenant:alert_threshold:kafka_request_rate_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:kafka_request_rate:sum
+            > on(tenant) group_left
+            tenant:alert_threshold:kafka_request_rate_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "kafka_request_rate"
           tenant: "{{ $labels.tenant }}"
         annotations:

@@ -126,13 +126,16 @@ tenants:
     )
     unless on(tenant)
     (user_state_filter{filter="maintenance"} == 1)
+  labels:
+    severity: warning
+    maintenance: mute
 ```
 
 **啟停機制**：Tier 2 場景的啟停透過既有三態控制間接實現，不需要額外的開關 key：
 
 - **啟用**：只要場景依賴的各指標閾值均為有效值（Custom 或 Default），場景自動生效。
 - **停用某一指標**：將該指標設為 `"disable"`，recording rule 不產出值，條件不成立，場景不觸發。
-- **全域維護模式**：透過 `_state_maintenance` 設為 `"enable"`，場景中的 `unless` 子句生效。
+- **全域維護模式**：透過 `_state_maintenance` 設為 `"enable"`，場景中的 `unless` 子句生效。告警要同時帶 `maintenance: mute` label：`recurring:` 週期維護的 silence 只擋帶這個 label 的告警，沒帶的自訂規則在週期窗內會照常通知（[#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)）。
 
 > **設計考量**：PromQL 不支援動態開關。透過「閾值缺失 → recording rule 無值 → 條件不成立」的傳遞效應實現隱式啟停，避免為每個場景引入額外 config key。
 

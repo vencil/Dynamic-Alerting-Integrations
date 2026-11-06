@@ -75,6 +75,7 @@ tests:
         alertname: MariaDBReplicaIOThreadDown
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: replication_lag
               tenant: db-a
@@ -84,6 +85,7 @@ tests:
               description: "Replica IO thread is stopped (Slave_IO_Running=No) for tenant db-a — the replica is no longer receiving events from the primary, so the DR/read copy is going stale. seconds_behind_master turns NULL/absent (or lies at 0) in this state, so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_IO_Error (network / credentials / primary binlog purged)."
               description_zh: "租戶 db-a 的 replica IO 執行緒已停止（Slave_IO_Running=No）— replica 不再接收 primary 的事件，DR／讀取副本正在過期。此狀態下 seconds_behind_master 會變 NULL/absent（或誤報 0），MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_IO_Error（網路／憑證／primary binlog 已清除）。"
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: replication_lag
               tenant: db-m
@@ -96,6 +98,7 @@ tests:
         alertname: MariaDBReplicaSQLThreadDown
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: replication_lag
               tenant: db-b
@@ -177,6 +180,7 @@ tests:
         exp_alerts:
           # db-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: replication_lag
               tenant: db-a
@@ -192,6 +196,7 @@ tests:
               tier: gold
           # db-b: VACUUM-FIRE (branch B) — fires bare; also proves the absent-guard.
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: replication_lag
               tenant: db-b
@@ -230,6 +235,7 @@ tests:
         alertname: MariaDBReplicationLagCritical
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: critical
               metric_group: replication_lag
               tenant: db-a

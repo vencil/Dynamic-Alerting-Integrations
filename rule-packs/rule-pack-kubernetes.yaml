@@ -402,8 +402,6 @@ groups:
                 tenant_version:alert_threshold:container_cpu{version="default", severity="warning"}
             )
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       - record: rule_pack_kubernetes:pod_container_high_cpu_critical:core
         expr: |
@@ -424,8 +422,6 @@ groups:
                 tenant_version:alert_threshold:container_cpu{version="default", severity="critical"}
             )
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       # ADR-024 Route 2: version-aware exact-or-fallback memory core, split per
       # severity — mirrors the CPU cores above (same many-to-many cardinality
@@ -449,8 +445,6 @@ groups:
                 tenant_version:alert_threshold:container_memory{version="default", severity="warning"}
             )
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       - record: rule_pack_kubernetes:pod_container_high_memory_critical:core
         expr: |
@@ -471,8 +465,6 @@ groups:
                 tenant_version:alert_threshold:container_memory{version="default", severity="critical"}
             )
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       # CFS throttle cores (#944 PR-2c) — same Route-2 shape (exact-or-fallback per
       # severity + maintenance unless); see the cpu_throttle threshold record above
@@ -496,8 +488,6 @@ groups:
                 tenant_version:alert_threshold:container_cpu_throttle{version="default", severity="warning"}
             )
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       - record: rule_pack_kubernetes:pod_cpu_throttled_critical:core
         expr: |
@@ -518,8 +508,6 @@ groups:
                 tenant_version:alert_threshold:container_cpu_throttle{version="default", severity="critical"}
             )
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       # OOM cores — deliberately NOT routed through the user_threshold pipeline.
       # Every other core in this group resolves a tenant-tunable percentage; an OOM kill
@@ -539,8 +527,6 @@ groups:
           (
             max by(tenant) (tenant:container_oom_events_1h:by_container) > 0
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       # Storm tier: ≥3 OOM kills on the SAME container within the rolling hour is an
       # OOM→restart loop, not the single kill a tenant sees while right-sizing a new
@@ -555,8 +541,6 @@ groups:
           (
             max by(tenant) (tenant:container_oom_events_1h:by_container) >= 3
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
   # -------------------------------------------------------
   # Alert Rules: Container resources (Weakest Link)
@@ -569,9 +553,12 @@ groups:
       - alert: PodContainerHighCPU
         expr: |
           rule_pack_kubernetes:pod_container_high_cpu_warning:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 60s
         labels:
           severity: warning
+          maintenance: mute
           # Severity-dedup key (ADR-001; #1199). The pair aggregates to {tenant, version}
           # (OOM: {tenant}) — no pod label survives — so one static group per pair is
           # the whole contract: both alerts of the pair carry the SAME value, unique
@@ -599,9 +586,12 @@ groups:
       - alert: PodContainerHighCPUCritical
         expr: |
           rule_pack_kubernetes:pod_container_high_cpu_critical:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 60s
         labels:
           severity: critical
+          maintenance: mute
           # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
           metric_group: "container_cpu"
           tenant: "{{ $labels.tenant }}"
@@ -622,9 +612,12 @@ groups:
         # Metadata in annotations, not joined (#3483) — see PodContainerHighCPU.
         expr: |
           rule_pack_kubernetes:pod_container_high_memory_warning:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 60s
         labels:
           severity: warning
+          maintenance: mute
           # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
           metric_group: "container_memory"
           tenant: "{{ $labels.tenant }}"
@@ -643,9 +636,12 @@ groups:
       - alert: PodContainerHighMemoryCritical
         expr: |
           rule_pack_kubernetes:pod_container_high_memory_critical:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 60s
         labels:
           severity: critical
+          maintenance: mute
           # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
           metric_group: "container_memory"
           tenant: "{{ $labels.tenant }}"
@@ -673,9 +669,12 @@ groups:
       - alert: PodContainerCPUThrottled
         expr: |
           rule_pack_kubernetes:pod_cpu_throttled_warning:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 15m
         labels:
           severity: warning
+          maintenance: mute
           # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
           metric_group: "container_cpu_throttle"
           tenant: "{{ $labels.tenant }}"
@@ -696,9 +695,12 @@ groups:
       - alert: PodContainerCPUThrottledCritical
         expr: |
           rule_pack_kubernetes:pod_cpu_throttled_critical:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 15m
         labels:
           severity: critical
+          maintenance: mute
           # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
           metric_group: "container_cpu_throttle"
           tenant: "{{ $labels.tenant }}"
@@ -726,9 +728,12 @@ groups:
       - alert: ContainerOOMKilled
         expr: |
           rule_pack_kubernetes:container_oom_killed_warning:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
           metric_group: "container_oom_killed"
           tenant: "{{ $labels.tenant }}"
@@ -748,9 +753,12 @@ groups:
       - alert: ContainerOOMKilledCritical
         expr: |
           rule_pack_kubernetes:container_oom_killed_critical:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
           metric_group: "container_oom_killed"
           tenant: "{{ $labels.tenant }}"
@@ -774,18 +782,17 @@ groups:
         expr: |
           (
             (
-              (
-                tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
-                * on(tenant) group_left
-                max by(tenant) (user_state_filter{filter="container_crashloop"})
-              ) > 0
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+              tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+              * on(tenant) group_left
+              max by(tenant) (user_state_filter{filter="container_crashloop"})
+            ) > 0
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Container crash loop detected in {{ $labels.tenant }}"
@@ -802,18 +809,17 @@ groups:
         expr: |
           (
             (
-              (
-                tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
-                * on(tenant) group_left
-                max by(tenant) (user_state_filter{filter="container_imagepull"})
-              ) > 0
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+              tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+              * on(tenant) group_left
+              max by(tenant) (user_state_filter{filter="container_imagepull"})
+            ) > 0
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Image pull failure detected in {{ $labels.tenant }}"
@@ -890,6 +896,7 @@ groups:
         for: 10m
         labels:
           severity: warning
+          maintenance: page
           # Platform-scoped: the count() expr yields no tenant, so this renders
           # empty (dropped) — same established pattern as *ExporterAbsent sentinels.
           # Present to satisfy custom-rule-policy required_labels (tenant).
@@ -1010,6 +1017,7 @@ groups:
         for: 15m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Disk alert declared but no disk data is visible for {{ $labels.tenant }}"
@@ -1083,8 +1091,6 @@ groups:
             and on(node)
               (kube_node_status_condition{condition="Ready", status="true"} == 0)
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       # Metadata in annotations, not joined (#3483) — same as the
       # container/pod-state alerts. `node` rides
@@ -1100,9 +1106,12 @@ groups:
       - alert: NodeNotReady
         expr: |
           rule_pack_kubernetes:node_not_ready:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 3m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
           node: "{{ $labels.node }}"
         annotations:
@@ -1209,8 +1218,6 @@ groups:
               )
             )
           )
-          unless on(tenant)
-          (user_state_filter{filter="maintenance"} == 1)
 
       # Metadata in annotations, not joined (#3483) — same as node-health and
       # the threshold alerts: a tenant with NO tenant_metadata_info still fires,
@@ -1218,9 +1225,12 @@ groups:
       - alert: TenantHAReplicasDegraded
         expr: |
           rule_pack_kubernetes:ha_replicas_degraded:core
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 15m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "HA workload for {{ $labels.tenant }} is running with reduced redundancy"

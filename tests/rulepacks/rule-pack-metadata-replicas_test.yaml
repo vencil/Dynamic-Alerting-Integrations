@@ -220,6 +220,7 @@ tests:
         alertname: ClickHouseHighConnections
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: t1
             exp_annotations:

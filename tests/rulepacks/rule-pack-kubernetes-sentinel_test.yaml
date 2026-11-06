@@ -53,6 +53,7 @@ tests:
         alertname: VersionAwareThresholdInert
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: warning
             exp_annotations:
               summary: "Version-aware thresholds declared but kube-state-metrics exposes no pod labels — feature inert"

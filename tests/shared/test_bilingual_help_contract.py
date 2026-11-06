@@ -29,7 +29,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 
 * BILINGUAL (derived complement, 37 — all pass; repair queue empty) — the
   behavioral assertions above run per tool.
-* ``ENGLISH_ONLY`` (140) — dx convention: non-customer-facing internal tools
+* ``ENGLISH_ONLY`` (141) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
@@ -46,7 +46,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 COST DESIGN (why not a blind full-matrix sweep)
 -----------------------------------------------
 Subprocess budget = 2×|BILINGUAL| + 1×|ENGLISH_ONLY| + 1×|CHINESE_ONLY|
-= 2×37 + 140 + 28 = 242 (vs 376 already spent by test_tool_exit_codes).
+= 2×37 + 141 + 28 = 243 (vs 376 already spent by test_tool_exit_codes).
 The allowlists are known-conclusion sets: one zh-help run suffices to verify
 "still no CJK" / "still has CJK" — an en-side run there would prove nothing
 this gate asserts. The CHINESE_ONLY wiring ratchet is a source-text check
@@ -169,6 +169,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "generate_platform_data.py": _R_DX,
     "generate_rule_pack_readme.py": _R_DX,
     "generate_rulepack_configmaps.py": _R_DX,
+    "generate_rulepack_derived.py": _R_DX,
     "generate_tenant_fixture.py": _R_DX,
     "generate_tenant_metadata.py": _R_DX,
     "measure_judgement_budget.py": _R_DX,
