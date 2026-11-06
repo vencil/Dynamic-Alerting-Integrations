@@ -852,7 +852,7 @@
     "secretRef": {
       "type": "object",
       "title": "Kubernetes Secret Reference",
-      "description": "Reference to one key of a Kubernetes Secret, in place of the credential's literal value (#1560). Two shapes. `{secret: {key: <k>}}` is the tenant's own Secret, whose name is not written: it is always `da-<tenant>`, derived from the tenant id. `{secret: {shared: <alias>, key: <k>}}` is a Secret several tenants share: the alias must be listed under `shared_secrets` of the deployment policy file (generate-routes --policy), which names the real Secret and the fields that may use it; with no policy, or none listed, no shared reference is accepted. The Secret is created by the operator or ExternalSecrets, not by this config. The generator renders the reference as Alertmanager's `<field>_file: <root>/<secret-name>/<key>` (ConfigMap output; <root> is generate-routes --secret-mount-root, default /etc/alertmanager/secrets, the layout Prometheus Operator gives `spec.secrets`), and refuses the receiver when the binding rules are broken. auth_password takes only the tenant's own Secret, and only under a policy whose allowed_domains admits the smarthost. Seven fields take it (webhook / rocketchat url, slack api_url, teams webhook_url, pagerduty service_key / routing_key, email auth_password); email `headers` and webhook `http_config` have no Alertmanager `*_file` counterpart and do not, at any depth: the schema refuses one there (headers take only strings; http_config carries definitions.secretRefFree), and the generator refuses any reference still in its output after rendering (secret_ref_unsupported_field). A receiver with a shared reference may not set http_config.proxy_url either: the proxy would see the request to the shared destination; the generator refuses it (secret_ref_shared_proxy_url), the schema does not, since the shared aliases live in the deployment policy. Distinct from Alertmanager's own `*_ref` / `*_file` fields (e.g. basic_auth.password_file), which a conf.d receiver may not carry (#3257, definitions.fileReferenceKey): only the generator writes a `*_file` path, when it renders a reference.",
+      "description": "Reference to one key of a Kubernetes Secret, in place of the credential's literal value (#1560). Two shapes. `{secret: {key: <k>}}` is the tenant's own Secret, whose name is not written: it is always `da-<tenant>`, derived from the tenant id. `{secret: {shared: <alias>, key: <k>}}` is a Secret several tenants share: the alias must be listed under `shared_secrets` of the deployment policy file (generate-routes --policy), which names the real Secret and the fields that may use it; with no policy, or none listed, no shared reference is accepted. The Secret is created by the operator or ExternalSecrets, not by this config. The generator renders the reference as Alertmanager's `<field>_file: <root>/<secret-name>/<key>` (ConfigMap output; <root> is generate-routes --secret-mount-root, default /etc/alertmanager/secrets, the layout Prometheus Operator gives `spec.secrets`), and refuses the receiver when the binding rules are broken. A reference whose credential is sent to a destination the tenant writes — email auth_password (to the smarthost) and the webhook http_config leaves (to url; the oauth2 ones to oauth2.token_url and, as the access token they yield, to url) — takes only the tenant's own Secret, only under a policy whose allowed_domains is non-empty and admits every destination's host (written out, not a reference), and only when no proxy_url those requests go through is set; every one but the TLS client key also needs follow_redirects: false (Alertmanager sends it again on a redirect). Where a reference may stand is one table, _lib_validation.CREDENTIAL_REF_SITES: webhook / rocketchat url, slack api_url, teams webhook_url, pagerduty service_key / routing_key, email auth_password; webhook http_config basic_auth.password, authorization.credentials, bearer_token, tls_config.key, oauth2.client_secret, oauth2.client_certificate_key, oauth2.tls_config.key (each rendered as its prometheus/common `*_file`), and an item of http_headers.<name>.secrets (moved to that header's files list). Nowhere else, at any depth: email `headers` take only strings, oauth2 claims carry definitions.secretRefFree, the other http_config leaves are typed, and the generator refuses any reference still in its output after rendering (secret_ref_unsupported_field). A receiver with a shared reference may not set the proxy_url its request goes through either: the proxy would see the request to the shared destination; the generator refuses it (secret_ref_proxy_url), the schema does not, since the shared aliases live in the deployment policy. Distinct from Alertmanager's own `*_ref` / `*_file` fields (e.g. basic_auth.password_file), which a conf.d receiver may not carry (#3257, definitions.fileReferenceKey): only the generator writes a `*_file` path, when it renders a reference.",
       "$comment": "#1560: key follows the Secret data key rule (Kubernetes IsConfigMapKey: [-._a-zA-Z0-9]+, at most 253, not '.' and not starting with '..'); shared is a DNS-1123 label, like the shared_secrets aliases the generator accepts. Both reject a newline: Python's re `$` also matches before a trailing newline, so the pattern alone would let `key\\n` through (same guard as definitions.duration). No `name`: a tenant that could write a Secret name could point at another tenant's Secret (owner decision 2026-11-04). The `secret` / `key` / `shared` children are the Secret's coordinates, not the credential value: the field that holds a secretRef is the one on the redaction list, and it is masked whole. tests/ops/test_config_diff.py skips this definition by name for that reason. _lib_validation.secret_ref_problem reads the patterns below at run time.",
       "required": ["secret"],
       "properties": {
@@ -908,15 +908,15 @@
         "basic_auth": {
           "anyOf": [{ "$ref": "#/definitions/httpBasicAuth" }, { "type": "null" }],
           "title": "Basic Authentication",
-          "description": "HTTP basic authentication: username and password, given inline (no *_file / *_ref form, #3257)."
+          "description": "HTTP basic authentication: username and password, given inline (no *_file / *_ref form, #3257); password may be a Secret reference (definitions.secretRef, #1560)."
         },
         "oauth2": { "anyOf": [{ "$ref": "#/definitions/httpOAuth2" }, { "type": "null" }], "title": "OAuth 2.0", "description": "OAuth 2.0 client credentials. client_id and token_url are required." },
         "authorization": {
           "anyOf": [{ "$ref": "#/definitions/httpAuthorization" }, { "type": "null" }],
           "title": "Authorization Header",
-          "description": "Authorization header: type (default Bearer; never basic, use basic_auth) and credentials, given inline (no *_file / *_ref form, #3257)."
+          "description": "Authorization header: type (default Bearer; never basic, use basic_auth) and credentials, given inline (no *_file / *_ref form, #3257); credentials may be a Secret reference (definitions.secretRef, #1560)."
         },
-        "bearer_token": { "type": ["string", "null"], "title": "Bearer Token", "description": "HTTP Bearer token for authentication. A string: quote a token YAML would read as a number or date." },
+        "bearer_token": { "x-credential": true, "anyOf": [{ "type": ["string", "null"] }, { "$ref": "#/definitions/secretRef" }], "title": "Bearer Token", "description": "HTTP Bearer token for authentication. A string: quote a token YAML would read as a number or date. Or a Secret reference (definitions.secretRef), rendered as bearer_token_file (#1560)." },
         "tls_config": { "anyOf": [{ "$ref": "#/definitions/httpTLSConfig" }, { "type": "null" }], "title": "TLS Configuration", "description": "TLS settings for the connection to the webhook." },
         "follow_redirects": {
           "type": ["boolean", "null"],
@@ -931,7 +931,7 @@
         "http_headers": {
           "anyOf": [{ "$ref": "#/definitions/httpHeaders" }, { "type": "null" }],
           "title": "HTTP Headers",
-          "description": "Extra headers to send, by header name: each a mapping of values / secrets lists (no files list, #3257). Headers Alertmanager reserves (Authorization, Content-Type, ...) are refused."
+          "description": "Extra headers to send, by header name: each a mapping of values / secrets lists (no files list, #3257). An item of secrets may be a Secret reference (definitions.secretRef): the generator moves it to that header's files list (#1560), and the receiver must set follow_redirects: false. Headers Alertmanager reserves (Authorization, Content-Type, ...) are refused."
         },
         "proxy_url": {
           "type": ["string", "null"],
@@ -949,14 +949,13 @@
       "allOf": [
         { "not": { "required": ["basic_auth", "oauth2"], "properties": { "basic_auth": { "type": "object" }, "oauth2": { "type": "object" } } } },
         { "not": { "required": ["basic_auth", "authorization"], "properties": { "basic_auth": { "type": "object" }, "authorization": { "type": "object" } } } },
-        { "not": { "required": ["basic_auth", "bearer_token"], "properties": { "basic_auth": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
+        { "not": { "required": ["basic_auth", "bearer_token"], "properties": { "basic_auth": { "type": "object" }, "bearer_token": { "type": ["string", "object"], "minLength": 1 } } } },
         { "not": { "required": ["oauth2", "authorization"], "properties": { "oauth2": { "type": "object" }, "authorization": { "type": "object" } } } },
-        { "not": { "required": ["oauth2", "bearer_token"], "properties": { "oauth2": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
-        { "not": { "required": ["authorization", "bearer_token"], "properties": { "authorization": { "type": "object" }, "bearer_token": { "type": "string", "minLength": 1 } } } },
-        { "$ref": "#/definitions/httpProxyRules" },
-        { "$ref": "#/definitions/secretRefFree" }
+        { "not": { "required": ["oauth2", "bearer_token"], "properties": { "oauth2": { "type": "object" }, "bearer_token": { "type": ["string", "object"], "minLength": 1 } } } },
+        { "not": { "required": ["authorization", "bearer_token"], "properties": { "authorization": { "type": "object" }, "bearer_token": { "type": ["string", "object"], "minLength": 1 } } } },
+        { "$ref": "#/definitions/httpProxyRules" }
       ],
-      "$comment": "#2295 / #2984: `properties` is the http_config key set Alertmanager accepts (prometheus/common HTTPClientConfig with its inline ProxyConfig), and each nested definition (httpBasicAuth, httpAuthorization, httpOAuth2, httpTLSConfig, httpHeader) is the key set of the struct Alertmanager decodes it into; tests/alertmanager-inhibit TestSchemaHTTPConfigKeys_MatchAlertmanager pins every one of them by reflection — minus the keys definitions.fileReferenceKey matches, which Alertmanager reads but a conf.d receiver may not carry (#3257: they make Alertmanager load a file or a secret from inside its own container). additionalProperties: false therefore refuses what Alertmanager refuses (an unknown key, at any depth, fails the whole config) and those keys. The route generator passes http_config through whole, and the Python check judges only its top level, so the nested rules here are the schema's and Alertmanager's alone (the rows carrying python_differs in receiver_presence_cases.json). The `allOf` pairs are every pair of basic_auth / oauth2 / authorization / bearer_token: Alertmanager (HTTPClientConfig.Validate) refuses more than one, null and an empty bearer_token count as unset, an empty mapping counts as set (its fifth, bearer_token_file, is a file-reference key, #3257). The Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) is pinned by tests/shared/test_receiver_spec_parity.py and the rows of receiver_presence_cases.json.",
+      "$comment": "#2295 / #2984: `properties` is the http_config key set Alertmanager accepts (prometheus/common HTTPClientConfig with its inline ProxyConfig), and each nested definition (httpBasicAuth, httpAuthorization, httpOAuth2, httpTLSConfig, httpHeader) is the key set of the struct Alertmanager decodes it into; tests/alertmanager-inhibit TestSchemaHTTPConfigKeys_MatchAlertmanager pins every one of them by reflection — minus the keys definitions.fileReferenceKey matches, which Alertmanager reads but a conf.d receiver may not carry (#3257: they make Alertmanager load a file or a secret from inside its own container). additionalProperties: false therefore refuses what Alertmanager refuses (an unknown key, at any depth, fails the whole config) and those keys. The route generator passes http_config through whole, and the Python check judges only its top level, so the nested rules here are the schema's and Alertmanager's alone (the rows carrying python_differs in receiver_presence_cases.json). #1560: the leaves that may be a Secret reference (`anyOf: [<value>, secretRef]`, x-credential) are exactly the http_config rows of _lib_validation.CREDENTIAL_REF_SITES (tests/shared/test_secret_ref_schema.py); every other leaf is typed so no mapping fits, and the one free-form mapping (oauth2.claims) carries definitions.secretRefFree. The `allOf` pairs are every pair of basic_auth / oauth2 / authorization / bearer_token: Alertmanager (HTTPClientConfig.Validate) refuses more than one, null and an empty bearer_token count as unset, an empty mapping counts as set, and so does a bearer_token that is a Secret reference (`type: [string, object]` with minLength: an object is a reference, rendered as bearer_token_file, which conflicts the same way) (its fifth, bearer_token_file, is a file-reference key, #3257). The Python copy (_lib_constants.HTTP_CONFIG_AUTH_FIELDS) is pinned by tests/shared/test_receiver_spec_parity.py and the rows of receiver_presence_cases.json.",
       "additionalProperties": false
     },
     "httpProxyRules": {
@@ -982,7 +981,7 @@
       "title": "Basic Authentication",
       "properties": {
         "username": { "type": ["string", "null"] },
-        "password": { "type": ["string", "null"] }
+        "password": { "x-credential": true, "anyOf": [{ "type": ["string", "null"] }, { "$ref": "#/definitions/secretRef" }] }
       },
       "$comment": "#3257: Alertmanager's username_file / username_ref / password_file / password_ref are not here — a conf.d receiver may carry no file-reference key (definitions.fileReferenceKey), so the at-most-one-form rules they needed are gone with them.",
       "additionalProperties": false
@@ -996,7 +995,7 @@
           "not": { "type": "string", "pattern": "^\\s*[Bb][Aa][Ss][Ii][Cc]\\s*$" },
           "description": "Default Bearer. Alertmanager refuses basic in any case, surrounding whitespace trimmed: use basic_auth."
         },
-        "credentials": { "type": ["string", "null"] }
+        "credentials": { "x-credential": true, "anyOf": [{ "type": ["string", "null"] }, { "$ref": "#/definitions/secretRef" }] }
       },
       "$comment": "#3257: Alertmanager's credentials_file / credentials_ref are not here (definitions.fileReferenceKey), so the at-most-one-form rules they needed are gone with them.",
       "additionalProperties": false
@@ -1006,14 +1005,14 @@
       "title": "OAuth 2.0",
       "properties": {
         "client_id": { "type": ["string", "null"] },
-        "client_secret": { "type": ["string", "null"] },
+        "client_secret": { "x-credential": true, "anyOf": [{ "type": ["string", "null"] }, { "$ref": "#/definitions/secretRef" }] },
         "client_certificate_key_id": { "type": ["string", "null"] },
-        "client_certificate_key": { "type": ["string", "null"] },
+        "client_certificate_key": { "x-credential": true, "anyOf": [{ "type": ["string", "null"] }, { "$ref": "#/definitions/secretRef" }] },
         "grant_type": { "type": ["string", "null"] },
         "signature_algorithm": { "type": ["string", "null"] },
         "iss": { "type": ["string", "null"] },
         "audience": { "type": ["string", "null"] },
-        "claims": { "type": ["object", "null"] },
+        "claims": { "type": ["object", "null"], "allOf": [{ "$ref": "#/definitions/secretRefFree" }] },
         "scopes": { "type": ["array", "null"], "items": { "type": "string" } },
         "token_url": { "type": ["string", "null"] },
         "endpoint_params": { "type": ["object", "null"], "additionalProperties": { "type": "string" } },
@@ -1042,7 +1041,7 @@
       "properties": {
         "ca": { "type": ["string", "null"] },
         "cert": { "type": ["string", "null"] },
-        "key": { "type": ["string", "null"] },
+        "key": { "x-credential": true, "anyOf": [{ "type": ["string", "null"] }, { "$ref": "#/definitions/secretRef" }] },
         "server_name": { "type": ["string", "null"] },
         "insecure_skip_verify": { "type": ["boolean", "null"] },
         "min_version": { "enum": ["TLS10", "TLS11", "TLS12", "TLS13", null] },
@@ -1051,14 +1050,14 @@
       "allOf": [
         {
           "if": { "required": ["cert"], "properties": { "cert": { "type": "string", "minLength": 1 } } },
-          "then": { "required": ["key"], "properties": { "key": { "type": "string", "minLength": 1 } } }
+          "then": { "required": ["key"], "properties": { "key": { "type": ["string", "object"], "minLength": 1 } } }
         },
         {
-          "if": { "required": ["key"], "properties": { "key": { "type": "string", "minLength": 1 } } },
+          "if": { "required": ["key"], "properties": { "key": { "type": ["string", "object"], "minLength": 1 } } },
           "then": { "required": ["cert"], "properties": { "cert": { "type": "string", "minLength": 1 } } }
         }
       ],
-      "$comment": "#2984: prometheus/common TLSConfig.Validate: a client cert needs a client key and the reverse. #3257: ca / cert / key are taken only inline — Alertmanager's ca_file / cert_file / key_file / ca_ref / cert_ref / key_ref are not here (definitions.fileReferenceKey), so the at-most-one-form rules they needed are gone with them. min_version / max_version: the keys of prometheus/common TLSVersions (pinned by tests/alertmanager-inhibit).",
+      "$comment": "#2984: prometheus/common TLSConfig.Validate: a client cert needs a client key and the reverse; a key that is a Secret reference (an object, rendered as key_file) counts as given (#1560). #3257: ca / cert / key are taken only inline — Alertmanager's ca_file / cert_file / key_file / ca_ref / cert_ref / key_ref are not here (definitions.fileReferenceKey), so the at-most-one-form rules they needed are gone with them. min_version / max_version: the keys of prometheus/common TLSVersions (pinned by tests/alertmanager-inhibit).",
       "additionalProperties": false
     },
     "httpHeaders": {
@@ -1070,16 +1069,17 @@
         }
       },
       "additionalProperties": { "anyOf": [{ "$ref": "#/definitions/httpHeader" }, { "type": "null" }] },
-      "$comment": "#2984: the names prometheus/common ReservedHeaders refuses, compared after http.CanonicalHeaderKey, i.e. in any case (pinned by tests/alertmanager-inhibit)."
+      "not": { "required": ["secret"] },
+      "$comment": "#2984: the names prometheus/common ReservedHeaders refuses, compared after http.CanonicalHeaderKey, i.e. in any case (pinned by tests/alertmanager-inhibit). #1560: a header named exactly `secret` holds a mapping ({values: [...]}), the shape of a Secret reference (_lib_validation.is_secret_ref); the route generator refuses one left in its output whatever it is (secret_ref_unsupported_field), so the schema refuses that header name too, keeping the two verdicts equal: a known limit."
     },
     "httpHeader": {
       "type": "object",
       "title": "HTTP Header",
       "properties": {
         "values": { "type": ["array", "null"], "items": { "type": "string" } },
-        "secrets": { "type": ["array", "null"], "items": { "type": "string" } }
+        "secrets": { "x-credential": true, "type": ["array", "null"], "items": { "anyOf": [{ "type": "string" }, { "$ref": "#/definitions/secretRef" }] } }
       },
-      "$comment": "#3257: Alertmanager's third list, files (header values read from files), is not here (definitions.fileReferenceKey).",
+      "$comment": "#3257: Alertmanager's third list, files (header values read from files), is not here (definitions.fileReferenceKey). #1560: only the generator writes it, from the Secret references among secrets; Alertmanager sends values, then secrets, then files, so a value read from a Secret is sent after the written ones.",
       "additionalProperties": false
     },
     "httpProxyConnectHeader": { "type": "object", "title": "Proxy CONNECT Headers", "additionalProperties": { "type": ["array", "null"], "items": { "type": "string" } } },
@@ -1093,7 +1093,7 @@
     "secretRefFree": {
       "title": "No Secret reference at any depth",
       "description": "A value with nothing shaped like a Secret reference (a mapping whose `secret` key holds a mapping, definitions.secretRef) anywhere inside it: the value itself, every value of every mapping and every list item in turn. Alertmanager has no `*_file` form there, so a reference would reach its config as written (#1560).",
-      "$comment": "#1560: applied to definitions.httpConfig — the one free-form subtree of a receiver that can hold a mapping (oauth2 claims); email headers take only strings. The route generator refuses the same thing on its output, for every receiver field at any depth (_grar_merge.secret_ref_paths, kind secret_ref_unsupported_field), so a field added later is covered there even before it is here. Shaped like _lib_validation.is_secret_ref, not like definitions.secretRef: a malformed reference is refused too; a `secret` key holding a scalar (a header or an oauth2 parameter named secret) is not a reference. An http_headers entry named `secret` holds a mapping ({values: [...]}) and is refused like a reference: a known limit.",
+      "$comment": "#1560: applied to oauth2 claims — the one free-form subtree of a receiver that can hold a mapping; email headers take only strings, and every other http_config leaf is typed (the leaves that take a Secret reference are _lib_validation.CREDENTIAL_REF_SITES). The route generator refuses the same thing on its output, for every receiver field at any depth (_grar_merge.secret_ref_paths, kind secret_ref_unsupported_field), so a field added later is covered there even before it is here. Shaped like _lib_validation.is_secret_ref, not like definitions.secretRef: a malformed reference is refused too; a `secret` key holding a scalar (an oauth2 parameter or claim named secret) is not a reference. An http_headers entry named `secret` holds a mapping ({values: [...]}) and is refused like a reference (definitions.httpHeaders): a known limit.",
       "not": { "type": "object", "required": ["secret"], "properties": { "secret": { "type": "object" } } },
       "additionalProperties": { "$ref": "#/definitions/secretRefFree" },
       "items": { "$ref": "#/definitions/secretRefFree" }

@@ -494,6 +494,8 @@ def _sample(prop: dict):
     """A value of the property's own type that sets nothing another key needs."""
     if prop.get("$ref") == "#/definitions/yamlBool":
         return False
+    if _SECRET_REF in prop.get("anyOf", []):  # #1560: <value> or secretRef: the value
+        return _sample(next(b for b in prop["anyOf"] if b != _SECRET_REF))
     if "anyOf" in prop:  # a nested definition or null: its smallest valid mapping
         ref = next(b["$ref"] for b in prop["anyOf"] if "$ref" in b)
         return _NESTED_SAMPLES.get(ref, {})
