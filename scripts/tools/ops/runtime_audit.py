@@ -441,8 +441,6 @@ class RuntimeAuditor:
 
     def json_document(self) -> dict:
         """The --json document (run() encodes it, #3216)."""
-        if self.caller_error:
-            return {"error": self.caller_error}
         m, u, o = self._counts()
         report = {
             "findings": [f.to_dict() for f in self.findings],
@@ -502,6 +500,10 @@ def main():
     auditor.run()
 
     if args.json:
+        if auditor.caller_error:
+            # #3617: no audit, no answer — the cause on stderr, stdout empty
+            # (it was a {"error": …} document).
+            raise CallerError(auditor.caller_error)
         return Report(auditor.json_document(), auditor.exit_code())  # #3216: run() encodes it
     auditor.print_human_report()
 

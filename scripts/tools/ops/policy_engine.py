@@ -1175,21 +1175,11 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
     return parser
 
 
-def _caller_error_exit(args, reason: str, rules_evaluated: int = 0) -> "int | Report":
-    """A caller-error terminal path: rc 2 and, under ``--json``, the report
-    schema zeroed with its status / reason (run() encodes it, #3216)."""
-    if not args.json_output:
-        return EXIT_CALLER_ERROR
-    return Report({
-        "status": "caller_error",
-        "reason": reason,
-        "tenants_evaluated": 0,
-        "rules_evaluated": rules_evaluated,
-        "error_count": 0,
-        "warning_count": 0,
-        "passed": False,
-        "violations": [],
-    }, EXIT_CALLER_ERROR)
+def _caller_error_exit(args, reason: str, rules_evaluated: int = 0) -> int:
+    """A caller-error terminal path: rc 2, the cause already on stderr.
+    #3617: under ``--json`` stdout stays empty — it was the report schema
+    zeroed with a status / reason, a document with no answer in it."""
+    return EXIT_CALLER_ERROR
 
 
 def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> "int | Report":

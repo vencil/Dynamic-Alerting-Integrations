@@ -84,12 +84,13 @@ def _judge(scenario, cluster, outcome, out, target):
         return f"rc {code} but the ConfigMap holds the new bytes"
     if code == 5 and not is_new:
         return "rc 5 but the ConfigMap holds the old bytes"
+    if code == 2:
+        # #3617: a caller error carries no document — stdout stays empty.
+        return None if not out.strip() else f"rc 2 with a document on stdout ({out[:60]!r})"
     try:
         doc = json.loads(out)
     except ValueError:
         return None if target in OUTPUT_FNS else f"no envelope (stdout {out[:60]!r})"
-    if doc.get("status") == "caller_error":
-        return None if code == 2 else f"caller_error envelope with rc {code}"
     if doc.get("exit_code") != code:
         return f"envelope exit_code {doc.get('exit_code')} != rc {code}"
     if doc.get("written") is None:

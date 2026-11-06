@@ -535,14 +535,9 @@ def main() -> "int | Report":
 
     for doc in DOCS:
         if not doc.is_file():
-            # ⛔ Under --json the consumer is a machine: emitting nothing on
-            # stdout hands it a parse error instead of a diagnosis. Measured:
-            # deleting cli-reference.en.md gave rc=2 with an empty stdout.
+            # #3617: rc 2, the cause on stderr, stdout empty under --json —
+            # the consumer reads the exit code first (dev-rules §13).
             print(f"ERROR: missing {doc}", file=sys.stderr)
-            if args.json:
-                # #3216: run() encodes it
-                return Report({"findings": [], "stats": {}, "notes":
-                               [f"missing {doc}"]}, EXIT_CALLER_ERROR)
             return EXIT_CALLER_ERROR
 
     findings, stats, notes, _by_header = scan()

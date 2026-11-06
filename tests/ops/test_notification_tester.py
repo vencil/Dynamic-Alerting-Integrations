@@ -1198,7 +1198,8 @@ class TestCLI:
             assert data["tool"] == "test-notification"
 
     def test_refused_tree_exits_caller_error(self, tmp_path, capsys):
-        """#2752：路由產生器拒收的樹 → rc 2，JSON 標 caller_error，不是「沒有 receiver」。"""
+        """#2752：路由產生器拒收的樹 → rc 2，不是「沒有 receiver」。#3617：rc 2 提早結束
+        不印文件——stdout 留空、原因在 stderr（以前 JSON 標 caller_error）。"""
         body = make_tenant_yaml("db-a", routing={"receiver": {"type": "webhook", "url": "https://a.com"}})
         write_yaml(str(tmp_path), "db-a.yaml", body)
         write_yaml(str(tmp_path), "db-a-copy.yaml", body)
@@ -1208,10 +1209,7 @@ class TestCLI:
                 _as_run(nt.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
-        data = json.loads(captured.out)
-        assert data["status"] == "caller_error"
-        assert data["reason"] == "routing_tree_refused"
-        assert data["summary"]["total_receivers"] == 0
+        assert captured.out == ""
         assert "route generator refuses this tree" in captured.err
 
     def test_refusal_lines_are_escaped(self, tmp_path, capsys):

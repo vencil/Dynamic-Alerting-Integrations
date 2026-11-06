@@ -383,12 +383,15 @@ class TestMainCLI:
     @pytest.mark.parametrize("flag", ["--js", "--j"])
     @mock.patch("patch_config.run_cmd")
     def test_abbreviated_json_flag_still_gets_an_envelope(self, mock_run, capsys, flag):
-        """argparse 接受 `--js`＝`--json`；參數錯誤時也要吐 envelope。"""
+        """argparse 接受 `--js`＝`--json`；參數錯誤時 rc 2。#3617：caller error
+        不印文件——stdout 留空、原因在 stderr（以前吐 `bad_arguments` envelope）。"""
         with mock.patch("sys.argv", ["patch_config.py", "tenant-x", "--diff", flag]):
             with pytest.raises(SystemExit) as exc_info:
                 run_main()
         assert exc_info.value.code == 2
-        assert json.loads(capsys.readouterr().out)["reason"] == "bad_arguments"
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert "ERROR: arguments rejected (usage above)" in out.err, out.err
         mock_run.assert_not_called()
 
     def test_apply_mode(self, capsys):
@@ -1054,16 +1057,16 @@ class TestWriteAndCliEdges:
     @mock.patch("patch_config.run_cmd")
     def test_cli_caller_errors_keep_rc_and_reason(self, mock_run, capsys, argv):
         """root 不是 mapping ⇒ configmap_shape；
-        `--json=x` ⇒ bad_arguments。"""
+        `--json=x` ⇒ bad_arguments。#3617：兩者 stdout 皆留空，由 stderr 區分。"""
         mock_run.return_value = json.dumps(
             {"data": {"_defaults.yaml": _DEFAULTS, "tx.yaml": "- a\n"}})
         with mock.patch("sys.argv", ["patch_config.py", "tx", "m", "1", *argv]):
             with pytest.raises(SystemExit) as exc:
                 run_main()
         assert exc.value.code == 2
-        reason = json.loads(capsys.readouterr().out)["reason"]
-        assert reason == ("configmap_shape" if argv[-1] == "--json"
-                          else "bad_arguments")
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert ("ERROR: ConfigMapShapeError: " if argv[-1] == "--json" else "ERROR: arguments rejected (usage above)") in out.err, out.err
 
     def test_json_help_is_rc_0_and_one_document(self, capsys):
         with mock.patch("sys.argv", ["patch_config.py", "--json", "-h"]):
@@ -1088,6 +1091,9 @@ class TestWriteAndCliEdges:
     def test_kubectl_json_that_is_not_an_object_is_kubectl_failed(self, _run, capsys):
         with mock.patch("sys.argv", ["patch_config.py", "--diff", "--json",
                                      "tx", "m", "1"]):
-            with pytest.raises(SystemExit):
+            with pytest.raises(SystemExit) as exc:
                 run_main()
-        assert json.loads(capsys.readouterr().out)["reason"] == "kubectl_failed"
+        assert exc.value.code == 2
+        out = capsys.readouterr()
+        assert out.out == ""  # #3617: a caller error prints no document
+        assert "ERROR: KubectlError: kubectl did not print JSON" in out.err, out.err

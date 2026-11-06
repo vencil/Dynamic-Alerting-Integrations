@@ -81,7 +81,7 @@ except ImportError:
         return _nullcontext()
 
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, die_caller_error)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, partial_answer)
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 
@@ -825,8 +825,12 @@ def main():
 
     if args.json:
         # #3216: run() encodes it
-        return Report(report, EXIT_VIOLATION if report["validation"]["metric_mismatches"]
-                      else EXIT_CALLER_ERROR if report["status"] == "error" else EXIT_OK)
+        # #3617: the files processed are the partial answer, each error named
+        # (none processed: rc 2, stdout empty).
+        return partial_answer(report, EXIT_VIOLATION if report["validation"]["metric_mismatches"]
+                              else EXIT_CALLER_ERROR if report["status"] == "error" else EXIT_OK,
+                              unanswered=report["errors"] or ["rule packs: error"],
+                              of=len(report["processed_files"]) + len(report["errors"]))
     # Text output
     if report["status"] == "success":
         print(t("✓ 規則包分割成功", "✓ Rule packs split successfully"))

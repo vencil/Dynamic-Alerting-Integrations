@@ -9,7 +9,10 @@ one path each that needs no network answer and no cluster:
 * a document JSON cannot carry (a NaN injected into the Report the tool
   builds) is the crash exit with the `output_not_serializable` envelope and
   no part of the document — a tool that printed its own document again
-  would print the NaN at its old status instead.
+  would print the NaN at its old status instead;
+* #3617: an rc-2 early exit (`EARLY_EXIT`) builds no Report — stdout stays
+  empty and the stderr line names the path (it used to be a caller_error
+  document).
 
 The ratchet (`tests/shared/test_single_json_encoder.py::OWN_JSON`) is the
 static half: none of these files may print JSON itself.
@@ -60,6 +63,25 @@ CASES = [
 ]
 IDS = [f"{t}-{i}" for i, (t, _, _) in enumerate(CASES)]
 
+# #3617: the rc-2 early exits — no document on stdout; the stderr line that
+# names each path.
+EARLY_EXIT = {
+    "alert_quality-1": "Error: Prometheus query failed",
+    "assemble_config_dir-3": "error: --sources is required",
+    "byo_check-7": "ERROR: nothing was answered: prometheus prometheus_reachable",
+    "check_alert-8": "ERROR: cannot read Prometheus alerts (http://127.0.0.1:9)",
+    "cutover_tenant-10": "ERROR: nothing was answered: load_readiness",
+    "explain_keys-14": "nope: No such file or directory",
+    "federation_check-16": "ERROR: nothing was answered: central_prometheus_reachable",
+}
+
+
+def _assert_early_exit(case_id, p):
+    """#3617: rc 2, stdout empty, the path named on stderr."""
+    assert p.returncode == 2, p.stderr[-2000:]
+    assert p.stdout == "", p.stdout[:500]
+    assert EARLY_EXIT[case_id] in p.stderr, p.stderr[-2000:]
+
 # Every Report the tool builds carries a NaN beside its document.
 _NAN_WRAPPER = """
 import math, os, runpy, sys
@@ -70,8 +92,8 @@ sys.path.insert(0, tools_dir)
 import _lib_exitcodes
 class _NaNReport(_lib_exitcodes.Report):
     __slots__ = ()
-    def __init__(self, document, status=0):
-        super().__init__({"document": document, "injected": math.nan}, status)
+    def __init__(self, document, status=0, **kw):
+        super().__init__({"document": document, "injected": math.nan}, status, **kw)
 _lib_exitcodes.Report = _NaNReport
 runpy.run_path(script, run_name="__main__")
 """
@@ -106,8 +128,13 @@ def _run(tree: Path, tool: str, argv: list[str], wrapper: str | None = None):
 
 @pytest.mark.usefixtures("da_guard_env")
 @pytest.mark.parametrize("tool, argv, status", CASES, ids=IDS)
-def test_the_document_is_the_one_encoders_text_at_the_paths_status(tree, tool, argv, status):
+def test_the_document_is_the_one_encoders_text_at_the_paths_status(tree, tool, argv, status,
+                                                                   request):
     p = _run(tree, tool, argv)
+    case_id = request.node.callspec.id
+    if case_id in EARLY_EXIT:
+        _assert_early_exit(case_id, p)
+        return
     assert p.returncode == status, p.stderr[-2000:]
     doc = json.loads(p.stdout)
     assert p.stdout == encode_json(doc) + "\n", p.stdout[:500]
@@ -118,10 +145,16 @@ def test_the_document_is_the_one_encoders_text_at_the_paths_status(tree, tool, a
 @pytest.mark.real_crash_exit_code
 @pytest.mark.usefixtures("da_guard_env")
 @pytest.mark.parametrize("tool, argv, status", CASES, ids=IDS)
-def test_a_nan_in_the_document_is_named_and_none_of_it_printed(tree, tool, argv, status):
+def test_a_nan_in_the_document_is_named_and_none_of_it_printed(tree, tool, argv, status,
+                                                               request):
     """#3558: no part of the document and no envelope on stdout — one stderr
-    line naming the value, the crash code."""
+    line naming the value, the crash code. #3617: an rc-2 early exit builds
+    no Report, so there is no NaN to name: stdout empty, its own stderr line."""
     p = _run(tree, tool, argv, _NAN_WRAPPER)
+    case_id = request.node.callspec.id
+    if case_id in EARLY_EXIT:
+        _assert_early_exit(case_id, p)
+        return
     assert p.returncode == 2, p.stderr[-2000:]
     assert p.stdout == "", p.stdout
     assert "injected: nan is not a JSON number" in p.stderr
@@ -134,7 +167,7 @@ def test_a_nan_in_the_document_is_named_and_none_of_it_printed(tree, tool, argv,
 # here, in-process, the step run() takes (`emit_result`).
 
 sys.path.insert(0, str(TOOLS / "ops"))
-from _lib_exitcodes import emit_result  # noqa: E402
+from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402
 import byo_check  # noqa: E402
 import cutover_tenant  # noqa: E402
 import discover_instance_mappings  # noqa: E402
@@ -145,10 +178,17 @@ _PASS = {"check": "x", "status": "pass", "detail": "d"}
 
 
 def _rc(main, *args):
+    """The exit status, as `run()` reaches it — a CallerError (#3617: a run
+    that answered nothing) ends at the caller-error code, its line on stderr."""
     try:
         return emit_result(main(*args))
     except SystemExit as exc:
         return exc.code
+    except CallerError as exc:
+        try:
+            exit_on_crash(exc)
+        except SystemExit as done:
+            return done.code
 
 
 @pytest.mark.parametrize("checks, status", [
@@ -158,7 +198,12 @@ def test_byo_check_json_status(monkeypatch, capsys, checks, status):
     monkeypatch.setattr(byo_check, "check_prometheus", lambda args: checks)
     monkeypatch.setattr(sys, "argv", ["byo_check", "prometheus", "--json"])
     assert _rc(byo_check.main) == status
-    assert json.loads(capsys.readouterr().out)["status"] == ("pass" if status == 0 else "fail")
+    out = capsys.readouterr()
+    if status == 2:  # #3617: every check unanswered — no document
+        assert out.out == ""
+        assert "ERROR: nothing was answered: prometheus x: d" in out.err, out.err
+        return
+    assert json.loads(out.out)["status"] == ("pass" if status == 0 else "fail")
 
 
 @pytest.mark.parametrize("checks, status", [
@@ -168,7 +213,12 @@ def test_federation_check_json_status(monkeypatch, capsys, checks, status):
     monkeypatch.setattr(federation_check, "check_edge", lambda url: checks)
     monkeypatch.setattr(sys, "argv", ["federation_check", "edge", "--json"])
     assert _rc(federation_check.main) == status
-    assert json.loads(capsys.readouterr().out)["status"] == ("pass" if status == 0 else "fail")
+    out = capsys.readouterr()
+    if status == 2:  # #3617: every check unanswered — no document
+        assert out.out == ""
+        assert "ERROR: nothing was answered: x: d" in out.err, out.err
+        return
+    assert json.loads(out.out)["status"] == ("pass" if status == 0 else "fail")
 
 
 @pytest.mark.parametrize("report, status", [
@@ -181,7 +231,12 @@ def test_cutover_json_status(monkeypatch, capsys, report, status):
     monkeypatch.setattr(sys, "argv", ["cutover_tenant", "--readiness-json", "r.json",
                                       "--tenant", "t", "--json-output"])
     assert _rc(cutover_tenant.main) == status
-    assert json.loads(capsys.readouterr().out) == report
+    out = capsys.readouterr()
+    if status == 2:  # #3617: the one step unanswered — no document
+        assert out.out == ""
+        assert "ERROR: nothing was answered: s: m" in out.err, out.err
+        return
+    assert json.loads(out.out) == report
 
 
 def test_discover_mappings_json_success_is_0(monkeypatch, capsys):

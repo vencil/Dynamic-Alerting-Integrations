@@ -190,9 +190,8 @@ def test_a_tree_the_generator_refuses_is_refused_not_empty(tmp_path, name, files
         assert_refused(p.returncode, p.stderr, named)
         assert p.stdout == "", p.stdout  # #3558: the shared refusal carries no document
         return
-    doc = json.loads(p.stdout)  # the tool's own refusal: its document, zeroed
-    assert doc["status"] == "caller_error"
-    assert doc["tenants"] == [] and doc["summary"]["total_receivers"] == 0
+    # the tool's own refusal: #3617, no document (it used to be its schema
+    # zeroed with reason `routing_tree_refused`); the cause on stderr.
+    assert p.stdout == "", p.stdout
     assert p.returncode == 2, (p.returncode, p.stderr[-800:])
     assert "route generator refuses this tree" in p.stderr, p.stderr[-800:]
-    assert doc["reason"] == "routing_tree_refused"

@@ -1,5 +1,4 @@
 """Tests for check_frontmatter_versions.py — Frontmatter version global scan."""
-import json
 import os
 import sys
 
@@ -526,15 +525,15 @@ class TestCLIUnderADotDirectoryAndOnAnEmptyTree:
 
     def test_json_mode_refuses_with_one_json_document(
             self, tmp_path, monkeypatch, capsys):
-        """dev-rules §13: --json stdout is exactly one JSON document on every
-        terminal path. Red if the refusal prints prose to stdout instead."""
+        """#3617: under --json a caller error leaves stdout empty, the reason
+        on stderr (it used to be one `caller_error` JSON document). Red if the
+        refusal prints prose (or a document) to stdout."""
         self._no_markdown(tmp_path, monkeypatch)
-        assert emit_result(cfv.main(["--json"])) == EXIT_CALLER_ERROR
+        with pytest.raises(SystemExit) as exc_info:
+            emit_result(cfv.main(["--json"]))
+        assert exc_info.value.code == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
-        doc = json.loads(captured.out)
-        assert doc["status"] == "caller_error"
-        assert "no markdown files found" in doc["reason"]
-        assert doc["total_scanned"] == 0 and doc["items"] == []
+        assert captured.out == ""
         assert "no markdown files found" in captured.err
 
     def test_markdown_that_is_all_hidden_says_so(self, tmp_path, monkeypatch, capsys):

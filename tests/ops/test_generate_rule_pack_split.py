@@ -22,17 +22,23 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import generate_rule_pack_split as grps  # noqa: E402
-from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _exit_code(main, *args):
     """`main()`'s exit the way `run()` ends it (#3216): a returned Report's
     document is written and its status is the code, a `SystemExit` gives
-    its own."""
+    its own, and a `CallerError` (#3617: a run that answered nothing) is the
+    caller-error code with its line on stderr and stdout empty."""
     try:
         return emit_result(main(*args))
     except SystemExit as exc:
         return exc.code
+    except CallerError as exc:
+        try:
+            exit_on_crash(exc)
+        except SystemExit as done:
+            return done.code
 
 
 # ---------------------------------------------------------------------------

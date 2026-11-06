@@ -38,7 +38,8 @@ from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
 from _lib_prometheus import (  # noqa: E402
     QueryError, collapse_replicas, instant_or_error, prometheus_rules,
     prometheus_status_config, vector_count)
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 
 # The module's one query call: (rows, None) or (None, why).
 query_prometheus = instant_or_error
@@ -379,12 +380,17 @@ def main():
     )
 
     if args.json:
-        return Report({  # #3216: run() encodes it
+        # #3617: see byo-check — the unanswered checks named, or rc 2 with
+        # stdout empty when none was answered.
+        return partial_answer({  # #3216: run() encodes it
             "tool": "federation-check",
             "section": section,
             "status": "fail" if has_failure else "pass",
             "checks": checks,
-        }, EXIT_CALLER_ERROR if caller_error else EXIT_VIOLATION if has_failure else EXIT_OK)
+        }, EXIT_CALLER_ERROR if caller_error else EXIT_VIOLATION if has_failure else EXIT_OK,
+            unanswered=[f"{c['check']}: {c.get('detail', '')}" for c in checks
+                        if c["status"] == "fail" and c.get("caller_error")],
+            of=len(checks))
     format_output(section, checks)
     print(f"\n{'='*60}")
     print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")

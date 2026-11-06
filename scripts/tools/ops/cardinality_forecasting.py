@@ -632,48 +632,22 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
         else:
             print(f"Error: Prometheus query failed: {safe_label(str(exc))}",
                   file=sys.stderr)
-        if args.json_output:
-            return Report({  # #3216: run() writes it
-                "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "caller_error",
-                "reason": "prometheus_query_error",
-                "error": str(exc),
-                "lookback_days": lookback_days,
-                "cardinality_limit": args.limit,
-                "warn_days": args.warn_days,
-                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0,
-                            "non_finite_samples_dropped": 0},
-                "tenants": [],
-            }, EXIT_CALLER_ERROR)
         return EXIT_CALLER_ERROR
 
     if not cardinality_data:
+        # #3213: how many samples were dropped as non-finite (the --tenant's
+        # only) is said here — #3617: there is no document to carry it.
+        dropped = sum(n for t, n in non_finite_dropped.items()
+                      if not args.tenant or t == args.tenant)
         if lang == "zh":
-            print("未取得基數資料。請確認 Prometheus 端點和 tenant_threshold_* 指標。",
+            print("未取得基數資料。請確認 Prometheus 端點和 tenant_threshold_* 指標。"
+                  + (f"（{dropped} 個非有限值樣本已丟棄）" if dropped else ""),
                   file=sys.stderr)
         else:
             print("No cardinality data retrieved. Check Prometheus endpoint "
-                  "and tenant_threshold_* metrics.", file=sys.stderr)
-        if args.json_output:
-            # #1112: same schema as generate_json_report(), zero tenants, plus a
-            # status/reason discriminator. Exit code stays EXIT_CALLER_ERROR —
-            # only the output shape changes, not the exit semantics.
-            # #3216: run() writes it.
-            return Report({
-                "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-                "status": "no_data",
-                "reason": "no_cardinality_data",
-                "lookback_days": lookback_days,
-                "cardinality_limit": args.limit,
-                "warn_days": args.warn_days,
-                "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0,
-                            # #3213: every sample non-finite (the --tenant's
-                            # only, as in the report)
-                            "non_finite_samples_dropped": sum(
-                                n for t, n in non_finite_dropped.items()
-                                if not args.tenant or t == args.tenant)},
-                "tenants": [],
-            }, EXIT_CALLER_ERROR)
+                  "and tenant_threshold_* metrics."
+                  + (f" ({dropped} non-finite sample(s) dropped)" if dropped else ""),
+                  file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     # Generate forecast

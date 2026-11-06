@@ -38,7 +38,8 @@ from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
 from _lib_prometheus import (  # noqa: E402
     QueryError, alertmanager_alerts, alertmanager_silences, alertmanager_status,
     collapse_replicas, instant_or_error, prometheus_rules, vector_count, vector_sample)
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 # #1132 structural check is the SINGLE implementation in _grar_validate.py (the
 # generator's fail-closed invariant); reuse it here so the BYO runtime check and
 # the generation-time guard can never disagree on "is this equal-label gated".
@@ -915,11 +916,17 @@ def main():
     # #452/#737: caller-error (cannot reach Prometheus/AM, query/API failed)
     # wins over violation — the tool could not do its job.
     if args.json:
-        return Report({  # #3216: run() encodes it
+        # #3617: a check whose read got no answer is named; the rest is the
+        # partial answer (none answered: rc 2, stdout empty).
+        checks = [(s["section"], c) for s in all_results for c in s["checks"]]
+        return partial_answer({  # #3216: run() encodes it
             "tool": "byo-check",
             "status": "fail" if has_failure else "pass",
             "sections": all_results,
-        }, EXIT_CALLER_ERROR if caller_error else EXIT_VIOLATION if has_failure else EXIT_OK)
+        }, EXIT_CALLER_ERROR if caller_error else EXIT_VIOLATION if has_failure else EXIT_OK,
+            unanswered=[f"{s} {c['check']}: {c.get('detail', '')}" for s, c in checks
+                        if c["status"] == "fail" and c.get("caller_error")],
+            of=len(checks))
 
     print(f"\n{'='*60}")
     print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")

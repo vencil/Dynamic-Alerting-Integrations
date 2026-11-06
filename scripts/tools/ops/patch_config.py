@@ -1616,11 +1616,11 @@ def _envelope(status, reason):
 
 
 def _refuse(as_json, reason, message):
-    """Caller error: message on stderr and, under --json, its document
-    (a ``Report`` with status 2: dev-rules §13)."""
+    """Caller error: message on stderr, rc 2. #3617: under --json stdout
+    stays empty — it was the --diff keys emptied plus `status` / `reason`,
+    a document with no answer in it."""
     _say(f"ERROR: {message}")
-    return _emit(_envelope("caller_error", reason) if as_json else None,
-                 EXIT_CALLER_ERROR)
+    return _emit(None, EXIT_CALLER_ERROR)
 
 
 def _apply_envelope(args, mode, report, outcome, code):
@@ -1628,7 +1628,7 @@ def _apply_envelope(args, mode, report, outcome, code):
     `status` (see _status_exit_code), `exit_code`, `written`, `rolled_back`,
     `message` and per-pod `problems` / `warnings` / `target_changes`."""
     if outcome["status"] == "caller_error":
-        return _envelope("caller_error", outcome["reason"])
+        return None  # #3617: nothing was answered, stdout stays empty
     return {
         "tenant": args.tenant, "metric_key": args.metric_key,
         "configmap_mode": mode, "before": None, "after": None,

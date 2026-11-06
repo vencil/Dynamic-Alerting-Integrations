@@ -24,13 +24,24 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 import _lib_kubectl  # noqa: E402
 from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 from _lib_kubectl import KubectlError  # noqa: E402
-from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+from _lib_exitcodes import emit_result, exit_on_crash  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _as_run(result):
     """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
     document is written and its status is the exit, as SystemExit."""
     raise SystemExit(emit_result(result))
+
+
+def _run_main(main):
+    """`_as_run(main())`, plus what `run()` does with a CallerError main
+    raises (#3617: a run that answered nothing): the caller-error exit, its
+    line on stderr, stdout empty."""
+    try:
+        result = main()
+    except CallerError as exc:
+        exit_on_crash(exc)
+    _as_run(result)
 
 
 # ---------------------------------------------------------------------------
@@ -287,14 +298,18 @@ class TestMain:
     @pytest.mark.parametrize("extra", [(), ("--json",)])
     def test_missing_dashboard_file_exits_caller_error(self, tmp_path, capsys, cli_argv, extra):
         """#452: a dashboard file that is not there is the caller's — rc 2,
-        under --json too, with the document saying `fail` (#3216)."""
+        under --json too. #3617: nothing was answered, so no document —
+        stdout empty, the missing file named on stderr (it used to be a
+        document saying `fail`, #3216)."""
         cli_argv("grafana_import.py", "--dashboard", str(tmp_path / "nope.json"),
                  "--dry-run", *extra)
         with pytest.raises(SystemExit) as exc:
-            _as_run(gi.main())
+            _run_main(gi.main)
         assert exc.value.code == 2
+        out = capsys.readouterr()
         if extra:
-            assert json.loads(capsys.readouterr().out)["status"] == "fail"
+            assert out.out == ""
+            assert "nope.json: No such file or directory" in out.err, out.err
 
     def test_verify_json_output(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(gi, "verify_dashboards",

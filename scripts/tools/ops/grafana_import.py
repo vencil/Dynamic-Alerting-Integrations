@@ -41,7 +41,8 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
 from _lib_kubectl import KubectlError, kubectl_list  # noqa: E402  (#3349)
 
@@ -268,12 +269,17 @@ def main():
         status = (EXIT_CALLER_ERROR if caller_error
                   else EXIT_VIOLATION if has_failure else EXIT_OK)
         if args.json:
-            return Report({  # #3216: run() encodes it
+            # #3617: the checks kubectl did not answer are named; none
+            # answered is rc 2 with stdout empty.
+            return partial_answer({  # #3216: run() encodes it
                 "tool": "grafana-import",
                 "mode": "verify",
                 "status": "fail" if has_failure else "pass",
                 "checks": checks,
-            }, status)
+            }, status,
+                unanswered=[f"{c['check']}: {c.get('detail', '')}" for c in checks
+                            if c["status"] == "fail" and c.get("caller_error")],
+                of=len(checks))
         print(f"\n{'='*60}")
         print(f"  GRAFANA DASHBOARD VERIFICATION")
         print(f"{'='*60}")
@@ -320,12 +326,16 @@ def main():
     status = (EXIT_CALLER_ERROR if caller_error
               else EXIT_VIOLATION if has_failure else EXIT_OK)
     if args.json:
-        return Report({  # #3216: run() encodes it
+        # #3617: see --verify.
+        return partial_answer({  # #3216: run() encodes it
             "tool": "grafana-import",
             "mode": "dry-run" if args.dry_run else "import",
             "status": "fail" if has_failure else "pass",
             "actions": all_results,
-        }, status)
+        }, status,
+            unanswered=[f"{r.get('file') or r.get('action', '?')}: {r.get('detail', '')}"
+                        for r in all_results if r["status"] == "fail" and r.get("caller_error")],
+            of=len(all_results))
     print(f"\n{'='*60}")
     print(f"  GRAFANA DASHBOARD IMPORT {'(DRY RUN)' if args.dry_run else ''}")
     print(f"{'='*60}")

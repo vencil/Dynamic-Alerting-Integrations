@@ -778,13 +778,16 @@ class TestMainLocal:
 
     @patch("gitops_check.check_local")
     def test_no_parse_tree_under_json_is_rc_2_with_the_report(self, mock_check_local, capsys):
-        """ADR-036 step 4: no usable parse-tree is a caller error — under
-        --json the report saying so goes out and the exit is 2 (#3216)."""
+        """ADR-036 step 4: no usable parse-tree is a caller error — the exit
+        is 2. #3617: under --json stdout stays empty (it used to be a report
+        whose one check said `da_guard_failed`); the cause is on stderr."""
         mock_check_local.side_effect = gc.ParseTreeError("no da-guard")
         exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config", "--json"])
         assert exc_info.value.code == EXIT_CALLER_ERROR
-        doc = json.loads(capsys.readouterr().out)
-        assert doc["checks"][0]["details"]["reason"] == "da_guard_failed"
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert ("ERROR: cannot read /tmp/config through `da-guard parse-tree`: no da-guard"
+                in out.err), out.err
 
 
 class TestMainEdgeCases:

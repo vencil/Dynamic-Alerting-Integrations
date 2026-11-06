@@ -695,18 +695,6 @@ def _status_doc(status: str) -> Callable[[object], str | None]:
     return check
 
 
-def _caller_error_doc(reason: str) -> Callable[[object], str | None]:
-    """An early-exit envelope: `status: caller_error` and the given `reason`."""
-    def check(doc: object) -> str | None:
-        if not isinstance(doc, dict):
-            return f"expected a JSON object, got {type(doc).__name__}"
-        got = (doc.get("status"), doc.get("reason"))
-        if got != ("caller_error", reason):
-            return f"(status, reason) must be ('caller_error', {reason!r}), got {got}"
-        return None
-    return check
-
-
 def _checklist_doc(doc: object) -> str | None:
     """`--checklist-only` must serve THE CHECKLIST, whatever else is combined with it.
 
@@ -922,11 +910,11 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--prometheus", s, "--json"]),  # #3212: no --alertmanager
     # #3065: a failed ALERTS query used to read as "nothing fired" (rc 0
     # under --ci). It is a caller error now, and still one document.
-    R("alert_quality", "prometheus-query-error",
-      # deliberately unreachable: port 1 is never listening
+    R("alert_quality",
+      "prometheus-query-error",
       lambda t, s: ["--prometheus", "http://127.0.0.1:1", "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("prometheus_query_error")),
+      expect_document=False),
     # #3115: a hand-written `sys.exit(2)` after the arguments are accepted —
     # no named reason, but still one envelope (from `_lib_exitcodes.run`).
     R("alert_quality", "invalid-period",
@@ -951,17 +939,19 @@ RECIPES: list[Recipe] = [
     # the pair answered rc 0 (#1828). It is refused now — rc 2, and the
     # rejection still emits exactly one document naming why. (`--validate`,
     # the other such flag, was removed in #3206.)
-    R("assemble_config_dir", "check-manifest",
+    R("assemble_config_dir",
+      "check-manifest",
       lambda t, s: ["--sources", str(SEED_CONF_D), "--check",
                     "--manifest", _out(t, "m.json"), "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("check_with_manifest")),
+      expect_document=False),
     # #1829: `--manifest` alone (no `--sources`) has no load path to take.
-    R("assemble_config_dir", "manifest-without-sources",
+    R("assemble_config_dir",
+      "manifest-without-sources",
       lambda t, s: ["--manifest", _out(t, "m.json"),
                     "--output", _out(t, "assembled"), "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("manifest_without_sources")),
+      expect_document=False),
     # #3115: `exit_on_output_write_error` — the output cannot be created.
     R("assemble_config_dir", "output-unwritable",
       lambda t, s: ["--sources", str(SEED_CONF_D), "--output", _path_under_a_file(t), "--json"],
@@ -990,38 +980,43 @@ RECIPES: list[Recipe] = [
     # #3059: the three rc 2 paths that printed nothing under `--json`; the
     # two argument errors come before the Prometheus check, so
     # `--skip-if-unavailable` cannot turn them into a skip.
-    R("backtest_threshold", "prometheus-unreachable",
+    R("backtest_threshold",
+      "prometheus-unreachable",
       lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
                     "--old-value", "100", "--new-value", "150",
                     "--prometheus", "http://127.0.0.1:1", "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("prometheus_unavailable")),
-    R("backtest_threshold", "tenant-args-missing",
+      expect_document=False),
+    R("backtest_threshold",
+      "tenant-args-missing",
       lambda t, s: ["--tenant", "tenant-one", "--prometheus", "http://127.0.0.1:1",
                     "--skip-if-unavailable", "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("tenant_args_missing")),
-    R("backtest_threshold", "invalid-tenant-id",
+      expect_document=False),
+    R("backtest_threshold",
+      "invalid-tenant-id",
       lambda t, s: ["--tenant", 'a"b', "--metric", "mysql_connections",
                     "--old-value", "70", "--new-value", "50",
                     "--prometheus", "http://127.0.0.1:1", "--skip-if-unavailable", "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("invalid_tenant_id")),
-    R("backtest_threshold", "no-change-source",
+      expect_document=False),
+    R("backtest_threshold",
+      "no-change-source",
       lambda t, s: ["--prometheus", "http://127.0.0.1:1",
                     "--skip-if-unavailable", "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("no_change_source")),
+      expect_document=False),
     # #3089: an output path that cannot be written is found BEFORE the
     # Prometheus check, so `--skip-if-unavailable` does not print a
     # `skipped` envelope next to rc 2; the parent here does not exist.
-    R("backtest_threshold", "output-unwritable",
+    R("backtest_threshold",
+      "output-unwritable",
       lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
                     "--old-value", "100", "--new-value", "150",
                     "--prometheus", "http://127.0.0.1:1", "--skip-if-unavailable",
                     "-o", _out(t, "absent/backtest.json"), "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("output_unwritable")),
+      expect_document=False),
 
     # ── batch_diagnose  (⚠ known multi-mode trap) ──────────────────────────
     # #1525: every mode reads the ConfigMap (the fake kubectl's db-a / db-b).
@@ -1051,14 +1046,19 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["all", "--prometheus", s, "--alertmanager", s, "--json"]),
 
     # ── cardinality_forecasting ────────────────────────────────────────────
+    # #3617: no cardinality data is rc 2 with no document; the forecast
+    # itself is driven on the rich payloads.
+    R("cardinality_forecasting", "no-data",
+      lambda t, s: ["--prometheus", s, "--json"],
+      expect_caller_error=True, expect_document=False),
     R("cardinality_forecasting", "forecast",
-      lambda t, s: ["--prometheus", s, "--json"]),
+      lambda t, s: ["--prometheus", s + "/rich", "--json"]),
     # #3065: a failed query is told apart from "no data" (no_cardinality_data).
-    R("cardinality_forecasting", "prometheus-query-error",
-      # deliberately unreachable: port 1 is never listening
+    R("cardinality_forecasting",
+      "prometheus-query-error",
       lambda t, s: ["--prometheus", "http://127.0.0.1:1", "--json"],
       expect_caller_error=True,
-      doc_check=_caller_error_doc("prometheus_query_error")),
+      expect_document=False),
 
     # ── check_alert ────────────────────────────────────────────────────────
     R("check_alert", "query",
@@ -1273,11 +1273,13 @@ RECIPES: list[Recipe] = [
     R("patch_config", "apply-noop",
       lambda t, s: ["db-a", "max_connections", "120", "--json"], needs_kubectl=True,
       doc_check=_status_doc("no-op")),
-    # Caller-error early exits: exit 2 and still one document.
+    # Caller-error early exits: exit 2 and no document (#3617: it was the
+    # --diff keys emptied plus status / reason). The third column is the
+    # reason each path is refused for, kept for the reader.
     *[R("patch_config", mode, (lambda a: lambda t, s: a)(argv),
-        needs_kubectl=True, expect_caller_error=True,
-        doc_check=_caller_error_doc(reason), fake_cm=cm)
-      for mode, argv, reason, cm in [
+        needs_kubectl=True, expect_caller_error=True, expect_document=False,
+        fake_cm=cm)
+      for mode, argv, _reason, cm in [
         ("bad-arguments", ["tenant-x", "--diff", "--json"], "bad_arguments", None),
         ("json-equals", ["tenant-x", "cpu", "1", "--diff", "--json=x"],
          "bad_arguments", None),
@@ -1304,9 +1306,11 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"],
       doc_check=lambda d: None if isinstance(d, dict) and d.get("status") == "ok"
       and d.get("schema") == "da-tools.explain-keys/v1" else f"not the explain report: {str(d)[:80]}"),
-    R("explain_keys", "missing-config-dir",
+    R("explain_keys",
+      "missing-config-dir",
       lambda t, s: ["--config-dir", str(t / "no-such-conf.d"), "--json"],
-      expect_caller_error=True, doc_check=_status_doc("caller_error")),
+      expect_caller_error=True,
+      expect_document=False),
 
     # ── policy_engine ──────────────────────────────────────────────────────
     R("policy_engine", "no-policies",
@@ -1430,10 +1434,11 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", _confd_with_nested_tenant(t), "--json"],
       doc_check=_validate_config_doc(must_see=_VC_NESTED_MUST_SEE)),
     # Early exit before any check runs: used to leave stdout empty (#1653).
-    R("validate_config", "missing-config-dir",
+    R("validate_config",
+      "missing-config-dir",
       lambda t, s: ["--config-dir", _out(t, "no-such-conf.d"), "--json"],
       expect_caller_error=True,
-      doc_check=_validate_config_doc(only_check="config_dir")),
+      expect_document=False),
 
     # ── validate_all  (scripts/tools/ top level, #1772) ────────────────────
     # Two terminal paths a subprocess can reach without side effects. The

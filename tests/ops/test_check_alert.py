@@ -15,7 +15,20 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_alert as ca  # noqa: E402
-from _lib_exitcodes import emit_result  # noqa: E402
+from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402
+
+
+def _caller_error_exit(call):
+    """The exit status of *call* as `run()` reaches it: a CallerError
+    (#3617: an rc-2 early exit with no document) ends at the caller-error
+    code with its line on stderr."""
+    try:
+        return emit_result(call())
+    except CallerError as exc:
+        try:
+            exit_on_crash(exc)
+        except SystemExit as done:
+            return done.code
 
 
 def _stub_http(monkeypatch, payload, err=None):
@@ -96,14 +109,15 @@ class TestCheckAlert:
 
     def test_http_error_exits_caller_error(self, monkeypatch, capsys):
         _stub_http(monkeypatch, None, err="connection refused")
-        # #3216: the document comes back as a Report; emit_result writes it
-        # and gives its status, as run() does.
-        rc = emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090"))
+        # #3617: no document — a CallerError, which run() ends at rc 2 with
+        # the cause on stderr (it was an {"error": …} document on stdout).
+        rc = _caller_error_exit(
+            lambda: ca.check_alert("HighCPU", "db-a", "http://localhost:9090"))
         assert rc == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
-        out = capsys.readouterr().out
-        payload = json.loads(out)
-        assert "error" in payload
-        assert "connection refused" in payload["error"]
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert "cannot read Prometheus alerts (http://localhost:9090)" in out.err
+        assert "connection refused" in out.err
 
 
 @pytest.mark.parametrize("payload,defect", [
@@ -114,7 +128,11 @@ class TestCheckAlert:
      "alert[0].labels.alertname is not a string"),
 ], ids=["no-data", "no-alerts", "error-status", "label-not-string"])
 def test_an_answer_that_is_not_one_is_rc2_not_inactive(monkeypatch, capsys, payload, defect):
-    """#3133: these used to read as no alert — "inactive", rc 0."""
+    """#3133: these used to read as no alert — "inactive", rc 0. #3617: rc 2
+    with stdout empty, the defect named on stderr."""
     _stub_http(monkeypatch, payload)
-    assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 2
-    assert defect in json.loads(capsys.readouterr().out)["error"]
+    assert _caller_error_exit(
+        lambda: ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 2
+    out = capsys.readouterr()
+    assert out.out == ""
+    assert defect in out.err, out.err

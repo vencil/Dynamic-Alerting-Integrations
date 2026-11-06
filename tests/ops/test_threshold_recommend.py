@@ -664,6 +664,38 @@ class TestCLI:
                 _as_run(tr.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
 
+    def test_no_key_measured_is_no_answer_under_json(self, tmp_path, capsys):
+        """#3617: every key's query unanswered — no partial answer, no document:
+        a CallerError naming the keys (run() makes it rc 2, stdout empty)."""
+        from _lib_exitcodes import CallerError
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+            "db-a", keys={"mysql_connections": 80, "mysql_threads_running": 50}))
+        with patch("threshold_recommend.prometheus_instant",
+                   side_effect=tr.QueryError("connection refused")), \
+                patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
+                                   "--prometheus", "http://p:9090", "--json"]):
+            with pytest.raises(CallerError) as exc:
+                tr.main()
+        assert "db-a/mysql_connections" in str(exc.value), exc.value
+        assert "db-a/mysql_threads_running" in str(exc.value), exc.value
+        assert capsys.readouterr().out == ""
+
+    def test_a_key_never_queried_is_not_an_answered_part(self, tmp_path, capsys):
+        """#3617: the one queried key unanswered, beside a key with no
+        observed-map entry (never sent to Prometheus) — still no answer."""
+        from _lib_exitcodes import CallerError
+        write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml(
+            "db-a", keys={"mysql_connections": 80, "no_such_observed_key": 5}))
+        with patch("threshold_recommend.prometheus_instant",
+                   side_effect=tr.QueryError("connection refused")), \
+                patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
+                                   "--prometheus", "http://p:9090", "--json"]):
+            with pytest.raises(CallerError) as exc:
+                tr.main()
+        assert "db-a/mysql_connections" in str(exc.value), exc.value
+        assert "no_such_observed_key" not in str(exc.value), exc.value
+        assert capsys.readouterr().out == ""
+
     @pytest.mark.parametrize("fmt", [[], ["--json"], ["--export-patch"]],
                              ids=["text", "json", "export-patch"])
     def test_a_key_not_measured_makes_the_run_partial_rc2(self, tmp_path, capsys, fmt):

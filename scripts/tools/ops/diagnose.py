@@ -713,7 +713,14 @@ def main() -> Report:
         sys.exit(EXIT_CALLER_ERROR)
     # issue 1513: `status: error` used to exit 0, so `da-tools diagnose t && …`
     # passed on an unhealthy tenant. #3216: run() encodes the document.
-    return Report(result, exit_code(result))
+    # #3617: rc 2 (a Prometheus query not answered) is a partial answer —
+    # the rest of the check, the queries not answered named.
+    # The parts: each Prometheus query failed, plus the Pod check (answered:
+    # a kubectl that did not answer ended the run above).
+    failed = [str(i) for i in result.get("issues", []) if str(i).startswith(PROMETHEUS_FAILURE)]
+    if exit_code(result) != EXIT_CALLER_ERROR:
+        return Report(result, exit_code(result))
+    return Report(result, EXIT_CALLER_ERROR, unanswered=failed, of=len(failed) + 1)
 
 
 if __name__ == "__main__":

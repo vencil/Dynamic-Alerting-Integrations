@@ -885,14 +885,15 @@ class TestCLI:
         assert "No policy rules found" not in err
         assert "未找到策略規則" not in err
 
-    @pytest.mark.parametrize("body, reason", [
-        ("policies: [\n", "policy_file_invalid"),
-        ("測試: 1\n".encode("cp950"), "policy_file_invalid"),
-        ("- a\n", "policy_file_invalid"),
+    @pytest.mark.parametrize("body, said", [
+        ("policies: [\n", "is not valid YAML (syntax_error)"),
+        ("測試: 1\n".encode("cp950"), "is not valid YAML (invalid_utf8)"),
+        ("- a\n", "is not a mapping (the top level is a sequence"),
     ], ids=["invalid-yaml", "cp950", "top-level-list"])
-    def test_main_policy_unusable_file_json_envelope(self, tmp_path, capsys, body, reason):
-        """Same three shapes + --json → stdout is exactly one JSON document
-        carrying status caller_error and the reason; prose stays on stderr.
+    def test_main_policy_unusable_file_json_envelope(self, tmp_path, capsys, body, said):
+        """Same three shapes + --json → rc 2, stdout empty, the cause on
+        stderr (#3617: an rc-2 early exit prints no document; it used to be
+        one caller_error envelope with reason `policy_file_invalid`).
 
         Before the fix: 0 bytes of stdout (traceback) for the first two, and
         a `no_policies` / passed:true envelope with rc 0 for the list.
@@ -906,11 +907,8 @@ class TestCLI:
         exit_code = emit_result(pe.main(["--config-dir", str(cfg), "--policy", str(pol), "--json"]))
         assert exit_code == 2
         captured = capsys.readouterr()
-        doc = json.loads(captured.out)          # exactly one document
-        assert doc["status"] == "caller_error"
-        assert doc["reason"] == reason
-        assert doc["passed"] is False
-        assert doc["violations"] == []
+        assert captured.out == ""               # #3617: no document
+        assert said in captured.err, captured.err
         assert repr(str(pol)) in captured.err
 
     def test_main_policy_valid_file_still_evaluates(self, tmp_path, capsys):
@@ -1198,8 +1196,7 @@ class TestInvalidRules:
             argv += ["--policy", str(pol)]
         assert emit_result(pe.main(argv)) == 2
         out = capsys.readouterr()
-        doc = json.loads(out.out)
-        assert (doc["status"], doc["reason"], doc["passed"]) == ("caller_error", "policy_rule_invalid", False)
+        assert out.out == ""  # #3617: an rc-2 early exit prints no document
         assert needle in out.err
         assert "rule #1" in out.err   # the good rule #0 is not named
 
@@ -1222,7 +1219,7 @@ class TestInvalidRules:
         pol.write_text("polices:\n" + _RULE_OK, encoding="utf-8")
         assert emit_result(pe.main(["--config-dir", str(tmp_path), "--ci", "--json", "--policy", str(pol)])) == 2
         out = capsys.readouterr()
-        assert json.loads(out.out)["reason"] == "policy_file_invalid"
+        assert out.out == ""  # #3617: an rc-2 early exit prints no document
         assert "unknown top-level key(s) ['polices']" in out.err
 
     @pytest.mark.parametrize("body", ["policies:\n" + _RULE_OK + "_policies:\n" + _RULE_OK,

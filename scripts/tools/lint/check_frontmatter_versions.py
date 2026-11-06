@@ -350,13 +350,8 @@ def main(argv: Optional[List[str]] = None) -> "Report | None":
             reason = f"no markdown files found under {DOCS_DIR}"
         msg = f"ERROR: {reason} — nothing was measured"
         print(msg, file=sys.stderr)
-        if args.json:
-            # dev-rules §13: --json stdout is exactly one JSON document on
-            # every terminal path, early exits included.
-            return Report(json_document([], expected, 0, 0, total_found=total_found,
-                                        status="caller_error", reason=reason),
-                          EXIT_CALLER_ERROR)  # #3216: run() encodes it
-        print(msg)
+        if not args.json:  # #3617: under --json a caller error leaves stdout empty
+            print(msg)
         sys.exit(EXIT_CALLER_ERROR)
     total_scanned = len(scanned)
     total_with_fm = sum(1 for s in scanned if s.has_frontmatter)

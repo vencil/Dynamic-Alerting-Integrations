@@ -71,7 +71,8 @@ from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133
 from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
 import _lib_consumer_read  # noqa: E402  (#3426: rule_pack_files, the one declaration)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, die_caller_error)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, die_caller_error,
+    partial_answer)
 # #1560: the mount-list document generate-routes writes, and the Operator's
 # mount root (the generator's default) — one definition, the generator's.
 from _grar_merge import (  # noqa: E402
@@ -648,7 +649,14 @@ def main():
     checker.run_all_checks()
 
     if args.json:
-        return Report(checker.json_document(), checker.exit_code())  # #3216: run() encodes it
+        # #3617: a read that got no answer is rc 2; the document is a partial
+        # answer naming those checks — or, when no check was answered, none
+        # at all (the causes on stderr, stdout empty).
+        return partial_answer(  # #3216: run() encodes it
+            checker.json_document(), checker.exit_code(),
+            unanswered=[f"{c.name}: {c.detail}" for c in checker.checks
+                        if c.status == "fail" and c.caller_error],
+            of=len(checker.checks))
     checker.print_human_report()
 
     sys.exit(checker.exit_code())

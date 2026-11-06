@@ -213,11 +213,14 @@ class TestVerdicts:
         assert payload["missing"] == ["croniter"]
 
     def test_json_output_on_caller_error(self, tmp_path, capsys):
+        """#3617: under --json a caller error leaves stdout empty, the cause
+        on stderr (it used to be a `{"status": "error"}` document)."""
         ci, _ = _write_pair(tmp_path, "pytest", "pytest")
         rc = _run(ci, tmp_path / "missing.json", "--json")
-        payload = json.loads(capsys.readouterr().out)
+        out = capsys.readouterr()
         assert rc == 2
-        assert payload["status"] == "error"
+        assert out.out == ""
+        assert "ERROR: devcontainer.json not found:" in out.err, out.err
 
 
 # ── 3. Live repo + mutant ────────────────────────────────────────────

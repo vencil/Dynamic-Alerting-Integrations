@@ -58,7 +58,8 @@ MAINTENANCE_QUERY = collapse_replicas('user_state_filter{filter="maintenance"}')
 # --alertmanager when it is not given. Only a URL the caller gave is a source
 # the run must read (#3133, owner 2026-10-23: an optional source).
 _DEFAULT_ALERTMANAGER = "http://localhost:9093"
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3392)
 
 # The module's one query call: (rows, None) or (None, why).
@@ -448,11 +449,17 @@ def main():
     status = (EXIT_CALLER_ERROR if caller_error
               else EXIT_VIOLATION if has_failure else EXIT_OK)
     if args.json:
-        return Report({  # #3216: run() encodes it
+        # #3617: the checks not answered are named; none answered is rc 2
+        # with stdout empty.
+        checks = [(p["phase"], c) for p in all_results for c in p["checks"]]
+        return partial_answer({  # #3216: run() encodes it
             "tool": "shadow-verify",
             "status": "fail" if has_failure else "pass",
             "phases": all_results,
-        }, status)
+        }, status,
+            unanswered=[f"{ph} {c['check']}: {c.get('detail', '')}" for ph, c in checks
+                        if c["status"] == "fail" and c.get("caller_error")],
+            of=len(checks))
 
     print(f"\n{'='*60}")
     print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")

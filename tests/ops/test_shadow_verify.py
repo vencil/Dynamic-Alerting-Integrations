@@ -18,13 +18,24 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import shadow_verify as sv  # noqa: E402
 import _lib_prometheus  # noqa: E402  (#3133: queries are read by the lib)
-from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _as_run(result):
     """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
     document is written and its status is the exit, as SystemExit."""
     raise SystemExit(emit_result(result))
+
+
+def _run_main(main):
+    """`_as_run(main())`, plus what `run()` does with a CallerError main
+    raises (#3617: a run that answered nothing): the caller-error exit, its
+    line on stderr, stdout empty."""
+    try:
+        result = main()
+    except CallerError as exc:
+        exit_on_crash(exc)
+    _as_run(result)
 
 
 # ---------------------------------------------------------------------------
@@ -419,15 +430,23 @@ class TestMainCLI:
     @pytest.mark.parametrize("caller_error, rc", [(True, 2), (False, 1)])
     def test_json_caller_error_is_rc_2_not_1(self, capsys, caller_error, rc):
         """#452/#737 under --json (#3216): a check that could not be made
-        (Prometheus answering 500) is rc 2; a failed finding is rc 1."""
+        (Prometheus answering 500) is rc 2; a failed finding is rc 1.
+        #3617: the rc-2 run here answered nothing (its one check), so it
+        prints no document — stdout empty, the check named on stderr."""
         check = {"check": "prometheus_reachable", "status": "fail", "detail": "HTTP 500"}
         if caller_error:
             check["caller_error"] = True
         with patch.object(sv, "check_preflight", return_value=[check]):
             with patch("sys.argv", ["shadow_verify.py", "preflight", "--json"]):
                 with pytest.raises(SystemExit) as exc_info:
-                    _as_run(sv.main())
-        assert json.loads(capsys.readouterr().out)["status"] == "fail"
+                    _run_main(sv.main)
+        out = capsys.readouterr()
+        if caller_error:
+            assert out.out == ""
+            assert "ERROR: nothing was answered:" in out.err, out.err
+            assert "prometheus_reachable: HTTP 500" in out.err, out.err
+        else:
+            assert json.loads(out.out)["status"] == "fail"
         assert exc_info.value.code == rc
 
     def test_json_exit_is_the_verdict(self, tmp_path, capsys):

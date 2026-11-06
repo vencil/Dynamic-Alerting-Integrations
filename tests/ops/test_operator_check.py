@@ -611,8 +611,16 @@ class TestMain:
 
     @pytest.mark.parametrize("code", [0, 1, 2])
     def test_json_flag_picks_json_reporter(self, monkeypatch, cli_argv, code):
+        """#3617: rc 2 under --json is a partial answer, so the code-2 run
+        holds one answered check beside the unanswered one (a caller-error
+        status with no unanswered check is refused) — the document is
+        still the JSON reporter's."""
         called = {"json": False, "human": False}
-        monkeypatch.setattr(oc.OperatorChecker, "run_all_checks", lambda self: None)
+        checks = ([oc.CheckResult("answered", "pass"),
+                   oc.CheckResult("unanswered", "fail", "kubectl timed out",
+                                  caller_error=True)] if code == 2 else [])
+        monkeypatch.setattr(oc.OperatorChecker, "run_all_checks",
+                            lambda self: self.checks.extend(checks))
         monkeypatch.setattr(
             oc.OperatorChecker, "json_document",
             lambda self: called.__setitem__("json", True) or {},

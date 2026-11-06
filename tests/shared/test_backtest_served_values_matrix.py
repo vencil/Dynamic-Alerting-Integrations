@@ -812,10 +812,11 @@ def test_a_retired_name_with_data_is_not_backtested_against(
 
 @pytest.mark.parametrize("side", ["baseline", "current", "both"])
 def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
-    """A file the exporter cannot decode, on either side: exit 2 with the
-    `caller_error` envelope, even under --skip-if-unavailable (the trees are
-    read before Prometheus is asked). #3206: through the shared conf.d
-    refusal — the file named, reason `conf_d_not_servable`."""
+    """A file the exporter cannot decode, on either side: exit 2, even under
+    --skip-if-unavailable (the trees are read before Prometheus is asked).
+    #3206: through the shared conf.d refusal — the file named on stderr.
+    #3617: stdout stays empty under --json (it used to be the `caller_error`
+    envelope, reason `conf_d_not_servable`)."""
     good = {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")}
     bad = {"_defaults.yaml": _DEFAULTS, "tx.yaml": "tenants:\n  tx: [unclosed\n"}
     b = _tree(tmp_path / "base", bad if side in ("baseline", "both") else good)
@@ -826,10 +827,9 @@ def test_a_tree_da_guard_refuses_exits_2(tmp_path: Path, side: str) -> None:
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         env={**os.environ, "PYTHONIOENCODING": "utf-8"})
     assert p.returncode == 2, (p.stdout, p.stderr)
-    doc = json.loads(p.stdout)
-    assert (doc["status"], doc["changes"]) == ("caller_error", [])
-    # #3111: both trees are read by da-guard only, so every side is this reason.
-    assert doc["reason"] == "conf_d_not_servable"
+    assert p.stdout == "", p.stdout
+    # #3111: both trees are read by da-guard only, so every side is the
+    # shared conf.d refusal.
     assert_refused(p.returncode, p.stderr, ["tx.yaml"])
 
 

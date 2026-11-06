@@ -1,7 +1,6 @@
 """Tests for byo_check.py — BYO Prometheus & Alertmanager integration verification."""
 from __future__ import annotations
 
-import json
 import os
 import sys
 from types import SimpleNamespace
@@ -13,17 +12,23 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import byo_check as bc  # noqa: E402
-from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _exit_code(main, *args):
     """`main()`'s exit the way `run()` ends it (#3216): a returned Report's
     document is written and its status is the code, a `SystemExit` gives
-    its own."""
+    its own, and a `CallerError` (#3617: a run that answered nothing) is the
+    caller-error code with its line on stderr and stdout empty."""
     try:
         return emit_result(main(*args))
     except SystemExit as exc:
         return exc.code
+    except CallerError as exc:
+        try:
+            exit_on_crash(exc)
+        except SystemExit as done:
+            return done.code
 
 
 # ---------------------------------------------------------------------------
@@ -305,11 +310,13 @@ class TestMain:
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
             with patch("sys.argv", ["byo_check.py", "prometheus", "--json"]):
                 rc = _exit_code(bc.main)
-        # #452/#737: unreachable Prometheus = transport caller-error → exit 2
+        # #452/#737: unreachable Prometheus = transport caller-error → exit 2.
+        # #3617: no check answered, so no document — stdout empty, stderr
+        # names the unanswered check.
         assert rc == 2
-        output = json.loads(capsys.readouterr().out)
-        assert output["tool"] == "byo-check"
-        assert output["status"] == "fail"
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert "ERROR: nothing was answered: prometheus prometheus_reachable" in out.err, out.err
 
     def test_all_target(self):
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):

@@ -246,9 +246,6 @@ def main(argv: list[str] | None = None) -> "int | Report":
         declared = devcontainer_packages(Path(args.devcontainer))
         required = ci_packages(Path(args.ci_workflow))
     except ParityError as exc:
-        if args.json:
-            # #3216: run() encodes it
-            return Report({"status": "error", "error": str(exc)}, EXIT_CALLER_ERROR)
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 

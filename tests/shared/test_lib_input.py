@@ -282,3 +282,23 @@ def test_require_selection_judges_a_selection_made_elsewhere(tmp_path):
     with pytest.raises(TypeError):
         _lib_input.require_selection(argparse.Namespace(src="x"), "src", [], wanted="w",
                                      lang="en")
+
+
+@pytest.mark.parametrize("where", ["path", "ancestor"])
+def test_a_stat_that_fails_is_not_nothing_there(tmp_path, monkeypatch, where):
+    """An lstat that fails with anything but ENOENT — at the path, or at the
+    nearest ancestor that is there — is something in the way: refused."""
+    default = tmp_path / "da" / "state"
+    real = os.lstat
+
+    def lstat(p, *a, **k):
+        if (where == "path" and pathlib.Path(p) == default) or \
+           (where == "ancestor" and pathlib.Path(p) == tmp_path):
+            raise PermissionError(errno.EACCES, os.strerror(errno.EACCES), str(p))
+        if where == "path":
+            return real(p, *a, **k)
+        if pathlib.Path(p) in (default, default.parent):
+            raise FileNotFoundError(errno.ENOENT, os.strerror(errno.ENOENT), str(p))
+        return real(p, *a, **k)
+    monkeypatch.setattr(_lib_input.os, "lstat", lstat)
+    assert _lib_input._nothing_at(default) is False

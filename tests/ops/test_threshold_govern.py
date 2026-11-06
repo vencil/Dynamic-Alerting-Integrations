@@ -35,6 +35,7 @@ def _kr(key, current, recommended=None, delta=None, confidence=recommend.CONFIDE
     return recommend.KeyRecommendation(
         key=key, current_value=current, recommended=recommended,
         delta_pct=delta, confidence=confidence, p95=p95, reason=reason,
+        queried=True,  # a graded key was measured (#3617)
     )
 
 
@@ -538,7 +539,8 @@ def test_min_samples_below_100_is_caller_error(monkeypatch, tmp_path, capsys, va
 # ---------------------------------------------------------------------------
 def _not_measured(key="mysql_connections", err="connection refused"):
     return recommend.KeyRecommendation(key=key, current_value=100,
-                                       reason=f"query error: {err}", query_error=err)
+                                       reason=f"query error: {err}", query_error=err,
+                                       queried=True)
 
 
 class TestNotMeasured:
@@ -587,6 +589,39 @@ class TestNotMeasured:
                                   "the report is partial (first: db-a/mysql_connections:")
         if json_output:
             assert json.loads(captured.out)["status"] == "partial"
+
+    def test_none_measured_is_no_answer_under_json(self, monkeypatch, tmp_path, capsys):
+        """#3617: every threshold not measured — no partial answer, no document:
+        a CallerError naming them (run() makes it rc 2, stdout empty)."""
+        import sys
+        from _lib_exitcodes import CallerError
+        reports = [_report("db-a", [_not_measured()]),
+                   _report("db-b", [_not_measured("pg_conn", "HTTP 503")])]
+        monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
+        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+                                          "--json"])
+        with pytest.raises(CallerError) as exc:
+            tg.main()
+        assert "db-a/mysql_connections" in str(exc.value) and "db-b/pg_conn" in str(exc.value)
+        assert capsys.readouterr().out == ""
+
+    def test_a_key_never_queried_is_not_an_answered_part(self, monkeypatch, tmp_path, capsys):
+        """#3617: the only query unanswered and a key that was never sent
+        (unmapped / skipped) beside it — still no answer: a key not queried
+        cannot count as the answered part."""
+        import sys
+        from _lib_exitcodes import CallerError
+        skipped = recommend.KeyRecommendation(
+            key="custom_key", current_value=5,
+            reason="no observed-load mapping for this key — not in observed-map (skipped)")
+        reports = [_report("db-a", [_not_measured(), skipped])]
+        monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
+        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+                                          "--json"])
+        with pytest.raises(CallerError) as exc:
+            tg.main()
+        assert "db-a/mysql_connections" in str(exc.value)
+        assert capsys.readouterr().out == ""
 
     def test_measured_keys_are_still_planned(self):
         plans = tg.build_governance_plan(self._reports(), 10.0)
