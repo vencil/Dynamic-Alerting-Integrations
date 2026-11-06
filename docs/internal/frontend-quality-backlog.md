@@ -13,7 +13,7 @@ lang: zh
 > **停下的 E2E 測試不在本表登記**（#1449）：登記就是測試上的 `issue` annotation。
 >
 > - **寫法**：`test.fixme('title', { annotation: { type: 'issue', description: '#<n>' } }, fn)`。
-> - **判定**：[`tests/e2e/reporters/parked-tests.ts`](../../tests/e2e/reporters/parked-tests.ts) 讀 runner 實際跑出的結果。結果為 skipped、或預期狀態不是 passed 的測試，沒有掛 `#<數字>` 形式的 issue，整次執行就判為失敗。
+> - **判定**：`tests/e2e/reporters/parked-tests.ts` 讀 runner 實際跑出的結果。結果為 skipped、或預期狀態不是 passed 的測試，沒有掛 `#<數字>` 形式的 issue，整次執行就判為失敗。
 > - **涵蓋**：判的是執行結果而不是寫法，所以別名、計算式呼叫、`testInfo.skip()`、`test.fail` 都在範圍內。
 > - **列出全部**：`cd tests/e2e && npx playwright test --list --reporter=json` 列得出所有宣告式的停車測試。
 > - **ESLint 的角色**：只擋 `.skip()`（任何形式），作為 commit 時的快速回饋。
