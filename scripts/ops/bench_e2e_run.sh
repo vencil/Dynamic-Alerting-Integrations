@@ -60,7 +60,14 @@ FIXTURE_SOURCE_DIR="fixture/$FIXTURE_KIND/conf.d"
 # Count tenant YAMLs only (NOT _defaults.yaml). The synthetic trees are wholly
 # generated and gitignored; nothing under them is tracked since #1443, so on a
 # fresh checkout the directory does not exist and the count is 0.
-TENANT_FILE_COUNT=$(find "$FIXTURE_SOURCE_DIR" -name "*.yaml" -not -name "_defaults.yaml" 2>/dev/null | wc -l)
+# ⛔ Guard the directory, do not lean on `2>/dev/null`: under `set -o pipefail`
+# a `find` on a missing path fails the whole pipeline, the assignment fails, and
+# `set -e` ends the script right after the banner with no message.
+# tests/ops/test_bench_e2e_run_fresh_checkout.py pins it.
+TENANT_FILE_COUNT=0
+if [[ -d "$FIXTURE_SOURCE_DIR" ]]; then
+    TENANT_FILE_COUNT=$(find "$FIXTURE_SOURCE_DIR" -name "*.yaml" -not -name "_defaults.yaml" | wc -l)
+fi
 if [[ "$TENANT_FILE_COUNT" -eq 0 ]]; then
     if [[ "$FIXTURE_KIND" == "customer-anon" ]]; then
         echo "[bench-e2e] ERROR: customer-anon fixture not present in $FIXTURE_SOURCE_DIR"
