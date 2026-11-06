@@ -14,7 +14,7 @@ own run is the CI lint job, which installs the pinned binary):
 5. **Level -> action mapping**: error=BLOCK, warning=WARN, info/style=INFO.
 6. **A run that does not show it ran is no run** (#3439): stand-ins for
    hadolint / docker on PATH, the wrapper run as a process. A non-zero exit,
-   an empty stdout, or stdout that is no JSON array of findings is exit 3 —
+   an empty stdout, or stdout that is no JSON array of findings is exit 2 —
    `docker run` with no daemon (rc 1, nothing on stdout) printed OK, rc 0.
 """
 from __future__ import annotations
@@ -308,7 +308,7 @@ def test_docker_with_no_daemon_is_no_run(tmp_path):
     proc = _wrapper(_stand_in(tmp_path, "docker", (
         "#!/bin/sh\necho 'failed to connect to the docker API at "
         "unix:///var/run/docker.sock' >&2\nexit 1\n")))
-    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "failed to connect to the docker API" in proc.stderr, proc.stderr
     assert "OK Container SAST" not in proc.stdout, proc.stdout
 
@@ -325,9 +325,9 @@ def test_docker_with_no_daemon_is_no_run(tmp_path):
     (0, '[{"message":"parse failed"}]'),   # no level: it would pass as INFO
 ], ids=["rc0-empty", "rc1-array", "rc2-array", "rc125-empty", "object", "null",
         "array-of-number", "not-json", "finding-without-level"])
-def test_an_engine_run_that_does_not_show_it_ran_is_exit_3(tmp_path, rc, stdout):
+def test_an_engine_run_that_does_not_show_it_ran_is_a_caller_error(tmp_path, rc, stdout):
     proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(rc, stdout)))
-    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "did not run" in proc.stderr and "engine said why" in proc.stderr, proc.stderr
     assert "OK Container SAST" not in proc.stdout, proc.stdout
 
@@ -342,7 +342,7 @@ def test_a_clean_engine_run_passes(tmp_path):
 
 def test_a_finding_is_a_finding_not_an_engine_failure(tmp_path):
     """--no-fail is what lets an error-level finding (hadolint exit 1 without
-    it) reach the wrapper as a BLOCK, rc 1 — not exit 3."""
+    it) reach the wrapper as a BLOCK, rc 1 — not exit 2."""
     proc = _wrapper(_stand_in(tmp_path, "hadolint", _FAITHFUL))
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "[BLOCK] x/Dockerfile:1 [DL3007 error]" in proc.stdout, proc.stdout

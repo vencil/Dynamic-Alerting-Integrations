@@ -54,7 +54,8 @@ with ``--no-fail``, so a run that read every file exits 0 whatever it found
 BLOCK), and ``--format json`` prints a JSON array even when clean (``[]``).
 Anything else — a non-zero exit (``docker run`` with no daemon exits 1 with
 an empty stdout; a file hadolint cannot open), an empty stdout, output that
-is not an array of findings — is the engine not having run: exit 3, its
+is not an array of findings — is the engine not having run: exit 2 (a
+caller error: no verdict; #3577, #3611), its
 stderr shown. It was read as "no finding", rc 0.
 
 Usage:
@@ -285,7 +286,7 @@ def locate_engine() -> tuple[str | None, str | None]:
 def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
     """Run hadolint over the given repo-relative Dockerfiles.
 
-    Returns the parsed findings, or None — the caller's hard error (exit 3) —
+    Returns the parsed findings, or None — the caller's hard error (exit 2) —
     when the engine is unavailable or the run does not show that it ran
     (#3439, see the module docstring): a non-zero exit, an empty stdout, or
     stdout that is not a JSON array of objects. The reason and hadolint's /
