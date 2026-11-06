@@ -18,6 +18,10 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "ops" / "bench_e2e_run.sh"
+# Resolved, never the bare name: on Windows a bare `bash` is WSL's
+# (tests/shared/test_platform_fs.py).
+_BASH = shutil.which("bash")
+pytestmark = pytest.mark.skipif(_BASH is None, reason="bash is not on PATH")
 
 # Records every call; for the fixture generator it also creates the --output
 # tree the way the real generator does, so the script can go on to stage it.
@@ -63,7 +67,7 @@ def test_a_missing_fixture_tree_is_generated_not_a_silent_exit(tmp_path, kind):
     fixture = root / "tests" / "e2e-bench" / "fixture" / kind / "conf.d"
     assert not fixture.exists()
 
-    proc = subprocess.run(["bash", str(root / "scripts" / "ops" / SCRIPT.name)],
+    proc = subprocess.run([_BASH, str(root / "scripts" / "ops" / SCRIPT.name)],
                           env=env, capture_output=True, text=True,
                           encoding="utf-8", timeout=60)
     calls = log.read_text(encoding="utf-8") if log.exists() else ""
@@ -87,7 +91,7 @@ def test_an_existing_tree_with_tenants_is_reused_not_regenerated(tmp_path):
                                             encoding="utf-8")
     (fixture / "t0.yaml").write_text("tenants:\n  t0: {}\n", encoding="utf-8")
 
-    proc = subprocess.run(["bash", str(root / "scripts" / "ops" / SCRIPT.name)],
+    proc = subprocess.run([_BASH, str(root / "scripts" / "ops" / SCRIPT.name)],
                           env=env, capture_output=True, text=True,
                           encoding="utf-8", timeout=60)
     calls = log.read_text(encoding="utf-8") if log.exists() else ""
