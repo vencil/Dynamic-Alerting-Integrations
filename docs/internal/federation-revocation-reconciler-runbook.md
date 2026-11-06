@@ -19,7 +19,7 @@
 | `federation_revocation_reconcile_errors_total` | counter | 失敗的對帳次數 |
 | `federation_revocation_events_checked` | gauge | 上輪對帳的事件數 |
 | `federation_revocation_events_dropped` | gauge | 上輪有 `federation_token_revoked` 標記卻解析失敗的 row 數（**非零＝tenant-api 事件 schema drift**，對帳覆蓋被侵蝕）|
-| `federation_gateway_revocation_load_errors` | gauge | 近窗（~10m）gateway 撤銷清單讀取失敗數（fail-open 訊號）|
+| `federation_gateway_revocation_load_errors` | gauge | 近窗（~10m）gateway 撤銷清單讀取失敗數（讀取失敗＝沿用前一份；冷啟動 worker 為 fail-open）|
 | `federation_revocation_channel_up` | gauge | **證據通道 liveness**（ADR-028 D1 / #1234）：窗內（30m）看到 tenant-api 心跳 canary＝1，否則 0。⛔ 查詢失敗**不會**把它寫 0（fail-closed，保留前值）——「問不到」不等於「通道死了」。fresh deploy 首次成功對帳前為 0（告警 `for:15m` 即寬限窗）|
 | `federation_revocation_heartbeats_seen` | gauge | 窗內心跳筆數（除錯 / chaos 驗證用；健康時約 5-6＝5m 週期落進 30m 窗）。**告警訊號是 `channel_up`，不是這個**；這個用來看「衰減中」vs「已斷」|
 | `federation_revocation_live_set_rejected_lines` | gauge | **執行面凍結——成因側**（#1235 / TRK-349）：掛載的 `revoked.txt` 中違反 token-id 行契約的行數，以**本行程讀到的檔案**為準。非零＝gateway 正在**拒載整份**撤銷集。只計數，**永不**回報行內容（ADR-028 D3）|
@@ -67,7 +67,7 @@
 ⚠️ **本告警不會因 VictoriaLogs 短暫不可用而誤報**：心跳查詢在 `reconcile_once` 既有的 fail-closed try 區塊內，失敗即 early-return、不碰 `channel_up`。
 
 ### `FederationGatewayRevocationLoadFailure`（warning）
-**意義**：gateway 讀不到 `revoked.txt`、**fail-open**（撤銷 token 被放行至 ≤4h TTL）——ADR-028 具名 Risk Acceptance 被觸發、變可見。
+**意義**：gateway 讀不到 `revoked.txt`。讀取失敗**不會清空**撤銷集：每個 worker 沿用**上一次成功載入**的那份，其中的 token 仍被擋，但**那次載入之後發出的撤銷在讀取恢復前都不生效**（reload 掛在請求路徑上，安靜的 worker 上一次成功載入可能遠早於失敗發生的時間）。⛔ **冷啟動**：首次載入就失敗的 worker 沒有前一份可沿用、**不執行任何撤銷**，撤銷 token 在該 worker 上被放行至 ≤4h TTL——這是 ADR-028 具名 Risk Acceptance（fail-open）被觸發、變可見。
 **IR**：查 gateway 的 `revoked.txt` projected-volume mount + `tenant-federation-store` ConfigMap；**持續**失敗（非 pod 啟動 / remount 瞬態）可能是 mount 遭竄改（DoS 防禦本身，見 [#996](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/996)）。真正的 fail-closed 降級是 #996 的 defer-with-trigger。
 
 ⛔ **本告警只吃「讀不到」那一句 warn**（`federation: revoked-set reload failed`）。gateway 另有**兩句**語意不同的 warn，各有自己的 gauge 與告警，見下（`revoked-set rejected` 與 `revoked-set missing`）。三句在 reconciler 端以「兩兩互不為子字串」的機械斷言釘住，所以不會互相吃到對方的 row。
@@ -107,22 +107,22 @@
 - ⛔ **兩者刻意不是冗餘**：各自在對方看不見的地方看得見，**任一可單獨非零**。看到其中一條就把另一條一起調出來看。
 - **`for:10m` 的來由（#1238 更正）**：原本寫的是「reconcile 週期 300s，10m ＝一個完整週期再加等量餘裕；此條件是**持久性**的，窗開長不花任何成本」。⛔ **那個持久性論證只對 `LiveSetRejected` 成立**——它讀的是**檔案**，壞行不修就一直在。`ReloadRejected` 讀的是 ~600s 窗內的 log 列數、每 300s 重算，所以**單次拒載最多非零 600s，恰好等於 `for:10m`，實測永不觸發**（promtool：9m/10m/11m/14m 皆不響）。而且流量會讓它更糟不是更好：gateway 的 reload 掛在請求路徑上，安靜的 gateway 帶著中毒檔案只會零星產生 warn，窗與窗之間 gauge 就衰減回 0。故 `ReloadRejected` **改為鎖存**（`max_over_time(...[1h])`），`LiveSetRejected` 維持裸 `> 0`（它的持久性是真的）。兩者的 `for:10m` 皆保留，但**鎖存那條的 `for:` 已不再過濾任何東西**，只是延遲——與 `FederationGatewayRevocationLoadFailure` 的 `for:2m`（去抖真正瞬態的 I/O，且其 gauge 本來就撐得過 2m）不同。
 
-⛔ **不要與 `FederationGatewayRevocationLoadFailure` 混為一談——兩者姿態相反**：
+⛔ **不要與 `FederationGatewayRevocationLoadFailure` 混為一談——姿態相同、成因與處置不同**：
 
 | | `revoked-set reload failed` | `revoked-set rejected` |
 |---|---|---|
 | 發生了什麼 | 清單**讀不到** | 清單讀到了、但**被拒絕** |
-| 目前的放行姿態 | **fail-open**：撤銷 token 正在被放行 | **沒有**放行任何東西：沿用前一份（竄改前）的撤銷集，仍在擋 |
+| 目前的放行姿態 | 沿用上一次成功載入的撤銷集：之後的撤銷不生效；冷啟動 worker 不執行任何撤銷 | 沿用前一份（竄改前）的撤銷集：此後的撤銷不生效；冷啟動 worker 不執行任何撤銷 |
 | 對應訊號 | `federation_gateway_revocation_load_errors` ↑、`FederationGatewayRevocationLoadFailure`（warning, `for:2m`）| `federation_revocation_live_set_rejected_lines` ／ `federation_gateway_revoked_set_reload_rejected` ↑、上面兩條 critical 告警（`for:10m`）|
 | 首要動作 | 修 mount / ConfigMap 可達性 | 查**誰寫壞了 `revoked.txt`** |
 
-⛔ **這兩條告警在講「執行面凍結」，不是「有東西被放行」。判讀時務必分開三種姿態**：
+⛔ **這兩條告警在講「執行面凍結」，不是「有東西被放行」。判讀時務必分開以下三點**：
 
 1. **FREEZE（穩態，最常見）**：gateway 沿用前一份 set，該 set 裡的 token 仍被 403。但**壞行出現之後才發出的每一筆撤銷都沒有載入、沒有生效**，而且會一直如此直到壞行被清掉。
    ⛔ **`FederationRevocationTamperSuspected` 對這些新撤銷不會響**——它比對的是 audit log **vs 檔案**，而檔案裡**確實有**那些新撤銷；壞掉的是 gateway **載到的**東西。`revoked.txt` **不見**一直是大聲的（偵測端讀到空集合、全部 token 都「缺席」），**被拒**卻曾經是無聲的——這兩條告警就是在補這個不對稱。
 2. **COLD START（更糟，優先排除）**：pod **剛起來、第一次載入**就撞到壞行 → **沒有前值可留**，該 worker 的撤銷集為空 → 與 missing-file 同姿態、**fail OPEN**，該 worker 對任何撤銷 token 都放行。
    **怎麼查**：`kubectl -n <ns> get pod -l app=federation-gateway -o wide` 取各 pod 的 `startTime`，比對 gateway log 中**首見**該 warn 的時間戳；只要有任一 pod 的啟動時間落在首見 warn **之後**（或兩者相距在一個 `reloadIntervalSeconds` 內），就當作冷啟動處理：**先讓 `revoked.txt` 回到合法內容再重啟該 pod**，不要先重啟——重啟到同一份壞檔只會再冷啟動一次。滾動更新／節點驅逐/擴容都會製造新 pod，所以只要壞行還在，冷啟動風險就一直存在。
-3. **不是 fail-open（就 FREEZE 而言）**：沿用中的那份 set 沒有多放行任何東西。把這兩條讀成 `LoadFailure` 會讓 IR 走錯方向。
+3. **姿態與 `LoadFailure` 相同、成因不同**：兩者都凍結在前一份 set，沿用中的那份沒有多放行任何東西；差別在處置——`LoadFailure` 修 mount／ConfigMap 可達性，這兩條要查誰寫了壞行。把這兩條讀成 `LoadFailure` 會讓 IR 去修錯的東西。
 
 **為什麼是「整份作廢」而非「跳過那一行」**：`revoked.txt` 由 gateway（執行端）與本 reconciler（偵測端）兩個獨立實作讀取，兩端必須接受完全相同的行；跳過單行會讓兩端集合再度分岔。作廢整輪＝沿用竄改前的 set＝**攻擊被擋**（ADR-028 §D3 解析契約）。
 

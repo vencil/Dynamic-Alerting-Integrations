@@ -132,6 +132,21 @@ def test_main_reports_duplicate_as_violation_not_traceback(tree, monkeypatch):
     assert cov.main() == 1   # graceful violation exit, not an uncaught ValueError
 
 
+@pytest.mark.parametrize("content", [b"tests: [\xff\xfe]\n", b"tests: [unclosed\n",
+                                     b"- a\n- b\n"],
+                         ids=["not-utf8", "not-yaml", "not-a-mapping"])
+def test_an_unreadable_fixture_is_a_caller_error_not_a_finding(tree, monkeypatch, content):
+    """A fixture the tool cannot read means nothing was checked: 2, never the 1 of
+    a coverage finding (#3577). Before, a decode error rode the duplicate-alertname
+    `except ValueError` and was reported as a violation."""
+    rp, tr = tree
+    (rp / "rule-pack-x.yaml").write_text(_pack(["A"]), encoding="utf-8")
+    (tr / "x_test.yaml").write_bytes(content)
+    _write_baseline(tr, {})
+    monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--ci"])
+    assert cov.main() == 2
+
+
 def test_yml_rule_pack_is_not_silently_ignored(tree):
     """A `.yml`-suffixed pack must be tracked, not skipped by a `.yaml`-only glob (Gemini #969)
     — otherwise its alerts fail OPEN (no test, not baselined, straight past the gate)."""

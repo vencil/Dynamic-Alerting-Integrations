@@ -489,6 +489,11 @@ jobs:
       - name: Lint oauth2-proxy
         working-directory: tests/oauth2-proxy
         run: golangci-lint run ./...
+      # #1018: the module that judges every rendered pod with the upstream
+      # Pod Security Admission library.
+      - name: Lint pss
+        working-directory: tests/pss
+        run: golangci-lint run ./...
       # #3206: da-read, the module that keeps the alertmanager dependency out
       # of the exporter module; it ships in the da-tools image.
       - name: Lint da-read

@@ -45,8 +45,11 @@ across all four layers in TRK-314; Layer 1 uses the BLOCK/WARN reduction
 above.
 
 hadolint is located as: ``hadolint`` on PATH, else
-``docker run hadolint/hadolint:<ver>``. If neither exists the run aborts
-(exit 3) rather than silently passing.
+``docker run hadolint/hadolint:<ver>``. If neither exists, ``--ci`` (CI and
+the pre-commit hook) aborts with exit 2, a caller error, rather than silently
+passing; without ``--ci`` the engine pass is skipped with a WARN and the other
+rules still decide — the same switch as check_iac_helm / check_k8s_manifests
+(#3577 R2).
 
 ⛔ #3439: a hadolint run counts only when it shows that it ran. It is called
 with ``--no-fail``, so a run that read every file exits 0 whatever it found
@@ -54,7 +57,8 @@ with ``--no-fail``, so a run that read every file exits 0 whatever it found
 BLOCK), and ``--format json`` prints a JSON array even when clean (``[]``).
 Anything else — a non-zero exit (``docker run`` with no daemon exits 1 with
 an empty stdout; a file hadolint cannot open), an empty stdout, output that
-is not an array of findings — is the engine not having run: exit 3, its
+is not an array of findings — is the engine not having run: exit 2 (a
+caller error: no verdict; #3577, #3611), its
 stderr shown. It was read as "no finding", rc 0.
 
 Usage:
@@ -92,7 +96,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lint_helpers import parse_bypass_tag  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -124,8 +128,9 @@ DOCKERFILE_CONTEXTS: dict[str, str] = {
     "helm/federation-gateway/audit-sidecar/Dockerfile": "helm/federation-gateway/audit-sidecar",
     "helm/vector/projection-gate/Dockerfile": "helm/vector/projection-gate",
     # try-local's generator service runtime (#2903): built by the demo
-    # compose stack, never published; the service code is bind-mounted.
-    "try-local/generator/Dockerfile": "try-local/generator",
+    # compose stack, never published; the service code is bind-mounted. The
+    # repo root since #3530: its da-guard stage builds the exporter's Go.
+    "try-local/generator/Dockerfile": ".",
 }
 
 # Mandated .dockerignore baseline (epic #448 AC 1). Each is (label, probe):
@@ -285,7 +290,7 @@ def locate_engine() -> tuple[str | None, str | None]:
 def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
     """Run hadolint over the given repo-relative Dockerfiles.
 
-    Returns the parsed findings, or None — the caller's hard error (exit 3) —
+    Returns the parsed findings, or None — the caller's hard error (exit 2) —
     when the engine is unavailable or the run does not show that it ran
     (#3439, see the module docstring): a non-zero exit, an empty stdout, or
     stdout that is not a JSON array of objects. The reason and hadolint's /
@@ -365,8 +370,13 @@ def _read_pr_body(pr_body_file: str | None) -> str | None:
     return os.environ.get("PR_BODY") or None
 
 
-def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
-    """Run all rules; return {'BLOCK': [...], 'WARN': [...], 'INFO': [...]}."""
+def collect_findings(dockerfiles: list[str], strict: bool = True) -> dict[str, list[str]]:
+    """Run all rules; return {'BLOCK': [...], 'WARN': [...], 'INFO': [...]}.
+
+    *strict* is ``--ci``, the same switch as check_iac_helm / check_k8s_manifests
+    (#3577 R2): with no engine at all, strict is a hard error (exit 2) and
+    otherwise a WARN and a skipped engine pass (exit 0 on a dev box). An engine
+    that is there but does not show it ran is exit 2 either way."""
     findings: dict[str, list[str]] = {"BLOCK": [], "WARN": [], "INFO": []}
 
     # Unregistered Dockerfiles (governance) -> BLOCK.
@@ -380,7 +390,12 @@ def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
     registered = [df for df in dockerfiles if df in DOCKERFILE_CONTEXTS]
 
     # Engine (hadolint) findings.
-    hl = run_hadolint(registered)
+    skip_engine = bool(registered) and not strict and locate_engine() == (None, None)
+    if skip_engine:
+        findings["WARN"].append(
+            "[engine] hadolint pass skipped — neither the hadolint binary nor "
+            "docker is on PATH (with --ci this is exit 2)")
+    hl = [] if skip_engine else run_hadolint(registered)
     if hl is None:
         findings["BLOCK"].append(
             "[engine] hadolint unavailable or did not run (the ERROR line "
@@ -465,15 +480,15 @@ def main() -> int:
             print(f"  {df}  ->  {ctx}")
         return EXIT_OK
 
-    findings = collect_findings(dockerfiles)
+    findings = collect_findings(dockerfiles, strict=args.ci)
     engine_error = findings.pop("__engine_error__", None)
 
     for action in ("BLOCK", "WARN", "INFO"):
         for line in findings[action]:
             print(f"  [{action}] {line}")
 
-    if engine_error:
-        return 3
+    if engine_error:  # the scan did not run: a caller error (#3577, #3611)
+        return EXIT_CALLER_ERROR
 
     n_block = len(findings["BLOCK"])
     n_warn = len(findings["WARN"])

@@ -84,11 +84,23 @@ _BASELINE_HEADER = """\
 def _load_yaml(p: Path) -> dict:
     """A promtool test fixture or this lint's own baseline — never a rule
     pack, which is read the way Prometheus reads it (`declared_alerts`)."""
-    return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        # main() reports it as unreadable input (2), not a traceback.
+        raise ValueError(f"{p}: the top-level YAML document is not a mapping")
+    return data
 
 
 class RulePacksRefused(Exception):
     """A rule pack Prometheus' rule loader refuses (each named)."""
+
+
+class DuplicateAlertNames(ValueError):
+    """The same alertname declared in more than one rule pack — a finding in the
+    packs (exit 1), named by its own type so that no other ValueError (a file
+    that is not UTF-8, say) can be reported as one (#3577)."""
 
 
 def _rule_pack_files() -> list[Path]:
@@ -142,7 +154,7 @@ def declared_alerts() -> dict[str, str]:
                     dupes.setdefault(name, [out[name]]).append(f.name)
                 out[name] = f.name
     if dupes:
-        raise ValueError(
+        raise DuplicateAlertNames(
             "duplicate alertname(s) across rule-packs — alertnames must be globally unique, "
             "else a pack's alert is silently dropped from coverage tracking: "
             + "; ".join(f"{a} in {sorted(set(ps))}" for a, ps in sorted(dupes.items())))
@@ -244,7 +256,7 @@ def main() -> int:
             generate()
             return 0
         return check()
-    except ValueError as e:   # duplicate-alertname collision (declared_alerts) — fail loud
+    except DuplicateAlertNames as e:   # cross-pack collision (declared_alerts) — a finding
         print(f"check_vmalert_coverage: {e}", file=sys.stderr)
         return 1
     except RulePacksRefused as e:   # malformed input, named (dev-rules §13)
@@ -252,6 +264,12 @@ def main() -> int:
         return 2
     except _lib_consumer_read.ConsumerReadError as e:
         print(f"check_vmalert_coverage: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError, yaml.YAMLError) as e:
+        # A test fixture or the baseline could not be read (not UTF-8, not YAML,
+        # unreadable): nothing was checked — the contract's 2, not a finding (#3577).
+        print(f"check_vmalert_coverage: could not read the coverage inputs: {e}",
+              file=sys.stderr)
         return 2
 
 

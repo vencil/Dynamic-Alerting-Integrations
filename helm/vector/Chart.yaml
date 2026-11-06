@@ -32,6 +32,15 @@ version: 0.11.0
 # CLI pinned in ci.yml / .devcontainer/install-vector.sh. Bound by
 # tests/shared/test_vector_pin_parity.py.
 appVersion: "0.61.0"
+annotations:
+  # Pod Security Standards level this chart's pods need (#1018). The single
+  # place the exception is declared: tests/pss judges the rendered pods at
+  # this level, and every other chart (no annotation) at `restricted`. Vector
+  # tails /var/log/pods as root with DAC_READ_SEARCH over three hostPath
+  # volumes, which even `baseline` forbids, so install it in a namespace
+  # labelled pod-security.kubernetes.io/enforce=privileged of its own
+  # (k8s/00-namespaces/namespace-vector.yaml), never alongside other workloads.
+  dynamic-alerting.io/pod-security-level: privileged
 keywords:
   - dynamic-alerting
   - log-aggregation
