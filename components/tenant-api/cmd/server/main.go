@@ -229,20 +229,6 @@ func main() {
 		parseDurationOrDefault(os.Getenv("TA_FEDERATION_HEARTBEAT_INTERVAL"), token.DefaultHeartbeatInterval),
 		"ADR-028 D1: cadence of the federation revocation evidence-channel liveness canary (default 5m; must stay well below the reconciler's 30m heartbeat window; TA_FEDERATION_HEARTBEAT_INTERVAL)")
 
-	// ADR-027 PR-1b-i: machine-identity audit (KSA projected token +
-	// TokenReview). Opt-in and AUDIT-ONLY — when enabled, tenant-api verifies
-	// a caller's ServiceAccount token (if present) and records the outcome
-	// (metric + log). It never changes authz (which stays header-driven) and
-	// never fails the request; being a synchronous TokenReview it may add
-	// bounded latency to a Bearer-carrying request. Enabling requires an
-	// in-cluster config; a missing one is fatal (MED-7 fail-loud, no silent skip).
-	machineIdentityAudit := flag.Bool("machine-identity-audit", envBool("TA_MACHINE_IDENTITY_AUDIT"),
-		"ADR-027: audit-only verification of caller ServiceAccount tokens via TokenReview (verify+log+metric; never changes authz or fails the request; a synchronous review may add bounded latency to Bearer requests). Requires in-cluster config. Default off.")
-	machineIdentityAudience := flag.String("machine-identity-audience", envOrDefault("TA_MACHINE_IDENTITY_AUDIENCE", "tenant-api"),
-		"ADR-027 G4: audience bound into every TokenReview and required in the result. An empty audience would accept any SA token — the Helm chart enforces non-empty; this flag defaults to 'tenant-api'.")
-	machineIdentityIssuer := flag.String("machine-identity-issuer", envOrDefault("TA_MACHINE_IDENTITY_ISSUER", ""),
-		"ADR-027: comma-separated cluster-issuer allowlist for machine-identity audit dispatch. Empty (default) sends any issuer to TokenReview (the apiserver is the sole verifier). Reserved for keypool isolation when the human JWT-A path lands.")
-
 	// ADR-027 §2: the API's only listener. The same pod's oauth2-proxy
 	// routes /api/ to this socket; the TCP --addr listener serves only
 	// /health, /ready and /metrics (tcp_router.go). Required: no socket, no
@@ -323,26 +309,6 @@ func main() {
 	// so tenant_api_scope_denied_total is always present (0-series) and counts
 	// decisions a scope axis denied.
 	rbacMgr.SetScopeAuditor(handler.NewScopeDeniedRecorder())
-
-	// ADR-027 PR-1b-i: machine-identity audit side-channel. Built here so an
-	// in-cluster-config failure is fatal (MED-7 fail-loud) rather than a
-	// silently-skipped verification. Disabled (nil) by default; when enabled
-	// it is installed on the RBAC manager and observes every request WITHOUT
-	// affecting the authorization decision.
-	machineAuditor, err := wireMachineAuditor(machineAuditorFlags{
-		Enabled:     *machineIdentityAudit,
-		Audience:    *machineIdentityAudience,
-		IssuerAllow: splitCSV(*machineIdentityIssuer),
-	})
-	if err != nil {
-		log.Fatalf("FATAL: machine-identity audit init: %v", err)
-	}
-	if machineAuditor != nil {
-		rbacMgr.SetMachineAuditor(machineAuditor)
-		slog.Info("machine-identity audit enabled (ADR-027; audit-only, does not affect authz)",
-			"audience", *machineIdentityAudience,
-			"issuer_allowlist", splitCSV(*machineIdentityIssuer))
-	}
 
 	// v2.6.0: WebSocket/SSE hub for real-time config change notifications.
 	// #143: per-client liveness (heartbeat + per-write deadline) from TA_SSE_* env.
@@ -970,8 +936,8 @@ var errEnvBoolUnparseable = errors.New("not a boolean")
 // parser flag.Bool uses for the command line: a value the command line would
 // reject is rejected here too, instead of being silently downgraded.
 //
-// ADR-034: these switches decide whether a check RUNS (RBAC metadata/org scope
-// enforcement, machine-identity audit), so "false" must not double as the
+// ADR-034: these switches decide whether a check RUNS (e.g. the dev auth
+// bypass), so "false" must not double as the
 // value an unrecognized input lands on — a typo would then be byte-identical
 // to a deliberate opt-out. Two shapes the pre-#1599 parser accepted are gone
 // on purpose: "yes"/"on" (the command line never took them either) and
@@ -1034,18 +1000,4 @@ func formatClaimHeaders(m map[string]string) string {
 		pairs = append(pairs, k+"="+m[k])
 	}
 	return strings.Join(pairs, ",")
-}
-
-// splitCSV splits a comma-separated flag value into trimmed, non-empty items.
-// An empty string yields nil (used for --machine-identity-issuer, where nil
-// means "no allowlist — send any issuer to TokenReview").
-func splitCSV(s string) []string {
-	var out []string
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
 }

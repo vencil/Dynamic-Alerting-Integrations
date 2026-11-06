@@ -3,9 +3,7 @@
   serves only /health, /ready and /metrics and answers a request carrying an
   identity header 400; the API is on the pod-internal Unix socket behind
   oauth2-proxy. The NetworkPolicy stays a required defense-in-depth control
-  (the recipe-preview and da-portal relay entries below are the old
-  topology's channels and go with later ADR-027 changes):
-  `--set networkPolicy.enabled=false` renders a hard failure instead of
+  (ADR-027 §8): `--set networkPolicy.enabled=false` renders a hard failure instead of
   silently dropping the policy.
 */ -}}
 {{- if not .Values.networkPolicy.enabled }}
@@ -13,15 +11,15 @@
 {{- end }}
 {{- /*
   Empty-selector guard (GHSA-3g2h-rf85-5rrv). internalPortAllow.prometheus /
-  .recipePreview / .daPortal feed straight into the port-8080
+  .prometheusOperator feed straight into the port-8080
   podSelector.matchLabels via toYaml. An empty map renders `matchLabels: {}`,
   which Kubernetes treats as matching ALL pods in prometheusNamespace — silently
   degrading the pod-scoped allow-list back to the namespace-wide over-grant this
   policy exists to close. Reject it at render time with the same fail-closed
-  intent as the enabled guard. (daPortal added by ADR-027 D2-B O1.)
+  intent as the enabled guard.
 */ -}}
-{{- if or (not .Values.networkPolicy.internalPortAllow.prometheus) (not .Values.networkPolicy.internalPortAllow.prometheusOperator) (not .Values.networkPolicy.internalPortAllow.recipePreview) (not .Values.networkPolicy.internalPortAllow.daPortal) }}
-{{- fail "networkPolicy.internalPortAllow.prometheus/prometheusOperator/recipePreview/daPortal must be non-empty label selectors: an empty matchLabels map matches ALL pods in the monitoring namespace, reopening the port-8080 identity-header trust bypass (GHSA-3g2h-rf85-5rrv)." }}
+{{- if or (not .Values.networkPolicy.internalPortAllow.prometheus) (not .Values.networkPolicy.internalPortAllow.prometheusOperator) }}
+{{- fail "networkPolicy.internalPortAllow.prometheus/prometheusOperator must be non-empty label selectors: an empty matchLabels map matches ALL pods in the monitoring namespace, reopening the port-8080 identity-header trust bypass (GHSA-3g2h-rf85-5rrv)." }}
 {{- end }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -65,22 +63,6 @@ spec:
           podSelector:
             matchLabels:
               {{- toYaml .Values.networkPolicy.internalPortAllow.prometheusOperator | nindent 14 }}
-        # recipe-preview PEP (#657) — /access authz probe over 8080 (#1004).
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
-          podSelector:
-            matchLabels:
-              {{- toYaml .Values.networkPolicy.internalPortAllow.recipePreview | nindent 14 }}
-        # da-portal relay — the old topology forwarded the human's /api/v1
-        # requests here; since ADR-027 §2 port 8080 has no API (404 / 400).
-        # Removed with the relay list in a later ADR-027 change.
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}
-          podSelector:
-            matchLabels:
-              {{- toYaml .Values.networkPolicy.internalPortAllow.daPortal | nindent 14 }}
       ports:
         - port: {{ include "tenant-api.apiPort" . }}
           protocol: TCP

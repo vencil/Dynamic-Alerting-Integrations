@@ -210,7 +210,6 @@ Prometheus 文字格式(`text/plain; version=0.0.4`)。「何時出現」寫「�
 | `tenant_api_rate_limit_active_callers` | Gauge | 恆有 | 滾動視窗內仍有請求的呼叫者數(背景 sweeper 控管記憶體) |
 | `tenant_api_federation_orphaned_tokens` | Gauge | 恆有 | 租戶已不在 conf.d、卻仍有效的聯邦 token 記錄數;非 0 照 [租戶下架 runbook](../../docs/internal/tenant-offboarding-runbook.md) 處理 |
 | `tenant_api_federation_orphaned_subset_files` | Gauge | 恆有 | 已不在 conf.d、仍在 state store 留有 federation subset 紀錄的租戶數(名稱寫 files,實際按租戶計) |
-| `tenant_api_identity_audit_total{result}` | Counter | 恆有 | 機器身分(KSA／TokenReview)稽核結果,只記錄、不參與授權;未開 `--machine-identity-audit` 時全為 0。值:`mismatch` / `no_token` / `unknown_issuer` / `unknown_workload` / `verified` / `verify_failed` |
 | `tenant_api_scope_denied_total{axis}` | Counter | 恆有 | 被範圍擋下的決定數:某條規則匹配呼叫者與租戶(寫入面還要授予所求權限),但它的 environments/domains 或 `org-scope` 沒過、且沒有其他規則授予。值:`metadata` / `metadata_write` / `org` / `org_write`(`metadata` 是 list 面,`org` 涵蓋 list 與 read-by-id)。list 面每次列表對每個被藏起來的租戶各記一次,升級後或改標記後的跳升才是要看的訊號 |
 | `tenant_api_config_reload_failures_total{component}` | Counter | 恆有 | 該設定重載解析失敗次數(失敗時沿用上一份正確設定)。值:`RBAC` / `federation-policy` / `groups` / `tenantorg` / `views` |
 | `tenant_api_config_last_reload_successful{component}` | Gauge | 恆有 | 該設定最後一次重載是否成功;0 = 目前正用舊設定。值:`RBAC` / `federation-policy` / `groups` / `tenantorg` / `views` |
@@ -306,9 +305,6 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | 變數 | 預設 | 說明 |
 |------|------|------|
 | `TA_OAUTH2_PROXY_CONFIG` | (空) | 同一個 pod 的 oauth2-proxy 所用的結構化設定檔(`--alpha-config`)路徑;tenant-api 讀其中的 `injectRequestHeaders` 決定 email、group 與各 claim 由哪個 header 帶來,形狀不符即拒絕啟動(見「身分 header 由 oauth2-proxy 設定檔決定」)。server **必填**;`config check` 可省略(不讀額外 claim) |
-| `TA_MACHINE_IDENTITY_AUDIT` | `false` | 以 TokenReview 稽核呼叫端的 ServiceAccount token;只記錄,不影響授權。需要 in-cluster config |
-| `TA_MACHINE_IDENTITY_AUDIENCE` | `tenant-api` | 上述稽核要求的 audience |
-| `TA_MACHINE_IDENTITY_ISSUER` | (空) | 稽核的 issuer 允許清單(逗號分隔);空 = 全部交給 TokenReview |
 
 **本機開發(⛔ 不得用於正式環境)**
 

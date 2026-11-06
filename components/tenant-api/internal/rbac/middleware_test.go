@@ -9,8 +9,7 @@ package rbac
 // exhaustively unit-tested in match_eval / metadata_scope / org_scope; this
 // file smoke-tests the HTTP layer only; handler-level tests (outside this
 // package) verify their own wiring, not rbac semantics — the apparent overlap
-// across layers is deliberate, not redundant. The machine-identity audit
-// side-channel lives in middleware_audit_test.go.
+// across layers is deliberate, not redundant.
 
 import (
 	"encoding/json"

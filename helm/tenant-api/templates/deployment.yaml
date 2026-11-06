@@ -59,8 +59,8 @@ spec:
       serviceAccountName: {{ include "tenant-api.name" . }}
       # Always on since #2856: the state store (groups, views, federation
       # settings, AccountID registry) is a ConfigMap read through the
-      # in-cluster API client. Federation's token store and machineIdentity's
-      # TokenReview use the same client. The ServiceAccount disables automount
+      # in-cluster API client. Federation's token store uses the same client.
+      # The ServiceAccount disables automount
       # by default; the Role in rbac-state.yaml grants get+update on the state
       # ConfigMap only.
       automountServiceAccountToken: true
@@ -218,26 +218,11 @@ spec:
             {{- end }}
             {{- include "tenant-api.taEnv" (list "TA_FEDERATION_TOKEN_TTL" .Values.federation.tokenTTL "federation.tokenTTL") | nindent 12 }}
             {{- end }}
-            {{- if .Values.machineIdentity.enabled }}
-            # ADR-027 machine-identity audit baseline — verify machine callers'
-            # projected SA tokens via TokenReview and AUDIT (log+metric) only;
-            # authz still runs on the oauth2-proxy hop headers. audit-only:
-            # never blocks. The audience below is HARD-gated: TokenReview only
-            # accepts a token whose audience list contains it, so an empty
-            # audience would accept ANY SA token (incl. the default-audience
-            # kube-apiserver token) — `required` fails the render loudly rather
-            # than shipping that hole (ADR-027 G4).
-            - name: TA_MACHINE_IDENTITY_AUDIT
-              value: "true"
-            {{- include "tenant-api.taEnv" (list "TA_MACHINE_IDENTITY_AUDIENCE" (required "machineIdentity.audience MUST be set (ADR-027 G4: empty audience = TokenReview accepts ANY SA token incl default-audience)" .Values.machineIdentity.audience) "machineIdentity.audience") | nindent 12 }}
-            {{- end }}
-            {{- if .Values.humanSocket.enabled }}
             # ADR-027 §2: the API is served only on this pod-internal Unix
             # socket, the oauth2-proxy sidecar's upstream (below); port 8080
             # serves only /health, /ready and /metrics. The socket lives on the
             # human-sock emptyDir mounted into both containers.
-            {{- include "tenant-api.taEnv" (list "TA_HUMAN_SOCKET" .Values.humanSocket.path "humanSocket.path") | nindent 12 }}
-            {{- end }}
+            {{- include "tenant-api.taEnv" (list "TA_HUMAN_SOCKET" (include "tenant-api.humanSocketPath" .) "tenant-api.humanSocketPath") | nindent 12 }}
             - name: TA_STATE_STORE
               value: "configmap"
             {{- include "tenant-api.taEnv" (list "TA_STATE_CONFIGMAP" .Values.state.configMapName "state.configMapName") | nindent 12 }}
@@ -362,12 +347,10 @@ spec:
               mountPath: {{ include "tenant-api.oauth2ProxyConfigDir" . }}
               readOnly: true
             {{- end }}
-            {{- if .Values.humanSocket.enabled }}
-            # ADR-027 D2-B: shared dir for the human-plane Unix socket. tenant-api
+            # ADR-027 §2: shared dir for the API's Unix socket. tenant-api
             # binds+owns the socket here; the oauth2-proxy sidecar dials it.
             - name: human-sock
-              mountPath: {{ dir .Values.humanSocket.path }}
-            {{- end }}
+              mountPath: {{ include "tenant-api.humanSocketPath" . | dir }}
             # ADR-036 §3 (#2902): the generator's socket directory. tenant-api
             # only dials the socket (--generator-socket, #2903), so read-only.
             - name: generator-sock
@@ -492,7 +475,7 @@ spec:
             capabilities:
               drop: ["ALL"]
           # ADR-027 §10: provider, request-header injection and the listener
-          # (with the upstream: tenant-api's Unix socket, humanSocket.path) are
+          # (with the upstream: tenant-api's Unix socket, tenant-api.humanSocketPath) are
           # in the structured config file; oauth2-proxy refuses the legacy
           # flags for them alongside it. Session, cookie and route flags stay.
           args:
@@ -530,14 +513,12 @@ spec:
             - name: oauth2-proxy-client-secret
               mountPath: {{ include "tenant-api.oauth2ProxyClientSecretDir" . }}
               readOnly: true
-            {{- if .Values.humanSocket.enabled }}
             # ADR-027 §2: mount the shared human-sock dir so oauth2-proxy can dial
             # the Unix socket tenant-api serves its API on. readOnly: the proxy only connects to
             # the socket, never creates files here (its rootfs stays read-only).
             - name: human-sock
-              mountPath: {{ dir .Values.humanSocket.path }}
+              mountPath: {{ include "tenant-api.humanSocketPath" . | dir }}
               readOnly: true
-            {{- end }}
           resources:
             {{- toYaml .Values.resources.oauth2Proxy | nindent 12 }}
           readinessProbe:
@@ -577,8 +558,7 @@ spec:
               - key: OAUTH2_PROXY_CLIENT_SECRET
                 path: client-secret
         {{- end }}
-        {{- if .Values.humanSocket.enabled }}
-        # ADR-027 D2-B: pod-internal dir for the human-plane Unix socket. Memory-
+        # ADR-027 §2: pod-internal dir for the API's Unix socket. Memory-
         # backed (tmpfs) — the socket is an ephemeral pod-local rendezvous, never
         # persisted. Tiny: it holds one socket inode. Shared by tenant-api (binds)
         # and oauth2-proxy (dials); pod-level fsGroup 65534 makes it group-writable
@@ -587,7 +567,6 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        {{- end }}
 
         # ADR-036 §3 (#2902): the generator's socket directory. Memory-backed
         # and tiny (one socket inode). Mounted ONLY by the generator and

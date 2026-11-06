@@ -41,7 +41,7 @@ _REQUIRE_HELM = helm_required()
 _RENDERS = {
     "default": [],
     "everything-on": [
-        "federation.enabled=true", "machineIdentity.enabled=true", "humanSocket.enabled=true",
+        "federation.enabled=true",
         "oauth2Proxy.claimHeaders.org=X-Org",
         "generator.policy.existingConfigMap=da-policy",
     ],
@@ -116,7 +116,7 @@ def test_the_settings_reach_the_env():
     env = {e["name"] for e in container.get("env") or []}
     for flag in ("addr", "config-dir", "git-dir", "rbac", "write-mode", "generator-socket",
                  "deploy-policy", "federation-key", "federation-store", "federation-namespace",
-                 "machine-identity-audit", "machine-identity-audience", "human-socket",
+                 "human-socket",
                  "oauth2-proxy-config", "state-store",
                  "state-configmap"):
         assert envs[flag] in env, f"--{flag} ({envs[flag]}) is not in the tenant-api env"
@@ -157,8 +157,6 @@ _EMPTY_REFUSED = [
     ("everything-on", "federation.store.configMapName"),
     ("everything-on", "federation.signingKey.secretKey"),
     ("everything-on", "federation.tokenTTL"),
-    ("everything-on", "humanSocket.path"),
-    ("everything-on", "machineIdentity.audience"),
     ("default", "tenantApi.listenAddr"),
     ("pr-github", "writeBack.github.repo"),
     ("pr-gitlab", "writeBack.gitlab.project"),

@@ -122,7 +122,7 @@ def test_client_secret_reaches_oauth2_proxy_only() -> None:
     assert env == ["OAUTH2_PROXY_COOKIE_SECRET"], env
 
 
-@pytest.mark.parametrize("render", [[], ["humanSocket.enabled=true", "oauth2Proxy.provider=gitlab",
+@pytest.mark.parametrize("render", [[], ["oauth2Proxy.provider=gitlab",
                                          "oauth2Proxy.oidcIssuerUrl=https://gitlab.example",
                                          "oauth2Proxy.gitlabGroups={a/b}",
                                          "oauth2Proxy.scope=openid email"]])

@@ -302,14 +302,12 @@ configuration the generator container cannot run in. The container is
 required since #2903, so this always applies.
 */}}
 {{- /*
-ADR-027 §2: tenant-api refuses to start without the API's Unix socket
-(TA_HUMAN_SOCKET) or the oauth2-proxy config file (TA_OAUTH2_PROXY_CONFIG),
-so a render without either would be a pod that never starts. Fail here.
+ADR-027 §2: tenant-api refuses to start without the oauth2-proxy config file
+(TA_OAUTH2_PROXY_CONFIG), so a render without it would be a pod that never
+starts. Fail here. (The API's Unix socket is always rendered: its path is
+tenant-api.humanSocketPath, not a value.)
 */ -}}
 {{- define "tenant-api.identityPlaneGuard" -}}
-{{- if not .Values.humanSocket.enabled -}}
-{{- fail "humanSocket.enabled=false is no longer supported: tenant-api serves its API only on the pod-internal Unix socket and refuses to start without it; port 8080 serves only /health, /ready and /metrics (ADR-027 §2, §3). Remove the override." -}}
-{{- end -}}
 {{- if not .Values.oauth2Proxy.enabled -}}
 {{- fail "oauth2Proxy.enabled=false is no longer supported: the API is reachable only through the oauth2-proxy sidecar, and tenant-api refuses to start without its config file (ADR-027 §2). Remove the override." -}}
 {{- end -}}
@@ -404,6 +402,14 @@ oauth2-proxy.yaml
 {{- define "tenant-api.oauth2ProxyConfigDir" -}}
 /etc/oauth2-proxy/config
 {{- end -}}
+{{/*
+The Unix socket tenant-api serves its API on (ADR-027 §2), on the human-sock
+emptyDir shared with the oauth2-proxy sidecar. A constant: ADR-027 §6 removed
+the humanSocket key, and nothing outside the pod names this path.
+*/}}
+{{- define "tenant-api.humanSocketPath" -}}
+/run/ta-human/human.sock
+{{- end -}}
 {{- define "tenant-api.oauth2ProxyConfigPath" -}}
 {{ include "tenant-api.oauth2ProxyConfigDir" . }}/{{ include "tenant-api.oauth2ProxyConfigKey" . }}
 {{- end -}}
@@ -430,7 +436,7 @@ rendered with toYaml, so every value is quoted as YAML needs.
 */}}
 {{- define "tenant-api.oauth2ProxyConfig" -}}
 {{- $o := .Values.oauth2Proxy -}}
-{{- $upstream := printf "unix://%s" .Values.humanSocket.path -}}
+{{- $upstream := printf "unix://%s" (include "tenant-api.humanSocketPath" .) -}}
 {{- $headers := list
       (dict "name" "X-Forwarded-Email" "values" (list (dict "claimSource" (dict "claim" "email"))))
       (dict "name" "X-Forwarded-Groups" "values" (list (dict "claimSource" (dict "claim" "groups")))) -}}
