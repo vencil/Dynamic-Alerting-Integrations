@@ -31,5 +31,6 @@ metadata:
     purpose: logging
     app.kubernetes.io/part-of: dynamic-alerting
     pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/enforce-version: v1.37
     pod-security.kubernetes.io/warn: privileged
     pod-security.kubernetes.io/audit: privileged

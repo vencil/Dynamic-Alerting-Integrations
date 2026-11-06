@@ -7,13 +7,17 @@
 # manifests, which were removed in #1594 (the chart is the only deployment
 # source); the namespace and its PSS labels were kept here.
 #
-# PSS #1018 PR-1 soak stage: warn+audit only, NO enforce yet (flip is a
-# follow-up PR after soak) — see docs/internal/pss-enforcement-runbook.md.
+# PSS #1018: enforces restricted, pinned to the kind node image's minor (see
+# namespaces.yaml and docs/internal/pss-enforcement-runbook.md). ⚠️ Not
+# compatible with the chart's `confDir.type=hostPath` (a declared exception in
+# helm/tenant-api/ci/): use pvc or emptyDir here.
 apiVersion: v1
 kind: Namespace
 metadata:
   name: tenant-api
   labels:
     app.kubernetes.io/part-of: dynamic-alerting
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.37
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/audit: restricted

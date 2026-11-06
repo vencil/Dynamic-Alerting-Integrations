@@ -47,7 +47,9 @@ helm install chargeback ./helm/chargeback-aggregator -n monitoring
 驗 query log 真的進去 store：
 
 ```sh
-kubectl run vl-q --rm -i --restart=Never --image=busybox:1.36 --quiet -- \
+# 安全性設定（--overrides）讓 debug pod 能在 enforce restricted 的 namespace 起來（#1018）
+kubectl run vl-q --rm -i --restart=Never --image=busybox:1.36 --quiet \
+  --override-type=strategic --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"vl-q","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' -- \
   wget -qO- 'http://victorialogs.monitoring.svc:9428/select/logsql/query?query=log_type%3Aprometheus_query_log&limit=2'
 # 期望看到 _stream={app="prometheus",k8s_namespace="monitoring",log_type="prometheus_query_log",...}
 # 內含 params.query, samples_scanned, exec_time_s 等欄位
@@ -84,7 +86,7 @@ kubectl logs -n monitoring job/chargeback-aggregator-manual | grep sha256
 
 # 方法 2：操作員端用 sha256sum -c 驗證單一 CSV（標準 GNU coreutils）
 kubectl run vfy --rm -i --restart=Never --image=busybox:1.36 \
-  --overrides='{"spec":{"containers":[{"name":"v","image":"busybox:1.36","workingDir":"/reports","command":["sh","-c","sha256sum -c chargeback-'$(date -u +%F)'.csv.sha256"],"volumeMounts":[{"name":"r","mountPath":"/reports"}]}],"volumes":[{"name":"r","persistentVolumeClaim":{"claimName":"chargeback-aggregator-reports"}}]}}' \
+  --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"v","image":"busybox:1.36","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}},"workingDir":"/reports","command":["sh","-c","sha256sum -c chargeback-'$(date -u +%F)'.csv.sha256"],"volumeMounts":[{"name":"r","mountPath":"/reports"}]}],"volumes":[{"name":"r","persistentVolumeClaim":{"claimName":"chargeback-aggregator-reports"}}]}}' \
   -n monitoring
 # 期望：chargeback-YYYY-MM-DD.csv: OK
 # 若 FAILED → CSV 被改動過、跟 sidecar 對不上 → 對照 manifest.jsonl 看是否有

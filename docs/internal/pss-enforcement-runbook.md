@@ -19,23 +19,26 @@ mitigation 不是 app-TLS，而是用 PSS admission 讓「rogue tenant deploymen
 的 `kubernetes.io/metadata.name` auto-label——PSA 前提已涵蓋，ns manifest
 無需（也不應）手寫該 label。
 
-## 0. 現況（PR-1 已落地 = 本 repo 的 soak 基線）
+## 0. 現況：實驗叢集全部 enforce
 
-| Namespace | enforce | warn / audit | 說明 |
-|---|---|---|---|
-| `db-a` / `db-b` | —（無） | `restricted` | mariadb chart 0.1.2 已補 `runAsNonRoot` + `runAsUser/Group: 999`（restricted-ready） |
-| `monitoring` | —（無） | `restricted` | app-tier（prometheus / grafana / alertmanager / KSM / da-portal / threshold-exporter / victorialogs / chargeback…）；soak 期蒐集 warn |
-| `tenant-api` | —（無） | `restricted` | tenant-api workload 已達 restricted（drop ALL + runAsNonRoot + seccomp） |
-| `vector` | **`privileged`** | `privileged` | **carve-out**：Vector DaemonSet 3 個 hostPath 連 baseline 都禁；獨立 ns 隔離爆炸半徑（見 `k8s/00-namespaces/namespace-vector.yaml` 註解與 [platform-log-aggregation-runbook §1.1](platform-log-aggregation-runbook.md) 遷移步驟） |
+每個 app-tier namespace（`db-a`、`db-b`、`monitoring`、`tenant-api`）
+**enforce `restricted`**；`vector` 是 carve-out，enforce `privileged`（Vector
+DaemonSet 的 3 個 hostPath 連 baseline 都禁，見
+`k8s/00-namespaces/namespace-vector.yaml` 與
+[platform-log-aggregation-runbook §1.1](platform-log-aggregation-runbook.md)）。
 
-配套 guardrail：`check_k8s_manifests.py`（Container SAST L4）內建
-**informational** 規則——`k8s/` 下所有 `kind: Namespace` 必帶
-`pod-security.kubernetes.io/warn` + `audit` 兩個 label、值 ∈
-{privileged, baseline, restricted}；`enforce` 選配（帶了就驗值）。WARN
-級不擋 merge（soak 紀律：不回溯攔在飛 PR；enforce flip 時再議升級）。
+⛔ **不要在這裡維護一張 namespace 對等級的表**：權威是
+`k8s/00-namespaces/*.yaml` 本身，`tests/pss` 的 `TestLabNamespacesEnforce`
+守住三件事：每個 Namespace 都有 `enforce`；等級等於同名 chart 在
+`Chart.yaml` 宣告的等級（沒有宣告就是 `restricted`）；`enforce-version`
+等於 kind node image 的 minor（`scripts/ops/kind-node-image.env`）。
 
-⛔ **warn/audit 故意用不帶版本的 latest 形式**——soak 期要抓的是「對最新
-標準的偏移」；**pin minor 版是 enforce flip 那一步才做的事**（見 §3）。
+`warn`／`audit` 刻意維持不帶版本的 latest 形式：它們要在新標準被 enforce
+之前先回報偏移。
+
+`check_k8s_manifests.py`（Container SAST L4）另有一條 informational 規則，
+檢查每個 Namespace 都帶 `warn` 與 `audit`；它不擋 merge，enforce 由上面的
+測試守。
 
 ### 0.1 CI 閘門：每個出貨的 pod 都過得了它宣告的等級
 
@@ -91,7 +94,7 @@ kubectl label --dry-run=server --overwrite ns --all \
 與尚未修完的 monitoring app-tier 元件。出現**預期外** violator → 先記
 issue、修掉或 carve，**不要**急著開豁免。
 
-## 2. Step 1 — warn+audit soak（本 PR 起算）
+## 2. Step 1 — warn+audit soak（歷程；新 namespace 仍可沿用）
 
 **soak 窗口 ≥ 8 天**，理由：violation 只在 **pod 建立時**被 admission
 評估，長駐 Deployment 不重排就不觸發——窗口必須涵蓋所有「會建新 pod 的
@@ -116,18 +119,24 @@ kubectl label --dry-run=server --overwrite ns monitoring \
 **soak 通過條件**：整個窗口內零**非預期** warn/audit 事件（Vector ns 的
 privileged 是宣告內、不算）。
 
-## 3. Step 2→3 — 修 violator、flip enforce（follow-up PR，不在本 PR）
+## 3. Step 2→3 — flip enforce（已完成，#1018）
 
-1. 修掉 soak 抓到的 violator（或依 Vector 前例 carve 到專屬 ns——⛔
-   **不可 blanket-exempt 整個 monitoring**，會連 prometheus/grafana/KSM
-   一起解保護）。
-2. **flip 時才 pin 版本**：`enforce=restricted` + `enforce-version:
-   v1.<叢集當前 minor>`——確保未來 k8s 升版讓 restricted 定義收緊時，
-   不會在升版當下無預警開始 reject；warn/audit 維持 latest 繼續抓偏移。
-3. 順序：**app ns 先**（`db-a` / `db-b` / `tenant-api`），`monitoring`
-   確認 Vector 已完成搬遷（§0 表格）+ 自身 app-tier 清乾淨後最後上。
-4. L4 lint 的 PSS 規則屆時同步把 `enforce` 從 optional 改 required
-   （對已 flip 的 ns），severity 是否升級同回合再議。
+實驗叢集已全部 flip（§0）。依據：Step 0 在 v1.37.0 apiserver 上部署
+`k8s/**` 與全部 chart 後，唯一違規是 `vector` ns 的 Vector（宣告內的
+carve-out），且負向對照（monitoring 放一個 `NET_RAW` pod）有被抓到；另外
+§0.1 的 CI 閘門以同一份 admission 程式碼持續判定每個 chart。
+
+flip 時一併處理、之後仍適用的規則：
+
+1. ⛔ **不可 blanket-exempt 整個 monitoring**，會連 prometheus／grafana／
+   KSM 一起解保護。需要更寬等級的 workload 依 Vector 前例 carve 到專屬
+   ns，並在它的 chart `Chart.yaml` 宣告等級（§0.1）。
+2. **`enforce-version` 釘版**，確保 k8s 升版讓 restricted 定義收緊時不會
+   在升版當下無預警開始 reject；版本跟著 kind node image 走（§0）。
+3. **執行期才建的 pod 也要符合**：`scripts/run_load.sh` 的 Job／Pod 與
+   `docs/internal/**` 的 `kubectl run` debug pod 都帶 restricted
+   securityContext（debug pod 用 `--override-type=strategic`，以免取代掉
+   `--` 之後的參數），由 `tests/pss` 判定。
 
 ### Flip 後的日常操作注意
 
