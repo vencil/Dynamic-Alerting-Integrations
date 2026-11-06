@@ -85,7 +85,7 @@ _CLAUSE = re.compile(
     r'\s*unless\s+on\s*\(\s*tenant\s*\)\s*\(\s*user_state_filter\s*\{\s*filter\s*=\s*"maintenance"\s*\}'
     r'\s*==\s*1\s*\)')
 #: Any reference to the maintenance filter, canonical or not.
-_ANY_MAINTENANCE = re.compile(r'filter\s*!?[=~]+\s*"maintenance"')
+_ANY_MAINTENANCE = re.compile(r'filter\s*!?[=~]+\s*"[^"]*mainten')
 _OR = re.compile(r'(?<![\w:])or(?![\w:])')
 _TOKEN = re.compile(r'[a-zA-Z_:][a-zA-Z0-9_:]*')
 
@@ -294,16 +294,34 @@ def _locate_fields(lines: list[str], it: Item) -> None:
                     end += 1
                 it.expr_end = last
                 it.expr_text = "\n".join(lines[k + 1:last])
-            elif rest and rest[0] not in "\"'>&*!":
+            elif rest and rest[0] not in "\"'>&*!|":
+                # A plain scalar may continue on more-indented lines; editing
+                # only the first line would splice the tail into the middle.
+                for k2 in range(k + 1, it.end):
+                    s2 = lines[k2]
+                    if not s2.strip() or s2.lstrip().startswith("#"):
+                        continue
+                    if _indent(s2) > key_indent:
+                        raise ShapeError(f"{it.name}: expr is a multi-line plain scalar; write it as a '|' block")
+                    break
                 it.expr_end = k + 1
                 it.expr_text = rest
             else:
-                raise ShapeError(f"{it.name}: expr written as {rest[:2]!r}; use a plain or '|' scalar")
+                raise ShapeError(f"{it.name}: expr written as {rest[:2]!r}; use a plain one-line or a '|' block scalar")
         elif key == "labels":
+            if rest and not rest.startswith("#"):
+                raise ShapeError(f"{it.name}: labels written inline ({rest[:20]!r}); use a block mapping")
+            child = None
             for k2 in range(k + 1, it.end):
                 s = lines[k2]
-                if s.strip() and _indent(s) <= key_indent:
+                if not s.strip() or s.lstrip().startswith("#"):
+                    continue
+                if _indent(s) <= key_indent:
                     break
+                if child is None:
+                    child = _indent(s)
+                if _indent(s) != child:
+                    continue  # a continuation line, not a label key
                 lm = _KEY.match(s)
                 if lm and lm.group(2) == MAINTENANCE_LABEL:
                     it.label = _unquote(lm.group(3).split(" #")[0])
@@ -439,13 +457,14 @@ def main(argv: list[str] | None = None) -> int:
             if not args.check:
                 p.write_text(new, encoding="utf-8", newline="\n")
 
-    if args.check or not stale:
-        try:
-            read = _lib_consumer_read.prometheus_rule_files(packs)
-        except _lib_consumer_read.ConsumerReadError as exc:
-            print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
-            return EXIT_CALLER_ERROR
-        problems += semantic_problems(read)
+    # Always judge the result as Prometheus reads it — after a write too, so a
+    # rewrite this tool got wrong cannot exit 0.
+    try:
+        read = _lib_consumer_read.prometheus_rule_files(packs)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    problems += semantic_problems(read)
 
     for msg in problems:
         print(f"ERROR: {msg}", file=sys.stderr)

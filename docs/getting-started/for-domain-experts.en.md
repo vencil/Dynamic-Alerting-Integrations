@@ -66,17 +66,16 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
 - alert: MariaDBHighConnections
   expr: |
     (
-      (
-        tenant:mysql_threads_connected:max
-        > on(tenant) group_left
-        tenant:alert_threshold:mysql_connections
-      )
-      unless on(tenant)
-      (user_state_filter{filter="maintenance"} == 1)
+      tenant:mysql_threads_connected:max
+      > on(tenant) group_left
+      tenant:alert_threshold:mysql_connections
     )
+    unless on(tenant)
+    (user_state_filter{filter="maintenance"} == 1)
   for: 30s
   labels:
     severity: warning
+    maintenance: mute
     metric_group: "connections"
     tenant: "{{ $labels.tenant }}"
   annotations:
@@ -88,7 +87,7 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
 ```
 
 - `> on(tenant) group_left tenant:alert_threshold:<key>`: each tenant is compared with its own threshold. When a tenant sets the key to `"disable"`, the threshold series does not exist and this alert cannot fire.
-- `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`: tenants in maintenance mode do not alert.
+- `maintenance: mute` and the `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` tail: tenants in maintenance mode do not alert. The label is the required decision (`mute` or `page`); `scripts/tools/dx/generate_rulepack_derived.py` writes the two tail lines from it, so do not write them by hand.
 - The `` {{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` …) }}…{{ end }} `` annotations: read the runbook, owner and tier from the tenant's `_metadata` (the `tenant_metadata_info` metric). Metadata lives only in annotations, never joined into alert labels: threshold-exporter runs several replicas, and for a minute or two while they reload their contents can differ — as labels, that would change the alert's identity and restart `for:`. A tenant without `_metadata` still alerts, with these annotations empty. The template has one spelling; `check_leftouterjoin_enrichment.py` refuses any other and references like `$labels.tier`.
 - `summary` / `summary_zh` are for the tenant; `platform_summary` / `platform_summary_zh` are the NOC-facing summary, used by notifications sent through platform-enforced routing (`_routing_enforced`). Annotations without a `*_zh` variant fall back to English.
 

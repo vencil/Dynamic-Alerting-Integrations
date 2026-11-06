@@ -821,3 +821,24 @@ class TestConfdThroughDaGuardWrite:
             and "defaults-snippet.yaml" in err and "not rolled back" in err, err
         # nothing after the batch is written either
         assert not (dest / "platform-alert-rules.yaml").exists()
+
+
+def test_migrated_alerts_carry_the_maintenance_label_and_canonical_tail():
+    """#3309: a migrated alert always holds the maintenance clause, so it must say
+    `maintenance: mute` — the recurring-maintenance silences select on that
+    label — and spell the clause as the rule-pack generator does."""
+    import importlib.util
+    from pathlib import Path
+    import migrate_rule
+    gen = Path(__file__).resolve().parents[2] / "scripts/tools/dx/generate_rulepack_derived.py"
+    spec = importlib.util.spec_from_file_location("grd_pin", gen)
+    grd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(grd)
+    assert migrate_rule.MAINTENANCE_TAIL == grd.MAINTENANCE_TAIL
+    rule = {"alert": "X", "expr": "mysql_up > 5", "labels": {"severity": "warning"}}
+    parsed = {"op": ">", "lhs": "mysql_up"}
+    alert, _ = migrate_rule._build_alert_rule(rule, "X", parsed, "tenant:x:max",
+                                               "tenant:alert_threshold:x", "custom_")
+    assert alert["labels"]["maintenance"] == grd.MUTE
+    assert alert["expr"].endswith(grd.MAINTENANCE_TAIL)
+    assert grd.clause_count(alert["expr"]) == 1

@@ -57,8 +57,9 @@ groups:
     rules:
       # Cluster health (0=green, 1=yellow, 2=red)
       - record: tenant:es_cluster_health:status
-        expr: max by(tenant) (elasticsearch_cluster_health_status{color="red"}) * 2
-              + max by(tenant) (elasticsearch_cluster_health_status{color="yellow"})
+        expr: |
+          max by(tenant) (elasticsearch_cluster_health_status{color="red"}) * 2
+          + max by(tenant) (elasticsearch_cluster_health_status{color="yellow"})
 
       # JVM heap usage percent
       - record: tenant:es_heap_usage_percent:max

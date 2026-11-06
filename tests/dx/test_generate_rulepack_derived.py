@@ -218,3 +218,49 @@ def test_check_fails_on_a_hand_edited_pack(da_read_env, tmp_path):
     assert grd.main(["--rule-packs-dir", str(rp)]) == 0
     assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
     assert p.read_text(encoding="utf-8") == text
+
+
+# ── shapes the text model must refuse rather than mis-rewrite (review F2/F3) ──
+
+_ONE = """groups:
+  - name: g
+    rules:
+      - alert: A
+        expr: @EXPR@
+        labels:
+          severity: info
+          maintenance: mute
+"""
+
+
+def test_a_multi_line_plain_scalar_is_refused_not_spliced():
+    pack = _ONE.replace("@EXPR@", "(time() - x)\n          < 300")
+    with pytest.raises(grd.ShapeError, match="multi-line plain scalar"):
+        grd.sync_text(pack, "p.yaml")
+
+
+@pytest.mark.parametrize("indicator", ["|2", ">-", ">"])
+def test_other_block_scalar_styles_are_refused(indicator):
+    pack = _ONE.replace("@EXPR@", indicator + "\n          x > 1")
+    with pytest.raises(grd.ShapeError):
+        grd.sync_text(pack, "p.yaml")
+
+
+def test_inline_labels_are_refused_with_a_reason():
+    pack = _ONE.replace("        labels:\n          severity: info\n          maintenance: mute\n",
+                        "        labels: {severity: info, maintenance: mute}\n").replace("@EXPR@", "x > 1")
+    with pytest.raises(grd.ShapeError, match="labels written inline"):
+        grd.sync_text(pack, "p.yaml")
+
+
+def test_only_a_label_key_counts_not_text_inside_a_label_value():
+    pack = (_ONE.replace("@EXPR@", "x > 1")
+            .replace("          maintenance: mute\n",
+                     "          note: |\n            maintenance: page\n          maintenance: mute\n"))
+    items = grd.parse_items(pack.split("\n"))
+    assert items[0].label == "mute"
+
+
+def test_a_near_miss_filter_value_is_refused():
+    with pytest.raises(grd.ShapeError):
+        grd.clause_count('x unless on(tenant) (user_state_filter{filter=~"mainten.+"} == 1)')

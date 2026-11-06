@@ -14,16 +14,17 @@ metadata:
     rule-pack: elasticsearch
 data:
   elasticsearch-recording.yml: "groups:\n- name: elasticsearch-normalization\n  interval:\
-    \ 15s\n  rules:\n  - record: tenant:es_cluster_health:status\n    expr: max by(tenant)\
-    \ (elasticsearch_cluster_health_status{color=\"red\"}) * 2 + max by(tenant) (elasticsearch_cluster_health_status{color=\"\
-    yellow\"})\n  - record: tenant:es_heap_usage_percent:max\n    expr: \"max by(tenant)\
-    \ (\\n  elasticsearch_jvm_memory_used_bytes{area=\\\"heap\\\"}\\n  / elasticsearch_jvm_memory_max_bytes{area=\\\
-    \"heap\\\"}\\n) * 100\\n\"\n  - record: tenant:es_disk_usage_percent:max\n   \
-    \ expr: \"max by(tenant) (\\n  1 - (\\n    elasticsearch_filesystem_data_available_bytes\\\
-    n    / elasticsearch_filesystem_data_size_bytes\\n  )\\n) * 100\\n\"\n  - record:\
-    \ tenant:es_search_latency_ms:avg\n    expr: 'sum by(tenant) (rate(elasticsearch_indices_search_query_time_seconds[5m]))\n\
-    \n      / sum by(tenant) (rate(elasticsearch_indices_search_query_total[5m]))\n\
-    \n      * 1000\n\n      '\n  - record: tenant:es_indexing:rate5m\n    expr: sum\
+    \ 15s\n  rules:\n  - record: tenant:es_cluster_health:status\n    expr: 'max by(tenant)\
+    \ (elasticsearch_cluster_health_status{color=\"red\"}) * 2\n\n      + max by(tenant)\
+    \ (elasticsearch_cluster_health_status{color=\"yellow\"})\n\n      '\n  - record:\
+    \ tenant:es_heap_usage_percent:max\n    expr: \"max by(tenant) (\\n  elasticsearch_jvm_memory_used_bytes{area=\\\
+    \"heap\\\"}\\n  / elasticsearch_jvm_memory_max_bytes{area=\\\"heap\\\"}\\n) *\
+    \ 100\\n\"\n  - record: tenant:es_disk_usage_percent:max\n    expr: \"max by(tenant)\
+    \ (\\n  1 - (\\n    elasticsearch_filesystem_data_available_bytes\\n    / elasticsearch_filesystem_data_size_bytes\\\
+    n  )\\n) * 100\\n\"\n  - record: tenant:es_search_latency_ms:avg\n    expr: 'sum\
+    \ by(tenant) (rate(elasticsearch_indices_search_query_time_seconds[5m]))\n\n \
+    \     / sum by(tenant) (rate(elasticsearch_indices_search_query_total[5m]))\n\n\
+    \      * 1000\n\n      '\n  - record: tenant:es_indexing:rate5m\n    expr: sum\
     \ by(tenant) (rate(elasticsearch_indices_indexing_index_total[5m]))\n  - record:\
     \ tenant:es_pending_tasks:max\n    expr: max by(tenant) (elasticsearch_cluster_health_number_of_pending_tasks)\n\
     \  - record: tenant:es_unassigned_shards:count\n    expr: max by(tenant) (elasticsearch_cluster_health_unassigned_shards)\n\
