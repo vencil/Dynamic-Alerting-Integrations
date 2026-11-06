@@ -108,11 +108,14 @@ def test_the_default_render_carries_none_of_it() -> None:
 
     netpol = next(d for d in docs if d.get("kind") == "NetworkPolicy"
                   and d["metadata"]["name"].endswith("-netpol"))
-    selectors = [f["podSelector"]["matchLabels"]
-                 for rule in netpol["spec"]["ingress"]
-                 if any(p.get("port") == 8080 for p in rule.get("ports", []))
-                 for f in rule.get("from", [])]
-    assert selectors == [
-        {"app": "prometheus"},
-        {"app.kubernetes.io/name": "prometheus"},
-    ], selectors
+    # Whole peers: an empty namespaceSelector would admit matching pods from
+    # every namespace, so the namespace half is pinned too.
+    peers = [f for rule in netpol["spec"]["ingress"]
+             if any(p.get("port") == 8080 for p in rule.get("ports", []))
+             for f in rule.get("from", [])]
+    monitoring = {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}
+    assert peers == [
+        {"namespaceSelector": monitoring, "podSelector": {"matchLabels": {"app": "prometheus"}}},
+        {"namespaceSelector": monitoring,
+         "podSelector": {"matchLabels": {"app.kubernetes.io/name": "prometheus"}}},
+    ], peers
