@@ -1784,8 +1784,13 @@ def main():
     if args.json:
         # #3617: the rule files not read are named; the phases' results are
         # the partial answer.
+        # The parts: each rule file scanned, and every other phase that ran
+        # (all rule files unread and no other phase: rc 2, stdout empty).
+        scanned = phase2_results[2].get("files_scanned", len(rule_errors)) if phase2_results else 0
         return Report(report, status,  # #3216: run() encodes it
-                      unanswered=[str(e) for e in rule_errors] or None)
+                      unanswered=[str(e) for e in rule_errors] or None,
+                      of=max(scanned, len(rule_errors)) + sum(
+                          1 for name, v in report["phases"].items() if v and name != "phase2"))
     sys.exit(status)
 
 

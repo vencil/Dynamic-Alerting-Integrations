@@ -14,7 +14,8 @@ import sys
 import pytest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / "scripts" / "tools"))
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report)
 
 
 def test_a_caller_error_without_unanswered_is_refused():
@@ -23,8 +24,22 @@ def test_a_caller_error_without_unanswered_is_refused():
 
 
 def test_a_partial_answer_names_what_it_did_not_answer():
-    r = Report({"checks": [1]}, EXIT_CALLER_ERROR, unanswered=["kubectl: rules"])
+    r = Report({"checks": [1]}, EXIT_CALLER_ERROR, unanswered=["kubectl: rules"], of=3)
     assert (r.status, r.unanswered) == (EXIT_CALLER_ERROR, ("kubectl: rules",))
+
+
+@pytest.mark.parametrize("of", [None, 0, True, "3"])
+def test_a_partial_answer_says_how_many_parts_there_are(of):
+    """Without `of` a document of nothing but unanswered parts would pass as
+    a partial answer (PR #3631 review: threshold-govern / -recommend)."""
+    with pytest.raises(TypeError, match="of="):
+        Report({}, EXIT_CALLER_ERROR, unanswered=["x"], of=of)
+
+
+def test_every_part_unanswered_is_no_answer_even_built_directly():
+    with pytest.raises(CallerError) as exc:
+        Report({"n": 0}, EXIT_CALLER_ERROR, unanswered=["a: down", "b: down"], of=2)
+    assert "a: down" in str(exc.value) and "b: down" in str(exc.value)
 
 
 @pytest.mark.parametrize("status", [EXIT_OK, EXIT_VIOLATION])
@@ -36,7 +51,7 @@ def test_unanswered_goes_with_the_caller_error_status_only(status):
 @pytest.mark.parametrize("parts", [[""], [None], [3]])
 def test_each_unanswered_part_is_named(parts):
     with pytest.raises(TypeError, match="non-empty str"):
-        Report({}, EXIT_CALLER_ERROR, unanswered=parts)
+        Report({}, EXIT_CALLER_ERROR, unanswered=parts, of=5)
 
 
 @pytest.mark.parametrize("status", [EXIT_OK, EXIT_VIOLATION])
@@ -47,7 +62,7 @@ def test_other_statuses_are_unchanged(status):
 
 # ── partial_answer: the run's parts decide which of the three it is ──────
 
-from _lib_exitcodes import CallerError, partial_answer  # noqa: E402
+from _lib_exitcodes import partial_answer  # noqa: E402
 
 
 def test_partial_answer_passes_other_statuses_through():

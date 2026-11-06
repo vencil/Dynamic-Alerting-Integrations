@@ -498,11 +498,13 @@ class Report:
     the ConfigMap holds after a write). Only the tools the gate lists
     (tests/shared/test_json_stdout_contract.py) may ask for it.
 
-    *unanswered* (#3617): ⛔ a caller error carries a document only as a
-    PARTIAL answer — what the run did answer, with *unanswered* naming
-    (non-empty strings) the parts it could not. ``EXIT_CALLER_ERROR``
-    without it is refused (``TypeError``), and so is *unanswered* with any
-    other status. An early exit has no answer to carry: it ends with
+    *unanswered* / *of* (#3617): ⛔ a caller error carries a document only as
+    a PARTIAL answer — what the run did answer, with *unanswered* naming
+    (non-empty strings) the parts it could not, out of *of* parts in all.
+    ``EXIT_CALLER_ERROR`` without *unanswered*, *unanswered* with any other
+    status, and *unanswered* without *of* are refused (``TypeError``). With
+    every part unanswered there is no answer: the constructor raises
+    :class:`CallerError` naming them, and stdout stays empty. An early exit has no answer to carry: it ends with
     ``CallerError`` / ``die_caller_error`` — stdout empty, the reason on
     stderr. (Before #3617 a tool answered one with its own schema emptied
     plus ``status`` / ``reason``.)"""
@@ -511,6 +513,7 @@ class Report:
 
     def __init__(self, document: Any, status: int = 0, *,
                  unanswered: "Optional[Sequence[str]]" = None,
+                 of: Optional[int] = None,
                  on_stdout_failure: Optional[Callable[[str], str]] = None,
                  delivery: str = "all") -> None:
         if status != 0 or isinstance(status, bool):
@@ -526,6 +529,11 @@ class Report:
         if parts and status != EXIT_CALLER_ERROR:
             raise TypeError("Report unanswered=[…] goes with the caller-error status only "
                             "(#3617): a part left unanswered is a caller error")
+        if parts and not (isinstance(of, int) and not isinstance(of, bool) and of > 0):
+            raise TypeError("Report unanswered=[…] needs of=<how many parts in all> "
+                            "(#3617): only then can it tell a partial answer from none")
+        if parts and len(parts) >= of:
+            raise CallerError("nothing was answered: " + "; ".join(parts))
         if on_stdout_failure is not None and not callable(on_stdout_failure):
             raise TypeError("Report on_stdout_failure must be callable")
         if delivery not in DELIVERIES:
@@ -550,9 +558,7 @@ def partial_answer(document: Any, status: int, *, unanswered: "Sequence[str]",
         return Report(document, status)
     if not unanswered:
         raise TypeError("partial_answer: the caller-error status with no unanswered part")
-    if len(unanswered) >= of:
-        raise CallerError("nothing was answered: " + "; ".join(unanswered))
-    return Report(document, status, unanswered=unanswered)
+    return Report(document, status, unanswered=unanswered, of=of)
 
 
 #: Report's *delivery* values: stdout's failure ends the run at the

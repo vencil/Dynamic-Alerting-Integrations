@@ -25,15 +25,21 @@ from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 
 import backtest_threshold as bt  # noqa: E402
 from _go_refusal import assert_refused  # noqa: E402  (#3206)
-from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _main_exit():
     """`bt.main()` in-process, ended the way `run()` ends it (#3216): a
     `--json` Report's document written by the one encoder, then
     `SystemExit` with its status — so `pytest.raises(SystemExit)` reads the
-    exit of every path, `--json` or not."""
-    raise SystemExit(emit_result(bt.main()))
+    exit of every path, `--json` or not. A `CallerError` (#3617: e.g. a
+    `Report` whose every change went unmeasured) ends as `run()` ends it:
+    its `ERROR:` line on stderr, the caller-error exit, stdout empty."""
+    try:
+        result = bt.main()
+    except CallerError as exc:
+        exit_on_crash(exc)
+    raise SystemExit(emit_result(result))
 
 
 class TestParseLookback:
@@ -1657,13 +1663,19 @@ class TestQueryError:
     `--skip-if-unavailable` 也不把它轉成 0（Prometheus 不是 unavailable）。"""
 
     @pytest.mark.parametrize("code", [400, 503])
-    def test_single_query_error_is_rc2_partial(self, fake_prom, cli_argv, capsys, code):
+    def test_single_query_error_is_rc2_with_no_answer(
+            self, fake_prom, cli_argv, capsys, tmp_path, code):
+        """#3617：唯一的 change 沒量到 = 什麼都沒回答 → `--json` stdout 留空、
+        stderr 點名；`-o` 仍寫出那份報告（逐筆 query_error 的原因在裡面）。"""
         p = fake_prom(errors={"t-bad": code})
+        written = tmp_path / "o.json"
         rc, out = _run_main(cli_argv, capsys, "--tenant", "t-bad", "--metric", "mysql_connections",
                             "--old-value", "70", "--new-value", "50",
-                            "--prometheus", p.url, "--json")
-        doc = json.loads(out.out)
+                            "--prometheus", p.url, "--json", "-o", str(written))
         assert rc == 2
+        assert out.out == ""
+        assert "nothing was answered: t-bad mysql_connections" in out.err, out.err
+        doc = json.loads(written.read_text(encoding="utf-8"))
         assert (doc["status"], doc["reason"]) == ("partial", "query_error")
         assert doc["query_error"] == 1 and doc["no_data"] == 0
         row = doc["changes"][0]
@@ -1686,6 +1698,8 @@ class TestQueryError:
         self._git(monkeypatch, "t-ok", "t-bad")
         rc, out = _run_main(cli_argv, capsys, *self._src, "--prometheus", p.url, "--json")
         doc = json.loads(out.out)
+        assert (doc["status"], doc["reason"]) == ("partial", "query_error"), \
+            "one change measured: a partial answer, carried on stdout (#3617)"
         got = {r["tenant"]: r for r in doc["changes"]}
         assert got["t-ok"]["status"] == "analyzed" and got["t-ok"]["risk"] == "HIGH"
         assert got["t-bad"]["status"] == "query_error"
@@ -1708,7 +1722,7 @@ class TestQueryError:
         rc, out = _run_main(cli_argv, capsys, *self._src, "--prometheus", p.url,
                             "--skip-if-unavailable", "--json")
         assert rc == 2
-        assert json.loads(out.out)["status"] == "partial"
+        assert out.out == "" and "nothing was answered" in out.err, out.err
 
     def test_text_and_markdown_name_the_unmeasured(
             self, fake_prom, monkeypatch, cli_argv, capsys, tmp_path):
@@ -1874,8 +1888,11 @@ def _path_served_values(mp, tmp, prom):
 
 
 def _path_query_error(mp, tmp, prom):
-    p = prom(errors={"t-x": 400})
-    return [*_TENANT, "--prometheus", p.url]
+    # #3617: one change measured, one not — a partial answer, so stdout
+    # carries the document (every change unmeasured is no answer at all).
+    p = prom(errors={"t-bad": 400})
+    cur, base = _dirs_for(tmp, "t-ok", "t-bad")
+    return ["--config-dir", cur, "--baseline", base, "--prometheus", p.url]
 
 
 def _path_high(mp, tmp, prom):

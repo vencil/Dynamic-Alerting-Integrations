@@ -82,7 +82,8 @@ from _lib_tenant_values import (  # noqa: E402
 )
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538; #1641; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report, partial_answer)
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -1689,10 +1690,12 @@ def main() -> "Report | None":
               "report is partial", file=sys.stderr)
         status = EXIT_CALLER_ERROR
     if json_report:
-        # #3617: a key not measured is named; the rest is the partial answer.
-        return Report(json_document(reports), status,  # #3216: run() encodes it
-                      unanswered=[f"{r.tenant}/{k.key}" for r in reports
-                                  for k in r.keys + r.inherited if k.query_error] or None)
+        # #3617: a key not measured is named; the rest is the partial answer
+        # — none measured is no answer (rc 2, stdout empty).
+        keys = [(r.tenant, k) for r in reports for k in r.keys + r.inherited]
+        return partial_answer(json_document(reports), status,  # #3216: run() encodes it
+                              unanswered=[f"{t}/{k.key}" for t, k in keys if k.query_error],
+                              of=len(keys))
     if status:
         sys.exit(status)
 

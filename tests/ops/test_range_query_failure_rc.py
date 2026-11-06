@@ -225,17 +225,19 @@ def test_malformed_success_is_a_named_caller_error(tool, shape):
 def test_backtest_malformed_success_is_query_error(shape, tmp_path):
     """backtest_threshold (#3059 rule): the change is ``query_error``, the
     report ``status: partial`` / ``reason: query_error``, rc 2, and ``-o``
-    is written with the same document."""
+    is written with it. Its only change unmeasured, nothing was answered
+    (#3617): stdout stays empty and stderr names the change."""
     out = tmp_path / "o.json"
     with _fake(_SHAPES[shape](_GOOD_ROW["backtest_threshold"])) as url:
         proc = _run("backtest_threshold", *_argv("backtest_threshold", url, out))
     assert proc.returncode == 2, (shape, proc.returncode, proc.stdout, proc.stderr)
-    doc = json.loads(proc.stdout)
+    assert proc.stdout == "", proc.stdout
+    assert "nothing was answered" in proc.stderr, proc.stderr
+    doc = json.loads(out.read_text(encoding="utf-8"))
     assert (doc["status"], doc["reason"]) == ("partial", "query_error"), doc
     row = doc["changes"][0]
     assert row["status"] == "query_error", row
     assert "malformed Prometheus response" in row["message"], row
-    assert json.loads(out.read_text(encoding="utf-8")) == doc
     assert "Traceback" not in proc.stderr, proc.stderr
 
 

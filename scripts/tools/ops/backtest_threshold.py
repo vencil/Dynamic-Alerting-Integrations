@@ -1780,7 +1780,7 @@ def _main():
             # Prometheus did not answer named (#3216: run() writes it).
             return Report(report, EXIT_CALLER_ERROR, unanswered=[
                 f"{c['tenant']} {c['metric']}" for c in report["changes"]
-                if c["status"] == "query_error"])
+                if c["status"] == "query_error"], of=len(report["changes"]))
         sys.exit(EXIT_CALLER_ERROR)
     if args.json:
         return Report(report, EXIT_VIOLATION if high_count > 0 else EXIT_OK)

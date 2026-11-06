@@ -588,6 +588,21 @@ class TestNotMeasured:
         if json_output:
             assert json.loads(captured.out)["status"] == "partial"
 
+    def test_none_measured_is_no_answer_under_json(self, monkeypatch, tmp_path, capsys):
+        """#3617: every threshold not measured — no partial answer, no document:
+        a CallerError naming them (run() makes it rc 2, stdout empty)."""
+        import sys
+        from _lib_exitcodes import CallerError
+        reports = [_report("db-a", [_not_measured()]),
+                   _report("db-b", [_not_measured("pg_conn", "HTTP 503")])]
+        monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
+        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+                                          "--json"])
+        with pytest.raises(CallerError) as exc:
+            tg.main()
+        assert "db-a/mysql_connections" in str(exc.value) and "db-b/pg_conn" in str(exc.value)
+        assert capsys.readouterr().out == ""
+
     def test_measured_keys_are_still_planned(self):
         plans = tg.build_governance_plan(self._reports(), 10.0)
         assert [(p.tenant, [c.key for c in p.changes]) for p in plans] == [

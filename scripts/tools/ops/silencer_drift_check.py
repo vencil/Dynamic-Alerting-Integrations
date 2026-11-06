@@ -760,7 +760,10 @@ def main(argv: list[str] | None = None) -> "int | Report":
     if args.json:
         # #3617: the rule-source files not read are named; the report over
         # the rest is the partial answer.
-        return Report(report, status, unanswered=[str(e) for e in errors] or None)  # #3216
+        # The parts: each file not read, plus the alerts read (there are some:
+        # none with errors ended the run above).
+        return Report(report, status, unanswered=[str(e) for e in errors] or None,  # #3216
+                      of=len(errors) + 1)
     return status
 
 

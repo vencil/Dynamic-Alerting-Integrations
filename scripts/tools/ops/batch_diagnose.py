@@ -534,11 +534,16 @@ def main():
         # #3216: run() encodes it. #3617: rc 2 is a partial answer — the
         # tenants a Prometheus query or the environment failed for named.
         code = batch_exit_code(results, environment_errors)
+        if code != EXIT_CALLER_ERROR:
+            return Report(report, code)
+        # The parts, as `diagnose` counts them for one tenant: each tenant's
+        # Pod check and its Prometheus queries, plus each environment error
+        # (none answered: rc 2, stdout empty).
         return Report(report, code, unanswered=(
             [str(e) for e in environment_errors]
-            + [str(r.get("tenant", "?")) for r in results
-               if diagnose_exit_code(r) == EXIT_CALLER_ERROR]) if code == EXIT_CALLER_ERROR
-            else None)
+            + [f"{r.get('tenant', '?')}: Prometheus" for r in results
+               if diagnose_exit_code(r) == EXIT_CALLER_ERROR]),
+            of=2 * len(results) + len(environment_errors))
     return batch_exit_code(results, environment_errors)
 
 

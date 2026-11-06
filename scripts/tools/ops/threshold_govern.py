@@ -67,7 +67,7 @@ from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report)
+    EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report, partial_answer)
 
 # Reuse the recommendation engine wholesale — threshold_govern is its gate
 # layer, never a re-implementation (the engine owns percentiles / observed-map /
@@ -197,6 +197,10 @@ class GovernanceResult:
     force_manual: list[ForceManualKey] = field(default_factory=list)
     inherited: list[InheritedKey] = field(default_factory=list)
     not_measured: list[NotMeasuredKey] = field(default_factory=list)
+    #: #3617: how many thresholds were queried — measured or not. A threshold
+    #: within margin lands in no list above, so the answered part cannot be
+    #: counted from them.
+    queried: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +626,7 @@ def run(args: argparse.Namespace) -> GovernanceResult:
         force_manual=collect_force_manual(reports),
         inherited=collect_inherited(reports),
         not_measured=collect_not_measured(reports),
+        queried=sum(len(r.keys) + len(r.inherited) for r in reports),
     )
 
 
@@ -714,12 +719,13 @@ def main() -> "Report | None":
     else:
         status = EXIT_OK
     if args.json_output:
-        return Report(json_document(  # #3216: run() encodes it
+        # #3617: the thresholds not measured are named; the rest is the
+        # partial answer — none measured is no answer (rc 2, stdout empty).
+        return partial_answer(json_document(  # #3216: run() encodes it
             result.plans, result.ungoverned, result.not_applicable,
             result.force_manual, result.inherited, result.not_measured), status,
-            # #3617: the thresholds not measured are named; the rest is the
-            # partial answer.
-            unanswered=[f"{m.tenant}/{m.key}" for m in result.not_measured] or None)
+            unanswered=[f"{m.tenant}/{m.key}" for m in result.not_measured],
+            of=result.queried)
     sys.exit(status)
 
 

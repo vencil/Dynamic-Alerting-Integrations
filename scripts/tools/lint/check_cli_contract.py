@@ -2314,7 +2314,9 @@ def main() -> "int | Report":
         return Report({"findings": [f._asdict() for f in open_findings],
                        "suppressed": len(suppressed), "ignored": len(ignored),
                        "stats": stats, "errors": errors, "fatal": fatal},
-                      status, unanswered=[str(e) for e in fatal] or None)  # #3216
+                      status, unanswered=[str(e) for e in fatal] or None,  # #3216
+                      # the parts: each fatal step, plus the scan that ran
+                      of=len(fatal) + 1)
     else:
         for e in fatal:
             print(f"[FATAL] {e}", file=sys.stderr)

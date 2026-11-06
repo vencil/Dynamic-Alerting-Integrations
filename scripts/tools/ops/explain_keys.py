@@ -293,8 +293,10 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
         # #3216: run() encodes it. #3617: undecidable keys are a partial
         # answer — every other key's verdict, the threshold keys named.
         if doc["undecidable"]:
+            # Two parts: the threshold keys (undecidable) and every other
+            # key's verdict (read).
             return Report(doc, EXIT_CALLER_ERROR, unanswered=[
-                "threshold keys (no root platform file was read)"])
+                "threshold keys (no root platform file was read)"], of=2)
         return Report(doc, EXIT_VIOLATION if diffs else EXIT_OK)
     if doc["undecidable"]:
         return EXIT_CALLER_ERROR

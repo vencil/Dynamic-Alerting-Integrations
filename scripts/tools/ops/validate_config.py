@@ -3137,7 +3137,8 @@ def _main() -> "Report | None":
     # caller's environment kept from answering named.
     if args.json:
         return Report(json_document(results), status,  # #3216: run() encodes it
-                      unanswered=unanswered if status == EXIT_CALLER_ERROR else None)
+                      unanswered=unanswered if status == EXIT_CALLER_ERROR else None,
+                      of=len(results))
     print_report(results)
     sys.exit(status)
 
