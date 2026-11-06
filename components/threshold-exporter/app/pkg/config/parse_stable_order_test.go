@@ -155,3 +155,13 @@ func TestScheduledValue_TiedParentsWithNestedTimestampKeys_StableOrder(t *testin
 		}
 	}
 }
+
+// On the sorting path the node encoder tags a `<<` string as a merge key
+// (`!!merge <<`), which plain yaml.Marshal does not; the decode has already
+// applied any real merge, so a `<<` left in the value is only a string.
+func TestScheduledValue_MergeKeyTextOnSortingPath_MatchesPlainMarshal(t *testing.T) {
+	t.Parallel()
+	doc := "\"<<\": 1\nk: \"<<\"\n2026-01-02T00:00:00Z: b\n2026-01-01T00:00:00Z: a\n"
+	want := "<<: 1\nk: <<\n2026-01-01T00:00:00Z: a\n2026-01-02T00:00:00Z: b\n"
+	assertSameEveryRun(t, doc, want)
+}

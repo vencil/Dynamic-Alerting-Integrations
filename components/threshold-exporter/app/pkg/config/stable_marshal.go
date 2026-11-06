@@ -27,7 +27,9 @@ import (
 // Not covered: a `.nan` key ties with every number in that comparator, so a
 // mapping that mixes `.nan` with numeric keys still has no fixed order (and
 // yaml.v3 drops the NaN key's value). That predates #3323 and has no known
-// use in conf.d.
+// use in conf.d. Neither is a string-key run whose characters are non-ASCII
+// Unicode digits: yaml.v3's natural sort reads them as `r-'0'` and is not
+// transitive there, so such keys can come out in varying order on either path.
 func marshalStable(v interface{}) ([]byte, error) {
 	// Fast path: no mapping holds two timestamp keys, so yaml.v3's own order
 	// is already total and the output is exactly yaml.Marshal's.
@@ -47,6 +49,12 @@ func marshalStable(v interface{}) ([]byte, error) {
 func sortTiedTimestampKeys(n *yaml.Node) {
 	if n == nil {
 		return
+	}
+	// The node encoder tags a `<<` string as a merge key; plain yaml.Marshal
+	// writes it untagged. The decode already applied any real merge, so a
+	// `<<` left here is only a string: keep the plain output.
+	if n.Kind == yaml.ScalarNode && n.Tag == "!!merge" {
+		n.Tag = ""
 	}
 	// Children first: a tie between two parent keys is broken by the text of
 	// their values, which must already be in its final order.
