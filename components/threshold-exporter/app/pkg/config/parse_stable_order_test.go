@@ -139,3 +139,19 @@ func TestScheduledValue_TimestampKeysWithSameText_StableOrder(t *testing.T) {
 	want := "2026-01-01T00:00:00Z: a\n2026-01-01T00:00:00Z: b\n"
 	assertSameEveryRun(t, doc, want)
 }
+
+// CodeRabbit on #3622: parents whose key text ties are tie-broken by their
+// value's text, so nested timestamp keys must be ordered first.
+func TestScheduledValue_TiedParentsWithNestedTimestampKeys_StableOrder(t *testing.T) {
+	t.Parallel()
+	// Child key ranges interleave (01,03 vs 02,04), so unsorted children make
+	// either parent's text come first.
+	doc := "2026-01-01T00:00:00+00:00:\n    2026-03-01T00:00:00Z: c\n    2026-01-01T00:00:00Z: a\n" +
+		"2026-01-01T00:00:00Z:\n    2026-04-01T00:00:00Z: d\n    2026-02-01T00:00:00Z: b\n"
+	first := reserialiseOnce(t, doc)
+	for i := 0; i < stableOrderRuns; i++ {
+		if got := reserialiseOnce(t, doc); got != first {
+			t.Fatalf("run %d differs:\n%s---\n%s", i, got, first)
+		}
+	}
+}

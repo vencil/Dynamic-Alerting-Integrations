@@ -2,6 +2,7 @@ package config
 
 import (
 	"sort"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,6 +29,11 @@ import (
 // yaml.v3 drops the NaN key's value). That predates #3323 and has no known
 // use in conf.d.
 func marshalStable(v interface{}) ([]byte, error) {
+	// Fast path: no mapping holds two timestamp keys, so yaml.v3's own order
+	// is already total and the output is exactly yaml.Marshal's.
+	if !hasTiedTimestampKeys(v) {
+		return yaml.Marshal(v)
+	}
 	var n yaml.Node
 	if err := n.Encode(v); err != nil {
 		return nil, err
@@ -41,6 +47,11 @@ func marshalStable(v interface{}) ([]byte, error) {
 func sortTiedTimestampKeys(n *yaml.Node) {
 	if n == nil {
 		return
+	}
+	// Children first: a tie between two parent keys is broken by the text of
+	// their values, which must already be in its final order.
+	for _, c := range n.Content {
+		sortTiedTimestampKeys(c)
 	}
 	if n.Kind == yaml.MappingNode {
 		pairs := len(n.Content) / 2
@@ -59,9 +70,37 @@ func sortTiedTimestampKeys(n *yaml.Node) {
 			start = end
 		}
 	}
-	for _, c := range n.Content {
-		sortTiedTimestampKeys(c)
+}
+
+// hasTiedTimestampKeys reports whether any mapping under v has two or more
+// time.Time keys — the only keys yaml.v3's sort leaves unordered.
+func hasTiedTimestampKeys(v interface{}) bool {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		for _, c := range t {
+			if hasTiedTimestampKeys(c) {
+				return true
+			}
+		}
+	case map[interface{}]interface{}:
+		n := 0
+		for k, c := range t {
+			if _, ok := k.(time.Time); ok {
+				n++
+			}
+			if hasTiedTimestampKeys(c) {
+				return true
+			}
+		}
+		return n > 1
+	case []interface{}:
+		for _, c := range t {
+			if hasTiedTimestampKeys(c) {
+				return true
+			}
+		}
 	}
+	return false
 }
 
 func isTimestampKey(k *yaml.Node) bool {
