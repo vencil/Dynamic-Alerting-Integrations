@@ -3894,23 +3894,38 @@ def _on_paths_covers(patterns: list[str], path: str) -> bool:
     return covered
 
 
-_GLOB_CHARS = re.compile(r"[*?\[]")
+# Every character GitHub's filter cheat sheet gives a glob meaning to that can
+# sit inside one segment. `+` ("one or more of the preceding character") is
+# easy to forget — round 2 of #3601's review caught it missing.
+_GLOB_CHARS = re.compile(r"[*?\[+]")
+# Shapes refused outright in a `!` pattern rather than approximated: a brace or
+# extglob group can contain `/`, so splitting on `/` would cut it apart, and a
+# `./` prefix or trailing `/` has no documented meaning in `on.paths`.
+_NEGATION_REFUSED = re.compile(r"[{}()]|^\./|/$")
 
 
 def _negation_may_match(pattern: str, path: str) -> bool:
     """An OVER-approximation of GitHub's match, for `!` patterns only.
 
-    `**` absorbs any run of segments; any other segment holding a glob
-    character matches ANY single segment; a literal segment must be equal.
-    Every path GitHub's matcher accepts is accepted here, so an exclusion is
-    never under-applied — the cost is a possible false "excluded", which is
-    the loud direction for a negative pattern.
+    A segment containing `**` anywhere (`**`, `**.py`, `ops**`) absorbs ANY
+    run of segments — GitHub's `**` matches any characters, `/` included. Any
+    other segment holding a glob character matches any single segment. A
+    literal segment must be equal. Every path GitHub's matcher accepts is
+    therefore accepted here, so an exclusion is never under-applied; the cost
+    is a possible false "excluded", the loud direction for a negative pattern.
     """
+    if _NEGATION_REFUSED.search(pattern):
+        raise AssertionError(
+            f"`!{pattern}`: braces, extglob groups, a `./` prefix and a "
+            "trailing `/` are not modelled in a negated `on.paths` pattern — "
+            "an exclusion this guard cannot bound might hide an uncovered "
+            "script. Rewrite it as plain segments.")
+
     def walk(pat: list[str], parts: list[str]) -> bool:
         if not pat:
             return not parts
         head, rest = pat[0], pat[1:]
-        if head == "**":
+        if "**" in head:
             return any(walk(rest, parts[i:]) for i in range(len(parts) + 1))
         if not parts:
             return False
@@ -4074,6 +4089,14 @@ def test_on_paths_covers_follows_githubs_last_match_rule() -> None:
     assert not _on_paths_covers(["scripts/**", "!scripts/tools/lint/check_*.py"], f)
     assert not _on_paths_covers(["scripts/**", "!scripts/tools/lint/check_doc_link?.py"], f)
     assert not _on_paths_covers(["scripts/**", "!scripts/**/*_links.py"], f)
+    # Round 2: `**` inside a segment crosses `/`; `+` is a glob character.
+    for neg in ("!**.py", "!scripts/**.py", "!scripts/tools**",
+                "!scripts**/*.py", "!scripts/tool+s/lint/*.py"):
+        assert not _on_paths_covers(["scripts/**", neg], f), neg
+    for neg in ("!{scripts,docs}/**", "!scripts/(tools)/**",
+                "!./scripts/**", "!scripts/tools/"):
+        with pytest.raises(AssertionError, match="not modelled"):
+            _on_paths_covers(["scripts/**", neg], f)
     # …while its literal segments still bound it (bench-gate-pr.yaml's shape).
     assert _on_paths_covers(
         ["scripts/**", "!components/threshold-exporter/app/**/*_test.go"], f)
