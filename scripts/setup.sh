@@ -22,7 +22,11 @@ if kind get clusters 2>/dev/null | grep -q "^${CLUSTER_NAME}$"; then
   log "Cluster '${CLUSTER_NAME}' exists."
 else
   warn "Creating cluster '${CLUSTER_NAME}'..."
-  kind create cluster --name "${CLUSTER_NAME}" --wait 60s
+  # Node image (= Kubernetes version) comes from the SSOT, not kind's default.
+  unset KIND_NODE_IMAGE  # an exported value must not stand in for the file
+  source "$(cd "$(dirname "$0")" && pwd)/ops/kind-node-image.env"
+  : "${KIND_NODE_IMAGE:?scripts/ops/kind-node-image.env did not set KIND_NODE_IMAGE}"
+  kind create cluster --name "${CLUSTER_NAME}" --image "${KIND_NODE_IMAGE}" --wait 60s
 fi
 ensure_kubeconfig
 
