@@ -96,9 +96,13 @@ codes passed through from Go binaries are the binary's.
 
 Allowed extensions
 ------------------
-A tool MAY define higher codes (>= 3) for finer-grained caller-error
-subtypes, as long as 0/1/2 keep the meanings above. The sanctioned >= 3
-extensions today:
+A tool MAY use a code outside 0/1/2 only where :data:`EXTENDED_EXIT_CODES`
+registers it for that entry — the one list, read at runtime by ``run()``
+(an unregistered status ends at 2 with an ERROR line) and statically by
+tests/shared/test_single_exit_path.py (every exit-status literal outside
+0..2 under scripts/{tools,ops,dx,session-guards} must be in its entry's row),
+so a code can no longer be added by writing it. Adding a row is an owner
+decision (#3611). The rows, and why each exists:
 
 * diag_pr_ci.py's EXIT_NETWORK_BLOCKED = 3 (documented in
   docs/internal/windows-mcp-playbook.md trap #64 — "switch host" hint,
@@ -121,6 +125,11 @@ extensions today:
   the remedy is to run
   `da-tools generate-routes --config-dir <dir> --validate --strict`.
   Precedence 3 > 1 > 4 > 0. Same contract places as exit 3.
+* :data:`PASSTHROUGH` — ops/dx_run.py (``--run``: the command run in the
+  dev container) and ops/commit_helper.py (``git commit``): wrappers that
+  end with the wrapped command's own status, whatever it is (#3577). Their
+  own failures — docker, the container, the wrapper's inputs — are 2 like
+  any tool's, and a literal they choose is held to 0/1/2 by the gate.
 
 No CLI tool repurposes 1 or 2: dx/tenant_verify.py, which inverted them
 (exit 2 = verification finding, exit 1 = caller error and crash), follows
@@ -145,6 +154,7 @@ from __future__ import annotations
 import os
 import sys
 import traceback
+from types import MappingProxyType
 from typing import Any, Callable, Final, NoReturn, Optional
 
 
@@ -696,17 +706,86 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     _stdout_failure_line = None
     _best_effort = False
     try:
-        status = emit_result(entry())
+        status = _contract_status(emit_result(entry()), entry)
     except SystemExit as exc:
-        status = exc.code
+        status = _contract_status(exc.code, entry)
     except Exception as exc:  # noqa: BLE001 — that is the point
         if _interactive():
             raise
         try:
             exit_on_crash(exc)
         except SystemExit as done:
-            status = done.code
+            status = done.code  # the crash code: the contract's own, not checked
     _finalize_and_exit(status)
+
+
+# ── The exit-code registry (#3611) ────────────────────────────────────
+
+#: An entry may also end at any code its wrapped command ends at.
+PASSTHROUGH: Final[str] = "passthrough"
+
+#: ⛔ The one list of exit codes beyond 0/1/2, by entry module name (the
+#: ``__main__`` file's stem — the da-tools image is flat, so a path would
+#: not match there). ``run()`` refuses any other code at runtime (#3611):
+#: a code a tool picked on its own, a multiple of 256 (which the OS would
+#: truncate to 0 — a false success) or a non-int status. Each row is an
+#: owner-sanctioned exception; dev-rules §13 names them.
+EXTENDED_EXIT_CODES: Final = MappingProxyType({
+    # Network-blocked host: "switch host", not 2's "gh missing" (diag_pr_ci).
+    "diag_pr_ci": frozenset({3}),
+    # What happened after or around the write (#1950, docs/cli-reference.md).
+    "patch_config": frozenset({3, 4, 5, 6, 7}),
+    # da-guard's 3 (cannot decode) and 4 (not judged), passed through (#2123, #2904).
+    "guard_dispatch": frozenset({3, 4}),
+    # Wrappers of an arbitrary command (#3577 R3): `--run` ends at the wrapped
+    # command's own code; the wrapper's own failures are 2, named on stderr.
+    "dx_run": PASSTHROUGH,
+    # `git commit`'s own code (a hook's refusal among them), passed through.
+    "commit_helper": PASSTHROUGH,
+})
+
+
+def _entry_name(entry: Callable[..., Any]) -> str:
+    """The file name (stem) of the module *entry* was defined in — the key of
+    its EXTENDED_EXIT_CODES row. Read from the entry, not ``__main__``: the
+    da-tools image runs a tool by exec-ing it under ``entrypoint.py``, where
+    ``sys.modules['__main__']`` is still the entrypoint (#3611). The allowed
+    decorators all ``functools.wraps``, so ``inspect.unwrap`` reaches the def."""
+    import inspect
+    try:
+        target = inspect.unwrap(entry)
+    except ValueError:  # a __wrapped__ cycle
+        target = entry
+    path = (getattr(target, "__globals__", None) or {}).get("__file__") or getattr(
+        sys.modules.get("__main__"), "__file__", None) or ""
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def _contract_status(status: Any, entry: Callable[..., Any]) -> Any:
+    """*status* as ``run()`` may end with it (#3611): None, 0/1/2, a code
+    the registry gives this entry — or, for any other int, the caller-error
+    code after one ``ERROR:`` line naming the registry (under tests: the test
+    crash code, so a test pinning an unregistered code goes red). A string is
+    printed as Python would and is its own explanation — ``SystemExit("ERROR:
+    …")`` is how tools say why — so it ends at the caller-error code with no
+    second line; under tests it also gets the line and the test crash code. None and a bool end as Python ends them (0, 0/1)."""
+    if status is None or isinstance(status, bool):
+        return status
+    name = _entry_name(entry)
+    allowed = EXTENDED_EXIT_CODES.get(name, frozenset())
+    if isinstance(status, int):
+        if status in (0, 1, 2) or (
+                1 <= status <= 255 and (allowed == PASSTHROUGH or status in allowed)):
+            return status
+        why = f"exit status {status} is not in {name or 'this tool'}'s exit-code contract"
+    else:
+        _to_stderr(str(status))
+        why = f"a non-integer exit status ({type(status).__name__}) ends as a caller error"
+        if crash_exit_code_from_env() is None:
+            return _caller_error_code
+    _to_stderr(f"ERROR: {why} (scripts/tools/_lib_exitcodes.py EXTENDED_EXIT_CODES, #3611)")
+    override = crash_exit_code_from_env()
+    return override if override is not None else _caller_error_code
 
 
 # ── stdout failures (#3124) ───────────────────────────────────────────

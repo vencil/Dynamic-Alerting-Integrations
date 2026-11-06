@@ -12,7 +12,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Iterator, NamedTuple, Optional, Union
 
 from _lib_compat import find_project_root
 from _lib_constants import (
@@ -483,10 +483,172 @@ def secret_ref_problem(value: Any) -> Optional[str]:
     return None
 
 
+class CredentialRefSite(NamedTuple):
+    """One place in a receiver where a Secret reference may stand (#1560).
+
+    ``path`` is read from the receiver: a key, ``"*"`` for any key of a
+    mapping, ``"[]"`` for any item of a list. ``file_key`` is the
+    Alertmanager key the reference renders as — the leaf's sibling
+    (``password`` → ``password_file``), or, for a list item, the sibling list
+    the item moves to (a header's ``secrets[i]`` → that header's ``files``).
+
+    ``destinations`` are the receiver fields naming where the credential is
+    sent, when that is not the credential itself: the tenant writes them, so
+    a reference here takes only the tenant's own Secret, and only under a
+    policy whose non-empty ``allowed_domains`` admits every one of their
+    hosts (written out, not a reference). Empty: the credential IS where it
+    goes (a webhook URL, a routing key). An oauth2 credential has two: it
+    goes to token_url, and the access token it is exchanged for — a
+    credential the tenant's Secret yields — goes with every request to url.
+    ``proxies`` are the proxy keys the requests carrying it go through (the
+    token request through oauth2.proxy_url, the request to url through
+    http_config.proxy_url). ``follows_redirects``: Alertmanager sends it
+    again on a redirect (http_config.follow_redirects defaults to true) to a
+    host the allowlist did not judge. prometheus/common v0.70.1 re-adds
+    Authorization (basic_auth, authorization, bearer_token, the oauth2 access
+    token) on every hop isCrossHostRedirect does not flag, and that check
+    passes a SUBDOMAIN of the original host (isDomainOrSubdomain) — outside
+    an allowlist that names the host exactly; a custom http_headers value is
+    re-added on every hop, any host (sensitiveHeadersStripRT strips only
+    Authorization / Cookie-like names). A TLS client key is never sent.
+    The oauth2 rows carry the flag for the access token they yield, which
+    rides the webhook client's redirects: http_config.follow_redirects
+    governs only that client. The token request itself goes through a
+    separate client that does not read FollowRedirects, so the flag says
+    nothing about it.
+    """
+
+    rtype: str
+    path: tuple[str, ...]
+    file_key: str
+    destinations: tuple[tuple[str, ...], ...]
+    proxies: tuple[tuple[str, ...], ...]
+    follows_redirects: bool = False
+
+
+_HTTP_PROXY = ("http_config", "proxy_url")
+_OAUTH2_PROXY = ("http_config", "oauth2", "proxy_url")
+_TOKEN_URL = ("http_config", "oauth2", "token_url")
+_URL = ("url",)
+_TO_URL = ((_URL,), (_HTTP_PROXY,))
+_TO_TOKEN_URL = ((_TOKEN_URL, _URL), (_OAUTH2_PROXY, _HTTP_PROXY))
+_IS_URL = ((), (_HTTP_PROXY,))
+
+#: ⛔ THE one table of where a Secret reference may stand (#1560). The schema
+#: (`anyOf: [<value>, secretRef]` at exactly these paths, pinned by
+#: tests/shared/test_secret_ref_schema.py), the shape check, the rendering,
+#: the binding rules and every listing of a receiver's references read it.
+#: Each `*_file` is the key prometheus/common v0.70.1 (Alertmanager v0.34.2)
+#: reads from a file: config/http_config.go BasicAuth.PasswordFile,
+#: Authorization.CredentialsFile, HTTPClientConfig.BearerTokenFile,
+#: TLSConfig.KeyFile, OAuth2.ClientSecretFile / ClientCertificateKeyFile,
+#: config/headers.go Header.Files; the receivers' own `*_file` for the rest.
+#: The oauth2 three go to token_url, through oauth2's own proxy_url (its
+#: token client is built from the OAuth2 block alone), and the access token
+#: they yield goes to url, through http_config.proxy_url. Not here:
+#: proxy_connect_header (no file form upstream).
+CREDENTIAL_REF_SITES: tuple[CredentialRefSite, ...] = (
+    CredentialRefSite("webhook", ("url",), "url_file", *_IS_URL),
+    CredentialRefSite("rocketchat", ("url",), "url_file", *_IS_URL),
+    CredentialRefSite("slack", ("api_url",), "api_url_file", *_IS_URL),
+    CredentialRefSite("teams", ("webhook_url",), "webhook_url_file", *_IS_URL),
+    CredentialRefSite("pagerduty", ("service_key",), "service_key_file", *_IS_URL),
+    CredentialRefSite("pagerduty", ("routing_key",), "routing_key_file", *_IS_URL),
+    CredentialRefSite("email", ("auth_password",), "auth_password_file",
+                      (("smarthost",),), ()),
+    CredentialRefSite("webhook", ("http_config", "basic_auth", "password"),
+                      "password_file", *_TO_URL, follows_redirects=True),
+    CredentialRefSite("webhook", ("http_config", "authorization", "credentials"),
+                      "credentials_file", *_TO_URL, follows_redirects=True),
+    CredentialRefSite("webhook", ("http_config", "bearer_token"),
+                      "bearer_token_file", *_TO_URL, follows_redirects=True),
+    CredentialRefSite("webhook", ("http_config", "tls_config", "key"),
+                      "key_file", *_TO_URL),
+    CredentialRefSite("webhook", ("http_config", "http_headers", "*", "secrets", "[]"),
+                      "files", *_TO_URL, follows_redirects=True),
+    CredentialRefSite("webhook", ("http_config", "oauth2", "client_secret"),
+                      "client_secret_file", *_TO_TOKEN_URL, follows_redirects=True),
+    CredentialRefSite("webhook", ("http_config", "oauth2", "client_certificate_key"),
+                      "client_certificate_key_file", *_TO_TOKEN_URL, follows_redirects=True),
+    CredentialRefSite("webhook", ("http_config", "oauth2", "tls_config", "key"),
+                      "key_file", *_TO_TOKEN_URL, follows_redirects=True),
+)
+
+
+#: the destinations of CREDENTIAL_REF_SITES written as `host:port` (email
+#: smarthost); every other destination is a URL and must be written with an
+#: http:// or https:// scheme (#1560: without one, the host read is the text
+#: before the first ':' — `hook.example.com:80@evil.example` would read as
+#: hook.example.com).
+HOST_PORT_DESTINATIONS: frozenset[tuple[str, ...]] = frozenset({("smarthost",)})
+
+
+def credential_ref_sites(rtype: str) -> tuple[CredentialRefSite, ...]:
+    """The ``CREDENTIAL_REF_SITES`` of receiver type *rtype*."""
+    return tuple(s for s in CREDENTIAL_REF_SITES if s.rtype == rtype)
+
+
+RefPath = tuple[Union[str, int], ...]
+
+
+def ref_path_text(path: RefPath) -> str:
+    """``("http_config", "http_headers", "X", "secrets", 0)`` →
+    ``http_config.http_headers.X.secrets[0]``."""
+    out = ""
+    for part in path:
+        out += f"[{part}]" if isinstance(part, int) else (f".{part}" if out else str(part))
+    return out
+
+
+def _walk_site(value: Any, pattern: tuple[str, ...], here: RefPath) -> Iterator[RefPath]:
+    if not pattern:
+        if is_secret_ref(value):
+            yield here
+        return
+    step, rest = pattern[0], pattern[1:]
+    if step == "[]":
+        if isinstance(value, list):
+            for i, item in enumerate(value):
+                yield from _walk_site(item, rest, here + (i,))
+    elif isinstance(value, dict):
+        keys = ([k for k in value if isinstance(k, str)] if step == "*"
+                else [step] if step in value else [])
+        for k in keys:
+            yield from _walk_site(value[k], rest, here + (k,))
+
+
+def find_credential_refs(receiver: Any, rtype: Optional[str] = None,
+                         ) -> list[tuple[CredentialRefSite, RefPath]]:
+    """``(site, concrete path)`` of every Secret reference (``is_secret_ref``)
+    standing on a ``CREDENTIAL_REF_SITES`` path of *receiver*, in table
+    order. *rtype* defaults to the receiver's own ``type`` (an Alertmanager
+    entry has none). A receiver that is not a mapping, or of no known type,
+    has none."""
+    if rtype is None:
+        rtype = receiver.get("type") if isinstance(receiver, dict) else None
+    if not isinstance(receiver, dict) or not isinstance(rtype, str):
+        return []
+    return [(site, path) for site in credential_ref_sites(rtype)
+            for path in _walk_site(receiver, site.path, ())]
+
+
+def ref_value_at(receiver: Any, path: RefPath) -> Any:
+    """The value at concrete *path* of *receiver* (None when absent)."""
+    value = receiver
+    for part in path:
+        if isinstance(part, int):
+            if not isinstance(value, list) or part >= len(value):
+                return None
+        elif not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
 def receiver_secret_ref_fields(rtype: str) -> list[str]:
-    """The fields of *rtype* the schema lets hold a Secret reference."""
-    return [f for f, prop in _receiver_field_schemas().get(rtype, {}).items()
-            if prop.get("secret_ref")]
+    """The top-level fields of *rtype* that take a Secret reference
+    (``CREDENTIAL_REF_SITES`` of one key)."""
+    return [s.path[0] for s in credential_ref_sites(rtype) if len(s.path) == 1]
 
 
 def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
@@ -496,14 +658,18 @@ def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Option
       (``secret_ref_problem``), or a mapping / list that is no reference
       (Alertmanager cannot load it as the string it reads there);
     - a string field that does not take one holds one (``channel:
-      {secret: …}`` would be copied to Alertmanager as written).
+      {secret: …}`` would be copied to Alertmanager as written);
+    - a nested ``CREDENTIAL_REF_SITES`` path (inside ``http_config``) holds
+      a malformed one. A reference anywhere else inside ``http_config`` is
+      the generator's output check's (``secret_ref_unsupported_field``).
     """
     fields = _receiver_field_schemas().get(rtype, {})
+    takes_ref = set(receiver_secret_ref_fields(rtype))
     for field, prop in fields.items():
         if field not in receiver:
             continue
         value = receiver[field]
-        if prop.get("secret_ref"):
+        if field in takes_ref:
             if is_secret_ref(value):
                 problem = secret_ref_problem(value)
                 if problem:
@@ -515,6 +681,11 @@ def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Option
             takes = ", ".join(receiver_secret_ref_fields(rtype)) or "none"
             return (f"field '{field}' does not take a Secret reference (the "
                     f"fields of a {rtype} receiver that do: {takes})")
+    for _site, path in find_credential_refs(receiver, rtype):
+        if len(path) > 1:
+            problem = secret_ref_problem(ref_value_at(receiver, path))
+            if problem:
+                return f"field '{ref_path_text(path)}' {problem}"
     return None
 
 
@@ -723,7 +894,8 @@ def _http_config_problem(value: Any) -> Optional[str]:
     - ``HTTP_CONFIG_AUTH_MAPPINGS`` keys: null is unset, else a mapping (set
       even when empty); the other ``HTTP_CONFIG_AUTH_FIELDS``: null and ``""``
       are unset, else a string (a number or date is refused: PyYAML has
-      already rewritten its text, '0123' → 83); at most one set;
+      already rewritten its text, '0123' → 83) or a Secret reference
+      (#1560, set); at most one set;
     - ``proxy_url`` / ``no_proxy``: null and ``""`` are unset; else a string
       (strict for the same reason). Whether a proxy_url
       parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
@@ -748,6 +920,11 @@ def _http_config_problem(value: Any) -> Optional[str]:
             if not isinstance(item, dict):
                 return (f"field 'http_config.{key}' must be a mapping, "
                         f"got {_type_name(item)}")
+            set_keys.append(key)
+        elif is_secret_ref(item):
+            # #1560: bearer_token as a Secret reference renders as
+            # bearer_token_file, which conflicts the same way; its shape is
+            # _receiver_secret_ref_problem's.
             set_keys.append(key)
         elif not isinstance(item, str):
             return (f"field 'http_config.{key}' must be a string, "
@@ -957,7 +1134,7 @@ def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) 
     if is_secret_ref(value):
         # #1560: the value is in a Secret; its shape is all that is judged
         # here (the URL format applies to the value, which is not visible).
-        if not prop.get("secret_ref"):
+        if field not in receiver_secret_ref_fields(rtype):
             return (f"field '{field}' must be a string; it does not take a "
                     "Secret reference")
         problem = secret_ref_problem(value)

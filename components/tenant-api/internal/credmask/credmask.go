@@ -70,30 +70,36 @@ var ErrUnmaskable = errors.New("document cannot be masked")
 // basic_auth / bearer_token / authorization / oauth2.client_secret. So the
 // whole `http_config` value is the placeholder, as are `tls_config`,
 // header maps and `endpoint_params` wherever else they appear (an email
-// receiver's `headers` included).
+// receiver's `headers` included). The leaves inside them are listed as well
+// where the schema marks them x-credential (#1560: oauth2
+// client_certificate_key, a header's `secrets`), so a leaf masks even when
+// written outside its container; tls_config's `key` is not, since `key` is
+// also a Secret reference's own coordinate — its container masks it.
 var credentialKeys = map[string]bool{
-	"http_config":          true,
-	"tls_config":           true,
-	"headers":              true,
-	"http_headers":         true,
-	"proxy_connect_header": true,
-	"endpoint_params":      true,
-	"url":                  true,
-	"api_url":              true,
-	"webhook_url":          true,
-	"proxy_url":            true,
-	"routing_key":          true,
-	"service_key":          true,
-	"auth_password":        true,
-	"auth_secret":          true,
-	"password":             true,
-	"bearer_token":         true,
-	"credentials":          true,
-	"client_secret":        true,
-	"api_key":              true,
-	"token":                true,
-	"bot_token":            true,
-	"user_key":             true,
+	"http_config":            true,
+	"tls_config":             true,
+	"headers":                true,
+	"http_headers":           true,
+	"proxy_connect_header":   true,
+	"endpoint_params":        true,
+	"url":                    true,
+	"api_url":                true,
+	"webhook_url":            true,
+	"proxy_url":              true,
+	"routing_key":            true,
+	"service_key":            true,
+	"auth_password":          true,
+	"auth_secret":            true,
+	"password":               true,
+	"bearer_token":           true,
+	"credentials":            true,
+	"client_secret":          true,
+	"client_certificate_key": true,
+	"secrets":                true,
+	"api_key":                true,
+	"token":                  true,
+	"bot_token":              true,
+	"user_key":               true,
 }
 
 // IsCredentialKey reports whether a mapping key's value is masked.

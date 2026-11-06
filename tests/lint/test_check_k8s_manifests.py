@@ -393,11 +393,12 @@ class TestMainExitCodes:
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
         assert k8s.main() == 1
 
-    def test_engine_missing_three(self, monkeypatch):
+    def test_engine_missing_is_a_caller_error(self, monkeypatch):
+        # #3577/#3611: the scan did not run — the contract's 2, not a third code
         monkeypatch.setattr(k8s, "manifest_root_exists", lambda: True)
         monkeypatch.setattr(k8s, "engine_available", lambda: False)
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
-        assert k8s.main() == 3
+        assert k8s.main() == 2
 
     def test_kube_linter_unparseable_is_caller_error(self, monkeypatch):
         # kube-linter failing/unparseable is "couldn't run the check" =>

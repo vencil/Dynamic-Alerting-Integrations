@@ -354,7 +354,7 @@ data:
         },
         {
           "title": "Gateway fail-open",
-          "description": "Gateway revoked-set read failures in the recent (~10m) window. The federation-gateway fails OPEN by design when it cannot read revoked.txt — revoked tokens ARE accepted until their TTL (<=4h). 0 = OK; >0 = the ADR-028 named Risk Acceptance is active and revoked tokens are being honoured. Threshold aligned to the FederationGatewayRevocationLoadFailure alert (>0, for 2m, warning). The fail-closed hardening is tracked in #996. a11y: symbol + text.",
+          "description": "Gateway revoked-set read failures in the recent (~10m) window. A failed read does NOT clear the set: each gateway worker keeps enforcing the set it had already loaded, so revocations issued since are NOT in force; a worker whose FIRST load failed has no previous set and honours every revoked token until its TTL (<=4h) — that cold-start case is the fail-open half of the ADR-028 named Risk Acceptance. 0 = OK; >0 = the gateway is enforcing a stale set (or, on a cold-started worker, none). Threshold aligned to the FederationGatewayRevocationLoadFailure alert (>0, for 2m, warning). The fail-closed hardening is tracked in #996. a11y: symbol + text.",
           "type": "stat",
           "datasource": {
             "type": "prometheus",
@@ -490,7 +490,7 @@ data:
         },
         {
           "title": "Revoked-set contract — file",
-          "description": "ENFORCEMENT-PLANE STALENESS, cause side (ADR-028 D1 / #1235). Lines in the mounted revoked.txt that violate the token-id line contract, as THIS reconciler reads the file. The gateway applies the same contract and discards the WHOLE reload on a violation, keeping the set it had already loaded — so >0 means the enforcement plane is frozen on a pre-violation revoked set: every revocation issued since that line appeared is NOT in force, and a gateway worker whose FIRST load hit it has no previous set and is enforcing nothing. ⛔ This is NOT 'Gateway fail-open': there the list is unreadable and revoked tokens ARE being let through; here the list is readable and is being refused. ⛔ Tamper status will NOT show this — it compares the audit log against the FILE, which does contain the newer revocations. Threshold aligned to the FederationRevocationLiveSetRejected alert (>0, for 10m, critical). a11y (ADR-012 / WCAG 1.4.1): state is symbol + text, never colour alone.",
+          "description": "ENFORCEMENT-PLANE STALENESS, cause side (ADR-028 D1 / #1235). Lines in the mounted revoked.txt that violate the token-id line contract, as THIS reconciler reads the file. The gateway applies the same contract and discards the WHOLE reload on a violation, keeping the set it had already loaded — so >0 means the enforcement plane is frozen on a pre-violation revoked set: every revocation issued since that line appeared is NOT in force, and a gateway worker whose FIRST load hit it has no previous set and is enforcing nothing. ⛔ This is NOT 'Gateway fail-open': there the list is unreadable; here it is readable and is being refused — the same frozen posture, but a different cause and a different fix. ⛔ Tamper status will NOT show this — it compares the audit log against the FILE, which does contain the newer revocations. Threshold aligned to the FederationRevocationLiveSetRejected alert (>0, for 10m, critical). a11y (ADR-012 / WCAG 1.4.1): state is symbol + text, never colour alone.",
           "type": "stat",
           "datasource": {
             "type": "prometheus",
@@ -987,7 +987,7 @@ data:
         },
         {
           "title": "Gateway revoked-set read failures (fail-open / 拍頻)",
-          "description": "CHAOS SCENARIO: fail-open + 拍頻 (beat-frequency). federation_gateway_revocation_load_errors over the recent window; the >0 line is the FederationGatewayRevocationLoadFailure threshold (for 2m, warning). Healthy: flat 0. Bad: >0 = the gateway is failing OPEN and revoked tokens are honoured until TTL. 拍頻 WATCH: the reconcile interval (300s) beats against the Prometheus scrape interval; oscillation of this gauge right at the for:2m boundary can flap the alert. If you see it toggling in and out of firing near 2m, tune the for: window or the reconcile interval (runbook chaos step 4).",
+          "description": "CHAOS SCENARIO: fail-open + 拍頻 (beat-frequency). federation_gateway_revocation_load_errors over the recent window; the >0 line is the FederationGatewayRevocationLoadFailure threshold (for 2m, warning). Healthy: flat 0. Bad: >0 = the gateway cannot read the list and is enforcing the set it already had (revocations issued since are NOT in force; a cold-started worker enforces nothing). 拍頻 WATCH: the reconcile interval (300s) beats against the Prometheus scrape interval; oscillation of this gauge right at the for:2m boundary can flap the alert. If you see it toggling in and out of firing near 2m, tune the for: window or the reconcile interval (runbook chaos step 4).",
           "type": "timeseries",
           "datasource": {
             "type": "prometheus",

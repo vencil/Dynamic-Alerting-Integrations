@@ -50,7 +50,7 @@ installs it).
 
 Engine is binary-on-PATH first (CI installs it), else Docker:
   kube-linter -> `kube-linter` | docker run stackrox/kube-linter:<ver>
-With --ci the engine is REQUIRED (exit 3 if missing) so the scan can't silently
+With --ci the engine is REQUIRED (exit 2 if missing) so the scan can't silently
 skip in CI; without --ci it is skipped with a WARN when absent.
 
 Usage:
@@ -382,8 +382,8 @@ def main() -> int:
         for line in findings[action]:
             print(f"  [{action}] {line}")
 
-    if engine_error:
-        return 3
+    if engine_error:  # the scan did not run: a caller error (#3577, #3611)
+        return EXIT_CALLER_ERROR
 
     # "Couldn't run the check" (kube-linter failed/unparseable) is a
     # caller-error (exit 2: fix the engine/manifests, then retry), distinct from
