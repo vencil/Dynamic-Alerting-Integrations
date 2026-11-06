@@ -26,6 +26,7 @@ tests:
         alertname: Custom_threshold__mysql_semisync_master_last_errno__eq__w5m__for1m
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: critical
               tenant: shop-a
@@ -60,6 +61,7 @@ tests:
         alertname: Custom_threshold__mysql_semisync_master_last_errno__eq__w5m__for1m
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: critical
               tenant: shop-a

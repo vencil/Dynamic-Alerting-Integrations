@@ -145,8 +145,8 @@ def test_sync_reports_a_missing_or_unknown_label():
 
 def test_every_shipped_pack_is_already_a_fixed_point():
     """The committed packs are what the generator writes (the --check contract)."""
-    packs = [p for p in sorted((_REPO / "rule-packs").glob("rule-pack-*.yaml"))
-             if p.name not in ("rule-pack-platform.yaml", "rule-pack-custom-alerts.yaml")]
+    packs = [p for p in grd._lib_consumer_read.tenant_rule_pack_files(_REPO / "rule-packs")
+             if grd._pack(p) != grd.CUSTOM_ALERTS_PACK]
     assert len(packs) >= 10
     for p in packs:
         text = p.read_text(encoding="utf-8")

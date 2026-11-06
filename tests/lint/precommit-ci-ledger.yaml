@@ -304,6 +304,12 @@ hooks:
   evidence:
     pytest:
     - tests/lint/test_check_maintenance_symmetry.py
+- id: rulepack-derived-check
+  category: b
+  evidence:
+    pytest:
+    - tests/dx/test_generate_rulepack_derived.py::test_every_shipped_pack_is_already_a_fixed_point
+    - tests/dx/test_generate_rulepack_derived.py::test_check_passes_on_the_repo
 - id: orphan-recordings-check
   category: b
   evidence:

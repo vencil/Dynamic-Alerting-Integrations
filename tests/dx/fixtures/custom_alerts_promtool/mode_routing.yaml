@@ -38,6 +38,7 @@ tests:
         exp_alerts:
           # shop-a → mode=page (would route to the pager)
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: warning
               tenant: shop-a
@@ -56,6 +57,7 @@ tests:
           # web-b → mode=silent (S7/S8: suppressed by the CustomRecipeSilent
           # sentinel + inhibit, NOT route-to-null; stays a dashboard-only ALERTS series)
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: warning
               tenant: web-b
@@ -79,6 +81,7 @@ tests:
         alertname: CustomRecipeSilent
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: none
               component: sentinel
               tenant: web-b
