@@ -504,3 +504,51 @@ def test_every_short_o_spelling_is_read(tmp_path, spelling):
     assert r.returncode in (0, 2), (r.stdout, r.stderr)
     assert target.read_text(encoding="utf-8") == "kept\n"
     assert "--findings-json names the same file as -o/--output" in r.stderr, r.stderr
+
+
+# ── #1560 ③-c：http_config 的參照 render 後也列進掛載清單 ─────────────────────
+# required_mounts 走訪所有 `*_file` 與 http_headers 的 `files`，所以 ③-c render 出
+# 的 password_file、credentials_file、key_file、client_secret_file、
+# client_certificate_key_file、bearer_token_file 與 header files 不必另外接線。
+
+_HTTP_CONFIG_REFS = (
+    "        type: webhook\n"
+    "        url: https://hook.example.com/a\n"
+    "        http_config:\n"
+    "          follow_redirects: false\n"
+    "          basic_auth: {username: u, password: {secret: {key: basic-pw}}}\n"
+    "          tls_config: {cert: client-cert, key: {secret: {key: tls-key}}}\n"
+    "          http_headers:\n"
+    "            X-Token: {values: [v], secrets: [{secret: {key: hdr-1}}, {secret: {key: hdr-2}}]}\n"
+)
+_OAUTH2_REFS = (
+    "        type: webhook\n"
+    "        url: https://hook.example.com/b\n"
+    "        http_config:\n"
+    "          follow_redirects: false\n"
+    "          oauth2:\n"
+    "            client_id: c\n"
+    "            token_url: https://token.example.com/t\n"
+    "            client_secret: {secret: {key: oauth-secret}}\n"
+    "            tls_config: {cert: client-cert, key: {secret: {key: oauth-tls-key}}}\n"
+)
+_BEARER_REF = (
+    "        type: webhook\n"
+    "        url: https://hook.example.com/c\n"
+    "        http_config: {follow_redirects: false, bearer_token: {secret: {key: bearer}}}\n"
+)
+
+
+def test_http_config_references_are_listed_after_rendering(tmp_path):
+    d = _tree(tmp_path, {"t-a": _HTTP_CONFIG_REFS, "t-b": _OAUTH2_REFS, "t-c": _BEARER_REF})
+    out, mounts = tmp_path / "am.yml", tmp_path / "mounts.json"
+    r = _run(tmp_path, d, "--output-alertmanager", "-o", str(out),
+             "--secret-mounts-out", str(mounts))
+    assert r.returncode == 0, r.stderr
+    doc = json.loads(mounts.read_text(encoding="utf-8"))
+    assert doc["mounts"] == [
+        {"name": "da-t-a", "keys": ["basic-pw", "hdr-1", "hdr-2", "tls-key"]},
+        {"name": "da-t-b", "keys": ["oauth-secret", "oauth-tls-key"]},
+        {"name": "da-t-c", "keys": ["bearer"]},
+    ]
+    assert doc["other_files"] == []

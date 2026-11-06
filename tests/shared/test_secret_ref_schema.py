@@ -17,7 +17,7 @@ import os
 import jsonschema
 import pytest
 
-from _lib_validation import receiver_secret_ref_fields, secret_ref_problem
+from _lib_validation import CREDENTIAL_REF_SITES, receiver_secret_ref_fields, secret_ref_problem
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _SCHEMA = os.path.join(_REPO_ROOT, "docs", "schemas", "tenant-config.schema.json")
@@ -104,30 +104,183 @@ def test_invalid_references_are_rejected(validator, doc):
     assert secret_ref_problem(doc) is not None
 
 
-def test_secret_ref_is_wired_to_exactly_the_seven_credential_fields():
-    """接線：恰好這 7 個欄位以 `anyOf: [<值>, secretRef]` 接受它，其他地方都不引用。"""
-    schema = _load()
+_SECRET_REF = {"$ref": "#/definitions/secretRef"}
+_PREFIX = "#/definitions/"
+
+
+def _schema_ref_sites(schema: dict) -> tuple[dict, set[int]]:
+    """{(rtype, path): owning property} for every place a receiver's schema
+    lets a secretRef stand, read by walking each receiver definition through
+    properties ("key"), additionalProperties ("*"), items ("[]"), $ref and
+    anyOf / allOf / oneOf (not `not` / `if` / `then`: they only constrain).
+    Also the ids of the secretRef members found, to compare with the text
+    count."""
     defs = schema["definitions"]
-    ref = {"$ref": "#/definitions/secretRef"}
-    seen: dict[str, set[str]] = {}
+    found: dict[tuple[str, tuple[str, ...]], dict] = {}
+    nodes: set[int] = set()
+
+    def walk(rtype, node, path, prop, seen):
+        if not isinstance(node, dict):
+            return
+        if node == _SECRET_REF:
+            found[(rtype, path)] = prop
+            nodes.add(id(node))
+            return
+        ref = node.get("$ref")
+        if ref:
+            name = ref[len(_PREFIX):]
+            if name not in seen:
+                walk(rtype, defs[name], path, prop, seen | {name})
+        for key in ("anyOf", "allOf", "oneOf"):
+            for sub in node.get(key, []):
+                walk(rtype, sub, path, prop, seen)
+        for name, sub in node.get("properties", {}).items():
+            walk(rtype, sub, path + (name,), sub, seen)
+        if isinstance(node.get("additionalProperties"), dict):
+            walk(rtype, node["additionalProperties"], path + ("*",), prop, seen)
+        if isinstance(node.get("items"), dict):
+            walk(rtype, node["items"], path + ("[]",), prop, seen)
+
     for branch in defs["receiver"]["oneOf"]:
-        d = defs[branch["$ref"].rsplit("/", 1)[1]]
+        name = branch["$ref"][len(_PREFIX):]
+        d = defs[name]
         rtype = d["properties"]["type"]["const"]
-        for field, prop in d["properties"].items():
-            if ref in prop.get("anyOf", []):
-                assert prop.get("x-credential") is True, f"{rtype}.{field}"
-                seen.setdefault(rtype, set()).add(field)
-    assert seen == WIRED
-    # 除了這 7 處，schema 裡沒有別處引用 secretRef。
+        walk(rtype, d, (), {}, frozenset({name}))
+    return found, nodes
+
+
+def test_schema_takes_a_reference_exactly_where_the_table_says():
+    """⛔ SSOT 對帳：schema 允許 secretRef 的位置（`anyOf: [<值>, secretRef]`）恰好
+    是 CREDENTIAL_REF_SITES——頂層欄位與 http_config 葉欄位都算——且每處都標
+    x-credential；走訪看到的 secretRef 數等於 schema 文字裡的數量（沒有藏在走不到的地方）。"""
+    schema = _load()
+    found, nodes = _schema_ref_sites(schema)
+    table = {(s.rtype, s.path) for s in CREDENTIAL_REF_SITES}
+    assert set(found) == table, (sorted(set(found) - table), sorted(table - set(found)))
+    unmarked = sorted(k for k, prop in found.items() if prop.get("x-credential") is not True)
+    assert not unmarked, unmarked
     text = json.dumps({k: v for k, v in schema.items() if k != "definitions"})
-    text += json.dumps({k: v for k, v in defs.items() if k != "secretRef"})
-    assert text.count(json.dumps(ref)) == sum(len(v) for v in WIRED.values())
+    text += json.dumps({k: v for k, v in schema["definitions"].items() if k != "secretRef"})
+    assert text.count(json.dumps(_SECRET_REF)) == len(nodes)
+    # 正向控制：走訪要走得到巢狀列，不只頂層 7 欄。
+    assert ("webhook", ("http_config", "http_headers", "*", "secrets", "[]")) in found
 
 
-def test_python_reads_the_same_wiring():
-    """產生器讀到的「哪些欄位接 secretRef」就是 schema 的接線。"""
+def test_top_level_wiring_is_the_tables_and_the_schemas():
+    """產生器的頂層視角（receiver_secret_ref_fields，取自資料表）就是 ③-a 的 7 欄，
+    schema 讀取器（_receiver_field_schemas 的 secret_ref）讀到的也一樣。"""
+    from _lib_validation import _receiver_field_schemas
     got = {rtype: set(receiver_secret_ref_fields(rtype)) for rtype in WIRED}
     assert got == WIRED
+    schema_view = {rtype: {f for f, p in props.items() if p.get("secret_ref")}
+                   for rtype, props in _receiver_field_schemas().items()}
+    assert {r: f for r, f in schema_view.items() if f} == WIRED
+
+
+def test_table_file_keys_are_the_upstream_file_form():
+    """每列 render 成 `<葉>_file`；list 元素例外，併入同層的 `files`
+    （prometheus/common Header.Files）。http_config 內的列都有要約束的目的地。"""
+    for s in CREDENTIAL_REF_SITES:
+        if s.path[-1] == "[]":
+            assert s.file_key == "files", s
+        else:
+            assert s.file_key == f"{s.path[-1]}_file", s
+        assert len(s.path) == 1 or s.destinations, s
+
+
+_URL = "https://hook.example.com/a"
+_OAUTH = {"client_id": "c", "token_url": "https://token.example.com/t"}
+
+
+def _webhook_with(path: tuple[str, ...], value) -> dict:
+    """A valid webhook receiver with *value* at *path* ("*" → a header name,
+    a trailing "[]" → a one-item list), plus the siblings that path needs to
+    be valid (oauth2's client_id / token_url, a client cert for a client key)."""
+    receiver: dict = {"type": "webhook", "url": _URL}
+    node = receiver
+    for i, step in enumerate(path):
+        key = "X-Token" if step == "*" else step
+        rest = path[i + 1:]
+        if rest == ("[]",):
+            node[key] = [value]
+            break
+        if not rest:
+            node[key] = value
+            break
+        node = node.setdefault(key, {})
+        if key == "oauth2":
+            for k, v in _OAUTH.items():
+                node.setdefault(k, v)
+        if key == "tls_config" and rest == ("key",):
+            node.setdefault("cert", "client-cert-pem")
+    return receiver
+
+
+def _doc(receiver: dict) -> dict:
+    return {"tenants": {"t1": {"_routing": {"receiver": receiver}}}}
+
+
+_NESTED = [s for s in CREDENTIAL_REF_SITES if len(s.path) > 1]
+
+
+@pytest.mark.parametrize("site", _NESTED, ids=lambda s: ".".join(s.path))
+def test_schema_accepts_a_reference_on_each_http_config_row(site):
+    v = jsonschema.Draft7Validator(_load())
+    for value in (_ref(), _ref(shared="corp")):   # 形狀；能不能綁定是產生器的事
+        assert [e.message for e in v.iter_errors(_doc(_webhook_with(site.path, value)))] == []
+    bad = _webhook_with(site.path, {"secret": {"name": "x", "key": "k"}})
+    assert list(v.iter_errors(_doc(bad))) != []
+
+
+def _http_config_leaves(schema: dict) -> set[tuple[str, ...]]:
+    """Every leaf property path under webhook http_config (a property with no
+    properties of its own), "*" for a header name, through $ref / anyOf."""
+    defs = schema["definitions"]
+    out: set[tuple[str, ...]] = set()
+
+    def walk(node, path, seen):
+        if not isinstance(node, dict):
+            return
+        ref = node.get("$ref")
+        if ref and ref != _SECRET_REF["$ref"]:
+            name = ref[len(_PREFIX):]
+            if name not in seen:
+                walk(defs[name], path, seen | {name})
+        for sub in node.get("anyOf", []):
+            walk(sub, path, seen)
+        props = node.get("properties")
+        if props:
+            for name, sub in props.items():
+                walk(sub, path + (name,), seen)
+        elif path[-1] == "http_headers" and isinstance(node.get("additionalProperties"), dict):
+            walk(node["additionalProperties"], path + ("*",), seen)
+        elif not ref and "anyOf" not in node:
+            out.add(path)
+
+    walk(defs["webhookReceiver"]["properties"]["http_config"], ("http_config",), frozenset())
+    return out
+
+
+def test_schema_refuses_a_reference_on_every_other_http_config_leaf():
+    """表上沒有的 http_config 葉欄位一律拒收參照（其餘部分都合法，拒收只來自參照本身）；
+    oauth2 claims 任一層也拒。"""
+    schema = _load()
+    v = jsonschema.Draft7Validator(schema)
+    rows = {s.path for s in _NESTED}
+    others = sorted(_http_config_leaves(schema) - rows - {p[:-1] for p in rows if p[-1] == "[]"})
+    # 正向控制：走訪找得到它該找的葉欄位。
+    assert {("http_config", "basic_auth", "username"), ("http_config", "proxy_url"),
+            ("http_config", "oauth2", "token_url"), ("http_config", "tls_config", "cert"),
+            ("http_config", "http_headers", "*", "values")} <= set(others), others
+    accepted = []
+    for path in others:
+        for where in (path, path + ("[]",)):
+            if not list(v.iter_errors(_doc(_webhook_with(where, _ref())))):
+                accepted.append(where)
+    assert not accepted, accepted
+    for claims in ({"a": _ref()}, {"a": [{"b": _ref(shared="corp")}]}):
+        receiver = _webhook_with(("http_config", "oauth2", "claims"), claims)
+        assert list(v.iter_errors(_doc(receiver))) != [], claims
 
 
 @pytest.mark.parametrize("rtype,field,receiver", [
@@ -162,3 +315,33 @@ def test_unwired_fields_refuse_a_reference():
     ):
         doc = {"tenants": {"t1": {"_routing": {"receiver": receiver}}}}
         assert list(v.iter_errors(doc)) != [], receiver
+
+
+def test_a_reference_counts_as_set_in_the_schemas_pairs():
+    """參照在「至多一個」與「cert／key 互相要求」裡算有設，與 Alertmanager 對 render 後
+    `*_file` 的判定一致（bearer_token_file 與 basic_auth 互斥、key_file 要 cert）。"""
+    v = jsonschema.Draft7Validator(_load())
+    # bearer_token 參照與三個認證 mapping 各自互斥（#3616 review：oauth2、
+    # authorization 兩組原本只由字串案例釘住）。
+    for other, value in (("basic_auth", {"username": "u"}),
+                         ("oauth2", dict(_OAUTH)),
+                         ("authorization", {"credentials": "c"})):
+        both = _webhook_with(("http_config", "bearer_token"), _ref())
+        both["http_config"][other] = value
+        assert list(v.iter_errors(_doc(both))) != [], other
+        del both["http_config"]["bearer_token"]
+        assert list(v.iter_errors(_doc(both))) == [], other   # 只有那一組才拒
+    lone_key = _webhook_with(("http_config", "tls_config", "key"), _ref())
+    del lone_key["http_config"]["tls_config"]["cert"]
+    assert list(v.iter_errors(_doc(lone_key))) != []
+    lone_cert = {"type": "webhook", "url": _URL, "http_config": {"tls_config": {"cert": "c"}}}
+    assert list(v.iter_errors(_doc(lone_cert))) != []
+
+
+def test_a_header_named_secret_is_refused_like_the_generator_refuses_it():
+    v = jsonschema.Draft7Validator(_load())
+    receiver = {"type": "webhook", "url": _URL,
+                "http_config": {"http_headers": {"secret": {"values": ["v"]}}}}
+    assert list(v.iter_errors(_doc(receiver))) != []
+    receiver["http_config"]["http_headers"] = {"X-Secret": {"values": ["v"]}}
+    assert list(v.iter_errors(_doc(receiver))) == []

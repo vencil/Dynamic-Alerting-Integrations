@@ -17,8 +17,10 @@ Functions:
 """
 from __future__ import annotations
 
+import copy
 import fnmatch
 import os
+import re
 import sys
 from types import MappingProxyType
 from typing import Mapping, NamedTuple
@@ -39,7 +41,9 @@ from _lib_validation import (  # noqa: E402  (#2766 finding kinds)
     FIELD_NOT_STRING, FIELD_SET, receiver_field_state,
 )
 from _lib_validation import (  # noqa: E402  (#1560 Secret references)
-    is_secret_ref, receiver_secret_ref_fields,
+    CREDENTIAL_REF_SITES, HOST_PORT_DESTINATIONS, CredentialRefSite, RefPath,
+    find_credential_refs,
+    is_secret_ref, ref_path_text, ref_value_at,
 )
 
 
@@ -191,26 +195,36 @@ FINDING_KINDS: dict[str, str] = {
         "A Secret reference uses a shared Secret on a field its "
         "shared_secrets entry does not list under `fields`; the entry is not "
         "rendered.",
-    "secret_ref_shared_auth_password":
-        "auth_password references a shared Secret, which is never allowed: "
-        "the password goes to the SMTP server the receiver names; the entry "
-        "is not rendered.",
-    "secret_ref_auth_password_unconfined":
-        "auth_password references the tenant's Secret, but the --policy "
-        "allowed_domains is empty or absent, or does not admit the "
-        "smarthost; the entry is not rendered.",
+    "secret_ref_shared_confined":
+        "A shared Secret on a field whose credential goes to a destination "
+        "the receiver names (email auth_password, the webhook http_config "
+        "credentials), which is never allowed; the entry is not rendered.",
+    "secret_ref_destination_unconfined":
+        "The tenant's Secret on a field whose credential goes to a "
+        "destination the receiver names, but the --policy allowed_domains is "
+        "empty or absent, or does not admit that destination's host (or the "
+        "destination is missing or itself a Secret reference); the entry is "
+        "not rendered.",
     "secret_ref_no_owner":
         "A receiver no tenant owns (the platform-wide _routing_enforced, "
         "without {{tenant}}) references a tenant's own Secret, whose name "
         "derives from the tenant; the entry is not rendered.",
-    "secret_ref_shared_proxy_url":
-        "A receiver with a shared Secret reference also sets "
-        "http_config.proxy_url, a proxy the tenant chose that would see the "
-        "request to the shared destination; the entry is not rendered.",
+    "secret_ref_proxy_url":
+        "A receiver with a shared Secret reference, or a reference whose "
+        "destination the allowlist confines, also sets the proxy_url that "
+        "request goes through, a proxy the tenant chose that would see it; "
+        "the entry is not rendered.",
+    "secret_ref_follow_redirects":
+        "A credential from the tenant's Secret that Alertmanager sends again "
+        "on a redirect (basic_auth, authorization, bearer_token, oauth2, an "
+        "http_headers value) on a receiver that does not set "
+        "http_config.follow_redirects: false; a redirect could carry it to a "
+        "host allowed_domains did not admit; the entry is not rendered.",
     "secret_ref_unsupported_field":
         "A Secret reference is still in the Alertmanager entry after "
         "rendering — on a field, at any depth, that has no *_file form "
-        "(http_config, email headers); the entry is not rendered.",
+        "(email headers, the http_config leaves CREDENTIAL_REF_SITES does not "
+        "list); the entry is not rendered.",
     "invalid_override_entry":
         "An overrides value or entry that is not the expected list / "
         "mapping; it is not rendered.",
@@ -683,15 +697,17 @@ def receiver_type(receiver_obj: object) -> str:
 DEFAULT_MOUNT_ROOT = "/etc/alertmanager/secrets"
 #: the tenant's own Secret is `da-<tenant>`; a shared Secret may not start so.
 OWN_NAME_PREFIX = "da-"
-#: the receiver field a shared Secret is never allowed on: its value goes to
-#: the server the receiver itself names (the smarthost).
-SECRET_REF_OWN_ONLY_FIELDS = frozenset({"auth_password"})
-#: the http_config keys a receiver with a shared Secret may not set: each
-#: sends the request to a host the tenant chose instead of the destination.
-#: proxy_url is the only one — oauth2's proxy_url carries the token request
-#: (to token_url), not the request to the shared URL; proxy_from_environment
-#: is Alertmanager's own environment, not the tenant's to choose.
-SHARED_SECRET_REFUSED_HTTP_KEYS = ("proxy_url",)
+#: the top-level receiver fields a shared Secret is never allowed on: their
+#: value goes to a destination the receiver itself names (CREDENTIAL_REF_SITES
+#: rows with `destinations`; today auth_password → smarthost). The nested
+#: http_config rows are all such fields too, and no `shared_secrets` entry can
+#: list them (it lists top-level field names).
+CONFINED_REF_FIELDS = frozenset(
+    s.path[0] for s in CREDENTIAL_REF_SITES if len(s.path) == 1 and s.destinations)
+# Which proxies the requests carrying a credential go through are each site's
+# `proxies` (CREDENTIAL_REF_SITES): http_config.proxy_url, and for oauth2
+# oauth2.proxy_url as well (the token request). proxy_from_environment is Alertmanager's own
+# environment, not the tenant's to choose, and is never refused.
 
 
 class SharedSecret(NamedTuple):
@@ -812,16 +828,18 @@ def required_mounts(config: Mapping, mount_root: str) -> dict:
     }
 
 
-def _receiver_secret_refs(receiver_obj: object) -> list[tuple[str, dict]]:
-    """``(field, reference)`` of every Secret reference on a field of
-    *receiver_obj* that takes one."""
-    if not isinstance(receiver_obj, dict):
+def _receiver_secret_refs(receiver_obj: object) -> list[tuple[CredentialRefSite, RefPath]]:
+    """``(site, path)`` of every Secret reference of *receiver_obj* that
+    stands where ``CREDENTIAL_REF_SITES`` lets one stand (a top-level field
+    or an http_config leaf). A receiver of no known type has none."""
+    if receiver_type(receiver_obj) not in RECEIVER_TYPES:
         return []
-    rtype = receiver_type(receiver_obj)
-    if rtype not in RECEIVER_TYPES:
-        return []
-    return [(f, receiver_obj[f]) for f in receiver_secret_ref_fields(rtype)
-            if is_secret_ref(receiver_obj.get(f))]
+    return find_credential_refs(receiver_obj)
+
+
+def _is_set(value: object) -> bool:
+    """Empty / null counts as not set, as in Alertmanager."""
+    return value not in (None, "")
 
 
 def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
@@ -839,98 +857,175 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
     the policy's allowlist (None or empty: none). The reference shapes have
     already been judged (``receiver_optional_problem``).
 
-    The rules: a shared alias must be listed; its entry must list the field;
-    ``auth_password`` never takes a shared Secret, and takes the tenant's own
-    only when *allowed_domains* is non-empty and admits the smarthost (the
-    smarthost is the tenant's to write, and the password goes there); a
-    receiver with any shared reference sets no ``http_config.proxy_url``
-    (``SHARED_SECRET_REFUSED_HTTP_KEYS``).
+    The rules, per ``CREDENTIAL_REF_SITES`` row:
+
+    * a shared alias must be listed, and its entry must list the field;
+    * a row with ``destinations`` (email auth_password → smarthost; every
+      webhook http_config leaf → url, the oauth2 ones → oauth2.token_url and
+      url, where the access token they yield is sent): the tenant writes
+      where the credential goes, so it never takes a shared Secret, and takes
+      the tenant's own only when *allowed_domains* is non-empty and admits
+      every destination's host, written out (a destination that is missing,
+      or itself a reference, cannot be checked);
+    * a shared reference, or a reference on a row with destinations, refuses
+      a set proxy on any of its row's ``proxies`` (a proxy the tenant chose sees a
+      plain-http request whole, and an https one whenever the receiver's
+      own tls_config — a CA the tenant chose, insecure_skip_verify — lets
+      it intercept); an own reference whose content IS the destination does
+      not (the tenant may route its own webhook as it likes, as before);
+    * a row that ``follows_redirects`` (every http_config credential but the
+      TLS client key) needs ``http_config.follow_redirects: false``: upstream
+      re-adds Authorization on a redirect to a subdomain of the original
+      host, and a custom header on a redirect to any host
+      (``CredentialRefSite``).
     """
     out: list[Finding] = []
 
-    def refuse(text: str, fld: str, *, kind: str) -> None:
+    def refuse(text: str, where: str, *, kind: str) -> None:
         out.append(skipped_entry_warning(
-            f"  WARN: {ctx}: receiver {fld} {text}, skipping",
-            kind=kind, tenant=tenant_id, field=f"{field}.{fld}"))
+            f"  WARN: {ctx}: receiver {where} {text}, skipping",
+            kind=kind, tenant=tenant_id, field=f"{field}.{where}"))
 
-    for fld, ref in _receiver_secret_refs(receiver_obj):
-        alias = ref["secret"].get("shared")
+    # proxy path → the reasons a proxy there is refused (one finding each path)
+    proxied: dict[tuple[str, ...], list[str]] = {}
+    redirect_paths: list[str] = []
+    for site, path in _receiver_secret_refs(receiver_obj):
+        where = ref_path_text(path)
+        alias = ref_value_at(receiver_obj, path)["secret"].get("shared")
         if alias is None:
             if owner_tenant is None:
                 refuse("references a tenant's own Secret (no 'shared'), but "
                        "no tenant owns this receiver; use a shared Secret the "
                        "deployment policy lists, or write {{tenant}} in "
                        "_routing_enforced to render one receiver per tenant",
-                       fld, kind="secret_ref_no_owner")
-            elif fld in SECRET_REF_OWN_ONLY_FIELDS:
-                # The smarthost read exactly as the domain allowlist reads it.
-                # Imported here: _grar_validate imports this leaf module.
-                from _grar_validate import _extract_host
-                host = _extract_host(receiver_obj.get("smarthost"))
+                       where, kind="secret_ref_no_owner")
+            elif site.destinations:
+                checked = ", ".join(ref_path_text(d) for d in site.destinations)
                 if not allowed_domains:
-                    refuse("references a Secret, but the deployment policy "
-                           "(--policy) has no allowed_domains to confine the "
-                           "smarthost the password is sent to",
-                           fld, kind="secret_ref_auth_password_unconfined")
-                elif host is None or not any(fnmatch.fnmatch(host, p)
-                                             for p in allowed_domains):
-                    refuse(f"references a Secret, but the smarthost host "
-                           f"{host!r} is not in the deployment policy's "
-                           "allowed_domains",
-                           fld, kind="secret_ref_auth_password_unconfined")
+                    # One sentence for every destination, not one per destination.
+                    problems = ["the deployment policy (--policy) has no allowed_domains "
+                                f"to confine the {checked} it is sent to"]
+                else:
+                    problems = [p for d in site.destinations
+                                if (p := _destination_problem(receiver_obj, d, allowed_domains))]
+                if problems:
+                    refuse(f"references a Secret, but {'; '.join(problems)}",
+                           where, kind="secret_ref_destination_unconfined")
+                for proxy in site.proxies:
+                    proxied.setdefault(proxy, []).append(
+                        f"{where} is sent through it, past the allowed_domains "
+                        f"check on {checked}")
+                if site.follows_redirects:
+                    redirect_paths.append(where)
             continue
-        if fld in SECRET_REF_OWN_ONLY_FIELDS:
-            refuse(f"references the shared Secret '{alias}', which "
-                   f"{fld} may never use: the password goes to the SMTP "
-                   "server this receiver names; use the tenant's own Secret "
-                   "({secret: {key: …}})",
-                   fld, kind="secret_ref_shared_auth_password")
+        for proxy in site.proxies:
+            proxied.setdefault(proxy, []).append(
+                f"the receiver uses the shared Secret '{alias}': the proxy "
+                "would see the request to the shared destination")
+        if site.destinations:
+            refuse(f"references the shared Secret '{alias}', which this field "
+                   f"may never use: the credential goes to "
+                   f"{', '.join(ref_path_text(d) for d in site.destinations)}, which this receiver "
+                   "names; use the tenant's own Secret ({secret: {key: …}})",
+                   where, kind="secret_ref_shared_confined")
         elif alias not in binding.shared_secrets:
             refuse(f"references the shared Secret '{alias}', which the "
                    "deployment policy's shared_secrets does not list"
                    + ("" if binding.shared_secrets else
                       " (it lists none, or no --policy is given)"),
-                   fld, kind="secret_ref_shared_unknown")
-        elif fld not in binding.shared_secrets[alias].fields:
+                   where, kind="secret_ref_shared_unknown")
+        elif path[0] not in binding.shared_secrets[alias].fields:
             refuse(f"references the shared Secret '{alias}', whose "
                    "shared_secrets entry does not list this field under "
                    f"fields ({', '.join(sorted(binding.shared_secrets[alias].fields))})",
-                   fld, kind="secret_ref_shared_field_not_allowed")
-    # A shared Secret is admitted only on a field whose content IS the
-    # destination; a proxy the tenant names would see that request (and, for
-    # plain http, the shared URL itself). Empty / null counts as not set, as
-    # in Alertmanager.
-    aliases = sorted({ref["secret"]["shared"] for _f, ref in _receiver_secret_refs(receiver_obj)
-                      if ref["secret"].get("shared") is not None})
-    http_config = receiver_obj.get("http_config")
-    if aliases and isinstance(http_config, dict):
-        for key in SHARED_SECRET_REFUSED_HTTP_KEYS:
-            if http_config.get(key) not in (None, ""):
-                refuse(f"sets a proxy the tenant chose, but the receiver uses "
-                       f"the shared Secret {', '.join(map(repr, aliases))}: the "
-                       "proxy would see the request to the shared destination; "
-                       "drop it, or use the tenant's own Secret",
-                       f"http_config.{key}", kind="secret_ref_shared_proxy_url")
+                   where, kind="secret_ref_shared_field_not_allowed")
+    for proxy, reasons in proxied.items():
+        if _is_set(ref_value_at(receiver_obj, proxy)):
+            refuse(f"sets a proxy the tenant chose, but {'; '.join(dict.fromkeys(reasons))}; "
+                   "drop it, or write the value itself",
+                   ref_path_text(proxy), kind="secret_ref_proxy_url")
+    if redirect_paths and ref_value_at(receiver_obj, ("http_config", "follow_redirects")) is not False:
+        refuse(f"is not false, but {', '.join(redirect_paths)} is a credential "
+               "from a Secret that Alertmanager sends again on a redirect "
+               "(Authorization to a subdomain of the url host, a custom header "
+               "to any host), past allowed_domains; set "
+               "http_config.follow_redirects: false",
+               "http_config.follow_redirects", kind="secret_ref_follow_redirects")
     return out
+
+
+_URL_SCHEME_RE = re.compile(r"[Hh][Tt][Tt][Pp][Ss]?://")
+
+
+def _destination_problem(receiver_obj: dict, destination: tuple[str, ...],
+                         allowed_domains: list[str] | None) -> str | None:
+    """Why a credential sent to *destination* (a receiver path) is not
+    confined by *allowed_domains*, or None. The host is read exactly as the
+    domain allowlist reads it (``_grar_validate._extract_host``); a URL
+    destination (every one but ``HOST_PORT_DESTINATIONS``) must carry an
+    http:// or https:// scheme, or that reader takes it for ``host:port``."""
+    # Imported here: _grar_validate imports this leaf module.
+    from _grar_validate import _extract_host
+    dest_text = ref_path_text(destination)
+    if not allowed_domains:
+        return ("the deployment policy (--policy) has no allowed_domains to "
+                f"confine the {dest_text} it is sent to")
+    raw = ref_value_at(receiver_obj, destination)
+    if is_secret_ref(raw):
+        return (f"{dest_text}, where it is sent, is itself a Secret reference, "
+                "whose host cannot be checked against allowed_domains")
+    if not isinstance(raw, str) or raw == "":
+        # Missing, null, empty, or not a string: nothing to read a host from.
+        return (f"the {dest_text} it is sent to is missing or not a non-empty string (got {raw!r}), so it "
+                "cannot be checked against allowed_domains")
+    if destination not in HOST_PORT_DESTINATIONS and _URL_SCHEME_RE.match(raw) is None:
+        return (f"{dest_text} {raw!r}, where it is sent, is not an http:// or "
+                "https:// URL, so its host cannot be read for allowed_domains")
+    host = _extract_host(raw)
+    if host is None:
+        return (f"the {dest_text} {raw!r}, where it is sent, has no host this "
+                "generator can read, so it cannot be checked against allowed_domains")
+    if not any(fnmatch.fnmatch(host, p) for p in allowed_domains):
+        return (f"the {dest_text} host {host!r} is not in the deployment "
+                "policy's allowed_domains")
+    return None
 
 
 def render_secret_refs(am_entry: dict, rtype: str, owner_tenant: str | None,
                        binding: SecretBinding) -> None:
     """#1560: rewrite, in place, every Secret reference of Alertmanager entry
-    *am_entry* as ``<field>_file: <root>/<secret>/<key>`` and drop the field.
-    Only for references ``secret_binding_findings`` passed (a shared alias is
-    listed; an own reference has an owner)."""
-    root = binding.mount_root.rstrip("/")  # "/" → "", so "/<secret>/<key>"
-    for fld in receiver_secret_ref_fields(rtype):
-        ref = am_entry.get(fld)
-        if not is_secret_ref(ref):
-            continue
-        inner = ref["secret"]
+    *am_entry* that stands on a ``CREDENTIAL_REF_SITES`` path: a leaf
+    becomes ``<file_key>: <root>/<name>/<key>`` beside it and is dropped; a
+    list item (a header's ``secrets[i]``) moves to the sibling list
+    ``<file_key>`` (that header's ``files``), in order, and a list left
+    empty is dropped. Only for references ``secret_binding_findings``
+    passed (a shared alias is listed; an own reference has an owner).
+    *am_entry* must not share nested values with the tenant's receiver."""
+    root = binding.mount_root.rstrip("/")  # "/" → "", so "/<name>/<key>"
+    # (id(holder), key) → (holder, key): each list is filtered once, however
+    # many references it held (a dict is unhashable, so its identity is the key).
+    emptied: dict[tuple[int, str], tuple[dict, str]] = {}
+    for site, path in find_credential_refs(am_entry, rtype):
+        inner = ref_value_at(am_entry, path)["secret"]
         alias = inner.get("shared")
         name = (binding.shared_secrets[alias].secret if alias is not None
                 else own_secret_name(owner_tenant))
-        del am_entry[fld]
-        am_entry[f"{fld}_file"] = f"{root}/{name}/{inner['key']}"
+        mounted = f"{root}/{name}/{inner['key']}"
+        if isinstance(path[-1], int):
+            holder = ref_value_at(am_entry, path[:-2])
+            holder.setdefault(site.file_key, []).append(mounted)
+            emptied[(id(holder), path[-2])] = (holder, path[-2])
+        else:
+            holder = ref_value_at(am_entry, path[:-1])
+            del holder[path[-1]]
+            holder[site.file_key] = mounted
+    for holder, key in emptied.values():
+        if key in holder:
+            kept = [v for v in holder[key] if not is_secret_ref(v)]
+            if kept:
+                holder[key] = kept
+            else:
+                del holder[key]
 
 
 def secret_ref_paths(value: object, path: str) -> list[str]:
@@ -972,9 +1067,12 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
             is a caller bug and raises ``TypeError``.
         secrets: #1560 — mount root and the policy's ``shared_secrets``
             (None: the default root, no shared Secret).
-        allowed_domains: #1560 — the --policy allowlist, read only by the
-            auth_password rule of ``secret_binding_findings`` (the domain
-            allowlist itself is the caller's ``validate_receiver_domains``).
+        allowed_domains: #1560 — the --policy allowlist, read only by
+            ``secret_binding_findings`` for every ``CREDENTIAL_REF_SITES`` row
+            with destinations (email auth_password → smarthost, the webhook
+            http_config leaves → url, the oauth2 ones → token_url and url);
+            the domain allowlist itself is the caller's
+            ``validate_receiver_domains``.
 
     Returns:
         (am_config_dict, warnings) where am_config_dict is e.g.
@@ -1055,11 +1153,14 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
             warnings.extend(binding_warnings)
             return None, warnings
 
-    # Build AM config — include required + present optional fields
+    # Build AM config — include required + present optional fields. A copy:
+    # #1560's rendering rewrites http_config in place, and the tenant's
+    # receiver (shared by every caller holding the merged routing) must not
+    # change under it.
     am_entry = {}
     for fld in spec["required"] + spec["optional"]:
         if fld in receiver_obj:
-            am_entry[fld] = receiver_obj[fld]
+            am_entry[fld] = copy.deepcopy(receiver_obj[fld])
 
     # Alertmanager's email_config.to is a single STRING (comma-separated for
     # multiple recipients). conf.d authors — and _routing_defaults — conventionally
@@ -1081,13 +1182,15 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
     render_secret_refs(am_entry, rtype, owner_tenant, binding)
 
     # #1560: whatever is still shaped like a reference after that is on a
-    # field with no `*_file` form (http_config at any depth, email headers)
-    # and would reach Alertmanager as written. Judged on the OUTPUT, so every
+    # field with no `*_file` form (an http_config leaf CREDENTIAL_REF_SITES
+    # does not list, email headers) and would reach Alertmanager as written. Judged on the OUTPUT, so every
     # receiver slot and every field — today's and one added later — is
     # covered by this one check rather than by a rule per field.
     leftover = secret_ref_paths(am_entry, field)
     if leftover:
-        takes = ", ".join(receiver_secret_ref_fields(rtype)) or "none"
+        takes = ", ".join(dict.fromkeys(
+            ref_path_text(s.path).replace(".*", ".<name>").replace(".[]", "[i]")
+            for s in CREDENTIAL_REF_SITES if s.rtype == rtype)) or "none"
         for path in leftover:
             warnings.append(skipped_entry_warning(
                 f"  WARN: {tenant}: receiver type '{rtype}' field '{path}' holds a "
