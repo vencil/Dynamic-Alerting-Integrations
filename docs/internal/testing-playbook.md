@@ -531,7 +531,8 @@ Portal 工具卡片是從 `tool-registry.yaml` 動態產生的 `.cards a.card`�
   - ⛔ `allowConditional` 必須維持 false。翻成 true 後，只要符合以下任一條件就豁免：呼叫帶參數、位於 `if` 裡、位於 `switch case` 裡（plugin 2.10.2）。這樣一來 `test.skip(true, 'debt')`、`test.skip('reason')` 都會過。
   - 環境差異走 `--grep` tag 或 playwright.config.ts 的 project，這兩種 suite 本來就在用。
 - **reporter 清單只寫在一處**：`playwright.config.ts` 是唯一列 reporter 的地方。命令列的 `--reporter` 會整份取代清單、把這道檢查拿掉，所以 CI 不帶這個參數，由 `tests/lint/test_e2e_spec_lint.py` 釘住。
-- **看不到的**：沒有被收進執行的測試，也就是 `--grep-invert`、`testIgnore` 排除的，或直接刪掉的。
+- **看不到的**：沒有被收進或沒有被執行的測試，包括被 `--grep`／`--grep-invert`、`testIgnore`（config 或 project 層）、`--shard`、`--last-failed`、`--only-changed` 排除的，以及直接刪掉的。也不檢查 issue 是否存在、是否還 open。
+- **只算最後一次結果**：retry 之後通過的測試不算停車。因為 hook 失敗而被連帶跳過的測試沒有 skip/fixme 標記，也不算。issue 必須寫在宣告裡；執行時才 push 的 annotation 不算，因為 `--list` 看不到它。
 - **執行點**：本機每次 `playwright test`，以及 CI 的 `Smoke Tests (Chromium)`。⚠️ 該 job 不在 main 的 required checks 內，紅了不擋 merge。
 
 **仍是人類判斷的**：issue 有沒有在推進。reporter 只檢查有沒有掛 issue，不檢查那張票是否還 open。
@@ -565,10 +566,10 @@ Phase .a0 已將主要互動工具加 `data-testid`（wizard、playground、conf
 排程 calibration sprint 時，按下列順序執行單一 spec：
 
 1. `cd tests/e2e && npx playwright test wizard.spec.ts --ui`
-2. 逐條 unlock → 改成真的 `test(...)`。⛔ 這一步原本寫「或 `test.fixme(false, ...)`（後者保留將來再關）」——實測 `test.fixme(false, 'kept')` 同樣被 lint 擋下（#1428），那個選項不存在。還不想現在修就**刪測 + 在 [`frontend-quality-backlog.md`](frontend-quality-backlog.md) 登記**
+2. 逐條 unlock → 改成真的 `test(...)`，並拿掉它的 `issue` annotation。還不想現在修，就保留宣告式的 `test.fixme`，連同它指向的 issue（#1449）
 3. Locator panel 驗「exactly 1 match」；不是 1 時先補 `data-testid`（jsx 側）再回 spec
 4. `npx playwright test wizard.spec.ts` headless 跑過 → 再 `--count=3` 驗穩定性
-5. `docs/internal/frontend-quality-backlog.md` 該檔的登記條目逐條劃掉
+5. 解鎖完成的測試不再有 fixme 和 issue annotation，`--list` 自然不會再列出它。全部解鎖後，關閉它們指向的 issue
 6. PR 標題：`test(e2e): calibrate <spec> (remove N fixme)`，body 附 `--count=3` 輸出
 
 ## v2.8.0 Lessons Learned（2026-04-23, Phase .a）

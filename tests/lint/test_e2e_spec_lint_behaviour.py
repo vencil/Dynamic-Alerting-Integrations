@@ -302,6 +302,15 @@ _UNREGISTERED_PARKING = {
     "issue not a number": (
         "test.fixme('n', { annotation: { type: 'issue', description: 'none' } },"
         " async () => {});\n"),
+    "issue #0": (
+        "test.fixme('z', { annotation: { type: 'issue', description: '#0' } },"
+        " async () => {});\n"),
+    # Registered only at run time: `--list` cannot see it, so it is outside
+    # the register even though the annotation exists by the time the test ends.
+    "issue pushed at run time": (
+        "test('rt', async ({}, ti) => {\n"
+        "  ti.annotations.push({ type: 'issue', description: '#1' });\n"
+        "  ti.skip();\n});\n"),
 }
 
 
@@ -357,6 +366,14 @@ def test_a_scratch_spec_is_neither_linted_nor_collected(tmp_path: Path) -> None:
     root = _tree(tmp_path)
     e2e = root / "tests/e2e"
     (e2e / "ok.spec.ts").write_text(_LEGIT_SPEC, encoding="utf-8", newline="\n")
+    (e2e / "nested").mkdir()
+    (e2e / "nested" / "_deep.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n\ntest.skip('deep', async () => {});\n",
+        encoding="utf-8", newline="\n")
+    (e2e / "_dir").mkdir()
+    (e2e / "_dir" / "x.spec.ts").write_text(
+        "import { test } from '@playwright/test';\n\ntest.skip('in dir', async () => {});\n",
+        encoding="utf-8", newline="\n")
     (e2e / "_scratch.spec.ts").write_text(
         "import { test } from '@playwright/test';\n\n"
         "test.skip('scratch', async () => {});\n",
@@ -370,6 +387,47 @@ def test_a_scratch_spec_is_neither_linted_nor_collected(tmp_path: Path) -> None:
     assert "ok.spec.ts" in result.stdout, (
         "the listing did not show the control spec, so it proves nothing.\n"
         + _report(result))
+    for hidden in ("_scratch.spec.ts", "_deep.spec.ts", "_dir"):
+        assert hidden not in result.stdout, (
+            f"the runner collected `{hidden}`, a `_` scratch path eslint never "
+            "reads — the two ignore lists disagree.\n" + _report(result))
+    lint = _run(root)
+    assert lint.returncode == 0, (
+        "the lint chain read a `_` scratch path (it holds a test.skip) — "
+        "eslint.config.mjs and playwright.config.ts must ignore the same "
+        "paths.\n" + _report(lint))
     assert "_scratch.spec.ts" not in result.stdout, (
         "the runner collected a `_*` scratch spec that eslint never reads — "
         "playwright.config.ts lost `testIgnore: ['**/_*']`.\n" + _report(result))
+
+
+# A first attempt that fails and a retry that passes is not parking. CI runs
+# with `retries: 1`; a hook or serial group failing once makes Playwright mark
+# siblings failed or skipped on attempt 0 (#1449 review measured the reporter
+# failing such a run under the A-13 message). Only the final attempt counts.
+_FLAKY_NOT_PARKED = {
+    "beforeAll fails once": (
+        "test.describe('g', () => {\n"
+        "  test.beforeAll(({}, ti) => { expect(ti.retry).toBe(1); });\n"
+        "  test('one', async () => {});\n  test('two', async () => {});\n});\n"),
+    "serial group fails once": (
+        "test.describe('s', () => {\n"
+        "  test.describe.configure({ mode: 'serial' });\n"
+        "  test('a', async ({}, ti) => { expect(ti.retry).toBe(1); });\n"
+        "  test('b', async () => {});\n});\n"),
+}
+
+
+@pytest.mark.parametrize("shape", sorted(_FLAKY_NOT_PARKED))
+def test_a_retry_that_passes_is_not_reported_as_parking(
+        tmp_path: Path, shape: str) -> None:
+    root = _tree(tmp_path)
+    (root / "tests/e2e/flaky.spec.ts").write_text(
+        "import { test, expect } from '@playwright/test';\n\n"
+        + _FLAKY_NOT_PARKED[shape], encoding="utf-8", newline="\n")
+    result = _run_playwright(root, "flaky.spec.ts")
+    assert "flaky" in result.stdout, (
+        "the probe did not produce a flaky run, so it proves nothing.\n"
+        + _report(result))
+    assert "[A-13]" not in result.stderr, _report(result)
+    assert result.returncode == 0, _report(result)

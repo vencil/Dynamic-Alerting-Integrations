@@ -155,8 +155,8 @@ test.describe('Visual regression baselines @visual', () => {
   // ─── TRK-238 expansion (Plan A): 5 staged baselines, one per category ───
   //
   // fixme until each one has a baseline — #3642 tracks them and holds the
-  // activation steps (visual-baseline.yaml workflow_dispatch, then drop the
-  // fixme). These used to sit in a block comment because A-13 banned fixme;
+  // activation steps (on a branch: drop the fixme first, THEN run
+  // visual-baseline.yaml — `--update-snapshots` makes no baseline for a fixme). These used to sit in a block comment because A-13 banned fixme;
   // now the parked-tests reporter requires the `issue` annotation instead
   // (#1449). Selection: one tool per visual category; rich-data tools that
   // change often (release-notes-generator, schema-explorer) are left out.

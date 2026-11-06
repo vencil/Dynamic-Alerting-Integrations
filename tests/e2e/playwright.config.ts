@@ -16,9 +16,10 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './',
-  /* `_*` files are scratch probes (dev-rules §11); eslint.config.mjs ignores the
-   * same pattern, so the runner must not collect what the linter never read. */
-  testIgnore: ['**/_*'],
+  /* `_*` files and directories are scratch probes (dev-rules §11);
+   * eslint.config.mjs ignores the same two patterns, so the runner must not
+   * collect what the linter never read. */
+  testIgnore: ['**/_*', '**/_*/**'],
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */

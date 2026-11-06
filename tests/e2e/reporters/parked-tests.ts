@@ -5,9 +5,11 @@
  * "Parked" is judged from what the runner actually did, not from how the spec
  * is spelled: a result of `skipped`, or an expected status other than
  * `passed` (`test.fixme`, `test.skip`, `test.fail`, `testInfo.skip()`, an
- * aliased or computed call — every spelling ends here). Such a test must carry
- * at least one `issue` annotation, and every `issue` annotation on it must be
- * `#<number>`:
+ * aliased or computed call — every spelling, for every test the run collects).
+ * Such a test must DECLARE at least one `issue` annotation, and every declared
+ * `issue` annotation on it must be `#<number>`. Only the final attempt counts,
+ * and a skip carries no parking mark (`skip` / `fixme`) when it is collateral
+ * (a hook failed, `--max-failures`), so those are not reported:
  *
  *   test.fixme('title', { annotation: { type: 'issue', description: '#123' } },
  *     async ({ page }) => { ... });
@@ -22,35 +24,59 @@
  * flag on the command line replaces that list and drops this check, which is
  * why tests/lint/test_e2e_spec_lint.py rejects one in the CI invocation.
  *
- * ⚠️ Not seen: tests the run never collects — `--grep-invert`, `testIgnore`,
- * a deleted test. Those leave no result to judge.
+ * ⚠️ Not seen: tests the run never collects or never runs — `--grep` /
+ * `--grep-invert`, `testIgnore` (config or project), `--shard`,
+ * `--last-failed`, `--only-changed`, a deleted test. Those leave no result
+ * to judge. Nor whether the named issue exists or is still open.
  */
-import type { FullResult, Reporter, TestCase, TestResult } from '@playwright/test/reporter';
+import type {
+  FullResult, Reporter, Suite, TestCase, TestResult,
+} from '@playwright/test/reporter';
 
-const ISSUE = /^#\d+$/;
+// A real issue number; `#0` names nothing.
+const ISSUE = /^#[1-9]\d*$/;
+const PARKING_MARKS = new Set(['skip', 'fixme']);
 
 export default class ParkedTestsReporter implements Reporter {
-  private offenders: string[] = [];
+  // Issue annotations as DECLARED, captured before anything runs: an issue
+  // pushed at run time (`testInfo.annotations.push`) is invisible to
+  // `--list`, i.e. outside the register, so it does not count.
+  private declaredIssues = new Map<string, string[]>();
+  private lastResult = new Map<string, { test: TestCase; result: TestResult }>();
+
+  onBegin(_config: unknown, suite: Suite): void {
+    for (const test of suite.allTests()) {
+      this.declaredIssues.set(test.id, test.annotations
+        .filter((a) => a.type === 'issue').map((a) => a.description ?? ''));
+    }
+  }
 
   onTestEnd(test: TestCase, result: TestResult): void {
-    const parked = result.status === 'skipped' || test.expectedStatus !== 'passed';
-    if (!parked) return;
-    const issues = test.annotations.filter((a) => a.type === 'issue');
-    if (issues.length > 0 && issues.every((a) => ISSUE.test(a.description ?? ''))) return;
-    const where = `${test.location.file}:${test.location.line}`;
-    const entry = `${where} "${test.titlePath().slice(1).join(' › ')}" ` +
-      `(status=${result.status}, expected=${test.expectedStatus})`;
-    // A retried test reports once per attempt; name it once.
-    if (!this.offenders.includes(entry)) this.offenders.push(entry);
+    // Only the final attempt decides: a retry that passes clears an earlier
+    // failure, and siblings skipped because a hook failed once are not parked.
+    this.lastResult.set(test.id, { test, result });
   }
 
   onEnd(): { status?: FullResult['status'] } | undefined {
-    if (this.offenders.length === 0) return undefined;
+    const offenders: string[] = [];
+    for (const { test, result } of this.lastResult.values()) {
+      const marked = [...test.annotations, ...result.annotations]
+        .some((a) => PARKING_MARKS.has(a.type));
+      const parked = test.expectedStatus !== 'passed'
+        || (result.status === 'skipped' && marked);
+      if (!parked) continue;
+      const issues = this.declaredIssues.get(test.id) ?? [];
+      if (issues.length > 0 && issues.every((d) => ISSUE.test(d))) continue;
+      offenders.push(`${test.location.file}:${test.location.line} ` +
+        `"${test.titlePath().slice(1).join(' › ')}" ` +
+        `(status=${result.status}, expected=${test.expectedStatus})`);
+    }
+    if (offenders.length === 0) return undefined;
     process.stderr.write(
-      '[A-13] parked test(s) without an issue annotation — add ' +
-      "{ annotation: { type: 'issue', description: '#<n>' } } naming the " +
-      'issue that tracks it, or let the test run (#1449):\n' +
-      this.offenders.map((o) => `  ${o}\n`).join(''));
+      '[A-13] parked test(s) without a declared issue annotation — add ' +
+      "{ annotation: { type: 'issue', description: '#<n>' } } to the test's " +
+      'declaration, naming the issue that tracks it, or let the test run ' +
+      '(#1449):\n' + offenders.map((o) => `  ${o}\n`).join(''));
     return { status: 'failed' };
   }
 

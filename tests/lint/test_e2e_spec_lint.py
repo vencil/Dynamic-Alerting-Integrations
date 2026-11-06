@@ -1452,44 +1452,95 @@ _PLAYWRIGHT_CONFIG = _REPO_ROOT / "tests/e2e/playwright.config.ts"
 _PARKED_REPORTER = "./reporters/parked-tests.ts"
 
 
-def _playwright_invocations() -> list[tuple[str, str]]:
-    """(where, command) for every place that starts the Playwright runner.
+# A run step that may start the runner: names playwright, or runs an npm test
+# script while in tests/e2e (by working-directory or a `cd` in the step).
+_NPM_TEST = re.compile(r"\bnpm\s+(?:t|test|run\s+test(?::[\w:-]+)?)\b")
+# What replaces the config's reporter list: a --reporter flag, or a different
+# config file altogether (-c / --config).
+_DROPS_REPORTER = re.compile(r"(?:^|\s)(?:--reporter\b|--config\b|-c(?:\s|=|$))")
 
-    Workflow `run:` steps that name `playwright` or run `npm test` from
-    tests/e2e, and tests/e2e/package.json scripts that call `playwright test`.
+
+def _playwright_invocations(workflows_dir: Path | None = None,
+                            package_json: Path | None = None,
+                            ) -> list[tuple[str, str]]:
+    """(where, command) for every place that may start the Playwright runner.
+
+    Whitespace is collapsed first, so `npx playwright  test` is still seen.
     """
+    workflows_dir = workflows_dir or _REPO_ROOT / ".github" / "workflows"
+    package_json = package_json or _REPO_ROOT / "tests/e2e/package.json"
     found: list[tuple[str, str]] = []
-    for path in sorted((_REPO_ROOT / ".github" / "workflows").glob("*.y*ml")):
+    for path in sorted(workflows_dir.glob("*.y*ml")):
         doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
         for job_id, job in (doc.get("jobs") or {}).items():
             for step in (job or {}).get("steps") or []:
-                run = str((step or {}).get("run") or "")
+                run = " ".join(str((step or {}).get("run") or "").split())
                 wd = str((step or {}).get("working-directory") or "")
-                if "playwright test" in run or (
-                        wd.rstrip("/").endswith("tests/e2e") and "npm test" in run):
+                in_e2e = wd.rstrip("/").endswith("tests/e2e") or "tests/e2e" in run
+                if "playwright" in run or (in_e2e and _NPM_TEST.search(run)):
                     found.append((f"{path.name}::{job_id}", run))
-    pkg = json.loads((_REPO_ROOT / "tests/e2e/package.json").read_text(encoding="utf-8"))
+    pkg = json.loads(package_json.read_text(encoding="utf-8"))
     for name, cmd in (pkg.get("scripts") or {}).items():
-        if "playwright test" in cmd:
-            found.append((f"tests/e2e/package.json::{name}", cmd))
+        cmd = " ".join(cmd.split())
+        if "playwright" in cmd:
+            found.append((f"{package_json.name}::{name}", cmd))
     return found
 
 
-def test_no_playwright_invocation_replaces_the_reporter_list():
-    """A `--reporter` flag replaces the config's list and drops parked-tests.
+def _overriding(found: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    return [(w, c) for w, c in found if _DROPS_REPORTER.search(c)]
 
-    That reporter is what fails a run whose skipped / fixme / fail-expected
-    test names no issue (#1449); dropping it on the CI command line would turn
-    the gate off with every check still green.
+
+def test_no_playwright_invocation_replaces_the_reporter_list():
+    """`--reporter`, `-c` or `--config` replaces the config's reporter list.
+
+    That list carries parked-tests, which fails a run whose skipped / fixme /
+    fail-expected test declares no issue (#1449); dropping it on a command
+    line turns the gate off with every check still green.
     """
     found = _playwright_invocations()
-    assert any("::smoke" in w or "playwright.yml" in w for w, _c in found), (
+    assert any(w.startswith("playwright.yml::") for w, _c in found), (
         "found no Playwright invocation in playwright.yml — this scan stopped "
         f"seeing the CI run, so it checks nothing: {found}")
-    overriding = [(w, c) for w, c in found if "--reporter" in c]
+    overriding = _overriding(found)
     assert not overriding, (
-        "these Playwright invocations pass --reporter, which replaces "
-        f"playwright.config.ts's list and drops {_PARKED_REPORTER}: {overriding}")
+        "these Playwright invocations pass --reporter / -c / --config, which "
+        "replaces playwright.config.ts's reporter list and drops "
+        f"{_PARKED_REPORTER}: {overriding}")
+
+
+@pytest.mark.parametrize("run, wd", [
+    ("cd tests/e2e && npm test -- --reporter=dot", ""),
+    ("npx playwright  test --reporter=dot", ""),
+    ("npm run test:critical -- --reporter=dot", "tests/e2e"),
+    ("npm t -- --reporter=dot", "tests/e2e"),
+    ("npx playwright test -c other.config.ts", ""),
+    ("npx playwright test --config=other.config.ts", ""),
+])
+def test_the_invocation_scan_sees_each_spelling(tmp_path, run, wd):
+    """#1449 review measured each of these slipping past the first version."""
+    wf = tmp_path / "wf"
+    wf.mkdir()
+    step = {"run": run, **({"working-directory": wd} if wd else {})}
+    (wf / "x.yml").write_text(yaml.safe_dump({"jobs": {"j": {"steps": [step]}}}),
+                              encoding="utf-8")
+    pkg = tmp_path / "package.json"
+    pkg.write_text('{"scripts": {}}', encoding="utf-8")
+    found = _playwright_invocations(wf, pkg)
+    assert found and _overriding(found), (run, wd, found)
+
+
+def test_the_invocation_scan_leaves_plain_runs_alone(tmp_path):
+    wf = tmp_path / "wf"
+    wf.mkdir()
+    (wf / "x.yml").write_text(yaml.safe_dump({"jobs": {"j": {"steps": [
+        {"run": "npm test -- --workers=4", "working-directory": "tests/e2e"},
+        {"run": "npx playwright test --update-snapshots --grep @visual"}]}}}),
+        encoding="utf-8")
+    pkg = tmp_path / "package.json"
+    pkg.write_text('{"scripts": {"test": "playwright test"}}', encoding="utf-8")
+    found = _playwright_invocations(wf, pkg)
+    assert len(found) == 3 and not _overriding(found), found
 
 
 def test_the_parked_tests_reporter_is_on_every_config_branch():

@@ -40,10 +40,12 @@ export default [
       'node_modules/**',
       'playwright-report/**',
       'test-results/**',
-      // Scratchpad / calibration probes (dev-rules §11 `_*` prefix).
-      '_*.mjs',
-      '_*.js',
-      '_*.ts',
+      // Scratchpad / calibration probes (dev-rules §11 `_*` prefix), at any
+      // depth, files and directories alike. playwright.config.ts `testIgnore`
+      // holds the same two patterns so the runner never collects what this
+      // file never read (pinned by test_e2e_spec_lint_behaviour.py).
+      '**/_*',
+      '**/_*/**',
     ],
   },
   {
