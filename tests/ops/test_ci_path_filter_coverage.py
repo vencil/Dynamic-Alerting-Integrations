@@ -2122,6 +2122,7 @@ GATED_LEGS = {
     ("ci.yml", "go-tests-am-inhibit"),
     # ADR-027 §9 item 9: the oauth2-proxy module's leg, on the `go` filter.
     ("ci.yml", "go-tests-oauth2-proxy"),
+    ("ci.yml", "go-tests-pss"),
     # #3206: the da-read module's leg, gated on the `go` filter like its siblings.
     ("ci.yml", "go-tests-da-read"),
     ("ci.yml", "go-tests-e2e-bench-receiver"),

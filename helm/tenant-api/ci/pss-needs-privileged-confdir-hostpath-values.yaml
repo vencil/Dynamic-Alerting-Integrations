@@ -1,0 +1,12 @@
+# PSS gate value set (#1018) — a DECLARED EXCEPTION. The `pss-needs-privileged-`
+# prefix tells tests/pss to judge this configuration at `privileged` AND to
+# require that it really does violate `restricted`: if confDir.type=hostPath
+# ever becomes restricted-compliant (or is removed), the gate goes red and this
+# file has to go. A hostPath conf.d (documented for kind development) cannot run
+# in a namespace enforcing restricted — not even baseline.
+confDir:
+  type: hostPath
+  hostPath: /srv/pss-gate/conf.d
+writeBack:
+  mode: direct
+  directAcknowledgeNotDelivered: true
