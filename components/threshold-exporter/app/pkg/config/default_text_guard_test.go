@@ -62,8 +62,9 @@ var defaultTextBaseline = map[defaultTextSite]int{
 	{"custom_alert.go", "walkCustomAlertSpecs", "redecode"}:       1,
 	// _metadata value re-decoded from sv.Default.
 	{"metadata_layers.go", "decodeMetadataValue", "redecode"}: 1,
-	// _metadata (TenantMetadata) re-decoded from sv.Default.
-	{"resolve.go", "tenantMetadataOf", "redecode"}: 1,
+	// _metadata (TenantMetadata) re-decoded from sv.Default (moved out of
+	// resolve.go tenantMetadataOf by #3653; the same site, not a new one).
+	{"metadata_value.go", "decodeTenantMetadata", "redecode"}: 1,
 	// _routing re-decoded from sv.Default (raw := sv.Default).
 	{"resolve.go", "ThresholdConfig.ResolveRoutingLogf", "redecode"}: 1,
 	// _silent_mode: "target:" sniff, then re-decode of TrimSpace(sv.Default).
