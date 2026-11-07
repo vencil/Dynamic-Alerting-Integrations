@@ -969,35 +969,20 @@ repos:
         stages: [manual]
 
       - id: jsx-babel-check
-        name: JSX Babel standalone parse validation
-        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci
-        language: python
-        pass_filenames: false
-        files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
-        # Promoted from manual → auto (docs/harness-hardening):
-        # catches NUL bytes, browser-mode Babel incompatibilities, and
-        # broken JSX syntax before they reach HEAD. Skips silently if
-        # Node.js unavailable (~0s), otherwise ~2-4s against cached @babel/standalone.
-
-      - id: jsx-babel-check-strict-linecount
-        name: JSX line-count soft-cap regression gate
+        name: JSX Babel parse + static + line-count gate
         entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
         language: python
         pass_filenames: false
         files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
-        # Auto-stage (NOT manual) — runs on every commit to catch
-        # line-count regressions immediately. Locks in the progress
-        # from PR-2d (#153 Phase 1+2+3 / S#69-S#72): codebase had 0
-        # soft-cap line-count warnings as of S#72, this keeps it that
-        # way. Pre-existing `style={{}}` warnings stay non-fatal
-        # because `--strict-linecount` is granular (NOT `--strict`).
-        # Separate cleanup track will eventually activate
-        # `--strict-static` once they are cleared. See PR #160 / S#71
-        # for the granular-flag design rationale.
-        # Initially proposed as `stages: [manual]` but PR #162 first
-        # CI run failed with "No hook with id ... in stage pre-commit"
-        # — empirically the codebase's CI-invoked hooks are auto-stage,
-        # not manual-stage. Aligning with that convention now.
+        # One hook (#3611 B2): it used to be two — this one with `--ci` and
+        # jsx-babel-check-strict-linecount with `--ci --strict-linecount`,
+        # the same files:, a strict superset — so every commit ran Babel
+        # twice. `--strict-linecount` makes soft-cap (>1500 lines) fatal
+        # too: 0 soft-cap warnings since PR-2d (#153), this keeps it there.
+        # Pre-existing `style={{}}` warnings stay non-fatal (granular flag,
+        # NOT `--strict`; PR #160). Needs node: without it, or without an
+        # installable @babel/standalone, the hook exits 2, never a silent
+        # skip (#3611).
 
       - id: dev-rules-enforcement-check
         name: dev-rules.md ↔ pre-commit-config.yaml drift check

@@ -1673,8 +1673,8 @@ class TestPortalCarrier:
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stand-in for node")
     @pytest.mark.parametrize("body,needle", [
-        ("echo 'SyntaxError: boom' >&2; exit 3", "rc=3"),
-        ("printf '[]'", "zero commands"),
+        ("echo 'SyntaxError: boom' >&2; exit 3", "exit 3"),
+        ("printf '[]'", "non-empty list"),
     ])
     def test_a_node_that_runs_but_fails_is_fatal_not_silent(
             self, tmp_path, monkeypatch, body, needle):
@@ -1691,7 +1691,7 @@ class TestPortalCarrier:
         for name in mod.PORTAL_PLAYGROUND_FILES:
             (root / rel / name).write_text((_PLAYGROUND / name).read_text(
                 encoding="utf-8"), encoding="utf-8", newline="\n")
-        monkeypatch.setattr(mod.shutil, "which", lambda _name: node)
+        monkeypatch.setattr(mod._lib_engine.shutil, "which", lambda _name: node)
         r = mod.scan(parsers=PARSERS, command_map=COMMAND_MAP, docs=[],
                      reference_docs=(_reference(tmp_path),), injected=INJECTED,
                      exit_codes={"widget": mod.reachable_exit_codes(_WIDGET_SOURCE)},
@@ -1700,10 +1700,13 @@ class TestPortalCarrier:
                    for e in r.fatal), r.fatal
         assert r.stats["portal_commands"] == 0
 
-    def test_no_node_is_disclosed_or_fatal_under_the_require_env(
-            self, tmp_path, monkeypatch):
-        monkeypatch.setattr(mod.shutil, "which", lambda _name: None)
-        assert mod.portal_commands(_PLAYGROUND) == ([], "node not on PATH")
+    def test_no_node_is_fatal_with_or_without_ci(self, tmp_path, monkeypatch):
+        """#3611 Q1 (owner 2026-11-06): no node is no verdict for the CLI
+        Playground carrier — fatal (rc 2) always. It used to be a NOT-scored
+        disclosure unless CLI_CONTRACT_REQUIRE_NODE=1 was set."""
+        monkeypatch.setattr(mod._lib_engine.shutil, "which", lambda _name: None)
+        rows, why = mod.portal_commands(_PLAYGROUND)
+        assert rows == [] and "node is not available" in why
         root = tmp_path / "repo"
         rel = mod.PORTAL_PLAYGROUND_DIR.relative_to(mod.REPO_ROOT)
         (root / rel).mkdir(parents=True)
@@ -1711,14 +1714,10 @@ class TestPortalCarrier:
                   reference_docs=(_reference(tmp_path),), injected=INJECTED,
                   exit_codes={"widget": mod.reachable_exit_codes(_WIDGET_SOURCE)},
                   repo_root=root)
-        monkeypatch.delenv(mod.PORTAL_REQUIRE_ENV, raising=False)
-        quiet = mod.scan(**kw)
-        assert quiet.stats["portal_unavailable"] == 1
-        assert not any("CLI Playground" in e for e in quiet.fatal)
-        assert "CLI Playground NOT scored" in mod._not_scored_lines(quiet.stats)[0]
-        monkeypatch.setenv(mod.PORTAL_REQUIRE_ENV, "1")
-        loud = mod.scan(**kw)
-        assert any(mod.PORTAL_REQUIRE_ENV in e for e in loud.fatal)
+        r = mod.scan(**kw)
+        assert any("CLI Playground carrier cannot run" in e and "node" in e
+                   for e in r.fatal), r.fatal
+        assert "NOT scored: node" not in "\n".join(mod._not_scored_lines(r.stats))
 
     @_needs_node
     def test_the_real_catalog_is_built_by_the_pages_own_engine(self):
@@ -1876,7 +1875,6 @@ class TestRealRepo:
     def test_the_portal_carrier_judged_the_real_playground(self, result):
         """With node present the real catalog must be judged, not disclosed."""
         assert result["stats"]["portal_commands"] > 0
-        assert result["stats"]["portal_unavailable"] == 0
 
     @pytest.mark.parametrize("command,flag,pattern", [
         ("offboard", "--config-dir", r"offboard[^\n]*--config-dir"),

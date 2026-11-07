@@ -17,7 +17,6 @@ import argparse
 import atexit
 import os
 import re
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -31,6 +30,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_engine  # noqa: E402
 
 # Puppeteer config required for mmdc to launch headless Chrome inside
 # sandboxed CI runners (GitHub Actions, containers, WSL, etc.). Without
@@ -41,6 +41,15 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 _PUPPETEER_CONFIG_JSON = (
     '{"args": ["--no-sandbox", "--disable-setuid-sandbox"]}'
 )
+
+# ⛔ #3608/#3611: mermaid-cli exits 1 both for a diagram it cannot parse and
+# for a renderer (Chrome / puppeteer) that cannot start — measured on 12.2.0,
+# "Parse error on line 3" and "Browser was not found" are both rc 1. Its
+# stderr is not read to tell them apart (#3611 Q2). This known-good diagram
+# is: rendered first, it proves the renderer works before any diagram is
+# judged; rendered again after a diagram fails, it tells "this diagram is
+# wrong" (canary still renders) from "the renderer stopped" (it does not).
+_CANARY_DIAGRAM = "graph TD\n  A-->B\n"
 
 
 class MermaidValidator:
@@ -62,6 +71,9 @@ class MermaidValidator:
         self.valid_diagrams = 0
         # Lazily materialised on first render call.
         self._puppeteer_config_path: Optional[str] = None
+        # The renderer, once located and proven by the canary; False once it
+        # is known not to work (reported once, nothing more is rendered).
+        self._mmdc: "Optional[_lib_engine.Located] | bool" = None
 
     def _ensure_puppeteer_config(self) -> str:
         """Materialise the puppeteer config file once per instance.
@@ -300,21 +312,47 @@ class MermaidValidator:
 
         return errors
 
+    def _mmdc_once(self, src: str, timeout: int) -> "_lib_engine.Result":
+        """Render *src* once with mmdc; Ran(True) rendered, Ran(False) exit 1."""
+        with tempfile.TemporaryDirectory(prefix='mmdc-') as tmp:
+            diagram = Path(tmp) / 'diagram.mmd'
+            diagram.write_text(src, encoding='utf-8', newline='\n')
+            out = Path(tmp) / 'out.png'
+            return _lib_engine.run(
+                self._mmdc, 'render',
+                ['-p', self._ensure_puppeteer_config(), '-i', str(diagram), '-o', str(out)],
+                timeout=timeout, expect={'output': str(out)})
+
+    def _canary_renders(self) -> "Optional[str]":
+        """None when the known-good diagram renders; else why it did not."""
+        result = self._mmdc_once(_CANARY_DIAGRAM, timeout=60)
+        if isinstance(result, _lib_engine.NoVerdict):
+            return result.message()
+        if not result.data:
+            return ("mmdc exited 1 on a known-good diagram — the renderer "
+                    "(Chrome / puppeteer) is not working:\n"
+                    + (result.proc.stderr or '').strip()[-2000:])
+        return None
+
+    def _renderer(self) -> bool:
+        """Locate mmdc and prove it renders, once. False (reported once) when
+        --render was asked for and nothing can render (#3608)."""
+        if self._mmdc is None:
+            located = _lib_engine.locate('mmdc')
+            if isinstance(located, _lib_engine.NoVerdict):
+                self._mmdc = False
+                self._not_checked(f'--render was requested but {located.reason}')
+                return False
+            self._mmdc = located
+            why = self._canary_renders()
+            if why is not None:
+                self._mmdc = False
+                self._not_checked(f'--render: {why}')
+                return False
+        return self._mmdc is not False
+
     def render_with_mmdc(self, filepath: Path) -> bool:
         """使用 mmdc 進行完整渲染驗證"""
-        try:
-            # Check if mmdc is available
-            subprocess.run(
-                ['mmdc', '--version'],
-                capture_output=True,
-                check=False,
-                timeout=5
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            if self.verbose:
-                print("Warning: mmdc not found, skipping render validation")
-            return True
-
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -342,6 +380,11 @@ class MermaidValidator:
                 diagram_content = '\n'.join(diagram_lines).strip()
                 if diagram_content:
                     diagram_num += 1
+                    # The renderer is located and proven on the first diagram
+                    # there is to render, not per file: a file (or a tree)
+                    # with no diagram needs no renderer (#3611 review F1).
+                    if not self._renderer():
+                        return False
                     if not self._render_diagram(diagram_content, filepath, start_line):
                         render_errors = True
 
@@ -356,60 +399,32 @@ class MermaidValidator:
         line_number: int
     ) -> bool:
         """使用 mmdc 渲染單個圖表"""
-        try:
-            with tempfile.NamedTemporaryFile(
-                mode='w',
-                suffix='.mmd',
-                delete=False,
-                encoding='utf-8',
-                newline='\n'
-            ) as tmp:
-                tmp.write(content)
-                tmp_path = tmp.name
-
-            try:
-                # Run mmdc with output to temp PNG (just validation, not stored).
-                # -p <puppeteer-config> is required so headless Chrome can launch
-                # in sandboxed environments (CI runners, containers, WSL).
-                puppeteer_cfg = self._ensure_puppeteer_config()
-                with tempfile.NamedTemporaryFile(suffix='.png', delete=True) as out:
-                    result = subprocess.run(
-                        [
-                            'mmdc',
-                            '-p', puppeteer_cfg,
-                            '-i', tmp_path,
-                            '-o', out.name,
-                        ],
-                        capture_output=True,
-                        text=True,
-                        timeout=10,
-                        encoding='utf-8'
-                    )
-
-                    if result.returncode != 0:
-                        error = {
-                            'file': str(filepath),
-                            'line': line_number,
-                            'diagram_type': 'unknown',
-                            'status': 'error',
-                            'message': f'mmdc render failed: {result.stderr}'
-                        }
-                        self.errors.append(error)
-                        return False
-
-                    if self.verbose:
-                        print(f"✓ mmdc render: {filepath}:{line_number}")
-                    return True
-
-            finally:
-                os.unlink(tmp_path)
-
-        except subprocess.TimeoutExpired:
-            self._not_checked(f'{filepath}:{line_number}: mmdc render timeout')
+        where = f'{filepath}:{line_number}'
+        result = self._mmdc_once(content, timeout=30)
+        if isinstance(result, _lib_engine.NoVerdict):
+            self._not_checked(f'{where}: {result.message()}')
             return False
-        except (OSError, ValueError, TypeError, IndexError) as e:
-            self._not_checked(f'{filepath}:{line_number}: mmdc render error: {e}')
+        if result.data:
+            if self.verbose:
+                print(f"✓ mmdc render: {where}")
+            return True
+        # Exit 1: this diagram, or the renderer? Only the canary can say.
+        why = self._canary_renders()
+        if why is not None:
+            # The renderer stopped: report once and render nothing more —
+            # every later diagram would cost a render plus a canary each,
+            # up to their timeouts, for the same answer (#3611 review F2).
+            self._mmdc = False
+            self._not_checked(f'{where}: not rendered, and {why}')
             return False
+        self.errors.append({
+            'file': str(filepath),
+            'line': line_number,
+            'diagram_type': 'unknown',
+            'status': 'error',
+            'message': f'mmdc render failed: {result.proc.stderr}',
+        })
+        return False
 
     def _not_checked(self, why: str) -> None:
         """Record (and say on stderr) one thing that could not be checked."""
