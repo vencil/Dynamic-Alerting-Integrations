@@ -115,7 +115,9 @@ var reservedValueShapes = map[string]string{
 // reservedValueChecks names, per key, the exporter-side function that
 // judges its value (`value.check`; bound in valueChecks).
 var reservedValueChecks = map[string]string{
-	"_silent_mode": "silent_mode",
+	"_metadata":       "metadata",
+	"_severity_dedup": "severity_dedup",
+	"_silent_mode":    "silent_mode",
 }
 
 // reservedPrefixValueChecks names, per prefix, the function that judges

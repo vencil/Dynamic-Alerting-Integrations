@@ -229,26 +229,76 @@ func refusedThresholdWriteMessage(key, raw string, whole bool) string {
 
 // thresholdReadAlike reports whether the row resolver of threshold key key
 // (canonical spelling) reads a and b the same way (#3267, ADR-038 decision
-// 12): each value — `default` and every window's, in order — by its
-// thresholdValueReading, each window by its parsed span, and the same
-// expiry. Quoting, surrounding space, a severity suffix's case, `1_000`
-// against `1000`, or `abc:warning` against `abc` are read alike; `abc`
-// against `xyz`, or a moved window, are not. readAlike, the one "read the
-// same way" of a value finding, dispatches a threshold key to it.
+// 12): at every minute of the UTC day the value the schedule resolves to —
+// valueAtMinute, the function /metrics resolves it with — has the same
+// thresholdValueReading, and the expiry lapses at the same instant
+// (expiryReading). So quoting, surrounding space, a severity suffix's case,
+// `1_000` against `1000`, or `abc:warning` against `abc` are read alike; so
+// are (#3508) windows that do not overlap written in another order, a
+// `reason:` added or changed, and `expires` written with another offset for
+// the same instant. `abc` against `xyz`, a moved window, or overlapping
+// windows reordered so another one wins a minute are not.
+//
+// Every value written must also be one the other side writes (as a set of
+// readings, so a window repeating the default stays alike): a value under a
+// window that never applies — one that does not parse, or one wholly
+// shadowed by an earlier window — is never served, so the minute-by-minute
+// comparison cannot see it, yet it is a value the write adds, and a refused
+// one must not pass as the one already on disk. readAlike, the one "read
+// the same way" of a value finding, dispatches a threshold key to it.
 func thresholdReadAlike(key string, a, b ScheduledValue) bool {
-	if len(a.Overrides) != len(b.Overrides) || thresholdValueReading(key, a.Default) != thresholdValueReading(key, b.Default) {
+	if expiryReading(a.Expiry) != expiryReading(b.Expiry) {
 		return false
 	}
-	for i := range a.Overrides {
-		if windowReading(a.Overrides[i].Window) != windowReading(b.Overrides[i].Window) ||
-			thresholdValueReading(key, a.Overrides[i].Value) != thresholdValueReading(key, b.Overrides[i].Value) {
+	if len(a.Overrides) == 0 && len(b.Overrides) == 0 {
+		return thresholdValueReading(key, a.Default) == thresholdValueReading(key, b.Default)
+	}
+	if !sameValueReadings(key, a, b) {
+		return false
+	}
+	for m := 0; m < 24*60; m++ {
+		if thresholdValueReading(key, a.valueAtMinute(m, nil)) != thresholdValueReading(key, b.valueAtMinute(m, nil)) {
 			return false
 		}
 	}
-	if (a.Expiry == nil) != (b.Expiry == nil) {
+	return true
+}
+
+// sameValueReadings reports whether a and b write the same set of values —
+// default and every window's, by thresholdValueReading — wherever they sit.
+func sameValueReadings(key string, a, b ScheduledValue) bool {
+	set := func(sv ScheduledValue) map[string]bool {
+		out := map[string]bool{thresholdValueReading(key, sv.Default): true}
+		for _, o := range sv.Overrides {
+			out[thresholdValueReading(key, o.Value)] = true
+		}
+		return out
+	}
+	sa, sb := set(a), set(b)
+	if len(sa) != len(sb) {
 		return false
 	}
-	return a.Expiry == nil || *a.Expiry == *b.Expiry
+	for r := range sa {
+		if !sb[r] {
+			return false
+		}
+	}
+	return true
+}
+
+// expiryReading is when e makes a threshold lapse, as isThresholdExpired
+// reads it: the parsed instant in UTC, or "never" — for no expiry, an empty
+// `expires`, and one that does not parse (that reading is fail-open: the
+// value never lapses). `reason:` is not read.
+func expiryReading(e *ExpiryMeta) string {
+	if e == nil || e.Expires == "" {
+		return "never"
+	}
+	t, err := time.Parse(time.RFC3339, e.Expires)
+	if err != nil {
+		return "never"
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // thresholdValueReading is raw as the row resolver of key reads it, as a
@@ -274,15 +324,6 @@ func thresholdValueReading(key, raw string) string {
 		return "t:" + strings.TrimSpace(t[:i]) + ":" + strings.ToLower(strings.TrimSpace(t[i+1:]))
 	}
 	return "t:" + t + ":warning"
-}
-
-// windowReading is a window as the resolver reads it: its span, or its text
-// when it does not parse (it then matches no minute).
-func windowReading(w string) string {
-	if start, end, ok := parseTimeWindow(w, nil); ok {
-		return fmt.Sprintf("%d-%d", start, end)
-	}
-	return "x:" + strings.TrimSpace(w)
 }
 
 // nonFiniteThresholdText reports whether raw's number half (the shared

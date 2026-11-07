@@ -345,3 +345,26 @@ func TestRejectBatchOnVerdict_FirstChangedOpOfTheTenant(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// #3591: a value_unread about the written tenant is not repeated as its
+// advice — KeyValidation's message (a NOTICE for an untouched value, by the
+// decision 12 ratchet) is the one given; about another tenant of the file
+// it is shown as any finding.
+func TestAdviseKeyVerdict_ValueUnreadIsKeyValidations(t *testing.T) {
+	t.Parallel()
+	files := []ProposedFile{{Path: "team/shared.yaml", Tenants: []string{"db-a"}}}
+	own := kvFinding("_silent_mode", "team/shared.yaml", "db-a")
+	own.Kind, own.Reason = KindValueUnread, "unknown silent mode"
+	neighbour := own
+	neighbour.Tenants = []string{"db-b"}
+	ctx := WithTreeVisible(WithTenantNames(context.Background(), func(string) bool { return true }), true)
+	adv := adviseKeyVerdict(ctx, files, &KeyVerdict{Status: KeyVerdictComplete, Findings: []KeyFinding{own, neighbour}})
+	if len(adv.byTenant["db-a"]) != 0 {
+		t.Errorf("the written tenant's value_unread repeated as advice: %q", adv.byTenant)
+	}
+	want := []string{"key verdict: error: key _silent_mode in team/shared.yaml has a value its reader does not read " +
+		"(ADR-038 decision 10) (unknown silent mode) — tenant(s) db-b"}
+	if !reflect.DeepEqual(adv.whole, want) {
+		t.Errorf("whole = %q\nwant    %q", adv.whole, want)
+	}
+}

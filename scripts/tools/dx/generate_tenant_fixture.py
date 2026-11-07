@@ -554,11 +554,13 @@ def generate_synthetic_v2(
          a "size multiplier" in [1, 6] via Zipf alpha=1.5 and replicate
          the threshold dict that many times (up to the available metric
          template count) to vary YAML body size.
-      2. Power-law _metadata overlay depth — most tenants have flat
-         metadata (depth=0); a long tail (~5%) get depth 1-3 nested
-         overlay blocks (e.g. nested escalation policies, inherited
-         silence schedules). Implementation: sample depth in [0, 3]
-         via power-law alpha=2.0.
+      2. Power-law _metadata overlay depth — sampled in [0, 3] via
+         power-law alpha=2.0, and its draws are still made, but nothing
+         is written for it any more (#3591): the nested `_overlay_l<N>`
+         blocks were `_metadata` fields TenantMetadata does not know, which
+         the exporter drops and the shared key verdict refuses
+         (value_unread). Keeping the draws keeps every other value a seed
+         gives as it was, so a bench baseline stays comparable.
 
     Why these specific distributions: they push the inheritance graph
     + merged_hash compute through a non-uniform input that better
@@ -610,18 +612,12 @@ def generate_synthetic_v2(
                 extra_key = EXTRA_THRESHOLD_KEYS[extra_i]
                 tenant_config["tenants"][tid][extra_key] = _gen_threshold_value(rng)
 
-            # Power-law: deepen _metadata with nested overlay blocks.
-            depth = depths[idx]
-            if depth > 0:
-                meta = tenant_config["tenants"][tid]["_metadata"]
-                cursor = meta
-                for d_i in range(depth):
-                    nested_key = f"_overlay_l{d_i}"
-                    cursor[nested_key] = {
-                        "schedule": rng.choice(["business-hours", "off-hours", "24x7"]),
-                        "escalation_tier": rng.choice(TIERS),
-                    }
-                    cursor = cursor[nested_key]
+            # Power-law overlay depth: the draws the nested `_overlay_l<N>`
+            # blocks took, made and discarded (#3591; see the docstring), so
+            # the values drawn after them are what a seed always gave.
+            for _ in range(depths[idx]):
+                rng.choice(["business-hours", "off-hours", "24x7"])
+                rng.choice(TIERS)
 
             files.append((f"{domain}/{region}/{env}/{tid}.yaml", tenant_config))
             domain_db_types.setdefault(domain, []).append(db_type)
@@ -633,7 +629,7 @@ def generate_synthetic_v2(
 
     _confirm_and_write(output_dir, files)
     print(f"✅ Generated {idx} tenant files (synthetic-v2) in {output_dir}")
-    print(f"   Skew: Zipf alpha=1.5 (sizes 1-6), power-law alpha=2.0 (overlay depths 0-3)")
+    print(f"   Skew: Zipf alpha=1.5 (sizes 1-6), power-law alpha=2.0 (overlay depths 0-3, drawn but not written)")
     print(f"   Distribution: sizes p50={sorted(sizes)[len(sizes)//2]} p99={sorted(sizes)[int(len(sizes)*0.99)] if len(sizes)>1 else sizes[0]}; depths p50={sorted(depths)[len(depths)//2]} p99={sorted(depths)[int(len(depths)*0.99)] if len(depths)>1 else depths[0]}")
 
 

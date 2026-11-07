@@ -74,7 +74,7 @@ class Finding(NamedTuple):
     """One thing to report: a tenant's own key, or a platform file / profile
     key reaching `tenants`."""
     severity: str
-    kind: str                      # "unread" | "disable_noop" | "disable_cascade" | "profile_not_judged"
+    kind: str                      # "unread" | "disable_noop" | "disable_cascade" | "profile_not_judged" | "value_unread"
     key: str
     file: str | None
     tenants: tuple[str, ...]
@@ -164,7 +164,7 @@ def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) 
 
 _VERDICTS = frozenset({READ, UNREAD, UNDECIDABLE})
 _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
-_KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged"})
+_KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged", "value_unread"})
 #: Finding kinds only a da-guard older than #3046 writes (`tv._OlderOutput`).
 _RETIRED_KINDS = frozenset({"disable_partial"})
 _DISABLES = frozenset({"effective", "noop"})

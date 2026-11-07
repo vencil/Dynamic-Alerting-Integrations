@@ -58,8 +58,11 @@ def _refused(tmp_path: Path, case: dict) -> list[str]:
     (tmp_path / "t-a.yaml").write_text(
         yaml.safe_dump({"tenants": {"t-a": {case["key"]: "5"}}}), encoding="utf-8")
     verdict = kv.judge_tree(str(tmp_path))
+    # The matrix is about key NAMES (membership); every key is written as
+    # "5", which is no value a reserved key's reader reads. A value_unread
+    # finding (#3591) is about the value, not whether the key is read.
     why = [kv.finding_line(f, 5) for f in verdict.findings
-           if f.severity == kv.ERROR and f.key == case["key"]]
+           if f.severity == kv.ERROR and f.key == case["key"] and f.kind != "value_unread"]
     checks = kv.key_check_lines(verdict)
     return why + [msg for kind, _, msg in checks if kind == kv.KEY_CHECK_VERSION_LABEL]
 

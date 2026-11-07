@@ -436,3 +436,30 @@ def test_a_document_this_reader_cannot_read_is_refused_not_read_as_another_answe
     assert kv._read(_doc(), None).findings  # the valid document reads
     with pytest.raises((TypeError, ValueError, KeyError)):
         kv._read(doc, None)
+
+
+def test_a_value_unread_is_charged_to_the_layer_that_writes_it(tmp_path):
+    """#3591：讀不懂的保留鍵值在寫它的那一層判。profile 與根平台檔 `tenants:`
+    的錯字是 notice、不擋；只有租戶自己檔裡的才是 error、會擋。"""
+    files = {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n"
+                          "    _silent_mode: purple\n    _metadata: {owner: p, bogus_field: x}\n",
+        "_platform.yaml": "tenants:\n  ta:\n    _severity_dedup: maybe\n",
+        "ta.yaml": "tenants:\n  ta:\n    _profile: gold\n",
+        "tb.yaml": "tenants:\n  tb:\n    _profile: gold\n",
+    }
+    t = kv.judge_tree(_tree(tmp_path / "inherited", files))
+    got = sorted((f.severity, f.file, f.key, f.tenants) for f in t.findings if f.kind == "value_unread")
+    assert got == [
+        (kv.NOTICE, "_defaults.yaml", "_metadata", ("ta", "tb")),
+        (kv.NOTICE, "_defaults.yaml", "_silent_mode", ("ta", "tb")),
+        (kv.NOTICE, "_platform.yaml", "_severity_dedup", ("ta",)),
+    ]
+    assert not t.blocks
+
+    own = dict(files, **{"tb.yaml": "tenants:\n  tb:\n    _profile: gold\n    _metadata: {dbType: x}\n"})
+    t = kv.judge_tree(_tree(tmp_path / "own", own))
+    errors = [f for f in t.findings if f.kind == "value_unread" and f.severity == kv.ERROR]
+    assert [(f.file, f.key, f.tenants, f.blocks) for f in errors] == [("tb.yaml", "_metadata", ("tb",), True)]
+    assert "dbType" in errors[0].reason
+    assert t.blocks

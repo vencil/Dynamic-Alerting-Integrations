@@ -2465,7 +2465,9 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     # ADR-038: each line names the file, the key, the reason and the tenants.
     "unread_keys": (
         "Fix a misspelt key, or remove a key nothing reads; a `disable` that "
-        "switches nothing off usually sits on a misspelt key; a line on a "
+        "switches nothing off usually sits on a misspelt key; a value_unread "
+        "line is a key that is read with a value its reader does not read — "
+        "fix the value, not the key; a line on a "
         "`version` label or a renamed key is the exporter's and says what to "
         "change. `da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
         "key, who reads it and why not. An error, or a threshold key no root "
