@@ -140,7 +140,12 @@ func (j treeJudge) batchOpMerge(o batchOp) func(configDir string, existing []byt
 		if err != nil {
 			return "", err
 		}
-		if !touchesScopeMetadata(op) && !countOrg {
+		// The post-state is judged when the op touches a scope key, and
+		// whenever the pre-state could not be: then it is the op's only
+		// scope verdict. Not only on the tenant's first op (countOrg) — that
+		// op may change nothing (ErrMergeNoOp above) and leave a later op
+		// of the same tenant unjudged.
+		if !touchesScopeMetadata(op) && judged {
 			return merged, nil
 		}
 		post := scopePairOf(proposedScopeMeta(configDir, merged), op.TenantID)
