@@ -54,8 +54,10 @@ Token 只能存在 VM 的 `~/.git-credentials` 和 `~/.bashrc`（session 結束�
 | `ghcr.io/vencil/da-tools` | `scripts/tools/` | `tools/v*` |
 | `ghcr.io/vencil/da-portal` (+ OCI chart) | `portal/` | `portal/v*` |
 | `ghcr.io/vencil/recipe-preview` (+ OCI chart) ⛔ **尚未發布**（#1352 案例 B：`recipe-preview/v*` 零 tag，這條線從未被切過，兩個產物今天都不存在）| `scripts/tools/dx/`（bundled eval core）| `recipe-preview/v*` |
-| `ghcr.io/vencil/dynamic-alerting` (platform OCI) | Helm chart + Rule Packs | `v*` |
+| ~~`ghcr.io/vencil/dynamic-alerting` (platform OCI)~~ ⛔ **不存在**：`release.yaml` 的 trigger 不含 `v*`，也沒有任何 job 推這個 package；`v*` 只是平台版號的錨點 | — | `v*` |
 | `ghcr.io/vencil/tenant-api` | `cmd/tenant-api/` | `tenant-api/v*` |
+
+`helm/` 底下其餘的 chart（federation-*、vector、victorialogs、chargeback-aggregator、mariadb-instance）不發佈，只從 git checkout 安裝；每一個都列在 `scripts/tools/lint/check_chart_pull_surface.py` 的 `GIT_ONLY` 表並附理由，新 chart 沒有推、也沒列進表就會被擋（#1269）。這類 chart 的 security advisory 不寫 chart 版號，而是寫修法 commit 與第一個含它的平台 tag。
 
 推完 tag 後用 `gh api /users/vencil/packages?package_type=container` 驗證 package 是否更新，或直接在瀏覽器 <https://github.com/vencil?tab=packages> 確認。
 

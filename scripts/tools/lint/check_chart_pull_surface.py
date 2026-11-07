@@ -19,6 +19,13 @@ A name on the pull side with no push site is the violation. The reverse is
 NOT: a chart can be published without any document teaching it, and demanding
 docs for it would be this gate inventing a policy nobody agreed to.
 
+Second rule (#1269, owner decision 2026-11-07): every chart under `helm/` is
+either pushed or listed in GIT_ONLY below with the reason it is not. A chart
+nobody decided about is exactly how federation-gateway ended up with a security
+advisory and no released version to name as patched. A GIT_ONLY entry for a
+chart that IS pushed, or for a chart that no longer exists, is a violation too —
+otherwise the table rots into a second, wrong answer.
+
 Scanned surface: `git ls-files`, minus EXCLUDED_PREFIXES / EXCLUDED_FILES
 below — build output generated from sources that ARE scanned, test fixtures,
 and the changelogs, which record what was true then rather than instructing a
@@ -145,6 +152,68 @@ def taught_charts(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]]:
     return taught
 
 
+#: Charts deliberately NOT published to a registry, and why. Installed from a
+#: checkout (`helm install ./helm/<chart>`); an advisory for one of them names
+#: the fix commit and the first platform tag that carries it, not a chart
+#: version a reader could pull (#1269).
+GIT_ONLY: Dict[str, str] = {
+    "chargeback-aggregator": "documented install is from a checkout; publishing not decided (#1269)",
+    "federation-gateway": "default auditLog sidecar image (federation-audit-sidecar) is built from "
+                          "the chart directory and never published, so a registry install with "
+                          "default values cannot start (#1269)",
+    "federation-proxy": "documented install is from a checkout; publishing not decided (#1269)",
+    "federation-reconciler": "its default da-tools image predates the reconciler script, so the "
+                             "chart is only runnable from a checkout with an image override (#1269)",
+    "mariadb-instance": "lab-only: deployed by scripts/setup.sh for the local demo, not a product",
+    "vector": "documented install is from a checkout; publishing not decided (#1269)",
+    "victorialogs": "documented install is from a checkout; publishing not decided (#1269)",
+}
+
+
+def chart_names(repo_root: Path = REPO_ROOT) -> Dict[str, str]:
+    """Chart `name` (as helm would publish it) -> its directory under helm/."""
+    names: Dict[str, str] = {}
+    for chart_yaml in sorted((repo_root / "helm").glob("*/Chart.yaml")):
+        try:
+            meta = yaml.safe_load(chart_yaml.read_text(encoding="utf-8")) or {}
+        except (OSError, yaml.YAMLError) as exc:
+            raise CallerError(f"cannot read {chart_yaml}: {exc}") from exc
+        name = meta.get("name") if isinstance(meta, dict) else None
+        if not isinstance(name, str) or not name:
+            raise CallerError(f"{chart_yaml}: no `name`")
+        names[name] = chart_yaml.parent.relative_to(repo_root).as_posix()
+    return names
+
+
+def distribution_violations(repo_root: Path = REPO_ROOT,
+                            git_only: Dict[str, str] | None = None) -> List[str]:
+    """Every chart is pushed XOR declared git-only; the table names real charts."""
+    git_only = GIT_ONLY if git_only is None else git_only
+    charts = chart_names(repo_root)
+    if not charts:
+        # A tree with no helm/*/Chart.yaml has nothing to distribute (the test
+        # fixtures for the pull rule). The live repo's chart set is pinned
+        # non-empty by tests/lint/test_check_chart_pull_surface.py, so a broken
+        # glob cannot hide behind this.
+        return []
+    pushed: Set[str] = set(discover_pushed_charts(repo_root))
+    out: List[str] = []
+    for name in sorted(set(charts) - pushed - set(git_only)):
+        out.append(
+            f"{name} ({charts[name]}): no `helm push` publishes it and it is not in "
+            f"GIT_ONLY. Decide: publish it (package + push in release.yaml), or add it "
+            f"to GIT_ONLY in scripts/tools/lint/check_chart_pull_surface.py with the "
+            f"reason — an advisory for it then names a fix commit and platform tag, "
+            f"not a chart version (#1269).")
+    for name in sorted(set(git_only) & pushed):
+        out.append(f"{name}: listed in GIT_ONLY but a `helm push` publishes it — "
+                   f"remove the GIT_ONLY entry.")
+    for name in sorted(set(git_only) - set(charts)):
+        out.append(f"{name}: listed in GIT_ONLY but no helm/*/Chart.yaml is named "
+                   f"that — remove the stale entry.")
+    return out
+
+
 def check(repo_root: Path = REPO_ROOT) -> List[str]:
     """Return the list of violations. Empty list == pass."""
     taught = taught_charts(repo_root)
@@ -163,6 +232,7 @@ def check(repo_root: Path = REPO_ROOT) -> List[str]:
             f"to its release job, the way #1352 did for da-portal) or stop "
             f"teaching it."
         )
+    violations.extend(distribution_violations(repo_root))
     return violations
 
 

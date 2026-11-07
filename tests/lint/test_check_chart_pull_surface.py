@@ -372,3 +372,57 @@ def test_main_returns_exit_caller_error(monkeypatch, capsys) -> None:
 
 def test_main_on_the_live_repo_in_process() -> None:
     assert gate.main([]) == gate.EXIT_OK
+
+
+
+# ── every chart is pushed XOR declared git-only (#1269) ────────────────────
+def test_live_repo_charts_are_all_decided() -> None:
+    charts = gate.chart_names(REPO_ROOT)
+    assert len(charts) >= 10, f"anti-vacuity: read only {sorted(charts)}"
+    assert gate.distribution_violations(REPO_ROOT) == []
+    pushed = set(gate.discover_pushed_charts(REPO_ROOT))
+    assert set(charts) == pushed | set(gate.GIT_ONLY)
+    assert not pushed & set(gate.GIT_ONLY)
+    assert all(reason.strip() for reason in gate.GIT_ONLY.values())
+
+
+def _chart(name: str) -> str:
+    return f"apiVersion: v2\nname: {name}\nversion: 0.1.0\n"
+
+
+def test_an_undecided_chart_is_red(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/forgotten/Chart.yaml": _chart("forgotten")})
+    out = gate.distribution_violations(repo, git_only={})
+    assert len(out) == 1 and out[0].startswith("forgotten (helm/forgotten)"), out
+
+
+def test_a_git_only_entry_for_a_pushed_chart_is_red(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped")})
+    out = gate.distribution_violations(repo, git_only={"shipped": "x"})
+    assert len(out) == 1 and "remove the GIT_ONLY entry" in out[0], out
+
+
+def test_a_git_only_entry_for_a_missing_chart_is_red(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped")})
+    out = gate.distribution_violations(repo, git_only={"gone": "x"})
+    assert len(out) == 1 and "stale entry" in out[0], out
+
+
+def test_a_declared_chart_is_green(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/local/Chart.yaml": _chart("local")})
+    assert gate.distribution_violations(repo, git_only={"local": "lab only"}) == []
+
+
+def test_check_reports_distribution_violations(tmp_path: Path, monkeypatch) -> None:
+    """The rule is wired into check(), i.e. into pre-commit and CI, not only callable."""
+    monkeypatch.setattr(gate, "GIT_ONLY", {})
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/forgotten/Chart.yaml": _chart("forgotten")})
+    assert any(v.startswith("forgotten (helm/forgotten)") for v in gate.check(repo))
