@@ -2238,8 +2238,14 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         severities = {t: tv.severities for t, tv in load_served_tree(config_dir, partial=True).tenants.items()}
     except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
-    # (file, key as written, served at critical by its value) -> tenants
-    found: dict[tuple[str, str, bool], set[str]] = {}
+    # ONE LINE PER KEY (#3591): what is judged is the key — no shipped alert
+    # compares it, whatever file writes it — so the line is the key's in the
+    # exporter's canonical spelling, the dimension part dropped (the lookup's
+    # own unit; label values are the tenants' and unbounded), with its
+    # critical tier apart. The lines are bounded by the platform's declared
+    # keys, twice. (canonical base, served at critical by its value) ->
+    # (files, tenants)
+    found: dict[tuple[str, bool], tuple[set[str], set[str]]] = {}
     for v in served:
         base = spell.canonical(v.key.partition("{")[0])
         if base in _observed_map_lib.KNOWN_DEFERRED:
@@ -2248,19 +2254,23 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
         if sev == "critical" and not base.endswith("_critical"):
             key = base + "_critical"
         if _observed_map_lib.lookup(observed, key)[0] is _observed_map_lib.LookupKind.NO_ALERT:
-            found.setdefault((v.file or "?", v.key, key != base), set()).add(v.tenant)
+            files, tenants = found.setdefault((base, key != base), (set(), set()))
+            files.add(v.file or "?")
+            tenants.add(v.tenant)
     if not found:
         return _make_result("no_alert", PASS, [
             f"{len(served)} served key row(s): every one is compared by a shipped alert "
             "(or deferred by the observed-map)"])
+
+    def capped(names: "set[str]") -> str:
+        ordered = sorted(names)
+        return ", ".join(ordered[:WARN_LIMIT]) + (
+            f" (+{len(ordered) - WARN_LIMIT} more)" if len(ordered) > WARN_LIMIT else "")
     details = []
-    for (file, key, promoted), tenants in sorted(found.items()):
-        names = sorted(tenants)
-        who = ", ".join(names[:WARN_LIMIT]) + (
-            f" (+{len(names) - WARN_LIMIT} more)" if len(names) > WARN_LIMIT else "")
+    for (key, promoted), (files, tenants) in sorted(found.items()):
         tier = " (served as critical)" if promoted else ""
-        details.append(f"{file}: no_alert `{key}`{tier} — served, but no shipped alert compares it "
-                       f"— tenant(s) {who}")
+        details.append(f"no_alert `{key}`{tier} — served, but no shipped alert compares it "
+                       f"— file(s) {capped(files)} — tenant(s) {capped(tenants)}")
     return _make_result("no_alert", WARN, details)
 
 

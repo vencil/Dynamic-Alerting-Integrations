@@ -382,7 +382,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 | 情況 | 處理 | 等級 |
 |---|---|---|
-| 送出了但沒有任何告警比較它（例如根 defaults 的錯字、規則包沒有 critical 層時的 `<key>_critical`） | 讀取端是出貨的告警規則。以 `metric_observed_map.yaml` 判斷：它記每個閾值鍵被哪條告警比較（含經 recording rule 間接比較；規則包有 critical 層的，`<key>_critical` 各自一筆），並由 CI 守住與規則包一致。validate-config 的 `no_alert` 列報出 exporter 有送、但這份對照查不到的鍵，掛在值來自的檔上；以 `"95:critical"` 寫成 critical 的值，查的是 `<key>_critical`；對照延後判的鍵（version-aware 的 `container_*`）不報。客戶自己的 Prometheus 規則不在判斷範圍 | 永遠只是建議（WARN，不影響 exit code） |
+| 送出了但沒有任何告警比較它（例如根 defaults 的錯字、規則包沒有 critical 層時的 `<key>_critical`） | 讀取端是出貨的告警規則。以 `metric_observed_map.yaml` 判斷：它記每個閾值鍵被哪條告警比較（含經 recording rule 間接比較；規則包有 critical 層的，`<key>_critical` 各自一筆），並由 CI 守住與規則包一致。validate-config 的 `no_alert` 列報出 exporter 有送、但這份對照查不到的鍵，每個鍵（正規拼法、不含維度）一行，列出寫它的檔與租戶；以 `"95:critical"` 寫成 critical 的值，查的是 `<key>_critical`；對照延後判的鍵（version-aware 的 `container_*`）不報。客戶自己的 Prometheus 規則不在判斷範圍 | 永遠只是建議（WARN，不影響 exit code） |
 | 整份沒有讀取端讀的檔（租戶區沒有 `tenants:` 的檔、子目錄沒被選上的 `_defaults` 檔） | 沿用 served-values 現有的 `skipped`／`unread_keys` | notice：新建、還沒寫 `tenants:` 的檔不能凍結寫入 |
 | `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準，判決報 `value_unread`；schema 的 `_metadata` 欄位表以 Go 測試與它雙向釘住 | 租戶檔：error；平台檔與 profile：notice |
 | 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_profile` 指到不存在的 profile） | 由讀取它的程式判：登錄表 `value.check` 把鍵綁到 exporter 的讀取函式，判決報 `value_unread`。兩個讀取端都讀的 `_severity_dedup`，產生器的接受字由測試釘成與 exporter 一致。只有產生器讀的 `_routing_profile` 由產生器自己擋 | 租戶檔：error；平台檔與 profile：notice |
@@ -397,7 +397,7 @@ _defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode "purple
 
 ```
 [WARN] no_alert
-       examples/mongo-prod.yaml: no_alert `mongodb_connections_current_critical` — served, but no shipped alert compares it — tenant(s) mongo-prod
+       no_alert `mongodb_connections_current_critical` — served, but no shipped alert compares it — file(s) examples/mongo-prod.yaml — tenant(s) mongo-prod
 ```
 
 ### 11. 推進順序

@@ -42,11 +42,30 @@ def test_a_served_key_no_alert_compares_is_one_line_on_its_file(tmp_path):
                         "    container_cpu{version=\"v2\"}: \"60\"\n"}))
     assert r["status"] == vc.WARN, r
     assert r["details"] == [
-        "_defaults.yaml: no_alert `mysql_connectoins` — served, but no shipped alert compares it "
-        "— tenant(s) ta, tb",
-        "team/tb.yaml: no_alert `redis_memory_used_bytes_critical` — served, but no shipped alert "
-        "compares it — tenant(s) tb",
+        "no_alert `mysql_connectoins` — served, but no shipped alert compares it "
+        "— file(s) _defaults.yaml — tenant(s) ta, tb",
+        "no_alert `redis_memory_used_bytes_critical` — served, but no shipped alert "
+        "compares it — file(s) team/tb.yaml — tenant(s) tb",
     ]
+
+
+def test_one_line_per_key_whatever_the_files_and_dimensions(tmp_path):
+    """判的是鍵：同一個鍵寫在多個檔、帶不同維度 label，仍是一行（正規 base），
+    檔與租戶各自截到 WARN_LIMIT。行數的上界是平台宣告的鍵數，不隨租戶的 label 值增長。"""
+    files = {"_defaults.yaml": "defaults:\n  redis_memory_used_bytes: 70\n"
+                               "dimensions:\n  redis_memory_used_bytes: [db]\n"}
+    for i in range(7):
+        files[f"t{i}.yaml"] = (f"tenants:\n  t{i}:\n    redis_memory_used_bytes_critical: 90\n"
+                               f"    redis_memory_used_bytes{{db=\"d{i}\"}}: \"80:critical\"\n")
+    r = vc.check_no_alert(_tree(tmp_path, files))
+    assert r["details"] == [
+        "no_alert `redis_memory_used_bytes` (served as critical) — served, but no shipped alert "
+        "compares it — file(s) t0.yaml, t1.yaml, t2.yaml, t3.yaml, t4.yaml (+2 more) — "
+        "tenant(s) t0, t1, t2, t3, t4 (+2 more)",
+        "no_alert `redis_memory_used_bytes_critical` — served, but no shipped alert compares it "
+        "— file(s) t0.yaml, t1.yaml, t2.yaml, t3.yaml, t4.yaml (+2 more) — "
+        "tenant(s) t0, t1, t2, t3, t4 (+2 more)",
+    ], r
 
 
 def test_every_key_compared_passes(tmp_path):
@@ -74,8 +93,8 @@ def test_a_value_served_at_critical_is_looked_up_as_its_critical_tier(tmp_path):
         "ta.yaml": "tenants:\n  ta:\n    es_disk_usage_percent: \"95:critical\"\n"
                    "    mysql_connections: \"90:critical\"\n"}))
     assert r["details"] == [
-        "ta.yaml: no_alert `es_disk_usage_percent` (served as critical) — served, but no shipped "
-        "alert compares it — tenant(s) ta"], r
+        "no_alert `es_disk_usage_percent` (served as critical) — served, but no shipped "
+        "alert compares it — file(s) ta.yaml — tenant(s) ta"], r
 
 
 def test_a_deferred_base_is_not_listed_at_critical_either(tmp_path):
@@ -149,9 +168,9 @@ def test_it_never_changes_the_exit_code(tmp_path):
 # (#3658). Shrink-only — a key that appears here is new and fails; a key #3658
 # fixes fails too until it is removed from this list.
 _SHIPPED_KNOWN = {
-    ("examples/mongo-prod.yaml", "mongodb_connections_current_critical"),  # #3658
-    ("examples/mongo-prod.yaml", "mongodb_replication_lag_critical"),      # #3658
-    ("examples/redis-prod.yaml", "redis_memory_used_bytes_critical"),      # #3658
+    "mongodb_connections_current_critical",  # #3658
+    "mongodb_replication_lag_critical",      # #3658
+    "redis_memory_used_bytes_critical",      # #3658
 }
 
 
@@ -159,8 +178,8 @@ def test_the_shipped_example_tree_has_only_the_known_gaps():
     r = vc.check_no_alert(str(_REPO / "components/threshold-exporter/config/conf.d"))
     got = set()
     for line in r["details"]:
-        file, _, rest = line.partition(": no_alert `")
-        got.add((file, rest.partition("`")[0]))
+        if line.startswith("no_alert `"):
+            got.add(line[len("no_alert `"):].partition("`")[0])
     if r["status"] == vc.PASS:
         got = set()
     assert not any(d.startswith("not checked:") for d in r["details"]), r

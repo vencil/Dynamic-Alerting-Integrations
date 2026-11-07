@@ -376,7 +376,7 @@ The documentation will say: the tools try to report problems, but whether values
 
 | Case | Handling | Level |
 |---|---|---|
-| Served, but no alert compares it (for example, a typo in the root defaults, or a `<key>_critical` whose rule pack has no critical tier) | The reader is the shipped alert rules. Judged by `metric_observed_map.yaml`, which records the alert comparing each threshold key (including through a recording rule; where a rule pack has a critical tier, each `<key>_critical` has its own entry) and which CI keeps equal to the rule packs. validate-config's `no_alert` row lists the keys the exporter serves that the map has no alert for, on the file the value comes from; a value written at critical (`"95:critical"`) is looked up as `<key>_critical`; a key the map defers (the version-aware `container_*`) is not listed. The customer's own Prometheus rules are not seen | Always advisory only (WARN, no change to the exit code) |
+| Served, but no alert compares it (for example, a typo in the root defaults, or a `<key>_critical` whose rule pack has no critical tier) | The reader is the shipped alert rules. Judged by `metric_observed_map.yaml`, which records the alert comparing each threshold key (including through a recording rule; where a rule pack has a critical tier, each `<key>_critical` has its own entry) and which CI keeps equal to the rule packs. validate-config's `no_alert` row lists the keys the exporter serves that the map has no alert for, one line per key (canonical spelling, no dimension part) naming the files that write it and the tenants; a value written at critical (`"95:critical"`) is looked up as `<key>_critical`; a key the map defers (the version-aware `container_*`) is not listed. The customer's own Prometheus rules are not seen | Always advisory only (WARN, no change to the exit code) |
 | Whole files no reader reads (files in the tenant area without `tenants:`, `_defaults` files in sub-directories that are not selected) | Reuse the existing `skipped` / `unread_keys` of served-values | notice: a newly created file that has no `tenants:` yet must not freeze writes |
 | Unknown sub-keys of `_metadata` | The Go `TenantMetadata` is the source of truth; the verdict reports `value_unread`. The schema's `_metadata` field list is pinned to it in both directions by a Go test | Tenant file: error; platform files and profiles: notice |
 | Read, but the value is invalid (`_silent_mode: garbage`, `_severity_dedup: maybe`, a `_profile` naming no profile) | The program that reads it decides: the registry's `value.check` binds the key to the exporter's reading function, and the verdict reports `value_unread`. For `_severity_dedup`, which both readers read, a test pins the generator's accepted words to the exporter's. `_routing_profile`, read by the generator alone, is refused by the generator itself | Tenant file: error; platform files and profiles: notice |
@@ -391,7 +391,7 @@ Measured on the repo's example conf.d, `no_alert` lists 3 keys: `mongodb_connect
 
 ```
 [WARN] no_alert
-       examples/mongo-prod.yaml: no_alert `mongodb_connections_current_critical` — served, but no shipped alert compares it — tenant(s) mongo-prod
+       no_alert `mongodb_connections_current_critical` — served, but no shipped alert compares it — file(s) examples/mongo-prod.yaml — tenant(s) mongo-prod
 ```
 
 ### 11. Rollout order
