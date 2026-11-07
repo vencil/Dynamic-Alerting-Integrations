@@ -1274,13 +1274,15 @@ class TestAnalyzeScrapeConfigs:
 class TestScanRuleFiles:
     """掃描規則檔案。"""
 
-    def test_glob_pattern(self, config_dir):
-        """Glob 模式掃描規則檔案。"""
+    def test_paths_are_taken_as_given(self, config_dir):
+        """目錄遞迴取 *.yaml／*.yml；檔案照給的讀；不展開 glob（#3463）。"""
         write_yaml(config_dir, "a.yaml", "groups: []")
         write_yaml(config_dir, "b.yml", "groups: []")
         write_yaml(config_dir, "c.txt", "not yaml")
-        assert len(scan_rule_files(os.path.join(config_dir, "*.yaml"))) == 1
-        assert len(scan_rule_files(os.path.join(config_dir, "*.yml"))) == 1
+        assert len(scan_rule_files([config_dir])) == 2
+        assert scan_rule_files([os.path.join(config_dir, "c.txt")]) == [
+            os.path.join(config_dir, "c.txt")]
+        assert scan_rule_files([os.path.join(config_dir, "*.yaml")]) == []
 
 
 class TestWriteOutputs:
@@ -1503,29 +1505,90 @@ def test_rule_files_empty_file_or_dangling_symlink_exits_2(tmp_path, monkeypatch
     assert "b.yaml" in capsys.readouterr().err
 
 
-def test_rule_files_glob_exclude_matches_the_whole_path_as_matched(tmp_path, monkeypatch,
-                                                                    capsys):
-    """#3426 F16: for a file the glob matched, a pattern with `/` is matched
-    against the path as matched — `'*/recipes/*'`, as cli-reference says."""
+def test_rule_files_exclude_matches_a_given_file_by_its_path_as_given(tmp_path, monkeypatch,
+                                                                      capsys):
+    """#3426 F16: for a file given as a target (the shell expanded the
+    pattern), a pattern with `/` is matched against the path as given —
+    `'*/recipes/*'`, as cli-reference says; relative to a directory given,
+    `'recipes/*'`."""
     rules = tmp_path / "rules"
     (rules / "recipes").mkdir(parents=True)
     (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
     (rules / "recipes" / "r.yaml").write_text("recipe: x\n", encoding="utf-8")
-    glob = str(rules) + "/**/*.yaml"
-    assert _onboard_rules(monkeypatch, ["--rule-files", glob, "-o", str(tmp_path / "o1"),
+    given = [str(rules / "a.yaml"), str(rules / "recipes" / "r.yaml")]
+    assert _onboard_rules(monkeypatch, ["--rule-files", *given, "-o", str(tmp_path / "o1"),
                                         "--exclude", "*/recipes/*"]) == 0
-    assert _onboard_rules(monkeypatch, ["--rule-files", glob, "-o", str(tmp_path / "o2"),
+    assert _onboard_rules(monkeypatch, ["--rule-files", *given, "-o", str(tmp_path / "o2"),
                                         "--exclude", "recipes/*"]) == 2
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(rules), "-o", str(tmp_path / "o3"),
+                                        "--exclude", "recipes/*"]) == 0
 
 
-def test_rule_files_glob_returning_a_dangling_symlink_exits_2(tmp_path, monkeypatch, capsys):
-    """#3426: glob.glob returns a dangling symlink; it is named, rc 2 — it
-    used to be passed over (neither a file nor a directory)."""
+def test_rule_files_a_given_dangling_symlink_among_others_exits_2(tmp_path, monkeypatch,
+                                                                   capsys):
+    """#3426: a dangling symlink among the targets (the shell expands a
+    pattern to it) is named, rc 2 — never passed over."""
     rules = tmp_path / "rules"
     rules.mkdir()
     (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
     symlink_or_skip(str(rules / "gone.yaml"), str(rules / "b.yaml"))
-    assert _onboard_rules(monkeypatch, ["--rule-files", str(rules) + "/*.yaml",
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(rules / "a.yaml"),
+                                        str(rules / "b.yaml"),
                                         "-o", str(tmp_path / "out")]) == 2
     err = capsys.readouterr().err
     assert "b.yaml" in err and "dangling symlink" in err
+
+
+def test_rule_files_a_path_with_a_bracket_is_that_file(tmp_path, monkeypatch, capsys):
+    """#3463: `rules/b[1].yaml` that is there is read — it was taken for the
+    glob `b[1].yaml`, which matches `b1.yaml` and not the file itself, so
+    the run read the wrong file (or none: `selects no file`, rc 2)."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "b[1].yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    # What the glob would pick instead: no rule file, so reading it is rc 2.
+    (rules / "b1.yaml").write_text("apiVersion: v2\nname: decoy\n", encoding="utf-8")
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(rules / "b[1].yaml"),
+                                        "-o", str(tmp_path / "out")]) == 0
+    err = capsys.readouterr().err
+    assert "Scanned 1 file(s), 1 rule(s)" in err and "b1.yaml" not in err, err
+
+
+def test_rule_files_takes_several_paths(tmp_path, monkeypatch, capsys):
+    """#3463: `--rule-files` takes paths (`nargs='+'`), as `lint` does — what
+    an unquoted pattern expands to was `unrecognized arguments`, rc 2."""
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    (tmp_path / "b.yml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(tmp_path / "d"),
+                                        str(tmp_path / "b.yml"),
+                                        "-o", str(tmp_path / "out")]) == 0
+    assert "Scanned 2 file(s), 2 rule(s)" in capsys.readouterr().err
+
+
+def test_rule_files_a_quoted_pattern_is_a_path_that_is_not_there(tmp_path, monkeypatch, capsys):
+    """#3463 (breaking): a pattern the shell did not expand (`'x/*.yaml'`,
+    or a Kubernetes Job's `args`) is a path, and nothing is there — rc 2,
+    named; it was expanded and read (rc 0)."""
+    (tmp_path / "x").mkdir()
+    (tmp_path / "x" / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    pattern = str(tmp_path / "x" / "*.yaml")
+    from _lib_exitcodes import CallerError
+    with pytest.raises(CallerError) as exc_info:  # rc 2 by the crash hook
+        _onboard_rules(monkeypatch, ["--rule-files", pattern, "-o", str(tmp_path / "out")])
+    assert str(exc_info.value) == f"--rule-files {pattern}: No such file or directory"
+    assert not (tmp_path / "out").exists()
+
+
+def test_rule_files_given_twice_adds_up(tmp_path, monkeypatch, capsys):
+    """#3463: a repeated `--rule-files` adds its values (`action="extend"`),
+    as the repeatable `--exclude` beside it does — with the default
+    `store`, the last one won and the earlier paths were not read, without
+    a word."""
+    (tmp_path / "d").mkdir()
+    (tmp_path / "d" / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    (tmp_path / "b.yml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(tmp_path / "b.yml"),
+                                        "--rule-files", str(tmp_path / "d"),
+                                        "-o", str(tmp_path / "out")]) == 0
+    assert "Scanned 2 file(s), 2 rule(s)" in capsys.readouterr().err

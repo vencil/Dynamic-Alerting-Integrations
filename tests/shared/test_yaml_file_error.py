@@ -917,7 +917,7 @@ def test_onboard_rule_files_unreadable_ends_with_rc_2_after_writing(tmp_path, sh
         (rules / name).write_bytes(body)
     out = tmp_path / "out"
     p = _run(OPS / "onboard_platform.py",
-             ["--rule-files", str(rules / "*.yml"), "-o", str(out)])
+             ["--rule-files", str(rules), "-o", str(out)])
     assert p.returncode == rc, f"{shape}: rc {p.returncode}\nstderr={p.stderr[-600:]!r}"
     assert "Traceback" not in p.stderr
     assert any(out.rglob("migration-plan.csv")) == plan_written, \
@@ -938,7 +938,7 @@ def test_onboard_rule_files_json_keeps_envelope_with_errors(tmp_path):
     (rules / "a.yml").write_bytes(_RULE_BAD)
     (rules / "b.yml").write_bytes(_RULE_GOOD)
     p = _run(OPS / "onboard_platform.py",
-             ["--rule-files", str(rules / "*.yml"), "-o", str(tmp_path / "out"), "--json"])
+             ["--rule-files", str(rules), "-o", str(tmp_path / "out"), "--json"])
     assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-600:]
     doc = json.loads(p.stdout)
     errors = doc["phases"]["phase2"]["summary"]["errors"]
