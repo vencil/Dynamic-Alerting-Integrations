@@ -2,26 +2,29 @@
 """migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。
 
 自動將傳統的 PromQL (寫死數值) 轉換為本專案的「動態多租戶」三件套：
-1. 租戶檔                  → migration_output/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
+1. 租戶檔                  → migration_output/conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
 2. 平台 Recording Rule      → migration_output/platform-recording-rules.yaml
 3. 平台動態 Alert Rule      → migration_output/platform-alert-rules.yaml
 4. 遷移報告                 → migration_output/migration-report.txt
 5. Triage CSV               → migration_output/triage-report.csv
 6. Prefix Mapping           → migration_output/prefix-mapping.yaml
-7. 根 defaults              → migration_output/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
+7. 根 defaults              → migration_output/conf.d/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
+
+1 與 7 寫在 `-o` 底下自己的 `conf.d/`（#3671）：那是一棵只有這兩個檔的 conf.d，
+可以整棵驗；2–6 不是 conf.d 檔，留在 `-o`，名稱也就不會與租戶檔相撞。
 
 1 與 7 是 conf.d 內容，由 Go 寫（ADR-036 §2，#3206）：兩個檔的資料（帶型別的值、
 註解）一次交給 `da-guard write`，文字由 Go 產生、整棵樹判一次，兩個檔同進退；
 被拒、或沒有可用的 da-guard（$DA_GUARD_BINARY / PATH），結束碼 2、一個檔都不寫。
 
 用法:
-  python3 migrate_rule.py <legacy_rules.yml>                    # 預設檔案輸出
-  python3 migrate_rule.py <legacy_rules.yml> --dry-run          # 僅顯示報告，不產生檔案
-  python3 migrate_rule.py <legacy_rules.yml> --interactive      # 遇到不確定時詢問使用者
-  python3 migrate_rule.py <legacy_rules.yml> -o /custom/path    # 自訂輸出目錄
-  python3 migrate_rule.py <legacy_rules.yml> --triage           # Triage 模式: 只產出 CSV 分桶報告
-  python3 migrate_rule.py <legacy_rules.yml> --no-prefix        # 停用 custom_ 前綴 (不建議)
-  python3 migrate_rule.py <legacy_rules.yml> --no-ast           # 強制使用舊版 regex 引擎
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a                    # 預設檔案輸出
+  python3 migrate_rule.py <legacy_rules.yml> --dry-run                        # 僅顯示報告，不產生檔案
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --interactive      # 遇到不確定時詢問使用者
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a -o /custom/path    # 自訂輸出目錄
+  python3 migrate_rule.py <legacy_rules.yml> --triage                         # Triage 模式: 只產出 CSV 分桶報告
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --no-prefix        # 停用 custom_ 前綴 (不建議)
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --no-ast           # 強制使用舊版 regex 引擎
 
 v4 升級 (AST Engine — Phase 11):
   - promql-parser (Rust/PyO3) 取代 regex 進行 metric name 辨識
@@ -1064,9 +1067,14 @@ def _dedup_recording_rules(results):
     return deduplicated_rules
 
 
-#: The root defaults file (#3671): `-o` is a conf.d root, and its root
-#: `_defaults.yaml` is what declares the keys the tenant file writes —
-#: scaffold_tenant writes the same pair.
+#: The conf.d this tool writes, under `-o` (#3671): a tree of its own, so
+#: its two files are judged as a conf.d root holds them and the other
+#: outputs (rule packs, reports) — no conf.d files — never share a name with
+#: the tenant file.
+CONFD_DIR = "conf.d"
+
+#: The root defaults file of that conf.d: what declares the keys the tenant
+#: file writes — scaffold_tenant writes the same pair.
 DEFAULTS_FILE = "_defaults.yaml"
 
 
@@ -1137,7 +1145,7 @@ def tenant_config_entry(results, tenant):
                             if pending else None))
             pending = []
         if r.dim_hints:
-            pending.append("維度標籤替代語法:")
+            pending.append(f"維度標籤替代語法（寫在 tenants.{tenant} 底下）:")
             for hint in r.dim_hints:
                 label_pairs = ', '.join(f'{lk}="{lv}"' for lk, lv in hint["labels"].items())
                 dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
@@ -1467,25 +1475,36 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
     與 `tenants:` 底下的 key（#3671）。
 
     ADR-036 §2（#3206 步驟 10c）：寫 conf.d 的只有 Go。兩個 conf.d 內容檔
-    （`<tenant>.yaml`、`_defaults.yaml`）一次交給同一次 `da-guard write`
-    （已存在就整份取代，-o 當 conf.d 根）：整棵樹判一次，兩個檔同進退——一個被拒
-    就一個都不寫、結束碼 2，其他檔也不寫。之前先讓既有的 -o 過共用的 conf.d 拒絕
-    （`_require_output_tree`）。rule pack、報表、CSV、prefix mapping 不是 conf.d
-    檔，在批次之後由本工具照舊寫。
+    （`<tenant>.yaml`、`_defaults.yaml`）一次交給同一次 `da-guard write`，寫進
+    `-o/conf.d`（`CONFD_DIR`，#3671；已存在就整份取代）：那棵樹判一次，兩個檔
+    同進退——一個被拒就一個都不寫、結束碼 2，其他檔也不寫。之前先讓既有的
+    `-o`（含 `conf.d/`）過共用的 conf.d 拒絕（`_require_output_tree`），且 `conf.d/` 不得有這兩個
+    檔以外的檔（另一次 `--tenant` 留下的租戶檔會成為多出來的租戶）。rule pack、
+    報表、CSV、prefix mapping 不是 conf.d 檔，在批次之後由本工具照舊寫在 `-o`。
     """
     if not is_valid_tenant_id(tenant):
         print(f"ERROR: --tenant {tenant!r} is not a valid tenant id ({tenant_id_rule()[1]}) "
               "— nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    _require_output_tree(output_dir)
+    conf_dir = Path(output_dir) / CONFD_DIR
+    _require_output_tree(output_dir)  # the whole -o, `conf.d/` included
     try:
         entries = [tenant_config_entry(results, tenant), defaults_snippet_entry(results)]
     except ValueError as exc:
         print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+    if conf_dir.is_dir():
+        mine = {e["path"] for e in entries}
+        other = sorted(p.relative_to(conf_dir).as_posix() for p in conf_dir.rglob("*")
+                       if p.relative_to(conf_dir).as_posix() not in mine)
+        if other:
+            print(f"ERROR: {conf_dir} holds {', '.join(other)}, which this run does not write "
+                  f"(another --tenant's file is another tenant in the tree, #3671); remove "
+                  f"it or use another -o — nothing was written", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
     _lib_confedit.write_all_or_exit(
-        output_dir, entries, tool="migrate_rule",
-        make_root=lambda: ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG))
+        conf_dir, entries, tool="migrate_rule",
+        make_root=lambda: ensure_dir_or_die(conf_dir, flag=_OUTPUT_FLAG))
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")
@@ -1704,7 +1723,7 @@ def main():
             print(f"[📖] {n_golden} 條建議改用黃金標準 (詳見報告)")
         if n_unparseable:
             print(f"[!] {n_unparseable} 條需人工處理 (LLM Prompt 已寫入報告)")
-        print(f"📁 檔案已輸出至 {args.output_dir}/")
+        print(f"📁 檔案已輸出至 {args.output_dir}/（conf.d 檔在 {args.output_dir}/{CONFD_DIR}/）")
         print(f"⚠️  先把 {DEFAULTS_FILE} 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml"
               "（合併，不要整份覆蓋）；沒宣告的 key，threshold-exporter 不會發射閾值。")
         if prefix:
