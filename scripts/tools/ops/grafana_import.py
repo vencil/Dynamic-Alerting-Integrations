@@ -43,13 +43,15 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
-from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_input  # noqa: E402  (#3445: --dashboard is read by the lib)
 
 #: --dashboard: a Grafana dashboard, a JSON object (#3445: a list or a scalar
 #: was "Invalid JSON: 'int' object has no attribute 'get'"; content that
 #: cannot be read, or another top level, is rc 2 naming the flag and path).
 DASHBOARD_DOCUMENT = _lib_input.Document("json", dict)
+#: ``--dashboard-dir``: its top-level ``*.json`` entries (#3693).
+DASHBOARD_FILES = _lib_input.TopLevel("*.json")
 from _lib_kubectl import KubectlError, kubectl_list  # noqa: E402  (#3349)
 
 
@@ -254,8 +256,11 @@ def main():
     )
     _lib_input.add_input(parser, "--dashboard", decode=DASHBOARD_DOCUMENT,
                          help="Path to dashboard JSON file")
-    parser.add_argument("--dashboard-dir",
-                        help="Import all *.json files in directory")
+    # #3693: a declared input — listed by `_lib_input` (once), a directory
+    # that cannot be listed or holds no *.json named, rc 2.
+    _lib_input.add_input(parser, "--dashboard-dir", select=DASHBOARD_FILES,
+                         empty=_lib_input.EMPTY_REFUSED,
+                         help="Import all *.json files in directory")
     parser.add_argument("--name",
                         help="ConfigMap name (auto-generated if omitted)")
     parser.add_argument("--namespace", default="monitoring",
@@ -308,19 +313,14 @@ def main():
         dashboards.append((args.dashboard, cm_name,
                            _lib_input.document(args, "dashboard", lang="en")))
     elif args.dashboard_dir:
-        dash_dir = Path(args.dashboard_dir)
-        require_dir(dash_dir, lang="en", flag="--dashboard-dir")  # #3276
-        for entry in sorted(dash_dir.glob("*.json")):
+        # #3693: `Path.glob` read a directory it could not list as one with
+        # no *.json ("No dashboard files found.", no flag, no path) — the
+        # declaration judges it, and an empty selection, by name (#452).
+        for entry in _lib_input.selected(args, "dashboard_dir", lang="en"):
             fpath = str(entry)
             dashboards.append((fpath, auto_name(fpath), None))
     else:
         parser.error("Provide --dashboard, --dashboard-dir, or --verify")
-
-    if not dashboards:
-        # #452: empty/unusable input (dir has no *.json) = caller error,
-        # consistent with the "directory not found" sibling above.
-        print("No dashboard files found.", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
 
     all_results = []
     has_failure = False
