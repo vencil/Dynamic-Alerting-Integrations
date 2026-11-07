@@ -1,6 +1,6 @@
 # promtool unit test — Runtime-Canary DEMO (ADR-025 design-readiness).
 # Proves, against the REAL compiler output + the hand-authored dead-man's-switch
-# (runtime-canary.rules.yaml), the three claims the design doc makes:
+# (runtime-canary.compiled.rules.yaml + runtime-canary.meta.rules.yaml), the three claims the design doc makes:
 #   1. LIVENESS        — heartbeat present → the canary's Custom_ alert fires end
 #                        to end; the dead-man's-switch stays quiet.
 #   2. CONTAINMENT     — a co-tenant on the SAME shape with broken data does NOT
@@ -9,7 +9,8 @@
 #                        core record vanishes → CustomAlertPipelineCanaryDown PAGES.
 # Run by the CI promtool loop (`for t in tests/rulepacks/*_test.yaml`).
 rule_files:
-  - ./runtime-canary.rules.yaml
+  - ./runtime-canary.compiled.rules.yaml
+  - ./runtime-canary.meta.rules.yaml
 
 evaluation_interval: 15s
 
@@ -29,6 +30,7 @@ tests:
         exp_alerts:
           - exp_labels:
               component: custom
+              maintenance: mute
               severity: warning
               tenant: platform-canary
               recipe: threshold
@@ -80,6 +82,7 @@ tests:
         exp_alerts:
           - exp_labels:
               component: custom
+              maintenance: mute
               severity: warning
               tenant: platform-canary
               recipe: threshold
@@ -96,6 +99,7 @@ tests:
               tier: platform
           - exp_labels:
               component: custom
+              maintenance: mute
               severity: warning
               tenant: noisy-neighbor
               recipe: threshold

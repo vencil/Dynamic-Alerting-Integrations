@@ -123,8 +123,13 @@ def test_reads_of_other_labels_pass():
 
 
 def test_the_runtime_canary_bundle_is_linted_too():
-    assert "tests/rulepacks/runtime-canary.rules.yaml" in lint.EXTRA_RULE_FILES
-    assert (_REPO / lint.EXTRA_RULE_FILES[0]).is_file()
+    # Both halves (#3679): the compiler's output and the hand-authored meta rules.
+    assert set(lint.EXTRA_RULE_FILES) == {
+        "tests/rulepacks/runtime-canary.compiled.rules.yaml",
+        "tests/rulepacks/runtime-canary.meta.rules.yaml",
+    }
+    for rel in lint.EXTRA_RULE_FILES:
+        assert (_REPO / rel).is_file(), rel
 
 
 def test_labels_are_checked_too():

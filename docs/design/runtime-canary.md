@@ -112,7 +112,9 @@ ADR-025「之後再說」表原本把 canary 的信任資產寫成：「故意�
 
 設計就緒**附帶一個可跑、不會 rot 的 demo**——不是一份會跟程式碼漂移的文件，而是經由**真實編譯器**產出、且在 CI 跑的 promtool 測試：
 
-- [`tests/rulepacks/runtime-canary.rules.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary.rules.yaml)：canary 的規則鏈**逐字**取自 `compile_custom_alerts.py` 對上面那條 recipe 的輸出（證明它 dogfood 真實編譯鏈），加上手寫的 dead-man's-switch meta-alert。
+- [`tests/rulepacks/runtime-canary-recipe/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary-recipe/platform-canary.yaml)：canary 那條 recipe 唯一的宣告處。
+- [`tests/rulepacks/runtime-canary.compiled.rules.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary.compiled.rules.yaml)：`compile_custom_alerts.py` 對那條 recipe 的輸出，整份由 `make runtime-canary-compile` 寫出（證明它 dogfood 真實編譯鏈）。`make runtime-canary-compile-check`（pre-commit 與 CI）以同一支編譯器重編比對，編譯器的輸出一變、這份沒重產就擋下（[#3679](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3679)）。
+- [`tests/rulepacks/runtime-canary.meta.rules.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary.meta.rules.yaml)：手寫的 dead-man's-switch meta-alert。
 - [`tests/rulepacks/runtime-canary_test.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary_test.yaml)：三個 case 證明本文三項主張——
   1. **活性**：heartbeat 在 → canary 端到端觸發、meta 靜默。
   2. **隔離（containment）**：同 shape 的鄰居租戶帶極端值（9999）同時觸發 → canary 那一列仍是**自己的值（1.00）、不被污染**——兩列各自獨立（證明 join 不跨租戶混值）。

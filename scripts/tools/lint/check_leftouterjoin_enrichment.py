@@ -22,8 +22,8 @@ either replica's value during a reload, and an absent `tenant_metadata_info`
 renders an empty string.
 
 WHAT THIS CHECKS, per alert/recording rule of every rule pack and of the
-runtime canary's rule bundle (tests/rulepacks/runtime-canary.rules.yaml, whose
-custom-alert groups are the compiler's verbatim output) — read the way
+runtime canary's rule bundle (tests/rulepacks/runtime-canary.compiled.rules.yaml,
+the compiler's output, and its hand-authored runtime-canary.meta.rules.yaml) — read the way
 Prometheus' rule loader reads it, ADR-036 §12:
   1. expr: `tenant_metadata_info` may appear only as the right-hand operand of
      `and` / `unless`, which match on presence and keep only left-hand labels.
@@ -104,7 +104,10 @@ _LABEL_REFS = (
     re.compile(r"\bindex\s+\$?\.?[Ll]abels\s+\"(" + _ALT + r")\""),
 )
 #: Rule files linted besides the rule packs: the runtime canary's bundle.
-EXTRA_RULE_FILES = ("tests/rulepacks/runtime-canary.rules.yaml",)
+EXTRA_RULE_FILES = (
+    "tests/rulepacks/runtime-canary.compiled.rules.yaml",
+    "tests/rulepacks/runtime-canary.meta.rules.yaml",
+)
 
 
 def _repo_root() -> Path:
