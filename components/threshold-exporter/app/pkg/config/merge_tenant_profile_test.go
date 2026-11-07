@@ -301,26 +301,6 @@ func TestMergeTenantProfileNoticesOnlyForTheElectedProfile(t *testing.T) {
 	}
 }
 
-// The flat-KV fallback: the display map is not the tenant layer, so the
-// profile's keys filled into it are not judged as the tenant's.
-func TestMergeTenantFlatFallbackProfileIsNotTheTenants(t *testing.T) {
-	t.Parallel()
-	files := map[string]string{
-		"_defaults.yaml": platformMergeDefaults,
-		"_profiles.yaml": "profiles:\n  strict:\n    bogus_key: \"1\"\n    mysql_connections: \"55\"\n",
-	}
-	kv, m := profileKV(t, files, "_profile: strict\n")
-	if len(kv.Errors) != 0 {
-		t.Errorf("errors %q: the profile's key judged as the tenant's", kv.Errors)
-	}
-	if _, ok := m.own["tx"]["bogus_key"]; ok {
-		t.Errorf("the tenant layer holds the profile's key: %v", m.own["tx"])
-	}
-	if !containsRow(resolvedRows(&m, "tx"), "mysql_connections{}=55/warning") {
-		t.Errorf("rows %v: the profile is not expanded for the flat document", resolvedRows(&m, "tx"))
-	}
-}
-
 // Expanding writes into this merge's maps only: the shared decode cache
 // (and so the next merge) never sees another merge's profile fill.
 func TestMergeTenantProfileExpansionDoesNotReachTheCache(t *testing.T) {

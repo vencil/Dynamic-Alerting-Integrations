@@ -510,8 +510,9 @@ jobs:
               - "scripts/tools/_lib_godispatch.py"
               - "scripts/tools/ops/guard_dispatch.py"
             # schema: the am-inhibit leg pins the tenant schema's http_config
-            # key sets to the structs Alertmanager decodes into (#2984), so a
-            # schema-only PR must run it. Its own filter for the reason `docs`
+            # key sets to the structs Alertmanager decodes into (#2984), and the
+            # tenant-api leg pins its top-level key set (#3504), so a
+            # schema-only PR must run them. Its own filter for the reason `docs`
             # is: adding the path to `go` would wake all five Go legs
             # (tenant-api's schemathesis included), while the only other Go
             # leg that reads the schema (threshold-exporter) already wakes on
@@ -2411,9 +2412,11 @@ jobs:
   go-tests-tenant-api:
     name: Go Tests — tenant-api
     runs-on: ubuntu-24.04
-    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note).
+    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). Also on
+    # `schema`: internal/confd holds the tenant file's top-level key set equal
+    # to tenant-config.schema.json's (#3504), so a schema-only PR must run it.
     needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
+    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.schema_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests,
     # swag drift check and schemathesis all run against the local checkout.
     permissions:
