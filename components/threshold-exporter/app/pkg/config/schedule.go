@@ -161,12 +161,17 @@ func DeadEntriesReading(des []DeadEntry) string {
 // config as shown) written as a schedule, its DeadEntries — read from the
 // value as /metrics reads it (scheduledValueFromRaw, the build's one
 // decode of a raw value); nil when no key has one. A reserved key's
-// schedule is not read (#3269: only its `default` is), so it has none.
-func deadEntriesOfView(view map[string]any) map[string][]DeadEntry {
+// schedule is not read (#3269: only its `default` is), so it has none; nor
+// has a key notServed names for a reason under which /metrics serves none of
+// its value (notServedKeyServed: undeliverable, unconsumed, …).
+func deadEntriesOfView(view map[string]any, notServed map[string]NotServedKey) map[string][]DeadEntry {
 	var out map[string][]DeadEntry
 	for k, v := range view {
 		m, ok := v.(map[string]any)
 		if !ok || strings.HasPrefix(k, "_") {
+			continue
+		}
+		if ns, named := notServed[k]; named && !notServedKeyServed(ns.Reason) {
 			continue
 		}
 		if _, scheduled := m["overrides"]; !scheduled {

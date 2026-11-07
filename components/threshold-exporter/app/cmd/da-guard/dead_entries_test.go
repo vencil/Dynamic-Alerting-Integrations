@@ -86,3 +86,41 @@ func TestDeadEntries_ThroughEveryDocument(t *testing.T) {
 		t.Errorf("key-verdict blocks = %v", kv["blocks"])
 	}
 }
+
+// A key /metrics serves nothing of has no dead entry in either document
+// (#3502 review): an undeclared key and an undeliverable subtree value say
+// why through their own reason, effective's not_served and served-values'
+// keys[].reason alike.
+func TestDeadEntries_NoneOnAKeyServedNothing(t *testing.T) {
+	t.Parallel()
+	sched := "      default: \"70\"\n      overrides:\n" +
+		"        - window: \"22:00-06:00\"\n          value: \"1000\"\n" +
+		"        - window: \"01:00-03:00\"\n          value: \"5\"\n"
+	root := writeTree(t, map[string]string{
+		"_defaults.yaml":      kvRoot,
+		"team/_defaults.yaml": "defaults:\n  kafka_lag:\n" + sched,
+		"team/a.yaml":         "tenants:\n  t1:\n    mysql_conections:\n" + sched,
+	})
+	served := runDoc(t, "served-values", "--config-dir", root, "--at", "2026-07-01T03:00:00Z")
+	keys := served["tenants"].(map[string]any)["t1"].(map[string]any)["keys"].(map[string]any)
+	for _, k := range []string{"mysql_conections", "kafka_lag"} {
+		e, ok := keys[k].(map[string]any)
+		if !ok {
+			t.Fatalf("served-values has no key %s: %v", k, keys)
+		}
+		if _, has := e["dead_entries"]; has || e["exporter"] != false {
+			t.Errorf("served-values keys.%s = %v", k, e)
+		}
+	}
+	eff := runDoc(t, "effective", "--config-dir", root)
+	te := eff["tenants"].(map[string]any)["t1"].(map[string]any)
+	if dead := te["dead_entries"].(map[string]any); len(dead) != 0 {
+		t.Errorf("effective dead_entries = %v (not_served %v)", dead, te["not_served"])
+	}
+	ns := te["not_served"].(map[string]any)
+	for _, k := range []string{"mysql_conections", "kafka_lag"} {
+		if _, named := ns[k]; !named {
+			t.Errorf("effective not_served lacks %s: %v", k, ns)
+		}
+	}
+}

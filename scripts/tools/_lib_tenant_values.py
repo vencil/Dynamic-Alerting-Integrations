@@ -1012,7 +1012,8 @@ def _run_da_guard(
 # Fields a da-guard document gained after its first version: one missing
 # names the binary as older than this tool (#3489, #3016).
 _FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",),
-                       ("undecidable_blocks",), ("switched_off_with",), ("base",))
+                       ("undecidable_blocks",), ("switched_off_with",), ("base",),
+                       ("dead_entries",))  # #3502: key-verdict's rows and findings
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:

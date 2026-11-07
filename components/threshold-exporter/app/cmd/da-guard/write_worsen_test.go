@@ -300,3 +300,54 @@ func TestWrite_AnUnreadValueIsRefusedWhenTheWriteMakesIt(t *testing.T) {
 		})
 	}
 }
+
+// #3502: a schedule entry /metrics never serves is refused as dead_entry
+// (the entry to remove or the windows to reorder, not a key nobody reads)
+// when the write makes it new — and changing the dead entry as written is
+// new. A dead entry the write leaves alone does not block.
+func TestWrite_ADeadEntryIsRefusedWhenTheWriteMakesIt(t *testing.T) {
+	tree := map[string]string{
+		"_defaults.yaml": "defaults:\n  cpu: 5\n  mem: 5\n",
+		"ta.yaml": "tenants:\n  ta:\n    mem: \"6\"\n    cpu:\n      default: \"7\"\n      overrides:\n" +
+			"        - window: \"22:00-06:00\"\n          value: \"8\"\n" +
+			"        - window: \"01:00-03:00\"\n          value: \"9\"\n",
+	}
+	schedule := func(dead string) string {
+		return `{"files":[{"path":"ta.yaml","ops":[{"op":"set","path":["tenants","ta","cpu"],"value":{"map":[` +
+			`["default",{"str":"7"}],["overrides",{"seq":[` +
+			`{"map":[["window",{"str":"22:00-06:00"}],["value",{"str":"8"}]]},` +
+			`{"map":[["window",{"str":"` + dead + `"}],["value",{"str":"9"}]]}]}]]}}]}]}`
+	}
+	for _, tc := range []struct {
+		name, in string
+		refused  bool
+	}{
+		{"another dead entry", schedule("02:00-04:00"), true},
+		{"the same schedule", schedule("01:00-03:00"), false},
+		{"another key, the dead entry untouched",
+			`{"files":[{"path":"ta.yaml","ops":[{"op":"set","path":["tenants","ta","mem"],"value":{"str":"7"}}]}]}`, false},
+		{"a fix: a window partly outside", schedule("05:00-08:00"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeTree(t, tree)
+			code, res := runBatch(t, writeCmd, tc.in, "--config-dir", root, "--dry-run")
+			if !tc.refused {
+				if code != exitOK {
+					t.Fatalf("exit %d %v (%v)", code, worsenedOf(res), res.Message)
+				}
+				return
+			}
+			if code != exitFindings || callReason(res) != writeReasonWorsensTree {
+				t.Fatalf("exit %d reason %q %v (%v)", code, callReason(res), worsenedOf(res), res.Message)
+			}
+			if !reflect.DeepEqual(worsenedOf(res), []string{"dead_entry ta.yaml ta"}) {
+				t.Fatalf("worsened %v", worsenedOf(res))
+			}
+			w := res.Worsened[0]
+			if w.Finding != "window_covered" || !strings.Contains(w.Message, "serves at no minute") ||
+				strings.Contains(w.Message, "no reader reads it") {
+				t.Errorf("worsened %+v", w)
+			}
+		})
+	}
+}

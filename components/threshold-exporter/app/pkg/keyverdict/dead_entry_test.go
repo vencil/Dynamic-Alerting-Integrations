@@ -134,3 +134,23 @@ func TestNewBlocks_DeadEntryRatchetsOnTheEntriesAsWritten(t *testing.T) {
 		t.Fatalf("new: new blocks %+v", bs)
 	}
 }
+
+// Every row carries dead_entries as a list, the profile_not_filled row a
+// profile adds included (#3502 review: it read null, and the Python reader
+// refused the whole verdict).
+func TestJudge_EveryRowCarriesDeadEntriesAsAList(t *testing.T) {
+	t.Parallel()
+	tree := Judge(Input{
+		Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{}}},
+		Effective: map[string]EffectiveTenant{"t1": {Config: map[string]any{}, NotServed: map[string]config.NotServedKey{
+			"kafka_lag": {Reason: config.NotServedProfileNotFilled, File: "_profiles.yaml"}}}},
+	})
+	if len(tree.Keys["t1"]) == 0 {
+		t.Fatal("no row")
+	}
+	for _, v := range tree.Keys["t1"] {
+		if v.DeadEntries == nil {
+			t.Errorf("%s: dead_entries is nil (JSON null)", v.Key)
+		}
+	}
+}

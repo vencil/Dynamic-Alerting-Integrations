@@ -89,3 +89,28 @@ func anyContains(list []string, sub string) bool {
 	}
 	return false
 }
+
+// Only a value /metrics may serve is judged (#3502 review): a key the
+// platform does not declare is the verdict's unread, and of two spellings
+// of one dimensional key only the one served has dead entries to report.
+func TestValidateTenantKeys_DeadEntryOnlyOnAServedValue(t *testing.T) {
+	t.Parallel()
+	cfg := deadEntryConfig(deadSchedule)
+	cfg.Tenants["t1"] = map[string]ScheduledValue{"mysql_conections": deadSchedule}
+	if fs := deadFindingsOf(cfg.ValidateTenantKeys()); len(fs) != 0 {
+		t.Fatalf("an undeclared key: %+v", fs)
+	}
+	cfg = deadEntryConfig(deadSchedule)
+	cfg.Defaults["redis_queue_length"] = 10
+	cfg.Tenants["t1"] = map[string]ScheduledValue{
+		`redis_queue_length{env="b", queue="a"}`: {Default: "5"},
+		`redis_queue_length{queue="a", env="b"}`: deadSchedule,
+	}
+	if fs := deadFindingsOf(cfg.ValidateTenantKeys()); len(fs) != 0 {
+		t.Fatalf("the losing spelling: %+v", fs)
+	}
+	cfg.Tenants["t1"] = map[string]ScheduledValue{`redis_queue_length{env="b", queue="a"}`: deadSchedule}
+	if fs := deadFindingsOf(cfg.ValidateTenantKeys()); len(fs) != 1 {
+		t.Fatalf("the served dimensional spelling: %+v", fs)
+	}
+}

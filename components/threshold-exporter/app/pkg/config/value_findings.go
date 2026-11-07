@@ -81,6 +81,36 @@ func newDeadEntryFinding(tenant, key string, sv ScheduledValue) (ValueFinding, b
 	}, true
 }
 
+// deadEntriesJudged reports whether the write gate judges the dead entries
+// of sv, written under key (canonKey once #1231-canonicalized): only a value
+// /metrics may serve — a key whose platform key (PlatformKeyFor) the root
+// `defaults:` values or `optional_overrides:` declares, in the spelling the
+// tenant's map serves (normalized: of two spellings of one dimensional key,
+// the one normalizeKeys keeps). A key no reader reads is the shared key
+// verdict's unread, and a losing spelling is spelling_duplicate; neither
+// serves its schedule, so neither has a dead entry to report (#3502).
+func deadEntriesJudged(key, canonKey string, sv ScheduledValue, normalized map[string]ScheduledValue,
+	canonDefaults map[string]float64, canonOptional map[string]struct{}) bool {
+	if len(sv.Overrides) == 0 {
+		return false
+	}
+	base, ok := PlatformKeyFor(canonKey)
+	if !ok {
+		return false
+	}
+	_, valued := canonDefaults[base]
+	_, declared := canonOptional[base]
+	if !valued && !declared {
+		return false
+	}
+	if c, dim := canonicalDimensionalKey(key); dim {
+		if served, has := normalized[c]; has && !sameSchedule(served, sv) {
+			return false
+		}
+	}
+	return true
+}
+
 // deadEntryProblem is a dead-entry finding's tenant-free reason.
 const deadEntryProblem = "with entries /metrics serves at no minute of the day"
 

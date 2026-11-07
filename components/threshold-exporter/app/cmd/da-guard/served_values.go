@@ -393,8 +393,8 @@ type servedKey struct {
 	// writes as a schedule: the entries of that schedule /metrics serves at
 	// no minute of the UTC day (config.ScheduledValue.DeadEntries — the
 	// resolver's own reading of which entry serves a minute). Absent when
-	// none, and for a key whose value is not the one served (a retired
-	// spelling its canonical key shadows, an undeliverable subtree value).
+	// none, and for a key /metrics serves nothing of at any minute (reason
+	// shadowed, undeliverable or no_row).
 	DeadEntries []config.DeadEntry `json:"dead_entries,omitempty"`
 }
 
@@ -1189,6 +1189,14 @@ func servedKeys(tv servedTenantValues,
 				e.Reason = keyReasonBaseDisabled
 			default:
 				e.Reason = keyReasonNoRow
+			}
+			switch e.Reason {
+			case keyReasonShadowed, keyReasonUndeliverable, keyReasonNoRow:
+				// #3502: a key /metrics serves nothing of, at any minute, has
+				// no entry that serves; its own reason says why. A reason of
+				// the instant read (disabled, a refused value) leaves the
+				// rest of the day served, so its entries are judged.
+				e.DeadEntries = nil
 			}
 		}
 		if !strings.HasPrefix(k, "_") {

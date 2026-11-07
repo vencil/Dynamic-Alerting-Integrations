@@ -494,7 +494,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		ec.NotServed = withNotCarried(ec.NotServed, view, notCarried, relChain)
 		ec.NotServed = withProfileNotFilled(ec.NotServed, view, parts.profileNotFilled)
 	}
-	ec.DeadEntries = deadEntriesOfView(view)
+	ec.DeadEntries = deadEntriesOfView(view, ec.NotServed)
 	return ec, nil
 }
 

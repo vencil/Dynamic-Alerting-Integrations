@@ -181,15 +181,22 @@ const (
 	NotServedBaseDisabled = "base_disabled"
 )
 
-// notServedReasons is every NotServed* reason — the closed set of
-// NotServedKey.Reason, in declaration order. TestNotServedReasons_EveryConstant
-// reads the constants from this file's syntax tree, so a reason added above
-// and not here is red.
-var notServedReasons = []string{
-	NotServedParseFailed, NotServedRootDefaultsUnwrapped, NotServedValueRejected, NotServedValueUnparsed,
-	NotServedValueUnparsedDropped, NotServedWindowInvalid, NotServedUndeliverable, NotServedRootNullUndeclared,
-	NotServedRootDefaultRefused, NotServedRootDefaultsReserved, NotServedSpellingDuplicate,
-	NotServedUnregistered, NotServedUnconsumed, NotServedProfileNotFilled, NotServedBaseDisabled,
+// notServedReasonTable is every NotServed* reason — the closed set of
+// NotServedKey.Reason, in declaration order — and whether, under it, the
+// key's value is still served in some part of the day (keyServed): the
+// reason names part of the value (a window it cannot read, a value of one
+// part of the day it refuses) or a switch-off, not a key /metrics serves
+// nothing of. TestNotServedReasons_EveryConstant reads the constants from
+// this file's syntax tree, so a reason added above and not here is red.
+var notServedReasonTable = []struct {
+	reason    string
+	keyServed bool
+}{
+	{NotServedParseFailed, false}, {NotServedRootDefaultsUnwrapped, false}, {NotServedValueRejected, false},
+	{NotServedValueUnparsed, true}, {NotServedValueUnparsedDropped, true}, {NotServedWindowInvalid, true},
+	{NotServedUndeliverable, false}, {NotServedRootNullUndeclared, false}, {NotServedRootDefaultRefused, false},
+	{NotServedRootDefaultsReserved, false}, {NotServedSpellingDuplicate, false}, {NotServedUnregistered, false},
+	{NotServedUnconsumed, false}, {NotServedProfileNotFilled, false}, {NotServedBaseDisabled, true},
 }
 
 // NotServedReasons is a copy of the closed set of NotServedKey.Reason —
@@ -197,7 +204,24 @@ var notServedReasons = []string{
 // anything else (scripts/tools/_lib_tenant_values.py NOT_SERVED_REASONS,
 // pinned to this list by TestNotServedReasons_PythonReaderIsThisList).
 func NotServedReasons() []string {
-	return append([]string(nil), notServedReasons...)
+	out := make([]string, len(notServedReasonTable))
+	for i, r := range notServedReasonTable {
+		out[i] = r.reason
+	}
+	return out
+}
+
+// notServedKeyServed reports whether a key not_served for reason still has
+// its value served in some part of the day (notServedReasonTable) — and so
+// whether entries of its schedule can be dead (#3502): a key /metrics serves
+// nothing of has no entry that serves, and listing them would say otherwise.
+func notServedKeyServed(reason string) bool {
+	for _, r := range notServedReasonTable {
+		if r.reason == reason {
+			return r.keyServed
+		}
+	}
+	return false
 }
 
 // NotServedKey is why /metrics does not serve one key of an effective config

@@ -758,7 +758,7 @@ func profileNotFilled(tenant string, notServed map[string]config.NotServedKey, a
 		layer, file := config.KeyLayerProfile, ns.File
 		sev, reason := SeverityError, ns.Reason
 		out = append(out, KeyVerdict{Tenant: tenant, Key: key, Layer: &layer, File: &file, ReadBy: []string{},
-			Verdict: Unread, Severity: &sev, Reason: &reason})
+			Verdict: Unread, Severity: &sev, Reason: &reason, DeadEntries: []config.DeadEntry{}})
 	}
 	return out
 }
