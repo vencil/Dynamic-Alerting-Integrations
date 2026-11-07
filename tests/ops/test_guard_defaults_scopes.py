@@ -458,8 +458,13 @@ class TestTriggerCoversEveryRootPlatformFile:
 
 
 def _scope_pathspecs() -> list[str]:
-    """從 workflow 取出 scope step 餵給 `git diff` 的 pathspec（`--` 之後、`>` 之前）。"""
-    found = []
+    """從 workflow 取出 scope step 餵給 `git diff` 的 pathspec（`--` 之後、`>` 之前）。
+
+    #3644 起 scope step 有兩條 `git diff --name-only`：變更清單，與
+    `--diff-filter=D` 的刪除清單（給 helper 的 `--deleted`）。⛔ 兩條的 pathspec
+    必須一字不差——刪除清單較窄時，整棵刪除的樹會少列一個檔而退回 target（紅），
+    較寬時則多出 helper 不會用到的路徑；兩種都是兩份清單各自漂移的開始。"""
+    listing, deleted = [], []
     for step in TestWorkflowContract._steps():
         run = step.get("run") or ""
         if "guard_defaults_scopes.py" not in run:
@@ -468,12 +473,18 @@ def _scope_pathspecs() -> list[str]:
             if line.startswith("git diff") and "--name-only" in line:
                 argv = shlex.split(line)
                 tail = argv[argv.index("--") + 1:]
-                found.append(tail[:tail.index(">")] if ">" in tail else tail)
-    assert len(found) == 1, (
-        f"預期 scope step 恰有 1 條 `git diff --name-only`，實際 {len(found)} 條"
-        "——0 表示下面的斷言空虛通過")
-    assert found[0], "pathspec 為空：git diff 會列出所有檔案，本斷言失去意義"
-    return found[0]
+                spec = tail[:tail.index(">")] if ">" in tail else tail
+                (deleted if "--diff-filter=D" in argv else listing).append(spec)
+    assert len(listing) == 1, (
+        f"預期 scope step 恰有 1 條（不帶 --diff-filter 的）`git diff --name-only`，"
+        f"實際 {len(listing)} 條——0 表示下面的斷言空虛通過")
+    assert len(deleted) == 1, (
+        f"預期 scope step 恰有 1 條 `git diff --name-only --diff-filter=D`（#3644 的刪除清單），"
+        f"實際 {len(deleted)} 條")
+    assert deleted[0] == listing[0], (
+        f"刪除清單的 pathspec {deleted[0]} 與變更清單 {listing[0]} 不一致")
+    assert listing[0], "pathspec 為空：git diff 會列出所有檔案，本斷言失去意義"
+    return listing[0]
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -894,6 +905,78 @@ class TestGoldenFixturesAreExcludedOutLoud:
         for step in TestWorkflowContract._steps():
             for line in TestWorkflowContract._code_lines(step.get("run") or ""):
                 assert "tests/golden/fixtures" not in line, line
+
+
+class TestRemovedTreesAreNamedNotGuarded:
+    """#3644：整棵 conf.d 樹被刪掉的 PR，不該對不存在的目錄跑 da-guard（exit 2 → 紅）。
+
+    `removed` 要兩個條件**都**成立：該樹在變更清單裡的路徑全在 `--deleted` 裡，
+    且根目錄在 checkout 裡不存在。每個案例各自釘住其中一半——拿掉任一半，
+    就有一個案例轉紅。"""
+
+    _GONE = "gone/conf.d/_defaults.yaml"
+
+    @staticmethod
+    def _run(tmp_path, monkeypatch, capsys, changed: list[str],
+             deleted: list[str] | None) -> tuple[int, list[str]]:
+        monkeypatch.chdir(tmp_path)
+        argv = ["--null"]
+        if deleted is not None:
+            listing = tmp_path / "deleted.bin"
+            listing.write_bytes("".join(p + "\0" for p in deleted).encode(
+                "utf-8", errors="surrogateescape"))
+            argv += ["--deleted", str(listing)]
+        monkeypatch.setattr("sys.stdin", _Stdin("".join(p + "\0" for p in changed)))
+        rc = mod.main([*argv, "-"])
+        return rc, capsys.readouterr().out.splitlines()
+
+    def test_a_whole_tree_deletion_is_a_removed_row(self, tmp_path, monkeypatch, capsys):
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._GONE], [self._GONE])
+        assert rc == 0, rows
+        assert rows == ["removed\tgone/conf.d"], rows
+
+    def test_deleting_defaults_from_a_tree_that_remains_is_still_a_target(
+            self, tmp_path, monkeypatch, capsys):
+        """條件 2：樹還在（還有別的檔）＝ 還有東西可驗，必須照驗。"""
+        (tmp_path / "gone" / "conf.d" / "db").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._GONE], [self._GONE])
+        assert rc == 0, rows
+        assert rows == ["target\tgone/conf.d\t."], rows
+
+    def test_a_missing_directory_that_was_not_deleted_stays_a_red_target(
+            self, tmp_path, monkeypatch, capsys):
+        """條件 1：目錄不存在但不是刪除（例如路徑在途中被改寫過）→ 維持 target，
+        讓 da-guard 的 exit 2 照樣轉紅。只看目錄的話這裡會被洗成綠燈。"""
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._GONE], [])
+        assert rc == 0, rows
+        assert rows == ["target\tgone/conf.d\t."], rows
+
+    def test_one_surviving_change_under_the_tree_keeps_it_a_target(
+            self, tmp_path, monkeypatch, capsys):
+        """「全是刪除」是全稱：同一棵樹裡只要有一個不是刪除，就不是 removed。"""
+        other = "gone/conf.d/_profiles.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._GONE, other],
+                             [self._GONE])
+        assert rc == 0, rows
+        assert rows == ["target\tgone/conf.d\t."], rows
+
+    def test_without_deletion_facts_nothing_is_removed(self, tmp_path, monkeypatch, capsys):
+        """沒給 `--deleted` ＝ 舊行為：失敗方向是多驗而紅，不是少驗而綠。"""
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._GONE], None)
+        assert rc == 0, rows
+        assert rows == ["target\tgone/conf.d\t."], rows
+
+    def test_a_removed_tree_does_not_hide_a_surviving_one(self, tmp_path, monkeypatch, capsys):
+        (tmp_path / "kept" / "conf.d").mkdir(parents=True)
+        kept = "kept/conf.d/_defaults.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._GONE, kept], [self._GONE])
+        assert rc == 0, rows
+        assert rows == ["target\tkept/conf.d\t.", "removed\tgone/conf.d"], rows
+
+    def test_deleted_without_its_file_is_a_caller_error(self, monkeypatch, capsys):
+        monkeypatch.setattr("sys.stdin", _Stdin(self._GONE + "\0"))
+        assert mod.main(["--null", "-", "--deleted"]) == 2
+        assert "--deleted needs a file" in capsys.readouterr().err
 
 
 class _Stdin:

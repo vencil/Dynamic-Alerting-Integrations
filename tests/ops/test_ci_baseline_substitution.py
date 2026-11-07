@@ -1132,6 +1132,36 @@ def test_da_guard_flags_an_unrecognised_scope_kind_instead_of_dropping_it(
 
 
 @needs_bash
+def test_da_guard_names_a_removed_tree_without_failing_the_verdict(
+        tmp_path) -> None:
+    """#3644: a `removed` row is named NOT CHECKED, raises neither WORST nor
+    RAN_TARGET (so the whole-tree smoke still runs), and is not handed to
+    da-guard — the fixture's da-guard caller-errors (exit 2) on any tree but
+    tree-a, so dispatching the row as a target turns this red, and so does
+    dropping the `removed)` branch (the catch-all sets WORST=2)."""
+    runner_temp, targets = _guard_fixture(tmp_path, "removed\tgone/conf.d\n")
+    step = _step(GUARD_DEFAULTS, _S_RUN_DA_GUARD)
+    script = _render(step.script, {
+        "runner.temp": str(runner_temp.as_posix()),
+        "steps.detect.outputs.conf_d": "tree-a",
+    })
+    out = tmp_path / "gh-output"
+    proc = _run(step, script, tmp_path, {
+        "RUNNER_TEMP": str(runner_temp.as_posix()),
+        "TARGETS": str(targets.as_posix()),
+        "CONF_D": "tree-a",
+        "GITHUB_OUTPUT": str(out.as_posix()),
+    })
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    assert "exit=0" in out.read_text(encoding="utf-8"), (
+        f"a removed tree moved the verdict:\n{proc.stdout}\n{proc.stderr}")
+    report = (runner_temp / "guard-report.md").read_text(encoding="utf-8")
+    assert "### `gone/conf.d` — NOT CHECKED: this PR removes the whole tree" in report, report
+    assert "`tree-a`" in report, (
+        f"the whole-tree smoke did not run after a removed-only TSV:\n{report}")
+
+
+@needs_bash
 def test_da_guard_names_a_tree_it_could_not_validate(tmp_path) -> None:
     """An empty section under a heading reads as "no findings".
 
@@ -3058,6 +3088,53 @@ def test_control_the_comment_strip_is_quote_aware(line: str, expected: str):
 def test_control_the_executable_line_reader_folds_and_strips(script, expected):
     """The two pre-processing steps every rule in this module reads through."""
     assert _executable_lines(script) == expected
+
+
+@needs_bash
+def test_a_pr_that_deletes_a_whole_tree_resolves_it_as_removed(tmp_path) -> None:
+    """#3644, end to end: RUN the scope chain with the REAL helper on a repo
+    whose PR deletes one tree outright and edits another. The deleted tree must
+    come out `removed`, the edited one `target`. Dropping the workflow's
+    `--diff-filter=D` listing, or not passing it with `--deleted`, makes the
+    deleted tree a target on a directory that does not exist — the red of
+    run 42260087991."""
+    chain, _env = _scope_pipeline()
+    step = chain[-1]
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    repo = tmp_path / "repo"
+    ops = repo / "scripts" / "ops"
+    ops.mkdir(parents=True)
+    for rel in ("scripts/ops/guard_defaults_scopes.py",
+                "scripts/tools/_lib_exitcodes.py", "scripts/tools/_lib_compat.py"):
+        (ops / Path(rel).name).write_bytes((ROOT / rel).read_bytes())
+    for tree in ("conf.d", "gone/conf.d"):
+        (repo / tree).mkdir(parents=True)
+        (repo / tree / "_defaults.yaml").write_text(
+            "defaults:\n  cpu: 1\n", encoding="utf-8", newline="\n")
+    _git(repo, "init", "-q", ".")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    (repo / "conf.d" / "_defaults.yaml").write_text(
+        "defaults:\n  cpu: 2\n", encoding="utf-8", newline="\n")
+    _git(repo, "rm", "-q", "-r", "gone")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "pr removes one tree and edits another")
+    assert not (repo / "gone").exists()
+
+    script = _render("\n".join(s.script for s in chain), {})
+    proc = _run(step, script, repo, {
+        "BASE_REF": "main",
+        "CONF_D": "conf.d",
+        "RUNNER_TEMP": str(runner_temp.as_posix()),
+    })
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    rows = (runner_temp / "guard-targets.tsv").read_text(encoding="utf-8").splitlines()
+    assert rows == ["target\tconf.d\t.", "removed\tgone/conf.d"], (
+        f"{rows}\n{proc.stdout}\n{proc.stderr}")
 
 
 def test_the_scope_helper_is_told_that_its_input_is_nul_separated():

@@ -398,6 +398,7 @@ jobs:
           if [ "$mb_rc" -eq 1 ]; then
             echo "::warning::origin/${BASE_REF} and HEAD share no history, so this PR has no computable diff of _-prefixed config files — falling back to validating the whole detected tree"
             : > "$RUNNER_TEMP/changed-defaults.txt"
+            : > "$RUNNER_TEMP/deleted-defaults.txt"
           else
             # ⛔ The listing gets the SAME wrapper as the probe above, and this
             # is the half the previous round left out while the comment on line
@@ -435,6 +436,23 @@ jobs:
               echo "::error::git diff exited $diff_rc listing this PR's changed config files — the scopes below would be resolved from a partial list, so nothing is validated rather than some of it silently"
               exit "$diff_rc"
             fi
+            # #3644: which of those paths this PR DELETED — same range, same
+            # pathspec, same wrapper. The helper marks a tree `removed` (NOT
+            # CHECKED, not counted) only when every changed path under it is in
+            # this list AND its root is gone from the checkout; a root that is
+            # merely absent stays a target, so a rewritten path keeps da-guard's
+            # exit 2. ⚠️ A truncated list here can only make a tree LESS likely
+            # to be `removed` (it stays a red target), never more.
+            set +e
+            git diff -z --name-only --diff-filter=D "origin/${BASE_REF}...HEAD" -- \
+              ':(icase,glob)**/_*.yaml' ':(icase,glob)**/_*.yml' \
+              > "$RUNNER_TEMP/deleted-defaults.txt"
+            diff_rc=$?
+            set -e
+            if [ "$diff_rc" -ne 0 ]; then
+              echo "::error::git diff exited $diff_rc listing this PR's deleted config files — cannot tell a removed tree from a missing one, so nothing is validated rather than some of it silently"
+              exit "$diff_rc"
+            fi
           fi
           echo "Changed _-prefixed config files (_defaults / _profiles / _platform / …):"
           tr '\0' '\n' < "$RUNNER_TEMP/changed-defaults.txt"
@@ -450,7 +468,8 @@ jobs:
           # So the scope is not one directory: it is one (config-dir, scope) pair
           # per tree that the PR actually touched. Resolution lives in a tested
           # helper rather than inline bash, because this is the step that failed.
-          python3 scripts/ops/guard_defaults_scopes.py --null - \
+          python3 scripts/ops/guard_defaults_scopes.py --null \
+            --deleted "$RUNNER_TEMP/deleted-defaults.txt" - \
             < "$RUNNER_TEMP/changed-defaults.txt" > "$RUNNER_TEMP/guard-targets.tsv"
           echo "Resolved targets:"; cat "$RUNNER_TEMP/guard-targets.tsv"
 
@@ -610,7 +629,7 @@ jobs:
               # is wrong — while naming an EMPTY path. The required fields come
               # from that helper's own output contract
               # (`target<TAB>dir<TAB>scope`, `unmanaged<TAB>path`,
-              # `excluded<TAB>path<TAB>reason`).
+              # `excluded<TAB>path<TAB>reason`, `removed<TAB>dir`).
               bad_row=0
               if [ -z "$kind" ] || [ -z "$a" ]; then
                 bad_row=1
@@ -646,6 +665,18 @@ jobs:
                            echo "此檔屬於刻意寫壞的測試 fixture 樹，這裡不判 da-guard 主檢查的結果；釘住的只有每棵樹 \`da-guard served-values\` 的結束碼（\`tests/golden/not_served.json\` 與 \`golden_served_test.go\`）。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::notice::${a} is a test fixture — not validated here (${b})" ;;
+                # #3644: the PR deleted this whole tree — there is nothing left
+                # to validate. Named, never silent, and neither RAN_TARGET nor
+                # WORST moves: running da-guard on a directory that no longer
+                # exists is a caller error (exit 2) about nothing. The helper
+                # only emits this when every changed path under the tree is a
+                # deletion AND its root is gone, so a rewritten path that merely
+                # lands on a missing directory is still a target and still red.
+                removed)   echo "### \`$a\` — NOT CHECKED: this PR removes the whole tree" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "這個 PR 刪除了整棵樹（其下變動的 \`_\` 開頭檔全是刪除，且根目錄在 HEAD 已不存在），沒有剩下的設定可驗。" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "::notice::${a} is removed by this PR — nothing left to validate" ;;
                 # The whole point of guard_defaults_scopes.py is that a file
                 # it cannot place is reported rather than dropped. A `case`
                 # with no catch-all would drop a third kind on the floor and
@@ -657,7 +688,7 @@ jobs:
                 # In the isolated case this section IS the whole comment.
                 *)         echo "### \`${a}\` — NOT CHECKED (unrecognised scope kind \`${kind}\`)" >> "$REPORT"
                            echo >> "$REPORT"
-                           echo "此列的 kind 是 \`${kind}\`，而本 workflow 只認得 \`target\`、\`unmanaged\` 與 \`excluded\`。這棵樹**沒有被驗證**；請對齊 \`guard_defaults_scopes.py\` 與本檔的 kind 詞彙表後重跑。" >> "$REPORT"
+                           echo "此列的 kind 是 \`${kind}\`，而本 workflow 只認得 \`target\`、\`unmanaged\`、\`excluded\` 與 \`removed\`。這棵樹**沒有被驗證**；請對齊 \`guard_defaults_scopes.py\` 與本檔的 kind 詞彙表後重跑。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::error::unrecognised scope kind '${kind}' for ${a} — guard_defaults_scopes.py and this workflow disagree"
                            WORST=2 ;;
@@ -674,7 +705,7 @@ jobs:
             # exactly the right smoke test for "does the guard still work
             # after this change".
             # (push / workflow_dispatch land here too: no PR diff to scope against.)
-            echo "No conf.d tree resolved from this diff (any unmanaged / excluded files are listed as NOT CHECKED) — running whole-tree over ${CONF_D}"
+            echo "No conf.d tree resolved from this diff (any unmanaged / excluded / removed entries are listed as NOT CHECKED) — running whole-tree over ${CONF_D}"
             # --scope is relative to --config-dir (#2588): "." = the whole tree.
             run_one "${CONF_D}" "."
           fi
