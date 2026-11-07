@@ -39,6 +39,19 @@ _PUSH_LINE = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _fixture_repos_declare_nothing(request, monkeypatch):
+    """A tmp_path repo is not this repo: its charts are not ours to declare.
+
+    The live tables name real charts, so against a fixture they would read as
+    stale entries. Clearing them here (rather than skipping the rule when a
+    tree has no charts) keeps the gate fail-closed on the live repo.
+    """
+    if "tmp_path" in request.fixturenames:
+        monkeypatch.setattr(gate, "GIT_ONLY", {})
+        monkeypatch.setattr(gate, "UNRELEASED", {})
+
+
 def _make_repo(tmp_path: Path, *, workflow_extra: str = "",
                files: dict[str, str] | None = None) -> Path:
     """A git repo shaped like this one: release.yaml with an env: block."""
@@ -372,3 +385,92 @@ def test_main_returns_exit_caller_error(monkeypatch, capsys) -> None:
 
 def test_main_on_the_live_repo_in_process() -> None:
     assert gate.main([]) == gate.EXIT_OK
+
+
+
+# ── every chart is pushed XOR declared git-only (#1269) ────────────────────
+def test_live_repo_charts_are_all_decided() -> None:
+    charts = gate.chart_names(REPO_ROOT)
+    assert len(charts) >= 10, f"anti-vacuity: read only {sorted(charts)}"
+    assert gate.distribution_violations(REPO_ROOT) == []
+    pushed = set(gate.discover_pushed_charts(REPO_ROOT))
+    assert set(charts) == pushed | set(gate.GIT_ONLY)
+    assert not pushed & set(gate.GIT_ONLY)
+    assert set(gate.UNRELEASED) <= pushed
+    assert all(r.strip() for r in [*gate.GIT_ONLY.values(), *gate.UNRELEASED.values()])
+
+
+def _chart(name: str) -> str:
+    return f"apiVersion: v2\nname: {name}\nversion: 0.1.0\n"
+
+
+def test_an_undecided_chart_is_red(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/forgotten/Chart.yaml": _chart("forgotten")})
+    out = gate.distribution_violations(repo, git_only={})
+    assert len(out) == 1 and out[0].startswith("forgotten (helm/forgotten)"), out
+
+
+def test_a_git_only_entry_for_a_pushed_chart_is_red(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped")})
+    out = gate.distribution_violations(repo, git_only={"shipped": "x"})
+    assert len(out) == 1 and "remove the GIT_ONLY entry" in out[0], out
+
+
+def test_a_git_only_entry_for_a_missing_chart_is_red(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped")})
+    out = gate.distribution_violations(repo, git_only={"gone": "x"})
+    assert len(out) == 1 and "stale entry" in out[0], out
+
+
+def test_a_declared_chart_is_green(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/local/Chart.yaml": _chart("local")})
+    assert gate.distribution_violations(repo, git_only={"local": "lab only"}) == []
+
+
+def test_check_reports_distribution_violations(tmp_path: Path, monkeypatch) -> None:
+    """The rule is wired into check(), i.e. into pre-commit and CI, not only callable."""
+    monkeypatch.setattr(gate, "GIT_ONLY", {})
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/forgotten/Chart.yaml": _chart("forgotten")})
+    assert any(v.startswith("forgotten (helm/forgotten)") for v in gate.check(repo))
+
+
+
+def test_an_unreleased_entry_without_a_push_site_is_red(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/local/Chart.yaml": _chart("local")})
+    out = gate.distribution_violations(repo, git_only={"local": "x"},
+                                       unreleased={"local": "never cut"})
+    assert len(out) == 1 and "UNRELEASED" in out[0], out
+
+
+def test_two_charts_with_one_name_cannot_run(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/copy/Chart.yaml": _chart("shipped")})
+    with pytest.raises(gate.CallerError, match="two charts are named"):
+        gate.chart_names(repo)
+
+
+def test_an_untracked_chart_does_not_block(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped")})
+    (repo / "helm" / "wip").mkdir()
+    (repo / "helm" / "wip" / "Chart.yaml").write_text(_chart("wip"), encoding="utf-8")
+    assert gate.distribution_violations(repo) == []
+
+
+def test_the_live_tables_fail_closed_when_no_chart_is_read(tmp_path: Path, monkeypatch) -> None:
+    """A broken chart read must not turn the rule into a no-op: with the real
+    tables and a tree that yields no charts, every entry reads as stale."""
+    monkeypatch.setattr(gate, "GIT_ONLY", {"federation-gateway": "x"})
+    repo = _make_repo(tmp_path)
+    assert gate.distribution_violations(repo) != []

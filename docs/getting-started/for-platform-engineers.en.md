@@ -70,7 +70,7 @@ kubectl get pod -n monitoring | grep threshold-exporter
 
 > For local kind development with a `kind load`-ed local image, add `-f environments/local/threshold-exporter.yaml` (pins `:dev` + `pullPolicy: Never`).
 
-> If you bring your own GitOps (Argo CD / Flux), point the Application/Kustomization at the chart path — no raw manifests required. The chart is also published as an OCI artifact (`ghcr.io/vencil/dynamic-alerting`); air-gapped environments follow [migration-toolkit-installation.md](../migration-toolkit-installation.en.md) Path C.
+> If you bring your own GitOps (Argo CD / Flux), point the Application/Kustomization at the chart path — no raw manifests required. The charts published to a registry are `oci://ghcr.io/vencil/charts/threshold-exporter` and `oci://ghcr.io/vencil/charts/tenant-api`; the others install from a repository checkout. Air-gapped environments follow [migration-toolkit-installation.md](../migration-toolkit-installation.en.md) Path C.
 
 ### Mount Rule Packs
 
