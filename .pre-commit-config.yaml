@@ -1959,6 +1959,24 @@ repos:
         # of detection scope by design (see the lint docstring).
         files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml|scripts/tools/lint/check_metric_group_pairs\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
+      - id: critical-tier-twins-check
+        name: "critical-tier twins — every declared <base>_critical has one critical alert, the warning alert's twin (#3658)"
+        # #3206 (ADR-036 §12): the tenant rule packs are read the way
+        # Prometheus' rule loader reads them (`da-read prometheus-rules`); the
+        # wrapper builds da-read when unset, and a run without go fails by
+        # name. Which bases have a critical tier is read from the registry's
+        # `critical_of` (scaffold_tenant.RULE_PACKS optional_overrides →
+        # check_threshold_registry.py --regen) — no second list. FAIL on a
+        # declared tier with no critical alert, a critical-tier reader with no
+        # declaration, or a critical alert that is not its warning alert's
+        # twin (expr / labels / metric_group / for / annotation keys / name /
+        # group); FOR_EXCEPTIONS is exit-locked (see the lint docstring).
+        entry: bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/lint/check_critical_tier_twins.py --ci
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: ^(?:rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|scripts/tools/lint/check_critical_tier_twins\.py|scripts/tools/ops/_registry_lib\.py|scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css
         entry: python3 -X utf8 scripts/tools/lint/check_undefined_tokens.py --ci

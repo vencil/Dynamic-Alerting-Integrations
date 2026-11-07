@@ -11,8 +11,21 @@
 #   container_cpu: 80   [chart-default]   # % — Container CPU % of limit (weakest link)
 #   container_cpu_throttle: 25   [chart-default]
 #       % — Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier
-#       opt-in via container_cpu_throttle_critical, suggest 50; #944)
+#       opt-in via container_cpu_throttle_critical, declared in optional_overrides; #944)
 #   container_memory: 85   [chart-default]   # % — Container memory % of limit (weakest link)
+#
+# optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：
+# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。
+# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值
+# （components/threshold-exporter/app/pkg/config/resolve.go），
+# 而下列每個 key 的 base 都標了
+# [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的
+# conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的
+# critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。
+# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
+#   container_cpu_critical: 95   # % — Container CPU critical
+#   container_cpu_throttle_critical: 50   # % — CFS throttle critical
+#   container_memory_critical: 95   # % — Container memory critical
 # <<< GENERATED:threshold-registry:pack-kubernetes
 #
 # 對應的 state_filters:

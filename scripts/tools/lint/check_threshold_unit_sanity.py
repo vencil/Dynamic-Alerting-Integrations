@@ -264,6 +264,14 @@ if not _REGISTRY_METADATA_FIELDS or "value" not in registry_lib._FIELD_ORDER:
     )
 
 
+class _DimensionalKey(str):
+    """A registry key read from a dimensional spelling (`container_cpu{version="v3"}`):
+    equal to its base everywhere, but carries the fact that its value applies
+    to one selector only. Tier ordering compares plain keys alone (#3658): the
+    base and its `_critical` key written with different selectors are not one
+    pair, and two selectors of one base would otherwise overwrite each other."""
+
+
 def _walk_literals(node, key_of_interest: str | None = None):
     """Yield (registry_key, raw literal) for every scalar reachable in `node`
     beneath a registry key — the candidates `_numbers` reads.
@@ -281,7 +289,7 @@ def _walk_literals(node, key_of_interest: str | None = None):
             if key_of_interest is None and isinstance(k, str):
                 base = k.split("{", 1)[0]  # dimensional key: container_cpu{version="v2"}
                 if base in _REGISTRY_KEYS:
-                    yield from _walk_literals(v, base)
+                    yield from _walk_literals(v, base if base == k else _DimensionalKey(base))
                     continue
             if key_of_interest is not None and k in _REGISTRY_METADATA_FIELDS:
                 continue
@@ -575,7 +583,7 @@ def run_check(
         msg = _domain_error(dimension, unit, value)
         if msg:
             errors.append(f"OUT-OF-DOMAIN: {surface}: {key} = {value:g} — {msg}")
-        if is_threshold:
+        if is_threshold and not isinstance(key, _DimensionalKey):
             per_surface.setdefault(surface, {})[key] = value
 
     # 3. Tier ordering. The registry knows which key is the critical tier of
@@ -584,7 +592,8 @@ def run_check(
     #    warning the critical arm fires first or together, and ADR-001's
     #    severity-dedup (shared `metric_group`) then suppresses the warning
     #    permanently — the warning tier becomes dead config that still reads
-    #    like protection.
+    #    like protection. Plain keys only: a dimensional spelling holds for one
+    #    selector, so it pairs with no other spelling (_DimensionalKey, #3658).
     for surface, values in sorted(per_surface.items()):
         for key, value in sorted(values.items()):
             base = spec[key].get("critical_of")
