@@ -3827,14 +3827,20 @@ WORKFLOW_PATHS_PENDING: dict[tuple[str, str], str] = {}
 # ⛔ Deliberately NOT triggered: a (workflow, script) the scan finds uncovered
 # and the owner decided to leave that way (#3665, option C′). Each entry names
 # what DOES check the script on a PR, and that claim is measured, not trusted:
-#   ("workflow", X, via) — workflow X starts on a PR changing the script (its
-#       `on.pull_request.paths`) and runs it in a job and step that carry no
-#       `if:` (a condition could skip it; refused rather than modelled). When
-#       X runs it only INDIRECTLY (the scan sees direct runs only — a disclosed
-#       blind spot above), `via` names the script X runs unconditionally and
-#       that script's text must invoke this one;
-#   ("pytest", T, None) — test module T exists, names the script's module, and the
-#       CI `python` filter starts Python Tests on a PR changing the script.
+#   ("workflow", X, via) — X's `on.pull_request.paths` cover the script, and
+#       a step runs it with no `if:` on the step, its job, or any job in its
+#       `needs:` chain, and no `continue-on-error` (refused rather than
+#       modelled). When X runs it only INDIRECTLY (the scan sees direct runs
+#       only — a disclosed blind spot above), `via` names the script X runs
+#       that way, and the name must appear in via's shell code outside comments;
+#   ("pytest", T, None) — test module T exists, IMPORTS the script's module
+#       (AST, not text), and the CI `python` filter covers the script.
+# ⚠️ NOT measured (same limits as invariant 4, plus two of this check's own):
+#   `on.pull_request.types` / `branches` narrowing; a shell-level `if` inside
+#   the step's `run:` or inside via; whether via's mention is a call rather
+#   than, say, an `echo`. And the `python` filter check cannot fail today —
+#   ci.yml's filter carries a `**` catch-all, which
+#   `test_python_tests_run_cannot_be_path_skipped` guards separately.
 # `test_workflow_paths_not_triggered_is_still_justified` turns red when the
 # claim stops holding, `..._is_still_needed` when the pair becomes covered
 # (the entry would then excuse a regression of the same pair). Both red.
@@ -4042,16 +4048,52 @@ def test_workflow_paths_not_triggered_is_still_needed() -> None:
 
 
 def _unconditional_runners(workflow_path: Path, script: str) -> list[str]:
-    """`job/step` names that run `script` with no `if:` on the job or step."""
-    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+    """`job/step` names that run `script` with nothing that can skip it or
+    swallow its failure: no `if:` on the step, its job, or any job its job
+    `needs:` (transitively — a skipped upstream skips it too), and no
+    `continue-on-error` on the step or job."""
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8")) or {}
+    jobs = workflow.get("jobs") or {}
+
+    def chain_ok(job_id: str, seen: frozenset[str] = frozenset()) -> bool:
+        job = jobs.get(job_id) or {}
+        if job_id in seen or "if" in job or job.get("continue-on-error"):
+            return False
+        needs = job.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        return all(chain_ok(n, seen | {job_id}) for n in needs)
+
     hits = []
-    for job_id, job in ((workflow or {}).get("jobs") or {}).items():
-        job = job or {}
-        for i, step in enumerate(job.get("steps") or []):
+    for job_id, job in jobs.items():
+        for i, step in enumerate((job or {}).get("steps") or []):
             if (isinstance(step, dict) and script in _step_files(step)
-                    and "if" not in job and "if" not in step):
+                    and "if" not in step and not step.get("continue-on-error")
+                    and chain_ok(job_id)):
                 hits.append(f"{job_id}/{step.get('name', i)}")
     return hits
+
+
+def _shell_code(text: str) -> str:
+    """Shell text with comments removed (whole-line and trailing ` # …`), so a
+    file name that survives only in a comment does not count as a call."""
+    out = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        out.append(re.split(r"\s#", line, maxsplit=1)[0])
+    return "\n".join(out)
+
+
+def _imports_module(test_text: str, module: str) -> bool:
+    """True when the test module imports `module` (or `from module import …`)
+    in its AST — a mention in a comment or docstring does not count."""
+    for node in ast.walk(ast.parse(test_text)):
+        if isinstance(node, ast.Import) and any(
+                a.name.split(".")[-1] == module for a in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[-1] == module:
+            return True
+    return False
 
 
 def _not_triggered_justification_errors(directory: Path) -> list[str]:
@@ -4069,15 +4111,15 @@ def _not_triggered_justification_errors(directory: Path) -> list[str]:
                 broken.append(f"{where} — does not start on the script")
             elif not _unconditional_runners(directory / target, via or script):
                 broken.append(f"{where} — no job/step runs {via or script!r} without an `if:`")
-            elif via and Path(script).name not in (ROOT / via).read_text(encoding="utf-8"):
+            elif via and Path(script).name not in _shell_code((ROOT / via).read_text(encoding="utf-8")):
                 broken.append(f"{where} — {via!r} does not invoke the script")
         elif kind == "pytest" and via is None:
             module = Path(script).stem
             test = ROOT / target
             if not test.is_file():
                 broken.append(f"{where} — test module missing")
-            elif module not in test.read_text(encoding="utf-8"):
-                broken.append(f"{where} — test module does not name {module!r}")
+            elif not _imports_module(test.read_text(encoding="utf-8"), module):
+                broken.append(f"{where} — test module does not import {module!r}")
             elif not any(_covers(p, script) for p in _python_filter_patterns()):
                 broken.append(f"{where} — the CI `python` filter does not start on it")
         else:
