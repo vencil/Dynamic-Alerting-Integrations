@@ -96,6 +96,13 @@ def test_every_agent_prompt_carries_the_snapshot_root(tmp_path):
         assert f"is relative to {_WS}" in c["prompt"], (c["label"], c["prompt"][:400])
         assert "NEVER resolve a path against your current working directory" in c["prompt"]
     assert out["result"]["workspaceRoot"] == _WS
+    # SKILL.md tells the operator to find this sentence in the progress log's
+    # promptPreview, which is truncated — so it leads the hunter/validator prompts.
+    for c in path_agents:
+        if c["agentType"] != "vibe-sec-recon":
+            # right after the leading `[Role …]` tag, nothing in between
+            assert c["prompt"].index("PATH RESOLUTION") == c["prompt"].index("] ") + 2, (
+                c["label"], c["prompt"][:160])
 
 
 @needs_node
@@ -121,7 +128,13 @@ def test_the_cross_component_class_resolves_against_the_snapshot(tmp_path):
     ({"target": "/main/components/tenant-api", "workspaceRoot": _WS}, "is not under workspaceRoot"),
     # prefix, not a parent: /snap/sec-audit-old is not under /snap/sec-audit
     ({"target": _WS + "-old/components/tenant-api", "workspaceRoot": _WS}, "is not under workspaceRoot"),
-], ids=["missing", "relative", "posix-root", "drive-root", "elsewhere", "sibling-prefix"])
+    # string containment is not path containment: ".." must not climb out
+    ({"target": _WS + "/../main/components/tenant-api", "workspaceRoot": _WS}, 'contains a "." or ".." segment'),
+    ({"target": _TARGET, "workspaceRoot": _WS + "/components/.."}, 'contains a "." or ".." segment'),
+    ({"target": "C:\\snap\\ws\\..\\main", "workspaceRoot": "C:\\snap\\ws"}, 'contains a "." or ".." segment'),
+    ({"target": _TARGET, "workspaceRoot": [_WS]}, "must be strings"),
+], ids=["missing", "relative", "posix-root", "drive-root", "elsewhere", "sibling-prefix",
+        "dotdot-target", "dotdot-root", "dotdot-windows", "non-string"])
 def test_a_workspace_root_that_cannot_anchor_the_target_is_refused(tmp_path, args, needle):
     out = _run(args, tmp_path)
     assert not out["ok"], f"accepted {args}: agents would read an unanchored tree"
@@ -134,7 +147,10 @@ def test_a_workspace_root_that_cannot_anchor_the_target_is_refused(tmp_path, arg
     (_WS + "/", _TARGET),
     ("C:\\snap\\sec-audit", "C:/snap/sec-audit/components/tenant-api"),
     (_WS, _WS),
-], ids=["trailing-slash", "windows-separators", "target-is-root"])
+    ("C:\\snap\\sec-audit", "c:\\snap\\sec-audit\\components\\tenant-api"),
+    ("/snap//sec-audit", _TARGET),
+], ids=["trailing-slash", "windows-separators", "target-is-root", "drive-letter-case",
+        "doubled-separator"])
 def test_equivalent_spellings_of_the_same_tree_are_accepted(tmp_path, ws, target):
     out = _run({"target": target, "workspaceRoot": ws}, tmp_path)
     assert out["ok"], out
