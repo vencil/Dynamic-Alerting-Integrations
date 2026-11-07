@@ -2290,8 +2290,9 @@ paths:
         "403":
           description: 'PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api''s
             own forge token lacks write scope to open the PR/MR — an operator must
-            fix the token. (A member refused by the write scope, on the local copy
-            or on the latest base branch, rejects the batch with a 422 instead.)'
+            fix the token. (A member refused by the write scope or the label gate,
+            on the local copy or under the writer lock on the tree the batch lands
+            on, rejects the batch with a 422 instead.)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "404":
@@ -2312,19 +2313,20 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "422":
           description: 'Batch rejected (status rejected): at least one member was
-            refused — by the checks on this server''s copy, or (PR write-back mode)
-            on the latest base branch — so nothing was written and no PR/MR was opened.
-            results lists the members the caller may read: status error (message,
-            code) for the refused ones, not_applied for the rest; the messages name
-            no member index. Codes TENANT_TREE_UNREADABLE and TENANT_CONFIG_NOT_LOADABLE
-            as on POST /api/v1/tenants/batch (#2939). Also when the route generator
-            container refuses the batch as a whole (#2903, ADR-036 §4: the tree with
-            the whole batch applied is judged once): every result is status error
-            with code GENERATOR_FINDINGS (its message names the findings about that
-            result''s tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld
-            carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED
-            (key_verdict_memory, key_verdict_error, key_verdict_undecidable (no root
-            platform file: threshold keys cannot be judged), key_verdict_platform_file
+            refused — by the checks on this server''s copy, or by the same checks
+            judged again under the writer lock on the tree the batch lands on (direct
+            mode: the serving tree; PR write-back mode: the latest base branch) —
+            so nothing was written and no PR/MR was opened. results lists the members
+            the caller may read: status error (message, code) for the refused ones,
+            not_applied for the rest; the messages name no member index. Codes TENANT_TREE_UNREADABLE
+            and TENANT_CONFIG_NOT_LOADABLE as on POST /api/v1/tenants/batch (#2939).
+            Also when the route generator container refuses the batch as a whole (#2903,
+            ADR-036 §4: the tree with the whole batch applied is judged once): every
+            result is status error with code GENERATOR_FINDINGS (its message names
+            the findings about that result''s tenant) and findings[] / findings_compared_with_base
+            / unrelated_findings_withheld carry the findings as for PUT /tenants/{id};
+            or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_undecidable
+            (no root platform file: threshold keys cannot be judged), key_verdict_platform_file
             (the shared key verdict did not complete, ADR-038 decision 5), memory,
             incomplete, too_large: the files the batch produces are too large to judge
             in one request — split the batch, invalid_request, normalized: git attributes
@@ -2613,13 +2615,19 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
-          description: 'Forbidden: insufficient permissions. In PR write-back mode
-            the write scope is judged again on the latest base branch, which this
-            server''s local copy may lag: a refusal there is the same 403 with tenant_id,
-            and no PR/MR or branch is left. Code FORBIDDEN for the caller''s permission;
-            in PR write-back mode, code FORGE_FORBIDDEN (#3202) when the forge refuses
-            tenant-api''s own configured token the write scope to open the PR/MR —
-            an operator must fix the token'
+          description: 'Forbidden: insufficient permissions. Only a platform administrator
+            (an admin rule on all tenants, the * pattern, with no org-scope, environments
+            or domains) may change the tenant''s environment or domain label (_metadata,
+            directly or through _profile), or replace a tenant file whose labels cannot
+            be read (ADR-027 §7). The write scope and this label gate are judged again
+            under the writer lock on the tree the write lands on — the serving tree
+            in direct mode, where a write queued ahead may have changed the file;
+            the latest base branch, which this server''s local copy may lag, in PR
+            write-back mode: a refusal there is the same 403 with tenant_id, and nothing
+            is written (no PR/MR or branch is left). Code FORBIDDEN for the caller''s
+            permission; in PR write-back mode, code FORGE_FORBIDDEN (#3202) when the
+            forge refuses tenant-api''s own configured token the write scope to open
+            the PR/MR — an operator must fix the token'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
@@ -3337,8 +3345,9 @@ paths:
         "403":
           description: 'PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api''s
             own forge token lacks write scope to open the PR/MR — an operator must
-            fix the token. (An operation refused by the write scope, on the local
-            copy or on the latest base branch, rejects the batch with a 422 instead.)'
+            fix the token. (An operation refused by the write scope or the label gate,
+            on the local copy or under the writer lock on the tree the batch lands
+            on, rejects the batch with a 422 instead.)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
@@ -3355,35 +3364,36 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "422":
           description: 'Batch rejected (status rejected): at least one operation was
-            refused — by the checks on this server''s copy, or (PR write-back mode)
-            on the latest base branch the PR/MR would be cut from — so nothing was
-            written and no PR/MR was opened. results lists every operation in request
-            order: status error (message, code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE,
-            TENANT_FILE_DIRTY (direct mode, #1535: the operation''s tenant file differs
-            from HEAD in tenant-api''s copy), TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE,
-            CONFIG_DECODE_ERROR, BAD_REQUEST (the operation fails validation, e.g.
-            a _silent_mode value the exporter ignores, #3227), INTERNAL_ERROR) for
-            the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939):
-            the tree after the batch holds an unresolvable symlink (dangling, looping,
-            or with a non-directory in its path) that no operation replaces; every
-            operation not refused for another reason carries it; an operation whose
-            own tenant file cannot be read (and is not an unresolvable symlink (dangling,
-            looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE,
-            and the message names the entries only for a caller with write permission
-            on all tenants (otherwise their number); an async task''s stored results
-            never name them. Also when the route generator container refuses the batch
-            as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is
-            judged once): every result is status error with code GENERATOR_FINDINGS
-            (its message names the findings about that result''s tenant) and findings[]
-            / findings_compared_with_base / unrelated_findings_withheld carry the
-            findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (key_verdict_memory,
-            key_verdict_error, key_verdict_undecidable (no root platform file: threshold
-            keys cannot be judged), key_verdict_platform_file (the shared key verdict
-            did not complete, ADR-038 decision 5), memory, incomplete, too_large:
-            the files the batch produces are too large to judge in one request — split
-            the batch, invalid_request, normalized: git attributes would commit other
-            bytes than the ones judged). An async batch''s task carries the same per-op
-            results.'
+            refused — by the checks on this server''s copy, or by the same checks
+            judged again under the writer lock on the tree the batch lands on (direct
+            mode: the serving tree; PR write-back mode: the latest base branch the
+            PR/MR would be cut from) — so nothing was written and no PR/MR was opened.
+            results lists every operation in request order: status error (message,
+            code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_FILE_DIRTY (direct
+            mode, #1535: the operation''s tenant file differs from HEAD in tenant-api''s
+            copy), TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR,
+            BAD_REQUEST (the operation fails validation, e.g. a _silent_mode value
+            the exporter ignores, #3227), INTERNAL_ERROR) for the refused ones, not_applied
+            for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch
+            holds an unresolvable symlink (dangling, looping, or with a non-directory
+            in its path) that no operation replaces; every operation not refused for
+            another reason carries it; an operation whose own tenant file cannot be
+            read (and is not an unresolvable symlink (dangling, looping, or with a
+            non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message
+            names the entries only for a caller with write permission on all tenants
+            (otherwise their number); an async task''s stored results never name them.
+            Also when the route generator container refuses the batch as a whole (#2903,
+            ADR-036 §4: the tree with the whole batch applied is judged once): every
+            result is status error with code GENERATOR_FINDINGS (its message names
+            the findings about that result''s tenant) and findings[] / findings_compared_with_base
+            / unrelated_findings_withheld carry the findings as for PUT /tenants/{id};
+            or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_undecidable
+            (no root platform file: threshold keys cannot be judged), key_verdict_platform_file
+            (the shared key verdict did not complete, ADR-038 decision 5), memory,
+            incomplete, too_large: the files the batch produces are too large to judge
+            in one request — split the batch, invalid_request, normalized: git attributes
+            would commit other bytes than the ones judged). An async batch''s task
+            carries the same per-op results.'
           schema:
             $ref: '#/definitions/internal_handler.BatchResponse'
         "429":

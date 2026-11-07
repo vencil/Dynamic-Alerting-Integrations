@@ -194,6 +194,15 @@ func errorGoldenCorpus(apiHash string) []goldenErr {
 	add("freshBaseScopeError{Put}", &freshBaseScopeError{TenantID: goldenTenant, Put: true})
 	add("freshBaseScopeError{Op: 2, PreState}", &freshBaseScopeError{TenantID: goldenTenant, Op: 2, PreState: true})
 	add("freshBaseScopeError{Op: 2}", &freshBaseScopeError{TenantID: goldenTenant, Op: 2})
+	add("freshBaseScopeError{Put, Labels}", &freshBaseScopeError{TenantID: goldenTenant, Put: true, Labels: true})
+	add("freshBaseScopeError{Op: 2, Labels, LabelsUnknown}", &freshBaseScopeError{TenantID: goldenTenant, Op: 2, Labels: true, LabelsUnknown: true})
+	// ADR-027 §7: the same verdicts under the writer lock in direct mode
+	// (tree_judge.go) — the gate's own text outside the lock.
+	add("freshBaseScopeError{Put, PreState, Direct}", &freshBaseScopeError{TenantID: goldenTenant, Put: true, PreState: true, Direct: true})
+	add("freshBaseScopeError{Put, Direct}", &freshBaseScopeError{TenantID: goldenTenant, Put: true, Direct: true})
+	add("freshBaseScopeError{Put, Labels, LabelsUnknown, Direct}", &freshBaseScopeError{TenantID: goldenTenant, Put: true, Labels: true, LabelsUnknown: true, Direct: true})
+	add("freshBaseScopeError{Op: 2, PreState, Direct}", &freshBaseScopeError{TenantID: goldenTenant, Op: 2, PreState: true, Direct: true})
+	add("freshBaseScopeError{Op: 2, Labels, Direct}", &freshBaseScopeError{TenantID: goldenTenant, Op: 2, Labels: true, Direct: true})
 	add("freshBaseOrgsError", &freshBaseOrgsError{Err: errors.New("parse /srv/conf.d/_tenant_orgs.yaml: bad")})
 	add("tenantFileNotLoadableError", &tenantFileNotLoadableError{TenantID: goldenTenant, Reason: "malformed_yaml"})
 	add("platform.APIError{403}", &platform.APIError{Provider: "GitHub", Method: "POST", Path: "/repos/o/r/pulls", StatusCode: http.StatusForbidden})

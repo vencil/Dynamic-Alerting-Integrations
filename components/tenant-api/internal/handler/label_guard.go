@@ -28,47 +28,57 @@ package handler
 // elects carries other ones, and a body that drops its own `_metadata` changes
 // them unless the layer below says the same.
 //
-// Which tree: the one the write rewrites. The handler's check reads the
-// serving tree — the tree a direct-mode write lands on, and in PR mode an
-// early refusal only. In PR mode the write lands on the fresh base the branch
-// is cut from, which the serving tree may lag, so the verdict is taken again
-// there, under the writer lock, before anything is written (the same place as
-// the #2857 scope re-judgement): a label changed on the base since the pod
-// synced cannot be quietly reverted, nor a write that changes nothing locally
-// pass for one that changes nothing.
+// Which tree: the one the write rewrites, under the writer lock (tree_judge.go):
+// the serving tree in direct mode, the fresh base a PR-mode branch is cut from
+// in PR mode. The check a handler runs before it calls the Writer reads a tree
+// that a write queued ahead of this one may still change, so it can only
+// refuse early: a label changed since — by a platform administrator's write
+// that landed first, or on the base since the pod synced — cannot be quietly
+// reverted, nor a write that changes nothing early pass for one that changes
+// nothing where it lands.
 //
 // Reading the labels before the write:
 //   - a tenant with no file yet: the labels the root platform layer alone
 //     gives it (a tenant declared with an empty block) — creating a tenant
 //     with labels is a change, creating one that keeps what the platform
 //     layer already says is not;
+//   - a file that is an unresolvable symlink: no file (scopeLabelsOnTree);
 //   - a file whose labels cannot be read (ambiguous, not a regular file,
-//     unparseable, not declaring the tenant, undecodable `_metadata`): on the
-//     serving tree, unlabeled — the write scope gates' own fail-soft
-//     (WriteScopeMeta), which here fails closed: such a file cannot be given
-//     labels by a non-administrator; on the fresh base, the labels the
-//     serving tree's check judged, so a base file that is broken is refused
-//     for what it is further on (the write's own validation) and not
-//     reported as a label change it cannot be shown to be.
+//     unparseable, not declaring the tenant, undecodable `_metadata`):
+//     unknown. No write can be shown to leave unknown labels as they were —
+//     a body without labels may be removing the ones the file holds — so
+//     under the lock a write over such a file passes a platform
+//     administrator only, as config check reports such a tenant
+//     (metadata_unknown). The early check lets it through: most such files
+//     are refused for what they are under the lock first (git-managed,
+//     ambiguous, not a regular file), and that answer is the one the
+//     caller can act on.
 
 import (
 	"errors"
+	"io/fs"
 	"net/http"
-	"path/filepath"
 
 	"github.com/vencil/tenant-api/internal/confd"
 	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
+	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
 )
 
-// labelChangeDeniedText is the refusal of a label change by a caller who is
-// not a platform administrator. It names the tenant the caller addressed and
-// neither label value (the base's may not be the caller's to learn).
-func labelChangeDeniedText(tenantID string) string {
-	return "only a platform administrator may change the environment or domain labels (_metadata) of tenant " +
-		tenantID + ": they decide which RBAC rules' environments/domains cover it, so this write, " +
-		"which would change them, is refused (ADR-027)"
+// labelChangeDeniedText is the refusal of a write a caller who is not a
+// platform administrator may not make: one changing tenantID's labels, or —
+// beforeKnown false — one over a file whose labels cannot be read. It names
+// the tenant the caller addressed and no label value (the stored one may not
+// be the caller's to learn).
+func labelChangeDeniedText(tenantID string, beforeKnown bool) string {
+	head := "only a platform administrator may change the environment or domain labels (_metadata) of tenant " +
+		tenantID + ": they decide which RBAC rules' environments/domains cover it"
+	if !beforeKnown {
+		return head + ", and the labels its current tenant file holds cannot be read, so this write cannot be " +
+			"shown to leave them as they were and is refused (ADR-027)"
+	}
+	return head + ", so this write, which would change them, is refused (ADR-027)"
 }
 
 // mayChangeScopeLabels reports whether p may change a tenant's environment /
@@ -81,103 +91,95 @@ func mayChangeScopeLabels(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal) bool
 	return rbacMgr.PlatformAdminUnrestricted(p)
 }
 
-// labelChangeAllowed is the gate: a write leaving the labels as they were
-// passes whoever writes it; one changing them passes a platform administrator
-// only.
-func labelChangeAllowed(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, before, after scopePair) bool {
-	return before == after || mayChangeScopeLabels(rbacMgr, p)
+// labelState is a tenant's labels before a write: pair as the write scope
+// gates read them, known false when its file's labels cannot be read.
+type labelState struct {
+	pair  scopePair
+	known bool
+}
+
+// labelChangeAllowed is the gate under the writer lock: a write leaving known
+// labels as they were passes whoever writes it; one changing them, or one
+// over labels that cannot be read, passes a platform administrator only.
+func labelChangeAllowed(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, before labelState, after scopePair) bool {
+	return (before.known && before.pair == after) || mayChangeScopeLabels(rbacMgr, p)
+}
+
+// labelChangeAllowedEarly is the gate outside the lock: labels that cannot be
+// read are left to the verdict under the lock (see the file comment).
+func labelChangeAllowedEarly(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, before labelState, after scopePair) bool {
+	return !before.known || labelChangeAllowed(rbacMgr, p, before, after)
 }
 
 // scopeLabelsOf reads tenantID's labels from data, a tenant document on the
 // tree whose root platform layer src reads; nil data is a tenant with no file
-// (see the file comment). known is false when data's labels cannot be read.
-func scopeLabelsOf(src *platformMetadataSource, data []byte, tenantID string) (pair scopePair, known bool) {
+// (see the file comment).
+func scopeLabelsOf(src *platformMetadataSource, data []byte, tenantID string) labelState {
 	if data == nil {
 		data = []byte("tenants:\n  " + tenantID + ": {}\n")
 	}
 	e, dm, ok, decoded := src.declaredIn(data, tenantID)
 	if !ok || !decoded {
-		return scopePair{}, false
+		return labelState{}
 	}
-	return scopePair{e, dm}, true
+	return labelState{scopePair{e, dm}, true}
 }
 
 // scopeLabelsOnTree reads tenantID's labels from its file in configDir
-// (confd.ResolveTenantFile, as every write gate locates it). known is false
-// when the file is there but its labels cannot be read.
-func scopeLabelsOnTree(configDir, tenantID string) (pair scopePair, known bool) {
+// (confd.ResolveTenantFile, as every write gate locates it), read as the
+// write reads the file it replaces (gitops.ReadTenantFile): a file that is an
+// unresolvable symlink holds no labels anywhere — the write replaces it as it
+// would create the tenant — so it reads as no file, not as unknown.
+func scopeLabelsOnTree(configDir, tenantID string) labelState {
 	src := &platformMetadataSource{configDir: configDir}
 	path, err := confd.ResolveTenantFile(configDir, tenantID)
 	if errors.Is(err, confd.ErrTenantFileNotFound) {
 		return scopeLabelsOf(src, nil, tenantID)
 	}
 	if err != nil {
-		return scopePair{}, false
+		return labelState{}
 	}
-	data, problem := confd.ReadTenantFile(filepath.Dir(path), filepath.Base(path))
-	if problem != confd.ProblemNone {
-		return scopePair{}, false
+	data, err := gitops.ReadTenantFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return scopeLabelsOf(src, nil, tenantID)
+	}
+	if err != nil {
+		return labelState{}
 	}
 	return scopeLabelsOf(src, data, tenantID)
 }
 
-// servingLabelsBefore is the labels before the write on the serving tree:
-// unreadable reads as unlabeled (see the file comment).
-func servingLabelsBefore(configDir, tenantID string) scopePair {
-	pair, _ := scopeLabelsOnTree(configDir, tenantID)
-	return pair
-}
-
-// requireLabelsUnchangedAt is the PUT check on the serving tree (planPut):
-// before is the tenant's labels there, after the ones the body proposes. It
-// writes the 403 to w and returns false when the caller may not make the
-// change.
-func requireLabelsUnchangedAt(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, before, after scopePair) bool {
-	if labelChangeAllowed(d.RBAC, rbac.RequestPrincipal(r), before, after) {
+// requireLabelsUnchangedAt is the PUT check outside the lock (planPut):
+// before is the tenant's labels on the serving tree, after the ones the body
+// proposes. It writes the 403 to w and returns false when the caller may not
+// make the change.
+func requireLabelsUnchangedAt(w http.ResponseWriter, r *http.Request, d *Deps, tenantID string, before labelState, after scopePair) bool {
+	if labelChangeAllowedEarly(d.RBAC, rbac.RequestPrincipal(r), before, after) {
 		return true
 	}
-	WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden, labelChangeDeniedText(tenantID))
+	WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden, labelChangeDeniedText(tenantID, true))
 	return false
 }
 
-// freshLabelsBefore is the labels before the write on the fresh base a
-// PR-mode write lands on: the tenant's file there as data (nil: no file),
-// else — labels that cannot be read there — local, the ones the serving
-// tree's check judged.
-func freshLabelsBefore(configDir string, data []byte, tenantID string, local scopePair) scopePair {
-	if pair, known := scopeLabelsOf(&platformMetadataSource{configDir: configDir}, data, tenantID); known {
-		return pair
+// batchLabelsBefore is the "before" of a batch op's label check outside the
+// lock, after its scope gates: the tenant's block on disk with prior (the
+// tenant's earlier ops of the request) laid over it, read as a proposed body
+// is (stackedScopeMeta). Labels its file holds that cannot be read are left to
+// the verdict under the lock (unknown here, which the early check lets
+// through).
+func batchLabelsBefore(configDir string, prior []BatchOperation, op BatchOperation) labelState {
+	if !touchesScopeMetadata(op) || !scopeLabelsOnTree(configDir, op.TenantID).known {
+		return labelState{}
 	}
-	return local
+	return labelState{scopePairOf(stackedScopeMeta(configDir, op.TenantID, prior), op.TenantID), true}
 }
 
-// freshLabelsBeforeOnTree is freshLabelsBefore reading the tenant's file in
-// configDir itself (a PUT's check gets the tree, not the bytes).
-func freshLabelsBeforeOnTree(configDir, tenantID string, local scopePair) scopePair {
-	if pair, known := scopeLabelsOnTree(configDir, tenantID); known {
-		return pair
-	}
-	return local
-}
-
-// gateBatchOpLabels is a batch op's label check on the serving tree, after
-// its scope gates: an op that sets a scopeMetadataKeys key is refused when
-// the labels it leaves differ from the ones before it — the tenant's block on
-// disk with prior (the tenant's earlier ops of the request) laid over it,
-// read as a proposed body is (stackedScopeMeta).
-func gateBatchOpLabels(rbacMgr *rbac.Manager, configDir string, prior []BatchOperation, op BatchOperation, p *rbac.VerifiedPrincipal) (res BatchResult, refused bool) {
-	if !touchesScopeMetadata(op) {
+// gateBatchOpLabelsAt is a batch op's label check outside the lock: an op that
+// sets a scopeMetadataKeys key is refused when the labels it leaves (after)
+// differ from the ones before it.
+func gateBatchOpLabelsAt(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, op BatchOperation, before labelState, after scopePair) (BatchResult, bool) {
+	if !touchesScopeMetadata(op) || labelChangeAllowedEarly(rbacMgr, p, before, after) {
 		return BatchResult{}, false
 	}
-	before := scopePairOf(stackedScopeMeta(configDir, op.TenantID, prior), op.TenantID)
-	after := scopePairOf(postStateScopeMeta(configDir, prior, op), op.TenantID)
-	return gateBatchOpLabelsAt(rbacMgr, p, op, before, after)
-}
-
-// gateBatchOpLabelsAt is gateBatchOpLabels over pairs the caller computed.
-func gateBatchOpLabelsAt(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal, op BatchOperation, before, after scopePair) (BatchResult, bool) {
-	if !touchesScopeMetadata(op) || labelChangeAllowed(rbacMgr, p, before, after) {
-		return BatchResult{}, false
-	}
-	return gateRefusal(op.TenantID, errkind.Forbidden, labelChangeDeniedText(op.TenantID)), true
+	return gateRefusal(op.TenantID, errkind.Forbidden, labelChangeDeniedText(op.TenantID, true)), true
 }
