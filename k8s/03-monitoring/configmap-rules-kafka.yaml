@@ -41,33 +41,39 @@ data:
     \    expr: absent(kafka_brokers{job=\"tenant-exporters\"})\n    for: 30s\n   \
     \ labels:\n      maintenance: page\n      severity: critical\n      tenant: '{{\
     \ $labels.tenant }}'\n    annotations:\n      description: No kafka_brokers metric\
-    \ found for 30s\n      description_zh: 30 秒內未找到 kafka_brokers metric\n      summary:\
-    \ Kafka exporter target missing\n      summary_zh: Kafka exporter 目標缺失\n  - alert:\
-    \ KafkaHighConsumerLag\n    expr: \"(\\n  tenant:kafka_consumer_lag:max\\n  >\
-    \ on(tenant) group_left\\n  tenant:alert_threshold:kafka_consumer_lag\\n)\\nunless\
-    \ on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n   \
-    \ for: 30s\n    labels:\n      maintenance: mute\n      metric_group: kafka_consumer_lag\n\
-    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: 'Consumer lag: {{ $value | printf \"%.0f\" }} (warning threshold\
-    \ exceeded)'\n      description_zh: '消費者延遲: {{ $value | printf \"%.0f\" }} (超過警告閾值)'\n\
-    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: consumer lag elevated — consumer capacity review'\n  \
-    \    platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: 消費者延遲提升 — 請檢查消費者容量'\n      runbook_url: '{{ with query\
+    \ found for 30s\n      description_zh: 30 秒內未找到 kafka_brokers metric\n      owner:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ Kafka exporter target missing\n      summary_zh: Kafka exporter 目標缺失\n     \
+    \ tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: KafkaHighConsumerLag\n\
+    \    expr: \"(\\n  tenant:kafka_consumer_lag:max\\n  > on(tenant) group_left\\\
+    n  tenant:alert_threshold:kafka_consumer_lag\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \"maintenance\\\"} == 1)\\n\"\n    for: 30s\n    labels:\n      maintenance: mute\n\
+    \      metric_group: kafka_consumer_lag\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Consumer lag:\
+    \ {{ $value | printf \"%.0f\" }} (warning threshold exceeded)'\n      description_zh:\
+    \ '消費者延遲: {{ $value | printf \"%.0f\" }} (超過警告閾值)'\n      owner: '{{ with query\
     \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: High\
-    \ Kafka consumer lag on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 的 Kafka 消費者延遲過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: KafkaHighConsumerLagCritical\n    expr: \"(\\n  tenant:kafka_consumer_lag:max\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:kafka_consumer_lag_critical\\\
-    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 30s\n    labels:\n      maintenance: mute\n      metric_group: kafka_consumer_lag\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \ index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: consumer lag elevated — consumer capacity review'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: 消費者延遲提升 — 請檢查消費者容量'\n      runbook_url: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
+    \ }}{{ end }}{{ end }}'\n      summary: High Kafka consumer lag on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Kafka 消費者延遲過高'\n      tier: '{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: KafkaHighConsumerLagCritical\n\
+    \    expr: \"(\\n  tenant:kafka_consumer_lag:max\\n  > on(tenant) group_left\\\
+    n  tenant:alert_threshold:kafka_consumer_lag_critical\\n)\\nunless on(tenant)\\\
+    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 30s\n   \
+    \ labels:\n      maintenance: mute\n      metric_group: kafka_consumer_lag\n \
+    \     severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: 'Consumer lag: {{ $value | printf \"%.0f\" }} (critical threshold\
     \ exceeded)'\n      description_zh: '消費者延遲: {{ $value | printf \"%.0f\" }} (超過嚴重閾值)'\n\
     \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\

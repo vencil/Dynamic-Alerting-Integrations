@@ -330,20 +330,33 @@ class TestLoadTenantConfigs:
         assert set(configs) == {"db-a"}
         assert configs["db-a"]["custom_pg_conn"] == 100
 
-    def test_load_single_file_non_dict_yaml_yields_empty_config(self, config_dir, da_guard_env):
-        """單檔非 dict yaml（list/scalar）→ {}，對齊目錄分支的 lib 行為。
+    @pytest.mark.parametrize("name, text, got", [
+        ("weird", "- a\n- b\n", "a list"), ("scalar", "5\n", "a number"),
+        ("word", "hello\n", "a string"),
+    ])
+    def test_load_single_file_non_dict_yaml_is_a_caller_error(self, config_dir, da_guard_env,
+                                                             name, text, got):
+        """#3445：單檔頂層不是 mapping（list／scalar）是 caller error，點名旗標與檔案。
 
-        修前 `data or {}` 會把 truthy 的 list/scalar 原樣存入 →
-        extract_custom_metrics 對它 .items() 直接 AttributeError
-        （CodeRabbit PR#1126 inline finding）。
+        這條原本叫 `test_load_single_file_non_dict_yaml_yields_empty_config`，斷言
+        `== {"weird": {}}`（CodeRabbit PR#1126 修的是 `.items()` 的 AttributeError，
+        修法是讀成「無鍵」）。但「無鍵」的結果是 rc 0、報告說沒有 custom_ 指標——
+        把一個根本不是租戶設定的檔案當成乾淨的掃描。所有工具的設定／輸入檔頂層型別
+        錯誤都是 rc 2（`_lib_input.refuse_top` 同一句話）。
         """
-        path = write_yaml(config_dir, "weird.yaml", "- a\n- b\n")
-        configs = ag.load_tenant_configs(tenant_config=path)
-        assert configs == {"weird": {}}
-        assert ag.extract_custom_metrics(configs) == []
-        # #2906：parse-tree 對非 mapping 頂層回 top_level_not_mapping，這裡仍是「無鍵」
-        path = write_yaml(config_dir, "scalar.yaml", "5\n")
-        assert ag.load_tenant_configs(tenant_config=path) == {"scalar": {}}
+        from _lib_exitcodes import CallerError
+        path = write_yaml(config_dir, f"{name}.yaml", text)
+        with pytest.raises(CallerError) as exc:
+            ag.load_tenant_configs(tenant_config=path)
+        assert exc.value.reason == "file_unreadable"
+        assert str(exc.value) == (f"--tenant-config {path}: the top level is not a mapping "
+                                  f"(got {got})")
+
+    def test_load_single_file_empty_is_a_tenant_with_no_keys(self, config_dir, da_guard_env):
+        """An empty (or null) document is an empty mapping to parse-tree — the
+        exporter's reading — so it stays a tenant with no keys."""
+        path = write_yaml(config_dir, "blank.yaml", "")
+        assert ag.load_tenant_configs(tenant_config=path) == {"blank": {}}
 
     def test_wrapper_tenants_reach_gap_analysis(self, config_dir, da_guard_env):
         """端到端：wrapper 租戶的 custom_ 指標真的進到 gap 分析。"""

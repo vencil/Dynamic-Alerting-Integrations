@@ -15,16 +15,13 @@ metadata:
 data:
   redis-recording.yml: "groups:\n- name: redis-normalization\n  interval: 15s\n  rules:\n\
     \  - record: tenant:redis_memory_used_bytes:max\n    expr: max by(tenant) (redis_memory_used_bytes)\n\
-    \  - record: tenant:redis_memory_usage:ratio\n    expr: 'max by(tenant) (redis_memory_used_bytes)\n\
-    \n      / max by(tenant) (redis_memory_max_bytes > 0)\n\n      '\n  - record:\
-    \ tenant:redis_connected_clients:max\n    expr: max by(tenant) (redis_connected_clients)\n\
+    \  - record: tenant:redis_connected_clients:max\n    expr: max by(tenant) (redis_connected_clients)\n\
     \  - record: tenant:redis_evicted_keys:rate5m\n    expr: sum by(tenant) (rate(redis_evicted_keys_total[5m]))\n\
     \  - record: tenant:redis_keyspace_hit_ratio:avg\n    expr: \"sum by(tenant) (rate(redis_keyspace_hits_total[5m]))\\\
     n/ (\\n  sum by(tenant) (rate(redis_keyspace_hits_total[5m]))\\n  + sum by(tenant)\
     \ (rate(redis_keyspace_misses_total[5m]))\\n)\\n\"\n  - record: tenant:redis_replication_lag:max\n\
-    \    expr: max by(tenant) (redis_connected_slave_lag_seconds)\n  - record: tenant:redis_commands:rate5m\n\
-    \    expr: sum by(tenant) (rate(redis_commands_processed_total[5m]))\n- name:\
-    \ redis-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:redis_memory_used_bytes\n\
+    \    expr: max by(tenant) (redis_connected_slave_lag_seconds)\n- name: redis-threshold-normalization\n\
+    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:redis_memory_used_bytes\n\
     \    expr: max by(tenant) (user_threshold{component=\"redis\", metric=\"memory_used_bytes\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:redis_connected_clients\n\
     \    expr: max by(tenant) (user_threshold{component=\"redis\", metric=\"connected_clients\"\
@@ -36,9 +33,15 @@ data:
   redis-alert.yml: "groups:\n- name: redis-alerts\n  rules:\n  - alert: RedisDown\n\
     \    expr: redis_up == 0\n    for: 15s\n    labels:\n      maintenance: page\n\
     \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      summary: Redis instance {{ $labels.instance }} is DOWN\n      summary_zh:\
-    \ Redis 實例 {{ $labels.instance }} 已停機\n  - alert: RedisHighMemory\n    expr: \"\
-    (\\n  tenant:redis_memory_used_bytes:max\\n  > on(tenant) group_left\\n  tenant:alert_threshold:redis_memory_used_bytes\\\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Redis instance {{ $labels.instance }} is DOWN\n      summary_zh:\
+    \ Redis 實例 {{ $labels.instance }} 已停機\n      tier: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}'\n  - alert: RedisHighMemory\n    expr: \"(\\n  tenant:redis_memory_used_bytes:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:redis_memory_used_bytes\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Memory\

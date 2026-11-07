@@ -564,11 +564,11 @@ docker run -i --rm <部署中的 tenant-api 映像> state show --from - < tenant
 
 `config check --kind rbac|tenant-orgs FILE|-` 以 server 讀 `_rbac.yaml`／`_tenant_orgs.yaml` 的同一個解析函式判定，印出 `{"schema": "tenant-api.config-check/v1", "kind", "config", "problem"}`；RBAC 另依 `--oauth2-proxy-config`（或 `TA_OAUTH2_PROXY_CONFIG`）設定檔注入的 claim 檢查；`--kind oauth2-proxy` 判定那份設定檔本身。空檔讀得了（空設定）。結束碼：0 讀得了、1 拒收、2 用法錯誤或輸入打不開。
 
-`config check --kind scope --config-dir DIR [--rbac PATH] [--tenant-orgs PATH] [--oauth2-proxy-config PATH]` 是升級前的範圍軸離線檢查（[ADR-027 §7](../../docs/adr/027-tenant-api-caller-identity.md)）：同時讀 RBAC 設定（預設 `DIR/_rbac.yaml`）、組織對應（預設 `DIR/_tenant_orgs.yaml`；這個預設檔不存在時與 server 相同，視為所有租戶都沒有組織）與 `DIR` 下的租戶設定，對每條範圍軸列出「有範圍限制的規則 × 該規則套得到、卻沒有標記的租戶」。各範圍軸一律強制，所以每一筆都是升級後該規則不再授予的租戶。
+`config check --kind scope --config-dir DIR [--rbac PATH] [--tenant-orgs PATH] [--oauth2-proxy-config PATH]` 是升級前的範圍軸離線檢查（[ADR-027 §7](../../docs/adr/027-tenant-api-caller-identity.md)）：同時讀 RBAC 設定（預設 `DIR/_rbac.yaml`）、組織對應（預設 `DIR/_tenant_orgs.yaml`；這個預設檔不存在時與 server 相同，視為所有租戶都沒有組織）與 `DIR` 下的租戶設定，對每條範圍軸列出「有範圍限制的規則 × 該規則套得到、卻不會授予的租戶」：沒有標記的租戶，以及標記讀不到的租戶（server 的租戶清單在任何限制 environments 或 domains 的規則下都不列出它）。各範圍軸一律強制，所以每一筆都是升級後該規則不再授予的租戶。
 
 - 判定與 server 相同：租戶清單與每個租戶的環境、domain 用 `GET /api/v1/tenants` 的同一個讀法取得；規則套不套得到用同一個租戶 pattern 比對；`environments`／`domains` 非空而租戶該欄為空、或規則有 `org-scope` 而租戶在組織對應裡沒有任何組織（不在檔內與列了空清單都算），即為未標記。已標記但不在規則允許範圍內的租戶不在此列。
-- 印出一份 JSON（`schema: tenant-api.scope-check/v1`）：`findings` 每筆是 `{axis, rule, rule_index, tenant}`，`axis` 為 `environment`／`domain`／`org`；`tenant_problems` 列出環境與 domain 讀不到的租戶（`reason` 是該列的 `config_error`，或 `metadata_incomplete`），它們的 metadata 軸不判定，不會被靜默略過；`config_problems` 列出 server 會拒收的 RBAC 設定、組織對應或租戶清單（例如同一租戶有兩個檔）；另有 `summary`。結果只依設定、不依流量，各清單已排序。
-- 結束碼：0 沒有任何 finding 與 problem、1 有 finding 或 problem、2 用法錯誤或輸入打不開（`DIR` 或 RBAC 設定不存在、明確指定的 `--tenant-orgs` 不存在）。
+- 印出一份 JSON（`schema: tenant-api.scope-check/v1`）：`findings` 每筆是 `{axis, rule, rule_index, tenant, reason}`，`axis` 為 `environment`／`domain`／`org`，`reason` 為 `unlabeled`（補標記）或 `metadata_unknown`（標記讀不到，要修租戶檔）；`tenant_problems` 僅供參考，列出所有環境與 domain 讀不到的租戶（`reason` 是該列的 `config_error`，或 `metadata_incomplete`），不影響結束碼——這種租戶只在被限制規則涵蓋時才影響授權，那時它已是一筆 finding；`config_problems` 列出 server 會拒收的 RBAC 設定、組織對應或租戶清單（例如同一租戶有兩個檔）；另有 `summary`。結果只依設定、不依流量，各清單已排序。
+- 結束碼：0 沒有 finding 也沒有 config problem、1 有 finding 或 config problem、2 用法錯誤或輸入打不開（`DIR` 或 RBAC 設定不存在、明確指定的 `--tenant-orgs` 不存在）。
 - 有 `org-scope` 的規則需要以 `--oauth2-proxy-config`（或 `TA_OAUTH2_PROXY_CONFIG`）指向部署用的 oauth2-proxy 設定檔，否則它引用的 claim 沒有 header 注入，RBAC 設定會像在 server 一樣被拒收。
 - **升級前用要升級到的新版 image 跑**，讓判定與新版 server 一致，例如 `docker run --rm -v "$PWD/conf.d:/conf.d:ro" <新版 tenant-api 映像> config check --kind scope --config-dir /conf.d`。CI 對 repo 內的範例設定（`try-local/seed/conf.d`）也跑它。
 

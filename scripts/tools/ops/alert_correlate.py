@@ -12,7 +12,6 @@
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -33,7 +32,7 @@ from _lib_python import (  # noqa: E402
 # QueryError (rc 2) — never "no alerts".
 from _lib_prometheus import QueryError, alertmanager_alerts, prometheus_alerts  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
-from _lib_paths import require_file  # noqa: E402  (#3415)
+import _lib_input  # noqa: E402  (#3445: --input is read by the lib)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -157,14 +156,17 @@ def _time_overlap(a_start: float, a_end: float,
 # ---------------------------------------------------------------------------
 # Core logic
 # ---------------------------------------------------------------------------
-def load_alerts_from_json(path: str) -> List[AlertEvent]:
-    """Load alerts from a JSON file.
+#: --input: a JSON array of alerts, or the Alertmanager API answer (an
+#: object whose ``data`` is that array). Anything else at the top level is a
+#: caller error, named (#3445: a scalar was "No alerts found", rc 0).
+INPUT_DOCUMENT = _lib_input.Document("json", (list, dict))
+
+
+def alerts_from_document(data) -> List[AlertEvent]:
+    """The alerts of a parsed --input document (`INPUT_DOCUMENT`).
 
     Supports both raw array format and Alertmanager API response format.
     """
-    with open(path, encoding="utf-8") as f:
-        data = json.load(f)
-
     # Handle Alertmanager API wrapper
     if isinstance(data, dict) and "data" in data:
         alerts_raw = data["data"]
@@ -456,8 +458,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--prometheus", default=None,
                         help="Prometheus URL (default: $PROMETHEUS_URL)")
-    parser.add_argument("--input", "-i", default=None,
-                        help=h["input"])
+    _lib_input.add_input(parser, "--input", "-i", decode=INPUT_DOCUMENT,
+                         help=h["input"])
     parser.add_argument("--window", default="5m",
                         help=h["window"])
     parser.add_argument("--lookback", default="24h",
@@ -484,9 +486,12 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     # Load alerts
-    if args.input:
-        require_file(args.input, lang=detect_cli_lang(), flag="--input")  # #3415
-        alerts = load_alerts_from_json(args.input)
+    if args.input is not None:
+        # #3415 / #3445: the path and the content judged by the lib, named.
+        # `--input ''` names no file: refused there, never taken for "no
+        # --input" (it queried Prometheus instead and could report rc 0).
+        alerts = alerts_from_document(
+            _lib_input.document(args, "input", lang=detect_cli_lang()))
     else:
         # `... or "http://localhost:9090"` (not os.environ.get's default): a
         # PROMETHEUS_URL that is SET BUT EMPTY (e.g. a ConfigMap key resolving

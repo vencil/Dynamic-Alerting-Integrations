@@ -161,6 +161,15 @@ class TestRunSingleComparison:
 # load_mapping_pairs
 # ---------------------------------------------------------------------------
 
+def _mapping_args(path):
+    """The namespace --mapping *path* parses to (declared as the tool does)."""
+    import argparse
+    import _lib_input
+    parser = argparse.ArgumentParser()
+    _lib_input.add_input(parser, "--mapping", decode=vm.MAPPING_DOCUMENT)
+    return parser.parse_args(["--mapping", str(path)])
+
+
 class TestLoadMappingPairs:
     """Tests for load_mapping_pairs()."""
 
@@ -178,7 +187,7 @@ class TestLoadMappingPairs:
         p = tmp_path / "mapping.yaml"
         p.write_text(yaml.safe_dump(mapping), encoding="utf-8")
 
-        pairs = vm.load_mapping_pairs(str(p))
+        pairs = vm.load_mapping_pairs(_mapping_args(p))
         assert len(pairs) == 2
         assert pairs[0]["label"] == "custom_cpu_usage"
         assert pairs[0]["old_query"] == "node_cpu_seconds_total"
@@ -194,15 +203,25 @@ class TestLoadMappingPairs:
         p = tmp_path / "mapping.yaml"
         p.write_text(yaml.safe_dump(mapping), encoding="utf-8")
 
-        pairs = vm.load_mapping_pairs(str(p))
+        pairs = vm.load_mapping_pairs(_mapping_args(p))
         assert len(pairs) == 1
         assert pairs[0]["label"] == "has_original"
 
     def test_empty_mapping(self, tmp_path):
+        """An empty mapping file is refused by name (#3445): it was read as
+        no pairs, which the CLI then refused as "No comparison pairs found"
+        (rc 2 either way) — now the message names the flag and the file."""
+        from _lib_exitcodes import CallerError
         p = tmp_path / "mapping.yaml"
         p.write_text("", encoding="utf-8")
-        pairs = vm.load_mapping_pairs(str(p))
-        assert pairs == []
+        with pytest.raises(CallerError) as exc:
+            vm.load_mapping_pairs(_mapping_args(p))
+        assert str(exc.value) == f"--mapping {p}: 頂層不是映射（實為空文件）"
+
+    def test_a_mapping_with_no_pair_is_no_pair(self, tmp_path):
+        p = tmp_path / "mapping.yaml"
+        p.write_text("{}\n", encoding="utf-8")
+        assert vm.load_mapping_pairs(_mapping_args(p)) == []
 
 
 # ---------------------------------------------------------------------------

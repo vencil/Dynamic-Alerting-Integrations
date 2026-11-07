@@ -44,6 +44,12 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3445: --dashboard is read by the lib)
+
+#: --dashboard: a Grafana dashboard, a JSON object (#3445: a list or a scalar
+#: was "Invalid JSON: 'int' object has no attribute 'get'"; content that
+#: cannot be read, or another top level, is rc 2 naming the flag and path).
+DASHBOARD_DOCUMENT = _lib_input.Document("json", dict)
 from _lib_kubectl import KubectlError, kubectl_list  # noqa: E402  (#3349)
 
 
@@ -69,12 +75,16 @@ def run_cmd(cmd, dry_run=False):
         raise KubectlError(f"`{' '.join(cmd[:3])}`: no answer within 120s") from exc
 
 
-def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
-    """Import a single Grafana dashboard JSON as a labeled ConfigMap."""
+def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboard=None):
+    """Import a single Grafana dashboard JSON as a labeled ConfigMap.
+
+    *dashboard*: its parsed content when already read (--dashboard, by
+    ``_lib_input.document``); None for a file of --dashboard-dir, read here."""
     results = []
 
     dashboard_p = Path(dashboard_path)
-    dashboard_problem = classify_path(dashboard_path, "file", lang="en", flag="--dashboard")  # #3276
+    dashboard_problem = (None if dashboard is not None else
+                         classify_path(dashboard_path, "file", lang="en", flag="--dashboard"))  # #3276
     if dashboard_problem is not None:
         results.append({
             "action": "import",
@@ -86,8 +96,9 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False):
 
     # Validate JSON
     try:
-        with open(dashboard_path, encoding="utf-8") as f:
-            dashboard = json.load(f)
+        if dashboard is None:
+            with open(dashboard_path, encoding="utf-8") as f:
+                dashboard = json.load(f)
         title = dashboard.get("title", dashboard_p.name)
     except (json.JSONDecodeError, Exception) as e:
         results.append({
@@ -241,8 +252,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="Grafana dashboard import via ConfigMap sidecar",
     )
-    parser.add_argument("--dashboard",
-                        help="Path to dashboard JSON file")
+    _lib_input.add_input(parser, "--dashboard", decode=DASHBOARD_DOCUMENT,
+                         help="Path to dashboard JSON file")
     parser.add_argument("--dashboard-dir",
                         help="Import all *.json files in directory")
     parser.add_argument("--name",
@@ -293,13 +304,15 @@ def main():
     dashboards = []
     if args.dashboard:
         cm_name = args.name or auto_name(args.dashboard)
-        dashboards.append((args.dashboard, cm_name))
+        # #3445: read (and refused, named) before anything is imported.
+        dashboards.append((args.dashboard, cm_name,
+                           _lib_input.document(args, "dashboard", lang="en")))
     elif args.dashboard_dir:
         dash_dir = Path(args.dashboard_dir)
         require_dir(dash_dir, lang="en", flag="--dashboard-dir")  # #3276
         for entry in sorted(dash_dir.glob("*.json")):
             fpath = str(entry)
-            dashboards.append((fpath, auto_name(fpath)))
+            dashboards.append((fpath, auto_name(fpath), None))
     else:
         parser.error("Provide --dashboard, --dashboard-dir, or --verify")
 
@@ -313,8 +326,9 @@ def main():
     has_failure = False
     caller_error = False  # #452/#737: file-not-found / invalid-JSON / kubectl env
 
-    for dashboard_path, cm_name in dashboards:
-        results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run)
+    for dashboard_path, cm_name, content in dashboards:
+        results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run,
+                                   dashboard=content)
         all_results.extend(results)
         if any(r["status"] == "fail" for r in results):
             has_failure = True
