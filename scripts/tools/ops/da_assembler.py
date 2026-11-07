@@ -384,6 +384,46 @@ def render_entries(cr: dict) -> "list[dict]":
     return entries
 
 
+def _ownership_error(config_dir: Path, cr: dict) -> str:
+    """Why *cr* may not write its paths under *config_dir*, or ``""``
+    (#3671). A CR owns its directory WHOLE and its legacy flat file: every
+    one of them already there must be a file this tool rendered for a CR of
+    the same name (`_rendered_cr_name` of its header). Anything else — a
+    hand-written ``<name>/_defaults.yaml`` or tenant file, a subdirectory, a
+    ``<name>`` that is a file, a hand-written ``<name>.yaml`` — is another
+    author's, and writing or deleting it would change tenants the CR does
+    not declare (a subtree ``_defaults.yaml`` applies to every tenant below
+    it). The CR is refused, the path named; nothing is written."""
+    name = _cr_name(cr)
+    own = config_dir / name
+    if own.is_symlink() or (own.exists() and not own.is_dir()):
+        return (f"{name} in --config-dir is not a directory; the CR's files go in "
+                f"its own directory {name}/ (#3671). Rename the CR or move that path")
+    mine = {_output_filename(cr), _defaults_filename(cr)}
+    if own.is_dir():
+        for p in sorted(own.rglob("*")):
+            rel = p.relative_to(config_dir).as_posix()
+            if rel not in mine or _rendered_cr_name(p) != name:
+                return (f"{rel} was not rendered by this tool for CR {name}: a CR owns "
+                        f"its directory {name}/ whole (#3671), and a subtree "
+                        f"_defaults.yaml there applies to every tenant below it. Rename "
+                        f"the CR or move that directory; nothing was written")
+    legacy = config_dir / _legacy_filename(cr)
+    if (legacy.exists() or legacy.is_symlink()) and _rendered_cr_name(legacy) != name:
+        return (f"{_legacy_filename(cr)} was not rendered by this tool for CR {name}, "
+                f"and the CR replaces the file an earlier version rendered there "
+                f"(#3671). Rename the CR or move that file; nothing was written")
+    return ""
+
+
+def owned_paths(config_dir: Path, cr: dict) -> "list[str]":
+    """`rendered_paths` of *cr* that are there and that this tool rendered
+    for it (`_rendered_cr_name`): what deleting the CR deletes. Another
+    author's file at one of them is left alone (#3671)."""
+    name = _cr_name(cr)
+    return [p for p in rendered_paths(cr) if _rendered_cr_name(config_dir / p) == name]
+
+
 def rendered_paths(cr: dict) -> "list[str]":
     """Every path under --config-dir *cr* owns (`render_entries`): what the
     controller deletes when the CR is deleted."""
@@ -443,6 +483,16 @@ def _cr_name(cr: dict) -> str:
             "(DNS-1123 subdomain: lowercase a-z, 0-9, '-' and '.', starting "
             f"and ending alphanumeric, at most {_DNS1123_SUBDOMAIN_MAX} "
             "characters); not written")
+    # #3671: the name is a directory under --config-dir, and a directory
+    # whose name carries a config file's extension (`a.yaml`) is no
+    # directory the exporter's walk takes as one. Asked of da-guard
+    # (`parse-tree --list-only --names`: the walker's own rule), not restated.
+    import _lib_parse_tree  # noqa: PLC0415
+    if _lib_parse_tree.classify_names([name])[name].config_extension:
+        raise ValueError(
+            f"metadata.name {name!r} ends in a config file extension (.yaml / .yml): "
+            "the CR's directory would carry a config file's name (#3671); rename the CR; "
+            "not written")
     return name
 
 
@@ -671,6 +721,9 @@ def reconcile_one(
                     "conf.d holds paths da-guard validation names; not written")[:200])
             return
         entries = render_entries(cr)
+        why = _ownership_error(config_dir, cr)
+        if why:
+            raise ValueError(why)
         filename = entries[0]["path"]
         changed, sha = write_rendered(config_dir, entries, dry_run=dry_run, cli=cli)
 
@@ -824,7 +877,7 @@ def run_watch(
                     # the watch.
                     try:
                         filename = _output_filename(cr)
-                        removed = remove_rendered(config_dir, rendered_paths(cr),
+                        removed = remove_rendered(config_dir, owned_paths(config_dir, cr),
                                                   dry_run=dry_run)
                     except Exception as e:  # noqa: BLE001 — logged, loop goes on
                         log.error("Failed to delete the file of CR %s/%s: %s",
