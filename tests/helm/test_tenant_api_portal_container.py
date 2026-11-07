@@ -10,7 +10,7 @@ its own pod, behind oauth2-proxy's "/" upstream. This guards, on the render:
   * that config forwards nothing: no ``*_pass``, no njs, no include but
     mime.types; it listens on the pod's loopback only;
   * the container mounts no human socket and no secret, and its image is
-    pinned by digest;
+    pinned to a release;
   * oauth2-proxy sends the portal "/" at that loopback address.
 """
 from __future__ import annotations
@@ -84,7 +84,9 @@ def test_portal_container_mounts_no_identity_or_secret(render):
     for n in names:
         assert "secret" not in vols[n], f"portal mounts secret volume {n}"
     assert not c.get("env"), "the portal reads no environment"
-    assert re.search(r"@sha256:[0-9a-f]{64}$", c["image"]), f"portal image {c['image']} is not pinned by digest"
+    # Pinned to a release (bump_docs.py --portal rewrites it), never a
+    # floating tag; a digest is optional, as for the generator image.
+    assert re.search(r":v\d+\.\d+\.\d+(?:@sha256:[0-9a-f]{64})?$", c["image"]), f"portal image {c['image']} is not pinned to a release"
     assert not c.get("ports"), "the portal exposes no container port: it is reached through oauth2-proxy only"
 
 

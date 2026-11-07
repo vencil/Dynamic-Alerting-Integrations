@@ -78,11 +78,11 @@
             },
             "tag": {
               "type": "string",
-              "minLength": 1
+              "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
             },
             "digest": {
               "type": "string",
-              "pattern": "^sha256:[0-9a-f]{64}$"
+              "pattern": "^(sha256:[0-9a-f]{64})?$"
             },
             "pullPolicy": {
               "type": "string",

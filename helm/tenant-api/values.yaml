@@ -105,12 +105,14 @@ oauth2Proxy:
 # nothing (templates/_helpers.tpl tenant-api.portalNginxConfig).
 portal:
   image:
-    # renovate: datasource=docker depName=ghcr.io/vencil/da-portal
+    # The portal release line (portal/v*): `bump_docs.py --portal` rewrites
+    # this tag at release time (two-line repository/tag pin), as
+    # `--tools` does generator.image. A first-party image, so not Renovate's.
     repository: ghcr.io/vencil/da-portal
     tag: "v2.9.0"
-    # ⛔ Digest is AUTHORITATIVE, as for oauth2Proxy.image: set tag and digest
-    #    together; `--set portal.image.tag=…` alone keeps running this digest.
-    digest: "sha256:ecd9e2bb207d2355c65b0ff020d1a2f4f7e53834053b6589aa6b21ab5260fa51"
+    # Optional digest pin. Empty = tag only. ⛔ When set, the digest is what
+    # runs: `--set portal.image.tag=…` alone would not change the image.
+    digest: ""
     pullPolicy: IfNotPresent
   resources:
     requests:
