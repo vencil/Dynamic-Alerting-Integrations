@@ -162,6 +162,9 @@ on:
       # resolve to scripts/tools/ and are covered by the `_lib_*` entry
       # above.) Pinned by invariant 4 of tests/ops/test_ci_path_filter_coverage.py.
       - "scripts/ops/guard_defaults_scopes.py"
+      # The build flags of the da-guard this workflow builds (#3601 follow-up):
+      # a change to them changes the binary under test.
+      - "scripts/ops/go_build.sh"
       - "requirements/ci-constraints.txt"
       - ".github/workflows/guard-defaults-impact.yml"
   workflow_dispatch:

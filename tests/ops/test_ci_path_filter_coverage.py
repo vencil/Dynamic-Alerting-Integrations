@@ -3831,10 +3831,6 @@ WORKFLOW_PATHS_PENDING: dict[tuple[str, str], str] = {
     ("bench-workload-record.yaml", "scripts/tools/ops/bench_gate_compare.sh"):
         "undecided: gate is test-file shaped (bench inputs), the comparator "
         "is also exercised by bench-gate-pr.yaml",
-    ("config-diff-advisory.yml", "scripts/ops/go_build.sh"):
-        "undecided: build-flag wrapper shared with guard-defaults-impact.yml",
-    ("guard-defaults-impact.yml", "scripts/ops/go_build.sh"):
-        "undecided: build-flag wrapper shared with config-diff-advisory.yml",
 }
 
 
