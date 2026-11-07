@@ -211,9 +211,9 @@ func TestValidate_RejectsNonTenantRootKeys(t *testing.T) {
 // root-key guard it was rejected by the structural "must contain tenants.{id}"
 // check; now it is rejected one step earlier by CheckTenantRootKeys. Either way
 // the OUTCOME is unchanged — a flat body is rejected, never silently wrapped on
-// write. (The flat-KV fallback in MergeTenantWithRootDefaults serves the GET read
-// path for legacy on-disk files, not the write path.) This locks the contract so
-// a future refactor cannot quietly start accepting flat bodies on write.
+// write. (No read path wraps one either since #3504: on disk such a file is
+// git-managed, not_tenant_document.) This locks the contract so a future
+// refactor cannot quietly start accepting flat bodies on write.
 func TestValidate_RejectsFlatKV(t *testing.T) {
 	t.Parallel()
 	dir := pilotDefaultsDir(t)

@@ -133,6 +133,13 @@ helm install vector ./helm/vector -n vector \
 helm install vector ./helm/vector -n vector \
   --set victorialogs.host=victorialogs.observability.svc
 
+# Authenticate to the store's vmauth (#1295). The Secret (key `password`, hex,
+# no trailing newline) holds the same value as helm/victorialogs'
+# auth.consumers[name=vector].existingSecret — see
+# docs/internal/platform-log-aggregation-runbook.md §1.2.
+helm install vector ./helm/vector -n vector \
+  --set victorialogs.auth.existingSecret=victorialogs-vector
+
 # Smoke-test (tail all pods on the node)
 helm install vector ./helm/vector -n vector \
   --set source.extraLabelSelector=""

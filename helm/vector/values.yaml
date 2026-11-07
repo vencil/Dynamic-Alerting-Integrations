@@ -35,6 +35,17 @@ victorialogs:
   # the default tenant — fine for Phase 1 single-tenant store.
   accountId: ""
   projectId: ""
+  # Credentials toward the store's vmauth (helm/victorialogs `auth`, #1295).
+  # `username` is this consumer's entry in helm/victorialogs
+  # `auth.consumers` — tests/shared/test_victorialogs_consumers.py holds the
+  # two to each other. `existingSecret` names a Secret in THIS release's
+  # namespace whose key `password` equals the store-side Secret of the same
+  # consumer (hex only, no trailing newline — see helm/victorialogs
+  # values.yaml). Empty = send no credentials, which only works while the
+  # store runs `auth.mode: observe`.
+  auth:
+    username: vector
+    existingSecret: ""
 
 # Scope of the kubernetes_logs source — which pods to tail.
 # Phase 1 default was federation-gateway only (per #539 §1 trigger and §7

@@ -17,3 +17,7 @@ affinity:
               operator: Exists
 image:
   digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+# Store credentials (#1295): Secret-backed env.
+victorialogs:
+  auth:
+    existingSecret: pss-gate

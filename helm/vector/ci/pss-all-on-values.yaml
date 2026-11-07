@@ -33,3 +33,7 @@ affinity:
           matchExpressions:
             - key: pss-gate
               operator: Exists
+# Store credentials (#1295): Secret-backed env.
+victorialogs:
+  auth:
+    existingSecret: pss-gate

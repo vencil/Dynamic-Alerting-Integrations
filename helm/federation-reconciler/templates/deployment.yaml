@@ -154,6 +154,18 @@ spec:
             - {{ .Values.reconcile.failopenLookbackSeconds | quote }}
             - --heartbeat-lookback
             - {{ .Values.reconcile.heartbeatLookbackSeconds | default 1800 | quote }}
+          {{- with include "federation-reconciler.vlAuthSecret" . }}
+          # Store credentials (#1295), sent as HTTP basic auth by
+          # query_victorialogs(). Env, not a flag: argv is visible in ps.
+          env:
+            - name: VICTORIALOGS_USERNAME
+              value: {{ include "federation-reconciler.vlAuthUser" $ | quote }}
+            - name: VICTORIALOGS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: password
+          {{- end }}
           ports:
             - name: metrics
               containerPort: {{ .Values.metricsPort }}

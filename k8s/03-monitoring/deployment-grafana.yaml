@@ -46,6 +46,21 @@ spec:
                   key: admin-password
             - name: GF_USERS_ALLOW_SIGN_UP
               value: "false"
+            # VictoriaLogs datasource password (#1295), read by the
+            # provisioning file as ${VICTORIALOGS_PASSWORD}
+            # (Grafana expands env vars in provisioning files). Create it
+            # with the same value as the store-side Secret of consumer
+            # `grafana` (hex only, no trailing newline):
+            #   kubectl -n monitoring create secret generic victorialogs-grafana \
+            #     --from-literal=password="<same value>"
+            # optional: Grafana still starts without it (empty password), which
+            # only works while the store runs `auth.mode: observe`.
+            - name: VICTORIALOGS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: victorialogs-grafana
+                  key: password
+                  optional: true
             # VictoriaLogs datasource plugin (#539 Phase 1), pinned to an
             # exact version (TRK-2605). Grafana installs it from grafana.com
             # before it starts serving (a failed install fails startup) and,
