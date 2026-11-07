@@ -369,7 +369,7 @@ class TestRenderTenantConfig:
         r.dim_hints = [{"labels": {"instance": "db01"}}]
         out = mr.render_tenant_config([r], "t1")
         assert "# 📖 a note\n" in out
-        assert "# 維度標籤替代語法:\n" in out
+        assert "# 維度標籤替代語法（寫在 tenants.t1 底下）:\n" in out
         assert 'custom_cpu{instance="db01"}' in out
 
 
@@ -584,7 +584,7 @@ class TestWriteOutputsIsThinWriter:
         ]
         dest = tmp_path / "out"
         mr.write_outputs(results, str(dest), prefix="custom_", dictionary={}, tenant="t1")
-        assert (dest / "t1.yaml").read_text(encoding="utf-8") == \
+        assert (dest / "conf.d" / "t1.yaml").read_text(encoding="utf-8") == \
             mr.render_tenant_config(results, "t1")
         assert (dest / "platform-recording-rules.yaml").read_text(encoding="utf-8") == \
             mr.render_recording_rules(results, "custom_")
@@ -784,7 +784,7 @@ class TestConfdThroughDaGuardWrite:
         body = [ln for ln in text.splitlines() if ln and not ln.lstrip().startswith("#")]
         assert body == ["tenants:", "  t1:", '    custom_a: "1"', '    custom_b: "2"'], text
         # the foot is set off by a blank line after the last key
-        assert 'custom_b: "2"\n\n# 維度標籤替代語法:' in text, text
+        assert 'custom_b: "2"\n\n# 維度標籤替代語法（寫在 tenants.t1 底下）:' in text, text
 
     def test_no_key_is_a_file_of_comments_and_an_empty_top_level(self):
         gold = _make_result("Gold", tenant_config={"custom_g": "9"},

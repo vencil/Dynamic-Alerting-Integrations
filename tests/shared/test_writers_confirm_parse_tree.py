@@ -1512,9 +1512,9 @@ def _mr(tmp_path, threshold, env=None, *extra):
 def test_migrate_rule_writes_what_reads_back(tmp_path):
     r, out = _mr(tmp_path, "1e3")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert 'custom_app_queue_depth: "1e3"' in (out / "t1.yaml").read_text(
+    assert 'custom_app_queue_depth: "1e3"' in (out / "conf.d" / "t1.yaml").read_text(
         encoding="utf-8")
-    assert "custom_app_queue_depth: 1000" in (out / "_defaults.yaml").read_text(
+    assert "custom_app_queue_depth: 1000" in (out / "conf.d" / "_defaults.yaml").read_text(
         encoding="utf-8")
 
 
@@ -1527,10 +1527,41 @@ def test_migrate_rule_output_is_a_conf_d_the_exporter_serves(tmp_path):
     r, out = _mr(tmp_path, "80")
     assert r.returncode == 0, r.stdout + r.stderr
     sv = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir",
-                         str(out)], capture_output=True, text=True, encoding="utf-8",
+                         str(out / "conf.d")], capture_output=True, text=True, encoding="utf-8",
                         timeout=120, check=False)
     assert sv.returncode == 0, sv.stdout + sv.stderr
     assert json.loads(sv.stdout)["tenants"]["t1"]["values"]["custom_app_queue_depth"] == 80
+    assert sorted(p.name for p in (out / "conf.d").iterdir()) == ["_defaults.yaml", "t1.yaml"]
+
+
+@pytest.mark.parametrize("tenant", ["platform-alert-rules", "prefix-mapping", "platform-recording-rules"])
+def test_migrate_rule_a_tenant_named_like_another_output_keeps_its_file(tmp_path, tenant):
+    # Review of #3671: these are valid tenant ids, and with every output in
+    # -o the rule pack / mapping written after the batch replaced the tenant
+    # file (rc 0, thresholds gone). The conf.d files live in -o/conf.d.
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
+                     "    expr: app_queue_depth > 80\n", encoding="utf-8")
+    out = tmp_path / "out"
+    r = _run("ops/migrate_rule.py", str(rules), "--tenant", tenant, "-o", str(out))
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (out / "conf.d" / f"{tenant}.yaml").read_text(encoding="utf-8")
+    assert f"tenants:\n  {tenant}:\n" in text and "custom_app_queue_depth" in text, text
+
+
+def test_migrate_rule_refuses_a_conf_d_holding_another_tenant(tmp_path):
+    # Review of #3671: a rerun with another --tenant left the first tenant's
+    # file beside the new one — two tenants in the tree. Refused, nothing
+    # written; the same -o and --tenant reruns as before.
+    r, out = _mr(tmp_path, "80")
+    assert r.returncode == 0, r.stdout + r.stderr
+    before = _bytes(out)
+    r = _run("ops/migrate_rule.py", str(tmp_path / "rules.yml"), "--tenant", "t2", "-o", str(out))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "t1.yaml, which this run does not write" in r.stderr, r.stderr
+    assert _bytes(out) == before
+    r, out = _mr(tmp_path, "90")
+    assert r.returncode == 0, r.stdout + r.stderr
 
 
 def test_migrate_rule_needs_a_valid_tenant_to_write(tmp_path):
@@ -1553,7 +1584,7 @@ def test_migrate_rule_quotes_a_key_holding_a_hash(tmp_path):
     # double-quoted, read back as itself.
     r, out = _mr(tmp_path, "80", None, "--prefix", "team #")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert '"team #app_queue_depth": "80"' in (out / "t1.yaml").read_text(
+    assert '"team #app_queue_depth": "80"' in (out / "conf.d" / "t1.yaml").read_text(
         encoding="utf-8")
 
 
@@ -1564,14 +1595,15 @@ def test_migrate_rule_one_refused_file_writes_neither(tmp_path):
     from _platform_fs import symlink_or_skip
     (tmp_path / "elsewhere.yaml").write_text("defaults: {}\n", encoding="utf-8")
     out = tmp_path / "out"
-    out.mkdir()
-    symlink_or_skip(str(tmp_path / "elsewhere.yaml"), out / "_defaults.yaml")
+    (out / "conf.d").mkdir(parents=True)
+    symlink_or_skip(str(tmp_path / "elsewhere.yaml"), out / "conf.d" / "_defaults.yaml")
     before = _bytes(out)
     r, out = _mr(tmp_path, "80")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "_defaults.yaml: symlink" in r.stderr and "nothing was written" in r.stderr, \
         r.stderr
-    assert sorted(p.name for p in out.iterdir()) == ["_defaults.yaml"]
+    assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*")) == \
+        ["conf.d", "conf.d/_defaults.yaml"]
     assert _bytes(out) == before
 
 
@@ -1580,9 +1612,9 @@ def test_migrate_rule_rerun_replaces_both_files(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     r, out = _mr(tmp_path, "90")
     assert r.returncode == 0, r.stdout + r.stderr
-    tc = (out / "t1.yaml").read_text(encoding="utf-8")
+    tc = (out / "conf.d" / "t1.yaml").read_text(encoding="utf-8")
     assert 'custom_app_queue_depth: "90"' in tc and '"80"' not in tc, tc
-    assert "custom_app_queue_depth: 90\n" in (out / "_defaults.yaml").read_text(
+    assert "custom_app_queue_depth: 90\n" in (out / "conf.d" / "_defaults.yaml").read_text(
         encoding="utf-8")
 
 
@@ -1592,7 +1624,7 @@ def test_migrate_rule_writes_a_default_past_18_digits_as_a_float(tmp_path):
     r, out = _mr(tmp_path, "1e20")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "custom_app_queue_depth: 100000000000000000000.0\n" in (
-        out / "_defaults.yaml").read_text(encoding="utf-8")
+        out / "conf.d" / "_defaults.yaml").read_text(encoding="utf-8")
 
 
 def test_migrate_rule_without_da_guard_is_exit_2(tmp_path):

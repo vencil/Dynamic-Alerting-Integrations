@@ -105,7 +105,7 @@ def _run_migrate(tmp_path):
 
 def test_defaults_snippet_declares_every_key_with_a_number(tmp_path):
     out, stdout = _run_migrate(tmp_path)
-    snippet = yaml.safe_load((out / "_defaults.yaml").read_text(encoding="utf-8"))
+    snippet = yaml.safe_load((out / "conf.d" / "_defaults.yaml").read_text(encoding="utf-8"))
     # `<base>_critical` 不進 defaults：exporter 會把它當成另一個 base 指標、
     # 發射成 severity="warning"，不是 critical 層。
     assert snippet == {"defaults": {
@@ -130,7 +130,7 @@ def test_defaults_snippet_declares_the_base_key_for_a_critical_only_rule(tmp_pat
     )
     assert proc.returncode == 0, proc.stderr
     defaults = yaml.safe_load(
-        (out / "_defaults.yaml").read_text(encoding="utf-8"))["defaults"]
+        (out / "conf.d" / "_defaults.yaml").read_text(encoding="utf-8"))["defaults"]
     # exporter 只在 base key 存在時才發射 critical 那一列
     # （resolveCriticalRows；沒有 base 時整條 critical 被丟掉）。
     assert defaults == {"custom_mysql_global_status_threads_connected": 200}
@@ -234,7 +234,7 @@ def test_critical_only_rule_reads_the_base_row_so_defaults_arm_it(tmp_path):
     assert "_critical" not in rec
     assert "tenant:alert_threshold:custom_mysql_global_status_threads_connected\n" in alert
     assert 'severity: "critical"' in alert   # #3206: label values always quoted
-    tenant_cfg = yaml.safe_load((out / "t1.yaml").read_text(encoding="utf-8"))
+    tenant_cfg = yaml.safe_load((out / "conf.d" / "t1.yaml").read_text(encoding="utf-8"))
     assert tenant_cfg == {"tenants": {"t1": {"custom_mysql_global_status_threads_connected": "200"}}}
 
 
@@ -255,11 +255,11 @@ def test_two_thresholds_on_one_key_are_reported_not_silently_merged(tmp_path):
     out, stdout = _migrate_rules(tmp_path, (
         "  - alert: Low\n    expr: http_requests_total > 5\n    labels: {severity: warning}\n"
         "  - alert: High\n    expr: http_requests_total > 50\n    labels: {severity: warning}\n"))
-    tenant_text = (out / "t1.yaml").read_text(encoding="utf-8")
+    tenant_text = (out / "conf.d" / "t1.yaml").read_text(encoding="utf-8")
     live = [ln.strip() for ln in tenant_text.splitlines()
             if ln.strip().startswith("custom_http_requests_total:")]
     assert live == ['custom_http_requests_total: "5"'], tenant_text
-    defaults = yaml.safe_load((out / "_defaults.yaml").read_text(encoding="utf-8"))
+    defaults = yaml.safe_load((out / "conf.d" / "_defaults.yaml").read_text(encoding="utf-8"))
     assert defaults == {"defaults": {"custom_http_requests_total": 5}}
     report = (out / "migration-report.txt").read_text(encoding="utf-8")
     for text in (stdout, report, tenant_text):
