@@ -1466,6 +1466,20 @@ def _require_output_tree(output_dir):
         sys.exit(EXIT_CALLER_ERROR)
 
 
+def other_confd_files(conf_dir, mine):
+    """The config files of the conf.d at *conf_dir* other than *mine* (the
+    paths this run writes), as relative paths in walk order; [] when it is not
+    there (#3671). The tree as the exporter's walk sees it (da-guard's
+    list-only walk): a hidden or non-config name is read by no reader, so it
+    adds no tenant and is not listed."""
+    conf_dir = Path(conf_dir)
+    if not conf_dir.is_dir():
+        return []
+    import _lib_parse_tree  # noqa: PLC0415
+    return [e.path for e in _lib_parse_tree.list_tree(conf_dir).config_files()
+            if e.path not in mine]
+
+
 def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, tenant):
     """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。
 
@@ -1493,15 +1507,12 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
     except ValueError as exc:
         print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    if conf_dir.is_dir():
-        mine = {e["path"] for e in entries}
-        other = sorted(p.relative_to(conf_dir).as_posix() for p in conf_dir.rglob("*")
-                       if p.relative_to(conf_dir).as_posix() not in mine)
-        if other:
-            print(f"ERROR: {conf_dir} holds {', '.join(other)}, which this run does not write "
-                  f"(another --tenant's file is another tenant in the tree, #3671); remove "
-                  f"it or use another -o — nothing was written", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
+    other = other_confd_files(conf_dir, {e["path"] for e in entries})
+    if other:
+        print(f"ERROR: {conf_dir} holds {', '.join(other)}, which this run does not write "
+              f"(another --tenant's file is another tenant in the tree, #3671); remove "
+              f"it or use another -o — nothing was written", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     _lib_confedit.write_all_or_exit(
         conf_dir, entries, tool="migrate_rule",
         make_root=lambda: ensure_dir_or_die(conf_dir, flag=_OUTPUT_FLAG))
