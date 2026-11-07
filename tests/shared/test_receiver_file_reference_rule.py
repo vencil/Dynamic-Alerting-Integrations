@@ -373,7 +373,9 @@ def test_the_tree_records_one_error_per_key(tmp_path, where):
 
 @pytest.mark.parametrize("where", sorted(_WHERE))
 def test_a_clean_http_config_in_the_same_place_is_no_error(tmp_path, where):
-    clean = "http_config:\n  basic_auth:\n    username: u\n    password: p\n"
+    # #1560 ⑤-b: no credential written out either (a basic_auth password
+    # value is refused as `credential_plaintext`, whatever its keys).
+    clean = "http_config:\n  follow_redirects: false\n  basic_auth:\n    username: u\n"
     errs = load_tenant_tree(str(_write(tmp_path, _tree(where, clean)))).field_type_errors
     assert errs == []
 
@@ -402,7 +404,9 @@ def test_every_mode_refuses_and_writes_nothing(tmp_path, where):
 
 
 def test_validate_strict_passes_without_file_keys(tmp_path):
-    clean = "http_config:\n  basic_auth:\n    username: u\n    password: p\n"
+    # #1560 ⑤-b: no credential written out either (a basic_auth password
+    # value is refused as `credential_plaintext`, whatever its keys).
+    clean = "http_config:\n  follow_redirects: false\n  basic_auth:\n    username: u\n"
     p = _gar("--config-dir", str(_write(tmp_path, _tree("tenant", clean))), "--validate", "--strict")
     assert p.returncode == 0, p.stderr
     assert _REFUSAL not in p.stderr

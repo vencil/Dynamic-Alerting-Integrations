@@ -215,7 +215,7 @@ O(M) complexity (`group_left` vector matching) · each Rule Pack deployed indepe
 
 ### Tenant Management
 
-Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Four-layer routing merge: `_routing_defaults` → profile → tenant → enforced ([ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md)) · Scheduled thresholds & maintenance windows · Schema Validation (dual Go + Python) · Cardinality Guard (per-tenant 500 limit) · Receiver credentials in a Kubernetes Secret (`secretRef`: the name derives from the tenant id as `da-<tenant>`, shared Secrets are listed by the deployment policy's `shared_secrets`; [BYO integration guide §5](docs/integration/byo-alertmanager-integration.en.md#credentials-in-a-secret-secretref))
+Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Four-layer routing merge: `_routing_defaults` → profile → tenant → enforced ([ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md)) · Scheduled thresholds & maintenance windows · Schema Validation (dual Go + Python) · Cardinality Guard (per-tenant 500 limit) · Receiver credentials in a Kubernetes Secret (`secretRef`: the name derives from the tenant id as `da-<tenant>`, shared Secrets are listed by the deployment policy's `shared_secrets`; a credential written out is refused by the generator; [BYO integration guide §5](docs/integration/byo-alertmanager-integration.en.md#credentials-in-a-secret-secretref))
 
 ### Tenant Self-Service & Multi-Cluster
 

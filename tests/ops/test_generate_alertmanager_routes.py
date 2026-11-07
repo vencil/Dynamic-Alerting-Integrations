@@ -2177,11 +2177,13 @@ class TestDomainPolicyOverrideSubroutes:
         with tempfile.TemporaryDirectory() as d:
             _wy(d, "_domain_policy.yaml", {"domain_policies": self._policy(
                 forbidden_receiver_types=["slack"])})
+            # #1560 ⑤-b: written to a file the CLI judges, so references.
+            ref = {"secret": {"key": "k"}}
             _wy(d, "tenant-fin.yaml", {"tenants": {"tenant-fin": {
                 "_routing": {
-                    "receiver": self._PD,
+                    "receiver": {**self._PD, "service_key": ref},
                     "overrides": [{"alertname": "MysqlDown",
-                                   "receiver": self._SLACK}],
+                                   "receiver": {**self._SLACK, "api_url": ref}}],
                 }}}})
 
             def run(*flags):
@@ -2218,7 +2220,7 @@ class TestStrictValidateCLI:
         """建一個含 domain policy 的最小 conf.d。"""
         defaults = routing_defaults or {
             "receiver": {"type": "slack",
-                         "api_url": "https://hooks.slack.com/services/T/B/X"},
+                         "api_url": {"secret": {"key": "slack-url"}}},  # #1560 ⑤-b
             "group_by": ["alertname"],
             "group_wait": "5s",
             "repeat_interval": "24h",

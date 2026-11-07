@@ -494,7 +494,10 @@ generator:
     sizeLimit: 1Gi
   # Deployment-side policy file (ADR-036 §5, #2826): `allowed_domains` (and
   # optionally `min_generator_version`, and `shared_secrets` — the shared
-  # Secrets a receiver's secretRef may name, #1560) kept OUTSIDE the tenant repository, so
+  # Secrets a receiver's secretRef may name, #1560; each entry's `fields` lists
+  # full field paths such as `api_url` or `http_config.basic_auth.password`,
+  # a bare `http_config` makes the policy unusable since #1560 ⑤-b, see the
+  # BYO integration guide §5) kept OUTSIDE the tenant repository, so
   # a user who can write to the repository cannot loosen it. The chart ships
   # no policy content: name an existing ConfigMap you manage and its key. Set,
   # it is mounted read-only into the generator (passed as --policy) and into

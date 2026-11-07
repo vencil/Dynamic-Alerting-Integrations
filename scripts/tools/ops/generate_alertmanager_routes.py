@@ -109,6 +109,7 @@ from _grar_parse import (  # noqa: E402, F401
     _parse_tenant_overrides,
     load_tenant_tree,
     print_reader_warnings,  # #2906: for the tools that do not print the stream
+    credential_findings,  # #1560 ⑤-b: credentials written out (validate-config's routes row)
 )
 
 # Used here, not re-exported: which #2326 routing-tree findings refuse the
@@ -1352,7 +1353,8 @@ def _exit_code_of(exc: SystemExit) -> int:
     return 1  # a message: Python prints it and exits 1
 
 
-def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
+def main(argv: list[str] | None = None, *, key_verdict: bool = True,
+         credential_scope: "frozenset[str] | None" = None) -> None:
     """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML.
 
     *argv* defaults to ``sys.argv[1:]``; the generator container (#2901)
@@ -1360,7 +1362,10 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
     ``--validate`` also reports the shared key verdict (ADR-038 §5). The
     container passes False: it judges the keys itself, after the generator
     passes the write (``_gsvc_child.key_verdict``), so running it here too
-    would judge every write twice."""
+    would judge every write twice. *credential_scope* (#1560 ⑤-b): the
+    files a credential written out refuses the run for (``credential_findings``'
+    *scope*); the container passes the files the write changes, so tenant-api
+    refuses a write by the files it writes. None: every file (every CLI run)."""
     parser = _build_parser()
     # #2766: every finding the run prints, in the order it was determined.
     # --findings-json writes it on EVERY exit — a refusal, a verdict, a caller
@@ -1392,7 +1397,8 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
         # A judge (#3206): it refuses a tree Go names paths on as its own
         # finding, so the reader's fail-closed exit stands aside.
         with receipts, _lib_parse_cache.session(), _lib_parse_cache.judging():
-            _run(args, findings, key_verdict=key_verdict, mount_lists=mount_lists)
+            _run(args, findings, key_verdict=key_verdict, mount_lists=mount_lists,
+                 credential_scope=credential_scope)
         for path, doc in mount_lists:
             _write_mount_list(path, doc)
         code = EXIT_OK
@@ -1827,9 +1833,11 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _run(args: argparse.Namespace, findings: list[str], *,
          key_verdict: bool = True,
-         mount_lists: list[tuple[str, dict]] | None = None) -> None:
+         mount_lists: list[tuple[str, dict]] | None = None,
+         credential_scope: "frozenset[str] | None" = None) -> None:
     """``main`` after argument parsing; appends each finding to *findings*
-    (#2766) as soon as the run has determined it. *key_verdict*: ``main``'s.
+    (#2766) as soon as the run has determined it. *key_verdict*,
+    *credential_scope*: ``main``'s.
     *mount_lists* (#1560): receives ``(path, document)`` for
     ``--secret-mounts-out``, which ``main`` writes once the run is done."""
 
@@ -1977,6 +1985,13 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     _refuse_invalid_tenant_ids(tree, findings)
     _refuse_field_type_errors(tree, findings)
     findings.extend(schema_warnings)
+    # #1560 ⑤-b: a credential a file writes out is judged on that file's own
+    # value, before any layer is merged — after the refusals (a refused tree
+    # is judged by nothing else), before any early exit (a tree with nothing
+    # to render, an unbound routing profile, is judged too). Blocking under
+    # --validate (blocking_generation_errors) and printed in every mode.
+    credential_lines = credential_findings(tree, scope=credential_scope)
+    findings.extend(credential_lines)
     # ADR-038 §5: after the refusals (a refused tree is judged by nothing
     # else), before the exits below that end the run short of
     # `_validate_mode` ("No tenants found", "No valid routes …"): a tree with
@@ -1993,9 +2008,10 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         # tenant (an unreadable `_routing`; an invalid tenant id is refused
         # above, ADR-035 D3): those lines are blocking here as everywhere else — `--validate` and
         # `--strict` fail on them, render mode prints them and exits 0.
-        for w in schema_warnings:
+        for w in schema_warnings + credential_lines:
             print(safe_label(w), file=sys.stderr)
-        errors = ((blocking_generation_errors(schema_warnings) if args.validate else [])
+        errors = ((blocking_generation_errors(schema_warnings + credential_lines)
+                   if args.validate else [])
                   + (_policy_errors(schema_warnings) if args.strict else [])
                   + key_blocks)
         if errors:
@@ -2027,7 +2043,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
 
     # Collect all warnings
-    all_warnings = schema_warnings + route_warnings + dedup_warnings
+    all_warnings = schema_warnings + credential_lines + route_warnings + dedup_warnings
     findings.extend(route_warnings + dedup_warnings)
     for w in all_warnings:
         # #1538: escape here, not in `all_warnings` — the same list is handed

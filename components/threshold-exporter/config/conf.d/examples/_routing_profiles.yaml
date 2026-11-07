@@ -20,13 +20,21 @@
 # tenant="<id>" matcher stays on the parent route. Timing / group_by not set on
 # an entry are inherited from the tenant's main route. Domain policies and the
 # --policy webhook allowlist check these receivers too.
+#
+# Credentials (#1560): a profile never writes one out — the generator refuses
+# that under --validate. `{secret: {key: <key>}}` is the Secret of the tenant
+# that binds the profile (da-<tenant>), so EVERY tenant binding it needs that
+# key in its own Secret: here da-redis-prod and da-mongo-prod hold
+# `pagerduty-service-key` (domain-finance-tier1). A credential the tenants
+# share instead is `{secret: {shared: <alias>, key: <key>}}`, with the alias
+# in the deployment policy's shared_secrets (BYO guide §5).
 
 routing_profiles:
   # SRE team in APAC region
   team-sre-apac:
     receiver:
       type: slack
-      api_url: "https://hooks.slack.com/services/T00/B00/sre-apac"
+      api_url: {secret: {key: slack-api-url}}
     group_by: [tenant, alertname, severity]
     group_wait: 30s
     group_interval: 5m
@@ -37,7 +45,7 @@ routing_profiles:
       - match: { severity: critical }
         receiver:
           type: pagerduty
-          service_key: "sre-apac-critical-key"
+          service_key: {secret: {key: pagerduty-critical-service-key}}
         repeat_interval: 15m
 
   # Global DBA team
@@ -54,7 +62,7 @@ routing_profiles:
   domain-finance-tier1:
     receiver:
       type: pagerduty
-      service_key: "finance-tier1-key"
+      service_key: {secret: {key: pagerduty-service-key}}
     group_by: [tenant, alertname, severity]
     group_wait: 30s
     group_interval: 5m

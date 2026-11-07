@@ -318,6 +318,9 @@ func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
 			"          receiver: {type: webhook, url: \"https://ok.example.com/y\"}\n", "routing_value_not_string"},
 		"key the generator does not read": {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n" +
 			"        url: https://ok.example.com/x\n      continue: true\n", "routing_key_ignored"},
+		// #1560 ⑤-b: a credential written out in the file this write changes.
+		"credential written out": {"tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: pagerduty\n" +
+			"        service_key: k\n", "credential_plaintext"},
 	} {
 		before := gitRev(t, repo, "HEAD")
 		if got := kinds(putTenantAs(t, d, "t-a", c.body, "admins", nil)); !got[c.kind] {
@@ -344,6 +347,17 @@ func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
 		!batchKinds["routing_not_mapping"] {
 		t.Errorf("batch _routing patch: status %d body %s; want 422, %s with routing_not_mapping",
 			w.Code, w.Body.String(), errcode.GeneratorFindings)
+	}
+	// #1560 ⑤-b: a credential written out in a file this write does not
+	// change is a NOTICE, not a refusal: the files written decide.
+	if err := os.WriteFile(filepath.Join(repo, "_routing_profiles.yaml"),
+		[]byte("routing_profiles:\n  p:\n    receiver:\n      type: pagerduty\n      service_key: k\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "_routing_profiles.yaml")
+	runGit(t, repo, "commit", "-qm", "a profile writes a credential out")
+	if w := putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n", "admins", nil); w.Code != http.StatusOK {
+		t.Errorf("credential in a file the write does not change: status %d body %s; want 200", w.Code, w.Body.String())
 	}
 	// The repo's policy file unreadable: the generator's finding, refusing
 	// even a threshold-only write — not tenant-api's 503.
