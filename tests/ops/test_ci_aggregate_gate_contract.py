@@ -2049,16 +2049,6 @@ KNOWN_SKIP_TOLERANCE_GAPS = {
         "whose failure the gate's first branch already catches, so it cannot "
         "skip while its own `if:` was true.",
     ),
-    ("ci.yml", "go-tests", "go-tests-tenant-api"): (
-        frozenset({"schema_changed"}),
-        "the leg runs on `go_changed || schema_changed` (#3504: internal/confd "
-        "holds the tenant file's top-level key set equal to the tenant schema's), "
-        "while the gate forgives a skip whenever `go_changed != 'true'`. Same "
-        "latent shape and reachability argument as am-inhibit's `schema_changed` "
-        "above: the leg's only `needs:` is detect-changes, whose failure the "
-        "gate's first branch already catches, so it cannot skip while its own "
-        "`if:` was true.",
-    ),
 }
 
 
