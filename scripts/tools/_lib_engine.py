@@ -46,6 +46,7 @@ import re
 import shutil
 import subprocess
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Union
 
 #: Every external engine whose output decides a verdict somewhere under the
@@ -154,18 +155,23 @@ def argv(located: Located, args: Sequence[str], *,
 def run(located: Located, subcommand: str, args: Sequence[str], *,
         timeout: int, cwd: Optional[str] = None,
         docker_run: Sequence[str] = (), entrypoint: Optional[str] = None,
-        stdin_text: Optional[str] = None) -> Result:
+        stdin_text: Optional[str] = None, env: Optional[dict] = None,
+        expect: Optional[dict] = None) -> Result:
     """Run *located* and judge the result with the proof registered for
     ``(engine, subcommand)``. Never raises for an engine failure: a binary
     that cannot start, a timeout, and output without proof are all
-    :class:`NoVerdict`."""
+    :class:`NoVerdict`.
+
+    *expect* is what the proof checks the output against beyond its shape —
+    how many inputs were sent (``inputs``), the file the run must write
+    (``output``)."""
     proof = PROOFS[(located.engine, subcommand)]
     cmd = argv(located, args, docker_run=docker_run, entrypoint=entrypoint)
     via = "" if located.mode == "binary" else " (docker)"
     try:
         proc = subprocess.run(cmd, cwd=cwd, input=stdin_text, capture_output=True,
                               text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout)
+                              timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
         return NoVerdict(f"{located.engine}{via} did not finish within {timeout}s "
                          f"(rc {_TIMEOUT_RC})")
@@ -173,7 +179,7 @@ def run(located: Located, subcommand: str, args: Sequence[str], *,
         return NoVerdict(f"cannot run {located.engine}{via}: {exc} "
                          f"(rc {_NOT_RUNNABLE_RC})")
     try:
-        data = proof(proc)
+        data = proof(proc, expect or {})
     except NoProof as exc:
         return NoVerdict(
             f"{located.engine} {subcommand}{via} did not run: {exc} "
@@ -194,7 +200,7 @@ def _requires(proc: subprocess.CompletedProcess, *flags: str) -> None:
         raise ValueError(f"proof needs {missing} in the engine's argv: {args}")
 
 
-def _kube_linter_lint(proc: subprocess.CompletedProcess) -> list[dict]:
+def _kube_linter_lint(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
     """``kube-linter lint --format json``: rc 0 (clean) or 1 (findings), and
     stdout a JSON object carrying ``Reports`` and ``Summary`` (measured on
     v0.7.4: a clean run prints ``"Reports": null``). No objects found and an
@@ -219,7 +225,7 @@ def _kube_linter_lint(proc: subprocess.CompletedProcess) -> list[dict]:
     return reports
 
 
-def _helm_template(proc: subprocess.CompletedProcess) -> str:
+def _helm_template(proc: subprocess.CompletedProcess, expect: dict) -> str:
     """``helm template``: rc 0 and a non-empty render. An empty render lints
     as "no objects", which is no scan at all."""
     if proc.returncode != 0:
@@ -233,7 +239,7 @@ def _helm_template(proc: subprocess.CompletedProcess) -> str:
 _HADOLINT_FIELDS = frozenset({"file", "line", "code", "level", "message"})
 
 
-def _hadolint(proc: subprocess.CompletedProcess) -> list[dict]:
+def _hadolint(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
     """``hadolint --no-fail --format json``: exit 0 means "ran" (--no-fail),
     and stdout is a JSON array (a clean run prints ``[]``) whose items carry
     the fields every finding has — one without ``level`` would be classified
@@ -258,7 +264,7 @@ _ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")
 _PINT_ENTRIES_RE = re.compile(r"entries=(\d+)")
 
 
-def _pint_lint(proc: subprocess.CompletedProcess) -> tuple[int, int]:
+def _pint_lint(proc: subprocess.CompletedProcess, expect: dict) -> tuple[int, int]:
     """``pint lint``: rc 0 (clean) or 1 (problems), and its log names how many
     rule entries it checked (``entries=N``; coloured unconditionally, so SGR
     is stripped first). Returns ``(entries, returncode)``. A pint that stops
@@ -277,12 +283,73 @@ def _pint_lint(proc: subprocess.CompletedProcess) -> tuple[int, int]:
     return int(m.group(1)), proc.returncode
 
 
+def _json_stdout(proc: subprocess.CompletedProcess) -> Any:
+    out = (proc.stdout or "").strip()
+    if not out:
+        raise NoProof("nothing on stdout")
+    try:
+        return json.loads(out)
+    except json.JSONDecodeError:
+        raise NoProof(f"stdout is not JSON: {out[:300]}") from None
+
+
+def _node_babel_parse(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
+    """lint_jsx_babel's driver (``node -e``): rc 0 and one ``{path, ok}``
+    result per JSX file it was handed (``expect["inputs"]``). A result list
+    shorter than the input is files that were never parsed."""
+    if proc.returncode != 0:
+        raise NoProof("non-zero exit")
+    doc = _json_stdout(proc)
+    if not (isinstance(doc, list)
+            and all(isinstance(r, dict) and {"path", "ok"} <= r.keys() for r in doc)):
+        raise NoProof("stdout is not a list of {path, ok} results")
+    if len(doc) != expect["inputs"]:
+        raise NoProof(f"{len(doc)} result(s) for {expect['inputs']} file(s)")
+    return doc
+
+
+def _node_cli_playground(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
+    """check_cli_contract's CLI Playground driver: rc 0 and a non-empty list
+    of ``{key, kind, cmd}`` rows (a catalog that evaluates to no command is
+    a page this check could not read, not a page with nothing wrong)."""
+    if proc.returncode != 0:
+        raise NoProof("non-zero exit")
+    doc = _json_stdout(proc)
+    if not (isinstance(doc, list) and doc
+            and all(isinstance(r, dict) and {"key", "kind", "cmd"} <= r.keys() for r in doc)):
+        raise NoProof("stdout is not a non-empty list of {key, kind, cmd} rows")
+    return doc
+
+
+def _mmdc_render(proc: subprocess.CompletedProcess, expect: dict) -> bool:
+    """``mmdc -i <diagram> -o <png>``: ``True`` when it exited 0 and wrote a
+    non-empty image (``expect["output"]``); ``False`` when it exited 1.
+
+    ⛔ ``False`` is NOT yet a finding: mermaid-cli exits 1 both for a diagram
+    it cannot parse and for a renderer that cannot start (measured, 12.2.0:
+    "Parse error on line 3" and "Browser was not found" are both rc 1). Only
+    a canary — a known-good diagram rendered by the same command line just
+    before or after — separates them, and that is the caller's to run
+    (validate_mermaid). No text is read to tell them apart (#3611 Q2)."""
+    if proc.returncode == 1:
+        return False
+    if proc.returncode != 0:
+        raise NoProof("unexpected exit status")
+    out = Path(expect["output"])
+    if not (out.is_file() and out.stat().st_size > 0):
+        raise NoProof(f"exit 0 but no image at {out}")
+    return True
+
+
 #: (engine, subcommand) → proof. The key is the pair, not the engine: one
 #: engine's subcommands prove a run differently (helm ``template`` vs
-#: ``package``).
-PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess], Any]] = {
+#: ``package``; node runs a different driver for each tool).
+PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess, dict], Any]] = {
     ("hadolint", "lint"): _hadolint,
     ("helm", "template"): _helm_template,
     ("kube-linter", "lint"): _kube_linter_lint,
+    ("mmdc", "render"): _mmdc_render,
+    ("node", "babel-parse"): _node_babel_parse,
+    ("node", "cli-playground"): _node_cli_playground,
     ("pint", "lint"): _pint_lint,
 }

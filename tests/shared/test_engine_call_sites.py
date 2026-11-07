@@ -106,7 +106,12 @@ BASELINE: dict[Key, int] = {
 _BASELINE_SHA256 = "4da9dcc811bcbef20b216905935b50ef7890886b1ac8512cba835a3aeac4d592"
 
 #: Sites moved to _lib_engine since the baseline: key → how many.
-MIGRATED: dict[Key, int] = {}
+MIGRATED: dict[Key, int] = {
+    # #3611 PR 2: node / mmdc
+    ("scripts/tools/lint/check_cli_contract.py", "node"): 1,
+    ("scripts/tools/lint/lint_jsx_babel.py", "node"): 2,
+    ("scripts/tools/lint/validate_mermaid.py", "mmdc"): 2,
+}
 
 #: Baseline sites the scanner counts that are not engine calls. They stay in
 #: the count (the scanner cannot tell them apart); naming them here keeps a

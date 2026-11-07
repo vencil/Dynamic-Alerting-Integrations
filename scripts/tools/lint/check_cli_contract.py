@@ -30,7 +30,7 @@ inline code span、manifest 的 ``command:``／``args:`` 清單（行尾 YAML �
 選項之後），以及 cli-reference 的選項表與結束碼表；裸 ``da-tools`` 只在命令位置或 ``docker run``
 的 image 位置才是主語。portal CLI Playground（``cli-playground/{commands,engine}.js``）以 node 求值：
 用頁面自己的 ``buildCommand`` 把每個命令的參數與旗標全部填上後組出字串，連同 preview 首行一起判；
-沒有 node 時揭露為 NOT scored，``CLI_CONTRACT_REQUIRE_NODE=1``（CI）下則是硬錯。
+node 經 ``_lib_engine`` 定位與判定，沒有 node、或 node 沒跑出命令清單，一律是硬錯（rc 2，#3611）。
 
 帳本 ``docs/internal/cli-contract-baseline.yaml`` 每列 (file, command, verdict, token, count, ticket)，
 比對是集合相等——少於 count 是 stale 硬錯、多出來的是新 finding、ticket 必須是 ``#NNNN``。
@@ -66,6 +66,7 @@ from typing import Any, Iterator, NamedTuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo subdir layout
+import _lib_engine  # noqa: E402
 import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 from _lint_helpers import ENTRYPOINT_PATH, parse_command_map  # noqa: E402
@@ -92,8 +93,6 @@ EXTRA_DOC_FILES = (
 # is judged is the exact string a user copies, not a regex guess at it.
 PORTAL_PLAYGROUND_DIR = REPO_ROOT / "tools/portal/src/interactive/tools/cli-playground"
 PORTAL_PLAYGROUND_FILES = ("commands.js", "engine.js")
-# Set in CI so a runner without node is a hard error, not a quiet disclosure.
-PORTAL_REQUIRE_ENV = "CLI_CONTRACT_REQUIRE_NODE"
 _JS_FRONTMATTER = re.compile(r"\A---\n.*?\n---\n", re.S)
 INLINE_IGNORE = "datools-cmd-ignore"
 VERDICTS = ("V0", "V1", "V2", "V3", "V4", "V5", "V6", "V7")
@@ -1963,7 +1962,7 @@ _STAT_KEYS = (
     "cmd_unparseable", "table_rows_positional", "table_rows_no_parser",
     "reference_sections_unmatched", "exit_tables_no_script",
     "exit_undecidable_scripts", "commands_without_exit_table", "ignored",
-    "unscanned_carrier_files", "portal_commands", "portal_unavailable",
+    "unscanned_carrier_files", "portal_commands",
     "cmd_synopsis", "cmd_injected_assumed", "cmd_parse_placeholder_value",
     "cmd_parse_crashed", "table_cmd_rows", "table_flags_by_union",
     "v7_sections_without_option_table", "v7_suppressed_options",
@@ -2004,13 +2003,14 @@ def portal_commands(src_dir: Path = PORTAL_PLAYGROUND_DIR,
     """Evaluate the CLI Playground catalog; return (commands, why-unavailable).
 
     ``why-unavailable`` is set (and the list empty) only when node is not on
-    PATH — a condition the caller discloses or, under ``PORTAL_REQUIRE_ENV``,
-    treats as fatal. Anything else that stops the evaluation raises: a page
-    this check could not read is not a page with nothing wrong in it.
+    PATH; the caller treats that as fatal (#3611: no engine is no verdict,
+    with or without --ci). Anything else that stops the evaluation raises: a
+    page this check could not read is not a page with nothing wrong in it.
     """
-    node = node or shutil.which("node")
-    if node is None:
-        return [], "node not on PATH"
+    located = (_lib_engine.Located("node", "binary", path=node) if node
+               else _lib_engine.locate("node"))
+    if isinstance(located, _lib_engine.NoVerdict):
+        return [], located.reason
     source = (src_dir / "commands.js").read_text(encoding="utf-8")
     with tempfile.TemporaryDirectory() as tmp:
         mods = {}
@@ -2024,14 +2024,12 @@ def portal_commands(src_dir: Path = PORTAL_PLAYGROUND_DIR,
             mods[name] = json.dumps(mod.as_uri())
         driver = _PORTAL_DRIVER % {"commands": mods["commands.js"],
                                    "engine": mods["engine.js"]}
-        proc = subprocess.run([node, "--input-type=module", "-e", driver],
-                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
-    if proc.returncode != 0:
-        raise RuntimeError(f"node could not evaluate the CLI Playground catalog "
-                           f"(rc={proc.returncode}): {proc.stderr.strip()[:500]}")
-    rows = json.loads(proc.stdout)
-    if not rows:
-        raise RuntimeError("the CLI Playground catalog evaluated to zero commands")
+        result = _lib_engine.run(located, "cli-playground",
+                                 ["--input-type=module", "-e", driver], timeout=60)
+    if isinstance(result, _lib_engine.NoVerdict):
+        raise RuntimeError(f"node could not evaluate the CLI Playground catalog: "
+                           f"{result.message()[:500]}")
+    rows = result.data
     lines = source.splitlines()
 
     def _line(pattern: str) -> int:
@@ -2136,11 +2134,8 @@ def scan(parsers: dict[str, ParserModel] | None = None,
                 fatal.append(f"the CLI Playground carrier failed — this check saw "
                              f"NONE of its commands: {exc}")
             if unavailable is not None:
-                if os.environ.get(PORTAL_REQUIRE_ENV) == "1":
-                    fatal.append(f"{PORTAL_REQUIRE_ENV}=1 but the CLI Playground "
-                                 f"carrier cannot run: {unavailable}")
-                else:
-                    stats["portal_unavailable"] = 1
+                fatal.append(f"the CLI Playground carrier cannot run — this "
+                             f"check saw NONE of its commands: {unavailable}")
         else:
             portal = []
             fatal.append(f"{_rel(portal_dir, repo_root)} not found — the CLI "
@@ -2212,9 +2207,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
         f"{s['cmd_sh_c_strings']} `sh -c` strings, {s['portal_commands']} CLI "
         f"Playground command lines, {s['v7_sections_without_option_table']} "
         f"reference sections with options but no option table (V7 reports "
-        f"each of their options)"
-        + (" (⚠️ CLI Playground NOT scored: node not on PATH)"
-           if s["portal_unavailable"] else ""),
+        f"each of their options)",
         f"NOT scored: {s['cmd_no_parser']} commands under a subcommand with no "
         f"argparse parser (guard/parser/batch-pr — their subcommands are "
         f"check_doc_datools_cmds' job), {s['cmd_script_not_in_map']} `python3 "

@@ -37,10 +37,18 @@ Severity split (added in docs/harness-hardening):
     pre-commit stays on default so commits are not blocked by pre-existing
     drift; CI runs --strict to surface everything.
 
+The Babel pass runs in node, located and judged through ``_lib_engine``
+(#3611, owner 2026-11-06): no node, an ``@babel/standalone`` that cannot be
+installed, a node run that fails or does not return one result per JSX file
+is no verdict — exit 2 with or without ``--ci``, never a green run that
+skipped the parse. To skip the hook, use pre-commit's own ``SKIP=<id>``.
+
 Exit codes:
-    0 = all files pass
+    0 = all files pass (findings without --ci are printed, exit 0)
     1 = Babel parse failure / hard-cap line-count (always fatal under --ci),
         OR static / soft-cap warnings under --strict
+    2 = no verdict: node missing, @babel/standalone not installable, or the
+        node pass did not run over every file
 """
 from __future__ import annotations
 
@@ -61,6 +69,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+import _lib_engine  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -364,20 +373,20 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Check Node.js
-    try:
-        subprocess.run(["node", "--version"], capture_output=True, timeout=10, check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        print("⚠ Node.js not found — skipping JSX Babel lint")
-        return 0
+    # The Babel pass needs node: required with or without --ci (#3611 Q1).
+    node = _lib_engine.locate("node")
+    if isinstance(node, _lib_engine.NoVerdict):
+        print(f"ERROR: {node.reason}; the JSX Babel parse did not run", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     # Ensure @babel/standalone is installed
     babel_prefix = Path(tempfile.gettempdir()) / "da-babel-lint"
     babel_prefix.mkdir(exist_ok=True)
     node_modules = babel_prefix / "node_modules"
     if not _ensure_babel(node_modules):
-        print("⚠ Could not install @babel/standalone — skipping")
-        return 0
+        print("ERROR: could not install @babel/standalone (npm); the JSX Babel "
+              "parse did not run", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     # Collect JSX files
     files = []
@@ -412,34 +421,16 @@ def main() -> int:
     # Pass 2: Babel parse via Node.js
     env = os.environ.copy()
     env["NODE_PATH"] = str(node_modules)
-    result = subprocess.run(
-        ["node", "-e", NODE_SCRIPT],
-        input=json.dumps(files),
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-        timeout=30,
-        env=env,
-    )
-
-    babel_failures = []
-    if result.returncode != 0:
-        print(f"⚠ Node.js error: {result.stderr[:200]}")
-        # The Babel pass could not run (subprocess crash, not a JSX defect).
-        # Under --ci that's a caller/environment error — failing green here
-        # would let real parse errors slip through silently.
-        if args.ci:
-            return EXIT_CALLER_ERROR
-        return 0
-    else:
-        try:
-            results = json.loads(result.stdout)
-            babel_failures = [r for r in results if not r["ok"]]
-        except json.JSONDecodeError:
-            print("⚠ Could not parse Node.js output")
-            # Unparseable output → the check did not produce a verdict.
-            if args.ci:
-                return EXIT_CALLER_ERROR
-            return 0
+    # A node run that crashed, printed no results, or returned fewer results
+    # than files is the parse not having run — no verdict, with or without
+    # --ci (it used to be exit 0 without --ci).
+    result = _lib_engine.run(node, "babel-parse", ["-e", NODE_SCRIPT],
+                             stdin_text=json.dumps(files), env=env, timeout=30,
+                             expect={"inputs": len(files)})
+    if isinstance(result, _lib_engine.NoVerdict):
+        print(f"ERROR: {result.message()}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    babel_failures = [r for r in result.data if not r["ok"]]
 
     # Combine results
     all_failures = (
