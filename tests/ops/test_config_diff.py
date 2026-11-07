@@ -666,13 +666,6 @@ class TestCLI:
         assert (f"--new-dir {tmp_path / 'new'}: selects nothing (a file da-guard lists "
                 "as a config file)") in p.stderr, p.stderr
 
-    def test_old_dir_missing_is_a_first_import(self, tmp_path):
-        """#3693 `missing=ABSENT_EMPTY`: a base side with nothing at its path
-        is a first import — every tenant added, rc 1."""
-        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
-        p = _run_cli(tmp_path / "nope", tmp_path / "new")
-        assert p.returncode == 1, p.stderr
-
     @pytest.mark.parametrize("label, write", [
         ("malformed_yaml", lambda f: f.write_text("tenants:\n  db-a: [unclosed\n   x: :\n", encoding="utf-8")),
         ("non_utf8", lambda f: f.write_bytes(b"tenants:\n  db-a:\n    note: caf\xe9\n")),

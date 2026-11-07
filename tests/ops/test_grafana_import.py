@@ -331,6 +331,16 @@ class TestMain:
         assert exc.value.reason == "dir_not_found"
         assert str(ghost) in str(exc.value)
 
+    def test_an_empty_dashboard_dir_is_named_not_a_usage_error(self, cli_argv):
+        """#3693: `--dashboard-dir ""` (an unset variable) is judged by its
+        declaration and named — it fell through to "Provide --dashboard,
+        --dashboard-dir, or --verify"."""
+        cli_argv("grafana_import.py", "--dashboard-dir", "")
+        with pytest.raises(CallerError) as exc:
+            gi.main()
+        assert exc.value.reason == "dir_not_found"
+        assert str(exc.value).startswith("--dashboard-dir '': "), str(exc.value)
+
     def test_dashboard_dir_no_jsons_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         d = tmp_path / "empty-dir"
         d.mkdir()
