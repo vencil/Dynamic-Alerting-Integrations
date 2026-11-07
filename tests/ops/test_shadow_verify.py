@@ -629,3 +629,20 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
         with patch("urllib.request.urlopen", side_effect=OSError("fail")):
             c = {c["check"]: c for c in sv.check_preflight(_args(alertmanager="http://am:9093"))}
         assert c["alertmanager_shadow_route"]["status"] == "pass"
+
+
+@pytest.mark.parametrize("phase", ["runtime", "convergence"])
+def test_a_report_whose_records_end_in_a_bare_cr_is_read(tmp_path, phase):
+    """#3445 review: read as bytes and decoded, a report with CR-only line
+    ends lost the universal newlines the text-mode open gave it — runtime
+    exited 2 (csv.Error), convergence could skip a recent mismatch."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    path = tmp_path / "cr.csv"
+    path.write_bytes(f"Tenant,Status,Timestamp\rdb-a,mismatch,{now}\r".encode())
+    args = _args(report_csv=str(path))
+    with patch.object(sv, "query_prometheus", return_value=([], None)):
+        checks = (sv.check_runtime if phase == "runtime" else sv.check_convergence)(
+            args, _read(args))
+    name = "csv_mismatch_ratio" if phase == "runtime" else "seven_day_zero_mismatch"
+    check = next(c for c in checks if c["check"] == name)
+    assert check["status"] == "fail" and check["detail"].startswith("1"), check

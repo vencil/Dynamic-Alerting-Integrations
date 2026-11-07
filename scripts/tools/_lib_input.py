@@ -302,6 +302,9 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
             raise ValueError("a decode= input takes no empty=, default= or absent_default=")
         if decode.empty_is is not None and decode.fmt != "yaml":
             raise ValueError("empty_is is for a YAML document only")
+        tops = decode.top if isinstance(decode.top, tuple) else (decode.top,)
+        if decode.empty_is is not None and decode.empty_is not in tops:
+            raise ValueError(f"empty_is {decode.empty_is!r} is not a declared top {decode.top!r}")
     elif not (select == DA_GUARD_LISTS or _is_selector(select)):
         raise TypeError("select must be a selector (choose(directory, names), wanted) "
                         f"or DA_GUARD_LISTS, not {select!r}")
@@ -499,7 +502,7 @@ def document(args: argparse.Namespace, dest: str, *, lang: str) -> Any:
         raise _caller_error(f"{label}: {safe_label(exc.detail(lang))}",
                             "file_unreadable") from exc
     if data is None and doc.empty_is is not None:
-        return doc.empty_is()
+        data = doc.empty_is()  # judged by the top-level check like any value
     if not isinstance(data, doc.top):
         raise refuse_top(label, kind_of(data), doc.top, lang=lang)
     return data

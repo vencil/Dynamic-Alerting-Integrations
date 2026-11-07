@@ -408,6 +408,18 @@ class TestCLI:
         report = json.loads(out)
         assert report["total_alerts"] == 2
 
+    def test_main_an_empty_input_is_refused_not_a_live_query(self, monkeypatch, cli_argv):
+        """`--input ''` names no file: it was taken for "no --input", so the
+        tool queried Alertmanager / Prometheus instead and could report rc
+        0 (#3445 review). Now it reaches `_lib_input.document`: refused."""
+        from _lib_exitcodes import CallerError
+        cli_argv("alert_correlate", "--input", "", "--json")
+        monkeypatch.setattr(ac, "load_alerts_from_alertmanager",
+                            lambda *a, **k: pytest.fail("queried instead of refusing"))
+        with pytest.raises(CallerError) as exc:
+            emit_result(ac.main())
+        assert str(exc.value).startswith("--input ''"), str(exc.value)
+
     def test_main_no_alerts(self, monkeypatch, capsys, cli_argv):
         cli_argv("alert_correlate", "--prometheus", "http://fake:9090")
         monkeypatch.setattr(ac, "load_alerts_from_alertmanager",

@@ -486,8 +486,10 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
 
     # Load alerts
-    if args.input:
+    if args.input is not None:
         # #3415 / #3445: the path and the content judged by the lib, named.
+        # `--input ''` names no file: refused there, never taken for "no
+        # --input" (it queried Prometheus instead and could report rc 0).
         alerts = alerts_from_document(
             _lib_input.document(args, "input", lang=detect_cli_lang()))
     else:

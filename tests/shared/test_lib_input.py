@@ -480,3 +480,11 @@ def test_a_value_safeloader_cannot_build_is_a_document_error():
     with pytest.raises(_lib_input.DocumentError) as exc:
         _lib_input.decode_bytes(b"a: 2020-99-99\n", fmt="yaml", name="x")
     assert str(exc.value).startswith("not valid YAML: ")
+
+
+def test_an_empty_is_that_is_not_a_declared_top_is_refused_at_declaration():
+    """#3445 review: `Document("yaml", list, empty_is=dict)` read an empty
+    file as `{}` past the top-level check."""
+    with pytest.raises(ValueError):
+        _lib_input.add_input(argparse.ArgumentParser(), "--f",
+                             decode=_lib_input.Document("yaml", list, empty_is=dict))

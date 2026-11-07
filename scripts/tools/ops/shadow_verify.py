@@ -106,7 +106,10 @@ def run_cmd(cmd):
 
 def _csv_rows(text):
     """The rows of a --report-csv's text (`REPORT_CSV_DOCUMENT`)."""
-    return csv.DictReader(io.StringIO(text.removeprefix("\ufeff")))
+    # newline=None: universal newlines, as the text-mode open before #3445
+    # read it — a report whose records end in a bare CR was one unquoted
+    # field full of newlines (csv.Error, rc 2) or rows the 7-day check skipped.
+    return csv.DictReader(io.StringIO(text.removeprefix("\ufeff"), newline=None))
 
 
 def check_preflight(args, inputs=None):
