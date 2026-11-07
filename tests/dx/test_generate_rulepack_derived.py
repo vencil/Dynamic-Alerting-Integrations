@@ -581,3 +581,19 @@ def test_a_union_with_a_dropped_side_fails_the_check(da_read_env, tmp_path, caps
         lhs='(up{job="clickhouse"} == 0 or sum(up{job="clickhouse"}) == 0)'))
     assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
     assert "drops `tenant`" in capsys.readouterr().err
+
+
+_RECORD_EMPTIES = ("  - name: f2-record-labels\n    rules:\n"
+                   "      - record: tenant:f2probe_up:min\n        expr: min by(tenant) (up{job=\"clickhouse\"})\n"
+                   "        labels:\n          tenant: \"\"\n"
+                   "      - alert: F2RecordLabels\n        expr: |\n          tenant:f2probe_up:min == 0\n"
+                   "          unless on(tenant)\n          (user_state_filter{filter=\"maintenance\"} == 1)\n"
+                   "        labels:\n          maintenance: mute\n")
+
+
+def test_a_record_whose_labels_remove_tenant_fails_the_check(da_read_env, tmp_path, capsys):
+    """CodeRabbit on #3690: a recording rule's own `labels: {tenant: ""}`
+    removes tenant from every series it writes, whatever its expr keeps."""
+    rp = _pack_with(tmp_path, _RECORD_EMPTIES)
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert "drops `tenant`" in capsys.readouterr().err

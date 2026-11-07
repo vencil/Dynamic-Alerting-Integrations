@@ -44,9 +44,10 @@
 // the series <series> as Prometheus' parser and label matchers read them
 // (promql_selectors.go): {"documents": [[[{"selector", "start", "end"}, …], …]]}.
 //
-// `promql-label-flow` reads a JSON array of PromQL expressions on standard
-// input and prints, per expression, every `and` / `unless` matching on
-// <label> and whether its left side keeps <label> (promql_label_flow.go):
+// `promql-label-flow` reads a JSON object on standard input — the PromQL
+// "expressions", the "records" they may read and the "aliases" of <label>
+// (promql_label_flow.go) — and prints, per expression, every `and` /
+// `unless` matching on <label> and whether its left side keeps <label>:
 // {"documents": [[[{"op", "start", "end", "lhs"}, …], …]]}.
 //
 // `-` reads standard input — how a file held in a ConfigMap is handed over
@@ -105,7 +106,7 @@ func usage(stderr io.Writer) int {
 		"{\"files\": [{\"path\", \"documents\", \"problem\"}]}. `-` reads standard input "+
 		"(at most once). promql-selectors reads a JSON array of PromQL expressions on "+
 		"standard input and prints, per expression, the selectors that could select "+
-		"<series>; promql-label-flow prints, per expression, whether the left side of "+
+		"<series>; promql-label-flow reads {\"expressions\", \"records\", \"aliases\"} and prints, per expression, whether the left side of "+
 		"each `and`/`unless on(<label>)` keeps <label>. Exit 2 when a file is refused.\n")
 	return exitCallerErr
 }

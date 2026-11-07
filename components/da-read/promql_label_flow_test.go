@@ -33,8 +33,11 @@ var labelFlowCases = []struct {
 	{"absent without", `absent(nope{job="x"})`, flowDropped},
 	{"label_replace other", `label_replace(up, "x", "1", "", "")`, flowKept},
 	{"label_replace tenant", `label_replace(up, "tenant", "", "", "")`, flowUnknown},
-	{"tenant copied whole from a kept label", `label_replace(sum by(ns) (up), "tenant", "$1", "ns", "(.*)")`, flowKept},
-	{"tenant copied from a dropped label", `label_replace(sum by(job) (up), "tenant", "$1", "instance", "(.+)")`, flowDropped},
+	{"tenant copied whole from namespace", `label_replace(sum by(namespace) (up), "tenant", "$1", "namespace", "(.*)")`, flowKept},
+	{"tenant copied from a non-alias label (CodeRabbit)", `label_replace(sum by(job) (up), "tenant", "$1", "job", "(.*)")`, flowUnknown},
+	{"(.*) over a dropped namespace empties tenant", `label_replace(sum by(tenant) (up{tenant="t1"}), "tenant", "$1", "namespace", "(.*)")`, flowDropped},
+	{"(.+) over a dropped namespace leaves tenant (CodeRabbit)", `label_replace(sum by(tenant) (up), "tenant", "$1", "namespace", "(.+)")`, flowKept},
+	{"absent of an aggregation has no labels (CodeRabbit)", `absent(sum(nope{tenant="t1"}))`, flowDropped},
 	{"tenant from a partial regex", `label_replace(up, "tenant", "$1", "job", "j(.*)")`, flowUnknown},
 	{"on tenant one-to-one", `up >= on(tenant, job) up`, flowKept},
 	{"on other one-to-one", `up >= on(job) up`, flowDropped},
@@ -55,8 +58,8 @@ var labelFlowCases = []struct {
 
 const labelFlowSeries = `
 load 1m
-  up{tenant="t1", job="j1", instance="i1", ns="t1"} 0 0 0 0 0 0 0 0 0 0
-  up{tenant="t2", job="j2", instance="i2", ns="t2"} 0 0 0 0 0 0 0 0 0 0
+  up{tenant="t1", job="j1", instance="i1", ns="t1", namespace="t1"} 0 0 0 0 0 0 0 0 0 0
+  up{tenant="t2", job="j2", instance="i2", ns="t2", namespace="t2"} 0 0 0 0 0 0 0 0 0 0
   c{tenant="t1", job="j1"} 0 1 2 3 4 5 6 7 8 9
 `
 
@@ -165,15 +168,51 @@ func TestPromQLLabelFlowCommand(t *testing.T) {
 }
 
 func newFlow(records map[string]string) *flowReader {
-	f := &flowReader{label: "tenant", records: map[string][]parser.Expr{}, visiting: map[string]bool{}}
+	f := &flowReader{label: "tenant", records: map[string][]recordDef{}, visiting: map[string]bool{},
+		aliases: map[string]bool{"namespace": true}}
 	for name, e := range records {
 		n, err := ruleParser.ParseExpr(e)
 		if err != nil {
 			panic(err)
 		}
-		f.records[name] = append(f.records[name], n)
+		f.records[name] = append(f.records[name], recordDef{expr: n})
 	}
 	return f
+}
+
+// TestRecordLabelsOverride: a recording rule's own `labels:` set or remove
+// the label on every series it writes (CodeRabbit on #3690).
+func TestRecordLabelsOverride(t *testing.T) {
+	t.Parallel()
+	clause := ` unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`
+	for _, c := range []struct {
+		lbls map[string]string
+		want flow
+	}{
+		{map[string]string{"tenant": ""}, flowDropped},
+		{map[string]string{"tenant": "t1"}, flowKept},
+		{map[string]string{"x": "y"}, flowKept},
+	} {
+		f := newFlow(nil)
+		f.records["r:x"] = []recordDef{{expr: mustParse(t, `max by(tenant) (up)`), labels: c.lbls}}
+		hits := f.setMatchesOn(mustParse(t, `r:x`+clause))
+		if len(hits) != 1 || hits[0].LHS != c.want.String() {
+			t.Errorf("labels %v: got %+v, want %s", c.lbls, hits, c.want)
+		}
+	}
+}
+
+// TestFunctionsThatDropALabel: histogram_quantile and histogram_fraction
+// drop `le` (CodeRabbit on #3690); for any other label they follow the vector.
+func TestFunctionsThatDropALabel(t *testing.T) {
+	t.Parallel()
+	e := mustParse(t, `histogram_quantile(0.9, rate(b[5m]))`)
+	if got := newFlow(nil).forLabel("le").carries(e); got != flowDropped {
+		t.Errorf("le: got %s, want dropped", got)
+	}
+	if got := newFlow(nil).carries(e); got != flowKept {
+		t.Errorf("tenant: got %s, want kept", got)
+	}
 }
 
 // TestRecordsAreFollowed: a record that aggregated tenant away cannot hide
