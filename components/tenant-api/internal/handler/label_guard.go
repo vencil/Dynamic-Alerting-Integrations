@@ -43,8 +43,10 @@ package handler
 //     with labels is a change, creating one that keeps what the platform
 //     layer already says is not;
 //   - a file that is an unresolvable symlink: no file (scopeLabelsOnTree);
+//   - a file that parses but does not declare the tenant (a `tenants: {}`
+//     shell): no file — it holds no labels of the tenant;
 //   - a file whose labels cannot be read (ambiguous, not a regular file,
-//     unparseable, not declaring the tenant, undecodable `_metadata`):
+//     unparseable, undecodable `_metadata`):
 //     unknown. No write can be shown to leave unknown labels as they were —
 //     a body without labels may be removing the ones the file holds — so
 //     under the lock a write over such a file passes a platform
@@ -64,6 +66,7 @@ import (
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // labelChangeDeniedText is the refusal of a write a caller who is not a
@@ -119,7 +122,17 @@ func scopeLabelsOf(src *platformMetadataSource, data []byte, tenantID string) la
 		data = []byte("tenants:\n  " + tenantID + ": {}\n")
 	}
 	e, dm, ok, decoded := src.declaredIn(data, tenantID)
-	if !ok || !decoded {
+	if !ok {
+		// A file that parses but does not declare the tenant (a
+		// `tenants: {}` shell) holds no labels of it: the platform layer
+		// alone gives them, as for a tenant with no file. Only a file that
+		// does not parse is unknown.
+		if _, err := cfg.ParseConfigFile(data); err == nil {
+			return scopeLabelsOf(src, nil, tenantID)
+		}
+		return labelState{}
+	}
+	if !decoded {
 		return labelState{}
 	}
 	return labelState{scopePair{e, dm}, true}

@@ -629,3 +629,43 @@ func TestScopeGateDirectNoopFirstOpStillJudged(t *testing.T) {
 		})
 	}
 }
+
+// A file that parses but does not declare the tenant (a `tenants: {}` shell)
+// holds no labels of it: like no file, the platform layer alone gives them,
+// so a writer's body without labels changes nothing.
+func TestLabelGuardEmptyShellIsNoFile(t *testing.T) {
+	t.Parallel()
+	tree := lgTree()
+	tree[lgTenant+".yaml"] = "tenants: {}\n"
+	dir := seedGitTree(t, tree)
+	mgr, orgs, claims := lgRBACManager(t)
+	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: mgr, TenantOrg: orgs, ClaimHeaders: claims,
+		Groups: groups.NewDirManager(dir), WriteMode: WriteModeDirect}
+	body := lgTenantYAML("", "90")
+	w := lgPut(t, d, lgWriters, lgTenant, body)
+	if w.Code != http.StatusOK || lgReadFile(t, dir, lgTenant+".yaml") != body {
+		t.Fatalf("status %d, body %s; want 200 and the body written", w.Code, w.Body.String())
+	}
+}
+
+// A batch op that sets no scope key cannot change the labels: the merge
+// keeps `_metadata` as the file has it (mergePatchYAML), so labels that
+// cannot be read stay exactly as they were, and the label gate — about
+// writes that can change them — does not apply. (A whole-file PUT can drop
+// them, so it is refused: TestLabelGuardUnreadableLabelsBefore.)
+func TestLabelGuardBatchKeepsUnreadableLabels(t *testing.T) {
+	t.Parallel()
+	undecodable := "tenants:\n  " + lgTenant + ":\n    _metadata:\n      environment: [production]\n      domain: finance\n" +
+		"    mysql_connections: '80'\n"
+	tree := lgTree()
+	tree[lgTenant+".yaml"] = undecodable
+	dir := seedGitTree(t, tree)
+	mgr, orgs, claims := lgRBACManager(t)
+	d := &Deps{Writer: newTestWriter(dir), ConfigDir: dir, RBAC: mgr, TenantOrg: orgs, ClaimHeaders: claims,
+		Groups: groups.NewDirManager(dir), WriteMode: WriteModeDirect}
+	w := lgBatch(t, d, lgWriters, `[{"tenant_id":"`+lgTenant+`","patch":{"mysql_connections":"95"}}]`)
+	got := lgReadFile(t, dir, lgTenant+".yaml")
+	if w.Code != http.StatusOK || !strings.Contains(got, "environment: [production]") || !strings.Contains(got, `"95"`) {
+		t.Fatalf("status %d, file %q, body %s; want 200, the patch written and _metadata kept verbatim", w.Code, got, w.Body.String())
+	}
+}

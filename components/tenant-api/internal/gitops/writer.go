@@ -90,8 +90,9 @@ var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — w
 // handler's 409 TENANT_CONFIG_NOT_LOADABLE text, so the two never disagree.
 const MsgPlatformWriteRepair = "replacing it through the API (a whole-file PUT /api/v1/tenants/{id}) " +
 	"requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] and no org-scope, " +
-	"environments or domains); without it, ask a caller who has that permission to replace it, " +
-	"or repair the file in git"
+	"environments or domains) — and, when its environment/domain labels cannot be read either, a platform " +
+	"administrator (such a rule granting admin; ADR-027 §7); without that, ask a caller who has it to " +
+	"replace it, or repair the file in git"
 
 // MsgUnparseableBaseNeedsPlatformWrite is the validation text for a
 // whole-file write over a current tenant file the end-of-life guard cannot

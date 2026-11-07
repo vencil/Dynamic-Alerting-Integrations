@@ -2503,7 +2503,9 @@ paths:
         repaired; a whole-file PUT can replace it. When the end-of-life check cannot decode the current file's
         tenants: block, that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting
         write and no org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused
-        with 400, file unchanged — fix it in git then; when allowed, its end-of-life recipe usage counts as none, so
+        with 400, file unchanged — fix it in git then. When the file's environment/domain labels cannot be read
+        either (it does not parse, or its _metadata does not decode), only a platform administrator (such a rule
+        granting admin) may replace it, others get 403 (ADR-027 §7); when allowed, its end-of-life recipe usage counts as none, so
         a body with an end-of-life recipe is refused. A file that exists but cannot be read at all (permissions, I/O,
         a directory) refuses the write.
         A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by
@@ -2611,7 +2613,9 @@ paths:
             or an anchor, alias, merge key or tagged key at the top level or directly
             under tenants: (nothing written). Also 400 when the current tenant file''s
             tenants: block cannot be decoded for the end-of-life check and the caller
-            lacks write permission on all tenants (#2405; nothing written)'
+            lacks write permission on all tenants (#2405; nothing written; when the
+            file''s environment/domain labels cannot be read either, the refusal is
+            the 403 below, ADR-027 §7)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
@@ -2623,11 +2627,14 @@ paths:
             under the writer lock on the tree the write lands on — the serving tree
             in direct mode, where a write queued ahead may have changed the file;
             the latest base branch, which this server''s local copy may lag, in PR
-            write-back mode: a refusal there is the same 403 with tenant_id, and nothing
-            is written (no PR/MR or branch is left). Code FORBIDDEN for the caller''s
-            permission; in PR write-back mode, code FORGE_FORBIDDEN (#3202) when the
-            forge refuses tenant-api''s own configured token the write scope to open
-            the PR/MR — an operator must fix the token'
+            write-back mode: a refusal there is the same 403 — in direct mode with
+            the gate''s own text and no other field, in PR write-back mode with tenant_id
+            — and nothing is written (no PR/MR or branch is left). A non-administrator''s
+            whole-file write over a tenant file whose labels cannot be read is refused
+            here too. Code FORBIDDEN for the caller''s permission; in PR write-back
+            mode, code FORGE_FORBIDDEN (#3202) when the forge refuses tenant-api''s
+            own configured token the write scope to open the PR/MR — an operator must
+            fix the token'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
