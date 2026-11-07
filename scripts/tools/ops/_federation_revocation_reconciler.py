@@ -45,13 +45,16 @@ Design notes (ADR-028 §MVP):
 from __future__ import annotations
 
 import argparse
+import base64
 import dataclasses
 import json
+import os
 import re
 import sys
 import time
 import urllib.parse
 import urllib.request
+from collections.abc import Mapping
 from pathlib import Path as _P
 
 # cp950-console --help hardening (da-tools ROI r4 W7): importing a root lib
@@ -616,6 +619,22 @@ class Metrics:
 
 # ── I/O (thin; exercised via integration, not unit tests) ──────────────────────
 
+def victorialogs_auth_header(env: Mapping[str, str]) -> str | None:
+    """Basic-auth header toward the store's vmauth (#1295), or None.
+
+    The chart sets VICTORIALOGS_USERNAME and a Secret-backed
+    VICTORIALOGS_PASSWORD from ``victorialogs.auth``; without a username no
+    credentials are sent, which only works while the store runs
+    ``auth.mode: observe``. Env, not argv: a flag would show the password in
+    the process list. The password is used byte-for-byte — vmauth compares it
+    as-is, so trimming here would only hide a malformed Secret."""
+    user = env.get("VICTORIALOGS_USERNAME", "")
+    if not user:
+        return None
+    raw = f"{user}:{env.get('VICTORIALOGS_PASSWORD', '')}".encode("utf-8")
+    return "Basic " + base64.b64encode(raw).decode("ascii")
+
+
 def query_victorialogs(base_url: str, query: str, timeout_s: float = 30.0) -> list[dict]:
     """Run a LogsQL query; return the newline-delimited JSON rows.
 
@@ -624,6 +643,9 @@ def query_victorialogs(base_url: str, query: str, timeout_s: float = 30.0) -> li
         raise ValueError(f"victorialogs url must be http(s): {base_url!r}")
     url = base_url.rstrip("/") + "/select/logsql/query?" + urllib.parse.urlencode({"query": query})
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    auth = victorialogs_auth_header(os.environ)
+    if auth:
+        req.add_header("Authorization", auth)
     # The scheme is guarded to http(s) above; the URL is the operator-set
     # in-cluster VictoriaLogs endpoint, not user input.
     with urllib.request.urlopen(req, timeout=timeout_s) as resp:  # noqa: S310  # nosec B310

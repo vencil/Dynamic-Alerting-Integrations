@@ -1456,6 +1456,52 @@ func (c *ThresholdConfig) ResolveSeverityDedupLogf(logf func(format string, args
 	return result
 }
 
+// severityDedupModeOf is how the exporter reads one `_severity_dedup`
+// value: ResolveSeverityDedupLogf itself, on a config of one tenant holding
+// it — so the `severity_dedup` value check (#3591) refuses exactly what the
+// resolver does not read, with no second word list. val is the value as the
+// resolver compares it; mode is "enable" or "disable", or "" for a value the
+// resolver does not read (it serves enable and writes a WARN).
+func severityDedupModeOf(sv ScheduledValue) (val, mode string) {
+	val = strings.TrimSpace(strings.ToLower(sv.Default))
+	warned := false
+	c := ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"": {"_severity_dedup": sv}}}
+	got := c.ResolveSeverityDedupLogf(func(string, ...any) { warned = true })
+	switch {
+	case warned:
+		return val, ""
+	case len(got) == 0:
+		return val, "disable"
+	}
+	return val, "enable"
+}
+
+// severityDedupProblem is the `severity_dedup` check's problem: "" for a
+// value severityDedupModeOf reads — a null too, which the resolver reads as
+// no key.
+func severityDedupProblem(sv ScheduledValue) string {
+	if val, mode := severityDedupModeOf(sv); mode == "" {
+		return fmt.Sprintf("unknown severity_dedup value %q (valid: enable, disable)", val)
+	}
+	return ""
+}
+
+// severityDedupReading is the `severity_dedup` check's reading: the mode,
+// and for a value the resolver does not read the text itself — two such
+// values are alike only when they are the same text, or a write could
+// replace one unread value with another and get a NOTICE (as
+// stateFilterValueReading).
+func severityDedupReading(sv ScheduledValue) any {
+	if sv.deleted {
+		return "deleted"
+	}
+	val, mode := severityDedupModeOf(sv)
+	if mode == "" {
+		return "unread|raw=" + val
+	}
+	return mode
+}
+
 // ResolveMetadata returns metadata for ALL tenants unconditionally.
 // Tenants without _metadata get empty strings — every tenant has a
 // tenant_metadata_info series for alert annotations to query (#3483).
@@ -1498,8 +1544,8 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 	if !exists || sv.Default == "" {
 		return meta, true
 	}
-	var tm TenantMetadata
-	if err := yaml.Unmarshal([]byte(sv.Default), &tm); err != nil {
+	tm, err := decodeTenantMetadata(sv)
+	if err != nil {
 		if logf != nil {
 			logf("WARN: tenant=%s: failed to parse _metadata: %v", tenant, err)
 		}
@@ -1677,12 +1723,8 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 		// Note: applyProfiles() also warns on unknown profiles during merging.
 		// This check ensures validation is complete even if applyProfiles is skipped.
 		if sv, exists := overrides["_profile"]; exists {
-			profileName := strings.TrimSpace(sv.Default)
-			if profileName != "" {
-				if _, found := c.Profiles[profileName]; !found {
-					v.Errors = append(v.Errors, fmt.Sprintf(
-						"WARN: tenant=%s: _profile references unknown profile %q", tenant, profileName))
-				}
+			if problem := unknownProfileProblem(c.Profiles, sv); problem != "" {
+				v.Errors = append(v.Errors, fmt.Sprintf("WARN: tenant=%s: _profile %s", tenant, problem))
 			}
 		}
 
@@ -1828,6 +1870,22 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 	}
 
 	return v
+}
+
+// unknownProfileProblem is the one check of a `_profile` value against the
+// profiles the root platform files define (profiles): "" when it names one,
+// or names none (an empty value); otherwise the problem. validateOverrideKeysOf
+// and the shared key verdict's value findings (LayerValueProblems) both
+// read it (#3591).
+func unknownProfileProblem(profiles map[string]map[string]ScheduledValue, sv ScheduledValue) string {
+	name := strings.TrimSpace(sv.Default)
+	if name == "" {
+		return ""
+	}
+	if _, found := profiles[name]; found {
+		return ""
+	}
+	return fmt.Sprintf("references unknown profile %q", name)
 }
 
 // validateVersionLabel enforces the ADR-024 OQ-6 rules on a dimensional

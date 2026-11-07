@@ -121,6 +121,11 @@ type LoadReport struct {
 	// RootDefaultsUnjudged is the build's FlatBuild.RootDefaultsUnjudged: the
 	// root carrier is in ParseFailed, so RootDefaultsRefused is no verdict.
 	RootDefaultsUnjudged bool
+	// ValueProblems (#3591): every reserved value the exporter does not
+	// read, judged in the file and layer that writes it, never on a merged
+	// value (LayerValueProblems). Set by LoadDirFromScan only — the shared
+	// key verdict's reading; nil from every other load.
+	ValueProblems []LayerValueProblem
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -194,6 +199,7 @@ func LoadDirFromScan(scan *TreeScan, dir string, logger *log.Logger) (cfg *Thres
 	if err != nil || built == nil {
 		return cfg, rep, nil, err
 	}
+	rep.ValueProblems = LayerValueProblems(scan, built)
 	return cfg, rep, writtenKeys(scan, built), nil
 }
 

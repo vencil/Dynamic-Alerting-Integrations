@@ -57,6 +57,16 @@ var keyVerdictGoldenTrees = map[string]map[string]string{
 		"db-a.yaml": "tenants:\n  db-a:\n    _profile: gold\n    owner_tag: x\n",
 		"db-b.yaml": "tenants:\n  db-b:\n    _profile: gold\n    owner_tag: x\n",
 	},
+	// #3591: a reserved value the exporter does not read is judged in the
+	// file and layer that writes it — an error in a tenant file, a notice
+	// in a profile (naming the tenants that bind it) or a root platform
+	// file's `tenants:` entry; a `_profile` naming no profile is one too.
+	"value-unread": {
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n    _silent_mode: purple\n",
+		"_platform.yaml": "tenants:\n  ta:\n    _metadata: {owner: a, bogus_field: x}\n",
+		"ta.yaml":        "tenants:\n  ta:\n    _profile: gold\n    _severity_dedup: maybe\n",
+		"tb.yaml":        "tenants:\n  tb:\n    _profile: silver\n",
+	},
 	// No root platform file: threshold keys are undecidable, `_` keys are
 	// judged as usual.
 	"undecidable": {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n    _routng: disable\n"},

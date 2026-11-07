@@ -48,6 +48,17 @@ victorialogs:
   # ProjectID=0) is the default tenant; leave empty.
   accountId: ""
   projectId: ""
+  # Credentials toward the store's vmauth (helm/victorialogs `auth`, #1295).
+  # `username` is this consumer's entry in helm/victorialogs
+  # `auth.consumers` — tests/shared/test_victorialogs_consumers.py holds the
+  # two to each other. `existingSecret` names a Secret in THIS release's
+  # namespace whose key `password` equals the store-side Secret of the same
+  # consumer (hex only, no trailing newline — see helm/victorialogs
+  # values.yaml). Empty = send no credentials, which only works while the
+  # store runs `auth.mode: observe`.
+  auth:
+    username: chargeback-aggregator
+    existingSecret: ""
 
 # Aggregation window. 24h matches the daily cadence; bump to 168h
 # (7d) if you want overlapping windows for reconciliation.

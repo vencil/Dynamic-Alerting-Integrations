@@ -113,3 +113,16 @@ func TestKeyVerdictRefusal_ReadsBlocks(t *testing.T) {
 		t.Error("a finding that blocks did not refuse")
 	}
 }
+
+// #3591: a value_unread finding is KeyValidation's to refuse, with the
+// ADR-038 decision 12 ratchet; the verdict's copy refuses nothing, or an
+// untouched unread value would refuse every write to the tenant.
+func TestKeyVerdictRefusal_ValueUnreadIsKeyValidations(t *testing.T) {
+	t.Parallel()
+	files := []ProposedFile{{Path: "db-a.yaml", Tenants: []string{"db-a"}}}
+	value := kvFinding("_silent_mode", "db-a.yaml", "db-a")
+	value.Kind, value.Blocks = KindValueUnread, true
+	if r := keyVerdictRefusal(files, &KeyVerdict{Status: KeyVerdictComplete, Findings: []KeyFinding{value}}); r != nil {
+		t.Errorf("a value_unread finding refused: %v", r)
+	}
+}

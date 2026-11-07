@@ -590,6 +590,10 @@ class TestRunNonInteractive:
 
     def test_with_profile(self):
         with tempfile.TemporaryDirectory() as d:
+            # The profile is defined in the tree first (`--generate-profile`
+            # writes it): a tenant naming no profile is refused (#3591).
+            with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
+                f.write("profiles:\n  high-load:\n    mysql_connections: 150\n")
             args = argparse.Namespace(
                 tenant="db-x", db="mariadb", output_dir=d,
                 profile="high-load", silent_mode=None,
@@ -600,6 +604,21 @@ class TestRunNonInteractive:
             with open(os.path.join(d, "db-x.yaml"), encoding="utf-8") as f:
                 data = yaml.safe_load(f)
             assert data["tenants"]["db-x"]["_profile"] == "high-load"
+
+    def test_with_a_profile_the_tree_does_not_define_writes_nothing(self):
+        """#3591: `_profile` naming a profile no root platform file defines
+        is a value the exporter does not read (value_unread); da-guard write
+        refuses it and nothing is written."""
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile="high-load", silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces=None,
+            )
+            with pytest.raises(SystemExit):
+                run_non_interactive(args)
+            assert not os.path.exists(os.path.join(d, "db-x.yaml"))
 
     def test_with_silent_mode(self):
         with tempfile.TemporaryDirectory() as d:
