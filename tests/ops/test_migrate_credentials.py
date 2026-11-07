@@ -467,19 +467,25 @@ tenants:
 """
 
 
-def test_r2_a_value_left_in_the_file_stops_its_rewrite(tmp_path):
+def test_e9_the_place_is_rewritten_and_its_merge_source_is_not_promised(tmp_path):
+    """The promise is the credential place: with `<<: *base`, the rewrite
+    sets the receiver's own api_url, which overrides the merged one — read
+    back, the place is a reference. The anchor `_base` still holds the old
+    value: no receiver place, so the tool does not see it again; rotation
+    is what makes it dead (cli-reference)."""
     root = _tree(tmp_path, {"team-a.yaml": E9})
     out = tmp_path / "secrets"
-    before = _snapshot(root)
     proc = _run("--config-dir", root, "--manifests-out", out, "--write", "--json")
     assert proc.returncode == 1, proc.stderr
     _no_canary(proc)
     doc = json.loads(proc.stdout)
-    assert [d["reason"] for d in doc["decisions"]] == ["value_remains_in_file"]
-    assert doc["manifests"] == [] and doc["written"] is False and doc["plan"] == []
-    assert _snapshot(root) == before and not out.exists()
+    assert doc["written"] is True and doc["decisions"] == []
+    text = (root / "team-a.yaml").read_text(encoding="utf-8")
+    assert yaml.safe_load(text)["tenants"]["team-a"]["_routing"]["receiver"]["api_url"] == {
+        "secret": {"key": "receiver.api_url"}}
+    assert CANARY in text                              # the anchor's copy: not promised
     again = _run("--config-dir", root)
-    assert again.returncode == 1 and "needs_reference" in again.stdout
+    assert again.returncode == 0 and "No credential is written out." in again.stdout
 
 
 @pytest.fixture
@@ -697,7 +703,9 @@ def test_r9_vocabulary():
 CORE = "cnry7f1e"
 
 #: name → (the conf.d files, the reason a person gets the file, or None when
-#: the rewrite goes through; the text that must never be printed)
+#: the rewrite goes through; the text that must never be printed). A copy of
+#: a value elsewhere in the file (x1c's _metadata, x2b's anchor, s3's comment
+#: and title) is not the tool's to find: the place itself is rewritten.
 SHAPES = {
     # x1c: a two-line block scalar, the same lines again under _metadata.
     "x1c": ({"team-a.yaml": f"""\
@@ -713,7 +721,7 @@ tenants:
       note: |-
         {CORE}-part1
         {CORE}-part2
-"""}, "value_remains_in_file", CORE),
+"""}, None, CORE),
     # x2b: a tab-escaped value in an anchor merged into the receiver.
     "x2b": ({"team-a.yaml": f"""\
 _base: &base
@@ -725,7 +733,7 @@ tenants:
       receiver:
         <<: *base
         channel: "#x"
-"""}, "value_remains_in_file", CORE),
+"""}, None, CORE),
     # x2d: the anchor defined in a flow mapping under the merge key itself.
     "x2d": ({"team-a.yaml": f"""\
 tenants:
@@ -734,7 +742,7 @@ tenants:
       receiver:
         <<: &base {{type: slack, api_url: "https://hooks.slack.example.com/T/B/{CORE}\\t"}}
         channel: "#x"
-"""}, "value_remains_in_file", CORE),
+"""}, None, CORE),
     # x2e: backslash and quote escapes, merged into basic_auth.
     "x2e": ({"team-a.yaml": f"""\
 _auth: &auth
@@ -749,7 +757,7 @@ tenants:
         http_config:
           basic_auth:
             <<: *auth
-"""}, "value_remains_in_file", CORE),
+"""}, None, CORE),
     # b16: a header named Authorization, an oauth2 secret, an endpoint_params
     # key named `secret` (allowed, stays): the rewrite is refused by the
     # binding, so --write writes nothing.
@@ -791,7 +799,7 @@ tenants:
         api_url: "https://hooks.slack.example.com/T/B/{CORE}"   # was https://hooks.slack.example.com/T/B/{CORE}
         channel: '#alerts'
         title: "{CORE}-in-title"
-"""}, "value_in_comment", CORE),
+"""}, None, CORE),
     # Escapes: tab, backslash, quote, NEL (\\N) in one value.
     "escapes": ({"team-a.yaml": f"""\
 tenants:
@@ -862,7 +870,10 @@ def test_values_only_ever_reach_the_manifest(tmp_path, shape):
         assert last["written"] is False and not out.exists()
     else:
         assert last["written"] is True
-        assert _files_holding(root, core) == []
+        rewritten = {r["location"] for r in last["plan"]}
+        assert rewritten
+        after = json.loads(_run("--config-dir", root, "--json").stdout)
+        assert not rewritten & {r["location"] for r in after["rotate"]}
         manifest = yaml.safe_load((out / "da-team-a.yaml").read_text(encoding="utf-8"))
         assert all(core in v for v in manifest["stringData"].values())
 
@@ -881,27 +892,6 @@ def test_manifests_out_without_write_only_checks_the_path(tmp_path):
     worktree_out = tmp_path / "repo" / "s"
     (tmp_path / "repo" / ".git").mkdir(parents=True)
     assert _run("--config-dir", root, "--manifests-out", worktree_out).returncode == 2
-
-
-def test_a_file_that_cannot_be_rewritten_stops_the_whole_write(tmp_path):
-    """N3: manifests and conf.d are written together or not at all — a
-    second file held back for a comment stops the first one's write too."""
-    root = _tree(tmp_path, {"team-x.yaml": TENANT.replace("team-a", "team-x"),
-                            "team-a.yaml": SHAPES["s3"][0]["team-a.yaml"]})
-    out = tmp_path / "secrets"
-    before = _snapshot(root)
-    proc = _run("--config-dir", root, "--manifests-out", out, "--write", "--json")
-    assert proc.returncode == 1, proc.stderr
-    doc = json.loads(proc.stdout)
-    assert doc["written"] is False and not out.exists() and _snapshot(root) == before
-    assert any("value_in_comment" in n for n in doc["notes"])
-
-
-def test_a_comment_holding_one_line_of_a_multiline_value_is_found():
-    assert mc._in_comment(["a: 1  # see line2-xyz\n"], ["line1-abc\nline2-xyz"])
-    assert not mc._in_comment(['a: "x # line2-xyz"\n'], ["line1-abc\nline2-xyz"])
-    assert not mc._in_comment(["a: x#line2-xyz\n"], ["line2-xyz"])      # not a comment
-    assert mc._in_comment(['a: "open quote line2-xyz\n'], ["line2-xyz"])  # conservative
 
 
 def test_a_user_key_outside_the_http_token_charset_is_not_printed():
@@ -938,3 +928,92 @@ def test_a_crash_names_the_exception_type_only(tmp_path):
     assert proc.stderr.splitlines() == [
         f"KeyError: {mc.CRASH_TEXT}",
         f"ERROR: unexpected internal error (KeyError): {mc.CRASH_TEXT}"]
+
+
+def test_a_rewrite_that_does_not_take_stops_the_whole_write(monkeypatch, tmp_path, capsys):
+    """The dry-run rewrite read back still has the value at the place (here:
+    da-guard made to hand back the file unchanged) ⇒ rewrite_not_effective,
+    and --write writes nothing at all, the good file included."""
+    root = _tree(tmp_path, {"team-a.yaml": TENANT,
+                            "team-x.yaml": TENANT.replace("team-a", "team-x")})
+    real = mc._dry_run
+
+    def unchanged_for_team_x(config_dir, edits):
+        out = real(config_dir, edits)
+        if "team-x.yaml" in out and any("secret" in json.dumps(op) for op in edits["team-x.yaml"]):
+            out["team-x.yaml"] = (root / "team-x.yaml").read_text(encoding="utf-8")
+        return out
+    monkeypatch.setattr(mc, "_dry_run", unchanged_for_team_x)
+    out = tmp_path / "secrets"
+    before = _snapshot(root)
+    report = mc.main(["--config-dir", str(root), "--manifests-out", str(out), "--write",
+                      "--json"])
+    doc = report.document
+    assert report.status == 1
+    assert {(d["file"], d["reason"]) for d in doc["decisions"]} == {
+        ("team-x.yaml", "rewrite_not_effective")}
+    assert doc["written"] is False and not out.exists() and _snapshot(root) == before
+    assert CANARY not in json.dumps(doc)
+
+
+def test_after_the_write_the_files_are_read_back_and_judged(monkeypatch, tmp_path, capsys):
+    """R3 TOCTOU: a write that did not land (here: `da-guard write` made a
+    no-op) is caught by reading the files back — rc 2, the places named,
+    the manifests written named, no value."""
+    root = _tree(tmp_path, {"team-a.yaml": TENANT})
+    real = mc._lib_confedit.write_all
+    monkeypatch.setattr(mc._lib_confedit, "write_all",
+                        lambda *a, **k: real(*a, **k) if k.get("dry_run") else [])
+    out = tmp_path / "secrets"
+    with pytest.raises(SystemExit) as e:
+        mc.main(["--config-dir", str(root), "--manifests-out", str(out), "--write"])
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "conf.d was written, but these places are still written out" in err
+    assert "team-a.yaml: tenants.team-a._routing.receiver.api_url" in err
+    assert str(out / "da-team-a.yaml") in err and CANARY not in err
+
+
+def test_a_manifest_write_failing_part_way_names_what_was_written(monkeypatch, tmp_path,
+                                                                 capsys):
+    """R5: the second manifest fails ⇒ rc 2, the first one named, conf.d untouched."""
+    root = _tree(tmp_path, {"team-a.yaml": TENANT,
+                            "team-b.yaml": TENANT.replace("team-a", "team-b")})
+    real = mc._lib_io.write_operator_output
+    calls = []
+
+    def second_fails(path, *a, **k):
+        calls.append(path)
+        if len(calls) == 2:
+            raise mc._lib_io.OutputWriteError(path, OSError(28, "No space left on device"))
+        return real(path, *a, **k)
+    monkeypatch.setattr(mc._lib_io, "write_operator_output", second_fails)
+    out = tmp_path / "secrets"
+    before = _snapshot(root)
+    with pytest.raises(SystemExit) as e:
+        mc.main(["--config-dir", str(root), "--manifests-out", str(out), "--write"])
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "conf.d was not changed" in err and str(out / "da-team-a.yaml") in err
+    assert _snapshot(root) == before and CANARY not in err
+
+
+def test_a_data_key_the_report_would_not_print_is_not_derived(tmp_path):
+    """R6: the key passes the Secret data key rule but is longer than the
+    report's key rule allows (64) ⇒ key_invalid, nothing rewritten."""
+    name = "X-" + "a" * 50
+    root = _tree(tmp_path, {"t.yaml": f"""\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: webhook
+        url: https://h.example.com/x
+        http_config:
+          http_headers:
+            {name}:
+              secrets: ["{CANARY}"]
+"""})
+    doc = json.loads(_run("--config-dir", root, "--json").stdout)
+    assert [d["reason"] for d in doc["decisions"]] == ["key_invalid"]
+    assert doc["plan"] == []

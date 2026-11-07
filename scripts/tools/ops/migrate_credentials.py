@@ -32,20 +32,27 @@ Left for a person (listed with the reason): credentials in platform places,
 in places no plane reads, a URL with userinfo, the four proxy credentials
 (the platform sets HTTPS_PROXY on Alertmanager from a Secret and the tenant
 writes `proxy_from_environment: true`), an invalid tenant id, a key that
-cannot be derived or is taken, and a file whose rewritten text would still
-hold a value it moves out (an anchor or merge key sharing it, another
-field, a comment). The rewritten tree is then judged by the generator
-(`--policy`): Secret references it would still refuse, and tenants the
+cannot be derived or is taken, and a file whose rewritten text, read back,
+still has the value at a place it rewrote (`rewrite_not_effective`). The
+rewritten tree is then judged by the generator (`--policy`, on a copy of
+conf.d in a 0700 temporary directory): Secret references it would still refuse, and tenants the
 rewrite would drop, are listed, the run does not count as done, and
 `--write` writes nothing; so does a file that cannot be rewritten.
 
 ⛔ No credential value reaches stdout, stderr or the JSON report: nothing the
 report says is taken from a file's text (the report's sources are closed:
 see `_row`), and values go only into the files under --manifests-out
-(`_write_manifest`). Whether a value moved out of a file stays in it is
-judged on the file read back by parse-tree (`_residue`: a scalar or key
-equal to or holding it) and in its comments (`_in_comment`), never by
-searching its text for the value.
+(`_write_manifest`).
+
+⛔ What it promises (owner decision, #1560 ⑤-a): the credential PLACES it
+rewrites are no longer written out — judged by `plaintext_credential_findings`
+on the files read back by parse-tree, after the dry run (`rewrite_not_effective`
+stops the write) and again after the write (rc 2 when one still is). It does
+NOT promise that no copy of a value is left: another field, a merge source,
+a comment, another file, or git history may still hold one. Every value on
+the rotation list must be rotated (docs/internal/secret-leak-remediation-sop.md);
+rotation is what makes those copies dead. `da-guard write` drops the comment
+at the end of a line it rewrites.
 
 Exit: 0 nothing written out and every config file read; 1 found, or a file
 no plane reads (the report is the answer); 2 usage / I/O error, no usable
@@ -84,7 +91,7 @@ import _lib_exitcodes  # noqa: E402
 import _lib_io  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report, die_caller_error  # noqa: E402
-from _lib_parse_tree import ParseTreeError, is_scalar  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402
 from _lib_validation import detect_cli_lang, is_valid_tenant_id  # noqa: E402
 from _lib_validation import (  # noqa: E402
@@ -99,7 +106,7 @@ from _lib_validation import (  # noqa: E402
     secret_ref_problem,
 )
 from _grar_merge import FINDING_KINDS, OWN_NAME_PREFIX  # noqa: E402
-from _grar_parse import RawReceiver, raw_receivers  # noqa: E402
+from _grar_parse import RawReceiver, file_receivers, raw_receivers  # noqa: E402
 
 TOOL = "migrate-credentials"
 SCHEMA = "da-tools.migrate-credentials/v1"
@@ -135,8 +142,9 @@ REASONS = {
                       "gives Alertmanager HTTPS_PROXY from a Secret, and the receiver "
                       "writes http_config.proxy_from_environment: true",
     "not_a_string": "the value is not a string: write it as a string first",
-    "key_invalid": "no Secret data key can be derived from this path "
-                   "([-._a-zA-Z0-9]+, at most 253): choose one and rewrite it by hand",
+    "key_invalid": "no Secret data key can be derived from this path (a data key "
+                   "[-._a-zA-Z0-9]+ that the report prints: at most 64 characters): "
+                   "choose one and rewrite it by hand",
     "key_taken": "the derived Secret data key is taken in this tenant: choose another "
                  "and rewrite it by hand",
     "list_not_rewritable": "the list holding it has a value `da-guard write` cannot write "
@@ -144,13 +152,9 @@ REASONS = {
                            "it does not carry), and the edit writes a list whole: respell "
                            "that value, or rewrite this one by hand",
     "rewrite_refused": "`da-guard write` refused the rewrite of this file",
-    "value_remains_in_file": "the rewritten file would still hold a value it moves out (an "
-                             "anchor or merge key sharing it, a comment, another field): "
-                             "nothing in this file is rewritten; remove the other "
-                             "occurrence by hand, then run again",
-    "value_in_comment": "a comment in the file holds a value it moves out (the rewrite "
-                        "would drop or keep it in plain text): delete that comment by hand, "
-                        "then run again; nothing in this file is rewritten",
+    "rewrite_not_effective": "read back after the rewrite, the place still holds the value "
+                             "written out (what supplies it is not what the edit changed): "
+                             "nothing is written; rewrite it by hand",
 }
 
 
@@ -297,7 +301,8 @@ def _derived_entry(r: RawReceiver, field_path: tuple) -> Optional[str]:
     """The Secret data key of the credential at *field_path* of tenant
     receiver *r*, or None when it is not a valid key (``secret_ref_problem``)."""
     entry = ".".join([_slot_of(r.path)] + [str(p) for p in field_path])
-    if secret_ref_problem({"secret": {"key": entry}}) is not None:
+    # Printed in the plan as it is: the report's key rule too (`_safe_key`).
+    if secret_ref_problem({"secret": {"key": entry}}) is not None or _safe_key(entry) != entry:
         return None
     return entry
 
@@ -567,79 +572,20 @@ def _lines(config_dir: str, nodes: dict, by_file: dict, notes: list[str]
     return lines, exact
 
 
-#: parse-tree's tagged nodes, unconverted: each scalar with its tag.
-_NODES = _lib_parse_cache.ParseMode("parse-tree:nodes", lambda node: node)
-
-
-def _holds(text: str, moved: list[str]) -> bool:
-    return any(v == text or v in text for v in moved)
-
-
-def _residue(config_dir: str, rel: str, text: str, moved: list[str]) -> bool:
-    """R2, by structure: whether *text* (file *rel* after the rewrite, its
-    moved keys dropped: `_plan`'s probe), read
-    back as yaml.v3 reads it (parse-tree's file mode: anchors, aliases and
-    merge keys resolved), has a scalar — a value or a key — equal to or
-    holding one of the *moved* values. A text comparison cannot answer
-    this: the file spells a value with escapes, folds and indentation that
-    the value itself does not have."""
-    node = _lib_parse_cache.read_text_as(config_dir, rel, text.encode("utf-8"), _NODES)
-    stack = [node]
-    while stack:
-        n = stack.pop()
-        if is_scalar(n):
-            value = n.get("value")
-            if _holds(value if isinstance(value, str) else n["text"], moved):
-                return True
-        elif isinstance(n, dict):
-            for k, v in n.items():
-                if _holds(k, moved):
-                    return True
-                stack.append(v)
-        elif isinstance(n, list):
-            stack.extend(n)
-    return False
-
-
-def _comment(line: str) -> str:
-    """The comment of one line of YAML: from the first ``#`` that starts a
-    token (line start or after white space) outside a quoted scalar. A line
-    that ends inside a quote (a quoted scalar continued on the next line)
-    is taken whole: which ``#`` would start a comment cannot be told."""
-    quote, i = None, 0
-    while i < len(line):
-        c = line[i]
-        if quote == '"':
-            if c == "\\":
-                i += 2
-                continue
-            if c == '"':
-                quote = None
-        elif quote == "'":
-            if c == "'":
-                if line[i + 1:i + 2] == "'":
-                    i += 2
-                    continue
-                quote = None
-        elif c in "\"'" and (i == 0 or line[i - 1] in " \t:[{,-?"):
-            quote = c
-        elif c == "#" and (i == 0 or line[i - 1] in " \t"):
-            return line[i:]
-        i += 1
-    return line if quote else ""
-
-
-def _in_comment(texts: list[str], moved: list[str]) -> bool:
-    """Whether a comment of any of *texts* holds a *moved* value — or, for a
-    value on several lines, any of its non-blank lines. A comment is source
-    text with no escapes, so comparing text is sound here (and only here)."""
-    needles = set()
-    for v in moved:
-        needles.add(v)
-        needles.update(part.strip() for part in v.splitlines() if part.strip())
-    needles.discard("")
-    return any(n in _comment(line) for text in texts for line in text.splitlines()
-               for n in needles)
+def _still_written_out(config_dir: str, reader: Any, texts: dict[str, str],
+                       items: list[Item]) -> list[Item]:
+    """The rewritten *items* whose place, in the file read as *texts* gives
+    it (``file_receivers``: parse-tree's file mode, merge keys and aliases
+    resolved), is still a finding of ``plaintext_credential_findings`` — the
+    judgement that listed them. Values are compared nowhere."""
+    still: list[Item] = []
+    for f in sorted(texts):
+        places = {r.path + found.path
+                  for r in file_receivers(config_dir, f, texts[f], reader)
+                  for found in plaintext_credential_findings(r.receiver)}
+        still += [it for it in items
+                  if it.file == f and it.entry is not None and it.path in places]
+    return still
 
 
 def _plan(config_dir: str, reader: Any, items: list[Item], raws: list[RawReceiver]) -> Plan:
@@ -649,7 +595,7 @@ def _plan(config_dir: str, reader: Any, items: list[Item], raws: list[RawReceive
         by_file.setdefault(it.file, []).append(it)
     nodes = {f: reader.node(os.path.join(config_dir, f)) for f in by_file}
     lines, exact = _lines(config_dir, nodes, by_file, notes)
-    receivers = {(r.file, r.path): r.receiver for r in raws}
+    del raws
 
     # The rewrite, file by file; a list that cannot be written back leaves
     # only the values in it to a person (R7).
@@ -674,47 +620,17 @@ def _plan(config_dir: str, reader: Any, items: list[Item], raws: list[RawReceive
             notes.append(f"the rewrite was refused: {_refusal_text(exc)}")
             for f in plain:
                 final = _drop(final, "rewrite_refused", file=f)
-    # R2: a value moved out of a file must not stay in it — in a value or a
-    # key (by structure, `_residue`), or in a comment, before or after the
-    # rewrite (`da-guard write` drops the comment of a line it rewrites).
-    # parse-tree resolves merge keys, so a merged value the rewrite overrides
-    # is not in the rewritten file's reading: the probe drops each moved key
-    # written in a mapping instead of overriding it, and what a merge key
-    # still supplies there shows through. (A list is written whole from
-    # parse-tree's reading, merges already resolved: nothing hides in it.)
-    probes: dict[str, list[dict]] = {}
-    for f in rewritten:
-        paths = [it.path for it in final if it.file == f and it.entry is not None]
-        direct = [q for q in paths if _list_prefix(q) is None]
-        listed, _failed = _ops(nodes[f], {q: _ref_node("probe") for q in paths
-                                          if _list_prefix(q) is not None})
-        probes[f] = [_lib_confedit.unset_op(list(q)) for q in direct] + listed
-    probed: dict[str, Optional[str]] = {}
-    for f, ops in probes.items():
+    # The promise is the credential place itself: read the rewritten files
+    # back and judge them again, as the tool judged them first. A place the
+    # rewrite meant to change that is still written out stops the write.
+    if rewritten:
         try:
-            probed[f] = _dry_run(config_dir, {f: ops})[f]
-        except _lib_confedit.EditsRefused as exc:
-            # A dropped key that still reads back (da-guard's read_back_mismatch)
-            # is a key a merge supplies: the value is still there.
-            probed[f] = None
-            if not all(r.reason == "read_back_mismatch" for r in exc.refusals):
-                notes.append(f"{f}: the rewrite could not be checked: {_refusal_text(exc)}")
-        except _EDIT_ERRORS as exc:
-            probed[f] = None
-            notes.append(f"{f}: the rewrite could not be checked: {_refusal_text(exc)}")
-    for f in sorted(rewritten):
-        moved = [v for v in (ref_value_at(receivers[(it.file, it.receiver_path)],
-                                          it.path[len(it.receiver_path):])
-                             for it in final if it.file == f and it.entry is not None)
-                 if isinstance(v, str) and v]
-        why = None
-        if _in_comment([_read_text(os.path.join(config_dir, f)), rewritten[f]], moved):
-            why = "value_in_comment"
-        elif (_residue(config_dir, f, rewritten[f], moved) or probed.get(f) is None
-              or _residue(config_dir, f, probed[f], moved)):
-            why = "value_remains_in_file"
-        if why is not None:
-            final = _drop(final, why, file=f)
+            still = _still_written_out(config_dir, reader, rewritten, final)
+        except ParseTreeError as exc:
+            notes.append(f"the rewrite could not be read back: {_refusal_text(exc)}")
+            still = [it for it in final if it.file in rewritten and it.entry is not None]
+        for f in sorted({it.file for it in still}):
+            final = _drop(final, "rewrite_not_effective", file=f)
             del rewritten[f]
     for f in sorted(rewritten):
         for prefix in sorted({_list_prefix(it.path) for it in final
@@ -796,7 +712,13 @@ def _still_refused(config_dir: str, rewritten: dict[str, str], policy: Any) -> l
     the tree with *rewritten* in place, under *policy*: its Secret-reference
     findings, a tenant with routing before the rewrite and none after, a
     tree it refuses after and not before. Each row in the closed vocabulary
-    (R9): never the generator's line, which may quote a written value."""
+    (R9): never the generator's line, which may quote a written value.
+
+    The generator reads a whole tree from disk, so the copy is the whole
+    conf.d (the rewritten files in place), in a ``TemporaryDirectory`` —
+    mode 0700, removed when the judgement ends; the written-out values of
+    the other places are in it meanwhile. (No overlay reader serves the
+    generator a tree that is not on disk.)"""
     before = _judge_tree(config_dir, policy)
     with tempfile.TemporaryDirectory(prefix="da-migrate-credentials-") as tmp:
         copy_root = os.path.join(tmp, "conf.d")
@@ -836,9 +758,9 @@ def _manifest_text(name: str, pairs: list[tuple[str, str]]) -> str:
 
 def _write_manifest(path: str, text: str) -> None:
     """Write *text* to *path*: created 0600, never through a symlink
-    (O_NOFOLLOW)."""
-    _lib_io.write_operator_output_or_die(path, text, flag="--manifests-out", mode=0o600,
-                                         nofollow=True)
+    (O_NOFOLLOW). Raises ``_lib_io.OutputWriteError``."""
+    _lib_io.write_operator_output(path, text, flag="--manifests-out", mode=0o600,
+                                  nofollow=True)
 
 
 def _manifest_plan(raws: list[RawReceiver], items: list[Item]
@@ -854,14 +776,21 @@ def _manifest_plan(raws: list[RawReceiver], items: list[Item]
 
 
 def _write_manifests(out: str, by_tenant: dict, paths: dict[str, str]) -> None:
+    """Every manifest, before conf.d is touched. A failure part-way is rc 2
+    naming the manifests already written; conf.d is not changed."""
+    done: list[str] = []
     try:
         os.makedirs(out, mode=0o700, exist_ok=True)
+        for tenant in sorted(by_tenant):
+            _write_manifest(paths[tenant], _manifest_text(_object_name(tenant),
+                                                          sorted(by_tenant[tenant])))
+            done.append(paths[tenant])
     except OSError as exc:
-        _die(f"ERROR: cannot create --manifests-out {_lib_io.safe_label(out)}: "
-             f"{exc.strerror}; nothing was written")
-    for tenant in sorted(by_tenant):
-        _write_manifest(paths[tenant], _manifest_text(_object_name(tenant),
-                                                      sorted(by_tenant[tenant])))
+        shown = ", ".join(_lib_io.safe_label(p) for p in done) or "(none)"
+        _die(f"ERROR: writing the Secret manifests under --manifests-out "
+             f"{_lib_io.safe_label(out)} failed ({type(exc).__name__}: "
+             f"{exc.strerror or 'see above'}): conf.d was not changed. The Secret "
+             f"manifests written before it: {shown}")
 
 
 def _write_confd(config_dir: str, entries: list[dict], manifests: list[dict]) -> None:
@@ -879,6 +808,25 @@ def _write_confd(config_dir: str, entries: list[dict], manifests: list[dict]) ->
     except _EDIT_ERRORS as exc:
         _die(f"ERROR: `da-guard write` did not take the rewrite ({_refusal_text(exc)}): "
              f"conf.d was not changed. The Secret manifests were written: {shown}")
+
+
+def _verify_written(config_dir: str, reader: Any, files: list[str], items: list[Item],
+                    manifests: list[dict]) -> None:
+    """After the write: the files as they are on disk now, judged again
+    (``_still_written_out``). A place still written out — the file changed
+    between the plan and the write, say — is rc 2 naming the places (never
+    their values) and the manifests written."""
+    texts = {f: _read_text(os.path.join(config_dir, f)) for f in files}
+    try:
+        still = _still_written_out(config_dir, reader, texts, items)
+    except ParseTreeError as exc:
+        _die(f"ERROR: conf.d was written, but it could not be read back "
+             f"({_refusal_text(exc)}): check it before relying on it")
+    if still:
+        shown = ", ".join(_lib_io.safe_label(m["path"]) for m in manifests) or "(none)"
+        places = "; ".join(f"{it.file}: {_render(_safe_parts(it))}" for it in still)
+        _die(f"ERROR: conf.d was written, but these places are still written out: "
+             f"{places}. The Secret manifests were written: {shown}")
 
 
 # ── the report ──────────────────────────────────────────────────────────
@@ -938,7 +886,7 @@ def _print_text(doc: dict) -> None:
 
 #: A file-level reason that stops `--write` whole (N3: the manifests and
 #: conf.d are written together or not at all).
-_STOPS_WRITE = frozenset({"value_remains_in_file", "value_in_comment", "rewrite_refused"})
+_STOPS_WRITE = frozenset({"rewrite_not_effective", "rewrite_refused"})
 
 
 #: What a crash says instead of its exception's message (`main`).
@@ -1037,6 +985,7 @@ def _main(argv: Optional[list[str]]) -> Any:
             ops, _failed = _ops(node, rewrite)   # the lists that failed are out of items
             entries.append(_lib_confedit.edit_entry(f, ops))
         _write_confd(args.config_dir, entries, manifests)
+        _verify_written(args.config_dir, reader, sorted(plan.rewritten), items, manifests)
         written = True
     if blocked:
         plan.notes.append("the rewrite is not complete: the generator would still refuse "
