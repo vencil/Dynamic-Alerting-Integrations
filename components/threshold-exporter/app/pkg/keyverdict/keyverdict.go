@@ -584,8 +584,13 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 				// switches off — a sibling it inherits is the cascade asked.
 				kinds = append(kinds, KindDisableCascade)
 			}
-			if v.Verdict == Read && len(v.DeadEntries) > 0 {
-				// #3502: read, and part of its value never applies.
+			if len(v.DeadEntries) > 0 && (v.Verdict == Read || deref(v.Reason) == ReasonDisableNoop) {
+				// #3502: read, and part of its value never applies. A key
+				// whose `disable` at the instant read switches nothing off
+				// is unread there (disable_noop) but served in the rest of
+				// the day, so its entries are judged too — the verdict on
+				// them must not depend on --at. served-values names no dead
+				// entry on a key /metrics serves nothing of.
 				kinds = append(kinds, KindDeadEntry)
 			}
 			for _, kind := range kinds {

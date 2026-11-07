@@ -3613,7 +3613,7 @@ const docTemplate = `{
                     }
                 },
                 "dead_entries": {
-                    "description": "DeadEntries names each threshold key of EffectiveConfig written as a\nschedule with an entry /metrics serves at no minute of the UTC day —\na window the windows before it cover, or a ` + "`" + `default` + "`" + ` the windows\ncover (#3502, ScheduledValue.DeadEntries) — with those entries. The\nkey itself is served, so it is not in NotServed: what never applies\nis part of its value. The file of the value is KeySources'. Filled by\nResolveEffective and EffectiveTree; omitted when no key has one.",
+                    "description": "DeadEntries names each threshold key of EffectiveConfig written as a\nschedule with an entry /metrics serves at no minute of the UTC day —\na window the windows before it cover, or a ` + "`" + `default` + "`" + ` the windows\ncover (#3502, ScheduledValue.DeadEntries) — with those entries. Not\npart of NotServed: the key is still served in some part of the day,\nand what never applies is an entry of its value. A key may be in both\n(its schedule also has a window that does not parse, window_invalid);\na key NotServed names for a reason under which none of its value is\nserved (undeliverable, unconsumed, …) has no dead entry. The file of\nthe value is KeySources'. Filled by\nResolveEffective and EffectiveTree; omitted when no key has one.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "array",

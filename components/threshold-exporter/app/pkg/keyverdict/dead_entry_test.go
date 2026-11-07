@@ -154,3 +154,16 @@ func TestJudge_EveryRowCarriesDeadEntriesAsAList(t *testing.T) {
 		}
 	}
 }
+
+// A `disable` that switches nothing off at the instant read (disable_noop)
+// leaves the rest of the day served: its dead entries are judged, so the
+// finding does not depend on --at (#3502 review).
+func TestJudge_DeadEntryOnADisableNoopKey(t *testing.T) {
+	t.Parallel()
+	in := deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow})
+	in.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connections": {Reason: ReasonDisabled,
+		Disable: DisableNoop, DeadEntries: deadWindow}}}
+	if fs := deadFindings(Judge(in)); len(fs) != 1 {
+		t.Fatalf("findings %+v", fs)
+	}
+}

@@ -635,6 +635,9 @@ NOT_SERVED_REASONS = frozenset({
 #: DeadEntryReasons, pinned the same way; #3502).
 DEAD_ENTRY_REASONS = frozenset({"default_covered", "window_covered"})
 
+#: A dead entry that is an override: `overrides[<i>]`, i the 0-based index.
+_OVERRIDE_ENTRY = re.compile(r"overrides\[(0|[1-9][0-9]*)\]")
+
 
 class DeadEntry(NamedTuple):
     """One entry of a threshold value's schedule /metrics serves at no minute
@@ -665,6 +668,12 @@ def dead_entries(v: Any, what: str) -> "tuple[DeadEntry, ...]":
             raise ValueError(f"{what}: reason {reason!r} is none of {sorted(DEAD_ENTRY_REASONS)}")
         if (entry == "default") != (window is None):
             raise ValueError(f"{what}: entry {entry!r} with window {window!r}")
+        # The entry names the default or an override by its 0-based index,
+        # and each has its own reason: the default is covered by the windows,
+        # a window by the windows written before it.
+        want = "default_covered" if entry == "default" else "window_covered"
+        if (entry != "default" and not _OVERRIDE_ENTRY.fullmatch(entry)) or reason != want:
+            raise ValueError(f"{what}: entry {entry!r} with reason {reason!r}")
         out.append(DeadEntry(entry, window, value, reason))
     return tuple(out)
 
@@ -1344,7 +1353,7 @@ def _served_key(e: Any) -> ServedKey:
     switched = e.get("switched_off_with")
     if switched is not None and not isinstance(switched, str):
         raise TypeError(f"switched_off_with is a {type(switched).__name__}")
-    dead = dead_entries(e.get("dead_entries") or [], "dead_entries")
+    dead = dead_entries(e.get("dead_entries", []), "dead_entries")
     return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint),
                      disable, refused, switched, dead)
 

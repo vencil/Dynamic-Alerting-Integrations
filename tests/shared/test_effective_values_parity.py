@@ -485,7 +485,12 @@ def test_effective_without_dead_entries_is_named_too_old(tmp_path):
     {"k": [{"entry": "overrides[0]", "window": "01:00-02:00", "value": "5", "reason": "covered"}]},
     {"k": [{"entry": "default", "window": "01:00-02:00", "value": "5", "reason": "default_covered"}]},
     {"k": [{"entry": "overrides[0]", "value": "5", "reason": "window_covered"}]},
-], ids=["not-a-list", "not-a-mapping", "unknown-reason", "default-with-window", "window-without-window"])
+    {"k": [{"entry": "override[0]", "window": "01:00-02:00", "value": "5", "reason": "window_covered"}]},
+    {"k": [{"entry": "overrides[01]", "window": "01:00-02:00", "value": "5", "reason": "window_covered"}]},
+    {"k": [{"entry": "overrides[0]", "window": "01:00-02:00", "value": "5", "reason": "default_covered"}]},
+    {"k": [{"entry": "default", "value": "5", "reason": "window_covered"}]},
+], ids=["not-a-list", "not-a-mapping", "unknown-reason", "default-with-window", "window-without-window",
+        "misspelt-entry", "padded-index", "window-with-default-reason", "default-with-window-reason"])
 def test_dead_entries_not_of_their_shape_are_refused(tmp_path, dead):
     doc = _doc(dead_entries=dead)
     with pytest.raises(tv.EffectiveError) as ei:
@@ -545,3 +550,12 @@ def test_subprocess_gets_a_timeout(tmp_path, monkeypatch, da_guard):
     conf_d = _tree(tmp_path, {"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
     tv.load_effective(conf_d, binary=da_guard, timeout=7)
     assert seen.get("timeout") == 7
+
+
+@pytest.mark.parametrize("dead", [False, {}, 0, ""], ids=["false", "object", "zero", "empty-string"])
+def test_a_served_key_dead_entries_of_another_type_is_refused(dead):
+    """#3502 審查：served-values 的 `keys[].dead_entries` 只有「沒有這欄」才當成沒有；
+    寫成其他型別（即使是 falsy）要拒收，不能讀成「沒有死條目」。"""
+    assert tv._served_key({"exporter": True}).dead_entries == ()
+    with pytest.raises((TypeError, ValueError)):
+        tv._served_key({"exporter": True, "dead_entries": dead})
