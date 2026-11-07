@@ -4,15 +4,12 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"log/slog"
-	"os"
-	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/vencil/tenant-api/internal/testutil"
 )
 
 // A test canary, not a credential.
@@ -91,67 +88,21 @@ func TestLogValuer_ResolvedOnTheTypedErrorOnly(t *testing.T) {
 	}
 }
 
-// Every exported type of this package with an `Error() string` method
-// also has `LogValue() slog.Value`: a new error type that would log its
-// text fails here first.
-func TestLogValuer_EveryExportedErrorType(t *testing.T) {
+// Auxiliary to the behaviour matrix (internal/handler/log_canary_matrix_test.go,
+// the main guard): every type declared here — exported or not — whose
+// method set implements error (a promoted Error(), a parenthesised
+// receiver included: go/types, not a name or syntax match) also implements
+// slog.LogValuer, so a new error type decides whether it carries the
+// generator's text.
+func TestLogValuer_EveryErrorType(t *testing.T) {
 	t.Parallel()
-	files, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	methods := map[string]map[string]bool{}
-	fset := token.NewFileSet()
-	for _, name := range files {
-		if strings.HasSuffix(name, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f, err := parser.ParseFile(fset, name, src, 0)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv == nil || len(fn.Recv.List) != 1 {
-				continue
-			}
-			recv := fn.Recv.List[0].Type
-			if star, ok := recv.(*ast.StarExpr); ok {
-				recv = star.X
-			}
-			ident, ok := recv.(*ast.Ident)
-			if !ok {
-				continue
-			}
-			if methods[ident.Name] == nil {
-				methods[ident.Name] = map[string]bool{}
-			}
-			methods[ident.Name][fn.Name.Name] = true
-		}
-	}
-	var errorTypes, missing []string
-	for typ, m := range methods {
-		if !ast.IsExported(typ) || !m["Error"] {
-			continue
-		}
-		errorTypes = append(errorTypes, typ)
-		if !m["LogValue"] {
-			missing = append(missing, typ)
-		}
-	}
-	sort.Strings(errorTypes)
-	sort.Strings(missing)
-	// Positive control: the scan finds the error types it guards.
+	missing, all := testutil.ErrorTypesWithoutLogValuer(t, ".", nil)
 	for _, want := range []string{"FindingsError", "RejectedError", "UnavailableError"} {
-		if i := sort.SearchStrings(errorTypes, want); i >= len(errorTypes) || errorTypes[i] != want {
-			t.Fatalf("the scan did not find %s (found %v)", want, errorTypes)
+		if !slices.Contains(all, want) {
+			t.Fatalf("the scan did not find %s (found %v)", want, all)
 		}
 	}
 	if len(missing) != 0 {
-		t.Errorf("exported error types without slog.LogValuer (they would log their text): %v", missing)
+		t.Errorf("error types without slog.LogValuer (they would log their text): %v", missing)
 	}
 }

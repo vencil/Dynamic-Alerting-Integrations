@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"fmt"
 	"log/slog"
 	"net/http/httptest"
 	"strings"
@@ -27,7 +28,10 @@ func TestGeneratorOpResult_LogsNoContainerMessage(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 
 	for _, reason := range []string{generator.ReasonMemory, "a reason " + canary} {
-		rej := &generator.RejectedError{Reason: reason, Message: "container: " + canary}
+		// Wrapped as the write paths hand it over (#1560 ⑤-b N-4): slog
+		// resolves a LogValuer on the value it is given only, so a call site
+		// that logs the wrapper logs Error() — the container's message.
+		rej := fmt.Errorf("write: %w", &generator.RejectedError{Reason: reason, Message: "container: " + canary})
 		// A batch op's result (generatorOpResult) …
 		res, ok := generatorOpResult("db-a", rej)
 		if !ok || res.Status != "error" {

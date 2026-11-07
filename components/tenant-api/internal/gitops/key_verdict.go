@@ -16,8 +16,8 @@ package gitops
 //   - every other finding (a profile, a platform file, a file the write
 //     does not change) is the platform's: shown only to a caller who sees
 //     the whole tree (WithTreeVisible), and once per write — to anyone else
-//     one line says only that there is something, and the details go to
-//     the log;
+//     one line says only that there is something; the log counts them by
+//     kind, never their key, file, tenants or reason (#1560 ⑤-b);
 //   - a verdict that did not complete says so, with its reason only: the
 //     generator's message can carry a platform path or a program's stderr.
 //
@@ -105,7 +105,7 @@ func TreeVisibleOf(ctx context.Context) bool {
 // The texts of a key verdict's lines.
 const (
 	msgVerdictPrefix         = "key verdict"
-	msgVerdictOtherWithheld  = "key verdict: there are findings about platform files, profiles or tenants you cannot view (the details are in the server log)"
+	msgVerdictOtherWithheld  = "key verdict: there are findings about platform files, profiles or tenants you cannot view (a caller with write permission on all tenants is shown them)"
 	msgVerdictMoreLinesFmt   = "key verdict: %d more line(s) not shown"
 	msgVerdictTruncatedFmt   = "key verdict: %d more finding(s) the generator did not send"
 	msgVerdictNotCompleteFmt = "key verdict: not completed (%s); the keys of this write were not judged"
@@ -244,8 +244,11 @@ func adviseKeyVerdict(ctx context.Context, files []ProposedFile, kv *KeyVerdict)
 	}
 	if withheld > 0 {
 		adv.whole = append(adv.whole, msgVerdictOtherWithheld)
+		// #1560 ⑤-b: the verdict's structured fields only (KeyVerdict.LogValue)
+		// — never a finding's key, reason, file or tenants, which quote what
+		// the tenants wrote.
 		slog.Info("key verdict: findings withheld from the caller", "withheld", withheld,
-			"not_sent", kv.Truncated, "findings", kv.Findings)
+			"key_verdict", kv)
 	}
 	return adv
 }
