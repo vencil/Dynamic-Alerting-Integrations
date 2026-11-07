@@ -881,7 +881,7 @@ _RENDER_NAMESPACE = "da-render-probe"
 # operator choice that has nothing to do with its scrape Service. Rendered with
 # the minimum that choice requires — tenant-api refuses until writeBack.mode is
 # chosen (#2855) and needs a git repository in conf.d (#2903); the shared test
-# baseline picks acknowledged direct mode + a hostPath conf.d, adding no
+# baseline picks acknowledged direct mode + a pvc conf.d, adding no
 # Service or annotation of its own.
 _RENDER_MINIMUM = {
     "helm/tenant-api": ["-f", str(REPO_ROOT / "tests" / "helm" / "tenant_api_render_baseline.yaml")],

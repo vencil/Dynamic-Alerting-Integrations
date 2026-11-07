@@ -34,8 +34,8 @@ _needs_helm = pytest.mark.skipif(shutil.which("helm") is None, reason="helm CLI 
 _DIRECT_ACK = ["--set", "writeBack.mode=direct",
                "--set", "writeBack.directAcknowledgeNotDelivered=true",
                # #2903: the required generator container needs a git
-               # repository in conf.d; a hostPath conf.d stands for one.
-               "--set", "confDir.type=hostPath", "--set", "confDir.hostPath=/srv/conf.d"]
+               # repository in conf.d; a pvc conf.d stands for one.
+               "--set", "confDir.type=pvc"]
 
 # values path -> env var. Every numeric key the deployment template writes as
 # an env value; a new one belongs here.
