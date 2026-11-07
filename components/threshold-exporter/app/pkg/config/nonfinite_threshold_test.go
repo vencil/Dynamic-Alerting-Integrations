@@ -261,6 +261,9 @@ func TestThresholdReadAlike(t *testing.T) {
 	w := func(d, win, v string) ScheduledValue {
 		return ScheduledValue{Default: d, Overrides: []TimeWindowOverride{{Window: win, Value: v}}}
 	}
+	w2 := func(d, win1, v1, win2, v2 string) ScheduledValue {
+		return ScheduledValue{Default: d, Overrides: []TimeWindowOverride{{Window: win1, Value: v1}, {Window: win2, Value: v2}}}
+	}
 	alike := [][3]any{
 		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: " abc "}},
 		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc:warning"}},
@@ -270,6 +273,15 @@ func TestThresholdReadAlike(t *testing.T) {
 		{"k", ScheduledValue{Default: "disable"}, ScheduledValue{Default: "OFF"}},
 		{"k", w("70", "01:00-02:00", "abc"), w("70", " 01:00-02:00 ", " abc")},
 		{"k_critical", ScheduledValue{Default: "90:critical"}, ScheduledValue{Default: " 90:critical"}},
+		// #3508: read the same at every minute of the day.
+		{"k", w2("abc", "01:00-02:00", "1", "03:00-04:00", "2"), w2("abc", "03:00-04:00", "2", "01:00-02:00", "1")},
+		{"k", ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z"}},
+			ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z", Reason: "migration"}}},
+		{"k", ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T08:00:00+08:00"}},
+			ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z"}}},
+		// isThresholdExpired is fail-open on an expires that does not parse:
+		// such a value never lapses, as one with no expires.
+		{"k", ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "soon"}}, ScheduledValue{Default: "abc"}},
 	}
 	for _, c := range alike {
 		if !thresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
@@ -288,6 +300,12 @@ func TestThresholdReadAlike(t *testing.T) {
 		{"k", w("70", "01:00-02:00", "abc"), w("70", "01:00-02:00", "xyz")},
 		{"k", ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z"}},
 			ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2031-01-01T00:00:00Z"}}},
+		// #3508 control: overlapping windows reordered — the first one wins
+		// 01:30-02:00, so another value is served there.
+		{"k", w2("abc", "01:00-02:00", "1", "01:30-03:00", "2"), w2("abc", "01:30-03:00", "2", "01:00-02:00", "1")},
+		// A window that does not parse matches no minute, but the value
+		// under it is still one the write adds.
+		{"k", w("abc", "bogus", "1"), ScheduledValue{Default: "abc"}},
 	}
 	for _, c := range differ {
 		if thresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
