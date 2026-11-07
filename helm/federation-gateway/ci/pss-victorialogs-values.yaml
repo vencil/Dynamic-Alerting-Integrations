@@ -1,0 +1,10 @@
+# PSS gate value set (#1018) for mode=victorialogs: the store credential
+# (#1295) is only valid in that mode, and it adds a Secret volume to the pod.
+# Turns on the branches pss-all-on-values.yaml cannot (that set runs the
+# default mode). Not a deployment example.
+mode: victorialogs
+jwt:
+  audience: tenant-federation-logs
+victorialogs:
+  auth:
+    existingSecret: pss-gate
