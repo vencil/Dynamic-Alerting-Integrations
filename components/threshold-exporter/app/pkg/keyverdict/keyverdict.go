@@ -250,6 +250,9 @@ type Finding struct {
 	// value_unread in a tenant file) — what Blocks reads as Block.Own where
 	// the key's verdict row has no file (effective carries no `_metadata`).
 	own bool
+	// reading: a value_unread's value as its reader reads it — what makes
+	// two such Blocks the same one (NewBlocks); "" for any other kind.
+	reading string
 }
 
 // Tree is the verdict on a tree.
@@ -356,7 +359,7 @@ func Judge(in Input) Tree {
 		keys[tenant] = rows
 	}
 	findings := findingsOf(keys, rootDefaults)
-	findings = append(findings, valueFindings(in.Values, tenants, in.Effective)...)
+	findings = append(findings, valueFindings(in.Values, tenants, in.Effective, in.Undecidable)...)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
 		if in.Whole {
@@ -603,13 +606,18 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 // tenant's entry; in a root platform file's `tenants:` entry a notice on
 // that tenant; in a profile a notice naming the judged tenants that bind it
 // ([] for none). Never charged to a tenant through a layer it inherits
-// (config.LayerValueProblems).
+// (config.LayerValueProblems). With no root platform file read
+// (undecidable), a name the root files would define (`_profile`) is not
+// judged: which profiles exist is not known (decision 7).
 func valueFindings(values []config.LayerValueProblem, tenants map[string]bool,
-	effective map[string]EffectiveTenant) []Finding {
+	effective map[string]EffectiveTenant, undecidable bool) []Finding {
 	var out []Finding
 	for _, v := range values {
+		if undecidable && v.RefersToRoot {
+			continue
+		}
 		file, reason := v.File, v.Problem
-		f := Finding{Kind: KindValueUnread, Key: v.Key, File: &file, Reason: &reason}
+		f := Finding{Kind: KindValueUnread, Key: v.Key, File: &file, Reason: &reason, reading: v.Reading}
 		switch v.Layer {
 		case config.ValueLayerTenant, config.ValueLayerPlatform:
 			if !tenants[v.Owner] {

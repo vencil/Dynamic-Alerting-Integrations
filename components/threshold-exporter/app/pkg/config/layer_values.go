@@ -17,6 +17,7 @@ package config
 // ProfileRoutingKeys reads it), in the layer it is written in.
 
 import (
+	"fmt"
 	"sort"
 	"strings"
 )
@@ -44,11 +45,22 @@ type LayerValueProblem struct {
 	// Problem: the reader's tenant-free reason (CheckReservedValue, or
 	// unknownProfileProblem for `_profile`).
 	Problem string
+	// Reading: the value as the reader reads it (ValueReading) — two values
+	// whose readings are equal are the same unread value, so a write that
+	// swaps one unread value for another makes a new one (the Ratchet's
+	// rule, readAlike).
+	Reading string
+	// RefersToRoot: the problem is a name the root platform files do not
+	// define (`_profile`) — judged only when a root platform file was read.
+	RefersToRoot bool
 }
 
 // LayerValueProblems is every reserved value of built's files the exporter
-// does not read, in a layer the exporter reads the key in (a key no reader
-// reads there is the verdict's unread finding, not a value one), sorted by
+// does not read, in a layer the exporter reads the key in (a key the
+// registry declares no exporter layer for there is the verdict's unread
+// finding, not a value one; a `_state_<filter>` whose filter the root does
+// not declare is both — its value is judged as the write gate's
+// KeyValidation judges it, whatever the declaration), sorted by
 // file, layer, owner and key. The files are the ones the flat merge reads:
 // the root platform files (an unselected root carrier is not among them, a
 // nested `_` file contributes nothing) and the tenant files. A tenant entry
@@ -64,7 +76,9 @@ func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
 	add := func(file, layer, owner string, values map[string]ScheduledValue) {
 		for key, sv := range values {
 			if p := layerValueProblem(layer, key, sv, values, profiles); p != "" {
-				out = append(out, LayerValueProblem{File: file, Layer: layer, Owner: owner, Key: key, Problem: p})
+				canon, _ := canonicalKeyFor(key)
+				out = append(out, LayerValueProblem{File: file, Layer: layer, Owner: owner, Key: key, Problem: p,
+					Reading: ValueReading(canon, sv), RefersToRoot: canon == "_profile"})
 			}
 		}
 	}
@@ -103,6 +117,19 @@ func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
 // beside the other keys of its map (values): "" for a threshold key, a key
 // the exporter does not read in layer, a deprecated spelling its canonical
 // sibling overrides (resolve ignores it), or a value the exporter reads.
+// ValueReading is sv, the value of reserved key k, as its reader reads it,
+// as text: the reading k's `value.check` is bound to, `_profile`'s name, or
+// the value as written when k has neither.
+func ValueReading(k string, sv ScheduledValue) string {
+	if k == "_profile" {
+		return strings.TrimSpace(sv.Default)
+	}
+	if c, ok := reservedCheck(k); ok && c.reading != nil {
+		return fmt.Sprintf("%v", c.reading(k, sv))
+	}
+	return sv.Default
+}
+
 func layerValueProblem(layer, key string, sv ScheduledValue, values map[string]ScheduledValue,
 	profiles map[string]map[string]ScheduledValue) string {
 	if !strings.HasPrefix(key, "_") {

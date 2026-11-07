@@ -205,6 +205,10 @@ func adviseKeyVerdict(ctx context.Context, files []ProposedFile, kv *KeyVerdict)
 		// tenant the file declares is judged too, and shown as names says.
 		for _, t := range f.Tenants {
 			switch {
+			case ts[t] && f.Kind == KindValueUnread:
+				// The write's own KeyValidation already says it, with the
+				// decision 12 ratchet (an untouched value is a NOTICE): the
+				// verdict's copy would contradict that as an error line.
 			case ts[t]:
 				adv.byTenant[t] = append(adv.byTenant[t], verdictLine(f, []string{t}))
 			case mayName(t):
@@ -281,7 +285,8 @@ func (e *KeyVerdictError) lines() []string {
 // unread value the write leaves as the exporter reads it is a notice, not a
 // refusal). Refusing it again from the verdict, which judges the tree after
 // the write alone, would refuse every write to a tenant whose untouched
-// value is unread. It is reported like any finding that refuses nothing.
+// value is unread. Nor is it repeated as the written tenant's advice
+// (adviseKeyVerdict): KeyValidation's message is the one given.
 func keyVerdictRefusal(files []ProposedFile, kv *KeyVerdict) *KeyVerdictError {
 	if kv == nil || kv.Status != KeyVerdictComplete {
 		return nil

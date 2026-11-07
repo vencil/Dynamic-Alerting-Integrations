@@ -93,3 +93,22 @@ func TestValueFindings_NewOnItsOwnEntry(t *testing.T) {
 		t.Fatalf("new blocks %+v, want t2's own", got)
 	}
 }
+
+// With no root platform file read, which profiles exist is not known: a
+// `_profile` naming one is not judged (decision 7) — every other value is.
+func TestValueFindings_ProfileNotJudgedWithoutTheRoot(t *testing.T) {
+	t.Parallel()
+	in := valueInput(
+		config.LayerValueProblem{File: "t1.yaml", Layer: config.ValueLayerTenant, Owner: "t1", Key: "_profile",
+			Problem: "p", RefersToRoot: true},
+		config.LayerValueProblem{File: "t1.yaml", Layer: config.ValueLayerTenant, Owner: "t1", Key: "_silent_mode", Problem: "p"},
+	)
+	in.Undecidable = true
+	var keys []string
+	for _, r := range valueRows(Judge(in)) {
+		keys = append(keys, r.Key)
+	}
+	if !reflect.DeepEqual(keys, []string{"_silent_mode"}) {
+		t.Errorf("judged %v, want only _silent_mode", keys)
+	}
+}
