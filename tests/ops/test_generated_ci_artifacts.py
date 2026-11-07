@@ -2892,8 +2892,9 @@ def _assert_github_deploy_contract(
     # edit that clears the red is `expected_uses` alone, leaving the new
     # action's scope requirement unenforced forever. Naming the
     # demands-nothing actions explicitly is what makes the omission deliberate.
-    # azure/setup-helm downloads from get.helm.sh; with `version:` pinned it
-    # never resolves "latest" through the GitHub API, so it needs no token scope.
+    # azure/setup-helm downloads from get.helm.sh (even "latest" is read from
+    # get.helm.sh/helm-latest-version) and its `token` input is deprecated and
+    # unread, so it needs no GITHUB_TOKEN scope.
     _NEEDS_NOTHING = {"actions/upload-artifact", "actions/download-artifact",
                       "azure/setup-helm"}
     unclassified = sorted(
@@ -8522,6 +8523,11 @@ def test_github_helm_apply_installs_the_pinned_helm_before_using_it(
         f"apply job installs helm {len(setup)} time(s); expected exactly one "
         f"azure/setup-helm step: {[s.get('uses') or s.get('name') for s in steps]}")
     assert setup[0] < min(helm_runs), "setup-helm must run before the first `helm` call"
+    step = steps[setup[0]]
+    # A step that is skipped, or allowed to fail, or pointed elsewhere hands the
+    # runner's own helm back while every line above still reads "installed".
+    assert not ({"if", "continue-on-error"} & set(step)), step
+    assert set(step.get("with") or {}) == {"version"}, step.get("with")
     gitlab_tag = ip.GITLAB_HELM_IMAGE.rsplit(":", 1)[1]
     assert steps[setup[0]].get("with", {}).get("version") == f"v{gitlab_tag}", (
         f"GitHub installs helm {steps[setup[0]].get('with')!r}, GitLab runs "

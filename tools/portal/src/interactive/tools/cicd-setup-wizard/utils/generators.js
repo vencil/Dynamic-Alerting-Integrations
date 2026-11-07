@@ -48,12 +48,13 @@ const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:v2.9.0';
 // the da-tools tag above; `bump_docs.py --exporter` rewrites this line at
 // release. Without `--version` the helm step installs whatever chart is newest
 // in the registry on the day it runs.
+const CICD_THRESHOLD_EXPORTER_CHART_VERSION = '2.9.0';
+
 // HELM_VERSION in scripts/tools/ops/init_project.py — the helm the generated
 // GitHub apply job installs. Not derived here: section 7 of
 // tests/ops/test_generated_ci_artifacts.py compares this preview to the CLI's
 // output byte for byte, so a drift between the two reds there.
 const CICD_HELM_VERSION = '3.22.1';
-const CICD_THRESHOLD_EXPORTER_CHART_VERSION = '2.9.0';
 
 // ⛔ There is deliberately no argocd CLI image pin here any more, and none in
 // the CLI leg either: `--deploy argocd` is retired (#1351). It scaffolded no

@@ -296,7 +296,7 @@ GITLAB_HELM_IMAGE = f'alpine/helm:{HELM_VERSION}'
 # tracked major runs on every runner a customer may use (GitHub Enterprise
 # Server, self-hosted, older `ubuntu-*` images). We measure agreement with the
 # platform, not universal availability. A customer on a runner that cannot take
-# the tracked major edits the two `uses:` lines in their own repository — the
+# the tracked major edits the `uses:` lines in their own repository — the
 # delivered pipeline is theirs once written.
 
 # The tool image every generated project runs, and the only ref that reaches
