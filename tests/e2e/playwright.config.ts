@@ -28,7 +28,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   /* CI workers default. Local benchmarks at workers=4 + ThreadingHTTP
    * server: 1.5 min vs workers=1 = 5.2 min (~3.5x). The CI workflow
-   * (.github/workflows/playwright.yml) passes `--workers=4` explicitly,
+   * (.github/workflows/ci.yml, smoke-tests-run) passes `--workers=4` explicitly,
    * which overrides this; aligning the default here so that a future
    * workflow drop of the flag (or someone setting CI=true locally) lands
    * on the actually-fast configuration instead of silently reverting to

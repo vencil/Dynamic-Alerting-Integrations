@@ -533,7 +533,7 @@ Portal 工具卡片是從 `tool-registry.yaml` 動態產生的 `.cards a.card`�
 - **reporter 清單只寫在一處**：`playwright.config.ts` 是唯一列 reporter 的地方。命令列的 `--reporter` 會整份取代清單、把這道檢查拿掉，所以 CI 不帶這個參數，由 `tests/lint/test_e2e_spec_lint.py` 釘住。
 - **看不到的**：沒有被收進或沒有被執行的測試，包括被 `--grep`／`--grep-invert`、`testIgnore`（config 或 project 層）、`--shard`、`--last-failed`、`--only-changed` 排除的，以及直接刪掉的。也不檢查 issue 是否存在、是否還 open。
 - **只算最後一次結果**：retry 之後通過的測試不算停車。因為 hook 失敗而被連帶跳過的測試沒有 skip/fixme 標記，也不算。issue 必須寫在宣告裡；執行時才 push 的 annotation 不算，因為 `--list` 看不到它。
-- **執行點**：本機每次 `playwright test`，以及 CI 的 `Smoke Tests (Chromium)`。⚠️ 該 job 不在 main 的 required checks 內，紅了不擋 merge。
+- **執行點**：本機每次 `playwright test`，以及 CI 的 `Smoke Tests (Chromium)`。它是 main 的 required check，由 `ci.yml` 的 aggregate gate 回報，紅了會擋 merge（[#1428](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1428)）。
 
 **仍是人類判斷的**：issue 有沒有在推進。reporter 只檢查有沒有掛 issue，不檢查那張票是否還 open。
 
