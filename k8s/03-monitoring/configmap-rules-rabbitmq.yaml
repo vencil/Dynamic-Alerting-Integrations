@@ -41,8 +41,14 @@ data:
     \ 30s\n    labels:\n      maintenance: page\n      severity: critical\n      tenant:\
     \ '{{ $labels.tenant }}'\n    annotations:\n      description: No rabbitmq_identity_info\
     \ metric found for 30s\n      description_zh: 30 秒內未找到 rabbitmq_identity_info\
-    \ metric\n      summary: RabbitMQ exporter target missing\n      summary_zh: RabbitMQ\
-    \ exporter 目標缺失\n  - alert: RabbitMQHighQueueDepth\n    expr: \"(\\n  tenant:rabbitmq_queue_messages:max\\\
+    \ metric\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: RabbitMQ exporter target missing\n      summary_zh: RabbitMQ\
+    \ exporter 目標缺失\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: RabbitMQHighQueueDepth\n    expr: \"(\\n  tenant:rabbitmq_queue_messages:max\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:rabbitmq_queue_messages\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 30s\n    labels:\n      maintenance: mute\n      metric_group: rabbitmq_queue_messages\n\
