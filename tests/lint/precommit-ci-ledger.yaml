@@ -299,11 +299,6 @@ hooks:
     pytest:
     - tests/lint/test_check_devcontainer_dep_parity.py
     - tests/shared/test_toolchain_pin_parity.py
-- id: maintenance-symmetry-check
-  category: b
-  evidence:
-    pytest:
-    - tests/lint/test_check_maintenance_symmetry.py
 - id: rulepack-derived-check
   category: b
   evidence:

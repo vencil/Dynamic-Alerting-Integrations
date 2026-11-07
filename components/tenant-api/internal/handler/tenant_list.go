@@ -63,7 +63,8 @@ type TenantSummary struct {
 	// answers no tenant either.
 	ManagedBy string `json:"managed_by,omitempty" enums:"api,git"`
 	// GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:
-	// not_tenant_document (not YAML, or its root or tenants: is not a mapping), several_documents, yaml_indirection,
+	// not_tenant_document (not YAML, its root or tenants: is not a mapping, or its root has a key other than
+	// tenants), several_documents, yaml_indirection,
 	// tenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's
 	// other fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:
 	// it names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id

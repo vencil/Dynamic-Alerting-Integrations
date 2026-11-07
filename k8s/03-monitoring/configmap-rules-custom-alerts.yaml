@@ -57,10 +57,16 @@ data:
     \ }}'\n    annotations:\n      description: The recipe is still evaluated and\
     \ visible as an ALERTS series (dashboard-only); its notifications are suppressed\
     \ via inhibit, not deleted.\n      description_zh: 此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經\
-    \ inhibit 抑制而非刪除。\n      summary: Custom recipe [{{ $labels.name }}] is silent\
-    \ for {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{\
-    \ $labels.name }}] 處於靜默模式'\n  - alert: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m\n\
-    \    expr: custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\n\
+    \ inhibit 抑制而非刪除。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Custom recipe [{{ $labels.name }}] is silent for {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式'\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m\n  \
+    \  expr: custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\n\
     \    for: 1m\n    labels:\n      component: custom\n      maintenance: mute\n\
     \      mode: '{{ $labels.mode }}'\n      recipe: rate\n      severity: warning\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'rate\

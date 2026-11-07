@@ -69,7 +69,10 @@ tests:
               platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
-              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   # ── B) HEALTHY: declared + pods + BOTH volume-stats present → SILENT ──
   - interval: 15s
@@ -128,7 +131,10 @@ tests:
               platform_summary_zh: "[SRE] 租戶 db-b disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
-              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   # ── D) EITHER-ABSENT: available present but capacity ABSENT → FIRE (ratio needs both) ──
   - interval: 15s
@@ -155,7 +161,10 @@ tests:
               platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
-              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   # ── E) NOT-DECLARED: pods + no volume-stats, but the declared recipe is NOT a disk one → SILENT ──
   - interval: 15s
@@ -220,7 +229,10 @@ tests:
               platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
-              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   # ── I) #10 used_bytes recipe HEALTHY: declared via used_bytes + pods + volume-stats present → SILENT ──
   # The OR leg recognizes the recipe, but the unless presence-legs (available+capacity,
@@ -266,7 +278,10 @@ tests:
               platform_summary_zh: "[SRE] 租戶 db-a disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
               description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
               description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
-              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   # ── K) #9 deliberate scope: a NON-db-namespace tenant (shop-a) declared + inert → SILENT ──
   # user_threshold.tenant is the conf.d id (CAN be non-db, e.g. shop-a), but the pods-leg

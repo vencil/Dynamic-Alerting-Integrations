@@ -52,6 +52,8 @@ Revised 2026-11-05: a `dimensions:` base is never a `<key>_critical`: such a dec
 
 Revised 2026-11-07: a reserved key that is read but whose value the reader does not read joins the shared verdict (`value_unread`), judged in the file and layer that writes it, never on the merged value: an error in a tenant file, a notice in a profile or a root platform file's `tenants:`; `_metadata`'s sub-keys and `_severity_dedup` each get their reader's value check. tenant-api refuses nothing more on such a finding and keeps decision 12's write check (decisions 10, 12).
 
+Revised 2026-11-07: a served key no alert compares is reported by validate-config's `no_alert` row, judged by `metric_observed_map.yaml`, advisory only; the example tree's 3 `_critical` keys are rule packs without a critical tier, not an index that misses the suffix (decision 10).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -374,7 +376,7 @@ The documentation will say: the tools try to report problems, but whether values
 
 | Case | Handling | Level |
 |---|---|---|
-| Served, but no rule reads it (for example, a typo in the root defaults, or a dimension key on a declared base that no rule reads) | The reader is the deployed alert rules. Judged by the index of the rule packs in the repo, covering rules that read it indirectly through a recording rule, rules that query `user_threshold` directly, and `_critical` keys; an "external reader" (the customer's own Prometheus rules) can be declared | Always advisory only |
+| Served, but no alert compares it (for example, a typo in the root defaults, or a `<key>_critical` whose rule pack has no critical tier) | The reader is the shipped alert rules. Judged by `metric_observed_map.yaml`, which records the alert comparing each threshold key (including through a recording rule; where a rule pack has a critical tier, each `<key>_critical` has its own entry) and which CI keeps equal to the rule packs. validate-config's `no_alert` row lists the keys the exporter serves that the map has no alert for, one line per key (canonical spelling, no dimension part) naming the files that write it and the tenants; a value written at critical (`"95:critical"`) is looked up as `<key>_critical`; a key the map defers (the version-aware `container_*`) is not listed. The customer's own Prometheus rules are not seen | Always advisory only (WARN, no change to the exit code) |
 | Whole files no reader reads (files in the tenant area without `tenants:`, `_defaults` files in sub-directories that are not selected) | Reuse the existing `skipped` / `unread_keys` of served-values | notice: a newly created file that has no `tenants:` yet must not freeze writes |
 | Unknown sub-keys of `_metadata` | The Go `TenantMetadata` is the source of truth; the verdict reports `value_unread`. The schema's `_metadata` field list is pinned to it in both directions by a Go test | Tenant file: error; platform files and profiles: notice |
 | Read, but the value is invalid (`_silent_mode: garbage`, `_severity_dedup: maybe`, a `_profile` naming no profile) | The program that reads it decides: the registry's `value.check` binds the key to the exporter's reading function, and the verdict reports `value_unread`. For `_severity_dedup`, which both readers read, a test pins the generator's accepted words to the exporter's. `_routing_profile`, read by the generator alone, is refused by the generator itself | Tenant file: error; platform files and profiles: notice |
@@ -385,7 +387,12 @@ A value is judged in the file and layer that writes it, never on the merged valu
 _defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode "purple" (valid: warning, critical, all, disable)) — tenant(s) ta, tb
 ```
 
-Measured on the main conf.d with the existing rule index, 18 keys are served but no rule reading them can be found. 3 of them are `_critical` keys whose base is read by an alert; the index just does not handle the `_critical` suffix yet, which the implementation must add. The other 15 are dimension keys whose base no rule reads; they are exactly the keys behind the 15 key-name warnings in the Background section. These are neither deleted nor given a looser check; instead they go into a known list with issue links, and the list may only shrink. This check asks "is every served value read by some rule"; the existing check "can the thresholds that alerts need be served" asks "is every value a rule needs served". The two run in opposite directions and complement each other.
+Measured on the repo's example conf.d, `no_alert` lists 3 keys: `mongodb_connections_current_critical`, `mongodb_replication_lag_critical` and `redis_memory_used_bytes_critical`. The mongodb and redis rule packs compare only the `severity="warning"` threshold and have no critical tier, so these critical thresholds are served and no alert uses them ([#3658](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3658)). A test keeps them in a known list with that issue, and the list may only shrink: a new one in the example tree fails it, and so does one that is fixed but not removed from the list. The dimension keys of the Background section are no longer served (decision 11); the verdict reports them as unread, not this row. This check asks "is every served value compared by some alert"; the existing check "can the thresholds that alerts need be served" asks "is every value an alert needs served". The two run in opposite directions and complement each other.
+
+```
+[WARN] no_alert
+       no_alert `mongodb_connections_current_critical` — served, but no shipped alert compares it — file(s) examples/mongo-prod.yaml — tenant(s) mongo-prod
+```
 
 ### 11. Rollout order
 

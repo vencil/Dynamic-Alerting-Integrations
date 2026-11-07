@@ -39,11 +39,25 @@ guard 驗錯樹之後貼上綠色 sticky comment。
   target<TAB><config-dir><TAB><scope（相對 config-dir）>
   unmanaged<TAB><path>
   excluded<TAB><path><TAB><原因>
+  removed<TAB><config-dir>
+
+`removed`（#3644）＝這個 PR 把整棵樹刪掉了，沒有東西可驗。兩個條件**都**成立才給：
+
+1. 這棵樹在變更清單裡的每一個路徑，都出現在 `--deleted` 清單（`git diff -z
+   --name-only --diff-filter=D` 的輸出）裡；
+2. 這棵樹的根目錄在工作目錄（＝HEAD 的 checkout）裡已經不存在。
+
+⛔ 不能只看條件 2。「目錄不存在」也是路徑被改寫過（見下方非 ASCII 一節）的症狀，
+那種情況必須維持 `target` ⇒ da-guard exit 2 ⇒ 紅燈；只看目錄會把它洗成「整棵刪除」
+的綠燈。條件 1 把兩者分開：被改寫的路徑不會逐字出現在 git 自己列出的刪除清單裡。
+⚠️ 沒給 `--deleted` ＝ 沒有刪除資訊 ＝ 永遠不給 `removed`，維持舊行為（紅燈）；
+失敗方向是「多驗一次而紅」，不是「少驗而綠」。
 
 用法
 ----
   python3 scripts/ops/guard_defaults_scopes.py <changed-path>...
   git diff -z --name-only ... | python3 scripts/ops/guard_defaults_scopes.py --null -
+  ... | python3 scripts/ops/guard_defaults_scopes.py --null --deleted <NUL 分隔的刪除清單檔> -
 
 ⛔ 非 ASCII 路徑必須走 `-z` + `--null`
 ------------------------------------
@@ -101,6 +115,9 @@ EXIT_QUOTED_INPUT = 2
 # is a change to the repo's content, which the user makes — and it stays apart
 # from the 2 above, the producer's fault (#3577, #3611).
 EXIT_UNREPRESENTABLE_PATH = 1
+# `--deleted` given without its file: the caller's mistake, the contract's 2.
+# An unreadable `--deleted` file is the same 2, via _lib_exitcodes' crash exit.
+EXIT_USAGE = 2
 
 # The output contract, named once so the refusal below is derived from the
 # same two constants the emitter interpolates. Enumerating the delimiters a
@@ -238,6 +255,36 @@ def resolve(paths: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
     return targets, sorted(unmanaged)
 
 
+def removed_roots(paths: list[str], deleted: set[str],
+                  exists=os.path.lexists) -> set[str]:
+    """The conf.d roots this change removed whole (#3644): every changed path
+    under the root is in `deleted`, AND the root is gone from the checkout.
+
+    ⛔ Both, never the second alone — a root that does not exist is also what a
+    path rewritten on its way here looks like, and that case must stay a red
+    `target` (see the module docstring). `deleted` comes from git itself, so a
+    rewritten path does not appear in it verbatim and fails condition 1.
+    Paths are compared verbatim, like everything else in this file.
+    """
+    by_root: dict[str, list[str]] = {}
+    for path in paths:
+        if not path:
+            continue
+        root = conf_d_root(path)
+        if root is not None:
+            by_root.setdefault(root, []).append(path)
+    return {root for root, members in by_root.items()
+            if all(p in deleted for p in members) and not exists(root)}
+
+
+def read_deleted(path: str) -> set[str]:
+    """The `--deleted` file: NUL-separated (`git diff -z`), read as bytes and
+    decoded with surrogateescape for the same reason stdin is (see main)."""
+    with open(path, "rb") as fh:
+        raw = fh.read().decode("utf-8", errors="surrogateescape")
+    return {p for p in raw.split("\0") if p}
+
+
 def looks_c_quoted(path: str) -> bool:
     """git 的 C-quoting 一定以 `"` 開頭；真的以引號開頭的檔名也會被引起來。
 
@@ -249,6 +296,16 @@ def looks_c_quoted(path: str) -> bool:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    deleted_file: str | None = None
+    if "--deleted" in args:
+        i = args.index("--deleted")
+        if i + 1 >= len(args):
+            sys.stderr.write("guard_defaults_scopes: --deleted needs a file "
+                             "(NUL-separated output of `git diff -z --name-only "
+                             "--diff-filter=D ...`).\n")
+            return EXIT_USAGE
+        deleted_file = args[i + 1]
+        del args[i:i + 2]
     null_sep = False
     for flag in ("--null", "-0"):
         if flag in args:
@@ -380,8 +437,14 @@ def main(argv: list[str] | None = None) -> int:
 
     kept, excluded = partition(paths)
     targets, unmanaged = resolve(kept)
+    # ⛔ No `--deleted` ⇒ no deletion facts ⇒ nothing is `removed`: the tree
+    # stays a target and da-guard's exit 2 keeps the job red. Never inferred
+    # from the directory being absent alone (see removed_roots).
+    removed = (removed_roots(kept, read_deleted(deleted_file))
+               if deleted_file is not None else set())
     lines = [f"target{FIELD_SEP}{config_dir}{FIELD_SEP}{scope}{ROW_SEP}"
-             for config_dir, scope in targets]
+             for config_dir, scope in targets if config_dir not in removed]
+    lines += [f"removed{FIELD_SEP}{root}{ROW_SEP}" for root in sorted(removed)]
     lines += [f"unmanaged{FIELD_SEP}{path}{ROW_SEP}" for path in unmanaged]
     lines += [f"excluded{FIELD_SEP}{path}{FIELD_SEP}{reason}{ROW_SEP}"
               for path, reason in excluded]

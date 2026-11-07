@@ -47,7 +47,6 @@ lang: zh
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
 | `guard_dispatch.py` | `da-tools guard` Python entrypoint. |
 | `init_project.py` | Bootstrap a Dynamic Alerting integration in a customer repo. |
-| `inject_metadata_join.py` | One-time script: add tenant metadata annotations (runbook_url, owner, tier) to Rule Pack alert rules. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
 | `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
@@ -190,7 +189,6 @@ lang: zh
 | `check_leftouterjoin_enrichment.py` | Tenant metadata reaches alerts through annotations only, never a join (#3483). |
 | `check_lint_toolchain_fit.py` | meta-lint: stop reinventing ESLint/stylelint. |
 | `check_log_egress_policy.py` | #566 batch D (T4-1/T4-2) egress allowlist gate. |
-| `check_maintenance_symmetry.py` | check_maintenance_symmetry — per-arm maintenance-clause symmetry guard for rule-pack alerts. |
 | `check_makefile_targets.py` | 自動化入口與 DX 工具聯動檢查 |
 | `check_md_yaml_drift.py` | Markdown 內 YAML 範例與 Schema 漂移偵測 |
 | `check_metric_dictionary.py` | Metric Dictionary 自動驗證 |

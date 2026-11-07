@@ -96,3 +96,6 @@ groups:
           summary_zh: "租戶 {{ $labels.tenant }} ({{ $labels.db_type }}) 的 exporter 缺席"
           description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels.db_type }}) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
           description_zh: "租戶 {{ $labels.tenant }} (db_type={{ $labels.db_type }}) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

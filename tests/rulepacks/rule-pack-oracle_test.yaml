@@ -60,6 +60,9 @@ tests:
               summary_zh: "Oracle 實例 oracledb-exporter-a:9161 已關閉"
               description: "oracledb_up=0 for 15s on oracledb-exporter-a:9161"
               description_zh: "oracledb_up=0，持續 15 秒，實例：oracledb-exporter-a:9161"
+              runbook_url: ""
+              owner: ""
+              tier: ""
         # db-b (oracledb_up=1) produces NO alert.
 
   # ── Threshold + ratio alerts: four-tenant scaffold, one shared input set ──

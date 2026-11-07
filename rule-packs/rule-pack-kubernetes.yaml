@@ -517,8 +517,8 @@ groups:
       # exact silent-failure class this coverage exists to close. The two constants are
       # therefore inline; a tenant that wants a different OOM policy has the
       # maintenance opt-out and (for bespoke shapes) the custom-alerts route.
-      # Maintenance suppression is factored HERE, once, so both alert bodies below carry
-      # ZERO maintenance clauses (the 0-copy shape check_maintenance_symmetry expects).
+      # No maintenance clause here: it sits on each alert that reads these cores,
+      # written from the alert's `maintenance:` label by generate_rulepack_derived.py (#3309).
       # No `version` dimension: unlike cpu/memory these cores are not part of the
       # ADR-024 version pilot (no threshold to resolve per version), so the alert labels
       # stay (tenant) only and Alertmanager groups one OOM notification per tenant.
@@ -911,7 +911,10 @@ groups:
           # `#for-platform-operators-ksm-allowlist-remediation` is a CONTRACT with that
           # English H2 heading in the guide — do NOT rename the heading (the link would
           # rot silently; mkdocs-strict does not validate URLs inside rule-pack YAML).
-          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation"
+          platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/scenarios/version-aware-thresholds.md#for-platform-operators-ksm-allowlist-remediation"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
   # ─────────────────────────────────────────────────────────────────────
   # Custom disk-recipe inert sentinel (#692 P0③ W2 / ADR-024 §Addendum).
@@ -1026,7 +1029,10 @@ groups:
           platform_summary_zh: "[SRE] 租戶 {{ $labels.tenant }} disk recipe inert — volume-stats 缺席。依序查:(1) 租戶根本沒掛 PVC(最常見、屬租戶端);(2) kubelet volume-stats scrape job 是否帶 namespace→tenant relabel;(3) CSI 是否實作 NodeGetVolumeStats(kind 預設 local-path 不實作)。"
           description: "You declared a disk-fill custom alert, but the platform sees no disk (volume) metrics for your workload, so the alert can never fire. This usually means your service mounts no PersistentVolumeClaim — check your deployment. If you DO use a PVC, contact the platform team to investigate disk-metric collection."
           description_zh: "您設定了磁碟填滿告警，但平台偵測不到您工作負載的磁碟(volume)指標，該告警永遠不會觸發。這通常表示您的服務沒有掛載 PersistentVolumeClaim — 請確認您的部署。若您確實使用 PVC，請聯繫平台團隊排查磁碟指標收集。"
-          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+          platform_runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
   # ─────────────────────────────────────────────────────────────────────
   # (#944 PR-2b) The ContainerCpuSignalAbsent sentinel that lived here was RETIRED:

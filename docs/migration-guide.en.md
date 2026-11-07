@@ -97,7 +97,7 @@ Full command set, hash verification, air-gapped flow, cosign keyless verificatio
 For enterprises with mature monitoring stacks, `da-tools onboard` **reverse-analyzes** Alertmanager / Prometheus rules / scrape config and produces a migration plan (skip this step if you have no existing monitoring):
 
 - Alertmanager (`--alertmanager-config`) → `phase1-routing/`: a routing summary per tenant route and a `<tenant>.yaml` routing snippet, plus `onboard-hints.json` (when tenant routes are found)
-- Rule files (`--rule-files '<glob>'`) → `phase2-rules/migration-plan.csv` (per alert rule `status`: `perfect` / `complex` / `unparseable`) and `_defaults-suggestion.yaml`
+- Rule files (`--rule-files <file-or-dir>...`; on the v2.9.0 image a directory selects no file, so give a quoted glob <!-- image-caveat: v2.9.0 -->) → `phase2-rules/migration-plan.csv` (per alert rule `status`: `perfect` / `complex` / `unparseable`) and `_defaults-suggestion.yaml`
 - Scrape config (`--scrape-config`) → `phase3-scrape/`: `scrape-analysis.yaml` and a `<job>-relabel-suggestion.yaml` per job
 
 Full flags, output conditions and exit codes: [`cli-reference.md#onboard`](cli-reference.md#onboard). `onboard-hints.json` feeds `scaffold --from-onboard`; rule conversion is `migrate`, which reads the old rule files directly.

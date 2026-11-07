@@ -34,6 +34,9 @@ tests:
               description_zh: "PostgreSQL 運行時間僅 120s（少於 5 分鐘）"
               summary: " restarted recently"
               summary_zh: " 最近已重新啟動"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   - interval: 1m
     name: M2-pg-restart-silent-in-maintenance
@@ -62,6 +65,9 @@ tests:
               description_zh: "運行時間僅 60s（少於 5 分鐘）"
               summary: " restarted recently"
               summary_zh: " 最近已重新啟動"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   - interval: 1m
     name: M4-mariadb-restart-silent-in-maintenance
@@ -90,6 +96,9 @@ tests:
               description_zh: "查詢失敗率：20.0 次查詢/秒"
               summary: "ClickHouse failed query rate > 10/s"
               summary_zh: "ClickHouse 查詢失敗率 > 10/秒"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   - interval: 1m
     name: M6-clickhouse-failed-queries-silent-in-maintenance
@@ -120,3 +129,6 @@ tests:
               description_zh: "pg_up=0，持續 15 秒，實例："
               summary: "PostgreSQL instance  is DOWN"
               summary_zh: "PostgreSQL 實例  已關閉"
+              runbook_url: ""
+              owner: ""
+              tier: ""

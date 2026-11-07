@@ -101,8 +101,9 @@ type TenantDetail struct {
 	// refused with 409 TENANT_GIT_MANAGED.
 	ManagedBy string `json:"managed_by" enums:"api,git"`
 	// GitManagedReason says why the tenant is git-managed (managed_by: git):
-	// not_tenant_document (not YAML, or its root or tenants: is not a
-	// mapping), several_documents, yaml_indirection, tenant_count (several
+	// not_tenant_document (not YAML, its root or tenants: is not a
+	// mapping, or its root has a key other than tenants),
+	// several_documents, yaml_indirection, tenant_count (several
 	// tenants), id_mismatch (the one tenant is not the file's name). A
 	// fixed code: it names no tenant. Absent when managed_by is api.
 	GitManagedReason string `json:"git_managed_reason,omitempty" enums:"not_tenant_document,several_documents,yaml_indirection,tenant_count,id_mismatch"`

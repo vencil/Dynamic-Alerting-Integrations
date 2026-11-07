@@ -133,7 +133,6 @@ ENGLISH_ONLY: dict[str, str] = {
     # run by hand; its answers are HTTP JSON, not prose.
     "generator_service.py": "container service started by the chart, not an operator CLI; English-only help",
     "grafana_import.py": _R_OPS,
-    "inject_metadata_join.py": _R_OPS,
     "lint_custom_rules.py": _R_OPS,
     "maintenance_scheduler.py": _R_OPS,
     "onboard_platform.py": _R_OPS,
@@ -227,7 +226,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_leftouterjoin_enrichment.py": _R_LINT,
     "check_lint_toolchain_fit.py": _R_LINT,
     "check_log_egress_policy.py": _R_LINT,
-    "check_maintenance_symmetry.py": _R_LINT,
     "check_md_yaml_drift.py": _R_LINT,
     "check_open_encoding.py": _R_LINT,
     "check_orphan_docs.py": _R_LINT,

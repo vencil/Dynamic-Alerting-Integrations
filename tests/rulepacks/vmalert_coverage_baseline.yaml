@@ -99,7 +99,6 @@ uncovered:
   - RabbitMQHighUnackedMessages
   - RabbitMQLowConsumers
   rule-pack-redis.yaml:
-  - RedisDown
   - RedisHighKeyEvictions
   - RedisHighMemory
   - RedisLowHitRatio

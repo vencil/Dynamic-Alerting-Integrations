@@ -19,7 +19,6 @@ var managedCases = []struct {
 	{"flow style", "tenants: {db-a: {mysql_connections: \"70\"}}\n", ""},
 	{"anchor and alias inside own section", "tenants:\n  db-a:\n    _metadata: &m\n      owner: x\n    _routing:\n      meta: *m\n", ""},
 	{"merge key inside own section", "tenants:\n  db-a:\n    base: &b {x: \"1\"}\n    more:\n      <<: *b\n      y: \"2\"\n", ""},
-	{"other plain top-level key", "x: 1\ntenants:\n  db-a: {}\n", ""},
 	{"trailing empty document", "tenants:\n  db-a: {}\n---\n", ""},
 	{"trailing null document", "tenants:\n  db-a: {}\n---\n~\n", ""},
 	{"trailing comment-only document", "tenants:\n  db-a: {}\n---\n# nothing\n", ""},
@@ -28,11 +27,22 @@ var managedCases = []struct {
 	{"whitespace only", " \n\n", ""},
 	{"comments only", "# nothing yet\n", ""},
 	{"null root", "~\n", ""},
-	{"no tenants key", "x: 1\n", ""},
 	{"null tenants", "tenants:\n", ""},
 	{"empty tenants", "tenants: {}\n", ""},
 
 	// Git-managed.
+	// #3504: a top-level key other than `tenants` — the exporter reads a
+	// tenant only from `tenants.<id>`, and the schema allows no other key.
+	{"other plain top-level key", "x: 1\ntenants:\n  db-a: {}\n", GitManagedNotTenantDocument},
+	{"flat thresholds, no tenants key", "container_cpu: \"70\"\n", GitManagedNotTenantDocument},
+	{"flat reserved key, no tenants key", "_profile: strict\n", GitManagedNotTenantDocument},
+	{"empty tenants beside another key", "x: 1\ntenants: {}\n", GitManagedNotTenantDocument},
+	{"stray key after tenants", "tenants:\n  db-a: {}\nx: 1\n", GitManagedNotTenantDocument},
+	// A stray key does not mask a more specific reason.
+	{"stray key with two tenants", "x: 1\ntenants:\n  db-a: {}\n  db-b: {}\n", GitManagedTenantCount},
+	{"stray key with another id", "tenants:\n  db-b: {}\nx: 1\n", GitManagedIDMismatch},
+	{"stray key with a tagged tenant key", "tenants:\n  !!str db-a: {}\nx: 1\n", GitManagedYAMLIndirection},
+	{"stray key in two documents", "x: 1\n---\ny: 2\n", GitManagedSeveralDocuments},
 	{"two tenants", "tenants:\n  db-a: {}\n  db-b: {}\n", GitManagedTenantCount},
 	{"stem mismatch", "tenants:\n  db-b: {}\n", GitManagedIDMismatch},
 	{"!!binary co-tenant key decoding to own id",
@@ -199,7 +209,7 @@ func TestShapeVerdict_AgreesWithTheExporter(t *testing.T) {
 			continue
 		}
 		apiShaped++
-		ids, reason := walkDeclaredIDs([]byte(c.data))
+		ids, reason, _ := walkDeclaredIDs([]byte(c.data))
 		if reason != "" {
 			t.Fatalf("%s: walk reason %q under an API-shaped verdict", c.name, reason)
 		}
