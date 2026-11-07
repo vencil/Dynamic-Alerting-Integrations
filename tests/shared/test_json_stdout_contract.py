@@ -1703,6 +1703,13 @@ runpy.run_path(script, run_name="__main__")
 CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
                       if not r.expect_caller_error}.values())
 
+#: Tools whose crash line names the exception's type but never its message
+#: (it may quote what the tool read): the text they print instead.
+#: migrate_credentials (#1560 ⑤-a): a message may quote a credential value.
+CRASH_MESSAGE_WITHHELD = {
+    "migrate_credentials": "the message is not shown: it may quote a credential value",
+}
+
 # These tools catch `Exception` around their work themselves (their own word
 # for "no result": a stderr line and rc 2). The injected crash above fires
 # before that handler, so green there is not coverage for it. The crash is
@@ -1788,7 +1795,10 @@ def test_a_crash_in_json_mode_leaves_stdout_empty(
     where = (f"{recipe.tool}.py ({recipe.mode}) rc={proc.returncode}\n"
              f"  stdout[:300]: {proc.stdout[:300]!r}\n"
              f"  stderr[-300:]: {proc.stderr[-300:]!r}")
-    assert f"ERROR: unexpected internal error (RuntimeError): {_INJECTED}" in proc.stderr, (
+    shown = CRASH_MESSAGE_WITHHELD.get(recipe.tool, _INJECTED)
+    if recipe.tool in CRASH_MESSAGE_WITHHELD:
+        assert _INJECTED not in proc.stderr, f"the crash message was printed: {where}"
+    assert f"ERROR: unexpected internal error (RuntimeError): {shown}" in proc.stderr, (
         f"the injected crash never fired (the tool parses no arguments through "
         f"ArgumentParser.parse_args?): {where}")
     assert proc.returncode == EXIT_CALLER_ERROR, f"a crash must exit 2: {where}"

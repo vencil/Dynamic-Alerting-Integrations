@@ -908,3 +908,33 @@ def test_a_user_key_outside_the_http_token_charset_is_not_printed():
     assert mc._safe_key("X-Token") == "X-Token"
     for bad in ("X Token", "a\tb", "x" * 65, "é", ""):
         assert mc._safe_key(bad) == "<key>"
+
+
+def test_a_crash_names_the_exception_type_only(tmp_path):
+    """A crash inside the tool's work: the shared crash line and exit code,
+    the exception's type name, a fixed text — never its message (it may
+    quote a value), and no traceback of frames."""
+    root = _tree(tmp_path, {"team-a.yaml": TENANT})
+    wrapper = (
+        "import os, runpy, sys\n"
+        "tools, script = sys.argv[1], sys.argv[2]\n"
+        "sys.argv = sys.argv[2:]\n"
+        "sys.path.insert(0, os.path.dirname(script)); sys.path.insert(0, tools)\n"
+        "import _lib_validation\n"
+        "def boom(*a, **k):\n"
+        f"    raise KeyError({SLACK!r})\n"
+        "_lib_validation.plaintext_credential_findings = boom\n"
+        "import migrate_credentials\n"
+        "migrate_credentials.plaintext_credential_findings = boom\n"
+        "runpy.run_path(script, run_name='__main__')\n")
+    proc = subprocess.run(
+        [sys.executable, "-c", wrapper, os.path.join(REPO, "scripts", "tools"), TOOL,
+         "--config-dir", str(root), "--json"],
+        capture_output=True, text=True, encoding="utf-8", check=False, timeout=300)
+    # The shared crash code: 2, or the test run's override (tests/conftest.py).
+    assert proc.returncode == int(os.environ.get("DA_TEST_CRASH_EXIT_CODE", "2")), proc.stderr
+    assert proc.stdout == ""
+    _no_canary(proc)
+    assert proc.stderr.splitlines() == [
+        f"KeyError: {mc.CRASH_TEXT}",
+        f"ERROR: unexpected internal error (KeyError): {mc.CRASH_TEXT}"]

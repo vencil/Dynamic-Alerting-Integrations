@@ -941,8 +941,45 @@ def _print_text(doc: dict) -> None:
 _STOPS_WRITE = frozenset({"value_remains_in_file", "value_in_comment", "rewrite_refused"})
 
 
+#: What a crash says instead of its exception's message (`main`).
+CRASH_TEXT = "the message is not shown: it may quote a credential value"
+
+
+def _crash_without_message(exc: Exception) -> Exception:
+    """The exception a crash goes on as: of *exc*'s type name, carrying
+    ``CRASH_TEXT``, with no traceback to print (its ``__traceback__`` reads
+    None). Raised out of ``main``, it ends the shared way — ``run()``'s
+    crash line and crash exit code — naming the type only."""
+
+    class Withheld(Exception):
+        @property
+        def __traceback__(self):  # type: ignore[override]
+            return None
+
+        @__traceback__.setter
+        def __traceback__(self, _value):
+            pass
+
+    Withheld.__name__ = Withheld.__qualname__ = type(exc).__name__
+    return Withheld(CRASH_TEXT)
+
+
 @_lib_parse_cache.exit_on_parse_tree_error
 def main(argv: Optional[list[str]] = None) -> Any:
+    """The tool. An unexpected exception's message may quote a value read
+    from conf.d (a KeyError of a key, a ValueError of a scalar): it ends as a
+    crash naming the exception's type only (`_crash_without_message`). Not
+    a crash: no usable da-guard (ParseTreeError, the decorator's), a caller
+    error, an OSError (a path, or a failing stdout: the shared handling)."""
+    try:
+        return _main(argv)
+    except (ParseTreeError, _lib_exitcodes.CallerError, OSError):
+        raise
+    except Exception as exc:  # noqa: BLE001 — every other exception is a crash here
+        raise _crash_without_message(exc) from None
+
+
+def _main(argv: Optional[list[str]]) -> Any:
     import generate_alertmanager_routes as gar
     args = _parse_args(argv)
     problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
