@@ -124,7 +124,7 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 			// never stderr_tail, a finding's message or its field, which
 			// quote what the tenants wrote. The caller sees the findings
 			// in the 422 (disclosedFindings, by RBAC); the CLI on its tree.
-			slog.Info("generator: write refused with findings", findingsLogAttrs(base, len(files), v)...)
+			slog.Info("generator: write refused with findings", "base", base, "files", len(files), "verdict", v)
 			return nil, g.findings(ctx, deadline, base, files, v)
 		}
 		problem := mismatch(v.Validated, base, files, policy)
@@ -143,34 +143,6 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 	}
 }
 
-// findingsLogAttrs is what the platform log keeps of a `findings` verdict
-// (#1560 ⑤-b): base, the number of files, the exit code and, per finding
-// kind (a closed vocabulary), how many there were. Never stderr_tail nor a
-// finding's message, field, tenant, policy or file: those quote conf.d,
-// and the log crosses a trust boundary the 422 does not.
-func findingsLogAttrs(base string, files int, v *Verdict) []any {
-	counts := map[string]int{}
-	if v.Findings != nil {
-		for _, f := range v.Findings.Findings {
-			counts[f.Kind]++
-		}
-	}
-	kinds := make([]string, 0, len(counts))
-	for k := range counts {
-		kinds = append(kinds, k)
-	}
-	sort.Strings(kinds)
-	perKind := make([]string, 0, len(kinds))
-	for _, k := range kinds {
-		perKind = append(perKind, fmt.Sprintf("%s=%d", k, counts[k]))
-	}
-	rc := -1
-	if v.RC != nil {
-		rc = *v.RC
-	}
-	return []any{"base", base, "files", files, "rc", rc, "findings_by_kind", strings.Join(perKind, ",")}
-}
-
 // refuseUnjudged refuses a pass whose key verdict is missing or did not
 // complete (ADR-038 decision 5: no fallback — neither taken unjudged nor
 // judged by another key check). No verdict at all is a generator image
@@ -178,7 +150,7 @@ func findingsLogAttrs(base string, files int, v *Verdict) []any {
 // verdict that did not complete refuses this write (keyVerdictReasons):
 // retryable when time ran out, otherwise not. The service's message is
 // neither passed on nor logged (#1560 ⑤-b: the log keeps structured fields
-// only — keyVerdictLogReason); it can carry a platform path or a program's
+// only — KeyVerdict.LogValue); it can carry a platform path or a program's
 // stderr.
 func (g *Gate) refuseUnjudged(ctx context.Context, kv *KeyVerdict, base string, files int) error {
 	if kv == nil {
@@ -199,7 +171,7 @@ func (g *Gate) refuseUnjudged(ctx context.Context, kv *KeyVerdict, base string, 
 		return nil
 	}
 	slog.Info("generator: write refused, key verdict not completed", "base", base, "files", files,
-		"reason", keyVerdictLogReason(kv.Reason), "tenants", kv.Tenants, "seconds", kv.Seconds)
+		"key_verdict", kv)
 	r, ok := keyVerdictReasons[kv.Reason]
 	if !ok {
 		r = keyVerdictReasons["error"]
@@ -246,7 +218,7 @@ func keyVerdict(kv *KeyVerdict, base string, files int) *gitops.KeyVerdict {
 	}
 	if kv.Status != gitops.KeyVerdictComplete {
 		slog.Info("generator: key verdict not completed", "base", base, "files", files,
-			"reason", keyVerdictLogReason(kv.Reason), "tenants", kv.Tenants, "seconds", kv.Seconds)
+			"key_verdict", kv)
 		return &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: kv.Reason}
 	}
 	out := &gitops.KeyVerdict{Status: gitops.KeyVerdictComplete, Truncated: kv.Truncated,

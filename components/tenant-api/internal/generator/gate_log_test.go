@@ -47,7 +47,7 @@ func TestValidateWrites_FindingsLogNoGeneratorText(t *testing.T) {
 	}
 	// Positive control: the refusal is logged, by its structured fields.
 	if !strings.Contains(logs, "write refused with findings") ||
-		!strings.Contains(logs, `"findings_by_kind":"credential_plaintext=2"`) {
+		!strings.Contains(logs, `"findings_by_kind":["credential_plaintext=2"]`) {
 		t.Errorf("no structured refusal line:\n%s", logs)
 	}
 }

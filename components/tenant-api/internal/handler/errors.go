@@ -880,17 +880,16 @@ func generatorOpResult(tenantID string, err error) (BatchResult, bool) {
 	case errkind.GeneratorRejectedRetryable, errkind.GeneratorRejected:
 		var rej *generator.RejectedError
 		errors.As(err, &rej)
-		// #1560 ⑤-b: the reason code only — the container's message is free
-		// text the log must not carry (generatorRejectedText is the client's).
-		slog.Warn("batch op refused: the generator gave no verdict", "tenant", tenantID,
-			"reason", generator.ClientReason(rej.Reason))
+		// #1560 ⑤-b: the typed error, never err (a wrapper logs its Error()
+		// text): its LogValue keeps the code and reason only.
+		slog.Warn("batch op refused: the generator gave no verdict", "tenant", tenantID, "error", rej)
 		msg = generatorRejectedText(rej)
 	default: // ValidatorUnavailable, PolicyUnavailable
 		var unav *generator.UnavailableError
 		errors.As(err, &unav)
-		// The message is the log's only (generatorUnavailableText); an async
-		// task's results have no other path to it.
-		slog.Error("batch op refused: the generator container cannot judge", "tenant", tenantID, "code", unav.Code, "reason", unav.Reason, "error", err)
+		// #1560 ⑤-b: the typed error, never err (a wrapper logs its Error()
+		// text): its LogValue keeps the code and reason only.
+		slog.Error("batch op refused: the generator container cannot judge", "tenant", tenantID, "error", unav)
 		msg = generatorUnavailableText(unav)
 	}
 	return BatchResult{TenantID: tenantID, Status: "error", Message: msg, Code: kindSpecOf(k).Code}, true
