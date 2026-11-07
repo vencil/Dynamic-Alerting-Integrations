@@ -1781,7 +1781,7 @@ da-tools migrate-credentials --config-dir <DIR> [options]
 
 | Code | Meaning |
 |------|---------|
-| `0` | nothing written out, and every config file read |
+| `0` | nothing written out, and every config file read. ⚠️ Only receivers whose `type` is a known receiver type, in `overrides` / `routes` that are lists, are judged; a receiver with an invalid `type` or in a block of the wrong shape is not (the generator skips it, yet the value is in the repository) — fix such files with `validate-config` first |
 | `1` | found, or a file no plane reads (`unread`) (the report is the answer; also after `--write`: the rotation list stands; also when the rewrite would be refused and `--write` wrote nothing) |
 | `2` | usage / I/O error, no usable da-guard, a file that cannot be read, `--manifests-out` refused, a failed manifest or `da-guard write`, a place still written out when read back after the write |
 
@@ -1793,7 +1793,10 @@ da-tools migrate-credentials --config-dir conf.d
 
 # Apply: the manifests and conf.d together; the manifest directory is outside
 # the repository, mounted on its own (da-tools mounts only the current
-# directory, and manifests may not be written into a git worktree). Then git diff
+# directory, and manifests may not be written into a git worktree). Then git diff.
+# ⚠️ The container cannot see the host's .git, so inside it the tool cannot tell
+# whether /secrets lies in a git repository on the host: make sure $HOME/da-secrets
+# is in none (for example when $HOME itself is a dotfiles repository)
 mkdir -m 700 -p "$HOME/da-secrets"
 docker run --rm --network=host --user "$(id -u):$(id -g)" \
   -v "$(pwd):/workspace" -w /workspace -v "$HOME/da-secrets:/secrets" \

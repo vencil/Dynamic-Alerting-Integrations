@@ -1778,7 +1778,7 @@ da-tools migrate-credentials --config-dir <DIR> [options]
 
 | 代碼 | 說明 |
 |------|------|
-| `0` | 沒有任何明文要處理，且每個 config 檔都讀了 |
+| `0` | 沒有任何明文要處理，且每個 config 檔都讀了。⚠️ 只判 `type` 是已知 receiver 型別、且 `overrides`／`routes` 是 list 的位置；`type` 不合法或區塊形狀不對的 receiver 不判（產生器會略過它，但值仍在 repo 裡），這種檔先用 `validate-config` 修好再跑 |
 | `1` | 有發現、或有沒有任何 plane 讀的檔（`unread`）（報告就是答案；`--write` 改寫完也是 1，待輪替清單仍在；改寫會被擋而 `--write` 什麼都沒寫時也是 1） |
 | `2` | 用法／I/O 錯誤、沒有可用的 da-guard、有讀不了的檔、`--manifests-out` 被拒、清單或 `da-guard write` 寫入失敗、寫入後讀回仍有明文 |
 
@@ -1789,7 +1789,9 @@ da-tools migrate-credentials --config-dir <DIR> [options]
 da-tools migrate-credentials --config-dir conf.d
 
 # 套用：Secret 清單與 conf.d 一起寫；清單目錄在 repo 之外，另掛進容器
-# （da-tools 只掛當前目錄，而清單不得寫進 git worktree）。之後用 git diff 看改了什麼
+# （da-tools 只掛當前目錄，而清單不得寫進 git worktree）。之後用 git diff 看改了什麼。
+# ⚠️ 容器看不到主機的 .git，工具在容器裡判不出 /secrets 是否位在主機的 git 倉庫內：
+# 請自行確認 $HOME/da-secrets 不在任何 git 倉庫裡（例如 $HOME 本身是 dotfiles repo）
 mkdir -m 700 -p "$HOME/da-secrets"
 docker run --rm --network=host --user "$(id -u):$(id -g)" \
   -v "$(pwd):/workspace" -w /workspace -v "$HOME/da-secrets:/secrets" \
