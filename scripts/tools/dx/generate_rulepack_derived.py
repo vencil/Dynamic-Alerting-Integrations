@@ -109,6 +109,12 @@ VALUES = (MUTE, PAGE)
 #: The series the maintenance clause reads, as a selector (check 4).
 MAINTENANCE_SERIES = 'user_state_filter{filter="maintenance"}'
 
+#: Labels whose whole value IS the tenant (check 6): Prometheus writes
+#: `tenant` from the namespace (k8s/03-monitoring/configmap-prometheus.yaml,
+#: `target_label: tenant` from `__meta_kubernetes_namespace`), so a
+#: `label_replace` copying `namespace` into `tenant` keeps the tenant.
+TENANT_ALIASES = ("namespace",)
+
 #: The series Prometheus derives from firing alerts (check 5).
 ALERT_SERIES = ("ALERTS", "ALERTS_FOR_STATE")
 
@@ -537,14 +543,15 @@ def alert_series_problems(rules: "list[tuple[str, str, str]]", selectors_of=None
 
 
 def clause_flow_problems(rules: "list[tuple[str, str, str]]", flow_of=None,
-                         records: "dict[str, list[str]] | None" = None) -> list[str]:
+                         records: "dict[str, list[dict]] | None" = None) -> list[str]:
     """Check 6 of the module docstring. *rules* are (path, name, expr);
-    *records* the recording rules they may read ({name: [expr, …]}, followed
+    *records* the recording rules they may read ({name: [{"expr", "labels"}, …]}, followed
     so a record cannot hide a dropped ``tenant``); *flow_of* (default: ``da-read
     promql-label-flow tenant``) maps a list of exprs to, per expr, its
     ``and``/``unless on(tenant)`` matches."""
     if flow_of is None:
-        flow_of = lambda exprs: _lib_consumer_read.promql_label_flow("tenant", exprs, records)  # noqa: E731
+        flow_of = lambda exprs: _lib_consumer_read.promql_label_flow(  # noqa: E731
+            "tenant", exprs, records, TENANT_ALIASES)
     with_clause = [(p, n, e) for p, n, e in rules if _clauses(e)]
     if not with_clause:
         return []
@@ -573,6 +580,7 @@ def semantic_problems(rule_files: list, selectors_of=None, alert_selectors_of=No
                       flow_of=None) -> list[str]:
     """Checks 2, 4, 5 and 6 of the module docstring, on the files as Prometheus reads them."""
     records: dict[str, list[str]] = {}
+    record_defs: dict[str, list[dict]] = {}
     alerts: list[tuple[str, dict]] = []
     every: list[tuple[str, str, str]] = []
     for rf in rule_files:
@@ -581,13 +589,15 @@ def semantic_problems(rule_files: list, selectors_of=None, alert_selectors_of=No
                 for r in g.get("rules") or []:
                     if "record" in r:
                         records.setdefault(r["record"], []).append(r.get("expr", ""))
+                        record_defs.setdefault(r["record"], []).append(
+                            {"expr": r.get("expr", ""), "labels": r.get("labels") or {}})
                         every.append((rf.path, f"record {r['record']}", r.get("expr", "")))
                     elif "alert" in r:
                         alerts.append((rf.path, r))
                         every.append((rf.path, f"alert {r['alert']}", r.get("expr", "")))
     problems: list[str] = stray_selector_problems(every, selectors_of)
     problems += alert_series_problems(every, alert_selectors_of)
-    problems += clause_flow_problems(every, flow_of, records)
+    problems += clause_flow_problems(every, flow_of, record_defs)
 
     def count(expr: str, seen: frozenset[str]) -> int:
         n = clause_count(expr)

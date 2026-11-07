@@ -520,17 +520,21 @@ def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None)
     return docs[0]
 
 
-def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[str]] | None" = None,
+def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[dict]] | None" = None,
+                      aliases: "list[str] | tuple[str, ...]" = (),
                       binary: str | None = None) -> "list[list[dict]]":
     """Per expression of *exprs*, every ``and`` / ``unless`` that matches
     ``on(… label …)`` and whether its left side keeps *label*, read on
     Prometheus' parse tree (``da-read promql-label-flow``, #3678). *records*
     ({name: [expr, …]}, the recording rules of the same files) are followed
-    where a selector names one. Each hit is
+    where a selector names one ({name: [{"expr": str, "labels": {…}}, …]}:
+    a rule's own ``labels:`` set or, with "", remove the label). *aliases*
+    are the labels a ``label_replace`` may copy into *label* whole. Each hit is
     ``{"op": "and"|"unless", "start": int, "end": int, "lhs":
     "kept"|"dropped"|"unknown"}`` (byte offsets into the UTF-8 encoding)."""
     resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
-    data = json.dumps({"expressions": list(exprs), "records": dict(records or {})}).encode("utf-8")
+    data = json.dumps({"expressions": list(exprs), "records": dict(records or {}),
+                       "aliases": list(aliases)}).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["promql-label-flow", label, "-"], data)
     docs = out["documents"]
