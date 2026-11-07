@@ -23,7 +23,8 @@ import pytest
 _SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "tools" / "lint" / "lint_jsx_babel.py"
 
 #: mode: "ok" one ok result per file · "fail-first" first file a parse error ·
-#: "short" one result fewer than files · "crash" exit 1 · "garbage" not JSON
+#: "short" one result fewer than files · "doubled" first file twice, last
+#: missing · "crash" exit 1 · "garbage" not JSON
 _STAND_IN_NODE = f"""#!{sys.executable}
 import json, os, sys
 mode = os.environ["STAND_IN_MODE"]
@@ -37,6 +38,8 @@ if mode == "fail-first":
     out[0] = {{"path": files[0]["path"], "ok": False, "error": "Unexpected token"}}
 if mode == "short":
     out = out[:-1]
+if mode == "doubled":
+    out = [out[0]] + out[:-1]
 sys.stdout.write(json.dumps(out))
 """
 
@@ -49,11 +52,13 @@ def _run(tmp_path, *, ci, mode=None, babel=True):
         node.write_text(_STAND_IN_NODE, encoding="utf-8", newline="\n")
         node.chmod(0o755)
     tmp = tmp_path / "tmp"
+    tmp.mkdir(exist_ok=True)
     if babel:
-        (tmp / "da-babel-lint" / "node_modules" / "@babel" / "standalone").mkdir(
-            parents=True, exist_ok=True)
-    else:
-        tmp.mkdir(exist_ok=True)
+        babel_dir = tmp / "da-babel-lint" / "node_modules" / "@babel" / "standalone"
+        babel_dir.mkdir(parents=True, exist_ok=True)
+        if babel != "empty-dir":
+            (babel_dir / "package.json").write_text(
+                '{"version": "7.26.4"}', encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
     env.update(PATH=str(bin_dir), TMPDIR=str(tmp), STAND_IN_MODE=mode or "")
     return subprocess.run([sys.executable, str(_SCRIPT), *(["--ci"] if ci else [])],
@@ -80,7 +85,7 @@ def test_babel_not_installable_is_rc_2(tmp_path, ci):
     assert "could not install @babel/standalone" in proc.stderr
 
 
-@pytest.mark.parametrize("mode", ["crash", "garbage", "short"])
+@pytest.mark.parametrize("mode", ["crash", "garbage", "short", "doubled"])
 @pytest.mark.parametrize("ci", [True, False], ids=["ci", "dev-box"])
 def test_a_node_pass_that_did_not_cover_every_file_is_rc_2(tmp_path, ci, mode):
     """A crash, non-JSON output, or one result missing: rc 2. Without --ci
@@ -88,6 +93,23 @@ def test_a_node_pass_that_did_not_cover_every_file_is_rc_2(tmp_path, ci, mode):
     proc = _run(tmp_path, ci=ci, mode=mode)
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "babel-parse did not run" in proc.stderr, proc.stderr
+
+
+def test_an_interrupted_babel_install_is_reinstalled_not_trusted(tmp_path):
+    """An empty @babel/standalone directory (an npm run cut off) is not an
+    install: with no npm on PATH it is "could not install", rc 2 — not a
+    node `Cannot find module` on every later run (#3611 review F5)."""
+    proc = _run(tmp_path, ci=True, mode="ok", babel="empty-dir")
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "could not install @babel/standalone" in proc.stderr
+
+
+def test_no_verdict_still_prints_what_the_node_free_passes_found(tmp_path, monkeypatch):
+    """rc 2 (no verdict) does not swallow the static / line-count findings
+    computed before the Babel pass (#3611 review F3)."""
+    proc = _run(tmp_path, ci=True)
+    assert proc.returncode == 2
+    assert "static pattern warning(s) also found" in proc.stdout, proc.stdout
 
 
 def test_a_parse_error_is_a_finding_under_ci_only(tmp_path):

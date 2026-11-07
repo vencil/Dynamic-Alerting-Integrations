@@ -976,8 +976,9 @@ repos:
         files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
         # Promoted from manual → auto (docs/harness-hardening):
         # catches NUL bytes, browser-mode Babel incompatibilities, and
-        # broken JSX syntax before they reach HEAD. Skips silently if
-        # Node.js unavailable (~0s), otherwise ~2-4s against cached @babel/standalone.
+        # broken JSX syntax before they reach HEAD. Needs node: without it
+        # (or without an installable @babel/standalone) the hook exits 2,
+        # never a silent skip (#3611); ~2-4s against cached @babel/standalone.
 
       - id: jsx-babel-check-strict-linecount
         name: JSX line-count soft-cap regression gate

@@ -353,9 +353,6 @@ class MermaidValidator:
 
     def render_with_mmdc(self, filepath: Path) -> bool:
         """使用 mmdc 進行完整渲染驗證"""
-        if not self._renderer():
-            return False
-
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -383,6 +380,11 @@ class MermaidValidator:
                 diagram_content = '\n'.join(diagram_lines).strip()
                 if diagram_content:
                     diagram_num += 1
+                    # The renderer is located and proven on the first diagram
+                    # there is to render, not per file: a file (or a tree)
+                    # with no diagram needs no renderer (#3611 review F1).
+                    if not self._renderer():
+                        return False
                     if not self._render_diagram(diagram_content, filepath, start_line):
                         render_errors = True
 
@@ -409,6 +411,10 @@ class MermaidValidator:
         # Exit 1: this diagram, or the renderer? Only the canary can say.
         why = self._canary_renders()
         if why is not None:
+            # The renderer stopped: report once and render nothing more —
+            # every later diagram would cost a render plus a canary each,
+            # up to their timeouts, for the same answer (#3611 review F2).
+            self._mmdc = False
             self._not_checked(f'{where}: not rendered, and {why}')
             return False
         self.errors.append({

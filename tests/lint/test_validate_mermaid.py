@@ -338,6 +338,24 @@ class TestRenderWithMmdc:
         assert v.errors == []
         assert len(v.not_checked) == 1 and "known-good diagram" in v.not_checked[0]
 
+    def test_a_dead_renderer_is_reported_once_and_rendering_stops(
+            self, tmp_path, monkeypatch):
+        """After the canary fails once, no further diagram is rendered: 4
+        diagrams with the renderer dying after the first canary cost the
+        canary, one diagram and one re-canary — not a render + canary each."""
+        state = _mmdc(tmp_path, monkeypatch, broken_after=1)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD * 4)) is False
+        assert (state / "count").read_text().strip() == "3"
+        assert len(v.not_checked) == 1 and v.errors == []
+
+    def test_a_file_without_diagrams_needs_no_renderer(self, tmp_path, monkeypatch):
+        """No diagram, nothing to render: not even mmdc's absence matters."""
+        monkeypatch.setenv("PATH", str(tmp_path))
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, "# no diagrams here\n")) is True
+        assert v.not_checked == []
+
     def test_exit_0_without_an_image_is_not_checked(self, tmp_path, monkeypatch):
         state = _mmdc(tmp_path, monkeypatch)
         exe = state.parent / "mmdc"

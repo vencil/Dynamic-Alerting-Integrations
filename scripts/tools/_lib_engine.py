@@ -294,17 +294,18 @@ def _json_stdout(proc: subprocess.CompletedProcess) -> Any:
 
 
 def _node_babel_parse(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
-    """lint_jsx_babel's driver (``node -e``): rc 0 and one ``{path, ok}``
-    result per JSX file it was handed (``expect["inputs"]``). A result list
-    shorter than the input is files that were never parsed."""
+    """lint_jsx_babel's driver (``node -e``): rc 0 and exactly one ``{path,
+    ok}`` result per JSX file it was handed (``expect["paths"]``) — the same
+    paths, each once. A missing or doubled path is a file never parsed."""
     if proc.returncode != 0:
         raise NoProof("non-zero exit")
     doc = _json_stdout(proc)
     if not (isinstance(doc, list)
             and all(isinstance(r, dict) and {"path", "ok"} <= r.keys() for r in doc)):
         raise NoProof("stdout is not a list of {path, ok} results")
-    if len(doc) != expect["inputs"]:
-        raise NoProof(f"{len(doc)} result(s) for {expect['inputs']} file(s)")
+    if sorted(r["path"] for r in doc) != sorted(expect["paths"]):
+        raise NoProof(f"{len(doc)} result(s) for {len(expect['paths'])} file(s), "
+                      "not one per file")
     return doc
 
 

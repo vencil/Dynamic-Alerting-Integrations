@@ -198,11 +198,13 @@ def _cp(rc, out="", err="", args=("x",)):
 def test_babel_parse_needs_one_result_per_input():
     proof = E.PROOFS[("node", "babel-parse")]
     two = '[{"path":"a","ok":true},{"path":"b","ok":false}]'
-    assert len(proof(_cp(0, two), {"inputs": 2})) == 2
-    for rc, out, n in [(0, two, 3), (1, two, 2), (0, "[]", 1), (0, '[{"path":"a"}]', 1),
-                       (0, "nope", 1)]:
+    assert len(proof(_cp(0, two), {"paths": ["b", "a"]})) == 2
+    doubled = '[{"path":"a","ok":true},{"path":"a","ok":true}]'
+    for rc, out, paths in [(0, two, ["a", "b", "c"]), (1, two, ["a", "b"]),
+                           (0, "[]", ["a"]), (0, '[{"path":"a"}]', ["a"]),
+                           (0, "nope", ["a"]), (0, doubled, ["a", "b"])]:
         with pytest.raises(E.NoProof):
-            proof(_cp(rc, out), {"inputs": n})
+            proof(_cp(rc, out), {"paths": paths})
 
 
 def test_cli_playground_needs_a_non_empty_catalog():
