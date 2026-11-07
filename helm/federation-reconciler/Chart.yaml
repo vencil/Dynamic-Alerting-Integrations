@@ -15,7 +15,8 @@ type: application
 #         and one more projected file. `helm upgrade --reuse-values` is safe (both
 #         keys default and Helm deep-merges the maps); default `warn` never blocks
 #         startup and `optional: true` on the volume is unchanged.
-version: 0.3.0
+# 0.4.0 — #1295: victorialogs.auth {username, existingSecret} -> VICTORIALOGS_USERNAME / VICTORIALOGS_PASSWORD env, sent as HTTP basic auth by the reconciler. ⚠️ Needs a da-tools image that carries #1295; an older one ignores the env and queries without credentials. No Secret = no change.
+version: 0.4.0
 # appVersion: the da-tools image the reconciler ships in.
 # ⛔ v2.9.0 does NOT contain the reconciler script — it was added to build.sh
 # TOOL_FILES after that tag was cut, so the chart is not runnable as pinned.

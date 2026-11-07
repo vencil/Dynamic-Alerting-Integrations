@@ -429,7 +429,13 @@ class TestVector:
             "tenantProjections[0].accountId": "1000",
             "projectionGate.registry.configMapName": "test-registry",
         },
-    ], ids=["default", "tenant-projections"])
+        {
+            "tenantProjections[0].tenantId": "tenant-alpha",
+            "tenantProjections[0].accountId": "1000",
+            "projectionGate.registry.configMapName": "test-registry",
+            "victorialogs.auth.existingSecret": "vl-vector",
+        },
+    ], ids=["default", "tenant-projections", "store-auth"])
     def test_chart_rendered_vector_config_contains_no_dollar(
             self, repo_root: Path, sets: dict[str, str]) -> None:
         """Interpolation is on (previous test), and it is TEXTUAL and runs over
@@ -437,7 +443,10 @@ class TestVector:
         inside VRL string literals and YAML COMMENTS alike, and an unset
         `${NAME}` fails the load on every node. So the chart's own config must
         contain no `$` at all — the only interpolation sites are the ones an
-        operator writes into additionalSinks. A `$` added to a comment or VRL
+        operator writes into additionalSinks, plus the store credential
+        (#1295): with victorialogs.auth.existingSecret set, the exact line
+        `password: "${VICTORIALOGS_PASSWORD}"` (whose env var the chart always
+        sets alongside) and nothing else. A `$` added to a comment or VRL
         in configmap.yaml turns this red instead of CrashLooping the DaemonSet."""
         docs = _render(repo_root / "helm/vector", sets=sets)
         cms = [d for d in docs if d.get("kind") == "ConfigMap"
@@ -449,6 +458,8 @@ class TestVector:
             for key, body in cm["data"].items()
             for n, line in enumerate(body.splitlines(), 1)
             if "$" in line
+            and not ("victorialogs.auth.existingSecret" in sets
+                     and line.strip() == 'password: "${VICTORIALOGS_PASSWORD}"')
         ]
         assert not offenders, (
             "chart-rendered Vector config contains `$` (Vector would interpolate it):\n"

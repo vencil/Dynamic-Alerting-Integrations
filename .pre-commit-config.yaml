@@ -1876,25 +1876,6 @@ repos:
         # `python scripts/tools/lint/check_vmalert_coverage.py --generate` + commit.
         files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
-      - id: maintenance-symmetry-check
-        name: rule-pack per-arm maintenance-clause symmetry (#947/#977 bare-arm class guard)
-        # #3206 (ADR-036 §12): rule files are read the way Prometheus' rule
-        # loader reads them (`da-read prometheus-rules`), a ConfigMap /
-        # PrometheusRule the way kubectl reads it (da-crdecode). The wrappers
-        # build both when unset; a run without go fails by name, never a
-        # PyYAML fallback. The reader and the binaries' sources are in `files:`.
-        entry: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_maintenance_symmetry.py --ci
-        language: python
-        additional_dependencies: ['pyyaml']
-        pass_filenames: false
-        # Two-arm (enriched or bare) alert exprs hand-copy the maintenance `unless`
-        # once per arm; deleting/typo-ing ONE copy keeps promtool green unless the
-        # fixture carries an e-tenant (#977) — and an onboarding tenant would page
-        # during its maintenance window. Requires 0 copies (:core-factored upstream),
-        # 1 factored top-level copy (union parenthesised — `or` binds looser than
-        # `unless`), or 2 copies one-per-arm and byte-canonical.
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_maintenance_symmetry\.py|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
-
       - id: rulepack-derived-check
         name: "rule-pack maintenance label → clause (every tenant alert's `maintenance: mute|page` decides its PromQL clause; #3309)"
         # The label is the one written decision; the clause is generated from it.

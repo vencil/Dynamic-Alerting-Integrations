@@ -255,3 +255,48 @@ func TestWrite_ARejectedCustomAlertCountsNotItsIndex(t *testing.T) {
 		sameTree(t, before, snapshot(t, root))
 	})
 }
+
+// #3591: a reserved value of a tenant's own entry its reader does not read
+// is refused as value_unread (the value to fix, not a key to remove) when
+// the write makes it new — and replacing one unread value with another is
+// new (the Ratchet's rule: the same unread value only when it reads the
+// same). An unread value the write leaves alone does not block.
+func TestWrite_AnUnreadValueIsRefusedWhenTheWriteMakesIt(t *testing.T) {
+	tree := map[string]string{
+		"_defaults.yaml": "defaults:\n  cpu: 5\n",
+		"ta.yaml":        "tenants:\n  ta:\n    _silent_mode: purple\n    cpu: \"6\"\n",
+	}
+	set := func(key, value string) string {
+		return `{"files":[{"path":"ta.yaml","ops":[{"op":"set","path":["tenants","ta","` + key +
+			`"],"value":{"str":"` + value + `"}}]}]}`
+	}
+	for _, tc := range []struct {
+		name, in string
+		refused  bool
+	}{
+		{"another unread value", set("_silent_mode", "orange"), true},
+		{"the same value, as the reader reads it", set("_silent_mode", "Purple"), false},
+		{"another key, the unread value untouched", set("cpu", "7"), false},
+		{"a fix", set("_silent_mode", "warning"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := writeTree(t, tree)
+			code, res := runBatch(t, writeCmd, tc.in, "--config-dir", root, "--dry-run")
+			if !tc.refused {
+				if code != exitOK {
+					t.Fatalf("exit %d %v (%v)", code, worsenedOf(res), res.Message)
+				}
+				return
+			}
+			if code != exitFindings || callReason(res) != writeReasonWorsensTree {
+				t.Fatalf("exit %d reason %q %v", code, callReason(res), worsenedOf(res))
+			}
+			if !reflect.DeepEqual(worsenedOf(res), []string{"value_unread ta.yaml ta"}) {
+				t.Fatalf("worsened %v", worsenedOf(res))
+			}
+			if m := res.Worsened[0].Message; !strings.Contains(m, "a value its reader does not read") || strings.Contains(m, "no reader reads it") {
+				t.Errorf("message %q", m)
+			}
+		})
+	}
+}

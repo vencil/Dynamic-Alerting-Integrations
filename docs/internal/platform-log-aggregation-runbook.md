@@ -168,6 +168,27 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
    會變成密碼的一部分。
    ⚠️ Secret 名稱填錯，連 observe 也會停擺：容器起不來
    （CreateContainerConfigError），而 Recreate 策略已先刪掉舊 pod。
+
+   消費端那一側（使用者名稱就是 `auth.consumers[].name`；消費端與
+   VictoriaLogs 同在 `monitoring` 時，兩側可以指向同一個 Secret）：
+
+   | 消費端 | 設定 | 密碼怎麼進去 | 換密碼後 |
+   |---|---|---|---|
+   | `vector` | vector chart `victorialogs.auth.existingSecret` | env，代入兩種寫入 sink 的 basic auth | rollout restart DaemonSet |
+   | `grafana` | Secret `victorialogs-grafana`（`k8s/03-monitoring/deployment-grafana.yaml`） | env，datasource provisioning 以 `${VICTORIALOGS_PASSWORD}` 讀入 | rollout restart Deployment |
+   | `chargeback-aggregator` | chart `victorialogs.auth.existingSecret` | env，每次 Job 啟動讀入 | 下一次 Job 自動生效 |
+   | `federation-gateway` | chart `victorialogs.auth.existingSecret`（只在 `mode: victorialogs`） | 掛成檔案，Lua 依 `revokedSet.reloadIntervalSeconds` 重讀 | 不用重啟（kubelet 同步 Secret 後下一個重讀週期） |
+   | `federation-reconciler` | chart `victorialogs.auth.existingSecret` | env | rollout restart Deployment |
+
+   ⚠️ reconciler 的程式在 da-tools 映像裡，不在 chart 裡：映像早於帶有 #1295
+   的版本時，它會忽略這組 env、繼續不帶帳密查詢。切 enforce 前要確認
+   `image.tag` 已升到該版本。
+   各 chart 的 `victorialogs.auth.username` 預設就是登錄裡的名稱；
+   `tests/shared/test_victorialogs_consumers.py` 要求登錄與五個消費端一一
+   對應，並逐一追蹤密碼從 Secret 到使用它的設定：chargeback 與 reconciler
+   實際發出請求、讀到送出的 header；Vector、gateway、Grafana 是靜態比對。
+   gateway 在 runtime 真的帶上帳密，由 federation E2E 對 enforce 的 vmauth
+   驗證（VL1／VL7）；Grafana 的 plugin 是否送出 basic auth 沒有自動驗證。
 2. 在 `observe` 下確認每個消費端都已用帳密進來：
 
    ```bash
@@ -196,7 +217,8 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
   enforce 才會被拒。
 - **輪替密碼不會自動生效**：密碼以 env 在容器啟動時讀入，換 Secret 後要
   `kubectl rollout restart deploy/victorialogs`（Recreate 策略，會短暫斷線），
-  並同步更新消費端那份。
+  並同步更新消費端那份（各消費端何時生效見步驟 1 的表）。enforce 下兩側
+  換密碼之間的空窗，該消費端會收到 401。
 - vmauth 的內部 port（`auth.internalPort`）不經認證提供 `/debug/pprof`、
   `/flags`；只靠 NetworkPolicy 只放行 Service port 擋住，`networkPolicy` 要
   保持開啟。

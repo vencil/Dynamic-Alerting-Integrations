@@ -152,86 +152,63 @@ test.describe('Visual regression baselines @visual', () => {
     });
   });
 
-  /*
-   * ───────────────────────────────────────────────────────────────────
-   * TRK-238 expansion (Plan A) — 5 staged baselines across categories.
-   *
-   * Status: PARKED as block comment.
-   *
-   * Why: A-13 ESLint rule (eslint.config.mjs) forbids `test.fixme()`.
-   * We can't ship "stub specs that need baselines later" because:
-   *   1. Adding active toHaveScreenshot tests without baselines fails CI
-   *      (Playwright treats missing baselines as failures, not auto-creates
-   *      them, when --update-snapshots is not passed)
-   *   2. fixme guard prevents the usual "skip until baseline lands" pattern
-   *
-   * Activation flow when ready:
-   *   1. Un-comment a block here (delete the surrounding `/* ... *\/`),
-   *      commit on a new branch, push.
-   *   2. Run the workflow against that branch:
-   *        gh workflow run visual-baseline.yaml --ref <branch> \
-   *            -f reason="<why>" -f spec="visual.spec.ts"
-   *      It uploads the regenerated `tests/e2e/*-snapshots/` dir as
-   *      `visual-baselines-<run_id>` artifact.
-   *   3. Download + unzip into `tests/e2e/` on the same branch.
-   *      `git add tests/e2e/visual.spec.ts-snapshots/<new>.png`, commit,
-   *      push, open PR.
-   *   4. CI on the PR runs the un-commented test against the new baseline;
-   *      should be green.
-   *
-   * Selection rationale: one tool per visual category, maximize catch-rate
-   * per baseline. Skipping rich-data tools that change frequently
-   * (release-notes-generator, schema-explorer) — they'd produce noise PRs.
-   *
-   * ─── Onboarding ─────────────────────────────────────────────────────
-   * test('master-onboarding: dual-entry choice screen', async ({ page }) => {
-   *   await page.goto('../assets/jsx-loader.html?component=master-onboarding');
-   *   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-   *   await page.locator('text=/Onboarding|入門/i').first().waitFor({ timeout: 10000 });
-   *   await expect(page).toHaveScreenshot('master-onboarding-landing.png', {
-   *     fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
-   *   });
-   * });
-   *
-   * ─── Reference ──────────────────────────────────────────────────────
-   * test('glossary: categorized list', async ({ page }) => {
-   *   await page.goto('../assets/jsx-loader.html?component=glossary');
-   *   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-   *   await page.locator('text=/Rule Pack|Tenant/').first().waitFor({ timeout: 10000 });
-   *   await expect(page).toHaveScreenshot('glossary-list.png', {
-   *     fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
-   *   });
-   * });
-   *
-   * ─── Calculator ─────────────────────────────────────────────────────
-   * test('threshold-calculator: percentile sliders', async ({ page }) => {
-   *   await page.goto('../assets/jsx-loader.html?component=threshold-calculator');
-   *   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-   *   await page.locator('text=/Threshold|閾值/i').first().waitFor({ timeout: 10000 });
-   *   await expect(page).toHaveScreenshot('threshold-calculator-sliders.png', {
-   *     fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
-   *   });
-   * });
-   *
-   * ─── Wizard ─────────────────────────────────────────────────────────
-   * test('routing-trace: wizard step 1', async ({ page }) => {
-   *   await page.goto('../assets/jsx-loader.html?component=routing-trace');
-   *   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-   *   await page.locator('text=/Routing|路由/i').first().waitFor({ timeout: 10000 });
-   *   await expect(page).toHaveScreenshot('routing-trace-step1.png', {
-   *     fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
-   *   });
-   * });
-   *
-   * ─── Educational ────────────────────────────────────────────────────
-   * test('architecture-quiz: question screen', async ({ page }) => {
-   *   await page.goto('../assets/jsx-loader.html?component=architecture-quiz');
-   *   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-   *   await page.locator('text=/Architecture|架構/i').first().waitFor({ timeout: 10000 });
-   *   await expect(page).toHaveScreenshot('architecture-quiz-q1.png', {
-   *     fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
-   *   });
-   * });
-   * ───────────────────────────────────────────────────────────────────
-   */
+  // ─── TRK-238 expansion (Plan A): 5 staged baselines, one per category ───
+  //
+  // fixme until each one has a baseline — #3642 tracks them and holds the
+  // activation steps (on a branch: drop the fixme first, THEN run
+  // visual-baseline.yaml — `--update-snapshots` makes no baseline for a fixme). These used to sit in a block comment because A-13 banned fixme;
+  // now the parked-tests reporter requires the `issue` annotation instead
+  // (#1449). Selection: one tool per visual category; rich-data tools that
+  // change often (release-notes-generator, schema-explorer) are left out.
+  const PARKED_BASELINE = { annotation: { type: 'issue', description: '#3642' } };
+
+  // ─── Onboarding ───
+  test.fixme('master-onboarding: dual-entry choice screen', PARKED_BASELINE, async ({ page }) => {
+    await page.goto('../assets/jsx-loader.html?component=master-onboarding');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.locator('text=/Onboarding|入門/i').first().waitFor({ timeout: 10000 });
+    await expect(page).toHaveScreenshot('master-onboarding-landing.png', {
+      fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
+    });
+  });
+
+  // ─── Reference ───
+  test.fixme('glossary: categorized list', PARKED_BASELINE, async ({ page }) => {
+    await page.goto('../assets/jsx-loader.html?component=glossary');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.locator('text=/Rule Pack|Tenant/').first().waitFor({ timeout: 10000 });
+    await expect(page).toHaveScreenshot('glossary-list.png', {
+      fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
+    });
+  });
+
+  // ─── Calculator ───
+  test.fixme('threshold-calculator: percentile sliders', PARKED_BASELINE, async ({ page }) => {
+    await page.goto('../assets/jsx-loader.html?component=threshold-calculator');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.locator('text=/Threshold|閾值/i').first().waitFor({ timeout: 10000 });
+    await expect(page).toHaveScreenshot('threshold-calculator-sliders.png', {
+      fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
+    });
+  });
+
+  // ─── Wizard ───
+  test.fixme('routing-trace: wizard step 1', PARKED_BASELINE, async ({ page }) => {
+    await page.goto('../assets/jsx-loader.html?component=routing-trace');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.locator('text=/Routing|路由/i').first().waitFor({ timeout: 10000 });
+    await expect(page).toHaveScreenshot('routing-trace-step1.png', {
+      fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
+    });
+  });
+
+  // ─── Educational ───
+  test.fixme('architecture-quiz: question screen', PARKED_BASELINE, async ({ page }) => {
+    await page.goto('../assets/jsx-loader.html?component=architecture-quiz');
+    await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+    await page.locator('text=/Architecture|架構/i').first().waitFor({ timeout: 10000 });
+    await expect(page).toHaveScreenshot('architecture-quiz-q1.png', {
+      fullPage: true, maxDiffPixelRatio: 0.02, animations: 'disabled',
+    });
+  });
 });

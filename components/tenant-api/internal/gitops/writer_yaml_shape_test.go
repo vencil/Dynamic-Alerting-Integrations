@@ -158,8 +158,10 @@ func TestWriteAcceptsLegalYAMLShapes(t *testing.T) {
 		{"YAML 1.1 directive", "%YAML 1.1\n---\n" + own},
 		{"no trailing newline", strings.TrimSuffix(own, "\n")},
 		{"trailing blank lines", own + "\n\n\n"},
+		// A word both keys read (#3591: `warning` is no `_severity_dedup`
+		// value, and the write gate refuses it).
 		{"alias inside the tenant section",
-			"tenants:\n  db-a:\n    _silent_mode: &m \"warning\"\n    _severity_dedup: *m\n"},
+			"tenants:\n  db-a:\n    _silent_mode: &m \"disable\"\n    _severity_dedup: *m\n"},
 		{"merge key inside the tenant section",
 			"tenants:\n  db-a:\n    <<: {_silent_mode: \"warning\"}\n"},
 		// #3064: an explicitly tagged root key (`!!str tenants:`) is no longer

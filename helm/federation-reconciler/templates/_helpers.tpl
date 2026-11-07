@@ -40,3 +40,21 @@ treated as warn, silently downgrading a fail-closed intent into fail-open).
 {{- with .Values.image.digest }}{{- $img = printf "%s@%s" $img . -}}{{- end -}}
 {{- $img -}}
 {{- end -}}
+
+{{/*
+Store credentials (#1295), read null-safe. A release upgraded with
+--reuse-values from a chart older than this one carries no
+victorialogs.auth at all (Helm then does not merge the new defaults in),
+and an operator following the README may set only existingSecret. So: a
+missing `auth` is an empty map, and a missing username is the chart name —
+which is this consumer's name in helm/victorialogs auth.consumers
+(tests/shared/test_victorialogs_consumers.py renders both ways).
+*/}}
+{{- define "federation-reconciler.vlAuthSecret" -}}
+{{- $auth := .Values.victorialogs.auth | default dict -}}
+{{- $auth.existingSecret | default "" -}}
+{{- end }}
+{{- define "federation-reconciler.vlAuthUser" -}}
+{{- $auth := .Values.victorialogs.auth | default dict -}}
+{{- $auth.username | default .Chart.Name -}}
+{{- end }}

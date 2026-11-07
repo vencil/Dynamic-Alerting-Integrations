@@ -165,6 +165,14 @@ spec:
               readOnly: true
             - name: tmp
               mountPath: /tmp
+            {{- if include "federation-gateway.victorialogsAuth" . }}
+            # Log-store credential (#1295), read by revoked_check.lua. A
+            # directory mount, not subPath: kubelet must keep it current for
+            # a rotated password to reach the gateway.
+            - name: victorialogs-auth
+              mountPath: /etc/victorialogs-auth
+              readOnly: true
+            {{- end }}
             {{- if .Values.auditLog.enabled }}
             # Audit-log emptyDir (ADR-020 IV-2f) — Envoy writes sink 2,
             # the audit-metrics / logrotate sidecars share the same volume.
@@ -297,6 +305,16 @@ spec:
             # how to see, and where the message can name the namespace to fix.
             name: {{ .Values.revokedSet.configMapName }}
             optional: true
+        {{- if include "federation-gateway.victorialogsAuth" . }}
+        # Not optional: a missing Secret keeps the pod in ContainerCreating,
+        # which is better than a gateway that cannot reach the store.
+        - name: victorialogs-auth
+          secret:
+            secretName: {{ include "federation-gateway.vlAuthSecret" . | quote }}
+            items:
+              - key: password
+                path: password
+        {{- end }}
         - name: tmp
           emptyDir:
             medium: Memory

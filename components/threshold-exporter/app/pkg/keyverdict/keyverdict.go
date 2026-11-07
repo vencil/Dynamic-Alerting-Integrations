@@ -77,6 +77,15 @@ const (
 	// not judged (whether the exporter reads it is measured on a tenant),
 	// said so rather than left to read as judged and fine (#3395).
 	KindProfileNotJudged = "profile_not_judged"
+	// KindValueUnread (#3591, ADR-038 decision 10): a reserved key's value
+	// the exporter reads in no way it was written to be read — an unknown
+	// word, a `_metadata` field TenantMetadata does not know, a `_profile`
+	// naming no profile — judged in the file and layer that writes it
+	// (config.LayerValueProblems). The key is read; its value, or part of
+	// it, is not. An error in a tenant file; a notice in a root platform
+	// file's `tenants:` entry or a profile, which the tenant cannot fix in
+	// its own file.
+	KindValueUnread = "value_unread"
 )
 
 // Reasons this package reads from the served reading or gives itself. The
@@ -184,6 +193,11 @@ type Input struct {
 	// name → body), for the root platform files that have one and a reader
 	// reads. nil: the profile layer is not judged.
 	RootProfiles map[string]map[string]any
+	// Values: the reserved values the exporter does not read, per file and
+	// layer (LoadReport.ValueProblems). Only those of the tenants Served or
+	// Effective hold are judged; a profile's names the tenants among them
+	// that bind it.
+	Values []config.LayerValueProblem
 	// Whole: Served and Effective hold every tenant of the tree (no
 	// `--tenant` subset, no file the load dropped, no tenant set aside) —
 	// only then is a profile no tenant binds known to be one
@@ -232,6 +246,13 @@ type Finding struct {
 	Base *string `json:"base"`
 	// Blocks: a gate that judges the whole tree refuses it (Blocking).
 	Blocks bool `json:"blocks"`
+	// own: the finding is about the entry of its one tenant in File (a
+	// value_unread in a tenant file) — what Blocks reads as Block.Own where
+	// the key's verdict row has no file (effective carries no `_metadata`).
+	own bool
+	// reading: a value_unread's value as its reader reads it — what makes
+	// two such Blocks the same one (NewBlocks); "" for any other kind.
+	reading string
 }
 
 // Tree is the verdict on a tree.
@@ -338,6 +359,7 @@ func Judge(in Input) Tree {
 		keys[tenant] = rows
 	}
 	findings := findingsOf(keys, rootDefaults)
+	findings = append(findings, valueFindings(in.Values, tenants, in.Effective, in.Undecidable)...)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
 		if in.Whole {
@@ -576,6 +598,49 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 		out = append(out, f)
 	}
 	sortFindings(out)
+	return out
+}
+
+// valueFindings is a value_unread finding for every value of values about a
+// tenant the verdict judges (tenants): in a tenant file an error on that
+// tenant's entry; in a root platform file's `tenants:` entry a notice on
+// that tenant; in a profile a notice naming the judged tenants that bind it
+// ([] for none). Never charged to a tenant through a layer it inherits
+// (config.LayerValueProblems). With no root platform file read
+// (undecidable), a name the root files would define (`_profile`) is not
+// judged: which profiles exist is not known (decision 7).
+func valueFindings(values []config.LayerValueProblem, tenants map[string]bool,
+	effective map[string]EffectiveTenant, undecidable bool) []Finding {
+	var out []Finding
+	for _, v := range values {
+		if undecidable && v.RefersToRoot {
+			continue
+		}
+		file, reason := v.File, v.Problem
+		f := Finding{Kind: KindValueUnread, Key: v.Key, File: &file, Reason: &reason, reading: v.Reading}
+		switch v.Layer {
+		case config.ValueLayerTenant, config.ValueLayerPlatform:
+			if !tenants[v.Owner] {
+				continue
+			}
+			f.Tenants = []string{v.Owner}
+			f.Severity, f.own = SeverityNotice, false
+			if v.Layer == config.ValueLayerTenant {
+				f.Severity, f.own = SeverityError, true
+			}
+		case config.ValueLayerProfile:
+			bound := map[string]bool{}
+			for t, te := range effective {
+				if tenants[t] && te.Profile != "" && te.Profile == v.Owner {
+					bound[t] = true
+				}
+			}
+			f.Severity, f.Tenants = SeverityNotice, sortedKeys(bound)
+		default:
+			continue
+		}
+		out = append(out, f)
+	}
 	return out
 }
 

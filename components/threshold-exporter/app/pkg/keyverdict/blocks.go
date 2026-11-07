@@ -31,16 +31,20 @@ type Block struct {
 	// or its entry under a root platform file's `tenants:`) — not a profile
 	// or a defaults file it inherits Key from.
 	Own bool
+	// reading: a value_unread's value as its reader reads it (Finding's);
+	// "" for any other kind. Part of what makes two Blocks the same one, so
+	// a write replacing one unread value with another makes a new one.
+	reading string
 }
 
 // own is what makes two Blocks about a tenant's own entry the same one
 // (#3016): the tenant and the key, wherever the entry is, so moving a tenant
 // to another file is no new block.
-func (b Block) own() string { return b.Tenant + "\x00" + b.Key }
+func (b Block) own() string { return b.Tenant + "\x00" + b.Key + "\x00" + b.reading }
 
 // at is a Block's place: its file and its key — a finding's own unit, for
 // a finding on a file is one per file and key.
-func (b Block) at() string { return b.File + "\x00" + b.Key }
+func (b Block) at() string { return b.File + "\x00" + b.Key + "\x00" + b.reading }
 
 // ownEntry reports whether file is where tenant's own entry writes key.
 func ownEntry(t Tree, tenant, key, file string) bool {
@@ -60,13 +64,13 @@ func Blocks(t Tree) []Block {
 		if !f.Blocks {
 			continue
 		}
-		b := Block{Kind: f.Kind, Key: f.Key, File: deref(f.File), Reason: deref(f.Reason)}
+		b := Block{Kind: f.Kind, Key: f.Key, File: deref(f.File), Reason: deref(f.Reason), reading: f.reading}
 		if len(f.Tenants) == 0 {
 			out = append(out, b)
 			continue
 		}
 		for _, tenant := range f.Tenants {
-			b.Tenant, b.Own = tenant, ownEntry(t, tenant, f.Key, b.File)
+			b.Tenant, b.Own = tenant, f.own || ownEntry(t, tenant, f.Key, b.File)
 			out = append(out, b)
 		}
 	}
