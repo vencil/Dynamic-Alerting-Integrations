@@ -520,6 +520,28 @@ def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None)
     return docs[0]
 
 
+def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[str]] | None" = None,
+                      binary: str | None = None) -> "list[list[dict]]":
+    """Per expression of *exprs*, every ``and`` / ``unless`` that matches
+    ``on(… label …)`` and whether its left side keeps *label*, read on
+    Prometheus' parse tree (``da-read promql-label-flow``, #3678). *records*
+    ({name: [expr, …]}, the recording rules of the same files) are followed
+    where a selector names one. Each hit is
+    ``{"op": "and"|"unless", "start": int, "end": int, "lhs":
+    "kept"|"dropped"|"unknown"}`` (byte offsets into the UTF-8 encoding)."""
+    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    data = json.dumps({"expressions": list(exprs), "records": dict(records or {})}).encode("utf-8")
+    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
+               ["promql-label-flow", label, "-"], data)
+    docs = out["documents"]
+    if (len(docs) != 1 or not isinstance(docs[0], list) or len(docs[0]) != len(exprs)
+            or not all(isinstance(h, list) for h in docs[0])):
+        raise ConsumerReadError(
+            f"{DA_READ_BINARY_NAME} printed JSON without one list per expression "
+            "(an older da-read? rebuild it)")
+    return docs[0]
+
+
 class RuleFileRefused(InputRefused):
     """Prometheus' rule loader refused this rule file; ``path`` names it and
     ``problem`` is the loader's reason."""

@@ -489,3 +489,95 @@ def test_a_rewrite_that_would_change_a_group_label_is_not_written(da_read_env, t
     before = (rp / "rule-pack-redis.yaml").read_text(encoding="utf-8")
     assert grd.main(["--rule-packs-dir", str(rp)]) == 2
     assert (rp / "rule-pack-redis.yaml").read_text(encoding="utf-8") == before
+
+
+# ── #3678: the two gaps #3651's adversarial review found ────────────────────
+# tests/rulepacks/maintenance-derived-gaps_test.yaml is the promtool proof
+# that each shape breaks the maintenance contract; these pin that --check
+# refuses them (and only them).
+
+def _page_alert_reading(tmp_path, tail: str) -> Path:
+    rp = tmp_path / "rule-packs"
+    shutil.copytree(_REPO / "rule-packs", rp)
+    p = rp / "rule-pack-redis.yaml"
+    text = p.read_text(encoding="utf-8")
+    old = '      - alert: RedisDown\n        expr: redis_up == 0\n'
+    assert old in text, "fixture anchor moved: RedisDown's expr"
+    p.write_text(text.replace(old, f'      - alert: RedisDown\n        expr: redis_up == 0 {tail}\n', 1),
+                 encoding="utf-8")
+    return rp
+
+
+@pytest.mark.parametrize("tail", [
+    'and on(tenant) ALERTS{alertname="RedisMemoryHigh"}',
+    'and on(tenant) ALERTS_FOR_STATE',
+    'and on(tenant) {__name__=~"ALERTS.*"}',
+])
+def test_a_rule_reading_alert_series_fails_the_check(da_read_env, tmp_path, capsys, tail):
+    rp = _page_alert_reading(tmp_path, tail)
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert "the series of firing alerts" in capsys.readouterr().err
+
+
+def test_reading_another_series_the_same_way_passes(da_read_env, tmp_path):
+    """Negative control: same join, a series that is not an alert's."""
+    rp = _page_alert_reading(tmp_path, 'and on(tenant) redis_up')
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
+
+
+_MUTE_GROUP = ("  - name: f2-shape\n    rules:\n      - alert: F2Shape\n        expr: |\n"
+               "          {lhs}\n          unless on(tenant)\n"
+               "          (user_state_filter{{filter=\"maintenance\"}} == 1)\n"
+               "        labels:\n          maintenance: mute\n")
+
+
+@pytest.mark.parametrize("lhs", [
+    'sum without(tenant) (up{job="clickhouse"} == 0)',
+    'sum(up{job="clickhouse"} == 0) > 0',
+    'max by(job) (up{job="clickhouse"}) == 0',
+])
+def test_a_mute_clause_whose_left_side_dropped_tenant_fails_the_check(da_read_env, tmp_path, capsys, lhs):
+    rp = _pack_with(tmp_path, _MUTE_GROUP.format(lhs=lhs))
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert "drops `tenant`" in capsys.readouterr().err
+
+
+def test_a_mute_clause_whose_left_side_keeps_tenant_passes(da_read_env, tmp_path):
+    """Negative control: the aggregation keeps `tenant`."""
+    rp = _pack_with(tmp_path, _MUTE_GROUP.format(lhs='max by(tenant) (up{job="clickhouse"}) == 0'))
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
+
+
+def test_a_left_side_the_parse_tree_cannot_prove_is_refused():
+    expr = "x" + "\n" + TAIL
+    end = len(expr.encode("utf-8"))
+    unknown = grd.clause_flow_problems([("p", "alert A", expr)],
+                                       lambda exprs: [[{"op": "unless", "start": 0, "end": end, "lhs": "unknown"}]])
+    assert unknown and "cannot prove" in unknown[0]
+    missing = grd.clause_flow_problems([("p", "alert A", expr)], lambda exprs: [[]])
+    assert missing and "no `unless on(tenant)`" in missing[0]
+    kept = grd.clause_flow_problems([("p", "alert A", expr)],
+                                    lambda exprs: [[{"op": "unless", "start": 0, "end": end, "lhs": "kept"}]])
+    assert kept == []
+
+
+_RECORD_HIDES = ("  - name: f2-via-record\n    rules:\n"
+                 "      - record: job:f2probe_up:min\n        expr: min by(job) (up{job=\"clickhouse\"})\n"
+                 "      - alert: F2ViaRecord\n        expr: |\n          job:f2probe_up:min == 0\n"
+                 "          unless on(tenant)\n          (user_state_filter{filter=\"maintenance\"} == 1)\n"
+                 "        labels:\n          maintenance: mute\n")
+
+
+def test_a_record_cannot_hide_a_dropped_tenant(da_read_env, tmp_path, capsys):
+    """Review of #3678: the F2 shape moved one rule away (the record drops
+    tenant, the alert's clause reads the record)."""
+    rp = _pack_with(tmp_path, _RECORD_HIDES)
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert "drops `tenant`" in capsys.readouterr().err
+
+
+def test_a_union_with_a_dropped_side_fails_the_check(da_read_env, tmp_path, capsys):
+    rp = _pack_with(tmp_path, _MUTE_GROUP.format(
+        lhs='(up{job="clickhouse"} == 0 or sum(up{job="clickhouse"}) == 0)'))
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert "drops `tenant`" in capsys.readouterr().err
