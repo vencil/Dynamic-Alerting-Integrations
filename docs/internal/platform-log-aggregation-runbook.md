@@ -286,8 +286,12 @@ render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費�
     Prometheus 看不到 Vector 期間丟的。這個計數器在第一次丟資料時才出現且
     已非零，所以「之前沒有值」也算，前提是 Prometheus 之前有在抓這個 Vector
     （`up`）：Prometheus 沒有歷史（新裝、或像 `k8s/03-monitoring` 那樣用
-    emptyDir 重啟）不會對舊的丟失重響。盲點：Prometheus 開始抓某個 Vector
-    後 10 分鐘內只丟一次、或藏在超過一小時的中斷裡的單次丟失，不會響。
+    emptyDir 重啟）不會對舊的丟失重響。盲點（單次丟失、之後沒再丟才算）：
+    Prometheus 第一次抓到這個 Vector 之前就丟的、藏在超過一小時中斷裡的、
+    以及 Vector 原地重啟後丟的數量剛好等於重啟前計數器的值（例如 1 → 重啟
+    → 1，低流量的 `vl_tenant_*` 最可能）。評估這條規則的 Prometheus 必須
+    同時有該 Vector target 的 `up`：只轉送 `vector_*` 的 federation 或
+    remote-write 會讓「之前沒有值」那一段永遠不成立。
     additionalSinks 裡寫入其他 VictoriaLogs 的 sink 命名成 `victorialogs_<x>`
     才在監看範圍內。稍晚
     `FederationRevocationEvidenceChannelDown` 也會響：tenant-api 的心跳寫不進

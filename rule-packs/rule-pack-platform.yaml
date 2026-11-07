@@ -2267,9 +2267,13 @@ groups:
       #      that Vector target before (`up`), so a Prometheus without history
       #      (fresh, or restarted on an emptyDir like k8s/03-monitoring) and a
       #      gap longer than the look-back do not re-page old drops.
-      # Blind spots: a drop that only happened in Vector's first 10 minutes
-      # after Prometheus starts scraping it, or one hidden inside a gap of
-      # more than an hour, is not paged unless drops continue.
+      # Blind spots (a single drop, not paged unless drops continue): one that
+      # happened before Prometheus first scraped that Vector; one hidden inside
+      # a gap of more than an hour; and a Vector restart in place that drops
+      # exactly as many events as its counter held before (1 -> restart -> 1;
+      # likeliest on a quiet vl_tenant_ sink). The Prometheus evaluating this
+      # must also hold `up` for the Vector target (federation or remote-write
+      # that forwards only vector_* series silences the no-history clause).
       - alert: VectorStoreSinkDroppingEvents
         expr: |
           sum by (component_id) (
