@@ -8,9 +8,9 @@
 # source); the namespace and its PSS labels were kept here.
 #
 # PSS #1018: enforces restricted, pinned to the kind node image's minor (see
-# namespaces.yaml and docs/internal/pss-enforcement-runbook.md). ⚠️ Not
-# compatible with the chart's `confDir.type=hostPath` (a declared exception in
-# helm/tenant-api/ci/): use pvc or emptyDir here.
+# namespaces.yaml and docs/internal/pss-enforcement-runbook.md). Every
+# tenant-api chart option fits: confDir.type=hostPath, the one that did not,
+# was removed (#1018).
 apiVersion: v1
 kind: Namespace
 metadata:

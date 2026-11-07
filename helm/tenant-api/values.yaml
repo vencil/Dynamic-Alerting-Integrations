@@ -188,19 +188,26 @@ tenantApi:
 
 # conf.d volume: holds tenant YAML files and the git repository.
 # For production, set type=pvc and provide a storageClass.
-# For Kind dev, set type=hostPath and provide path.
+# A repository already on a node (kind dev, single-node, a host-side `git pull`):
+# put it on a PersistentVolume — a local or hostPath PV, its directory owned by
+# podSecurityContext.runAsUser (fsGroup does not apply to host directories) —
+# bind a PVC to it and name it in pvc.existingClaim. The pod itself then needs
+# no hostPath and stays within Pod Security `restricted`.
 confDir:
-  # type: emptyDir | hostPath | pvc
+  # type: emptyDir | pvc   (hostPath was removed in #1018: the render fails with
+  # these migration steps if it is still set)
   type: emptyDir
-  hostPath: ""        # used when type=hostPath
+  hostPath: ""        # removed (#1018); must stay empty
   pvc:
     storageClass: ""
     size: 1Gi
     accessMode: ReadWriteOnce
+    # Use this PVC instead of creating <name>-conf (the chart then creates none).
+    existingClaim: ""
 
 # Git repository to clone on startup (optional for `direct`; required for the
 # PR modes, and then it must be an https:// URL). Leave empty to skip the init
-# container (use hostPath or a pre-populated PVC instead). Do not put
+# container (use a pre-populated PVC instead, see confDir). Do not put
 # credentials in this URL: it is stored in a ConfigMap. Credentials for a
 # private repo come from writeBack.token, offered only to this URL's host.
 # tenant-api refuses to start (and to write) while the repository's git config
@@ -428,7 +435,7 @@ federation:
 #
 # ⛔ REQUIRED since #2903 — there is no switch. The chart refuses to render
 # without what the container needs: podSecurityContext.runAsUser, and a git
-# repository in conf.d (gitRepoUrl, or confDir.type pvc / hostPath holding
+# repository in conf.d (gitRepoUrl, or confDir.type pvc holding
 # one; "git 為必要", ADR-036 §3). Without the container answering, every
 # content-changing write is refused with 503 VALIDATOR_UNAVAILABLE; reads
 # keep working.
@@ -447,7 +454,7 @@ federation:
 # prunes loose objects on its own, so every tenant-api commit leaves its
 # objects loose and the repository only grows. Reclaim space by hand in a
 # maintenance window: scale the Deployment to 0 so nothing reads or writes the
-# repository, run `git gc` on it (for a pvc / hostPath conf.d, from a one-off
+# repository, run `git gc` on it (for a pvc conf.d, from a one-off
 # pod mounting the same volume as the same uid; an emptyDir conf.d is cloned
 # afresh on every pod start), then scale back to 1. Why it must not run by itself: the
 # generator reads git objects of a base commit WHILE tenant-api commits, and

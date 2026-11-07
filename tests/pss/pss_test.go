@@ -490,23 +490,31 @@ func TestWorkloadConditionalsAreExercised(t *testing.T) {
 			}
 			for _, idx := range actionRE.FindAllSubmatchIndex(b, -1) {
 				a := [][]byte{b[idx[0]:idx[1]], b[idx[2]:idx[3]]}
-				// `if not .Values.x` whose body is a `fail`/`required` is a
-				// guard: its "off" arm refuses to render, it shapes no pod.
+				// An action whose body is a `fail`/`required` is a guard: the
+				// arm that takes the body refuses to render, it shapes no pod.
+				//   `if not .Values.x` → fail: x's "off" arm fails, so only
+				//     "on" is a pod shape (still required below).
+				//   `if .Values.x` → fail (x read WITHOUT `not`): x's "on" arm
+				//     fails and its "off" arm is every other render, already
+				//     judged — so it adds no requirement at all. Requiring "on"
+				//     here would demand a values set that cannot render (#1018:
+				//     the removed confDir.hostPath guard).
 				guard := failNextRE.Match(b[idx[1]:])
 				negated := map[string]bool{}
 				for _, nm := range negatedPathRE.FindAllSubmatch(a[1], -1) {
-					if !guard {
-						negated[string(nm[1])] = true
-					}
+					negated[string(nm[1])] = true
 				}
 				for _, pm := range valuesPathRE.FindAllSubmatch(a[1], -1) {
 					k := string(pm[1])
+					if guard && !negated[k] {
+						continue
+					}
 					if paths[k] == nil {
 						paths[k] = &need{}
 						where[k] = filepath.Base(tp)
 					}
 					paths[k].on = true
-					if negated[k] {
+					if negated[k] && !guard {
 						paths[k].off = true
 					}
 				}
