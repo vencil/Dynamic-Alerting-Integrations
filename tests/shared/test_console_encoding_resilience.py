@@ -63,7 +63,6 @@ CP950_CRASHERS = (
     "ops/drift_detect.py",
     # lint CLIs whose --help live-crashed on cp950 ('⚠' U+26A0), surfaced by
     # the W7 blind review and fixed by extending carrier adoption to lint/.
-    "lint/check_maintenance_symmetry.py",
     "lint/check_vmalert_coverage.py",
 )
 
