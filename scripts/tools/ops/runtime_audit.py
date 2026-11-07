@@ -91,7 +91,6 @@ Exit codes (canonical, see scripts/tools/_lib_exitcodes.py):
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -101,13 +100,12 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_python import detect_cli_lang, url_type  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_rules, rules_groups  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 import _lib_input  # noqa: E402  (#3462: what --rule-packs-dir selects)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # Finding categories.
 MISSING = "MISSING"
@@ -363,15 +361,12 @@ class RuntimeAuditor:
 
     def _load_runtime(self) -> Optional[dict]:
         if self.args.runtime_json:
-            runtime_problem = classify_path(self.args.runtime_json, "file", lang=self.lang,
-                                            flag="--runtime-json")  # #3415
-            if runtime_problem is not None:
-                self.caller_error = f"{i18n('err_runtime_json', self.lang)}: {runtime_problem.message}"
-                return None
+            # #3415 / #3445: the path and the content judged by the lib —
+            # never cut, the flag and the path named (content that was not
+            # UTF-8 was a traceback).
             try:
-                raw = json.loads(Path(self.args.runtime_json).read_text(encoding="utf-8"))
-            except (OSError, json.JSONDecodeError) as exc:
-                # #3415: never cut — the path is what tells the caller which file.
+                raw = _lib_input.document(self.args, "runtime_json", lang=self.lang)
+            except CallerError as exc:
                 self.caller_error = f"{i18n('err_runtime_json', self.lang)}: {exc}"
                 return None
         elif self.args.prometheus:
@@ -463,6 +458,10 @@ class RuntimeAuditor:
         return EXIT_VIOLATION if gating > 0 else EXIT_OK
 
 
+#: --runtime-json: a saved ``/api/v1/rules`` answer, a JSON object (#3445).
+RUNTIME_DOCUMENT = _lib_input.Document("json", dict)
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The runtime-audit parser (--rule-packs-dir declared with `_lib_input`)."""
     # Help text responds to DA_LANG (dev-rules §9 bilingual-help contract).
@@ -481,8 +480,10 @@ def build_parser() -> argparse.ArgumentParser:
         help=i18n("h_rule_packs_dir", lang),
     )
     src = parser.add_argument_group(i18n("cli_src_group", lang))
-    src.add_argument("--prometheus", help=i18n("h_prometheus", lang))
-    src.add_argument("--runtime-json", help=i18n("h_runtime_json", lang))
+    src.add_argument("--prometheus", type=url_type(empty="refuse"),  # #3528
+                     help=i18n("h_prometheus", lang))
+    _lib_input.add_input(src, "--runtime-json", decode=RUNTIME_DOCUMENT,
+                         help=i18n("h_runtime_json", lang))
     parser.add_argument(
         "--strict-orphan", action="store_true",
         help=i18n("h_strict_orphan", lang),

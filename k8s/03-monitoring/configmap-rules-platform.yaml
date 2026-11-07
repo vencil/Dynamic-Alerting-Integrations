@@ -743,8 +743,29 @@ data:
     \ this is an\n\n        audit-trail integrity event — investigate immediately.\n\
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Vector sink {{ $labels.component_id }} dropping events for 5m\n\
-    \  - alert: TenantLogQueryRejectionRateAnomaly\n    expr: \"(\\n  sum by (account_id)\
-    \ (\\n    rate(tenant_log_query_requests_total{status=~\\\"rate_limited|auth_failed|bad_request\\\
+    \  - alert: VectorStoreSinkDroppingEvents\n    expr: \"sum by (component_id) (\\\
+    n  (\\n    vector_component_discarded_events_total{component_kind=\\\"sink\\\"\
+    ,component_id=~\\\"victorialogs|victorialogs_.+|vl_tenant_.+\\\",intentional=\\\
+    \"false\\\"}\\n    != last_over_time(vector_component_discarded_events_total{component_kind=\\\
+    \"sink\\\",component_id=~\\\"victorialogs|victorialogs_.+|vl_tenant_.+\\\",intentional=\\\
+    \"false\\\"}[1h] offset 10m)\\n  )\\n  or\\n  (\\n    (\\n      vector_component_discarded_events_total{component_kind=\\\
+    \"sink\\\",component_id=~\\\"victorialogs|victorialogs_.+|vl_tenant_.+\\\",intentional=\\\
+    \"false\\\"}\\n      unless last_over_time(vector_component_discarded_events_total{component_kind=\\\
+    \"sink\\\",component_id=~\\\"victorialogs|victorialogs_.+|vl_tenant_.+\\\",intentional=\\\
+    \"false\\\"}[1h] offset 10m)\\n    )\\n    and on (job, instance) (max_over_time(up{job=\\\
+    \"vector-metrics\\\"}[1h] offset 10m) == 1)\\n  )\\n) > 0\\n\"\n    for: 0s\n\
+    \    labels:\n      alert_source: platform\n      severity: critical\n    annotations:\n\
+    \      description: 'VictoriaLogs (through its vmauth) refused batches this sink\n\
+    \n        sent, and Vector drops a refused batch without retrying.\n\n       \
+    \ Every event in it is lost, including the audit trail and the\n\n        revocation\
+    \ evidence. Most likely the Vector side sends no or\n\n        the wrong credentials:\
+    \ check victorialogs.auth.existingSecret\n\n        in the vector chart against\
+    \ the store''s consumer `vector`\n\n        (platform-log-aggregation-runbook.md\
+    \ §1.2), and the Vector\n\n        logs for the response code.\n\n        '\n\
+    \      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
+    \      summary: Vector sink {{ $labels.component_id }} lost events the log store\
+    \ refused\n  - alert: TenantLogQueryRejectionRateAnomaly\n    expr: \"(\\n  sum\
+    \ by (account_id) (\\n    rate(tenant_log_query_requests_total{status=~\\\"rate_limited|auth_failed|bad_request\\\
     \"}[10m])\\n  )\\n  /\\n  sum by (account_id) (rate(tenant_log_query_requests_total[10m]))\\\
     n) > 0.5\\nand\\nsum by (account_id) (\\n  rate(tenant_log_query_requests_total{status=~\\\
     \"rate_limited|auth_failed|bad_request\\\"}[10m])\\n) > 0.0167\\n\"\n    for:\

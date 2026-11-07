@@ -361,22 +361,23 @@ MUTATIONS: list[Mutation] = [
         old="allow_nan=False, ensure_ascii=False, indent=2)",
         new="allow_nan=False, ensure_ascii=True, indent=2)",
     ),
-    # ── _validate_url_scheme (_lib_prometheus) ───────────────────
+    # ── url_problem (_lib_validation; _lib_prometheus._validate_url_scheme
+    #    delegates to it since #3528) ──────────────────────────────
     Mutation(
-        target_file="scripts/tools/_lib_prometheus.py",
+        target_file="scripts/tools/_lib_validation.py",
         test_file="tests/shared/test_property_tools.py",
         label="url_scheme: invert allowlist check (in → not in)",
-        fn_name="_validate_url_scheme",
-        old="    if scheme not in _ALLOWED_SCHEMES:",
-        new="    if scheme in _ALLOWED_SCHEMES:",
+        fn_name="url_problem",
+        old="    if parts.scheme not in _ALLOWED_SCHEMES:",
+        new="    if parts.scheme in _ALLOWED_SCHEMES:",
     ),
     Mutation(
         target_file="scripts/tools/_lib_prometheus.py",
         test_file="tests/shared/test_property_tools.py",
-        label="url_scheme: drop scheme parsing (always pass)",
+        label="url_scheme: drop the judgement (always pass)",
         fn_name="_validate_url_scheme",
-        old="    scheme = urllib.parse.urlparse(url).scheme\n    if scheme not in _ALLOWED_SCHEMES:\n        return f\"Unsupported URL scheme: {scheme}\"\n    return None",
-        new="    return None",
+        old="    return url_problem(url)\n",
+        new="    return None\n",
     ),
     # ── detect_cli_lang (_lib_validation) ────────────────────────
     Mutation(

@@ -38,7 +38,7 @@ from typing import NamedTuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import detect_cli_lang, add_prometheus_arg  # noqa: E402
+from _lib_python import detect_cli_lang, add_prometheus_arg, prometheus_url  # noqa: E402
 # #3133: the lib's raising reader (shape checked, samples read once).
 from _lib_prometheus import QueryError, prometheus_instant  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
@@ -698,7 +698,7 @@ def main() -> Report:
         return Report(inheritance, EXIT_OK)  # #3216: run() encodes it
 
     try:
-        result = check(args.tenant, args.prometheus, config_dir=args.config_dir)
+        result = check(args.tenant, prometheus_url(args.prometheus), config_dir=args.config_dir)
     except KubectlError as exc:
         # issue 1513 / #2968 / #3349: no answer from the cluster — kubectl
         # missing (the da-tools image ships none), forbidden, unreachable or

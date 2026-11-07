@@ -107,17 +107,44 @@ func (sv ScheduledValue) resolveValue(now time.Time, logf func(format string, ar
 }
 
 // valueAtMinute is the value sv resolves to at minute (0..1439) of the UTC
-// day: the FIRST override whose window contains the minute, else the
-// default. A window that does not parse matches no minute (logf, nil =
-// silent, is told). resolveValue and DaySegments both read a schedule
-// through it.
+// day: the value of the entry entryAtMinute picks. resolveValue and
+// DaySegments both read a schedule through it.
 func (sv ScheduledValue) valueAtMinute(minute int, logf func(format string, args ...any)) string {
-	for _, o := range sv.Overrides {
-		if start, end, ok := parseTimeWindow(o.Window, logf); ok && windowContains(start, end, minute) {
-			return o.Value
-		}
+	if i := sv.entryAtMinute(minute, logf); i != entryDefault {
+		return sv.Overrides[i].Value
 	}
 	return sv.Default
+}
+
+// entryDefault is entryAtMinute's answer for the `default` entry.
+const entryDefault = -1
+
+// entryAtMinute is the entry of sv that serves minute (0..1439) of the UTC
+// day: the index of the FIRST override whose window contains the minute,
+// else entryDefault. A window that does not parse matches no minute (logf,
+// nil = silent, is told).
+//
+// ⛔ The one reading of "which entry serves": valueAtMinute (the value
+// /metrics serves) and DeadEntries (#3502: the entries that never serve)
+// both ask it, so the analysis cannot disagree with what is served. Reading
+// the VALUE instead cannot tell two entries apart that write the same value.
+func (sv ScheduledValue) entryAtMinute(minute int, logf func(format string, args ...any)) int {
+	return firstWindowAt(len(sv.Overrides), func(i int) (int, int, bool) {
+		return parseTimeWindow(sv.Overrides[i].Window, logf)
+	}, minute)
+}
+
+// firstWindowAt is the rule entryAtMinute reads a schedule by: the index of
+// the FIRST of n windows (window(i): its start, end, and whether it parses)
+// that contains minute, else entryDefault. DeadEntries asks it with windows
+// it parsed once; entryAtMinute parses as it goes — one rule either way.
+func firstWindowAt(n int, window func(i int) (start, end int, ok bool), minute int) int {
+	for i := 0; i < n; i++ {
+		if start, end, ok := window(i); ok && windowContains(start, end, minute) {
+			return i
+		}
+	}
+	return entryDefault
 }
 
 // MatchTimeWindow checks if the given time falls within a UTC "HH:MM-HH:MM" window.
@@ -160,13 +187,15 @@ func parseTimeWindow(window string, logf func(format string, args ...any)) (star
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	parts := strings.SplitN(window, "-", 2)
-	if len(parts) != 2 {
+	// strings.Cut, not SplitN: the same split at the first "-", without the
+	// slice SplitN allocates on every reading of a window (#3502 bench gate).
+	from, to, found := strings.Cut(window, "-")
+	if !found {
 		logf("WARN: invalid time window format %q", window)
 		return 0, 0, false
 	}
-	startH, startM, err1 := parseHHMM(parts[0])
-	endH, endM, err2 := parseHHMM(parts[1])
+	startH, startM, err1 := parseHHMM(from)
+	endH, endM, err2 := parseHHMM(to)
 	if err1 != nil || err2 != nil {
 		logf("WARN: invalid time window %q: start=%v end=%v", window, err1, err2)
 		return 0, 0, false
@@ -198,15 +227,16 @@ func ParseHHMM(s string) (int, int, error) { return parseHHMM(s) }
 // parseHHMM parses "HH:MM" into hour and minute.
 func parseHHMM(s string) (int, int, error) {
 	s = strings.TrimSpace(s)
-	parts := strings.SplitN(s, ":", 2)
-	if len(parts) != 2 {
+	// strings.Cut: SplitN's split without its slice (#3502 bench gate).
+	hh, mm, found := strings.Cut(s, ":")
+	if !found {
 		return 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)
 	}
-	h, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	h, err := strconv.Atoi(strings.TrimSpace(hh))
 	if err != nil || h < 0 || h > 23 {
 		return 0, 0, fmt.Errorf("invalid hour in %q", s)
 	}
-	m, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	m, err := strconv.Atoi(strings.TrimSpace(mm))
 	if err != nil || m < 0 || m > 59 {
 		return 0, 0, fmt.Errorf("invalid minute in %q", s)
 	}

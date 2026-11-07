@@ -112,7 +112,9 @@ The ADR-025 deferred table originally framed the canary's trust signal as: "inte
 
 Design-readiness **ships with a runnable, rot-proof demo** — not a document that drifts from the code, but a promtool test produced through the **real compiler** and run in CI:
 
-- [`tests/rulepacks/runtime-canary.rules.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary.rules.yaml): the canary rule chain is the **verbatim** output of `compile_custom_alerts.py` for the recipe above (proving it dogfoods the real compile chain), plus the hand-authored dead-man's-switch meta-alert.
+- [`tests/rulepacks/runtime-canary-recipe/`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary-recipe/platform-canary.yaml): the one place the canary's recipe is declared.
+- [`tests/rulepacks/runtime-canary.compiled.rules.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary.compiled.rules.yaml): the output of `compile_custom_alerts.py` for that recipe, written whole by `make runtime-canary-compile` (proving it dogfoods the real compile chain). `make runtime-canary-compile-check` (pre-commit and CI) recompiles with the same compiler and compares, so a compiler change that is not regenerated here is blocked ([#3679](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3679)).
+- [`tests/rulepacks/runtime-canary.meta.rules.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary.meta.rules.yaml): the hand-authored dead-man's-switch meta-alert.
 - [`tests/rulepacks/runtime-canary_test.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/tests/rulepacks/runtime-canary_test.yaml): three cases proving this document's three claims —
   1. **Liveness**: heartbeat present → the canary fires end to end; the meta stays quiet.
   2. **Containment**: a co-tenant on the same shape firing at a wild value (9999) does **not** pollute the canary's row — the canary fires at its **own 1.00**; two independent rows (proving the join never mixes values across tenants).

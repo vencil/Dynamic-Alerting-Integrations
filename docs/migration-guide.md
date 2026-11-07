@@ -97,7 +97,7 @@ tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/
 對於已有成熟監控體系的企業，`da-tools onboard` **反向分析** Alertmanager / Prometheus rules / scrape config，自動產出遷移計畫（沒有既有監控可跳過此步）：
 
 - Alertmanager（`--alertmanager-config`）→ `phase1-routing/`：每個租戶 route 的路由摘要與 `<租戶>.yaml` 路由片段，以及 `onboard-hints.json`（找得到租戶 route 時）
-- 規則檔（`--rule-files '<glob>'`）→ `phase2-rules/migration-plan.csv`（每條告警規則的 `status`：`perfect` / `complex` / `unparseable`）與 `_defaults-suggestion.yaml`
+- 規則檔（`--rule-files <檔或目錄>...`；v2.9.0 映像給目錄選不到檔，改給加引號的 glob <!-- image-caveat: v2.9.0 -->）→ `phase2-rules/migration-plan.csv`（每條告警規則的 `status`：`perfect` / `complex` / `unparseable`）與 `_defaults-suggestion.yaml`
 - scrape config（`--scrape-config`）→ `phase3-scrape/`：`scrape-analysis.yaml` 與各 job 的 `<job>-relabel-suggestion.yaml`
 
 完整 flag、輸出條件與結束碼：[`cli-reference.md#onboard`](cli-reference.md#onboard)。`onboard-hints.json` 可餵 `scaffold --from-onboard`；規則轉換用 `migrate`，它直接吃舊規則檔。
@@ -243,9 +243,9 @@ tenants:
 | **多層嚴重度** | `mysql_global_status_threads_connected` | `max by(tenant) (...)` | `mysql_connections: "100"` + `mysql_connections_critical: "150"` | Alert Rule 自動處理 `_critical` 降級邏輯 |
 | **Replication Lag** | `mysql_slave_status_seconds_behind_master` | `max by(tenant) (...)` | `mysql_replication_lag: "30"` 或 `"disable"` | Max 用於「最弱環節」(最落後的 slave) |
 | **Rate 指標** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`：`sum by(tenant) (rate(...))` | 無租戶 key（見下方 ⚠️） | Sum 用於「叢集總量」 |
-| **比值計算** | `buffer_pool_pages_data / buffer_pool_pages_total` | `tenant:mysql_buffer_pool_usage:ratio`：`sum by(tenant) (...) / sum by(tenant) (...)` | 無租戶 key（見下方 ⚠️） | 比值在 Recording Rule 算好（0–1，不乘 100） |
+| **比值計算** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:ratio`：`sum by(tenant) (...) / sum by(tenant) (...)` | 無租戶 key（見下方 ⚠️） | 比值在 Recording Rule 算好（0–1，不乘 100） |
 
-> ⚠️ Rate 與比值這兩列，平台 MariaDB Rule Pack 目前只有 recording rule，沒有租戶可設的閾值 key：`MariaDBHighSlowQueries` 以固定的 `> 1` 判斷慢查詢速率，`tenant:mysql_buffer_pool_usage:ratio` 則沒有告警讀它。要讓租戶調這兩類閾值，平台要先宣告 key 並補上閾值正規化 recording rule，做法見 [Domain Expert 快速入門](getting-started/for-domain-experts.md)「新增指標到現有 Rule Pack」。沒有宣告就寫進租戶檔的 key 不會發射，validate-config 的 `unread_keys` 那列會報 `unread … (no_row)`。
+> ⚠️ Rate 與比值這兩列，平台 MariaDB Rule Pack 目前只有 recording rule，沒有租戶可設的閾值 key：`MariaDBHighSlowQueries` 以固定的 `> 1` 判斷慢查詢速率，`tenant:mysql_connection_usage:ratio` 則還沒有告警讀它（[#1320](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1320) 會接上）。要讓租戶調這兩類閾值，平台要先宣告 key 並補上閾值正規化 recording rule，做法見 [Domain Expert 快速入門](getting-started/for-domain-experts.md)「新增指標到現有 Rule Pack」。沒有宣告就寫進租戶檔的 key 不會發射，validate-config 的 `unread_keys` 那列會報 `unread … (no_row)`。
 
 > 場景 2–5 套用場景 1 的三件套模板，改指標名與 Tenant Config 的 key；平台側 Alert Rule 結構始終如一。前提是那個 key 已經在平台宣告（見上方 ⚠️）。Rule Pack 設計與三件套契約：[design/rule-packs.md](design/rule-packs.md)。實際黃金規則告警列表：[Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md)。
 

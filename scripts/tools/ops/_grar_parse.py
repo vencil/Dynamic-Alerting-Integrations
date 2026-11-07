@@ -18,6 +18,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -1906,3 +1907,174 @@ def print_reader_warnings(source: "TenantTree | dict") -> None:
              else source.unselected_carriers)
     for line in lines:
         print(safe_label(line), file=sys.stderr)
+
+
+# ============================================================
+# #1560 ⑤-a: every receiver as a file writes it
+# ============================================================
+
+#: Where a receiver is written (``RawReceiver.place``). The tenant's own:
+#: its `_routing` receiver, an `overrides[i]` / `routes[i]` receiver, and a
+#: `_routing_enforced` under its `tenants:` entry. The platform's (no
+#: tenant): `_routing_defaults` (receiver / overrides[i]), a routing profile
+#: (receiver / overrides[i] / routes[i]) and a top-level `_routing_enforced`.
+RAW_PLACES = ("tenant_routing", "tenant_enforced", "routing_defaults",
+              "routing_profile", "routing_enforced")
+
+
+class RawReceiver(NamedTuple):
+    """One receiver as written in one file (#1560 ⑤-a). ``file``: root-
+    relative path; ``path``: the keys (and list indices) from the file's top
+    level to the receiver; ``tenant``: whose it is (None: the platform's —
+    defaults, profiles, the root's enforced route); ``place``: a
+    ``RAW_PLACES`` word; ``receiver``: the value as written (the routing
+    reader's ``ROUTING_READ`` conversion), never merged with any layer.
+    ``read``: whether the route generator reads this place at all (the
+    rules of ``_parse_platform_config`` / ``_parse_nested_config`` /
+    ``_parse_profiles_and_policies``); a credential written where nothing
+    reads it is still written. ``tenant_valid``: the tenant id passes
+    ``is_valid_tenant_id`` (always True for the platform's)."""
+
+    file: str
+    path: tuple
+    tenant: "str | None"
+    place: str
+    receiver: object
+    read: bool = True
+    tenant_valid: bool = True
+
+
+class RawReceivers(NamedTuple):
+    """``raw_receivers``' answer: the receivers; the config files it could
+    not read (``(file, reason)``) — none of their receivers is in the list,
+    so a caller judging "no credential is written out" must name them; and
+    the config files no plane reads (``(file, reason)``: the defaults
+    carriers a directory passes over), which this reader does not open
+    either — "not read" is not "nothing written"."""
+
+    receivers: list
+    unreadable: list
+    unread: list = []
+
+
+def _block_receivers(block: object, prefix: tuple, *, slots: tuple[str, ...]
+                     ) -> list[tuple[tuple, object]]:
+    """``(path, receiver)`` of each receiver a routing block holds: its
+    ``receiver`` and the ``receiver`` of each mapping item of the lists in
+    *slots* (``overrides`` / ``routes``). Anything not shaped so holds none."""
+    if not isinstance(block, dict):
+        return []
+    out: list[tuple[tuple, object]] = []
+    if "receiver" in block:
+        out.append((prefix + ("receiver",), block["receiver"]))
+    for slot in slots:
+        items = block.get(slot)
+        for i, item in enumerate(items if isinstance(items, list) else []):
+            if isinstance(item, dict) and "receiver" in item:
+                out.append((prefix + (slot, i, "receiver"), item["receiver"]))
+    return out
+
+
+def _receivers_of(fname: str, data: dict, entry: object) -> list[RawReceiver]:
+    """The receivers file *fname* (content *data*, listing entry *entry*:
+    its Go class) writes, each with whether a plane reads its place."""
+    found: list[RawReceiver] = []
+    at_root = PurePosixPath(fname).parent.as_posix() == ROOT_LEVEL
+    reserved = entry.reserved
+    carrier = entry.cls == "defaults"
+
+    def add(entries: list, tenant: "str | None", place: str, read: bool) -> None:
+        ok = tenant is None or is_valid_tenant_id(tenant)
+        found.extend(RawReceiver(fname, p, tenant, place, r, read, ok) for p, r in entries)
+
+    # _parse_platform_config (root: a `_` file) / _parse_nested_config
+    # (below the root: the directory's defaults carrier).
+    add(_block_receivers(data.get("_routing_defaults"), ("_routing_defaults",),
+                         slots=("overrides", "routes")), None, "routing_defaults",
+        reserved if at_root else carrier)
+    # _parse_profiles_and_policies: profiles only from _routing_profiles.y(a)ml.
+    profiles = data.get("routing_profiles")
+    named = os.path.basename(fname) in ("_routing_profiles.yaml", "_routing_profiles.yml")
+    for name in (sorted(n for n in profiles if isinstance(n, str))
+                 if isinstance(profiles, dict) else []):
+        add(_block_receivers(profiles[name], ("routing_profiles", name),
+                             slots=("overrides", "routes")), None, "routing_profile", named)
+    # Read from a root `_` file only (a tenant file's: "ignored", below the
+    # root: refused).
+    add(_block_receivers(data.get("_routing_enforced"), ("_routing_enforced",),
+                         slots=()), None, "routing_enforced", at_root and reserved)
+    tenants = data.get("tenants")
+    for tenant in (sorted(t for t in tenants if isinstance(t, str))
+                   if isinstance(tenants, dict) else []):
+        body = tenants[tenant]
+        if not isinstance(body, dict):
+            continue
+        # A platform file below the root: its `tenants:` block is read by no plane.
+        add(_block_receivers(body.get("_routing"), ("tenants", tenant, "_routing"),
+                             slots=("overrides", "routes")), tenant, "tenant_routing",
+            at_root or not reserved)
+        add(_block_receivers(body.get("_routing_enforced"),
+                             ("tenants", tenant, "_routing_enforced"), slots=()),
+            tenant, "tenant_enforced", False)
+    return found
+
+
+def file_receivers(config_dir: str, rel: str, text: str,
+                   reader: "_lib_parse_cache.ConfdReader | None" = None) -> list[RawReceiver]:
+    """#1560 ⑤-a: ``raw_receivers`` of ONE file of *config_dir* as if its
+    content were *text* (parse-tree's file mode, the rest of the tree as it
+    is on disk) — the receivers a rewrite of *rel* would leave, judged
+    before or after it is written. The file keeps the class the tree's
+    listing gives it. Raises ``FileUnreadable`` / ``ParseTreeError``."""
+    if reader is None:
+        reader = _lib_parse_cache.reader_for(config_dir)
+    entry = reader.entry(rel)
+    if entry is None:
+        raise ParseTreeError(f"{rel}: not a config file of {config_dir}")
+    data = _lib_parse_cache.read_text_as(config_dir, rel, text.encode("utf-8"), ROUTING_READ)
+    return _receivers_of(rel, data, entry) if isinstance(data, dict) else []
+
+
+def raw_receivers(config_dir: str,
+                  reader: "_lib_parse_cache.ConfdReader | None" = None) -> RawReceivers:
+    """#1560 ⑤-a: every receiver written in *config_dir*, file by file, where
+    it is written — not the merged routing (``load_tenant_tree``), which no
+    longer says which file a value came from or whether a layer wrote it.
+
+    The files are the routing reader's (``_parse_config_files``): the one
+    listing of the tree (``list_config_tree``), less the defaults carriers
+    no plane reads (``reader.split_not_read``), each read through *reader*
+    (``ROUTING_READ``). Every routing place is listed whether or not a plane
+    renders it (a credential written where nothing reads it is written all
+    the same): ``tenants.<t>._routing`` and ``tenants.<t>._routing_enforced``
+    in any file; ``_routing_defaults``, ``_routing_enforced`` and
+    ``routing_profiles.<name>`` at the top level of any file. A file
+    parse-tree cannot read is in ``unreadable``; a carrier no plane reads,
+    in ``unread``. Each receiver says whether its place is read
+    (``RawReceiver.read``) and whether its tenant id is valid. Raises
+    ``ParseTreeError`` (no usable da-guard)."""
+    if reader is None:
+        reader = _lib_parse_cache.reader_for(config_dir)
+    reader.require()
+    listing = list_config_tree(config_dir, reader=reader)
+    root = Path(config_dir)
+    unreadable = [(p.relative_to(root).as_posix(), unusable_reason(p, listing.listing))
+                  for p in listing.unusable]
+    _read, not_read = reader.split_not_read(listing.files)
+    skipped = {p for p, _why in not_read}
+    unread = [(p.relative_to(root).as_posix(), why) for p, why in not_read]
+    found: list[RawReceiver] = []
+    for path_p in listing.files:
+        if path_p in skipped:
+            continue
+        fname = path_p.relative_to(root).as_posix()
+        try:
+            data = reader.read(path_p, ROUTING_READ)
+        except FileUnreadable as e:
+            unreadable.append((fname, unreadable_reason(e)))
+            continue
+        if not isinstance(data, dict):
+            continue
+        entry = listing.listing.entry(fname)
+        found.extend(_receivers_of(fname, data, entry))
+    return RawReceivers(found, unreadable, unread)

@@ -15,9 +15,9 @@ import cutover_tenant as ct
 # Fixtures
 # ---------------------------------------------------------------------------
 
-def _make_readiness(tmp, ready=True, pct=100.0, converged=5, total=5):
-    """Write a cutover-readiness.json and return its path."""
-    data = {
+def _readiness(ready=True, pct=100.0, converged=5, total=5):
+    """A parsed cutover-readiness.json."""
+    return {
         "ready": ready,
         "timestamp": "2026-03-07T12:00:00Z",
         "convergence_percentage": pct,
@@ -29,11 +29,6 @@ def _make_readiness(tmp, ready=True, pct=100.0, converged=5, total=5):
         "stability_window": 5,
         "recommendation": "Safe to cutover" if ready else "Not ready",
     }
-    path = os.path.join(tmp, "cutover-readiness.json")
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh)
-    os.chmod(path, 0o600)
-    return path
 
 
 # ---------------------------------------------------------------------------
@@ -44,43 +39,86 @@ class TestLoadCutoverReadiness:
     """load_cutover_readiness() tests。"""
 
     def test_valid_json(self):
-        """有效 JSON 檔案正確載入。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = _make_readiness(tmp)
-            data = ct.load_cutover_readiness(path)
-            assert data["ready"]
-            assert data["convergence_percentage"] == 100.0
+        """有效內容正確載入。"""
+        data = ct.load_cutover_readiness(_readiness())
+        assert data["ready"]
+        assert data["convergence_percentage"] == 100.0
 
     def test_not_ready(self):
         """未準備好的狀態正確解析。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = _make_readiness(tmp, ready=False, pct=60.0)
-            data = ct.load_cutover_readiness(path)
-            assert not data["ready"]
+        data = ct.load_cutover_readiness(_readiness(ready=False, pct=60.0))
+        assert not data["ready"]
 
     def test_missing_fields(self):
         """缺失必要欄位拋出 ValueError。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "bad.json")
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump({"ready": True}, fh)
-            with pytest.raises(ValueError) as exc_info:
-                ct.load_cutover_readiness(path)
-            assert "Missing required fields" in str(exc_info.value)
+        with pytest.raises(ValueError) as exc_info:
+            ct.load_cutover_readiness({"ready": True})
+        assert "Missing required fields" in str(exc_info.value)
 
-    def test_invalid_json(self):
-        """無效 JSON 拋出 JSONDecodeError。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            path = os.path.join(tmp, "bad.json")
-            with open(path, "w", encoding="utf-8") as fh:
-                fh.write("not json")
-            with pytest.raises(json.JSONDecodeError):
-                ct.load_cutover_readiness(path)
 
-    def test_file_not_found(self):
-        """檔案不存在拋出 FileNotFoundError。"""
-        with pytest.raises(FileNotFoundError):
-            ct.load_cutover_readiness("/nonexistent/path.json")
+class TestReadinessFileIsReadByTheLib:
+    """#3445: --readiness-json 的路徑與內容由 `_lib_input.document` 判，
+    任何步驟執行前就以 caller error（點名旗標與路徑）結束——不是 traceback，
+    也不是 report 裡的一個失敗步驟。三種壞內容的 CLI 列在
+    tests/shared/test_caller_paths.py（由 decode 宣告自動生成）。"""
+
+    @pytest.mark.parametrize("content, detail", [
+        (b"not json", "not valid JSON: Expecting value: line 1 column 1 (char 0)"),
+        (b"[]", "the top level is not a mapping (got a list)"),
+    ])
+    def test_content_it_cannot_read_is_named(self, tmp_path, monkeypatch, content, detail):
+        from _lib_exitcodes import CallerError
+        path = tmp_path / "r.json"
+        path.write_bytes(content)
+        monkeypatch.setattr("sys.argv", ["cutover", "--readiness-json", str(path),
+                                         "--tenant", "t", "--dry-run"])
+        with mock.patch("cutover_tenant._run_kubectl") as kube:
+            with pytest.raises(CallerError) as exc:
+                ct.main()
+        assert str(exc.value) == f"--readiness-json {path}: {detail}"
+        kube.assert_not_called()
+
+    def test_file_not_found(self, monkeypatch):
+        from _lib_exitcodes import CallerError
+        monkeypatch.setattr("sys.argv", ["cutover", "--readiness-json", "/no/such/file.json",
+                                         "--tenant", "t"])
+        with pytest.raises(CallerError) as exc:
+            ct.main()
+        assert exc.value.reason == "file_not_found"
+
+
+class TestDryRunDoesNotJudgeTheEnv:
+    """#3528 review: a dry run sends nothing, so an unusable $PROMETHEUS_URL
+    may not stop it (it was rc 2); a real run is stopped, named."""
+
+    def _run(self, tmp_path, monkeypatch, *extra):
+        path = tmp_path / "r.json"
+        path.write_text(json.dumps(_readiness()), encoding="utf-8")
+        monkeypatch.setenv("PROMETHEUS_URL", "ftp://x")
+        monkeypatch.setattr("sys.argv", ["cutover", "--readiness-json", str(path),
+                                         "--tenant", "t1", *extra])
+        seen = {}
+
+        def fake_apply(**kwargs):
+            seen.update(kwargs)
+            return {"success": True, "steps": [], "failed_step": None}
+        monkeypatch.setattr(ct, "apply_cutover", fake_apply)
+        try:
+            ct.main()
+        except SystemExit:
+            pass
+        return seen
+
+    def test_dry_run_with_an_unusable_env_runs(self, tmp_path, monkeypatch):
+        seen = self._run(tmp_path, monkeypatch, "--dry-run")
+        assert seen["prometheus_url"] == "ftp://x" and seen["dry_run"] is True
+
+    def test_a_real_run_with_an_unusable_env_is_refused_by_name(self, tmp_path, monkeypatch):
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError) as exc:
+            self._run(tmp_path, monkeypatch)
+        assert "$PROMETHEUS_URL" in str(exc.value) and exc.value.reason == \
+            "prometheus_url_unusable"
 
 
 # ---------------------------------------------------------------------------
@@ -220,8 +258,7 @@ class TestApplyCutover:
     def test_all_steps_succeed(self, _vh, _kube):
         """所有步驟成功。"""
         with tempfile.TemporaryDirectory() as tmp:
-            path = _make_readiness(tmp)
-            report = ct.apply_cutover(path, "db-a", "http://prom:9090")
+            report = ct.apply_cutover(_readiness(), "db-a", "http://prom:9090")
             assert report["success"]
             assert len(report["steps_completed"]) == 5
             assert report["failed_step"] is None
@@ -229,8 +266,8 @@ class TestApplyCutover:
     def test_not_ready_without_force(self):
         """未準備好時不強制執行。"""
         with tempfile.TemporaryDirectory() as tmp:
-            path = _make_readiness(tmp, ready=False, pct=60.0)
-            report = ct.apply_cutover(path, "db-a", "http://prom:9090")
+            report = ct.apply_cutover(_readiness(ready=False, pct=60.0), "db-a",
+                                      "http://prom:9090")
             assert not report["success"]
             assert report["failed_step"] == "readiness_check"
             assert "--force" in report["message"]
@@ -240,9 +277,8 @@ class TestApplyCutover:
     def test_force_overrides_not_ready(self, _vh, _kube):
         """--force 覆蓋未準備好的檢查。"""
         with tempfile.TemporaryDirectory() as tmp:
-            path = _make_readiness(tmp, ready=False, pct=60.0)
-            report = ct.apply_cutover(path, "db-a", "http://prom:9090",
-                                      force=True)
+            report = ct.apply_cutover(_readiness(ready=False, pct=60.0), "db-a",
+                                      "http://prom:9090", force=True)
             assert report["success"]
 
     @mock.patch("cutover_tenant._run_kubectl",
@@ -250,8 +286,7 @@ class TestApplyCutover:
     def test_fails_at_second_step(self, _kube):
         """在第二步失敗。"""
         with tempfile.TemporaryDirectory() as tmp:
-            path = _make_readiness(tmp)
-            report = ct.apply_cutover(path, "db-a", "http://prom:9090")
+            report = ct.apply_cutover(_readiness(), "db-a", "http://prom:9090")
             assert not report["success"]
             assert len(report["steps_completed"]) == 1
             assert report["failed_step"] == "Remove old Recording Rules"
@@ -261,17 +296,17 @@ class TestApplyCutover:
     def test_dry_run(self, _vh, _kube):
         """Dry-run 模式。"""
         with tempfile.TemporaryDirectory() as tmp:
-            path = _make_readiness(tmp)
-            report = ct.apply_cutover(path, "db-a", "http://prom:9090",
+            report = ct.apply_cutover(_readiness(), "db-a", "http://prom:9090",
                                       dry_run=True)
             assert report["success"]
 
-    def test_missing_readiness_file(self):
-        """缺失就緒檔案。"""
-        report = ct.apply_cutover("/no/such/file.json", "db-a",
-                                  "http://prom:9090")
+    def test_readiness_without_its_fields(self):
+        """就緒檔缺欄位：caller error 類的 load_readiness 失敗（缺檔改由
+        `TestReadinessFileIsReadByTheLib` 在步驟前判）。"""
+        report = ct.apply_cutover({"ready": True}, "db-a", "http://prom:9090")
         assert not report["success"]
         assert report["failed_step"] == "load_readiness"
+        assert report["caller_error"]
 
 
 # ---------------------------------------------------------------------------
@@ -283,9 +318,9 @@ class TestCLI:
 
     def test_parser_required_args(self, monkeypatch):
         """必要引數正確解析；--prometheus 未設 env 時 fallback localhost（byte-identical）。"""
-        # add_prometheus_arg resolves $PROMETHEUS_URL at build_parser() time,
-        # so pin the env-unset default here (byte-identical to the old
-        # hardcoded default="http://localhost:9090").
+        # #3528: $PROMETHEUS_URL is no longer the argparse default; main()
+        # resolves it with `_lib_io.prometheus_url` where it is used, so the
+        # URL cutover sends to is prometheus_url(args.prometheus).
         monkeypatch.delenv("PROMETHEUS_URL", raising=False)
         parser = ct.build_parser()
         args = parser.parse_args([
@@ -294,7 +329,8 @@ class TestCLI:
         ])
         assert args.readiness_json == "r.json"
         assert args.tenant == "db-a"
-        assert args.prometheus == "http://localhost:9090"
+        assert args.prometheus is None
+        assert ct.prometheus_url(args.prometheus) == "http://localhost:9090"
         assert not args.dry_run
         assert not args.force
 
@@ -306,7 +342,7 @@ class TestCLI:
             "--readiness-json", "r.json",
             "--tenant", "db-a",
         ])
-        assert args.prometheus == "http://test:1234"
+        assert ct.prometheus_url(args.prometheus) == "http://test:1234"
 
     def test_parser_prometheus_flag_overrides_env(self, monkeypatch):
         """顯式 --prometheus 蓋過 $PROMETHEUS_URL。"""
@@ -363,15 +399,9 @@ class TestEntrypointIntegration:
         assert '"cutover"' in content
         assert "cutover_tenant.py" in content
 
-    def test_prometheus_commands_has_cutover(self):
-        """PROMETHEUS_COMMANDS 包含 cutover 命令。"""
-        ep_path = os.path.join(
-            os.path.dirname(__file__), "..", "components",
-            "da-tools", "app", "entrypoint.py",
-        )
-        if not os.path.isfile(ep_path):
-            pytest.skip("entrypoint.py not found")
-        with open(ep_path, encoding="utf-8") as fh:
-            content = fh.read()
-        # PROMETHEUS_COMMANDS should contain "cutover"
-        assert '"cutover"' in content
+    def test_prometheus_flag_declares_its_env_fallback(self):
+        """#3528：--prometheus 可省略（$PROMETHEUS_URL 後備）由 parser 自己宣告
+        （add_prometheus_arg 標在 action 上），不再靠 entrypoint 的 PROMETHEUS_COMMANDS。"""
+        action = next(a for a in ct.build_parser()._actions
+                      if "--prometheus" in a.option_strings)
+        assert action.env_fallback == "PROMETHEUS_URL" and not action.required

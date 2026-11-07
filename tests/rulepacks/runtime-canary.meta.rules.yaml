@@ -1,0 +1,33 @@
+# ============================================================
+# Runtime-Canary DEMO — the HAND-AUTHORED half (ADR-025 design-readiness;
+# NOT the prod pack, NOT deployed: see docs/design/runtime-canary.md).
+#
+# The canary's custom-alert rules are NOT here: they are the compiler's output
+# for tests/rulepacks/runtime-canary-recipe/, written whole to
+# runtime-canary.compiled.rules.yaml by `make runtime-canary-compile` and held
+# equal to it by `make runtime-canary-compile-check` (pre-commit + CI, #3679).
+# promtool loads both files (runtime-canary_test.yaml `rule_files`).
+# ============================================================
+groups:
+# ── HAND-AUTHORED platform dead-man's-switch (NOT compiler output) ──────────
+# Watches the canary's CORE RECORDING RULE, not ALERTS{...}: (a) absent(ALERTS)
+# leaks the matcher labels (alertstate="firing" + a nested alertname) onto the
+# meta-alert, and a tenant-wide ALERTS matcher would also be satisfied by the
+# CustomRecipeSilent sentinel (which fires off user_threshold alone) — masking a
+# heartbeat-scrape break; (b) the core record is reliably materialised and absent
+# exactly when ANY realistic silent-death mode hits — exporter stops emitting
+# user_threshold, the heartbeat scrape gaps, or the compiler drifts the rule away.
+- name: custom-alerts-pipeline-canary-meta
+  rules:
+  - alert: CustomAlertPipelineCanaryDown
+    expr: absent(custom:threshold__canary_pipeline_heartbeat__gt__w5m__for1m:warning:core{tenant="platform-canary"})
+    for: 5m
+    labels:
+      severity: critical
+      component: platform-canary
+    annotations:
+      summary: "Custom-alert COMPILE PIPELINE canary is DOWN — the exporter -> compiler -> Prometheus -> route chain may be silently broken; tenant custom alerts may be failing to fire."
+      summary_zh: "自訂告警編譯管線 canary 已停止 — exporter -> 編譯器 -> Prometheus -> 路由 鏈可能已靜默損壞；租戶自訂告警可能正在無聲失效。"
+      description: "The always-firing platform-canary custom alert is no longer firing. Investigate the custom-alert pipeline end-to-end: threshold-exporter user_threshold emission, compile_custom_alerts drift, Prometheus rule load, scrape health."
+      description_zh: "常駐必觸發的 platform-canary 自訂告警已不再觸發。請端到端檢查自訂告警管線：threshold-exporter 的 user_threshold 發送、compile_custom_alerts 漂移、Prometheus 規則載入、scrape 健康度。"
+      runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/runtime-canary.md"

@@ -51,6 +51,10 @@ modules:
       - detect_cli_lang
       - i18n_text
     excluded:
+      url_problem: "#3528 the one URL judgement; scheme dispatch property-tested through its wrapper _lib_prometheus._validate_url_scheme (tests/shared/test_property_tools.py), every unusable shape run through every URL flag's parser by tests/shared/test_caller_path_manifest.py"
+      url_type: "#3528 constructor of the UrlArg argparse type; run per flag by tests/shared/test_caller_path_manifest.py::test_a_url_flag_refuses_an_unusable_value_by_name"
+      url_list_type: "#3528 constructor of the separator-list UrlArg; run by the same gate (federation-check --edge-urls)"
+      UrlArg._one: "#3528 url_problem → ArgumentTypeError; run by the same gate"
       routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"
       receiver_exactly_one_problem: "#2137 exactly-one receiver field groups over RECEIVER_TYPES (data-driven, not a numeric/string law); table-covered by tests/ops/test_generate_alertmanager_routes.py::TestBuildReceiverConfig pagerduty cases and tests/ops/test_notification_tester.py"
@@ -86,6 +90,11 @@ modules:
       positive_int: "#2966 argparse type: accepts a value iff int() parses it to a number >= 1; boundary and message table in tests/shared/test_lib_python.py::TestPositiveInt"
       positive_int_seconds: "#2966 argparse type: accepts a value iff int() parses it to a number from 1 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestPositiveIntSeconds"
       is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
+      url_has_userinfo: "#1560 ⑤-a urllib.parse.urlsplit username test (fail-closed on a URL it refuses); boundary table (user only, @ in path/query/fragment, non-http scheme, no authority) in tests/shared/test_credential_plaintext_policy.py::test_userinfo_boundaries"
+      _walk_present: "#1560 ⑤-a walk of one site pattern (key / * / []) yielding every value; every row and wildcard example-pinned by tests/shared/test_credential_plaintext_policy.py"
+      _written_out: "#1560 ⑤-a type test (non-empty scalar, not null / '' / mapping / list); its quiet cases pinned per row by tests/shared/test_credential_plaintext_policy.py::test_reference_only_rows"
+      plaintext_credential_findings: "#1560 ⑤-a table-driven judgement over CREDENTIAL_REF_SITES.plaintext + CREDENTIAL_PLAINTEXT_SITES (data, not a numeric/string law); positive and negative example per row in tests/shared/test_credential_plaintext_policy.py"
+      value_paths_to_mask: "#1560 ⑤-a the masking list (every written-out scalar on or below a credential row); example-pinned by tests/shared/test_credential_plaintext_policy.py and the canary tests of tests/ops/test_migrate_credentials.py"
 
   scripts/tools/_lib_label.py:
     covered:
@@ -130,6 +139,7 @@ modules:
       add_json_arg: "argparse boilerplate"
       add_ci_arg: "argparse boilerplate"
       add_prometheus_arg: "argparse boilerplate"
+      prometheus_url: "#3528 flag → env → default precedence with the env judged by url_problem; example-pinned by tests/shared/test_lib_python.py::TestAddPrometheusArg and the per-tool env-fallback tests"
       exit_on_yaml_file_error: "CLI-entry decorator (stderr + sys.exit on YamlFileError, #1654); example-pinned in tests/shared/test_yaml_file_error.py, no value computation to fuzz"
       output_write: "Context manager wrapping a raw output sink (#1789); the value it computes is delegated to _output_write_names_target, and the wrapping itself is side-effect-free control flow — example-pinned in tests/shared/test_lib_io_output_write.py"
       _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py"
@@ -165,6 +175,8 @@ modules:
       _is_tree_scalar: "parse-tree scalar predicate (the shape _lib_parse_tree.is_scalar checks); exercised through every finder pin"
       _written: "Suggestion-line shape (key / sequence item); pinned through both finders' message pins"
       # #2509 → #2906: YAML 1.1 boolean words (strings to yaml.v3) in boolean fields.
+      is_special_file: "#3615 → #1560 ⑤-a stat predicate (I/O); pinned through generate-routes' output clashes (/dev/null collides with nothing) in tests/ops"
+      same_file: "#3615 → #1560 ⑤-a realpath + samefile judgement (I/O); symlink and hard-link cases pinned by generate-routes' output-clash tests and tests/ops/test_migrate_credentials.py::test_a_manifest_that_is_a_confd_file_is_refused"
       find_yaml11_bool_words: "parse-tree nodes × schema walk (#2509 → #2906); word set (_lib_validation.yaml_bool_literals minus yaml.v3's six), quoted and unquoted alike, quiet controls (true/false, string field) and the Go reading (da-guard effective) in tests/shared/test_yaml11_bool_word_warning.py"
       YamlBoolWord.message: "Operator-facing text (#2509); suggestion shapes pinned in tests/shared/test_yaml11_bool_word_warning.py"
 

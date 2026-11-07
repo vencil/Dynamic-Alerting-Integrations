@@ -2259,7 +2259,7 @@ TRACED_INDIRECT_INPUTS = {
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
     ("docs-ci.yaml", "docs", "components/threshold-exporter/README.md"),
     # drift-checks → check_cli_contract.py: its contract source (entrypoint.py's
-    # COMMAND_MAP / PROMETHEUS_COMMANDS), its ledger, and the three landing
+    # COMMAND_MAP), its ledger, and the three landing
     # pages it scans outside docs/ — all reached through validate_all.py's
     # subprocess, which is why no scanner here can derive them.
     ("docs-ci.yaml", "docs", "components/da-tools/app/entrypoint.py"),
@@ -3822,19 +3822,48 @@ WORKFLOW_PATHS_SCOPE = "scripts/"
 # hide a regression of the same pair. Adding an entry is the wrong fix for a red
 # invariant 4 unless the omission is a deliberate CI-cost decision — then write
 # that decision here.
-WORKFLOW_PATHS_PENDING: dict[tuple[str, str], str] = {
-    ("bench-workload-effect.yaml", "scripts/tools/dx/pair_bench_ratio.py"):
-        "undecided: primary trigger is workflow_dispatch; the pull_request "
-        "gate lists only the workflow file itself",
-    ("bench-workload-effect.yaml", "scripts/tools/ops/bench_interleave.sh"):
-        "undecided: same as pair_bench_ratio.py above",
-    ("bench-workload-record.yaml", "scripts/tools/ops/bench_gate_compare.sh"):
-        "undecided: gate is test-file shaped (bench inputs), the comparator "
-        "is also exercised by bench-gate-pr.yaml",
-    ("config-diff-advisory.yml", "scripts/ops/go_build.sh"):
-        "undecided: build-flag wrapper shared with guard-defaults-impact.yml",
-    ("guard-defaults-impact.yml", "scripts/ops/go_build.sh"):
-        "undecided: build-flag wrapper shared with config-diff-advisory.yml",
+WORKFLOW_PATHS_PENDING: dict[tuple[str, str], str] = {}
+
+# ⛔ Deliberately NOT triggered: a (workflow, script) the scan finds uncovered
+# and the owner decided to leave that way (#3665, option C′). Each entry names
+# what DOES check the script on a PR, and that claim is measured, not trusted:
+#   ("workflow", X, via) — X's `on.pull_request.paths` cover the script, and
+#       a step runs it with no `if:` on the step, its job, or any job in its
+#       `needs:` chain, and no `continue-on-error` (refused rather than
+#       modelled). When X runs it only INDIRECTLY (the scan sees direct runs
+#       only — a disclosed blind spot above), `via` names the script X runs
+#       that way, and the name must appear in via's shell code outside comments;
+#   ("pytest", T, None) — test module T exists, IMPORTS the script's module
+#       (AST, not text), and the CI `python` filter covers the script.
+# ⚠️ NOT measured (same limits as invariant 4, plus two of this check's own):
+#   `on.pull_request.types` / `branches` narrowing; a shell-level `if` inside
+#   the step's `run:` or inside via; whether via's mention is a call rather
+#   than, say, an `echo`. And the `python` filter check cannot fail today —
+#   ci.yml's filter carries a `**` catch-all, which
+#   `test_python_tests_run_cannot_be_path_skipped` guards separately.
+# `test_workflow_paths_not_triggered_is_still_justified` turns red when the
+# claim stops holding, `..._is_still_needed` when the pair becomes covered
+# (the entry would then excuse a regression of the same pair). Both red.
+# ⚠️ bench-workload-effect's own PR self-test is known-red before the
+# overlay build until the reference version moves (#2348,
+# benchmark-playbook.md), so triggering it would buy a red check, not a run
+# of these scripts. Revisit these two entries when #2348 lands.
+# ⚠️ bench-gate-pr.yaml documents a future FLIP that drops its pull_request
+# block; the "workflow" entries naming it then turn red, correctly.
+WORKFLOW_PATHS_NOT_TRIGGERED: dict[tuple[str, str],
+                                  tuple[str, str, str | None, str]] = {
+    ("bench-workload-effect.yaml", "scripts/tools/ops/bench_interleave.sh"): (
+        "workflow", "bench-gate-pr.yaml", "scripts/tools/ops/bench_gate_compare.sh",
+        "its PR self-test cannot reach the script before #2348; "
+        "bench-gate-pr.yaml runs it on PRs"),
+    ("bench-workload-effect.yaml", "scripts/tools/dx/pair_bench_ratio.py"): (
+        "pytest", "tests/dx/test_pair_bench_ratio.py", None,
+        "its PR self-test cannot reach the script before #2348; no PR "
+        "workflow runs it, its unit tests do"),
+    ("bench-workload-record.yaml", "scripts/tools/ops/bench_gate_compare.sh"): (
+        "workflow", "bench-gate-pr.yaml", None,
+        "its PR gate is test-file shaped (bench inputs) and a full "
+        "interleaved run; bench-gate-pr.yaml runs the comparator on PRs"),
 }
 
 
@@ -3987,7 +4016,8 @@ def test_workflow_paths_cover_every_script_their_jobs_run() -> None:
     assert not unparseable, (
         "workflows that do not parse were NOT checked by invariant 4 — fix "
         "them, do not skip them:\n" + "\n".join(f"  {u}" for u in unparseable))
-    new = sorted(_workflow_paths_uncovered(scoped) - set(WORKFLOW_PATHS_PENDING))
+    new = sorted(_workflow_paths_uncovered(scoped) - set(WORKFLOW_PATHS_PENDING)
+                 - set(WORKFLOW_PATHS_NOT_TRIGGERED))
     assert not new, (
         "a workflow gated by `on.pull_request.paths` runs a script that is NOT "
         "in those paths — a PR changing only that script never starts the "
@@ -4004,6 +4034,113 @@ def test_workflow_paths_pending_only_shrinks() -> None:
         "renamed or removed). Delete them — a stale entry would silently "
         "excuse the same pair if it regressed:\n"
         + "\n".join(f"  {wf}: {p!r}" for wf, p in stale))
+
+
+def test_workflow_paths_not_triggered_is_still_needed() -> None:
+    """An excused pair that has become covered must leave the list."""
+    _, scoped = _workflow_paths_scan(WORKFLOWS_DIR)
+    stale = sorted(set(WORKFLOW_PATHS_NOT_TRIGGERED) - _workflow_paths_uncovered(scoped))
+    assert not stale, (
+        "these WORKFLOW_PATHS_NOT_TRIGGERED entries are covered now (or the "
+        "workflow no longer runs the script). Delete them — a stale excuse "
+        "would hide the same pair if it regressed:\n"
+        + "\n".join(f"  {wf}: {p!r}" for wf, p in stale))
+
+
+def _unconditional_runners(workflow_path: Path, script: str) -> list[str]:
+    """`job/step` names that run `script` with nothing that can skip it or
+    swallow its failure: no `if:` on the step, its job, or any job its job
+    `needs:` (transitively — a skipped upstream skips it too), and no
+    `continue-on-error` on the step or job."""
+    workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8")) or {}
+    jobs = workflow.get("jobs") or {}
+
+    def chain_ok(job_id: str, seen: frozenset[str] = frozenset()) -> bool:
+        job = jobs.get(job_id) or {}
+        if job_id in seen or "if" in job or job.get("continue-on-error"):
+            return False
+        needs = job.get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        return all(chain_ok(n, seen | {job_id}) for n in needs)
+
+    hits = []
+    for job_id, job in jobs.items():
+        for i, step in enumerate((job or {}).get("steps") or []):
+            if (isinstance(step, dict) and script in _step_files(step)
+                    and "if" not in step and not step.get("continue-on-error")
+                    and chain_ok(job_id)):
+                hits.append(f"{job_id}/{step.get('name', i)}")
+    return hits
+
+
+def _shell_code(text: str) -> str:
+    """Shell text with comments removed (whole-line and trailing ` # …`), so a
+    file name that survives only in a comment does not count as a call."""
+    out = []
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        out.append(re.split(r"\s#", line, maxsplit=1)[0])
+    return "\n".join(out)
+
+
+def _imports_module(test_text: str, module: str) -> bool:
+    """True when the test module imports `module` (or `from module import …`)
+    in its AST — a mention in a comment or docstring does not count."""
+    for node in ast.walk(ast.parse(test_text)):
+        if isinstance(node, ast.Import) and any(
+                a.name.split(".")[-1] == module for a in node.names):
+            return True
+        if isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[-1] == module:
+            return True
+    return False
+
+
+def _not_triggered_justification_errors(directory: Path) -> list[str]:
+    _, scoped = _workflow_paths_scan(directory)
+    broken = []
+    for (wf, script), (kind, target, via, _why) in sorted(WORKFLOW_PATHS_NOT_TRIGGERED.items()):
+        where = f"{wf}: {script!r} ({kind} {target}" + (f" via {via}" if via else "") + ")"
+        if kind == "workflow":
+            patterns, _files = scoped.get(target, (None, set()))
+            if target == wf:
+                broken.append(f"{where} — names itself")
+            elif patterns is None:
+                broken.append(f"{where} — no pull_request path gate in scope")
+            elif not _on_paths_covers(patterns, script):
+                broken.append(f"{where} — does not start on the script")
+            elif not _unconditional_runners(directory / target, via or script):
+                broken.append(f"{where} — no job/step runs {via or script!r} without an `if:`")
+            elif via and Path(script).name not in _shell_code((ROOT / via).read_text(encoding="utf-8")):
+                broken.append(f"{where} — {via!r} does not invoke the script")
+        elif kind == "pytest" and via is None:
+            module = Path(script).stem
+            test = ROOT / target
+            if not test.is_file():
+                broken.append(f"{where} — test module missing")
+            elif not _imports_module(test.read_text(encoding="utf-8"), module):
+                broken.append(f"{where} — test module does not import {module!r}")
+            elif not any(_covers(p, script) for p in _python_filter_patterns()):
+                broken.append(f"{where} — the CI `python` filter does not start on it")
+        else:
+            broken.append(f"{where} — unknown kind")
+    return broken
+
+
+def test_workflow_paths_not_triggered_is_still_justified() -> None:
+    """The stated reason is measured with the same scan, so it cannot go stale
+    silently. An empty list passes: deleting the last entry is the correct end
+    state, not a vacuous one (each entry is still guarded while it exists)."""
+    broken = _not_triggered_justification_errors(WORKFLOWS_DIR)
+    assert not broken, (
+        "a deliberately-not-triggered entry lost its justification — a PR "
+        "changing the script would no longer be checked by what it names:\n"
+        + "\n".join(f"  {b}" for b in broken))
+
+
+def test_workflow_paths_lists_are_disjoint() -> None:
+    both = sorted(set(WORKFLOW_PATHS_PENDING) & set(WORKFLOW_PATHS_NOT_TRIGGERED))
+    assert not both, f"a pair cannot be both undecided and decided: {both}"
 
 
 def test_workflow_paths_scan_still_sees_the_motivating_input() -> None:

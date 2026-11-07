@@ -45,12 +45,10 @@ kubectl scale -n monitoring deploy/mock-siem --replicas=0
 sleep 30
 kubectl get pod -n vector -l app.kubernetes.io/name=vector    # 應該 Running, RESTARTS=0
 # VictoriaLogs row count 應持續成長：
-#（vlq debug pod 留在 monitoring ns、打 vector label —— victorialogs netpol
-#  的 same-ns podSelector 條目就是為這類 debug pod 保留的）
-kubectl run vlq --rm -i --restart=Never --image=busybox:1.36 -n monitoring \
-  --labels='app.kubernetes.io/name=vector' \
-  --override-type=strategic --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"vlq","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' \
-  -- wget -qO- 'http://victorialogs.monitoring.svc:9428/select/logsql/query?query=%2A+%7C+stats+count%28%29+as+n&limit=1'
+#（經 vmauth 容器打 pod 內 loopback 上的 VictoriaLogs 本體：不經 vmauth、不需
+#  帳密——store 預設強制認證，#1295——能 exec 進 pod 才碰得到）
+kubectl exec -n monitoring deploy/victorialogs -c vmauth -- \
+  wget -qO- 'http://127.0.0.1:9429/select/logsql/query?query=%2A+%7C+stats+count%28%29+as+n&limit=1'
 
 # 6) 清乾淨
 kubectl scale -n monitoring deploy/mock-siem --replicas=1

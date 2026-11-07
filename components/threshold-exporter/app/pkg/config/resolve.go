@@ -1699,15 +1699,6 @@ func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
 // per-tenant entries on their own and must not repeat the defaults-side
 // notice once per platform file.
 func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
-	return c.validateOverrideKeysOf(true)
-}
-
-// validateOverrideKeysOf is validateOverrideKeys; thresholdValues false
-// leaves out the #3267 threshold value findings — for a tenant layer the
-// exporter does not read (TenantMerge's flat-KV fallback: the exporter
-// declares no tenant from such a file), whose non-`_` keys are not
-// thresholds anyone serves. The reserved-key findings are not affected.
-func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValidation {
 	var v KeyValidation
 	// versionLabels / renamed record the entries VersionLabels and Renames
 	// repeat.
@@ -1728,6 +1719,10 @@ func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValida
 	canonOptional := canonicalizeOptionalOverrides(c.OptionalOverrides)
 
 	for tenant, overrides := range c.Tenants {
+		// #3502: the map as /metrics reads it — of two spellings of one
+		// dimensional key, the one served (normalizeKeys) — so a dead entry
+		// is judged on the value served, not on a spelling that loses.
+		normalized, _ := normalizeKeys(overrides)
 		// Validate _profile reference (v1.12.0)
 		// Note: applyProfiles() also warns on unknown profiles during merging.
 		// This check ensures validation is complete even if applyProfiles is skipped.
@@ -1864,8 +1859,16 @@ func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValida
 			// where it is written. Errors AND Values, as a reserved value:
 			// an unchanged one already on disk is a notice (Ratchet, by the
 			// resolver's reading — readAlike).
-			if thresholdValues {
-				if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
+			if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
+				v.Errors = append(v.Errors, f.Message)
+				v.Values = append(v.Values, f)
+			}
+			// #3502: a schedule entry /metrics serves at no minute of the
+			// day is refused where it is written; one already on disk, left
+			// as it is, is a notice (Ratchet, by the dead entries as
+			// written).
+			if deadEntriesJudged(key, canonKey, sv, normalized, canonDefaults, canonOptional) {
+				if f, ok := newDeadEntryFinding(tenant, canonKey, sv); ok {
 					v.Errors = append(v.Errors, f.Message)
 					v.Values = append(v.Values, f)
 				}

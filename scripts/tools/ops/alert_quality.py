@@ -53,6 +53,10 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
+from _lib_io import add_prometheus_arg, prometheus_url  # noqa: E402  (#3528)
+
+#: #3528: optional since the dispatcher stopped appending it.
+HELP_PROMETHEUS = "Prometheus URL (default: $PROMETHEUS_URL, else http://localhost:9090)"
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -580,7 +584,7 @@ def build_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(
             description="警報品質評估 — 分析 Prometheus ALERTS 歷史以識別問題警報",
         )
-        parser.add_argument("--prometheus", required=True, help="Prometheus URL")
+        add_prometheus_arg(parser, help_text=HELP_PROMETHEUS)
         parser.add_argument("--period", default="30d", help="分析期間（預設: 30d）")
         parser.add_argument("--tenant", help="篩選特定租戶")
         parser.add_argument("--json", action="store_true", dest="json_output", help="JSON 格式輸出")
@@ -591,7 +595,7 @@ def build_parser() -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(
             description="Alert Quality Scoring — analyze the Prometheus ALERTS history to identify problem alerts",
         )
-        parser.add_argument("--prometheus", required=True, help="Prometheus URL")
+        add_prometheus_arg(parser, help_text=HELP_PROMETHEUS)
         parser.add_argument("--period", default="30d", help="Analysis period (default: 30d)")
         parser.add_argument("--tenant", help="Filter to specific tenant")
         parser.add_argument("--json", action="store_true", dest="json_output", help="JSON output")
@@ -622,7 +626,7 @@ def main() -> "int | Report":
     # 分析
     try:
         metrics = analyze_from_prometheus(
-            args.prometheus,
+            prometheus_url(args.prometheus),  # #3528: env judged here
             period_secs,
             tenant=args.tenant,
         )

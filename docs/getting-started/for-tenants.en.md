@@ -175,7 +175,7 @@ tenants:
       tier: "tier-1"
 ```
 
-Alerts that compare against your thresholds carry these three values in their annotations, so they appear in notifications. Down and exporter-absent alerts do not carry them yet ([#2566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2566)).
+Every tenant alert (thresholds, down, exporter-absent, sentinels, custom alerts) carries these three values in its annotations, so they appear in notifications; without `_metadata` the three values are empty strings and the alert still fires.
 
 ## What Your Notifications Look Like
 

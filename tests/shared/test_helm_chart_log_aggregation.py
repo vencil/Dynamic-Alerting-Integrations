@@ -33,10 +33,19 @@ _HAS_HELM = shutil.which("helm") is not None
 _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm CLI not on PATH")
 
 
+# Charts that refuse to render under bare defaults by design, rendered here
+# with the shared baseline: helm/victorialogs defaults to auth.mode=enforce and
+# needs a Secret named per consumer (#1295). Applied before any --set.
+_RENDER_BASELINES = {
+    "victorialogs": ["-f", str(Path(__file__).resolve().parents[1] / "helm" / "victorialogs_render_baseline.yaml")],
+}
+
+
 def _render(chart_dir: Path, *, sets: dict[str, str] | None = None,
             values_file: Path | None = None) -> list[dict]:
     """helm template the chart, return list of parsed manifests."""
-    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring"]
+    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring",
+           *_RENDER_BASELINES.get(chart_dir.name, [])]
     for k, v in (sets or {}).items():
         cmd += ["--set", f"{k}={v}"]
     if values_file is not None:
@@ -47,7 +56,8 @@ def _render(chart_dir: Path, *, sets: dict[str, str] | None = None,
 
 def _render_failing(chart_dir: Path, sets: dict[str, str]) -> subprocess.CompletedProcess:
     """helm template expected to fail; return CompletedProcess so caller asserts stderr."""
-    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring"]
+    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring",
+           *_RENDER_BASELINES.get(chart_dir.name, [])]
     for k, v in sets.items():
         cmd += ["--set", f"{k}={v}"]
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=30)

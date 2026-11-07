@@ -158,6 +158,10 @@ OPS_SITES = [
      ["--config-dir", "{D}", "--dry-run", "--json"], "--config-dir", "dir_not_accessible"),
     ("explain-keys --config-dir", "explain_keys.py", ["--config-dir", "{D}", "--json"],
      "--config-dir", None),
+    ("migrate-credentials --config-dir", "migrate_credentials.py",
+     ["--config-dir", "{D}", "--json"], "--config-dir", None),
+    ("migrate-credentials --policy", "migrate_credentials.py",
+     ["--config-dir", "{CONF}", "--policy", "{F}", "--json"], "--policy", None),
     ("runtime-audit --rule-packs-dir", "runtime_audit.py",
      ["--rule-packs-dir", "{D}", "--runtime-json", "{BOX}/silences.json", "--json"],
      "--rule-packs-dir", None),
@@ -203,6 +207,16 @@ OPS_SITES = [
     ("state-reconcile --state-dir", "state_reconcile.py",
      ["--state-dir", "{D}", "--manifest-path", "{BOX}/sr/manifest.json", "--json"],
      "--state-dir", "dir_not_accessible"),
+    # #3445: file inputs declared with `add_input(decode=...)` — they were
+    # `reader` lines (their own reader's refusal), now `_lib_input.document`.
+    ("fed-key --existing-jwks", "federation_keygen.py",
+     ["--rotate", "--existing-jwks", "{F}", "--jwks-out", "{BOX}/jwks.json"],
+     "--existing-jwks", None),
+    ("silencer-drift-check --silences-file", "silencer_drift_check.py",
+     ["--silences-file", "{F}", "--rule-pack-dir", "{RP}", "--json"], "--silences-file",
+     "file_not_accessible"),
+    ("lint-custom-rules --policy", "lint_custom_rules.py", ["--policy", "{F}", "{RP}"],
+     "--policy", None),
     # config-history is not a row: every subcommand creates `.da-history`
     # beside --config-dir first, so a locked parent never reaches its check;
     # test_config_history.py pins that check's message on a missing dir.
@@ -849,32 +863,36 @@ def test_a_missing_input_is_named_not_read_as_empty(tmp_path, script, argv, flag
     assert not out_dir.exists(), "an output was written before the input was judged"
 
 
-@pytest.mark.parametrize("pattern, made", [
-    ("*.yml", []),                 # a glob that matches nothing
-    ("d", ["d/"]),                 # a directory with no *.yaml / *.yml (#3426 walks it)
-    ("*.yml", ["d.yml/"]),         # a glob that matches only such a directory
+@pytest.mark.parametrize("targets, made", [
+    (["d"], ["d/"]),                     # a directory with no *.yaml / *.yml (#3426 walks it)
+    (["d", "e"], ["d/", "e/", "e/x.txt"]),  # two of them (#3463: --rule-files takes paths)
+    (["d.yml"], ["d.yml/"]),             # a directory named like a rule file
 ])
 @pytest.mark.parametrize("other_phase", [False, True], ids=["alone", "with-phase-1"])
-def test_onboard_rule_files_that_select_no_file_are_a_caller_error(tmp_path, pattern, made,
+def test_onboard_rule_files_that_select_no_file_are_a_caller_error(tmp_path, targets, made,
                                                                    other_phase):
     """onboard --rule-files: a value that selects no file was a WARN, an
     empty output tree and rc 1 — rc 0 with phase 1's output written when
-    another phase was given; rc 2 now either way (`file_not_found`), nothing
-    written (owner ruling on #3392)."""
+    another phase was given; rc 2 now either way, nothing written (owner
+    ruling on #3392), in `_lib_input.refuse_empty`'s one wording (#3463)."""
     rules = tmp_path / "rules"
     rules.mkdir()
     for name in made:
-        (rules / name.rstrip("/")).mkdir()
+        if name.endswith("/"):
+            (rules / name).mkdir()
+        else:
+            (rules / name).write_text("x\n", encoding="utf-8")
     out_dir = tmp_path / "out"
     extra = []
     if other_phase:
         am = tmp_path / "am.yml"
         am.write_text("route:\n  receiver: r\nreceivers:\n- name: r\n", encoding="utf-8")
         extra = ["--alertmanager-config", str(am)]
-    proc = _run_ops("onboard_platform.py", ["--rule-files", str(rules / pattern), *extra,
+    given = [str(rules / t) for t in targets]
+    proc = _run_ops("onboard_platform.py", ["--rule-files", *given, *extra,
                                             "--output-dir", str(out_dir), "--json"])
     assert proc.returncode == 2, proc.stdout + proc.stderr
-    assert f"--rule-files {rules / pattern}: selects no file" in proc.stderr
+    assert f"--rule-files {', '.join(given)}: selects nothing (" in proc.stderr, proc.stderr
     assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
     assert not out_dir.exists()
 
@@ -1063,23 +1081,29 @@ def test_an_empty_path_is_refused_not_taken_for_cwd(tmp_path, script, argv, flag
 # Every run has a stand-in kubectl on PATH that answers "nothing installed":
 # a run that reaches the cluster (operator-check) answers without one.
 
-def _declared_inputs() -> "list[tuple[str, str, str, object, list[str], object]]":
+def _declared_inputs(documents: bool = False
+                     ) -> "list[tuple[str, str, str, object, list[str], object]]":
     """(id, script under ops/, flag, InputSpec, its OPS_SITES argv, that
     row's reason) for every argument a da-tools parser declares with
-    `_lib_input.add_input`, read off the parsers by G1's walk."""
+    `_lib_input.add_input`, read off the parsers by G1's walk: the
+    directories (``select=``), or with *documents* the files whose content
+    is read (``decode=``, #3445) — each with the row that hands it {D} / {F}."""
     spec = importlib.util.spec_from_file_location(
         "_g1_manifest", pathlib.Path(__file__).with_name("test_caller_path_manifest.py"))
     g1 = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(g1)
     specs: dict = {}
     found, _dispatched = g1.parsed_arguments(specs)
+    holder = "F" if documents else "D"
     out = []
     for (command, flag), input_spec in sorted(specs.items()):
+        if g1.is_document(input_spec) != documents:
+            continue
         script = found[(command, flag)]
         rows = [(argv, reason) for _id, s, argv, _f, reason in OPS_SITES
-                if f"ops/{s}" == script and g1._locked_argument(argv) == (flag, "D")]
+                if f"ops/{s}" == script and g1._locked_argument(argv) == (flag, holder)]
         assert rows, (f"{command} {flag}: declared with add_input, no OPS_SITES row hands it "
-                      "{D} (test_caller_path_manifest names this too)")
+                      f"{{{holder}}} (test_caller_path_manifest names this too)")
         out.append((f"{command} {flag}", script.split("/", 1)[1], flag, input_spec, *rows[0]))
     return out
 
@@ -1231,3 +1255,218 @@ def test_each_declared_input_is_as_judged(declared_inputs):
     found = {rid: (spec.empty, spec.absent_default)
              for rid, _s, _f, spec, _a, _r in declared_inputs}
     assert found == JUDGED_DECLARATIONS
+
+
+# ── #3445: the content of a declared input file ───────────────────────────
+# Every argument declared with `_lib_input.add_input(decode=Document(...))`
+# (read off the parsers by G1's walk — not a list written here) is run with
+# its OPS_SITES row, the locked {F} replaced by a file holding content it
+# cannot read: bytes that are not UTF-8; syntax broken for its format; a top
+# level of another type than declared (an empty container of the other kind,
+# and a bare scalar). Each must end rc 2 with the flag and the path named —
+# not a traceback, not "unexpected internal error", not read as an empty
+# input — and, under --json, nothing on stdout (#3558).
+
+_NOT_UTF8 = b"a: \xff\xfe\n"
+_BROKEN = {"json": b"{bad", "yaml": b"a: [\n"}
+#: Content the parser fails on with something other than its own error
+#: class: nesting deeper than the recursion limit (RecursionError, both
+#: formats), and a YAML timestamp SafeLoader's constructor cannot build
+#: (ValueError). Both escaped as "unexpected internal error" (#3445 review).
+#: ⚠️ Whether a nesting this deep is a RecursionError depends on the Python
+#: build (3.13's json raised it; CI's parsed it), so a deep case is nested
+#: in a container the document does NOT take: parsed, it is the wrong top
+#: level; not parsed, it is a RecursionError — refused, named, either way.
+#: A document taking both lists and mappings gets no deep case here; the
+#: RecursionError path itself is pinned in test_lib_input.py.
+_DEEP = 100_000
+_NESTED = {list: b"[" * _DEEP + b"]" * _DEEP,
+           dict: b'{"a":' * _DEEP + b"1" + b"}" * _DEEP}
+_BEYOND = {"json": (), "yaml": (("timestamp", b"a: 2020-99-99\n"),)}
+
+
+def _deep_cases(tops) -> "list[tuple[str, bytes]]":
+    return [(f"deep_{kind.__name__}", raw) for kind, raw in _NESTED.items()
+            if kind not in tops][:1] if not {list, dict} <= set(tops) else []
+#: Top levels of each type, and the type each parses to.
+_TOPS = ((b"[]\n", list), (b"{}\n", dict), (b"1\n", int))
+
+
+#: #3662: what each csv case is refused FOR (`_lib_input._csv_records`).
+_CSV_SAYS = {"empty": "the header is not", "other_header": "the header is not",
+             "header_renamed": "the header is not", "header_reordered": "the header is not",
+             "header_only": "a header and no data row", "row_short": "fields, the header",
+             "csv_syntax": "not valid CSV", "form_": " is not "}
+
+
+def _valid_csv_row(doc, broken=None) -> str:
+    """A data row a csv `Document` *doc* accepts — "x" in a free column, a
+    value of its declared form in a formatted one — with the column
+    *broken* "x" instead."""
+    from datetime import datetime
+    forms = dict(doc.formats)
+    return ",".join("x" if col == broken or col not in forms
+                    else datetime(2026, 1, 1).strftime(forms[col]) for col in doc.columns)
+
+
+def _bad_contents(doc) -> "list[tuple[str, bytes]]":
+    """(case, content) for a `Document` *doc*: what its reading must refuse."""
+    cases = [("not_utf8", _NOT_UTF8)]
+    if doc.fmt in _BROKEN:
+        cases.append(("syntax", _BROKEN[doc.fmt]))
+        cases += list(_BEYOND[doc.fmt])
+        tops = doc.top if isinstance(doc.top, tuple) else (doc.top,)
+        cases += _deep_cases(tops)
+        cases += [(f"top_{kind.__name__}", raw) for raw, kind in _TOPS if kind not in tops]
+    if doc.fmt == "csv":
+        # #3662: derived from the declared header — a file that is not the
+        # report (no header, another header, one column short), a header
+        # with no data row, a row short of fields, and a quote left open.
+        # Each case breaks one rule only: the header cases keep the field
+        # count, so a row-length refusal cannot stand in for the header one.
+        header = ",".join(doc.columns).encode()
+        row = _valid_csv_row(doc).encode()
+        renamed = ",".join([*doc.columns[:-1], doc.columns[-1] + "X"]).encode()
+        reordered = ",".join(doc.columns[::-1]).encode()
+        cases += [("empty", b""),
+                  ("other_header", b",".join(b"c%d" % i for i in range(len(doc.columns)))
+                   + b"\n" + row + b"\n"),
+                  ("header_renamed", renamed + b"\n" + row + b"\n"),
+                  ("header_reordered", reordered + b"\n" + row + b"\n"),
+                  ("header_only", header + b"\n"),
+                  ("row_short", header + b"\n" + row[2:] + b"\n"),
+                  ("csv_syntax", header + b'\n"x\n')]
+        # each declared value form, broken in one column of an otherwise
+        # valid row
+        for col, _form in doc.formats:
+            cases.append((f"form_{col}", header + b"\n"
+                          + _valid_csv_row(doc, broken=col).encode() + b"\n"))
+    return cases
+
+
+@pytest.fixture(scope="module")
+def declared_documents():
+    found = _declared_inputs(documents=True)
+    assert found, "no add_input(decode=) declaration was read off a parser — nothing measured"
+    return found
+
+
+def _document_subst(tmp: pathlib.Path) -> dict:
+    (tmp / "box").mkdir(exist_ok=True)
+    (tmp / "box" / "silences.json").write_text("[]\n", encoding="utf-8")
+    return {"{CONF}": str(REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d"),
+            "{MAP}": str(REPO / "components" / "threshold-exporter" / "config" / "conf.d"
+                         / "examples"),
+            "{RP}": str(REPO / "rule-packs"),
+            "{WF}": str(REPO / "tests" / "dx" / "fixtures" / "waveform"),
+            "{BOX}": str(tmp / "box")}
+
+
+@pytest.mark.usefixtures("da_guard_env", "da_read_env")
+def test_a_declared_document_refuses_content_it_cannot_read(tmp_path, declared_documents):
+    faults, measured = [], 0
+    for n, (rid, script, flag, spec, argv, _reason) in enumerate(declared_documents):
+        for case, content in _bad_contents(spec.decode):
+            case_dir = tmp_path / f"d{n}-{case}"
+            case_dir.mkdir()
+            given = case_dir / "input"
+            given.write_bytes(content)
+            subst = {**_document_subst(case_dir), "{F}": str(given)}
+            proc = _run_ops(script, [_expand(a, subst) for a in argv])
+            out = proc.stdout + proc.stderr
+            measured += 1
+            why = []
+            if proc.returncode != 2:
+                why.append(f"rc {proc.returncode}")
+            if "Traceback" in out or "unexpected internal error" in out:
+                why.append("a crash")
+            if f"{flag} {given}:" not in proc.stderr:
+                why.append("the flag and the path not named on stderr")
+            elif (says := _CSV_SAYS.get(case if not case.startswith("form_") else "form_")) \
+                    and says not in proc.stderr:
+                # a later check (a value the tool refuses) must not stand in
+                # for the header / row rule this case breaks
+                why.append(f"refused, but not for {says!r}")
+            if "--json" in argv and proc.stdout != "":
+                why.append("a document on stdout")
+            if why:
+                faults.append(f"{rid} [{case}]: {', '.join(why)}: {out[-600:]}")
+    assert measured, "no bad content was run"
+    assert not faults, "\n".join(faults)
+
+
+#: ⛔ What was judged for each declared input file (#3445): (fmt, top,
+#: empty_is). The rows above prove each tool refuses what its declaration
+#: says; this proves the declaration is the judged one — a new file input,
+#: or a changed format or top level, is an edit here, reviewed.
+def _report_schema():
+    sys.path.insert(0, str(REPO / "scripts" / "tools"))
+    from _lib_shadow_report import REPORT_COLUMNS, REPORT_FORMATS
+    return REPORT_COLUMNS, REPORT_FORMATS
+
+
+#: #3662: the header (and the value forms) `--report-csv` must have are the
+#: report's one definition.
+_REPORT_COLUMNS, _REPORT_FORMATS = _report_schema()
+
+JUDGED_DOCUMENTS = {
+    "alert-correlate --input": ("json", (list, dict), None, (), ()),
+    "analyze-gaps --metric-dictionary": ("yaml", dict, None, (), ()),
+    "cutover --readiness-json": ("json", dict, None, (), ()),
+    "fed-key --existing-jwks": ("json", dict, None, (), ()),
+    "grafana-import --dashboard": ("json", dict, None, (), ()),
+    "lint --policy": ("yaml", dict, dict, (), ()),
+    "runtime-audit --runtime-json": ("json", dict, None, (), ()),
+    "scaffold --from-onboard": ("json", dict, None, (), ()),
+    "shadow-verify --mapping": ("yaml", dict, None, (), ()),
+    "shadow-verify --readiness-json": ("json", dict, None, (), ()),
+    "shadow-verify --report-csv": ("csv", list, None, _REPORT_COLUMNS, _REPORT_FORMATS),
+    "silencer-drift-check --silences-file": ("json", list, None, (), ()),
+    "validate --mapping": ("yaml", dict, None, (), ()),
+}
+
+
+def test_each_declared_document_is_as_judged(declared_documents):
+    found = {rid: tuple(spec.decode) for rid, _s, _f, spec, _a, _r in declared_documents}
+    assert found == JUDGED_DOCUMENTS
+
+
+# Inputs the walk above does not reach, each pinned here:
+# * analyze-gaps --tenant-config: its content is read by da-guard
+#   (parse-tree, the exporter's reading), not `document`; a top level that is
+#   not a mapping was read as a tenant with no keys, rc 0.
+# * generate-tenant-mapping --metric-dictionary: the tool is not a da-tools
+#   command, so G1's walk never sees its parser; a list or a scalar there was
+#   "no metrics to map".
+
+@pytest.mark.usefixtures("da_guard_env")
+@pytest.mark.parametrize("content, got", [(b"- a\n", "a list"), (b"5\n", "a number"),
+                                          (b"hello\n", "a string")])
+def test_analyze_gaps_refuses_a_tenant_config_that_is_no_mapping(tmp_path, content, got):
+    given = tmp_path / "t.yaml"
+    given.write_bytes(content)
+    proc = _run_ops("analyze_rule_pack_gaps.py", ["--tenant-config", str(given), "--json"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout == "", proc.stdout
+    assert proc.stderr.strip() == (f"ERROR: --tenant-config {given}: the top level is not "
+                                   f"a mapping (got {got})"), proc.stderr
+
+
+@pytest.mark.usefixtures("da_guard_env")
+@pytest.mark.parametrize("content, detail", [
+    (b"a: \xff\n", "not valid UTF-8 (byte 3)"),
+    (b"a: [\n", "not valid YAML: "),
+    (b"- a\n", "the top level is not a mapping (got a list)"),
+    (b"5\n", "the top level is not a mapping (got a number)"),
+    (b"", "the top level is not a mapping (got an empty document)"),
+])
+def test_generate_tenant_mapping_names_a_dictionary_it_cannot_read(tmp_path, content, detail):
+    given = tmp_path / "dict.yaml"
+    given.write_bytes(content)
+    conf = REPO / "components" / "threshold-exporter" / "config" / "conf.d" / "examples"
+    proc = _run_ops("generate_tenant_mapping_rules.py",
+                    ["--config-dir", str(conf), "--metric-dictionary", str(given), "--dry-run"])
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out
+    assert "Traceback" not in out and "no metrics to map" not in out, out
+    assert f"ERROR: --metric-dictionary {given}: {detail}" in proc.stderr, proc.stderr

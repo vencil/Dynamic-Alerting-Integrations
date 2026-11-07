@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -106,7 +107,7 @@ func outcomeHook(t *testing.T, repo, state, act string) {
 		"new=$(printf '%s\\n' \"$line\" | cut -d' ' -f2)\n" +
 		act + "\n" +
 		"exec sleep 10 >/dev/null 2>&1 </dev/null\n"
-	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(hook, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }

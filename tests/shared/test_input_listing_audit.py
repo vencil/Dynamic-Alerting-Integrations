@@ -15,6 +15,14 @@ off the parsers by G1's walk), so a new ``add_input`` flag is audited
 without an edit to this file. Files read UNDER the directory are not judged
 yet (``read_bytes``, #3445).
 
+#3445: a flag declared with ``add_input(decode=...)`` names a FILE whose
+content the tool reads; ``_lib_input.document`` is its one reading. Its row
+is run the same way, the locked {F} replaced by a sentinel FILE holding
+content the declaration accepts (so the run goes on past the read): an
+``open`` of the sentinel from any frame but ``_lib_input``'s is a fault — a
+tool's own ``open`` / ``json.load`` / ``yaml.safe_load`` of it, a second
+reading — and a run that never opens it from ``_lib_input`` is a dead row.
+
 ⚠️ Not covered: a listing of the directory a tool reaches by another
 spelling of the path that ``realpath`` does not equate (a bind mount), and
 a listing by a child process (da-guard is Go; it is meant to list).
@@ -151,3 +159,63 @@ def test_lib_consumer_read_lists_through_lib_input(tmp_path, call):
     events = _hooked(f"import sys, _lib_consumer_read as cr; {call}", sentinel, tmp_path)
     assert events, "the call never listed the sentinel — the probe measured nothing"
     assert all(any(f.startswith(LISTER) for f in e["stack"]) for e in events), events
+
+
+#: A content each declared format and top level accepts (the first type of
+#: a tuple), so the audited run reads past the sentinel.
+_ACCEPTED = {("json", dict): "{}\n", ("json", list): "[]\n", ("yaml", dict): "{}\n",
+             ("yaml", list): "[]\n", ("text", str): ""}
+
+
+@pytest.fixture(scope="module")
+def declared_documents():
+    rows = _tables()._declared_inputs(documents=True)
+    assert rows, "no add_input(decode=) declaration was read off a parser — nothing audited"
+    return rows
+
+
+@pytest.mark.usefixtures("da_guard_env", "da_read_env")
+def test_a_declared_input_file_is_read_only_by_lib_input(declared_documents, tmp_path):
+    faults = []
+    for n, (rid, script, _flag, spec, argv, _reason) in enumerate(declared_documents):
+        doc = spec.decode
+        top = doc.top[0] if isinstance(doc.top, tuple) else doc.top
+        case = tmp_path / f"doc-{n}"
+        case.mkdir()
+        sentinel = case / "sentinel"
+        if doc.fmt == "csv":
+            # #3662: its declared header and one row the declaration accepts.
+            accepted = ",".join(doc.columns) + "\n" + _tables()._valid_csv_row(doc) + "\n"
+        else:
+            accepted = _ACCEPTED[(doc.fmt, top)]
+        sentinel.write_text(accepted, encoding="utf-8")
+        subst = {**_subst(case), "{F}": str(sentinel)}
+        args = []
+        for a in argv:
+            for k, v in subst.items():
+                a = a.replace(k, v)
+            args.append(a)
+        events = _run_audited(script, args, sentinel, case)
+        if not any(any(f.startswith(LISTER) for f in e["stack"]) for e in events
+                   if e["ev"] == "open"):
+            faults.append(f"{rid}: the run never opened {sentinel} from _lib_input — dead row")
+        faults += [f"{rid}: {e['ev']}({e['path']}) outside _lib_input: {e['stack'][:6]}"
+                   for e in events if not any(f.startswith(LISTER) for f in e["stack"])]
+    assert not faults, "\n".join(faults)
+
+
+def test_an_open_of_the_sentinel_outside_lib_input_is_seen(tmp_path):
+    """The audit's fault is real: a tool's own `open` of the file is an
+    event from a frame that is not `_lib_input`'s; `document`'s is one."""
+    sentinel = tmp_path / "s.json"
+    sentinel.write_text("{}", encoding="utf-8")
+    events = _hooked("import sys, json; json.load(open(sys.argv[1], encoding='utf-8'))",
+                     sentinel, tmp_path)
+    assert [e["ev"] for e in events] == ["open"], events
+    assert not any(f.startswith(LISTER) for f in events[0]["stack"]), events
+    (tmp_path / "lib").mkdir()  # a log of its own
+    events = _hooked("import sys, argparse, _lib_input as li; p = argparse.ArgumentParser(); "
+                     "li.add_input(p, '--f', decode=li.Document('json', dict)); "
+                     "li.document(p.parse_args(['--f', sys.argv[1]]), 'f', lang='en')",
+                     sentinel, tmp_path / "lib")
+    assert events and all(any(f.startswith(LISTER) for f in e["stack"]) for e in events), events

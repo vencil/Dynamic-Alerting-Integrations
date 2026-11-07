@@ -70,8 +70,9 @@ func runScope(t *testing.T, args ...string) (code int, stdout, stderr string) {
 	return code, out.String(), errb.String()
 }
 
-// The whole document, byte for byte: every finding kind, the order, the
-// tenant problem and the summary.
+// The whole document, byte for byte: every finding kind (an unlabeled tenant,
+// and a tenant whose metadata cannot be read under each rule restricting a
+// metadata axis), the order, the tenant problems and the summary.
 func TestConfigCheckScope_Fixture(t *testing.T) {
 	t.Parallel()
 	dir := scopeFixture(t, nil, map[string]string{
@@ -91,25 +92,57 @@ func TestConfigCheckScope_Fixture(t *testing.T) {
       "axis": "environment",
       "rule": "env-operators",
       "rule_index": 0,
-      "tenant": "tenant-bravo"
+      "tenant": "tenant-bravo",
+      "reason": "unlabeled"
+    },
+    {
+      "axis": "environment",
+      "rule": "env-operators",
+      "rule_index": 0,
+      "tenant": "tenant-echo",
+      "reason": "metadata_unknown"
+    },
+    {
+      "axis": "environment",
+      "rule": "env-operators",
+      "rule_index": 0,
+      "tenant": "tenant-foxtrot",
+      "reason": "metadata_unknown"
     },
     {
       "axis": "domain",
       "rule": "finance-readers",
       "rule_index": 1,
-      "tenant": "tenant-charlie"
+      "tenant": "tenant-charlie",
+      "reason": "unlabeled"
+    },
+    {
+      "axis": "domain",
+      "rule": "finance-readers",
+      "rule_index": 1,
+      "tenant": "tenant-echo",
+      "reason": "metadata_unknown"
+    },
+    {
+      "axis": "domain",
+      "rule": "finance-readers",
+      "rule_index": 1,
+      "tenant": "tenant-foxtrot",
+      "reason": "metadata_unknown"
     },
     {
       "axis": "org",
       "rule": "org-writers",
       "rule_index": 2,
-      "tenant": "tenant-delta"
+      "tenant": "tenant-delta",
+      "reason": "unlabeled"
     },
     {
       "axis": "org",
       "rule": "org-writers",
       "rule_index": 2,
-      "tenant": "tenant-echo"
+      "tenant": "tenant-echo",
+      "reason": "unlabeled"
     }
   ],
   "tenant_problems": [
@@ -128,10 +161,10 @@ func TestConfigCheckScope_Fixture(t *testing.T) {
   "summary": {
     "tenants": 7,
     "rules": 4,
-    "findings": 4,
+    "findings": 8,
     "findings_by_axis": {
-      "domain": 1,
-      "environment": 1,
+      "domain": 3,
+      "environment": 3,
       "org": 2
     },
     "tenant_problems": 2,
@@ -154,6 +187,24 @@ func TestConfigCheckScope_CleanExitsZero(t *testing.T) {
 	}
 	if !strings.Contains(out, `"findings": [],`) || !strings.Contains(out, `"tenant_problems": [],`) {
 		t.Errorf("want empty findings and tenant_problems:\n%s", out)
+	}
+}
+
+// A tenant whose metadata cannot be read, under rules that restrict no
+// metadata axis: the server grants it as before, so it is listed in
+// tenant_problems for information and the exit code is 0.
+func TestConfigCheckScope_TenantProblemAloneExitsZero(t *testing.T) {
+	t.Parallel()
+	dir := scopeFixture(t, []string{"tenant-bravo.yaml", "tenant-charlie.yaml", "tenant-delta.yaml"}, map[string]string{
+		"_rbac.yaml":       "groups:\n  - name: ops\n    tenants: [\"*\"]\n    permissions: [read, write]\n",
+		"tenant-echo.yaml": "tenants:\n  tenant-echo: [unclosed\n",
+	})
+	code, out, errOut := runScope(t, "--config-dir", dir, "--oauth2-proxy-config", scopeFixtureClaims)
+	if code != 0 {
+		t.Fatalf("exit %d, want 0; stderr:\n%s\nstdout:\n%s", code, errOut, out)
+	}
+	if !strings.Contains(out, `"findings": [],`) || !strings.Contains(out, `"tenant": "tenant-echo"`) {
+		t.Errorf("want no finding and tenant-echo in tenant_problems:\n%s", out)
 	}
 }
 

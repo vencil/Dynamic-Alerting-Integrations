@@ -126,7 +126,7 @@ Edge clusters only need to deploy the corresponding exporter; threshold-exporter
 | MongoDB | mongodb_exporter | `mongodb_*` |
 | Oracle | oracledb_exporter | `oracledb_*` |
 | DB2 | db2_exporter | `db2_*` |
-| ClickHouse | clickhouse_exporter | `ClickHouse*` |
+| ClickHouse | built-in /metrics | `ClickHouse*` |
 | Kafka | kafka_exporter | `kafka_*` |
 | RabbitMQ | rabbitmq_exporter | `rabbitmq_*` |
 

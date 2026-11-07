@@ -109,13 +109,32 @@ extraArgs: []
 #              every path, so an install whose consumers are not wired yet
 #              keeps working. A consumer with an empty existingSecret is not
 #              rendered. Use this to roll the credentials out.
-#   enforce  — only /health, /ping and /metrics pass without credentials, and
-#              every consumer must name its existingSecret (render fails
-#              otherwise). Switch once every consumer authenticates: the
-#              check is in docs/internal/platform-log-aggregation-runbook.md.
+#   enforce  — (default) only /health, /ping and /metrics pass without
+#              credentials, and every consumer must name its existingSecret:
+#              the render fails, listing every consumer that has none.
+# ⛔ The default is enforce, so a plain `helm install` refuses to render until
+#   the Secrets are named here. Remove consumers you do not run from the list.
+# ⚠️ The render checks THIS side only: a consumer whose own chart sends no
+#   credential still renders fine and is refused (401) from then on — and
+#   Vector drops a refused batch without retrying (alert
+#   VectorStoreSinkDroppingEvents). Check every consumer authenticates
+#   (docs/internal/platform-log-aggregation-runbook.md §1.2 step 2) before
+#   enforce applies. `helm upgrade --reuse-values` keeps the previous
+#   release's values, including observe, the default before chart 0.5.0.
 # ⚠️ observe is NOT a security boundary — it is the migration step.
 auth:
-  mode: observe
+  mode: enforce
+  # On `helm upgrade` (this release's Deployment exists), look up every Secret
+  # auth.consumers names and refuse when one is missing or has no non-empty
+  # `password`: the strategy is Recreate, so the running pod would be deleted
+  # and the new one would never start. Offline renders (`helm template`,
+  # Argo CD) and first installs skip it. ⚠️ Needs `get secrets` in this
+  # namespace: a deployer without it fails EVERY upgrade with "forbidden" —
+  # set false for such a deployer (e.g. HELM_DRIVER=configmap with a Role that
+  # leaves Secrets out) and check the Secrets yourself before upgrading.
+  # Only an explicit false turns it off: unset (`--reuse-values` from a chart
+  # before this key) counts as on.
+  checkSecretsOnUpgrade: true
   # VictoriaLogs' own listener, on loopback only.
   backendPort: 9429
   # vmauth's own /health and /metrics (its per-user request counters).
@@ -229,8 +248,8 @@ prometheusScrapeAnnotations:
 #   - Vector DaemonSet (ingest)              app.kubernetes.io/name=vector
 #     ⚠️ since #1018 Vector deploys into its dedicated `vector` namespace
 #     (PSS privileged carve-out) and reaches :9428 via `allowedNamespaces`
-#     below; the same-ns podSelector row is RETAINED for same-ns debug pods
-#     (the smoketest's labelled `vlq` busybox) and pre-migration installs.
+#     below; the same-ns podSelector row is RETAINED for pre-migration
+#     installs.
 #   - chargeback-aggregator CronJob (query)  app.kubernetes.io/name=chargeback-aggregator
 #   - Grafana (query)                        app=grafana  (k8s/03-monitoring label)
 #   - federation-gateway (query, ADR-021)    app.kubernetes.io/name=federation-gateway

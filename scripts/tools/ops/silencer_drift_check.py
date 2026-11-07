@@ -139,6 +139,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import require_path  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3445: --silences-file is read by the lib)
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
@@ -146,25 +147,11 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads 
 # ─── Loading ──────────────────────────────────────────────────────────
 
 
-def load_silences(path: Path) -> list[dict] | None:
-    """Parse an amtool silence dump. Returns the list of silence dicts."""
-    try:
-        with path.open(encoding="utf-8") as f:
-            data = json.load(f)
-    except OSError as exc:
-        print(f"ERROR: cannot read {path}: {exc}", file=sys.stderr)
-        return None
-    except json.JSONDecodeError as exc:
-        print(f"ERROR: invalid JSON in {path}: {exc}", file=sys.stderr)
-        return None
-    if not isinstance(data, list):
-        print(
-            f"ERROR: {path} top-level must be a JSON array (amtool silence "
-            f"query -o json shape), got {type(data).__name__}",
-            file=sys.stderr,
-        )
-        return None
-    return data
+#: --silences-file: an amtool silence dump (``amtool silence query -o json``),
+#: a JSON array. A path or content that cannot be read, or another top level
+#: (``{silences: [...]}``, one object), is rc 2 naming the flag and the path
+#: (#3445: content that was not UTF-8 was an "unexpected internal error").
+SILENCES_DOCUMENT = _lib_input.Document("json", list)
 
 
 def _yaml_files_in(source: Path, exclude: "list[str] | tuple[str, ...]" = ()) -> list[Path]:
@@ -638,8 +625,8 @@ def main(argv: list[str] | None = None) -> "int | Report":
             "      --rule-pack-dir rule-packs/ --ci\n"
         ),
     )
-    ap.add_argument(
-        "--silences-file",
+    _lib_input.add_input(
+        ap, "--silences-file", decode=SILENCES_DOCUMENT,
         required=True,
         help="Path to amtool silence dump (amtool silence query -o json output).",
     )
@@ -713,9 +700,7 @@ def main(argv: list[str] | None = None) -> "int | Report":
     by_declaration = args.rule_pack_dir is not None
     rule_source = Path(args.rule_pack_dir if by_declaration else args.rule_source)
 
-    silences = load_silences(silences_path)
-    if silences is None:
-        return EXIT_CALLER_ERROR
+    silences = _lib_input.document(args, "silences_file", lang="en")
 
     if by_declaration:
         require_path(rule_source, "dir", lang="en", flag="--rule-pack-dir")

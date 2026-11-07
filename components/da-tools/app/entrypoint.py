@@ -78,6 +78,7 @@ def _build_help_text(lang):
     operator-check    驗證 Operator CRD 部署狀態 (5 項檢查 + 診斷報告)
     runtime-audit     Git rule-packs ↔ Prometheus runtime 唯讀對帳 (#747；MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator ConfigMap 格式遷移至 Operator 原生 CRD (含遷移清單與預檢)
+    migrate-credentials 找出 conf.d 裡明文的 receiver 憑證：改寫成 Secret 參照、產出 Secret 清單與待輪替清單 (#1560，只報告)
 
 命令 (Federation — 多叢集):
     rule-pack-split   Rule Pack 分層拆分 (edge Part 1 + central Part 2+3)
@@ -168,6 +169,7 @@ Commands (Operator-Native — CRD generation & validation):
     operator-check    Validate Operator CRD deployment status (5 checks + diagnostic report)
     runtime-audit     Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator Migrate ConfigMap format to Operator native CRD (migration checklist + pre-check)
+    migrate-credentials Find receiver credentials written out in conf.d: rewrite as Secret references, Secret manifests, rotation list (#1560, report only)
 
 Commands (Federation — multi-cluster):
     rule-pack-split   Rule Pack stratification (edge Part 1 + central Parts 2+3)
@@ -394,6 +396,9 @@ COMMAND_MAP = {
     # self-healing / a standing controller. See docs/custom-rule-governance.md §7.1.
     "runtime-audit": "runtime_audit.py",
     "migrate-to-operator": "migrate_to_operator.py",
+    # #1560 ⑤-a — receiver credentials written out in conf.d → Secret
+    # references + Secret manifests + rotation list (report only).
+    "migrate-credentials": "migrate_credentials.py",
     # Group E: Federation (multi-cluster)
     "rule-pack-split": "generate_rule_pack_split.py",
     # Tenant federation (ADR-020 IV-2l) — RS256 signing-key generation /
@@ -417,41 +422,13 @@ COMMAND_MAP = {
     "parser": "parser_dispatch.py",
 }
 
-# Commands that accept --prometheus flag (inject env var fallback).
-#
-# Two complementary $PROMETHEUS_URL fallback mechanisms exist and must
-# stay in sync (README §6.1 documents the single global fallback):
-#   1. `add_prometheus_arg` (scripts/tools/_lib_io.py) — argparse-layer
-#      default: `--prometheus` defaults to $PROMETHEUS_URL (else
-#      http://localhost:9090). This works for BOTH standalone invocation
-#      (`python3 <tool>.py`) and via the da-tools dispatcher.
-#   2. `inject_prometheus_env` below — dispatcher-layer argv injection:
-#      when a command runs THROUGH da-tools and argv omits `--prometheus`,
-#      it appends `--prometheus $PROMETHEUS_URL`.
-# For tools that already adopt add_prometheus_arg, the injection is
-# redundant but harmless (idempotent: it only fires when `--prometheus`
-# is absent, and injects the SAME env var the arg default reads). It is
-# kept as defence-in-depth and so tools NOT yet on add_prometheus_arg
-# still honour the env var through the dispatcher.
-PROMETHEUS_COMMANDS = {"check-alert", "baseline", "diagnose", "validate",
-                       "batch-diagnose", "backtest", "cutover", "blind-spot",
-                       "alert-quality", "alert-correlate",
-                       "cardinality-forecast", "threshold-recommend",
-                       "threshold-govern", "discover-mappings",
-                       # Adopted add_prometheus_arg + added here so the two
-                       # mechanisms agree (README §6.1 gap: previously these
-                       # honoured neither standalone env nor dispatcher inject).
-                       "federation-check", "byo-check", "shadow-verify"}
-
-# Flags that sit in the same mutually exclusive group as `--prometheus`.
-# When argv already carries one, the caller chose the other source, and
-# appending `--prometheus $PROMETHEUS_URL` would make argparse refuse the
-# line (rc=2) — measured on `discover-mappings --endpoint <url>` with
-# PROMETHEUS_URL set (issue 1513). The table is checked against the live
-# parsers by tests/shared/test_entrypoint.py, so a new group cannot be missed.
-PROMETHEUS_EXCLUSIVE_FLAGS = {
-    "discover-mappings": frozenset({"--endpoint"}),
-}
+# $PROMETHEUS_URL is the tool's business, not the dispatcher's (#3528): a
+# tool whose `--prometheus` may be left out declares it with
+# `_lib_io.add_prometheus_arg` (the action carries `env_fallback =
+# "PROMETHEUS_URL"`) and reads the env through `_lib_io.prometheus_url` where
+# it queries, judging it there. The dispatcher appends nothing: it used to
+# append `--prometheus $PROMETHEUS_URL`, which made argparse refuse an
+# unusable env on every run — paths that never query Prometheus included.
 
 
 # Usage examples shown after the help text. These command lines are
@@ -531,39 +508,6 @@ def _exit_flushed(code):
     except OSError as exc:
         _exit_stdout_failed(exc)
     sys.exit(code)
-
-
-def inject_prometheus_env(args, command=None):
-    """If --prometheus is not in args, inject PROMETHEUS_URL env var as default.
-
-    Both argv spellings count as "already specified": the separate-token form
-    (``--prometheus URL``) and the inline form (``--prometheus=URL``). Matching
-    only the bare token would let the inline form slip through and still get an
-    env value appended — and since argparse keeps the LAST occurrence, the
-    injected env URL would then silently override the endpoint the caller
-    explicitly asked for. Explicit CLI always wins.
-
-    A flag in ``PROMETHEUS_EXCLUSIVE_FLAGS[command]`` counts the same way: the
-    caller picked the other side of the mutually exclusive group.
-    """
-    blocking = {"--prometheus"} | PROMETHEUS_EXCLUSIVE_FLAGS.get(command, frozenset())
-
-    def _names_a_blocking_flag(arg):
-        # argparse resolves a unique prefix (`--end` → `--endpoint`), so a
-        # prefix of a blocking flag counts too. `--e`-style one-letter prefixes
-        # are only unique when no other option shares them; the tool's own
-        # parser rejects an ambiguous one, so treating it as blocking cannot
-        # turn a working line into a failing one.
-        name = arg.split("=", 1)[0]
-        return name.startswith("--") and len(name) > 2 and any(
-            flag.startswith(name) for flag in blocking)
-
-    already_specified = any(_names_a_blocking_flag(a) for a in args)
-    if not already_specified:
-        prom_url = os.environ.get("PROMETHEUS_URL")
-        if prom_url:
-            args.extend(["--prometheus", prom_url])
-    return args
 
 
 def run_tool(script_name, args):
@@ -765,10 +709,6 @@ def main():
         print(_t("執行 'da-tools --help' 以查看用法。",
                  "Run 'da-tools --help' for usage."), file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-
-    # Inject PROMETHEUS_URL for applicable commands
-    if command in PROMETHEUS_COMMANDS:
-        args = inject_prometheus_env(args, command)
 
     run_tool(COMMAND_MAP[command], args)
 

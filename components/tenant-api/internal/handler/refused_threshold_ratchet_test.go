@@ -184,7 +184,8 @@ func TestGetTenant_RefusedThresholdIsANotice(t *testing.T) {
 // caller who may not read that tenant gets neither its value nor its key,
 // only the fixed "another place in the file" notice. Both shapes that put
 // another tenant in the file: a shared file, and a file whose stem is not
-// the id it declares (the flat-KV fallback for the stem's tenant).
+// the id it declares (id_mismatch: the stem's tenant gets nothing from it,
+// #3504, and the declared tenant's findings are the ones disclosed).
 func TestGetTenant_OtherTenantsThresholdFindingIsWithheld(t *testing.T) {
 	t.Parallel()
 	for name, file := range map[string]string{

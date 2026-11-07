@@ -40,10 +40,16 @@ data:
     \    expr: db2_up == 0\n    for: 15s\n    labels:\n      maintenance: page\n \
     \     severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: db2_up=0 for 15s on {{ $labels.instance }}\n      description_zh:\
-    \ db2_up=0，持續 15 秒，實例：{{ $labels.instance }}\n      summary: DB2 instance {{ $labels.instance\
-    \ }} is DOWN\n      summary_zh: DB2 實例 {{ $labels.instance }} 已關閉\n  - alert:\
-    \ DB2HighConnections\n    expr: \"(\\n  tenant:db2_connections_active:max\\n \
-    \ > on(tenant) group_left\\n  tenant:alert_threshold:db2_connections_active\\\
+    \ db2_up=0，持續 15 秒，實例：{{ $labels.instance }}\n      owner: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: DB2\
+    \ instance {{ $labels.instance }} is DOWN\n      summary_zh: DB2 實例 {{ $labels.instance\
+    \ }} 已關閉\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: DB2HighConnections\n    expr: \"(\\n  tenant:db2_connections_active:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:db2_connections_active\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\

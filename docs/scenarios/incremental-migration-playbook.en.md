@@ -64,11 +64,11 @@ Analyze existing rules, categorize by type (Recording Rules / Alerting Rules), a
 
 ```bash
 da-tools onboard \
-  --rule-files '/etc/prometheus/rules.d/*.yaml' \
+  --rule-files /etc/prometheus/rules.d/ \
   --output-dir rule-audit
 ```
 
-`--rule-files` takes a single glob (`**` supported); if your rule files live in several places, gather them into one directory first. ⚠️ Quote the glob, or the shell expands it into several file names and the command exits 2.
+`--rule-files` takes one or more paths (files or directories; a directory is walked recursively for `*.yaml` / `*.yml`), so rule files in several places can all be listed. It expands no glob: for a wildcard leave it unquoted and let the shell expand it; a quoted `'rules.d/*.yaml'` is taken as one path that is not there, rc=2. In a Kubernetes Job the `args` do not go through a shell, so give a directory. ⚠️ The v2.9.0 image still takes the value as one glob and one value only, and a directory selects no file there (a WARN, exit code 1); on that image give a quoted glob (`'rules/*.yaml'`) or a single file. <!-- image-caveat: v2.9.0 -->
 
 **Expected output**: stderr prints a scan summary (`Scanned N file(s), M rule(s) in K group(s)`, how many alert rules are parseable / unparseable, how many recording rules), and the directory `rule-audit/phase2-rules/` is written:
 - `migration-plan.csv`: one row per alert rule with metric, threshold, operator, suggested aggregation, and `status` (`perfect` converts directly, `complex` needs a human check, `unparseable` could not be parsed)
@@ -208,7 +208,7 @@ The platform's Prometheus Deployment already mounts `prometheus-rules-redis` at 
 
 ```bash
 kubectl port-forward -n monitoring svc/prometheus 9090:9090 &
-curl -s 'http://localhost:9090/api/v1/query?query=tenant:redis_memory_usage:ratio'
+curl -s 'http://localhost:9090/api/v1/query?query=tenant:redis_memory_used_bytes:max'
 curl -s 'http://localhost:9090/api/v1/query?query=tenant:alert_threshold:redis_memory_used_bytes'
 ```
 

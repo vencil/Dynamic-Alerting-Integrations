@@ -86,10 +86,6 @@ groups:
           / sum by(tenant) (rate(elasticsearch_indices_search_query_total[5m]))
           * 1000
 
-      # Indexing rate
-      - record: tenant:es_indexing:rate5m
-        expr: sum by(tenant) (rate(elasticsearch_indices_indexing_index_total[5m]))
-
       # Pending cluster tasks
       - record: tenant:es_pending_tasks:max
         expr: max by(tenant) (elasticsearch_cluster_health_number_of_pending_tasks)
@@ -134,6 +130,9 @@ groups:
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為 RED"
           description: "Cluster health is RED — data loss or unavailability possible"
           description_zh: "叢集健康狀態為 RED — 可能造成資料遺失或無法使用"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       - alert: ElasticsearchClusterYellow
         expr: |

@@ -156,6 +156,8 @@ TOOL_FILES=(
     ops/runtime_audit.py
     # v2.6.0 Migration tools
     ops/migrate_to_operator.py
+    # #1560 ⑤-a — receiver credentials written out in conf.d → Secret references
+    ops/migrate_credentials.py
     # v2.3.0 Federation tools
     ops/generate_rule_pack_split.py
     # ADR-020 IV-2l (#518) — federation JWT signing-key generation / rotation
@@ -214,6 +216,9 @@ TOOL_FILES=(
     # imported by state_reconcile, migrate_to_operator and _lib_consumer_read.
     # Imports _lib_paths / _lib_label (above).
     _lib_input.py
+    # #3662 — stdlib only: the one definition of validation-report.csv
+    # (columns, timestamp format); written by validate, read by shadow-verify.
+    _lib_shadow_report.py
     _lib_io.py
     # #3107 — the one atomic writer (moved from dx/): _lib_io.write_repo_artifact
     # is its entry point; state-reconcile rewrites its manifest atomically.

@@ -2240,6 +2240,75 @@ groups:
             audit-trail integrity event — investigate immediately.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
 
+      # ── Vector store sinks rejected by the log store (#1295) ────
+      # The sinks that write to VictoriaLogs (the 0:0 `victorialogs` sink and
+      # each tenant projection `vl_tenant_<id>`) are elasticsearch sinks: a
+      # 4xx answer is not retried — the batch is dropped on the spot and
+      # counted as an UNINTENTIONAL discard (measured on Vector 0.61.0 against
+      # a 401: "Not retriable; dropping the request"). The store's vmauth
+      # answers 401 when Vector sends no or wrong credentials, so a consumer
+      # Secret missing on the Vector side loses every event while the buffer
+      # stays empty — VectorBufferEventsDropped above never sees it.
+      # Intentional discards (filters, route drops) carry intentional="true"
+      # and are excluded. An operator-added store sink (helm/vector
+      # additionalSinks) is covered when it is named `victorialogs_<x>`.
+      #
+      # Every unintentional drop is lost evidence, so this pages on ONE refused
+      # batch, with no hold-down. The question is the same in every case: is
+      # the counter now different from the last value Prometheus saw before
+      # the last 10 minutes (looking back an hour)? That window is also how
+      # long the alert stays up after the last drop.
+      #   1. a different value: drops (an increase, also one that happened
+      #      while Prometheus could not see Vector), or a Vector restart that
+      #      dropped again (the counter starts over below its old value).
+      #   2. no earlier value at all: Vector creates this counter at the FIRST
+      #      drop, already non-zero (measured on 0.61.0: absent before, 1 after
+      #      one refused event). It counts only when Prometheus WAS scraping
+      #      that Vector target before (`up{job="vector-metrics"}`, the
+      #      Service name: the job in both the raw scrape config and the
+      #      chart's ServiceMonitor), so a Prometheus without history
+      #      (fresh, or restarted on an emptyDir like k8s/03-monitoring) and a
+      #      gap longer than the look-back do not re-page old drops.
+      # Blind spots (a single drop, not paged unless drops continue): one that
+      # happened before Prometheus first scraped that Vector; one hidden inside
+      # a gap of more than an hour; and a Vector restart in place that drops
+      # exactly as many events as its counter held before (1 -> restart -> 1;
+      # likeliest on a quiet vl_tenant_ sink). The Prometheus evaluating this
+      # must also hold `up` for the Vector target (federation or remote-write
+      # that forwards only vector_* series silences the no-history clause).
+      - alert: VectorStoreSinkDroppingEvents
+        expr: |
+          sum by (component_id) (
+            (
+              vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}
+              != last_over_time(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}[1h] offset 10m)
+            )
+            or
+            (
+              (
+                vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}
+                unless last_over_time(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}[1h] offset 10m)
+              )
+              and on (job, instance) (max_over_time(up{job="vector-metrics"}[1h] offset 10m) == 1)
+            )
+          ) > 0
+        for: 0s
+        labels:
+          severity: critical
+          alert_source: platform
+        annotations:
+          summary: "Vector sink {{ $labels.component_id }} lost events the log store refused"
+          description: |
+            VictoriaLogs (through its vmauth) refused batches this sink
+            sent, and Vector drops a refused batch without retrying.
+            Every event in it is lost, including the audit trail and the
+            revocation evidence. Most likely the Vector side sends no or
+            the wrong credentials: check victorialogs.auth.existingSecret
+            in the vector chart against the store's consumer `vector`
+            (platform-log-aggregation-runbook.md §1.2), and the Vector
+            logs for the response code.
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+
       # ── Tenant log-query rejection surge (ADR-021 #609 PR-4) ────
       # Symmetric to FederationRejectionRateAnomaly above, but for the
       # LOG-query plane: >50% of an account partition's log-query

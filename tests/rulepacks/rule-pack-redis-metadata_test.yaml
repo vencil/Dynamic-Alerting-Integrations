@@ -1,0 +1,51 @@
+# ============================================================
+# Tenant metadata annotations on a liveness alert (C-gen, #2566 / #1200 D-C).
+#
+# RedisDown declares a `tenant` label and is not a platform alert, so
+# generate_rulepack_derived.py writes the three metadata annotations into it.
+# This pins what that buys at evaluation time, on the shipped pack:
+#   - a tenant WITH tenant_metadata_info gets its runbook_url / owner / tier;
+#   - a tenant WITHOUT it still pages, the three annotations empty — the
+#     annotation reads metadata, it never gates the alert.
+# Tenant ids are fixture-local placeholders (t-meta / t-bare).
+# ============================================================
+rule_files:
+  - ../../rule-packs/rule-pack-redis.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'redis_up{tenant="t-meta", instance="redis-a:9121"}'
+        values: '0x8'
+      - series: 'redis_up{tenant="t-bare", instance="redis-b:9121"}'
+        values: '0x8'
+      - series: 'tenant_metadata_info{tenant="t-meta", runbook_url="http://rb/t-meta", owner="team-meta", tier="gold"}'
+        values: '1x8'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: RedisDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              tenant: t-meta
+              instance: redis-a:9121
+            exp_annotations:
+              summary: "Redis instance redis-a:9121 is DOWN"
+              summary_zh: "Redis 實例 redis-a:9121 已停機"
+              runbook_url: "http://rb/t-meta"
+              owner: "team-meta"
+              tier: "gold"
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              tenant: t-bare
+              instance: redis-b:9121
+            exp_annotations:
+              summary: "Redis instance redis-b:9121 is DOWN"
+              summary_zh: "Redis 實例 redis-b:9121 已停機"
+              runbook_url: ""
+              owner: ""
+              tier: ""

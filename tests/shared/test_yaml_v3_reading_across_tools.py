@@ -299,6 +299,11 @@ _NOT_PROBED: dict[str, str] = {
     "ops/gitops_check.py": _GO_KEYS,
     "ops/init_project.py": _GO_WRITER, "ops/migrate_rule.py": _GO_WRITER,
     "ops/migrate_to_operator.py": _GO_KEYS,
+    "ops/migrate_credentials.py": (_GO + "; receivers as files write them, through the route "
+                                   "generator's own reader (_grar_parse.raw_receivers, "
+                                   "ROUTING_READ), changed only through `da-guard write`; it "
+                                   "judges credential strings, which yes / \"yes\" / true "
+                                   "never are — tests/ops/test_migrate_credentials.py"),
     "ops/onboard_platform.py": _GO_WRITER, "ops/operator_generate.py": _GO_KEYS,
     "ops/patch_config.py": _GO_EDIT,
     "ops/scaffold_tenant.py": _GO_WRITER,

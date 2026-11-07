@@ -1294,7 +1294,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/runtime-canary\.rules\.yaml|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/runtime-canary\.(compiled|meta)\.rules\.yaml|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # No rule may join tenant_metadata_info (arithmetic / comparison match,
         # either side, any label list): a join made runbook_url/owner/tier part
         # of the alert's identity, and threshold-exporter's replicas briefly
@@ -1412,7 +1412,21 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+
+      - id: runtime-canary-compile-check
+        name: "#3679: runtime canary's compiled rules must match its recipe through the real compiler"
+        # The canary claims to dogfood the live compile chain, so its custom-alert
+        # rules are the compiler's output for tests/rulepacks/runtime-canary-recipe/
+        # — written whole by `make runtime-canary-compile`, held equal here. Same
+        # compiler, same wrappers and the same compiler inputs in `files:` as
+        # custom-alerts-compile-check above: a compiler change that moves the
+        # shipped pack moves the canary too. CI mirrors this unfiltered.
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/dx/compile_custom_alerts.py --check --config-dir tests/rulepacks/runtime-canary-recipe --out tests/rulepacks/runtime-canary.compiled.rules.yaml
+        language: python
+        additional_dependencies: ['pyyaml']
+        pass_filenames: false
+        files: (?:^(tests/rulepacks/runtime-canary\.compiled\.rules\.yaml|tests/rulepacks/runtime-canary-recipe/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/lint/check_rulepack_sync\.py|scripts/tools/_lib_io\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: retire-drift-check
         name: "#869: forbid removing a K8s exporter target while conf.d _metadata.db_type remains (false-positive guard)"

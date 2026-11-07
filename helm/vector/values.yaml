@@ -161,6 +161,12 @@ additionalSources: []
 # primary sink). Naming conflicts surface at chart lint as a duplicate
 # YAML key — fail-loud.
 #
+# A sink that writes to another VictoriaLogs store: name it
+# `victorialogs_<x>` — that prefix is what VectorStoreSinkDroppingEvents
+# (rule-pack-platform) watches for refused, dropped batches. Give no other
+# sink that prefix or `vl_tenant_` (the projection sinks' own), or its
+# drops page as a log-store failure.
+#
 # ⛔ `inputs:` MUST be `[demux, federation_evidence]`, not `[demux]`
 # (ADR-028 / #1234). `demux` alone carries the gateway stream only; the
 # federation revocation audit trail (`log_type=federation_evidence`) arrives on

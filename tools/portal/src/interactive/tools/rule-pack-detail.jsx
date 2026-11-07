@@ -19,7 +19,6 @@ const RULE_PACKS = {
       { name: 'tenant:mysql_connection_usage:ratio', expr: 'sum by(tenant) (mysql_global_status_threads_connected) / sum by(tenant) (mysql_global_variables_max_connections)', desc: 'Connections as a ratio of max_connections' },
       { name: 'tenant:mysql_threads_connected:max', expr: 'max by(tenant) (mysql_global_status_threads_connected)', desc: 'Peak connected threads per tenant (backs the connection alerts)' },
       { name: 'tenant:mysql_threads_running:avg1m', expr: 'max by(tenant) (avg_over_time(mysql_global_status_threads_running[1m]))', desc: 'Running-threads 1m-avg saturation (threads_running, NOT host CPU%)' },
-      { name: 'tenant:mysql_buffer_pool_usage:ratio', expr: 'sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data) / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)', desc: 'InnoDB buffer pool page occupancy ratio (recording only — no alert consumes it)' },
       { name: 'tenant:mysql_slow_queries:rate5m', expr: 'sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))', desc: 'Slow query rate (5m)' },
       { name: 'tenant:mysql_replication_lag:max', expr: 'max by(tenant) (mysql_slave_status_seconds_behind_master - (mysql_slave_status_sql_delay or 0 * mysql_slave_status_seconds_behind_master))', desc: 'Replication lag in seconds with any deliberate sql_delay subtracted (backs both replication-lag alerts); the or-0 arm keeps older MariaDB builds that expose no sql_delay field from emptying the series' },
     ],
@@ -58,7 +57,6 @@ const RULE_PACKS = {
     description: 'Redis monitoring: memory usage, eviction rate, connected clients, and keyspace operations.',
     exporter: 'redis_exporter',
     recording: [
-      { name: 'tenant:redis_memory_usage:ratio', expr: 'max by(tenant) (redis_memory_used_bytes) / max by(tenant) (redis_memory_max_bytes > 0)', desc: 'Memory used as a ratio of maxmemory' },
       { name: 'tenant:redis_memory_used_bytes:max', expr: 'max by(tenant) (redis_memory_used_bytes)', desc: 'Peak memory used per tenant (backs RedisHighMemory)' },
       { name: 'tenant:redis_evicted_keys:rate5m', expr: 'sum by(tenant) (rate(redis_evicted_keys_total[5m]))', desc: 'Key eviction rate (5m)' },
     ],
@@ -105,7 +103,6 @@ const RULE_PACKS = {
     exporter: 'elasticsearch_exporter',
     recording: [
       { name: 'tenant:es_heap_usage_percent:max', expr: 'max by(tenant) (elasticsearch_jvm_memory_used_bytes{area="heap"} / elasticsearch_jvm_memory_max_bytes{area="heap"}) * 100', desc: 'JVM heap usage percentage' },
-      { name: 'tenant:es_indexing:rate5m', expr: 'sum by(tenant) (rate(elasticsearch_indices_indexing_index_total[5m]))', desc: 'Indexing rate (5m)' },
     ],
     alerts: [
       { name: 'ElasticsearchHighHeapUsage', severity: 'warning', expr: 'tenant:es_heap_usage_percent:max > on(tenant) group_left tenant:alert_threshold:es_heap_usage_percent', desc: 'JVM heap above threshold (for: 5m)', action: 'Review heap size settings, check for memory leaks' },
@@ -145,7 +142,7 @@ const RULE_PACKS = {
     label: 'ClickHouse',
     category: 'Database',
     description: 'ClickHouse monitoring: query performance, merge operations, memory usage, replication queue.',
-    exporter: 'clickhouse_exporter',
+    exporter: 'built-in /metrics',
     recording: [
       { name: 'tenant:clickhouse_queries:rate5m', expr: 'sum by(tenant) (rate(ClickHouseProfileEvents_Query{tenant!=""}[5m]))', desc: 'Query rate (5m)' },
       { name: 'tenant:clickhouse_memory_tracking:max', expr: 'max by(tenant) (ClickHouseMetrics_MemoryTracking{tenant!=""})', desc: 'Tracked memory in bytes per tenant' },

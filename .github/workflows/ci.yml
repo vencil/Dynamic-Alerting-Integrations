@@ -510,8 +510,9 @@ jobs:
               - "scripts/tools/_lib_godispatch.py"
               - "scripts/tools/ops/guard_dispatch.py"
             # schema: the am-inhibit leg pins the tenant schema's http_config
-            # key sets to the structs Alertmanager decodes into (#2984), so a
-            # schema-only PR must run it. Its own filter for the reason `docs`
+            # key sets to the structs Alertmanager decodes into (#2984), and the
+            # tenant-api leg pins its top-level key set (#3504), so a
+            # schema-only PR must run them. Its own filter for the reason `docs`
             # is: adding the path to `go` would wake all five Go legs
             # (tenant-api's schemathesis included), while the only other Go
             # leg that reads the schema (threshold-exporter) already wakes on
@@ -598,8 +599,10 @@ jobs:
 
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker
-      # image pull on the runner). Pin matches HADOLINT_VERSION in
-      # scripts/tools/lint/check_iac_vibe_rules.py and .hadolint.yaml.
+      # image pull on the runner). Pin matches HADOLINT_VERSION and
+      # HADOLINT_SHA256 in scripts/tools/lint/check_iac_vibe_rules.py (the SSOT,
+      # which .claude/hooks/session-start.sh reads; bound by
+      # tests/shared/test_toolchain_pin_parity.py) and .hadolint.yaml.
       #
       # Download-cache pattern (CI-ROI wave, shared by every pinned-binary
       # install in this workflow): the artifact is stored in a cache dir
@@ -1263,6 +1266,13 @@ jobs:
       # served-values); the wrapper builds .build/da-guard with the setup-go above.
       - name: "Custom-alert pack matches live conf.d source (HARD gate — #741 S3b)"
         run: bash scripts/ops/with_da_guard.sh python scripts/tools/dx/compile_custom_alerts.py --check --config-dir components/threshold-exporter/config/conf.d
+
+      # #3679: the runtime canary's custom-alert rules are the same compiler's
+      # output for tests/rulepacks/runtime-canary-recipe/; a compiler change that
+      # regenerates the pack above must regenerate the canary too
+      # (`make runtime-canary-compile`).
+      - name: "Runtime canary matches its recipe's compiler output (HARD gate — #3679)"
+        run: bash scripts/ops/with_da_guard.sh python scripts/tools/dx/compile_custom_alerts.py --check --config-dir tests/rulepacks/runtime-canary-recipe --out tests/rulepacks/runtime-canary.compiled.rules.yaml
 
       # SEC-AUDIT #741: promtool-check the GENERATED custom-alert pack itself. The
       # drift gate above only compares STRUCTURE (source↔pack), and the unit-test
@@ -2409,9 +2419,11 @@ jobs:
   go-tests-tenant-api:
     name: Go Tests — tenant-api
     runs-on: ubuntu-24.04
-    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note).
+    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). Also on
+    # `schema`: internal/confd holds the tenant file's top-level key set equal
+    # to tenant-config.schema.json's (#3504), so a schema-only PR must run it.
     needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true'
+    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.schema_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests,
     # swag drift check and schemathesis all run against the local checkout.
     permissions:
@@ -2465,8 +2477,9 @@ jobs:
 
       # ADR-027 §9 item 7: the offline scope check over the repo's sample
       # config — the conf.d tree, _rbac.yaml and (absent) _tenant_orgs.yaml
-      # try-local mounts as TA_CONFIG_DIR / TA_RBAC_PATH. Any rule × untagged
-      # tenant (or a tenant file the list cannot read) exits 1. A step running
+      # try-local mounts as TA_CONFIG_DIR / TA_RBAC_PATH. Any scope-restricted
+      # rule × a tenant it does not grant (untagged, or whose tags cannot be
+      # read) exits 1. A step running
       # the CLI rather than a Go test, so what is checked is the command an
       # operator runs before upgrading, flags and exit code included; a moved
       # tree exits 2 here instead of skipping. try-local/** is in the `go`

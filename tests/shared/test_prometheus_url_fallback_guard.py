@@ -1,12 +1,13 @@
-"""防回潮 gate：$PROMETHEUS_URL env fallback 一律走 `_lib_io.add_prometheus_arg`。
+"""防回潮 gate：$PROMETHEUS_URL env fallback 一律走 `_lib_io`（#3528 起是
+`prometheus_url()`：在要查 Prometheus 的那一步讀 env，並以 `url_problem` 判定；
+`add_prometheus_arg` 的 default 不再帶 env）。
 
 Rationale（da-tools ROI r3 W1）：
 `os.environ.get("PROMETHEUS_URL", default)` 對「set-but-empty」的環境變數
 會回**空字串**（key 存在就不套 default）——一個 ConfigMap 缺鍵解析成空字串
 的部署會把空 URL 直接塞進 HTTP 請求。canonical 形狀是 `_lib_io.py` 的
-`or` 鏈（`default or os.environ.get(...) or "http://localhost:9090"`，空字串
-視同未設），與 `entrypoint.inject_prometheus_env` 的 `if prom_url:` 語意
-對齊。#1111 W4 已收斂 10 支工具；W1 收掉最後兩支殘留
+`prometheus_url()`（`value` 沒給才讀 env，空字串視同未設；#3528 起分派層不再
+注入）。#1111 W4 已收斂 10 支工具；W1 收掉最後兩支殘留
 （threshold_recommend / threshold_govern），本 gate 防止再長回來。
 
 Pattern 精準度：只抓「帶 default 的錯誤形狀」`os.environ.get("PROMETHEUS_URL",`

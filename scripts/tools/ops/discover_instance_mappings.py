@@ -43,7 +43,10 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
+    add_prometheus_arg,
     detect_cli_lang,
+    prometheus_url,
+    url_type,
     write_text_or_die,
 )
 # #3133: series / label values are read by the lib; a query not answered
@@ -273,8 +276,8 @@ _HELP: dict[str, dict[str, str]] = {
         "en": "Database exporter /metrics endpoint URL",
     },
     "prometheus": {
-        "zh": "Prometheus 查詢 URL（替代直接 scrape）",
-        "en": "Prometheus query URL (alternative to direct scrape)",
+        "zh": "Prometheus 查詢 URL（替代直接 scrape；兩者都沒給時用 $PROMETHEUS_URL，否則 http://localhost:9090）",
+        "en": "Prometheus query URL (alternative to direct scrape; with neither given: $PROMETHEUS_URL, else http://localhost:9090)",
     },
     "instance": {
         "zh": "目標實例標籤（搭配 --prometheus 使用）",
@@ -305,9 +308,13 @@ def main(argv: list[str] | None = None) -> "int | Report":
         return _HELP[key].get(lang, _HELP[key]["en"])
 
     parser = argparse.ArgumentParser(description=_h("description"))
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--endpoint", help=_h("endpoint"))
-    group.add_argument("--prometheus", help=_h("prometheus"))
+    # #3528: one source or the other, never both. Neither given means
+    # Prometheus at $PROMETHEUS_URL (else localhost:9090) — the fallback the
+    # dispatcher used to append as `--prometheus`, now the tool's own. Both
+    # flags are judged at parse time (`--endpoint ""` used to end at exit 1).
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--endpoint", type=url_type(empty="refuse"), help=_h("endpoint"))
+    add_prometheus_arg(group, help_text=_h("prometheus"))
     parser.add_argument("--instance", help=_h("instance"))
     parser.add_argument("--job", help=_h("job"))
     parser.add_argument("-o", "--output", help=_h("output"))
@@ -355,14 +362,17 @@ def main(argv: list[str] | None = None) -> "int | Report":
         print(f"  Scraped {metric_count} metric samples, db_type={db_type}",
               file=sys.stderr)
 
-    elif args.prometheus:
+    else:  # --prometheus, or neither flag: $PROMETHEUS_URL / localhost (#3528)
         if not args.instance and not args.job:
-            print("ERROR: --prometheus requires --instance or --job",
+            print("ERROR: --prometheus requires --instance or --job "
+                  "(without --endpoint, Prometheus is queried: --prometheus, "
+                  "else $PROMETHEUS_URL, else http://localhost:9090)",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
-        print(f"Querying Prometheus at {args.prometheus} ...", file=sys.stderr)
+        prom = prometheus_url(args.prometheus)  # env judged here
+        print(f"Querying Prometheus at {prom} ...", file=sys.stderr)
         label_values = query_prometheus_label_values(
-            args.prometheus,
+            prom,
             instance=args.instance,
             job=args.job,
         )

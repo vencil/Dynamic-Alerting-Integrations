@@ -64,11 +64,11 @@ da-tools onboard \
 
 ```bash
 da-tools onboard \
-  --rule-files '/etc/prometheus/rules.d/*.yaml' \
+  --rule-files /etc/prometheus/rules.d/ \
   --output-dir rule-audit
 ```
 
-`--rule-files` 只收一個 glob（支援 `**`），規則檔散在多處時先集中到同一個目錄；⚠️ glob 要加引號，否則 shell 先展開成多個檔名，rc=2。
+`--rule-files` 收一個或多個路徑（檔或目錄，目錄遞迴取其中的 `*.yaml`／`*.yml`），規則檔散在多處時全部列出即可。它不展開 glob：要用萬用字元就不加引號、交給 shell 展開；加了引號的 `'rules.d/*.yaml'` 會被當成一個不存在的路徑，rc=2。在 Kubernetes Job 裡跑時 `args` 不經過 shell，直接給目錄。⚠️ v2.9.0 映像仍把值當成一個 glob、只收一個值，給目錄什麼檔都選不到（WARN、結束碼 1）；用那個映像時給加引號的 glob（`'rules/*.yaml'`）或單一檔。 <!-- image-caveat: v2.9.0 -->
 
 **預期輸出**：stderr 印出掃描摘要（`Scanned N file(s), M rule(s) in K group(s)`、Alert rules 其中可解析／不可解析各幾條、Recording rules 幾條），並寫出目錄 `rule-audit/phase2-rules/`：
 - `migration-plan.csv`：每條告警規則一列，含 metric、閾值、運算子、建議的聚合方式，以及 `status`（`perfect` 可直接轉換、`complex` 需人工確認、`unparseable` 無法解析）
@@ -208,7 +208,7 @@ kubectl apply -f k8s/03-monitoring/configmap-rules-redis.yaml
 
 ```bash
 kubectl port-forward -n monitoring svc/prometheus 9090:9090 &
-curl -s 'http://localhost:9090/api/v1/query?query=tenant:redis_memory_usage:ratio'
+curl -s 'http://localhost:9090/api/v1/query?query=tenant:redis_memory_used_bytes:max'
 curl -s 'http://localhost:9090/api/v1/query?query=tenant:alert_threshold:redis_memory_used_bytes'
 ```
 

@@ -70,7 +70,9 @@ EARLY_EXIT = {
     "assemble_config_dir-3": "error: --sources is required",
     "byo_check-7": "ERROR: nothing was answered: prometheus prometheus_reachable",
     "check_alert-8": "ERROR: cannot read Prometheus alerts (http://127.0.0.1:9)",
-    "cutover_tenant-10": "ERROR: nothing was answered: load_readiness",
+    # #3445: a readiness file that is not JSON is refused by its reading,
+    # named, before any step (it was the unanswered `load_readiness` step).
+    "cutover_tenant-10": "/ready.json: not valid JSON: ",
     "explain_keys-14": "nope: No such file or directory",
     "federation_check-16": "ERROR: nothing was answered: central_prometheus_reachable",
 }
@@ -226,9 +228,11 @@ def test_federation_check_json_status(monkeypatch, capsys, checks, status):
     ({"success": False, "failed_step": "s", "message": "m"}, 1),
     ({"success": False, "failed_step": "s", "message": "m", "caller_error": True}, 2)],
     ids=["success", "step-failed", "caller-error"])
-def test_cutover_json_status(monkeypatch, capsys, report, status):
+def test_cutover_json_status(monkeypatch, capsys, tmp_path, report, status):
     monkeypatch.setattr(cutover_tenant, "apply_cutover", lambda **kw: report)
-    monkeypatch.setattr(sys, "argv", ["cutover_tenant", "--readiness-json", "r.json",
+    ready = tmp_path / "r.json"  # read before apply_cutover (#3445)
+    ready.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["cutover_tenant", "--readiness-json", str(ready),
                                       "--tenant", "t", "--json-output"])
     assert _rc(cutover_tenant.main) == status
     out = capsys.readouterr()

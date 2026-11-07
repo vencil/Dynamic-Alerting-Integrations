@@ -249,12 +249,17 @@ MUTATIONS: list[Mutation] = [
         test_target="./...",
         label="parseHHMM: drop format split check (single-token input passes)",
         fn_name="parseHHMM",
-        old='if len(parts) != 2 {\n\t\treturn 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)\n\t}',
-        new='if false {\n\t\treturn 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)\n\t}',
+        old='if !found {\n\t\treturn 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)\n\t}',
+        # `&& false`, not a bare `false`: `found` must stay used or the
+        # mutant fails to compile, which kills nothing (#3502: SplitN became
+        # strings.Cut). A missing colon is then refused only by the empty
+        # minute, so TestParseHHMM pins the format error's own wording.
+        new='if !found && false {\n\t\treturn 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)\n\t}',
+        kill_test="TestParseHHMM",
     ),
     # NOTE: known equivalent mutation. The function applies
-    # `strings.TrimSpace` again on each part after SplitN
-    # (`strings.TrimSpace(parts[0])` / `parts[1]`), so the outer
+    # `strings.TrimSpace` again on each part after the split
+    # (`strings.TrimSpace(hh)` / `mm`; #3502 moved SplitN to strings.Cut), so the outer
     # TrimSpace is redundant — removing it doesn't change behavior
     # for any leading/trailing-whitespace input. Kept in the catalog
     # as a documented equivalent so future readers don't try to
@@ -264,8 +269,8 @@ MUTATIONS: list[Mutation] = [
         test_target="./...",
         label="parseHHMM: drop outer TrimSpace (KNOWN EQUIVALENT — inner TrimSpace covers it)",
         fn_name="parseHHMM",
-        old="s = strings.TrimSpace(s)\n\tparts := strings.SplitN(s, \":\", 2)",
-        new="parts := strings.SplitN(s, \":\", 2)",
+        old="s = strings.TrimSpace(s)\n\t// strings.Cut",
+        new="// strings.Cut",
         # Inner strings.TrimSpace(parts[i]) already trims each token, so the
         # outer TrimSpace is redundant for any whitespace-padded input.
         known_equivalent=True,

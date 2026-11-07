@@ -15,15 +15,12 @@ metadata:
 data:
   mongodb-recording.yml: "groups:\n- name: mongodb-normalization\n  interval: 15s\n\
     \  rules:\n  - record: tenant:mongodb_connections_current:max\n    expr: max by(tenant)\
-    \ (mongodb_connections{state=\"current\"})\n  - record: tenant:mongodb_connections_available:min\n\
-    \    expr: min by(tenant) (mongodb_connections{state=\"available\"})\n  - record:\
-    \ tenant:mongodb_connection_usage:ratio\n    expr: \"max by(tenant) (mongodb_connections{state=\\\
-    \"current\\\"})\\n/ (\\n  max by(tenant) (mongodb_connections{state=\\\"current\\\
-    \"})\\n  + min by(tenant) (mongodb_connections{state=\\\"available\\\"})\\n)\\\
-    n\"\n  - record: tenant:mongodb_replication_lag:max\n    expr: max by(tenant)\
-    \ (mongodb_mongod_replset_member_replication_lag)\n  - record: tenant:mongodb_opcounters:rate5m\n\
-    \    expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))\n  - record: tenant:mongodb_document_ops:rate5m\n\
-    \    expr: sum by(tenant) (rate(mongodb_mongod_metrics_document_total[5m]))\n\
+    \ (mongodb_connections{state=\"current\"})\n  - record: tenant:mongodb_connection_usage:ratio\n\
+    \    expr: \"max by(tenant) (mongodb_connections{state=\\\"current\\\"})\\n/ (\\\
+    n  max by(tenant) (mongodb_connections{state=\\\"current\\\"})\\n  + min by(tenant)\
+    \ (mongodb_connections{state=\\\"available\\\"})\\n)\\n\"\n  - record: tenant:mongodb_replication_lag:max\n\
+    \    expr: max by(tenant) (mongodb_mongod_replset_member_replication_lag)\n  -\
+    \ record: tenant:mongodb_opcounters:rate5m\n    expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))\n\
     \  - record: tenant:mongodb_page_faults:rate5m\n    expr: sum by(tenant) (rate(mongodb_extra_info_page_faults_total[5m]))\n\
     - name: mongodb-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
     \ tenant:alert_threshold:mongodb_connections_current\n    expr: max by(tenant)\
@@ -42,20 +39,32 @@ data:
     \ available (warning). Total outage escalates to MongoDBClusterDown (critical);\
     \ loss of PRIMARY to MongoDBNoPrimary (critical).\n      description_zh: '{{ $labels.instance\
     \ }} 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去\
-    \ PRIMARY 則為 MongoDBNoPrimary（critical）。'\n      summary: MongoDB member {{ $labels.instance\
-    \ }} is down (tenant {{ $labels.tenant }})\n      summary_zh: MongoDB 成員 {{ $labels.instance\
-    \ }} 停機（租戶 {{ $labels.tenant }}）\n  - alert: MongoDBClusterDown\n    expr: max\
-    \ by(tenant) (mongodb_up{job=\"tenant-exporters\"}) == 0\n    for: 30s\n    labels:\n\
-    \      maintenance: page\n      metric_group: liveness\n      severity: critical\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: No\
-    \ mongod reports up=1 for tenant {{ $labels.tenant }} — total service outage,\
-    \ not a single-member failover. For a planned single-instance drain, silence via\
-    \ the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's\
-    \ silent-critical sentinel still suppresses it).\n      description_zh: 租戶 {{\
-    \ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用\
+    \ PRIMARY 則為 MongoDBNoPrimary（critical）。'\n      owner: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: MongoDB\
+    \ member {{ $labels.instance }} is down (tenant {{ $labels.tenant }})\n      summary_zh:\
+    \ MongoDB 成員 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）\n      tier: '{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MongoDBClusterDown\n\
+    \    expr: max by(tenant) (mongodb_up{job=\"tenant-exporters\"}) == 0\n    for:\
+    \ 30s\n    labels:\n      maintenance: page\n      metric_group: liveness\n  \
+    \    severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: No mongod reports up=1 for tenant {{ $labels.tenant }} — total\
+    \ service outage, not a single-member failover. For a planned single-instance\
+    \ drain, silence via the Alertmanager Silence API (no maintenance-window opt-out\
+    \ by design; a tenant's silent-critical sentinel still suppresses it).\n     \
+    \ description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用\
     \ Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。\n\
-    \      summary: 'MongoDB: ALL instances down for tenant {{ $labels.tenant }}'\n\
-    \      summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機\n  - alert: MongoDBNoPrimary\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: 'MongoDB: ALL instances down for tenant {{ $labels.tenant\
+    \ }}'\n      summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機\n      tier:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MongoDBNoPrimary\n\
     \    expr: 'count by(tenant) (mongodb_mongod_replset_member_state{job=\"tenant-exporters\"\
     })\n\n      unless\n\n      count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
     tenant-exporters\"} == 1)\n\n      '\n    for: 2m\n    labels:\n      maintenance:\
@@ -65,10 +74,16 @@ data:
     \ failing / quorum lost → writes rejected. Unlike MongoDBClusterDown this fires\
     \ while secondaries are still up.\n      description_zh: 租戶 {{ $labels.tenant\
     \ }} 的 replica set 成員可連線但沒有 PRIMARY — 選舉失敗／失去 quorum → 寫入被拒。與 MongoDBClusterDown\
-    \ 不同，此告警在 secondary 仍存活時就會觸發。\n      summary: 'MongoDB: no PRIMARY in replica\
-    \ set for tenant {{ $labels.tenant }}'\n      summary_zh: MongoDB：租戶 {{ $labels.tenant\
-    \ }} 的 replica set 沒有 PRIMARY\n  - alert: MongoDBHighConnections\n    expr: \"\
-    (\\n  tenant:mongodb_connections_current:max\\n  > on(tenant) group_left\\n  tenant:alert_threshold:mongodb_connections_current\\\
+    \ 不同，此告警在 secondary 仍存活時就會觸發。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: 'MongoDB: no PRIMARY in replica set for tenant {{ $labels.tenant\
+    \ }}'\n      summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的 replica set 沒有 PRIMARY\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: MongoDBHighConnections\n    expr: \"(\\n  tenant:mongodb_connections_current:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:mongodb_connections_current\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\

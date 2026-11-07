@@ -88,7 +88,10 @@ HELP_CONTRACTS = {
             "--prometheus", "--period", "--tenant",
             "--json", "--markdown", "--ci", "--min-score",
         ],
-        "required": ["--prometheus"],
+        # #3528 (owner-accepted Breaking): --prometheus may be left out —
+        # $PROMETHEUS_URL, else localhost:9090 (add_prometheus_arg); the
+        # dispatcher used to append it, so "required" held only standalone.
+        "required": [],
         "choices": {},
     },
 }

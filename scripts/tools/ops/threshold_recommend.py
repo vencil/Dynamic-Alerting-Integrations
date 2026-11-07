@@ -61,7 +61,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
     VALID_RESERVED_KEYS,
     VALID_RESERVED_PREFIXES,
-    add_prometheus_arg,
+    add_prometheus_arg, prometheus_url,
     detect_cli_lang,
     exit_on_yaml_file_error,
     parse_duration_seconds,
@@ -1555,8 +1555,8 @@ def main() -> "Report | None":
         ),
     )
     # W1: canonical env fallback — `os.environ.get(k, default)` returned ""
-    # for a present-but-empty $PROMETHEUS_URL; add_prometheus_arg's `or`
-    # chain treats "" as unset (aligns with entrypoint.inject_prometheus_env).
+    # for a present-but-empty $PROMETHEUS_URL; _lib_io.prometheus_url treats
+    # "" as unset (#3528: the one env fallback; the dispatcher adds none).
     add_prometheus_arg(parser, help_text=_HELP['prometheus'][_LANG])
     parser.add_argument(
         "--tenant",
@@ -1686,7 +1686,8 @@ def main() -> "Report | None":
 
     reports = run_analysis(
         args.config_dir,
-        prometheus_url=args.prometheus,
+        # #3528: a dry run only generates queries — no URL, so no env judged
+        prometheus_url=None if args.dry_run else prometheus_url(args.prometheus),
         tenant_filter=args.tenant,
         lookback=args.lookback,
         min_samples=args.min_samples,
