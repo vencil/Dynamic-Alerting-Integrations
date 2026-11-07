@@ -121,7 +121,7 @@ func (sv ScheduledValue) DeadEntries() []DeadEntry {
 		return nil
 	}
 	cuts := sv.dayCuts()
-	live := make(map[int]bool, len(sv.Overrides)+1)
+	live := map[int]bool{}
 	for i := 0; i+1 < len(cuts); i++ {
 		if cuts[i] != cuts[i+1] {
 			live[sv.entryAtMinute(cuts[i], nil)] = true
