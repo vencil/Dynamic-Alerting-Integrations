@@ -1753,11 +1753,11 @@ It reads each receiver **as its file writes it** (not merged): the tenant's `_ro
 2. **Secret manifests**: `--manifests-out DIR` writes one `da-<tenant>.yaml` per tenant (`kind: Secret`, `stringData`), created 0600.
 3. **Rotation list**: file, line, field path and tenant of every written-out credential, never the value; what to do is in [secret-leak-remediation-sop](internal/secret-leak-remediation-sop.md). For a value inside a list the line is the list key's (`line_is_field: false` in `--json`).
 
-Left for a person (`decisions`, with the reason): values in platform places, in a tenant's `_routing_enforced`, a webhook url with userinfo, the four proxy credentials, a key that cannot be derived or is taken.
+Left for a person (`decisions`, with the reason): values in platform places (a URL with userinfo there has its own advice), in places no plane reads (a tenant's `_routing_enforced`, a top-level `_routing_enforced` in a file not named `_…`, a `_routing_defaults` outside its carrier, …: delete it, but it is still on the rotation list), an invalid tenant id (`tenant_id_invalid`: no rewrite, no manifest), a webhook url with userinfo, the four proxy credentials, a key that cannot be derived or is taken, a list holding a value that cannot be written back (only that list is left), and a file whose rewritten text would still hold a value it moves out (`value_remains_in_file`: an anchor / merge key sharing it, a comment, another field; nothing in the file is rewritten). A file no plane reads (a second defaults carrier in a directory, say) is listed under `unread`: the exit code is at least 1, and "No credential is written out" is not printed.
 
-The rewritten tree, on a temporary copy, goes through the generator's receiver binding (`secret_binding_findings`, under `--policy`); a reference that would still be refused (say `auth_password` without the policy's `allowed_domains`, an `http_config` reference without `follow_redirects: false`) is listed under `blocked_after_rewrite`, and the run does not count as done.
+The rewritten tree, on a temporary copy, is judged by the generator (under `--policy`): a reference it would still refuse (say `auth_password` without the policy's `allowed_domains`, an `http_config` reference without `follow_redirects: false`), and a tenant with routing before the rewrite and none after, is listed under `blocked_after_rewrite` (kind / field from a closed vocabulary, `other` otherwise). The run does not count as done, and **`--write` writes nothing** (no manifest, no conf.d file), exit 1: fix the policy or the `http_config` first, then run again.
 
-⛔ Credential values are written only into the `--manifests-out` files: never to stdout, stderr or the JSON report.
+⛔ Credential values are written only into the `--manifests-out` files. Every value read at a credential place this run is watched: any text the tool would emit (stdout, stderr, `--json`, the diff, an exception's message) holding one as a substring is not emitted as is — a file's diff is withheld and left for a person (`diff_withheld`), any other string or line is replaced whole by `<withheld: …>`.
 
 **Syntax**
 
@@ -1770,18 +1770,18 @@ da-tools migrate-credentials --config-dir <DIR> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--config-dir <DIR>` | conf.d root; read through da-guard (none usable: exit `2`) | (required) |
-| `--write` | Write the rewrite back into conf.d (through `da-guard write`, one batch, all or nothing). Needs `--manifests-out`, else exit `2` and nothing is written — the values need somewhere to go once they leave conf.d; the manifests are written first, conf.d after | false |
-| `--manifests-out <DIR>` | One `da-<tenant>.yaml` per tenant (0600). A destination inside any git worktree, the conf.d or inside it, not a directory, or a manifest that is a conf.d file (symlink / hard link, the same judgement as `generate-routes`) ⇒ exit `2`, before anything is written | none |
+| `--write` | Write the rewrite back into conf.d (through `da-guard write`, one batch, all or nothing). Needs `--manifests-out`, else exit `2` and nothing is written — the values need somewhere to go once they leave conf.d; the manifests are written first, conf.d after. With `blocked_after_rewrite` non-empty nothing is written (above). A failed `da-guard write` is exit `2`, naming that the manifests were written and conf.d was not changed (or which files a part-way write changed), with the manifest paths | false |
+| `--manifests-out <DIR>` | One `da-<tenant>.yaml` per tenant (0600, opened `O_NOFOLLOW`), directly in DIR, for a valid tenant id only. DIR not a directory, the conf.d or inside it, inside a git worktree; a manifest whose real path is inside a git worktree; or a manifest path already there as a symlink, a file that is not regular, a file with another hard link, or a conf.d file ⇒ exit `2`, before anything is written | none |
 | `--policy <PATH>` | The deployment policy (`allowed_domains`, `shared_secrets`) the rewritten binding is judged under; as `generate-routes --policy` | none |
-| `--json` | The report as one JSON document on stdout (`schema: da-tools.migrate-credentials/v1`; `diff`, `manifests`, `decisions`, `rotate`, `blocked_after_rewrite`, `notes`) | false |
+| `--json` | The report as one JSON document on stdout (`schema: da-tools.migrate-credentials/v1`; `diff`, `manifests`, `decisions`, `rotate`, `blocked_after_rewrite`, `unread`, `notes`) | false |
 
 **Exit codes**
 
 | Code | Meaning |
 |------|---------|
-| `0` | nothing written out |
-| `1` | found (the report is the answer; also after `--write`: the rotation list stands) |
-| `2` | usage / I/O error, no usable da-guard, a file that cannot be read, `--manifests-out` refused |
+| `0` | nothing written out, and every config file read |
+| `1` | found, or a file no plane reads (`unread`) (the report is the answer; also after `--write`: the rotation list stands; also when the rewrite would be refused and `--write` wrote nothing) |
+| `2` | usage / I/O error, no usable da-guard, a file that cannot be read, `--manifests-out` refused, a failed `da-guard write` |
 
 **Examples**
 

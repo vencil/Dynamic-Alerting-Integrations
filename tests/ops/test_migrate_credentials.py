@@ -22,6 +22,9 @@ sys.path.insert(0, os.path.join(REPO, "scripts", "tools"))
 
 from _grar_parse import raw_receivers  # noqa: E402
 
+sys.path.insert(0, os.path.join(REPO, "tests"))
+from _platform_fs import symlink_or_skip  # noqa: E402
+
 CANARY = "cnry-7f1e-do-not-print"
 SLACK = f"https://hooks.slack.example.com/services/T0/B0/{CANARY}"
 
@@ -234,7 +237,7 @@ def test_a_manifest_that_is_a_confd_file_is_refused(tmp_path):
     before = _snapshot(root)
     proc = _run("--config-dir", root, "--manifests-out", out, "--write")
     assert proc.returncode == 2
-    assert "is the conf.d file" in proc.stderr
+    assert "a file with another link" in proc.stderr
     assert _snapshot(root) == before
 
 
@@ -242,14 +245,14 @@ MIXED_PLATFORM = f"""\
 _routing_defaults:
   receiver:
     type: pagerduty
-    routing_key: "{CANARY}"
+    routing_key: "{CANARY}-a"
 _routing_enforced:
   enabled: true
   receiver:
     type: webhook
-    url: "https://noc:{CANARY}@noc.example.com/hook"
+    url: "https://noc:{CANARY}-b@noc.example.com/hook"
     http_config:
-      bearer_token: "{CANARY}"
+      bearer_token: "{CANARY}-c"
 """
 
 MIXED_TENANT = f"""\
@@ -260,13 +263,13 @@ tenants:
         type: webhook
         url: "https://hook.example.com/alerts"
         http_config:
-          bearer_token: "{CANARY}"
-          proxy_url: "http://u:{CANARY}@proxy.example.com:3128"
+          bearer_token: "{CANARY}-d"
+          proxy_url: "http://u:{CANARY}-e@proxy.example.com:3128"
           proxy_connect_header:
-            Proxy-Authorization: ["{CANARY}"]
+            Proxy-Authorization: ["{CANARY}-f"]
           http_headers:
             "X Token":
-              secrets: ["{CANARY}"]
+              secrets: ["{CANARY}-g"]
       overrides:
         - alertname: Mail
           receiver:
@@ -274,11 +277,11 @@ tenants:
             to: [ops@example.com]
             from: am@example.com
             smarthost: smtp.example.com:587
-            auth_password: "{CANARY}"
+            auth_password: "{CANARY}-h"
         - alertname: Hook
           receiver:
             type: webhook
-            url: "https://ops:{CANARY}@hook.example.com/x"
+            url: "https://ops:{CANARY}-i@hook.example.com/x"
     _routing_enforced:
       receiver:
         type: slack
@@ -300,7 +303,7 @@ def test_json_report_sorts_what_is_rewritten_from_what_is_left(tmp_path):
     decisions = {(d["location"], d["reason"]) for d in doc["decisions"]}
     assert decisions == {
         ("_routing_defaults.receiver.routing_key", "platform_place"),
-        ("_routing_enforced.receiver.url", "userinfo"),
+        ("_routing_enforced.receiver.url", "userinfo_platform"),
         ("_routing_enforced.receiver.http_config.bearer_token", "platform_enforced"),
         ("tenants.team-b._routing.receiver.http_config.proxy_url", "proxy_credential"),
         ("tenants.team-b._routing.receiver.http_config.proxy_connect_header",
@@ -389,3 +392,325 @@ def test_missing_config_dir_is_rc2(tmp_path):
     proc = _run("--config-dir", tmp_path / "nope")
     assert proc.returncode == 2
     assert "ERROR" in proc.stderr
+
+
+# ── fix round (PR #3672 review) ─────────────────────────────────────────
+
+import migrate_credentials as mc  # noqa: E402
+
+
+def _all_outputs(root, *extra):
+    """Run both output modes (text and --json) and return the procs."""
+    return [_run("--config-dir", root, *extra), _run("--config-dir", root, "--json", *extra)]
+
+
+R1_SUBSTRING = f"""\
+tenants:
+  team-e:
+    _routing:
+      receiver:
+        type: email
+        to: [ops@example.com]
+        from: "{CANARY}-hdr@example.com"
+        auth_password: "pw-{CANARY[:4]}-moved"
+        headers:
+          X-Token: "{CANARY}-hdr"
+        smarthost: smtp.example.com:587
+"""
+
+R1_COMMENT = f"""\
+tenants:
+  team-w:
+    _routing:
+      receiver:
+        type: webhook
+        # it used to be https://hook.example.com/{CANARY}-u
+        url: "https://hook.example.com/{CANARY}-u"
+        http_config:
+          bearer_token: "tok-moved"
+"""
+
+R1_FLOW_MERGE = f"""\
+_base: &base {{type: slack, api_url: "https://hooks.example.com/{CANARY}-m"}}
+tenants:
+  team-m:
+    _routing:
+      receiver: {{<<: *base, channel: "#m"}}
+"""
+
+
+@pytest.mark.parametrize("text,withheld", [
+    (R1_SUBSTRING, True),        # a watched value inside another field's value
+    (R1_COMMENT, True),          # a watched value in a comment beside the change
+    (R1_FLOW_MERGE, False),      # a merge key (flow) holding the moved value: R2 first
+])
+def test_r1_no_watched_value_reaches_any_output(tmp_path, text, withheld):
+    root = _tree(tmp_path, {"t.yaml": text})
+    for proc in _all_outputs(root):
+        assert proc.returncode == 1, proc.stderr
+        _no_canary(proc)
+    doc = json.loads(_all_outputs(root)[1].stdout)
+    assert ({d["reason"] for d in doc["decisions"]} >= {"diff_withheld"}) == withheld
+    if withheld:
+        assert doc["diff"] == ""
+        assert any("the diff is not shown" in n for n in doc["notes"])
+
+
+def test_r1_the_watch_withholds_whole_strings():
+    w = mc._Watch()
+    w.load([mc.RawReceiver("f", ("r",), "t", "tenant_routing",
+                           {"type": "slack", "api_url": "SEKRIT-1"})])
+    assert w.line("x SEKRIT-1 y") == mc.WITHHELD
+    assert w.line("nothing here") == "nothing here"
+    doc, hit = w.doc({"a": ["ok", "has SEKRIT-1"], "SEKRIT-1": 1})
+    assert hit and mc.WITHHELD in doc and doc["a"] == ["ok", mc.WITHHELD]
+    w2 = mc._Watch()
+    w2.load([mc.RawReceiver("f", ("r",), "t", "tenant_routing", {"type": "slack", "api_url": ""})])
+    assert not w2.hits("anything")          # the empty string is not watched
+
+
+E9 = f"""\
+_base: &base
+  type: slack
+  api_url: "https://hooks.example.com/services/{CANARY}-e9"
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        <<: *base
+        channel: "#a"
+"""
+
+
+def test_r2_a_value_left_in_the_file_stops_its_rewrite(tmp_path):
+    root = _tree(tmp_path, {"team-a.yaml": E9})
+    out = tmp_path / "secrets"
+    before = _snapshot(root)
+    proc = _run("--config-dir", root, "--manifests-out", out, "--write", "--json")
+    assert proc.returncode == 1, proc.stderr
+    _no_canary(proc)
+    doc = json.loads(proc.stdout)
+    assert [d["reason"] for d in doc["decisions"]] == ["value_remains_in_file"]
+    assert doc["manifests"] == [] and doc["written"] is False and doc["diff"] == ""
+    assert _snapshot(root) == before and not out.exists()
+    again = _run("--config-dir", root)
+    assert again.returncode == 1 and "needs_reference" in again.stdout
+
+
+@pytest.fixture
+def worktree(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    return repo
+
+
+def test_r3_a_symlinked_manifest_into_a_worktree_is_refused(tmp_path, worktree):
+    root = _tree(tmp_path, {"team-a.yaml": TENANT})
+    out = tmp_path / "secrets"
+    out.mkdir()
+    target = worktree / "leak.yaml"
+    target.write_text("keep\n", encoding="utf-8")
+    symlink_or_skip(target, out / "da-team-a.yaml")
+    before = _snapshot(root)
+    proc = _run("--config-dir", root, "--manifests-out", out, "--write")
+    assert proc.returncode == 2
+    assert "inside the git worktree" in proc.stderr
+    assert target.read_text(encoding="utf-8") == "keep\n"
+    assert _snapshot(root) == before
+    _no_canary(proc)
+
+
+def test_r3_a_symlinked_manifest_elsewhere_is_refused(tmp_path):
+    root = _tree(tmp_path, {"team-a.yaml": TENANT})
+    out = tmp_path / "secrets"
+    out.mkdir()
+    target = tmp_path / "elsewhere.yaml"
+    target.write_text("keep\n", encoding="utf-8")
+    symlink_or_skip(target, out / "da-team-a.yaml")
+    proc = _run("--config-dir", root, "--manifests-out", out)
+    assert proc.returncode == 2
+    assert "symlink" in proc.stderr
+    assert target.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_r3_a_hardlinked_manifest_is_refused(tmp_path):
+    root = _tree(tmp_path, {"team-a.yaml": TENANT})
+    out = tmp_path / "secrets"
+    out.mkdir()
+    other = tmp_path / "other.txt"
+    other.write_text("keep\n", encoding="utf-8")
+    os.link(other, out / "da-team-a.yaml")
+    proc = _run("--config-dir", root, "--manifests-out", out)
+    assert proc.returncode == 2
+    assert "another link" in proc.stderr
+    assert other.read_text(encoding="utf-8") == "keep\n"
+
+
+def test_r3_the_manifest_path_is_a_direct_child_named_after_a_valid_tenant(tmp_path, capsys):
+    assert mc._manifest_path(str(tmp_path), "team-a") == str(tmp_path / "da-team-a.yaml")
+    for bad in ("../x", "a/b", "..", "A_B"):
+        with pytest.raises(SystemExit) as e:
+            mc._manifest_path(str(tmp_path), bad)
+        assert e.value.code == 2
+    assert not list(tmp_path.iterdir())
+
+
+def test_r3_r4_a_tenant_id_with_dotdot_writes_nothing(tmp_path):
+    root = _tree(tmp_path, {"t.yaml": 'tenants:\n  "../x":\n    _routing:\n      receiver:\n'
+                                      f'        type: slack\n        api_url: "{SLACK}"\n'})
+    out = tmp_path / "secrets"
+    proc = _run("--config-dir", root, "--manifests-out", out, "--write", "--json")
+    assert proc.returncode == 1, proc.stderr
+    _no_canary(proc)
+    doc = json.loads(proc.stdout)
+    assert [d["reason"] for d in doc["decisions"]] == ["tenant_id_invalid"]
+    assert doc["manifests"] == [] and not out.exists() and not (tmp_path / "x").exists()
+
+
+def test_r4_r9_still_refused_rows(monkeypatch, tmp_path):
+    class W(str):
+        def __new__(cls, kind, tenant, field):
+            o = str.__new__(cls, "line quoting " + CANARY)
+            o.kind, o.tenant, o.field = kind, tenant, field
+            return o
+    results = iter([({"a", "b"}, []), ({"a"}, [
+        W("secret_ref_proxy_url", "a", "overrides[3].receiver.http_config.proxy_url"),
+        W(f"secret_ref_{CANARY}", "a", "receiver.api_url"),
+        W("secret_ref_follow_redirects", "Bad Tenant", f"receiver.{CANARY}"),
+        W("secret_ref_no_owner", "a",
+          "_routing_enforced.receiver.http_config.http_headers.X-Tok.secrets[0]"),
+    ])])
+    monkeypatch.setattr(mc, "_judge_tree", lambda root, policy: next(results))
+    root = _tree(tmp_path, {"a.yaml": "tenants:\n  a: {}\n"})
+    rows = mc._still_refused(str(root), {}, None)
+    assert CANARY not in repr(rows)
+    assert rows == [
+        {"kind": "tenant_dropped", "tenant": "b", "field": None},
+        {"kind": "secret_ref_proxy_url", "tenant": "a",
+         "field": "overrides[i].receiver.http_config.proxy_url"},
+        {"kind": "other", "tenant": "a", "field": "receiver.api_url"},
+        {"kind": "secret_ref_follow_redirects", "tenant": None, "field": "other"},
+        {"kind": "secret_ref_no_owner", "tenant": "a",
+         "field": "_routing_enforced.receiver.http_config.http_headers.*.secrets[i]"},
+    ]
+
+
+MAIL_BLOCKED = f"""\
+tenants:
+  team-c:
+    _routing:
+      receiver:
+        type: email
+        to: [ops@example.com]
+        from: am@example.com
+        smarthost: smtp.example.com:587
+        auth_password: "{CANARY}"
+"""
+
+
+def test_r5_write_writes_nothing_while_the_rewrite_is_blocked(tmp_path):
+    root = _tree(tmp_path, {"t.yaml": MAIL_BLOCKED})
+    out = tmp_path / "secrets"
+    before = _snapshot(root)
+    proc = _run("--config-dir", root, "--manifests-out", out, "--write", "--json")
+    assert proc.returncode == 1, proc.stderr
+    _no_canary(proc)
+    doc = json.loads(proc.stdout)
+    assert doc["written"] is False and doc["blocked_after_rewrite"]
+    assert all(m["path"] is None for m in doc["manifests"])
+    assert any("--write wrote nothing" in n for n in doc["notes"])
+    assert _snapshot(root) == before and not out.exists()
+
+
+def test_r6_a_file_no_plane_reads_is_not_a_clean_answer(tmp_path):
+    root = _tree(tmp_path, {
+        "sub/_defaults.yaml": "defaults: {}\n",
+        "sub/_defaults.yml": f'defaults: {{}}\n_routing_defaults:\n  receiver:\n'
+                             f'    type: slack\n    api_url: "{SLACK}"\n',
+        "sub/t1.yaml": 'tenants:\n  t1:\n    cpu: "1"\n'})
+    proc = _run("--config-dir", root)
+    assert proc.returncode == 1, proc.stderr
+    assert "No credential is written out." not in proc.stdout
+    assert "sub/_defaults.yml (unselected_defaults_carrier)" in proc.stdout
+    doc = json.loads(_run("--config-dir", root, "--json").stdout)
+    assert doc["unread"] == [{"file": "sub/_defaults.yml",
+                              "reason": "unselected_defaults_carrier"}]
+    assert doc["rotate"] == []
+
+
+R7 = f"""\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: slack
+        api_url: "{SLACK}"
+      overrides:
+        - alertname: A
+          group_wait_x: 010
+          receiver:
+            type: slack
+            api_url: "https://hooks.slack.example.com/services/{CANARY}-o"
+"""
+
+
+def test_r7_only_the_list_that_cannot_be_written_back_is_left(tmp_path):
+    root = _tree(tmp_path, {"t.yaml": R7})
+    proc = _run("--config-dir", root, "--json")
+    assert proc.returncode == 1, proc.stderr
+    _no_canary(proc)
+    doc = json.loads(proc.stdout)
+    assert [(d["location"], d["reason"]) for d in doc["decisions"]] == [
+        ("tenants.team-a._routing.overrides[0].receiver.api_url", "list_not_rewritable")]
+    assert [m["entries"] for m in doc["manifests"]] == [["receiver.api_url"]]
+
+
+def test_r8_a_tenant_files_top_level_enforced_route_is_unread(tmp_path):
+    root = _tree(tmp_path, {"team-a.yaml": f"""\
+_routing_enforced:
+  enabled: true
+  receiver: {{type: slack, api_url: "{SLACK}"}}
+tenants:
+  team-a:
+    cpu: "1"
+"""})
+    found = raw_receivers(str(root))
+    assert [(r.place, r.read) for r in found.receivers] == [("routing_enforced", False)]
+    doc = json.loads(_run("--config-dir", root, "--json").stdout)
+    assert [(d["location"], d["reason"]) for d in doc["decisions"]] == [
+        ("_routing_enforced.receiver.api_url", "unread_place")]
+    assert len(doc["rotate"]) == 1
+
+
+def test_r8_a_failed_confd_write_names_the_manifests(monkeypatch, capsys):
+    def refuse(*_a, **_k):
+        raise mc._lib_confedit.EditCallerError(
+            {"path": "t.yaml", "status": "caller_error", "reason": "bad_path",
+             "message": "quoted " + CANARY}, "write")
+    monkeypatch.setattr(mc._lib_confedit, "write_all", refuse)
+    with pytest.raises(SystemExit) as e:
+        mc._write_confd("conf.d", [], [{"path": "/x/da-t.yaml"}])
+    assert e.value.code == 2
+    err = capsys.readouterr().err
+    assert "conf.d was not changed" in err and "/x/da-t.yaml" in err
+    assert CANARY not in err
+
+
+def test_r9_vocabulary():
+    assert mc._vocab_kind("secret_ref_proxy_url") == "secret_ref_proxy_url"
+    assert mc._vocab_kind("anything_else") == "other"
+    assert mc._vocab_field("routes[12].receiver.http_config.oauth2.token_url") == \
+        "routes[i].receiver.http_config.oauth2.token_url"
+    assert mc._vocab_field("receiver.free.text") == "other"
+    assert mc._vocab_tenant("team-a") == "team-a" and mc._vocab_tenant("Bad Id") is None
+
+
+def test_r1_an_exception_that_would_show_a_value_is_withheld(monkeypatch, tmp_path):
+    root = _tree(tmp_path, {"team-a.yaml": TENANT})
+
+    def boom(*_a, **_k):
+        raise KeyError(SLACK)
+    monkeypatch.setattr(mc, "_judge", boom)
+    with pytest.raises(RuntimeError) as e:
+        mc.main(["--config-dir", str(root)])
+    assert CANARY not in str(e.value) and e.value.__cause__ is None

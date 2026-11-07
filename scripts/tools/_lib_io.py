@@ -960,15 +960,19 @@ _O_OPERATOR = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
                | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
 
 
-def _kernel_open_operator_output(path: str, mode: int, append: bool) -> tuple[int, bool]:
+def _kernel_open_operator_output(path: str, mode: int, append: bool,
+                                  nofollow: bool = False) -> tuple[int, bool]:
     """``open(2)`` *path* for writing; return ``(fd, created)``.
 
     O_NONBLOCK only for the open itself: a FIFO with no reader fails with
     ENXIO instead of blocking forever; it is cleared before any write. A
-    socket fails the open (ENXIO) on its own.
+    socket fails the open (ENXIO) on its own. *nofollow*: O_NOFOLLOW — a
+    symlink at *path* fails the open (ELOOP) instead of being written through.
     """
     nonblock = getattr(os, "O_NONBLOCK", 0)
     flags = _O_OPERATOR | (os.O_APPEND if append else os.O_TRUNC) | nonblock
+    if nofollow:
+        flags |= getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, mode)
     try:
         # Only where O_NONBLOCK was set: on Windows (3.12+) set_blocking
@@ -1003,7 +1007,8 @@ def _kernel_open_operator_output(path: str, mode: int, append: bool) -> tuple[in
 
 @contextlib.contextmanager
 def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
-                         append: bool = False) -> Iterator[io.TextIOBase]:
+                         append: bool = False,
+                         nofollow: bool = False) -> Iterator[io.TextIOBase]:
     """Open an operator-named output path for UTF-8/LF text writing.
 
     * ``-`` ⇒ stdout (claimed for *flag*; never closed).
@@ -1011,6 +1016,8 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
     * anything else ⇒ ``open(2)`` by the kernel (``O_CREAT|O_TRUNC``, or
       ``O_APPEND``); *mode* applies to a regular file this euid owns and did
       not reach through a symlink — created now or already there (V15).
+      *nofollow*: a symlink at *path* is refused (O_NOFOLLOW), never written
+      through (#1560: a file that holds credential values).
     * any ``OSError`` ⇒ :class:`OutputWriteError` naming *path* and *flag*.
       A write into a regular file that raises leaves it empty, not a prefix
       (a process killed mid-write can still leave one).
@@ -1026,7 +1033,7 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
             yield sink
             sink.flush()
             return
-        fd, regular = _kernel_open_operator_output(path, mode, append)
+        fd, regular = _kernel_open_operator_output(path, mode, append, nofollow)
         fh = io.open(fd, "w", encoding="utf-8", newline="\n", closefd=True)
         try:
             yield fh
@@ -1048,18 +1055,22 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
 
 
 def write_operator_output(path: str, content: str, *, flag: Optional[str],
-                          mode: int = 0o600, append: bool = False) -> None:
+                          mode: int = 0o600, append: bool = False,
+                          nofollow: bool = False) -> None:
     """Write *content* to an operator-named path; see :func:`open_operator_output`."""
-    with open_operator_output(path, flag=flag, mode=mode, append=append) as fh:
+    with open_operator_output(path, flag=flag, mode=mode, append=append,
+                              nofollow=nofollow) as fh:
         fh.write(content)
 
 
 def write_operator_output_or_die(path: str, content: str, *, flag: Optional[str],
                                  mode: int = 0o600, append: bool = False,
-                                 exit_code: Optional[int] = None) -> None:
+                                 exit_code: Optional[int] = None,
+                                 nofollow: bool = False) -> None:
     """:func:`write_operator_output`; an unusable path exits (rc 2, one line)."""
     try:
-        write_operator_output(path, content, flag=flag, mode=mode, append=append)
+        write_operator_output(path, content, flag=flag, mode=mode, append=append,
+                              nofollow=nofollow)
     except OutputWriteError as exc:
         _die_on_write_error(exc, exit_code)
 
