@@ -77,20 +77,12 @@ groups:
           sum by(tenant) (mysql_global_status_threads_connected)
           / sum by(tenant) (mysql_global_variables_max_connections)
 
-      - record: tenant:mysql_uptime:hours
-        expr: min by(tenant) (mysql_global_status_uptime) / 3600
-
       # Additional Percona-inspired normalization
       - record: tenant:mysql_slow_queries:rate5m
         expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
 
       - record: tenant:mysql_aborted_connections:rate5m
         expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))
-
-      - record: tenant:mysql_buffer_pool_usage:ratio
-        expr: |
-          sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data)
-          / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)
 
       # ── Async replication lag (#1200 WS5-P0-a) ──────────────────────────────
       # Seconds behind primary, SQL_Delay-ADJUSTED: an intentionally delayed

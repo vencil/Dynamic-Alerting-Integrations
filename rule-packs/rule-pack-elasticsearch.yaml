@@ -86,10 +86,6 @@ groups:
           / sum by(tenant) (rate(elasticsearch_indices_search_query_total[5m]))
           * 1000
 
-      # Indexing rate
-      - record: tenant:es_indexing:rate5m
-        expr: sum by(tenant) (rate(elasticsearch_indices_indexing_index_total[5m]))
-
       # Pending cluster tasks
       - record: tenant:es_pending_tasks:max
         expr: max by(tenant) (elasticsearch_cluster_health_number_of_pending_tasks)

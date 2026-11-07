@@ -24,9 +24,7 @@ data:
     \\\"}\\n  + ClickHouseMetrics_ReplicatedFetchQueueSize{tenant!=\\\"\\\"}\\n)\\\
     n\"\n  - record: tenant:clickhouse_memory_tracking:max\n    expr: \"max by(tenant)\
     \ (\\n  ClickHouseMetrics_MemoryTracking{tenant!=\\\"\\\"}\\n)\\n\"\n  - record:\
-    \ tenant:clickhouse_merges_rate:rate5m\n    expr: \"sum by(tenant) (\\n  rate(ClickHouseProfileEvents_MergedRows{tenant!=\\\
-    \"\\\"}[5m])\\n)\\n\"\n  - record: tenant:clickhouse_failed_queries:rate5m\n \
-    \   expr: \"sum by(tenant) (\\n  rate(ClickHouseProfileEvents_FailedQuery{tenant!=\\\
+    \ tenant:clickhouse_failed_queries:rate5m\n    expr: \"sum by(tenant) (\\n  rate(ClickHouseProfileEvents_FailedQuery{tenant!=\\\
     \"\\\"}[5m])\\n)\\n\"\n- name: clickhouse-threshold-normalization\n  rules:\n\
     \  - record: tenant:alert_threshold:clickhouse_queries_rate\n    expr: \"max by(tenant)\
     \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"queries_rate\\\
