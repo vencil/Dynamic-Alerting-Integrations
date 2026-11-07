@@ -64,6 +64,7 @@ import argparse
 import os
 import re
 import sys
+import tempfile
 import textwrap
 from pathlib import Path
 
@@ -108,6 +109,8 @@ _TOKEN = re.compile(r'[a-zA-Z_:][a-zA-Z0-9_:]*')
 
 _ITEM = re.compile(r'^(\s*)- (alert|record):\s*(\S.*?)\s*$')
 _KEY = re.compile(r'^(\s*)([A-Za-z_][\w-]*):(.*)$')
+#: An annotation key, plain or quoted (a quoted `"tier":` is the same key).
+_ANN_KEY = re.compile(r"""^(\s*)(?:"([^"]+)"|'([^']+)'|([A-Za-z_][\w-]*))\s*:(.*)$""")
 
 CUSTOM_ALERTS_PACK = "custom-alerts"
 
@@ -258,7 +261,8 @@ class Item:
         self.ann_line: int | None = None       # the `annotations:` line
         self.ann_end: int | None = None        # exclusive: after its last child line
         self.ann_indent: int | None = None     # its children's indent
-        self.ann_keys: dict[str, tuple[int, str]] = {}  # metadata key -> (line, value)
+        # metadata key -> (its lines, value; None when spelled over several lines)
+        self.ann_keys: dict[str, tuple[list[int], str | None]] = {}
 
 
 def _indent(line: str) -> int:
@@ -355,6 +359,7 @@ def _locate_fields(lines: list[str], it: Item) -> None:
                 raise ShapeError(f"{it.name}: annotations written inline ({rest[:20]!r}); use a block mapping")
             it.ann_line = k
             it.ann_end = k + 1
+            current: str | None = None   # the metadata key whose lines are being collected
             for k2 in range(k + 1, it.end):
                 s = lines[k2]
                 if not s.strip() or s.lstrip().startswith("#"):
@@ -365,13 +370,22 @@ def _locate_fields(lines: list[str], it: Item) -> None:
                 if it.ann_indent is None:
                     it.ann_indent = _indent(s)
                 if _indent(s) != it.ann_indent:
-                    continue  # a continuation line
-                am = _KEY.match(s)
-                if am and am.group(2) in METADATA_ANNOTATIONS:
-                    if am.group(3).strip()[:1] in ("|", ">"):
-                        raise ShapeError(f"{it.name}: annotation {am.group(2)} is a block scalar; "
+                    # A continuation line belongs to the key above it: a metadata
+                    # key spelled over several lines is rewritten whole.
+                    if current is not None:
+                        lns, _ = it.ann_keys[current]
+                        it.ann_keys[current] = (lns + [k2], None)
+                    continue
+                am = _ANN_KEY.match(s)
+                key2 = next((g for g in am.group(2, 3, 4) if g is not None), None) if am else None
+                current = key2 if key2 in METADATA_ANNOTATIONS else None
+                if current is not None:
+                    if current in it.ann_keys:
+                        raise ShapeError(f"{it.name}: annotation {current} written twice")
+                    if am.group(5).strip()[:1] in ("|", ">"):
+                        raise ShapeError(f"{it.name}: annotation {current} is a block scalar; "
                                          "write it on one line")
-                    it.ann_keys[am.group(2)] = (k2, _unquote(am.group(3)))
+                    it.ann_keys[current] = ([k2], _unquote(am.group(5)))
 
 
 def render_expr(lines: list[str], it: Item, new_expr: str) -> list[str]:
@@ -435,7 +449,7 @@ def sync_metadata(lines: list[str], it: Item) -> list[str]:
         return lines
     if not want and not have:
         return lines
-    drop = {ln for ln, _ in it.ann_keys.values()}
+    drop = {ln for lns, _ in it.ann_keys.values() for ln in lns}
     if not want:
         return [s for i, s in enumerate(lines) if i not in drop]
     pad = " " * (it.ann_indent if it.ann_indent is not None else it.indent + 4)
@@ -538,6 +552,48 @@ def semantic_problems(rule_files: list, selectors_of=None) -> list[str]:
     return problems
 
 
+def _underived(rule: dict) -> dict:
+    """*rule* without what this tool derives: the maintenance clause and the
+    metadata annotations."""
+    r = dict(rule)
+    if isinstance(r.get("annotations"), dict):
+        r["annotations"] = {k: v for k, v in r["annotations"].items() if k not in METADATA_ANNOTATIONS}
+    try:
+        r["expr"] = strip_clause(r.get("expr", ""))
+    except ShapeError:
+        pass
+    return r
+
+
+def rewrite_problems(old: str, new: str, name: str) -> list[str]:
+    """What a rewrite of the rule file *old* into *new* changed besides the
+    derived parts, both read the way Prometheus reads them. The writer edits
+    text; this is the net under it: a value spliced into a neighbour, a
+    keep-chomp scalar losing its trailing newline, a duplicate key — anything
+    but the clause and the three annotations — is refused before it is
+    written (#2566 adversarial review)."""
+    with tempfile.TemporaryDirectory() as d:
+        a, b = Path(d) / "old" / name, Path(d) / "new" / name
+        for f, text in ((a, old), (b, new)):
+            f.parent.mkdir()
+            f.write_text(text, encoding="utf-8", newline="\n")
+        try:
+            before, after = _lib_consumer_read.prometheus_rule_files([a, b])
+        except _lib_consumer_read.ConsumerReadError as exc:
+            return [f"the rewritten file would not load: {_lib_consumer_read.error_text(exc)}"]
+
+    def rules(rf) -> list[tuple[str, dict]]:
+        return [(g.get("name"), _underived(r)) for doc in rf.documents
+                for g in (doc or {}).get("groups") or [] for r in g.get("rules") or []]
+
+    x, y = rules(before), rules(after)
+    if len(x) != len(y):
+        return [f"the rewrite changed the number of rules ({len(x)} -> {len(y)})"]
+    return [f"the rewrite changed more than the derived parts of "
+            f"{r1.get('alert') or r1.get('record')} (group {g1}): {r1} -> {r2}"
+            for (g1, r1), (g2, r2) in zip(x, y) if (g1, r1) != (g2, r2)]
+
+
 def _pack(path: Path) -> str | None:
     return _lib_consumer_read.RULE_PACKS.member(path)
 
@@ -581,6 +637,12 @@ def main(argv: list[str] | None = None) -> int:
         if new != text:
             stale.append(p)
             if not args.check:
+                bad = rewrite_problems(text, new, p.name)
+                if bad:
+                    for msg in bad:
+                        print(f"ERROR: {p}: {msg} — not written; this layout needs a hand edit",
+                              file=sys.stderr)
+                    return EXIT_CALLER_ERROR
                 p.write_text(new, encoding="utf-8", newline="\n")
 
     # Always judge the result as Prometheus reads it — after a write too, so a

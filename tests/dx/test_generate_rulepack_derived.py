@@ -415,3 +415,63 @@ def test_semantic_check_judges_the_compiled_pack_too():
             "annotations": {"summary": "s"}}]}]}]
     problems = grd.semantic_problems([RF()], selectors_of=lambda exprs: [[] for _ in exprs])
     assert any("shows the tenant's metadata" in p for p in problems), problems
+
+
+# ── the writer's net: a rewrite changes nothing but the derived parts ─────────
+# Shapes from the C-gen adversarial review (#2566): each was written with rc 0
+# and passed --check and promtool while it silently changed another value.
+
+def _pack_with(tmp_path, group: str) -> Path:
+    rp = tmp_path / "rule-packs"
+    shutil.copytree(_REPO / "rule-packs", rp)
+    p = rp / "rule-pack-redis.yaml"
+    p.write_text(p.read_text(encoding="utf-8").rstrip("\n") + "\n" + group, encoding="utf-8")
+    return rp
+
+
+_GROUP_HEAD = ("  - name: review-shapes\n    rules:\n      - alert: ReviewShape\n"
+               "        expr: up == 0\n        labels:\n          maintenance: page\n"
+               "          tenant: \"{{ $labels.tenant }}\"\n        annotations:\n")
+
+
+def _loaded_annotations(rp: Path) -> dict:
+    import yaml
+    for g in yaml.safe_load((rp / "rule-pack-redis.yaml").read_text(encoding="utf-8"))["groups"]:
+        for r in g["rules"]:
+            if r.get("alert") == "ReviewShape":
+                return r["annotations"]
+    raise AssertionError("ReviewShape not found")
+
+
+def test_a_metadata_key_spelled_over_two_lines_is_replaced_whole(da_read_env, tmp_path):
+    rp = _pack_with(tmp_path, _GROUP_HEAD +
+                    "          summary: hello world\n"
+                    "          runbook_url: https://example.com/a\n"
+                    "            /b\n")
+    assert grd.main(["--rule-packs-dir", str(rp)]) == 0
+    ann = _loaded_annotations(rp)
+    assert ann["summary"] == "hello world"          # was 'hello world /b'
+    assert {k: ann[k] for k in META} == META
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
+
+
+def test_a_quoted_metadata_key_is_the_same_key(da_read_env, tmp_path):
+    rp = _pack_with(tmp_path, _GROUP_HEAD + '          summary: "s"\n          "tier": "gold"\n')
+    assert grd.main(["--rule-packs-dir", str(rp)]) == 0  # was: a duplicate key, file left unloadable
+    assert _loaded_annotations(rp)["tier"] == META["tier"]
+
+
+def test_a_rewrite_that_would_change_another_value_is_not_written(da_read_env, tmp_path):
+    """A keep-chomp (`|+`) last annotation: inserting after it would drop its
+    trailing newline. The net refuses the write and leaves the file as it was."""
+    rp = _pack_with(tmp_path, _GROUP_HEAD + "          summary: |+\n            keep trailing\n\n")
+    before = (rp / "rule-pack-redis.yaml").read_text(encoding="utf-8")
+    assert grd.main(["--rule-packs-dir", str(rp)]) == 2
+    assert (rp / "rule-pack-redis.yaml").read_text(encoding="utf-8") == before
+
+
+def test_rewrite_problems_ignores_only_the_derived_parts():
+    old = "groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up == 0\n    annotations:\n      summary: a\n"
+    new = old.replace("summary: a\n", 'summary: a\n      owner: "x"\n')
+    assert grd.rewrite_problems(old, new, "rule-pack-x.yaml") == []
+    assert grd.rewrite_problems(old, old.replace("summary: a", "summary: b"), "rule-pack-x.yaml")
