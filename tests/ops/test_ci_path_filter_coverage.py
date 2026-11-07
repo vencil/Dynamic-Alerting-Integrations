@@ -2170,6 +2170,9 @@ GATED_LEGS = {
     # advisory for the same reason.
     ("ci.yml", "python-coverage-combine"),
     ("ci.yml", "portal-tests-run"),
+    # #1428: the Playwright smoke run, on the `e2e` filter, behind the
+    # "Smoke Tests (Chromium)" aggregate gate (moved from playwright.yml).
+    ("ci.yml", "smoke-tests-run"),
     ("ci.yml", "go-tests-threshold-exporter"),
     ("ci.yml", "go-tests-tenant-api"),
     ("ci.yml", "go-tests-am-inhibit"),
@@ -2199,6 +2202,12 @@ GATED_LEGS = {
 KNOWN_VACUOUS_LEGS = {
     ("docs-ci.yaml", "doc-line-count"):
         "only `find docs rule-packs -name '*.md' | wc -l` — directory-shaped",
+    # #1428: every `run:` is an npm/npx command in tests/e2e (`npm ci`,
+    # `npx playwright install`, `npm run serve:portal`, `npm test`); what they
+    # read is directory-shaped — tests/e2e/** and the docs/ tree the portal
+    # server serves — and is held by the `e2e` filter, not by named files.
+    ("ci.yml", "smoke-tests-run"):
+        "npm/npx in tests/e2e only — inputs are tests/e2e/** and the served docs/ tree",
 }
 
 # One concrete path per motivating leg. Weaker than the accounting above (that

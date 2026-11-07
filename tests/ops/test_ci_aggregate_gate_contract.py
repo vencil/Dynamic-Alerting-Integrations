@@ -562,6 +562,11 @@ REQUIRED_CHECK_NAMES = frozenset({
     "Python Tests",
     "Go Tests",
     "Portal Tests",
+    # ci.yml's `smoke-tests` gate (#1428). Branch protection already required
+    # it while it lived as a path-filtered playwright.yml job (measured
+    # 2026-11-07: 20 contexts, this one included), which left every PR
+    # touching no portal file permanently pending.
+    "Smoke Tests (Chromium)",
     # validate.yaml (#1398)
     "Go Lint",
     "Validate Tenant Config & Routes",
