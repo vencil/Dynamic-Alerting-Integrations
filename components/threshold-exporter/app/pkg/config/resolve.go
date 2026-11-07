@@ -1653,15 +1653,6 @@ func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
 // per-tenant entries on their own and must not repeat the defaults-side
 // notice once per platform file.
 func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
-	return c.validateOverrideKeysOf(true)
-}
-
-// validateOverrideKeysOf is validateOverrideKeys; thresholdValues false
-// leaves out the #3267 threshold value findings — for a tenant layer the
-// exporter does not read (TenantMerge's flat-KV fallback: the exporter
-// declares no tenant from such a file), whose non-`_` keys are not
-// thresholds anyone serves. The reserved-key findings are not affected.
-func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValidation {
 	var v KeyValidation
 	// versionLabels / renamed record the entries VersionLabels and Renames
 	// repeat.
@@ -1822,11 +1813,9 @@ func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValida
 			// where it is written. Errors AND Values, as a reserved value:
 			// an unchanged one already on disk is a notice (Ratchet, by the
 			// resolver's reading — readAlike).
-			if thresholdValues {
-				if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
-					v.Errors = append(v.Errors, f.Message)
-					v.Values = append(v.Values, f)
-				}
+			if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
+				v.Errors = append(v.Errors, f.Message)
+				v.Values = append(v.Values, f)
 			}
 
 			// ADR-024 OQ-6: a dimensional key's `version` label is a value

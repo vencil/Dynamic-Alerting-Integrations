@@ -412,50 +412,6 @@ func TestValidateTenantKeys_ThresholdValueFinding(t *testing.T) {
 	}
 }
 
-// #3267: the flat-KV fallback (MergeTenantOverRootPlatform, a tenant file
-// with no `tenants.<id>`) is a display-only rebuild the exporter does not
-// read, so its non-`_` keys get no threshold value finding; its reserved-key
-// findings stay. A tenant the file declares under `tenants:` is judged.
-func TestTenantMerge_FlatFallbackHasNoThresholdFinding(t *testing.T) {
-	t.Parallel()
-	var root RootPlatform
-	thresholdFindings := func(v KeyValidation) (n int, reserved int) {
-		for _, f := range v.Values {
-			if f.threshold {
-				n++
-			} else {
-				reserved++
-			}
-		}
-		return n, reserved
-	}
-	// The flat form, and a `tenants:` file declaring another tenant only
-	// (the fallback wraps the whole document under tx: key `tenants`).
-	for _, body := range []string{
-		"mysql_connections: abc\n_silent_mode: purple\n",
-		"tenants:\n  other:\n    x_note: SECRET\n",
-	} {
-		m := MergeTenantOverRootPlatform(root, "tx", []byte(body))
-		kv := m.ValidateTenantKeysByTenant()
-		n, _ := thresholdFindings(kv.Tenants["tx"])
-		if n != 0 {
-			t.Errorf("%q: the fallback tenant got threshold findings: %+v", body, kv.Tenants["tx"].Values)
-		}
-		if strings.Contains(strings.Join(kv.Tenants["tx"].Errors, "\n"), "is not a threshold") {
-			t.Errorf("%q: errors %q", body, kv.Tenants["tx"].Errors)
-		}
-	}
-	m := MergeTenantOverRootPlatform(root, "tx", []byte("mysql_connections: abc\n_silent_mode: purple\n"))
-	if _, reserved := thresholdFindings(m.ValidateTenantKeysByTenant().Tenants["tx"]); reserved != 1 {
-		t.Errorf("the fallback tenant's reserved finding is gone")
-	}
-	// Control: the same keys declared under `tenants:` are judged.
-	m = MergeTenantOverRootPlatform(root, "tx", []byte("tenants:\n  tx:\n    mysql_connections: abc\n"))
-	if n, _ := thresholdFindings(m.ValidateTenantKeysByTenant().Tenants["tx"]); n != 1 {
-		t.Errorf("control: a declared tenant's refused threshold is not judged")
-	}
-}
-
 // #3267 review: the write gate's threshold value finding and the exporter
 // agree on one tree — the finding is there exactly when the row resolvers
 // that read the key refuse the value (ValuesNotServed: value_unparsed /
@@ -495,46 +451,5 @@ func TestThresholdFinding_IsExporterRefusal(t *testing.T) {
 	}
 	if checked < 20 {
 		t.Fatalf("only %d tree×value cases are read by a resolver", checked)
-	}
-}
-
-// The aggregated TenantMerge.ValidateTenantKeys judges the flat-KV
-// fallback's tenant as ValidateTenantKeysByTenant does (one ownLayerKeys):
-// no threshold value finding, its reserved-key finding kept.
-func TestTenantMerge_FlatFallbackAggregatedAgrees(t *testing.T) {
-	t.Parallel()
-	var root RootPlatform
-	for _, body := range []string{
-		"mysql_connections: abc\n_silent_mode: purple\n",
-		"tenants:\n  other:\n    x_note: SECRET\n",
-	} {
-		m := MergeTenantOverRootPlatform(root, "tx", []byte(body))
-		agg := m.ValidateTenantKeys()
-		for _, f := range agg.Values {
-			if f.threshold && f.Tenant == "tx" {
-				t.Errorf("%q: the aggregated view gives the fallback tenant a threshold finding: %+v", body, f)
-			}
-		}
-		by := m.ValidateTenantKeysByTenant()
-		var want []string
-		for _, v := range by.Tenants {
-			want = append(want, v.Errors...)
-		}
-		got := append([]string(nil), agg.Errors...)
-		sort.Strings(got)
-		sort.Strings(want)
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("%q: aggregated errors %q, by tenant %q", body, got, want)
-		}
-	}
-	m := MergeTenantOverRootPlatform(root, "tx", []byte("mysql_connections: abc\n_silent_mode: purple\n"))
-	reserved := 0
-	for _, f := range m.ValidateTenantKeys().Values {
-		if !f.threshold && f.Key == "_silent_mode" {
-			reserved++
-		}
-	}
-	if reserved != 1 {
-		t.Errorf("the fallback tenant's reserved finding is gone from the aggregated view")
 	}
 }

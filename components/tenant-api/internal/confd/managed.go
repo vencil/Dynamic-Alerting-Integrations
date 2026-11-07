@@ -36,7 +36,9 @@ import (
 // the file's shape and never name a tenant.
 const (
 	// GitManagedNotTenantDocument: not YAML, or its root or its `tenants`
-	// is not a mapping, or `tenants` is a top-level key twice.
+	// is not a mapping, or `tenants` is a top-level key twice, or the root
+	// has a key other than `tenants` (#3504: no reader takes a tenant's keys
+	// from anywhere but `tenants.<id>`; tenantFileTopLevelKeys).
 	GitManagedNotTenantDocument = "not_tenant_document"
 	// GitManagedSeveralDocuments: a YAML document with content after the
 	// first (the exporter reads the first alone).
@@ -61,9 +63,10 @@ const (
 //   - one YAML document: any document after the first is empty (no node, or
 //     a null one — a trailing `---`, a comment), as the exporter reads the
 //     first document alone;
-//   - its root a mapping, and its keys untagged scalars, plain or quoted (no
-//     tag — `!!str` included —, not `<<`, not a block scalar), carrying no
-//     anchor, with no value that is an alias or carries an anchor;
+//   - its root a mapping whose keys are tenantFileTopLevelKeys alone
+//     (`tenants`), untagged scalars, plain or quoted (no tag — `!!str`
+//     included —, not `<<`, not a block scalar), carrying no anchor, with no
+//     value that is an alias or carries an anchor;
 //   - its `tenants` a mapping with one pair, held to the same rules: an
 //     untagged scalar key that decodes to stem, a value that is not an alias
 //     and carries no anchor;
@@ -123,6 +126,12 @@ func shapeVerdict(data []byte, stem string) string {
 	return declaredVerdict(ids, stem)
 }
 
+// tenantFileTopLevelKeys is every top-level key a tenant file may hold: the
+// properties of docs/schemas/tenant-config.schema.json, which sets
+// additionalProperties false. TestTenantFileTopLevelKeys_MatchTheSchema holds
+// the two equal.
+var tenantFileTopLevelKeys = map[string]bool{"tenants": true}
+
 // walkDeclaredIDs walks data's YAML nodes: the ids its `tenants:` keys
 // decode to (repeats kept), or the git-managed reason its shape alone gives
 // (TenantFileManagement's rules other than the id check).
@@ -166,6 +175,13 @@ func walkDeclaredIDs(data []byte) (ids []string, reason string) {
 		name, ok := plainUntaggedKey(k)
 		if !ok || indirect(v) {
 			return nil, GitManagedYAMLIndirection
+		}
+		if !tenantFileTopLevelKeys[name] {
+			// #3504: the exporter reads a tenant only from `tenants.<id>`,
+			// and the tenant-config schema allows no other top-level key.
+			// A file holding one is not a tenant document, so the API must
+			// not show or overwrite what no reader takes from it.
+			return nil, GitManagedNotTenantDocument
 		}
 		if name != "tenants" {
 			continue
