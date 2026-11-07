@@ -56,9 +56,10 @@ type KeyVerdict struct {
 // KeyFinding is one finding of a KeyVerdict: a key (Key, as the file
 // spells it) written in File (relative to conf.d; "" when no single file
 // applies) that reaches Tenants. Kind is unread, disable_noop,
-// disable_cascade or value_unread; Severity the one ADR-038 decision 4
-// gives the gates once they block; Reason served-values' reason for an
-// unread key, the reader's problem for a value_unread one.
+// disable_cascade, value_unread or dead_entry; Severity the one ADR-038
+// decision 4 gives the gates once they block; Reason served-values' reason
+// for an unread key, the reader's problem for a value_unread one, the first
+// entry's reason for a dead_entry one.
 type KeyFinding struct {
 	Severity string
 	Kind     string
@@ -127,12 +128,25 @@ var verdictReasons = map[string]string{
 // does not read (keyverdict.KindValueUnread, #3591).
 const KindValueUnread = "value_unread"
 
+// KindDeadEntry is the verdict's kind for a schedule entry /metrics serves
+// at no minute of the day (keyverdict.KindDeadEntry, #3502).
+const KindDeadEntry = "dead_entry"
+
+// keyValidationKinds are the verdict's kinds a tenant's own write already
+// judges through KeyValidation, with its ratchet (ADR-038 decision 12; an
+// entry already on disk that the write leaves as it is is a notice): the
+// verdict judges the tree after the write alone, so refusing them again —
+// or repeating them as the written tenant's advice — would refuse every
+// write to a tenant whose untouched value has one.
+var keyValidationKinds = map[string]bool{KindValueUnread: true, KindDeadEntry: true}
+
 // verdictKinds say what a finding's Kind means.
 var verdictKinds = map[string]string{
 	"unread":          "is read by no reader",
 	"disable_noop":    "is a disable that switches nothing off",
 	"disable_cascade": "is switched off with its base's disable (ADR-038 decision 8)",
 	KindValueUnread:   "has a value its reader does not read (ADR-038 decision 10)",
+	KindDeadEntry:     "has a schedule entry /metrics serves at no minute of the day",
 }
 
 // verdictAdvice is a key verdict rendered for one caller: the lines for
@@ -205,7 +219,7 @@ func adviseKeyVerdict(ctx context.Context, files []ProposedFile, kv *KeyVerdict)
 		// tenant the file declares is judged too, and shown as names says.
 		for _, t := range f.Tenants {
 			switch {
-			case ts[t] && f.Kind == KindValueUnread:
+			case ts[t] && keyValidationKinds[f.Kind]:
 				// The write's own KeyValidation already says it, with the
 				// decision 12 ratchet (an untouched value is a NOTICE): the
 				// verdict's copy would contradict that as an error line.
@@ -279,8 +293,9 @@ func (e *KeyVerdictError) lines() []string {
 // platform file or a profile refuses nothing (ADR-038 decision 6) — their
 // findings are reported as before (adviseKeyVerdict).
 //
-// A value_unread finding refuses nothing here either: a tenant's own
-// reserved value is already this write's to refuse through KeyValidation,
+// A value_unread or dead_entry finding refuses nothing here either
+// (keyValidationKinds): a tenant's own value is already this write's to
+// refuse through KeyValidation,
 // which compares it with the value on disk first (ADR-038 decision 12: an
 // unread value the write leaves as the exporter reads it is a notice, not a
 // refusal). Refusing it again from the verdict, which judges the tree after
@@ -302,7 +317,7 @@ func keyVerdictRefusal(files []ProposedFile, kv *KeyVerdict) *KeyVerdictError {
 	}
 	var out *KeyVerdictError
 	for _, f := range kv.Findings {
-		if !f.Blocks || f.Kind == KindValueUnread {
+		if !f.Blocks || keyValidationKinds[f.Kind] {
 			continue
 		}
 		for _, t := range f.Tenants {

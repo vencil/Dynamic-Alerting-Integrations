@@ -17,23 +17,23 @@ lang: zh
 
 | Rule Pack | File | Recording Rules | Alert Rules | Total |
 |-----------|------|-----------------|-------------|-------|
-| Clickhouse | rule-pack-clickhouse.yaml | 12 | 7 | 19 |
+| Clickhouse | rule-pack-clickhouse.yaml | 11 | 7 | 18 |
 | DB2 | rule-pack-db2.yaml | 13 | 8 | 21 |
-| Elasticsearch | rule-pack-elasticsearch.yaml | 11 | 7 | 18 |
+| Elasticsearch | rule-pack-elasticsearch.yaml | 10 | 7 | 17 |
 | JVM | rule-pack-jvm.yaml | 9 | 7 | 16 |
 | Kafka | rule-pack-kafka.yaml | 13 | 9 | 22 |
 | Kubernetes | rule-pack-kubernetes.yaml | 30 | 14 | 44 |
 | Liveness | rule-pack-liveness.yaml | 0 | 1 | 1 |
-| Mariadb | rule-pack-mariadb.yaml | 14 | 18 | 32 |
-| Mongodb | rule-pack-mongodb.yaml | 10 | 8 | 18 |
+| Mariadb | rule-pack-mariadb.yaml | 12 | 18 | 30 |
+| Mongodb | rule-pack-mongodb.yaml | 8 | 8 | 16 |
 | Nginx | rule-pack-nginx.yaml | 9 | 6 | 15 |
 | Operational | rule-pack-operational.yaml | 0 | 4 | 4 |
 | Oracle | rule-pack-oracle.yaml | 11 | 7 | 18 |
 | Platform | rule-pack-platform.yaml | 0 | 53 | 53 |
-| Postgresql | rule-pack-postgresql.yaml | 11 | 9 | 20 |
+| Postgresql | rule-pack-postgresql.yaml | 8 | 9 | 17 |
 | Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 8 | 20 |
-| Redis | rule-pack-redis.yaml | 11 | 6 | 17 |
-| **TOTAL** | | **166** | **172** | **338** |
+| Redis | rule-pack-redis.yaml | 9 | 6 | 15 |
+| **TOTAL** | | **155** | **172** | **327** |
 
 ## 架構說明
 
@@ -121,7 +121,7 @@ groups:
 - **elasticsearch_exporter**: https://github.com/prometheus-community/elasticsearch_exporter
 - **oracledb_exporter**: https://github.com/iamseth/oracledb_exporter
 - **ibm_db2_exporter**: https://github.com/IBM/db2-prometheus-exporter (community)
-- **clickhouse_exporter**: https://github.com/ClickHouse/clickhouse_exporter (或 ClickHouse 內建 /metrics)
+- **ClickHouse 內建 /metrics**：沒有獨立 exporter（本 pack 讀的指標名不是 clickhouse_exporter 的）
 - **kafka_exporter**: https://github.com/danielqsj/kafka-exporter
 - **rabbitmq_exporter**: https://github.com/kbudde/rabbitmq_exporter
 - **kube-state-metrics**: https://github.com/kubernetes/kube-state-metrics

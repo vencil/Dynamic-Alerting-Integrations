@@ -68,19 +68,22 @@ class KeyVerdict(NamedTuple):
     switched_off_with: str | None  # the base whose `disable` switches it off (#3046), or None
     value: Any                     # the effective config's value (as written); None when absent
     served: Any                    # what /metrics serves for it; None when nothing
+    # #3502: the entries of its schedule /metrics serves at no minute of the day
+    dead_entries: "tuple[tv.DeadEntry, ...]" = ()
 
 
 class Finding(NamedTuple):
     """One thing to report: a tenant's own key, or a platform file / profile
     key reaching `tenants`."""
     severity: str
-    kind: str                      # "unread" | "disable_noop" | "disable_cascade" | "profile_not_judged" | "value_unread"
+    kind: str                      # one of _KINDS
     key: str
     file: str | None
     tenants: tuple[str, ...]
     reason: str | None
     blocks: bool = False                # a whole-tree gate refuses it (Go's keyverdict.Blocking)
     base: str | None = None             # disable_cascade: the base whose `disable` switches it off
+    dead_entries: "tuple[tv.DeadEntry, ...]" = ()  # dead_entry (#3502): its entries, in the order written
 
 
 class TreeVerdict(NamedTuple):
@@ -164,7 +167,8 @@ def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) 
 
 _VERDICTS = frozenset({READ, UNREAD, UNDECIDABLE})
 _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
-_KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged", "value_unread"})
+_KINDS = frozenset({"unread", "disable_noop", "disable_cascade", "profile_not_judged", "value_unread",
+                    "dead_entry"})
 #: Finding kinds only a da-guard older than #3046 writes (`tv._OlderOutput`).
 _RETIRED_KINDS = frozenset({"disable_partial"})
 _DISABLES = frozenset({"effective", "noop"})
@@ -223,7 +227,8 @@ def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
                       _optional(r["file"], f"{w}.file"), _tuple(r["read_by"], f"{w}.read_by"), verdict,
                       severity, _optional(r["reason"], f"{w}.reason"),
                       _optional(_current_disable(r["disable"], f"{w}.disable"), f"{w}.disable", _DISABLES),
-                      _optional(r["switched_off_with"], f"{w}.switched_off_with"), r["value"], r["served"])
+                      _optional(r["switched_off_with"], f"{w}.switched_off_with"), r["value"], r["served"],
+                      tv.dead_entries(r["dead_entries"], f"{w}.dead_entries"))
 
 
 def _current_disable(v: Any, what: str) -> Any:
@@ -240,7 +245,19 @@ def _finding(f: dict) -> Finding:
                    _one_of(f["kind"], "findings.kind", _KINDS), _str(f["key"], "findings.key"),
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
                    _optional(f["reason"], "findings.reason"), _bool(f["blocks"], "findings.blocks"),
-                   _optional(f["base"], "findings.base"))
+                   _optional(f["base"], "findings.base"), _finding_dead_entries(f))
+
+
+def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...]":
+    """A finding's `dead_entries`: a non-empty list on a dead_entry, null on
+    any other kind (#3502)."""
+    v = f["dead_entries"]
+    if (f["kind"] == "dead_entry") != (v is not None):
+        raise ValueError(f"findings: kind {f['kind']!r} with dead_entries {v!r}")
+    out = tv.dead_entries(v, "findings.dead_entries") if v is not None else ()
+    if f["kind"] == "dead_entry" and not out:
+        raise ValueError("findings: a dead_entry without entries")
+    return out
 
 
 def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
@@ -299,6 +316,11 @@ def finding_line(f: Finding, limit: int) -> str:
     if f.base:
         # #3046: name the base whose `disable` switches the key off.
         why = f" (switched off with its base `{f.base}`)"
+    if f.dead_entries:
+        # #3502: name each entry that never serves.
+        why = " (never served: " + "; ".join(
+            f"{d.entry}" + (f" `{d.window}`" if d.window is not None else "") + f" → {d.value!r}: {d.reason}"
+            for d in f.dead_entries) + ")"
     # A profile key no tenant binds names none (#3042).
     who = f"tenant(s) {who}" if who else "no tenant"
     return f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why} — {who}"

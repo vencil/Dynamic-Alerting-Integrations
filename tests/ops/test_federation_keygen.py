@@ -89,35 +89,38 @@ def test_secret_manifest_structure():
 # ---------------------------------------------------------------------------
 # _merge_jwks
 # ---------------------------------------------------------------------------
-def _write_jwks(path, kids):
-    path.write_text(json.dumps({"keys": [{"kid": k} for k in kids]}), encoding="utf-8")
+def _jwks(kids):
+    return {"keys": [{"kid": k} for k in kids]}
 
 
-def test_merge_jwks_appends_new_key(tmp_path):
-    src = tmp_path / "jwks.json"
-    _write_jwks(src, ["old-kid"])
-    merged = fk._merge_jwks(str(src), {"kid": "new-kid"})
+def test_merge_jwks_appends_new_key():
+    merged = fk._merge_jwks(_jwks(["old-kid"]), {"kid": "new-kid"}, existing_path="j.json")
     assert [k["kid"] for k in merged["keys"]] == ["old-kid", "new-kid"]
 
 
-def test_merge_jwks_rejects_duplicate_kid(tmp_path):
-    src = tmp_path / "jwks.json"
-    _write_jwks(src, ["dup-kid"])
+def test_merge_jwks_rejects_duplicate_kid():
     with pytest.raises(SystemExit):
-        fk._merge_jwks(str(src), {"kid": "dup-kid"})
+        fk._merge_jwks(_jwks(["dup-kid"]), {"kid": "dup-kid"}, existing_path="j.json")
 
 
-def test_merge_jwks_rejects_non_jwks_document(tmp_path):
-    bad = tmp_path / "notjwks.json"
-    bad.write_text(json.dumps({"not": "a jwks"}), encoding="utf-8")
+def test_merge_jwks_rejects_non_jwks_document():
     with pytest.raises(SystemExit):
-        fk._merge_jwks(str(bad), {"kid": "new-kid"})
+        fk._merge_jwks({"not": "a jwks"}, {"kid": "new-kid"}, existing_path="j.json")
 
 
-def test_merge_jwks_rejects_missing_file(tmp_path):
-    with pytest.raises(SystemExit) as exc:
-        fk._merge_jwks(str(tmp_path / "does-not-exist.json"), {"kid": "new-kid"})
-    assert exc.value.code == 2  # a caller error, not any exit
+def test_merge_jwks_rejects_missing_file(tmp_path, monkeypatch):
+    """A missing --existing-jwks is a caller error, named — read by the lib
+    (#3445) before a keypair is made."""
+    from _lib_exitcodes import CallerError
+    missing = tmp_path / "does-not-exist.json"
+    monkeypatch.setattr(sys, "argv", ["fed-key", "--rotate", "--existing-jwks", str(missing),
+                                      "--jwks-out", str(tmp_path / "out.json")])
+    monkeypatch.setattr(fk, "_generate_keypair",
+                        lambda bits: pytest.fail("a keypair was made before the input was read"))
+    with pytest.raises(CallerError) as exc:
+        fk.main()
+    assert exc.value.reason == "file_not_found"
+    assert str(exc.value).startswith(f"--existing-jwks {missing}: ")
 
 
 # ---------------------------------------------------------------------------

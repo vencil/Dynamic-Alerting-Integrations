@@ -146,14 +146,34 @@ ALLOWED = {
         (1, "the customer repo's .da-init.yaml (issue 1465 file ledger), written and read only by init; no Go consumer"),
     ('scripts/tools/ops/init_project.py', '_root_relative_ci_paths'):
         (1, "the customer repo's GitHub workflows, read by GitHub Actions; no Go consumer"),
-    ('scripts/tools/ops/lint_custom_rules.py', 'load_policy'):
-        (1, "the custom-rule lint policy (--policy), this tool's own input"),
     ('scripts/tools/ops/migrate_rule.py', 'load_metric_dictionary'):
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
-    ('scripts/tools/ops/shadow_verify.py', 'check_preflight'):
-        (1, 'the prefix-mapping file, a migration input read only by Python tools'),
     ('scripts/tools/ops/validate_migration.py', 'load_mapping_pairs'):
         (1, 'the prefix-mapping file, a migration input read only by Python tools'),
+    # #3445: `_lib_input.document` reads a declared input file (`decode_bytes`,
+    # which parses YAML for a YAML declaration only); each call is a point.
+    ('scripts/tools/ops/alert_correlate.py', 'main'):
+        (1, "the alerts file (--input), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/analyze_rule_pack_gaps.py', 'main'):
+        (1, "a metric-dictionary.yaml given with --metric-dictionary, the repo's own metric catalogue read only by Python tools"),
+    ('scripts/tools/ops/cutover_tenant.py', 'main'):
+        (1, "cutover-readiness.json (--readiness-json), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/federation_keygen.py', 'main'):
+        (1, "the JWKS to rotate into (--existing-jwks), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/generate_tenant_mapping_rules.py', 'main'):
+        (1, "a metric-dictionary.yaml given with --metric-dictionary, the repo's own metric catalogue read only by Python tools"),
+    ('scripts/tools/ops/grafana_import.py', 'main'):
+        (1, "a Grafana dashboard (--dashboard), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/lint_custom_rules.py', 'main'):
+        (1, "the custom-rule lint policy (--policy), this tool's own input"),
+    ('scripts/tools/ops/runtime_audit.py', 'RuntimeAuditor._load_runtime'):
+        (1, "a saved /api/v1/rules answer (--runtime-json), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/scaffold_tenant.py', 'run_from_onboard'):
+        (1, "onboard-hints.json (--from-onboard), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
+    ('scripts/tools/ops/shadow_verify.py', 'judge_inputs'):
+        (1, 'the prefix-mapping file (YAML), the readiness JSON and the report CSV (text), migration inputs read only by Python tools'),
+    ('scripts/tools/ops/silencer_drift_check.py', 'main'):
+        (1, "an amtool silence dump (--silences-file), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
 }
 
 DEBT: dict = {}

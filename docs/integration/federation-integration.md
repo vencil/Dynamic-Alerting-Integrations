@@ -130,7 +130,7 @@ scrape_configs:
 | MongoDB | mongodb_exporter | `mongodb_*` |
 | Oracle | oracledb_exporter | `oracledb_*` |
 | DB2 | db2_exporter | `db2_*` |
-| ClickHouse | clickhouse_exporter | `ClickHouse*` |
+| ClickHouse | 內建 /metrics | `ClickHouse*` |
 | Kafka | kafka_exporter | `kafka_*` |
 | RabbitMQ | rabbitmq_exporter | `rabbitmq_*` |
 

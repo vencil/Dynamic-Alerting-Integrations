@@ -37,12 +37,6 @@ groups:
       - record: tenant:redis_memory_used_bytes:max
         expr: max by(tenant) (redis_memory_used_bytes)
 
-      # Memory usage ratio
-      - record: tenant:redis_memory_usage:ratio
-        expr: |
-          max by(tenant) (redis_memory_used_bytes)
-          / max by(tenant) (redis_memory_max_bytes > 0)
-
       # Connected clients
       - record: tenant:redis_connected_clients:max
         expr: max by(tenant) (redis_connected_clients)
@@ -63,10 +57,6 @@ groups:
       # Replication lag (for replicas)
       - record: tenant:redis_replication_lag:max
         expr: max by(tenant) (redis_connected_slave_lag_seconds)
-
-      # Commands per second
-      - record: tenant:redis_commands:rate5m
-        expr: sum by(tenant) (rate(redis_commands_processed_total[5m]))
 
   # -------------------------------------------------------
   # Threshold normalization: Redis

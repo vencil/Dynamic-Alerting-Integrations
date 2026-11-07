@@ -2472,8 +2472,9 @@ jobs:
 
       # ADR-027 §9 item 7: the offline scope check over the repo's sample
       # config — the conf.d tree, _rbac.yaml and (absent) _tenant_orgs.yaml
-      # try-local mounts as TA_CONFIG_DIR / TA_RBAC_PATH. Any rule × untagged
-      # tenant (or a tenant file the list cannot read) exits 1. A step running
+      # try-local mounts as TA_CONFIG_DIR / TA_RBAC_PATH. Any scope-restricted
+      # rule × a tenant it does not grant (untagged, or whose tags cannot be
+      # read) exits 1. A step running
       # the CLI rather than a Go test, so what is checked is the command an
       # operator runs before upgrading, flags and exit code included; a moved
       # tree exits 2 here instead of skipping. try-local/** is in the `go`

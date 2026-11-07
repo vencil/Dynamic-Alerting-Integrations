@@ -424,7 +424,7 @@ ADR-016 提到「flat tenant 缺 `_metadata.{domain,region,environment}` 時可�
 
 早期版本在這類環境讀取全通、只有寫入需要補配置；open mode 刪除後（[ADR-027](../adr/027-tenant-api-caller-identity.md) §7）讀取也需要。從仍依賴缺檔可讀的版本升級前，先補上這份檔案。
 
-規則帶範圍限制（`environments`、`domains` 或 `org-scope`）的部署：三條範圍軸一律強制，未標記的租戶在限制該軸的規則下不可見、不可寫。升級前用新版 image 跑 `tenant-api config check`（範圍檢查模式，見 [`components/tenant-api/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md)），它列出每條範圍軸上「有範圍限制的規則 × 未標記的租戶」，有就非零退出。
+規則帶範圍限制（`environments`、`domains` 或 `org-scope`）的部署：三條範圍軸一律強制，未標記的租戶在限制該軸的規則下不可見、不可寫。升級前用新版 image 跑 `tenant-api config check`（範圍檢查模式，見 [`components/tenant-api/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md)），它列出每條範圍軸上「有範圍限制的規則 × 該規則因此不授予的租戶」（未標記、或標記讀不到），有就非零退出。
 
 ---
 

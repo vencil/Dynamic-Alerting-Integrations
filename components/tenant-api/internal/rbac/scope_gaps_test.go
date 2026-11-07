@@ -22,17 +22,21 @@ func TestUnlabeledScopeGaps(t *testing.T) {
 		{ID: "tenant-alpha", Environment: "staging", Domain: "finance", Orgs: []string{"ORG-1"}},
 		// Unlabeled on every axis.
 		{ID: "tenant-bravo"},
-		// Metadata unknown: the metadata axes are not judged, the org axis is.
+		// Metadata unknown: every rule restricting a metadata axis is a
+		// metadata_unknown gap (the server does not grant it); the org axis
+		// is judged as usual.
 		{ID: "tenant-bxx", MetadataUnknown: true, Orgs: []string{}},
 		// No scoped rule's pattern matches it.
 		{ID: "other-zulu"},
 	}
 	got := cfg.UnlabeledScopeGaps(tenants)
 	want := []ScopeGap{
-		{Axis: ScopeAxisEnvironment, Rule: "envs", RuleIndex: 0, Tenant: "tenant-bravo"},
-		{Axis: ScopeAxisDomain, Rule: "domains", RuleIndex: 1, Tenant: "tenant-bravo"},
-		{Axis: ScopeAxisOrg, Rule: "orgs", RuleIndex: 2, Tenant: "tenant-bravo"},
-		{Axis: ScopeAxisOrg, Rule: "orgs", RuleIndex: 2, Tenant: "tenant-bxx"},
+		{Axis: ScopeAxisEnvironment, Rule: "envs", RuleIndex: 0, Tenant: "tenant-bravo", Reason: GapReasonUnlabeled},
+		{Axis: ScopeAxisEnvironment, Rule: "envs", RuleIndex: 0, Tenant: "tenant-bxx", Reason: GapReasonMetadataUnknown},
+		{Axis: ScopeAxisDomain, Rule: "domains", RuleIndex: 1, Tenant: "tenant-bravo", Reason: GapReasonUnlabeled},
+		{Axis: ScopeAxisDomain, Rule: "domains", RuleIndex: 1, Tenant: "tenant-bxx", Reason: GapReasonMetadataUnknown},
+		{Axis: ScopeAxisOrg, Rule: "orgs", RuleIndex: 2, Tenant: "tenant-bravo", Reason: GapReasonUnlabeled},
+		{Axis: ScopeAxisOrg, Rule: "orgs", RuleIndex: 2, Tenant: "tenant-bxx", Reason: GapReasonUnlabeled},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("UnlabeledScopeGaps:\n got %+v\nwant %+v", got, want)
@@ -49,12 +53,12 @@ func TestUnlabeledScopeGaps_SortedWhateverTheInputOrder(t *testing.T) {
 	tenants := []TenantLabels{{ID: "tenant-charlie"}, {ID: "tenant-alpha"}}
 	got := cfg.UnlabeledScopeGaps(tenants)
 	want := []ScopeGap{
-		{Axis: ScopeAxisEnvironment, Rule: "both", Tenant: "tenant-alpha"},
-		{Axis: ScopeAxisEnvironment, Rule: "both", Tenant: "tenant-charlie"},
-		{Axis: ScopeAxisDomain, Rule: "both", Tenant: "tenant-alpha"},
-		{Axis: ScopeAxisDomain, Rule: "both", Tenant: "tenant-charlie"},
-		{Axis: ScopeAxisOrg, Rule: "both", Tenant: "tenant-alpha"},
-		{Axis: ScopeAxisOrg, Rule: "both", Tenant: "tenant-charlie"},
+		{Axis: ScopeAxisEnvironment, Rule: "both", Tenant: "tenant-alpha", Reason: GapReasonUnlabeled},
+		{Axis: ScopeAxisEnvironment, Rule: "both", Tenant: "tenant-charlie", Reason: GapReasonUnlabeled},
+		{Axis: ScopeAxisDomain, Rule: "both", Tenant: "tenant-alpha", Reason: GapReasonUnlabeled},
+		{Axis: ScopeAxisDomain, Rule: "both", Tenant: "tenant-charlie", Reason: GapReasonUnlabeled},
+		{Axis: ScopeAxisOrg, Rule: "both", Tenant: "tenant-alpha", Reason: GapReasonUnlabeled},
+		{Axis: ScopeAxisOrg, Rule: "both", Tenant: "tenant-charlie", Reason: GapReasonUnlabeled},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("UnlabeledScopeGaps:\n got %+v\nwant %+v", got, want)

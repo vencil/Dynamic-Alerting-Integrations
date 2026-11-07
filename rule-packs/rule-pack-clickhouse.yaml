@@ -1,10 +1,13 @@
 # ============================================================
-# Rule Pack: ClickHouse (via built-in /metrics or clickhouse_exporter)
+# Rule Pack: ClickHouse (via its built-in /metrics endpoint)
 # 選配 — 涵蓋 Queries、Connections、Parts、Replication、Memory、MergeRate
 #
-# 需要的 exporter:
-#   - ClickHouse 內建 Prometheus endpoint (/metrics)
-#   - 或 clickhouse_exporter (https://github.com/ClickHouse/clickhouse_exporter)
+# 需要的 endpoint:
+#   - ClickHouse 內建 Prometheus endpoint (/metrics)。本 pack 讀的指標名
+#     (ClickHouseMetrics_* / ClickHouseProfileEvents_*) 全是它的；clickhouse_exporter
+#     的指標名不同，不支援。沒有獨立 exporter，所以 target 的 up==0 就是 server
+#     連不上——ClickHouse 停機由 rule-pack-liveness.yaml 的 TenantExporterAbsent
+#     負責（#3618）。
 #
 # >>> GENERATED:threshold-registry:pack-clickhouse — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
@@ -73,13 +76,6 @@ groups:
             ClickHouseMetrics_MemoryTracking{tenant!=""}
           )
 
-      # Background merge rate (5m)
-      - record: tenant:clickhouse_merges_rate:rate5m
-        expr: |
-          sum by(tenant) (
-            rate(ClickHouseProfileEvents_MergedRows{tenant!=""}[5m])
-          )
-
       # Failed queries rate (5m)
       - record: tenant:clickhouse_failed_queries:rate5m
         expr: |
@@ -128,8 +124,16 @@ groups:
   - name: clickhouse-alerts
     rules:
       # --- Availability ---
+      # DEPRECATED (#3618): superseded by TenantExporterAbsent in rule-pack-liveness.yaml
+      # (ClickHouse serves /metrics itself, so its target being down IS the server
+      # being down). The old `up{job="clickhouse"}` never fired: the shipped scrape
+      # config has no such job. Kept ONE release as a deprecation shim, selecting the
+      # tenant's ClickHouse target the way the shipped config scrapes it, so external
+      # matchers on ClickHouseDown don't break. Removal: next release.
       - alert: ClickHouseDown
-        expr: up{job="clickhouse"} == 0
+        expr: |
+          up{job="tenant-exporters"} == 0
+          and on(tenant) tenant_expected_exporter{db_type="clickhouse"}
         for: 2m
         labels:
           severity: critical
