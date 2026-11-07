@@ -24,6 +24,28 @@ when a refusal is raised, as in `_lib_paths`.
   wording of "selected nothing".
 * ``read_bytes(path, *, flag, lang)`` — the bytes of a selected file; a
   file that cannot be read is reason ``file_unreadable``.
+* ``add_input(parser, flag, *, decode=Document(...))`` (#3445) — declares
+  an input FILE whose content the tool reads, and how: ``Document(fmt,
+  top)``. ``document(args, dest, *, lang)`` is that content, parsed. The
+  path is judged as ``_lib_paths.require_file`` judges it (``file_not_found``
+  / ``file_not_accessible``); content that is not UTF-8, not valid for its
+  format, or of another top-level type than declared is reason
+  ``file_unreadable``: rc 2, one line naming the flag and the path — never
+  a traceback, never an empty input.
+* ``decode_bytes(raw, *, fmt, name)`` — ⛔ with ``read_bytes``, the one reading
+  of a caller's input file: strict UTF-8, then JSON (``json.loads``) or
+  YAML (PyYAML's pure-Python ``SafeLoader``, see ``_lib_io``'s
+  ``load_yaml_file``, which decodes through it) or nothing (``text``).
+  Raises :class:`DocumentError` with a one-line detail.
+  ``refuse_top(label, got, wanted, *, lang)`` is the one wording of a top
+  level of the wrong type, for a reader that is not ``document`` (a file
+  da-guard reads).
+
+PyYAML is imported inside ``decode_bytes``' YAML branch only: this module stays
+importable with the standard library alone. (Not named ``decode``: that is
+``add_input``'s keyword, and the YAML-reader gate,
+``tests/shared/test_yaml_reader_boundary.py``, reads names — a module-level
+reader named ``decode`` made every ``add_input`` call a YAML read.)
 
 ⛔ ``_list(directory)`` is the one listing of a directory in the Python
 tools — ``_lib_consumer_read``'s walk and rule-source declarations ask it
@@ -48,6 +70,8 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import io
+import json
 import os
 import stat
 from pathlib import Path
@@ -96,17 +120,125 @@ def _is_selector(select: Any) -> bool:
             and isinstance(getattr(select, "wanted", None), str))
 
 
+#: ``Document.fmt``: what the bytes of the file are read as.
+FORMATS = ("json", "yaml", "text")
+
+#: What a top-level type is called in a refusal, per language.
+_NOUN = {
+    "en": {dict: "a mapping", list: "a list", str: "a string", int: "a number",
+           float: "a number", bool: "a boolean", type(None): "an empty document",
+           "scalar": "a scalar"},
+    "zh": {dict: "映射", list: "清單", str: "字串", int: "數字", float: "數字",
+           bool: "布林值", type(None): "空文件", "scalar": "純量"},
+}
+
+
+def _noun(kind: Any, lang: str) -> str:
+    words = _NOUN["zh" if lang == "zh" else "en"]
+    return words.get(kind, words["scalar"])
+
+
+def _wanted_words(top: Any, lang: str) -> str:
+    tops = top if isinstance(top, tuple) else (top,)
+    joiner = "或" if lang == "zh" else " or "
+    return joiner.join(_noun(t, lang) for t in tops)
+
+
+class Document(NamedTuple):
+    """``decode``: the input is a FILE whose content the tool reads.
+
+    *fmt* — ``"json"``, ``"yaml"`` or ``"text"`` (strict UTF-8, no parse).
+    *top* — the type the top level must be (``dict``, ``list``, ``str``
+    for text), or a tuple of them. *empty_is* — YAML only: an empty
+    document (no node, ``~``) is refused as of the wrong type unless a tool
+    reads it so on purpose; then this is that type (``dict``: read as
+    ``{}``), declared here, never a quiet ``or {}`` in the tool."""
+    fmt: str
+    top: Any
+    empty_is: Any = None
+
+    @property
+    def wanted(self) -> str:
+        """What the top level must be, as a refusal says it ("a mapping")."""
+        return _wanted_words(self.top, "en")
+
+
+class DocumentError(Exception):
+    """Content that ``decode_bytes`` cannot read. ``str()`` is the one-line
+    detail (English); :meth:`detail` says it in a language; ``cause`` is
+    the decoder's own error (``UnicodeDecodeError``, ``json.JSONDecodeError``,
+    a ``yaml.YAMLError``)."""
+
+    def __init__(self, problem: str, info: str, cause: BaseException) -> None:
+        self.problem = problem   # "utf8" | "json" | "yaml"
+        self.info = info
+        self.cause = cause
+        super().__init__(self.detail("en"))
+
+    def detail(self, lang: str) -> str:
+        if self.problem == "utf8":
+            return (f"不是有效的 UTF-8（第 {self.info} 個位元組）" if lang == "zh"
+                    else f"not valid UTF-8 (byte {self.info})")
+        name = self.problem.upper()
+        return (f"不是有效的 {name}：{self.info}" if lang == "zh"
+                else f"not valid {name}: {self.info}")
+
+
+#: The detail of a document nested deeper than the parser's recursion limit.
+_TOO_DEEP = "nested too deeply to read"
+
+
+def decode_bytes(raw: bytes, *, fmt: str, name: str) -> Any:
+    """*raw* (the bytes of the file *name*) read as *fmt*: ⛔ the one
+    decoding of a caller's input file (see the module docstring). Strict
+    UTF-8 first; then ``json.loads``, PyYAML's pure-Python ``SafeLoader``
+    (never the C one: see the comment above ``_lib_io.load_yaml_file``) on
+    a stream named *name* so its marks name the file, or nothing (text).
+    Raises :class:`DocumentError`; the parser's message is one line."""
+    if fmt not in FORMATS:
+        raise ValueError(f"fmt must be one of {FORMATS}, not {fmt!r}")
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise DocumentError("utf8", str(exc.start), exc) from exc
+    if fmt == "text":
+        return text
+    if fmt == "json":
+        try:
+            return json.loads(text)
+        except RecursionError as exc:
+            raise DocumentError("json", _TOO_DEEP, exc) from exc
+        except ValueError as exc:  # json.JSONDecodeError is one
+            raise DocumentError("json", " ".join(str(exc).split()), exc) from exc
+    import yaml  # noqa: PLC0415  (lazy: the module stays standard-library only)
+    stream = io.StringIO(text)
+    stream.name = name
+    try:
+        return yaml.load(stream, Loader=yaml.SafeLoader)  # noqa: S506  (SafeLoader, pure parser)
+    except RecursionError as exc:
+        raise DocumentError("yaml", _TOO_DEEP, exc) from exc
+    except (yaml.YAMLError, ValueError) as exc:
+        # ValueError: a value SafeLoader's constructors cannot build — a
+        # timestamp like 2020-99-99 — raised past PyYAML's own error class.
+        raise DocumentError("yaml", " ".join(str(exc).split()) or exc.__class__.__name__,
+                            exc) from exc
+
+
 class InputSpec(NamedTuple):
-    """What ``add_input`` declared for one flag."""
+    """What ``add_input`` declared for one flag: a directory (``select``)
+    or a file whose content is read (``decode``), never both."""
     flag: str
     dest: str
     select: Any
-    """A selector (:class:`TopLevel`, ``RuleSource``) or ``DA_GUARD_LISTS``."""
+    """A selector (:class:`TopLevel`, ``RuleSource``) or ``DA_GUARD_LISTS``;
+    None for a file input."""
     empty: str
     """``EMPTY_ALLOWED`` / ``EMPTY_REFUSED``."""
     default: Optional[str]
     absent_default: Optional[str]
     """``ABSENT_EMPTY`` / ``ABSENT_REFUSED``; None when there is no default."""
+    decode: Optional[Document] = None
+    """The :class:`Document` of a file input; None for a directory."""
 
 
 class _Value(str):
@@ -134,25 +266,46 @@ class _InputAction(argparse._StoreAction):
         setattr(namespace, self.dest, _Value(values, self.input_spec, True))
 
 
-def add_input(parser: Any, flag: str, *, select: Any, empty: str = EMPTY_ALLOWED,
+def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
+              decode: Optional[Document] = None, empty: str = EMPTY_ALLOWED,
               default: Optional[str] = None, absent_default: Optional[str] = None,
               **kwargs: Any) -> argparse.Action:
-    """Add the input flag *flag* to *parser* and declare what it selects.
+    """Add the input flag *flag* (and its short *aliases*, ``-i``) to
+    *parser* and declare what it is: exactly one of *select* or *decode*.
 
-    *select*: a selector (:class:`TopLevel`, ``RuleSource``; see the module
-    docstring) or ``DA_GUARD_LISTS``. *empty*: what an empty selection is
-    (``EMPTY_ALLOWED`` / ``EMPTY_REFUSED``). *default*: the value when the
-    flag is not given — no trailing separator (``rule-packs``, not
-    ``rule-packs/``: the value is shown in messages as the caller would
-    type it); *absent_default* (required with one,
+    *select* — a directory input: a selector (:class:`TopLevel`,
+    ``RuleSource``; see the module docstring) or ``DA_GUARD_LISTS``. *empty*:
+    what an empty selection is (``EMPTY_ALLOWED`` / ``EMPTY_REFUSED``).
+    *default*: the value when the flag is not given — no trailing separator
+    (``rule-packs``, not ``rule-packs/``: the value is shown in messages as
+    the caller would type it); *absent_default* (required with one,
     ``ABSENT_EMPTY`` / ``ABSENT_REFUSED``) is what that default is when
-    nothing is there. *kwargs* go to ``add_argument``
-    (``help``, ``required``, ``metavar``); the value is always the string
-    given, so ``type`` / ``nargs`` / ``action`` are not taken."""
+    nothing is there.
+
+    *decode* — a file input whose content the tool reads: a
+    :class:`Document`, read by :func:`document`. It takes no *empty*,
+    *default* or *absent_default* (#3445: a file nobody gave is not read).
+
+    *kwargs* go to ``add_argument`` (``help``, ``required``, ``metavar``);
+    the value is always the string given, so ``type`` / ``nargs`` /
+    ``action`` are not taken."""
     for taken in ("type", "nargs", "action", "dest"):
         if taken in kwargs:
             raise TypeError(f"add_input does not take {taken}=")
-    if not (select == DA_GUARD_LISTS or _is_selector(select)):
+    if (select is None) == (decode is None):
+        raise TypeError("add_input takes exactly one of select= (a directory) "
+                        "or decode= (a file)")
+    if decode is not None:
+        if not isinstance(decode, Document) or decode.fmt not in FORMATS:
+            raise TypeError(f"decode must be a Document with fmt in {FORMATS}, not {decode!r}")
+        if empty != EMPTY_ALLOWED or default is not None or absent_default is not None:
+            raise ValueError("a decode= input takes no empty=, default= or absent_default=")
+        if decode.empty_is is not None and decode.fmt != "yaml":
+            raise ValueError("empty_is is for a YAML document only")
+        tops = decode.top if isinstance(decode.top, tuple) else (decode.top,)
+        if decode.empty_is is not None and decode.empty_is not in tops:
+            raise ValueError(f"empty_is {decode.empty_is!r} is not a declared top {decode.top!r}")
+    elif not (select == DA_GUARD_LISTS or _is_selector(select)):
         raise TypeError("select must be a selector (choose(directory, names), wanted) "
                         f"or DA_GUARD_LISTS, not {select!r}")
     if empty not in (EMPTY_ALLOWED, EMPTY_REFUSED):
@@ -163,8 +316,8 @@ def add_input(parser: Any, flag: str, *, select: Any, empty: str = EMPTY_ALLOWED
         raise ValueError(f"absent_default must be {ABSENT_EMPTY!r} or {ABSENT_REFUSED!r}")
     if default is not None and len(default) > 1 and default.endswith(("/", os.sep)):
         raise ValueError(f"default {default!r}: no trailing separator (see add_input)")
-    action = parser.add_argument(flag, action=_InputAction, default=None, **kwargs)
-    spec = InputSpec(flag, action.dest, select, empty, default, absent_default)
+    action = parser.add_argument(flag, *aliases, action=_InputAction, default=None, **kwargs)
+    spec = InputSpec(flag, action.dest, select, empty, default, absent_default, decode)
     action.input_spec = spec
     if default is not None:
         action.default = _Value(default, spec, False)
@@ -262,6 +415,8 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
     if not isinstance(value, _Value):
         raise TypeError(f"{dest} was not declared with _lib_input.add_input")
     spec = value.spec
+    if spec.select is None:
+        raise TypeError(f"{dest} is a file input (decode=): read it with document()")
     problem = classify_path(value, "dir", lang=lang, flag=spec.flag)
     if problem is not None:
         if value.given or spec.absent_default == ABSENT_REFUSED or not _nothing_at(value):
@@ -293,3 +448,61 @@ def read_bytes(path: "str | os.PathLike[str]", *, flag: Optional[str], lang: str
         missing = exc.errno in _STAT_MISSING
         said = _DETAIL[lang]["missing" if missing else "inaccessible"](exc)
         raise _caller_error(f"{_label(path, flag)}: {said}", "file_unreadable") from exc
+
+
+def kind_of(data: Any) -> Any:
+    """The top-level kind of a parsed *data*, as ``refuse_top`` takes it."""
+    return type(data)
+
+
+def refuse_top(label: str, got: Any, wanted: Any, *, lang: str) -> BaseException:
+    """The refusal of a file whose top level is not of the type its reader
+    needs (reason ``file_unreadable``), for the caller to raise: *label*
+    names the flag and the path (``--mapping m.yaml``), *got* is the kind
+    found (a type, ``kind_of(data)``, or ``"scalar"``), *wanted* the type
+    or tuple of types needed. ⛔ The one wording of it (#3445): ``document``
+    says it, and a reader that is not ``document`` (a file da-guard reads)
+    says it here."""
+    if lang == "zh":
+        said = f"頂層不是{_wanted_words(wanted, lang)}（實為{_noun(got, lang)}）"
+    else:
+        said = f"the top level is not {_wanted_words(wanted, lang)} (got {_noun(got, lang)})"
+    return _caller_error(f"{label}: {said}", "file_unreadable")
+
+
+def document(args: argparse.Namespace, dest: str, *, lang: str) -> Any:
+    """The parsed content of the file the flag declared at *dest* (with
+    ``decode=``) names; None when the flag was not given.
+
+    The path is judged first (``_lib_paths.classify_path``, ``"file"``:
+    ``file_not_found`` / ``file_not_accessible``), then read
+    (``read_bytes``), decoded (``decode_bytes``) and its top level checked
+    against the declaration — each failure a :class:`_lib_exitcodes.
+    CallerError` (rc 2) whose message is ``<flag> <path>: <detail>``,
+    reason ``file_unreadable`` for the content. A YAML empty document is
+    ``empty_is()`` when the declaration says so, else of the wrong type.
+    *lang* (``"en"`` / ``"zh"``) as in ``classify_path``."""
+    value = getattr(args, dest)
+    if value is None:
+        return None
+    if not isinstance(value, _Value):
+        raise TypeError(f"{dest} was not declared with _lib_input.add_input")
+    spec = value.spec
+    if spec.decode is None:
+        raise TypeError(f"{dest} is a directory input (select=): read it with selected()")
+    doc = spec.decode
+    problem = classify_path(value, "file", lang=lang, flag=spec.flag)
+    if problem is not None:
+        raise _caller_error(problem.message, problem.reason)
+    raw = read_bytes(value, flag=spec.flag, lang=lang)
+    label = _label(value, spec.flag)
+    try:
+        data = decode_bytes(raw, fmt=doc.fmt, name=str(value))
+    except DocumentError as exc:
+        raise _caller_error(f"{label}: {safe_label(exc.detail(lang))}",
+                            "file_unreadable") from exc
+    if data is None and doc.empty_is is not None:
+        data = doc.empty_is()  # judged by the top-level check like any value
+    if not isinstance(data, doc.top):
+        raise refuse_top(label, kind_of(data), doc.top, lang=lang)
+    return data

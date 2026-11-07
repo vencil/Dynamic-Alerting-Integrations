@@ -359,9 +359,7 @@ class TestLoadAlerts:
              "startsAt": "2026-03-15T10:00:00Z",
              "endsAt": "2026-03-15T10:05:00Z"},
         ]
-        p = tmp_path / "alerts.json"
-        p.write_text(json.dumps(data), encoding="utf-8")
-        alerts = ac.load_alerts_from_json(str(p))
+        alerts = ac.alerts_from_document(data)
         assert len(alerts) == 1
         assert alerts[0].alertname == "A"
 
@@ -369,15 +367,14 @@ class TestLoadAlerts:
         data = {"data": [
             {"labels": {"alertname": "B"}, "startsAt": ""},
         ]}
-        p = tmp_path / "alerts.json"
-        p.write_text(json.dumps(data), encoding="utf-8")
-        alerts = ac.load_alerts_from_json(str(p))
+        alerts = ac.alerts_from_document(data)
         assert len(alerts) == 1
 
     def test_load_from_json_invalid(self, tmp_path):
-        p = tmp_path / "alerts.json"
-        p.write_text('{"unexpected": true}', encoding="utf-8")
-        alerts = ac.load_alerts_from_json(str(p))
+        # An object with no `data` holds no alerts; a top level that is
+        # neither is refused before this (#3445: the CLI rows in
+        # tests/shared/test_caller_paths.py).
+        alerts = ac.alerts_from_document({"unexpected": True})
         assert alerts == []
 
 
@@ -410,6 +407,18 @@ class TestCLI:
         out = capsys.readouterr().out
         report = json.loads(out)
         assert report["total_alerts"] == 2
+
+    def test_main_an_empty_input_is_refused_not_a_live_query(self, monkeypatch, cli_argv):
+        """`--input ''` names no file: it was taken for "no --input", so the
+        tool queried Alertmanager / Prometheus instead and could report rc
+        0 (#3445 review). Now it reaches `_lib_input.document`: refused."""
+        from _lib_exitcodes import CallerError
+        cli_argv("alert_correlate", "--input", "", "--json")
+        monkeypatch.setattr(ac, "load_alerts_from_alertmanager",
+                            lambda *a, **k: pytest.fail("queried instead of refusing"))
+        with pytest.raises(CallerError) as exc:
+            emit_result(ac.main())
+        assert str(exc.value).startswith("--input ''"), str(exc.value)
 
     def test_main_no_alerts(self, monkeypatch, capsys, cli_argv):
         cli_argv("alert_correlate", "--prometheus", "http://fake:9090")

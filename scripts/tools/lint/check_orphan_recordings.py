@@ -27,8 +27,9 @@ identifier regex that treats `:` as part of the token, so
 exactly the drift this family of gates exists to catch — see
 feedback: substring match hides drift).
 
-KNOWN_ORPHANS: the 12 records already orphaned when this gate landed,
-grandfathered as INFO with a pointer to #1204. The list is EXIT-LOCKED (same
+KNOWN_ORPHANS: the records already orphaned when this gate landed,
+grandfathered as INFO with a pointer to #1204 (12 then; #1204 D-del deleted 11,
+the one left is wired by #1320). The list is EXIT-LOCKED (same
 discipline as check_threshold_reachability.KNOWN_UNWIRED): a grandfathered
 record that gains a consumer or is deleted becomes a HARD error, forcing the
 list to shrink as #1204 fixes land. EXEMPT_ORPHANS holds the intentional
@@ -68,18 +69,9 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule files / manifests as their
 # per-record disposition (rewire the intended consumer vs delete) is tracked
 # in #1204 (TRK-341). EXIT-LOCKED: entries must be removed as fixes land.
 KNOWN_ORPHANS: dict[str, str] = {
-    "tenant:clickhouse_merges_rate:rate5m": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:es_indexing:rate5m": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:mongodb_connections_available:min": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:mongodb_document_ops:rate5m": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:mysql_buffer_pool_usage:ratio": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:mysql_connection_usage:ratio": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:mysql_uptime:hours": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:pg_connections:max": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:pg_transactions:rate5m": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:pg_uptime:hours": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:redis_commands:rate5m": "no consumer anywhere — disposition in #1204 (TRK-341)",
-    "tenant:redis_memory_usage:ratio": "no consumer anywhere — disposition in #1204 (TRK-341)",
+    # #1204 D-del: the other 11 were deleted; this one is wired by #1320
+    # (connection-usage ratio alerts).
+    "tenant:mysql_connection_usage:ratio": "no consumer yet — #1320 wires it (#1204 D-del)",
 }
 
 # Intentional no-consumer series — NOT drift, NOT tracked in #1204. These are

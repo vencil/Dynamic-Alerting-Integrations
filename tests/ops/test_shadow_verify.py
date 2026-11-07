@@ -55,6 +55,23 @@ def _args(**kwargs):
     return SimpleNamespace(**defaults)
 
 
+def _parsed(**kwargs):
+    """The namespace the shipped parser makes of *kwargs* (#3445: the input
+    files are `_lib_input` declarations): each a flag and its value."""
+    argv = [kwargs.pop("phase", "all")]
+    for dest, value in kwargs.items():
+        if value is not None:
+            argv += ["--" + dest.replace("_", "-"), value]
+    return sv.build_parser().parse_args(argv)
+
+
+def _read(args):
+    """What `judge_inputs` reads of the files *args* (an `_args`) names."""
+    return sv.judge_inputs(_parsed(mapping=args.mapping, report_csv=args.report_csv,
+                                   readiness_json=args.readiness_json),
+                           ["preflight", "runtime", "convergence"])
+
+
 def _write_mapping(tmp_path, content):
     p = tmp_path / "prefix-mapping.yaml"
     p.write_text(yaml.dump(content), encoding="utf-8")
@@ -139,31 +156,60 @@ class TestInputsAreJudged:
         from _lib_exitcodes import CallerError
         path = tmp_path / "nope" if case == "missing" else tmp_path
         with pytest.raises(CallerError) as exc:
-            sv.judge_inputs(_args(**{dest: str(path)}), [phase])
+            sv.judge_inputs(_parsed(**{dest: str(path)}), [phase])
         assert exc.value.reason == "file_not_found"
         assert str(exc.value).startswith(f"{flag} {path}: ")
 
     def test_every_unusable_input_is_named_at_once(self, tmp_path):
         from _lib_exitcodes import CallerError
         with pytest.raises(CallerError) as exc:
-            sv.judge_inputs(_args(mapping=str(tmp_path / "m"), readiness_json=str(tmp_path / "r")),
+            sv.judge_inputs(_parsed(mapping=str(tmp_path / "m"),
+                                    readiness_json=str(tmp_path / "r")),
                             ["preflight", "runtime", "convergence"])
         assert f"--mapping {tmp_path / 'm'}: " in str(exc.value)
         assert f"--readiness-json {tmp_path / 'r'}: " in str(exc.value)
 
     def test_a_flag_no_chosen_phase_reads_is_not_judged(self, tmp_path):
         missing = str(tmp_path / "nope")
-        sv.judge_inputs(_args(mapping=missing), ["runtime", "convergence"])
-        sv.judge_inputs(_args(report_csv=missing, readiness_json=missing), ["preflight"])
+        assert sv.judge_inputs(_parsed(mapping=missing), ["runtime", "convergence"]) == {}
+        assert sv.judge_inputs(_parsed(report_csv=missing, readiness_json=missing),
+                               ["preflight"]) == {}
 
     def test_a_flag_not_given_stays_a_skip(self):
-        sv.judge_inputs(_args(mapping="", report_csv=None), ["preflight", "runtime"])
+        assert sv.judge_inputs(_parsed(mapping="", report_csv=None),
+                               ["preflight", "runtime"]) == {}
 
-    def test_usable_inputs_pass(self, tmp_path):
-        sv.judge_inputs(_args(mapping=_write_mapping(tmp_path, {}),
-                              report_csv=_write_csv(tmp_path, []),
-                              readiness_json=_write_readiness(tmp_path, {})),
-                        ["preflight", "runtime", "convergence"])
+    def test_usable_inputs_are_read(self, tmp_path):
+        inputs = sv.judge_inputs(_parsed(mapping=_write_mapping(tmp_path, {"m": {}}),
+                                         report_csv=_write_csv(tmp_path, []),
+                                         readiness_json=_write_readiness(tmp_path, {})),
+                                 ["preflight", "runtime", "convergence"])
+        assert inputs == {"mapping": {"m": {}}, "report_csv": "Tenant,Status,Timestamp\r\n",
+                          "readiness_json": {}}
+
+    @pytest.mark.parametrize("dest, flag, content, detail", [
+        ("report_csv", "--report-csv", b"\xff\xfe", "not valid UTF-8 (byte 0)"),
+        ("mapping", "--mapping", b"- a\n", "the top level is not a mapping (got a list)"),
+        ("readiness_json", "--readiness-json", b"[]",
+         "the top level is not a mapping (got a list)"),
+    ])
+    def test_content_it_cannot_read_is_named(self, tmp_path, dest, flag, content, detail):
+        """#3445: a --report-csv that was not UTF-8 was a traceback; a mapping
+        or readiness file of another top-level type an AttributeError."""
+        path = tmp_path / "in"
+        path.write_bytes(content)
+        with pytest.raises(CallerError) as exc:
+            sv.judge_inputs(_parsed(**{dest: str(path)}), ["preflight", "runtime", "convergence"])
+        assert exc.value.reason == "file_unreadable"
+        assert str(exc.value) == f"{flag} {path}: {detail}"
+
+    def test_a_leading_bom_in_the_csv_is_dropped(self, tmp_path):
+        """`utf-8-sig`, as the CSV was opened before #3445."""
+        rows = [{"Tenant": "db-a", "Status": "match", "Timestamp": "2026-03-15 10:00:00"}]
+        text = "\ufeff" + open(_write_csv(tmp_path, rows), encoding="utf-8").read()
+        with patch.object(sv, "query_prometheus", return_value=([], None)):
+            checks = sv.check_runtime(_args(), {"report_csv": text})
+        assert next(c for c in checks if c["check"] == "csv_tenant_coverage")["status"] == "pass"
 
 
 # ---------------------------------------------------------------------------
@@ -177,7 +223,7 @@ class TestCheckPreflight:
 
         with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
             with patch("urllib.request.urlopen", side_effect=OSError("fail")):
-                checks = sv.check_preflight(args)
+                checks = sv.check_preflight(args, _read(args))
 
         mapping_check = next(c for c in checks if c["check"] == "mapping_file")
         assert mapping_check["status"] == "pass"
@@ -187,7 +233,7 @@ class TestCheckPreflight:
         args = _args(mapping=None)
         with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
             with patch("urllib.request.urlopen", side_effect=OSError("fail")):
-                checks = sv.check_preflight(args)
+                checks = sv.check_preflight(args, _read(args))
 
         mapping_check = next(c for c in checks if c["check"] == "mapping_file")
         assert mapping_check["status"] == "skip"
@@ -204,7 +250,7 @@ class TestCheckPreflight:
 
         with patch("urllib.request.urlopen", return_value=mock_resp):
             with patch.object(_lib_prometheus, "http_get_json", return_value=(prom_data, None)):
-                checks = sv.check_preflight(args)
+                checks = sv.check_preflight(args, _read(args))
 
         health_check = next(c for c in checks if c["check"] == "prometheus_healthy")
         assert health_check["status"] == "pass"
@@ -213,7 +259,7 @@ class TestCheckPreflight:
         args = _args()
         with patch("urllib.request.urlopen", side_effect=OSError("Connection refused")):
             with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
-                checks = sv.check_preflight(args)
+                checks = sv.check_preflight(args, _read(args))
 
         health_check = next(c for c in checks if c["check"] == "prometheus_healthy")
         assert health_check["status"] == "fail"
@@ -232,7 +278,7 @@ class TestCheckRuntime:
         args = _args(report_csv=csv_path)
 
         with patch.object(sv, "query_prometheus", return_value=([], None)):
-            checks = sv.check_runtime(args)
+            checks = sv.check_runtime(args, _read(args))
 
         ratio = next(c for c in checks if c["check"] == "csv_mismatch_ratio")
         assert ratio["status"] == "pass"
@@ -247,7 +293,7 @@ class TestCheckRuntime:
         args = _args(report_csv=csv_path)
 
         with patch.object(sv, "query_prometheus", return_value=([], None)):
-            checks = sv.check_runtime(args)
+            checks = sv.check_runtime(args, _read(args))
 
         ratio = next(c for c in checks if c["check"] == "csv_mismatch_ratio")
         assert ratio["status"] == "fail"
@@ -262,7 +308,7 @@ class TestCheckRuntime:
         args = _args(report_csv=csv_path)
 
         with patch.object(sv, "query_prometheus", return_value=([], None)):
-            checks = sv.check_runtime(args)
+            checks = sv.check_runtime(args, _read(args))
 
         coverage = next(c for c in checks if c["check"] == "csv_tenant_coverage")
         assert coverage["status"] == "pass"
@@ -277,7 +323,7 @@ class TestCheckRuntime:
                 (maint_results, None),  # maintenance query
                 ([], None),             # silent mode query
             ]
-            checks = sv.check_runtime(args)
+            checks = sv.check_runtime(args, _read(args))
 
         maint = next(c for c in checks if c["check"] == "maintenance_mode")
         assert maint["status"] == "warn"
@@ -291,7 +337,7 @@ class TestCheckRuntime:
                 for t in ("t2", "t1") for p in ("te-0", "te-1")]
         with patch.object(sv, "query_prometheus") as mock_qp:
             mock_qp.side_effect = [(rows, None), ([], None)]
-            checks = sv.check_runtime(args)
+            checks = sv.check_runtime(args, _read(args))
         maint = next(c for c in checks if c["check"] == "maintenance_mode")
         assert maint["detail"] == "Tenants in maintenance: t1, t2"
 
@@ -299,7 +345,7 @@ class TestCheckRuntime:
         args = _args(report_csv=None)
 
         with patch.object(sv, "query_prometheus", return_value=([], None)):
-            checks = sv.check_runtime(args)
+            checks = sv.check_runtime(args, _read(args))
 
         maint = next(c for c in checks if c["check"] == "maintenance_mode")
         assert maint["status"] == "pass"
@@ -316,7 +362,7 @@ class TestCheckConvergence:
             "unconverged_pairs": [],
         })
         args = _args(readiness_json=rj, report_csv=None)
-        checks = sv.check_convergence(args)
+        checks = sv.check_convergence(args, _read(args))
 
         readiness = next(c for c in checks if c["check"] == "cutover_readiness_json")
         assert readiness["status"] == "pass"
@@ -329,7 +375,7 @@ class TestCheckConvergence:
             "unconverged_pairs": ["metric_a", "metric_b"],
         })
         args = _args(readiness_json=rj, report_csv=None)
-        checks = sv.check_convergence(args)
+        checks = sv.check_convergence(args, _read(args))
 
         readiness = next(c for c in checks if c["check"] == "cutover_readiness_json")
         assert readiness["status"] == "fail"
@@ -344,7 +390,7 @@ class TestCheckConvergence:
         ]
         csv_path = _write_csv(tmp_path, rows)
         args = _args(report_csv=csv_path, readiness_json=None)
-        checks = sv.check_convergence(args)
+        checks = sv.check_convergence(args, _read(args))
 
         zero_check = next(c for c in checks if c["check"] == "seven_day_zero_mismatch")
         assert zero_check["status"] == "pass"
@@ -359,7 +405,7 @@ class TestCheckConvergence:
         ]
         csv_path = _write_csv(tmp_path, rows)
         args = _args(report_csv=csv_path, readiness_json=None)
-        checks = sv.check_convergence(args)
+        checks = sv.check_convergence(args, _read(args))
 
         zero_check = next(c for c in checks if c["check"] == "seven_day_zero_mismatch")
         assert zero_check["status"] == "fail"
@@ -553,7 +599,7 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
         args = _args(alertmanager="http://am:9093")
         monkeypatch.setattr(_lib_prometheus, "http_get_json", get)
         with patch("urllib.request.urlopen", side_effect=OSError("fail")):
-            c = {c["check"]: c for c in sv.check_preflight(args)}["alertmanager_shadow_route"]
+            c = {c["check"]: c for c in sv.check_preflight(args, _read(args))}["alertmanager_shadow_route"]
         assert (c["status"], c.get("caller_error")) == ("fail", True)
         # the URL given is the one read — not the default (review of fc7596cd3)
         assert [u for u in seen if "/api/v2/status" in u] == ["http://am:9093/api/v2/status"]
@@ -583,3 +629,20 @@ class TestAlertmanagerIsReadOnlyWhenGiven:
         with patch("urllib.request.urlopen", side_effect=OSError("fail")):
             c = {c["check"]: c for c in sv.check_preflight(_args(alertmanager="http://am:9093"))}
         assert c["alertmanager_shadow_route"]["status"] == "pass"
+
+
+@pytest.mark.parametrize("phase", ["runtime", "convergence"])
+def test_a_report_whose_records_end_in_a_bare_cr_is_read(tmp_path, phase):
+    """#3445 review: read as bytes and decoded, a report with CR-only line
+    ends lost the universal newlines the text-mode open gave it — runtime
+    exited 2 (csv.Error), convergence could skip a recent mismatch."""
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    path = tmp_path / "cr.csv"
+    path.write_bytes(f"Tenant,Status,Timestamp\rdb-a,mismatch,{now}\r".encode())
+    args = _args(report_csv=str(path))
+    with patch.object(sv, "query_prometheus", return_value=([], None)):
+        checks = (sv.check_runtime if phase == "runtime" else sv.check_convergence)(
+            args, _read(args))
+    name = "csv_mismatch_ratio" if phase == "runtime" else "seven_day_zero_mismatch"
+    check = next(c for c in checks if c["check"] == name)
+    assert check["status"] == "fail" and check["detail"].startswith("1"), check

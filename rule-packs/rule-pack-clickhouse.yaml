@@ -73,13 +73,6 @@ groups:
             ClickHouseMetrics_MemoryTracking{tenant!=""}
           )
 
-      # Background merge rate (5m)
-      - record: tenant:clickhouse_merges_rate:rate5m
-        expr: |
-          sum by(tenant) (
-            rate(ClickHouseProfileEvents_MergedRows{tenant!=""}[5m])
-          )
-
       # Failed queries rate (5m)
       - record: tenant:clickhouse_failed_queries:rate5m
         expr: |

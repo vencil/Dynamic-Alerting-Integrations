@@ -15,15 +15,12 @@ metadata:
 data:
   mongodb-recording.yml: "groups:\n- name: mongodb-normalization\n  interval: 15s\n\
     \  rules:\n  - record: tenant:mongodb_connections_current:max\n    expr: max by(tenant)\
-    \ (mongodb_connections{state=\"current\"})\n  - record: tenant:mongodb_connections_available:min\n\
-    \    expr: min by(tenant) (mongodb_connections{state=\"available\"})\n  - record:\
-    \ tenant:mongodb_connection_usage:ratio\n    expr: \"max by(tenant) (mongodb_connections{state=\\\
-    \"current\\\"})\\n/ (\\n  max by(tenant) (mongodb_connections{state=\\\"current\\\
-    \"})\\n  + min by(tenant) (mongodb_connections{state=\\\"available\\\"})\\n)\\\
-    n\"\n  - record: tenant:mongodb_replication_lag:max\n    expr: max by(tenant)\
-    \ (mongodb_mongod_replset_member_replication_lag)\n  - record: tenant:mongodb_opcounters:rate5m\n\
-    \    expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))\n  - record: tenant:mongodb_document_ops:rate5m\n\
-    \    expr: sum by(tenant) (rate(mongodb_mongod_metrics_document_total[5m]))\n\
+    \ (mongodb_connections{state=\"current\"})\n  - record: tenant:mongodb_connection_usage:ratio\n\
+    \    expr: \"max by(tenant) (mongodb_connections{state=\\\"current\\\"})\\n/ (\\\
+    n  max by(tenant) (mongodb_connections{state=\\\"current\\\"})\\n  + min by(tenant)\
+    \ (mongodb_connections{state=\\\"available\\\"})\\n)\\n\"\n  - record: tenant:mongodb_replication_lag:max\n\
+    \    expr: max by(tenant) (mongodb_mongod_replset_member_replication_lag)\n  -\
+    \ record: tenant:mongodb_opcounters:rate5m\n    expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))\n\
     \  - record: tenant:mongodb_page_faults:rate5m\n    expr: sum by(tenant) (rate(mongodb_extra_info_page_faults_total[5m]))\n\
     - name: mongodb-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
     \ tenant:alert_threshold:mongodb_connections_current\n    expr: max by(tenant)\
