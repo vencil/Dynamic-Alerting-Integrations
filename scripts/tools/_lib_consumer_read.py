@@ -1112,6 +1112,12 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
 #: compared without regard to case (``.YAML`` and ``.Yml`` are YAML too).
 YAML_SUFFIXES = (".yaml", ".yml")
 
+#: What ``files_to_read`` looks for, as the refusal of a selection that
+#: chose nothing names it (the *wanted* of ``_lib_input.refuse_empty``):
+#: ``lint --ci`` and ``onboard --rule-files`` say it in one wording (#3463).
+FILES_TO_READ_WANTED = (" / ".join("*" + x for x in YAML_SUFFIXES)
+                        + " files (any case) under the directories given, less --exclude")
+
 
 def _is_yaml_name(name: str) -> bool:
     """Whether *name* ends in a YAML suffix, any case — a name that IS the

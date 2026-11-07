@@ -169,9 +169,11 @@ cp -r alertmanager.yml alertmanager.yml.bak
 # 1.2 Scan and analyze current config
 python3 scripts/tools/ops/onboard_platform.py \
   --alertmanager-config alertmanager.yml \
-  --rule-files '/path/to/old_rules/*.yaml' \
+  --rule-files /path/to/old_rules/ \
   --output-dir migration_input/
-# Quote the glob, or the shell expands it into several file names and it exits 2
+# --rule-files takes files or directories (one or more) and expands no glob;
+# a directory is walked for *.yaml / *.yml
+# On the v2.9.0 image a directory selects no file: give a quoted glob ('/path/to/old_rules/*.yaml')
 # Output (migration_input/):
 #   - onboard-hints.json (tenant list, routing hints, DB types; written only when
 #     the Alertmanager config has tenant routes)
@@ -186,6 +188,7 @@ python3 scripts/tools/ops/validate_config.py \
   --config-dir conf.d/ \
   --policy .github/custom-rule-policy.yaml
 ```
+<!-- image-caveat: v2.9.0 -->
 
 > Running `validate_config.py` directly needs da-guard: run `make da-guard-build` and set `DA_GUARD_BINARY=.build/da-guard` first (the da-tools image ships it); see [validate-config's prerequisite](../cli-reference.en.md#validate-config).
 
