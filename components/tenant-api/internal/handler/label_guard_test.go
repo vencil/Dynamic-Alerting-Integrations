@@ -665,7 +665,28 @@ func TestLabelGuardBatchKeepsUnreadableLabels(t *testing.T) {
 		Groups: groups.NewDirManager(dir), WriteMode: WriteModeDirect}
 	w := lgBatch(t, d, lgWriters, `[{"tenant_id":"`+lgTenant+`","patch":{"mysql_connections":"95"}}]`)
 	got := lgReadFile(t, dir, lgTenant+".yaml")
-	if w.Code != http.StatusOK || !strings.Contains(got, "environment: [production]") || !strings.Contains(got, `"95"`) {
-		t.Fatalf("status %d, file %q, body %s; want 200, the patch written and _metadata kept verbatim", w.Code, got, w.Body.String())
+	if w.Code != http.StatusOK || !strings.Contains(got, `"95"`) {
+		t.Fatalf("status %d, file %q, body %s; want 200 and the patch written", w.Code, got, w.Body.String())
+	}
+	// The `_metadata` block, byte for byte: from its key to the next key of
+	// the tenant at the same indentation.
+	block := func(doc string) string {
+		i := strings.Index(doc, "    _metadata:\n")
+		if i < 0 {
+			return ""
+		}
+		rest := doc[i:]
+		lines := strings.SplitAfter(rest, "\n")
+		out := lines[0]
+		for _, l := range lines[1:] {
+			if !strings.HasPrefix(l, "      ") {
+				break
+			}
+			out += l
+		}
+		return out
+	}
+	if want := block(undecodable); want == "" || block(got) != want {
+		t.Errorf("_metadata block = %q, want it unchanged: %q", block(got), want)
 	}
 }
