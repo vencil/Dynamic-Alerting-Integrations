@@ -323,3 +323,95 @@ def test_stray_selector_offsets_are_bytes_mapped_to_characters():
     outside = "user_state_filter{filter=\"maintenance\"} > 0\n" + TAIL
     hit2 = {"selector": grd.MAINTENANCE_SERIES, "start": 0, "end": len(grd.MAINTENANCE_SERIES)}
     assert len(grd.stray_selector_problems([("p", "alert B", outside)], lambda exprs: [[hit2]])) == 1
+
+
+# ── C-gen: tenant metadata annotations (#2566 / #1200 D-C) ────────────────────
+
+META = grd.METADATA_ANNOTATIONS
+
+
+def _meta_pack(labels: str, annotations: str | None) -> str:
+    text = ("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up == 0\n"
+            f"    labels:\n{labels}")
+    if annotations is not None:
+        text += f"    annotations:\n{annotations}"
+    return text + "  - alert: B\n    expr: up == 1\n    labels:\n      maintenance: page\n"
+
+
+_TENANT = '      maintenance: page\n      tenant: "{{ $labels.tenant }}"\n'
+
+
+def _meta_lines(indent: int = 6, **override) -> str:
+    vals = {**META, **override}
+    return "".join(f'{" " * indent}{k}: "{v}"\n' for k, v in vals.items())
+
+
+def _annotations_of(text: str, alert: str = "A") -> dict:
+    import yaml
+    for r in yaml.safe_load(text)["groups"][0]["rules"]:
+        if r.get("alert") == alert:
+            return r.get("annotations") or {}
+    raise AssertionError(alert)
+
+
+def test_a_tenant_alert_gets_the_three_annotations():
+    new, problems = grd.sync_text(_meta_pack(_TENANT, '      summary: "x"\n'), "p")
+    assert problems == []
+    ann = _annotations_of(new)
+    assert {k: ann[k] for k in META} == META and ann["summary"] == "x"
+
+
+def test_an_alert_without_annotations_gets_a_block():
+    new, _ = grd.sync_text(_meta_pack(_TENANT, None), "p")
+    assert _annotations_of(new) == META
+    assert "maintenance: page" in new.split("- alert: B")[1]  # the next item is untouched
+
+
+def test_a_hand_edited_template_is_put_back():
+    text = _meta_pack(_TENANT, '      summary: "x"\n' + _meta_lines(owner="team-x"))
+    new, _ = grd.sync_text(text, "p")
+    assert _annotations_of(new)["owner"] == META["owner"]
+
+
+@pytest.mark.parametrize("labels", [
+    "      maintenance: page\n",                                                  # no tenant label
+    '      maintenance: page\n      tenant: "{{ $labels.tenant }}"\n      alert_source: platform\n',
+])
+def test_an_alert_that_shows_no_tenant_loses_them(labels):
+    new, _ = grd.sync_text(_meta_pack(labels, '      summary: "x"\n' + _meta_lines()), "p")
+    assert set(_annotations_of(new)) == {"summary"}
+
+
+def test_metadata_sync_is_a_fixed_point_and_leaves_right_lines_in_place():
+    text = _meta_pack(_TENANT, '      summary: "x"\n\n' + _meta_lines() + '      other: "y"\n')
+    new, _ = grd.sync_text(text, "p")
+    assert new == text
+    again, _ = grd.sync_text(grd.sync_text(_meta_pack(_TENANT, None), "p")[0], "p")
+    assert again == grd.sync_text(_meta_pack(_TENANT, None), "p")[0]
+
+
+def test_check_fails_when_one_annotation_is_dropped(da_read_env, tmp_path, capsys):
+    rp = tmp_path / "rule-packs"
+    shutil.copytree(_REPO / "rule-packs", rp)
+    p = rp / "rule-pack-redis.yaml"
+    text = p.read_text(encoding="utf-8")
+    head, sep, rest = text.partition("      - alert: RedisDown\n")
+    owner = f'          owner: "{META["owner"]}"\n'
+    assert owner in rest
+    p.write_text(head + sep + rest.replace(owner, "", 1), encoding="utf-8")
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert grd.main(["--rule-packs-dir", str(rp)]) == 0
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
+
+
+def test_semantic_check_judges_the_compiled_pack_too():
+    """The custom-alerts pack is never written, only checked: a compiler that
+    stops emitting the annotations is caught on the loaded rules."""
+    class RF:
+        path = "rule-pack-custom-alerts.yaml"
+        documents = [{"groups": [{"rules": [{
+            "alert": "CustomRecipeSilent", "expr": "x",
+            "labels": {"tenant": "{{ $labels.tenant }}", "maintenance": "page"},
+            "annotations": {"summary": "s"}}]}]}]
+    problems = grd.semantic_problems([RF()], selectors_of=lambda exprs: [[] for _ in exprs])
+    assert any("shows the tenant's metadata" in p for p in problems), problems
