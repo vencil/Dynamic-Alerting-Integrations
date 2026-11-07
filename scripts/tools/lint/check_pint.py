@@ -109,9 +109,10 @@ _PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint",
 #     today's count means routine rule additions never touch this number.
 # 368 leaves 8 entries of slack for small legitimate deletions. A deletion large
 # enough to trip it (≥9 rules, e.g. retiring a whole rule-pack) SHOULD require a
-# conscious edit here. Re-measure on every PINT_VERSION bump: a pint that stops
+# conscious edit here — #1204 D-del was one: 11 orphan recording rules deleted,
+# CI's pint step then logged entries=367, so the pair below moved to 367 / 359. Re-measure on every PINT_VERSION bump: a pint that stops
 # parsing a file is only visible as this count dropping.
-_MIN_PINT_ENTRIES = 368
+_MIN_PINT_ENTRIES = 359
 
 # The platform pack's share of the count, and the total measured at the same time.
 # Both are needed: the pair is what keeps the floor's DETECTION WINDOW open as the
@@ -124,7 +125,7 @@ _MIN_PINT_ENTRIES = 368
 # file's own convention is to read such values back out rather than repeat them, and
 # the lockstep test does exactly that for this constant.
 _PLATFORM_PACK_ENTRIES = 42
-_PINT_ENTRIES_AT_MEASURE = 376
+_PINT_ENTRIES_AT_MEASURE = 367
 
 
 def main() -> int:

@@ -15,16 +15,13 @@ metadata:
 data:
   redis-recording.yml: "groups:\n- name: redis-normalization\n  interval: 15s\n  rules:\n\
     \  - record: tenant:redis_memory_used_bytes:max\n    expr: max by(tenant) (redis_memory_used_bytes)\n\
-    \  - record: tenant:redis_memory_usage:ratio\n    expr: 'max by(tenant) (redis_memory_used_bytes)\n\
-    \n      / max by(tenant) (redis_memory_max_bytes > 0)\n\n      '\n  - record:\
-    \ tenant:redis_connected_clients:max\n    expr: max by(tenant) (redis_connected_clients)\n\
+    \  - record: tenant:redis_connected_clients:max\n    expr: max by(tenant) (redis_connected_clients)\n\
     \  - record: tenant:redis_evicted_keys:rate5m\n    expr: sum by(tenant) (rate(redis_evicted_keys_total[5m]))\n\
     \  - record: tenant:redis_keyspace_hit_ratio:avg\n    expr: \"sum by(tenant) (rate(redis_keyspace_hits_total[5m]))\\\
     n/ (\\n  sum by(tenant) (rate(redis_keyspace_hits_total[5m]))\\n  + sum by(tenant)\
     \ (rate(redis_keyspace_misses_total[5m]))\\n)\\n\"\n  - record: tenant:redis_replication_lag:max\n\
-    \    expr: max by(tenant) (redis_connected_slave_lag_seconds)\n  - record: tenant:redis_commands:rate5m\n\
-    \    expr: sum by(tenant) (rate(redis_commands_processed_total[5m]))\n- name:\
-    \ redis-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:redis_memory_used_bytes\n\
+    \    expr: max by(tenant) (redis_connected_slave_lag_seconds)\n- name: redis-threshold-normalization\n\
+    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:redis_memory_used_bytes\n\
     \    expr: max by(tenant) (user_threshold{component=\"redis\", metric=\"memory_used_bytes\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:redis_connected_clients\n\
     \    expr: max by(tenant) (user_threshold{component=\"redis\", metric=\"connected_clients\"\

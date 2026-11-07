@@ -302,3 +302,189 @@ def test_a_stat_that_fails_is_not_nothing_there(tmp_path, monkeypatch, where):
         return real(p, *a, **k)
     monkeypatch.setattr(_lib_input.os, "lstat", lstat)
     assert _lib_input._nothing_at(default) is False
+
+
+# ── #3445: a file whose content is read (decode=) ────────────────────────
+
+def _doc_args(path, doc):
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--f", decode=doc)
+    return p.parse_args(["--f", str(path)])
+
+
+def _read(tmp_path, content, doc, lang="en"):
+    path = tmp_path / "in"
+    path.write_bytes(content)
+    return path, _lib_input.document(_doc_args(path, doc), "f", lang=lang)
+
+
+def test_a_document_declaration_is_on_the_action():
+    p = argparse.ArgumentParser()
+    doc = _lib_input.Document("json", dict)
+    action = _lib_input.add_input(p, "--f", "-f", decode=doc)
+    assert action.input_spec == _lib_input.InputSpec("--f", "f", None, "allowed", None, None, doc)
+    assert p.parse_args(["-f", "x"]).f == "x"
+
+
+@pytest.mark.parametrize("kw", [
+    {}, {"select": _lib_input.TopLevel("*"), "decode": _lib_input.Document("json", dict)},
+    {"decode": ("json", dict)}, {"decode": _lib_input.Document("toml", dict)},
+])
+def test_add_input_takes_exactly_one_of_select_and_decode(kw):
+    with pytest.raises(TypeError):
+        _lib_input.add_input(argparse.ArgumentParser(), "--f", **kw)
+
+
+@pytest.mark.parametrize("kw", [
+    {"empty": "refused"}, {"default": "x", "absent_default": "empty"},
+])
+def test_a_document_takes_no_selection_keywords(kw):
+    with pytest.raises(ValueError):
+        _lib_input.add_input(argparse.ArgumentParser(), "--f",
+                             decode=_lib_input.Document("json", dict), **kw)
+
+
+def test_empty_is_is_for_yaml_only():
+    with pytest.raises(ValueError):
+        _lib_input.add_input(argparse.ArgumentParser(), "--f",
+                             decode=_lib_input.Document("json", dict, empty_is=dict))
+
+
+@pytest.mark.parametrize("fmt, content, data", [
+    ("json", b'{"a": 1}', {"a": 1}), ("yaml", b"a: 1\n", {"a": 1}),
+    ("yaml", "﻿a: 1\n".encode(), {"a": 1}), ("text", b"x,y\n", "x,y\n"),
+])
+def test_a_document_is_its_parsed_content(tmp_path, fmt, content, data):
+    top = str if fmt == "text" else dict
+    assert _read(tmp_path, content, _lib_input.Document(fmt, top))[1] == data
+
+
+@pytest.mark.parametrize("fmt, content, lang, said", [
+    ("json", b"\xff", "en", "not valid UTF-8 (byte 0)"),
+    ("text", b"ab\xfe", "zh", "不是有效的 UTF-8（第 2 個位元組）"),
+    ("json", b"{bad", "en",
+     "not valid JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"),
+    ("json", b"[]", "en", "the top level is not a mapping (got a list)"),
+    ("json", b"true", "en", "the top level is not a mapping (got a boolean)"),
+    ("yaml", b"", "en", "the top level is not a mapping (got an empty document)"),
+    ("yaml", b"- a\n", "zh", "頂層不是映射（實為清單）"),
+])
+def test_content_it_cannot_read_is_refused_named(tmp_path, fmt, content, lang, said):
+    top = str if fmt == "text" else dict
+    with pytest.raises(CallerError) as exc:
+        _read(tmp_path, content, _lib_input.Document(fmt, top), lang)
+    assert exc.value.reason == "file_unreadable"
+    assert str(exc.value) == f"--f {tmp_path / 'in'}: {said}"
+
+
+def test_a_yaml_syntax_error_is_one_line_naming_the_file(tmp_path):
+    with pytest.raises(CallerError) as exc:
+        _read(tmp_path, b"a: [\n", _lib_input.Document("yaml", dict))
+    assert "\n" not in str(exc.value)
+    assert str(exc.value).startswith(f"--f {tmp_path / 'in'}: not valid YAML: ")
+    assert f'in "{tmp_path / "in"}"' in str(exc.value)
+
+
+def test_an_empty_yaml_document_is_empty_only_as_declared(tmp_path):
+    assert _read(tmp_path, b"~\n", _lib_input.Document("yaml", dict, empty_is=dict))[1] == {}
+
+
+def test_a_tuple_of_tops(tmp_path):
+    doc = _lib_input.Document("json", (list, dict))
+    assert _read(tmp_path, b"[]", doc)[1] == []
+    with pytest.raises(CallerError) as exc:
+        _read(tmp_path, b"7", doc)
+    assert str(exc.value).endswith("the top level is not a list or a mapping (got a number)")
+
+
+def test_a_document_path_is_judged_as_a_file(tmp_path):
+    with pytest.raises(CallerError) as exc:
+        _lib_input.document(_doc_args(tmp_path, _lib_input.Document("json", dict)), "f",
+                            lang="en")
+    assert exc.value.reason == "file_not_found"
+    assert str(exc.value) == f"--f {tmp_path}: not a regular file"
+
+
+def test_a_document_not_given_is_none_and_kinds_do_not_mix():
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--f", decode=_lib_input.Document("json", dict))
+    _lib_input.add_input(p, "--d", select=_lib_input.TopLevel("*"))
+    args = p.parse_args(["--f", "x", "--d", "y"])
+    assert _lib_input.document(p.parse_args([]), "f", lang="en") is None
+    with pytest.raises(TypeError):
+        _lib_input.selected(args, "f", lang="en")
+    with pytest.raises(TypeError):
+        _lib_input.document(args, "d", lang="en")
+
+
+def test_decode_bytes_keeps_the_decoders_cause():
+    with pytest.raises(_lib_input.DocumentError) as exc:
+        _lib_input.decode_bytes(b"\xff", fmt="yaml", name="n")
+    assert isinstance(exc.value.cause, UnicodeDecodeError)
+    with pytest.raises(ValueError):
+        _lib_input.decode_bytes(b"", fmt="toml", name="n")
+
+
+def test_refuse_top_is_the_one_wording():
+    exc = _lib_input.refuse_top("--x f.yaml", "scalar", dict, lang="en")
+    assert (str(exc), exc.reason) == ("--x f.yaml: the top level is not a mapping (got a scalar)",
+                                      "file_unreadable")
+
+
+def test_the_module_reads_json_without_pyyaml(tmp_path):
+    """Standard library only: importing `_lib_input` and reading a JSON or
+    text document pulls in no PyYAML (only the YAML branch imports it)."""
+    import subprocess
+    (tmp_path / "a.json").write_text("{}", encoding="utf-8")
+    probe = (
+        "import builtins, sys, argparse\n"
+        "real = builtins.__import__\n"
+        "def guard(name, *a, **k):\n"
+        "    if name.split('.')[0] == 'yaml':\n"
+        "        raise ImportError('yaml is not installed here')\n"
+        "    return real(name, *a, **k)\n"
+        "builtins.__import__ = guard\n"
+        f"sys.path.insert(0, {str(REPO / 'scripts' / 'tools')!r})\n"
+        "import _lib_input as li\n"
+        "assert '_lib_exitcodes' not in sys.modules\n"
+        "p = argparse.ArgumentParser()\n"
+        "li.add_input(p, '--f', decode=li.Document('json', dict))\n"
+        f"print(li.document(p.parse_args(['--f', {str(tmp_path / 'a.json')!r}]), 'f', lang='en'))\n"
+    )
+    proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+    assert (proc.returncode, proc.stdout.strip()) == (0, "{}"), proc.stderr
+
+
+# ── #3445 review: a parser error that is not the parser's own class ─────
+
+@pytest.mark.parametrize("fmt", ["json", "yaml"])
+def test_a_recursion_error_while_parsing_is_a_document_error(fmt, monkeypatch):
+    """Nesting past the recursion limit raised RecursionError past the
+    decoder's own error class: a traceback. Whether a given depth does is
+    the Python build's business, so the error is forced here."""
+    import json
+
+    import yaml
+
+    def deep(*_a, **_k):
+        raise RecursionError("maximum recursion depth exceeded")
+    monkeypatch.setattr(json if fmt == "json" else yaml, "loads" if fmt == "json" else "load",
+                        deep)
+    with pytest.raises(_lib_input.DocumentError) as exc:
+        _lib_input.decode_bytes(b"[1]", fmt=fmt, name="x")
+    assert str(exc.value) == f"not valid {fmt.upper()}: nested too deeply to read"
+
+
+def test_a_value_safeloader_cannot_build_is_a_document_error():
+    with pytest.raises(_lib_input.DocumentError) as exc:
+        _lib_input.decode_bytes(b"a: 2020-99-99\n", fmt="yaml", name="x")
+    assert str(exc.value).startswith("not valid YAML: ")
+
+
+def test_an_empty_is_that_is_not_a_declared_top_is_refused_at_declaration():
+    """#3445 review: `Document("yaml", list, empty_is=dict)` read an empty
+    file as `{}` past the top-level check."""
+    with pytest.raises(ValueError):
+        _lib_input.add_input(argparse.ArgumentParser(), "--f",
+                             decode=_lib_input.Document("yaml", list, empty_is=dict))

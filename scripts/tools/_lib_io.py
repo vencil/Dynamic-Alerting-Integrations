@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterator, Optional, TypeVar
 import yaml
 
 from _lib_constants import ONBOARD_HINTS_FILENAME
+import _lib_input  # noqa: E402  (#3445: the one decoding of an input file)
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 import _lib_exitcodes  # noqa: E402
 from _lib_label import safe_label  # noqa: E402,F401  (re-export, #3276)
@@ -99,11 +100,11 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
         return default
     raw = Path(path).read_bytes()
     try:
-        stream = io.StringIO(raw.decode("utf-8"))
-        stream.name = str(path)
-        data = yaml.safe_load(stream)   # deliberately the pure parser: see above
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise YamlFileError(str(path), exc) from exc
+        # #3445: the one decoding of an input file (`_lib_input.decode_bytes`):
+        # strict UTF-8, the pure parser (see above), the stream named.
+        data = _lib_input.decode_bytes(raw, fmt="yaml", name=str(path))
+    except _lib_input.DocumentError as exc:
+        raise YamlFileError(str(path), exc.cause) from exc.cause
     return data if data is not None else default
 
 

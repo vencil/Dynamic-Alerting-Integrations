@@ -207,6 +207,16 @@ OPS_SITES = [
     ("state-reconcile --state-dir", "state_reconcile.py",
      ["--state-dir", "{D}", "--manifest-path", "{BOX}/sr/manifest.json", "--json"],
      "--state-dir", "dir_not_accessible"),
+    # #3445: file inputs declared with `add_input(decode=...)` — they were
+    # `reader` lines (their own reader's refusal), now `_lib_input.document`.
+    ("fed-key --existing-jwks", "federation_keygen.py",
+     ["--rotate", "--existing-jwks", "{F}", "--jwks-out", "{BOX}/jwks.json"],
+     "--existing-jwks", None),
+    ("silencer-drift-check --silences-file", "silencer_drift_check.py",
+     ["--silences-file", "{F}", "--rule-pack-dir", "{RP}", "--json"], "--silences-file",
+     "file_not_accessible"),
+    ("lint-custom-rules --policy", "lint_custom_rules.py", ["--policy", "{F}", "{RP}"],
+     "--policy", None),
     # config-history is not a row: every subcommand creates `.da-history`
     # beside --config-dir first, so a locked parent never reaches its check;
     # test_config_history.py pins that check's message on a missing dir.
@@ -1071,23 +1081,29 @@ def test_an_empty_path_is_refused_not_taken_for_cwd(tmp_path, script, argv, flag
 # Every run has a stand-in kubectl on PATH that answers "nothing installed":
 # a run that reaches the cluster (operator-check) answers without one.
 
-def _declared_inputs() -> "list[tuple[str, str, str, object, list[str], object]]":
+def _declared_inputs(documents: bool = False
+                     ) -> "list[tuple[str, str, str, object, list[str], object]]":
     """(id, script under ops/, flag, InputSpec, its OPS_SITES argv, that
     row's reason) for every argument a da-tools parser declares with
-    `_lib_input.add_input`, read off the parsers by G1's walk."""
+    `_lib_input.add_input`, read off the parsers by G1's walk: the
+    directories (``select=``), or with *documents* the files whose content
+    is read (``decode=``, #3445) — each with the row that hands it {D} / {F}."""
     spec = importlib.util.spec_from_file_location(
         "_g1_manifest", pathlib.Path(__file__).with_name("test_caller_path_manifest.py"))
     g1 = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(g1)
     specs: dict = {}
     found, _dispatched = g1.parsed_arguments(specs)
+    holder = "F" if documents else "D"
     out = []
     for (command, flag), input_spec in sorted(specs.items()):
+        if g1.is_document(input_spec) != documents:
+            continue
         script = found[(command, flag)]
         rows = [(argv, reason) for _id, s, argv, _f, reason in OPS_SITES
-                if f"ops/{s}" == script and g1._locked_argument(argv) == (flag, "D")]
+                if f"ops/{s}" == script and g1._locked_argument(argv) == (flag, holder)]
         assert rows, (f"{command} {flag}: declared with add_input, no OPS_SITES row hands it "
-                      "{D} (test_caller_path_manifest names this too)")
+                      f"{{{holder}}} (test_caller_path_manifest names this too)")
         out.append((f"{command} {flag}", script.split("/", 1)[1], flag, input_spec, *rows[0]))
     return out
 
@@ -1239,3 +1255,163 @@ def test_each_declared_input_is_as_judged(declared_inputs):
     found = {rid: (spec.empty, spec.absent_default)
              for rid, _s, _f, spec, _a, _r in declared_inputs}
     assert found == JUDGED_DECLARATIONS
+
+
+# ── #3445: the content of a declared input file ───────────────────────────
+# Every argument declared with `_lib_input.add_input(decode=Document(...))`
+# (read off the parsers by G1's walk — not a list written here) is run with
+# its OPS_SITES row, the locked {F} replaced by a file holding content it
+# cannot read: bytes that are not UTF-8; syntax broken for its format; a top
+# level of another type than declared (an empty container of the other kind,
+# and a bare scalar). Each must end rc 2 with the flag and the path named —
+# not a traceback, not "unexpected internal error", not read as an empty
+# input — and, under --json, nothing on stdout (#3558).
+
+_NOT_UTF8 = b"a: \xff\xfe\n"
+_BROKEN = {"json": b"{bad", "yaml": b"a: [\n"}
+#: Content the parser fails on with something other than its own error
+#: class: nesting deeper than the recursion limit (RecursionError, both
+#: formats), and a YAML timestamp SafeLoader's constructor cannot build
+#: (ValueError). Both escaped as "unexpected internal error" (#3445 review).
+#: ⚠️ Whether a nesting this deep is a RecursionError depends on the Python
+#: build (3.13's json raised it; CI's parsed it), so a deep case is nested
+#: in a container the document does NOT take: parsed, it is the wrong top
+#: level; not parsed, it is a RecursionError — refused, named, either way.
+#: A document taking both lists and mappings gets no deep case here; the
+#: RecursionError path itself is pinned in test_lib_input.py.
+_DEEP = 100_000
+_NESTED = {list: b"[" * _DEEP + b"]" * _DEEP,
+           dict: b'{"a":' * _DEEP + b"1" + b"}" * _DEEP}
+_BEYOND = {"json": (), "yaml": (("timestamp", b"a: 2020-99-99\n"),)}
+
+
+def _deep_cases(tops) -> "list[tuple[str, bytes]]":
+    return [(f"deep_{kind.__name__}", raw) for kind, raw in _NESTED.items()
+            if kind not in tops][:1] if not {list, dict} <= set(tops) else []
+#: Top levels of each type, and the type each parses to.
+_TOPS = ((b"[]\n", list), (b"{}\n", dict), (b"1\n", int))
+
+
+def _bad_contents(doc) -> "list[tuple[str, bytes]]":
+    """(case, content) for a `Document` *doc*: what its reading must refuse."""
+    cases = [("not_utf8", _NOT_UTF8)]
+    if doc.fmt in _BROKEN:
+        cases.append(("syntax", _BROKEN[doc.fmt]))
+        cases += list(_BEYOND[doc.fmt])
+        tops = doc.top if isinstance(doc.top, tuple) else (doc.top,)
+        cases += _deep_cases(tops)
+        cases += [(f"top_{kind.__name__}", raw) for raw, kind in _TOPS if kind not in tops]
+    return cases
+
+
+@pytest.fixture(scope="module")
+def declared_documents():
+    found = _declared_inputs(documents=True)
+    assert found, "no add_input(decode=) declaration was read off a parser — nothing measured"
+    return found
+
+
+def _document_subst(tmp: pathlib.Path) -> dict:
+    (tmp / "box").mkdir(exist_ok=True)
+    (tmp / "box" / "silences.json").write_text("[]\n", encoding="utf-8")
+    return {"{CONF}": str(REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d"),
+            "{MAP}": str(REPO / "components" / "threshold-exporter" / "config" / "conf.d"
+                         / "examples"),
+            "{RP}": str(REPO / "rule-packs"),
+            "{WF}": str(REPO / "tests" / "dx" / "fixtures" / "waveform"),
+            "{BOX}": str(tmp / "box")}
+
+
+@pytest.mark.usefixtures("da_guard_env", "da_read_env")
+def test_a_declared_document_refuses_content_it_cannot_read(tmp_path, declared_documents):
+    faults, measured = [], 0
+    for n, (rid, script, flag, spec, argv, _reason) in enumerate(declared_documents):
+        for case, content in _bad_contents(spec.decode):
+            case_dir = tmp_path / f"d{n}-{case}"
+            case_dir.mkdir()
+            given = case_dir / "input"
+            given.write_bytes(content)
+            subst = {**_document_subst(case_dir), "{F}": str(given)}
+            proc = _run_ops(script, [_expand(a, subst) for a in argv])
+            out = proc.stdout + proc.stderr
+            measured += 1
+            why = []
+            if proc.returncode != 2:
+                why.append(f"rc {proc.returncode}")
+            if "Traceback" in out or "unexpected internal error" in out:
+                why.append("a crash")
+            if f"{flag} {given}:" not in proc.stderr:
+                why.append("the flag and the path not named on stderr")
+            if "--json" in argv and proc.stdout != "":
+                why.append("a document on stdout")
+            if why:
+                faults.append(f"{rid} [{case}]: {', '.join(why)}: {out[-600:]}")
+    assert measured, "no bad content was run"
+    assert not faults, "\n".join(faults)
+
+
+#: ⛔ What was judged for each declared input file (#3445): (fmt, top,
+#: empty_is). The rows above prove each tool refuses what its declaration
+#: says; this proves the declaration is the judged one — a new file input,
+#: or a changed format or top level, is an edit here, reviewed.
+JUDGED_DOCUMENTS = {
+    "alert-correlate --input": ("json", (list, dict), None),
+    "analyze-gaps --metric-dictionary": ("yaml", dict, None),
+    "cutover --readiness-json": ("json", dict, None),
+    "fed-key --existing-jwks": ("json", dict, None),
+    "grafana-import --dashboard": ("json", dict, None),
+    "lint --policy": ("yaml", dict, dict),
+    "runtime-audit --runtime-json": ("json", dict, None),
+    "scaffold --from-onboard": ("json", dict, None),
+    "shadow-verify --mapping": ("yaml", dict, None),
+    "shadow-verify --readiness-json": ("json", dict, None),
+    "shadow-verify --report-csv": ("text", str, None),
+    "silencer-drift-check --silences-file": ("json", list, None),
+    "validate --mapping": ("yaml", dict, None),
+}
+
+
+def test_each_declared_document_is_as_judged(declared_documents):
+    found = {rid: tuple(spec.decode) for rid, _s, _f, spec, _a, _r in declared_documents}
+    assert found == JUDGED_DOCUMENTS
+
+
+# Inputs the walk above does not reach, each pinned here:
+# * analyze-gaps --tenant-config: its content is read by da-guard
+#   (parse-tree, the exporter's reading), not `document`; a top level that is
+#   not a mapping was read as a tenant with no keys, rc 0.
+# * generate-tenant-mapping --metric-dictionary: the tool is not a da-tools
+#   command, so G1's walk never sees its parser; a list or a scalar there was
+#   "no metrics to map".
+
+@pytest.mark.usefixtures("da_guard_env")
+@pytest.mark.parametrize("content, got", [(b"- a\n", "a list"), (b"5\n", "a number"),
+                                          (b"hello\n", "a string")])
+def test_analyze_gaps_refuses_a_tenant_config_that_is_no_mapping(tmp_path, content, got):
+    given = tmp_path / "t.yaml"
+    given.write_bytes(content)
+    proc = _run_ops("analyze_rule_pack_gaps.py", ["--tenant-config", str(given), "--json"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout == "", proc.stdout
+    assert proc.stderr.strip() == (f"ERROR: --tenant-config {given}: the top level is not "
+                                   f"a mapping (got {got})"), proc.stderr
+
+
+@pytest.mark.usefixtures("da_guard_env")
+@pytest.mark.parametrize("content, detail", [
+    (b"a: \xff\n", "not valid UTF-8 (byte 3)"),
+    (b"a: [\n", "not valid YAML: "),
+    (b"- a\n", "the top level is not a mapping (got a list)"),
+    (b"5\n", "the top level is not a mapping (got a number)"),
+    (b"", "the top level is not a mapping (got an empty document)"),
+])
+def test_generate_tenant_mapping_names_a_dictionary_it_cannot_read(tmp_path, content, detail):
+    given = tmp_path / "dict.yaml"
+    given.write_bytes(content)
+    conf = REPO / "components" / "threshold-exporter" / "config" / "conf.d" / "examples"
+    proc = _run_ops("generate_tenant_mapping_rules.py",
+                    ["--config-dir", str(conf), "--metric-dictionary", str(given), "--dry-run"])
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out
+    assert "Traceback" not in out and "no metrics to map" not in out, out
+    assert f"ERROR: --metric-dictionary {given}: {detail}" in proc.stderr, proc.stderr
