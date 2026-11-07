@@ -475,9 +475,11 @@ def test_every_da_tools_argument_is_declared(parsed):
 #: ``pushgateway``), a URL that does not parse, a port that is not a number,
 #: a scheme outside the allowlist, no host; whitespace or a control character
 #: (urlsplit drops \t\r\n and keeps a space in the host, so these pass it and
-#: then crash the request with http.client.InvalidURL).
+#: then crash the request with http.client.InvalidURL); a non-ASCII path or
+#: query (sent as ASCII: UnicodeEncodeError at request time).
 UNUSABLE_URLS = ("pushgateway:9091", "http://[::1", "http://h:abc", "ftp://h", "http://",
-                 "http://h :80", "http://a b", "http://h\n", "http://h\t:80")
+                 "http://h :80", "http://a b", "http://h\n", "http://h\t:80",
+                 "http://h/m\u00e9trics", "http://h/x?q=\u00e9")
 
 #: Scripts COMMAND_MAP does not reach: (script under scripts/tools, flag,
 #: ``empty=`` mode). Their parser is built inside ``main()``; it is caught
@@ -892,7 +894,9 @@ def test_the_value_rows_refuse_by_name_and_let_disabled_be_empty():
 
 def test_url_problem_is_the_one_judgement():
     lib = _url_lib()
-    for good in ("http://localhost:9090", "https://prom.example:443/x", "http://[::1]:9090"):
+    for good in ("http://localhost:9090", "https://prom.example:443/x", "http://[::1]:9090",
+                 # IDNA host; a percent-encoded path; a fragment is never sent
+                 "http://\u4f8b\u3048.jp/metrics", "http://h/a%C3%A9", "http://h/#\u00e9"):
         assert lib.url_problem(good) is None, good
     for bad in UNUSABLE_URLS + ("", "http://h:99999", "file:///etc/passwd"):
         assert lib.url_problem(bad), bad
@@ -904,3 +908,10 @@ def test_url_problem_is_the_one_judgement():
     # _validate_url_scheme keeps its Optional[str] contract over the same judgement
     for value in ("http://localhost:9090",) + UNUSABLE_URLS:
         assert _lib_prometheus._validate_url_scheme(value) == lib.url_problem(value), value
+
+
+def test_a_url_list_refuses_an_empty_separator():
+    """``separator=""`` would parse as one URL, not the list it promises."""
+    lib = _url_lib()
+    with pytest.raises(ValueError, match="separator"):
+        lib.url_list_type(empty="refuse", separator="")

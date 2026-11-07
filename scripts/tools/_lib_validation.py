@@ -182,6 +182,14 @@ def url_problem(value: str) -> Optional[str]:
         parts.port
     except ValueError as exc:  # "http://h:abc", "http://h:99999"
         return f"port is not usable: {exc}"
+    # http.client sends the request target as ASCII: "/métrics" would pass
+    # here and raise UnicodeEncodeError at request time. The host may be
+    # non-ASCII (IDNA-encoded on connect); path and query may not (the
+    # fragment is never sent).
+    bad = next((c for c in parts.path + parts.query if not c.isascii()),
+               None)
+    if bad is not None:
+        return f"non-ASCII character {bad!r} in the path or query (percent-encode it)"
     return None
 
 
@@ -201,6 +209,8 @@ class UrlArg:
     def __init__(self, empty: str, separator: Optional[str] = None) -> None:
         if empty not in URL_EMPTY_MODES:
             raise ValueError(f"empty= must be one of {URL_EMPTY_MODES}, got {empty!r}")
+        if separator == "":  # would parse as one URL, not the list it promises
+            raise ValueError("separator= must not be empty")
         self.empty = empty
         self.separator = separator
         # argparse names a type by __name__ in a ValueError message; this

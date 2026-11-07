@@ -86,10 +86,10 @@ da-tools <command> --help
 |------|------|
 | `--help` | 顯示幫助訊息 |
 | `--version` | 顯示版本資訊 |
-| `--prometheus <URL>` | Prometheus Query API 端點（預設：`http://localhost:9090`；可用 `PROMETHEUS_URL` env var） |
+| `--prometheus <URL>` | Prometheus Query API 端點（預設：`http://localhost:9090`；可用 `PROMETHEUS_URL` env var，`operator-check`／`runtime-audit` 除外） |
 | `--config-dir <PATH>` | 租戶配置目錄路徑（預設：`./conf.d`；部分命令需要） |
 
-**接 URL 的旗標**（`--prometheus`、`--alertmanager`、`--pushgateway`、`--endpoint`、`--opa-url`、`federation-check --edge-urls` 等）一律在解析參數時以同一個判定檢查：scheme 必須是 `http` 或 `https`、要有 host、埠（若有）必須是數字，且整個值不得含空白或控制字元（不會自動去掉）。不合格（例如沒寫 scheme 的 `pushgateway:9091`、`http://[::1`、`http://host:abc`、`ftp://host`、`http://host :80`、結尾帶換行、空字串）就以結束碼 `2` 結束，stderr 是 argparse 點名旗標的一行 `argument --<旗標>: …`，什麼都還沒做、`--json` 也不印任何東西（[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)）。例外只有 `maintenance-scheduler` 的 `--alertmanager ""`／`--pushgateway ""`：等於沒給。`--prometheus` 沒給時由工具自己讀 `$PROMETHEUS_URL`（沒設或空字串則用 `http://localhost:9090`），直接執行腳本與經 `da-tools` 執行都一樣——`da-tools` 不再把它補成 `--prometheus`。`$PROMETHEUS_URL` 只在真的要查 Prometheus 的那一步才讀、才以同一個判定檢查，不合格是結束碼 `2`（訊息點名 `$PROMETHEUS_URL`）；不查 Prometheus 的路徑（例如 `threshold-recommend`／`batch-diagnose`／`cutover` 的 `--dry-run`）不受影響。
+**接 URL 的旗標**（`--prometheus`、`--alertmanager`、`--pushgateway`、`--endpoint`、`--opa-url`、`federation-check --edge-urls` 等）一律在解析參數時以同一個判定檢查：scheme 必須是 `http` 或 `https`、要有 host、埠（若有）必須是數字，且整個值不得含空白或控制字元（不會自動去掉）、路徑與查詢字串不得含未 percent-encode 的非 ASCII 字元。不合格（例如沒寫 scheme 的 `pushgateway:9091`、`http://[::1`、`http://host:abc`、`ftp://host`、`http://host :80`、`http://host/métrics`、結尾帶換行、空字串）就以結束碼 `2` 結束，stderr 是 argparse 點名旗標的一行 `argument --<旗標>: …`，什麼都還沒做、`--json` 也不印任何東西（[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)）。例外只有 `maintenance-scheduler` 的 `--alertmanager ""`／`--pushgateway ""`：等於沒給。`--prometheus` 沒給時由工具自己讀 `$PROMETHEUS_URL`（沒設或空字串則用 `http://localhost:9090`；`operator-check`、`runtime-audit` 除外——它們沒給 `--prometheus` 就是不查 Prometheus，不讀 env），直接執行腳本與經 `da-tools` 執行都一樣——`da-tools` 不再把它補成 `--prometheus`。`$PROMETHEUS_URL` 只在會查 Prometheus 的執行才讀，並在該次執行開始處、做任何事之前以同一個判定檢查（與給了壞的 `--prometheus` 一樣先擋，即使這次其實沒有要送出的查詢），不合格是結束碼 `2`（訊息點名 `$PROMETHEUS_URL`）；不查 Prometheus 的路徑（例如 `threshold-recommend`／`batch-diagnose`／`cutover` 的 `--dry-run`）不受影響。
 
 **分派層（`da-tools` 本身）的結束碼**——與下方各命令章節的結束碼表是兩層不同的東西：
 
@@ -3668,7 +3668,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 
 | 變數 | 用途 | 預設值 | 說明 |
 |------|------|--------|------|
-| `PROMETHEUS_URL` | Prometheus 端點 URL | `http://localhost:9090` | 作為 `--prometheus` 的 fallback；容器內 localhost 指向容器自己，需使用正確的網路配置。不是可用的 http(s) URL 時，要查 Prometheus 的那一步以結束碼 2 點名它（見[全局選項](#全局選項)） |
+| `PROMETHEUS_URL` | Prometheus 端點 URL | `http://localhost:9090` | 作為 `--prometheus` 的 fallback；容器內 localhost 指向容器自己，需使用正確的網路配置。不是可用的 http(s) URL 時，會查 Prometheus 的執行在開始處以結束碼 2 點名它（見[全局選項](#全局選項)） |
 
 --8<-- "docs/includes/prometheus-url-config.md"
 
