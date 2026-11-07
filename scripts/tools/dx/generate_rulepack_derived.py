@@ -589,8 +589,11 @@ def semantic_problems(rule_files: list, selectors_of=None, alert_selectors_of=No
                 for r in g.get("rules") or []:
                     if "record" in r:
                         records.setdefault(r["record"], []).append(r.get("expr", ""))
+                        # The labels Prometheus writes on the record's series:
+                        # the group's `labels:`, then the rule's (which win).
                         record_defs.setdefault(r["record"], []).append(
-                            {"expr": r.get("expr", ""), "labels": r.get("labels") or {}})
+                            {"expr": r.get("expr", ""),
+                             "labels": {**(g.get("labels") or {}), **(r.get("labels") or {})}})
                         every.append((rf.path, f"record {r['record']}", r.get("expr", "")))
                     elif "alert" in r:
                         alerts.append((rf.path, r))
