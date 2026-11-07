@@ -321,6 +321,11 @@ hooks:
   evidence:
     pytest:
     - tests/lint/test_check_metric_group_pairs.py
+- id: critical-tier-twins-check
+  category: b
+  evidence:
+    pytest:
+    - tests/lint/test_check_critical_tier_twins.py
 - id: dist-source-consistency-check
   category: exempt
   evidence:
