@@ -390,7 +390,9 @@ def _regenerate_command(out_path: Path, config_dir: Path, repo: "Path | None") -
                 return Path(p).resolve().relative_to(repo.resolve()).as_posix()
             except ValueError:
                 pass
-        return str(p)
+        # Outside the repo: absolute, since the command runs from the repo
+        # root and a relative spelling would name another file there.
+        return str(Path(p).resolve())
 
     if repo is not None and shown(out_path) == OUT_REL:
         return "make custom-alerts-compile"
@@ -688,7 +690,9 @@ def main() -> int:
         # map, and group `labels` / `limit` / `query_offset` are not in it —
         # measured, both left a hand-edited canary green. A pack this compiler
         # writes is exactly `rendered`; anything else is a hand edit.
-        if not findings and committed and _committed_text(out_path) != rendered:
+        # An empty pack is compared too: `groups: []` with a hand-edited or
+        # missing header is still not what the compiler writes.
+        if not findings and _committed_text(out_path) != rendered:
             findings = [f"not byte-for-byte the compiler's output (a hand edit the rule "
                         f"comparison does not key on: a duplicate rule, a group field, "
                         f"the header or layout)"]

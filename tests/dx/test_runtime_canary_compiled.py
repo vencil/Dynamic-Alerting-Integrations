@@ -159,3 +159,23 @@ def test_the_writer_target_writes_the_checked_file():
     body = _make_recipe("runtime-canary-compile")
     assert f"--config-dir {RECIPE_REL}" in body
     assert f"/{COMPILED_REL}" in body and "--check" not in body
+
+
+def test_an_out_of_repo_target_is_named_absolutely(tmp_path, monkeypatch):
+    # CodeRabbit on #3688: the command runs from the repo root, so a relative
+    # spelling of a file outside the repo would name another file there.
+    out = tmp_path / "pack.yaml"
+    monkeypatch.chdir(tmp_path)
+    cmd = cc._regenerate_command(Path("pack.yaml"), _REPO / RECIPE_REL, _REPO)
+    assert f"--out {out.resolve()}" in cmd
+
+
+def test_an_empty_pack_is_compared_byte_for_byte_too(tmp_path, monkeypatch, capsys):
+    # CodeRabbit on #3688: no rules on either side must not skip the comparison.
+    src, out = tmp_path / "src", tmp_path / "pack.yaml"
+    src.mkdir()
+    (src / "a.yaml").write_text("tenants:\n  ta: {}\n", encoding="utf-8")
+    out.write_text("groups: []\n", encoding="utf-8")   # no header: not the compiler's
+    monkeypatch.setattr(sys, "argv", ["compile", "--check", "--config-dir", str(src), "--out", str(out)])
+    assert cc.main() == cc.EXIT_VIOLATION
+    assert "not byte-for-byte" in capsys.readouterr().out
