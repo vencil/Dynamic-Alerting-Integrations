@@ -1126,7 +1126,11 @@ def _build_parser() -> argparse.ArgumentParser:
                              "surface as WARN (an "
                              "unquoted override value is rendered via str() "
                              "instead; a bad group_by entry is dropped). CI runs "
-                             "--strict.")
+                             "--strict. NOT included: a credential written out "
+                             "(credential_plaintext / credential_unjudged, #1560) — "
+                             "only --validate (or validate-config) refuses it; the "
+                             "output modes and --apply print it and go on, with "
+                             "--strict too, so gate CI / BYO on --validate.")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--apply", action="store_true",
                             help="Apply: render from the cluster ConfigMap's "

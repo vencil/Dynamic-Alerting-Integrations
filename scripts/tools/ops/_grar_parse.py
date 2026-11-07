@@ -1935,8 +1935,11 @@ def print_reader_warnings(source: "TenantTree | dict") -> None:
 #: `_routing_enforced` under its `tenants:` entry. The platform's (no
 #: tenant): `_routing_defaults` (receiver / overrides[i]), a routing profile
 #: (receiver / overrides[i] / routes[i]) and a top-level `_routing_enforced`.
+#: #1560 ⑤-b (blind review F3): a `_routing` at a file's top level, which no
+#: plane reads (a tenant's `_routing` is read under its `tenants:` entry
+#: only) — a credential written there is in the repository all the same.
 RAW_PLACES = ("tenant_routing", "tenant_enforced", "routing_defaults",
-              "routing_profile", "routing_enforced")
+              "routing_profile", "routing_enforced", "top_level_routing")
 
 
 class RawReceiver(NamedTuple):
@@ -2076,6 +2079,11 @@ def _receivers_of(fname: str, data: dict, entry: object,
     # root: refused).
     add(_block_receivers(data.get("_routing_enforced"), ("_routing_enforced",),
                          slots=()), None, "routing_enforced", at_root and reserved)
+    # No plane reads a top-level `_routing` (F3).
+    p = []
+    add(_block_receivers(data.get("_routing"), ("_routing",),
+                         slots=("overrides", "routes"), problems=p),
+        None, "top_level_routing", False, p)
     tenants = data.get("tenants")
     for tenant in (sorted(t for t in tenants if isinstance(t, str))
                    if isinstance(tenants, dict) else []):
@@ -2178,14 +2186,6 @@ _PLAINTEXT_REMEDY = {
 _ROTATE = "; rotate the value (docs/internal/secret-leak-remediation-sop.md)"
 
 
-def _judged_effectively(u: Unjudged) -> bool:
-    """Whether the generator's own render already refuses *u* (a tenant's
-    ``_routing`` in a file a plane reads: ``build_receiver_config`` names an
-    unknown type, ``expand_routing_overrides`` / the routes expansion a
-    slot or item of the wrong shape) — not reported twice."""
-    return u.place == "tenant_routing" and u.read and u.tenant_valid
-
-
 class CredentialFact(NamedTuple):
     """#1560 ⑤-b: one credential a file writes out where the policy refuses
     it (``kind`` ``credential_plaintext``, ``detail`` the
@@ -2205,9 +2205,11 @@ def credential_facts(fname: str, data: dict, entry: object) -> list[CredentialFa
     reads it, listing entry *entry*) writes that the generator refuses:
     every finding of ``plaintext_credential_findings`` — THE one judgement —
     on each receiver as this file writes it (``_receivers_of``: every
-    routing place, read by a plane or not), and every ``Unjudged`` place but
-    those the render refuses already (``_judged_effectively``). Judged on
-    the file's own value, before any layer is merged."""
+    routing place, read by a plane or not), and every ``Unjudged`` place.
+    Judged on the file's own value, before any layer is merged. ⛔ No place
+    is left out because the render "already refuses it": a tenant's
+    `_routing` another read file overrides is never rendered (blind review
+    F2) — two findings for one place beat none."""
     unjudged: list[Unjudged] = []
     out: list[CredentialFact] = []
     for r in _receivers_of(fname, data, entry, unjudged):
@@ -2215,7 +2217,7 @@ def credential_facts(fname: str, data: dict, entry: object) -> list[CredentialFa
             out.append(CredentialFact(fname, r.path + f.path, r.tenant,
                                       "credential_plaintext", f.category))
     out.extend(CredentialFact(u.file, u.path, u.tenant, "credential_unjudged", u.reason)
-               for u in unjudged if not _judged_effectively(u))
+               for u in unjudged)
     return out
 
 

@@ -43,7 +43,7 @@ from _lib_validation import (  # noqa: E402  (#2766 finding kinds)
 from _lib_validation import (  # noqa: E402  (#1560 Secret references)
     CREDENTIAL_REF_SITES, HOST_PORT_DESTINATIONS, CredentialRefSite, RefPath,
     find_credential_refs,
-    is_secret_ref, ref_path_text, ref_value_at, site_path_text,
+    is_secret_ref, receiver_value_repr, ref_path_text, ref_value_at, site_path_text,
 )
 
 
@@ -214,7 +214,8 @@ FINDING_KINDS: dict[str, str] = {
         "the receiver names (email auth_password, the webhook http_config "
         "credentials) on a receiver a tenant owns; only the platform-wide "
         "_routing_enforced (no {{tenant}}) may, under the policy's "
-        "allowed_domains, follow_redirects: false and no proxy; the entry is "
+        "allowed_domains, follow_redirects: false and no proxy_url (proxy_from_environment "
+        "is the deployer's, allowed); the entry is "
         "not rendered.",
     "secret_ref_destination_unconfined":
         "The tenant's Secret on a field whose credential goes to a "
@@ -1039,19 +1040,22 @@ def _destination_problem(receiver_obj: dict, destination: tuple[str, ...],
         return ("the deployment policy (--policy) has no allowed_domains to "
                 f"confine the {dest_text} it is sent to")
     raw = ref_value_at(receiver_obj, destination)
+    # #1560 ⑤-b: a destination that is a credential place (webhook url) is
+    # never quoted (receiver_value_repr).
+    shown = receiver_value_repr(receiver_type(receiver_obj), destination, raw)
     if is_secret_ref(raw):
         return (f"{dest_text}, where it is sent, is itself a Secret reference, "
                 "whose host cannot be checked against allowed_domains")
     if not isinstance(raw, str) or raw == "":
         # Missing, null, empty, or not a string: nothing to read a host from.
-        return (f"the {dest_text} it is sent to is missing or not a non-empty string (got {raw!r}), so it "
+        return (f"the {dest_text} it is sent to is missing or not a non-empty string (got {shown}), so it "
                 "cannot be checked against allowed_domains")
     if destination not in HOST_PORT_DESTINATIONS and _URL_SCHEME_RE.match(raw) is None:
-        return (f"{dest_text} {raw!r}, where it is sent, is not an http:// or "
+        return (f"{dest_text} {shown}, where it is sent, is not an http:// or "
                 "https:// URL, so its host cannot be read for allowed_domains")
     host = _extract_host(raw)
     if host is None:
-        return (f"the {dest_text} {raw!r}, where it is sent, has no host this "
+        return (f"the {dest_text} {shown}, where it is sent, has no host this "
                 "generator can read, so it cannot be checked against allowed_domains")
     if not any(fnmatch.fnmatch(host, p) for p in allowed_domains):
         return (f"the {dest_text} host {host!r} is not in the deployment "

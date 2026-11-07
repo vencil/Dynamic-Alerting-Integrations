@@ -56,6 +56,17 @@ def _split(fixture: str) -> tuple[dict, str]:
     return files, last
 
 
+def _credential_scoped(rec: dict, write: str) -> dict:
+    """*rec* (a CLI finding) as the container reports it when the write
+    changes *write* only: a credential finding in another file becomes the
+    NOTICE ``_grar_parse.credential_findings`` gives outside its scope."""
+    if not rec["kind"].startswith("credential_") or rec["file"] == write:
+        return rec
+    message = (rec["message"].replace("ERROR (credential):", "NOTICE (credential):", 1)
+               + " (not refused here: this write does not change that file)")
+    return dict(rec, blocks="never", severity="note", message=message)
+
+
 @pytest.fixture(scope="module")
 def world(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gsvc")
@@ -125,6 +136,10 @@ def test_verdict_equals_the_cli_on_the_written_tree(world, tmp_path, fixture):
     # judges the keys itself, in `key_verdict`. So the generator's verdict
     # is the CLI's without it: when only `key_*` findings block (#3016),
     # the generator alone passes.
+    # #1560 ⑤-b: the container judges credentials written out only in the
+    # files the write changes (`credential_scope`); in another file the
+    # CLI's ERROR is the container's NOTICE, which blocks nothing.
+    cli = dict(cli, findings=[_credential_scoped(r, write) for r in cli["findings"]])
     blocking = [r for r in cli["findings"] if r["blocks"] in ("always", "validate", "strict")]
     if blocking and all(r["kind"].startswith("key_") for r in blocking):
         rc, cli = 0, dict(cli, exit_code=0)

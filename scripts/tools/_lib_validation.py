@@ -579,7 +579,7 @@ def secret_ref_problem(value: Any) -> Optional[str]:
     inner = value["secret"]
     if not isinstance(inner, dict):
         return (f"is not a Secret reference ({SECRET_REF_SHAPES}): 'secret' is "
-                f"{_type_name(inner)}")
+                f"{_type_name(inner, shown=MASKED_VALUE)}")
     unknown = sorted(str(k) for k in inner if k not in ("key", "shared"))
     if unknown:
         hint = (" — a reference never names its Secret: the tenant's own is "
@@ -602,7 +602,8 @@ def secret_ref_problem(value: Any) -> Optional[str]:
                     f"{max_len}; not '.' and not starting with '..')"
                     if name == "key" else
                     f"a shared Secret alias (a DNS-1123 label, at most {max_len})")
-            return f"has 'secret.{name}' {_type_name(item)}, which is not {what}"
+            return (f"has 'secret.{name}' {_type_name(item, shown=MASKED_VALUE)}, "
+                    f"which is not {what}")
     return None
 
 
@@ -1015,7 +1016,7 @@ def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Option
                     return f"field '{field}' {problem}"
             elif isinstance(value, (dict, list)):
                 return (f"field '{field}' must be a string or a Secret reference "
-                        f"({SECRET_REF_SHAPES}), got {_type_name(value)}")
+                        f"({SECRET_REF_SHAPES}), got {receiver_type_name(rtype, (field,), value)}")
         elif is_secret_ref(value) and prop.get("type") == "string":
             takes = ", ".join(receiver_secret_ref_fields(rtype)) or "none"
             return (f"field '{field}' does not take a Secret reference (the "
@@ -1205,12 +1206,57 @@ def receiver_bool_problems(rtype: str, receiver: Any) -> list[tuple[str, Any]]:
     return out
 
 
-def _type_name(value: Any) -> str:
-    """YAML-ish name of a decoded value's type, for messages."""
+#: What a message shows in place of a receiver value that may be a
+#: credential (``receiver_value_repr``).
+MASKED_VALUE = "<masked>"
+
+
+def _step_matches(part: Any, step: str) -> bool:
+    if step == "*":
+        return isinstance(part, str)
+    if step == "[]":
+        return isinstance(part, int)
+    return part == step
+
+
+def is_credential_path(rtype: Any, path: tuple) -> bool:
+    """#1560 ⑤-b: whether a value at receiver-relative *path* (keys and list
+    indices) is on, below or above a credential place of receiver type
+    *rtype* — a row of ``CREDENTIAL_REF_SITES`` or of
+    ``CREDENTIAL_PLAINTEXT_SITES``, the ones that allow a written value
+    included. Above: a value written where a mapping holding a credential
+    is expected (``http_config: "user:pass"``) may be that credential. A
+    type that is no receiver type has no table to read: every path is."""
+    rows = ([s.path for s in CREDENTIAL_REF_SITES if s.rtype == rtype]
+            + [s.path for s in CREDENTIAL_PLAINTEXT_SITES if s.rtype == rtype])
+    if not isinstance(rtype, str) or not rows:
+        return True
+    return any(all(_step_matches(p, st) for p, st in zip(path, site)) for site in rows)
+
+
+def receiver_value_repr(rtype: Any, path: tuple, value: Any) -> str:
+    """⛔ THE one way a receiver value goes into a message (#1560 ⑤-b):
+    ``repr(value)``, or ``MASKED_VALUE`` when *path* is a credential path
+    (``is_credential_path``). A message that quotes a receiver value — a
+    format check, a type check, a destination, a host that cannot be
+    parsed — reaches stderr, ``--findings-json`` and tenant-api's log."""
+    return MASKED_VALUE if is_credential_path(rtype, path) else repr(value)
+
+
+def receiver_type_name(rtype: Any, path: tuple, value: Any) -> str:
+    """``_type_name`` of a receiver value at *path*, its text through
+    ``receiver_value_repr``."""
+    return _type_name(value, shown=receiver_value_repr(rtype, path, value))
+
+
+def _type_name(value: Any, *, shown: Optional[str] = None) -> str:
+    """YAML-ish name of a decoded value's type, for messages. A string shows
+    *shown* (default its repr): a receiver value goes through
+    ``receiver_type_name``, a Secret reference's parts are always masked."""
     if value is None:
         return "null"
     if isinstance(value, str):
-        return f"string {value!r}"
+        return f"string {repr(value) if shown is None else shown}"
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, (int, float)):
@@ -1222,7 +1268,7 @@ def _type_name(value: Any) -> str:
     return type(value).__name__
 
 
-def _http_config_problem(value: Any) -> Optional[str]:
+def _http_config_problem(value: Any, rtype: str = "webhook") -> Optional[str]:
     """First problem of an ``http_config`` value, or ``None`` (#2295).
 
     Alertmanager's own rule (prometheus/common HTTPClientConfig / ProxyConfig
@@ -1249,7 +1295,8 @@ def _http_config_problem(value: Any) -> Optional[str]:
     if value is None:
         return None
     if not isinstance(value, dict):
-        return f"field 'http_config' must be a mapping, got {_type_name(value)}"
+        return (f"field 'http_config' must be a mapping, got "
+                f"{receiver_type_name(rtype, ('http_config',), value)}")
     set_keys = []
     for key in HTTP_CONFIG_AUTH_FIELDS:
         item = value.get(key)
@@ -1258,7 +1305,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
         if key in HTTP_CONFIG_AUTH_MAPPINGS:
             if not isinstance(item, dict):
                 return (f"field 'http_config.{key}' must be a mapping, "
-                        f"got {_type_name(item)}")
+                        f"got {receiver_type_name(rtype, ('http_config', key), item)}")
             set_keys.append(key)
         elif is_secret_ref(item):
             # #1560: bearer_token as a Secret reference renders as
@@ -1267,7 +1314,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
             set_keys.append(key)
         elif not isinstance(item, str):
             return (f"field 'http_config.{key}' must be a string, "
-                    f"got {_type_name(item)}")
+                    f"got {receiver_type_name(rtype, ('http_config', key), item)}")
         elif item != "":
             set_keys.append(key)
     if len(set_keys) > 1:
@@ -1276,23 +1323,26 @@ def _http_config_problem(value: Any) -> Optional[str]:
     proxy = value.get("proxy_url")
     proxy_key = proxy is not None
     if proxy is not None and not isinstance(proxy, str):
-        return f"field 'http_config.proxy_url' must be a string, got {_type_name(proxy)}"
+        return ("field 'http_config.proxy_url' must be a string, got "
+                f"{receiver_type_name(rtype, ('http_config', 'proxy_url'), proxy)}")
     proxy_text = proxy is not None and proxy != ""
     from_env = False
     if "proxy_from_environment" in value:
         pfe = value["proxy_from_environment"]
         if not is_bool_or_unset(pfe):
             return (f"field 'http_config.proxy_from_environment' must be true or "
-                    f"false, got {_type_name(pfe)}")
+                    f"false, got "
+                    f"{receiver_type_name(rtype, ('http_config', 'proxy_from_environment'), pfe)}")
         from_env = pfe is True
     no_proxy_value = value.get("no_proxy")
     if no_proxy_value is not None and not isinstance(no_proxy_value, str):
-        return f"field 'http_config.no_proxy' must be a string, got {_type_name(no_proxy_value)}"
+        return ("field 'http_config.no_proxy' must be a string, got "
+                f"{receiver_type_name(rtype, ('http_config', 'no_proxy'), no_proxy_value)}")
     no_proxy = no_proxy_value is not None and no_proxy_value != ""
     header = value.get("proxy_connect_header")
     if header is not None and not isinstance(header, dict):
         return (f"field 'http_config.proxy_connect_header' must be a mapping, "
-                f"got {_type_name(header)}")
+                f"got {receiver_type_name(rtype, ('http_config', 'proxy_connect_header'), header)}")
     if header and not from_env and not proxy_text:
         return "http_config: proxy_connect_header needs a non-empty proxy_url or proxy_from_environment: true"
     if from_env and proxy_text:
@@ -1437,10 +1487,10 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
     for field in receiver_bool_fields(rtype):
         if field in receiver and not is_bool_or_unset(receiver[field]):
             return (f"field '{field}' must be true or false, "
-                    f"got {_type_name(receiver[field])}")
+                    f"got {receiver_type_name(rtype, (field,), receiver[field])}")
     for field, prop in fields.items():
         if prop.get("ref") == _HTTP_CONFIG_REF and field in receiver:
-            problem = _http_config_problem(receiver[field])
+            problem = _http_config_problem(receiver[field], rtype)
             if problem:
                 return problem
     return None
@@ -1485,11 +1535,13 @@ def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) 
             return f"requires '{field}'"
         for i, item in enumerate(value):
             if not isinstance(item, str) or item == "":
-                return f"field '{field}' item {i} must be a non-empty string, got {item!r}"
+                return (f"field '{field}' item {i} must be a non-empty string, got "
+                        f"{receiver_value_repr(rtype, (field, i), item)}")
         return None
     pattern = prop.get("pattern")
     if pattern and re.fullmatch(pattern, value) is None:
-        return (f"field '{field}' value {value!r} is not in the format "
+        return (f"field '{field}' value {receiver_value_repr(rtype, (field,), value)} "
+                "is not in the format "
                 "tenant-config.schema.json requires")
     return None
 

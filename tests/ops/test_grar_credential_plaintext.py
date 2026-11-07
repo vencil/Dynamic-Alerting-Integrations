@@ -199,14 +199,58 @@ def test_a_receiver_that_cannot_be_judged_is_refused(tmp_path, files, field, rea
     assert CANARY not in text
 
 
-def test_a_tenants_own_routing_is_left_to_the_render(tmp_path):
-    """租戶 `_routing` 的同類形狀錯誤由 render 擋（`unknown_receiver_type`），不重複報。"""
+def test_a_tenants_own_routing_is_judged_by_both(tmp_path):
+    """盲審 F2：租戶 `_routing` 的同類形狀錯誤 render 也報；不去重——寧可兩條。"""
     d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a", "      receiver:\n        type: Slack\n"
                                                     "        api_url: {secret: {key: k}}\n")})
     rc, _text, findings = _validate(d)
     assert rc == 1
     kinds = [f["kind"] for f in findings]
-    assert "unknown_receiver_type" in kinds and "credential_unjudged" not in kinds
+    assert "unknown_receiver_type" in kinds and "credential_unjudged" in kinds
+
+
+def test_an_overridden_tenant_routing_is_still_judged(tmp_path):
+    """盲審 F2（案例 e14）：同一租戶的 `_routing` 在兩個被讀的檔裡，被蓋掉的那份
+    不會被 render——它的 receiver 仍要判到。"""
+    d = _tree(tmp_path, {"_platform.yaml": (
+        "tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: bogus\n"
+        f"        api_url: https://hooks.slack.example.com/{CANARY}\n")})
+    rc, text, findings = _validate(d)
+    assert rc == 1, text
+    assert ("credential_unjudged", "_platform.yaml", "tenants.t-a._routing.receiver",
+            "validate") in _credential(findings)
+    assert CANARY not in text
+
+
+@pytest.mark.parametrize("routing,field,kind", [
+    ("_routing:\n  receiver:\n    type: slack\n"
+     f"    api_url: https://hooks.slack.example.com/{CANARY}\n",
+     "_routing.receiver.api_url", "credential_plaintext"),
+    ("_routing:\n  routes:\n    - match: {severity: critical}\n      receiver:\n"
+     f"        type: pagerduty\n        service_key: {CANARY}\n",
+     "_routing.routes[0].receiver.service_key", "credential_plaintext"),
+    ("_routing:\n  overrides: {x: 1}\n", "_routing.overrides", "credential_unjudged"),
+])
+def test_a_top_level_routing_is_judged(tmp_path, routing, field, kind):
+    """盲審 F3（案例 e26）：檔案頂層的 `_routing` 沒有 plane 讀，值仍在 repo 裡。"""
+    d = _tree(tmp_path, {"t-a.yaml": routing + _tenant("t-a")})
+    rc, text, findings = _validate(d)
+    assert rc == 1, text
+    assert (kind, "t-a.yaml", field, "validate") in _credential(findings)
+    assert CANARY not in text
+
+
+def test_migrate_credentials_lists_a_top_level_routing(tmp_path):
+    d = _tree(tmp_path, {"t-a.yaml": "_routing:\n  receiver:\n    type: slack\n"
+                         f"    api_url: https://hooks.slack.example.com/{CANARY}\n"
+                         + _tenant("t-a")})
+    p = subprocess.run([sys.executable, str(_MIGRATE), "--config-dir", str(d), "--json"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert p.returncode == 1, p.stderr
+    doc = json.loads(p.stdout)
+    assert [(r["file"], r["location"], r["reason"]) for r in doc["decisions"]] == [
+        ("t-a.yaml", "_routing.receiver.api_url", "unread_place")]
+    assert CANARY not in p.stdout + p.stderr
 
 
 # ── 4. validate-config 的 routes 列；只 render 的模式 ─────────────────────
@@ -284,3 +328,86 @@ def test_migrate_credentials_lists_what_it_cannot_judge(tmp_path):
                                 "location": "routing_profiles.p.receiver",
                                 "tenant": None, "reason": "receiver_type_unknown"}]
     assert CANARY not in p.stdout + p.stderr
+
+
+# ── 7. 訊息不引用憑證值：跨兩張表每一列的 canary（盲審 F1）──────────────
+# 格式、型別、目的地檢查把欄位值放進訊息時，一律經 `receiver_value_repr`：
+# 路徑在 CREDENTIAL_REF_SITES／CREDENTIAL_PLAINTEXT_SITES 任一列之上、之下或
+# 就是那一列時印 `<masked>`。每一列放三種寫錯的值（不合格式的字串、壞掉的
+# 參照、該放 mapping／list 的地方放字串），跑 `--validate --strict
+# --findings-json`，stdout、stderr、findings 都不得出現 canary。
+# ⚠️ PATH 裡不放 amtool：amtool 自己的錯誤訊息照原文轉印，是另一條通道
+# （本判定擋下的樹不會交給 amtool；它放行的樹若被 amtool 拒收，amtool 的
+# 原文可能引用值），不在這個 helper 的範圍。
+
+from _lib_python import RECEIVER_TYPES  # noqa: E402
+from _lib_validation import CREDENTIAL_PLAINTEXT_SITES, CREDENTIAL_REF_SITES  # noqa: E402
+
+_BASES = {
+    "webhook": {"type": "webhook", "url": "https://hooks.example.com/a"},
+    "rocketchat": {"type": "rocketchat", "url": "https://chat.example.com/h"},
+    "slack": {"type": "slack", "api_url": {"secret": {"key": "slack-url"}}},
+    "teams": {"type": "teams", "webhook_url": {"secret": {"key": "teams-url"}}},
+    "pagerduty": {"type": "pagerduty", "routing_key": {"secret": {"key": "pd"}}},
+    "email": {"type": "email", "to": ["ops@example.com"], "from": "am@example.com",
+              "smarthost": "smtp.example.com:587"},
+}
+_ROWS = ([(s.rtype, s.path) for s in CREDENTIAL_REF_SITES]
+         + [(s.rtype, s.path) for s in CREDENTIAL_PLAINTEXT_SITES])
+_LEAF = f"{CANARY} not-a-url@["
+
+
+def _receiver_with(rtype: str, path: tuple, variant: str) -> dict:
+    """The *rtype* base receiver with a bad value on row *path*: ``leaf`` a
+    string that is no URL, ``ref`` a broken reference, ``container`` a
+    string where the mapping / list holding the leaf belongs."""
+    import copy
+    receiver = copy.deepcopy(_BASES[rtype])
+    if rtype == "pagerduty" and path == ("routing_key",):
+        receiver = {"type": "pagerduty"}
+    steps = ["X-Canary" if st == "*" else st for st in path]
+    leaf = {"leaf": _LEAF, "ref": {"secret": CANARY}}.get(variant)
+    if variant == "container":
+        cut = len(steps) - (2 if steps[-1] == "[]" else 1)
+        steps, leaf = steps[:cut], _LEAF
+    node = receiver
+    for i, st in enumerate(steps):
+        last = i == len(steps) - 1
+        if st == "[]":
+            continue
+        nxt = steps[i + 1] if i + 1 < len(steps) else None
+        if last or nxt == "[]" and i + 1 == len(steps) - 1:
+            node[st] = [leaf] if nxt == "[]" else leaf
+            break
+        node = node.setdefault(st, {})
+        if st == "oauth2":
+            node.setdefault("client_id", "c")
+            node.setdefault("token_url", "https://token.example.com/t")
+        if st == "tls_config":
+            node.setdefault("cert", "client-cert-pem")
+    return receiver
+
+
+_CANARY_CASES = [(rtype, path, v) for rtype, path in _ROWS
+                 for v in ("leaf", "ref", "container") if not (v == "container" and len(path) == 1)]
+
+
+@pytest.mark.parametrize("rtype,path,variant", _CANARY_CASES,
+                         ids=[f"{r}-{'.'.join(p)}-{v}" for r, p, v in _CANARY_CASES])
+def test_no_message_quotes_a_credential_value(tmp_path, rtype, path, variant):
+    import yaml
+    assert rtype in RECEIVER_TYPES
+    receiver = _receiver_with(rtype, path, variant)
+    d = _tree(tmp_path, {"t-a.yaml": yaml.safe_dump({"tenants": {"t-a": {
+        "cpu_usage_percent": "85", "_routing": {"receiver": receiver}}}})})
+    assert CANARY in (d / "t-a.yaml").read_text(encoding="utf-8")
+    empty = tmp_path / "bin"
+    empty.mkdir()
+    out = tmp_path / "f.json"
+    p = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d), "--validate",
+                        "--strict", "--findings-json", str(out)],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300,
+                       env={**__import__("os").environ, "PATH": str(empty)})
+    assert p.returncode in (0, 1), p.stderr
+    text = p.stdout + p.stderr + out.read_text(encoding="utf-8")
+    assert CANARY not in text, text

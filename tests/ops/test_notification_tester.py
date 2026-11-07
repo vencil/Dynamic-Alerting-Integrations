@@ -1274,8 +1274,10 @@ class TestGeneratorVerdict:
     def test_unclosed_ipv6_bracket_is_refused_like_the_generator(self, dry_run):
         result = nt.test_receiver(_webhook("http://[::1/hook"), timeout=2, dry_run=dry_run)
         assert result.status == nt.STATUS_INVALID_URL, result.detail
+        # #1560 ⑤-b (blind review F1): the generator's own message, with the
+        # url — a credential place — masked, never quoted.
         assert result.detail == ("receiver type 'webhook' field 'url' value "
-                                 "'http://[::1/hook' is not in the format "
+                                 "<masked> is not in the format "
                                  "tenant-config.schema.json requires")
 
     @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
