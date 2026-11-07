@@ -312,7 +312,7 @@ def main():
         # #3445: read (and refused, named) before anything is imported.
         dashboards.append((args.dashboard, cm_name,
                            _lib_input.document(args, "dashboard", lang="en")))
-    elif args.dashboard_dir:
+    elif args.dashboard_dir is not None:  # #3693: a given "" is judged, named
         # #3693: `Path.glob` read a directory it could not list as one with
         # no *.json ("No dashboard files found.", no flag, no path) — the
         # declaration judges it, and an empty selection, by name (#452).
