@@ -58,7 +58,7 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 | Docker（dev container） | —（刻意 `latest`，理由見 devcontainer.json） | CI 端由 runner image 決定，兩邊都不釘 | 豁免登記在測試的 `_FLOATING_ALLOWED` |
 | actionlint | `.pre-commit-config.yaml` `rev` | ci.yml `ACTIONLINT_VERSION`（兩個 job） | `tests/shared/test_actionlint_pin_parity.py` |
 | ShellCheck | `.pre-commit-config.yaml` shellcheck-py `rev` | CI 以 `pre-commit run shellcheck` 呼叫同一個 hook，自動同版 | 升版需重量該 hook 註解中的 fail-closed 三道門 |
-| hadolint | `scripts/tools/lint/check_iac_vibe_rules.py` `HADOLINT_VERSION`（+ digest） | ci.yml `HADOLINT_VERSION` + SHA-256 + cache key | `test_toolchain_pin_parity.py`（wrapper fallback） |
+| hadolint | `scripts/tools/lint/check_iac_vibe_rules.py` `HADOLINT_VERSION` + `HADOLINT_SHA256`（`hadolint-Linux-x86_64` 的 checksum）（+ digest） | ci.yml `HADOLINT_VERSION` + `HADOLINT_SHA256` + cache key；`.claude/hooks/session-start.sh` 執行時直接讀 SSOT 那兩行、自己不寫值（remote session 自己裝，[#3627](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3627)） | `test_toolchain_pin_parity.py`（wrapper fallback；ci.yml checksum ↔ wrapper；session-start 只從 wrapper 讀） |
 | kube-linter | `scripts/tools/lint/check_iac_helm.py` `KUBE_LINTER_VERSION`（+ digest） | ci.yml `KL` + `KL_SHA256` + cache key | 同上 |
 | pint | `scripts/tools/lint/check_pint.py` `PINT_VERSION`（+ digest） | ci.yml pint 下載步驟 + cache key | `tests/lint/test_check_pint.py` |
 | promtool（rule-pack gate） | `.devcontainer/install-promtool.sh` | ci.yml、nightly-vm-replay.yaml | `tests/preview/test_promtool_pin_parity.py` |

@@ -599,8 +599,10 @@ jobs:
 
       # Container SAST Layer 1 (#448 / TRK-311): the iac-sast-check hook drives
       # hadolint. Install the binary so the wrapper uses it directly (no docker
-      # image pull on the runner). Pin matches HADOLINT_VERSION in
-      # scripts/tools/lint/check_iac_vibe_rules.py and .hadolint.yaml.
+      # image pull on the runner). Pin matches HADOLINT_VERSION and
+      # HADOLINT_SHA256 in scripts/tools/lint/check_iac_vibe_rules.py (the SSOT,
+      # which .claude/hooks/session-start.sh reads; bound by
+      # tests/shared/test_toolchain_pin_parity.py) and .hadolint.yaml.
       #
       # Download-cache pattern (CI-ROI wave, shared by every pinned-binary
       # install in this workflow): the artifact is stored in a cache dir
