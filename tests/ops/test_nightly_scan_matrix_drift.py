@@ -3561,7 +3561,7 @@ def _unescaped_expansions(text: str) -> list[tuple[str, int]]:
     Deliberately NOT quote-state aware, and the asymmetry matters. Tracking
     single quotes would let it accept a genuinely-literal `` ` `` inside '...',
     but this prose is full of apostrophes ("Renovate's last weekly run",
-    "mariadb's 15 findings"). A naive tracker reads the first one as an opening
+    "mariadb's gosu findings"). A naive tracker reads the first one as an opening
     quote and then treats the rest of the argument as single-quoted — i.e. it
     stops reporting, silently, which is the exact failure mode this guard
     exists to end. Over-reporting a single-quoted backtick fails LOUD and costs
@@ -4123,3 +4123,19 @@ def test_swallow_guard_catches_the_multiline_form() -> None:
     assert not _swallowed_label_create(
         'if ! gh label create "$LABEL" --repo "$REPO" \\\n       --force; then\n'
     )
+
+
+def test_remediation_prose_states_no_finding_count() -> None:
+    """The nightly alert prose must not carry a per-image finding COUNT.
+
+    It is re-sent every night while the issue body beside it is regenerated, so a
+    count in the prose drifts the moment upstream publishes the next advisory —
+    measured: it said "mariadb's 15 findings" while #1243 listed 26 for mariadb.
+    Historical counts of a past triage ("cleared 58 of 120") are not per-image
+    current state and are not matched.
+    """
+    text = (Path(__file__).resolve().parents[2]
+            / ".github/workflows/nightly-image-scan.yaml").read_text(encoding="utf-8")
+    stale = re.findall(r"[A-Za-z][\w.-]*'s \d+ findings", text)
+    assert "gosu" in text, "anti-vacuity: the mariadb/gosu remediation prose moved"
+    assert not stale, f"per-image finding count(s) in the remediation prose: {stale}"
