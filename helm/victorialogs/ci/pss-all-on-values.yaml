@@ -25,3 +25,8 @@ affinity:
           matchExpressions:
             - key: pss-gate
               operator: Exists
+# The default auth.mode=enforce refuses to render until every consumer names a
+# Secret (#1295); observe renders the same pod (the Secrets only add env vars,
+# which Pod Security does not judge) without restating the consumer registry.
+auth:
+  mode: observe

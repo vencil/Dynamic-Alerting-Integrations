@@ -955,3 +955,11 @@ def test_transport_errors_cover_a_reply_that_is_not_http():
     import _lib_prometheus
     assert issubclass(http.client.BadStatusLine, _lib_prometheus.TRANSPORT_ERRORS)
     assert issubclass(http.client.IncompleteRead, _lib_prometheus.TRANSPORT_ERRORS)
+
+
+@pytest.mark.parametrize("flag", ["--alertmanager", "--pushgateway"])
+def test_an_empty_endpoint_is_the_flag_left_out(flag):
+    """#3528: ``""`` is the off switch (report-only / no push), pinned here
+    because the G1 gate reads the expected ``empty=`` mode off the parser."""
+    args = ms.build_parser().parse_args(["--config-dir", "conf.d", flag, ""])
+    assert getattr(args, flag[2:]) == ""

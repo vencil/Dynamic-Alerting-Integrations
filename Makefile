@@ -993,6 +993,14 @@ custom-alerts-compile: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 從 LIVE conf.d �
 custom-alerts-compile-check: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 驗證 committed rule-pack-custom-alerts.yaml 與 LIVE conf.d 源同步（#741 S3b drift gate；需要 da-guard）
 	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir components/threshold-exporter/config/conf.d --check
 
+.PHONY: runtime-canary-compile
+runtime-canary-compile: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 從 tests/rulepacks/runtime-canary-recipe/ 重產 runtime canary 的編譯規則（#3679；需要 da-guard）
+	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --config-dir tests/rulepacks/runtime-canary-recipe --out $(CURDIR)/tests/rulepacks/runtime-canary.compiled.rules.yaml
+
+.PHONY: runtime-canary-compile-check
+runtime-canary-compile-check: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 驗證 runtime canary 的編譯規則與 recipe 經編譯器的輸出一致（#3679 drift gate；需要 da-guard）
+	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/compile_custom_alerts.py --check --config-dir tests/rulepacks/runtime-canary-recipe --out tests/rulepacks/runtime-canary.compiled.rules.yaml
+
 .PHONY: recipe-contract
 recipe-contract: ## 從 pkg/config/recipe_contract.json 產生 schema、portal、_lib_constants.py、rule-packs/recipes 的 recipe 副本（#3229）
 	@python3 ./scripts/tools/dx/gen_recipe_contract.py --update

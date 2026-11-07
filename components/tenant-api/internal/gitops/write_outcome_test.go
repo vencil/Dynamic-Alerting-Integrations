@@ -17,6 +17,7 @@ package gitops
 import (
 	"context"
 	"errors"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -48,7 +49,7 @@ func refTxHook(t *testing.T, repo, state, act string) {
 		"new=$(printf '%s\\n' \"$line\" | cut -d' ' -f2)\n" +
 		act + "\n" +
 		"exec sleep 10 >/dev/null 2>&1 </dev/null\n"
-	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(hook, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -242,7 +243,7 @@ func refAndHeadFailingGit(t *testing.T, ranFirst, branchToo bool) string {
 		branchCase +
 		"esac\n" +
 		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return stub
@@ -347,7 +348,7 @@ func statusHangingGit(t *testing.T) string {
 		"  *status\\ --porcelain*) exec sleep 10 >/dev/null 2>&1 </dev/null ;;\n" +
 		"esac\n" +
 		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return stub
@@ -451,7 +452,7 @@ func singleRefFailingGit(t *testing.T, ranFirst bool, unreadable int, failIndex 
 		headCase +
 		"esac\n" +
 		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return stub
@@ -757,7 +758,7 @@ func commitTreeFailingGit(t *testing.T) string {
 		"  *HEAD*) [ -e '" + flag + "' ] && exit 1 ;;\n" +
 		"esac\n" +
 		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return stub

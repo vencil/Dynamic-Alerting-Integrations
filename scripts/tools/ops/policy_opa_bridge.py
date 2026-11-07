@@ -102,6 +102,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_validation import url_type  # noqa: E402  (#3528)
 # ADR-036 step 4 (#2906): the root defaults carrier is parse-tree's choice
 # (`defaults_carriers`) and its content parse-tree's yaml.v3 reading.
 import _lib_parse_cache  # noqa: E402
@@ -651,7 +652,7 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
             help="conf.d/ 目錄路徑（含 tenant YAML）",
         )
         parser.add_argument(
-            "--opa-url",
+            "--opa-url", type=url_type(empty="refuse"),  # #3528
             help="OPA REST API URL（例：http://localhost:8181）",
         )
         parser.add_argument(
@@ -687,7 +688,7 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
             help="Path to conf.d/ directory containing tenant YAML files",
         )
         parser.add_argument(
-            "--opa-url",
+            "--opa-url", type=url_type(empty="refuse"),  # #3528
             help="OPA REST API URL (e.g., http://localhost:8181)",
         )
         parser.add_argument(

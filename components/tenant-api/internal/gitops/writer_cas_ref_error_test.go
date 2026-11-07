@@ -13,6 +13,7 @@ package gitops
 import (
 	"context"
 	"errors"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +34,7 @@ func updateRefFailingGit(t *testing.T, ranFirst bool) string {
 		"  if [ \"$a\" = \"update-ref\" ]; then " + onUpdateRef + "; fi\n" +
 		"done\n" +
 		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
 	return stub

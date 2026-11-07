@@ -64,7 +64,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_python import detect_cli_lang, url_type  # noqa: E402
 import _lib_input  # noqa: E402  (#3462: what --rule-packs-dir selects)
 from _lib_paths import require_file  # noqa: E402  (#3392)
 from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
@@ -615,7 +615,8 @@ def main():
         parser, "--rule-packs-dir", select=_lib_consumer_read.RULE_PACKS,
         empty=_lib_input.EMPTY_REFUSED, default="rule-packs",
         absent_default=_lib_input.ABSENT_EMPTY, help=i18n("h_rule_packs_dir", lang))
-    parser.add_argument("--prometheus", help=i18n("h_prometheus", lang))
+    parser.add_argument("--prometheus", type=url_type(empty="refuse"),  # #3528
+                        help=i18n("h_prometheus", lang))
     parser.add_argument("--secret-mounts", dest="mount_list", default=None, metavar="FILE",
                         help=i18n("h_mount_list", lang))
     parser.add_argument("--alertmanager", default=None, metavar="NAME",

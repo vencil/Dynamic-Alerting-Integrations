@@ -61,6 +61,12 @@ import yaml
 # Charts whose rendered output carries egress-relevant config.
 DEFAULT_CHARTS = ("helm/vector", "helm/victorialogs", "helm/chargeback-aggregator")
 
+# Charts whose defaults refuse to render on purpose, and the repo-relative
+# values file that makes them render the production shape (see render_chart).
+RENDER_BASELINES = {
+    "victorialogs": "tests/helm/victorialogs_render_baseline.yaml",
+}
+
 # Default egress allowlist — in-cluster destinations that are always OK.
 # `*.svc` / `*.svc.cluster.local` cover ClusterIP services (VictoriaLogs
 # itself). Operators extend with their SIEM host(s) via --allow-host.
@@ -136,6 +142,15 @@ def render_chart(chart_dir: Path, values_files: list[Path], sets: list[str]) -> 
         print("ERROR: helm not on PATH — cannot render charts", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
     cmd = [helm, "template", "egress-lint", str(chart_dir), "-n", "monitoring"]
+    # A chart whose defaults refuse to render on purpose gets its shared render
+    # baseline as the FIRST values file, so the operator's -f / --set below
+    # still win: helm/victorialogs defaults to auth.mode=enforce and needs a
+    # Secret named per consumer (#1295). The baseline restates the chart's
+    # consumer registry; tests/helm/test_victorialogs_vmauth.py holds the two
+    # equal, so this judges the production shape, not the observe step.
+    baseline = RENDER_BASELINES.get(chart_dir.name)
+    if baseline is not None:
+        cmd += ["-f", str(Path(__file__).resolve().parents[3] / baseline)]
     for vf in values_files:
         cmd += ["-f", str(vf)]
     for s in sets:

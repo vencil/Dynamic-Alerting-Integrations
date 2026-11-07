@@ -11,6 +11,7 @@ package gitops
 import (
 	"context"
 	"errors"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -195,7 +196,7 @@ func TestCheckGitDrivers_CheckRunsNoDriver(t *testing.T) {
 	repo, mark := driverRepo(t)
 	setDriverPrograms(t, repo, mark)
 	fsmonitor := filepath.Join(t.TempDir(), "fsmonitor.sh")
-	if err := os.WriteFile(fsmonitor, []byte("#!/bin/sh\ntouch '"+filepath.Join(mark, "core.fsmonitor")+"'\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(fsmonitor, []byte("#!/bin/sh\ntouch '"+filepath.Join(mark, "core.fsmonitor")+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "config", "core.fsmonitor", fsmonitor)
@@ -291,7 +292,7 @@ func TestGitCommands_RunNoFSMonitor(t *testing.T) {
 	repo := seedTreeRepo(t, map[string]string{"t1.yaml": tenantBody("t1")})
 	mark := filepath.Join(t.TempDir(), "fsmonitor-ran")
 	fsmonitor := filepath.Join(t.TempDir(), "fsmonitor.sh")
-	if err := os.WriteFile(fsmonitor, []byte("#!/bin/sh\ntouch '"+mark+"'\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(fsmonitor, []byte("#!/bin/sh\ntouch '"+mark+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, repo, "config", "core.fsmonitor", fsmonitor)
@@ -335,7 +336,7 @@ func TestDiffPreview_RunsNoExternalDiff(t *testing.T) {
 			repo := seedTreeRepo(t, map[string]string{"t1.yaml": tenantBody("t1")})
 			mark := filepath.Join(t.TempDir(), "ext-diff-ran")
 			prog := filepath.Join(t.TempDir(), "extdiff.sh")
-			if err := os.WriteFile(prog, []byte("#!/bin/sh\ntouch '"+mark+"'\n"), 0o755); err != nil {
+			if err := testutil.WriteExecutable(prog, []byte("#!/bin/sh\ntouch '"+mark+"'\n"), 0o755); err != nil {
 				t.Fatal(err)
 			}
 			env := []string{"GIT_EXTERNAL_DIFF=" + prog}

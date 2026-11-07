@@ -354,13 +354,14 @@ class TestMain:
 # --prometheus env-var fallback (add_prometheus_arg / README §6.1)
 # ---------------------------------------------------------------------------
 class TestPrometheusEnvFallback:
-    """`--prometheus` resolves $PROMETHEUS_URL at the argparse layer.
+    """`--prometheus` falls back to $PROMETHEUS_URL (#3528: resolved by the
+    tool where it queries, `_lib_io.prometheus_url`; check_edge receives the
+    resolved URL).
 
-    federation-check was previously hardcoded to http://localhost:9090 AND
-    absent from the dispatcher's PROMETHEUS_COMMANDS, so a standalone run
-    (`python3 federation_check.py ...`) ignored $PROMETHEUS_URL entirely.
-    add_prometheus_arg now resolves it as the argparse default (env → else
-    localhost), so the same env-var works standalone and via da-tools.
+    federation-check was previously hardcoded to http://localhost:9090, so a
+    standalone run (`python3 federation_check.py ...`) ignored $PROMETHEUS_URL
+    entirely. The same env-var now works standalone and via da-tools (which
+    injects nothing).
     """
 
     def _run_main_capture_url(self, monkeypatch, argv):

@@ -87,6 +87,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, e
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_validation import url_type  # noqa: E402  (#3528)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
 try:
@@ -643,7 +644,7 @@ def main() -> "int | Report":
     parser.add_argument("pack", help="waveform pack YAML 路徑（單一 pack）")
     parser.add_argument("--rules", required=True,
                         help="候選規則檔或目錄（vmalert 格式；規則來源與本工具解耦）")
-    parser.add_argument("--vm-url", default=DEFAULT_VM_URL,
+    parser.add_argument("--vm-url", default=DEFAULT_VM_URL, type=url_type(empty="refuse"),  # #3528
                         help=f"隔離 vmsingle base URL（預設 {DEFAULT_VM_URL}；"
                              f"需 -retentionPeriod=100y）")
     parser.add_argument("--vmalert",

@@ -18,7 +18,7 @@ package gitops
 import (
 	"context"
 	"errors"
-	"os"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os/exec"
 	"path/filepath"
 	"testing"
@@ -97,7 +97,7 @@ tree=$(git rev-parse HEAD^{tree})
 new=$(git commit-tree "$tree" -p HEAD -m "external commit")
 git update-ref "$ref" "$new"
 `
-	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(hook, []byte(script), 0o755); err != nil {
 		t.Fatalf("install post-index-change hook: %v", err)
 	}
 

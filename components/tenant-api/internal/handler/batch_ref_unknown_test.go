@@ -22,6 +22,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"net/http/httptest"
 	"os"
 	"os/exec"
@@ -66,7 +67,7 @@ func refFailThenHeadUnreadable(t *testing.T, repo string, moved, branchToo bool,
 		"  aborted) " + onAborted + " ;;\n" +
 		"esac\n" +
 		"exit 0\n"
-	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(hook, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }

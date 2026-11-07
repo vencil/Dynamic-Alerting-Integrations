@@ -2259,7 +2259,7 @@ TRACED_INDIRECT_INPUTS = {
     ("docs-ci.yaml", "docs", "scripts/tools/lint/mkdocs-anchor-debt.txt"),
     ("docs-ci.yaml", "docs", "components/threshold-exporter/README.md"),
     # drift-checks → check_cli_contract.py: its contract source (entrypoint.py's
-    # COMMAND_MAP / PROMETHEUS_COMMANDS), its ledger, and the three landing
+    # COMMAND_MAP), its ledger, and the three landing
     # pages it scans outside docs/ — all reached through validate_all.py's
     # subprocess, which is why no scanner here can derive them.
     ("docs-ci.yaml", "docs", "components/da-tools/app/entrypoint.py"),

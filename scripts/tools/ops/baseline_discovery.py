@@ -61,7 +61,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
-    write_text_secure, add_prometheus_arg, DOCS_INSTALL_URL, positive_int_seconds,
+    write_text_secure, add_prometheus_arg, prometheus_url, DOCS_INSTALL_URL, positive_int_seconds,
 )
 # #3133: a query not answered raises QueryError, never "no sample"; the
 # sample is read once, by the lib (#3213).
@@ -305,10 +305,11 @@ def main():
         return
 
     # 開始觀測
+    prom = prometheus_url(args.prometheus)  # #3528: env judged here
     total_samples = args.duration // args.interval
     print(f"\n🔍 Baseline Discovery — 開始觀測")
     print(f"   Tenant: {args.tenant}")
-    print(f"   Prometheus: {args.prometheus}")
+    print(f"   Prometheus: {prom}")
     print(f"   Duration: {args.duration}s, Interval: {args.interval}s")
     print(f"   Expected samples: {total_samples}")
     print(f"   Metrics: {', '.join(metrics.keys())}")
@@ -328,7 +329,7 @@ def main():
 
         for key, info in metrics.items():
             try:
-                results = query_prometheus(args.prometheus, info["query"])
+                results = query_prometheus(prom, info["query"])
             except QueryError as exc:
                 # #3133: not measured — the point stays empty in the CSV, is
                 # counted, and the run ends partial (rc 2), never "樣本不足".

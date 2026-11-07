@@ -14,16 +14,17 @@
   V7  V3 的反向（#3110）：parser 宣告的每個選項字串（含短旗標、子命令的選項）都要是該命令
       cli-reference 選項表第一欄的一列；同節的散文、code span、範例都不算。沒有選項表的章節
       = 每個選項都報。``-h``／``--help`` 與 ``help=argparse.SUPPRESS`` 的選項不要求（後者揭露
-      計數）；entrypoint 會注入的 ``--prometheus`` 只要 parser 自己宣告就照樣要列（注入只是
-      ``$PROMETHEUS_URL`` 的後備）。沒有 ``####`` 章節的命令不判——那是 check_cli_coverage 的事。
+      計數）；可省略的 ``--prometheus``（``$PROMETHEUS_URL`` 後備，``add_prometheus_arg`` 宣告）
+      只要 parser 自己宣告就照樣要列。沒有 ``####`` 章節的命令不判——那是 check_cli_coverage 的事。
       逃生門只有帳本（沒有列可以掛 ``datools-cmd-ignore``）
   V5  fence 裡的命令交給該 subcommand 真的 ``ArgumentParser.parse_args`` 會失敗（缺必填、多餘的
       位置參數、``choices``／``type=`` 不收、互斥、個數不對）——只在 V0–V2 沒抓到東西時判；
       synopsis 行（``[options]``、``...``）不判；含 placeholder 的命令只判「缺必填」與「多餘位置參數」；
-      entrypoint 會注入的旗標（``--prometheus``）視為已給。inline span 與 CLI Playground 不判。
+      ``env_fallback`` 宣告的旗標（``--prometheus``）視為可補上。inline span 與 CLI Playground 不判。
 
 契約來源：``parse_command_map`` 給 subcommand→script，每支 script 用 runpy 跑到 ``parse_args``
-被攔下為止拿到真的 ``ArgumentParser``；``--prometheus`` 從 entrypoint 的 ``PROMETHEUS_COMMANDS`` 讀。
+被攔下為止拿到真的 ``ArgumentParser``；``--prometheus`` 可省略（``$PROMETHEUS_URL`` 後備）與否從 parser 上
+``add_prometheus_arg`` 留的 ``env_fallback`` 宣告讀（#3528；entrypoint 不再注入）。
 載體：fenced block 的邏輯行（``diff`` fence 只看 ``+`` 行、段首 ``$ `` 提示字元不算）、fence 之外的
 inline code span、manifest 的 ``command:``／``args:`` 清單（行尾 YAML 註解剝掉、整個容器的 key 收齊
 再判、清單行不再被 fenced 行載體重判）、shell 真的會執行的 ``sh -c "…"`` 字串（``-c`` 可在其他
@@ -68,7 +69,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo subdir layout
 import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
-from _lint_helpers import ENTRYPOINT_PATH, parse_command_map  # noqa: E402
+from _lint_helpers import parse_command_map  # noqa: E402
 # Imported, not copied: a second transcription of these pins is a second
 # thing that can drift.
 from check_cli_default_drift import (  # noqa: E402
@@ -310,19 +311,25 @@ def introspect_parsers() -> tuple[dict[str, ParserModel], list[str], list[str],
     return captured, unscoreable, blind, faults
 
 
-def prometheus_commands(entrypoint: Path = ENTRYPOINT_PATH) -> set[str]:
-    """Subcommands entrypoint.py injects ``--prometheus`` into, read from its AST."""
-    tree = ast.parse(entrypoint.read_text(encoding="utf-8-sig"))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        if not any(isinstance(t, ast.Name) and t.id == "PROMETHEUS_COMMANDS"
-                   for t in node.targets):
-            continue
-        if isinstance(node.value, (ast.Set, ast.List, ast.Tuple)):
-            return {e.value for e in node.value.elts
-                    if isinstance(e, ast.Constant) and isinstance(e.value, str)}
-    return set()
+def prometheus_commands(parsers: dict) -> set[str]:
+    """Subcommands whose ``--prometheus`` may be left out because
+    ``$PROMETHEUS_URL`` stands in — read off the captured parsers, where
+    ``_lib_io.add_prometheus_arg`` declares it (``action.env_fallback``,
+    #3528). The dispatcher no longer appends the flag; this is the one
+    declaration."""
+    import argparse
+
+    def declares(parser) -> bool:
+        for action in parser._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                if any(declares(sub) for sub in action.choices.values()):
+                    return True
+            elif "--prometheus" in action.option_strings \
+                    and getattr(action, "env_fallback", None) == "PROMETHEUS_URL":
+                return True
+        return False
+    return {command for command, model in parsers.items()
+            if getattr(model, "parser", None) is not None and declares(model.parser)}
 
 
 class ExitCodes(NamedTuple):
@@ -956,13 +963,13 @@ def judge_parse(args: list[str], command: str, model: ParserModel,
     a missing required argument or an extra positional does not depend on
     what the values are, so those still are.
 
-    A flag entrypoint.py injects (``--prometheus``) is supplied only to answer
-    "is it missing": the dispatcher appends it when ``$PROMETHEUS_URL`` is
-    set, so a line that fails for that reason alone passes on a retry with it
-    and is disclosed. It is NOT added up front: on
+    A flag declared with an env fallback (``--prometheus`` made by
+    ``_lib_io.add_prometheus_arg``, ``action.env_fallback``, #3528) is
+    supplied only to answer "is it missing": ``$PROMETHEUS_URL`` stands in
+    for it, so a line that fails for that reason alone passes on a retry with
+    it and is disclosed. It is NOT added up front: on
     ``discover-mappings --endpoint`` adding it makes argparse refuse the line
-    as mutually exclusive, and the dispatcher does not add it there either
-    (``PROMETHEUS_EXCLUSIVE_FLAGS`` in entrypoint.py, issue 1513).
+    as mutually exclusive (issue 1513).
     """
     parser = model.parser
     if parser is None:
@@ -2105,7 +2112,7 @@ def scan(parsers: dict[str, ParserModel] | None = None,
         fatal.append("COMMAND_MAP parsed to zero commands — nothing to check "
                      "against, so a clean result here means nothing")
     if injected is None:
-        injected = prometheus_commands()
+        injected = prometheus_commands(parsers)
     injected_for = {c: frozenset({"--prometheus"}) for c in injected}
     if exit_codes is None:
         exit_codes = {}

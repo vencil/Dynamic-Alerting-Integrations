@@ -11,12 +11,12 @@ commands:
   alert-correlate:
     "--lookback": not_path
     "--min-score": not_path
-    "--prometheus": not_path
+    "--prometheus": url
     "--window": not_path
   alert-quality:
     "--min-score": not_path
     "--period": not_path
-    "--prometheus": not_path
+    "--prometheus": url
     "--tenant": not_path
   analyze-gaps:
     "--config-dir": dir
@@ -32,38 +32,38 @@ commands:
     "--new-value": not_path
     "--old-value": not_path
     "--output": output
-    "--prometheus": not_path
+    "--prometheus": url
     "--tenant": not_path
   baseline:
     "--duration": not_path
     "--interval": not_path
     "--metrics": not_path
     "--output-dir": output
-    "--prometheus": not_path
+    "--prometheus": url
     "--tenant": not_path
   batch-diagnose:
     "--namespace": not_path
     "--output": output
-    "--prometheus": not_path
+    "--prometheus": url
     "--tenants": not_path
     "--timeout": not_path
     "--workers": not_path
   blind-spot:
     "--config-dir": dir
     "--exclude-jobs": not_path
-    "--prometheus": not_path
+    "--prometheus": url
   byo-check:
-    "--alertmanager": not_path
-    "--prometheus": not_path
+    "--alertmanager": url
+    "--prometheus": url
     target: not_path
   cardinality-forecast:
     "--limit": not_path
     "--lookback": not_path
-    "--prometheus": not_path
+    "--prometheus": url
     "--tenant": not_path
     "--warn-days": not_path
   check-alert:
-    "--prometheus": not_path
+    "--prometheus": url
     alert_name: not_path
     tenant: not_path
   config-diff:
@@ -84,7 +84,7 @@ commands:
     "--message": not_path
   cutover:
     "--namespace": not_path
-    "--prometheus": not_path
+    "--prometheus": url
     "--tenant": not_path
   deprecate:
     "--config-dir": dir
@@ -93,14 +93,14 @@ commands:
     metrics: not_path
   diagnose:
     "--config-dir": dir
-    "--prometheus": not_path
+    "--prometheus": url
     tenant: not_path
   discover-mappings:
-    "--endpoint": not_path
+    "--endpoint": url
     "--instance": not_path
     "--job": not_path
     "--output": output
-    "--prometheus": not_path
+    "--prometheus": url
   drift-detect:
     "--context": not_path
     "--dirs": dir
@@ -134,8 +134,8 @@ commands:
     "--secret-key": not_path
     "--secret-name": not_path
   federation-check:
-    "--edge-urls": not_path
-    "--prometheus": not_path
+    "--edge-urls": url_list
+    "--prometheus": url
     target: not_path
   generate-routes:
     "--base-config": file
@@ -195,9 +195,9 @@ commands:
     "--rule-pack-dir": dir
     paths: any
   maintenance-scheduler:
-    "--alertmanager": not_path
+    "--alertmanager": url
     "--config-dir": dir
-    "--pushgateway": not_path
+    "--pushgateway": url
   migrate:
     "--output-dir": output
     "--prefix": not_path
@@ -229,7 +229,7 @@ commands:
   opa-evaluate:
     "--config-dir": {kind: reader, by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--opa-binary": {kind: reader, by: "OPA binary not found", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_missing"}
-    "--opa-url": not_path
+    "--opa-url": url
     "--policy-package": not_path
     "--policy-path": {kind: reader, by: "opa eval -d (a failed eval is rc 2)", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_that_does_not_evaluate"}
   operator-check:
@@ -237,7 +237,7 @@ commands:
     "--alertmanager": not_path
     "--kubeconfig": {kind: reader, by: "kubectl through _lib_kubectl (KubectlError)", pinned_by: "tests/shared/test_caller_path_manifest.py::test_kubectls_refusal_of_a_kubeconfig_is_relayed"}
     "--namespace": not_path
-    "--prometheus": not_path
+    "--prometheus": url
     "--secret-mounts": file
   operator-generate:
     "--api-version": not_path
@@ -268,7 +268,7 @@ commands:
     "--output-dir": output
     "--rule-packs-dir": dir
   runtime-audit:
-    "--prometheus": not_path
+    "--prometheus": url
   scaffold:
     "--db": not_path
     "--generate-profile": not_path
@@ -291,8 +291,8 @@ commands:
     "--tier": not_path
     "--topology": not_path
   shadow-verify:
-    "--alertmanager": not_path
-    "--prometheus": not_path
+    "--alertmanager": url
+    "--prometheus": url
     phase: not_path
   silencer-drift-check:
     "--exclude": not_path
@@ -315,13 +315,13 @@ commands:
     "--lookback": not_path
     "--min-delta-pct": not_path
     "--min-samples": not_path
-    "--prometheus": not_path
+    "--prometheus": url
     "--tenant": not_path
   threshold-recommend:
     "--config-dir": dir
     "--lookback": not_path
     "--min-samples": not_path
-    "--prometheus": not_path
+    "--prometheus": url
     "--tenant": not_path
   validate:
     "--convergence-output": output
@@ -329,7 +329,7 @@ commands:
     "--new": not_path
     "--old": not_path
     "--output-dir": output
-    "--prometheus": not_path
+    "--prometheus": url
     "--rounds": not_path
     "--stability-window": not_path
     "--tolerance": not_path

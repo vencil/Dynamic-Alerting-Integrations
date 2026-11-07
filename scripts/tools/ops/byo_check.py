@@ -31,7 +31,7 @@ import sys
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
+from _lib_python import probe_health, add_prometheus_arg, prometheus_url, url_type  # noqa: E402
 # #3133: every answer is checked by the lib (prometheus_instant's shape
 # check, one count reading); a query not answered is a failed check, never
 # a missing one or an advisory.
@@ -411,7 +411,7 @@ def check_prometheus(args):
     follow-up queries on a recipe actually being declared.
     """
     checks = []
-    prom_url = args.prometheus
+    prom_url = prometheus_url(args.prometheus)  # #3528: env judged here
 
     # 0. Prometheus reachable (shared probe_health — scheme-validated, does NOT
     #    go through query_prometheus; r3 W2). The judge forms the dict; the
@@ -880,6 +880,7 @@ def main():
                        help_text="Prometheus Query API URL "
                                  "(default: $PROMETHEUS_URL, else http://localhost:9090)")
     parser.add_argument("--alertmanager", default="http://localhost:9093",
+                        type=url_type(empty="refuse"),  # #3528
                         help="Alertmanager API URL (default: http://localhost:9093)")
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON (for CI integration)")

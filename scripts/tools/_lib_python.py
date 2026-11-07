@@ -51,6 +51,7 @@ from _lib_io import (  # noqa: F401
     add_json_arg,
     add_ci_arg,
     add_prometheus_arg,
+    prometheus_url,
 )
 
 from _lib_validation import (  # noqa: F401
@@ -59,6 +60,10 @@ from _lib_validation import (  # noqa: F401
     non_negative_seconds,
     positive_int,
     positive_int_seconds,
+    url_problem,
+    url_type,
+    url_list_type,
+    UrlArg,
     format_duration,
     validate_and_clamp,
     detect_cli_lang,

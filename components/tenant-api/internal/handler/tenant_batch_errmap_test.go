@@ -17,6 +17,7 @@ package handler
 
 import (
 	"context"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -122,7 +123,7 @@ tip=$(git rev-parse "$ref")
 new=$(git commit-tree "$tip^{tree}" -p "$tip" -m "external commit")
 git update-ref "$ref" "$new"
 `
-	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(hook, []byte(script), 0o755); err != nil {
 		t.Fatalf("install pre-commit hook: %v", err)
 	}
 }

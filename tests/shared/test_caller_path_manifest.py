@@ -13,7 +13,25 @@ that takes a value to be declared in ``caller_path_manifest.yaml`` as one of:
   policy file's ``policy_unusable``, conf.d through da-guard). ``pinned_by``
   names the test.
 * ``output`` — a path the tool writes (the write entry's business, #3107).
-* ``not_path`` — not a filesystem path (URLs, names, numbers, refs).
+* ``url`` / ``url_list`` (#3528) — a URL the tool sends a request to (a
+  ``url_list``: comma-separated URLs). Judged at parse time by
+  ``_lib_validation.url_problem`` through ``type=url_type(empty=...)`` /
+  ``url_list_type(...)``. Held three ways:
+
+  1. the kind is ``url`` / ``url_list`` exactly when the parser action's
+     ``type`` is a ``_lib_validation.UrlArg`` (``url_list`` when it has a
+     separator) — read off the parser by identity, not by name or help;
+  2. every one is RUN: ``test_a_url_flag_refuses_an_unusable_value_by_name``
+     hands each a set of unusable values through the parser in-process and
+     requires argparse's refusal (exit 2) naming the flag; ``""`` is refused
+     for ``empty="refuse"`` and parses as ``""`` (off) for
+     ``empty="disabled"``;
+  3. an argument whose string default is a usable http(s) URL is a URL flag:
+     it must be declared ``url`` / ``url_list`` (and so, by 1, typed).
+
+  Scripts COMMAND_MAP does not reach (no parser to walk) are listed by hand
+  in ``URL_SITES`` and held to 1 and 2 the same way.
+* ``not_path`` — not a filesystem path and not a URL (names, numbers, refs).
 * ``pending`` — a caller-given input path not judged yet. It carries the
   ``ticket`` that migrates it, and the set may only shrink: ``PENDING`` below
   is the ceiling, so a new pending entry is a visible edit here, not a
@@ -67,7 +85,8 @@ REPO = pathlib.Path(__file__).resolve().parents[2]
 TOOLS = REPO / "scripts" / "tools"
 MANIFEST = pathlib.Path(__file__).with_name("caller_path_manifest.yaml")
 
-KINDS = {"dir", "file", "any", "reader", "output", "not_path", "pending"}
+KINDS = {"dir", "file", "any", "reader", "output", "url", "url_list", "not_path", "pending"}
+URL_KINDS = {"url", "url_list"}
 JUDGED = {"dir", "file", "any"}
 #: The `--json` reason prefix each judged kind answers with (`_lib_paths`).
 REASON_PREFIX = {"dir": "dir_", "file": "file_", "any": "path_"}
@@ -114,11 +133,14 @@ def rows_by_site() -> dict[tuple[str, str | None], list[tuple[str, str | None]]]
     return rows
 
 
-def parsed_arguments(specs: "dict | None" = None) -> tuple[dict[tuple[str, str], str], list[str]]:
+def parsed_arguments(specs: "dict | None" = None, actions: "dict | None" = None,
+                     ) -> tuple[dict[tuple[str, str], str], list[str]]:
     """(command, argument) -> script relative to scripts/tools, for every
     argument that takes a value; plus the commands no parser was reached for.
     *specs*, when given, is filled with (command, argument) -> the
-    ``_lib_input.InputSpec`` of every argument declared with ``add_input``."""
+    ``_lib_input.InputSpec`` of every argument declared with ``add_input``;
+    *actions* with (command, argument) -> (the argparse action, the parser
+    that owns it)."""
     import argparse
     sys.path[:0] = [str(TOOLS / "lint"), str(TOOLS)]
     try:
@@ -142,6 +164,8 @@ def parsed_arguments(specs: "dict | None" = None) -> tuple[dict[tuple[str, str],
             name = longs[0] if longs else (action.option_strings[0]
                                             if action.option_strings else action.dest)
             found[(command, name)] = script
+            if actions is not None:
+                actions[(command, name)] = (action, parser)
             if specs is not None and getattr(action, "input_spec", None) is not None:
                 specs[(command, name)] = action.input_spec
 
@@ -186,14 +210,55 @@ def _test_exists(ref: str) -> bool:
                for body in scopes for n in body)
 
 
+def _url_lib():
+    """``_lib_validation`` — the URL judgement and its ``type=`` mark."""
+    sys.path.insert(0, str(TOOLS))
+    try:
+        import _lib_validation
+    finally:
+        del sys.path[0]
+    return _lib_validation
+
+
+def url_faults(entries: dict[tuple[str, str], dict], actions: dict) -> list[str]:
+    """#3528 rules 1 and 3: a URL flag is declared ``url``/``url_list`` exactly
+    when its parser action carries the ``url_type`` mark; a usable http(s)
+    URL as a string default makes it a URL flag. *actions*: (command,
+    argument) -> (action, parser), or a bare action."""
+    lib = _url_lib()
+    faults: list[str] = []
+    for key in sorted(actions):
+        action = actions[key][0] if isinstance(actions[key], tuple) else actions[key]
+        where = f"{key[0]} {key[1]}"
+        kind = (entries.get(key) or {}).get("kind")
+        mark = action.type if isinstance(action.type, lib.UrlArg) else None
+        if mark is not None:
+            want = "url_list" if mark.separator else "url"
+            if kind != want:
+                faults.append(f"{where}: parsed with {mark!r} — declare it {want}, "
+                              f"not {kind}")
+        elif kind in URL_KINDS:
+            faults.append(f"{where}: declared {kind}, but its type is not url_type / "
+                          "url_list_type — the parser does not judge it")
+        default = action.default
+        if isinstance(default, str) and default and lib.url_problem(default) is None \
+                and kind not in URL_KINDS:
+            faults.append(f"{where}: its default {default!r} is an http(s) URL — a URL "
+                          "flag: declare it url, typed with url_type")
+    return faults
+
+
 def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
                     manifest: dict, rows: dict, pending_ceiling: frozenset,
-                    specs: "dict | None" = None) -> list[str]:
+                    specs: "dict | None" = None, actions: "dict | None" = None) -> list[str]:
     """Every way the manifest and the parsers disagree, one line each.
-    *specs*: the arguments declared with ``_lib_input.add_input``."""
+    *specs*: the arguments declared with ``_lib_input.add_input``;
+    *actions*: (command, argument) -> (action, parser), for the URL rules."""
     faults: list[str] = []
     entries = _entries(manifest)
     specs = specs or {}
+    if actions:
+        faults.extend(url_faults(entries, actions))
     if sorted(manifest.get("dispatched_to_go") or []) != dispatched:
         faults.append(f"dispatched_to_go is {sorted(manifest.get('dispatched_to_go') or [])}; "
                       f"no Python parser is reached for {dispatched}")
@@ -390,16 +455,169 @@ def test_the_go_dispatchers_dispatch_to_go():
 @pytest.fixture(scope="module")
 def parsed():
     specs: dict = {}
-    arguments, dispatched = parsed_arguments(specs)
-    return arguments, dispatched, specs
+    actions: dict = {}
+    arguments, dispatched = parsed_arguments(specs, actions)
+    return arguments, dispatched, specs, actions
 
 
 def test_every_da_tools_argument_is_declared(parsed):
-    arguments, dispatched, specs = parsed
+    arguments, dispatched, specs, actions = parsed
     assert len(arguments) > 200, "the walk found too few arguments to be measuring anything"
     assert specs, "no add_input declaration was read off a parser — the walk measured none"
     faults = manifest_faults(arguments, dispatched, load_manifest(), rows_by_site(), PENDING,
-                             specs)
+                             specs, actions)
+    assert not faults, "\n".join(faults)
+
+
+# ── URL flags (#3528): every one run through its parser ──────────────────
+
+#: Values no URL flag may take: no scheme (``host:port`` parses as scheme
+#: ``pushgateway``), a URL that does not parse, a port that is not a number,
+#: a scheme outside the allowlist, no host; whitespace or a control character
+#: (urlsplit drops \t\r\n and keeps a space in the host, so these pass it and
+#: then crash the request with http.client.InvalidURL); a non-ASCII path or
+#: query (sent as ASCII: UnicodeEncodeError at request time).
+UNUSABLE_URLS = ("pushgateway:9091", "http://[::1", "http://h:abc", "ftp://h", "http://",
+                 "http://h :80", "http://a b", "http://h\n", "http://h\t:80",
+                 "http://h/m\u00e9trics", "http://h/x?q=\u00e9")
+
+#: Scripts COMMAND_MAP does not reach: (script under scripts/tools, flag,
+#: ``empty=`` mode). Their parser is built inside ``main()``; it is caught
+#: at ``parse_args`` (`_parser_of`) and held to what a walked one is.
+URL_SITES = [
+    ("dx/run_chaos_soak.py", "--target-url", "refuse"),
+    ("dx/inject_waveform.py", "--vm-url", "refuse"),
+    ("ops/_federation_revocation_reconciler.py", "--victorialogs-url", "refuse"),
+]
+
+
+class _Caught(BaseException):
+    """Raised from a patched ``parse_args`` to carry the parser out of main()
+    — a BaseException, so no ``except Exception`` in the tool swallows it."""
+
+
+def _parser_of(script: str, monkeypatch):
+    """The parser *script*'s ``main()`` builds, caught before it parses."""
+    import argparse
+    path = TOOLS / script
+    spec = importlib.util.spec_from_file_location(f"_url_site_{path.stem}", path)
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, module)  # a @dataclass looks itself up
+    spec.loader.exec_module(module)
+
+    def catch(self, *_a, **_k):
+        raise _Caught(self)
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", catch)
+    try:
+        module.main()
+    except _Caught as caught:
+        return caught.args[0]
+    raise AssertionError(f"{script}: main() never reached parse_args")
+
+
+def _action_named(parser, flag: str):
+    return next(a for a in parser._actions if flag in a.option_strings)
+
+
+def _refusal(parser, argv: list[str]) -> "tuple[object, str]":
+    """(the SystemExit code, or the parsed namespace when it parsed; stderr)."""
+    import contextlib
+    import io
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        try:
+            namespace = parser.parse_args(argv)
+        except SystemExit as exc:
+            return exc.code, err.getvalue()
+    return namespace, err.getvalue()
+
+
+def url_value_faults(where: str, action, parser) -> list[str]:
+    """Hand an argument each unusable value through *parser* (in-process):
+    argparse must refuse it (exit 2) with a line naming the argument. ``""``
+    is refused for ``empty="refuse"`` and parses as off for ``"disabled"``."""
+    import argparse
+    lib = _url_lib()
+    mark = action.type
+    if not isinstance(mark, lib.UrlArg):
+        return [f"{where}: not typed with url_type"]
+    flag = action.option_strings[0] if action.option_strings else None
+    named = "argument " + ("/".join(action.option_strings) if flag else action.metavar
+                           or action.dest) + ":"
+    bad = list(UNUSABLE_URLS)
+    if mark.separator:  # one unusable item among usable ones is refused too
+        bad += [f"http://127.0.0.1:9090{mark.separator}{v}" for v in UNUSABLE_URLS]
+    if mark.empty == "refuse":
+        bad.append("")
+    faults = []
+    for value in bad:
+        got, err = _refusal(parser, [flag, value] if flag else [value])
+        if got != 2 or named not in err:
+            faults.append(f"{where} {value!r}: wanted exit 2 naming {named!r}, got "
+                          f"{got!r}: {err.strip()[-300:]}")
+    if mark.empty == "disabled":
+        # Only this argument is asked about: the parser's other required
+        # arguments are let off for the one parse, then put back.
+        held = [a for a in parser._actions if a.required and a is not action]
+        groups = [g for g in parser._mutually_exclusive_groups if g.required]
+        for a in held:
+            a.required = False
+        for g in groups:
+            g.required = False
+        try:
+            got, err = _refusal(parser, [flag, ""])
+        finally:
+            for a in held:
+                a.required = True
+            for g in groups:
+                g.required = True
+        off = [] if mark.separator else ""
+        if not isinstance(got, argparse.Namespace) or getattr(got, action.dest) != off:
+            faults.append(f"{where} '': empty=\"disabled\" must parse as {off!r}, got "
+                          f"{got!r}: {err.strip()[-300:]}")
+    return faults
+
+
+def test_a_url_flag_refuses_an_unusable_value_by_name(parsed):
+    _arguments, _dispatched, _specs, actions = parsed
+    declared = {k for k, d in _entries(load_manifest()).items() if d.get("kind") in URL_KINDS}
+    assert len(declared) > 20, "too few url declarations to be measuring anything"
+    faults: list[str] = []
+    for key in sorted(declared & set(actions)):
+        action, parser = actions[key]
+        faults += url_value_faults(f"{key[0]} {key[1]}", action, parser)
+    assert not faults, "\n".join(faults)
+
+
+@pytest.mark.parametrize("script, flag, empty", URL_SITES, ids=[f"{s} {f}" for s, f, _e in URL_SITES])
+def test_a_url_flag_outside_command_map_is_held_the_same_way(monkeypatch, script, flag, empty):
+    parser = _parser_of(script, monkeypatch)
+    monkeypatch.undo()  # parse_args back, for the rows below
+    action = _action_named(parser, flag)
+    lib = _url_lib()
+    assert isinstance(action.type, lib.UrlArg) and not action.type.separator, \
+        f"{script} {flag}: not typed with url_type ({action.type!r})"
+    assert action.type.empty == empty, (script, flag, action.type)
+    faults = url_faults({(script, flag): {"kind": "url"}}, {(script, flag): action})
+    faults += url_value_faults(f"{script} {flag}", action, parser)
+    assert not faults, "\n".join(faults)
+
+
+def test_no_other_argument_of_a_url_site_has_a_url_default(monkeypatch):
+    """Rule 3 for the hand-listed scripts: a usable http(s) URL default on
+    an argument URL_SITES does not list is a URL flag no row holds."""
+    listed = {(s, f) for s, f, _e in URL_SITES}
+    faults: list[str] = []
+    for script in sorted({s for s, _f, _e in URL_SITES}):
+        parser = _parser_of(script, monkeypatch)
+        monkeypatch.undo()
+        for action in parser._actions:
+            if not action.option_strings or action.nargs == 0:
+                continue
+            key = (script, action.option_strings[-1] if action.option_strings[-1].startswith("--")
+                   else action.option_strings[0])
+            entries = {key: {"kind": "url"}} if key in listed else {}
+            faults += url_faults(entries, {key: action})
     assert not faults, "\n".join(faults)
 
 
@@ -595,3 +813,105 @@ def test_an_add_input_document_is_held_to_file():
     assert manifest_faults(parsed, [], {"commands": {}}, wrong, frozenset(),
                            {("t", "--f"): spec}) == [
         "t --f: declared with _lib_input.add_input (a file), its row answers dir_not_found"]
+
+
+# ── the URL rules bite (synthetic parsers, no walk) ─────────────────────
+
+def _url_parser():
+    import argparse
+    lib = _url_lib()
+    p = argparse.ArgumentParser(prog="t")
+    p.add_argument("--u", type=lib.url_type(empty="refuse"))
+    p.add_argument("--off", type=lib.url_type(empty="disabled"))
+    p.add_argument("--list", type=lib.url_list_type(empty="refuse"))
+    p.add_argument("--n")
+    p.add_argument("--need", required=True)
+    return p
+
+
+def _actions_of(p) -> dict:
+    return {("t", a.option_strings[0]): (a, p) for a in p._actions if a.option_strings
+            and a.option_strings[0] != "-h"}
+
+
+def test_a_url_declaration_is_read_off_the_parser_by_identity():
+    p = _url_parser()
+    ok = {"--u": "url", "--off": "url", "--list": "url_list", "--n": "not_path",
+          "--need": "not_path"}
+    assert url_faults(_entries({"commands": {"t": ok}}), _actions_of(p)) == []
+    # a url_type flag declared not_path; a list declared url; a plain flag declared url
+    wrong = dict(ok, **{"--u": "not_path", "--list": "url", "--n": "url"})
+    faults = url_faults(_entries({"commands": {"t": wrong}}), _actions_of(p))
+    assert faults == [
+        "t --list: parsed with UrlArg(empty='refuse', separator=',') — declare it url_list, "
+        "not url",
+        "t --n: declared url, but its type is not url_type / url_list_type — the parser "
+        "does not judge it",
+        "t --u: parsed with UrlArg(empty='refuse') — declare it url, not not_path"], faults
+
+
+def test_a_name_that_looks_like_a_url_flag_is_not_the_mark():
+    """Identity, not vocabulary: a plain callable named like the lib's is not
+    a url_type."""
+    import argparse
+    p = argparse.ArgumentParser(prog="t")
+
+    def url(value):
+        return value
+    p.add_argument("--u", type=url)
+    faults = url_faults({("t", "--u"): {"kind": "url"}}, _actions_of(p))
+    assert len(faults) == 1 and "its type is not url_type" in faults[0], faults
+
+
+def test_a_url_default_makes_a_url_flag():
+    import argparse
+    p = argparse.ArgumentParser(prog="t")
+    p.add_argument("--n", default="http://localhost:9093")
+    p.add_argument("--m", default="localhost:9093")  # not a usable URL: not this rule
+    faults = url_faults({("t", "--n"): {"kind": "not_path"}, ("t", "--m"): {"kind": "not_path"}},
+                        _actions_of(p))
+    assert faults == ["t --n: its default 'http://localhost:9093' is an http(s) URL — a URL "
+                      "flag: declare it url, typed with url_type"], faults
+
+
+def test_the_value_rows_refuse_by_name_and_let_disabled_be_empty():
+    p = _url_parser()
+    acts = _actions_of(p)
+    for flag in ("--u", "--off", "--list"):
+        action, parser = acts[("t", flag)]
+        assert url_value_faults(f"t {flag}", action, parser) == [], flag
+    # the rows notice a type that lets an unusable value through
+    lib = _url_lib()
+    action, parser = acts[("t", "--u")]
+    loose = lib.UrlArg("refuse")
+    loose._one = lambda value: value  # accepts anything
+    action.type = loose
+    faults = url_value_faults("t --u", action, parser)
+    assert len(faults) == len(UNUSABLE_URLS), faults
+    # and the required arguments the "" row let off are put back
+    assert acts[("t", "--need")][0].required
+
+
+def test_url_problem_is_the_one_judgement():
+    lib = _url_lib()
+    for good in ("http://localhost:9090", "https://prom.example:443/x", "http://[::1]:9090",
+                 # IDNA host; a percent-encoded path; a fragment is never sent
+                 "http://\u4f8b\u3048.jp/metrics", "http://h/a%C3%A9", "http://h/#\u00e9"):
+        assert lib.url_problem(good) is None, good
+    for bad in UNUSABLE_URLS + ("", "http://h:99999", "file:///etc/passwd"):
+        assert lib.url_problem(bad), bad
+    sys.path.insert(0, str(TOOLS))
+    try:
+        import _lib_prometheus
+    finally:
+        del sys.path[0]
+    # _validate_url_scheme keeps its Optional[str] contract over the same judgement
+    for value in ("http://localhost:9090",) + UNUSABLE_URLS:
+        assert _lib_prometheus._validate_url_scheme(value) == lib.url_problem(value), value
+
+
+def test_a_url_list_refuses_an_empty_separator():
+    """``separator=""`` would parse as one URL, not the list it promises."""
+    lib = _url_lib()
+    with pytest.raises(ValueError, match="separator"):
+        lib.url_list_type(empty="refuse", separator="")

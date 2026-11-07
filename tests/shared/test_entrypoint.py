@@ -5,7 +5,7 @@ pytest style：使用 plain assert + capsys fixture。
 
 涵蓋:
   1. COMMAND_MAP 完整性 vs build.sh / release-tools.yaml
-  2. inject_prometheus_env() env-var fallback
+  2. 分派層不注入 --prometheus；每個 --prometheus 由 add_prometheus_arg 宣告後備（#3528）
   3. print_usage() / --version 輸出
   4. run_tool() 錯誤處理
   5. main() subcommand dispatch
@@ -64,45 +64,6 @@ class TestCommandMapConsistency:
         for cmd, script in entrypoint.COMMAND_MAP.items():
             assert script.endswith(".py"), f"'{cmd}' 映射到非 .py: {script}"
 
-    def test_prometheus_commands_subset_of_map(self):
-        """PROMETHEUS_COMMANDS 只引用有效的 command。"""
-        invalid = entrypoint.PROMETHEUS_COMMANDS - set(entrypoint.COMMAND_MAP.keys())
-        assert invalid == set(), f"PROMETHEUS_COMMANDS 引用未知命令: {invalid}"
-
-    def test_add_prometheus_arg_adopters_in_prometheus_commands(self):
-        """工具原始碼呼叫 add_prometheus_arg 者必須列入 PROMETHEUS_COMMANDS。
-
-        兩個 $PROMETHEUS_URL fallback 機制（argparse-layer default vs
-        dispatcher-layer argv 注入，見 PROMETHEUS_COMMANDS 上方註解）須保持
-        同步：工具改採 add_prometheus_arg 卻漏加 PROMETHEUS_COMMANDS 時，
-        兩機制的涵蓋集合就此 drift（README §6.1 的單一全域 fallback 敘述
-        失真）。W1 收斂 threshold-recommend / threshold-govern 時加上此
-        同步 gate。
-        """
-        tools_root = os.path.join(
-            os.path.dirname(__file__), os.pardir, os.pardir, "scripts", "tools")
-        missing = []
-        scanned = adopters = 0
-        for cmd, script in entrypoint.COMMAND_MAP.items():
-            for cand in (os.path.join(tools_root, "ops", script),
-                         os.path.join(tools_root, script)):
-                if os.path.isfile(cand):
-                    scanned += 1
-                    with open(cand, encoding="utf-8") as fh:
-                        src = fh.read()
-                    # 呼叫點帶括號；import 行（不帶括號）不算採用
-                    if "add_prometheus_arg(" in src:
-                        adopters += 1
-                        if cmd not in entrypoint.PROMETHEUS_COMMANDS:
-                            missing.append(cmd)
-                    break
-        # anti-vacuous：路徑推導壞掉時掃到 0 檔會假綠——W4 已有 10+ 支採用，
-        # 掃描結果低於此下限代表本測試自身失效而非 repo 乾淨。
-        assert scanned > 0, f"掃不到任何工具原始碼（tools_root 推導錯誤？）: {tools_root}"
-        assert adopters >= 10, f"add_prometheus_arg 採用數異常偏低（{adopters}），掃描可能失效"
-        assert missing == [], (
-            f"採用 add_prometheus_arg 但不在 PROMETHEUS_COMMANDS: {missing}")
-
     def test_command_map_keys_are_kebab_case(self):
         """所有 command 名稱使用 kebab-case 格式。"""
         for cmd in entrypoint.COMMAND_MAP:
@@ -116,134 +77,96 @@ class TestCommandMapConsistency:
             "COMMAND_MAP 有重複的 script 映射"
 
 
-# ── inject_prometheus_env ──────────────────────────────────────────
+# ── $PROMETHEUS_URL is the tool's, not the dispatcher's (#3528) ──────
 
 
-class TestInjectPrometheusEnv:
-    """inject_prometheus_env() 在 --prometheus 缺失時注入 PROMETHEUS_URL。"""
-
-    def test_injects_when_env_set_and_no_flag(self, monkeypatch):
-        """PROMETHEUS_URL 設定且 --prometheus 不在 args 時注入。"""
-        monkeypatch.setenv("PROMETHEUS_URL", "http://test:9090")
-        args = ["--tenant", "db-a"]
-        result = entrypoint.inject_prometheus_env(args)
-        assert "--prometheus" in result
-        assert "http://test:9090" in result
-
-    def test_no_inject_when_flag_present(self, monkeypatch):
-        """--prometheus 已存在時不重複注入。"""
-        monkeypatch.setenv("PROMETHEUS_URL", "http://test:9090")
-        args = ["--prometheus", "http://custom:9090", "--tenant", "db-a"]
-        result = entrypoint.inject_prometheus_env(args)
-        assert result.count("--prometheus") == 1
-
-    def test_no_inject_when_inline_flag_present(self, monkeypatch):
-        """--prometheus=URL（inline 形式）已存在時不注入。
-
-        回歸鎖：只比對裸 token 會漏掉 inline 形式 → 仍注入 env 值，而
-        argparse 取最後一個 → env 靜默蓋掉呼叫端明確指定的端點。
-        """
-        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
-        args = ["--prometheus=http://explicit:9090", "--tenant", "db-a"]
-        result = entrypoint.inject_prometheus_env(args)
-        assert result == ["--prometheus=http://explicit:9090", "--tenant", "db-a"]
-        assert "http://env:9090" not in result
-
-    def test_inline_flag_explicit_value_wins_in_argparse(self, monkeypatch):
-        """端到端：inline 形式經 argparse 解析後仍是呼叫端指定的值。"""
-        import argparse
-        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
-        args = entrypoint.inject_prometheus_env(["--prometheus=http://explicit:9090"])
-        parser = argparse.ArgumentParser()
-        parser.add_argument("--prometheus")
-        assert parser.parse_args(args).prometheus == "http://explicit:9090"
-
-    def test_no_inject_when_env_unset(self, monkeypatch):
-        """PROMETHEUS_URL 未設定時不注入。"""
-        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
-        args = ["--tenant", "db-a"]
-        result = entrypoint.inject_prometheus_env(args)
-        assert "--prometheus" not in result
-
-    def test_returns_same_list_reference(self, monkeypatch):
-        """inject_prometheus_env 修改並回傳同一個 list。"""
-        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
-        args = ["--tenant", "db-a"]
-        result = entrypoint.inject_prometheus_env(args)
-        assert result is args
-
-    def test_inject_appends_at_beginning(self, monkeypatch):
-        """注入的 --prometheus 出現在 args 中（位置不限）。"""
-        monkeypatch.setenv("PROMETHEUS_URL", "http://prom:9090")
-        args = ["--format", "json"]
-        result = entrypoint.inject_prometheus_env(args)
-        idx = result.index("--prometheus")
-        assert result[idx + 1] == "http://prom:9090"
+def _captured_parsers():
+    import importlib.util
+    script = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
+                          "scripts", "tools", "lint", "check_cli_contract.py")
+    spec = importlib.util.spec_from_file_location("check_cli_contract_for_entrypoint", script)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    captured, _unscoreable, blind, faults = gate.introspect_parsers()
+    assert not faults and not blind, (faults, blind)
+    return captured
 
 
-class TestInjectSkipsFlagsExclusiveWithPrometheus:
-    """argv 已有與 --prometheus 互斥的旗標時，不注入（issue 1513）。
+class TestDispatcherInjectsNothing:
+    """The dispatcher hands a tool its argv as typed (#3528). It used to append
+    `--prometheus $PROMETHEUS_URL`, which argparse then judged: an unusable env
+    stopped every run, paths that never query Prometheus included. The env is
+    now read by the tool (`_lib_io.prometheus_url`) where it queries."""
 
-    `discover-mappings` 的 `--endpoint` 與 `--prometheus` 在同一個互斥群組；
-    照 cli-reference 跑 `da-tools discover-mappings --endpoint <url>` 的讀者只要
-    環境裡設了 PROMETHEUS_URL，注入後 argparse 就以 rc=2 拒收。
-    """
-
-    @pytest.mark.parametrize("argv", [
-        ["--endpoint", "http://exporter:9104/metrics"],
-        ["--endpoint=http://exporter:9104/metrics"],
-        # argparse 接受唯一前綴縮寫，`--end` 就是 `--endpoint`
-        ["--end", "http://exporter:9104/metrics"],
-        ["--endp=http://exporter:9104/metrics"],
+    @pytest.mark.parametrize("command, argv", [
+        ("threshold-recommend", ["--config-dir", "conf.d", "--dry-run"]),
+        ("diagnose", ["db-a"]),
+        ("discover-mappings", ["--job", "mysql"]),
+        ("discover-mappings", ["--endpoint", "http://exporter:9104/metrics"]),
+        ("alert-quality", ["--json"]),
     ])
-    def test_discover_mappings_endpoint_is_left_alone(self, monkeypatch, argv):
-        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
-        assert entrypoint.inject_prometheus_env(list(argv), "discover-mappings") == argv
+    @pytest.mark.parametrize("env", ["http://env:9090", "ftp://bad"])
+    def test_argv_reaches_the_tool_untouched(self, monkeypatch, command, argv, env):
+        monkeypatch.setenv("PROMETHEUS_URL", env)
+        seen = {}
 
-    def test_discover_mappings_without_endpoint_still_gets_the_env(self, monkeypatch):
-        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
-        result = entrypoint.inject_prometheus_env(["--job", "mysql"], "discover-mappings")
-        assert result == ["--job", "mysql", "--prometheus", "http://env:9090"]
+        def fake_run_tool(script, args):
+            seen["script"], seen["args"] = script, list(args)
+        monkeypatch.setattr(entrypoint, "run_tool", fake_run_tool)
+        monkeypatch.setattr(sys, "argv", ["da-tools", command, *argv])
+        entrypoint.main()
+        assert seen == {"script": entrypoint.COMMAND_MAP[command], "args": argv}
 
-    def test_a_prefix_of_another_flag_still_gets_the_env(self, monkeypatch):
-        """`--e` 在 discover-mappings 不唯一（沒有其他 --e 開頭的旗標時才算）；
-        `--json` 不是 --endpoint 的前綴，照常注入。"""
-        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
-        result = entrypoint.inject_prometheus_env(["--json"], "discover-mappings")
-        assert result[-2:] == ["--prometheus", "http://env:9090"]
+    def test_the_dispatcher_has_no_injection_left(self):
+        assert not hasattr(entrypoint, "inject_prometheus_env")
+        assert not hasattr(entrypoint, "PROMETHEUS_COMMANDS")
 
-    def test_the_flag_only_counts_for_its_own_command(self, monkeypatch):
-        monkeypatch.setenv("PROMETHEUS_URL", "http://env:9090")
-        result = entrypoint.inject_prometheus_env(["--endpoint", "x"], "diagnose")
-        assert result[-2:] == ["--prometheus", "http://env:9090"]
 
-    def test_every_exclusive_flag_in_the_real_parsers_is_listed(self):
-        """表由真的 parser 推導、比對，不靠人記得同步。
+class TestEveryPrometheusFlagDeclaresItsFallback:
+    """With nothing injected, a `--prometheus` the reader may leave out (the
+    help and README §6.1 say $PROMETHEUS_URL stands in) must be one the tool
+    itself falls back for: made by `_lib_io.add_prometheus_arg`, which marks
+    the action (`env_fallback`) — read off the real parsers, not a list."""
 
-        對每個會被注入的子命令，找出與 `--prometheus` 同一互斥群組的旗標，
-        必須都在 PROMETHEUS_EXCLUSIVE_FLAGS 裡；反過來，表裡的旗標也必須真的
-        與 `--prometheus` 互斥（避免表比 parser 多、默默少注入）。
-        """
-        import importlib.util
-        script = os.path.join(os.path.dirname(__file__), os.pardir, os.pardir,
-                              "scripts", "tools", "lint", "check_cli_contract.py")
-        spec = importlib.util.spec_from_file_location("check_cli_contract_for_entrypoint",
-                                                      script)
-        gate = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(gate)
-        captured, _unscoreable, blind, faults = gate.introspect_parsers()
-        assert not faults and not blind, (faults, blind)
+    #: `--prometheus` flags whose absence means "do not ask Prometheus", not
+    #: "use $PROMETHEUS_URL" — they never had the dispatcher's fallback and
+    #: must not gain one (it would turn a skipped check into a query).
+    NO_FALLBACK = {
+        "operator-check": "optional target-health check; absent = skipped",
+        "runtime-audit": "one of two sources with --runtime-json; absent = no live source",
+    }
 
-        derived = {}
-        for command in sorted(entrypoint.PROMETHEUS_COMMANDS):
-            parser = captured[command].parser
-            for group in parser._mutually_exclusive_groups:
-                opts = {o for a in group._group_actions for o in a.option_strings}
-                if "--prometheus" in opts:
-                    derived.setdefault(command, set()).update(opts - {"--prometheus"})
-        assert derived, "no --prometheus mutex group found; the probe is blind"
-        assert {c: frozenset(v) for c, v in derived.items()} == \
-            dict(entrypoint.PROMETHEUS_EXCLUSIVE_FLAGS)
+    def test_every_prometheus_flag_is_made_by_add_prometheus_arg(self):
+        import argparse
+        found, undeclared = [], []
+
+        def walk(command, parser):
+            for action in parser._actions:
+                if isinstance(action, argparse._SubParsersAction):
+                    for name, sub in action.choices.items():
+                        walk(f"{command} {name}", sub)
+                elif "--prometheus" in action.option_strings:
+                    found.append(command)
+                    if getattr(action, "env_fallback", None) != "PROMETHEUS_URL" \
+                            or action.required:
+                        undeclared.append(command)
+        for command, model in sorted(_captured_parsers().items()):
+            walk(command, model.parser)
+        assert len(found) >= 15, f"only {len(found)} --prometheus flags seen; the walk is blind"
+        assert sorted(undeclared) == sorted(self.NO_FALLBACK), (
+            "--prometheus not made by add_prometheus_arg (no $PROMETHEUS_URL fallback "
+            f"declared, or required), beyond NO_FALLBACK: "
+            f"{sorted(set(undeclared) - set(self.NO_FALLBACK))}; listed but now declared: "
+            f"{sorted(set(self.NO_FALLBACK) - set(undeclared))}")
+
+    def test_discover_mappings_keeps_endpoint_and_prometheus_exclusive(self):
+        """issue 1513's group stays: one source or the other. Neither given is
+        allowed now — Prometheus at $PROMETHEUS_URL, else localhost."""
+        parser = _captured_parsers()["discover-mappings"].parser
+        groups = [g for g in parser._mutually_exclusive_groups
+                  if {"--endpoint", "--prometheus"} <= {o for a in g._group_actions
+                                                        for o in a.option_strings}]
+        assert len(groups) == 1 and not groups[0].required, groups
 
 
 # ── Version Display ────────────────────────────────────────────────
