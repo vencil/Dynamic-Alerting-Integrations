@@ -114,6 +114,9 @@ SCHEMA = "da-tools.migrate-credentials/v1"
 _LOCATE = "@@da-migrate-locate-{}@@"
 #: What a map key outside the conservative charset reads as (`_safe_key`).
 KEY_PLACEHOLDER = "<key>"
+#: What a plan row's place is rewritten to, given its derived data key (the
+#: JSON report carries the key alone, as `ref_key`).
+REF_TEMPLATE = "{{secret: {{key: {}}}}}"
 #: A map key printed as it is: an HTTP token of at most 64 characters.
 _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}")
 #: The routing steps of a receiver's path that the schema fixes.
@@ -852,8 +855,7 @@ def _print_text(doc: dict) -> None:
     if doc["plan"]:
         print("== Rewrite plan (after --write, `git diff` shows the change) ==")
         for row in doc["plan"]:
-            print(f"  {where(row)} [{row['tenant']}] -> "
-                  f"{{secret: {{key: {row['result']['secret']['key']}}}}}")
+            print(f"  {where(row)} [{row['tenant']}] -> " + REF_TEMPLATE.format(row["ref_key"]))
         print("(applied)" if doc["written"] else "(not applied: add --write)")
     if doc["manifests"]:
         print("== Kubernetes Secrets ==")
@@ -994,7 +996,7 @@ def _main(argv: Optional[list[str]]) -> Any:
         "schema": SCHEMA,
         "config_dir": args.config_dir,
         "written": written,
-        "plan": [{**_row(it, plan), "result": {"secret": {"key": it.entry}}}
+        "plan": [{**_row(it, plan), "ref_key": it.entry}
                  for it in items if it.entry is not None],
         "manifests": manifests,
         "decisions": [{**_row(it, plan), "reason": it.reason}

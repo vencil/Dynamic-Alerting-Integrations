@@ -157,8 +157,8 @@ def test_default_mode_prints_the_plan_and_changes_nothing(tmp_path):
             "{secret: {key: receiver.api_url}}") in proc.stdout
     assert "(not applied: add --write)" in proc.stdout
     doc = json.loads(_run("--config-dir", root, "--json").stdout)
-    assert [(r["location"], r["result"]) for r in doc["plan"]] == [
-        ("tenants.team-a._routing.receiver.api_url", {"secret": {"key": "receiver.api_url"}})]
+    assert [(r["location"], r["ref_key"]) for r in doc["plan"]] == [
+        ("tenants.team-a._routing.receiver.api_url", "receiver.api_url")]
     assert "diff" not in doc
 
 

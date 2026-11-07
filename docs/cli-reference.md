@@ -1746,7 +1746,7 @@ promtool query instant 'count(ALERTS{alertstate="firing"})'
 
 **輸出**
 
-1. **改寫計畫**：租戶 `_routing` 裡拒收的明文換成 `{secret: {key: <key>}}`。key 由位置與欄位路徑推導（`receiver.api_url`、`overrides.0.receiver.http_config.basic_auth.password`），須符合 Secret data key 規則且在租戶內唯一，推導不出或撞名就不改、列給人決定。預設印出結構化的計畫（`plan`：檔名、行號、位置路徑、租戶、改寫結果），文字與 `--json` 兩種格式；不印任何取自檔案文字的內容，所以沒有 diff——要看實際差異，`--write` 之後自己跑 `git diff`。`--write` 經 `da-guard write` 寫回。⚠️ 被改寫的值在 list 裡（`overrides`／`routes`／`http_headers.*.secrets`）時整個 list 重寫，list 內的註解不保留。
+1. **改寫計畫**：租戶 `_routing` 裡拒收的明文換成 `{secret: {key: <key>}}`。key 由位置與欄位路徑推導（`receiver.api_url`、`overrides.0.receiver.http_config.basic_auth.password`），須符合 Secret data key 規則且在租戶內唯一，推導不出或撞名就不改、列給人決定。預設印出結構化的計畫（`plan`：檔名、行號、位置路徑、租戶、改寫成的 data key `ref_key`），文字與 `--json` 兩種格式；不印任何取自檔案文字的內容，所以沒有 diff——要看實際差異，`--write` 之後自己跑 `git diff`。`--write` 經 `da-guard write` 寫回。⚠️ 被改寫的值在 list 裡（`overrides`／`routes`／`http_headers.*.secrets`）時整個 list 重寫，list 內的註解不保留。
 2. **Secret 清單**：`--manifests-out DIR` 搭配 `--write` 時為每個租戶寫一份 `da-<tenant>.yaml`（`kind: Secret`、`stringData`），建檔即 0600，與 conf.d 的改寫一起成敗：任一處被擋（`blocked_after_rewrite`、`rewrite_not_effective`、`rewrite_refused`）兩者都不寫。不帶 `--write` 時只檢查路徑，`manifests[].path` 顯示將會寫到哪裡（`written: false`）。
 3. **待輪替清單**：每一處明文的檔名、行號、欄位路徑、所屬租戶，不含值；處置見 [secret-leak-remediation-sop](internal/secret-leak-remediation-sop.md)。值在 list 裡時行號是那個 list 的鍵所在行（`--json` 的 `line_is_field: false`）。
 
