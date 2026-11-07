@@ -219,6 +219,12 @@ func silentSentinel() orderedMap {
 				"via inhibit, not deleted."},
 			{"description_zh", "此自訂告警仍會評估並可於監控面板（ALERTS series）查看，" +
 				"通知經 inhibit 抑制而非刪除。"},
+			// C-gen (#2566): every alert that declares a tenant label and is
+			// not a platform alert shows its tenant's metadata, the sentinel
+			// too; generate_rulepack_derived.py checks it.
+			{"runbook_url", metadataAnnotation("runbook_url")},
+			{"owner", metadataAnnotation("owner")},
+			{"tier", metadataAnnotation("tier")},
 		}},
 	}
 }

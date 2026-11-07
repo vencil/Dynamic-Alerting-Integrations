@@ -43,15 +43,21 @@ data:
     \      '\n    for: 30s\n    labels:\n      maintenance: page\n      severity:\
     \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
     \ Cluster health is RED — data loss or unavailability possible\n      description_zh:\
-    \ 叢集健康狀態為 RED — 可能造成資料遺失或無法使用\n      summary: Elasticsearch cluster RED on {{\
-    \ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為\
-    \ RED'\n  - alert: ElasticsearchClusterYellow\n    expr: 'tenant:es_cluster_health:status\
-    \ == 1\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"\
-    } == 1)\n\n      '\n    for: 5m\n    labels:\n      maintenance: mute\n      severity:\
-    \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
-    \ Some replica shards are unassigned\n      description_zh: 部分副本分片未分配\n      owner:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ 叢集健康狀態為 RED — 可能造成資料遺失或無法使用\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Elasticsearch cluster RED on {{ $labels.tenant }}\n    \
+    \  summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為 RED'\n      tier: '{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: ElasticsearchClusterYellow\n\
+    \    expr: 'tenant:es_cluster_health:status == 1\n\n      unless on(tenant)\n\n\
+    \      (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for: 5m\n\
+    \    labels:\n      maintenance: mute\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: Some replica shards\
+    \ are unassigned\n      description_zh: 部分副本分片未分配\n      owner: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
     \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
     \ }}: ES cluster YELLOW — replica shards unassigned'\n      platform_summary_zh:\

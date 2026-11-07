@@ -91,3 +91,6 @@ tests:
               summary_zh: "web-b 的自訂告警 [web_5xx] 處於靜默模式"
               description: "The recipe is still evaluated and visible as an ALERTS series (dashboard-only); its notifications are suppressed via inhibit, not deleted."
               description_zh: "此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。"
+              runbook_url: "http://rb/web"
+              owner: "team-web"
+              tier: "silver"

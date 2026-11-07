@@ -119,6 +119,9 @@ groups:
           summary_zh: "MongoDB 成員 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）"
           description: "mongodb_up=0 on {{ $labels.instance }} — one member of an HA replica set being down keeps the set available (warning). Total outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical)."
           description_zh: "{{ $labels.instance }} 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去 PRIMARY 則為 MongoDBNoPrimary（critical）。"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       # Cluster-survival (total outage): NO member reports up=1 for the tenant.
       # max by(tenant)(mongodb_up)==0 is topology-agnostic — fires iff EVERY
@@ -146,6 +149,9 @@ groups:
           summary_zh: "MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機"
           description: "No mongod reports up=1 for tenant {{ $labels.tenant }} — total service outage, not a single-member failover. For a planned single-instance drain, silence via the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's silent-critical sentinel still suppresses it)."
           description_zh: "租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       # Quorum / write-availability: members are reachable but NONE is PRIMARY
       # (member_state==1). This is the case max(up)==0 MISSES — e.g. 3 nodes, 2
@@ -186,6 +192,9 @@ groups:
           summary_zh: "MongoDB：租戶 {{ $labels.tenant }} 的 replica set 沒有 PRIMARY"
           description: "Replica-set members are reachable but none is PRIMARY for tenant {{ $labels.tenant }} — elections failing / quorum lost → writes rejected. Unlike MongoDBClusterDown this fires while secondaries are still up."
           description_zh: "租戶 {{ $labels.tenant }} 的 replica set 成員可連線但沒有 PRIMARY — 選舉失敗／失去 quorum → 寫入被拒。與 MongoDBClusterDown 不同，此告警在 secondary 仍存活時就會觸發。"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       - alert: MongoDBHighConnections
         expr: |

@@ -51,6 +51,9 @@ tests:
               summary_zh: "MariaDB 實例 db-a-0:9104 停機（租戶 db-a）"
               description: "mysql_up=0 on db-a-0:9104 — one replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
               description_zh: "db-a-0:9104 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
       - eval_time: 2m
         alertname: MariaDBClusterDown
         exp_alerts: []
@@ -97,6 +100,9 @@ tests:
               summary_zh: "MariaDB：租戶 db-a 的所有實例皆停機"
               description: "No mysqld reports up=1 for tenant db-a — total service outage, not a single-replica failover. For a planned single-instance drain, silence via the Alertmanager Silence API (no maintenance-window opt-out by design; a tenant's silent-critical sentinel still suppresses it)."
               description_zh: "租戶 db-a 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
       - eval_time: 3m
         alertname: MariaDBNoPrimary
         exp_alerts: []
@@ -130,6 +136,9 @@ tests:
               summary_zh: "MariaDB：租戶 db-a 沒有可寫 primary"
               description: "All instances are read_only for tenant db-a — no writable primary (failover stuck / primary lost) → writes rejected. Unlike MariaDBClusterDown this fires while replicas are still up."
               description_zh: "租戶 db-a 的所有實例皆為 read_only — 沒有可寫 primary（failover 卡住／primary 遺失）→ 寫入被拒。與 MariaDBClusterDown 不同，此告警在 replica 仍存活時就會觸發。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
       - eval_time: 3m
         alertname: MariaDBClusterDown
         exp_alerts: []
@@ -210,3 +219,6 @@ tests:
               summary_zh: "MariaDB 實例 db-b-0:9104 停機（租戶 db-b）"
               description: "mysql_up=0 on db-b-0:9104 — one replica down in a primary-replica set keeps the service available (warning). Total outage escalates to MariaDBClusterDown (critical); loss of the writable primary to MariaDBNoPrimary (critical)."
               description_zh: "db-b-0:9104 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
