@@ -39,6 +39,12 @@
 #                                  helm-gated tests treat a remote session as
 #                                  "helm required" (tests/_helm_gate.py), so a
 #                                  missing helm is now red, not skipped.
+#   7. hadolint absent           → since #3610 the iac-sast-check hook BLOCKS
+#                                  when hadolint did not run, and a remote
+#                                  session has neither the binary nor a docker
+#                                  daemon for the wrapper's image fallback — so
+#                                  `make pr-preflight` writes no marker and the
+#                                  pre-push guard refuses every push (#3627).
 #
 #   Items 2 and 3 have been misfiled as "pre-existing debt / BLOCKED hooks" in a
 #   handoff note before. They are neither — they are this list.
@@ -71,6 +77,12 @@ HELM_VERSION=4.3.0
 HELM_SHA256=86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
 GOLANGCI_LINT_VERSION=2.12.2
 GOLANGCI_LINT_SHA256=8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553
+# hadolint is NOT pinned here: its version and checksum are read below, at run
+# time, from the lint wrapper that owns them —
+# scripts/tools/lint/check_iac_vibe_rules.py
+# (`HADOLINT_VERSION` / `HADOLINT_SHA256`) — so there is no copy here to drift
+# (#3627).
+HADOLINT_PIN_SRC=scripts/tools/lint/check_iac_vibe_rules.py
 
 # Local machines already have a configured environment; only the ephemeral
 # remote containers need this.
@@ -106,6 +118,8 @@ TOOL_BIN="${VIBE_SESSION_START_BIN:-/usr/local/bin}"
 # SIGPIPE with the version present.
 at_pin() {
   local out
+  # An unreadable pin is an empty version; nothing is "at" it.
+  [ -n "$2" ] || return 1
   command -v "$1" >/dev/null 2>&1 || return 1
   case "$1" in
     helm) out="$(helm version --short 2>/dev/null)" || return 1
@@ -114,11 +128,29 @@ at_pin() {
     # that line this fails closed (RESULT=failed every start), never open.
     golangci-lint) out="$(golangci-lint version 2>/dev/null)" || return 1
           case "$out" in *" version $2 "*) return 0 ;; esac ;;
+    # Reads "Haskell Dockerfile Linter X.Y.Z"; the pin carries a leading "v".
+    hadolint) out="$(hadolint --version 2>/dev/null)" || return 1
+          case "$out" in *" ${2#v}") return 0 ;; esac ;;
   esac
   return 1
 }
 
-# install_pinned <tool> <version> <url> <sha256> <path inside the tarball>
+# py_pin <NAME> <file>: the value of every module-level line `NAME = "value"`
+# in <file>, one per line (nothing when there is none or the file is missing).
+py_pin() {
+  sed -n -E "s/^$1[[:space:]]*=[[:space:]]*\"([^\"]+)\"[[:space:]]*\$/\\1/p" "$2" 2>/dev/null || true
+}
+HADOLINT_VERSION="$(py_pin HADOLINT_VERSION "$HADOLINT_PIN_SRC")"
+HADOLINT_SHA256="$(py_pin HADOLINT_SHA256 "$HADOLINT_PIN_SRC")"
+# ⛔ Shape-checked, not just non-empty: both are interpolated into a URL and a
+# checksum line, and a wrong-looking value is a broken SSOT, not a version.
+# This is also what refuses two definitions: their values joined by a newline
+# match neither shape, so a duplicate is never resolved by picking one.
+[[ "$HADOLINT_VERSION" =~ ^v[0-9]+(\.[0-9]+)*$ ]] || HADOLINT_VERSION=""
+[[ "$HADOLINT_SHA256" =~ ^[0-9a-f]{64}$ ]] || HADOLINT_SHA256=""
+
+# install_pinned <tool> <version> <url> <sha256> [<path inside the tarball>]
+# Without the fifth argument the download is the binary itself.
 # On failure returns 1 with the reason in $why.
 install_pinned() {
   local tmp
@@ -130,13 +162,13 @@ install_pinned() {
   esac
   tmp="$(mktemp -d)" || { why="mktemp"; return 1; }
   # Bounded: a stalled server must not hang session start.
-  if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o "$tmp/pkg.tgz" "$3"; then
+  if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o "$tmp/pkg" "$3"; then
     why="download"
-  elif ! printf '%s  %s\n' "$4" "$tmp/pkg.tgz" | sha256sum -c - >/dev/null 2>&1; then
+  elif ! printf '%s  %s\n' "$4" "$tmp/pkg" | sha256sum -c - >/dev/null 2>&1; then
     why="sha256 mismatch"
-  elif ! tar -xzf "$tmp/pkg.tgz" -C "$tmp" "$5"; then
+  elif [ -n "${5:-}" ] && ! tar -xzf "$tmp/pkg" -C "$tmp" "$5"; then
     why="unpack"
-  elif ! install -m 0755 "$tmp/$5" "$TOOL_BIN/$1"; then
+  elif ! install -m 0755 "$tmp/${5:-pkg}" "$TOOL_BIN/$1"; then
     why="install into $TOOL_BIN"
   elif ! at_pin "$1" "$2"; then
     why="PATH resolves $(command -v "$1" || echo nothing), not $2"
@@ -169,8 +201,8 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 # the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
 # reinstalls it every time. So no-op when the last run ended in RESULT=ok, the
 # guards are in place, the e2e deps that run installed are still there, and
-# `pre-commit install` succeeds, and helm and golangci-lint are still at their
-# pins. Anything else runs the whole script again.
+# `pre-commit install` succeeds, and helm, golangci-lint and hadolint are still
+# at their pins. Anything else runs the whole script again.
 # ⛔ The commit hook is reinstalled, not inspected (#2790): one that exists may
 # still not run (mode 0644) or not be pre-commit's (an `exit 0` stub), and
 # `pre-commit install` is idempotent. Its stdout is kept, as in step 3. A
@@ -179,6 +211,7 @@ if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER
   && command -v pre-commit >/dev/null 2>&1 \
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; } \
   && at_pin helm "$HELM_VERSION" && at_pin golangci-lint "$GOLANGCI_LINT_VERSION" \
+  && at_pin hadolint "$HADOLINT_VERSION" \
   && pre-commit install; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing else to do"
@@ -319,7 +352,7 @@ fi
 # A failure here does not stop the steps around it, but it is in RESULT: a
 # remote session without helm turns the helm-gated tests red (tests/_helm_gate.py).
 toolchain_failed=""
-say "installing helm v$HELM_VERSION and golangci-lint v$GOLANGCI_LINT_VERSION (sha256-pinned)"
+say "installing helm v$HELM_VERSION, golangci-lint v$GOLANGCI_LINT_VERSION and hadolint ${HADOLINT_VERSION:-(pin unreadable)} (sha256-pinned)"
 if install_pinned helm "$HELM_VERSION" \
      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
      "$HELM_SHA256" linux-amd64/helm; then
@@ -337,6 +370,22 @@ else
   say "  ⛔ golangci-lint v$GOLANGCI_LINT_VERSION not installed: $why"
   note "golangci-lint=FAILED ($why)"
   toolchain_failed="${toolchain_failed:+$toolchain_failed; }golangci-lint: $why"
+fi
+# --- 6b. hadolint at the lint wrapper's pin (#3627) --------------------------
+# The release asset is the bare binary, not a tarball.
+if [ -z "$HADOLINT_VERSION" ] || [ -z "$HADOLINT_SHA256" ]; then
+  why="pin unreadable from $HADOLINT_PIN_SRC"
+  say "  ⛔ hadolint not installed: $why"
+  note "hadolint=FAILED ($why)"
+  toolchain_failed="${toolchain_failed:+$toolchain_failed; }hadolint: $why"
+elif install_pinned hadolint "$HADOLINT_VERSION" \
+     "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
+     "$HADOLINT_SHA256"; then
+  note "hadolint=$HADOLINT_VERSION"
+else
+  say "  ⛔ hadolint $HADOLINT_VERSION not installed: $why"
+  note "hadolint=FAILED ($why)"
+  toolchain_failed="${toolchain_failed:+$toolchain_failed; }hadolint: $why"
 fi
 
 # --- 7. Pre-build pre-commit's hook environments ---------------------------
