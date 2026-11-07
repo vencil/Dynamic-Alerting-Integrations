@@ -1143,6 +1143,27 @@ def _declared_run(box, script, argv, case_dir_name, holder):
     return proc, scratch
 
 
+def _empty_said() -> "tuple[str, ...]":
+    """`_lib_input`'s one wording of "selected nothing" (`refuse_empty`), in
+    each language, as it sits between the label and what was wanted — read
+    off the lib, not spelled here."""
+    import _lib_input
+    out = []
+    for lang in ("en", "zh"):
+        said = str(_lib_input.refuse_empty("<L>", "<W>", lang=lang))
+        out.append(said.split("<L>: ", 1)[1].split("<W>", 1)[0])
+    return tuple(out)
+
+
+def _not_read_as_empty(rid, out):
+    """#3693: a directory it cannot list (or that is not there) is not
+    refused as one that selects nothing — on an `empty=EMPTY_REFUSED` input
+    that refusal is rc 2 and names the flag and the path too, so rc and name
+    alone would let "unlistable" read as "empty" again."""
+    for said in _empty_said():
+        assert said not in out, (rid, out[-3000:])
+
+
 def _written(scratch):
     return sorted(p.name for p in scratch.rglob("*") if p.name != "silences.json")
 
@@ -1182,6 +1203,7 @@ def test_a_declared_input_refuses_a_directory_it_cannot_list(box, declared_input
         proc, scratch = _declared_run(box, script, argv, f"ul{n}", str(unlisted))
         out = proc.stdout + proc.stderr
         assert proc.returncode == 2, (rid, out[-3000:])
+        _not_read_as_empty(rid, out)
         assert "Traceback" not in out, (rid, out[-3000:])
         assert (f"{flag} {unlisted}" in out
                 or f"{flag} {os.path.realpath(unlisted)}" in out), (rid, out[-3000:])
@@ -1226,6 +1248,7 @@ def test_a_declared_input_given_with_nothing_there_is_as_declared(box, declared_
         assert "Traceback" not in out, (rid, out[-3000:])
         if spec.missing == _lib_input.ABSENT_REFUSED:
             assert proc.returncode == 2, (rid, out[-3000:])
+            _not_read_as_empty(rid, out)
             assert f"{flag} {gone}" in out, (rid, out[-3000:])
             if reason is not None:
                 assert proc.stdout == "", (rid, proc.stdout)  # #3558: no document
