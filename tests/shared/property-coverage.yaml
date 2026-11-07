@@ -92,6 +92,8 @@ modules:
       plaintext_credential_findings: "#1560 ⑤-a table-driven judgement over CREDENTIAL_REF_SITES.plaintext + CREDENTIAL_PLAINTEXT_SITES (data, not a numeric/string law); positive and negative example per row in tests/shared/test_credential_plaintext_policy.py"
       _step_matches: "#1560 ⑤-b one step of a table path against a concrete step ('*' any key, '[]' any index, else equal); exercised for every row by tests/ops/test_grar_credential_plaintext.py::test_no_message_quotes_a_credential_value"
       is_credential_path: "#1560 ⑤-b prefix overlap of a receiver path with the rows of CREDENTIAL_REF_SITES + CREDENTIAL_PLAINTEXT_SITES (data, no law); every row × three bad shapes pinned by tests/ops/test_grar_credential_plaintext.py::test_no_message_quotes_a_credential_value"
+      scalar_text: "#1560 ⑤-b repr of a scalar, type and length of a container (two branches, no law); pinned by tests/shared/test_no_value_repr_in_messages.py and the wrapped-receiver canary cases of tests/ops/test_grar_credential_plaintext.py"
+      value_text: "#1560 ⑤-b '<type> <scalar_text>' or a container's scalar_text; pinned by tests/ops/test_grar_group_by.py / test_grar_routing_values_not_string.py messages"
       receiver_value_repr: "#1560 ⑤-b repr or <masked> by is_credential_path; the canary test over both tables pins it (test_no_message_quotes_a_credential_value)"
       receiver_type_name: "#1560 ⑤-b _type_name with its text through receiver_value_repr; pinned with it by test_no_message_quotes_a_credential_value"
       site_path_text: "#1560 ⑤-b spelling of one CREDENTIAL_REF_SITES path (keys joined by '.', '*' kept, '[]' appended); every row's text pinned by tests/ops/test_grar_secret_ref.py::test_shared_secret_fields_are_the_table_paths"
