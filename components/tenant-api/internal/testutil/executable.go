@@ -16,9 +16,9 @@ import (
 // descriptor is close-on-exec, so it is closed only then). Running the file
 // in that window fails with ETXTBSY, "text file busy". os/exec forks with
 // syscall.ForkLock held for writing; holding it for reading from open to
-// close keeps every fork out of that window. On Linux, Go forks with
-// CLONE_VFORK, so the parent waits until the child has exec'd before it
-// releases the lock and no child is left holding a copy.
+// close keeps every fork out of that window. A child forked before the open
+// never had the descriptor and one forked after the close never sees it, so
+// this holds on every Unix, however long the child takes to exec.
 func WriteExecutable(name string, data []byte, perm os.FileMode) error {
 	syscall.ForkLock.RLock()
 	defer syscall.ForkLock.RUnlock()
