@@ -424,7 +424,7 @@ Dev and pre-prod environments need an `_rbac.yaml` too: without one, or with no 
 
 Earlier versions let every read through in such environments and required the config only for writes; with open mode deleted ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §7) reads need it as well. Before upgrading from a version where a missing file still meant readable, add the file.
 
-Deployments whose rules carry scope limits (`environments`, `domains` or `org-scope`): all three scope axes are always enforced, and an unlabelled tenant is invisible and unwritable under a rule limiting that axis. Before upgrading, run `tenant-api config check` from the new image (its scope-check mode; see [`components/tenant-api/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md)): it lists, per scope axis, every "scope-limited rule × unlabelled tenant" pair and exits non-zero if there is any.
+Deployments whose rules carry scope limits (`environments`, `domains` or `org-scope`): all three scope axes are always enforced, and an unlabelled tenant is invisible and unwritable under a rule limiting that axis. Before upgrading, run `tenant-api config check` from the new image (its scope-check mode; see [`components/tenant-api/README.md`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md)): it lists, per scope axis, every "scope-limited rule × tenant it therefore does not grant" pair (unlabelled, or whose labels cannot be read) and exits non-zero if there is any.
 
 ---
 
