@@ -78,9 +78,10 @@ HELM_SHA256=86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
 GOLANGCI_LINT_VERSION=2.12.2
 GOLANGCI_LINT_SHA256=8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553
 # hadolint is NOT pinned here: its version and checksum are read below, at run
-# time, from the lint wrapper that owns them (scripts/tools/lint/
-# check_iac_vibe_rules.py `HADOLINT_VERSION` / `HADOLINT_SHA256`), so there is
-# no copy here to drift (#3627).
+# time, from the lint wrapper that owns them —
+# scripts/tools/lint/check_iac_vibe_rules.py
+# (`HADOLINT_VERSION` / `HADOLINT_SHA256`) — so there is no copy here to drift
+# (#3627).
 HADOLINT_PIN_SRC=scripts/tools/lint/check_iac_vibe_rules.py
 
 # Local machines already have a configured environment; only the ephemeral
