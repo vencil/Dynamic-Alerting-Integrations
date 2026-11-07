@@ -8,11 +8,17 @@ package handler
 // remove one; a value left as it was is not a change — is refused, 403
 // FORBIDDEN, whatever the caller's write scope says.
 //
-// "Platform administrator" is rbac.Manager.PlatformAdminNonOrgScoped: a rule
-// granting admin on the literal "*" tenant with no org-scope. Not
-// Allowed(p, "*", PermAdmin): an org-scoped "*" admin rule passes that (its
-// org axis is not consulted on the platform-scope query), and an org admin is
-// not a platform admin.
+// "Platform administrator" is rbac.Manager.PlatformAdminUnrestricted: a rule
+// granting admin on the literal "*" tenant with no org-scope, environments or
+// domains. A label decides which OTHER rules cover the tenant, so changing it
+// changes who may see and write it — the same power as editing _rbac.yaml,
+// which no API grants. An admin restricted to some environments could
+// otherwise move a tenant between the environments it administers and so
+// hand it to every rule scoped to the destination; the write scope gates
+// (on the state before and after) do not stop that, since both states are
+// inside its own scope. Not Allowed(p, "*", PermAdmin) either: an org-scoped
+// "*" admin rule passes that (its org axis is not consulted on the
+// platform-scope query).
 //
 // What a label is: the pair the write scope gates read (ScopeMetaFunc's
 // reading, cfg.MetadataResolver): the tenant document's own `_metadata` merged
@@ -72,7 +78,7 @@ func mayChangeScopeLabels(rbacMgr *rbac.Manager, p *rbac.VerifiedPrincipal) bool
 	if rbacMgr == nil {
 		return true
 	}
-	return rbacMgr.PlatformAdminNonOrgScoped(p)
+	return rbacMgr.PlatformAdminUnrestricted(p)
 }
 
 // labelChangeAllowed is the gate: a write leaving the labels as they were

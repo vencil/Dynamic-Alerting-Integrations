@@ -21,10 +21,12 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 )
 
-// postStateRBAC carries admin so the label gate (ADR-027 §7, label_guard.go)
-// lets these writes through to the scope axis they pin: a "*" admin rule
-// without org-scope is a platform administrator (PlatformAdminNonOrgScoped
-// does not read environments). The label gate itself: label_guard_test.go.
+// postStateRBAC: an environment-restricted "*" admin. These tests pin the
+// write scope axis on the state a write leaves; a write here that changes a
+// tenant's labels is refused by the label gate too (ADR-027 §7: only an
+// unrestricted platform administrator changes labels, label_guard.go), and
+// the scope gate runs first, so an out-of-scope result is the scope gate's.
+// The label gate itself: label_guard_test.go.
 const postStateRBAC = `groups:
   - name: admins
     tenants: ["*"]
