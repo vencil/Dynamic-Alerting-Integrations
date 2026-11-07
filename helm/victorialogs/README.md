@@ -54,24 +54,43 @@ Secret (hex, no trailing newline: `--from-literal=password="$(openssl rand -hex 
 
 | `auth.mode` | Requests without credentials |
 |---|---|
-| `observe` (default) | reach every path — the migration step, **not a boundary** |
-| `enforce` | only `/health`, `/ping`, `/metrics` |
+| `enforce` (default) | only `/health`, `/ping`, `/metrics` |
+| `observe` | reach every path — the migration step, **not a boundary** |
 
 In `enforce`, every endpoint above needs the consumer's Basic Auth
-credentials. Migration steps: `docs/internal/platform-log-aggregation-runbook.md` §1.2.
+credentials, and the chart refuses to render until every consumer in
+`auth.consumers` names its Secret (the error lists the ones missing). Remove
+consumers you do not run. Each consumer chart sends its credential from
+`victorialogs.auth.existingSecret`; Grafana from the Secret
+`victorialogs-grafana`. Upgrading from a chart whose default was `observe`:
+set `auth.mode: observe` explicitly, wire every consumer, check they
+authenticate, then drop it — `docs/internal/platform-log-aggregation-runbook.md` §1.2.
+
+On `helm upgrade` the chart also looks up every Secret `auth.consumers` names
+and refuses if one is missing or has no non-empty `password` — the strategy is
+Recreate, so the running pod would go first and the new one would never start.
+`helm template` and first installs skip this. The lookup needs `get secrets` in
+the namespace; a deployer without it sets `auth.checkSecretsOnUpgrade: false`.
 
 ## Install
 
 ```bash
+# One Secret per consumer you run (hex, no trailing newline); the consumer
+# side holds the same password (in monitoring, both sides can name this one).
+for c in vector grafana chargeback-aggregator federation-gateway federation-reconciler; do
+  kubectl -n monitoring create secret generic "victorialogs-$c" \
+    --from-literal=password="$(openssl rand -hex 32)"
+done
 helm install victorialogs ./helm/victorialogs -n monitoring \
   --set persistence.size=20Gi \
-  --set retentionPeriod=60d
+  --set retentionPeriod=60d \
+  -f my-consumers.yaml   # auth.consumers[].existingSecret: victorialogs-<name>
 ```
 
-For chart smoke-tests / CI you can disable the PVC:
+For chart smoke-tests / CI you can disable the PVC (and skip the Secrets):
 
 ```bash
-helm template ./helm/victorialogs --set persistence.enabled=false
+helm template ./helm/victorialogs --set persistence.enabled=false --set auth.mode=observe
 ```
 
 (`emptyDir` mode — data evaporates with the pod. A `NOTES.txt` warning fires.)

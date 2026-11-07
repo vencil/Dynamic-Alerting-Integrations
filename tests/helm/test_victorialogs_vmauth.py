@@ -37,13 +37,20 @@ TWO_CONSUMERS = ('auth.consumers=[{"name":"vector","paths":["/insert/.*"],"exist
                  '{"name":"federation-gateway","paths":["/select/.*"],"existingSecret":"vl-gw"}]')
 
 
-def _helm(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["helm", "template", "t", str(CHART), "-n", "monitoring", *args],
+# The default is auth.mode=enforce, which refuses to render until every
+# consumer names its Secret; tests not about that render the shared baseline
+# (one Secret per consumer). `--set` after `-f` still overrides it.
+BASELINE = Path(__file__).resolve().parent / "victorialogs_render_baseline.yaml"
+
+
+def _helm(*args: str, baseline: bool = True) -> subprocess.CompletedProcess:
+    base = ["-f", str(BASELINE)] if baseline else []
+    return subprocess.run(["helm", "template", "t", str(CHART), "-n", "monitoring", *base, *args],
                           capture_output=True, text=True, encoding="utf-8", timeout=120, check=False)
 
 
-def _render(*args: str) -> list[dict]:
-    out = _helm(*args)
+def _render(*args: str, baseline: bool = True) -> list[dict]:
+    out = _helm(*args, baseline=baseline)
     assert out.returncode == 0, out.stderr
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
@@ -146,7 +153,7 @@ def test_enforce_passes_only_probes_and_metrics_without_credentials() -> None:
 def test_observe_still_passes_unauthenticated_traffic() -> None:
     """The migration step: until every consumer authenticates, requests without
     credentials keep reaching every path (it is NOT a boundary)."""
-    unauth = _auth(_render())["unauthorized_user"]
+    unauth = _auth(_render("--set", "auth.mode=observe"))["unauthorized_user"]
     assert [e["src_paths"] for e in unauth["url_map"]] == [["/.*"]], unauth
 
 
@@ -175,11 +182,13 @@ def test_passwords_come_from_secrets_not_the_configmap() -> None:
 
 
 def test_observe_skips_consumers_without_a_secret() -> None:
-    assert "users" not in _auth(_render()), "observe rendered a user with no Secret behind it"
+    assert "users" not in _auth(_render("--set", "auth.mode=observe", baseline=False)), (
+        "observe rendered a user with no Secret behind it")
 
 
 @pytest.mark.parametrize("args, needle", [
-    (["--set", "auth.mode=enforce"], "existingSecret is required when auth.mode=enforce"),
+    (["--set-json", 'auth.consumers=[{"name":"a","paths":["/x"],"existingSecret":"s"},'
+                    '{"name":"b","paths":["/y"]}]'], "missing: b."),
     (["--set", "auth.mode=open"], "auth.mode must be observe or enforce"),
     (["--set-json", 'auth.consumers=[{"name":"a","paths":["/x"],"existingSecret":"s"},'
                     '{"name":"a","paths":["/y"],"existingSecret":"s"}]'], "is listed twice"),
@@ -195,7 +204,7 @@ def test_render_refuses(args: list[str], needle: str) -> None:
 def test_unauthenticated_traffic_is_not_capped_below_the_global_limit() -> None:
     """In observe every request without credentials is ONE vmauth user; the
     default per-user cap (100) would be a new ceiling on all of them."""
-    args = _containers(_render())["vmauth"]["args"]
+    args = _containers(_render("--set", "auth.mode=observe"))["vmauth"]["args"]
     cap = _values()["auth"]["maxConcurrentRequests"]
     assert f"-maxConcurrentPerUserRequests={cap}" in args and f"-maxConcurrentRequests={cap}" in args, args
 
@@ -205,3 +214,126 @@ def test_pod_rolls_when_the_auth_config_changes() -> None:
         ann = _one(_render(*args), "Deployment")["spec"]["template"]["metadata"]["annotations"]
         return ann["checksum/vmauth"]
     assert checksum() != checksum("--set-json", TWO_CONSUMERS)
+
+
+# ── enforce is the default (#1295 phase 3) ──────────────────────────────────
+
+
+def test_enforce_is_the_default() -> None:
+    assert _values()["auth"]["mode"] == "enforce"
+
+
+def test_a_bare_install_names_every_consumer_it_must_provision() -> None:
+    """Breaking on purpose: with no Secrets named the render fails, and it says
+    which consumers at once rather than one per attempt."""
+    out = _helm(baseline=False)
+    names = [c["name"] for c in _values()["auth"]["consumers"]]
+    assert out.returncode != 0 and f"missing: {', '.join(names)}." in out.stderr, out.stderr[-600:]
+    assert "auth.mode=observe" in out.stderr, "the error must name the migration way out"
+
+
+def test_render_baseline_restates_the_registry() -> None:
+    """Helm replaces lists wholesale, so the baseline repeats the registry; it
+    must repeat it exactly, or every test using it judges a different store."""
+    def strip(consumers: list[dict]) -> list[dict]:
+        return [{k: v for k, v in c.items() if k != "existingSecret"} for c in consumers]
+    baseline = yaml.safe_load(BASELINE.read_text(encoding="utf-8"))["auth"]["consumers"]
+    assert strip(baseline) == strip(_values()["auth"]["consumers"])
+    assert all(c.get("existingSecret") for c in baseline), "the baseline must name a Secret per consumer"
+
+
+
+def test_upgrade_checks_named_secrets_exist_before_recreating_the_pod() -> None:
+    """A named Secret that is missing (or lacks `password`) is an outage on
+    upgrade: the strategy is Recreate, so the running pod goes first and the new
+    one stays in CreateContainerConfigError. The helper looks the Secrets up —
+    only once this release's Deployment exists, which is both the case with a
+    pod to lose and proof that `lookup` reaches a cluster (it returns empty
+    under `helm template`, so offline renders must keep working).
+
+    `lookup` needs a real API server, so this pins the thin wiring around it;
+    the judgement itself is exercised below with fake lookup results. Measured
+    on k3s v1.31 (PR description): missing Secret / missing key / empty value
+    each fail `helm upgrade`, a fresh install does not, a deployer without
+    `get secrets` fails every upgrade unless checkSecretsOnUpgrade=false, and
+    `--reuse-values` from 0.4.0 (where the key is absent) is still checked."""
+    tmpl = (CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
+    block = tmpl[tmpl.index('{{- define "victorialogs.authConsumers"'):]
+    block = block[:block.index("{{- toYaml $out")]
+    gate = re.search(
+        r'\{\{- if and \(include "victorialogs\.checkSecretsOnUpgrade" \.\) \(lookup "apps/v1" "Deployment" '
+        r'\.Release\.Namespace \(include "victorialogs\.name" \.\)\) -\}\}\n'
+        r'\{\{- \$found := dict -\}\}\n'
+        r'\{\{- range \$out -\}\}\n'
+        r'\{\{- \$_ := set \$found \(toString \.existingSecret\) \(lookup "v1" "Secret" '
+        r'\$\.Release\.Namespace \(toString \.existingSecret\)\) -\}\}\n'
+        r'\{\{- end -\}\}\n'
+        r'\{\{- \$broken := include "victorialogs\.secretProblems" '
+        r'\(dict "consumers" \$out "secrets" \$found\) -\}\}\n'
+        r'\{\{- if \$broken -\}\}\n\{\{- fail ', block)
+    assert gate, "the upgrade gate must look up every mounted Secret and fail on any problem"
+    assert _values()["auth"]["checkSecretsOnUpgrade"] is True, "the check must be on by default"
+    assert _helm().returncode == 0, "offline render must not treat an unreachable cluster as missing Secrets"
+
+
+_PROBLEMS_TEMPLATE = (
+    'problems: {{ include "victorialogs.secretProblems" '
+    '(dict "consumers" .Values.consumers "secrets" .Values.secrets) | quote }}\n'
+)
+
+
+def _probe(tmp_path: Path, template: str, values: dict) -> str:
+    """Render `template` (one `problems:` line) against the chart's own
+    _helpers.tpl, in a throwaway chart that holds a copy of it and nothing else."""
+    chart = tmp_path / "probe"
+    (chart / "templates").mkdir(parents=True)
+    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: victorialogs\nversion: 0.0.0\n", encoding="utf-8")
+    (chart / "templates" / "_helpers.tpl").write_text(
+        (CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8"), encoding="utf-8")
+    (chart / "templates" / "probe.yaml").write_text(template, encoding="utf-8")
+    values_file = tmp_path / "v.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    out = subprocess.run(["helm", "template", "p", str(chart), "-f", str(values_file)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=60, check=True)
+    return yaml.safe_load(out.stdout.split("---", 1)[1].split("\n", 2)[2])["problems"]
+
+
+def _secret_problems(tmp_path: Path, consumers: list[dict], secrets: dict) -> str:
+    """victorialogs.secretProblems with fake lookup results."""
+    return _probe(tmp_path, _PROBLEMS_TEMPLATE, {"consumers": consumers, "secrets": secrets})
+
+
+def test_secret_problems_flags_missing_keyless_and_empty_secrets(tmp_path: Path) -> None:
+    consumers = [{"name": n, "existingSecret": f"s-{n}"} for n in ("ok", "gone", "nokey", "empty", "nodata")]
+    secrets = {
+        "s-ok": {"data": {"password": "YWJj"}},
+        # s-gone: absent, as `lookup` answers NotFound (an empty map)
+        "s-nokey": {"data": {"pw": "YWJj"}},
+        "s-empty": {"data": {"password": ""}},
+        "s-nodata": {"metadata": {"name": "s-nodata"}},
+    }
+    assert _secret_problems(tmp_path, consumers, secrets) == (
+        'gone: Secret "s-gone" not found; '
+        'nokey: Secret "s-nokey" has no non-empty key `password`; '
+        'empty: Secret "s-empty" has no non-empty key `password`; '
+        'nodata: Secret "s-nodata" has no non-empty key `password`')
+
+
+def test_secret_problems_is_empty_when_every_secret_serves(tmp_path: Path) -> None:
+    consumers = [{"name": "a", "existingSecret": "s-a"}, {"name": "b", "existingSecret": "s-b"}]
+    secrets = {"s-a": {"data": {"password": "YWJj"}}, "s-b": {"data": {"password": "ZGVm", "x": "eQ=="}}}
+    assert _secret_problems(tmp_path, consumers, secrets) == ""
+
+
+@pytest.mark.parametrize(("auth", "expected"), [
+    ({}, "true"),  # --reuse-values from a chart that predates the key
+    ({"checkSecretsOnUpgrade": None}, "true"),
+    ({"checkSecretsOnUpgrade": True}, "true"),
+    ({"checkSecretsOnUpgrade": False}, ""),
+])
+def test_only_an_explicit_false_turns_the_secret_check_off(tmp_path: Path, auth: dict, expected: str) -> None:
+    """`helm upgrade --reuse-values` from 0.4.x carries the old release's values,
+    where the key is absent; a plain truthiness test skipped the check on exactly
+    the upgrade that names new Secrets (measured on k3s)."""
+    template = 'problems: {{ include "victorialogs.checkSecretsOnUpgrade" . | quote }}\n'
+    assert _probe(tmp_path, template, {"auth": auth}) == expected

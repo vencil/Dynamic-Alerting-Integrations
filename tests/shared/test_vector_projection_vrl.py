@@ -103,8 +103,17 @@ _PROJECTION_SETS = {
 }
 
 
+# Charts that refuse to render under bare defaults by design, rendered here
+# with the shared baseline: helm/victorialogs defaults to auth.mode=enforce and
+# needs a Secret named per consumer (#1295). Applied before any --set.
+_RENDER_BASELINES = {
+    "victorialogs": ["-f", str(Path(__file__).resolve().parents[1] / "helm" / "victorialogs_render_baseline.yaml")],
+}
+
+
 def _render(chart_dir: Path, *, sets: dict[str, str] | None = None) -> list[dict]:
-    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring"]
+    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring",
+           *_RENDER_BASELINES.get(chart_dir.name, [])]
     for k, v in (sets or {}).items():
         cmd += ["--set", f"{k}={v}"]
     out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=30)
@@ -135,7 +144,8 @@ def _render_result(chart_dir: Path, *, sets: dict[str, str] | None = None,
                    string_sets: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """helm template WITHOUT check=True — for asserting a render-time {{ fail }}
     guard or a values.schema.json rejection (the success path uses _render)."""
-    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring"]
+    cmd = ["helm", "template", "test-release", str(chart_dir), "-n", "monitoring",
+           *_RENDER_BASELINES.get(chart_dir.name, [])]
     for k, v in (sets or {}).items():
         cmd += ["--set", f"{k}={v}"]
     for k, v in (string_sets or {}).items():

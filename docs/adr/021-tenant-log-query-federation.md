@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-24
-updated_at: 2026-10-13
+updated_at: 2026-11-07
 ---
 
 # ADR-021: Tenant Log Query — Authorization-Plane-Only, Ingestion-Decoupled
@@ -27,6 +27,8 @@ updated_at: 2026-10-13
 **2026-10-11 修訂**：AccountID 帳本與 federation 白名單、子集移出 conf.d git 樹，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap，單機是一個目錄），寫入改為 compare-and-swap，不再 commit（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。原因：這些 commit 從不 push，chart 預設的 emptyDir 下重啟即失，帳本遺失正是本 ADR 要防的 AccountID 重發。下文的配發紀律、稽核與實作計畫已照此更新。
 
 **2026-10-11 修訂**：開機時比對仍有效的 logs token 與帳本，不一致即拒絕啟動；備份改經 `tenant-api state restore` 合併還原，不再以覆蓋還原（[#2884](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2884)）。見「單調性靠什麼守」。
+
+**2026-11-07 修訂**：日誌庫前方加上依消費端授權的 vmauth（只做消費端授權、不做租戶路由），gateway 以自己的帳密連線；與「不用 vmauth 做租戶路由」的決定不衝突，見替代方案 C。
 
 **2026-10-13 修訂**：AccountID 高水位另記在 federation token store ConfigMap，運行中被蓋回的舊帳本會被擋下；`state restore` 的計數器加上安全邊際（[#2928](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2928)）。見「單調性靠什麼守」。
 
@@ -295,6 +297,17 @@ prom-label-proxy 解析 **PromQL**、注入 metric label matcher。VictoriaLogs 
 ### C：vmauth 動態租戶路由 ⛔
 
 vmauth 雖能注入 `AccountID` header，但靠**靜態 `auth.yml`** 路由，無法消化 tenant-api 動態簽發的 RS256 JWT（4h TTL，每次簽發重寫 `auth.yml` 不可行）——與 ADR-020 拒絕 vmauth 同理。且既有 Envoy gateway 已具 JWT 驗證 + header 改寫，無須再引入第三方元件增加維運負擔。
+
+日誌庫前方現在確實有一個 vmauth，但它做的是另一件事，與上面的理由不衝突：它只決定**哪個平台元件**能連、能用哪些路徑（`auth.yml` 列的是固定幾個消費端，不隨 token 變動），不做租戶路由。gateway 是其中一個消費端，以自己的帳密連線、只能用 `/select`；租戶隔離仍完全靠 gateway 注入的 `AccountID`。例如 gateway 轉送一個 tenant 查詢時，送出的是：
+
+```text
+GET /select/logsql/query?query=...
+Authorization: Basic <federation-gateway 的帳密>   ← vmauth 驗證「是 gateway」
+AccountID: 1000                                    ← VictoriaLogs 依此隔離租戶
+ProjectID: 0
+```
+
+vmauth 只看第一個 header；第二、三個原封轉給 VictoriaLogs。設定方式見 [`platform-log-aggregation-runbook.md`](../internal/platform-log-aggregation-runbook.md) §1.2。
 
 ### D：native tenancy + gateway header 注入 ✅（採用）
 
