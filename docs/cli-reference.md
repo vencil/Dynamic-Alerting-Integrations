@@ -1728,6 +1728,74 @@ promtool query instant 'count(ALERTS{alertstate="firing"})'
 
 ---
 
+#### migrate-credentials
+
+找出 conf.d 裡**明文寫出**的 receiver 憑證，把租戶自己的改寫成 Secret 參照，並列出要輪替的每一處（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）。⚠️ **只報告**：目前沒有任何工具因明文而拒收；下一步產生器會以同一個判定（`_lib_validation.plaintext_credential_findings`）把明文改成擋下的 finding。
+
+**判定**（owner 裁決，表在 `_lib_validation.CREDENTIAL_REF_SITES` 的 `plaintext` 欄與 `CREDENTIAL_PLAINTEXT_SITES`）：
+
+| 位置 | 明文 |
+|------|------|
+| slack `api_url`、teams `webhook_url`、rocketchat `url`、pagerduty `routing_key`／`service_key`、email `auth_password`、webhook `http_config` 底下可放參照的每一處 | 拒收，只收參照 |
+| webhook `url` | 收；但帶 userinfo（`user:pass@`、只有 `user@` 也算）時拒收 |
+| `http_config.proxy_connect_header`、`http_config.oauth2.proxy_connect_header` | 出現就拒收（不論值）：改由平台在 Alertmanager 以 Secret 帶入 `HTTPS_PROXY`，租戶寫 `proxy_from_environment: true` |
+| `http_config.proxy_url`、`http_config.oauth2.proxy_url` | 帶 userinfo 時拒收（替代寫法同上） |
+| email `headers`、`http_headers.*.values`、`oauth2.endpoint_params`、`oauth2.claims` | 允許 |
+
+讀的是每個檔**原本寫的** receiver（不是合併後的）：租戶的 `_routing`（receiver、`overrides[i]`、`routes[i]`）與 `tenants.<t>._routing_enforced`，以及平台的 `_routing_defaults`、routing profile、頂層 `_routing_enforced`——沒有任何 plane 讀的位置也列（寫在那裡的值一樣在 repo 裡）。讀不了的檔 ⇒ 結束碼 `2`。
+
+**輸出**
+
+1. **改寫**：租戶 `_routing` 裡拒收的明文換成 `{secret: {key: <key>}}`。key 由位置與欄位路徑推導（`receiver.api_url`、`overrides.0.receiver.http_config.basic_auth.password`），須符合 Secret data key 規則且在租戶內唯一，推導不出或撞名就不改、列給人決定。預設把 unified diff 印到 stdout（憑證值一律顯示為 `<redacted:N>`）；`--write` 才經 `da-guard write` 寫回。⚠️ 被改寫的值在 list 裡（`overrides`／`routes`／`http_headers.*.secrets`）時整個 list 重寫，list 內的註解不保留。
+2. **Secret 清單**：`--manifests-out DIR` 為每個租戶寫一份 `da-<tenant>.yaml`（`kind: Secret`、`stringData`），建檔即 0600。
+3. **待輪替清單**：每一處明文的檔名、行號、欄位路徑、所屬租戶，不含值；處置見 [secret-leak-remediation-sop](internal/secret-leak-remediation-sop.md)。值在 list 裡時行號是那個 list 的鍵所在行（`--json` 的 `line_is_field: false`）。
+
+不自動處理、列給人決定（`decisions`，附原因）：平台位置的明文、租戶 `_routing_enforced` 裡的、帶 userinfo 的 webhook url、四處代理憑證、推導不出或撞名的 key。
+
+改寫後的樹會在暫存複本上交給產生器的 receiver 綁定判定（`secret_binding_findings`，套 `--policy`）；仍會被擋的參照（例如 `auth_password` 需要 policy 的 `allowed_domains`、`http_config` 的參照需要 `follow_redirects: false`）列在 `blocked_after_rewrite`，這時不算完成。
+
+⛔ 憑證值只會寫進 `--manifests-out` 的檔，不會出現在 stdout、stderr 或 JSON 報告。
+
+**語法**
+
+```bash
+da-tools migrate-credentials --config-dir <DIR> [options]
+```
+
+**選項**
+
+| 選項 | 說明 | 預設值 |
+|------|------|--------|
+| `--config-dir <DIR>` | conf.d 根目錄；經 da-guard 讀（找不到 da-guard 結束碼 `2`） | （必填） |
+| `--write` | 把改寫寫回 conf.d（經 `da-guard write`，整批一起判、全有或全無）。必須同時給 `--manifests-out`，否則結束碼 `2`、什麼都不寫——值離開 conf.d 之後要有地方放；Secret 清單先寫，conf.d 後寫 | false |
+| `--manifests-out <DIR>` | 每個租戶一份 `da-<tenant>.yaml`（0600）。目的地在任何 git worktree 內、是 conf.d 或在它底下、不是目錄、或其中一份清單就是某個 conf.d 檔（symlink／hard link，與 `generate-routes` 同一個判定）⇒ 結束碼 `2`，寫任何東西之前 | 無 |
+| `--policy <PATH>` | 部署端 policy（`allowed_domains`、`shared_secrets`），改寫後的綁定判定照它判；同 `generate-routes --policy` | 無 |
+| `--json` | 報告以一份 JSON 文件印到 stdout（`schema: da-tools.migrate-credentials/v1`；`diff`、`manifests`、`decisions`、`rotate`、`blocked_after_rewrite`、`notes`） | false |
+
+**結束碼**
+
+| 代碼 | 說明 |
+|------|------|
+| `0` | 沒有任何明文要處理 |
+| `1` | 有發現（報告就是答案；`--write` 改寫完也是 1，待輪替清單仍在） |
+| `2` | 用法／I/O 錯誤、沒有可用的 da-guard、有讀不了的檔、`--manifests-out` 被拒 |
+
+**範例**
+
+```bash
+# 只看：diff、要建的 Secret、要輪替的位置
+da-tools migrate-credentials --config-dir conf.d
+
+# 套用：先寫 Secret 清單（repo 之外），再改寫 conf.d
+da-tools migrate-credentials --config-dir conf.d --manifests-out ~/da-secrets --write \
+  --policy policy.yaml
+
+# 機器讀：待輪替清單
+da-tools migrate-credentials --config-dir conf.d --json | jq -r '.rotate[] | "\(.file):\(.line) \(.location)"'
+```
+
+---
+
 #### operator-check
 
 驗證 Prometheus Operator 叢集中 CRD 部署狀態，檢查 6 項指標並產生診斷報告。

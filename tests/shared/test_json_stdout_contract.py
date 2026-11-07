@@ -1312,6 +1312,23 @@ RECIPES: list[Recipe] = [
       expect_caller_error=True,
       expect_document=False),
 
+    # ── migrate_credentials ────────────────────────────────────────────────
+    # #1560 ⑤-a: the report (rc 0 or 1, one document); caller errors carry
+    # none — no such --config-dir, --write without --manifests-out.
+    R("migrate_credentials", "report",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"],
+      doc_check=lambda d: None if isinstance(d, dict)
+      and d.get("schema") == "da-tools.migrate-credentials/v1"
+      else f"not the migrate-credentials report: {str(d)[:80]}"),
+    R("migrate_credentials", "missing-config-dir",
+      lambda t, s: ["--config-dir", str(t / "no-such-conf.d"), "--json"],
+      expect_caller_error=True,
+      expect_document=False),
+    R("migrate_credentials", "write-without-manifests-out",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--write", "--json"],
+      expect_caller_error=True,
+      expect_document=False),
+
     # ── policy_engine ──────────────────────────────────────────────────────
     R("policy_engine", "no-policies",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"]),
@@ -1508,8 +1525,8 @@ def test_recipe_table_covers_every_json_tool():
         f"no recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 39, (
-        f"expected 39 JSON-flag tools (35 --json + 4 --json-output), "
+    assert len(JSON_TOOLS) == 40, (
+        f"expected 40 JSON-flag tools (36 --json + 4 --json-output), "
         f"found {len(JSON_TOOLS)}: {sorted(JSON_TOOLS)}"
     )
 

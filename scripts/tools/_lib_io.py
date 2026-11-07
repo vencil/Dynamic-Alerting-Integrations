@@ -1064,6 +1064,33 @@ def write_operator_output_or_die(path: str, content: str, *, flag: Optional[str]
         _die_on_write_error(exc, exit_code)
 
 
+def is_special_file(path: str) -> bool:
+    """Whether *path* is there and is not a regular file (``/dev/null``, a
+    tty, a FIFO): writing it replaces nothing, so it collides with nothing.
+    Whether it is fd 1 is the stdout owners' question, not this one."""
+    try:
+        return not stat.S_ISREG(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
+def same_file(a: Optional[str], b: Optional[str]) -> bool:
+    """Whether paths *a* and *b* name one file, so that writing one replaces
+    the other (#3615): the same path once symlinks are resolved
+    (``os.path.realpath`` — also for a file not created yet), or the same
+    inode (``os.path.samefile`` — a hard link). A path that is not a regular
+    file (``is_special_file``) is never the same file. generate-routes'
+    output clashes and migrate-credentials' outputs both judge by it."""
+    if not a or not b or is_special_file(a) or is_special_file(b):
+        return False
+    if os.path.realpath(a) == os.path.realpath(b):
+        return True
+    try:
+        return os.path.exists(a) and os.path.exists(b) and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def check_repo_artifact(path: Any, *, flag: Optional[str] = None) -> str:
     """The preconditions of :func:`write_repo_artifact`, callable before a
     tool READS the artifact it will rewrite (a FIFO or ``/dev/stdout`` would

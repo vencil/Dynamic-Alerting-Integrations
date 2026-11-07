@@ -50,6 +50,7 @@ lang: en
 | `inject_metadata_join.py` | One-time script: add tenant metadata annotations (runbook_url, owner, tier) to Rule Pack alert rules. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
+| `migrate_credentials.py` | find receiver credentials written out in conf.d and |
 | `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
 | `migrate_to_operator.py` | migrate-to-operator — Migrate ConfigMap-based rules to Operator CRD format. |
 | `notification_tester.py` | Multi-channel notification connectivity testing. |

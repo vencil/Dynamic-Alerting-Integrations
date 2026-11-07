@@ -246,6 +246,7 @@ TOOLS: dict[str, Tool] = {
                             "--config-dir", "{conf}")),
     "offboard_tenant": Tool((_PY, _T + "ops/offboard_tenant.py", "a", "--config-dir", "{conf}")),
     "explain_keys": Tool((_PY, _T + "ops/explain_keys.py", "--config-dir", "{conf}")),
+    "migrate_credentials": Tool((_PY, _T + "ops/migrate_credentials.py", "--config-dir", "{conf}")),
     "init_project": Tool((_PY, _T + "ops/init_project.py", "--non-interactive", "--tenants", "newt",
                           "--deploy", "helm", "--force", "-o", "{cell}",
                           "--da-tools-image", "ghcr.io/vencil/da-tools:v0.0.0")),

@@ -1731,6 +1731,74 @@ promtool query instant 'count(ALERTS{alertstate="firing"})'
 
 ---
 
+#### migrate-credentials
+
+Finds receiver credentials **written out** in conf.d, rewrites the ones a tenant owns as Secret references, and lists every place to rotate ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)). ⚠️ **Report only**: nothing refuses a written-out credential yet; next, the generator refuses it by the same judgement (`_lib_validation.plaintext_credential_findings`).
+
+**Judgement** (owner decision; the tables are the `plaintext` column of `_lib_validation.CREDENTIAL_REF_SITES` and `CREDENTIAL_PLAINTEXT_SITES`):
+
+| Place | Written out |
+|-------|-------------|
+| slack `api_url`, teams `webhook_url`, rocketchat `url`, pagerduty `routing_key` / `service_key`, email `auth_password`, every reference place under webhook `http_config` | refused: a reference only |
+| webhook `url` | taken, unless it carries userinfo (`user:pass@`, or just `user@`) |
+| `http_config.proxy_connect_header`, `http_config.oauth2.proxy_connect_header` | refused when present, whatever the value: the platform sets `HTTPS_PROXY` on Alertmanager from a Secret and the tenant writes `proxy_from_environment: true` |
+| `http_config.proxy_url`, `http_config.oauth2.proxy_url` | refused with userinfo (same alternative) |
+| email `headers`, `http_headers.*.values`, `oauth2.endpoint_params`, `oauth2.claims` | allowed |
+
+It reads each receiver **as its file writes it** (not merged): the tenant's `_routing` (receiver, `overrides[i]`, `routes[i]`) and `tenants.<t>._routing_enforced`, and the platform's `_routing_defaults`, routing profiles and top-level `_routing_enforced` — places no plane reads included (a value written there is in the repository all the same). A file that cannot be read ⇒ exit `2`.
+
+**Output**
+
+1. **Rewrite**: each refused value in a tenant's `_routing` becomes `{secret: {key: <key>}}`. The key is derived from the place and the field path (`receiver.api_url`, `overrides.0.receiver.http_config.basic_auth.password`); it must be a valid Secret data key and unique in the tenant, otherwise the value is left and listed for a person. By default a unified diff goes to stdout (every credential value reads `<redacted:N>`); `--write` applies it through `da-guard write`. ⚠️ A value inside a list (`overrides` / `routes` / `http_headers.*.secrets`) rewrites the whole list: comments inside it are not kept.
+2. **Secret manifests**: `--manifests-out DIR` writes one `da-<tenant>.yaml` per tenant (`kind: Secret`, `stringData`), created 0600.
+3. **Rotation list**: file, line, field path and tenant of every written-out credential, never the value; what to do is in [secret-leak-remediation-sop](internal/secret-leak-remediation-sop.md). For a value inside a list the line is the list key's (`line_is_field: false` in `--json`).
+
+Left for a person (`decisions`, with the reason): values in platform places, in a tenant's `_routing_enforced`, a webhook url with userinfo, the four proxy credentials, a key that cannot be derived or is taken.
+
+The rewritten tree, on a temporary copy, goes through the generator's receiver binding (`secret_binding_findings`, under `--policy`); a reference that would still be refused (say `auth_password` without the policy's `allowed_domains`, an `http_config` reference without `follow_redirects: false`) is listed under `blocked_after_rewrite`, and the run does not count as done.
+
+⛔ Credential values are written only into the `--manifests-out` files: never to stdout, stderr or the JSON report.
+
+**Syntax**
+
+```bash
+da-tools migrate-credentials --config-dir <DIR> [options]
+```
+
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--config-dir <DIR>` | conf.d root; read through da-guard (none usable: exit `2`) | (required) |
+| `--write` | Write the rewrite back into conf.d (through `da-guard write`, one batch, all or nothing). Needs `--manifests-out`, else exit `2` and nothing is written — the values need somewhere to go once they leave conf.d; the manifests are written first, conf.d after | false |
+| `--manifests-out <DIR>` | One `da-<tenant>.yaml` per tenant (0600). A destination inside any git worktree, the conf.d or inside it, not a directory, or a manifest that is a conf.d file (symlink / hard link, the same judgement as `generate-routes`) ⇒ exit `2`, before anything is written | none |
+| `--policy <PATH>` | The deployment policy (`allowed_domains`, `shared_secrets`) the rewritten binding is judged under; as `generate-routes --policy` | none |
+| `--json` | The report as one JSON document on stdout (`schema: da-tools.migrate-credentials/v1`; `diff`, `manifests`, `decisions`, `rotate`, `blocked_after_rewrite`, `notes`) | false |
+
+**Exit codes**
+
+| Code | Meaning |
+|------|---------|
+| `0` | nothing written out |
+| `1` | found (the report is the answer; also after `--write`: the rotation list stands) |
+| `2` | usage / I/O error, no usable da-guard, a file that cannot be read, `--manifests-out` refused |
+
+**Examples**
+
+```bash
+# Look only: the diff, the Secrets to create, the places to rotate
+da-tools migrate-credentials --config-dir conf.d
+
+# Apply: the manifests first (outside the repository), then conf.d
+da-tools migrate-credentials --config-dir conf.d --manifests-out ~/da-secrets --write \
+  --policy policy.yaml
+
+# Machine-readable rotation list
+da-tools migrate-credentials --config-dir conf.d --json | jq -r '.rotate[] | "\(.file):\(.line) \(.location)"'
+```
+
+---
+
 #### operator-check
 
 Verify Operator CRD deployment status in a Prometheus Operator cluster, checking 6 indicators and generating a diagnostic report.
