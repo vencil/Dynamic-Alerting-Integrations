@@ -38,6 +38,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import safe_label  # noqa: E402  (#1538; #3276)
+from _lib_validation import url_problem, url_type  # noqa: E402  (#3528)
 from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
@@ -460,6 +461,14 @@ def push_metrics(pushgateway_url, created, skipped, errors, duration_s):
     ]
     body = "\n".join(lines) + "\n"
 
+    # #3528: the parser already refused an unusable --pushgateway; a direct
+    # caller gets the same judgement here, so no request leaves for a scheme
+    # outside the allowlist (`ftp://` used to be sent).
+    problem = url_problem(pushgateway_url)
+    if problem is not None:
+        print(f"  WARN: not pushing metrics: --pushgateway {safe_label(pushgateway_url)!r} "
+              f"is not a usable URL: {problem}", file=sys.stderr)
+        return
     url = f"{pushgateway_url}/metrics/job/maintenance-scheduler"
     try:
         req = urllib.request.Request(url, method="POST")  # nosec B310  #operator-supplied internal Pushgateway URL
@@ -490,9 +499,11 @@ def build_parser():
     )
     parser.add_argument("--config-dir", required=True,
                         help="Tenant config directory (conf.d/)")
-    parser.add_argument("--alertmanager",
+    # #3528: judged at parse time — a value that is not a usable http(s)
+    # URL is exit 2 by name; "" is the flag left out (report-only / no push).
+    parser.add_argument("--alertmanager", type=url_type(empty="disabled"),
                         help="Alertmanager base URL (e.g., http://alertmanager:9093)")
-    parser.add_argument("--pushgateway",
+    parser.add_argument("--pushgateway", type=url_type(empty="disabled"),
                         help="Pushgateway base URL for observability metrics "
                              "(e.g., http://pushgateway:9091)")
     parser.add_argument("--dry-run", action="store_true",
@@ -513,8 +524,11 @@ def main():
       2 — fatal error (bad args, missing deps, a tenant file that cannot be read,
           da-guard missing or failing, Alertmanager's silences that could
           not be read)
-    A failed metrics push (--pushgateway unreachable, not HTTP, or not a
-    usable URL) is a WARN and changes none of these (#3477).
+    A --pushgateway or --alertmanager that is not a usable http(s) URL
+    (no scheme, a scheme other than http/https, no host, a port that is not
+    a number) is a caller error, refused at parse time: 2 (#3528); ""
+    leaves the flag out. A failed metrics push (Pushgateway unreachable, or
+    a reply that is not HTTP) is a WARN and changes none of these (#3477).
     """
     try_utf8_stdout()
     parser = build_parser()

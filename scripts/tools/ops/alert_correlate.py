@@ -25,8 +25,10 @@ from typing import List, Optional
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
+    add_prometheus_arg,
     detect_cli_lang,
     parse_duration_seconds,
+    prometheus_url,
 )
 # #3133: alerts are read by the lib; a Prometheus that does not answer raises
 # QueryError (rc 2) — never "no alerts".
@@ -456,8 +458,7 @@ def build_parser() -> argparse.ArgumentParser:
               %(prog)s --prometheus http://localhost:9090 --min-score 0.5 --ci
         """),
     )
-    parser.add_argument("--prometheus", default=None,
-                        help="Prometheus URL (default: $PROMETHEUS_URL)")
+    add_prometheus_arg(parser, help_text="Prometheus URL (default: $PROMETHEUS_URL)")
     _lib_input.add_input(parser, "--input", "-i", decode=INPUT_DOCUMENT,
                          help=h["input"])
     parser.add_argument("--window", default="5m",
@@ -493,13 +494,10 @@ def main():
         alerts = alerts_from_document(
             _lib_input.document(args, "input", lang=detect_cli_lang()))
     else:
-        # `... or "http://localhost:9090"` (not os.environ.get's default): a
-        # PROMETHEUS_URL that is SET BUT EMPTY (e.g. a ConfigMap key resolving
-        # to "") would satisfy get()'s key lookup and yield an empty URL. Same
-        # empty-string hardening as _lib_io.add_prometheus_arg.
-        prom_url = (args.prometheus
-                    or os.environ.get("PROMETHEUS_URL")
-                    or "http://localhost:9090")
+        # #3528: --prometheus (judged at parse), else $PROMETHEUS_URL judged
+        # here (empty = unset), else http://localhost:9090 — `--input` runs
+        # never read the env, so an unusable one does not stop them.
+        prom_url = prometheus_url(args.prometheus)
         alerts = load_alerts_from_alertmanager(prom_url)
 
     if not alerts:

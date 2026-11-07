@@ -32,7 +32,7 @@ import urllib.parse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
+from _lib_python import probe_health, add_prometheus_arg, prometheus_url, url_list_type  # noqa: E402
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
 from _lib_prometheus import (  # noqa: E402
@@ -350,24 +350,25 @@ def main():
     add_prometheus_arg(parser,
                        help_text="Prometheus URL (central for e2e, or target for edge/central; "
                                  "default: $PROMETHEUS_URL, else http://localhost:9090)")
-    parser.add_argument("--edge-urls",
+    parser.add_argument("--edge-urls", type=url_list_type(empty="refuse"),
                         help="Comma-separated edge Prometheus URLs (for e2e mode)")
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON (for CI integration)")
     args = parser.parse_args()
 
     if args.target == "edge":
-        checks = check_edge(args.prometheus)
+        checks = check_edge(prometheus_url(args.prometheus))  # #3528: env judged here
         section = "edge"
     elif args.target == "central":
-        checks = check_central(args.prometheus)
+        checks = check_central(prometheus_url(args.prometheus))
         section = "central"
     elif args.target == "e2e":
-        edge_urls = args.edge_urls.split(",") if args.edge_urls else []
+        # #3528: url_list_type parsed it — a list, every item a usable URL
+        edge_urls = args.edge_urls or []
         if not edge_urls:
             print("ERROR: --edge-urls required for e2e mode", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
-        checks = check_e2e(args.prometheus, edge_urls)
+        checks = check_e2e(prometheus_url(args.prometheus), edge_urls)
         section = "e2e"
     else:
         sys.exit(EXIT_CALLER_ERROR)

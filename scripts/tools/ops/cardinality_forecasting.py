@@ -35,6 +35,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_io import add_prometheus_arg, prometheus_url  # noqa: E402  (#3528)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility: the repo subdir layout needs the
@@ -566,8 +567,8 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(
             description="基數預測工具 — 分析 per-tenant time series 成長趨勢，預測觸頂時間。",
         )
-        parser.add_argument("--prometheus", required=True,
-                            help="Prometheus 端點 URL")
+        add_prometheus_arg(parser, help_text="Prometheus 端點 URL"
+                           "（預設: $PROMETHEUS_URL，否則 http://localhost:9090）")
         parser.add_argument("--lookback", default=DEFAULT_LOOKBACK, type=duration_arg,
                             help=f"回看時間範圍，如 5m / 4h / 30d（預設: {DEFAULT_LOOKBACK}）；"
                                  "不符合格式 ⇒ 結束碼 2")
@@ -586,8 +587,8 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(
             description="Cardinality forecasting — analyze per-tenant time series growth and predict limit breach.",
         )
-        parser.add_argument("--prometheus", required=True,
-                            help="Prometheus endpoint URL")
+        add_prometheus_arg(parser, help_text="Prometheus endpoint URL "
+                           "(default: $PROMETHEUS_URL, else http://localhost:9090)")
         parser.add_argument("--lookback", default=DEFAULT_LOOKBACK, type=duration_arg,
                             help=f"Lookback period such as 5m / 4h / 30d (default: "
                                  f"{DEFAULT_LOOKBACK}); any other shape exits 2")
@@ -622,7 +623,8 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
     non_finite_dropped: dict[str, int] = {}
     try:
         cardinality_data = query_cardinality_range(
-            args.prometheus, args.lookback, non_finite_dropped=non_finite_dropped,
+            prometheus_url(args.prometheus),  # #3528: env judged here
+            args.lookback, non_finite_dropped=non_finite_dropped,
         )
     except QueryError as exc:
         # #3065: a failed query is not "no data" — distinct reason, raw error.

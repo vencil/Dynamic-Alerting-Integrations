@@ -65,7 +65,7 @@ sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 # #2966: the chart forwards reconcile.intervalSeconds verbatim (no values schema),
 # so this argparse type is the only gate against 0 (busy loop) / negative (crash).
-from _lib_validation import positive_seconds  # noqa: E402
+from _lib_validation import positive_seconds, url_type  # noqa: E402
 
 # ── pure domain logic (unit-tested without a cluster) ──────────────────────────
 
@@ -820,7 +820,10 @@ def _serve_forever(cfg: Config, metrics: Metrics, clock=time.time) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Federation revocation reconciler (ADR-028 D1, #924).")
-    p.add_argument("--victorialogs-url", default="http://victorialogs.monitoring.svc.cluster.local:9428")
+    # #3528: judged at parse time, so an unusable URL is exit 2 at start —
+    # not a reconcile loop that fails every interval.
+    p.add_argument("--victorialogs-url", type=url_type(empty="refuse"),
+                   default="http://victorialogs.monitoring.svc.cluster.local:9428")
     p.add_argument("--revoked-file", default="/etc/revoked/revoked.txt",
                    help="Mounted tenant-federation-store revoked.txt key (direct CM read).")
     p.add_argument("--metrics-port", type=int, default=9099)

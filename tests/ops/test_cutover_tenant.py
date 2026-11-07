@@ -87,6 +87,40 @@ class TestReadinessFileIsReadByTheLib:
         assert exc.value.reason == "file_not_found"
 
 
+class TestDryRunDoesNotJudgeTheEnv:
+    """#3528 review: a dry run sends nothing, so an unusable $PROMETHEUS_URL
+    may not stop it (it was rc 2); a real run is stopped, named."""
+
+    def _run(self, tmp_path, monkeypatch, *extra):
+        path = tmp_path / "r.json"
+        path.write_text(json.dumps(_readiness()), encoding="utf-8")
+        monkeypatch.setenv("PROMETHEUS_URL", "ftp://x")
+        monkeypatch.setattr("sys.argv", ["cutover", "--readiness-json", str(path),
+                                         "--tenant", "t1", *extra])
+        seen = {}
+
+        def fake_apply(**kwargs):
+            seen.update(kwargs)
+            return {"success": True, "steps": [], "failed_step": None}
+        monkeypatch.setattr(ct, "apply_cutover", fake_apply)
+        try:
+            ct.main()
+        except SystemExit:
+            pass
+        return seen
+
+    def test_dry_run_with_an_unusable_env_runs(self, tmp_path, monkeypatch):
+        seen = self._run(tmp_path, monkeypatch, "--dry-run")
+        assert seen["prometheus_url"] == "ftp://x" and seen["dry_run"] is True
+
+    def test_a_real_run_with_an_unusable_env_is_refused_by_name(self, tmp_path, monkeypatch):
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError) as exc:
+            self._run(tmp_path, monkeypatch)
+        assert "$PROMETHEUS_URL" in str(exc.value) and exc.value.reason == \
+            "prometheus_url_unusable"
+
+
 # ---------------------------------------------------------------------------
 # TestRunKubectl
 # ---------------------------------------------------------------------------
@@ -284,9 +318,9 @@ class TestCLI:
 
     def test_parser_required_args(self, monkeypatch):
         """必要引數正確解析；--prometheus 未設 env 時 fallback localhost（byte-identical）。"""
-        # add_prometheus_arg resolves $PROMETHEUS_URL at build_parser() time,
-        # so pin the env-unset default here (byte-identical to the old
-        # hardcoded default="http://localhost:9090").
+        # #3528: $PROMETHEUS_URL is no longer the argparse default; main()
+        # resolves it with `_lib_io.prometheus_url` where it is used, so the
+        # URL cutover sends to is prometheus_url(args.prometheus).
         monkeypatch.delenv("PROMETHEUS_URL", raising=False)
         parser = ct.build_parser()
         args = parser.parse_args([
@@ -295,7 +329,8 @@ class TestCLI:
         ])
         assert args.readiness_json == "r.json"
         assert args.tenant == "db-a"
-        assert args.prometheus == "http://localhost:9090"
+        assert args.prometheus is None
+        assert ct.prometheus_url(args.prometheus) == "http://localhost:9090"
         assert not args.dry_run
         assert not args.force
 
@@ -307,7 +342,7 @@ class TestCLI:
             "--readiness-json", "r.json",
             "--tenant", "db-a",
         ])
-        assert args.prometheus == "http://test:1234"
+        assert ct.prometheus_url(args.prometheus) == "http://test:1234"
 
     def test_parser_prometheus_flag_overrides_env(self, monkeypatch):
         """顯式 --prometheus 蓋過 $PROMETHEUS_URL。"""
@@ -364,15 +399,9 @@ class TestEntrypointIntegration:
         assert '"cutover"' in content
         assert "cutover_tenant.py" in content
 
-    def test_prometheus_commands_has_cutover(self):
-        """PROMETHEUS_COMMANDS 包含 cutover 命令。"""
-        ep_path = os.path.join(
-            os.path.dirname(__file__), "..", "components",
-            "da-tools", "app", "entrypoint.py",
-        )
-        if not os.path.isfile(ep_path):
-            pytest.skip("entrypoint.py not found")
-        with open(ep_path, encoding="utf-8") as fh:
-            content = fh.read()
-        # PROMETHEUS_COMMANDS should contain "cutover"
-        assert '"cutover"' in content
+    def test_prometheus_flag_declares_its_env_fallback(self):
+        """#3528：--prometheus 可省略（$PROMETHEUS_URL 後備）由 parser 自己宣告
+        （add_prometheus_arg 標在 action 上），不再靠 entrypoint 的 PROMETHEUS_COMMANDS。"""
+        action = next(a for a in ct.build_parser()._actions
+                      if "--prometheus" in a.option_strings)
+        assert action.env_fallback == "PROMETHEUS_URL" and not action.required
