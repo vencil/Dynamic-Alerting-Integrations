@@ -13,6 +13,7 @@
  *
  * Invoke via the `vibe-security-audit` skill. args MUST be a JSON OBJECT:
  *   { target: "<abs path to component>",   // REQUIRED
+ *     workspaceRoot: "<abs path to the snapshot worktree root>",  // REQUIRED; target must be under it
  *     componentLabel?: "tenant-api",
  *     attackClasses?: [{ key, title, scope, files }] }  // else Vibe defaults
  */
@@ -43,7 +44,32 @@ const ROOT = A.target
 if (!/^(?:[a-zA-Z]:[\\/]|\/)/.test(ROOT)) {
   throw new Error(`vibe-security-audit: target must be an ABSOLUTE path (got "${ROOT}") — a relative path would be interpolated into agent prompts and read the wrong tree, defeating worktree isolation.`)
 }
+// --- workspaceRoot (#1488): the snapshot worktree's root. Attack classes name
+// cross-component files as repo-relative `components/...` / `scripts/...`
+// paths; without an explicit base an agent resolves those against its own cwd
+// — the MAIN tree, at whatever revision it is on — and nothing in the output
+// says so. "Read the wrong tree" and "read the right tree, found nothing" are
+// then indistinguishable. Required, absolute, and target must sit under it,
+// so the two cannot point at different checkouts. ---
+if (!A.workspaceRoot) {
+  throw new Error('vibe-security-audit: args.workspaceRoot is required — the absolute root of the snapshot worktree (e.g. "<abs>/.claude/worktrees/sec-audit"). Cross-component paths (components/..., scripts/...) are resolved against it; without it an agent falls back to its cwd, i.e. the main tree.')
+}
+if (!/^(?:[a-zA-Z]:[\\/]|\/)/.test(A.workspaceRoot)) {
+  throw new Error(`vibe-security-audit: workspaceRoot must be an ABSOLUTE path (got "${A.workspaceRoot}").`)
+}
+// Compared on '/'-separated, case-preserved strings with no trailing slash;
+// the boundary check (`WS + '/'`) keeps "/a/ws-old/x" from passing as under "/a/ws".
+const norm = (p) => p.replace(/\\/g, '/').replace(/\/+$/, '')
+const WS = norm(A.workspaceRoot)
+if (WS === '' || /^[a-zA-Z]:$/.test(WS)) {
+  throw new Error(`vibe-security-audit: workspaceRoot "${A.workspaceRoot}" is a filesystem root — every absolute target would count as "under" it. Pass the snapshot worktree's root.`)
+}
+if (norm(ROOT) !== WS && !norm(ROOT).startsWith(WS + '/')) {
+  throw new Error(`vibe-security-audit: target "${ROOT}" is not under workspaceRoot "${A.workspaceRoot}" — the component and the cross-component paths would be read from two different checkouts.`)
+}
 const LABEL = A.componentLabel || 'component'
+// The one sentence every prompt carries, so no agent is left to guess a base.
+const PATHS = `PATH RESOLUTION: the audited snapshot is the worktree at ${WS}. Component-relative paths are relative to ${ROOT}; an explicit components/... or scripts/... path is relative to ${WS}. NEVER resolve a path against your current working directory — that is a different checkout.`
 
 // --------------------------- schemas ---------------------------
 const RECON_SCHEMA = { type: 'object', additionalProperties: false,
@@ -127,7 +153,7 @@ const CLASSES = (Array.isArray(A.attackClasses) && A.attackClasses.length) ? A.a
 phase('Recon')
 log(`Recon: mapping ${LABEL} at ${ROOT} (sonnet)`)
 const recon = await agent(
-  `[Recon] Target: ${ROOT}. ${DOMAIN}\nMap: trust boundaries, ALL input surfaces (routes/handlers + auth level), the auth/identity model, and the concrete tenant-isolation mechanism. Cite file:line. Flag unverified external trust deps. Note unread subtrees (coverage honesty). Output the structured map.`,
+  `[Recon] Target: ${ROOT}. ${PATHS} ${DOMAIN}\nMap: trust boundaries, ALL input surfaces (routes/handlers + auth level), the auth/identity model, and the concrete tenant-isolation mechanism. Cite file:line. Flag unverified external trust deps. Note unread subtrees (coverage honesty). Output the structured map.`,
   { agentType: 'vibe-sec-recon', model: 'sonnet', phase: 'Recon', schema: RECON_SCHEMA }
 )
 log(`Recon done: ${(recon && recon.input_surfaces ? recon.input_surfaces.length : 0)} input surfaces, ${(recon && recon.trust_boundaries ? recon.trust_boundaries.length : 0)} trust boundaries`)
@@ -141,7 +167,7 @@ const perClass = await pipeline(
   CLASSES,
   async (cls) => {
     const h = await agent(
-      `[Hunter — only exploitable, concrete who/what/result + file:line, no padding, trace CROSS-COMPONENT sinks] Attack class: ${cls.title}. Scope: ${cls.scope}. Start files (relative to ${ROOT} unless an explicit components/... or scripts/... path is given): ${cls.files}. RECON MAP: ${reconBrief}. ${DOMAIN} ${ANTIP} Return MAX 3 strongest findings, or an EMPTY findings array if none are real.`,
+      `[Hunter — only exploitable, concrete who/what/result + file:line, no padding, trace CROSS-COMPONENT sinks] Attack class: ${cls.title}. Scope: ${cls.scope}. Start files (relative to ${ROOT}; an explicit components/... or scripts/... path is relative to ${WS}): ${cls.files}. ${PATHS} RECON MAP: ${reconBrief}. ${DOMAIN} ${ANTIP} Return MAX 3 strongest findings, or an EMPTY findings array if none are real.`,
       { agentType: 'vibe-sec-hunter', model: 'opus', label: `hunt:${cls.key}`, phase: 'Hunt', schema: HUNT_SCHEMA }
     )
     const n = (h && h.findings ? h.findings : []).length
@@ -153,7 +179,7 @@ const perClass = await pipeline(
     if (!fs.length) return []
     return parallel(fs.map(f => () =>
       agent(
-        `[Validator — DISPROVE this] Finding (class ${cls.key}): ${JSON.stringify(f)}. Read the ACTUAL source under ${ROOT} (and any cross-component path the finding cites) at every step. ${DOMAIN} Apply exploitation/impact/mitigation/designed-behavior tests. CONFIRM only if you cannot disprove (cite exact code). Default to skepticism. Set domain_aware + misread_designed_behavior.`,
+        `[Validator — DISPROVE this] Finding (class ${cls.key}): ${JSON.stringify(f)}. Read the ACTUAL source under ${ROOT} (and any cross-component path the finding cites, resolved against ${WS}) at every step. ${PATHS} ${DOMAIN} Apply exploitation/impact/mitigation/designed-behavior tests. CONFIRM only if you cannot disprove (cite exact code). Default to skepticism. Set domain_aware + misread_designed_behavior.`,
         { agentType: 'vibe-sec-validator', model: 'sonnet', label: `val:${cls.key}`, phase: 'Validate', schema: VERDICT_SCHEMA }
       ).then(v => ({ class: cls.key, finding: f, verdict: v }))
     ))
@@ -181,4 +207,4 @@ const synth = await agent(
   { model: 'sonnet', phase: 'Synthesize', schema: SYNTH_SCHEMA }
 )
 
-return { target: ROOT, label: LABEL, recon, coverage: huntCounts, findings: compact, confirmed_count: confirmed.length, synthesis: synth }
+return { target: ROOT, workspaceRoot: WS, label: LABEL, recon, coverage: huntCounts, findings: compact, confirmed_count: confirmed.length, synthesis: synth }
