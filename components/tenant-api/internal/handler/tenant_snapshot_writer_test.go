@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -136,7 +137,7 @@ func startHeldPR(t *testing.T, w *gitops.Writer, bare, hookBody string) <-chan e
 	t.Helper()
 	marker := filepath.Join(t.TempDir(), "push-started")
 	hook := "#!/bin/sh\ntouch '" + marker + "'\n" + hookBody
-	if err := os.WriteFile(filepath.Join(bare, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
+	if err := testutil.WriteExecutable(filepath.Join(bare, "hooks", "pre-receive"), []byte(hook), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)

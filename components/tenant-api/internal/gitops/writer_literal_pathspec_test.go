@@ -12,6 +12,7 @@ package gitops
 import (
 	"context"
 	"errors"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -175,7 +176,7 @@ func TestGitCommitOnto_CommitTreeKeepsGitEnv(t *testing.T) {
 		"  fi\n" +
 		"done\n" +
 		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
 	w.gitBinary = stub

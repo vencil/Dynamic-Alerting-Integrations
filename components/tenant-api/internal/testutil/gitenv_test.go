@@ -113,7 +113,7 @@ func TestDisableGitAutoMaintenance_RemoteSideOfALocalPushSeesTheSettings(t *test
 	for _, kv := range gitAutoMaintenanceOff {
 		hook.WriteString("printf '%s=%s\\n' " + kv[0] + " \"$(git config --get " + kv[0] + ")\" >> '" + seen + "'\n")
 	}
-	if err := os.WriteFile(filepath.Join(remote, "hooks", "pre-receive"), []byte(hook.String()), 0o755); err != nil {
+	if err := WriteExecutable(filepath.Join(remote, "hooks", "pre-receive"), []byte(hook.String()), 0o755); err != nil {
 		t.Fatal(err)
 	}
 

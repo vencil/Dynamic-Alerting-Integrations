@@ -49,7 +49,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
-from _lib_python import add_prometheus_arg  # noqa: E402
+from _lib_python import add_prometheus_arg, prometheus_url  # noqa: E402
 import _lib_input  # noqa: E402  (#3445: --readiness-json is read by the lib)
 from _lib_prometheus import (  # noqa: E402
     QueryError, collapse_replicas, prometheus_instant, vector_count,
@@ -357,7 +357,8 @@ def main():
         # named, before any step runs.
         readiness_doc=_lib_input.document(args, "readiness_json", lang="en"),
         tenant=args.tenant,
-        prometheus_url=args.prometheus,
+        # #3528: a dry run sends nothing — the URL it would use, env not judged
+        prometheus_url=prometheus_url(args.prometheus, judge=not args.dry_run),
         namespace=args.namespace,
         dry_run=args.dry_run,
         force=args.force,

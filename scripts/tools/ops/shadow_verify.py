@@ -42,7 +42,7 @@ from datetime import datetime, timezone
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
+from _lib_python import probe_health, add_prometheus_arg, prometheus_url, url_type  # noqa: E402
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
 from _lib_prometheus import (  # noqa: E402
@@ -136,7 +136,7 @@ def check_preflight(args, inputs=None):
     # the historical `"ok" in body or resp.status == 200` disjunction — real
     # Prometheus answers 200 "Prometheus Server is Healthy." (no "ok"), so the
     # status leg was the one that ever fired; probe success maps to "pass".
-    prom_url = args.prometheus
+    prom_url = prometheus_url(args.prometheus)  # #3528: env judged here
     body, probe_err = probe_health(f"{prom_url}/-/healthy")
     if probe_err is None:
         healthy = body.strip()
@@ -239,7 +239,7 @@ def check_runtime(args, inputs=None):
         })
 
     # 2. Tenant operational modes
-    prom_url = args.prometheus
+    prom_url = prometheus_url(args.prometheus)  # #3528: env judged here
     # #3133: a mode query not answered is a failed check — it used to append
     # nothing, so the report could not tell "not checked" from "none".
     # One row per tenant, not per exporter replica (#3483); the set dedups too.
@@ -405,7 +405,7 @@ def build_parser():
     add_prometheus_arg(parser,
                        help_text="Prometheus Query API URL "
                                  "(default: $PROMETHEUS_URL, else http://localhost:9090)")
-    parser.add_argument("--alertmanager", default=None,
+    parser.add_argument("--alertmanager", default=None, type=url_type(empty="refuse"),
                         help=f"Alertmanager API URL (default: {_DEFAULT_ALERTMANAGER}; "
                              "a URL given here that does not answer is exit 2, "
                              "the default not answering is a skip)")

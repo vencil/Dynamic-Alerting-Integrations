@@ -278,6 +278,8 @@ func render(t *testing.T, helm string, c chart, values string) ([]byte, error) {
 var defaultsDoNotRender = map[string]string{
 	// writeBack.mode has no default by design (#2855): the operator must choose.
 	"tenant-api": "writeBack.mode must be",
+	// auth.mode defaults to enforce (#1295): every consumer must name its Secret.
+	"victorialogs": "needs auth.consumers[].existingSecret for every consumer",
 }
 
 // needsPrivilegedPrefix marks a ci/ value set as a DECLARED exception: a

@@ -2480,8 +2480,8 @@ _ENTRYPOINT = _REPO_ROOT / "components" / "da-tools" / "app" / "entrypoint.py"
 # its authority. That sentence is FALSE, measured:
 #   validate-config --config-dir <d> --prometheus http://x  -> rc=2
 #   config-diff --old-dir <d> --new-dir <d> --config-dir <d> -> rc=2
-# `--prometheus` is injected by entrypoint.py only for the PROMETHEUS_COMMANDS
-# set, and `--config-dir` is an ordinary per-subcommand argument. Exempting them
+# `--prometheus` is declared only by the scripts that call `add_prometheus_arg`
+# (#3528: entrypoint.py injects nothing), and `--config-dir` is an ordinary per-subcommand argument. Exempting them
 # re-opened the exact class this guard closes: adding `--prometheus` to the
 # shipped Stage 1 left the suite green while the step exited 2 on every run.
 #
@@ -2492,23 +2492,6 @@ _ENTRYPOINT = _REPO_ROOT / "components" / "da-tools" / "app" / "entrypoint.py"
 # a constant or an exemption list, not only while chasing a bug. Exemptions are
 # derived from code below; nothing here is transcribed from prose.
 _CLI_GLOBAL_FLAGS = {"--help"}
-
-
-def _prometheus_commands() -> set[str]:
-    """Subcommands entrypoint.py injects `--prometheus` into, read from source."""
-    tree = ast.parse(_ENTRYPOINT.read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
-            continue
-        names = {t.id for t in node.targets if isinstance(t, ast.Name)}
-        if "PROMETHEUS_COMMANDS" not in names:
-            continue
-        if isinstance(node.value, (ast.Set, ast.List, ast.Tuple)):
-            return {
-                e.value for e in node.value.elts
-                if isinstance(e, ast.Constant) and isinstance(e.value, str)
-            }
-    return set()
 
 
 _SHELL_SEPARATORS = frozenset({"&&", "||", ";", ";;", "|", "&", "(", ")"})
@@ -2595,7 +2578,6 @@ def _da_tools_subcommands() -> dict[str, set[str]]:
         "flag check below would grade almost nothing."
     )
 
-    promq = _prometheus_commands()
     out: dict[str, set[str]] = {}
     for sub, script in dispatch.items():
         hits = list(_REPO_ROOT.glob(f"scripts/tools/**/{script}"))
@@ -2610,10 +2592,13 @@ def _da_tools_subcommands() -> dict[str, set[str]]:
                     if isinstance(a, ast.Constant) and isinstance(a.value, str)
                     and a.value.startswith("--")
                 )
-        # `--prometheus` is injected by the entrypoint, not declared by the
-        # script — so it is legal for exactly the commands that list names.
-        if sub in promq:
-            flags.add("--prometheus")
+            # #3528: `--prometheus` made by `_lib_io.add_prometheus_arg` is the
+            # script's own declaration (the entrypoint no longer injects it).
+            if isinstance(n, ast.Call) and (
+                    (isinstance(n.func, ast.Name) and n.func.id == "add_prometheus_arg")
+                    or (isinstance(n.func, ast.Attribute)
+                        and n.func.attr == "add_prometheus_arg")):
+                flags.add("--prometheus")
         out[sub] = flags
     assert out, "no da-tools scripts resolved — the glob stopped matching"
     return out

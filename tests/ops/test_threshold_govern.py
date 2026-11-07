@@ -486,12 +486,28 @@ class TestPrometheusEnvFallback:
 
         captured = {}
 
+        # #3528: the env is resolved inside run() (`_lib_io.prometheus_url`),
+        # not as the argparse default — so the URL is read where run() hands
+        # it to the recommender.
+        def fake_run_analysis(config_dir, *, prometheus_url, **_k):
+            captured["url"] = prometheus_url
+            raise _Captured
+
+        class _Captured(Exception):
+            pass
+
+        real_run = tg.run
+
         def fake_run(args):
-            captured["url"] = args.prometheus
+            try:
+                real_run(args)
+            except _Captured:
+                pass
             return SimpleNamespace(plans=[], ungoverned=[],
                                    not_applicable=[], force_manual=[], inherited=[],
                                    not_measured=[])
 
+        monkeypatch.setattr(tg.recommend, "run_analysis", fake_run_analysis)
         monkeypatch.setattr(tg, "run", fake_run)
         monkeypatch.setattr(tg, "format_text_report", lambda *a, **k: "")
         monkeypatch.setattr(sys, "argv", [

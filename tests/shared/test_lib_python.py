@@ -102,15 +102,41 @@ class TestDetectCliLang:
 class TestAddPrometheusArg:
     """--prometheus $PROMETHEUS_URL fallback (README §6.1).
 
-    The env resolution happens at argparse-default time, so parse_args([])
-    reflects whatever the env said when add_prometheus_arg ran.
+    #3528: the env is no longer the argparse default (argparse would run
+    ``url_type`` on it at parse time and an unusable env would stop runs
+    that never query); the tool resolves it where it queries, through
+    ``prometheus_url`` — so the URL a run sends to is
+    ``prometheus_url(parse_args(...).prometheus)``.
     """
 
     def _default(self):
         import argparse
         parser = argparse.ArgumentParser()
         lib.add_prometheus_arg(parser)
-        return parser.parse_args([]).prometheus
+        return lib.prometheus_url(parser.parse_args([]).prometheus)
+
+    def test_an_unusable_env_does_not_stop_the_parse_only_the_query(self, monkeypatch):
+        import argparse
+        from _lib_exitcodes import CallerError
+        monkeypatch.setenv("PROMETHEUS_URL", "pushgateway:9091")
+        parser = argparse.ArgumentParser()
+        lib.add_prometheus_arg(parser)
+        parsed = parser.parse_args([]).prometheus  # no SystemExit
+        assert parsed is None
+        with pytest.raises(CallerError) as exc:
+            lib.prometheus_url(parsed)
+        assert "$PROMETHEUS_URL" in str(exc.value) and "pushgateway" in str(exc.value)
+        # a dry run that only reports the URL does not judge it
+        assert lib.prometheus_url(parsed, judge=False) == "pushgateway:9091"
+
+    def test_an_unusable_flag_is_refused_at_parse_by_name(self, capsys):
+        import argparse
+        parser = argparse.ArgumentParser()
+        lib.add_prometheus_arg(parser)
+        with pytest.raises(SystemExit) as exc:
+            parser.parse_args(["--prometheus", "http://h:abc"])
+        assert exc.value.code == 2
+        assert "argument --prometheus:" in capsys.readouterr().err
 
     def test_env_unset_falls_back_to_localhost(self, monkeypatch):
         monkeypatch.delenv("PROMETHEUS_URL", raising=False)
@@ -122,8 +148,8 @@ class TestAddPrometheusArg:
 
     def test_env_empty_falls_back_to_localhost(self, monkeypatch):
         # Empty PROMETHEUS_URL (e.g. a ConfigMap key that resolves empty)
-        # must fall back to localhost — aligning with inject_prometheus_env's
-        # `if prom_url:` truthiness so the two fallback mechanisms agree.
+        # must fall back to localhost (`if env:` truthiness in
+        # _lib_io.prometheus_url, the one fallback since #3528).
         monkeypatch.setenv("PROMETHEUS_URL", "")
         assert self._default() == "http://localhost:9090"
 

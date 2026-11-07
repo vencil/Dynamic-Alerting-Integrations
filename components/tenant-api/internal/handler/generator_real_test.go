@@ -16,6 +16,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -146,7 +147,7 @@ func startRealGenerator(t *testing.T, repo, policy string) string {
 	}
 	script := realGeneratorScript(t)
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "amtool"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(filepath.Join(bin, "amtool"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	sockDir, err := os.MkdirTemp("", "rg")

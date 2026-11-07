@@ -1,7 +1,7 @@
 package gitops
 
 import (
-	"os"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -63,7 +63,7 @@ func TestGitExecTimeout_HungGitReleasesLock(t *testing.T) {
 	}
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "slowgit.sh")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
 
@@ -109,7 +109,7 @@ func TestGitExecTimeout_GrandchildHoldsPipe(t *testing.T) {
 	// `sleep 10 &` is the grandchild that inherits stdout and outlives the SIGKILL;
 	// `exec sleep 10` is the direct child the deadline kills. 10s ≫ deadline so a
 	// regression (WaitDelay removed) hangs ~10s and still fails the elapsed assert.
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\nsleep 10 &\nexec sleep 10\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte("#!/bin/sh\nsleep 10 &\nexec sleep 10\n"), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestGitExecSucceedsUnderTimeout(t *testing.T) {
 	}
 	dir := t.TempDir()
 	stub := filepath.Join(dir, "fastgit.sh")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
 

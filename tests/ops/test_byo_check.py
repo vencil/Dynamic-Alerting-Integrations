@@ -525,22 +525,28 @@ class TestStep5DiskIopsRecipePrereq:
 # --prometheus env-var fallback (add_prometheus_arg / README §6.1)
 # ---------------------------------------------------------------------------
 class TestPrometheusEnvFallback:
-    """`--prometheus` resolves $PROMETHEUS_URL at the argparse layer.
+    """`--prometheus` falls back to $PROMETHEUS_URL (#3528: resolved where the
+    tool queries, through `_lib_io.prometheus_url` — no longer the argparse
+    default).
 
-    byo-check was previously hardcoded to http://localhost:9090 AND absent
-    from the dispatcher's PROMETHEUS_COMMANDS, so a standalone run ignored
-    $PROMETHEUS_URL entirely. add_prometheus_arg now resolves it as the
-    argparse default (env → else localhost) for standalone + dispatcher.
+    byo-check was previously hardcoded to http://localhost:9090, so a
+    standalone run ignored $PROMETHEUS_URL entirely. The tool now resolves it
+    itself (env → else localhost); the dispatcher injects nothing (#3528).
     """
 
     def _run_main_capture_url(self, monkeypatch, argv):
+        # #3528: the env is resolved where the tool queries
+        # (`_lib_io.prometheus_url` inside check_prometheus), not as the
+        # argparse default — so the URL is read off the first request.
         captured = {}
+        suffix = "/-/healthy"
 
-        def fake_check_prometheus(args):
-            captured["url"] = args.prometheus
-            return [{"check": "x", "status": "pass", "detail": ""}]
+        def fake_probe_health(url, *a, **k):
+            assert url.endswith(suffix), url
+            captured["url"] = url[:-len(suffix)]
+            return None, "down"  # stop at step 0
 
-        monkeypatch.setattr(bc, "check_prometheus", fake_check_prometheus)
+        monkeypatch.setattr(bc, "probe_health", fake_probe_health)
         monkeypatch.setattr(sys, "argv", argv)
         _exit_code(bc.main)
         return captured["url"]

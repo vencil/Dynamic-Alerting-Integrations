@@ -46,7 +46,10 @@ services:
   # does its own readiness probe.
   federation-gateway-logs:
     image: envoyproxy/envoy:distroless-v1.38.0
-    command: ["-c", "/etc/envoy/envoy.yaml"]
+    # One worker: the Lua filter caches the log-store credential PER WORKER, so
+    # with several the rotation scenario (VL10) could land on a worker that had
+    # never loaded the old password and pass without proving a re-read.
+    command: ["-c", "/etc/envoy/envoy.yaml", "--concurrency", "1"]
     volumes:
       - ./rendered/victorialogs/envoy.yaml:/etc/envoy/envoy.yaml:ro
       - ./rendered/victorialogs/revoked_check.lua:/etc/envoy/revoked_check.lua:ro

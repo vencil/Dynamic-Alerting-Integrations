@@ -21,6 +21,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
+    add_prometheus_arg,
+    prometheus_url,
     exit_on_yaml_file_error,
     JOB_DB_MAP,
     METRIC_PREFIX_DB_MAP,
@@ -244,8 +246,8 @@ def build_parser():
               %(prog)s --config-dir conf.d/ --exclude-jobs prometheus,node-exporter
         """),
     )
-    parser.add_argument("--prometheus", default=None,
-                        help="Prometheus URL (default: $PROMETHEUS_URL or http://localhost:9090)")
+    add_prometheus_arg(parser,
+                       help_text="Prometheus URL (default: $PROMETHEUS_URL or http://localhost:9090)")
     parser.add_argument("--config-dir", required=True,
                         help="Tenant config directory (conf.d/)")
     parser.add_argument("--json-output", action="store_true",
@@ -262,11 +264,6 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    # `... or "http://localhost:9090"` (not os.environ.get's default): a
-    # PROMETHEUS_URL that is SET BUT EMPTY (e.g. a ConfigMap key resolving to
-    # "") would satisfy get()'s key lookup and yield an empty URL. Same
-    # empty-string hardening as _lib_io.add_prometheus_arg.
-    prom_url = args.prometheus or os.environ.get("PROMETHEUS_URL") or "http://localhost:9090"
     exclude_jobs = [j.strip() for j in args.exclude_jobs.split(",")] if args.exclude_jobs else []
 
     # 1. Load monitored DB types from tenant configs — FIRST (#3206): a
@@ -277,7 +274,8 @@ def main():
         sys.exit(EXIT_VIOLATION)
 
     # 2. Query Prometheus targets
-    targets = query_prometheus_targets(prom_url)
+    # #3528: --prometheus, else $PROMETHEUS_URL judged here (empty = unset)
+    targets = query_prometheus_targets(prometheus_url(args.prometheus))
     if not targets:
         print("WARN: No active targets found (Prometheus answered with none)",
               file=sys.stderr)

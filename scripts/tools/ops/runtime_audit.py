@@ -100,7 +100,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_python import detect_cli_lang, url_type  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_rules, rules_groups  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 from _lib_exitcodes import (  # noqa: E402
@@ -480,7 +480,8 @@ def build_parser() -> argparse.ArgumentParser:
         help=i18n("h_rule_packs_dir", lang),
     )
     src = parser.add_argument_group(i18n("cli_src_group", lang))
-    src.add_argument("--prometheus", help=i18n("h_prometheus", lang))
+    src.add_argument("--prometheus", type=url_type(empty="refuse"),  # #3528
+                     help=i18n("h_prometheus", lang))
     _lib_input.add_input(src, "--runtime-json", decode=RUNTIME_DOCUMENT,
                          help=i18n("h_runtime_json", lang))
     parser.add_argument(

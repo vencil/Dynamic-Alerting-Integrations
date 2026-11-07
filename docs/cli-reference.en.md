@@ -86,7 +86,10 @@ All commands support the following global options:
 |--------|-------------|
 | `--help` | Show help message |
 | `--version` | Show version information |
+| `--prometheus <URL>` | Prometheus Query API endpoint (default: `http://localhost:9090`; can be set with the `PROMETHEUS_URL` env var, except for `operator-check` / `runtime-audit`) |
 | `--config-dir <PATH>` | Path to tenant configuration directory (default: `./conf.d`; required by some commands) |
+
+**Flags that take a URL** (`--prometheus`, `--alertmanager`, `--pushgateway`, `--endpoint`, `--opa-url`, `federation-check --edge-urls` and the rest) are all checked by one judgement while the arguments are parsed: the scheme must be `http` or `https`, there must be a host, the port (if any) must be a number, the value may contain no whitespace or control character (nothing is stripped), and its path and query no non-ASCII character that is not percent-encoded. A value that fails (e.g. `pushgateway:9091` with no scheme, `http://[::1`, `http://host:abc`, `ftp://host`, `http://host :80`, `http://host/métrics`, a trailing newline, an empty string) exits `2` with argparse's one line naming the flag, `argument --<flag>: …`, on stderr — before anything is done, and nothing is printed under `--json` ([#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)). The only exception is `maintenance-scheduler`'s `--alertmanager ""` / `--pushgateway ""`, which mean the flag was left out. When `--prometheus` is not given, the tool itself reads `$PROMETHEUS_URL` (unset or empty: `http://localhost:9090`; not `operator-check` or `runtime-audit` — for them, no `--prometheus` means Prometheus is not queried and the env is not read), the same run directly or through `da-tools` — `da-tools` no longer fills it in as `--prometheus`. `$PROMETHEUS_URL` is read only on a run that queries Prometheus, and checked by the same judgement where that run starts, before anything is done (refused first, like a bad `--prometheus`, even when the run turns out to send no query); a value that fails is exit `2` (the message names `$PROMETHEUS_URL`), and a path that queries nothing (e.g. the `--dry-run` of `threshold-recommend` / `batch-diagnose` / `cutover`) is not affected.
 
 **Dispatcher-level exit codes (`da-tools` itself)** — a different layer from the per-command exit-code tables below:
 
@@ -230,7 +233,7 @@ da-tools check-alert <alert_name> <tenant> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 | `--json` | JSON output. Output is always JSON; the flag is accepted for compatibility | true |
 
 **Output**
@@ -294,7 +297,7 @@ da-tools diagnose <tenant> [options]
 | `--config-dir <PATH>` | Tenant config directory; profile and inheritance chain are looked up only when given. When given it must be a directory whose tree has the tenant, else exit `2` (see the exit codes) | (none) |
 | `--show-inheritance` | Print only the full inheritance-chain resolution (requires `--config-dir`) | false |
 | `--json` | JSON output. Output is always JSON; the flag is accepted for compatibility | true |
-| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 The Pod is always looked up in the namespace named after the tenant; there is no option to choose another namespace.
 
@@ -367,7 +370,7 @@ None (auto-discover tenants).
 | `--json` | Print only JSON on stdout, no text report | false |
 | `--dry-run` | Only list tenants, don't run checks | false |
 | `--namespace <NS>` | Namespace of the `threshold-config` ConfigMap | `monitoring` |
-| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Output**
 
@@ -419,7 +422,7 @@ da-tools baseline --tenant <name> [options]
 | `--metrics <LIST>` | Comma-separated metric list (empty=all) | (all) |
 | `-o, --output-dir <DIR>` | Output directory; both CSVs are written there (see Output below), created if missing | `baseline_output` |
 | `--dry-run` | Only show metrics to observe, don't sample | false |
-| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Output**
 
@@ -493,7 +496,7 @@ Choose one mode:
 | `--mapping <FILE>` | Mapping mode: path to `prefix-mapping.yaml` (see above) | (none) |
 | `--old <QUERY>` | Query mode: PromQL of the old Recording Rule (with `--new`) | (none) |
 | `--new <QUERY>` | Query mode: PromQL of the new Recording Rule (with `--old`) | (none) |
-| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 | `--watch` | Continuous monitoring mode (compare every N seconds) | false |
 | `--interval <SEC>` | Monitoring interval in seconds (>= 0, fractions allowed; `0` = no pause between rounds, capped by `--rounds`; a negative value, `nan` or `inf` exits `2`) | `60` |
 | `--rounds <N>` | Number of monitoring rounds. ⚠️ `0` is not infinite — it runs **no rounds at all** (`for i in range(rounds)`) | `10` |
@@ -556,7 +559,7 @@ da-tools cutover --readiness-json <FILE> --tenant <name> [options]
 | `--force` | Proceed even when the readiness JSON says `ready: false`; `--readiness-json` is still required | false |
 | `--namespace <NS>` | K8s namespace | `monitoring` |
 | `--json-output` | Also print a JSON report on stdout | false |
-| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Automated Steps**
 
@@ -613,7 +616,7 @@ da-tools blind-spot --config-dir <path> [options]
 |--------|-------------|---------|
 | `--exclude-jobs <LIST>` | Exclude job list (comma-separated) | (none) |
 | `--json-output` | Structured JSON output | false |
-| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Output**
 
@@ -670,8 +673,8 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--alertmanager <URL>` | Alertmanager base URL; silences are only created when this is given, otherwise it just reports | (none) |
-| `--pushgateway <URL>` | Push the run's results to a Pushgateway (skipped with `--dry-run`) | (none) |
+| `--alertmanager <URL>` | Alertmanager base URL; silences are only created when this is given, otherwise (or given as an empty string) it just reports | (none) |
+| `--pushgateway <URL>` | Push the run's results to a Pushgateway (skipped with `--dry-run`; an empty string is the flag left out). A failed push (unreachable, a reply that is not HTTP) is only a WARN and does not change the exit code | (none) |
 | `--dry-run` | Report only, create no silences | false |
 | `--json-output` | Also print a JSON document `{"created", "skipped", "errors", "mode"}` on stdout (two-space indent; one line before [#3216](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3216)); `mode` is `apply`, `dry-run` or `report-only`, and in the last two `created` is the number it *would* create | false |
 
@@ -696,7 +699,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 |------|-------------|
 | `0` | Success (silences created, already present, or not needed) |
 | `1` | At least one silence could not be created or extended |
-| `2` | Caller error: `--config-dir` does not exist, a recurring schedule exists but `croniter` is not installed, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654); or `--alertmanager` is given (without `--dry-run`), a schedule is in its window, and the existing silences cannot be read (unreachable, still failing after the retries, or a malformed answer; stdout empty under `--json-output`, [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)) — no silence is created then. Unreadable silences used to read as "none exist", so the silences were created anyway, possibly twice, exit 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
+| `2` | Caller error: `--alertmanager` or `--pushgateway` is not a usable http(s) URL (no scheme, a scheme other than http/https, no host, a port that is not a number; refused while parsing the arguments — `--pushgateway` used to be only a WARN, exit 0, ⚠️ Breaking, [#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)), `--config-dir` does not exist, a recurring schedule exists but `croniter` is not installed, or a file under it cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654); or `--alertmanager` is given (without `--dry-run`), a schedule is in its window, and the existing silences cannot be read (unreachable, still failing after the retries, or a malformed answer; stdout empty under `--json-output`, [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)) — no silence is created then. Unreadable silences used to read as "none exist", so the silences were created anyway, possibly twice, exit 0 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) |
 
 ---
 
@@ -769,7 +772,7 @@ python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
 | `--metric <KEY>` | Single-change mode: the threshold key (with `--tenant`) | (none) |
 | `--old-value <VALUE>` | Single-change mode: the old threshold value, read the way conf.d is (e.g. `70`, `70:critical`; with `--tenant`) | (none) |
 | `--new-value <VALUE>` | Single-change mode: the new threshold value (with `--tenant`) | (none) |
-| `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL. When the flag is not given, the tool reads (and checks) `$PROMETHEUS_URL` only when it queries Prometheus | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 | `--lookback <DURATION>` | Historical lookback window, `<number><d\|h\|m>` (e.g. `7d` / `24h`). A value that does not match that shape (including a bare `7` or the empty string) ⇒ exit code 2 listing the accepted shape (#1625; it used to be silently treated as `7d`) | `7d` |
 | `-o, --output <FILE>` | Also write the JSON report to a file, the same document `--json` would print on this run (when it is written: see Output below); the text report still goes to stdout | (none) |
 | `--json` | Print only JSON on stdout, no text report | false |
@@ -1089,7 +1092,7 @@ da-tools alert-quality --prometheus <URL> [--period <DURATION>] [--tenant <NAME>
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--prometheus` | Prometheus URL (required) | - |
+| `--prometheus` | Prometheus URL. When not given, `$PROMETHEUS_URL`, else `http://localhost:9090` (it used to be required, ⚠️ Breaking, [#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)) | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 | `--period` | Analysis period | `30d` |
 | `--tenant` | Filter to specific tenant | all |
 | `--json` | JSON output | - |
@@ -1116,7 +1119,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|-------------|
 | `0` | Success (CI mode: all alerts meet quality threshold) |
 | `1` | CI mode: BAD alerts found or score below threshold |
-| `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, the required `--prometheus` missing, or arguments argparse rejects; and a failed Prometheus `ALERTS` query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML; with or without `--ci`, #3065 — it used to count as no data, rc 0; or `success` in a shape that is not a matrix, e.g. no `data` or a row without `values` or `histograms`, [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` / a row without `values` or `histograms` used to be rc 0). No report is printed then and stderr carries `Error: Prometheus query failed: <raw>`; With `--json` stdout is empty and the raw text is on stderr only (⚠️ Breaking, [#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617): it printed `{"status": "caller_error", "reason": "prometheus_query_error", ...}` with the other keys zeroed). Tell them apart with `da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` |
+| `2` | Caller error: `--period` unparsable, `--tenant` containing characters other than alphanumerics / underscore / hyphen, or arguments argparse rejects (an unusable `--prometheus` included); and a failed Prometheus `ALERTS` query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML; with or without `--ci`, #3065 — it used to count as no data, rc 0; or `success` in a shape that is not a matrix, e.g. no `data` or a row without `values` or `histograms`, [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` / a row without `values` or `histograms` used to be rc 0). No report is printed then and stderr carries `Error: Prometheus query failed: <raw>`; With `--json` stdout is empty and the raw text is on stderr only (⚠️ Breaking, [#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617): it printed `{"status": "caller_error", "reason": "prometheus_query_error", ...}` with the other keys zeroed). Tell them apart with `da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` |
 
 **Sample values** ([#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)): every `ALERTS` sample is read once, by the lib. A value it cannot read (for example `"abc"`, or not a string) is a malformed answer, exit code `2` (`prometheus_query_error`). `+Inf` / `-Inf` / `NaN` are no state and are left out of the grades; how many were dropped is in `summary.non_finite_samples_dropped` of `--json` (and the same field on each alert) and on one line of the text report.
 
@@ -1233,7 +1236,7 @@ da-tools cardinality-forecast --prometheus <URL> [--lookback <DURATION>] [--limi
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| `--prometheus` | Prometheus URL (required) | - |
+| `--prometheus` | Prometheus URL. When not given, `$PROMETHEUS_URL`, else `http://localhost:9090` (it used to be required, ⚠️ Breaking, [#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)) | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 | `--lookback` | Lookback period, `<number><d\|h\|m\|s>` (e.g. `30d` / `4h`). A value that does not match that shape or is not positive (including a bare `30`, the empty string, `0s`) ⇒ exit code 2 listing the accepted shape (#1625; it used to be silently treated as `30d`) | `30d` |
 | `--limit` | Cardinality limit | `500` |
 | `--warn-days` | Warning days before limit | `7` |
@@ -3651,7 +3654,7 @@ da-tools discover-mappings --prometheus <URL> --instance <INST> [--job <JOB>] [-
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--endpoint` | Exporter /metrics URL to scrape directly | (mutually exclusive with --prometheus) |
-| `--prometheus` | Prometheus API URL | (mutually exclusive with --endpoint) |
+| `--prometheus` | Prometheus API URL | (mutually exclusive with --endpoint; with neither given, `$PROMETHEUS_URL`, else `http://localhost:9090` is queried, [#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)) |
 | `--instance` | Instance label in Prometheus | (used with --prometheus) |
 | `--job` | Job label in Prometheus (narrows query) | (optional) |
 | `-o`, `--output` | Output file path (defaults to stdout) | stdout |
@@ -3679,7 +3682,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 |------|-------------|
 | `0` | Successfully discovered partition labels and generated mapping draft |
 | `1` | No suitable partition labels found |
-| `2` | Caller error: bad arguments, `--endpoint` unreachable or not a valid URL, a `--prometheus` series / label-values query unreachable, answered with an error, or malformed (it used to count as no labels, exit 1, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)), or the output path given to `-o/--output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments, `--endpoint` unreachable or not a valid URL (an empty string included; it used to be exit 1, [#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)), a `--prometheus` series / label-values query unreachable, answered with an error, or malformed (it used to count as no labels, exit 1, [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)), or the output path given to `-o/--output` cannot be written (#1641) |
 
 ---
 
@@ -3687,7 +3690,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 
 | Variable | Purpose | Default | Description |
 |----------|---------|---------|-------------|
-| `PROMETHEUS_URL` | Prometheus endpoint URL | `http://localhost:9090` | Fallback for `--prometheus`; localhost inside container refers to the container itself, use correct network config |
+| `PROMETHEUS_URL` | Prometheus endpoint URL | `http://localhost:9090` | Fallback for `--prometheus`; localhost inside container refers to the container itself, use correct network config. A value that is not a usable http(s) URL is exit 2, named, where a run that queries Prometheus starts (see [Global Options](#global-options)) |
 
 --8<-- "docs/includes/prometheus-url-config.en.md"
 

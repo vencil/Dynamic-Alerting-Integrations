@@ -86,8 +86,10 @@ da-tools <command> --help
 |------|------|
 | `--help` | 顯示幫助訊息 |
 | `--version` | 顯示版本資訊 |
-| `--prometheus <URL>` | Prometheus Query API 端點（預設：`http://localhost:9090`；可用 `PROMETHEUS_URL` env var） |
+| `--prometheus <URL>` | Prometheus Query API 端點（預設：`http://localhost:9090`；可用 `PROMETHEUS_URL` env var，`operator-check`／`runtime-audit` 除外） |
 | `--config-dir <PATH>` | 租戶配置目錄路徑（預設：`./conf.d`；部分命令需要） |
+
+**接 URL 的旗標**（`--prometheus`、`--alertmanager`、`--pushgateway`、`--endpoint`、`--opa-url`、`federation-check --edge-urls` 等）一律在解析參數時以同一個判定檢查：scheme 必須是 `http` 或 `https`、要有 host、埠（若有）必須是數字，且整個值不得含空白或控制字元（不會自動去掉）、路徑與查詢字串不得含未 percent-encode 的非 ASCII 字元。不合格（例如沒寫 scheme 的 `pushgateway:9091`、`http://[::1`、`http://host:abc`、`ftp://host`、`http://host :80`、`http://host/métrics`、結尾帶換行、空字串）就以結束碼 `2` 結束，stderr 是 argparse 點名旗標的一行 `argument --<旗標>: …`，什麼都還沒做、`--json` 也不印任何東西（[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)）。例外只有 `maintenance-scheduler` 的 `--alertmanager ""`／`--pushgateway ""`：等於沒給。`--prometheus` 沒給時由工具自己讀 `$PROMETHEUS_URL`（沒設或空字串則用 `http://localhost:9090`；`operator-check`、`runtime-audit` 除外——它們沒給 `--prometheus` 就是不查 Prometheus，不讀 env），直接執行腳本與經 `da-tools` 執行都一樣——`da-tools` 不再把它補成 `--prometheus`。`$PROMETHEUS_URL` 只在會查 Prometheus 的執行才讀，並在該次執行開始處、做任何事之前以同一個判定檢查（與給了壞的 `--prometheus` 一樣先擋，即使這次其實沒有要送出的查詢），不合格是結束碼 `2`（訊息點名 `$PROMETHEUS_URL`）；不查 Prometheus 的路徑（例如 `threshold-recommend`／`batch-diagnose`／`cutover` 的 `--dry-run`）不受影響。
 
 **分派層（`da-tools` 本身）的結束碼**——與下方各命令章節的結束碼表是兩層不同的東西：
 
@@ -231,7 +233,7 @@ da-tools check-alert <alert_name> <tenant> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 | `--json` | JSON 輸出。本來就只輸出 JSON，接受這個旗標只為相容 | true |
 
 **輸出**
@@ -295,7 +297,7 @@ da-tools diagnose <tenant> [options]
 | `--config-dir <PATH>` | 租戶配置目錄；給了才查 profile 與繼承鏈。給了就必須是目錄、且樹裡有這個租戶，否則結束碼 `2`（見結束碼表） | （無） |
 | `--show-inheritance` | 只印完整的繼承鏈解析（需要 `--config-dir`） | false |
 | `--json` | JSON 輸出。本來就只輸出 JSON，接受這個旗標只為相容 | true |
-| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選項。
 
@@ -364,7 +366,7 @@ da-tools batch-diagnose [options]
 | `--json` | stdout 只印 JSON，不印文字報告 | false |
 | `--dry-run` | 僅列出租戶，不執行檢查 | false |
 | `--namespace <NS>` | `threshold-config` ConfigMap 所在的 namespace | `monitoring` |
-| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **輸出**
 
@@ -416,7 +418,7 @@ da-tools baseline --tenant <name> [options]
 | `--metrics <LIST>` | 逗號分隔指標清單（空=全部） | （全部） |
 | `-o, --output-dir <DIR>` | 輸出目錄；兩個 CSV 都寫在這裡（見下方「輸出」），目錄不存在會建立 | `baseline_output` |
 | `--dry-run` | 僅顯示要觀測的指標，不實際採樣 | false |
-| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **輸出**
 
@@ -490,7 +492,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 | `--mapping <FILE>` | Mapping 模式：`prefix-mapping.yaml` 路徑（見上方） | （無） |
 | `--old <QUERY>` | Query 模式：舊 Recording Rule 的 PromQL（搭配 `--new`） | （無） |
 | `--new <QUERY>` | Query 模式：新 Recording Rule 的 PromQL（搭配 `--old`） | （無） |
-| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 | `--watch` | 持續監控模式（每 N 秒比對一次） | false |
 | `--interval <SEC>` | 監控間隔（秒，≥ 0，可帶小數；`0` = 輪與輪之間不等待，由 `--rounds` 封頂；負數、`nan`、`inf` 回 `2`） | `60` |
 | `--rounds <N>` | 監控輪數。⚠️ `0` 不是無限，是**一輪都不跑**（`for i in range(rounds)`） | `10` |
@@ -553,7 +555,7 @@ da-tools cutover --readiness-json <FILE> --tenant <name> [options]
 | `--force` | readiness JSON 的 `ready` 為 false 也照樣切換；`--readiness-json` 仍然必填 | false |
 | `--namespace <NS>` | K8s namespace | `monitoring` |
 | `--json-output` | 另在 stdout 印一份 JSON 報告 | false |
-| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **自動化步驟**
 
@@ -610,7 +612,7 @@ da-tools blind-spot --config-dir <path> [options]
 |------|------|--------|
 | `--exclude-jobs <LIST>` | 排除的 job 清單（逗號分隔） | （無） |
 | `--json-output` | JSON 結構化輸出 | false |
-| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **輸出**
 
@@ -667,8 +669,8 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--alertmanager <URL>` | Alertmanager base URL；給了才會真的建立 silence，不給只印報告 | （無） |
-| `--pushgateway <URL>` | 把執行結果推到 Pushgateway（`--dry-run` 時不推） | （無） |
+| `--alertmanager <URL>` | Alertmanager base URL；給了才會真的建立 silence，不給（或給空字串）只印報告 | （無） |
+| `--pushgateway <URL>` | 把執行結果推到 Pushgateway（`--dry-run` 時不推；空字串等於不給）。推送失敗（連不上、回應不是 HTTP）只印 WARN，不影響結束碼 | （無） |
 | `--dry-run` | 只印報告，不建立 silence | false |
 | `--json-output` | 另在 stdout 印一份 JSON 文件 `{"created", "skipped", "errors", "mode"}`（兩格縮排；先前為單行，[#3216](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3216)）；`mode` 是 `apply`、`dry-run` 或 `report-only`，後兩者的 `created` 是「會建立」的數量 | false |
 
@@ -693,7 +695,7 @@ da-tools maintenance-scheduler --config-dir ./conf.d --alertmanager http://alert
 |------|------|
 | `0` | 成功（已建立、已存在或不需要 silence） |
 | `1` | 至少一個 silence 建立或延長失敗 |
-| `2` | 呼叫端錯誤：`--config-dir` 不存在、有 recurring 排程卻沒裝 `croniter`，或底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；或有給 `--alertmanager`（非 `--dry-run`）、有排程落在窗口內，卻讀不到既有的 silence（連不上、重試後仍失敗或回應格式不對，`--json-output` 時 stdout 為空，[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)），此時不建立任何 silence。先前讀不到被當成「沒有既有 silence」，照常建立、可能重複，rc 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
+| `2` | 呼叫端錯誤：`--alertmanager` 或 `--pushgateway` 不是可用的 http(s) URL（沒有 scheme、scheme 不是 http/https、沒有 host、埠不是數字；解析參數時就擋下，先前 `--pushgateway` 只印 WARN、rc 0，⚠️ Breaking，[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)）、`--config-dir` 不存在、有 recurring 排程卻沒裝 `croniter`，或底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654）；或有給 `--alertmanager`（非 `--dry-run`）、有排程落在窗口內，卻讀不到既有的 silence（連不上、重試後仍失敗或回應格式不對，`--json-output` 時 stdout 為空，[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)），此時不建立任何 silence。先前讀不到被當成「沒有既有 silence」，照常建立、可能重複，rc 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
 
@@ -766,7 +768,7 @@ python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
 | `--metric <KEY>` | 單一變更模式：門檻 key（搭配 `--tenant`） | （無） |
 | `--old-value <VALUE>` | 單一變更模式：舊門檻值，讀法同 conf.d（如 `70`、`70:critical`；搭配 `--tenant`） | （無） |
 | `--new-value <VALUE>` | 單一變更模式：新門檻值（搭配 `--tenant`） | （無） |
-| `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
+| `--prometheus <URL>` | Prometheus Query API URL。沒給這個旗標時，工具在要查 Prometheus 時才讀 `$PROMETHEUS_URL`（並檢查） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 | `--lookback <DURATION>` | 歷史回測期間，格式為 `<數字><d\|h\|m>`（如 `7d`／`24h`）。不符合格式的值（含裸數字 `7`、空字串）⇒ 結束碼 2 並列出接受的格式（#1625；之前會被靜默當成 `7d`） | `7d` |
 | `-o, --output <FILE>` | 另把 JSON 報告寫到檔案，內容與這次 `--json` 會印的相同（寫入時機見下方「輸出」）；文字報告照樣印到 stdout | （無） |
 | `--json` | stdout 只印 JSON，不印文字報告 | false |
@@ -1086,7 +1088,7 @@ da-tools alert-quality --prometheus <URL> [--period <DURATION>] [--tenant <NAME>
 
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
-| `--prometheus` | Prometheus URL（必填） | - |
+| `--prometheus` | Prometheus URL。沒給時用 `$PROMETHEUS_URL`，否則 `http://localhost:9090`（先前必填，⚠️ Breaking，[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 | `--period` | 分析期間 | `30d` |
 | `--tenant` | 篩選特定 tenant | 全部 |
 | `--json` | JSON 輸出 | - |
@@ -1113,7 +1115,7 @@ da-tools alert-quality --prometheus http://prometheus:9090 --ci --min-score 60
 |------|------|
 | `0` | 成功（CI 模式：所有告警品質達標） |
 | `1` | CI 模式：有 BAD 告警或分數低於閾值 |
-| `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元、缺必需的 `--prometheus`，或 argparse 拒絕的參數；以及 Prometheus 的 `ALERTS` 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；不論有無 `--ci`，#3065，之前當成沒有資料、rc 0；回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data`／列既沒有 `values` 也沒有 `histograms` 時 rc 0）——此時不印報告，stderr 帶 `Error: Prometheus query failed: <原文>`；`--json` 時 stdout 為空、原文只在 stderr（⚠️ Breaking，[#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617)：先前印 `{"status": "caller_error", "reason": "prometheus_query_error", ...}`，其餘鍵歸零）。`da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` 可分辨 |
+| `2` | 呼叫端錯誤：`--period` 解析不出、`--tenant` 含英數／底線／連字號以外的字元，或 argparse 拒絕的參數（含不可用的 `--prometheus`）；以及 Prometheus 的 `ALERTS` 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；不論有無 `--ci`，#3065，之前當成沒有資料、rc 0；回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data`／列既沒有 `values` 也沒有 `histograms` 時 rc 0）——此時不印報告，stderr 帶 `Error: Prometheus query failed: <原文>`；`--json` 時 stdout 為空、原文只在 stderr（⚠️ Breaking，[#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617)：先前印 `{"status": "caller_error", "reason": "prometheus_query_error", ...}`，其餘鍵歸零）。`da-tools alert-quality --prometheus <URL> --json \| jq '.status // "ok"'` 可分辨 |
 
 **樣本值**（[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）：`ALERTS` 的每個樣本值由 lib 讀一次。讀不懂的值（例如 `"abc"`，或不是字串）視為回應格式錯誤，結束碼 `2`（`prometheus_query_error`）。`+Inf`／`-Inf`／`NaN` 不算任何狀態，不計入評估；丟掉的數量寫在 `--json` 的 `summary.non_finite_samples_dropped`（每筆告警另有同名欄位），文字報告也會印一行。
 
@@ -1230,7 +1232,7 @@ da-tools cardinality-forecast --prometheus <URL> [--lookback <DURATION>] [--limi
 
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
-| `--prometheus` | Prometheus URL（必填） | - |
+| `--prometheus` | Prometheus URL。沒給時用 `$PROMETHEUS_URL`，否則 `http://localhost:9090`（先前必填，⚠️ Breaking，[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)） | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 | `--lookback` | 回溯期間，格式為 `<數字><d\|h\|m\|s>`（如 `30d`／`4h`）。不符合格式或不是正數的值（含裸數字 `30`、空字串、`0s`）⇒ 結束碼 2 並列出接受的格式（#1625；之前會被靜默當成 `30d`） | `30d` |
 | `--limit` | 基數上限 | `500` |
 | `--warn-days` | 預警天數 | `7` |
@@ -3635,7 +3637,7 @@ da-tools discover-mappings --prometheus <URL> --instance <INST> [--job <JOB>] [-
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
 | `--endpoint` | 直接掃描的 exporter /metrics URL | (與 --prometheus 二擇一) |
-| `--prometheus` | Prometheus API URL | (與 --endpoint 二擇一) |
+| `--prometheus` | Prometheus API URL | (與 --endpoint 二擇一；兩者都沒給時查 `$PROMETHEUS_URL`，否則 `http://localhost:9090`，[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)) |
 | `--instance` | Prometheus 中的 instance 標籤 | (搭配 --prometheus 使用) |
 | `--job` | Prometheus 中的 job 標籤（縮小查詢範圍） | (選填) |
 | `-o`, `--output` | 輸出檔案路徑（預設 stdout） | stdout |
@@ -3663,7 +3665,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 |------|------|
 | `0` | 成功發現 partition label 並產生映射草稿 |
 | `1` | 未發現合適的 partition label |
-| `2` | 呼叫端錯誤：參數錯誤、`--endpoint` 連不上或 URL 不合法、`--prometheus` 的 series／label values 查詢連不上、回錯或回應格式不對（先前被當成沒有標籤、rc 1，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤、`--endpoint` 連不上或 URL 不合法（含空字串，先前 rc 1，[#3528](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3528)）、`--prometheus` 的 series／label values 查詢連不上、回錯或回應格式不對（先前被當成沒有標籤、rc 1，[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
 
 ---
 
@@ -3671,7 +3673,7 @@ da-tools discover-mappings --endpoint http://mariadb-exporter:9104/metrics --jso
 
 | 變數 | 用途 | 預設值 | 說明 |
 |------|------|--------|------|
-| `PROMETHEUS_URL` | Prometheus 端點 URL | `http://localhost:9090` | 作為 `--prometheus` 的 fallback；容器內 localhost 指向容器自己，需使用正確的網路配置 |
+| `PROMETHEUS_URL` | Prometheus 端點 URL | `http://localhost:9090` | 作為 `--prometheus` 的 fallback；容器內 localhost 指向容器自己，需使用正確的網路配置。不是可用的 http(s) URL 時，會查 Prometheus 的執行在開始處以結束碼 2 點名它（見[全局選項](#全局選項)） |
 
 --8<-- "docs/includes/prometheus-url-config.md"
 

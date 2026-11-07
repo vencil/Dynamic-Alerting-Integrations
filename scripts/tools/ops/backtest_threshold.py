@@ -57,7 +57,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_prometheus import http_get_json  # noqa: E402  (#3133: the reachability probe; not a query)
-from _lib_python import prometheus_range, QueryError, write_text_or_die, add_prometheus_arg  # noqa: E402
+from _lib_python import prometheus_range, QueryError, write_text_or_die, add_prometheus_arg, prometheus_url  # noqa: E402
 from _lib_prometheus import sample_value  # noqa: E402  (#3213 the one sample reading)
 from _lib_python import YamlFileError  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
@@ -1711,14 +1711,16 @@ def _main():
     except observed_map_lib.ObservedMapError as exc:
         _exit_observed_map_error(exc, args, recipe_tenants)
 
-    # Check Prometheus availability
-    if not prometheus_available(args.prometheus):
+    # Check Prometheus availability (#3528: an unusable $PROMETHEUS_URL is
+    # rc 2 by name here — not "unavailable", which --skip-if-unavailable hides)
+    prom = prometheus_url(args.prometheus)
+    if not prometheus_available(prom):
         if args.skip_if_unavailable:
             print("Prometheus unavailable — skipping backtest (--skip-if-unavailable)",
                   file=sys.stderr)
             _end_not_run(args, "skipped", "prometheus_unavailable", EXIT_OK, recipe_tenants)
         else:
-            print(f"ERROR: Prometheus not reachable at {args.prometheus}", file=sys.stderr)
+            print(f"ERROR: Prometheus not reachable at {prom}", file=sys.stderr)
             print("Use --skip-if-unavailable to exit gracefully", file=sys.stderr)
             _end_not_run(args, "caller_error", "prometheus_unavailable", EXIT_CALLER_ERROR,
                          recipe_tenants)
@@ -1747,7 +1749,7 @@ def _main():
         # as not backtested and Prometheus is not asked about it. A `--tenant`
         # key's canonical spelling is asked of da-guard there too (#3556).
         try:
-            result = backtest_change(args.prometheus, change, lookback_seconds)
+            result = backtest_change(prom, change, lookback_seconds)
         except (DaGuardNotFoundError, DaGuardError) as exc:
             _exit_served_values_error(exc, args)
         if change.get("window"):  # #2119: the part of the day the values hold in
