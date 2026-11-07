@@ -30,6 +30,19 @@ func TestTenantFileTopLevelKeys_MatchTheSchema(t *testing.T) {
 	if err := json.Unmarshal(raw, &schema); err != nil {
 		t.Fatalf("decode %s: %v", path, err)
 	}
+	// Any of these at the top level can admit a key `properties` does not
+	// name, and the comparison below would no longer be the whole rule.
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &top); err != nil {
+		t.Fatalf("decode %s: %v", path, err)
+	}
+	for _, kw := range []string{"patternProperties", "unevaluatedProperties", "propertyNames",
+		"dependentSchemas", "allOf", "anyOf", "oneOf", "if", "then", "else", "$ref"} {
+		if _, ok := top[kw]; ok {
+			t.Errorf("%s has top-level %q: the top-level key set is no longer `properties` alone; "+
+				"teach tenantFileTopLevelKeys and this test what it admits", path, kw)
+		}
+	}
 	if schema.AdditionalProperties == nil || *schema.AdditionalProperties {
 		t.Fatalf("%s no longer closes the top level (additionalProperties false); the key set below is then not the whole rule", path)
 	}

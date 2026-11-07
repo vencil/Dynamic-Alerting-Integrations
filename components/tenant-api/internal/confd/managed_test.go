@@ -37,6 +37,12 @@ var managedCases = []struct {
 	{"flat thresholds, no tenants key", "container_cpu: \"70\"\n", GitManagedNotTenantDocument},
 	{"flat reserved key, no tenants key", "_profile: strict\n", GitManagedNotTenantDocument},
 	{"empty tenants beside another key", "x: 1\ntenants: {}\n", GitManagedNotTenantDocument},
+	{"stray key after tenants", "tenants:\n  db-a: {}\nx: 1\n", GitManagedNotTenantDocument},
+	// A stray key does not mask a more specific reason.
+	{"stray key with two tenants", "x: 1\ntenants:\n  db-a: {}\n  db-b: {}\n", GitManagedTenantCount},
+	{"stray key with another id", "tenants:\n  db-b: {}\nx: 1\n", GitManagedIDMismatch},
+	{"stray key with a tagged tenant key", "tenants:\n  !!str db-a: {}\nx: 1\n", GitManagedYAMLIndirection},
+	{"stray key in two documents", "x: 1\n---\ny: 2\n", GitManagedSeveralDocuments},
 	{"two tenants", "tenants:\n  db-a: {}\n  db-b: {}\n", GitManagedTenantCount},
 	{"stem mismatch", "tenants:\n  db-b: {}\n", GitManagedIDMismatch},
 	{"!!binary co-tenant key decoding to own id",
@@ -203,7 +209,7 @@ func TestShapeVerdict_AgreesWithTheExporter(t *testing.T) {
 			continue
 		}
 		apiShaped++
-		ids, reason := walkDeclaredIDs([]byte(c.data))
+		ids, reason, _ := walkDeclaredIDs([]byte(c.data))
 		if reason != "" {
 			t.Fatalf("%s: walk reason %q under an API-shaped verdict", c.name, reason)
 		}

@@ -95,7 +95,7 @@ func TenantFileManagement(data []byte, stem string) string {
 // (#3157), which decodes every file anyway, a second typed decode per file;
 // the verdict is TenantFileManagement's, not a copy of it.
 func TenantFileManagementParsed(data []byte, stem string, parsed cfg.ThresholdConfig, parseErr error) string {
-	ids, reason := walkDeclaredIDs(data)
+	ids, reason, stray := walkDeclaredIDs(data)
 	if reason != "" {
 		return reason
 	}
@@ -111,7 +111,7 @@ func TenantFileManagementParsed(data []byte, stem string, parsed cfg.ThresholdCo
 			ids = append(ids, id)
 		}
 	}
-	return declaredVerdict(ids, stem)
+	return strayTopLevelVerdict(declaredVerdict(ids, stem), stray)
 }
 
 // shapeVerdict is TenantFileManagement without the exporter's set: the
@@ -119,11 +119,21 @@ func TenantFileManagementParsed(data []byte, stem string, parsed cfg.ThresholdCo
 // what that test holds against cfg.ParseTenantFile, which the union in
 // TenantFileManagement would otherwise make agree by construction.
 func shapeVerdict(data []byte, stem string) string {
-	ids, reason := walkDeclaredIDs(data)
+	ids, reason, stray := walkDeclaredIDs(data)
 	if reason != "" {
 		return reason
 	}
-	return declaredVerdict(ids, stem)
+	return strayTopLevelVerdict(declaredVerdict(ids, stem), stray)
+}
+
+// strayTopLevelVerdict is verdict, or GitManagedNotTenantDocument when the
+// file is otherwise API-shaped but its root holds a key other than
+// `tenants` (#3504). Applied last, so every other reason keeps precedence.
+func strayTopLevelVerdict(verdict string, stray bool) string {
+	if verdict == "" && stray {
+		return GitManagedNotTenantDocument
+	}
+	return verdict
 }
 
 // tenantFileTopLevelKeys is every top-level key a tenant file may hold: the
@@ -134,10 +144,11 @@ var tenantFileTopLevelKeys = map[string]bool{"tenants": true}
 
 // walkDeclaredIDs walks data's YAML nodes: the ids its `tenants:` keys
 // decode to (repeats kept), or the git-managed reason its shape alone gives
-// (TenantFileManagement's rules other than the id check).
-func walkDeclaredIDs(data []byte) (ids []string, reason string) {
+// (TenantFileManagement's rules other than the id check and the top-level key
+// set); stray reports a top-level key other than `tenants`.
+func walkDeclaredIDs(data []byte) (ids []string, reason string, stray bool) {
 	if len(bytes.TrimSpace(data)) == 0 {
-		return nil, ""
+		return nil, "", false
 	}
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var docs []*yaml.Node
@@ -147,64 +158,66 @@ func walkDeclaredIDs(data []byte) (ids []string, reason string) {
 			if errors.Is(err, io.EOF) {
 				break
 			}
-			return nil, GitManagedNotTenantDocument
+			return nil, GitManagedNotTenantDocument, false
 		}
 		docs = append(docs, n)
 	}
 	if len(docs) == 0 {
-		return nil, "" // comments only: no document, no tenant
+		return nil, "", false // comments only: no document, no tenant
 	}
 	for _, d := range docs[1:] {
 		if docRoot(d) != nil {
-			return nil, GitManagedSeveralDocuments
+			return nil, GitManagedSeveralDocuments, false
 		}
 	}
 	root := docRoot(docs[0])
 	if root == nil {
-		return nil, "" // an empty first document declares no tenant
+		return nil, "", false // an empty first document declares no tenant
 	}
 	if root.Kind == yaml.AliasNode || root.Anchor != "" {
-		return nil, GitManagedYAMLIndirection
+		return nil, GitManagedYAMLIndirection, false
 	}
 	if root.Kind != yaml.MappingNode {
-		return nil, GitManagedNotTenantDocument
+		return nil, GitManagedNotTenantDocument, false
 	}
 	var tenants *yaml.Node
 	for i := 0; i+1 < len(root.Content); i += 2 {
 		k, v := root.Content[i], root.Content[i+1]
 		name, ok := plainUntaggedKey(k)
 		if !ok || indirect(v) {
-			return nil, GitManagedYAMLIndirection
+			return nil, GitManagedYAMLIndirection, false
 		}
 		if !tenantFileTopLevelKeys[name] {
-			// #3504: the exporter reads a tenant only from `tenants.<id>`,
-			// and the tenant-config schema allows no other top-level key.
-			// A file holding one is not a tenant document, so the API must
-			// not show or overwrite what no reader takes from it.
-			return nil, GitManagedNotTenantDocument
+			// #3504: the tenant-config schema allows no top-level key but
+			// `tenants`, and no reader takes a tenant's keys from one. Noted,
+			// not returned: a more specific reason the rest of the walk or
+			// declaredVerdict finds (yaml_indirection, tenant_count,
+			// id_mismatch) is the one reported (strayTopLevelVerdict).
+			stray = true
+			continue
 		}
 		if name != "tenants" {
 			continue
 		}
 		if tenants != nil {
-			return nil, GitManagedNotTenantDocument
+			return nil, GitManagedNotTenantDocument, false
 		}
 		tenants = v
 	}
 	if tenants != nil && !isNull(tenants) { // absent or null: no tenant
 		if tenants.Kind != yaml.MappingNode {
-			return nil, GitManagedNotTenantDocument
+			return nil, GitManagedNotTenantDocument, false
 		}
 		for i := 0; i+1 < len(tenants.Content); i += 2 {
 			k, v := tenants.Content[i], tenants.Content[i+1]
 			id, ok := plainUntaggedKey(k)
 			if !ok || indirect(v) {
-				return nil, GitManagedYAMLIndirection
+				return nil, GitManagedYAMLIndirection, false
 			}
 			ids = append(ids, id)
 		}
 	}
-	return ids, ""
+	return ids, "", stray
 }
 
 // declaredVerdict is TenantFileManagement's verdict on the ids a file
