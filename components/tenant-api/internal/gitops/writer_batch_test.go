@@ -11,6 +11,7 @@ package gitops
 import (
 	"context"
 	"errors"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -147,7 +148,7 @@ func TestWriteBatch_RefusedOpUndoesEveryWrite(t *testing.T) {
 // untouched.
 func TestWriteBatch_CommitFailureUndoesEveryWrite(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"c-a.yaml": silentBody("c-a", "warning")})
-	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	w := newTestWriter(dir, dir)
@@ -166,7 +167,7 @@ func TestWriteBatch_CommitFailureUndoesEveryWrite(t *testing.T) {
 // The PR-mode twin: no commit on a branch, no branch, the serving tree clean.
 func TestWritePRBatch_CommitFailureLeavesNothing(t *testing.T) {
 	dir := seedTreeRepo(t, map[string]string{"p-a.yaml": silentBody("p-a", "warning")})
-	if err := os.WriteFile(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(filepath.Join(dir, ".git", "hooks", "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	w := newTestWriter(dir, dir)

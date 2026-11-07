@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -104,7 +105,7 @@ func hangingStatusGit(t *testing.T) string {
 	}
 	stub := filepath.Join(t.TempDir(), "git-hang-on-status.sh")
 	script := "#!/bin/sh\nfor a in \"$@\"; do\n  if [ \"$a\" = status ]; then\n    exec sleep 30\n  fi\ndone\nexec '" + realGit + "' \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	return stub

@@ -10,6 +10,7 @@ package gitops
 
 import (
 	"context"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,7 +39,7 @@ func installEnvHooks(t *testing.T, repo string, hooks ...string) (envLog, yamlLo
 		if h == "pre-commit" {
 			script += "git diff --cached --name-only -- '*.yaml' >> '" + yamlLog + "'\n"
 		}
-		if err := os.WriteFile(filepath.Join(repo, ".git", "hooks", h), []byte(script), 0o755); err != nil {
+		if err := testutil.WriteExecutable(filepath.Join(repo, ".git", "hooks", h), []byte(script), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -170,7 +171,7 @@ func TestGitHooks_PostIndexChangeSeesLiteral(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(hook, append(b, "exit 1\n"...), 0o755); err != nil {
+	if err := testutil.WriteExecutable(hook, append(b, "exit 1\n"...), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	inheritPathspecEnv(t)

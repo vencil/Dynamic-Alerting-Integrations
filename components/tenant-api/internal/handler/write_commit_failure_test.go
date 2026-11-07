@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -49,7 +50,7 @@ func refuseRefUpdates(t *testing.T, repo string) {
 		t.Fatal(err)
 	}
 	script := "#!/bin/sh\n[ \"$1\" = prepared ] && { echo 'ref updates refused (test fault)' >&2; exit 1; }\nexit 0\n"
-	if err := os.WriteFile(hook, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(hook, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := exec.Command("git", "-C", repo, "update-ref", "refs/heads/fault-probe", "HEAD").CombinedOutput(); err == nil {

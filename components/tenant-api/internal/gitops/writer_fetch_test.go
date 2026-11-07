@@ -3,6 +3,7 @@ package gitops
 import (
 	"context"
 	"errors"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -152,7 +153,7 @@ func dispatchGitStub(t *testing.T) string {
 		"  if [ \"$a\" = \"fetch\" ]; then exec sleep 30; fi\n" +
 		"done\n" +
 		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
 	return stub

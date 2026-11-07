@@ -16,7 +16,7 @@ package gitops
 import (
 	"context"
 	"errors"
-	"os"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -211,7 +211,7 @@ func TestWritePR_PushTimeoutIsPushError(t *testing.T) {
 	dir := initRepoOnMain(t)
 	addBareRemote(t, dir)
 	hooks := t.TempDir()
-	if err := os.WriteFile(filepath.Join(hooks, "pre-push"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(filepath.Join(hooks, "pre-push"), []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	gitRun(t, dir, "config", "core.hooksPath", hooks)

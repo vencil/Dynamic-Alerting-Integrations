@@ -1,6 +1,7 @@
 package gitops
 
 import (
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,7 +30,7 @@ func TestDiffTexts_TenantIDReachesNeitherGitNorTheFilesystem(t *testing.T) {
 	script := "#!/bin/sh\n" +
 		"{ printf 'arg:%s\\n' \"$@\"; find . -print | sed 's/^/path:/'; } > '" + record + "'\n" +
 		"exec git \"$@\"\n"
-	if err := os.WriteFile(stub, []byte(script), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
 	w := newTestWriter(t.TempDir(), "")
