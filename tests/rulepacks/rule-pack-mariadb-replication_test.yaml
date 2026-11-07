@@ -84,6 +84,9 @@ tests:
               summary_zh: "MariaDB 租戶 db-a 的 replica IO 執行緒未運行"
               description: "Replica IO thread is stopped (Slave_IO_Running=No) for tenant db-a — the replica is no longer receiving events from the primary, so the DR/read copy is going stale. seconds_behind_master turns NULL/absent (or lies at 0) in this state, so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_IO_Error (network / credentials / primary binlog purged)."
               description_zh: "租戶 db-a 的 replica IO 執行緒已停止（Slave_IO_Running=No）— replica 不再接收 primary 的事件，DR／讀取副本正在過期。此狀態下 seconds_behind_master 會變 NULL/absent（或誤報 0），MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_IO_Error（網路／憑證／primary binlog 已清除）。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
           - exp_labels:
               maintenance: page
               severity: critical
@@ -94,6 +97,9 @@ tests:
               summary_zh: "MariaDB 租戶 db-m 的 replica IO 執行緒未運行"
               description: "Replica IO thread is stopped (Slave_IO_Running=No) for tenant db-m — the replica is no longer receiving events from the primary, so the DR/read copy is going stale. seconds_behind_master turns NULL/absent (or lies at 0) in this state, so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_IO_Error (network / credentials / primary binlog purged)."
               description_zh: "租戶 db-m 的 replica IO 執行緒已停止（Slave_IO_Running=No）— replica 不再接收 primary 的事件，DR／讀取副本正在過期。此狀態下 seconds_behind_master 會變 NULL/absent（或誤報 0），MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_IO_Error（網路／憑證／primary binlog 已清除）。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
       - eval_time: 3m
         alertname: MariaDBReplicaSQLThreadDown
         exp_alerts:
@@ -107,6 +113,9 @@ tests:
               summary_zh: "MariaDB 租戶 db-b 的 replica SQL 執行緒未運行"
               description: "Replica SQL thread is stopped (Slave_SQL_Running=No) for tenant db-b — events are still being received (relay log grows) but NOT applied, usually a replication error (duplicate key / row not found). The replica diverges until the error is resolved; seconds_behind_master is NULL/absent in this state so MariaDBReplicationLag CANNOT see it. Check SHOW SLAVE STATUS Last_SQL_Error."
               description_zh: "租戶 db-b 的 replica SQL 執行緒已停止（Slave_SQL_Running=No）— 事件仍在接收（relay log 持續成長）但不再套用，通常是複寫錯誤（duplicate key／row not found）。錯誤解決前 replica 會持續偏離；此狀態下 seconds_behind_master 為 NULL/absent，MariaDBReplicationLag 看不到。請查 SHOW SLAVE STATUS 的 Last_SQL_Error。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
 
   # ── for:1m de-flap: a 45s IO-thread blip (restart window — APA's stated reason
   #    for the 1m delay) recovers before the for: elapses → must NEVER fire.

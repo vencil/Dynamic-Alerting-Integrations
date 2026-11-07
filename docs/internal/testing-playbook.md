@@ -526,7 +526,7 @@ Portal 工具卡片是從 `tool-registry.yaml` 動態產生的 `.cards a.card`�
 
 - **reporter 怎麼判**：`tests/e2e/reporters/parked-tests.ts` 讀實際跑出的結果。結果是 skipped、或預期狀態不是 passed 的測試，必須帶 `issue` annotation，而且值要是 `#<數字>`，否則整次執行判為失敗。
 - **停車的寫法**：`test.fixme('title', { annotation: { type: 'issue', description: '#<n>' } }, fn)`。annotation 本身就是登記，不另外手寫表格（見 [`frontend-quality-backlog.md`](frontend-quality-backlog.md)）。
-- **為什麼不在 lint 判**：lint 只看得到寫法，而停車有列舉不完的寫法。#1449 實測，下面幾種都能通過任何 ESLint 設定：別名 `const t = test`、`test['sk'+'ip']()`、`testInfo.skip()`、`test.fail`、`test.extend()` 產生的物件。結果是債務被逼進 lint 看不到的地方：`visual.spec.ts` 曾用整段 block comment 停了 5 支 spec，現已改成帶 issue（#3642）的 fixme。
+- **為什麼不在 lint 判**：lint 只看得到寫法，而停車有列舉不完的寫法。#1449 實測，下面幾種都能通過任何 ESLint 設定：別名 `const t = test`、`test['sk'+'ip']()`、`testInfo.skip()`、`test.fail`、`test.extend()` 產生的物件。結果是債務被逼進 lint 看不到的地方：`visual.spec.ts` 曾用整段 block comment 停了 5 支 spec，#1449 改成帶 issue 的 fixme，#3642 補上 baseline 後已全數啟用。
 - **lint 的角色**：`tests/e2e/eslint.config.mjs` 只剩 commit 時的快速回饋，設定為 `{ allowConditional: false, disallowFixme: false }`：任何形式的 `.skip()` 都報錯，`test.fixme` 放行。
   - ⛔ `allowConditional` 必須維持 false。翻成 true 後，只要符合以下任一條件就豁免：呼叫帶參數、位於 `if` 裡、位於 `switch case` 裡（plugin 2.10.2）。這樣一來 `test.skip(true, 'debt')`、`test.skip('reason')` 都會過。
   - 環境差異走 `--grep` tag 或 playwright.config.ts 的 project，這兩種 suite 本來就在用。

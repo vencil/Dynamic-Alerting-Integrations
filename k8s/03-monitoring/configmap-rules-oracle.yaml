@@ -38,9 +38,15 @@ data:
     \    expr: oracledb_up == 0\n    for: 15s\n    labels:\n      maintenance: page\n\
     \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: oracledb_up=0 for 15s on {{ $labels.instance }}\n      description_zh:\
-    \ oracledb_up=0，持續 15 秒，實例：{{ $labels.instance }}\n      summary: Oracle instance\
-    \ {{ $labels.instance }} is DOWN\n      summary_zh: Oracle 實例 {{ $labels.instance\
-    \ }} 已關閉\n  - alert: OracleHighActiveSessions\n    expr: \"(\\n  tenant:oracle_sessions_active:max\\\
+    \ oracledb_up=0，持續 15 秒，實例：{{ $labels.instance }}\n      owner: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ Oracle instance {{ $labels.instance }} is DOWN\n      summary_zh: Oracle 實例\
+    \ {{ $labels.instance }} 已關閉\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: OracleHighActiveSessions\n    expr: \"(\\n  tenant:oracle_sessions_active:max\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:oracle_sessions_active\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\

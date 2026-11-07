@@ -175,7 +175,7 @@ tenants:
       tier: "tier-1"
 ```
 
-和你閾值比較的告警會把這三個值帶進 annotation，出現在通知裡。停機、exporter 缺席這類告警目前不帶（[#2566](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2566)）。
+所有租戶告警（閾值、停機、exporter 缺席、哨兵、自訂告警）都會把這三個值帶進 annotation，出現在通知裡；沒設 `_metadata` 時三個值是空字串，告警照常觸發。
 
 ## 你會收到的通知
 

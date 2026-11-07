@@ -47,7 +47,6 @@ lang: en
 | `grafana_import.py` | Grafana dashboard import via ConfigMap sidecar. |
 | `guard_dispatch.py` | `da-tools guard` Python entrypoint. |
 | `init_project.py` | Bootstrap a Dynamic Alerting integration in a customer repo. |
-| `inject_metadata_join.py` | One-time script: add tenant metadata annotations (runbook_url, owner, tier) to Rule Pack alert rules. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
 | `migrate_credentials.py` | find receiver credentials written out in conf.d and |

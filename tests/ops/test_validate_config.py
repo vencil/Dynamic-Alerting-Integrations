@@ -1940,6 +1940,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # #2695. Reads every file under `--config-dir`; a file that does
             # not parse stops it, and its row says no file was checked.
             "json_schema",
+            # #3591. Reads the tree through da-guard's key verdict (the
+            # `unread_keys` row's) under `--config-dir`.
+            "no_alert",
             "policy_dsl",
             "profiles",
             # #2291. Reads the root `_defaults.yaml` under `--config-dir`.
