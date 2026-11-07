@@ -66,11 +66,65 @@ def test_a_retired_spelling_is_looked_up_in_the_canonical_one(tmp_path):
     assert r["status"] == vc.PASS, r
 
 
+def test_a_value_served_at_critical_is_looked_up_as_its_critical_tier(tmp_path):
+    """`"95:critical"` 送出的是 critical 列：查 `<key>_critical`。es 規則包沒有 critical 層，
+    所以列出並標註；mariadb 有，`mysql_connections: "90:critical"` 不列。"""
+    r = vc.check_no_alert(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  es_disk_usage_percent: 80\n  mysql_connections: 80\n",
+        "ta.yaml": "tenants:\n  ta:\n    es_disk_usage_percent: \"95:critical\"\n"
+                   "    mysql_connections: \"90:critical\"\n"}))
+    assert r["details"] == [
+        "ta.yaml: no_alert `es_disk_usage_percent` (served as critical) — served, but no shipped "
+        "alert compares it — tenant(s) ta"], r
+
+
+def test_a_deferred_base_is_not_listed_at_critical_either(tmp_path):
+    """observed-map 延後判的 base（version-aware 的 `container_cpu`）寫成 `"N:critical"`：
+    它的 critical 層同樣是延後判，不列。"""
+    r = vc.check_no_alert(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  container_cpu: 50\n",
+        "ta.yaml": "tenants:\n  ta:\n    container_cpu: \"60:critical\"\n"}))
+    assert r["status"] == vc.PASS, r
+
+
+def test_a_tree_the_verdict_cannot_judge_is_not_checked_not_a_pass(tmp_path):
+    """沒有根平台檔：閾值鍵判不了，這一列不能說「每個都有告警比較」。"""
+    r = vc.check_no_alert(_tree(tmp_path, {"ta.yaml": "tenants:\n  ta:\n    mysql_connectoins: \"5\"\n"}))
+    assert r["status"] == vc.WARN and r["details"][0].startswith("not checked:"), r
+    assert r["hint"] == vc._NO_ALERT_NOT_CHECKED_HINT, r
+
+
+def test_no_verdict_from_unread_keys_is_not_judged_again(tmp_path, monkeypatch):
+    """`main` 在 `unread_keys` 沒給出判決時傳 judge=False：不再跑一次判決（原因那一列已報），
+    這一列寫 not checked。"""
+    import _lib_key_verdict
+
+    def must_not_run(*_a, **_k):
+        raise AssertionError("judged again")
+    monkeypatch.setattr(_lib_key_verdict, "judge_tree", must_not_run)
+    r = vc.check_no_alert(str(tmp_path), verdict=None, judge=False)
+    assert r["status"] == vc.WARN and r["details"][0].startswith("not checked:"), r
+
+
+def test_a_defect_of_this_tool_is_not_swallowed(tmp_path, monkeypatch):
+    """只有讀不到（da-guard、served-values、observed-map）才是「not checked」；
+    這支工具自己的錯照樣拋出（由 `_run_check` 報成 exit 2），不藏成 WARN。"""
+    import _observed_map_lib
+
+    def bug(*_a, **_k):
+        raise AttributeError("a field the map no longer has")
+    monkeypatch.setattr(_observed_map_lib, "load_observed_map", bug)
+    with pytest.raises(AttributeError):
+        vc.check_no_alert(_tree(tmp_path, {
+            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n"}))
+
+
 def test_a_map_that_cannot_be_read_is_not_checked_never_a_fail(tmp_path, monkeypatch):
     import _observed_map_lib
 
     def broken(*_a, **_k):
-        raise OSError("no map")
+        raise _observed_map_lib.ObservedMapError("no map", "missing")
     monkeypatch.setattr(_observed_map_lib, "load_observed_map", broken)
     r = vc.check_no_alert(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
