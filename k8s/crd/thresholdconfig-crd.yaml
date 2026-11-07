@@ -1,7 +1,8 @@
 # ThresholdConfig CRD — Optional entry point for declarative tenant config.
 #
 # Namespace-scoped.  The da-assembler-controller watches these resources and
-# renders each into a YAML file under config-dir/ that threshold-exporter reads.
+# renders each into a directory under config-dir/ (<name>/<name>.yaml, and
+# <name>/_defaults.yaml for spec.defaults) that threshold-exporter reads.
 #
 # The spec.tenants structure mirrors the existing tenant YAML format exactly,
 # so migration from hand-written YAML to CRD is copy-paste.
@@ -45,6 +46,18 @@ spec:
               type: object
               required:
                 - tenants
+              # #3671: a field the controller would render to no reader is
+              # refused at admission, not accepted and dropped.
+              x-kubernetes-validations:
+                - rule: "!has(self.stateFilters)"
+                  message: >-
+                    spec.stateFilters is not supported: the exporter reads
+                    state_filters only from the root _defaults.yaml. Declare
+                    the filter there.
+                - rule: "!has(self.profile)"
+                  message: >-
+                    spec.profile is not rendered. Set _profile on each tenant
+                    under spec.tenants instead.
               properties:
                 tenants:
                   description: >-
@@ -61,19 +74,23 @@ spec:
                     x-kubernetes-preserve-unknown-fields: true
                 defaults:
                   description: >-
-                    Optional platform defaults block.  Usually only set in a
-                    single ThresholdConfig resource per namespace.  Merged with
-                    any existing _defaults.yaml.
+                    Optional defaults for this resource's tenants alone,
+                    rendered as <name>/_defaults.yaml (the exporter's subtree
+                    defaults layer).  Only keys the root _defaults.yaml or
+                    optional_overrides declares are delivered.
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                 stateFilters:
                   description: >-
-                    Optional state_filters block.
+                    Not supported (refused by the validation rule above): the
+                    exporter reads state_filters only from the root
+                    _defaults.yaml.  Kept in the schema so the rule can name it.
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
                 profile:
                   description: >-
-                    Optional _profile reference (v1.12.0 four-layer inheritance).
+                    Not supported (refused by the validation rule above): set
+                    _profile on each tenant under spec.tenants.
                   type: string
             status:
               type: object
@@ -87,7 +104,8 @@ spec:
                     - Error
                 lastRenderedHash:
                   description: >-
-                    SHA-256 of the last successfully rendered YAML file.
+                    SHA-256 over the files last rendered for this resource
+                    (each file's path and bytes, in path order).
                   type: string
                 lastRenderedTime:
                   description: Timestamp of last successful render.

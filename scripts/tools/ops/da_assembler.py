@@ -24,13 +24,19 @@ Prerequisites:
     Every mode also needs da-guard (ADR-036 §2, #2906, #3206): on $PATH, or
     named by $DA_GUARD_BINARY. Only Go writes conf.d: the CR is sent to
     `da-guard write` as data (each value with its JSON type, the header a
-    comment), which writes the file — replacing one already there whole —
-    or deletes it when the CR is deleted, after reading it back in the
-    tree. A CR whose name is not a Kubernetes object name, whose tenant id
-    is not one (ADR-035), whose `defaults` value is a sequence, a mapping or
-    an int past float64's range (a string or a bool is written as it is: the
-    exporter refuses that key alone when it is no number, #3250), or that
-    da-guard refuses (a path no reader reads) is not
+    comment), which writes the files — replacing ones already there whole —
+    or deletes them when the CR is deleted, after reading them back in the
+    tree. Each CR owns a directory (#3671): `<name>/<name>.yaml` holds its
+    tenants, `<name>/_defaults.yaml` its `spec.defaults` (the exporter's
+    subtree defaults layer: those tenants alone, and only keys the root
+    `_defaults.yaml` or `optional_overrides:` declares); the `<name>.yaml`
+    an earlier version wrote is deleted in the same batch. A CR that sets
+    `spec.stateFilters` (the exporter reads it from the root
+    `_defaults.yaml` alone) or `spec.profile` (rendered nowhere) is refused.
+    A CR whose name is not a Kubernetes object name, whose tenant id
+    is not one (ADR-035), whose `defaults` value is an int past float64's
+    range, or that da-guard refuses (a path no reader reads, a default the
+    exporter does not apply, a key the root does not declare) is not
     written — `--render-cr` exits 2 naming it, the controller logs it, sets
     the CR's status to Error and goes on. A new file is mode 0600 (da-guard
     write's), a replaced one keeps its mode.
@@ -204,26 +210,56 @@ def _die_by_signal(signum: int) -> int:
 _TOOL = "da_assembler"
 
 
-def render_cr_to_yaml(cr: dict) -> str:
-    """The text the rendered file of *cr* holds, as `da-guard write` writes
-    it (ADR-036 §2, #3206): a preview — `write --dry-run` of
-    `render_entry(cr)` into an empty private directory, nothing written
-    anywhere. The file `reconcile_one` writes is this text, byte for byte
-    (the same entry, the same Go). Raises ValueError for a CR this tool
-    does not render (`render_entry`), and `_lib_confedit`'s errors (no
-    usable da-guard: `ParseTreeError`; a refusal: `EditsRefused`).
+def render_cr_files(cr: dict) -> "dict[str, str]":
+    """The files *cr* renders to, path → text, as `da-guard write` writes
+    them (ADR-036 §2, #3206): a preview — `write --dry-run` of
+    `render_entries(cr)` into an empty private directory, nothing written
+    anywhere. The files `reconcile_one` writes are these texts, byte for
+    byte (the same entries, the same Go). Always the tenant file
+    (`_output_filename`); the subtree `_defaults.yaml` only when the CR sets
+    `spec.defaults`. Raises ValueError for a CR this tool does not render
+    (`render_entries`), and `_lib_confedit`'s errors (no usable da-guard:
+    `ParseTreeError`; a refusal: `EditsRefused`).
     """
-    entry = render_entry(cr)
+    entries = render_entries(cr)
     with tempfile.TemporaryDirectory(prefix="da-assembler-") as tmp:
-        [result] = _lib_confedit.write_all(tmp, [entry], dry_run=True)
-    return result["content"]
+        results = _lib_confedit.write_all(tmp, entries, dry_run=True)
+    return {e["path"]: r["content"] for e, r in zip(entries, results) if "create" in e}
 
 
-def _render_doc(cr: dict) -> "tuple[str, Dict[str, Any]]":
-    """``(head comment, document)`` of *cr*'s rendered file: the comment's
-    lines without their ``# `` (Go writes it), the document as Python data."""
+def _unrendered_spec_error(spec: dict) -> str:
+    """Why *spec* sets a field no reader would read once rendered, or ``""``
+    (#3671). ONE check for both paths (`--render-cr` and the controller),
+    through `_render_doc`.
+
+    ``spec.stateFilters``: the exporter reads ``state_filters`` from the root
+    ``_defaults.yaml`` alone — not from a tenant file (it logs ``should only be
+    in _defaults.yaml, ignoring``) nor from a subtree ``_defaults.yaml`` — so a
+    CR cannot set it. ``spec.profile``: nothing renders it (#2476); a
+    tenant's ``_profile`` is the reader's key. A null one is unset, as
+    Kubernetes reads it. The CRD refuses both too
+    (``x-kubernetes-validations``)."""
+    if spec.get("profile") is not None:
+        return ("spec.profile is set, but it is not rendered: the rendered file "
+                "would carry no profile. Set _profile on each tenant under "
+                "spec.tenants instead")
+    if spec.get("stateFilters") is not None:
+        return ("spec.stateFilters is set, but the exporter reads state_filters "
+                "only from the root _defaults.yaml (the platform's): a CR cannot "
+                "set it. Declare the filter in the root _defaults.yaml instead")
+    return ""
+
+
+def _render_doc(cr: dict) -> "tuple[str, Dict[str, Any], Dict[str, Any] | None]":
+    """``(head comment, tenant document, defaults document or None)`` of
+    *cr*'s rendered files: the comment's lines without their ``# `` (Go
+    writes it), each document as Python data. ValueError for a field no
+    reader would read (`_unrendered_spec_error`)."""
     spec = cr.get("spec", {})
     metadata = cr.get("metadata", {})
+    why = _unrendered_spec_error(spec if isinstance(spec, dict) else {})
+    if why:
+        raise ValueError(why)
 
     doc: Dict[str, Any] = {}
 
@@ -237,14 +273,15 @@ def _render_doc(cr: dict) -> "tuple[str, Dict[str, Any]]":
     if isinstance(tenants, dict) and tenants:
         doc["tenants"] = tenants
 
-    # Optional platform blocks
+    # #3671: `defaults:` in a tenant file is read by no reader (the exporter
+    # logs `should only be in _defaults.yaml, ignoring`). The CR's defaults
+    # are written as the defaults file of the CR's own directory — the
+    # exporter's subtree layer, which applies them to the tenants of that
+    # directory alone, and delivers only the keys the root `_defaults.yaml`
+    # or `optional_overrides:` declares (the shared verdict reports any
+    # other as `undeliverable`).
     defaults = spec.get("defaults")
-    if isinstance(defaults, dict) and defaults:
-        doc["defaults"] = defaults
-
-    state_filters = spec.get("stateFilters")
-    if isinstance(state_filters, dict) and state_filters:
-        doc["state_filters"] = state_filters
+    defaults_doc = {"defaults": defaults} if isinstance(defaults, dict) and defaults else None
 
     # The CR's namespace and name are outside input put into a comment
     # (`comment_field`: a character da-guard's comment refuses is named here).
@@ -257,7 +294,7 @@ def _render_doc(cr: dict) -> "tuple[str, Dict[str, Any]]":
         "DO NOT EDIT — changes will be overwritten on next reconcile."
     )
 
-    return header, doc
+    return header, doc, defaults_doc
 
 
 def _render_value(doc: Dict[str, Any]) -> dict:
@@ -267,14 +304,12 @@ def _render_value(doc: Dict[str, Any]) -> dict:
     quoted), except numbers under ``defaults`` and ``tenants``: the exporter
     decodes thresholds into ``float64``, so every number there goes through
     `number_value` (an int past 18 digits goes as the float it is to the
-    exporter; a shorter one stays an int). A ``defaults`` value that is a
-    string or a bool is written as it is: the exporter reads its text as a
-    tenant's value is read and refuses that key alone when it is no number
-    (#3250, served-values' ``root_defaults_refused``). A sequence / mapping
-    there, or an int past float64's range, is ValueError naming the key, as
-    is a tenant id that is not one (ADR-035)
-    and a value with no edit-contract type (an int past 18 digits under
-    ``stateFilters``)."""
+    exporter; a shorter one stays an int). Any other ``defaults`` value (a
+    string, a bool, a sequence, a mapping) is written as it is: whether the
+    exporter applies it in the CR's subtree ``_defaults.yaml`` is the shared
+    verdict's, and ``da-guard write`` refuses one it does not apply
+    (``value_rejected``, #3671). An int past float64's range is ValueError
+    naming the key, as is a tenant id that is not one (ADR-035)."""
     entries = []
     for key, block in doc.items():
         if key == "tenants":
@@ -291,14 +326,13 @@ def _render_value(doc: Dict[str, Any]) -> dict:
             for metric, value in block.items():
                 why = _default_value_error(value)
                 if why:
-                    raise ValueError(f"spec.defaults.{metric} {why}; the exporter skips "
-                                     "the whole rendered file otherwise")
-                values.append((metric, _lib_confedit.data_value(value, ("defaults", metric))
-                               if value is None or isinstance(value, (str, bool))
-                               else _lib_confedit.number_value(value, at=("defaults", metric))))
+                    raise ValueError(f"spec.defaults.{metric} {why}")
+                values.append((metric, _lib_confedit.number_value(value, at=("defaults", metric))
+                               if isinstance(value, (int, float)) and not isinstance(value, bool)
+                               else _lib_confedit.data_value(value, ("defaults", metric))))
             entries.append((key, _lib_confedit.map_value(values)))
             continue
-        entries.append((key, _lib_confedit.data_value(block, (key,))))
+        raise ValueError(f"internal: no rendering for block {key!r}")
     return _lib_confedit.map_value(entries)
 
 
@@ -319,16 +353,41 @@ def _numbers_as_float64(obj: Any, at: "tuple[str, ...]") -> dict:
     return _lib_confedit.data_value(obj, at)
 
 
-def render_entry(cr: dict) -> dict:
-    """*cr*'s rendered file as one `da-guard write` entry (ADR-036 §2): a
-    file generated whole from the CR, so a file already at its path is
+def render_entries(cr: dict) -> "list[dict]":
+    """*cr*'s rendered files as ONE `da-guard write` batch (ADR-036 §2), so
+    the tree is judged once and the CR's files land, or are refused,
+    together (#3671):
+
+    - the tenant file, ``<name>/<name>.yaml`` (`_output_filename`);
+    - the CR's subtree defaults file, ``<name>/_defaults.yaml``
+      (`_defaults_filename`) when the CR sets ``spec.defaults``, else its
+      delete (a CR that drops its defaults drops the file);
+    - the delete of ``<name>.yaml`` (`_legacy_filename`), where an earlier
+      version wrote the CR — left there, it would declare the CR's tenants a
+      second time.
+
+    Each file is generated whole from the CR, so one already at its path is
     replaced whole (`replace`: its mode and owner are kept; a new file is
-    0600, da-guard's). ValueError for a CR this tool does not render
-    (`_output_filename`, `_render_value`)."""
+    0600, da-guard's). A delete of a file not there changes nothing.
+    ValueError for a CR this tool does not render (`_output_filename`,
+    `_render_doc`, `_render_value`)."""
     filename = _output_filename(cr)
-    header, doc = _render_doc(cr)
-    return _lib_confedit.create_entry(filename, _render_value(doc),
-                                      head_comment=header, replace=True)
+    header, doc, defaults_doc = _render_doc(cr)
+    entries = [_lib_confedit.create_entry(filename, _render_value(doc),
+                                          head_comment=header, replace=True)]
+    if defaults_doc is not None:
+        entries.append(_lib_confedit.create_entry(
+            _defaults_filename(cr), _render_value(defaults_doc), head_comment=header, replace=True))
+    else:
+        entries.append(_lib_confedit.delete_entry(_defaults_filename(cr)))
+    entries.append(_lib_confedit.delete_entry(_legacy_filename(cr)))
+    return entries
+
+
+def rendered_paths(cr: dict) -> "list[str]":
+    """Every path under --config-dir *cr* owns (`render_entries`): what the
+    controller deletes when the CR is deleted."""
+    return [_output_filename(cr), _defaults_filename(cr), _legacy_filename(cr)]
 
 
 def _content_sha256(content: "str | bytes") -> str:
@@ -337,13 +396,46 @@ def _content_sha256(content: "str | bytes") -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _rendered_sha256(files: "dict[str, str | bytes]") -> str:
+    """The CR status's ``lastRenderedHash``: SHA-256 over the CR's rendered
+    files (path → content), each as its path, NUL, its bytes, NUL, in path
+    order — so a change to either file, or a file appearing or going, moves
+    it."""
+    h = hashlib.sha256()
+    for path in sorted(files):
+        raw = files[path]
+        raw = raw.encode("utf-8") if isinstance(raw, str) else raw
+        h.update(path.encode("utf-8") + b"\0" + raw + b"\0")
+    return h.hexdigest()
+
+
 def _output_filename(cr: dict) -> str:
-    """The output filename, ``<metadata.name>.yaml``. ValueError when the
-    name is not a Kubernetes object name (DNS-1123 subdomain, as the API
-    server checks it, #2396): the name is a path under --config-dir and goes
-    into the header comment. Not ADR-035's tenant-id rule: the file holds
-    the CR's tenants, its name is the CR's (a subdomain may hold ``.`` and
-    253 characters, which a tenant id may not)."""
+    """The tenant file, ``<metadata.name>/<metadata.name>.yaml`` (#3671: the
+    CR's own directory, so its ``_defaults.yaml`` is a subtree layer for its
+    tenants alone). ValueError when the name is not a Kubernetes object name
+    (`_cr_name`)."""
+    name = _cr_name(cr)
+    return f"{name}/{name}.yaml"
+
+
+def _defaults_filename(cr: dict) -> str:
+    """The CR's subtree defaults file, ``<metadata.name>/_defaults.yaml``."""
+    return f"{_cr_name(cr)}/_defaults.yaml"
+
+
+def _legacy_filename(cr: dict) -> str:
+    """``<metadata.name>.yaml``: where an earlier version wrote the CR, with
+    its ``defaults:`` in the tenant file, read by no reader (#3671)."""
+    return f"{_cr_name(cr)}.yaml"
+
+
+def _cr_name(cr: dict) -> str:
+    """*cr*'s ``metadata.name``. ValueError when it is not a Kubernetes
+    object name (DNS-1123 subdomain, as the API server checks it, #2396):
+    the name is a path under --config-dir and goes into the header comment.
+    Not ADR-035's tenant-id rule: the files hold the CR's tenants, their
+    names are the CR's (a subdomain may hold ``.`` and 253 characters, which
+    a tenant id may not)."""
     name = (cr.get("metadata") or {}).get("name")
     if not isinstance(name, str) or not _is_dns1123_subdomain(name):
         raise ValueError(
@@ -351,7 +443,7 @@ def _output_filename(cr: dict) -> str:
             "(DNS-1123 subdomain: lowercase a-z, 0-9, '-' and '.', starting "
             f"and ending alphanumeric, at most {_DNS1123_SUBDOMAIN_MAX} "
             "characters); not written")
-    return f"{name}.yaml"
+    return name
 
 
 # ── File writing ─────────────────────────────────────────────────────
@@ -365,16 +457,17 @@ def _make_config_dir(config_dir: Path) -> None:
 
 def write_rendered(
     config_dir: Path,
-    entry: dict,
+    entries: "list[dict]",
     *,
     dry_run: bool = False,
     cli: bool = False,
 ) -> "tuple[bool, str]":
-    """Write *entry* (`render_entry`) under *config_dir* through `da-guard
-    write` (ADR-036 §2): ``(changed, sha256 of the file's content)``.
-    The same bytes as the file already there are not written (da-guard's
-    `unchanged`: changed False); under *dry_run* nothing is written and
-    *changed* says whether it would be.
+    """Write *entries* (`render_entries`, one batch) under *config_dir*
+    through `da-guard write` (ADR-036 §2): ``(changed, _rendered_sha256 of
+    the files written)``. The same bytes as a file already there are not
+    written, a delete of a file not there changes nothing (da-guard's
+    `unchanged`: changed False when every entry is); under *dry_run*
+    nothing is written and *changed* says whether it would be.
 
     *cli* (``--render-cr``, a one-shot run) writes through
     `_lib_confedit.write_all_or_exit`: a refusal, a write that stopped
@@ -385,55 +478,71 @@ def write_rendered(
     raises (EditsRefused, EditCallerError, PartialWrite, ParseTreeError),
     and `reconcile_one` logs it and sets the CR's status to Error.
     """
-    filename = entry["path"]
-    dest = config_dir / filename
+    created = [e["path"] for e in entries if "create" in e]
     if dry_run:
         # A --config-dir not there yet is an empty tree: previewed in one.
         if config_dir.is_dir():
-            [result] = _lib_confedit.write_all(config_dir, [entry], dry_run=True)
+            results = _lib_confedit.write_all(config_dir, entries, dry_run=True)
         else:
             with tempfile.TemporaryDirectory(prefix="da-assembler-") as tmp:
-                [result] = _lib_confedit.write_all(tmp, [entry], dry_run=True)
-        if result["status"] == _lib_confedit.UNCHANGED:
-            with output_write(dest, flag="--config-dir", action="read"):
-                return False, _content_sha256(dest.read_bytes())
-        log.info("DRY-RUN: would write %s (%d bytes)", filename,
-                 len(result["content"].encode("utf-8")))
-        return True, _content_sha256(result["content"])
+                results = _lib_confedit.write_all(tmp, entries, dry_run=True)
+        files: "dict[str, str | bytes]" = {}
+        for entry, result in zip(entries, results):
+            if "create" not in entry:
+                if result["status"] != _lib_confedit.UNCHANGED:
+                    log.info("DRY-RUN: would delete %s", entry["path"])
+                continue
+            if result["status"] == _lib_confedit.UNCHANGED:
+                dest = config_dir / entry["path"]
+                with output_write(dest, flag="--config-dir", action="read"):
+                    files[entry["path"]] = dest.read_bytes()
+                continue
+            log.info("DRY-RUN: would write %s (%d bytes)", entry["path"],
+                     len(result["content"].encode("utf-8")))
+            files[entry["path"]] = result["content"]
+        changed = any(r["status"] != _lib_confedit.UNCHANGED for r in results)
+        return changed, _rendered_sha256(files)
     if cli:
-        [result] = _lib_confedit.write_all_or_exit(
-            config_dir, [entry], tool=_TOOL,
+        results = _lib_confedit.write_all_or_exit(
+            config_dir, entries, tool=_TOOL,
             make_root=lambda: _make_config_dir(config_dir))
     else:
         if not config_dir.is_dir():
             _make_config_dir(config_dir)
-        [result] = _lib_confedit.write_all(config_dir, [entry])
-    # The bytes da-guard wrote (or left: unchanged) are the file's now.
-    with output_write(dest, flag="--config-dir", action="read"):
-        sha = _content_sha256(dest.read_bytes())
-    return result["status"] != _lib_confedit.UNCHANGED, sha
+        results = _lib_confedit.write_all(config_dir, entries)
+    # The bytes da-guard wrote (or left: unchanged) are the files' now.
+    files = {}
+    for path in created:
+        dest = config_dir / path
+        with output_write(dest, flag="--config-dir", action="read"):
+            files[path] = dest.read_bytes()
+    return any(r["status"] != _lib_confedit.UNCHANGED for r in results), _rendered_sha256(files)
 
 
 def remove_rendered(
     config_dir: Path,
-    filename: str,
+    filenames: "list[str]",
     *,
     dry_run: bool = False,
 ) -> bool:
-    """Remove a rendered file (CR deleted) through `da-guard write`'s delete
-    (ADR-036 §2): True when the file was there (under *dry_run*: would be
-    removed). Raises `_lib_confedit`'s errors — a delete da-guard refuses
-    (the tree would be worse without the file), no usable da-guard — for
+    """Remove a CR's rendered files (CR deleted; `rendered_paths`) through
+    ONE `da-guard write` batch of deletes (ADR-036 §2): True when any was
+    there (under *dry_run*: would be removed). A file not there changes
+    nothing. Raises `_lib_confedit`'s errors — a delete da-guard refuses
+    (the tree would be worse without the files), no usable da-guard — for
     the caller to log; never exits."""
     if not config_dir.is_dir():
         return False
-    [result] = _lib_confedit.write_all(
-        config_dir, [_lib_confedit.delete_entry(filename)], dry_run=dry_run)
-    if result["status"] == _lib_confedit.UNCHANGED:
-        return False
-    if dry_run:
-        log.info("DRY-RUN: would delete %s", filename)
-    return True
+    results = _lib_confedit.write_all(
+        config_dir, [_lib_confedit.delete_entry(f) for f in filenames], dry_run=dry_run)
+    removed = False
+    for filename, result in zip(filenames, results):
+        if result["status"] == _lib_confedit.UNCHANGED:
+            continue
+        removed = True
+        if dry_run:
+            log.info("DRY-RUN: would delete %s", filename)
+    return removed
 
 
 # ── Status update ────────────────────────────────────────────────────
@@ -561,9 +670,9 @@ def reconcile_one(
                 update_cr_status(api, cr, "Error", message=(
                     "conf.d holds paths da-guard validation names; not written")[:200])
             return
-        entry = render_entry(cr)
-        filename = entry["path"]
-        changed, sha = write_rendered(config_dir, entry, dry_run=dry_run, cli=cli)
+        entries = render_entries(cr)
+        filename = entries[0]["path"]
+        changed, sha = write_rendered(config_dir, entries, dry_run=dry_run, cli=cli)
 
         if changed:
             log.info("Rendered %s/%s → %s (sha256:%s)",
@@ -715,7 +824,7 @@ def run_watch(
                     # the watch.
                     try:
                         filename = _output_filename(cr)
-                        removed = remove_rendered(config_dir, filename,
+                        removed = remove_rendered(config_dir, rendered_paths(cr),
                                                   dry_run=dry_run)
                     except Exception as e:  # noqa: BLE001 — logged, loop goes on
                         log.error("Failed to delete the file of CR %s/%s: %s",
@@ -883,7 +992,7 @@ _DNS1123_LABEL = r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?"
 _DNS1123_SUBDOMAIN_RE = re.compile(rf"{_DNS1123_LABEL}(?:\.{_DNS1123_LABEL})*")
 _DNS1123_LABEL_RE = re.compile(_DNS1123_LABEL)
 _DNS1123_SUBDOMAIN_MAX = 253
-# The first line of every file render_cr_to_yaml writes, before
+# The first line of every file render_cr_files writes, before
 # ``<namespace>/<name>``; _stale_render_hint reads it back (#2430).
 _HEADER_PREFIX = "# Auto-generated by da-assembler from ThresholdConfig "
 _HEADER_READ_MAX = 4096
@@ -1224,13 +1333,12 @@ def render_cr_file(
         log.error("%s: spec must be a mapping", cr_path)
         return EXIT_CALLER_ERROR
     spec = cr.get("spec") or {}
-    # #2476: the CRD declares `spec.profile`, but nothing renders it (the
-    # controller path drops it too), so the rendered file would carry no
-    # profile. A null one is no profile.
-    if spec.get("profile") is not None:
-        log.error("%s: spec.profile is set, but it is not rendered: the "
-                  "rendered file would carry no profile. Set _profile on "
-                  "each tenant under spec.tenants instead", cr_path)
+    # #2476 / #3671: a field no reader would read (`spec.profile`,
+    # `spec.stateFilters`) — the one check `_render_doc` makes on both paths,
+    # asked first here so it is named before the shape checks below.
+    why = _unrendered_spec_error(spec)
+    if why:
+        log.error("%s: %s", cr_path, why)
         return EXIT_CALLER_ERROR
     why = ""
     if isinstance(spec.get("tenants"), dict):
@@ -1276,8 +1384,8 @@ def render_cr_file(
 def _spec_block_shape_error(spec: dict) -> str:
     """Why *spec*'s blocks would not render as the CR wrote them, or ``""``.
 
-    #2395. ``render_cr_to_yaml`` silently drops a block that is not a
-    mapping (``defaults: [x]``, ``stateFilters: foo``), and writes a tenant
+    #2395. ``render_cr_files`` silently drops a block that is not a
+    mapping (``defaults: [x]``), and writes a tenant
     whose value is not a mapping as-is — the exporter then refuses the WHOLE
     file (``cannot unmarshal !!int``), every tenant in it included. The CRD
     declares each of these ``type: object``.
@@ -1288,16 +1396,17 @@ def _spec_block_shape_error(spec: dict) -> str:
     written, not dropped, and the exporter refuses ``t2: 0`` too.
     A ``!!set`` is a mapping to the exporter (every value null), so it passes
     wherever a mapping is WRITTEN (a tenant, a state filter); a block that is
-    a set is still refused, because ``render_cr_to_yaml`` would drop it.
+    a set is still refused, because ``render_cr_files`` would drop it.
 
-    Below the blocks, only as deep as the exporter's types go
-    (``pkg/config/types.go``): ``defaults`` is ``map[string]float64``
-    (:func:`_default_value_error`) and ``state_filters`` is
-    ``map[string]StateFilter`` (:func:`_state_filter_error`). Tenant values
-    below the tenant (``ScheduledValue``) are not checked.
+    Below the blocks: a ``defaults`` int with no float64 value
+    (:func:`_default_value_error`). Whether the exporter applies a
+    ``defaults`` value is the shared verdict's, on the written subtree file
+    (#3671). Tenant values below the tenant (``ScheduledValue``) are not
+    checked. ``stateFilters`` never gets here: it is refused whole
+    (`_unrendered_spec_error`).
     Only ``--render-cr`` asks this; the controller path is unchanged.
     """
-    for key in ("tenants", "defaults", "stateFilters"):
+    for key in ("tenants", "defaults"):
         block = spec.get(key)
         if block is None or isinstance(block, dict):
             continue
@@ -1312,32 +1421,19 @@ def _spec_block_shape_error(spec: dict) -> str:
     for metric, value in (defaults if isinstance(defaults, dict) else {}).items():
         why = _default_value_error(value)
         if why:
-            return (f"spec.defaults.{metric} {why}; the exporter skips the "
-                    f"whole rendered file otherwise")
-    filters = spec.get("stateFilters")
-    for name, sf in (filters if isinstance(filters, dict) else {}).items():
-        why = _state_filter_error(sf)
-        if why:
-            return (f"spec.stateFilters.{name}{why}; the exporter skips the "
-                    f"whole rendered file otherwise")
+            return f"spec.defaults.{metric} {why}"
     return ""
 
 
 def _default_value_error(value: Any) -> str:
-    """Why *value* is not a ``defaults`` value the exporter decodes, as far
-    as its JSON type tells, or ``""``.
-
-    The exporter reads each root ``defaults`` value's text through
-    parseThresholdNumber (#3250): a sequence / mapping makes it refuse the
-    whole file, which is what this names. A scalar never does — a string or
-    a bool it does not read (``foo``, ``true``) refuses that key alone and is
-    the exporter's verdict to report (served-values' ``root_defaults_refused``,
-    da-guard's ``root_default_refused``), not this tool's; ``"80"`` is read
-    as 80. An int past float64's range has no value the writer can send.
-    """
-    if value is None or isinstance(value, (str, bool)):
-        return ""
-    if isinstance(value, int):
+    """Why *value*, a ``defaults`` value, cannot be written, or ``""``: an
+    int past float64's range has no value the writer can send (the
+    exporter's float64). Nothing else is judged here (#3671): the CR's
+    defaults are the subtree ``_defaults.yaml`` of its directory, and
+    whether the exporter applies a value there (a string, a bool, a
+    sequence, a mapping) is the shared verdict's — ``da-guard write``
+    refuses one it does not apply (``value_rejected``)."""
+    if isinstance(value, int) and not isinstance(value, bool):
         # The exporter's float64: an int past 18 digits is sent as the
         # float it rounds to (`_lib_confedit.number_value`), so one past
         # float64 max (Go-measured: (2^54-1)*2^970 and up, either sign) has
@@ -1347,37 +1443,6 @@ def _default_value_error(value: Any) -> str:
             float(value)
         except OverflowError:
             return "must be a number within float64 range"
-        return ""
-    if isinstance(value, float):
-        return ""
-    return "must be a number"
-
-
-def _state_filter_error(sf: Any) -> str:
-    """Why *sf* is not a ``StateFilter`` the exporter decodes, or ``""``.
-
-    ``StateFilter`` is ``{reasons: []string, severity: string,
-    default_state: string}``, other keys ignored. Oracle-measured: a
-    non-mapping filter, a non-sequence ``reasons`` or one holding a
-    sequence / mapping, and a sequence / mapping ``severity`` /
-    ``default_state`` are refused. Any scalar (null included) is a string.
-    The returned text follows the filter's name.
-    """
-    if sf is None or isinstance(sf, set):
-        return ""
-    if not isinstance(sf, dict):
-        return " must be a mapping"
-    reasons = sf.get("reasons")
-    if reasons is not None:
-        if not isinstance(reasons, list):
-            return ".reasons must be a list"
-        # `tuple`: an item of `!!omap` / `!!pairs`, a one-key mapping to
-        # the exporter.
-        if any(isinstance(r, (list, tuple, dict, set)) for r in reasons):
-            return ".reasons must be a list of strings"
-    for key in ("severity", "default_state"):
-        if isinstance(sf.get(key), (list, dict, set)):
-            return f".{key} must be a string"
     return ""
 
 
