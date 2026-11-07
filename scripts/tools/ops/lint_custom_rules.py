@@ -593,8 +593,7 @@ def main():
                           "platform packs")
             else:
                 label = ", ".join(safe_label(p) for p in args.paths)
-                wanted = (" / ".join("*" + x for x in _lib_consumer_read.YAML_SUFFIXES)
-                          + " files (any case) under the directories given, less --exclude")
+                wanted = _lib_consumer_read.FILES_TO_READ_WANTED
             raise _lib_input.refuse_empty(label, wanted, lang="en")
         print("No YAML files found under: "
               + ", ".join(repr(p) for p in (args.paths or [args.rule_pack_dir])))

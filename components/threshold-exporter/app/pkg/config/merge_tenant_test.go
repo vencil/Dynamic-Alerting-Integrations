@@ -96,41 +96,12 @@ func TestCheckTenantRootKeys(t *testing.T) {
 	}
 }
 
-// TestMergeTenantWithRootDefaults_FlatKVFallback pins the flat key-value
-// fallback (merge_tenant.go "Fallback: a flat key-value document …"): a body
-// with NO top-level `tenants:` wrapper is wrapped under tenantID, preserving the
-// historical loadMergedConfig behavior. This path is documented as load-bearing
-// but was previously unexercised — a wholesale rewrite could silently drop it
-// while the wrapper-form tests stayed green (the false-green trap this suite
-// closes).
-func TestMergeTenantWithRootDefaults_FlatKVFallback(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir() // no _defaults.yaml needed
-
-	body := []byte("container_cpu: \"70\"\nmysql_threads_running: \"60\"\n")
-	merged := MergeTenantWithRootDefaults(dir, "db-a", body)
-
-	tenant, ok := merged.Tenants["db-a"]
-	if !ok {
-		t.Fatalf("flat-KV body should be wrapped under tenantID db-a, got tenants: %v", merged.Tenants)
-	}
-	if got := tenant["container_cpu"].Default; got != "70" {
-		t.Errorf("container_cpu = %q, want \"70\"", got)
-	}
-	if got := tenant["mysql_threads_running"].Default; got != "60" {
-		t.Errorf("mysql_threads_running = %q, want \"60\"", got)
-	}
-	if len(merged.Tenants) != 1 {
-		t.Errorf("only the requested tenant should be present, got: %v", merged.Tenants)
-	}
-}
-
-// TestMergeTenantWithRootDefaults_BodyShapes characterizes how the parse paths
-// (tenants-block, flat-KV fallback, and unparseable/empty) shape the resulting
-// Tenants map. It pins two non-obvious behaviors: the `tenants:` block takes
-// precedence — when it already contains the requested tenantID the flat-KV
-// fallback does NOT fire (no phantom key); and a multi-tenant body merges EVERY
-// tenant in the block, not just tenantID.
+// TestMergeTenantWithRootDefaults_BodyShapes characterizes how the body shapes
+// (tenants-block, a flat body with no `tenants:` wrapper, and
+// unparseable/empty) shape the resulting Tenants map. It pins two non-obvious
+// behaviors: a tenant comes only from a `tenants:` block, so a flat body
+// merges nothing (#3504: no flat key-value re-read under tenantID); and a
+// multi-tenant body merges EVERY tenant in the block, not just tenantID.
 func TestMergeTenantWithRootDefaults_BodyShapes(t *testing.T) {
 	t.Parallel()
 	// shape flattens Tenants to tenant -> sorted metric keys, so each case can
@@ -154,7 +125,7 @@ func TestMergeTenantWithRootDefaults_BodyShapes(t *testing.T) {
 		want     map[string][]string
 	}{
 		{
-			name:     "tenants block, requested id present — no flat-KV phantom",
+			name:     "tenants block, requested id present",
 			tenantID: "db-a",
 			body:     "tenants:\n  db-a:\n    container_cpu: \"70\"\n",
 			want:     map[string][]string{"db-a": {"container_cpu"}},
@@ -164,6 +135,12 @@ func TestMergeTenantWithRootDefaults_BodyShapes(t *testing.T) {
 			tenantID: "db-a",
 			body:     "tenants:\n  db-a:\n    container_cpu: \"70\"\n  db-b:\n    mysql_threads_running: \"60\"\n",
 			want:     map[string][]string{"db-a": {"container_cpu"}, "db-b": {"mysql_threads_running"}},
+		},
+		{
+			name:     "flat body (no tenants: wrapper) merges nothing",
+			tenantID: "db-a",
+			body:     "container_cpu: \"70\"\nmysql_threads_running: \"60\"\n",
+			want:     map[string][]string{},
 		},
 		{
 			name:     "empty body merges nothing",
@@ -311,33 +288,5 @@ func TestMergeParsedTenantWithRootDefaults_MatchesByteVariant(t *testing.T) {
 				t.Errorf("parsed: tenant override missing — Tenants[%q] = %v", tt.tenantID, parsed.Tenants[tt.tenantID])
 			}
 		})
-	}
-}
-
-// TestMergeParsedTenantWithRootDefaults_OmitsFlatKVFallback documents the one
-// intentional difference from the byte entry point: the parsed variant does NOT
-// wrap a flat key-value document under tenantID. That fallback serves the GET
-// read path's legacy on-disk files; the write boundary that uses this variant
-// has already asserted a `tenants.<id>` block is present (gitops.validate's
-// structural check), so the fallback is unreachable for it. A flat body decodes
-// into a ThresholdConfig with no `tenants:`, so the merged result has no entry
-// for the tenant — unlike MergeTenantWithRootDefaults, which synthesises one.
-func TestMergeParsedTenantWithRootDefaults_OmitsFlatKVFallback(t *testing.T) {
-	t.Parallel()
-	dir := t.TempDir() // no _defaults.yaml needed
-
-	flat := "container_cpu: \"70\"\nmysql_threads_running: \"60\"\n" // no tenants: wrapper
-	var tcfg ThresholdConfig
-	if err := yaml.Unmarshal([]byte(flat), &tcfg); err != nil {
-		t.Fatalf("decode body: %v", err)
-	}
-	if got := MergeParsedTenantWithRootDefaults(dir, tcfg); len(got.Tenants) != 0 {
-		t.Errorf("parsed variant must not synthesise a tenant from a flat-KV body, got tenants: %v", got.Tenants)
-	}
-
-	// The byte entry point, by contrast, still applies the flat-KV fallback —
-	// pinning that this refactor left the GET read-path behavior untouched.
-	if _, ok := MergeTenantWithRootDefaults(dir, "db-a", []byte(flat)).Tenants["db-a"]; !ok {
-		t.Error("byte variant should still wrap a flat-KV body under tenantID (GET read-path behavior)")
 	}
 }

@@ -94,8 +94,8 @@ func CheckTenantRootKeys(yamlContent []byte) []string {
 type TenantMerge struct {
 	ThresholdConfig
 
-	// own is the tenant layer per tenant: the body's entry (or the flat-KV
-	// fallback), read-only. The display maps are separate copies.
+	// own is the tenant layer per tenant: the body's entry, read-only. The
+	// display maps are separate copies.
 	own map[string]map[string]ScheduledValue
 	// platform is, per tenant, the root platform files that supplied keys
 	// the display merge carries (merge order), each with those keys.
@@ -106,12 +106,6 @@ type TenantMerge struct {
 	// notice. profileFileOrder is those files in merge order.
 	profileFiles     map[string]map[string]string
 	profileFileOrder []string
-	// flat marks the tenant whose own layer is the flat-KV fallback
-	// (MergeTenantOverRootPlatform): a display-only rebuild the exporter does
-	// not read — it declares no tenant from such a file — so its non-`_`
-	// keys get no threshold value finding (#3267; ADR-038 decision 12 judges
-	// the values the exporter reads).
-	flat map[string]bool
 }
 
 // ResolveAt is ThresholdConfig.ResolveAt without the resolver's log lines —
@@ -176,8 +170,7 @@ type platformSupply struct {
 //     profiles were read here, every `_profile` was reported unknown).
 func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
 	// The tenant layer: one ownLayerKeys per tenant, the judgement
-	// ValidateTenantKeysByTenant gives each — so the two cannot part (the
-	// flat-KV fallback's threshold rule, #3267, included).
+	// ValidateTenantKeysByTenant gives each — so the two cannot part.
 	v := KeyValidation{Notices: m.defaultsKeyNotices()}
 	for tid := range m.own {
 		o := m.ownLayerKeys(tid)
@@ -220,9 +213,7 @@ func (m *TenantMerge) ValidateTenantKeysByTenant() KeyValidationByTenant {
 }
 
 // ownLayerKeys is the key checks on tenant tid's own layer (m.own[tid]),
-// both ValidateTenantKeys and ValidateTenantKeysByTenant take: the
-// flat-KV fallback's tenant (m.flat) gets no threshold value finding —
-// the exporter declares no tenant from such a file (#3267).
+// both ValidateTenantKeys and ValidateTenantKeysByTenant take.
 func (m *TenantMerge) ownLayerKeys(tid string) KeyValidation {
 	layer := ThresholdConfig{
 		Defaults:          m.Defaults,
@@ -230,7 +221,7 @@ func (m *TenantMerge) ownLayerKeys(tid string) KeyValidation {
 		Profiles:          m.Profiles,
 		Tenants:           map[string]map[string]ScheduledValue{tid: m.own[tid]},
 	}
-	return layer.validateOverrideKeysOf(!m.flat[tid])
+	return layer.validateOverrideKeys()
 }
 
 // platformLayerNotices is ValidateTenantKeys' notices about the root
@@ -494,28 +485,13 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 
 	merged := mergeTenantConfig(root.r, tenantCfg)
 
-	// Fallback: a flat key-value document (no `tenants:` wrapper) is wrapped
-	// under tenantID. Preserves the historical loadMergedConfig behavior. This
-	// raw-bytes re-decode lives only on the byte entry point — the parsed
-	// variant's callers (the write boundary) have already asserted a
-	// `tenants.<id>` block, so the fallback is unreachable for them.
-	//
-	// No platform layer applies to it: the exporter declares no tenant from
-	// such a file, so /metrics has nothing to overlay either.
-	if _, exists := merged.Tenants[tenantID]; !exists {
-		var flatKV map[string]ScheduledValue
-		if err := yaml.Unmarshal(tenantData, &flatKV); err == nil && len(flatKV) > 0 {
-			// ⛔ Two maps: ApplyProfiles below writes the profile's keys
-			// into the display one, and own must stay what the tenant wrote.
-			display := make(map[string]ScheduledValue, len(flatKV))
-			for k, v := range flatKV {
-				display[k] = servedValue(k, v) // #3269, as mergeTenantConfig
-			}
-			merged.Tenants[tenantID] = display
-			merged.own[tenantID] = flatKV
-			merged.flat = map[string]bool{tenantID: true}
-		}
-	}
+	// #3504: no fallback. A file whose decode does not declare tenantID gives
+	// tenantID nothing, exactly as /metrics reads it: the exporter takes a
+	// tenant's keys only from a `tenants.<id>` block, and the tenant-config
+	// schema requires that block (`tenants` is its one top-level property).
+	// The flat key-value re-read that used to sit here was a second reader —
+	// a file declaring another tenant came back under tenantID with a key
+	// named `tenants`, and a row /metrics never serves.
 
 	// Silent: ApplyProfiles' WARNs would be written on every request; the
 	// same facts reach the caller through ValidateTenantKeys.
@@ -537,10 +513,8 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 // top-level keys — that decode targets a genuinely different shape, not the same
 // one twice.
 //
-// It deliberately omits the byte variant's flat-KV fallback (that path serves
-// the GET read path's legacy flat on-disk files; a parsed caller has already
-// asserted a `tenants.<id>` block is present). The root merge, tenant merge,
-// and ApplyProfiles are otherwise identical, with ONE difference that comes
+// The root merge, tenant merge, and ApplyProfiles are the byte variant's,
+// with ONE difference that comes
 // from the caller's decode, not from this function: the byte entry point
 // decodes through ParseConfigFile, which drops a threshold key the body writes
 // as null (#2518), while the write gate (gitops.validate) hands in a plain
@@ -568,9 +542,9 @@ func MergeParsedTenantWithRootDefaults(configDir string, tenantCfg ThresholdConf
 // entry points: it builds a fresh ThresholdConfig, overlays the root defaults
 // carrier (Defaults + OptionalOverrides + StateFilters) from root, then
 // per tenant the root platform files' `tenants:` entries, then the
-// already-decoded tenantCfg's `tenants:` block. It does NOT run the flat-KV
-// fallback or ApplyProfiles — the entry points layer those on so each
-// preserves its exact step ordering.
+// already-decoded tenantCfg's `tenants:` block. It does NOT run
+// ApplyProfiles — the entry points layer it on so each preserves its exact
+// step ordering.
 //
 // The platform layer is the flat plane's (/metrics), rule for rule, except
 // that this core does not carry `_metadata` (below):
