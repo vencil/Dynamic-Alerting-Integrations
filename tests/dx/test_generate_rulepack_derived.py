@@ -264,3 +264,36 @@ def test_only_a_label_key_counts_not_text_inside_a_label_value():
 def test_a_near_miss_filter_value_is_refused():
     with pytest.raises(grd.ShapeError):
         grd.clause_count('x unless on(tenant) (user_state_filter{filter=~"mainten.+"} == 1)')
+
+
+@pytest.mark.parametrize("expr", [
+    # A regex / negative matcher selects the maintenance series without naming it
+    # (the adversarial-review escape that retired check_maintenance_symmetry's
+    # token hygiene would otherwise have reopened, #1200).
+    'up == 0\nunless on(tenant) (user_state_filter{filter=~"main.*"} == 1)',
+    'up == 0\nunless on(tenant) (user_state_filter{filter!="container_crashloop"} == 1)',
+    'up == 0\nunless on(tenant) (user_state_filter{filter!~"container_.*"} == 1)',
+    'up == 0\nunless on(tenant) user_state_filter',
+    'up == 0\nunless on(tenant) (user_state_filter{severity="critical"} == 1)',
+    'up == 0\nunless on(tenant) (user_state_filter{filter="x", tenant!=""} == 1)',
+    'up == 0\nunless on(tenant) ({__name__="user_state_filter", filter="maintenance"} == 1)',
+])
+def test_a_user_state_filter_that_does_not_name_one_filter_is_refused(expr):
+    with pytest.raises(grd.ShapeError, match="does not select one filter by name"):
+        grd.clause_count(expr)
+
+
+def test_a_page_alert_with_a_regex_maintenance_matcher_fails_the_check(tmp_path):
+    """End to end on a pack: the label says page, the expr mutes by regex."""
+    pack = tmp_path / "rule-pack-x.yaml"
+    pack.write_text(
+        "groups:\n- name: x\n  rules:\n  - alert: XDown\n"
+        "    expr: |\n      up == 0\n      unless on(tenant) (user_state_filter{filter=~\"main.*\"} == 1)\n"
+        "    labels:\n      maintenance: page\n      tenant: \"{{ $labels.tenant }}\"\n",
+        encoding="utf-8")
+    _, problems = grd.sync_text(pack.read_text(encoding="utf-8"), str(pack))
+    assert any("does not select one filter by name" in p for p in problems), problems
+
+
+def test_a_user_state_filter_in_a_comment_is_ignored():
+    assert grd.clause_count('x > 1\n# user_state_filter{filter=~"main.*"}') == 0

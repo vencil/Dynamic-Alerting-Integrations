@@ -1535,7 +1535,7 @@ RULE_PACKS = RuleSource(
 #: declaration: the rule-tree contracts (``scripts/tools/lint/_rule_tree.py``
 #: — alert_source RESERVED, heartbeat uniqueness, runbook presence), the
 #: platform-data catalogue, the tenant-pack lints (threshold registry,
-#: maintenance symmetry, vmalert coverage) and ``operator-generate`` all read
+#: maintenance clause, vmalert coverage) and ``operator-generate`` all read
 #: it; none of them names a pack itself. Members are ``RULE_PACKS.member``
 #: names. "Required" (always deployed) is a different property: the
 #: operational and liveness packs are required but are tenant packs.
@@ -1560,7 +1560,7 @@ def is_platform_pack(name: "str | None") -> bool:
 def tenant_rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
     """``rule_pack_files`` less the declared platform packs (``PLATFORM_PACKS``):
     the packs a TENANT-pack contract judges — the custom-rule policy, the
-    threshold contract, maintenance symmetry, vmalert coverage. Same refusals as
+    threshold contract, the maintenance clause, vmalert coverage. Same refusals as
     ``rule_pack_files``."""
     return [p for p in rule_pack_files(rule_packs)
             if not is_platform_pack(RULE_PACKS.member(p))]

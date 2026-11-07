@@ -42,6 +42,12 @@ Checking (``--check``)
      hold exactly one canonical clause for ``mute`` and none for ``page``.
   3. Every ``filter="maintenance"`` spelling is the canonical clause: a variant
      (``=~``, ``== bool 1``, another join) is refused instead of being missed.
+  4. Every ``user_state_filter`` reference selects ONE filter by name:
+     ``user_state_filter{filter="<name>"}``, nothing else in the braces. A
+     regex or negative matcher (``filter=~"main.*"``, ``filter!="x"``), another
+     label, or no selector can match the maintenance series without spelling
+     its name, and would mute a ``page`` alert in a maintenance window.
+     Structural, so no list of the other filters' names is kept here.
 
 Exit codes: 0 ok / wrote, 1 drift or a violation, 2 caller error (a pack the
 loader refuses, an expr shape this tool does not understand).
@@ -86,6 +92,10 @@ _CLAUSE = re.compile(
     r'\s*==\s*1\s*\)')
 #: Any reference to the maintenance filter, canonical or not.
 _ANY_MAINTENANCE = re.compile(r'filter\s*!?[=~]+\s*"[^"]*mainten')
+#: The one shape a ``user_state_filter`` reference may take (check 4).
+_USF_SELECTOR = re.compile(r'user_state_filter\s*\{\s*filter\s*=\s*"[^"]*"\s*,?\s*\}')
+#: The metric name anywhere, code or string (``{__name__="user_state_filter"}``).
+_USF_NAME = re.compile(r'user_state_filter')
 _OR = re.compile(r'(?<![\w:])or(?![\w:])')
 _TOKEN = re.compile(r'[a-zA-Z_:][a-zA-Z0-9_:]*')
 
@@ -101,9 +111,10 @@ class ShapeError(ValueError):
 
 # ── PromQL text helpers ──────────────────────────────────────────────────────
 
-def _mask(expr: str) -> str:
+def _mask(expr: str, strings: bool = True) -> str:
     """Blank quoted strings and ``#`` comments (position-preserving) so paren
-    depth and ``or`` scans cannot be fooled by their contents."""
+    depth and ``or`` scans cannot be fooled by their contents. With
+    ``strings=False`` only comments are blanked."""
     out: list[str] = []
     quote = ""
     esc = False
@@ -125,7 +136,7 @@ def _mask(expr: str) -> str:
                 quote = ""
                 out.append(ch)
                 continue
-            out.append(" ")
+            out.append(" " if strings else ch)
             continue
         if ch in "\"'`":
             quote = ch
@@ -187,6 +198,14 @@ def clause_count(expr: str) -> int:
     """Canonical clauses in *expr*; raises ShapeError on a non-canonical spelling."""
     masked = _mask(expr)
     canonical = _clauses(expr)
+    code = _mask(expr, strings=False)
+    selectors = [m.span() for m in _USF_SELECTOR.finditer(code)]
+    for m in _USF_NAME.finditer(code):
+        if not any(s <= m.start() and m.end() <= e for s, e in selectors):
+            raise ShapeError(f"`user_state_filter` near {expr[m.start():m.start() + 50]!r} does not select "
+                             f'one filter by name — write user_state_filter{{filter="<name>"}}: a regex, '
+                             f"negative or other matcher can select the maintenance series and mute "
+                             f"the alert in a maintenance window")
     for m in _ANY_MAINTENANCE.finditer(expr):
         if masked[m.start():m.end()].strip() == "":
             continue  # inside a comment or string
