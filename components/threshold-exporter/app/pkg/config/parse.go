@@ -129,8 +129,18 @@ const entryDefault = -1
 // both ask it, so the analysis cannot disagree with what is served. Reading
 // the VALUE instead cannot tell two entries apart that write the same value.
 func (sv ScheduledValue) entryAtMinute(minute int, logf func(format string, args ...any)) int {
-	for i, o := range sv.Overrides {
-		if start, end, ok := parseTimeWindow(o.Window, logf); ok && windowContains(start, end, minute) {
+	return firstWindowAt(len(sv.Overrides), func(i int) (int, int, bool) {
+		return parseTimeWindow(sv.Overrides[i].Window, logf)
+	}, minute)
+}
+
+// firstWindowAt is the rule entryAtMinute reads a schedule by: the index of
+// the FIRST of n windows (window(i): its start, end, and whether it parses)
+// that contains minute, else entryDefault. DeadEntries asks it with windows
+// it parsed once; entryAtMinute parses as it goes — one rule either way.
+func firstWindowAt(n int, window func(i int) (start, end int, ok bool), minute int) int {
+	for i := 0; i < n; i++ {
+		if start, end, ok := window(i); ok && windowContains(start, end, minute) {
 			return i
 		}
 	}
@@ -177,13 +187,15 @@ func parseTimeWindow(window string, logf func(format string, args ...any)) (star
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	parts := strings.SplitN(window, "-", 2)
-	if len(parts) != 2 {
+	// strings.Cut, not SplitN: the same split at the first "-", without the
+	// slice SplitN allocates on every reading of a window (#3502 bench gate).
+	from, to, found := strings.Cut(window, "-")
+	if !found {
 		logf("WARN: invalid time window format %q", window)
 		return 0, 0, false
 	}
-	startH, startM, err1 := parseHHMM(parts[0])
-	endH, endM, err2 := parseHHMM(parts[1])
+	startH, startM, err1 := parseHHMM(from)
+	endH, endM, err2 := parseHHMM(to)
 	if err1 != nil || err2 != nil {
 		logf("WARN: invalid time window %q: start=%v end=%v", window, err1, err2)
 		return 0, 0, false
@@ -215,15 +227,16 @@ func ParseHHMM(s string) (int, int, error) { return parseHHMM(s) }
 // parseHHMM parses "HH:MM" into hour and minute.
 func parseHHMM(s string) (int, int, error) {
 	s = strings.TrimSpace(s)
-	parts := strings.SplitN(s, ":", 2)
-	if len(parts) != 2 {
+	// strings.Cut: SplitN's split without its slice (#3502 bench gate).
+	hh, mm, found := strings.Cut(s, ":")
+	if !found {
 		return 0, 0, fmt.Errorf("invalid HH:MM format: %q", s)
 	}
-	h, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+	h, err := strconv.Atoi(strings.TrimSpace(hh))
 	if err != nil || h < 0 || h > 23 {
 		return 0, 0, fmt.Errorf("invalid hour in %q", s)
 	}
-	m, err := strconv.Atoi(strings.TrimSpace(parts[1]))
+	m, err := strconv.Atoi(strings.TrimSpace(mm))
 	if err != nil || m < 0 || m > 59 {
 		return 0, 0, fmt.Errorf("invalid minute in %q", s)
 	}

@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -117,25 +118,49 @@ func DeadEntryReasons() []string {
 // schedule is served as written, after it none of it is — no entry is
 // reachable after it that was not before (the key's own verdict).
 func (sv ScheduledValue) DeadEntries() []DeadEntry {
-	if len(sv.Overrides) == 0 {
+	n := len(sv.Overrides)
+	if n == 0 {
 		return nil
 	}
-	cuts := sv.dayCuts()
-	live := map[int]bool{}
+	// Each window parsed once, on the stack for the schedules people write
+	// (#3502 bench gate: the load judges every scheduled key, so a reading
+	// that re-parsed each window per piece of the day cost allocations on
+	// every reload).
+	type window struct {
+		start, end int
+		ok         bool
+	}
+	var wbuf [8]window
+	var cbuf [2 + 2*8]int
+	ws, cuts := wbuf[:0], append(cbuf[:0], 0, MinutesPerDay)
+	for _, o := range sv.Overrides {
+		start, end, ok := parseTimeWindow(o.Window, nil)
+		ws = append(ws, window{start, end, ok})
+		if ok {
+			cuts = append(cuts, start, end)
+		}
+	}
+	sort.Ints(cuts)
+	at := func(i int) (int, int, bool) { return ws[i].start, ws[i].end, ws[i].ok }
+	var lbuf [8 + 1]bool // live[i+1]: entry i serves some minute; live[0]: the default
+	live := lbuf[:0]
+	for i := 0; i <= n; i++ {
+		live = append(live, false)
+	}
 	for i := 0; i+1 < len(cuts); i++ {
 		if cuts[i] != cuts[i+1] {
-			live[sv.entryAtMinute(cuts[i], nil)] = true
+			live[firstWindowAt(n, at, cuts[i])+1] = true
 		}
 	}
 	var out []DeadEntry
-	if !live[entryDefault] && sv.Default != "" {
+	if !live[0] && sv.Default != "" {
 		out = append(out, DeadEntry{Entry: "default", Value: sv.Default, Reason: DeadEntryDefaultCovered})
 	}
 	for i, o := range sv.Overrides {
-		if _, _, ok := parseTimeWindow(o.Window, nil); !ok || live[i] {
+		if !ws[i].ok || live[i+1] {
 			continue
 		}
-		out = append(out, DeadEntry{Entry: fmt.Sprintf("overrides[%d]", i), Window: o.Window, Value: o.Value,
+		out = append(out, DeadEntry{Entry: "overrides[" + strconv.Itoa(i) + "]", Window: o.Window, Value: o.Value,
 			Reason: DeadEntryWindowCovered})
 	}
 	return out
@@ -174,7 +199,8 @@ func deadEntriesOfView(view map[string]any, notServed map[string]NotServedKey) m
 		if ns, named := notServed[k]; named && !notServedKeyServed(ns.Reason) {
 			continue
 		}
-		if _, scheduled := m["overrides"]; !scheduled {
+		raw, scheduled := m["overrides"]
+		if !scheduled || !mayHaveDeadEntry(m["default"], raw) {
 			continue
 		}
 		sv, ok := scheduledValueFromRaw(v)
@@ -189,6 +215,37 @@ func deadEntriesOfView(view map[string]any, notServed map[string]NotServedKey) m
 		}
 	}
 	return out
+}
+
+// mayHaveDeadEntry is deadEntriesOfView's cheap first reading of a schedule
+// as shown (#3502 bench gate: the full decode, scheduledValueFromRaw, is a
+// YAML round-trip per key, on every effective resolve): its windows alone,
+// when each is a string, through DeadEntries itself — whether an entry is
+// dead depends on the windows only. Values are left out; the caller decodes
+// the value whole for them when this says yes. Anything it cannot read so
+// (a window that is not a string, overrides that are not a list of
+// mappings) is a yes: the full decode decides.
+func mayHaveDeadEntry(def, overrides any) bool {
+	list, ok := overrides.([]any)
+	if !ok {
+		return true
+	}
+	sv := ScheduledValue{Overrides: make([]TimeWindowOverride, 0, len(list))}
+	if def != nil {
+		sv.Default = "x" // a written default is an entry; its value does not matter here
+	}
+	for _, e := range list {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return true
+		}
+		w, ok := m["window"].(string)
+		if !ok {
+			return true
+		}
+		sv.Overrides = append(sv.Overrides, TimeWindowOverride{Window: w})
+	}
+	return len(sv.DeadEntries()) > 0
 }
 
 // ScheduleCuts is the minutes of the UTC day (sorted, 0 always first) at
