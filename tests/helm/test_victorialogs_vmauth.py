@@ -242,28 +242,78 @@ def test_render_baseline_restates_the_registry() -> None:
     assert all(c.get("existingSecret") for c in baseline), "the baseline must name a Secret per consumer"
 
 
+
 def test_upgrade_checks_named_secrets_exist_before_recreating_the_pod() -> None:
     """A named Secret that is missing (or lacks `password`) is an outage on
     upgrade: the strategy is Recreate, so the running pod goes first and the new
     one stays in CreateContainerConfigError. The helper looks the Secrets up —
-    but only once this release's Deployment exists, which is both the case with
-    a pod to lose and proof that `lookup` reaches a cluster (it returns empty
+    only once this release's Deployment exists, which is both the case with a
+    pod to lose and proof that `lookup` reaches a cluster (it returns empty
     under `helm template`, so offline renders must keep working).
 
-    Firing needs a real API server; measured on k3s v1.31 (PR description):
-    missing Secret / missing key / empty value each fail `helm upgrade`, a fresh
-    install does not, and removing the guard lets the upgrade through. What a
-    render can pin is the wiring, below, and that offline renders still pass."""
+    `lookup` needs a real API server, so this pins the thin wiring around it;
+    the judgement itself is exercised below with fake lookup results. Measured
+    on k3s v1.31 (PR description): missing Secret / missing key / empty value
+    each fail `helm upgrade`, a fresh install does not, and a deployer without
+    `get secrets` fails every upgrade unless checkSecretsOnUpgrade=false."""
     tmpl = (CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
-    block = tmpl[tmpl.index("{{- define \"victorialogs.authConsumers\""):]
-    block = block[:block.index("{{- end }}")]
-    gate = re.search(r'\{\{- if lookup "apps/v1" "Deployment" \.Release\.Namespace '
-                     r'\(include "victorialogs\.name" \.\) -\}\}(.*?)\{\{- toYaml \$out', block, re.S)
-    assert gate, "the Secret check must be gated on this release's live Deployment"
-    body = gate.group(1)
-    assert re.search(r'\{\{- range \$out -\}\}\s*\{\{- \$secret := lookup "v1" "Secret" '
-                     r'\$\.Release\.Namespace \(toString \.existingSecret\)', body), \
-        "every consumer the Deployment mounts ($out) must be looked up"
-    assert 'index ($secret.data | default dict) "password"' in body, "the `password` key must be checked"
-    assert "{{- fail" in body
+    block = tmpl[tmpl.index('{{- define "victorialogs.authConsumers"'):]
+    block = block[:block.index("{{- toYaml $out")]
+    gate = re.search(
+        r'\{\{- if and \.Values\.auth\.checkSecretsOnUpgrade \(lookup "apps/v1" "Deployment" '
+        r'\.Release\.Namespace \(include "victorialogs\.name" \.\)\) -\}\}\n'
+        r'\{\{- \$found := dict -\}\}\n'
+        r'\{\{- range \$out -\}\}\n'
+        r'\{\{- \$_ := set \$found \(toString \.existingSecret\) \(lookup "v1" "Secret" '
+        r'\$\.Release\.Namespace \(toString \.existingSecret\)\) -\}\}\n'
+        r'\{\{- end -\}\}\n'
+        r'\{\{- \$broken := include "victorialogs\.secretProblems" '
+        r'\(dict "consumers" \$out "secrets" \$found\) -\}\}\n'
+        r'\{\{- if \$broken -\}\}\n\{\{- fail ', block)
+    assert gate, "the upgrade gate must look up every mounted Secret and fail on any problem"
+    assert _values()["auth"]["checkSecretsOnUpgrade"] is True, "the check must be on by default"
     assert _helm().returncode == 0, "offline render must not treat an unreachable cluster as missing Secrets"
+
+
+_PROBLEMS_TEMPLATE = (
+    'problems: {{ include "victorialogs.secretProblems" '
+    '(dict "consumers" .Values.consumers "secrets" .Values.secrets) | quote }}\n'
+)
+
+
+def _secret_problems(tmp_path: Path, consumers: list[dict], secrets: dict) -> str:
+    """Run the chart's own victorialogs.secretProblems with fake lookup results,
+    in a throwaway chart that holds a copy of _helpers.tpl and nothing else."""
+    chart = tmp_path / "probe"
+    (chart / "templates").mkdir(parents=True)
+    (chart / "Chart.yaml").write_text("apiVersion: v2\nname: victorialogs\nversion: 0.0.0\n", encoding="utf-8")
+    (chart / "templates" / "_helpers.tpl").write_text(
+        (CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8"), encoding="utf-8")
+    (chart / "templates" / "probe.yaml").write_text(_PROBLEMS_TEMPLATE, encoding="utf-8")
+    values = tmp_path / "v.yaml"
+    values.write_text(yaml.safe_dump({"consumers": consumers, "secrets": secrets}), encoding="utf-8")
+    out = subprocess.run(["helm", "template", "p", str(chart), "-f", str(values)],
+                         capture_output=True, text=True, encoding="utf-8", timeout=60, check=True)
+    return yaml.safe_load(out.stdout.split("---", 1)[1].split("\n", 2)[2])["problems"]
+
+
+def test_secret_problems_flags_missing_keyless_and_empty_secrets(tmp_path: Path) -> None:
+    consumers = [{"name": n, "existingSecret": f"s-{n}"} for n in ("ok", "gone", "nokey", "empty", "nodata")]
+    secrets = {
+        "s-ok": {"data": {"password": "YWJj"}},
+        # s-gone: absent, as `lookup` answers NotFound (an empty map)
+        "s-nokey": {"data": {"pw": "YWJj"}},
+        "s-empty": {"data": {"password": ""}},
+        "s-nodata": {"metadata": {"name": "s-nodata"}},
+    }
+    assert _secret_problems(tmp_path, consumers, secrets) == (
+        'gone: Secret "s-gone" not found; '
+        'nokey: Secret "s-nokey" has no non-empty key `password`; '
+        'empty: Secret "s-empty" has no non-empty key `password`; '
+        'nodata: Secret "s-nodata" has no non-empty key `password`')
+
+
+def test_secret_problems_is_empty_when_every_secret_serves(tmp_path: Path) -> None:
+    consumers = [{"name": "a", "existingSecret": "s-a"}, {"name": "b", "existingSecret": "s-b"}]
+    secrets = {"s-a": {"data": {"password": "YWJj"}}, "s-b": {"data": {"password": "ZGVm", "x": "eQ=="}}}
+    assert _secret_problems(tmp_path, consumers, secrets) == ""

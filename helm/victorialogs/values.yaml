@@ -124,6 +124,15 @@ extraArgs: []
 # ⚠️ observe is NOT a security boundary — it is the migration step.
 auth:
   mode: enforce
+  # On `helm upgrade` (this release's Deployment exists), look up every Secret
+  # auth.consumers names and refuse when one is missing or has no non-empty
+  # `password`: the strategy is Recreate, so the running pod would be deleted
+  # and the new one would never start. Offline renders (`helm template`,
+  # Argo CD) and first installs skip it. ⚠️ Needs `get secrets` in this
+  # namespace: a deployer without it fails EVERY upgrade with "forbidden" —
+  # set false for such a deployer (e.g. HELM_DRIVER=configmap with a Role that
+  # leaves Secrets out) and check the Secrets yourself before upgrading.
+  checkSecretsOnUpgrade: true
   # VictoriaLogs' own listener, on loopback only.
   backendPort: 9429
   # vmauth's own /health and /metrics (its per-user request counters).

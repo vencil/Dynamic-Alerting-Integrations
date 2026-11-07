@@ -83,20 +83,35 @@ release's Deployment already exists: that is the case with a pod to lose,
 and it proves `lookup` is talking to a cluster (it returns empty under
 `helm template` and client-side dry-run, so offline and GitOps renders are
 unaffected). Applies in observe too — a Secret named there is mounted the
-same way. */ -}}
-{{- if lookup "apps/v1" "Deployment" .Release.Namespace (include "victorialogs.name" .) -}}
-{{- $broken := list -}}
+same way. The judgement lives in victorialogs.secretProblems so a test can
+feed it lookup results without a cluster. */ -}}
+{{- if and .Values.auth.checkSecretsOnUpgrade (lookup "apps/v1" "Deployment" .Release.Namespace (include "victorialogs.name" .)) -}}
+{{- $found := dict -}}
 {{- range $out -}}
-{{- $secret := lookup "v1" "Secret" $.Release.Namespace (toString .existingSecret) -}}
+{{- $_ := set $found (toString .existingSecret) (lookup "v1" "Secret" $.Release.Namespace (toString .existingSecret)) -}}
+{{- end -}}
+{{- $broken := include "victorialogs.secretProblems" (dict "consumers" $out "secrets" $found) -}}
+{{- if $broken -}}
+{{- fail (printf "auth.consumers name Secrets this namespace (%s) cannot serve — %s. The Deployment uses Recreate, so upgrading now would delete the running store pod and leave the new one unable to start. Create the Secret(s) with key `password` first, then re-run. See docs/internal/platform-log-aggregation-runbook.md §1.2 (#1295)" $.Release.Namespace $broken) -}}
+{{- end -}}
+{{- end -}}
+{{- toYaml $out -}}
+{{- end }}
+
+{{/*
+victorialogs (#1295). Given {consumers: [...], secrets: {name: lookup result}},
+one "; "-joined line per consumer whose Secret is missing (lookup returned
+empty) or has no non-empty `password`; empty when all are usable.
+*/}}
+{{- define "victorialogs.secretProblems" -}}
+{{- $broken := list -}}
+{{- range .consumers -}}
+{{- $secret := index $.secrets (toString .existingSecret) | default dict -}}
 {{- if not $secret -}}
 {{- $broken = append $broken (printf "%s: Secret %q not found" .name .existingSecret) -}}
 {{- else if not (index ($secret.data | default dict) "password") -}}
 {{- $broken = append $broken (printf "%s: Secret %q has no non-empty key `password`" .name .existingSecret) -}}
 {{- end -}}
 {{- end -}}
-{{- if $broken -}}
-{{- fail (printf "auth.consumers name Secrets this namespace (%s) cannot serve — %s. The Deployment uses Recreate, so upgrading now would delete the running store pod and leave the new one unable to start. Create the Secret(s) with key `password` first, then re-run. See docs/internal/platform-log-aggregation-runbook.md §1.2 (#1295)" $.Release.Namespace (join "; " $broken)) -}}
-{{- end -}}
-{{- end -}}
-{{- toYaml $out -}}
+{{- join "; " $broken -}}
 {{- end }}

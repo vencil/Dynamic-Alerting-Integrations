@@ -1,13 +1,19 @@
-# promtool behavioural test for VectorStoreSinkDroppingEvents (#1295):
-#   1) FIRES once a store sink has dropped batches for the 5m hold-down, one
-#      alert per sink (pod / instance / job aggregated away), critical.
-#   2) does NOT fire before the hold-down (catches a SHORTER `for`).
-#   3) ignores intentional discards, sinks that are not store sinks, and
-#      non-sink components that happen to carry a store sink's id.
-#   4) CLEARS once the drops have left the 5m rate window.
-#   5) FIRES on a single refused batch: Vector creates the counter at the
-#      first drop, already non-zero, so rate() alone never sees it.
-#   6) covers an operator-added store sink named victorialogs_<x>.
+# promtool behavioural test for VectorStoreSinkDroppingEvents (#1295).
+# Every unintentional drop by a store sink is lost evidence, so the alert pages
+# on ONE refused batch, with no hold-down; each case below is a way that one
+# batch can show up in the counter, or a way an old drop could re-page:
+#   1) drops on two pods → ONE alert per sink; clears 10m after the last drop
+#      (Prometheus 3 ranges are left-open: one step stays visible for 10m
+#      minus one scrape interval, hence the 18m/19m and 49m/50m pairs);
+#      intentional discards, non-store sinks and non-sink components carrying a
+#      store sink's id are ignored.
+#   2) a tenant projection sink fires on its own id.
+#   3) a counter BORN at the first drop (Vector creates it lazily, non-zero):
+#      rate()/increase() never see it; fires anyway, for 10m. Also proves an
+#      additionalSinks store sink named victorialogs_<x> is watched.
+#   4) a counter that existed for long moves by ONE batch: fires for 10m.
+#   5) a scrape gap shorter than an hour with no new drop: does NOT re-page.
+#   6) Vector restarts in place (stale, then reset) and drops one batch: fires.
 # Run: promtool test rules tests/rulepacks/platform-vector-store-sink-dropped_test.yaml
 rule_files:
   - ../../rule-packs/rule-pack-platform.yaml
@@ -15,28 +21,24 @@ rule_files:
 evaluation_interval: 1m
 
 tests:
-  # The 0:0 sink is refused on two pods from t=0 to t=10m, then recovers. The
-  # condition is true from 1m, so it fires from 6m; 5m is the `for: 5m`
-  # discriminator. A tenant sink drops intentionally, a SIEM sink drops
-  # unintentionally: neither is a store sink refused by the store.
   - interval: 1m
     name: store-sink-refused-fires-once-per-sink-then-clears
     input_series:
       - series: 'vector_component_discarded_events_total{component_id="victorialogs", component_kind="sink", intentional="false", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '0+10x10 100x20'
+        values: '0+10x10 100x30'
       - series: 'vector_component_discarded_events_total{component_id="victorialogs", component_kind="sink", intentional="false", pod="vector-b", instance="10.0.0.2:9598", job="vector-metrics"}'
-        values: '0+5x10 50x20'
+        values: '0+5x10 50x30'
       - series: 'vector_component_discarded_events_total{component_id="vl_tenant_1000", component_kind="sink", intentional="true", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '0+10x30'
+        values: '0+10x40'
       - series: 'vector_component_discarded_events_total{component_id="siem_sink", component_kind="sink", intentional="false", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '0+10x30'
+        values: '0+10x40'
       - series: 'vector_component_discarded_events_total{component_id="victorialogs", component_kind="transform", intentional="false", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
-        values: '0+10x30'
+        values: '0+10x40'
     alert_rule_test:
-      - eval_time: 5m
+      - eval_time: 0m
         alertname: VectorStoreSinkDroppingEvents
         exp_alerts: []
-      - eval_time: 8m
+      - eval_time: 2m
         alertname: VectorStoreSinkDroppingEvents
         exp_alerts:
           - exp_labels:
@@ -55,18 +57,36 @@ tests:
                 (platform-log-aggregation-runbook.md §1.2), and the Vector
                 logs for the response code.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
-      - eval_time: 16m
+      - eval_time: 18m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts:
+          - exp_labels:
+              component_id: victorialogs
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Vector sink victorialogs lost events the log store refused"
+              description: |
+                VictoriaLogs (through its vmauth) refused batches this sink
+                sent, and Vector drops a refused batch without retrying.
+                Every event in it is lost, including the audit trail and the
+                revocation evidence. Most likely the Vector side sends no or
+                the wrong credentials: check victorialogs.auth.existingSecret
+                in the vector chart against the store's consumer `vector`
+                (platform-log-aggregation-runbook.md §1.2), and the Vector
+                logs for the response code.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+      - eval_time: 19m
         alertname: VectorStoreSinkDroppingEvents
         exp_alerts: []
 
-  # A tenant projection sink refused by the store fires on its own id.
   - interval: 1m
     name: tenant-store-sink-refused-fires
     input_series:
       - series: 'vector_component_discarded_events_total{component_id="vl_tenant_1001", component_kind="sink", intentional="false", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
         values: '0+3x15'
     alert_rule_test:
-      - eval_time: 10m
+      - eval_time: 5m
         alertname: VectorStoreSinkDroppingEvents
         exp_alerts:
           - exp_labels:
@@ -86,21 +106,34 @@ tests:
                 logs for the response code.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
 
-  # One refused batch, nothing after: the series is born at 4 and never moves.
-  # rate()/increase() see no increase; the first-appearance clause holds for
-  # 10m, so the alert fires after the 5m hold and clears once the 10m offset
-  # reaches the first sample. Starts at 2m so `offset 10m` cannot see a sample.
-  # The id also proves the victorialogs_<x> prefix (additionalSinks) is watched.
+  # Born at 4 at 2m, never moves. Fires from its first sample until the 1h
+  # look-back (offset 10m) reaches it at 12m.
   - interval: 1m
     name: single-refused-batch-on-new-counter-fires
     input_series:
       - series: 'vector_component_discarded_events_total{component_id="victorialogs_secondary", component_kind="sink", intentional="false", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
         values: '_ _ 4x30'
     alert_rule_test:
-      - eval_time: 6m
+      - eval_time: 2m
         alertname: VectorStoreSinkDroppingEvents
-        exp_alerts: []
-      - eval_time: 8m
+        exp_alerts:
+          - exp_labels:
+              component_id: victorialogs_secondary
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Vector sink victorialogs_secondary lost events the log store refused"
+              description: |
+                VictoriaLogs (through its vmauth) refused batches this sink
+                sent, and Vector drops a refused batch without retrying.
+                Every event in it is lost, including the audit trail and the
+                revocation evidence. Most likely the Vector side sends no or
+                the wrong credentials: check victorialogs.auth.existingSecret
+                in the vector chart against the store's consumer `vector`
+                (platform-log-aggregation-runbook.md §1.2), and the Vector
+                logs for the response code.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+      - eval_time: 11m
         alertname: VectorStoreSinkDroppingEvents
         exp_alerts:
           - exp_labels:
@@ -122,3 +155,108 @@ tests:
       - eval_time: 13m
         alertname: VectorStoreSinkDroppingEvents
         exp_alerts: []
+
+  # An old counter (born at 0m, its own first-sight page long over) moves 4→5
+  # once at 41m. A 5m hold-down could never be met by one increment.
+  - interval: 1m
+    name: single-refused-batch-on-existing-counter-fires
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="victorialogs", component_kind="sink", intentional="false", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '4x40 5x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts: []
+      - eval_time: 41m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts:
+          - exp_labels:
+              component_id: victorialogs
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Vector sink victorialogs lost events the log store refused"
+              description: |
+                VictoriaLogs (through its vmauth) refused batches this sink
+                sent, and Vector drops a refused batch without retrying.
+                Every event in it is lost, including the audit trail and the
+                revocation evidence. Most likely the Vector side sends no or
+                the wrong credentials: check victorialogs.auth.existingSecret
+                in the vector chart against the store's consumer `vector`
+                (platform-log-aggregation-runbook.md §1.2), and the Vector
+                logs for the response code.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+      - eval_time: 49m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts:
+          - exp_labels:
+              component_id: victorialogs
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Vector sink victorialogs lost events the log store refused"
+              description: |
+                VictoriaLogs (through its vmauth) refused batches this sink
+                sent, and Vector drops a refused batch without retrying.
+                Every event in it is lost, including the audit trail and the
+                revocation evidence. Most likely the Vector side sends no or
+                the wrong credentials: check victorialogs.auth.existingSecret
+                in the vector chart against the store's consumer `vector`
+                (platform-log-aggregation-runbook.md §1.2), and the Vector
+                logs for the response code.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+      - eval_time: 50m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts: []
+
+  # Scrape gap of 15m (stale marker, then nothing) with no new drop: the old
+  # non-zero counter must not look new when it comes back.
+  - interval: 1m
+    name: scrape-gap-does-not-repage-an-old-drop
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="victorialogs", component_kind="sink", intentional="false", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '4x20 stale _x14 4x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts: []
+      - eval_time: 37m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts: []
+      - eval_time: 41m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts: []
+      - eval_time: 47m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts: []
+
+  # Vector restarts in place: stale, then the counter comes back at 1 (one
+  # refused batch after the restart). increase() counts the reset.
+  - interval: 1m
+    name: restart-then-one-refused-batch-fires
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="victorialogs", component_kind="sink", intentional="false", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '10x20 stale 1x40'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts: []
+      - eval_time: 23m
+        alertname: VectorStoreSinkDroppingEvents
+        exp_alerts:
+          - exp_labels:
+              component_id: victorialogs
+              severity: critical
+              alert_source: platform
+            exp_annotations:
+              summary: "Vector sink victorialogs lost events the log store refused"
+              description: |
+                VictoriaLogs (through its vmauth) refused batches this sink
+                sent, and Vector drops a refused batch without retrying.
+                Every event in it is lost, including the audit trail and the
+                revocation evidence. Most likely the Vector side sends no or
+                the wrong credentials: check victorialogs.auth.existingSecret
+                in the vector chart against the store's consumer `vector`
+                (platform-log-aggregation-runbook.md §1.2), and the Vector
+                logs for the response code.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"

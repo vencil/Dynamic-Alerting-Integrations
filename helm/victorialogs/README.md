@@ -66,6 +66,12 @@ consumers you do not run. Each consumer chart sends its credential from
 set `auth.mode: observe` explicitly, wire every consumer, check they
 authenticate, then drop it — `docs/internal/platform-log-aggregation-runbook.md` §1.2.
 
+On `helm upgrade` the chart also looks up every Secret `auth.consumers` names
+and refuses if one is missing or has no non-empty `password` — the strategy is
+Recreate, so the running pod would go first and the new one would never start.
+`helm template` and first installs skip this. The lookup needs `get secrets` in
+the namespace; a deployer without it sets `auth.checkSecretsOnUpgrade: false`.
+
 ## Install
 
 ```bash

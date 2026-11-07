@@ -207,6 +207,10 @@ render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費�
    指名的 Secret：不存在、或沒有非空的 `password` key，就拒絕升級並列出
    全部。`helm template`、client 端 dry-run 與 Argo CD 查不到叢集，不做這項
    檢查；首次安裝也不做（沒有舊 pod 可丟，新 pod 起不來會直接看到）。
+   ⚠️ 這項檢查要讀 Secret：部署身分沒有這個 namespace 的 `get secrets`
+   （例如 `HELM_DRIVER=configmap` 配上不含 Secret 的 Role），每次升級都會以
+   `forbidden` 失敗。這種部署者設 `auth.checkSecretsOnUpgrade: false`，
+   升級前自己確認 Secret 都在。
 
    消費端那一側（使用者名稱就是 `auth.consumers[].name`；消費端與
    VictoriaLogs 同在 `monitoring` 時，兩側可以指向同一個 Secret）：
@@ -276,10 +280,12 @@ render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費�
     整批事件當下丟掉（Vector log：`Not retriable; dropping the request`），
     計入 `vector_component_discarded_events_total{intentional="false"}`。
     buffer 是空的，所以 `VectorBufferEventsDropped` **不會**響；會響的是
-    `VectorStoreSinkDroppingEvents`（critical，持續 5 分鐘後發出）。這個
-    計數器在第一次丟資料時才出現，所以告警另外看「最近 10 分鐘內新出現的
-    非零計數器」：只被拒一批也會響。additionalSinks 裡寫入其他 VictoriaLogs
-    的 sink 命名成 `victorialogs_<x>` 才在監看範圍內。稍晚
+    `VectorStoreSinkDroppingEvents`（critical，沒有等待時間，只被拒一批也會
+    響，約 10 分鐘後自行解除）。這個計數器在第一次丟資料時才出現且已非零，
+    所以告警另外把「前一小時沒有樣本的非零計數器」當成新的丟失；Prometheus
+    停機或抓不到 Vector 超過一小時、Prometheus 沒保留資料重啟時，曾經丟過
+    資料的 sink 會再響一次。additionalSinks 裡寫入其他 VictoriaLogs 的 sink
+    命名成 `victorialogs_<x>` 才在監看範圍內。稍晚
     `FederationRevocationEvidenceChannelDown` 也會響：tenant-api 的心跳寫不進
     store，reconciler 讀不到（前提是 reconciler 有部署、且自己帶了帳密）。
   - **reconciler**：觸發 `FederationRevocationReconcileStale`。
