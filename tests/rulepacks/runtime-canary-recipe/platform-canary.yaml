@@ -1,0 +1,9 @@
+# Runtime-Canary recipe (ADR-025 design-readiness; docs/design/runtime-canary.md).
+# The ONE place the canary's custom alert is declared (#3679). Its compiled rules
+# (../runtime-canary.compiled.rules.yaml) are written from this file by
+# `make runtime-canary-compile` and checked by `make runtime-canary-compile-check`
+# (pre-commit + CI): edit here, never in the compiled file.
+tenants:
+  platform-canary:
+    _custom_alerts:
+    - {recipe: threshold, name: pipeline_heartbeat, metric: canary_pipeline_heartbeat, op: ">", window: 5m, threshold: "0:warning", mode: silent}

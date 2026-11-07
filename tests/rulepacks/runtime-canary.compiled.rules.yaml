@@ -1,21 +1,9 @@
 # ============================================================
-# Runtime-Canary DEMO rule bundle — ADR-025 design-readiness (NOT the prod pack).
-#
-# Two parts:
-#  1. The `custom-alerts*` groups below are the VERBATIM output of the REAL
-#     compiler for one reserved-tenant recipe — proving the canary dogfoods the
-#     exact live compile chain (regenerate with:
-#       printf 'tenants:\n  platform-canary:\n    _custom_alerts:\n    - {recipe: threshold, name: pipeline_heartbeat, metric: canary_pipeline_heartbeat, op: ">", window: 5m, threshold: "0:warning", mode: silent}\n' > /tmp/cc/platform-canary.yaml
-#       python3 scripts/tools/dx/compile_custom_alerts.py --config-dir /tmp/cc --out -  ).
-#     The canary is an ALWAYS-FIRING threshold (heartbeat 1 > 0), mode:silent so
-#     it never pages — it is a dashboard-only ALERTS series whose DISAPPEARANCE is
-#     the signal.
-#  2. `custom-alerts-pipeline-canary-meta` is a HAND-AUTHORED platform rule (NOT
-#     compiler output): the dead-man's-switch that PAGES when the always-firing
-#     canary stops — i.e. the custom-alert compile pipeline silently broke.
-#
-# This bundle is exercised by runtime-canary_test.yaml (promtool, CI-run). It is
-# illustrative design-readiness, NOT deployed: see docs/design/runtime-canary.md.
+# custom-alerts Rule Pack — Tenant-authored declarative alerts
+# GENERATED from _custom_alerts declarations by
+# scripts/tools/dx/compile_custom_alerts.py — DO NOT EDIT.
+# Run `bash scripts/ops/with_da_guard.sh python3 scripts/tools/dx/compile_custom_alerts.py --config-dir tests/rulepacks/runtime-canary-recipe --out tests/rulepacks/runtime-canary.compiled.rules.yaml` after editing recipes/conf.d.
+# Rule count = SHAPE count (vectorized, not per-tenant; ADR-024 §2b).
 # ============================================================
 groups:
 - name: custom-alerts-normalization
@@ -61,6 +49,7 @@ groups:
     expr: max by(tenant, name) (user_threshold{component="custom", mode="silent"})
     labels:
       severity: none
+      maintenance: page
       component: sentinel
       tenant: '{{ $labels.tenant }}'
       name: '{{ $labels.name }}'
@@ -69,12 +58,15 @@ groups:
       summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式'
       description: The recipe is still evaluated and visible as an ALERTS series (dashboard-only); its notifications are suppressed via inhibit, not deleted.
       description_zh: 此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。
+      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'
+      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'
+      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'
   - alert: Custom_threshold__canary_pipeline_heartbeat__gt__w5m__for1m
-    expr: |-
-      custom:threshold__canary_pipeline_heartbeat__gt__w5m__for1m:warning:core
+    expr: custom:threshold__canary_pipeline_heartbeat__gt__w5m__for1m:warning:core
     for: 1m
     labels:
       severity: warning
+      maintenance: mute
       tenant: '{{ $labels.tenant }}'
       recipe: threshold
       component: custom
@@ -87,26 +79,3 @@ groups:
       runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'
       owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'
       tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'
-
-# ── HAND-AUTHORED platform dead-man's-switch (NOT compiler output) ──────────
-# Watches the canary's CORE RECORDING RULE, not ALERTS{...}: (a) absent(ALERTS)
-# leaks the matcher labels (alertstate="firing" + a nested alertname) onto the
-# meta-alert, and a tenant-wide ALERTS matcher would also be satisfied by the
-# CustomRecipeSilent sentinel (which fires off user_threshold alone) — masking a
-# heartbeat-scrape break; (b) the core record is reliably materialised and absent
-# exactly when ANY realistic silent-death mode hits — exporter stops emitting
-# user_threshold, the heartbeat scrape gaps, or the compiler drifts the rule away.
-- name: custom-alerts-pipeline-canary-meta
-  rules:
-  - alert: CustomAlertPipelineCanaryDown
-    expr: absent(custom:threshold__canary_pipeline_heartbeat__gt__w5m__for1m:warning:core{tenant="platform-canary"})
-    for: 5m
-    labels:
-      severity: critical
-      component: platform-canary
-    annotations:
-      summary: "Custom-alert COMPILE PIPELINE canary is DOWN — the exporter -> compiler -> Prometheus -> route chain may be silently broken; tenant custom alerts may be failing to fire."
-      summary_zh: "自訂告警編譯管線 canary 已停止 — exporter -> 編譯器 -> Prometheus -> 路由 鏈可能已靜默損壞；租戶自訂告警可能正在無聲失效。"
-      description: "The always-firing platform-canary custom alert is no longer firing. Investigate the custom-alert pipeline end-to-end: threshold-exporter user_threshold emission, compile_custom_alerts drift, Prometheus rule load, scrape health."
-      description_zh: "常駐必觸發的 platform-canary 自訂告警已不再觸發。請端到端檢查自訂告警管線：threshold-exporter 的 user_threshold 發送、compile_custom_alerts 漂移、Prometheus 規則載入、scrape 健康度。"
-      runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/runtime-canary.md"
