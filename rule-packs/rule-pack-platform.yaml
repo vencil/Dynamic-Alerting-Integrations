@@ -2264,7 +2264,9 @@ groups:
       #   2. no earlier value at all: Vector creates this counter at the FIRST
       #      drop, already non-zero (measured on 0.61.0: absent before, 1 after
       #      one refused event). It counts only when Prometheus WAS scraping
-      #      that Vector target before (`up`), so a Prometheus without history
+      #      that Vector target before (`up{job="vector-metrics"}`, the
+      #      Service name: the job in both the raw scrape config and the
+      #      chart's ServiceMonitor), so a Prometheus without history
       #      (fresh, or restarted on an emptyDir like k8s/03-monitoring) and a
       #      gap longer than the look-back do not re-page old drops.
       # Blind spots (a single drop, not paged unless drops continue): one that
@@ -2287,7 +2289,7 @@ groups:
                 vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}
                 unless last_over_time(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}[1h] offset 10m)
               )
-              and on (job, instance) (max_over_time(up[1h] offset 10m) == 1)
+              and on (job, instance) (max_over_time(up{job="vector-metrics"}[1h] offset 10m) == 1)
             )
           ) > 0
         for: 0s
