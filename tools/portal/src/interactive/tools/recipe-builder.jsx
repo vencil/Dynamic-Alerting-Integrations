@@ -28,7 +28,7 @@ import {
 /* ── i18n helper ───────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
 
-/* ── Custom Alert Recipe Builder (ADR-024 §S6b, #741) ─────────────────
+/* ── Custom Alert Recipe Builder (ADR-024 §3, #741) ─────────────────
  *
  * A no-PromQL "Smart Form, Dumb Handoff" component: it produces a valid
  * `_custom_alerts` recipe object and hands it off — it does NOT own the
