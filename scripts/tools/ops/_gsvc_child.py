@@ -412,7 +412,13 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         # ADR-038 §5: not the CLI's key verdict — this process judges the
         # keys itself below (key_verdict()), after a pass and within this
         # judgement's deadline; the CLI's would judge every write a second time.
-        gar.main(argv, key_verdict=False)
+        # #1560 ⑤-b: a credential written out refuses the write only in a
+        # file the write changes (ADR-038 decision 5: tenant-api refuses by
+        # what the files it writes hold); elsewhere it is a NOTICE. A deleted
+        # file holds nothing.
+        gar.main(argv, key_verdict=False,
+                 credential_scope=frozenset(w.path for w in job.request.writes
+                                            if not w.delete))
         rc = 0
     except SystemExit as exc:
         rc = _exit_code_of(exc)

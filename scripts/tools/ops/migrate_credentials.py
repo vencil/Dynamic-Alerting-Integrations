@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """migrate_credentials.py — find receiver credentials written out in conf.d and
-move them into Secret references (#1560 ⑤-a). REPORT ONLY: nothing refuses a
-written-out credential yet; the route generator will (⑤-b), by the same
-judgement (`_lib_validation.plaintext_credential_findings`).
+move them into Secret references (#1560 ⑤-a). The route generator refuses
+every one of them under `--validate` (⑤-b, `credential_plaintext`), by the
+same judgement (`_lib_validation.plaintext_credential_findings`); this tool
+is the way out of that refusal.
 
 Reads every receiver where a file writes it (`_grar_parse.raw_receivers`:
 tenants' `_routing` / `overrides` / `routes` / `_routing_enforced`, and the
@@ -54,8 +55,15 @@ the rotation list must be rotated (docs/internal/secret-leak-remediation-sop.md)
 rotation is what makes those copies dead. `da-guard write` drops the comment
 at the end of a line it rewrites.
 
-Exit: 0 nothing written out and every config file read; 1 found, or a file
-no plane reads (the report is the answer); 2 usage / I/O error, no usable
+A receiver the judgement cannot read (a type that is no receiver type, an
+`overrides` / `routes` that is not a list, an item of one that is not a
+mapping: `_grar_parse.Unjudged`) is listed under `unjudged` with its file,
+place and reason; the generator refuses it too (`credential_unjudged`, or the
+render's own finding for a tenant's `_routing`).
+
+Exit: 0 nothing written out, nothing unjudged and every config file read; 1
+found, unjudged, or a file no plane reads (the report is the answer); 2
+usage / I/O error, no usable
 da-guard, a file that cannot be read, a refused --manifests-out, a failed
 write.
 
@@ -106,7 +114,7 @@ from _lib_validation import (  # noqa: E402
     secret_ref_problem,
 )
 from _grar_merge import FINDING_KINDS, OWN_NAME_PREFIX  # noqa: E402
-from _grar_parse import RawReceiver, file_receivers, raw_receivers  # noqa: E402
+from _grar_parse import RawReceiver, Unjudged, file_receivers, raw_receivers  # noqa: E402
 
 TOOL = "migrate-credentials"
 SCHEMA = "da-tools.migrate-credentials/v1"
@@ -184,7 +192,7 @@ _HELP = {
     "en": {
         "description": "Find receiver credentials written out in conf.d, rewrite the ones "
                        "a tenant owns as Secret references, and list what to rotate "
-                       "(#1560; report only: nothing is refused yet).",
+                       "(#1560; the route generator refuses them under --validate).",
         "config_dir": "conf.d root (read through da-guard)",
         "write": "apply the rewrite to the conf.d files and write the manifests "
                  "(default: print the plan); needs --manifests-out",
@@ -195,7 +203,7 @@ _HELP = {
     },
     "zh": {
         "description": "找出 conf.d 裡明文寫出的 receiver 憑證：租戶自己的改寫成 Secret "
-                       "參照，並列出要輪替的位置（#1560；只報告，目前不拒收）。",
+                       "參照，並列出要輪替的位置（#1560；路由產生器在 --validate 下拒收明文）。",
         "config_dir": "conf.d 根目錄（經 da-guard 讀）",
         "write": "把改寫寫回 conf.d 並寫出清單（預設只印改寫計畫）；須同時給 --manifests-out",
         "manifests_out": "搭配 --write 時在 DIR 為每個租戶寫一份 Kubernetes Secret "
@@ -846,6 +854,14 @@ def _row(it: Item, plan: Plan) -> dict:
             "tenant": _safe_tenant(it.tenant), "category": it.category}
 
 
+def _unjudged_row(u: Unjudged) -> dict:
+    """An ``Unjudged`` place as the report says it: its location from closed
+    sources only (``_safe_parts`` of a receiver path, no field below it)."""
+    it = Item(u.file, u.path, u.path, "", u.tenant, "", ())
+    return {"file": u.file, "location": _render(_safe_parts(it)),
+            "tenant": _safe_tenant(u.tenant), "reason": u.reason}
+
+
 def _print_text(doc: dict) -> None:
     def where(row: dict) -> str:
         line = f":{row['line']}" if row["line"] is not None else ""
@@ -880,9 +896,14 @@ def _print_text(doc: dict) -> None:
         print("== Not read (no plane reads these files; what they write is not judged) ==")
         for row in doc["unread"]:
             print(f"  {row['file']} ({row['reason']})")
+    if doc["unjudged"]:
+        print("== Not judged (fix the shape first: the generator refuses these too) ==")
+        for row in doc["unjudged"]:
+            print(f"  {row['file']} {row['location']} [{row['tenant'] or 'platform'}] "
+                  f"({row['reason']})")
     for note in doc["notes"]:
         print(f"NOTE: {note}")
-    if not doc["rotate"] and not doc["unread"]:
+    if not doc["rotate"] and not doc["unread"] and not doc["unjudged"]:
         print("No credential is written out.")
 
 
@@ -1004,9 +1025,10 @@ def _main(argv: Optional[list[str]]) -> Any:
         "rotate": [_row(it, plan) for it in items],
         "blocked_after_rewrite": blocked,
         "unread": [{"file": f, "reason": why} for f, why in found.unread],
+        "unjudged": [_unjudged_row(u) for u in found.unjudged],
         "notes": plan.notes,
     }
-    status = EXIT_VIOLATION if items or found.unread else EXIT_OK
+    status = EXIT_VIOLATION if items or found.unread or found.unjudged else EXIT_OK
     if args.json_output:
         return Report(doc, status)
     _print_text(doc)

@@ -375,11 +375,26 @@ _routing:
   allowed_domains: ["*.example.com"]
   shared_secrets:
     corp-alerting: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
+    corp-smtp: {secret: corp-smtp, fields: [auth_password]}
+    corp-hook: {secret: corp-hook, fields: [http_config.basic_auth.password]}
   ```
 
-  `secret` 是實際的 Secret 名稱，不得以 `da-` 開頭（避免與租戶推導出的名稱撞名）；`fields` 只能列內容本身就是送達目的地的欄位，不能列 `auth_password`。沒有 policy 檔，或 policy 沒有 `shared_secrets`，就沒有任何共用例外。receiver 只要用了任一共用 Secret，就不能設 `http_config.proxy_url`：代理是租戶自己指定的，會看到送往共用目的地的請求（`secret_ref_proxy_url`）。`shared_secrets` 寫壞（不是 mapping、別名不是 DNS-1123 label、條目不是 `{secret, fields}`、名稱以 `da-` 開頭、`fields` 列了不接 Secret 的欄位）時整份 policy 不可用，結束碼 `2`。
-- **送往租戶自填目的地的憑證**（上表「憑證送往」不是欄位本身的那幾列：`auth_password` 與 `http_config` 底下各欄）：目的地是租戶自己填的，所以
-  - 只能用自己的 Secret，共用 Secret 一律拒（`secret_ref_shared_confined`）；
+  `secret` 是實際的 Secret 名稱，不得以 `da-` 開頭（避免與租戶推導出的名稱撞名）。`fields` 列的是**完整欄位路徑**，可以填的值就是上表每一列的路徑（`_lib_validation.CREDENTIAL_REF_SITES`）：第一層欄位照寫（`api_url`、`url`、`auth_password`），`http_config` 底下的寫完整路徑（`http_config.basic_auth.password`、`http_config.oauth2.client_secret`）。header 那一列寫 `http_config.http_headers.*.secrets[]`：`*` 代表任一 header 名稱、`[]` 代表 `secrets` 的任一項，照字面寫，不填實際的 header 名稱或索引；列了它，該別名就能放在任何 header 的 `secrets` 裡。⚠️ BREAKING（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560) ⑤-b）：以前只比對第一層欄位名，寫一個 `http_config` 就一次開放 8 列；現在 `http_config` 不是任何一列的路徑，整份 policy 不可用（結束碼 `2`），訊息列出它底下可以填的路徑。沒有 policy 檔，或 policy 沒有 `shared_secrets`，就沒有任何共用例外。receiver 只要用了任一共用 Secret，就不能設 `http_config.proxy_url`：代理是租戶自己指定的，會看到送往共用目的地的請求（`secret_ref_proxy_url`）。`shared_secrets` 寫壞（不是 mapping、別名不是 DNS-1123 label、條目不是 `{secret, fields}`、名稱以 `da-` 開頭、`fields` 列了不是上表路徑的值）時整份 policy 不可用，結束碼 `2`。
+- **送往 receiver 自填目的地的憑證**（上表「憑證送往」不是欄位本身的那幾列：`auth_password` 與 `http_config` 底下各欄）：目的地是寫 receiver 的人填的，所以
+  - 租戶擁有的 receiver（租戶的 `_routing`、`_routing_defaults`、routing profile、帶 `{{tenant}}` 的 `_routing_enforced`）只能用自己的 Secret，共用 Secret 一律拒（`secret_ref_shared_confined`）：否則租戶能把平台的憑證導向自己挑的 host。**沒有所屬租戶的 `_routing_enforced`**（不帶 `{{tenant}}`，只從 conf.d 根目錄的 `_` 開頭檔讀，tenant-api 寫不到）反過來只能用共用 Secret，別名的 `fields` 要列出該欄位路徑，而且下面三條照樣適用：目的地通過 `allowed_domains`、`follow_redirects: false`、不設 `proxy_url`（不能設的是設定本身指定的 proxy，也就是 `proxy_url`；`proxy_from_environment: true` 允許：它讀的是 Alertmanager pod 的 `HTTPS_PROXY` 等環境變數，由平台部署者決定，上游也不允許它與 `proxy_url`、`no_proxy` 同時設定）。例如平台級 SMTP 密碼：
+
+    ```yaml
+    # conf.d/_routing_enforced.yaml（根目錄）
+    _routing_enforced:
+      enabled: true
+      receiver:
+        type: email
+        to: [noc@example.com]
+        smarthost: smtp.example.com:587
+        from: alertmanager@example.com
+        auth_password: {secret: {shared: corp-smtp, key: password}}
+    ```
+
   - policy 必須設了非空的 `allowed_domains`，每個目的地的 host 都在其中（oauth2 那幾欄是 `oauth2.token_url` 與 `url` 兩個都要；URL 類目的地必須以 `http://` 或 `https://` 開頭，`smarthost` 照舊寫 `host:port`）；目的地沒寫、或本身也是參照（看不到 host）就拒（`secret_ref_destination_unconfined`）；
   - 該請求經過的 `proxy_url`（webhook 請求是 `http_config.proxy_url`，token 請求是 `http_config.oauth2.proxy_url`；oauth2 那幾欄兩個都算）不能設（`secret_ref_proxy_url`）：代理不受 `allowed_domains` 約束，`http://` 的請求它整個看得到，`https://` 的請求在同一個 receiver 設了 `tls_config.ca` 或 `insecure_skip_verify` 時它也能攔截；
   - 除了 TLS client key（`tls_config.key`）以外，`http_config` 的憑證都要求 `http_config.follow_redirects` 寫成 `false`（`secret_ref_follow_redirects`）：Alertmanager 預設跟隨 redirect；redirect 到 `url` host 的子網域時，`Authorization`（basic_auth、authorization、bearer_token、oauth2 的 access token）會再送一次，自訂 header 則照送到 redirect 指向的任何 host，兩者都可能送到 `allowed_domains` 沒放行的 host。TLS client key 不會被送出。oauth2 那幾欄要求它，是因為用它們換到的 access token 會隨 webhook 請求的 redirect 再送一次；`follow_redirects` 只管 webhook 請求本身，向 `token_url` 取 token 的請求由另一個 client 送出，不受它影響。
@@ -391,6 +406,32 @@ _routing:
 
 **要掛哪些 Secret**：`generate-routes --output-configmap`（或 `--output-alertmanager`）加 `--secret-mounts-out <檔>`，把產出的設定實際會讀的 Secret 寫成 JSON（`mounts[].name` 與各自的 `keys`，依名稱排序；只有名稱與 key，沒有值），掛載就照它列（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）。清單從產出的設定本身走訪每個 `*_file`、`http_headers` 的 `files` 與頂層 `templates`（template 的 glob 在 Secret 名稱那段時無法對應 Secret，列進 `other_files`；只在 key 那段時列名稱、不列 key），所以 base 自己的（例如 `watchdog-heartbeat`）也在內；`<root>` 以外的路徑列在 `other_files`，要另外提供。`--apply` 不寫清單：用同一份 conf.d 與來源跑一次 `--output-configmap --secret-mounts-out` 取得。格式與規則見 [cli-reference §generate-routes](../cli-reference.md#generate-routes)；Prometheus Operator 路徑另有 `operator-check --secret-mounts` 拿它比對 `spec.secrets`（[Operator 整合](operator-alertmanager-integration.md)）。
 
+### 憑證不收明文（BREAKING）
+
+[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560) ⑤-b 起，產生器拒收寫出來的憑證值。判定只有一個函式（`_lib_validation.plaintext_credential_findings`），看的是**每個檔裡寫的原始值**，不是合併後的結果，所以沒有租戶綁定的 routing profile、被租戶蓋掉的 `_routing_defaults`、沒有任何 plane 讀的位置也都會判：
+
+| 位置 | 寫出值的時候 |
+|---|---|
+| 上表除了 webhook `url` 以外的每一列 | 拒收，只收參照 |
+| webhook `url` | 收；帶 userinfo（`user:pass@`、只有 `user@` 也算）時拒收：把憑證移到 `http_config` 的 `basic_auth`／`authorization` 並寫成參照 |
+| `http_config.proxy_connect_header`、`http_config.oauth2.proxy_connect_header` | 出現就拒收，不論值 |
+| `http_config.proxy_url`、`http_config.oauth2.proxy_url` | 帶 userinfo 時拒收 |
+| email `headers`、`http_headers.<名稱>.values`、`oauth2.endpoint_params`、`oauth2.claims` | 收（讀取端照樣遮罩） |
+
+代理憑證沒有參照寫法（Alertmanager 的 `proxy_connect_header` 沒有檔案形式，`proxy_url` 的 userinfo 會被 Go 轉成 `Proxy-Authorization` 送出）。需要代理認證時，平台在 Alertmanager pod 以 Secret 帶入 `HTTPS_PROXY`（例如 `env: [{name: HTTPS_PROXY, valueFrom: {secretKeyRef: {name: egress-proxy, key: url}}}]`），租戶的 receiver 只寫 `http_config.proxy_from_environment: true`。
+
+每一處都是產生器的 finding（kind `credential_plaintext`），行內只寫檔名、位置與類別（`needs_reference`、`userinfo`、`proxy_credential`），不印值。判定讀不了的 receiver 同樣擋下（kind `credential_unjudged`）：`type` 不是已知型別（`Slack`、空字串、沒寫、不是字串）、receiver 不是 mapping、`overrides`／`routes` 不是 list、其中一項不是 mapping，以及 routing 區塊（`_routing`、`_routing_defaults`、`_routing_enforced`、`routing_profiles`）裡任何 receiver 形狀的值（`receiver` 鍵的值，或 `type` 是已知型別的 mapping）不在走訪器讀的位置上（區塊寫成 list、巢狀 `routes`、產生器不讀的鍵；reason `not_walked`）。讀不了的檔本來就讓產生器拒收整棵樹。租戶自己 `_routing` 裡的這幾種形狀錯誤，render 也會另外報（`unknown_receiver_type`、`invalid_override_entry` 等），同一處可能有兩行：寧可兩行也不要零行（被另一個檔蓋掉的 `_routing` 不會被 render）。檔案頂層的 `_routing`（沒有任何 plane 讀）也判。
+
+- `generate-routes --validate` 結束碼 `1`；`validate-config` 的 routes 列 FAIL。只 render 的模式（`--output-configmap` 等）印出 `ERROR (credential)` 行、不改結束碼，所以 CI 要跑 `--validate`。
+- tenant-api 經產生器容器判定，回 422 `GENERATOR_FINDINGS`。擋不擋看**被寫入的那個檔**：這筆寫入改到的檔裡有明文就擋（包括這筆寫入沒碰到、原本就在那個檔裡的）；其他檔裡的明文只是 NOTICE，不擋這筆寫入，交給整棵樹的 CI 擋（與 [ADR-038](../adr/038-unread-keys-judged-by-readers.md) 決定 5、6 對鍵名判決的分法相同）。
+
+**遷移步驟**
+
+1. 跑 `da-tools migrate-credentials --config-dir conf.d`（加 `--manifests-out <repo 外的目錄> --write` 套用）：租戶自己 `_routing` 裡的明文改寫成 `{secret: {key: …}}`，並為每個租戶寫一份 `da-<tenant>` Secret。平台位置（`_routing_defaults`、profile、平台級 `_routing_enforced`）的明文列給人決定，依上面的寫法手動改成參照。
+2. 待輪替清單上的每個值都已進過 git，照 [secret-leak-remediation-sop](../internal/secret-leak-remediation-sop.md) 輪替。
+3. policy 的 `shared_secrets.<別名>.fields` 改寫成完整欄位路徑（見上）。
+4. 代理認證改走 Alertmanager 的 `HTTPS_PROXY`，receiver 寫 `proxy_from_environment: true`。
+
 ### 訊息模板（Go Template）
 
 Slack、Teams、Email 的 `title` / `text` / `html` 欄位支援 Alertmanager Go template 語法。以 Slack 為例：
@@ -399,7 +440,7 @@ Slack、Teams、Email 的 `title` / `text` / `html` 欄位支援 Alertmanager Go
 _routing:
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/..."
+    api_url: {secret: {key: slack-url}}
     channel: "#db-alerts"
     title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
     text: >-
@@ -470,7 +511,7 @@ tenants:
     _routing:
       receiver:
         type: "slack"
-        api_url: "https://hooks.slack.com/services/../default"
+        api_url: {secret: {key: slack-default}}
         channel: "#db-alerts"
 
       # 特定警報的路由覆寫
@@ -478,7 +519,7 @@ tenants:
         - alertname: "MariaDBHighConnections"
           receiver:
             type: "pagerduty"
-            service_key: "urgency-key-123"
+            service_key: {secret: {key: pagerduty-urgent}}
 
         - metric_group: "replication"
           receiver:
@@ -541,7 +582,7 @@ _routing_enforced:
   enabled: true
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/x"
+    api_url: {secret: {shared: noc-slack, key: url}}   # 共用 Secret：policy shared_secrets 的 noc-slack 列出 api_url
     channel: "#alerts-{{tenant}}"    # → #alerts-db-a, #alerts-db-b, ...
 ```
 

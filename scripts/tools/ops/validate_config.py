@@ -950,7 +950,10 @@ def check_routes(
         sys.stderr = old_stderr
 
     captured_output = captured.getvalue().strip()
-    all_issues = list(route_warnings) + list(dedup_warnings)
+    # #1560 ⑤-b: credentials written out, judged in each file (the same
+    # function generate-routes --validate calls); blocking by type.
+    all_issues = (gen.credential_findings(tree)
+                  + list(route_warnings) + list(dedup_warnings))
     if captured_output:
         all_issues.extend(captured_output.split("\n"))
 

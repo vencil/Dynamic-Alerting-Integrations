@@ -34,7 +34,7 @@ _ROOT_RD = ("defaults:\n  mysql_connections: 80\n"
             "_routing_defaults:\n  receiver:\n    type: webhook\n"
             "    url: https://hooks.example.com/root\n")
 _SUB_RD = ("_routing_defaults:\n  receiver:\n    type: slack\n"
-           "    api_url: https://hooks.slack.com/services/T/B/x\n")
+           "    api_url: {secret: {key: slack-url}}\n")
 
 # What the unselected spelling carries. None of it may change the result.
 _BODIES = {
