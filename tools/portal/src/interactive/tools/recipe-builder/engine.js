@@ -1,7 +1,7 @@
 ---
 title: "Custom Alert Recipe Builder — pure recipe/validation/YAML engine"
 purpose: |
-  Pure functions extracted from recipe-builder.jsx (ADR-024 §S6b, #741):
+  Pure functions extracted from recipe-builder.jsx (ADR-024 §3, #741):
   recipe lifecycle status, field-layout model, per-field + whole-recipe
   validation, plain-English summary, and the `_custom_alerts` recipe object
   + copy-paste YAML snippet (the "Dumb Handoff" payload).

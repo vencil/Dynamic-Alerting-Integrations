@@ -380,7 +380,7 @@ func TestEmit_OneTenantWithTwoRulesIsNotReportedAsTwoTenants(t *testing.T) {
 // ⛔ THE SHAPE MATTERS AND IT WAS MEASURED THE HARD WAY. The translated
 // emission writes a per-tenant carrier only for tenants whose threshold
 // DIFFERS from the cluster default (`PerTenantOverrides`; matching tenants
-// fall through to `_defaults.yaml` — the ADR-018 §1 anti-pattern fix). A
+// fall through to `_defaults.yaml` — the ADR-018 §Profile-as-Directory-Default anti-pattern fix). A
 // two-member fixture makes the first member's value the default, so the very
 // tenant under test gets no carrier and the guard is never reached: the first
 // version of the tests below failed for that reason, not because the guard was

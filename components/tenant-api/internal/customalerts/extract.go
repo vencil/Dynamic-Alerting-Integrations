@@ -8,7 +8,7 @@ import (
 )
 
 // Extract returns the tenant's `_custom_alerts` list as a slice of generic
-// maps (ADR-024 §S6b-2). The portal RecipeBuilder modal reads this JSON
+// maps (ADR-024 §3). The portal RecipeBuilder modal reads this JSON
 // directly instead of parsing the (subset-lossy) YAML client-side — the
 // backend owns the YAML round-trip on BOTH the read (here) and the write
 // (MergeCustomAlerts), so the client only ever handles JSON.
