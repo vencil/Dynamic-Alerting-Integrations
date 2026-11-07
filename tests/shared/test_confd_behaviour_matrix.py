@@ -303,8 +303,8 @@ TOOLS: dict[str, Tool] = {
                              "--tenant", "newt", "--db", "mariadb", "-o", "{conf}")),
     "onboard_platform": Tool((_PY, _T + "ops/onboard_platform.py", "--rule-files",
                               "{cell}/rules.yaml", "-o", "{conf}"), prep=_alert_rules),
-    "migrate_rule": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml", "-o", "{conf}"),
-                         prep=_alert_rules),
+    "migrate_rule": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml",
+                          "--tenant", "newt", "-o", "{conf}"), prep=_alert_rules),
     # Every other write mode of those writers: each writes into the tree
     # without a conf.d file to confirm, or a different one.
     "migrate_rule --triage": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml",

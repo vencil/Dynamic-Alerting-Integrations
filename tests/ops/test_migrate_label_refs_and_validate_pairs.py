@@ -133,7 +133,7 @@ def test_alert_rules_with_quotes_and_templated_labels_parse_back():
 def _migrate(tmp_path, fixture=_MULTIDB):
     out = tmp_path / "out"
     proc = subprocess.run(
-        [sys.executable, str(_OPS / "migrate_rule.py"), str(fixture), "-o", str(out),
+        [sys.executable, str(_OPS / "migrate_rule.py"), str(fixture), "--tenant", "t1", "-o", str(out),
          "--no-dictionary"],
         capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
@@ -253,7 +253,7 @@ def test_golden_entries_get_no_pair(tmp_path, capsys):
     out = tmp_path / "out"
     proc = subprocess.run(
         [sys.executable, str(_OPS / "migrate_rule.py"),
-         str(_REPO / "tests" / "fixtures" / "legacy-dummy.yml"), "-o", str(out)],
+         str(_REPO / "tests" / "fixtures" / "legacy-dummy.yml"), "--tenant", "t1", "-o", str(out)],
         capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     mapping = yaml.safe_load((out / "prefix-mapping.yaml").read_text(encoding="utf-8"))
