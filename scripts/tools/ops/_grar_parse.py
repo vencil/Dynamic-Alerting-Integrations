@@ -1987,39 +1987,50 @@ ROUTING_BLOCK_KEYS = frozenset({"_routing", "_routing_defaults", "_routing_enfor
                                 "routing_profiles"})
 
 
+#: The list slots whose items are route entries, not receivers (F-D).
+_ENTRY_SLOTS = frozenset({"overrides", "routes"})
+
+
 def _not_walked(data: object, walked: "set[tuple]") -> list[tuple]:
     """#1560 ⑤-b (round 3): the path of every receiver-shaped value inside a
     ``ROUTING_BLOCK_KEYS`` block of *data* (at any depth) that is not in
     *walked* (the receivers ``_receivers_of`` judged) nor inside one.
+
     Receiver-shaped: the non-null value of a key ``receiver``, whatever its
-    type; or a mapping whose ``type`` is a ``RECEIVER_TYPES`` key, except
-    the value of a ``match`` key (label matchers, where a label may be
-    called ``type``). Not descended below a hit (one finding per receiver)."""
+    type; or a mapping whose ``type`` is a ``RECEIVER_TYPES`` key. Round 4
+    (F-C, F-D): inside a ``match`` mapping a key is a label — ``receiver:
+    team-a`` or ``type: slack`` is a label, and only a mapping there can be
+    a receiver; the mapping a ``match`` key holds, and an item directly in
+    an ``overrides`` / ``routes`` list, is a route entry, not a receiver, so
+    the ``type`` rule does not apply to it. Not descended below a hit (one
+    finding per receiver)."""
     out: list[tuple] = []
 
-    def visit(node: object, path: tuple, inside: bool) -> None:
+    def visit(node: object, path: tuple, inside: bool, parent: object) -> None:
         if isinstance(node, dict):
             items = list(node.items())
         elif isinstance(node, list):
             items = list(enumerate(node))
         else:
             return
+        in_match = parent == "match" and isinstance(node, dict)
+        entry_list = isinstance(node, list) and parent in _ENTRY_SLOTS
         for key, value in items:
             here = path + (key,)
             if here in walked:
                 continue  # a judged receiver: its subtree is the judgement's
             within = inside or (isinstance(key, str) and key in ROUTING_BLOCK_KEYS)
-            shaped = within and (
-                (key == "receiver" and value is not None)
-                or (key != "match" and isinstance(value, dict)
-                    and isinstance(value.get("type"), str)
-                    and value["type"] in RECEIVER_TYPES))
-            if shaped:
+            by_key = key == "receiver" and value is not None and (
+                not in_match or isinstance(value, dict))
+            by_type = (key != "match" and not entry_list and isinstance(value, dict)
+                       and isinstance(value.get("type"), str)
+                       and value["type"] in RECEIVER_TYPES)
+            if within and (by_key or by_type):
                 out.append(here)
                 continue
-            visit(value, here, within)
+            visit(value, here, within, key)
 
-    visit(data, (), False)
+    visit(data, (), False, None)
     return out
 
 
