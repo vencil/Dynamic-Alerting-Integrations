@@ -3,6 +3,9 @@ title: "Tenant Manager — useTenantData hook"
 purpose: |
   Owns the data-loading state machine: priority chain
   /api/v1/tenants/search → platform-data.json → DEMO_TENANTS (ADR-009).
+  A 401 from the API sends the browser to sign in instead (ADR-027 §5);
+  the offline and demo sources are never mixed (#3306), and the page marks
+  any source but the API as offline and read-only.
   Extracted from tenant-manager.jsx in PR-2d Phase 2 (#153).
 
   Owns 5 piece of state internally (tenants / groups / loading /
@@ -34,6 +37,7 @@ purpose: |
 
 import { useState, useEffect } from "react";  // TRK-233 ESM import
 import { DEMO_TENANTS, DEMO_GROUPS } from '../fixtures/demo-tenants.js';
+import { redirectToSignIn } from '../../_common/auth/sign-in.js';
 import { operationalModeFromSummary, derivationNoticeFromSearch } from '../utils/operational-mode.js';
 
 function useTenantData({ setApiNotification, t, q = '' }) {
@@ -49,6 +53,13 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       // ---- Step 1: try the live API ----
       try {
         const apiData = await fetchTenantsFromAPI();
+        if (apiData && apiData.unauthenticated) {
+          // ADR-027 §5: signed out — sign in, never fall back to the
+          // offline or demo data (#3306). loading stays true: the page is
+          // about to leave.
+          redirectToSignIn();
+          return;
+        }
         if (apiData) {
           setTenants(apiData.tenants);
           setSearchOverflow(apiData.overflow);
@@ -56,7 +67,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
           setDataSource('api');
           // Seed groups for the group filter: prefer the live API (GET
           // /api/v1/groups) so a PUT-created group survives reload, then
-          // platform-data.json, then DEMO_GROUPS (see loadGroupsBestEffort).
+          // platform-data.json, else none (see loadGroupsBestEffort).
           await loadGroupsBestEffort();
           return;
         }
@@ -72,39 +83,29 @@ function useTenantData({ setApiNotification, t, q = '' }) {
         const response = await fetch('platform-data.json');
         const data = await response.json();
         if (data.tenant_metadata && Object.keys(data.tenant_metadata).length > 0) {
-          const hasRichMetadata = Object.values(data.tenant_metadata).some(
-            tt => tt.environment && tt.tier
-          );
-          if (hasRichMetadata) {
-            setTenants(data.tenant_metadata);
-          } else {
-            const merged = { ...DEMO_TENANTS };
-            for (const [name, meta] of Object.entries(data.tenant_metadata)) {
-              if (!merged[name]) {
-                merged[name] = {
-                  environment: meta.environment || 'production',
-                  region: meta.region || 'default',
-                  tier: meta.tier || 'tier-2',
-                  domain: meta.domain || 'general',
-                  db_type: meta.db_type || '',
-                  rule_packs: meta.rule_packs || [],
-                  owner: meta.owner || '',
-                  routing_channel: meta.routing_channel || '',
-                  operational_mode: meta.operational_mode || 'normal',
-                  metric_count: meta.metric_count || 0,
-                  last_config_commit: meta.last_config_commit || '',
-                  tags: meta.tags || [],
-                  groups: meta.groups || [],
-                };
-              }
-            }
-            setTenants(merged);
+          // #3306: the offline copy is shown as it is — demo tenants are
+          // never mixed into it, and a tenant's missing fields stay empty
+          // rather than invented.
+          const offline = {};
+          for (const [name, meta] of Object.entries(data.tenant_metadata)) {
+            offline[name] = {
+              environment: meta.environment || '',
+              region: meta.region || '',
+              tier: meta.tier || '',
+              domain: meta.domain || '',
+              db_type: meta.db_type || '',
+              rule_packs: meta.rule_packs || [],
+              owner: meta.owner || '',
+              routing_channel: meta.routing_channel || '',
+              operational_mode: meta.operational_mode || 'normal',
+              metric_count: meta.metric_count || 0,
+              last_config_commit: meta.last_config_commit || '',
+              tags: meta.tags || [],
+              groups: meta.groups || [],
+            };
           }
-          if (data.custom_groups && Object.keys(data.custom_groups).length > 0) {
-            setGroups(data.custom_groups);
-          } else {
-            setGroups(DEMO_GROUPS);
-          }
+          setTenants(offline);
+          setGroups(data.custom_groups || {});
           setDataSource('static');
           return;
         }
@@ -143,10 +144,15 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       } catch (e) {
         return null; // network error / total failure
       }
+      if (resp && resp.status === 401) {
+        // ADR-027 §5: oauth2-proxy answers /api/ without a session with
+        // 401 (--api-route); the caller sends the browser to sign in.
+        return { unauthenticated: true };
+      }
       if (!resp || !resp.ok) {
-        // 4xx (incl. 401/403/404 — wrong host or unauthenticated):
-        // silent fall-through is correct, the static path will
-        // show demo data instead of a confusing error toast.
+        // Other 4xx (403/404 — no access, or no API on this host):
+        // fall through to the offline copy, which the page marks as
+        // offline and read-only (#3306).
         return null;
       }
       const body = await resp.json();
@@ -239,7 +245,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
     //      previously READ only from the static path, so a created
     //      group vanished on reload in live mode).
     //   2. platform-data.json's custom_groups block.
-    //   3. DEMO_GROUPS, so the group-management UI has SOMETHING.
+    //   3. none — live tenants are never shown with demo groups (#3306).
     // Falls through on any failure so the static docs-site path
     // (no backend) still works.
     async function loadGroupsBestEffort() {
@@ -255,21 +261,13 @@ function useTenantData({ setApiNotification, t, q = '' }) {
         setGroups(apiGroups);
         return;
       }
-      // ---- 2 + 3: static platform-data.json → DEMO ----
+      // ---- 2 + 3: static platform-data.json, else none ----
       try {
         const resp = await fetch('platform-data.json');
-        if (!resp.ok) {
-          setGroups(DEMO_GROUPS);
-          return;
-        }
-        const data = await resp.json();
-        if (data?.custom_groups && Object.keys(data.custom_groups).length > 0) {
-          setGroups(data.custom_groups);
-        } else {
-          setGroups(DEMO_GROUPS);
-        }
+        const data = resp.ok ? await resp.json() : null;
+        setGroups(data?.custom_groups || {});
       } catch (_e) {
-        setGroups(DEMO_GROUPS);
+        setGroups({});
       }
     }
 
