@@ -164,9 +164,10 @@ cp -r alertmanager.yml alertmanager.yml.bak
 # 1.2 掃描並分析現有配置
 python3 scripts/tools/ops/onboard_platform.py \
   --alertmanager-config alertmanager.yml \
-  --rule-files '/path/to/old_rules/*.yaml' \
+  --rule-files /path/to/old_rules/ \
   --output-dir migration_input/
-# glob 要加引號，否則 shell 先展開成多個檔名，rc=2
+# --rule-files 收檔或目錄（可多個），不展開 glob；目錄遞迴取 *.yaml／*.yml
+# v2.9.0 映像給目錄選不到檔，改給加引號的 glob（'/path/to/old_rules/*.yaml'）
 # 產出（migration_input/）：
 #   - onboard-hints.json（租戶清單、路由提示、DB 類型；Alertmanager 設定裡
 #     找得到租戶 route 才會寫）
@@ -181,6 +182,7 @@ python3 scripts/tools/ops/validate_config.py \
   --config-dir conf.d/ \
   --policy .github/custom-rule-policy.yaml
 ```
+<!-- image-caveat: v2.9.0 -->
 
 > 直接跑 `validate_config.py` 需要 da-guard：先 `make da-guard-build` 並設 `DA_GUARD_BINARY=.build/da-guard`（da-tools 映像已內建）；詳見 [validate-config 的前置需求](../cli-reference.md#validate-config)。
 

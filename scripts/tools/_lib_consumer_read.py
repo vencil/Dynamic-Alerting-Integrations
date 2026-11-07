@@ -498,6 +498,28 @@ def prometheus_config(source: "str | bytes | os.PathLike[str]", binary: str | No
     return _one_document(out, "config")
 
 
+def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None) -> "list[list[dict]]":
+    """Per expression of *exprs*, the vector selectors that could select the
+    series *series* (equality matchers only, e.g.
+    ``user_state_filter{filter="maintenance"}``), as Prometheus' parser and
+    label matchers read them (``da-read promql-selectors``, #1200): a regex,
+    negative or escaped matcher, a ``{__name__=~...}`` selector or one with
+    no metric name is judged the way Prometheus evaluates it. Each hit is
+    ``{"selector": <Prometheus' spelling>, "start": int, "end": int}`` (byte
+    offsets into the expression's UTF-8 encoding)."""
+    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    data = json.dumps(list(exprs)).encode("utf-8")
+    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
+               ["promql-selectors", series, "-"], data)
+    docs = out["documents"]
+    if (len(docs) != 1 or not isinstance(docs[0], list) or len(docs[0]) != len(exprs)
+            or not all(isinstance(h, list) for h in docs[0])):
+        raise ConsumerReadError(
+            f"{DA_READ_BINARY_NAME} printed JSON without one selector list per expression "
+            "(an older da-read? rebuild it)")
+    return docs[0]
+
+
 class RuleFileRefused(InputRefused):
     """Prometheus' rule loader refused this rule file; ``path`` names it and
     ``problem`` is the loader's reason."""
@@ -1112,6 +1134,12 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
 #: compared without regard to case (``.YAML`` and ``.Yml`` are YAML too).
 YAML_SUFFIXES = (".yaml", ".yml")
 
+#: What ``files_to_read`` looks for, as the refusal of a selection that
+#: chose nothing names it (the *wanted* of ``_lib_input.refuse_empty``):
+#: ``lint --ci`` and ``onboard --rule-files`` say it in one wording (#3463).
+FILES_TO_READ_WANTED = (" / ".join("*" + x for x in YAML_SUFFIXES)
+                        + " files (any case) under the directories given, less --exclude")
+
 
 def _is_yaml_name(name: str) -> bool:
     """Whether *name* ends in a YAML suffix, any case — a name that IS the
@@ -1535,7 +1563,7 @@ RULE_PACKS = RuleSource(
 #: declaration: the rule-tree contracts (``scripts/tools/lint/_rule_tree.py``
 #: — alert_source RESERVED, heartbeat uniqueness, runbook presence), the
 #: platform-data catalogue, the tenant-pack lints (threshold registry,
-#: maintenance symmetry, vmalert coverage) and ``operator-generate`` all read
+#: maintenance clause, vmalert coverage) and ``operator-generate`` all read
 #: it; none of them names a pack itself. Members are ``RULE_PACKS.member``
 #: names. "Required" (always deployed) is a different property: the
 #: operational and liveness packs are required but are tenant packs.
@@ -1560,7 +1588,7 @@ def is_platform_pack(name: "str | None") -> bool:
 def tenant_rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
     """``rule_pack_files`` less the declared platform packs (``PLATFORM_PACKS``):
     the packs a TENANT-pack contract judges — the custom-rule policy, the
-    threshold contract, maintenance symmetry, vmalert coverage. Same refusals as
+    threshold contract, the maintenance clause, vmalert coverage. Same refusals as
     ``rule_pack_files``."""
     return [p for p in rule_pack_files(rule_packs)
             if not is_platform_pack(RULE_PACKS.member(p))]
