@@ -53,7 +53,8 @@ from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _lib_validation import (  # noqa: E402  (#1560)
-    MASKED_VALUE, is_credential_path, is_secret_ref, receiver_value_repr, secret_ref_rule,
+    MASKED_VALUE, is_credential_path, is_secret_ref, receiver_value_repr, scalar_text,
+    secret_ref_rule, value_text,
     shared_secret_field_texts,
 )
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
@@ -1768,11 +1769,11 @@ def value_type_text(value: object) -> str:
     if value is None:
         return "null"
     if isinstance(value, bool):
-        return f"boolean {value!r}"
+        return f"boolean {scalar_text(value)}"
     if isinstance(value, str):
-        return f"string {value!r}"
+        return f"string {scalar_text(value)}"
     if isinstance(value, (int, float)):
-        return f"number {value!r}"
+        return f"number {scalar_text(value)}"
     if isinstance(value, list):
         return "a list"
     if isinstance(value, dict):
@@ -2115,11 +2116,11 @@ def route_entry_matchers(entry: object, idx: int,
     matchers = []
     for label, value in match.items():
         if not isinstance(label, str) or not _LABEL_NAME_RE.fullmatch(label):
-            return None, [skipped_entry_warning(f"  WARN: {ctx}: match label {label!r} is not a "
+            return None, [skipped_entry_warning(f"  WARN: {ctx}: match label {scalar_text(label)} is not a "
                                                 "valid label name, skipping", **where)]
         if not isinstance(value, str):
             return None, [skipped_entry_warning(f"  WARN: {ctx}: match value for '{label}' must be "
-                                                f"a string, got {type(value).__name__} {value!r} "
+                                                f"a string, got {value_text(value)} "
                                                 "(quote it in YAML), skipping", **where)]
         if value == "":
             # AM reads label="" as "label absent", so this child would take
@@ -2232,7 +2233,7 @@ def override_redundancies(routing_config: object) -> list[tuple[str, str, str]]:
                 out.append((
                     "duplicate_override_matcher", f"overrides[{idx}]",
                     f"override[{idx}] has the same matcher as override[{first}] "
-                    f"({present[0]}={override[present[0]]!r}); override[{first}] "
+                    f"({present[0]}={scalar_text(override[present[0]])}); override[{first}] "
                     f"catches those alerts first, so this one never takes "
                     f"effect — remove it or change its matcher"))
             elif sig is not None:
@@ -2252,7 +2253,7 @@ def value_not_string_message(tenant: str, field: str, value: object) -> str:
     """The ``--strict`` refusal for one ``routing_values_not_string`` entry."""
     key = field.rsplit(".", 1)[-1]
     return (f"tenant '{tenant}': {field} must be a string, got "
-            f"{type(value).__name__} {value!r} — quote it in YAML (e.g. "
+            f"{value_text(value)} — quote it in YAML (e.g. "
             f"{key}: \"...\") so the route generator reads it as text")
 
 
@@ -2346,7 +2347,7 @@ def group_by_problem_text(field: str, kind: str, value: object) -> str:
     #2431 line's parse key).
     """
     if kind == "not_string":
-        return (f"{field} is {type(value).__name__} {value!r}, not a string — "
+        return (f"{field} is {value_text(value)}, not a string — "
                 "quote it in YAML (e.g. \"8\", \"on\") so it is a label name; "
                 "Alertmanager would group by a label named after its text")
     if kind == "empty":
@@ -2362,15 +2363,22 @@ def group_by_problem_text(field: str, kind: str, value: object) -> str:
 
 
 def _shape_of(value: object) -> str:
-    """``<type> <repr>`` of a YAML value as PyYAML read it, repr capped."""
+    """The type of a YAML value as PyYAML read it, for a message — never its
+    content (#1560 ⑤-b, round 3): a routing block written as a list, a
+    mapping in the wrong place or a string can hold a receiver and its
+    credential. A list or mapping says its length, a string only whether
+    it is empty."""
     if value is None:
         return "null"
-    kind = {type(None): "null", bool: "boolean", str: "string",
-            list: "list"}.get(type(value), type(value).__name__)
-    text = repr(value)
-    if len(text) > 60:
-        text = text[:57] + "..."
-    return f"{kind} {text}"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "an empty string" if value == "" else "a non-empty string"
+    if isinstance(value, list):
+        return f"a list of {len(value)} item(s)"
+    if isinstance(value, dict):
+        return f"a mapping of {len(value)} key(s)"
+    return type(value).__name__
 
 
 def routing_not_mapping_text(value: object) -> str:

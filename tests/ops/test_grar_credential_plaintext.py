@@ -194,8 +194,11 @@ def test_a_receiver_that_cannot_be_judged_is_refused(tmp_path, files, field, rea
     rc, text, findings = _validate(d)
     assert rc == 1, text
     got = [f for f in findings if f["kind"] == "credential_unjudged"]
-    assert [(f["field"], f["blocks"]) for f in got] == [(field, "validate")]
-    assert f"({reason})" in got[0]["message"]
+    # Round 3: a receiver inside a slot of the wrong shape is also named
+    # where it stands (`not_walked`) — two lines rather than none.
+    inner = ([(f"{field}.x.receiver", "validate")] if reason == "slot_not_list" else [])
+    assert sorted((f["field"], f["blocks"]) for f in got) == sorted([(field, "validate")] + inner)
+    assert f"({reason})" in next(f for f in got if f["field"] == field)["message"]
     assert CANARY not in text
 
 
@@ -411,3 +414,57 @@ def test_no_message_quotes_a_credential_value(tmp_path, rtype, path, variant):
     assert p.returncode in (0, 1), p.stderr
     text = p.stdout + p.stderr + out.read_text(encoding="utf-8")
     assert CANARY not in text, text
+
+
+# ── 8. 不變式：routing 區塊裡每個 receiver 形狀的值，不是被走訪器判過，就是 finding ──
+# （第 3 輪，換主體：深掃取代逐一列舉形狀。）同一個帶明文的 receiver 用各種
+# 走訪器不認得的方式包起來，每一種都要有 credential finding、`--validate` rc 1。
+
+_R = {"type": "slack", "api_url": f"https://hooks.slack.example.com/{CANARY}"}
+_TENANT_ONLY = "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n"
+_WRAPS = [
+    ("tenant_routing_list", {"t-a.yaml": {"tenants": {"t-a": {"_routing": [{"receiver": _R}]}}}}),
+    ("receiver_as_string", {"_routing_profiles.yaml": {"routing_profiles": {"p": {
+        "routes": [{"match": {"x": "y"}, "receiver": f"https://h.example.com/{CANARY}"}]}}}}),
+    ("nested_routes", {"t-a.yaml": {"tenants": {"t-a": {"_routing": {
+        "receiver": {"type": "slack", "api_url": {"secret": {"key": "k"}}},
+        "routes": [{"match": {"a": "b"}, "receiver": {"type": "slack", "api_url": {
+            "secret": {"key": "k"}}}, "routes": [{"match": {"c": "d"}, "receiver": _R}]}]}}}}}),
+    ("extra_mapping_layer", {"t-a.yaml": {"tenants": {"t-a": {"_routing": {
+        "receiver": {"type": "slack", "api_url": {"secret": {"key": "k"}}},
+        "extra": {"receiver": _R}}}}}}),
+    ("profile_as_list", {"_routing_profiles.yaml": {"routing_profiles": {"p": [{"receiver": _R}]}}}),
+    ("profiles_as_list", {"_routing_profiles.yaml": {"routing_profiles": [{"receiver": _R}]}}),
+    ("root_enforced_as_list", {"_platform.yaml": {"_routing_enforced": [{"receiver": _R}]}}),
+    ("defaults_as_list", {"_platform.yaml": {"_routing_defaults": [{"receiver": _R}]}}),
+    ("top_level_routing_list", {"t-b.yaml": {"_routing": [{"receiver": _R}],
+                                             "tenants": {"t-b": {"cpu_usage_percent": "85"}}}}),
+    ("typed_mapping_no_receiver_key", {"_routing_profiles.yaml": {"routing_profiles": {"p": {
+        "routes": [{"match": {"x": "y"}, "fallback": _R}]}}}}),
+    ("enforced_overrides", {"_platform.yaml": {"_routing_enforced": {
+        "enabled": True, "receiver": {"type": "webhook", "url": "https://noc.example.com/a"},
+        "overrides": [{"alertname": "X", "receiver": _R}]}}}),
+]
+
+
+@pytest.mark.parametrize("files", [w[1] for w in _WRAPS], ids=[w[0] for w in _WRAPS])
+def test_a_wrapped_receiver_is_never_silent(tmp_path, files):
+    import yaml
+    d = _tree(tmp_path, {name: yaml.safe_dump(body, sort_keys=False)
+                         for name, body in files.items()})
+    rc, text, findings = _validate(d)
+    assert rc == 1, text
+    assert _credential(findings), findings
+    assert all(f["blocks"] == "validate" for f in findings if f["kind"].startswith("credential_"))
+    assert CANARY not in text and CANARY not in json.dumps(findings)
+
+
+def test_the_shipped_trees_have_no_credential_finding():
+    """對照組：出貨的 conf.d 不因深掃多出 finding。"""
+    for rel in ("components/threshold-exporter/config/conf.d", "try-local/seed/conf.d",
+                "rule-packs/recipes/examples/conf.d",
+                "components/da-tools/app/examples/cardinality-demo/conf.d",
+                "tests/fixtures/da-tools-smoke/new/conf.d",
+                "tests/fixtures/da-tools-smoke/old/conf.d"):
+        tree = gar.load_tenant_tree(str(REPO / rel))
+        assert gar.credential_findings(tree) == [], rel

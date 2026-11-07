@@ -1243,20 +1243,43 @@ def receiver_value_repr(rtype: Any, path: tuple, value: Any) -> str:
     return MASKED_VALUE if is_credential_path(rtype, path) else repr(value)
 
 
+def scalar_text(value: Any) -> str:
+    """⛔ THE way a config value that is not a receiver's goes into a message
+    (#1560 ⑤-b, round 3): a scalar (string, number, boolean, null, a date) as
+    its repr — what the operator must fix, a label or a duration —, a list
+    or a mapping only as its type and length: a container in a routing
+    field can hold a receiver and its credential. A receiver's value goes
+    through ``receiver_value_repr`` instead. Pinned with it by
+    tests/shared/test_no_value_repr_in_messages.py."""
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return f"a list of {len(value)} item(s)"
+    if isinstance(value, dict):
+        return f"a mapping of {len(value)} key(s)"
+    return repr(value)
+
+
+def value_text(value: Any) -> str:
+    """``<type> <scalar_text>`` of a scalar (``int 8``, ``str 'x'``), just
+    ``scalar_text`` of a container (``a mapping of 1 key(s)``)."""
+    if isinstance(value, (list, tuple, set, frozenset, dict)):
+        return scalar_text(value)
+    return f"{type(value).__name__} {scalar_text(value)}"
+
+
 def receiver_type_name(rtype: Any, path: tuple, value: Any) -> str:
     """``_type_name`` of a receiver value at *path*, its text through
     ``receiver_value_repr``."""
     return _type_name(value, shown=receiver_value_repr(rtype, path, value))
 
 
-def _type_name(value: Any, *, shown: Optional[str] = None) -> str:
+def _type_name(value: Any, *, shown: str) -> str:
     """YAML-ish name of a decoded value's type, for messages. A string shows
-    *shown* (default its repr): a receiver value goes through
+    *shown*, never its own text: a receiver value goes through
     ``receiver_type_name``, a Secret reference's parts are always masked."""
     if value is None:
         return "null"
     if isinstance(value, str):
-        return f"string {repr(value) if shown is None else shown}"
+        return f"string {shown}"
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, (int, float)):
@@ -1409,13 +1432,13 @@ def file_reference_paths(value: Any, path: str = "", *,
     out: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
-            name = key if isinstance(key, str) else repr(key)
+            name = key if isinstance(key, str) else scalar_text(key)
             here = f"{path}.{name}" if path else name
             if not isinstance(key, str) or is_file_reference_key(key):
                 out.append(here)
             elif key in label_maps and isinstance(item, dict):
                 for label, v in item.items():
-                    lname = label if isinstance(label, str) else repr(label)
+                    lname = label if isinstance(label, str) else scalar_text(label)
                     out.extend(file_reference_paths(v, f"{here}.{lname}", label_maps=label_maps,
                                                     receiver_keys=receiver_keys))
             elif key in receiver_keys:

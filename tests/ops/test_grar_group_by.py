@@ -283,7 +283,8 @@ class TestNonStrictRepair:
         r = _gar(d, "--output-alertmanager", "--dry-run")
         assert r.returncode == 0, r.stdout + r.stderr
         assert "missing required labels" not in r.stderr
-        assert f"WARN: {_T}: group_by[1] is dict {{'a': 1}}, not a string" in r.stderr
+        # #1560 ⑤-b (round 3): a container's shape, not its content.
+        assert f"WARN: {_T}: group_by[1] is a mapping of 1 key(s), not a string" in r.stderr
 
     def test_cli_dry_run_rc0_and_output(self, tmp_path):
         d = _tree(tmp_path, _MAIN + "      group_by: [alertname, true, 8]\n")

@@ -40,6 +40,7 @@ from dataclasses import dataclass
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_validation import value_text  # noqa: E402  (#1560 ⑤-b: values into messages)
 
 from _grar_merge import (  # noqa: E402
     Finding,
@@ -144,7 +145,7 @@ def enforced_match_invalid_text(where: str, value: object) -> str:
     """The refusal line's text for ``enforced_match_invalid`` (no prefix)."""
     return (f"_routing_enforced{where}: 'match' must be a list of Alertmanager "
             f"matcher strings, each non-empty (e.g. ['severity=\"critical\"']), got "
-            f"{type(value).__name__} {value!r} — platform-enforced (NOC) routing "
+            f"{value_text(value)} — platform-enforced (NOC) routing "
             f"is NOT rendered (no NOC route exists at all), skipping")
 
 

@@ -191,7 +191,7 @@ FINDING_KINDS: dict[str, str] = {
     "credential_plaintext":
         "A file writes a credential out where only a Secret reference is "
         "taken, a URL carrying userinfo (user[:password]@), or a proxy "
-        "credential a tenant may not write (proxy_connect_header, a "
+        "credential no receiver may write (proxy_connect_header, a "
         "proxy_url with userinfo); judged on each file's own value, before "
         "any layer is merged. The line names the file, the place and the "
         "category, never the value. Blocks under --validate.",

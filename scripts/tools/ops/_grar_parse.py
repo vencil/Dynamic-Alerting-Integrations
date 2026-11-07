@@ -25,6 +25,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
+from _lib_validation import scalar_text  # noqa: E402  (#1560 ⑤-b: values into messages)
 from _lib_validation import (  # noqa: E402  (#1560 ⑤-b: the one plaintext judgement)
     NEEDS_REFERENCE, PROXY_CREDENTIAL, URL_USERINFO,
     plaintext_credential_findings, ref_path_text,
@@ -368,7 +369,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
                 if bad:
                     print(f"  WARN: optional_overrides in {_f} has "
                           f"{len(bad)} non-string entr{'y' if len(bad) == 1 else 'ies'} "
-                          f"({bad!r}) — ignored here, but the Go exporter fails "
+                          f"({', '.join(scalar_text(k) for k in bad)}) — ignored here, but the Go exporter fails "
                           "the whole file on them", file=sys.stderr)
                 result["optional_override_keys"].update(
                     k for k in raw if isinstance(k, str))
@@ -1972,7 +1973,54 @@ UNJUDGED_REASONS = {
                               + ", ".join(sorted(RECEIVER_TYPES))),
     "slot_not_list": "it is not a list",
     "item_not_mapping": "it is not a mapping",
+    "not_walked": ("a receiver in a routing block at a place the receiver walk does "
+                   "not read (a block that is not a mapping, a nested routes entry, "
+                   "a key the generator does not read), so its credentials are not judged"),
 }
+
+#: #1560 ⑤-b (round 3): the routing blocks `_not_walked` scans, at any depth.
+#: The walk above lists the places it reads; listing them was the defect three
+#: times over (a top-level `_routing`, a block that is a list, nested
+#: routes). The invariant instead: every receiver-shaped value inside any of
+#: these blocks is either a walked receiver or a finding.
+ROUTING_BLOCK_KEYS = frozenset({"_routing", "_routing_defaults", "_routing_enforced",
+                                "routing_profiles"})
+
+
+def _not_walked(data: object, walked: "set[tuple]") -> list[tuple]:
+    """#1560 ⑤-b (round 3): the path of every receiver-shaped value inside a
+    ``ROUTING_BLOCK_KEYS`` block of *data* (at any depth) that is not in
+    *walked* (the receivers ``_receivers_of`` judged) nor inside one.
+    Receiver-shaped: the non-null value of a key ``receiver``, whatever its
+    type; or a mapping whose ``type`` is a ``RECEIVER_TYPES`` key, except
+    the value of a ``match`` key (label matchers, where a label may be
+    called ``type``). Not descended below a hit (one finding per receiver)."""
+    out: list[tuple] = []
+
+    def visit(node: object, path: tuple, inside: bool) -> None:
+        if isinstance(node, dict):
+            items = list(node.items())
+        elif isinstance(node, list):
+            items = list(enumerate(node))
+        else:
+            return
+        for key, value in items:
+            here = path + (key,)
+            if here in walked:
+                continue  # a judged receiver: its subtree is the judgement's
+            within = inside or (isinstance(key, str) and key in ROUTING_BLOCK_KEYS)
+            shaped = within and (
+                (key == "receiver" and value is not None)
+                or (key != "match" and isinstance(value, dict)
+                    and isinstance(value.get("type"), str)
+                    and value["type"] in RECEIVER_TYPES))
+            if shaped:
+                out.append(here)
+                continue
+            visit(value, here, within)
+
+    visit(data, (), False)
+    return out
 
 
 class Unjudged(NamedTuple):
@@ -2098,6 +2146,15 @@ def _receivers_of(fname: str, data: dict, entry: object,
         add(_block_receivers(body.get("_routing_enforced"),
                              ("tenants", tenant, "_routing_enforced"), slots=()),
             tenant, "tenant_enforced", False)
+    # #1560 ⑤-b (round 3): what the walk above did not read is a finding,
+    # not a silence — the invariant, not a fourth listed shape.
+    if unjudged is not None:
+        walked = {r.path for r in found}
+        for path in _not_walked(data, walked):
+            owner = (path[1] if len(path) > 1 and path[0] == "tenants"
+                     and isinstance(path[1], str) else None)
+            unjudged.append(Unjudged(fname, path, owner, "not_walked", "not_walked", False,
+                                     owner is None or is_valid_tenant_id(owner)))
     return found
 
 
@@ -2179,9 +2236,27 @@ _PLAINTEXT_REMEDY = {
         "credential with http_config (basic_auth.password / authorization.credentials "
         "as a Secret reference)"),
     PROXY_CREDENTIAL: (
-        "a proxy credential a tenant may not write (proxy_connect_header, or a "
-        "proxy_url with userinfo): give Alertmanager HTTPS_PROXY from a Secret and "
-        "write http_config.proxy_from_environment: true"),
+        "a proxy credential, which a tenant may not write (proxy_connect_header, or a "
+        "proxy_url with userinfo; it has no Secret form): the platform gives "
+        "Alertmanager HTTPS_PROXY from a Secret and the receiver writes "
+        "http_config.proxy_from_environment: true"),
+}
+#: The same for a place no tenant owns (``CredentialFact.tenant`` None: the
+#: platform's `_routing_defaults`, profiles, `_routing_enforced`, a top-level
+#: `_routing`) — the platform wrote it, so "a tenant may not" is not the
+#: reason; that it would sit in the repository is.
+_PLATFORM_PLAINTEXT_REMEDY = {
+    **_PLAINTEXT_REMEDY,
+    NEEDS_REFERENCE: (
+        "a credential written out where only a Secret reference is taken: write "
+        "{secret: {shared: <alias>, key: <key>}} with an alias the deployment policy's "
+        "shared_secrets lists for this field (on _routing_defaults or a routing "
+        "profile, {secret: {key: <key>}} names each binding tenant's da-<tenant>)"),
+    PROXY_CREDENTIAL: (
+        "a proxy credential, which no receiver in conf.d may carry (proxy_connect_header, "
+        "or a proxy_url with userinfo; it has no Secret form, so it would sit in the "
+        "repository): give Alertmanager HTTPS_PROXY from a Secret and write "
+        "http_config.proxy_from_environment: true"),
 }
 _ROTATE = "; rotate the value (docs/internal/secret-leak-remediation-sop.md)"
 
@@ -2240,7 +2315,8 @@ def credential_findings(tree: "TenantTree", *, scope: "frozenset[str] | None" = 
     out: list[Finding] = []
     for fact in tree.credential_facts:
         where = ref_path_text(fact.path)
-        text = (f"is {_PLAINTEXT_REMEDY[fact.detail]} ({fact.detail}){_ROTATE}"
+        remedy = _PLAINTEXT_REMEDY if fact.tenant is not None else _PLATFORM_PLAINTEXT_REMEDY
+        text = (f"is {remedy[fact.detail]} ({fact.detail}){_ROTATE}"
                 if fact.kind == "credential_plaintext" else
                 "cannot be judged for credentials written out: "
                 f"{UNJUDGED_REASONS[fact.detail]} ({fact.detail}); write it as "
