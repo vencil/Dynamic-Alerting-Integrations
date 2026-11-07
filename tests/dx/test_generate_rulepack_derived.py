@@ -475,3 +475,17 @@ def test_rewrite_problems_ignores_only_the_derived_parts():
     new = old.replace("summary: a\n", 'summary: a\n      owner: "x"\n')
     assert grd.rewrite_problems(old, new, "rule-pack-x.yaml") == []
     assert grd.rewrite_problems(old, old.replace("summary: a", "summary: b"), "rule-pack-x.yaml")
+
+
+def test_a_rewrite_that_would_change_a_group_label_is_not_written(da_read_env, tmp_path):
+    """Second review round: text inside a group-label block scalar that looks
+    like an alert was 'completed' by the writer, changing the label every alert
+    of the group carries. The net compares group keys too."""
+    group = ("  - name: advG\n    labels:\n      note: |\n        - alert: Phantom\n"
+             "          expr: up\n          labels:\n            tenant: x\n"
+             "            maintenance: page\n    rules:\n      - alert: AdvReal\n"
+             "        expr: up == 0\n        labels:\n          maintenance: page\n")
+    rp = _pack_with(tmp_path, group)
+    before = (rp / "rule-pack-redis.yaml").read_text(encoding="utf-8")
+    assert grd.main(["--rule-packs-dir", str(rp)]) == 2
+    assert (rp / "rule-pack-redis.yaml").read_text(encoding="utf-8") == before

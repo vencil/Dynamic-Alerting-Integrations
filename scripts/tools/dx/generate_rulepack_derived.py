@@ -582,16 +582,25 @@ def rewrite_problems(old: str, new: str, name: str) -> list[str]:
         except _lib_consumer_read.ConsumerReadError as exc:
             return [f"the rewritten file would not load: {_lib_consumer_read.error_text(exc)}"]
 
-    def rules(rf) -> list[tuple[str, dict]]:
-        return [(g.get("name"), _underived(r)) for doc in rf.documents
-                for g in (doc or {}).get("groups") or [] for r in g.get("rules") or []]
+    def documents(rf) -> list:
+        # The whole reading — group keys (name, interval, labels, limit, …)
+        # included — with only each rule's derived parts taken out.
+        out = []
+        for doc in rf.documents:
+            doc = dict(doc or {})
+            doc["groups"] = [{**g, "rules": [_underived(r) for r in g.get("rules") or []]}
+                             for g in doc.get("groups") or []]
+            out.append(doc)
+        return out
 
-    x, y = rules(before), rules(after)
-    if len(x) != len(y):
-        return [f"the rewrite changed the number of rules ({len(x)} -> {len(y)})"]
-    return [f"the rewrite changed more than the derived parts of "
-            f"{r1.get('alert') or r1.get('record')} (group {g1}): {r1} -> {r2}"
-            for (g1, r1), (g2, r2) in zip(x, y) if (g1, r1) != (g2, r2)]
+    x, y = documents(before), documents(after)
+    if x == y:
+        return []
+    gx = [g for d in x for g in d.get("groups") or []]
+    gy = [g for d in y for g in d.get("groups") or []]
+    diffs = [f"group {g1.get('name')}: {g1} -> {g2}" for g1, g2 in zip(gx, gy) if g1 != g2]
+    return [f"the rewrite changed more than the derived parts: {d}"
+            for d in diffs or [f"{len(gx)} -> {len(gy)} groups"]]
 
 
 def _pack(path: Path) -> str | None:
