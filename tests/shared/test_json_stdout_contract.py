@@ -1313,6 +1313,23 @@ RECIPES: list[Recipe] = [
       expect_caller_error=True,
       expect_document=False),
 
+    # ── migrate_credentials ────────────────────────────────────────────────
+    # #1560 ⑤-a: the report (rc 0 or 1, one document); caller errors carry
+    # none — no such --config-dir, --write without --manifests-out.
+    R("migrate_credentials", "report",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"],
+      doc_check=lambda d: None if isinstance(d, dict)
+      and d.get("schema") == "da-tools.migrate-credentials/v1"
+      else f"not the migrate-credentials report: {str(d)[:80]}"),
+    R("migrate_credentials", "missing-config-dir",
+      lambda t, s: ["--config-dir", str(t / "no-such-conf.d"), "--json"],
+      expect_caller_error=True,
+      expect_document=False),
+    R("migrate_credentials", "write-without-manifests-out",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--write", "--json"],
+      expect_caller_error=True,
+      expect_document=False),
+
     # ── policy_engine ──────────────────────────────────────────────────────
     R("policy_engine", "no-policies",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"]),
@@ -1509,8 +1526,8 @@ def test_recipe_table_covers_every_json_tool():
         f"no recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 39, (
-        f"expected 39 JSON-flag tools (35 --json + 4 --json-output), "
+    assert len(JSON_TOOLS) == 40, (
+        f"expected 40 JSON-flag tools (36 --json + 4 --json-output), "
         f"found {len(JSON_TOOLS)}: {sorted(JSON_TOOLS)}"
     )
 
@@ -1687,6 +1704,13 @@ runpy.run_path(script, run_name="__main__")
 CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
                       if not r.expect_caller_error}.values())
 
+#: Tools whose crash line names the exception's type but never its message
+#: (it may quote what the tool read): the text they print instead.
+#: migrate_credentials (#1560 ⑤-a): a message may quote a credential value.
+CRASH_MESSAGE_WITHHELD = {
+    "migrate_credentials": "the message is not shown: it may quote a credential value",
+}
+
 # These tools catch `Exception` around their work themselves (their own word
 # for "no result": a stderr line and rc 2). The injected crash above fires
 # before that handler, so green there is not coverage for it. The crash is
@@ -1772,7 +1796,10 @@ def test_a_crash_in_json_mode_leaves_stdout_empty(
     where = (f"{recipe.tool}.py ({recipe.mode}) rc={proc.returncode}\n"
              f"  stdout[:300]: {proc.stdout[:300]!r}\n"
              f"  stderr[-300:]: {proc.stderr[-300:]!r}")
-    assert f"ERROR: unexpected internal error (RuntimeError): {_INJECTED}" in proc.stderr, (
+    shown = CRASH_MESSAGE_WITHHELD.get(recipe.tool, _INJECTED)
+    if recipe.tool in CRASH_MESSAGE_WITHHELD:
+        assert _INJECTED not in proc.stderr, f"the crash message was printed: {where}"
+    assert f"ERROR: unexpected internal error (RuntimeError): {shown}" in proc.stderr, (
         f"the injected crash never fired (the tool parses no arguments through "
         f"ArgumentParser.parse_args?): {where}")
     assert proc.returncode == EXIT_CALLER_ERROR, f"a crash must exit 2: {where}"

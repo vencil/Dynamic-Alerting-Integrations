@@ -1731,6 +1731,84 @@ promtool query instant 'count(ALERTS{alertstate="firing"})'
 
 ---
 
+#### migrate-credentials
+
+Finds receiver credentials **written out** in conf.d, rewrites the ones a tenant owns as Secret references, and lists every place to rotate ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)). ⚠️ **Report only**: nothing refuses a written-out credential yet; next, the generator refuses it by the same judgement (`_lib_validation.plaintext_credential_findings`). ⚠️ The v2.9.0 image does not have this subcommand yet; the examples below need the next image. <!-- image-caveat: v2.9.0 -->
+
+**Judgement** (owner decision; the tables are the `plaintext` column of `_lib_validation.CREDENTIAL_REF_SITES` and `CREDENTIAL_PLAINTEXT_SITES`):
+
+| Place | Written out |
+|-------|-------------|
+| slack `api_url`, teams `webhook_url`, rocketchat `url`, pagerduty `routing_key` / `service_key`, email `auth_password`, every reference place under webhook `http_config` | refused: a reference only |
+| webhook `url` | taken, unless it carries userinfo (`user:pass@`, or just `user@`) |
+| `http_config.proxy_connect_header`, `http_config.oauth2.proxy_connect_header` | refused when present, whatever the value: the platform sets `HTTPS_PROXY` on Alertmanager from a Secret and the tenant writes `proxy_from_environment: true` |
+| `http_config.proxy_url`, `http_config.oauth2.proxy_url` | refused with userinfo (same alternative) |
+| email `headers`, `http_headers.*.values`, `oauth2.endpoint_params`, `oauth2.claims` | allowed |
+
+It reads each receiver **as its file writes it** (not merged): the tenant's `_routing` (receiver, `overrides[i]`, `routes[i]`) and `tenants.<t>._routing_enforced`, and the platform's `_routing_defaults`, routing profiles and top-level `_routing_enforced` — places no plane reads included (a value written there is in the repository all the same). A file that cannot be read ⇒ exit `2`.
+
+**Output**
+
+1. **Rewrite plan**: each refused value in a tenant's `_routing` becomes `{secret: {key: <key>}}`. The key is derived from the place and the field path (`receiver.api_url`, `overrides.0.receiver.http_config.basic_auth.password`); it must be a valid Secret data key and unique in the tenant, otherwise the value is left and listed for a person. By default the plan is printed as rows (`plan`: file, line, place, tenant, the data key it becomes as `ref_key`), as text or `--json`; nothing taken from a file's text is printed, so there is no diff — run `git diff` after `--write` to see the change. `--write` applies it through `da-guard write`. ⚠️ A value inside a list (`overrides` / `routes` / `http_headers.*.secrets`) rewrites the whole list: comments inside it are not kept.
+2. **Secret manifests**: `--manifests-out DIR` with `--write` writes one `da-<tenant>.yaml` per tenant (`kind: Secret`, `stringData`), created 0600, together with the conf.d rewrite or not at all: anything held back (`blocked_after_rewrite`, `rewrite_not_effective`, `rewrite_refused`) writes neither. Without `--write` DIR is only checked, and `manifests[].path` says where they would go (`written: false`).
+3. **Rotation list**: file, line, field path and tenant of every written-out credential, never the value; what to do is in [secret-leak-remediation-sop](internal/secret-leak-remediation-sop.md). For a value inside a list the line is the list key's (`line_is_field: false` in `--json`).
+
+Left for a person (`decisions`, with the reason): values in platform places (a URL with userinfo there has its own advice), in places no plane reads (a tenant's `_routing_enforced`, a top-level `_routing_enforced` in a file not named `_…`, a `_routing_defaults` outside its carrier, …: delete it, but it is still on the rotation list), an invalid tenant id (`tenant_id_invalid`: no rewrite, no manifest), a webhook url with userinfo, the four proxy credentials, a key that cannot be derived or is taken, a list holding a value that cannot be written back (only that list is left), and a place that, read back after the rewrite, is still written out (`rewrite_not_effective`: nothing is written). A file no plane reads (a second defaults carrier in a directory, say) is listed under `unread`: the exit code is at least 1, and "No credential is written out" is not printed.
+
+The rewritten tree, on a temporary copy, is judged by the generator (under `--policy`; the generator reads a whole tree from disk, so the copy is the whole conf.d, in a 0700 temporary directory removed when the judgement ends — the written-out values of the other places are in it meanwhile): a reference it would still refuse (say `auth_password` without the policy's `allowed_domains`, an `http_config` reference without `follow_redirects: false`), and a tenant with routing before the rewrite and none after, is listed under `blocked_after_rewrite` (kind / field from a closed vocabulary, `other` otherwise). The run does not count as done, and **`--write` writes nothing** (no manifest, no conf.d file), exit 1: fix the policy or the `http_config` first, then run again.
+
+⛔ Credential values are written only into the `--manifests-out` files. Every string of the report comes from the tool's own constants, file paths, valid tenant ids, derived keys and place paths; a key the user chose in a place path (a header name, a profile name) is printed only as an HTTP token of at most 64 characters, `<key>` otherwise; a derived key must pass the same rule, else it is `key_invalid`.
+
+⛔ **What the tool promises, and what it does not** (owner decision): only that **the credential places it rewrites** are no longer written out — the dry-run rewrite is read back by parse-tree (anchors, aliases and merge keys resolved) and judged again by the same judgement; a place still written out is `rewrite_not_effective` and nothing is written; after the real write the files are read back and judged once more, and a place still written out is exit `2`, saying that conf.d was written but these places are still written out, naming them (never their values) and the manifests written. It does **not** promise to find other copies: another field of the file, a merge source (anchor), a comment, another file, the old value in git history. So every value on the rotation list must be rotated as [secret-leak-remediation-sop](internal/secret-leak-remediation-sop.md) says; rotation is what makes those copies dead. Also: `da-guard write` drops the comment at the end of a line it rewrites.
+
+**Syntax**
+
+```bash
+da-tools migrate-credentials --config-dir <DIR> [options]
+```
+
+**Options**
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--config-dir <DIR>` | conf.d root; read through da-guard (none usable: exit `2`) | (required) |
+| `--write` | Write the rewrite back into conf.d (through `da-guard write`, one batch, all or nothing). Needs `--manifests-out`, else exit `2` and nothing is written — the values need somewhere to go once they leave conf.d; the manifests are written first, conf.d after. With `blocked_after_rewrite` non-empty, or a file that cannot be rewritten (`rewrite_not_effective`, `rewrite_refused`), nothing is written (above). A manifest write failing part-way is exit `2`, naming the manifests written and that conf.d was not changed; a failed `da-guard write` is exit `2`, naming that the manifests were written and conf.d was not changed (or which files a part-way write changed), with the manifest paths; a place still written out when read back after the write is exit `2` (above) | false |
+| `--manifests-out <DIR>` | With `--write`, one `da-<tenant>.yaml` per tenant (0600, opened `O_NOFOLLOW`), directly in DIR, for a valid tenant id only. DIR not a directory, the conf.d or inside it, inside a git worktree; a manifest whose real path is inside a git worktree; or a manifest path already there as a symlink, a file that is not regular, a file with another hard link, or a conf.d file ⇒ exit `2`, before anything is written | none |
+| `--policy <PATH>` | The deployment policy (`allowed_domains`, `shared_secrets`) the rewritten binding is judged under; as `generate-routes --policy` | none |
+| `--json` | The report as one JSON document on stdout (`schema: da-tools.migrate-credentials/v1`; `plan`, `manifests`, `decisions`, `rotate`, `blocked_after_rewrite`, `unread`, `notes`) | false |
+
+**Exit codes**
+
+| Code | Meaning |
+|------|---------|
+| `0` | nothing written out, and every config file read. ⚠️ Only receivers whose `type` is a known receiver type, in `overrides` / `routes` that are lists, are judged; a receiver with an invalid `type` or in a block of the wrong shape is not (the generator skips it, yet the value is in the repository) — fix such files with `validate-config` first |
+| `1` | found, or a file no plane reads (`unread`) (the report is the answer; also after `--write`: the rotation list stands; also when the rewrite would be refused and `--write` wrote nothing) |
+| `2` | usage / I/O error, no usable da-guard, a file that cannot be read, `--manifests-out` refused, a failed manifest or `da-guard write`, a place still written out when read back after the write |
+
+**Examples**
+
+```bash
+# Look only: the rewrite plan, the Secrets to create, the places to rotate
+da-tools migrate-credentials --config-dir conf.d
+
+# Apply: the manifests and conf.d together; the manifest directory is outside
+# the repository, mounted on its own (da-tools mounts only the current
+# directory, and manifests may not be written into a git worktree). Then git diff.
+# ⚠️ The container cannot see the host's .git, so inside it the tool cannot tell
+# whether /secrets lies in a git repository on the host: make sure $HOME/da-secrets
+# is in none (for example when $HOME itself is a dotfiles repository)
+mkdir -m 700 -p "$HOME/da-secrets"
+docker run --rm --network=host --user "$(id -u):$(id -g)" \
+  -v "$(pwd):/workspace" -w /workspace -v "$HOME/da-secrets:/secrets" \
+  ghcr.io/vencil/da-tools:v2.9.0 migrate-credentials --config-dir conf.d \
+  --manifests-out /secrets --write --policy policy.yaml
+
+# Machine-readable rotation list
+da-tools migrate-credentials --config-dir conf.d --json | jq -r '.rotate[] | "\(.file):\(.line) \(.location)"'
+```
+
+---
+
 #### operator-check
 
 Verify Operator CRD deployment status in a Prometheus Operator cluster, checking 6 indicators and generating a diagnostic report.

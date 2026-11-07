@@ -156,6 +156,8 @@ TOOL_FILES=(
     ops/runtime_audit.py
     # v2.6.0 Migration tools
     ops/migrate_to_operator.py
+    # #1560 ⑤-a — receiver credentials written out in conf.d → Secret references
+    ops/migrate_credentials.py
     # v2.3.0 Federation tools
     ops/generate_rule_pack_split.py
     # ADR-020 IV-2l (#518) — federation JWT signing-key generation / rotation

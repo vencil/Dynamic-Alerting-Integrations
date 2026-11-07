@@ -181,6 +181,7 @@ docker run --rm \
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
 | `migrate-to-operator` | ConfigMap 格式 → Operator 原生 PrometheusRule CRD（含遷移清單與預檢；Alertmanager 路由改用 `generate-routes` → configSecret） | `--source-dir <d>` |
+| `migrate-credentials` | 找出 conf.d 裡明文寫的 receiver 憑證：租戶的改寫成 Secret 參照（diff；`--write` 套用）、`--manifests-out` 產出每個租戶的 Secret（0600）、列出待輪替清單（#1560，只報告不擋） | `--config-dir <dir>` |
 | `operator-generate` | 產出 PrometheusRule / ServiceMonitor CRD YAML（Alertmanager 路由改用 `generate-routes` → configSecret，#3572） | `--rule-packs-dir <dir>` |
 | `operator-check` | 驗證 Operator CRD 部署狀態（檢查項目 + 診斷） | `--namespace <ns>` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（MISSING / UNHEALTHY / ORPHAN；偵測-only，不自癒） | `--prometheus <url>` 或 `--runtime-json <file>` |

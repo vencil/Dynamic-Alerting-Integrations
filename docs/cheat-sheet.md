@@ -63,6 +63,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `operator-check` | Operator CRD 部署狀態驗證（檢查項目 + 診斷報告） | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING/UNHEALTHY/ORPHAN，偵測-only） | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
 | `migrate-to-operator` | 讀取 ConfigMap 格式規則，產出等效 PrometheusRule CRD YAML + 遷移清單 | --source-dir <DIR>, --dry-run, --checklist-only | `da-tools migrate-to-operator --help` |
+| `migrate-credentials` | 找出 conf.d 明文憑證：改寫成 Secret 參照、產出 Secret 清單與待輪替清單（只報告） | --config-dir <DIR>, --manifests-out <DIR>, --write | `da-tools migrate-credentials --help` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | --rule-packs-dir <DIR>, --output-dir <DIR>, --operator | `da-tools rule-pack-split --help` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
 | `guard` | Dangling Defaults Guard（v2.8.0），shell-out 至 `da-guard` Go binary 驗 conf.d/ schema + cardinality（路由交給 `generate-routes`，樹上有路由時 exit 4） | defaults-impact 子命令 + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
