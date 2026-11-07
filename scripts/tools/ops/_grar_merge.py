@@ -43,7 +43,7 @@ from _lib_validation import (  # noqa: E402  (#2766 finding kinds)
 from _lib_validation import (  # noqa: E402  (#1560 Secret references)
     CREDENTIAL_REF_SITES, HOST_PORT_DESTINATIONS, CredentialRefSite, RefPath,
     find_credential_refs,
-    is_secret_ref, ref_path_text, ref_value_at,
+    is_secret_ref, ref_path_text, ref_value_at, site_path_text,
 )
 
 
@@ -187,18 +187,35 @@ FINDING_KINDS: dict[str, str] = {
         "A receiver URL whose host cannot be read, so the --policy domain "
         "check cannot run; the entry is not rendered.",
     # #1560: which Secret a receiver's Secret reference may name.
+    # #1560 ⑤-b: credentials written out, judged in the file that writes them.
+    "credential_plaintext":
+        "A file writes a credential out where only a Secret reference is "
+        "taken, a URL carrying userinfo (user[:password]@), or a proxy "
+        "credential a tenant may not write (proxy_connect_header, a "
+        "proxy_url with userinfo); judged on each file's own value, before "
+        "any layer is merged. The line names the file, the place and the "
+        "category, never the value. Blocks under --validate.",
+    "credential_unjudged":
+        "A receiver, or a list holding receivers, whose credentials the "
+        "plaintext judgement cannot read: a receiver that is not a mapping or "
+        "whose type is not a receiver type, an overrides / routes that is "
+        "not a list, an item of one that is not a mapping. Blocks under "
+        "--validate.",
     "secret_ref_shared_unknown":
         "A Secret reference names a shared alias the deployment policy's "
         "shared_secrets does not list (or no --policy is given); the entry "
         "is not rendered.",
     "secret_ref_shared_field_not_allowed":
-        "A Secret reference uses a shared Secret on a field its "
-        "shared_secrets entry does not list under `fields`; the entry is not "
-        "rendered.",
+        "A Secret reference uses a shared Secret on a field whose full path "
+        "(api_url, http_config.basic_auth.password) its shared_secrets entry "
+        "does not list under `fields`; the entry is not rendered.",
     "secret_ref_shared_confined":
         "A shared Secret on a field whose credential goes to a destination "
         "the receiver names (email auth_password, the webhook http_config "
-        "credentials), which is never allowed; the entry is not rendered.",
+        "credentials) on a receiver a tenant owns; only the platform-wide "
+        "_routing_enforced (no {{tenant}}) may, under the policy's "
+        "allowed_domains, follow_redirects: false and no proxy; the entry is "
+        "not rendered.",
     "secret_ref_destination_unconfined":
         "The tenant's Secret on a field whose credential goes to a "
         "destination the receiver names, but the --policy allowed_domains is "
@@ -477,6 +494,29 @@ def ignored_key_warning(line: str, *, kind: str = UNCLASSIFIED,
                              field=field)
 
 
+# ── #1560 ⑤-b: "a credential is written out" is a type too ───────────────
+# A credential a file writes out where the policy refuses it (or a receiver
+# whose credentials cannot be judged) is judged in the FILE that writes it,
+# before any layer is merged (``_grar_parse.credential_findings``), not on a
+# rendered entry: the receiver may still render. Its own type, so
+# ``blocking_generation_errors`` refuses it under ``--validate`` and
+# validate-config's ``routes`` row; same rules as the types above.
+class CredentialRefusal(Finding):
+    """A line naming a credential a file writes out where it is refused."""
+
+    __slots__ = ()
+    _DEFAULT_BLOCKS = "validate"
+
+
+def credential_refusal(line: str, *, kind: str, tenant: str | None = None,
+                       file: str | None = None,
+                       field: str | None = None) -> CredentialRefusal:
+    """Mark *line* as a credential refusal — blocking under ``--validate``
+    and validate-config's ``routes`` row."""
+    return CredentialRefusal(line, kind=kind, tenant=tenant, file=file,
+                             field=field)
+
+
 def _apply_timing_params(source_dict: dict, context_name: str, *,
                          tenant_id: str | None = None,
                          field_prefix: str = "") -> tuple[dict, list[str]]:
@@ -705,13 +745,6 @@ def receiver_type(receiver_obj: object) -> str:
 DEFAULT_MOUNT_ROOT = "/etc/alertmanager/secrets"
 #: the tenant's own Secret is `da-<tenant>`; a shared Secret may not start so.
 OWN_NAME_PREFIX = "da-"
-#: the top-level receiver fields a shared Secret is never allowed on: their
-#: value goes to a destination the receiver itself names (CREDENTIAL_REF_SITES
-#: rows with `destinations`; today auth_password → smarthost). The nested
-#: http_config rows are all such fields too, and no `shared_secrets` entry can
-#: list them (it lists top-level field names).
-CONFINED_REF_FIELDS = frozenset(
-    s.path[0] for s in CREDENTIAL_REF_SITES if len(s.path) == 1 and s.destinations)
 # Which proxies the requests carrying a credential go through are each site's
 # `proxies` (CREDENTIAL_REF_SITES): http_config.proxy_url, and for oauth2
 # oauth2.proxy_url as well (the token request). proxy_from_environment is Alertmanager's own
@@ -867,14 +900,23 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
 
     The rules, per ``CREDENTIAL_REF_SITES`` row:
 
-    * a shared alias must be listed, and its entry must list the field;
+    * a shared alias must be listed, and its entry must list the row's full
+      path (``site_path_text``: ``api_url``,
+      ``http_config.basic_auth.password``) under ``fields``;
     * a row with ``destinations`` (email auth_password → smarthost; every
       webhook http_config leaf → url, the oauth2 ones → oauth2.token_url and
-      url, where the access token they yield is sent): the tenant writes
-      where the credential goes, so it never takes a shared Secret, and takes
-      the tenant's own only when *allowed_domains* is non-empty and admits
-      every destination's host, written out (a destination that is missing,
-      or itself a reference, cannot be checked);
+      url, where the access token they yield is sent): whoever writes the
+      receiver writes where the credential goes, so the credential is
+      confined by *allowed_domains* — non-empty, and admitting every
+      destination's host, written out (a destination that is missing, or
+      itself a reference, cannot be checked). On a receiver a tenant owns it
+      never takes a shared Secret (the tenant would point the platform's
+      credential at a host of its choosing) and takes the tenant's own under
+      that allowlist; on the receiver no tenant owns (*owner_tenant* None:
+      the platform-wide ``_routing_enforced``, read only from a root ``_``
+      file, which tenant-api cannot write) it takes a shared Secret the
+      policy lists for the row, under the same allowlist, and the redirect
+      and proxy rules below (#1560 ⑤-b, 2-c);
     * a shared reference, or a reference on a row with destinations, refuses
       a set proxy on any of its row's ``proxies`` (a proxy the tenant chose sees a
       plain-http request whole, and an https one whenever the receiver's
@@ -930,11 +972,14 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
             proxied.setdefault(proxy, []).append(
                 f"the receiver uses the shared Secret '{alias}': the proxy "
                 "would see the request to the shared destination")
-        if site.destinations:
+        field_path = site_path_text(site.path)
+        if site.destinations and owner_tenant is not None:
             refuse(f"references the shared Secret '{alias}', which this field "
-                   f"may never use: the credential goes to "
+                   f"may not use on a receiver a tenant owns: the credential goes to "
                    f"{', '.join(ref_path_text(d) for d in site.destinations)}, which this receiver "
-                   "names; use the tenant's own Secret ({secret: {key: …}})",
+                   "names; use the tenant's own Secret ({secret: {key: …}}) (only "
+                   "the platform-wide _routing_enforced, without {{tenant}}, may "
+                   "use a shared Secret here)",
                    where, kind="secret_ref_shared_confined")
         elif alias not in binding.shared_secrets:
             refuse(f"references the shared Secret '{alias}', which the "
@@ -942,11 +987,26 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
                    + ("" if binding.shared_secrets else
                       " (it lists none, or no --policy is given)"),
                    where, kind="secret_ref_shared_unknown")
-        elif path[0] not in binding.shared_secrets[alias].fields:
+        elif field_path not in binding.shared_secrets[alias].fields:
             refuse(f"references the shared Secret '{alias}', whose "
-                   "shared_secrets entry does not list this field under "
+                   f"shared_secrets entry does not list {field_path} under "
                    f"fields ({', '.join(sorted(binding.shared_secrets[alias].fields))})",
                    where, kind="secret_ref_shared_field_not_allowed")
+        elif site.destinations:
+            # #1560 ⑤-b (2-c): the receiver no tenant owns; the credential
+            # is confined as a tenant's own would be.
+            checked = ", ".join(ref_path_text(d) for d in site.destinations)
+            if not allowed_domains:
+                problems = ["the deployment policy (--policy) has no allowed_domains "
+                            f"to confine the {checked} it is sent to"]
+            else:
+                problems = [p for d in site.destinations
+                            if (p := _destination_problem(receiver_obj, d, allowed_domains))]
+            if problems:
+                refuse(f"references the shared Secret '{alias}', but {'; '.join(problems)}",
+                       where, kind="secret_ref_destination_unconfined")
+            if site.follows_redirects:
+                redirect_paths.append(where)
     for proxy, reasons in proxied.items():
         if _is_set(ref_value_at(receiver_obj, proxy)):
             refuse(f"sets a proxy the tenant chose, but {'; '.join(dict.fromkeys(reasons))}; "

@@ -25,6 +25,11 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
+from _lib_validation import (  # noqa: E402  (#1560 ⑤-b: the one plaintext judgement)
+    NEEDS_REFERENCE, PROXY_CREDENTIAL, URL_USERINFO,
+    plaintext_credential_findings, ref_path_text,
+)
+from _lib_python import RECEIVER_TYPES  # noqa: E402  (#1560 ⑤-b)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
@@ -46,6 +51,7 @@ from _lib_confd import (  # noqa: E402
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
     Finding,
+    credential_refusal,
     domain_policy_levels,
     merge_routing_with_defaults,
     policy_reaches,
@@ -1175,6 +1181,8 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         "tenant_declarations": [],   # (file, tenant id) per tenant-file key
         # #2315: {tenant_id: [file, ...]} for every id two tenant files declare.
         "duplicate_tenants": {},
+        # #1560 ⑤-b: `credential_facts` of every file read, judged as it is read.
+        "credential_facts": [],
     }
 
     config_dir_problem = classify_path(config_dir, "dir", lang="en", flag="--config-dir")  # #3276
@@ -1342,6 +1350,10 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
 
         # #1460: read — a mapping (an empty file is an empty mapping).
         result["files_read"] += 1
+        # #1560 ⑤-b: the credentials this file writes, judged on its own
+        # values now, before anything below merges a layer into another.
+        if isinstance(data, dict):
+            result["credential_facts"].extend(credential_facts(fname, data, entry))
 
         if not data:
             continue
@@ -1683,6 +1695,10 @@ class TenantTree:
     # #1211: the tenants whose own `_routing` is `disable` (an explicit
     # opt-out, as opposed to having no `_routing` at all).
     routing_disabled: frozenset[str] = frozenset()
+    # #1560 ⑤-b: every credential a file writes out, and every place whose
+    # receivers cannot be judged (`CredentialFact`, judged as each file was
+    # read) — `credential_findings` turns them into the run's findings.
+    credential_facts: list = field(default_factory=list)
 
 
 def policy_level_source(parsed: dict, level: str) -> str:
@@ -1888,7 +1904,8 @@ def load_tenant_tree(
         invalid_tenant_ids=invalid_ids,
         field_type_errors=field_type_errors,
         unselected_carriers=list(parsed.get("unselected_carriers", [])),
-        routing_disabled=frozenset(parsed.get("disabled_tenants", ())))
+        routing_disabled=frozenset(parsed.get("disabled_tenants", ())),
+        credential_facts=list(parsed.get("credential_facts", ())))
 
 
 def print_reader_warnings(source: "TenantTree | dict") -> None:
@@ -1944,24 +1961,54 @@ class RawReceiver(NamedTuple):
     tenant_valid: bool = True
 
 
+#: #1560 ⑤-b: why a place holding receivers cannot be judged for credentials
+#: written out (``Unjudged.reason``) — the schema's shapes the judgement needs.
+UNJUDGED_REASONS = {
+    "receiver_not_mapping": "the receiver is not a mapping",
+    "receiver_type_unknown": ("its type is missing or not one of "
+                              + ", ".join(sorted(RECEIVER_TYPES))),
+    "slot_not_list": "it is not a list",
+    "item_not_mapping": "it is not a mapping",
+}
+
+
+class Unjudged(NamedTuple):
+    """#1560 ⑤-b: a place of one file whose receivers' credentials
+    ``plaintext_credential_findings`` cannot judge (``UNJUDGED_REASONS``):
+    the value is still written in the file. Fields as ``RawReceiver``'s."""
+
+    file: str
+    path: tuple
+    tenant: "str | None"
+    place: str
+    reason: str
+    read: bool = True
+    tenant_valid: bool = True
+
+
 class RawReceivers(NamedTuple):
     """``raw_receivers``' answer: the receivers; the config files it could
     not read (``(file, reason)``) — none of their receivers is in the list,
     so a caller judging "no credential is written out" must name them; and
     the config files no plane reads (``(file, reason)``: the defaults
     carriers a directory passes over), which this reader does not open
-    either — "not read" is not "nothing written"."""
+    either — "not read" is not "nothing written". ``unjudged`` (#1560 ⑤-b):
+    the places whose receivers no judgement can read (``Unjudged``)."""
 
     receivers: list
     unreadable: list
     unread: list = []
+    unjudged: list = []
 
 
-def _block_receivers(block: object, prefix: tuple, *, slots: tuple[str, ...]
+def _block_receivers(block: object, prefix: tuple, *, slots: tuple[str, ...],
+                     problems: "list[tuple[tuple, str]] | None" = None,
                      ) -> list[tuple[tuple, object]]:
     """``(path, receiver)`` of each receiver a routing block holds: its
     ``receiver`` and the ``receiver`` of each mapping item of the lists in
-    *slots* (``overrides`` / ``routes``). Anything not shaped so holds none."""
+    *slots* (``overrides`` / ``routes``). Anything not shaped so holds none;
+    #1560 ⑤-b: a slot that is set but no list, or an item of one that is set
+    but no mapping, is appended to *problems* as ``(path, reason)``."""
     if not isinstance(block, dict):
         return []
     out: list[tuple[tuple, object]] = []
@@ -1969,36 +2016,62 @@ def _block_receivers(block: object, prefix: tuple, *, slots: tuple[str, ...]
         out.append((prefix + ("receiver",), block["receiver"]))
     for slot in slots:
         items = block.get(slot)
-        for i, item in enumerate(items if isinstance(items, list) else []):
-            if isinstance(item, dict) and "receiver" in item:
-                out.append((prefix + (slot, i, "receiver"), item["receiver"]))
+        if items is not None and not isinstance(items, list):
+            if problems is not None:
+                problems.append((prefix + (slot,), "slot_not_list"))
+            continue
+        for i, item in enumerate(items or []):
+            if isinstance(item, dict):
+                if "receiver" in item:
+                    out.append((prefix + (slot, i, "receiver"), item["receiver"]))
+            elif item is not None and problems is not None:
+                problems.append((prefix + (slot, i), "item_not_mapping"))
     return out
 
 
-def _receivers_of(fname: str, data: dict, entry: object) -> list[RawReceiver]:
+def _receivers_of(fname: str, data: dict, entry: object,
+                  unjudged: "list[Unjudged] | None" = None) -> list[RawReceiver]:
     """The receivers file *fname* (content *data*, listing entry *entry*:
-    its Go class) writes, each with whether a plane reads its place."""
+    its Go class) writes, each with whether a plane reads its place. #1560
+    ⑤-b: the places no judgement can read are appended to *unjudged* — a
+    slot or item of the wrong shape, and a receiver that is set (not null)
+    but no mapping, or whose ``type`` is not a ``RECEIVER_TYPES`` key."""
     found: list[RawReceiver] = []
     at_root = PurePosixPath(fname).parent.as_posix() == ROOT_LEVEL
     reserved = entry.reserved
     carrier = entry.cls == "defaults"
 
-    def add(entries: list, tenant: "str | None", place: str, read: bool) -> None:
+    def add(entries: list, tenant: "str | None", place: str, read: bool,
+            problems: "list[tuple[tuple, str]] | None" = None) -> None:
         ok = tenant is None or is_valid_tenant_id(tenant)
         found.extend(RawReceiver(fname, p, tenant, place, r, read, ok) for p, r in entries)
+        if unjudged is None:
+            return
+        for p, why in problems or []:
+            unjudged.append(Unjudged(fname, p, tenant, place, why, read, ok))
+        for p, r in entries:
+            why = ("receiver_not_mapping" if not isinstance(r, dict) else
+                   "receiver_type_unknown" if not (isinstance(r.get("type"), str)
+                                                   and r["type"] in RECEIVER_TYPES)
+                   else None)
+            if r is not None and why is not None:
+                unjudged.append(Unjudged(fname, p, tenant, place, why, read, ok))
 
     # _parse_platform_config (root: a `_` file) / _parse_nested_config
     # (below the root: the directory's defaults carrier).
+    p: list[tuple[tuple, str]] = []
     add(_block_receivers(data.get("_routing_defaults"), ("_routing_defaults",),
-                         slots=("overrides", "routes")), None, "routing_defaults",
-        reserved if at_root else carrier)
+                         slots=("overrides", "routes"), problems=p), None, "routing_defaults",
+        reserved if at_root else carrier, p)
     # _parse_profiles_and_policies: profiles only from _routing_profiles.y(a)ml.
     profiles = data.get("routing_profiles")
     named = os.path.basename(fname) in ("_routing_profiles.yaml", "_routing_profiles.yml")
     for name in (sorted(n for n in profiles if isinstance(n, str))
                  if isinstance(profiles, dict) else []):
+        p = []
         add(_block_receivers(profiles[name], ("routing_profiles", name),
-                             slots=("overrides", "routes")), None, "routing_profile", named)
+                             slots=("overrides", "routes"), problems=p),
+            None, "routing_profile", named, p)
     # Read from a root `_` file only (a tenant file's: "ignored", below the
     # root: refused).
     add(_block_receivers(data.get("_routing_enforced"), ("_routing_enforced",),
@@ -2010,9 +2083,10 @@ def _receivers_of(fname: str, data: dict, entry: object) -> list[RawReceiver]:
         if not isinstance(body, dict):
             continue
         # A platform file below the root: its `tenants:` block is read by no plane.
+        p = []
         add(_block_receivers(body.get("_routing"), ("tenants", tenant, "_routing"),
-                             slots=("overrides", "routes")), tenant, "tenant_routing",
-            at_root or not reserved)
+                             slots=("overrides", "routes"), problems=p), tenant,
+            "tenant_routing", at_root or not reserved, p)
         add(_block_receivers(body.get("_routing_enforced"),
                              ("tenants", tenant, "_routing_enforced"), slots=()),
             tenant, "tenant_enforced", False)
@@ -2064,6 +2138,7 @@ def raw_receivers(config_dir: str,
     skipped = {p for p, _why in not_read}
     unread = [(p.relative_to(root).as_posix(), why) for p, why in not_read]
     found: list[RawReceiver] = []
+    unjudged: list[Unjudged] = []
     for path_p in listing.files:
         if path_p in skipped:
             continue
@@ -2076,5 +2151,106 @@ def raw_receivers(config_dir: str,
         if not isinstance(data, dict):
             continue
         entry = listing.listing.entry(fname)
-        found.extend(_receivers_of(fname, data, entry))
-    return RawReceivers(found, unreadable, unread)
+        found.extend(_receivers_of(fname, data, entry, unjudged))
+    return RawReceivers(found, unreadable, unread, unjudged)
+
+
+# ============================================================
+# #1560 ⑤-b: credentials written out refuse the tree
+# ============================================================
+
+#: What each plaintext category asks for (``credential_findings``' lines).
+_PLAINTEXT_REMEDY = {
+    NEEDS_REFERENCE: (
+        "a credential written out where only a Secret reference is taken: write "
+        "{secret: {key: <key>}} (the owner tenant's own Secret da-<tenant>), or, where "
+        "the deployment policy's shared_secrets lists this field, {secret: {shared: "
+        "<alias>, key: <key>}}; `da-tools migrate-credentials` moves a tenant's own"),
+    URL_USERINFO: (
+        "a URL carrying userinfo (user[:password]@): drop it from the URL and send the "
+        "credential with http_config (basic_auth.password / authorization.credentials "
+        "as a Secret reference)"),
+    PROXY_CREDENTIAL: (
+        "a proxy credential a tenant may not write (proxy_connect_header, or a "
+        "proxy_url with userinfo): give Alertmanager HTTPS_PROXY from a Secret and "
+        "write http_config.proxy_from_environment: true"),
+}
+_ROTATE = "; rotate the value (docs/internal/secret-leak-remediation-sop.md)"
+
+
+def _judged_effectively(u: Unjudged) -> bool:
+    """Whether the generator's own render already refuses *u* (a tenant's
+    ``_routing`` in a file a plane reads: ``build_receiver_config`` names an
+    unknown type, ``expand_routing_overrides`` / the routes expansion a
+    slot or item of the wrong shape) — not reported twice."""
+    return u.place == "tenant_routing" and u.read and u.tenant_valid
+
+
+class CredentialFact(NamedTuple):
+    """#1560 ⑤-b: one credential a file writes out where the policy refuses
+    it (``kind`` ``credential_plaintext``, ``detail`` the
+    ``PlaintextFinding.category``), or one place whose receivers cannot be
+    judged (``credential_unjudged``, ``detail`` an ``UNJUDGED_REASONS``
+    key). ``path`` from the file's top level; never the value."""
+
+    file: str
+    path: tuple
+    tenant: "str | None"
+    kind: str
+    detail: str
+
+
+def credential_facts(fname: str, data: dict, entry: object) -> list[CredentialFact]:
+    """#1560 ⑤-b: what file *fname* (content *data* as the routing reader
+    reads it, listing entry *entry*) writes that the generator refuses:
+    every finding of ``plaintext_credential_findings`` — THE one judgement —
+    on each receiver as this file writes it (``_receivers_of``: every
+    routing place, read by a plane or not), and every ``Unjudged`` place but
+    those the render refuses already (``_judged_effectively``). Judged on
+    the file's own value, before any layer is merged."""
+    unjudged: list[Unjudged] = []
+    out: list[CredentialFact] = []
+    for r in _receivers_of(fname, data, entry, unjudged):
+        for f in plaintext_credential_findings(r.receiver):
+            out.append(CredentialFact(fname, r.path + f.path, r.tenant,
+                                      "credential_plaintext", f.category))
+    out.extend(CredentialFact(u.file, u.path, u.tenant, "credential_unjudged", u.reason)
+               for u in unjudged if not _judged_effectively(u))
+    return out
+
+
+def credential_findings(tree: "TenantTree", *, scope: "frozenset[str] | None" = None,
+                        ) -> list[Finding]:
+    """#1560 ⑤-b: the run's findings for *tree*'s ``credential_facts`` (every
+    file ``load_tenant_tree`` read, judged as it was read) — each a
+    ``CredentialRefusal`` (blocks under ``--validate``) naming the file, the
+    place and the category, never the value.
+
+    *scope* (the generator container: the files the write changes, relative
+    to the conf.d root): a fact in another file does not block — a NOTICE
+    (``blocks: never``) instead; tenant-api refuses a write for what the
+    files it writes hold (ADR-038 decision 5), not for a file it did not
+    touch. None (every CLI run): every fact blocks.
+
+    A file that cannot be read has no facts: the generator refuses the
+    whole tree on it before this judgement (``tree_refusal``), and
+    validate-config's yaml_syntax row fails on it."""
+    out: list[Finding] = []
+    for fact in tree.credential_facts:
+        where = ref_path_text(fact.path)
+        text = (f"is {_PLAINTEXT_REMEDY[fact.detail]} ({fact.detail}){_ROTATE}"
+                if fact.kind == "credential_plaintext" else
+                "cannot be judged for credentials written out: "
+                f"{UNJUDGED_REASONS[fact.detail]} ({fact.detail}); write it as "
+                "tenant-config.schema.json says")
+        if scope is None or fact.file in scope:
+            out.append(credential_refusal(
+                f"  ERROR (credential): {fact.file}: {where} {text}",
+                kind=fact.kind, tenant=fact.tenant, file=fact.file, field=where))
+        else:
+            out.append(Finding(
+                f"  NOTICE (credential): {fact.file}: {where} {text} (not refused "
+                "here: this write does not change that file)",
+                kind=fact.kind, blocks="never", tenant=fact.tenant, file=fact.file,
+                field=where))
+    return out

@@ -44,7 +44,7 @@ _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 _T = "demo-apac"
 
 _MAIN = ("      receiver:\n        type: pagerduty\n"
-         "        service_key: main-key\n")
+         "        service_key: {secret: {key: main-key}}\n")  # #1560 ⑤-b
 _WEBHOOK = ("        receiver:\n          type: webhook\n"
             "          url: https://hooks.example.com/x\n")
 

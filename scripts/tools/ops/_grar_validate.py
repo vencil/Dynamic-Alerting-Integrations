@@ -53,11 +53,11 @@ from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _lib_validation import (  # noqa: E402  (#1560)
-    is_secret_ref, receiver_secret_ref_fields, secret_ref_rule,
+    is_secret_ref, secret_ref_rule, shared_secret_field_texts,
 )
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     OWN_NAME_PREFIX,
-    CONFINED_REF_FIELDS,
+    CredentialRefusal,
     SharedSecret,
     ROOT_LEVEL,
     Finding,
@@ -917,12 +917,15 @@ class PolicyDocument(NamedTuple):
 
 
 def _shared_secret_fields() -> frozenset[str]:
-    """The receiver fields a ``shared_secrets`` entry may list: every
-    top-level field that takes a Secret reference, but those whose credential
-    goes to a destination the receiver names (``CONFINED_REF_FIELDS``:
-    auth_password) (#1560). The http_config leaves are never listable."""
-    return frozenset(f for rtype in RECEIVER_TYPES
-                     for f in receiver_secret_ref_fields(rtype)) - CONFINED_REF_FIELDS
+    """The values a ``shared_secrets`` entry may list under ``fields``: the
+    full path of each ``CREDENTIAL_REF_SITES`` row (``site_path_text``:
+    ``api_url``, ``http_config.basic_auth.password``,
+    ``http_config.http_headers.*.secrets[]``) (#1560 ⑤-b, BREAKING: it was
+    the top-level field name, so ``http_config`` opened all eight
+    http_config rows at once). Which receiver may then use it on a row
+    whose credential goes to a destination the receiver names is the
+    generator's (``secret_binding_findings``)."""
+    return shared_secret_field_texts()
 
 
 # A Kubernetes object name (DNS-1123 subdomain), for a shared Secret's name.
@@ -941,6 +944,12 @@ def _load_shared_secrets(data: dict, policy_path: str) -> Mapping[str, SharedSec
 
         shared_secrets:
           corp-slack: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
+          corp-smtp: {secret: corp-smtp, fields: [auth_password]}
+          corp-hook: {secret: corp-hook, fields: [http_config.basic_auth.password]}
+
+    Each ``fields`` value is a full row path (``_shared_secret_fields``);
+    a bare ``http_config`` (the spelling before #1560 ⑤-b) names no row and
+    makes the policy unusable, with the paths it may have meant.
     """
     raw = data.get("shared_secrets")
     if raw is None:
@@ -949,7 +958,7 @@ def _load_shared_secrets(data: dict, policy_path: str) -> Mapping[str, SharedSec
     if not isinstance(raw, dict):
         raise PolicyInputError(
             f"{where} is {type(raw).__name__}, expected a mapping of alias → "
-            "{secret: <Secret name>, fields: [<receiver field>, ...]}")
+            "{secret: <Secret name>, fields: [<receiver field path>, ...]}")
     alias_re, alias_max = secret_ref_rule()["shared"]
     allowed = _shared_secret_fields()
     out: dict[str, SharedSecret] = {}
@@ -962,7 +971,7 @@ def _load_shared_secrets(data: dict, policy_path: str) -> Mapping[str, SharedSec
         if not isinstance(entry, dict) or set(entry) != {"secret", "fields"}:
             raise PolicyInputError(
                 f"{where}: entry {alias!r} must be exactly "
-                "{secret: <Secret name>, fields: [<receiver field>, ...]}")
+                "{secret: <Secret name>, fields: [<receiver field path>, ...]}")
         name, fields = entry["secret"], entry["fields"]
         if (not isinstance(name, str) or len(name) > 253
                 or _SECRET_NAME_RE.fullmatch(name) is None):
@@ -979,12 +988,15 @@ def _load_shared_secrets(data: dict, policy_path: str) -> Mapping[str, SharedSec
                 or not all(isinstance(f, str) for f in fields)):
             raise PolicyInputError(
                 f"{where}: entry {alias!r} fields must be a non-empty list of "
-                f"receiver field names (of {', '.join(sorted(allowed))})")
+                f"receiver field paths (of {', '.join(sorted(allowed))})")
         bad = sorted(set(fields) - allowed)
         if bad:
-            why = (" — auth_password never takes a shared Secret: the password "
-                   "goes to the SMTP server the receiver names"
-                   if set(bad) & CONFINED_REF_FIELDS else "")
+            # #1560 ⑤-b: the top-level spelling `http_config` named eight
+            # rows at once; it names none now — say which paths it may mean.
+            meant = sorted(f for f in allowed
+                           if any(f.startswith(b + ".") for b in bad))
+            why = (f" — a field is a full path now; under {bad} the paths are "
+                   f"{', '.join(meant)}" if meant else "")
             raise PolicyInputError(
                 f"{where}: entry {alias!r} lists {bad} under fields; only "
                 f"{', '.join(sorted(allowed))} may use a shared Secret{why}")
@@ -1425,7 +1437,7 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     ``schema`` / ``routes`` rows. #2164 was two spellings of this predicate
     drifting apart (validate-config showed a WARN row at exit 0 while
     ``--validate`` failed); a new blocking category added to one copy only
-    reopens exactly that. Six categories today:
+    reopens exactly that. Seven categories today:
 
     * a config entry was dropped as unusable — a ``SkippedEntryWarning``,
       i.e. a line built by ``skipped_entry_warning`` (#2489). Decided by the
@@ -1447,14 +1459,18 @@ def blocking_generation_errors(warnings: list[str]) -> list[str]:
     * a conf.d tree the routing plane refuses (#2326,
       ``ROUTING_TREE_ERROR_PREFIX``);
     * a boolean / enum field of the wrong type or an unknown value (#2906,
-      ``FIELD_TYPE_ERROR_PREFIX``).
+      ``FIELD_TYPE_ERROR_PREFIX``);
+    * a credential a file writes out where the #1560 policy refuses it, or
+      a receiver whose credentials cannot be judged — a ``CredentialRefusal``
+      (``_grar_parse.credential_findings``, #1560 ⑤-b), decided by type.
 
     ADR-007 ``--strict`` policy errors are NOT in here: they are blocking only
     under ``--strict`` and each caller already selects them by
     ``POLICY_ERROR_PREFIX``.
     """
     return [w for w in warnings
-            if isinstance(w, (SkippedEntryWarning, ReplacedValueWarning, IgnoredKeyWarning))
+            if isinstance(w, (SkippedEntryWarning, ReplacedValueWarning, IgnoredKeyWarning,
+                              CredentialRefusal))
             or is_receiver_name_collision(w)
             or is_routing_tree_error(w)
             or is_field_type_error(w)]

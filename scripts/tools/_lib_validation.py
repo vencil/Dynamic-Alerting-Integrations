@@ -607,8 +607,9 @@ def secret_ref_problem(value: Any) -> Optional[str]:
 
 
 #: #1560 plaintext policy of a credential site (``CredentialRefSite.plaintext``,
-#: ``CredentialPlaintextSite.policy``). ⑤-a only REPORTS against it
-#: (``da-tools migrate-credentials``); nothing refuses a value by it yet.
+#: ``CredentialPlaintextSite.policy``). The route generator refuses by it
+#: (``_grar_parse.credential_findings``, #1560 ⑤-b) and
+#: ``da-tools migrate-credentials`` rewrites by it.
 PLAINTEXT_REFUSED = "refused"
 PLAINTEXT_UNLESS_USERINFO = "unless_userinfo"
 PLAINTEXT_ALLOWED = "allowed"
@@ -885,9 +886,10 @@ def _written_out(value: Any) -> bool:
 
 def plaintext_credential_findings(receiver: Any, rtype: Optional[str] = None
                                   ) -> list[PlaintextFinding]:
-    """#1560 ⑤-a: every credential *receiver* writes out where the owner's
-    policy refuses it — THE one judgement; ``da-tools migrate-credentials``
-    reports by it today, and the route generator is to refuse by it next.
+    """#1560: every credential *receiver* writes out where the owner's
+    policy refuses it — THE one judgement: the route generator refuses by it
+    (``_grar_parse.credential_findings``, ⑤-b) and ``da-tools
+    migrate-credentials`` rewrites by it (⑤-a).
 
     *receiver* is the receiver as one file writes it (before any routing
     layer is merged), *rtype* its type (default: its own ``type``). Per row
@@ -956,6 +958,30 @@ def value_paths_to_mask(receiver: Any, rtype: Optional[str] = None) -> list[RefP
         for path, value in _walk_present(receiver, site, ()):
             scalars(value, path)
     return list(dict.fromkeys(found))
+
+
+def site_path_text(path: tuple[str, ...]) -> str:
+    """A ``CREDENTIAL_REF_SITES`` row's path as the policy's
+    ``shared_secrets.<alias>.fields`` spells it (#1560 ⑤-b): the keys joined
+    with ``.``, a ``"*"`` step (any key of a mapping) written ``*``, a
+    ``"[]"`` step (any item of a list) written ``[]`` after the step before
+    it — ``("http_config", "http_headers", "*", "secrets", "[]")`` →
+    ``http_config.http_headers.*.secrets[]``. One spelling per row: the text
+    names the row, never a concrete header name or index."""
+    out = ""
+    for step in path:
+        out += "[]" if step == "[]" else (f".{step}" if out else step)
+    return out
+
+
+def shared_secret_field_texts() -> frozenset[str]:
+    """Every value a ``shared_secrets.<alias>.fields`` list may hold: the
+    ``site_path_text`` of each ``CREDENTIAL_REF_SITES`` row (#1560 ⑤-b). A
+    row whose credential goes to a destination the receiver names
+    (``destinations``) is listable, but the generator takes a shared
+    Secret there only on the receiver no tenant owns (the platform-wide
+    ``_routing_enforced``)."""
+    return frozenset(site_path_text(s.path) for s in CREDENTIAL_REF_SITES)
 
 
 def receiver_secret_ref_fields(rtype: str) -> list[str]:

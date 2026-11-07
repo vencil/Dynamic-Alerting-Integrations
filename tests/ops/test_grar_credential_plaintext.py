@@ -1,0 +1,286 @@
+"""#1560 ⑤-b：寫出來的憑證是產生器的 finding（BREAKING）。
+
+判定只有一個函式（`_lib_validation.plaintext_credential_findings`），看**每個檔裡寫的
+原始值**，不看合併後的結果（owner 裁決 2-b）：沒人綁的 profile、被租戶蓋掉的
+`_routing_defaults`、沒有 plane 讀的位置都要判到。每一處是 `credential_plaintext`
+（`CredentialRefusal`，`--validate` 下擋）；判定讀不了的 receiver 是
+`credential_unjudged`（第 5 輪審查 N-A）。行內只有檔名、位置、類別，⛔ 不印值。
+
+擋不擋看被寫入的那個檔（ADR-038 決定 5）：產生器容器把這筆寫入改到的檔交給
+`credential_scope`，其他檔裡的只是 NOTICE。
+
+租戶 id 都是 fixture 名稱（CLAUDE.md #9）。
+"""
+from __future__ import annotations
+
+import io
+import json
+import subprocess
+import sys
+from contextlib import redirect_stderr, redirect_stdout
+from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.usefixtures("judging_run")
+
+REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO / "scripts" / "tools"))
+sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
+import generate_alertmanager_routes as gar  # noqa: E402
+import validate_config as vc  # noqa: E402
+from _grar_merge import CredentialRefusal  # noqa: E402
+
+_GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
+_MIGRATE = REPO / "scripts" / "tools" / "ops" / "migrate_credentials.py"
+
+CANARY = "cnry-5b-do-not-print"
+_DEFAULTS = "defaults:\n  cpu_usage_percent: 80\n"
+_HOOK = ("      receiver:\n        type: webhook\n"
+         "        url: https://hooks.example.com/{t}\n")
+
+
+def _tenant(t: str, receiver: str = _HOOK) -> str:
+    return (f"tenants:\n  {t}:\n    cpu_usage_percent: '85'\n    _routing:\n"
+            + receiver.replace("{t}", t))
+
+
+def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
+    d = tmp_path / "conf.d"
+    for rel, text in {"_defaults.yaml": _DEFAULTS, "t-a.yaml": _tenant("t-a"),
+                      **files}.items():
+        (d / rel).parent.mkdir(parents=True, exist_ok=True)
+        (d / rel).write_text(text, encoding="utf-8")
+    return d
+
+
+def _validate(d: Path, *extra: str) -> tuple[int, str, list[dict]]:
+    out = d.parent / "findings.json"
+    p = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d), "--validate",
+                        "--findings-json", str(out), *extra],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    doc = json.loads(out.read_text(encoding="utf-8"))
+    return p.returncode, p.stdout + p.stderr, doc["findings"]
+
+
+def _credential(findings: list[dict]) -> list[tuple]:
+    return sorted((f["kind"], f["file"], f["field"], f["blocks"]) for f in findings
+                  if f["kind"].startswith("credential_"))
+
+
+# ── 1. 每一類都擋，只印位置與類別 ─────────────────────────────────────────
+
+_SLACK = f"        type: slack\n        api_url: https://hooks.slack.example.com/{CANARY}\n"
+_CASES = [
+    # needs_reference：只收參照的欄位寫了值
+    ("needs_reference", "      receiver:\n" + _SLACK,
+     "tenants.t-a._routing.receiver.api_url"),
+    # webhook url 帶 userinfo
+    ("userinfo", f"      receiver:\n        type: webhook\n"
+                 f"        url: https://u:{CANARY}@hooks.example.com/a\n",
+     "tenants.t-a._routing.receiver.url"),
+    # 代理憑證：proxy_connect_header 出現就擋、proxy_url 帶 userinfo
+    ("proxy_credential", "      receiver:\n        type: webhook\n"
+                         "        url: https://hooks.example.com/a\n"
+                         "        http_config:\n          proxy_connect_header:\n"
+                         f"            Proxy-Authorization: [Basic {CANARY}]\n",
+     "tenants.t-a._routing.receiver.http_config.proxy_connect_header"),
+    ("proxy_credential", "      receiver:\n        type: webhook\n"
+                         "        url: https://hooks.example.com/a\n"
+                         "        http_config:\n"
+                         f"          proxy_url: http://u:{CANARY}@proxy.example.com:3128\n",
+     "tenants.t-a._routing.receiver.http_config.proxy_url"),
+    # http_config 的認證子欄位
+    ("needs_reference", "      receiver:\n        type: webhook\n"
+                        "        url: https://hooks.example.com/a\n"
+                        "        http_config:\n          basic_auth:\n"
+                        f"            username: u\n            password: {CANARY}\n",
+     "tenants.t-a._routing.receiver.http_config.basic_auth.password"),
+]
+
+
+@pytest.mark.parametrize("category,receiver,field", _CASES,
+                         ids=[f"{c[0]}-{c[2].rsplit('.', 1)[-1]}" for c in _CASES])
+def test_each_category_refuses_under_validate_and_never_prints_the_value(
+        tmp_path, category, receiver, field):
+    d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a", receiver)})
+    rc, text, findings = _validate(d)
+    assert rc == 1, text
+    assert ("credential_plaintext", "t-a.yaml", field, "validate") in _credential(findings)
+    line = next(f["message"] for f in findings if f["field"] == field)
+    assert line.startswith("ERROR (credential): t-a.yaml: ") and f"({category})" in line
+    assert CANARY not in text and CANARY not in json.dumps(findings)
+
+
+def test_the_proxy_finding_names_the_replacement(tmp_path):
+    d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a", _CASES[2][1])})
+    _rc, text, _f = _validate(d)
+    assert "HTTPS_PROXY" in text and "proxy_from_environment: true" in text
+
+
+def test_a_reference_and_an_allowed_plaintext_place_pass(tmp_path):
+    receiver = ("      receiver:\n        type: webhook\n"
+                "        url: https://hooks.example.com/a\n"
+                "        http_config:\n          http_headers:\n"
+                "            X-Team: {values: [team-a]}\n")
+    d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a", receiver),
+                         "t-b.yaml": _tenant("t-b", "      receiver:\n        type: slack\n"
+                                                    "        api_url: {secret: {key: slack-url}}\n")})
+    rc, text, findings = _validate(d)
+    assert rc == 0, text
+    assert _credential(findings) == []
+
+
+# ── 2. 看每個檔寫的原始值，不看合併後的值 ─────────────────────────────────
+
+def test_an_overridden_defaults_value_is_still_refused(tmp_path):
+    """租戶自己寫了 receiver，合併後 `_routing_defaults` 的 receiver 不在了——值仍在檔裡。"""
+    d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS + "_routing_defaults:\n" + _SLACK.replace(
+        "        ", "    ").replace("    type", "  receiver:\n    type", 1)})
+    rc, text, findings = _validate(d)
+    assert rc == 1, text
+    assert _credential(findings) == [("credential_plaintext", "_defaults.yaml",
+                                      "_routing_defaults.receiver.api_url", "validate")]
+
+
+def test_a_profile_no_tenant_binds_is_refused(tmp_path):
+    d = _tree(tmp_path, {"_routing_profiles.yaml": (
+        "routing_profiles:\n  unbound:\n    receiver:\n      type: pagerduty\n"
+        f"      service_key: {CANARY}\n")})
+    rc, text, findings = _validate(d)
+    assert rc == 1, text
+    assert _credential(findings) == [("credential_plaintext", "_routing_profiles.yaml",
+                                      "routing_profiles.unbound.receiver.service_key",
+                                      "validate")]
+    assert CANARY not in text
+
+
+def test_a_place_no_plane_reads_is_refused(tmp_path):
+    """租戶檔裡的 `_routing_enforced` 沒有 plane 讀，但值在 repo 裡。"""
+    d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a") + (
+        "    _routing_enforced:\n      receiver:\n        type: slack\n"
+        f"        api_url: https://hooks.slack.example.com/{CANARY}\n")})
+    rc, _text, findings = _validate(d)
+    assert rc == 1
+    assert ("credential_plaintext", "t-a.yaml",
+            "tenants.t-a._routing_enforced.receiver.api_url", "validate") in _credential(findings)
+
+
+# ── 3. 判不了的 receiver（N-A）──────────────────────────────────────────
+
+@pytest.mark.parametrize("files,field,reason", [
+    ({"_routing_profiles.yaml": "routing_profiles:\n  p:\n    receiver:\n"
+      f"      type: Slack\n      api_url: https://x.example.com/{CANARY}\n"},
+     "routing_profiles.p.receiver", "receiver_type_unknown"),
+    ({"_routing_profiles.yaml": "routing_profiles:\n  p:\n    receiver:\n"
+      f"      api_url: https://x.example.com/{CANARY}\n"},
+     "routing_profiles.p.receiver", "receiver_type_unknown"),
+    ({"_routing_profiles.yaml": "routing_profiles:\n  p:\n    receiver:\n"
+      "      type: ''\n"}, "routing_profiles.p.receiver", "receiver_type_unknown"),
+    ({"_routing_profiles.yaml": "routing_profiles:\n  p:\n    receiver:\n"
+      "      type: [slack]\n"}, "routing_profiles.p.receiver", "receiver_type_unknown"),
+    ({"_routing_profiles.yaml": "routing_profiles:\n  p:\n    receiver: hook\n"},
+     "routing_profiles.p.receiver", "receiver_not_mapping"),
+    ({"_defaults.yaml": _DEFAULTS + "_routing_defaults:\n  overrides:\n    x:\n"
+      "      receiver:\n        type: slack\n"
+      f"        api_url: https://x.example.com/{CANARY}\n"},
+     "_routing_defaults.overrides", "slot_not_list"),
+    ({"_routing_profiles.yaml": "routing_profiles:\n  p:\n    routes:\n"
+      f"      - [https://x.example.com/{CANARY}]\n"},
+     "routing_profiles.p.routes[0]", "item_not_mapping"),
+])
+def test_a_receiver_that_cannot_be_judged_is_refused(tmp_path, files, field, reason):
+    d = _tree(tmp_path, files)
+    rc, text, findings = _validate(d)
+    assert rc == 1, text
+    got = [f for f in findings if f["kind"] == "credential_unjudged"]
+    assert [(f["field"], f["blocks"]) for f in got] == [(field, "validate")]
+    assert f"({reason})" in got[0]["message"]
+    assert CANARY not in text
+
+
+def test_a_tenants_own_routing_is_left_to_the_render(tmp_path):
+    """租戶 `_routing` 的同類形狀錯誤由 render 擋（`unknown_receiver_type`），不重複報。"""
+    d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a", "      receiver:\n        type: Slack\n"
+                                                    "        api_url: {secret: {key: k}}\n")})
+    rc, _text, findings = _validate(d)
+    assert rc == 1
+    kinds = [f["kind"] for f in findings]
+    assert "unknown_receiver_type" in kinds and "credential_unjudged" not in kinds
+
+
+# ── 4. validate-config 的 routes 列；只 render 的模式 ─────────────────────
+
+def test_validate_config_routes_row_fails(tmp_path):
+    d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a", _CASES[0][1])})
+    result = vc.check_routes(str(d))
+    assert result["status"] == vc.FAIL, result
+    assert any("ERROR (credential): t-a.yaml" in line for line in result["details"])
+    assert CANARY not in json.dumps(result)
+
+
+def test_the_finding_is_its_own_blocking_type(tmp_path):
+    d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a", _CASES[0][1])})
+    found = gar.credential_findings(gar.load_tenant_tree(str(d)))
+    assert [type(f) for f in found] == [CredentialRefusal]
+    assert gar.blocking_generation_errors(found) == found
+
+
+# ── 5. 產生器容器：擋不擋看被寫入的那個檔（ADR-038 決定 5）───────────────
+
+def _scoped(d: Path, scope: frozenset[str]) -> tuple[int, list[dict]]:
+    out = d.parent / "scoped.json"
+    sink = io.StringIO()
+    rc = 0
+    with redirect_stdout(sink), redirect_stderr(sink):
+        try:
+            gar.main(["--config-dir", str(d), "--validate", "--findings-json", str(out)],
+                     key_verdict=False, credential_scope=scope)
+        except SystemExit as exc:
+            rc = exc.code if isinstance(exc.code, int) else 1
+    assert CANARY not in sink.getvalue()
+    return rc, json.loads(out.read_text(encoding="utf-8"))["findings"]
+
+
+def test_a_value_in_a_file_the_write_does_not_change_does_not_refuse_it(tmp_path):
+    d = _tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS + "_routing_defaults:\n  receiver:\n    type: slack\n"
+                          f"    api_url: https://hooks.slack.example.com/{CANARY}\n",
+        "t-b.yaml": _tenant("t-b")})
+    rc, findings = _scoped(d, frozenset({"t-b.yaml"}))
+    assert rc == 0, findings
+    assert _credential(findings) == [("credential_plaintext", "_defaults.yaml",
+                                      "_routing_defaults.receiver.api_url", "never")]
+    assert next(f for f in findings if f["kind"] == "credential_plaintext")[
+        "message"].startswith("NOTICE (credential): _defaults.yaml")
+
+
+def test_a_value_already_in_the_written_file_refuses_the_write(tmp_path):
+    """寫入沒碰到、但原本就在被寫入那個檔裡的明文也擋。"""
+    d = _tree(tmp_path, {"t-a.yaml": _tenant("t-a", _CASES[0][1])})
+    rc, findings = _scoped(d, frozenset({"t-a.yaml"}))
+    assert rc == 1
+    assert _credential(findings) == [("credential_plaintext", "t-a.yaml",
+                                      "tenants.t-a._routing.receiver.api_url", "validate")]
+
+
+def test_the_container_hands_the_written_files_as_the_scope():
+    """`_gsvc_child` 把寫入（刪除除外）的路徑交給 credential_scope。"""
+    src = (REPO / "scripts" / "tools" / "ops" / "_gsvc_child.py").read_text(encoding="utf-8")
+    assert ("credential_scope=frozenset(w.path for w in job.request.writes\n"
+            "                                            if not w.delete)") in src
+
+
+# ── 6. migrate-credentials 列出判不了的 receiver ──────────────────────────
+
+def test_migrate_credentials_lists_what_it_cannot_judge(tmp_path):
+    d = _tree(tmp_path, {"_routing_profiles.yaml": "routing_profiles:\n  p:\n    receiver:\n"
+                         f"      type: Slack\n      api_url: https://x.example.com/{CANARY}\n"})
+    p = subprocess.run([sys.executable, str(_MIGRATE), "--config-dir", str(d), "--json"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert p.returncode == 1, p.stderr
+    doc = json.loads(p.stdout)
+    assert doc["unjudged"] == [{"file": "_routing_profiles.yaml",
+                                "location": "routing_profiles.p.receiver",
+                                "tenant": None, "reason": "receiver_type_unknown"}]
+    assert CANARY not in p.stdout + p.stderr
