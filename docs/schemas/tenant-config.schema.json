@@ -273,7 +273,7 @@
           "examples": [["team-alpha", "tier-1-dbs"]]
         }
       },
-      "$comment": "additionalProperties:false (was true) so a mistyped _metadata KEY is rejected at author/CI time instead of being silently swallowed — this is the shift-left half of the #880 db_type-typo fix (a dbType/db_typ key no longer parses to DBType=\"\" undetected). All legitimate metadata fields are enumerated above; add a property here before introducing a new one.",
+      "$comment": "additionalProperties:false (was true) so a mistyped _metadata KEY is rejected at author/CI time instead of being silently swallowed — this is the shift-left half of the #880 db_type-typo fix (a dbType/db_typ key no longer parses to DBType=\"\" undetected). All legitimate metadata fields are enumerated above; add a property here before introducing a new one. #3591: the fields are the exporter reader's (pkg/config TenantMetadata's yaml tags); TestMetadataSchemaPropertiesMatchReader pins this properties set equal to them in both directions, and the shared key verdict reports any other field as value_unread.",
       "additionalProperties": false
     },
     "silentMode": {

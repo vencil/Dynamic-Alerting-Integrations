@@ -26,7 +26,7 @@
         "generator": ["tenant", "platform_tenants"]
       },
       "description": "Whether a firing critical suppresses its warning twin.",
-      "value": {"shape": "scalar"}
+      "value": {"shape": "scalar", "check": "severity_dedup"}
     },
     "_namespaces": {
       "read_by": {"annotation": ["tenant", "platform_tenants"]},
@@ -37,7 +37,7 @@
       "read_by": {"exporter": ["tenant", "platform_tenants", "profile"]},
       "description": "Tenant metadata (owner, tier, runbook_url, ...) served as tenant_metadata_info.",
       "note": "The route generator does not read it (#3043): nothing it renders uses the tenant metadata.",
-      "value": {"shape": "mapping"}
+      "value": {"shape": "mapping", "check": "metadata"}
     },
     "_profile": {
       "read_by": {"exporter": ["tenant", "platform_tenants"]},

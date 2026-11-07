@@ -66,7 +66,7 @@ func Blocks(t Tree) []Block {
 			continue
 		}
 		for _, tenant := range f.Tenants {
-			b.Tenant, b.Own = tenant, ownEntry(t, tenant, f.Key, b.File)
+			b.Tenant, b.Own = tenant, f.own || ownEntry(t, tenant, f.Key, b.File)
 			out = append(out, b)
 		}
 	}

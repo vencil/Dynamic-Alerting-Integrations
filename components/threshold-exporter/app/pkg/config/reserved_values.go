@@ -59,6 +59,21 @@ var valueChecks = map[string]valueCheck{
 		reading: stateFilterValueReading,
 		effect:  "the state filter is not switched on while it is set",
 	},
+	// #3591: `_metadata`, by the decode tenant_metadata_info is served from
+	// (decodeTenantMetadata); a field TenantMetadata does not know is a part
+	// the exporter ignores.
+	"metadata": {
+		problem: metadataProblem,
+		reading: metadataReading,
+		effect:  "what the exporter cannot read of it is not served",
+	},
+	// #3591: `_severity_dedup`, by the resolver's own words
+	// (severityDedupModeOf).
+	"severity_dedup": {
+		problem: func(_ string, sv ScheduledValue) string { return severityDedupProblem(sv) },
+		reading: func(_ string, sv ScheduledValue) any { return severityDedupReading(sv) },
+		effect:  "severity dedup stays on (the default) while it is set",
+	},
 }
 
 // metadataPatchReason is the refusal tenant-api has given for a batch patch

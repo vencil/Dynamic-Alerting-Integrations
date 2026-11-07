@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-05
+updated_at: 2026-11-07
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -55,6 +55,8 @@ updated_at: 2026-11-05
 2026-11-04 修訂：沒有租戶綁定的 profile 上的閾值鍵不判，報 `profile_not_judged` notice，取代「profile 的每個鍵都逐 profile 直接判」；tenant-api 的預覽走寫入同一套判定；tenant-api 與產生器容器擋不擋讀判決的 `blocks`（決定 4、5、6）。
 
 2026-11-05 修訂：`dimensions:` 的 base 不能是 `<key>_critical`，這種宣告不宣告任何東西，`<key>_critical{…}` 一律沒有列（決定 11）。
+
+2026-11-07 修訂：讀了但值讀不懂的保留鍵進共用判決（`value_unread`），在寫它的檔與層判，不在合併後的值上判：租戶檔 error，profile 與根平台檔 `tenants:` notice；`_metadata` 的子鍵與 `_severity_dedup` 也各有讀取端的值檢查。tenant-api 不因這類 finding 另外拒收，沿用決定 12 的寫入檢查（決定 10、12）。
 
 ## 摘要
 
@@ -380,8 +382,14 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 |---|---|---|
 | 送出了但沒有任何規則讀它（例如根 defaults 的錯字、base 已宣告但沒有規則讀的維度鍵） | 讀取端是部署中的告警規則。以 repo 內規則包的索引判斷，涵蓋經 recording rule 間接讀、直接查 `user_threshold` 的規則，以及 `_critical` 鍵；可以宣告「外部讀取端」（客戶自己的 Prometheus 規則） | 永遠只是建議 |
 | 整份沒有讀取端讀的檔（租戶區沒有 `tenants:` 的檔、子目錄沒被選上的 `_defaults` 檔） | 沿用 served-values 現有的 `skipped`／`unread_keys` | notice：新建、還沒寫 `tenants:` 的檔不能凍結寫入 |
-| `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準；今天只有 validate-config 的 schema 檢查會報 | 租戶檔：error；平台檔與 profile：notice |
-| 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_routing_profile: 5`） | 今天產生器與 da-guard 都不報，validate-config 只擋得到其中兩個（`_severity_dedup: maybe` 全無提示）。只有一個讀取端的鍵，由它驗；兩個讀取端都讀的 `_severity_dedup`，以一份共用案例表把兩邊的接受值釘成一致 | error |
+| `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準，判決報 `value_unread`；schema 的 `_metadata` 欄位表以 Go 測試與它雙向釘住 | 租戶檔：error；平台檔與 profile：notice |
+| 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_profile` 指到不存在的 profile） | 由讀取它的程式判：登錄表 `value.check` 把鍵綁到 exporter 的讀取函式，判決報 `value_unread`。兩個讀取端都讀的 `_severity_dedup`，產生器的接受字由測試釘成與 exporter 一致。只有產生器讀的 `_routing_profile` 由產生器自己擋 | 租戶檔：error；平台檔與 profile：notice |
+
+值在寫它的那一份檔、那一層判，不在合併後的值上判。合併後的租戶設定已經帶著 profile 與根平台檔 `tenants:` 填進來的值；在那上面判，profile 裡一個錯字會算到每個選用它的租戶頭上，擋下它們與這個值無關的寫入，而它們沒辦法在自己的檔裡修。例如 profile `gold` 寫了 `_silent_mode: purple`，選用它的 `ta`、`tb` 只得到一筆掛在 profile 檔上的 notice，列出這兩個租戶：
+
+```
+_defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode "purple" (valid: warning, critical, all, disable)) — tenant(s) ta, tb
+```
 
 用現有的規則索引對主 conf.d 實測，有 18 個送出了但查不到規則讀的鍵。其中 3 個是 `_critical` 鍵，它們的 base 有告警讀，只是索引還沒有處理 `_critical` 後綴，實作時要補上；其餘 15 個是維度鍵，所屬的 base 沒有任何規則讀；它們正是背景一節那 15 條鍵名警告的鍵。後者不刪也不放寬檢查，而是列進一份帶 issue 連結的已知清單，清單只准縮小。這項檢查問「送出的值有沒有規則讀」，現有的「告警所需的閾值是否送得到」檢查問「規則要的值有沒有送出」，兩者方向相反、互相補足。
 
@@ -429,6 +437,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 - **只適用新加的值檢查**。既有的檢查（例如 `_profile` 指向不存在的 profile、排程值的 `expires:` 不是 RFC3339 時間）不因此放寬。
 - **作用在檔案裡的每一個租戶**：一個檔可以有多個租戶，寫其中一個時，其他租戶沒動過的錯值同樣只是 notice。
 - 讀取租戶設定（GET）時，以磁碟上的內容自己當基準，既有的錯值以 notice 回報。
+- 共用判決的 `value_unread` 在 tenant-api 不另外拒收：它只看寫入後的樹，分不出值有沒有被這次寫入改過；租戶層的值由寫入檢查照上面的規則擋，判決的那一筆只當成提示回報。validate-config 照判決擋整棵樹，`da-guard write` 只擋新出現的。
 
 這和產生器關卡對寫入前就有的問題的處理不同。產生器關卡把它標成 `pre_existing`（寫入前就有），但照樣擋。差別在失效方向與影響範圍：`_silent_mode` 的錯值讓 exporter 什麼都不靜音，告警照常送出，失效在安全的那一側，影響也只有這一個鍵；照擋卻會讓租戶在修好它之前什麼都不能改。產生器擋的問題有些會讓整棵 conf.d 拒絕產出（例如 `_severity_dedup` 寫了產生器不認得的值），放行的代價高得多。
 
