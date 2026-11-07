@@ -4,7 +4,7 @@ package handler
 // scalar key a batch op may patch decides a tenant's environment/domain —
 // `_profile` (its profile's `_metadata`). `_metadata` itself a batch cannot
 // set (#2859, TestBatchMetadataPatchRefused). The batch write gate therefore authorizes such an op against the metadata
-// the tenant will have once it is written (gateBatchOpPostState), as PUT does
+// the tenant will have once it is written (gateBatchOpPostStateAt), as PUT does
 // for its body (RequireOrgWriteProposed): a production-scoped caller cannot
 // move a tenant to dev by batch, in either write mode (ADR-027 §7: the write
 // plane's environments/domains always bind).
