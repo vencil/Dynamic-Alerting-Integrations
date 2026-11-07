@@ -253,8 +253,11 @@ def _report_deferred_write_error(
 @_lib_parse_cache.exit_on_parse_tree_error  # #3206: the listing is da-guard's — rc 2, named
 def main() -> int:
     try_utf8_stdout()
+    # #3528 (imported here: a line added above would move the sink pins
+    # test_output_write_sites_stay_guarded.py holds by line)
+    from _lib_validation import url_type
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[1])
-    parser.add_argument("--target-url", required=True,
+    parser.add_argument("--target-url", required=True, type=url_type(empty="refuse"),  # #3528
                         help="threshold-exporter URL (e.g. http://localhost:8080)")
     parser.add_argument("--config-dir", required=True,
                         help="conf.d/ path threshold-exporter watches; harness toggles a file in here")

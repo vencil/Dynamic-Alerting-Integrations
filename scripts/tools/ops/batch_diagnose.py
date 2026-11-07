@@ -52,7 +52,7 @@ from _lib_kubectl import KubectlError, kubectl_get  # noqa: E402  (#3349)
 from diagnose import CommandTimeoutError, DEADLINE_GRACE_S  # noqa: E402  (#2968)
 from diagnose import deadline as diagnose_deadline  # noqa: E402  (#2968)
 from _lib_python import (  # noqa: E402
-    add_prometheus_arg, positive_int, positive_seconds,
+    add_prometheus_arg, prometheus_url, positive_int, positive_seconds,
     write_json_or_die,
 )
 from _lib_exitcodes import (  # noqa: E402
@@ -470,7 +470,8 @@ def main():
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "dry_run",
                 "reason": "health_checks_skipped",
-                "prometheus_url": args.prometheus,
+                # Nothing is sent: the URL that would be, env not judged (#3528).
+                "prometheus_url": prometheus_url(args.prometheus, judge=False),
                 "total_tenants": len(tenants),
                 "healthy_count": None,
                 "unchecked_count": None,
@@ -484,11 +485,12 @@ def main():
         return EXIT_OK
 
     # Run diagnose in parallel
+    prom = prometheus_url(args.prometheus)  # #3528: env judged here
     results = []
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {
             executor.submit(
-                run_diagnose_for_tenant, tenant, args.prometheus, args.timeout,
+                run_diagnose_for_tenant, tenant, prom, args.timeout,
                 chains[tenant],
             ): tenant
             for tenant in tenants
@@ -515,7 +517,7 @@ def main():
     results.sort(key=lambda r: r.get("tenant", ""))
 
     # Generate report
-    report = generate_report(results, args.prometheus)
+    report = generate_report(results, prom)
 
     # Output
     if not args.json:

@@ -1389,22 +1389,68 @@ def add_ci_arg(
     parser.add_argument("--ci", action="store_true", help=help_text)
 
 
+#: Where ``--prometheus`` points when neither it nor ``$PROMETHEUS_URL`` is given.
+PROMETHEUS_DEFAULT_URL = "http://localhost:9090"
+#: The env var a flag made by :func:`add_prometheus_arg` falls back to; also
+#: the value of that action's ``env_fallback`` attribute (#3528).
+PROMETHEUS_ENV = "PROMETHEUS_URL"
+
+
 def add_prometheus_arg(
     parser: argparse.ArgumentParser,
     *,
     default: str | None = None,
     help_text: str = "Prometheus URL (default: $PROMETHEUS_URL or http://localhost:9090)",
-) -> None:
-    """Add ``--prometheus`` argument with env-var fallback."""
-    parser.add_argument(
+) -> argparse.Action:
+    """Add ``--prometheus``, judged at parse time (``url_type``, #3528).
+
+    ⛔ The default is NOT ``$PROMETHEUS_URL`` (#3528): argparse runs ``type=``
+    on a string default, so an unusable env value would stop every run of
+    the tool at parse time — paths that never query Prometheus included.
+    The flag defaults to *default* (``None`` unless given); the tool resolves
+    the env fallback where it queries, through :func:`prometheus_url`, which
+    judges the env value with the same ``url_problem``.
+    """
+    from _lib_validation import url_type
+    action = parser.add_argument(
         "--prometheus",
-        # `... or "http://localhost:9090"` (not the get() default) so an
-        # empty $PROMETHEUS_URL falls back to localhost too. This aligns the
-        # empty-string semantics with entrypoint.py's inject_prometheus_env
-        # (`if prom_url:`), which also treats "" as unset — otherwise a
-        # deployment that sets PROMETHEUS_URL="" (e.g. a ConfigMap key that
-        # resolves empty) would get an empty URL here but localhost via the
-        # dispatcher, an inconsistency between the two fallback mechanisms.
-        default=default or os.environ.get("PROMETHEUS_URL") or "http://localhost:9090",
+        type=url_type(empty="refuse"),
+        default=default,
         help=help_text,
     )
+    # The declaration "--prometheus may be left out: $PROMETHEUS_URL stands
+    # in" lives on the parser (#3528); the CLI-contract lint and the tests
+    # read it here — there is no dispatcher-side list any more.
+    action.env_fallback = PROMETHEUS_ENV
+    return action
+
+
+def prometheus_url(value: "str | None", default: str = PROMETHEUS_DEFAULT_URL, *,
+                   judge: bool = True) -> str:
+    """The Prometheus URL a tool sends to (#3528): *value* (``--prometheus``,
+    already judged by ``url_type``) when given, else ``$PROMETHEUS_URL``, else
+    *default*.
+
+    The env value is judged HERE, with the same ``url_problem`` the flag is
+    parsed with — at the point of use, so an unusable env stops only a run
+    that would query with it, as a named caller error (rc 2). An empty
+    ``$PROMETHEUS_URL`` counts as unset (`` or ``, not the ``get()`` default),
+    so a ConfigMap key that resolves empty falls back to *default*.
+
+    *judge*: ``False`` only where nothing is sent — a dry run that reports
+    the URL it would query.
+    """
+    if value:
+        return value
+    env = os.environ.get(PROMETHEUS_ENV)
+    if not env:
+        return default
+    if not judge:
+        return env
+    from _lib_validation import url_problem
+    problem = url_problem(env)
+    if problem is not None:
+        raise _lib_exitcodes.CallerError(
+            f"$PROMETHEUS_URL (the fallback for --prometheus) is not a usable URL "
+            f"{safe_label(env)!r}: {problem}", reason="prometheus_url_unusable")
+    return env

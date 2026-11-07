@@ -63,7 +63,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import ensure_dir_or_die, write_text_or_die, write_json_or_die, add_prometheus_arg, non_negative_seconds  # noqa: E402
+from _lib_python import ensure_dir_or_die, write_text_or_die, write_json_or_die, add_prometheus_arg, prometheus_url, non_negative_seconds  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 import _lib_input  # noqa: E402  (#3445: --mapping is read by the lib)
 # #3133: a query not answered raises QueryError; a sample is read once, by
@@ -505,12 +505,15 @@ def main():
         print("No comparison pairs found.", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    # #3528: --prometheus, else $PROMETHEUS_URL judged here (rc 2, named).
+    prom = prometheus_url(args.prometheus)
+
     def run_once():
         all_results = []
         for pair in pairs:
             print(f"  🔍 比對: {pair['label']}...")
             result = run_single_comparison(
-                args.prometheus,
+                prom,
                 pair["old_query"],
                 pair["new_query"],
                 pair["label"],

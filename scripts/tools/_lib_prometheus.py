@@ -14,7 +14,8 @@ import urllib.parse
 import urllib.request
 from typing import Any, Optional
 
-from _lib_constants import _ALLOWED_SCHEMES
+# No import cycle: _lib_validation imports only stdlib + _lib_compat + _lib_constants.
+from _lib_validation import url_problem
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 from _lib_exitcodes import CallerError
 
@@ -82,16 +83,17 @@ def collapse_replicas(selector: str) -> str:
 
 
 def _validate_url_scheme(url: str) -> Optional[str]:
-    """Validate URL scheme for SSRF prevention.
+    """Validate a URL before a request is sent (SSRF prevention).
 
     Returns:
-        ``None`` if the scheme is allowed, or an error message string
-        if the scheme is disallowed.
+        ``None`` if the URL is usable, or an error message string if it is
+        not: a scheme outside ``_ALLOWED_SCHEMES``, no host, a port that is
+        not a number, a URL that does not parse. #3528: the judgement is
+        ``_lib_validation.url_problem`` — the one every URL flag is parsed
+        with (``url_type``), so a request never judges a URL differently
+        from the parser that took it.
     """
-    scheme = urllib.parse.urlparse(url).scheme
-    if scheme not in _ALLOWED_SCHEMES:
-        return f"Unsupported URL scheme: {scheme}"
-    return None
+    return url_problem(url)
 
 
 def http_get_json(

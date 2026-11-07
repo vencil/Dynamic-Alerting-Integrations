@@ -51,6 +51,10 @@ modules:
       - detect_cli_lang
       - i18n_text
     excluded:
+      url_problem: "#3528 the one URL judgement; scheme dispatch property-tested through its wrapper _lib_prometheus._validate_url_scheme (tests/shared/test_property_tools.py), every unusable shape run through every URL flag's parser by tests/shared/test_caller_path_manifest.py"
+      url_type: "#3528 constructor of the UrlArg argparse type; run per flag by tests/shared/test_caller_path_manifest.py::test_a_url_flag_refuses_an_unusable_value_by_name"
+      url_list_type: "#3528 constructor of the separator-list UrlArg; run by the same gate (federation-check --edge-urls)"
+      UrlArg._one: "#3528 url_problem → ArgumentTypeError; run by the same gate"
       routing_disabled: "#3141 the route generator's _routing word; table-covered by routing_policy_parity_matrix.json (routing-not-mapping)"
       receiver_field_state: "#2137; table-covered by receiver_presence_cases.json"
       receiver_exactly_one_problem: "#2137 exactly-one receiver field groups over RECEIVER_TYPES (data-driven, not a numeric/string law); table-covered by tests/ops/test_generate_alertmanager_routes.py::TestBuildReceiverConfig pagerduty cases and tests/ops/test_notification_tester.py"
@@ -130,6 +134,7 @@ modules:
       add_json_arg: "argparse boilerplate"
       add_ci_arg: "argparse boilerplate"
       add_prometheus_arg: "argparse boilerplate"
+      prometheus_url: "#3528 flag → env → default precedence with the env judged by url_problem; example-pinned by tests/shared/test_lib_python.py::TestAddPrometheusArg and the per-tool env-fallback tests"
       exit_on_yaml_file_error: "CLI-entry decorator (stderr + sys.exit on YamlFileError, #1654); example-pinned in tests/shared/test_yaml_file_error.py, no value computation to fuzz"
       output_write: "Context manager wrapping a raw output sink (#1789); the value it computes is delegated to _output_write_names_target, and the wrapping itself is side-effect-free control flow — example-pinned in tests/shared/test_lib_io_output_write.py"
       _output_write_names_target: "Pure predicate, but its inputs are real OSError instances the kernel populates (errno/filename/filename2); a generated OSError would test the fixture rather than the predicate (#1789) — example-pinned in tests/shared/test_lib_io_output_write.py"

@@ -29,7 +29,7 @@ import argparse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
-from _lib_python import add_prometheus_arg  # noqa: E402
+from _lib_python import add_prometheus_arg, prometheus_url  # noqa: E402
 # #3133: the alerts are read by the lib; an answer that is not one raises
 # QueryError (rc 2) — never "inactive".
 from _lib_prometheus import QueryError, prometheus_alerts  # noqa: E402
@@ -96,7 +96,7 @@ def main():
     parser.add_argument("--json", action="store_true", default=True,
                         help="Emit machine-readable JSON to stdout (default).")
     args = parser.parse_args()
-    return check_alert(args.alert_name, args.tenant, args.prometheus)
+    return check_alert(args.alert_name, args.tenant, prometheus_url(args.prometheus))
 
 
 if __name__ == "__main__":

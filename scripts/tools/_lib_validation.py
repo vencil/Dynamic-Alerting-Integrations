@@ -11,11 +11,14 @@ import math
 import os
 import re
 import threading
+import unicodedata
+import urllib.parse
 from pathlib import Path
 from typing import Any, Iterator, NamedTuple, Optional, Union
 
 from _lib_compat import find_project_root
 from _lib_constants import (
+    _ALLOWED_SCHEMES,
     _DISABLED_VALUES,
     _DURATION_MULTIPLIERS,
     _DURATION_RE,
@@ -139,6 +142,116 @@ def positive_int_seconds(value: str) -> int:
             f"must be a whole number of seconds from 1 to "
             f"{threading.TIMEOUT_MAX:.0f}: {value!r}")
     return number
+
+
+# ============================================================
+# URLs a caller hands a tool (#3528)
+# ============================================================
+
+def url_problem(value: str) -> Optional[str]:
+    """The ONE judgement of a URL a tool will send a request to (#3528).
+
+    ``None`` when *value* is usable: it parses, its scheme is one of
+    ``_ALLOWED_SCHEMES`` (the SSRF allowlist), it names a host, and its port
+    (if any) is a number in range. Otherwise the reason, one line.
+
+    Every URL flag is judged here, through :func:`url_type` at parse time,
+    and so is every request ``_lib_prometheus`` sends
+    (``_validate_url_scheme``): a value the parser accepts is one a request
+    will not refuse for its shape. ⚠️ A scheme message starts with
+    ``Unsupported URL scheme:`` and names the scheme — callers and tests
+    read that wording.
+    """
+    # ⛔ Before urlsplit: it silently drops \t \r \n and keeps a space in the
+    # host, so "http://h :80" or "http://h\n" would pass here and then make
+    # http.client raise InvalidURL at request time. No whitespace, no control
+    # character anywhere — refused by name, never stripped.
+    bad = next((c for c in value if c.isspace() or unicodedata.category(c) in ("Cc", "Cf")),
+               None)
+    if bad is not None:
+        return f"contains whitespace or a control character ({bad!r})"
+    try:
+        parts = urllib.parse.urlsplit(value)
+    except ValueError as exc:  # "http://[::1": Invalid IPv6 URL
+        return f"not a URL: {exc}"
+    if parts.scheme not in _ALLOWED_SCHEMES:
+        return f"Unsupported URL scheme: {parts.scheme or 'none given'}"
+    if not parts.hostname:
+        return "no host"
+    try:
+        parts.port
+    except ValueError as exc:  # "http://h:abc", "http://h:99999"
+        return f"port is not usable: {exc}"
+    return None
+
+
+#: What :func:`url_type` takes for ``empty=``.
+URL_EMPTY_MODES = ("refuse", "disabled")
+
+
+class UrlArg:
+    """An argparse ``type=`` made by :func:`url_type` / :func:`url_list_type`.
+
+    The class is the mark: a parser action whose ``type`` is an instance of
+    it is a URL flag judged by :func:`url_problem`, and the da-tools gate
+    (``tests/shared/test_caller_path_manifest.py``) reads it off the parser
+    by identity — not by the flag's name or help text.
+    """
+
+    def __init__(self, empty: str, separator: Optional[str] = None) -> None:
+        if empty not in URL_EMPTY_MODES:
+            raise ValueError(f"empty= must be one of {URL_EMPTY_MODES}, got {empty!r}")
+        self.empty = empty
+        self.separator = separator
+        # argparse names a type by __name__ in a ValueError message; this
+        # one raises ArgumentTypeError, whose message is used as it is.
+        self.__name__ = "url_list" if separator else "url"
+
+    def __repr__(self) -> str:
+        sep = f", separator={self.separator!r}" if self.separator else ""
+        return f"UrlArg(empty={self.empty!r}{sep})"
+
+    def _one(self, value: str) -> str:
+        problem = url_problem(value)
+        if problem is not None:
+            raise argparse.ArgumentTypeError(
+                f"not a usable URL {value!r} (wanted http:// or https://, a host, "
+                f"a numeric port): {problem}")
+        return value
+
+    def __call__(self, value: str) -> "str | list[str]":
+        if value == "":
+            if self.empty == "disabled":
+                return [] if self.separator else ""
+            raise argparse.ArgumentTypeError("empty: a URL is required")
+        if not self.separator:
+            return self._one(value)
+        # Not stripped: a space around an item is refused by url_problem, the
+        # same as in a single URL — the two types judge one way.
+        items = value.split(self.separator)
+        if "" in items:
+            raise argparse.ArgumentTypeError(
+                f"an empty item in {value!r} ({self.separator!r}-separated URLs)")
+        return [self._one(item) for item in items]
+
+
+def url_type(*, empty: str) -> UrlArg:
+    """argparse ``type=`` for a URL flag (#3528): :func:`url_problem`, so a
+    value that is not a usable http(s) URL exits 2 (CALLER_ERROR) at parse
+    time with argparse's ``argument --flag: ...`` line.
+
+    *empty*: ``"refuse"`` — ``""`` is refused like any other unusable value;
+    ``"disabled"`` — ``""`` parses as ``""``, the flag's off switch (for a
+    flag whose absence already means "do not send").
+    """
+    return UrlArg(empty)
+
+
+def url_list_type(*, empty: str, separator: str = ",") -> UrlArg:
+    """:func:`url_type` for a *separator*-separated list of URLs; parses to a
+    ``list[str]``, each item judged on its own (not stripped), an empty
+    item refused."""
+    return UrlArg(empty, separator)
 
 
 def format_duration(seconds: int) -> str:

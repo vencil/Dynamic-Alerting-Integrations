@@ -1405,8 +1405,8 @@ class TestPrometheusEnvFallback:
     回歸鎖（形狀照 tests/ops/test_byo_check.py::TestPrometheusEnvFallback）：
     修正前是 `os.environ.get("PROMETHEUS_URL", default)` —— 對
     present-but-empty 的 $PROMETHEUS_URL 會回空字串（key 存在），把空 URL
-    塞進查詢，與 entrypoint.inject_prometheus_env 的 `if prom_url:` 語意
-    分歧。help 文字（_HELP dict）逐字保留。
+    塞進查詢（#3528 起唯一的 fallback 是 _lib_io.prometheus_url，空字串視同
+    未設）。help 文字（_HELP dict）逐字保留。
     """
 
     def _run_main_capture_url(self, monkeypatch, tmp_path, extra=()):

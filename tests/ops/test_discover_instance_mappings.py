@@ -238,9 +238,20 @@ class TestQueryPrometheusLabelValues:
 # CLI main (unit-level)
 # ---------------------------------------------------------------------------
 class TestCliMain:
-    def test_no_args_exits(self):
-        with pytest.raises(SystemExit):
-            emit_result(dim.main([]))
+    def test_no_args_queries_prometheus_and_needs_instance_or_job(self, capsys, monkeypatch):
+        """#3528 (owner-accepted Breaking): neither --endpoint nor --prometheus
+        is no longer argparse's "one of the arguments is required" — it means
+        Prometheus at $PROMETHEUS_URL / localhost, which still needs
+        --instance or --job (rc 2, named; nothing is queried)."""
+        monkeypatch.delenv("PROMETHEUS_URL", raising=False)
+        rc = emit_result(dim.main([]))
+        assert rc == EXIT_CALLER_ERROR
+        assert "requires --instance or --job" in capsys.readouterr().err
+
+    def test_endpoint_and_prometheus_stay_exclusive(self):
+        with pytest.raises(SystemExit) as exc:
+            dim.main(["--endpoint", "http://e:9104/metrics", "--prometheus", "http://p:9090"])
+        assert exc.value.code == 2
 
     def test_prometheus_without_instance_or_job(self, capsys):
         rc = emit_result(dim.main(["--prometheus", "http://localhost:9090"]))
