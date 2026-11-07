@@ -281,11 +281,15 @@ render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費�
     計入 `vector_component_discarded_events_total{intentional="false"}`。
     buffer 是空的，所以 `VectorBufferEventsDropped` **不會**響；會響的是
     `VectorStoreSinkDroppingEvents`（critical，沒有等待時間，只被拒一批也會
-    響，約 10 分鐘後自行解除）。這個計數器在第一次丟資料時才出現且已非零，
-    所以告警另外把「前一小時沒有樣本的非零計數器」當成新的丟失；Prometheus
-    停機或抓不到 Vector 超過一小時、Prometheus 沒保留資料重啟時，曾經丟過
-    資料的 sink 會再響一次。additionalSinks 裡寫入其他 VictoriaLogs 的 sink
-    命名成 `victorialogs_<x>` 才在監看範圍內。稍晚
+    響，最後一次丟失後約 10 分鐘自行解除）。判斷方式：計數器現值與 10 分鐘
+    以前（往回看一小時）最後一次看到的值不同——涵蓋 Vector 重啟後又丟、
+    Prometheus 看不到 Vector 期間丟的。這個計數器在第一次丟資料時才出現且
+    已非零，所以「之前沒有值」也算，前提是 Prometheus 之前有在抓這個 Vector
+    （`up`）：Prometheus 沒有歷史（新裝、或像 `k8s/03-monitoring` 那樣用
+    emptyDir 重啟）不會對舊的丟失重響。盲點：Prometheus 開始抓某個 Vector
+    後 10 分鐘內只丟一次、或藏在超過一小時的中斷裡的單次丟失，不會響。
+    additionalSinks 裡寫入其他 VictoriaLogs 的 sink 命名成 `victorialogs_<x>`
+    才在監看範圍內。稍晚
     `FederationRevocationEvidenceChannelDown` 也會響：tenant-api 的心跳寫不進
     store，reconciler 讀不到（前提是 reconciler 有部署、且自己帶了帳密）。
   - **reconciler**：觸發 `FederationRevocationReconcileStale`。

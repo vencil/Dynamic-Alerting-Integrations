@@ -2254,31 +2254,36 @@ groups:
       # additionalSinks) is covered when it is named `victorialogs_<x>`.
       #
       # Every unintentional drop is lost evidence, so this pages on ONE refused
-      # batch — there is no hold-down, and each clause carries its own 10m
-      # window so the alert stays up long enough to be routed:
-      #   1. increase over 10m: a counter that already existed moved (a reset
-      #      after a Vector restart counts its new value).
-      #   2. a series with no sample in the hour before the last 10m: Vector
-      #      creates this counter at the FIRST drop, already non-zero (measured
-      #      on 0.61.0: absent before, 1 after one refused event), so rate()
-      #      and increase() never see that loss. Looking back an hour, not just
-      #      `offset 10m`, keeps a scrape gap or a Prometheus outage shorter
-      #      than an hour from re-paging an old drop. Longer gaps, a Prometheus
-      #      that restarted without its data, or a new scrape target DO page
-      #      for a counter that was already non-zero: those events were lost,
-      #      only before Prometheus was watching.
-      # ⛔ Keep `> 0` on the increase() side: `or` matches label sets WITHOUT
-      # the metric name, so a zero increase() sample would shadow the
-      # new-series sample and the single-drop case would go silent again.
+      # batch, with no hold-down. The question is the same in every case: is
+      # the counter now different from the last value Prometheus saw before
+      # the last 10 minutes (looking back an hour)? That window is also how
+      # long the alert stays up after the last drop.
+      #   1. a different value: drops (an increase, also one that happened
+      #      while Prometheus could not see Vector), or a Vector restart that
+      #      dropped again (the counter starts over below its old value).
+      #   2. no earlier value at all: Vector creates this counter at the FIRST
+      #      drop, already non-zero (measured on 0.61.0: absent before, 1 after
+      #      one refused event). It counts only when Prometheus WAS scraping
+      #      that Vector target before (`up`), so a Prometheus without history
+      #      (fresh, or restarted on an emptyDir like k8s/03-monitoring) and a
+      #      gap longer than the look-back do not re-page old drops.
+      # Blind spots: a drop that only happened in Vector's first 10 minutes
+      # after Prometheus starts scraping it, or one hidden inside a gap of
+      # more than an hour, is not paged unless drops continue.
       - alert: VectorStoreSinkDroppingEvents
         expr: |
           sum by (component_id) (
-            (increase(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}[10m]) > 0)
-            or
             (
               vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}
-              unless
-              max_over_time(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}[1h] offset 10m)
+              != last_over_time(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}[1h] offset 10m)
+            )
+            or
+            (
+              (
+                vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}
+                unless last_over_time(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}[1h] offset 10m)
+              )
+              and on (job, instance) (max_over_time(up[1h] offset 10m) == 1)
             )
           ) > 0
         for: 0s

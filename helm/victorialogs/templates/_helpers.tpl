@@ -85,7 +85,7 @@ and it proves `lookup` is talking to a cluster (it returns empty under
 unaffected). Applies in observe too — a Secret named there is mounted the
 same way. The judgement lives in victorialogs.secretProblems so a test can
 feed it lookup results without a cluster. */ -}}
-{{- if and .Values.auth.checkSecretsOnUpgrade (lookup "apps/v1" "Deployment" .Release.Namespace (include "victorialogs.name" .)) -}}
+{{- if and (include "victorialogs.checkSecretsOnUpgrade" .) (lookup "apps/v1" "Deployment" .Release.Namespace (include "victorialogs.name" .)) -}}
 {{- $found := dict -}}
 {{- range $out -}}
 {{- $_ := set $found (toString .existingSecret) (lookup "v1" "Secret" $.Release.Namespace (toString .existingSecret)) -}}
@@ -114,4 +114,15 @@ empty) or has no non-empty `password`; empty when all are usable.
 {{- end -}}
 {{- end -}}
 {{- join "; " $broken -}}
+{{- end }}
+
+{{/*
+victorialogs (#1295). "true" unless auth.checkSecretsOnUpgrade is explicitly
+false. An UNSET value counts as on: `helm upgrade --reuse-values` from a chart
+that predates the key carries the old release's values, where it is absent —
+and that 0.4.x → 0.5.0 upgrade is exactly the one that names new Secrets
+(measured on k3s: with a plain truthiness test the check silently skipped).
+*/}}
+{{- define "victorialogs.checkSecretsOnUpgrade" -}}
+{{- if ne (toString .Values.auth.checkSecretsOnUpgrade) "false" -}}true{{- end -}}
 {{- end }}

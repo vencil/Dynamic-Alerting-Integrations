@@ -132,6 +132,8 @@ auth:
   # namespace: a deployer without it fails EVERY upgrade with "forbidden" —
   # set false for such a deployer (e.g. HELM_DRIVER=configmap with a Role that
   # leaves Secrets out) and check the Secrets yourself before upgrading.
+  # Only an explicit false turns it off: unset (`--reuse-values` from a chart
+  # before this key) counts as on.
   checkSecretsOnUpgrade: true
   # VictoriaLogs' own listener, on loopback only.
   backendPort: 9429

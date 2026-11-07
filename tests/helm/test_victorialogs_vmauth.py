@@ -254,13 +254,14 @@ def test_upgrade_checks_named_secrets_exist_before_recreating_the_pod() -> None:
     `lookup` needs a real API server, so this pins the thin wiring around it;
     the judgement itself is exercised below with fake lookup results. Measured
     on k3s v1.31 (PR description): missing Secret / missing key / empty value
-    each fail `helm upgrade`, a fresh install does not, and a deployer without
-    `get secrets` fails every upgrade unless checkSecretsOnUpgrade=false."""
+    each fail `helm upgrade`, a fresh install does not, a deployer without
+    `get secrets` fails every upgrade unless checkSecretsOnUpgrade=false, and
+    `--reuse-values` from 0.4.0 (where the key is absent) is still checked."""
     tmpl = (CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
     block = tmpl[tmpl.index('{{- define "victorialogs.authConsumers"'):]
     block = block[:block.index("{{- toYaml $out")]
     gate = re.search(
-        r'\{\{- if and \.Values\.auth\.checkSecretsOnUpgrade \(lookup "apps/v1" "Deployment" '
+        r'\{\{- if and \(include "victorialogs\.checkSecretsOnUpgrade" \.\) \(lookup "apps/v1" "Deployment" '
         r'\.Release\.Namespace \(include "victorialogs\.name" \.\)\) -\}\}\n'
         r'\{\{- \$found := dict -\}\}\n'
         r'\{\{- range \$out -\}\}\n'
@@ -281,20 +282,25 @@ _PROBLEMS_TEMPLATE = (
 )
 
 
-def _secret_problems(tmp_path: Path, consumers: list[dict], secrets: dict) -> str:
-    """Run the chart's own victorialogs.secretProblems with fake lookup results,
-    in a throwaway chart that holds a copy of _helpers.tpl and nothing else."""
+def _probe(tmp_path: Path, template: str, values: dict) -> str:
+    """Render `template` (one `problems:` line) against the chart's own
+    _helpers.tpl, in a throwaway chart that holds a copy of it and nothing else."""
     chart = tmp_path / "probe"
     (chart / "templates").mkdir(parents=True)
     (chart / "Chart.yaml").write_text("apiVersion: v2\nname: victorialogs\nversion: 0.0.0\n", encoding="utf-8")
     (chart / "templates" / "_helpers.tpl").write_text(
         (CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8"), encoding="utf-8")
-    (chart / "templates" / "probe.yaml").write_text(_PROBLEMS_TEMPLATE, encoding="utf-8")
-    values = tmp_path / "v.yaml"
-    values.write_text(yaml.safe_dump({"consumers": consumers, "secrets": secrets}), encoding="utf-8")
-    out = subprocess.run(["helm", "template", "p", str(chart), "-f", str(values)],
+    (chart / "templates" / "probe.yaml").write_text(template, encoding="utf-8")
+    values_file = tmp_path / "v.yaml"
+    values_file.write_text(yaml.safe_dump(values), encoding="utf-8")
+    out = subprocess.run(["helm", "template", "p", str(chart), "-f", str(values_file)],
                          capture_output=True, text=True, encoding="utf-8", timeout=60, check=True)
     return yaml.safe_load(out.stdout.split("---", 1)[1].split("\n", 2)[2])["problems"]
+
+
+def _secret_problems(tmp_path: Path, consumers: list[dict], secrets: dict) -> str:
+    """victorialogs.secretProblems with fake lookup results."""
+    return _probe(tmp_path, _PROBLEMS_TEMPLATE, {"consumers": consumers, "secrets": secrets})
 
 
 def test_secret_problems_flags_missing_keyless_and_empty_secrets(tmp_path: Path) -> None:
@@ -317,3 +323,17 @@ def test_secret_problems_is_empty_when_every_secret_serves(tmp_path: Path) -> No
     consumers = [{"name": "a", "existingSecret": "s-a"}, {"name": "b", "existingSecret": "s-b"}]
     secrets = {"s-a": {"data": {"password": "YWJj"}}, "s-b": {"data": {"password": "ZGVm", "x": "eQ=="}}}
     assert _secret_problems(tmp_path, consumers, secrets) == ""
+
+
+@pytest.mark.parametrize(("auth", "expected"), [
+    ({}, "true"),  # --reuse-values from a chart that predates the key
+    ({"checkSecretsOnUpgrade": None}, "true"),
+    ({"checkSecretsOnUpgrade": True}, "true"),
+    ({"checkSecretsOnUpgrade": False}, ""),
+])
+def test_only_an_explicit_false_turns_the_secret_check_off(tmp_path: Path, auth: dict, expected: str) -> None:
+    """`helm upgrade --reuse-values` from 0.4.x carries the old release's values,
+    where the key is absent; a plain truthiness test skipped the check on exactly
+    the upgrade that names new Secrets (measured on k3s)."""
+    template = 'problems: {{ include "victorialogs.checkSecretsOnUpgrade" . | quote }}\n'
+    assert _probe(tmp_path, template, {"auth": auth}) == expected
