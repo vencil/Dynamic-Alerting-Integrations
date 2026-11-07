@@ -42,12 +42,14 @@ Checking (``--check``)
      hold exactly one canonical clause for ``mute`` and none for ``page``.
   3. Every ``filter="maintenance"`` spelling is the canonical clause: a variant
      (``=~``, ``== bool 1``, another join) is refused instead of being missed.
-  4. Every ``user_state_filter`` reference selects ONE filter by name:
-     ``user_state_filter{filter="<name>"}``, nothing else in the braces. A
-     regex or negative matcher (``filter=~"main.*"``, ``filter!="x"``), another
-     label, or no selector can match the maintenance series without spelling
-     its name, and would mute a ``page`` alert in a maintenance window.
-     Structural, so no list of the other filters' names is kept here.
+  4. Every selector that could select the maintenance series sits inside a
+     canonical clause. Which selectors could is Prometheus' answer, not this
+     file's (``da-read promql-selectors``): a regex or negative matcher
+     (``filter=~"main.*"``), an escaped or single-quoted value, a
+     ``{__name__=~"user_state_.*"}`` selector or one with no metric name all
+     reach the series without spelling it, and in a ``page`` alert would mute
+     it in a maintenance window (#1200). No list of the other filters' names
+     is kept: a selector that cannot match the series is not reported.
 
 Exit codes: 0 ok / wrote, 1 drift or a violation, 2 caller error (a pack the
 loader refuses, an expr shape this tool does not understand).
@@ -83,6 +85,9 @@ MUTE = "mute"
 PAGE = "page"
 VALUES = (MUTE, PAGE)
 
+#: The series the maintenance clause reads, as a selector (check 4).
+MAINTENANCE_SERIES = 'user_state_filter{filter="maintenance"}'
+
 #: The one spelling of the maintenance clause (= Go's maintenanceTail).
 MAINTENANCE_TAIL = 'unless on(tenant)\n(user_state_filter{filter="maintenance"} == 1)'
 
@@ -92,10 +97,6 @@ _CLAUSE = re.compile(
     r'\s*==\s*1\s*\)')
 #: Any reference to the maintenance filter, canonical or not.
 _ANY_MAINTENANCE = re.compile(r'filter\s*!?[=~]+\s*"[^"]*mainten')
-#: The one shape a ``user_state_filter`` reference may take (check 4).
-_USF_SELECTOR = re.compile(r'user_state_filter\s*\{\s*filter\s*=\s*"[^"]*"\s*,?\s*\}')
-#: The metric name anywhere, code or string (``{__name__="user_state_filter"}``).
-_USF_NAME = re.compile(r'user_state_filter')
 _OR = re.compile(r'(?<![\w:])or(?![\w:])')
 _TOKEN = re.compile(r'[a-zA-Z_:][a-zA-Z0-9_:]*')
 
@@ -111,10 +112,9 @@ class ShapeError(ValueError):
 
 # ── PromQL text helpers ──────────────────────────────────────────────────────
 
-def _mask(expr: str, strings: bool = True) -> str:
+def _mask(expr: str) -> str:
     """Blank quoted strings and ``#`` comments (position-preserving) so paren
-    depth and ``or`` scans cannot be fooled by their contents. With
-    ``strings=False`` only comments are blanked."""
+    depth and ``or`` scans cannot be fooled by their contents."""
     out: list[str] = []
     quote = ""
     esc = False
@@ -136,7 +136,7 @@ def _mask(expr: str, strings: bool = True) -> str:
                 quote = ""
                 out.append(ch)
                 continue
-            out.append(" " if strings else ch)
+            out.append(" ")
             continue
         if ch in "\"'`":
             quote = ch
@@ -198,14 +198,6 @@ def clause_count(expr: str) -> int:
     """Canonical clauses in *expr*; raises ShapeError on a non-canonical spelling."""
     masked = _mask(expr)
     canonical = _clauses(expr)
-    code = _mask(expr, strings=False)
-    selectors = [m.span() for m in _USF_SELECTOR.finditer(code)]
-    for m in _USF_NAME.finditer(code):
-        if not any(s <= m.start() and m.end() <= e for s, e in selectors):
-            raise ShapeError(f"`user_state_filter` near {expr[m.start():m.start() + 50]!r} does not select "
-                             f'one filter by name — write user_state_filter{{filter="<name>"}}: a regex, '
-                             f"negative or other matcher can select the maintenance series and mute "
-                             f"the alert in a maintenance window")
     for m in _ANY_MAINTENANCE.finditer(expr):
         if masked[m.start():m.end()].strip() == "":
             continue  # inside a comment or string
@@ -392,19 +384,50 @@ def _references(expr: str) -> set[str]:
     return set(_TOKEN.findall(_mask(expr)))
 
 
-def semantic_problems(rule_files: list) -> list[str]:
-    """Check 2 of the module docstring, on the files as Prometheus reads them."""
+def _char_offset(expr: str, byte_offset: int) -> int:
+    return len(expr.encode("utf-8")[:byte_offset].decode("utf-8", errors="ignore"))
+
+
+def stray_selector_problems(rules: "list[tuple[str, str, str]]", selectors_of=None) -> list[str]:
+    """Check 4 of the module docstring. *rules* are (path, name, expr);
+    *selectors_of* (default: Prometheus' reading, ``da-read
+    promql-selectors``) maps a list of exprs to, per expr, the selectors that
+    could select MAINTENANCE_SERIES."""
+    if selectors_of is None:
+        selectors_of = lambda exprs: _lib_consumer_read.promql_selectors(MAINTENANCE_SERIES, exprs)  # noqa: E731
+    exprs = [e for _, _, e in rules]
+    hits = selectors_of(exprs) if exprs else []
+    problems: list[str] = []
+    for (path, name, expr), found in zip(rules, hits):
+        clauses = _clauses(expr)
+        for h in found:
+            s, e = _char_offset(expr, h["start"]), _char_offset(expr, h["end"])
+            if not any(cs <= s and e <= ce for cs, ce in clauses):
+                problems.append(
+                    f"{path}: {name}: selector {h['selector']} could select the maintenance "
+                    f"series outside the maintenance clause — a regex, negative or "
+                    f"differently quoted matcher mutes the rule in a maintenance window "
+                    f"without the label saying so; write the clause as the tail "
+                    f"{MAINTENANCE_TAIL!r} or select another filter by its exact name")
+    return problems
+
+
+def semantic_problems(rule_files: list, selectors_of=None) -> list[str]:
+    """Checks 2 and 4 of the module docstring, on the files as Prometheus reads them."""
     records: dict[str, list[str]] = {}
     alerts: list[tuple[str, dict]] = []
+    every: list[tuple[str, str, str]] = []
     for rf in rule_files:
         for doc in rf.documents:
             for g in (doc or {}).get("groups") or []:
                 for r in g.get("rules") or []:
                     if "record" in r:
                         records.setdefault(r["record"], []).append(r.get("expr", ""))
+                        every.append((rf.path, f"record {r['record']}", r.get("expr", "")))
                     elif "alert" in r:
                         alerts.append((rf.path, r))
-    problems: list[str] = []
+                        every.append((rf.path, f"alert {r['alert']}", r.get("expr", "")))
+    problems: list[str] = stray_selector_problems(every, selectors_of)
 
     def count(expr: str, seen: frozenset[str]) -> int:
         n = clause_count(expr)

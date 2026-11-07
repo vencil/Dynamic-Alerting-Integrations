@@ -498,6 +498,28 @@ def prometheus_config(source: "str | bytes | os.PathLike[str]", binary: str | No
     return _one_document(out, "config")
 
 
+def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None) -> "list[list[dict]]":
+    """Per expression of *exprs*, the vector selectors that could select the
+    series *series* (equality matchers only, e.g.
+    ``user_state_filter{filter="maintenance"}``), as Prometheus' parser and
+    label matchers read them (``da-read promql-selectors``, #1200): a regex,
+    negative or escaped matcher, a ``{__name__=~...}`` selector or one with
+    no metric name is judged the way Prometheus evaluates it. Each hit is
+    ``{"selector": <Prometheus' spelling>, "start": int, "end": int}`` (byte
+    offsets into the expression's UTF-8 encoding)."""
+    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    data = json.dumps(list(exprs)).encode("utf-8")
+    out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
+               ["promql-selectors", series, "-"], data)
+    docs = out["documents"]
+    if (len(docs) != 1 or not isinstance(docs[0], list) or len(docs[0]) != len(exprs)
+            or not all(isinstance(h, list) for h in docs[0])):
+        raise ConsumerReadError(
+            f"{DA_READ_BINARY_NAME} printed JSON without one selector list per expression "
+            "(an older da-read? rebuild it)")
+    return docs[0]
+
+
 class RuleFileRefused(InputRefused):
     """Prometheus' rule loader refused this rule file; ``path`` names it and
     ``problem`` is the loader's reason."""

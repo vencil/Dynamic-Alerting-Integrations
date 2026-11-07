@@ -266,34 +266,60 @@ def test_a_near_miss_filter_value_is_refused():
         grd.clause_count('x unless on(tenant) (user_state_filter{filter=~"mainten.+"} == 1)')
 
 
-@pytest.mark.parametrize("expr", [
-    # A regex / negative matcher selects the maintenance series without naming it
-    # (the adversarial-review escape that retired check_maintenance_symmetry's
-    # token hygiene would otherwise have reopened, #1200).
-    'up == 0\nunless on(tenant) (user_state_filter{filter=~"main.*"} == 1)',
-    'up == 0\nunless on(tenant) (user_state_filter{filter!="container_crashloop"} == 1)',
-    'up == 0\nunless on(tenant) (user_state_filter{filter!~"container_.*"} == 1)',
-    'up == 0\nunless on(tenant) user_state_filter',
-    'up == 0\nunless on(tenant) (user_state_filter{severity="critical"} == 1)',
-    'up == 0\nunless on(tenant) (user_state_filter{filter="x", tenant!=""} == 1)',
-    'up == 0\nunless on(tenant) ({__name__="user_state_filter", filter="maintenance"} == 1)',
-])
-def test_a_user_state_filter_that_does_not_name_one_filter_is_refused(expr):
-    with pytest.raises(grd.ShapeError, match="does not select one filter by name"):
-        grd.clause_count(expr)
+# ── check 4: selectors that reach the maintenance series (Prometheus' reading) ──
+
+#: Spellings that select the maintenance series without the canonical clause:
+#: the first from the review that retired check_maintenance_symmetry (#1200),
+#: the rest from the review of a text check that replaced it — each passed
+#: every other hook, and in a `page` alert muted it in a maintenance window
+#: (promtool-verified by the reviewer).
+_STRAY_SELECTORS = [
+    'user_state_filter{filter=~"main.*"}',
+    'user_state_filter{filter!="container_crashloop"}',
+    r'user_state_filter{filter="mai\x6etenance"}',
+    '{__name__=~"user_state_.*", filter=~"main.*"}',
+    '{__name__=~"user_state_.*", filter=`maintenance`}',
+    "{__name__=~\"user_state_.*\", filter='maintenance'}",
+    '{filter="maintenance"}',
+    'user_state_filter',
+]
 
 
-def test_a_page_alert_with_a_regex_maintenance_matcher_fails_the_check(tmp_path):
-    """End to end on a pack: the label says page, the expr mutes by regex."""
-    pack = tmp_path / "rule-pack-x.yaml"
-    pack.write_text(
-        "groups:\n- name: x\n  rules:\n  - alert: XDown\n"
-        "    expr: |\n      up == 0\n      unless on(tenant) (user_state_filter{filter=~\"main.*\"} == 1)\n"
-        "    labels:\n      maintenance: page\n      tenant: \"{{ $labels.tenant }}\"\n",
-        encoding="utf-8")
-    _, problems = grd.sync_text(pack.read_text(encoding="utf-8"), str(pack))
-    assert any("does not select one filter by name" in p for p in problems), problems
+def _page_alert_muted_by(tmp_path, selector: str) -> Path:
+    rp = tmp_path / "rule-packs"
+    shutil.copytree(_REPO / "rule-packs", rp)
+    p = rp / "rule-pack-clickhouse.yaml"
+    text = p.read_text(encoding="utf-8")
+    old = '      - alert: ClickHouseDown\n        expr: up{job="clickhouse"} == 0\n'
+    assert old in text, "fixture anchor moved: ClickHouseDown's expr"
+    p.write_text(text.replace(old, (
+        '      - alert: ClickHouseDown\n        expr: |\n'
+        '          up{job="clickhouse"} == 0\n'
+        f'          unless on(tenant) ({selector} == 1)\n'), 1), encoding="utf-8")
+    return rp
 
 
-def test_a_user_state_filter_in_a_comment_is_ignored():
-    assert grd.clause_count('x > 1\n# user_state_filter{filter=~"main.*"}') == 0
+@pytest.mark.parametrize("selector", _STRAY_SELECTORS)
+def test_a_page_alert_muted_by_any_spelling_fails_the_check(da_read_env, tmp_path, capsys, selector):
+    rp = _page_alert_muted_by(tmp_path, selector)
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert "could select the maintenance series outside the maintenance clause" in capsys.readouterr().err
+
+
+def test_selecting_another_filter_by_name_passes(da_read_env, tmp_path):
+    """Negative control: the same edit with a filter that is not maintenance."""
+    rp = _page_alert_muted_by(tmp_path, 'user_state_filter{filter="container_crashloop"}')
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
+
+
+def test_stray_selector_offsets_are_bytes_mapped_to_characters():
+    """da-read reports byte offsets; a non-ASCII comment before the clause must
+    not shift the containment test."""
+    expr = "x # 註解\n" + TAIL
+    start = expr.encode("utf-8").index(b"user_state_filter")
+    hit = {"selector": grd.MAINTENANCE_SERIES, "start": start,
+           "end": start + len(grd.MAINTENANCE_SERIES)}
+    assert grd.stray_selector_problems([("p", "alert A", expr)], lambda exprs: [[hit]]) == []
+    outside = "user_state_filter{filter=\"maintenance\"} > 0\n" + TAIL
+    hit2 = {"selector": grd.MAINTENANCE_SERIES, "start": 0, "end": len(grd.MAINTENANCE_SERIES)}
+    assert len(grd.stray_selector_problems([("p", "alert B", outside)], lambda exprs: [[hit2]])) == 1
