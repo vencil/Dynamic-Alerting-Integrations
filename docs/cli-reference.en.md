@@ -1074,7 +1074,7 @@ da-tools grafana-import --dashboard overview.json --dry-run
 |------|-------------|
 | `0` | Success |
 | `1` | `--verify` found issues (a ConfigMap whose dashboard JSON is invalid). ⚠️ Import-mode failures are all 2, not 1; `kubectl` not on PATH is an uncaught exception (traceback, rc 1, in both import and `--verify`) |
-| `2` | Caller error: `--dashboard` file missing or its content unreadable (not UTF-8, not valid JSON, a top level that is not an object — one line naming the flag and the path before anything is imported, stdout empty under `--json`; a list or a scalar used to be reported as `Invalid JSON: 'int' object has no attribute 'get'`, [#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)), `--dashboard-dir` missing or holding no `*.json`; `kubectl create / apply / label` failed during import; `kubectl get` failed or its output unparsable under `--verify`; none of the three mode flags given |
+| `2` | Caller error: `--dashboard` file missing or its content unreadable (not UTF-8, not valid JSON, a top level that is not an object — one line naming the flag and the path before anything is imported, stdout empty under `--json`; a list or a scalar used to be reported as `Invalid JSON: 'int' object has no attribute 'get'`, [#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)), `--dashboard-dir` missing, unlistable or holding no `*.json` (one line naming the flag and the path; an unlistable one and an empty one both used to print only `No dashboard files found.`, [#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)); `kubectl create / apply / label` failed during import; `kubectl get` failed or its output unparsable under `--verify`; none of the three mode flags given |
 
 ---
 
@@ -2781,8 +2781,8 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 | Parameter | Description |
 |-----------|-------------|
-| `--old-dir <PATH>` | Old config directory (the base). Missing, or holding no config file: a first import, every tenant counts as added. A symlink loop is not "missing" (`ls` lists the entry): exit code `2`, named on stderr as not accessible (it used to read exactly as missing — a first import at exit code 1, [#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)) |
-| `--new-dir <PATH>` | New config directory (the PR) |
+| `--old-dir <PATH>` | Old config directory (the base). Nothing at the path, or no config file in it: a first import, every tenant counts as added. Anything else it cannot use is exit code `2`, one stderr line naming the flag and the path: a symlink loop, a dangling symlink, a regular file (`ls` lists the entry; it used to read exactly as missing — a first import at exit code 1, [#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)); a directory that stats but cannot be listed (mode 0311, say: it used to read exactly as an empty one, exit code 1, [#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)) |
+| `--new-dir <PATH>` | New config directory (the PR). Missing, unlistable, or holding no config file: exit code `2`, one stderr line naming the flag and the path, no report (an unlistable one and one with no config file both used to be reported as `has no config file`, [#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)) |
 
 **Options**
 
@@ -2836,7 +2836,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 |------|-------------|
 | `0` | No configuration changes |
 | `1` | Changes detected; or a platform setting to review (see Platform settings above: a changed key whose renders show no difference, one neither render reads, one not read where it is written, or a `_` file that cannot be read; a comment- or formatting-only edit, and `_policies` / `domain_policies` where their check reads them, do not count); or the base side's configuration is broken and does not render (that view is Not Compared, so the PR that fixes it is not blocked) |
-| `2` | No result: a PR-side file cannot be read (stderr names the file and the exporter's or generator's own reason), the PR side has no config file, da-guard is missing or a tool failed, or bad arguments (for example `--at` that is not RFC3339, a file given as a directory). Except for bad arguments, the report is still printed and says which view was not computed (`da-guard parse-tree` failing is the Platform settings view not computed); an unexpected error in the tool prints one `ERROR:` line on stderr and no report |
+| `2` | No result: a PR-side file cannot be read (stderr names the file and the exporter's or generator's own reason), either side's directory cannot be listed or the PR side has no config file (one line, named, no report), da-guard is missing or a tool failed, or bad arguments (for example `--at` that is not RFC3339, a file given as a directory). Except for bad arguments, the report is still printed and says which view was not computed (`da-guard parse-tree` failing is the Platform settings view not computed); an unexpected error in the tool prints one `ERROR:` line on stderr and no report |
 
 > ⚠️ **`1` means "there are changes", not "it failed".** A CI step that calls
 > this command bare will fail whenever the command is working correctly.

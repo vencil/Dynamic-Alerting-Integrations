@@ -336,12 +336,12 @@ class TestMain:
         d.mkdir()
         (d / "readme.txt").write_text("x", encoding="utf-8")  # not .json
         cli_argv("grafana_import.py", "--dashboard-dir", str(d))
-        with pytest.raises(SystemExit) as exc:
-            _as_run(gi.main())
-        # #452: empty dir = caller error (2), consistent with dir-not-found
-        assert exc.value.code == 2
-        err = capsys.readouterr().err
-        assert "No dashboard files" in err
+        # #452: empty dir = caller error (2), consistent with dir-not-found;
+        # #3693: named by the declaration (flag, path, what it looks for).
+        with pytest.raises(CallerError) as exc:
+            gi.main()
+        assert exc.value.reason == "input_empty"
+        assert str(exc.value) == f"--dashboard-dir {d}: selects nothing (*.json)"
 
     def test_single_dashboard_dry_run_exits_zero(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "dash.json"
