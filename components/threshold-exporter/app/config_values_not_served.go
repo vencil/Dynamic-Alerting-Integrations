@@ -134,9 +134,7 @@ func formatValuesNotServedLog(vs []valueNotServed, root, context string) string 
 	var b strings.Builder
 	fmt.Fprintf(&b,
 		"WARN: config values not served as written (%s): %d tenant value(s) under %s are not served as written "+
-			"by /metrics: value_unparsed serves the platform default, value_unparsed_dropped serves no series, "+
-			"window_invalid never applies that schedule window, value_rejected keeps a shallower level's value, "+
-			"spelling_duplicate is a second spelling of a threshold the same mapping writes and only the other one is served. "+
+			"by /metrics: "+config.ValueNotServedReasonsEffect()+". "+
 			"Alerts on them do not fire at the written threshold. "+
 			"Run `da-guard effective --config-dir %s` (not_served) for the file of each one. Values:",
 		context, len(vs), root, root)

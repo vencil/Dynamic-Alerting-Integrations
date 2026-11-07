@@ -1719,6 +1719,10 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 	canonOptional := canonicalizeOptionalOverrides(c.OptionalOverrides)
 
 	for tenant, overrides := range c.Tenants {
+		// #3502: the map as /metrics reads it — of two spellings of one
+		// dimensional key, the one served (normalizeKeys) — so a dead entry
+		// is judged on the value served, not on a spelling that loses.
+		normalized, _ := normalizeKeys(overrides)
 		// Validate _profile reference (v1.12.0)
 		// Note: applyProfiles() also warns on unknown profiles during merging.
 		// This check ensures validation is complete even if applyProfiles is skipped.
@@ -1858,6 +1862,16 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
 				v.Errors = append(v.Errors, f.Message)
 				v.Values = append(v.Values, f)
+			}
+			// #3502: a schedule entry /metrics serves at no minute of the
+			// day is refused where it is written; one already on disk, left
+			// as it is, is a notice (Ratchet, by the dead entries as
+			// written).
+			if deadEntriesJudged(key, canonKey, sv, normalized, canonDefaults, canonOptional) {
+				if f, ok := newDeadEntryFinding(tenant, canonKey, sv); ok {
+					v.Errors = append(v.Errors, f.Message)
+					v.Values = append(v.Values, f)
+				}
 			}
 
 			// ADR-024 OQ-6: a dimensional key's `version` label is a value

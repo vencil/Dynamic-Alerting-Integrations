@@ -1,7 +1,7 @@
 package handler
 
 // ADR-027 §7 / §9 item 6: a write by a caller who is not a platform
-// administrator (rbac.Manager.PlatformAdminNonOrgScoped) that would change a
+// administrator (rbac.Manager.PlatformAdminUnrestricted) that would change a
 // tenant's environment or domain label is refused, 403 FORBIDDEN — on every
 // write path that rewrites a tenant file (PUT, the tenant batch; the group
 // batch runs the same loops), and in PR mode on the fresh base the branch is
@@ -31,6 +31,7 @@ const (
 	lgWriters   = "lg-writers"   // write on "*", not an admin
 	lgPlatform  = "lg-platform"  // admin on "*", no org-scope: a platform administrator
 	lgOrgAdmins = "lg-org-admin" // admin on "*" but org-scoped: not one
+	lgEnvAdmins = "lg-env-admin" // admin on "*" but environment-restricted: not one
 	lgOrg       = "ORG-LG"
 	lgOrgHeader = "X-LG-Org"
 
@@ -48,6 +49,10 @@ const lgRBAC = `groups:
     tenants: ["*"]
     permissions: [read, write, admin]
     org-scope: org
+  - name: ` + lgEnvAdmins + `
+    tenants: ["*"]
+    permissions: [read, write, admin]
+    environments: [production, staging]
 `
 
 const (
@@ -184,6 +189,12 @@ func TestLabelGuardPutDirect(t *testing.T) {
 		{"org-scoped * admin changes environment", lgOrgAdmins,
 			lgTenantYAML("      environment: staging\n      domain: finance\n", "90"), false},
 		{"org-scoped * admin keeps the labels", lgOrgAdmins, lgTenantYAML(lgProdFinance, "90"), true},
+		// Both environments are inside its write scope, so only the label
+		// gate refuses this: the relabel would hand the tenant to every rule
+		// scoped to staging.
+		{"environment-restricted * admin moves the tenant between its environments", lgEnvAdmins,
+			lgTenantYAML("      environment: staging\n      domain: finance\n", "90"), false},
+		{"environment-restricted * admin keeps the labels", lgEnvAdmins, lgTenantYAML(lgProdFinance, "90"), true},
 		{"platform admin changes environment", lgPlatform,
 			lgTenantYAML("      environment: staging\n      domain: finance\n", "90"), true},
 		{"platform admin removes the labels", lgPlatform, lgTenantYAML("", "90"), true},

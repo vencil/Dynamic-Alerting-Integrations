@@ -98,6 +98,12 @@ from _lint_helpers import parse_bypass_tag  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 HADOLINT_VERSION = "v2.12.0"
+# SHA-256 of the release binary `hadolint-Linux-x86_64` at HADOLINT_VERSION (upstream
+# .sha256, re-verified once on bump). This module is the SSOT for both values:
+# `.claude/hooks/session-start.sh` reads these two lines at runtime (#3627) — keep each
+# a single-line string literal — and ci.yml's copy is bound by
+# tests/shared/test_toolchain_pin_parity.py.
+HADOLINT_SHA256 = "56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55010"
 # Supply-chain: pin the Docker fallback by digest (multi-arch index of the tag) so a
 # re-pushed/tampered tag can't swap the image. On version bump, re-resolve with:
 #   docker buildx imagetools inspect hadolint/hadolint:<ver>   (take the top-level Digest)

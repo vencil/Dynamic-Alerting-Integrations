@@ -31,8 +31,6 @@ Usage:
 """
 
 import argparse
-import csv
-import io
 import os
 import subprocess
 import sys
@@ -60,6 +58,7 @@ _DEFAULT_ALERTMANAGER = "http://localhost:9093"
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, partial_answer)
 import _lib_input  # noqa: E402  (#3445: the input files are read by the lib)
+from _lib_shadow_report import REPORT_COLUMNS, REPORT_FORMATS, parse_timestamp  # noqa: E402  (#3662)
 
 #: The input files (#3445): read by `_lib_input.document` before any phase
 #: runs — a path or content that cannot be read, or a top level of another
@@ -68,7 +67,10 @@ import _lib_input  # noqa: E402  (#3445: the input files are read by the lib)
 #: did).
 MAPPING_DOCUMENT = _lib_input.Document("yaml", dict)
 READINESS_DOCUMENT = _lib_input.Document("json", dict)
-REPORT_CSV_DOCUMENT = _lib_input.Document("text", str)
+#: #3662: the header is `_lib_shadow_report.REPORT_COLUMNS`, the one
+#: definition `validate` writes the report by; a document is its data rows.
+REPORT_CSV_DOCUMENT = _lib_input.Document("csv", list, columns=REPORT_COLUMNS,
+                                          formats=REPORT_FORMATS)
 
 # The module's one query call: (rows, None) or (None, why).
 query_prometheus = instant_or_error
@@ -102,14 +104,6 @@ def run_cmd(cmd):
         return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace", stderr=subprocess.DEVNULL, timeout=120).strip()
     except subprocess.CalledProcessError:
         return None
-
-
-def _csv_rows(text):
-    """The rows of a --report-csv's text (`REPORT_CSV_DOCUMENT`)."""
-    # newline=None: universal newlines, as the text-mode open before #3445
-    # read it — a report whose records end in a bare CR was one unquoted
-    # field full of newlines (csv.Error, rc 2) or rows the 7-day check skipped.
-    return csv.DictReader(io.StringIO(text.removeprefix("\ufeff"), newline=None))
 
 
 def check_preflight(args, inputs=None):
@@ -219,27 +213,18 @@ def check_runtime(args, inputs=None):
     # 1. CSV report analysis (read by `judge_inputs`, #3392: a missing
     # one was a "skip" and an Overall PASS; #3445: content that was not
     # UTF-8 was a traceback)
-    csv_text = inputs.get("report_csv")
-    if csv_text is not None:
+    records = inputs.get("report_csv")
+    if records is not None:
         mismatch_count = 0
         total_rows = 0
         tenants = set()
-        try:
-            for row in _csv_rows(csv_text):
-                total_rows += 1
-                if row.get("Status", "").strip() == "mismatch":
-                    mismatch_count += 1
-                tenant = row.get("Tenant", "").strip()
-                if tenant:
-                    tenants.add(tenant)
-        except csv.Error as e:
-            checks.append({
-                "check": "csv_report",
-                "status": "fail",
-                "caller_error": True,  # CSV load/IO failure = caller-error (exit 2)
-                "detail": f"CSV parse error: {str(e)[:60]}",
-            })
-            return checks
+        for row in records:
+            total_rows += 1
+            if row["Status"].strip() == "mismatch":
+                mismatch_count += 1
+            tenant = row["Tenant"].strip()
+            if tenant:
+                tenants.add(tenant)
 
         mismatch_pct = (mismatch_count / total_rows * 100) if total_rows > 0 else 0
         checks.append({
@@ -316,29 +301,19 @@ def check_convergence(args, inputs=None):
         })
 
     # 2. 7-day zero-mismatch (from CSV)
-    csv_text = inputs.get("report_csv")
-    if csv_text is not None:
+    records = inputs.get("report_csv")
+    if records is not None:
         now = datetime.now(timezone.utc)
         recent_mismatches = 0
         recent_rows = 0
-        try:
-            for row in _csv_rows(csv_text):
-                ts_str = row.get("Timestamp", "").strip()
-                if not ts_str:
-                    continue
-                try:
-                    ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(
-                        tzinfo=timezone.utc
-                    )
-                except ValueError:
-                    continue
-                age_days = (now - ts).total_seconds() / 86400
-                if age_days <= 7:
-                    recent_rows += 1
-                    if row.get("Status", "").strip() == "mismatch":
-                        recent_mismatches += 1
-        except csv.Error:
-            pass
+        # #3662: every Timestamp's form was judged at reading
+        # (REPORT_FORMATS): one that did not parse was skipped here, in silence.
+        for row in records:
+            age_days = (now - parse_timestamp(row["Timestamp"])).total_seconds() / 86400
+            if age_days <= 7:
+                recent_rows += 1
+                if row["Status"].strip() == "mismatch":
+                    recent_mismatches += 1
 
         if recent_rows > 0:
             checks.append({

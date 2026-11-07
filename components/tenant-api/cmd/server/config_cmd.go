@@ -44,19 +44,24 @@ DIR/_tenant_orgs.yaml; when that default file does not exist no tenant has an
 organization, as in the server) and the tenants in DIR as GET
 /api/v1/tenants reads them, and prints one JSON document (schema
 tenant-api.scope-check/v1) listing, for every scope axis, each rule that
-restricts it x each tenant the rule applies to that carries no label on it:
-"findings" entries {axis, rule, rule_index, tenant}, axis "environment"
-(the rule lists environments, the tenant has none), "domain" (likewise) or
-"org" (the rule has an org-scope, the tenant has no organization). Every
-scope axis is enforced, so each finding is a tenant the rule does not grant.
-"tenant_problems" lists the tenants whose environment/domain cannot be read
-(reason: the config_error, or metadata_incomplete); their metadata axes are
-not judged. "config_problems" lists an RBAC config, organization mapping or
-tenant listing the server would refuse. The result depends only on the files;
-the lists are sorted. Run it with the image you are upgrading to.
+restricts it x each tenant the rule applies to that it does not grant:
+"findings" entries {axis, rule, rule_index, tenant, reason}, axis
+"environment" (the rule lists environments), "domain" (likewise) or "org"
+(the rule has an org-scope, the tenant has no organization); reason
+"unlabeled" (the tenant has no label on the axis: add it) or
+"metadata_unknown" (the tenant's environment/domain cannot be read, and the
+server's tenant list shows such a tenant under no rule restricting either:
+fix the tenant file, or the root platform files when they cannot be read). Every scope axis is enforced, so each finding is a tenant the rule
+does not grant. "tenant_problems" lists, for information, every tenant whose
+environment/domain cannot be read (reason: the config_error, or
+metadata_incomplete); it does not set the exit code — such a tenant matters
+here only where a restricting rule applies to it, and then it is a finding.
+"config_problems" lists an RBAC config, organization mapping or tenant
+listing the server would refuse. The result depends only on the files; the
+lists are sorted. Run it with the image you are upgrading to.
 
-Exit codes: 0 no finding and no problem, 1 any finding or problem, 2 usage or
-an input cannot be opened.`
+Exit codes: 0 no finding and no config problem, 1 any finding or config
+problem, 2 usage or an input cannot be opened.`
 
 // configCheckSchema names the JSON document `tenant-api config check` prints.
 const configCheckSchema = "tenant-api.config-check/v1"

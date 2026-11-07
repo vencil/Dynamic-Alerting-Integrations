@@ -2,14 +2,16 @@
 
 Each test runs the real script in a throwaway repo, with the marker redirected
 through `VIBE_SESSION_START_MARKER`. `pip`, `npm` and `pre-commit` on PATH are
-stand-ins that only record their arguments, so nothing is installed. `helm` and
-`golangci-lint` are stand-ins that report a version (the pinned one unless a
-test says otherwise), `curl` is one that fails or serves bytes that are not the
-pinned tarball, and `VIBE_SESSION_START_BIN` points into the test's tmp dir —
-so no run downloads anything or writes outside it.
+stand-ins that only record their arguments, so nothing is installed. `helm`,
+`golangci-lint` and `hadolint` are stand-ins that report a version (the pinned
+one unless a test says otherwise), `curl` is one that fails, serves bytes that
+are not the pinned artifact, or serves a stand-in binary whose checksum a test
+pinned, and `VIBE_SESSION_START_BIN` points into the test's tmp dir — so no run
+downloads anything or writes outside it.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import os
 import re
@@ -41,6 +43,19 @@ def _pin(name: str) -> str:
 _HELM = _pin("HELM")
 _GOLANGCI = _pin("GOLANGCI_LINT")
 
+# hadolint's pin is not in the script: it reads the lint wrapper's (#3627).
+_HADOLINT_SRC = "scripts/tools/lint/check_iac_vibe_rules.py"
+_HADOLINT_SRC_TEXT = (_REPO_ROOT / _HADOLINT_SRC).read_text(encoding="utf-8")
+
+
+def _py_pin(name: str, text: str = _HADOLINT_SRC_TEXT) -> str:
+    found = re.findall(rf'^{name}\s*=\s*"([^"]+)"\s*$', text, re.MULTILINE)
+    assert len(found) == 1, f"{name} in {_HADOLINT_SRC}: {found}"
+    return found[0]
+
+
+_HADOLINT = _py_pin("HADOLINT_VERSION")
+
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="cloud-only script (bash)")
 
 
@@ -65,6 +80,8 @@ def _repo(root: Path) -> Path:
     (repo / ".claude" / "hooks").mkdir(parents=True)
     shutil.copy2(_REPO_ROOT / ".claude" / "hooks" / "session-start.sh",
                  repo / ".claude" / "hooks" / "session-start.sh")
+    (repo / _HADOLINT_SRC).parent.mkdir(parents=True)
+    shutil.copy2(_REPO_ROOT / _HADOLINT_SRC, repo / _HADOLINT_SRC)
     (repo / "requirements").mkdir()
     (repo / "requirements" / "ci-constraints.txt").write_text("", encoding="utf-8")
     (repo / ".pre-commit-config.yaml").write_text("repos: []\n", encoding="utf-8")
@@ -81,14 +98,18 @@ _INSTALL_SAID = "stand-in pre-commit install ran"
 
 def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc: int = 0,
          pre_commit: bool = True, real_pre_commit: bool = False,
-         helm: str = _HELM, golangci: str = _GOLANGCI, curl: str = "fail"):
+         helm: str = _HELM, golangci: str = _GOLANGCI, hadolint: str | None = _HADOLINT,
+         curl: str = "fail", tool_bin_on_path: bool = False):
     """Run the script; return (completed, marker text, {tool: [argument lines]}).
     `pre_commit=False` leaves no pre-commit anywhere on PATH; `real_pre_commit`
     puts the installed one there (still recorded). The stand-in's `install`
     prints `_INSTALL_SAID` to stdout, as the real one reports there. `helm` and
-    `golangci` are the versions their stand-ins report; `curl` is "fail" (exit
-    22, as `curl -f` does on an HTTP error) or "garbage" (writes bytes that are
-    not the pinned tarball to its `-o` file)."""
+    `golangci` / `hadolint` are the versions their stand-ins report (`hadolint`
+    None: a stand-in that fails to run, as if absent); `curl` is "fail" (exit 22, as `curl -f` does on
+    an HTTP error), "garbage" (writes bytes that are not the pinned artifact to
+    its `-o` file) or any other text, which it writes to its `-o` file verbatim.
+    `tool_bin_on_path` puts the install target first on PATH, so what the
+    script installs is what it then finds."""
     marker = root / "marker"
     if marker_text is not None:
         marker.write_text(marker_text, encoding="utf-8")
@@ -105,12 +126,22 @@ def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc:
         stub.chmod(0o755)
     reports = {"helm": f"v{helm}+gstub",
                "golangci-lint": f"golangci-lint has version {golangci} built with stub"}
+    if hadolint is not None:
+        reports["hadolint"] = f"Haskell Dockerfile Linter {hadolint.removeprefix('v')}"
     for tool, line in reports.items():
         stub = bindir / tool
         stub.write_text(f'#!/bin/sh\necho "{line}"\n', encoding="utf-8")
         stub.chmod(0o755)
+    if hadolint is None:
+        # A stand-in that cannot run, not an absent file: a real hadolint later
+        # on PATH (the runner's own) would otherwise answer at the pin.
+        stub = bindir / "hadolint"
+        stub.write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
+        stub.chmod(0o755)
+    served = root / "curl.serves"
+    served.write_text("garbage\n" if curl == "garbage" else curl, encoding="utf-8")
     body = ('exit 22\n' if curl == "fail" else
-            'while [ $# -gt 0 ]; do [ "$1" = -o ] && echo garbage > "$2"; shift; done\n')
+            f'while [ $# -gt 0 ]; do [ "$1" = -o ] && cat "{served}" > "$2"; shift; done\n')
     stub = bindir / "curl"
     stub.write_text(f'#!/bin/sh\necho "$*" >> "{root / "curl"}.calls"\n{body}', encoding="utf-8")
     stub.chmod(0o755)
@@ -118,7 +149,7 @@ def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc:
     tool_bin.mkdir(exist_ok=True)
     env = {**os.environ, "CLAUDE_CODE_REMOTE": "true", "CLAUDE_PROJECT_DIR": str(repo),
            "VIBE_SESSION_START_MARKER": str(marker), "VIBE_SESSION_START_BIN": str(tool_bin),
-           "PATH": os.pathsep.join([str(bindir)] + [
+           "PATH": os.pathsep.join([str(tool_bin)] * tool_bin_on_path + [str(bindir)] + [
                d for d in os.environ["PATH"].split(os.pathsep)
                if pre_commit or not (Path(d) / "pre-commit").exists()])}
     r = subprocess.run(  # subprocess-timeout: ignore
@@ -226,10 +257,11 @@ def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
 
 @pytest.mark.parametrize("state", [
     "last-run-failed", "no-pre-commit-on-PATH", "e2e-deps-gone", "helm-off-pin",
-    "golangci-lint-off-pin"])
+    "golangci-lint-off-pin", "hadolint-off-pin", "hadolint-absent"])
 def test_a_no_op_needs_every_condition(tmp_path, state):
     """The no-op path is taken only after a RESULT=ok run, with pre-commit on
-    PATH, the e2e deps still in place and helm / golangci-lint at their pins;
+    PATH, the e2e deps still in place and helm / golangci-lint / hadolint at
+    their pins;
     otherwise the whole script runs again."""
     repo = _repo(tmp_path)
     hooks = repo / ".git" / "hooks"
@@ -242,7 +274,9 @@ def test_a_no_op_needs_every_condition(tmp_path, state):
 
     r, _, calls = _run(tmp_path, repo, marker_text, pre_commit=state != "no-pre-commit-on-PATH",
                        helm="3.0.0" if state == "helm-off-pin" else _HELM,
-                       golangci="2.5.0" if state == "golangci-lint-off-pin" else _GOLANGCI)
+                       golangci="2.5.0" if state == "golangci-lint-off-pin" else _GOLANGCI,
+                       hadolint={"hadolint-off-pin": "v2.10.0",
+                                 "hadolint-absent": None}.get(state, _HADOLINT))
 
     assert "already bootstrapped" not in r.stdout
     assert calls["pip"]
@@ -364,9 +398,11 @@ def test_tools_already_at_their_pins_are_not_downloaded(tmp_path):
     assert calls["curl"] == []
     assert f"helm={_HELM}" in marker.splitlines()
     assert f"golangci-lint={_GOLANGCI}" in marker.splitlines()
+    assert f"hadolint={_HADOLINT}" in marker.splitlines()
     results = _result(marker)
     assert len(results) == 1 and "helm" not in results[0] \
-        and "golangci-lint" not in results[0], r.stdout + r.stderr
+        and "golangci-lint" not in results[0] and "hadolint" not in results[0], \
+        r.stdout + r.stderr
 
 
 @pytest.mark.parametrize("curl,why", [("fail", "download"), ("garbage", "sha256 mismatch")])
@@ -387,3 +423,102 @@ def test_a_tool_that_cannot_be_installed_fails_the_run(tmp_path, curl, why):
     assert any(f"helm-v{_HELM}-linux-amd64.tar.gz" in c for c in calls["curl"]), calls["curl"]
     assert not (tmp_path / "tool-bin" / "helm").exists()
     assert calls["pip"], "a tool failure skipped the Python deps"
+
+
+# ── hadolint (#3627) ────────────────────────────────────────────────────────
+
+
+def _set_hadolint_pin(repo: Path, **values: str) -> None:
+    """Rewrite the copied lint wrapper's HADOLINT_* lines (the script's SSOT)."""
+    f = repo / _HADOLINT_SRC
+    text = f.read_text(encoding="utf-8")
+    for name, value in values.items():
+        text, n = re.subn(rf'^{name}\s*=\s*"[^"]+"\s*$', f'{name} = "{value}"', text,
+                          flags=re.MULTILINE)
+        assert n == 1, name
+    f.write_text(text, encoding="utf-8")
+
+
+def _hadolint_downloads(calls: list[str]) -> list[str]:
+    return [c for c in calls if "hadolint" in c]
+
+
+@pytest.mark.parametrize("curl,why", [("fail", "download"), ("garbage", "sha256 mismatch")])
+def test_hadolint_that_cannot_be_installed_fails_the_run(tmp_path, curl, why):
+    """#3627: without hadolint the iac-sast-check hook blocks, so preflight
+    writes no marker and every push is refused. That is RESULT=failed with the
+    reason, at the start of the session — not a surprise at the first push.
+    Bytes that are not the pinned binary are never installed."""
+    repo = _repo(tmp_path)
+
+    r, marker, calls = _run(tmp_path, repo, None, hadolint=None, curl=curl)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    results = _result(marker)
+    assert len(results) == 1 and results[0].endswith(f"hadolint: {why})"), marker
+    assert f"hadolint=FAILED ({why})" in marker.splitlines()
+    assert _hadolint_downloads(calls["curl"]) == [
+        c for c in calls["curl"]
+        if f"/download/{_HADOLINT}/hadolint-Linux-x86_64" in c], calls["curl"]
+    assert _hadolint_downloads(calls["curl"]), calls["curl"]
+    assert not (tmp_path / "tool-bin" / "hadolint").exists()
+
+
+def test_hadolint_pin_is_read_from_the_lint_wrapper_at_run_time(tmp_path):
+    """The script carries no hadolint version of its own: bump the wrapper and
+    the script asks for the new one. A copy in the script would still fetch the
+    old version here."""
+    repo = _repo(tmp_path)
+    _set_hadolint_pin(repo, HADOLINT_VERSION="v9.8.7")
+
+    r, marker, calls = _run(tmp_path, repo, None)  # stand-in reports the real pin
+
+    assert any("/download/v9.8.7/hadolint-Linux-x86_64" in c for c in calls["curl"]), \
+        calls["curl"]
+    assert "hadolint=FAILED (download)" in marker.splitlines(), marker
+
+
+def test_hadolint_is_installed_as_a_bare_binary(tmp_path):
+    """The release asset is the binary itself, not a tarball: what curl served
+    (and the checksum matched) is what lands in the install dir and runs."""
+    repo = _repo(tmp_path)
+    binary = (f'#!/bin/sh\necho "Haskell Dockerfile Linter '
+              f'{_HADOLINT.removeprefix("v")}"\n')
+    _set_hadolint_pin(repo, HADOLINT_SHA256=hashlib.sha256(binary.encode()).hexdigest())
+
+    r, marker, calls = _run(tmp_path, repo, None, hadolint=None, curl=binary,
+                            tool_bin_on_path=True)
+
+    installed = tmp_path / "tool-bin" / "hadolint"
+    assert installed.read_text(encoding="utf-8") == binary, r.stdout + r.stderr
+    assert os.access(installed, os.X_OK)
+    assert f"hadolint={_HADOLINT}" in marker.splitlines(), marker
+    assert all("hadolint" not in line for line in _result(marker)), marker
+
+
+@pytest.mark.parametrize("damage", ["missing", "duplicated", "not-a-version", "not-a-sha"])
+def test_an_unreadable_hadolint_pin_fails_without_downloading(tmp_path, damage):
+    """Zero lines, two lines or a value of the wrong shape is a broken SSOT:
+    the script names it and fetches nothing — never a guessed version, never
+    an unverifiable checksum."""
+    repo = _repo(tmp_path)
+    f = repo / _HADOLINT_SRC
+    text = f.read_text(encoding="utf-8")
+    line = f'HADOLINT_VERSION = "{_HADOLINT}"\n'
+    if damage == "missing":
+        text = text.replace(line, "")
+    elif damage == "duplicated":
+        text = text.replace(line, line + line)
+    f.write_text(text, encoding="utf-8")
+    if damage == "not-a-version":
+        _set_hadolint_pin(repo, HADOLINT_VERSION="latest")
+    elif damage == "not-a-sha":
+        _set_hadolint_pin(repo, HADOLINT_SHA256="abc123")
+
+    r, marker, calls = _run(tmp_path, repo, None)
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    why = f"pin unreadable from {_HADOLINT_SRC}"
+    assert f"hadolint=FAILED ({why})" in marker.splitlines(), marker
+    assert _result(marker)[0].endswith(f"hadolint: {why})"), marker
+    assert _hadolint_downloads(calls["curl"]) == [], calls["curl"]

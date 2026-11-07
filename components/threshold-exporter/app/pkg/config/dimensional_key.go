@@ -504,6 +504,7 @@ func (ec *EffectiveConfig) AsWritten() *EffectiveConfig {
 	out.EffectiveConfig = renamedKeys(ec.EffectiveConfig, ec.writtenKey)
 	out.KeySources = renamedKeys(ec.KeySources, ec.writtenKey)
 	out.NotServed = renamedKeys(ec.NotServed, ec.writtenKey)
+	out.DeadEntries = renamedKeys(ec.DeadEntries, ec.writtenKey)
 	out.PlatformOverlay = make([]PlatformOverlaySource, len(ec.PlatformOverlay))
 	for i, ps := range ec.PlatformOverlay {
 		out.PlatformOverlay[i] = PlatformOverlaySource{File: ps.File, Keys: renamedList(ps.Keys, ec.writtenKey)}

@@ -49,6 +49,7 @@ lang: zh
 | `init_project.py` | Bootstrap a Dynamic Alerting integration in a customer repo. |
 | `lint_custom_rules.py` | Custom Rule deny-list linter。 |
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
+| `migrate_credentials.py` | find receiver credentials written out in conf.d and |
 | `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
 | `migrate_to_operator.py` | migrate-to-operator — Migrate ConfigMap-based rules to Operator CRD format. |
 | `notification_tester.py` | Multi-channel notification connectivity testing. |
@@ -265,6 +266,7 @@ lang: zh
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.
 - `scripts/tools/_lib_redact.py`：Which config fields hold a credential, and how a report prints them.
+- `scripts/tools/_lib_shadow_report.py`：The validation report `validate` writes and `shadow-verify` reads (#3662).
 - `scripts/tools/_lib_tenant_state.py`：Read tenant-api's state records as tenant-api reads them (#2883, ADR-036 §12).
 - `scripts/tools/_lib_tenant_uniqueness.py`：Does this ARTIFACT declare one tenant twice? One measurement, two producers.
 - `scripts/tools/_lib_tenant_values.py`：Per-tenant values from Go: /metrics via da-guard served-values, /effective via da-guard effective.

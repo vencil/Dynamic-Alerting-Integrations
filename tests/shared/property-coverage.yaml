@@ -90,6 +90,11 @@ modules:
       positive_int: "#2966 argparse type: accepts a value iff int() parses it to a number >= 1; boundary and message table in tests/shared/test_lib_python.py::TestPositiveInt"
       positive_int_seconds: "#2966 argparse type: accepts a value iff int() parses it to a number from 1 to threading.TIMEOUT_MAX; boundary table in tests/shared/test_lib_python.py::TestPositiveIntSeconds"
       is_valid_tenant_id: "#2341 R8 membership in one fixed regex (no numeric/string law beyond it); table-pinned by the tenant_ids table of tests/shared/routing_policy_parity_matrix.json"
+      url_has_userinfo: "#1560 ⑤-a urllib.parse.urlsplit username test (fail-closed on a URL it refuses); boundary table (user only, @ in path/query/fragment, non-http scheme, no authority) in tests/shared/test_credential_plaintext_policy.py::test_userinfo_boundaries"
+      _walk_present: "#1560 ⑤-a walk of one site pattern (key / * / []) yielding every value; every row and wildcard example-pinned by tests/shared/test_credential_plaintext_policy.py"
+      _written_out: "#1560 ⑤-a type test (non-empty scalar, not null / '' / mapping / list); its quiet cases pinned per row by tests/shared/test_credential_plaintext_policy.py::test_reference_only_rows"
+      plaintext_credential_findings: "#1560 ⑤-a table-driven judgement over CREDENTIAL_REF_SITES.plaintext + CREDENTIAL_PLAINTEXT_SITES (data, not a numeric/string law); positive and negative example per row in tests/shared/test_credential_plaintext_policy.py"
+      value_paths_to_mask: "#1560 ⑤-a the masking list (every written-out scalar on or below a credential row); example-pinned by tests/shared/test_credential_plaintext_policy.py and the canary tests of tests/ops/test_migrate_credentials.py"
 
   scripts/tools/_lib_label.py:
     covered:
@@ -170,6 +175,8 @@ modules:
       _is_tree_scalar: "parse-tree scalar predicate (the shape _lib_parse_tree.is_scalar checks); exercised through every finder pin"
       _written: "Suggestion-line shape (key / sequence item); pinned through both finders' message pins"
       # #2509 → #2906: YAML 1.1 boolean words (strings to yaml.v3) in boolean fields.
+      is_special_file: "#3615 → #1560 ⑤-a stat predicate (I/O); pinned through generate-routes' output clashes (/dev/null collides with nothing) in tests/ops"
+      same_file: "#3615 → #1560 ⑤-a realpath + samefile judgement (I/O); symlink and hard-link cases pinned by generate-routes' output-clash tests and tests/ops/test_migrate_credentials.py::test_a_manifest_that_is_a_confd_file_is_refused"
       find_yaml11_bool_words: "parse-tree nodes × schema walk (#2509 → #2906); word set (_lib_validation.yaml_bool_literals minus yaml.v3's six), quoted and unquoted alike, quiet controls (true/false, string field) and the Go reading (da-guard effective) in tests/shared/test_yaml11_bool_word_warning.py"
       YamlBoolWord.message: "Operator-facing text (#2509); suggestion shapes pinned in tests/shared/test_yaml11_bool_word_warning.py"
 

@@ -596,6 +596,17 @@ def secret_ref_problem(value: Any) -> Optional[str]:
     return None
 
 
+#: #1560 plaintext policy of a credential site (``CredentialRefSite.plaintext``,
+#: ``CredentialPlaintextSite.policy``). ⑤-a only REPORTS against it
+#: (``da-tools migrate-credentials``); nothing refuses a value by it yet.
+PLAINTEXT_REFUSED = "refused"
+PLAINTEXT_UNLESS_USERINFO = "unless_userinfo"
+PLAINTEXT_ALLOWED = "allowed"
+PLAINTEXT_FORBIDDEN = "forbidden"
+PLAINTEXT_POLICIES = frozenset({PLAINTEXT_REFUSED, PLAINTEXT_UNLESS_USERINFO,
+                                PLAINTEXT_ALLOWED, PLAINTEXT_FORBIDDEN})
+
+
 class CredentialRefSite(NamedTuple):
     """One place in a receiver where a Secret reference may stand (#1560).
 
@@ -629,6 +640,12 @@ class CredentialRefSite(NamedTuple):
     governs only that client. The token request itself goes through a
     separate client that does not read FollowRedirects, so the flag says
     nothing about it.
+
+    ``plaintext``: what a value written out (not a reference) at this path
+    is under the owner's #1560 policy (``plaintext_credential_findings``):
+    ``PLAINTEXT_REFUSED`` — only a reference is taken; or
+    ``PLAINTEXT_UNLESS_USERINFO`` — a written URL is taken too, unless it
+    carries userinfo (``user:pass@`` or ``user@``).
     """
 
     rtype: str
@@ -637,6 +654,8 @@ class CredentialRefSite(NamedTuple):
     destinations: tuple[tuple[str, ...], ...]
     proxies: tuple[tuple[str, ...], ...]
     follows_redirects: bool = False
+    plaintext: str = PLAINTEXT_REFUSED
+
 
 
 _HTTP_PROXY = ("http_config", "proxy_url")
@@ -661,7 +680,8 @@ _IS_URL = ((), (_HTTP_PROXY,))
 #: they yield goes to url, through http_config.proxy_url. Not here:
 #: proxy_connect_header (no file form upstream).
 CREDENTIAL_REF_SITES: tuple[CredentialRefSite, ...] = (
-    CredentialRefSite("webhook", ("url",), "url_file", *_IS_URL),
+    CredentialRefSite("webhook", ("url",), "url_file", *_IS_URL,
+                      plaintext=PLAINTEXT_UNLESS_USERINFO),
     CredentialRefSite("rocketchat", ("url",), "url_file", *_IS_URL),
     CredentialRefSite("slack", ("api_url",), "api_url_file", *_IS_URL),
     CredentialRefSite("teams", ("webhook_url",), "webhook_url_file", *_IS_URL),
@@ -756,6 +776,176 @@ def ref_value_at(receiver: Any, path: RefPath) -> Any:
             return None
         value = value[part]
     return value
+
+
+class CredentialPlaintextSite(NamedTuple):
+    """One place in a receiver that holds a credential but takes no Secret
+    reference (#1560 ⑤-a): Alertmanager has no ``*_file`` form for it.
+    ``path`` is spelled as ``CredentialRefSite.path`` (``"*"`` any key,
+    ``"[]"`` any item) and names the place itself or the subtree it heads.
+    ``policy``: ``PLAINTEXT_ALLOWED`` (written out is fine: every reading
+    tool masks it), ``PLAINTEXT_FORBIDDEN`` (the tenant may not write it at
+    all, whatever its value) or ``PLAINTEXT_UNLESS_USERINFO`` (refused when
+    the URL carries userinfo)."""
+
+    rtype: str
+    path: tuple[str, ...]
+    policy: str
+
+
+#: ⛔ The credential places CREDENTIAL_REF_SITES does not hold (#1560 ⑤-a,
+#: owner decision): together with that table and the test's list of
+#: non-credential leaves they classify every leaf under an `x-credential`
+#: node of the tenant schema exactly once
+#: (tests/shared/test_credential_plaintext_policy.py). Kept apart from
+#: CREDENTIAL_REF_SITES because every row there is read as "a reference may
+#: stand here". The four proxy rows have no file form upstream: the platform
+#: gives Alertmanager HTTPS_PROXY from a Secret and the tenant writes
+#: `proxy_from_environment: true` instead.
+CREDENTIAL_PLAINTEXT_SITES: tuple[CredentialPlaintextSite, ...] = (
+    CredentialPlaintextSite("email", ("headers", "*"), PLAINTEXT_ALLOWED),
+    CredentialPlaintextSite("webhook", ("http_config", "http_headers", "*", "values", "[]"),
+                            PLAINTEXT_ALLOWED),
+    CredentialPlaintextSite("webhook", ("http_config", "oauth2", "endpoint_params", "*"),
+                            PLAINTEXT_ALLOWED),
+    CredentialPlaintextSite("webhook", ("http_config", "oauth2", "claims"), PLAINTEXT_ALLOWED),
+    CredentialPlaintextSite("webhook", ("http_config", "proxy_connect_header"),
+                            PLAINTEXT_FORBIDDEN),
+    CredentialPlaintextSite("webhook", ("http_config", "oauth2", "proxy_connect_header"),
+                            PLAINTEXT_FORBIDDEN),
+    CredentialPlaintextSite("webhook", ("http_config", "proxy_url"), PLAINTEXT_UNLESS_USERINFO),
+    CredentialPlaintextSite("webhook", ("http_config", "oauth2", "proxy_url"),
+                            PLAINTEXT_UNLESS_USERINFO),
+)
+
+#: What a plaintext finding asks for (``PlaintextFinding.category``).
+NEEDS_REFERENCE = "needs_reference"        # write a Secret reference instead
+URL_USERINFO = "userinfo"                  # a URL carrying user[:password]@
+PROXY_CREDENTIAL = "proxy_credential"      # a proxy credential the tenant may not write
+PLAINTEXT_CATEGORIES = (NEEDS_REFERENCE, URL_USERINFO, PROXY_CREDENTIAL)
+
+
+class PlaintextFinding(NamedTuple):
+    """One credential written out where the #1560 policy refuses it. Holds
+    where (``path``, concrete; ``site``, the table row's path) and why
+    (``category``) — never the value."""
+
+    path: RefPath
+    site: tuple[str, ...]
+    category: str
+
+
+def url_has_userinfo(text: str) -> bool:
+    """Whether URL *text* carries userinfo (``user:pass@host`` or
+    ``user@host``), as ``urllib.parse.urlsplit`` reads its authority. A URL
+    the parser refuses (a malformed IPv6 host) counts when it holds an ``@``:
+    it cannot be shown to be free of one."""
+    from urllib.parse import urlsplit
+    try:
+        return urlsplit(text).username is not None
+    except ValueError:
+        return "@" in text
+
+
+def _walk_present(value: Any, pattern: tuple[str, ...], here: RefPath
+                  ) -> Iterator[tuple[RefPath, Any]]:
+    """``(concrete path, value)`` of every value standing on *pattern* of
+    *value* (``_walk_site``'s steps), whatever it is."""
+    if not pattern:
+        yield here, value
+        return
+    step, rest = pattern[0], pattern[1:]
+    if step == "[]":
+        if isinstance(value, list):
+            for i, item in enumerate(value):
+                yield from _walk_present(item, rest, here + (i,))
+    elif isinstance(value, dict):
+        keys = ([k for k in value if isinstance(k, str)] if step == "*"
+                else [step] if step in value else [])
+        for k in keys:
+            yield from _walk_present(value[k], rest, here + (k,))
+
+
+def _written_out(value: Any) -> bool:
+    """A credential value written out: a non-empty scalar (null and "" are
+    not set, as in Alertmanager; a mapping or list is a shape problem the
+    schema refuses, and a reference is not written out)."""
+    return (value is not None and value != "" and not isinstance(value, (dict, list)))
+
+
+def plaintext_credential_findings(receiver: Any, rtype: Optional[str] = None
+                                  ) -> list[PlaintextFinding]:
+    """#1560 ⑤-a: every credential *receiver* writes out where the owner's
+    policy refuses it — THE one judgement; ``da-tools migrate-credentials``
+    reports by it today, and the route generator is to refuse by it next.
+
+    *receiver* is the receiver as one file writes it (before any routing
+    layer is merged), *rtype* its type (default: its own ``type``). Per row
+    of ``CREDENTIAL_REF_SITES`` (``plaintext``) and
+    ``CREDENTIAL_PLAINTEXT_SITES`` (``policy``):
+
+    * ``PLAINTEXT_REFUSED``: a written-out value → ``NEEDS_REFERENCE``;
+    * ``PLAINTEXT_UNLESS_USERINFO``: a written-out string whose URL carries
+      userinfo (``url_has_userinfo``) → ``URL_USERINFO`` on a reference
+      site (webhook url), ``PROXY_CREDENTIAL`` on a proxy;
+    * ``PLAINTEXT_FORBIDDEN``: the key present, whatever its value →
+      ``PROXY_CREDENTIAL``;
+    * ``PLAINTEXT_ALLOWED``: nothing.
+
+    A Secret reference is never a finding (its shape is judged elsewhere).
+    In table order; no value is returned, only where and why."""
+    if rtype is None:
+        rtype = receiver.get("type") if isinstance(receiver, dict) else None
+    if not isinstance(receiver, dict) or not isinstance(rtype, str):
+        return []
+    out: list[PlaintextFinding] = []
+    rows = ([(s.path, s.plaintext, URL_USERINFO) for s in CREDENTIAL_REF_SITES
+             if s.rtype == rtype]
+            + [(s.path, s.policy, PROXY_CREDENTIAL) for s in CREDENTIAL_PLAINTEXT_SITES
+               if s.rtype == rtype])
+    for site, policy, userinfo_category in rows:
+        for path, value in _walk_present(receiver, site, ()):
+            if policy == PLAINTEXT_FORBIDDEN:
+                out.append(PlaintextFinding(path, site, PROXY_CREDENTIAL))
+            elif is_secret_ref(value) or not _written_out(value):
+                continue
+            elif policy == PLAINTEXT_REFUSED:
+                out.append(PlaintextFinding(path, site, NEEDS_REFERENCE))
+            elif (policy == PLAINTEXT_UNLESS_USERINFO and isinstance(value, str)
+                  and url_has_userinfo(value)):
+                out.append(PlaintextFinding(path, site, userinfo_category))
+    return out
+
+
+def value_paths_to_mask(receiver: Any, rtype: Optional[str] = None) -> list[RefPath]:
+    """The concrete path of every written-out scalar *receiver* holds on or
+    below a credential site of either table (reference or not, allowed or
+    not) — what a tool masks before it shows a receiver's text. A reference
+    is not written out; its key names nothing secret, so it is not listed."""
+    if rtype is None:
+        rtype = receiver.get("type") if isinstance(receiver, dict) else None
+    if not isinstance(receiver, dict) or not isinstance(rtype, str):
+        return []
+    found: list[RefPath] = []
+
+    def scalars(value: Any, here: RefPath) -> None:
+        if is_secret_ref(value):
+            return
+        if isinstance(value, dict):
+            for k, v in value.items():
+                scalars(v, here + (k,))
+        elif isinstance(value, list):
+            for i, v in enumerate(value):
+                scalars(v, here + (i,))
+        elif _written_out(value):
+            found.append(here)
+
+    sites = ([s.path for s in CREDENTIAL_REF_SITES if s.rtype == rtype]
+             + [s.path for s in CREDENTIAL_PLAINTEXT_SITES if s.rtype == rtype])
+    for site in sites:
+        for path, value in _walk_present(receiver, site, ()):
+            scalars(value, path)
+    return list(dict.fromkeys(found))
 
 
 def receiver_secret_ref_fields(rtype: str) -> list[str]:

@@ -384,6 +384,45 @@ def test_ci_lint_binary_matches_the_wrapper_fallback(ci_var: str, wrapper: str, 
         f"(and the wrapper's image digest) together.")
 
 
+_VIBE_RULES = _REPO / "scripts" / "tools" / "lint" / "check_iac_vibe_rules.py"
+
+
+def test_ci_hadolint_checksum_matches_the_wrapper() -> None:
+    """The wrapper is the SSOT for the hadolint binary's checksum as well as its
+    version (#3627): the remote-session bootstrap reads it from there. ci.yml
+    still writes its own copy in the install step; it must be the same bytes,
+    or CI and a remote session verify different binaries."""
+    ci = set(re.findall(r"^\s*HADOLINT_SHA256=([0-9a-f]{64})\s*$",
+                        (_WORKFLOWS / "ci.yml").read_text(encoding="utf-8"), re.MULTILINE))
+    assert len(ci) == 1, f"expected one ci.yml HADOLINT_SHA256 value, got {sorted(ci)}"
+    pinned = _one(r'^HADOLINT_SHA256\s*=\s*"([0-9a-f]{64})"\s*$',
+                  _VIBE_RULES.read_text(encoding="utf-8"),
+                  "check_iac_vibe_rules.py HADOLINT_SHA256")
+    assert ci == {pinned}, (
+        f"ci.yml HADOLINT_SHA256={ci.pop()} but check_iac_vibe_rules.py has {pinned}. "
+        f"Re-verify the upstream checksum of hadolint-Linux-x86_64 and write it in both.")
+
+
+def test_session_start_reads_the_hadolint_pin_from_the_wrapper() -> None:
+    """session-start installs hadolint (#3627) from the wrapper's pin read at
+    run time, so it has no copy to fall behind. This binds that shape: it names
+    the wrapper as its pin source, reads both constants out of it, and assigns
+    neither a literal of its own (a copy written later would silently win)."""
+    src = _SESSION_START.read_text(encoding="utf-8")
+    pin_src = _one(r"^HADOLINT_PIN_SRC=(\S+)\s*$", src, "session-start.sh HADOLINT_PIN_SRC")
+    assert _REPO / pin_src == _VIBE_RULES, (
+        f"session-start.sh reads the hadolint pin from {pin_src}, not from the wrapper "
+        f"that owns it ({_VIBE_RULES.relative_to(_REPO)}).")
+    for name in ("HADOLINT_VERSION", "HADOLINT_SHA256"):
+        assigns = re.findall(rf"^\s*{name}=(.*)$", src, re.MULTILINE)
+        assert assigns == [f'"$(py_pin {name} "$HADOLINT_PIN_SRC")"'], (
+            f"session-start.sh must set {name} only from the wrapper "
+            f"(`py_pin {name} \"$HADOLINT_PIN_SRC\"`); found {assigns}.")
+    assert '${HADOLINT_VERSION}' in src and '"$HADOLINT_SHA256"' in src, (
+        "session-start.sh no longer builds its hadolint download from HADOLINT_VERSION "
+        "and checks HADOLINT_SHA256 — the pin this test binds is not what gets installed.")
+
+
 # ── kubectl / kind / no floating devcontainer features ─────────────────────
 
 
