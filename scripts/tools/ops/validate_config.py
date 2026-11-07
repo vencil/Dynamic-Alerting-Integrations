@@ -222,6 +222,7 @@ from _lib_tenant_values import (  # noqa: E402
     load_guard_report,
     print_load_error,
 )
+from _lib_tenant_values import key_spellings as tv_key_spellings  # noqa: E402
 # ADR-038: the shared verdict on keys no reader reads (`check_unread_keys`).
 import _lib_key_verdict as key_verdict  # noqa: E402
 # #3142: the deployment --policy's remedy, shared with the tools that take it.
@@ -2121,7 +2122,7 @@ _UNREAD_KEYS_UNDECIDABLE_HINT = (
     "and run again (#3016).")
 
 
-def check_unread_keys(config_dir: str) -> dict[str, object]:
+def check_unread_keys(config_dir: str, verdict_out: "list | None" = None) -> dict[str, object]:
     """Keys no reader reads (ADR-038), by the shared verdict
     (`_lib_key_verdict.judge_tree`: `da-guard key-verdict`).
 
@@ -2132,6 +2133,9 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
     as tenant-api refuses a write it has no verdict for (decision 5): a
     caller error when da-guard itself fails (exit 2), a plain FAIL when the
     tree's own content stops it (rules Policy-as-Code refuses).
+
+    *verdict_out*, given, receives the verdict when one was given, so the
+    `no_alert` row reads the same one instead of judging the tree again.
     """
     try:
         verdict = key_verdict.judge_tree(config_dir)
@@ -2145,6 +2149,8 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
             "verdict incomplete: the keys no reader reads were not judged "
             f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
             caller_error=tool, hint=_UNREAD_KEYS_INCOMPLETE_HINT)
+    if verdict_out is not None:
+        verdict_out.append(verdict)
     details = [key_verdict.finding_line(f, WARN_LIMIT) for f in verdict.findings]
     undecidable = key_verdict.undecidable_line(verdict)
     if undecidable is not None:
@@ -2166,6 +2172,65 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         return _make_result("unread_keys", FAIL if verdict.blocks else WARN, details, hint=hint)
     return _make_result("unread_keys", PASS, [
         f"{len(verdict.keys)} tenant(s): every key is read by some reader"])
+
+
+_NO_ALERT_HINT = (
+    "Judged against the alert rules this platform ships "
+    "(`metric_observed_map.yaml`, kept equal to the rule packs by "
+    "`check_threshold_observed_map.py`): a key only your own Prometheus rules "
+    "read is listed too, and can be left as it is. Otherwise the value "
+    "reaches no alert: fix a misspelt key name, or remove the key. Never "
+    "blocks (#3591).")
+
+
+def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = None) -> dict[str, object]:
+    """Threshold keys /metrics serves that no shipped alert compares (ADR-038
+    decision 10, #3591): a typo the exporter still serves
+    (`mysql_connectoins` in the root `defaults:`), a `<key>_critical` tier
+    whose rule pack has no critical tier.
+
+    The served keys are the shared verdict's (*verdict*: the `unread_keys`
+    row's, or judged here): every key the exporter reads and serves, with
+    the file its value comes from. Whether an alert compares a key is the
+    observed-map's answer (`_observed_map_lib.lookup`, in the exporter's
+    canonical spelling asked of da-guard, the dimension part dropped) — no
+    second key → alert table. A key the map defers (KNOWN_DEFERRED) is not
+    listed.
+
+    Advisory only: WARN or PASS, never FAIL — a reader outside the shipped
+    rule packs (a customer's own rules) is not seen. A verdict or map that
+    cannot be read is a WARN saying the keys were not checked.
+    """
+    import _observed_map_lib  # ops/: the observed-map the recommender reads
+    try:
+        if verdict is None:
+            verdict = key_verdict.judge_tree(config_dir)
+        observed = _observed_map_lib.load_observed_map()
+        served = [v for vs in verdict.keys.values() for v in vs
+                  if v.verdict == key_verdict.READ and "exporter" in v.read_by
+                  and not v.key.startswith("_") and v.served is not None]
+        spell = tv_key_spellings(sorted({v.key.partition("{")[0] for v in served}))
+    except Exception as exc:  # noqa: BLE001 — advisory: not checked, never a FAIL
+        return _make_result("no_alert", WARN, [
+            "not checked: whether a shipped alert compares each served key was not judged "
+            f"({type(exc).__name__}: {' '.join(str(exc).split())})"])
+    found: dict[tuple[str, str], set[str]] = {}
+    for v in served:
+        key = spell.canonical(v.key.partition("{")[0])
+        if _observed_map_lib.lookup(observed, key)[0] is _observed_map_lib.LookupKind.NO_ALERT:
+            found.setdefault((v.file or "?", v.key), set()).add(v.tenant)
+    if not found:
+        return _make_result("no_alert", PASS, [
+            f"{len(served)} served key row(s): every one is compared by a shipped alert "
+            "(or deferred by the observed-map)"])
+    details = []
+    for (file, key), tenants in sorted(found.items()):
+        names = sorted(tenants)
+        who = ", ".join(names[:WARN_LIMIT]) + (
+            f" (+{len(names) - WARN_LIMIT} more)" if len(names) > WARN_LIMIT else "")
+        details.append(f"{file}: no_alert `{key}` — served, but no shipped alert compares it "
+                       f"— tenant(s) {who}")
+    return _make_result("no_alert", WARN, details)
 
 
 def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]:
@@ -2463,6 +2528,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "docs/cli-reference.md#validate-config",
     ),
     # ADR-038: each line names the file, the key, the reason and the tenants.
+    "no_alert": (_NO_ALERT_HINT, "docs/cli-reference.md#validate-config"),
     "unread_keys": (
         "Fix a misspelt key, or remove a key nothing reads; a `disable` that "
         "switches nothing off usually sits on a misspelt key; a value_unread "
@@ -3093,8 +3159,16 @@ def _main() -> "Report | None":
 
     # 14. Keys no reader reads (ADR-038) — unconditional; FAIL when the
     # verdict blocks or cannot be given (#3016).
+    verdicts: list = []
     results.append(_run_check("unread_keys", check_unread_keys,
-                              args.config_dir, _config_dir=args.config_dir))
+                              args.config_dir, verdict_out=verdicts, _config_dir=args.config_dir))
+
+    # 15. Served keys no shipped alert compares (ADR-038 decision 10, #3591)
+    # — unconditional, advisory: WARN at most, never a FAIL. It reads the
+    # verdict the row above gave.
+    results.append(_run_check("no_alert", check_no_alert, args.config_dir,
+                              verdict=verdicts[0] if verdicts else None,
+                              _config_dir=args.config_dir))
 
     _effective_runs = None
 

@@ -58,6 +58,8 @@ updated_at: 2026-11-07
 
 2026-11-07 修訂：讀了但值讀不懂的保留鍵進共用判決（`value_unread`），在寫它的檔與層判，不在合併後的值上判：租戶檔 error，profile 與根平台檔 `tenants:` notice；`_metadata` 的子鍵與 `_severity_dedup` 也各有讀取端的值檢查。tenant-api 不因這類 finding 另外拒收，沿用決定 12 的寫入檢查（決定 10、12）。
 
+2026-11-07 修訂：送出了但沒有告警比較的鍵由 validate-config 的 `no_alert` 列以 `metric_observed_map.yaml` 判、只報不擋；範例樹的 3 個 `_critical` 鍵是規則包缺 critical 層，不是索引沒處理後綴（決定 10）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -380,7 +382,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 | 情況 | 處理 | 等級 |
 |---|---|---|
-| 送出了但沒有任何規則讀它（例如根 defaults 的錯字、base 已宣告但沒有規則讀的維度鍵） | 讀取端是部署中的告警規則。以 repo 內規則包的索引判斷，涵蓋經 recording rule 間接讀、直接查 `user_threshold` 的規則，以及 `_critical` 鍵；可以宣告「外部讀取端」（客戶自己的 Prometheus 規則） | 永遠只是建議 |
+| 送出了但沒有任何告警比較它（例如根 defaults 的錯字、規則包沒有 critical 層時的 `<key>_critical`） | 讀取端是出貨的告警規則。以 `metric_observed_map.yaml` 判斷：它記每個閾值鍵被哪條告警比較（含經 recording rule 間接比較，`_critical` 鍵各自一筆），並由 CI 守住與規則包一致。validate-config 的 `no_alert` 列報出 exporter 有送、但這份對照查不到的鍵，掛在值來自的檔上；對照延後判的鍵（version-aware 的 `container_*`）不報。客戶自己的 Prometheus 規則不在判斷範圍 | 永遠只是建議（WARN，不影響 exit code） |
 | 整份沒有讀取端讀的檔（租戶區沒有 `tenants:` 的檔、子目錄沒被選上的 `_defaults` 檔） | 沿用 served-values 現有的 `skipped`／`unread_keys` | notice：新建、還沒寫 `tenants:` 的檔不能凍結寫入 |
 | `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準，判決報 `value_unread`；schema 的 `_metadata` 欄位表以 Go 測試與它雙向釘住 | 租戶檔：error；平台檔與 profile：notice |
 | 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_profile` 指到不存在的 profile） | 由讀取它的程式判：登錄表 `value.check` 把鍵綁到 exporter 的讀取函式，判決報 `value_unread`。兩個讀取端都讀的 `_severity_dedup`，產生器的接受字由測試釘成與 exporter 一致。只有產生器讀的 `_routing_profile` 由產生器自己擋 | 租戶檔：error；平台檔與 profile：notice |
@@ -391,7 +393,12 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 _defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode "purple" (valid: warning, critical, all, disable)) — tenant(s) ta, tb
 ```
 
-用現有的規則索引對主 conf.d 實測，有 18 個送出了但查不到規則讀的鍵。其中 3 個是 `_critical` 鍵，它們的 base 有告警讀，只是索引還沒有處理 `_critical` 後綴，實作時要補上；其餘 15 個是維度鍵，所屬的 base 沒有任何規則讀；它們正是背景一節那 15 條鍵名警告的鍵。後者不刪也不放寬檢查，而是列進一份帶 issue 連結的已知清單，清單只准縮小。這項檢查問「送出的值有沒有規則讀」，現有的「告警所需的閾值是否送得到」檢查問「規則要的值有沒有送出」，兩者方向相反、互相補足。
+對 repo 的範例 conf.d 實測，`no_alert` 報 3 個鍵：`mongodb_connections_current_critical`、`mongodb_replication_lag_critical`、`redis_memory_used_bytes_critical`。mongodb 與 redis 規則包只比較 `severity="warning"` 的門檻，沒有 critical 層，所以這幾個 critical 門檻送出了也沒有告警用到（[#3658](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3658)）。它們列在測試裡一份帶 issue 的已知清單，清單只准縮小：範例樹多出一個就紅，修好一個沒從清單拿掉也紅。背景一節的維度鍵如今不再送出（決定 11），由判決報 unread，不在這裡。這項檢查問「送出的值有沒有告警比較」，現有的「告警所需的閾值是否送得到」檢查問「告警要的值有沒有送出」，兩者方向相反、互相補足。
+
+```
+[WARN] no_alert
+       examples/mongo-prod.yaml: no_alert `mongodb_connections_current_critical` — served, but no shipped alert compares it — tenant(s) mongo-prod
+```
 
 ### 11. 推進順序
 
