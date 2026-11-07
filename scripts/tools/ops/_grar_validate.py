@@ -53,7 +53,8 @@ from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _lib_validation import (  # noqa: E402  (#1560)
-    is_secret_ref, secret_ref_rule, shared_secret_field_texts,
+    MASKED_VALUE, is_credential_path, is_secret_ref, receiver_value_repr, secret_ref_rule,
+    shared_secret_field_texts,
 )
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     OWN_NAME_PREFIX,
@@ -135,7 +136,8 @@ def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: 
         if not host:
             warnings.append(
                 skipped_entry_warning(f"  WARN: {tenant}: cannot parse host from receiver "
-                                      f"{field}='{raw}', skipping domain check",
+                                      f"{field}={receiver_value_repr(rtype, (field,), raw)}, "
+                                      "skipping domain check",
                                       kind="receiver_host_unparseable", tenant=tenant_id,
                                       field=f"{receiver_field}.{field}"))
             continue
@@ -1919,9 +1921,11 @@ def receiver_bool_type_errors(obj: object, *, block: str, where: str,
         if rtype not in RECEIVER_TYPES:
             continue  # unknown_receiver_type / missing_receiver_field name it
         for fld, value in receiver_bool_problems(rtype, recv):
+            # #1560 ⑤-b: a receiver value goes through the one helper.
             out.append((f"{path}.{fld}",
                         f"{label}.{fld} must be a boolean (true / false, "
-                        f"unquoted), got {value_type_text(value)}"))
+                        f"unquoted), got "
+                        f"{MASKED_VALUE if is_credential_path(rtype, tuple(fld.split('.'))) else value_type_text(value)}"))
     return out
 
 
