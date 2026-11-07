@@ -1064,9 +1064,13 @@ def _cli_gh_triggers(deploy: str) -> dict:
 # `test_the_delivered_action_pins_track_the_platforms_own` reads the majors out
 # of `.github/workflows/**`, so the platform's own bump is what reds this.
 def _cli_gh_uses(deploy: str) -> list[str]:
-    del deploy  # same for kustomize and helm; see the note above
+    # ⛔ helm adds `azure/setup-helm`: without it the apply job runs whatever
+    # helm the runner image carries, and `ubuntu-latest` moved to a Helm 4 image
+    # in 2026-10/11 (actions/runner-images#14748) — across the major the GitLab
+    # pin holds. kustomize still uses the runner's kubectl/kustomize.
+    extra = ["azure/setup-helm@v4"] if deploy == "helm" else []
     return sorted(["actions/checkout@v6"] * 3
-                  + ["marocchino/sticky-pull-request-comment@v2"])
+                  + ["marocchino/sticky-pull-request-comment@v2"] + extra)
 
 
 # ⛔ There are deliberately no `_PORTAL_GH_*` counterparts to the two helpers
@@ -2888,7 +2892,10 @@ def _assert_github_deploy_contract(
     # edit that clears the red is `expected_uses` alone, leaving the new
     # action's scope requirement unenforced forever. Naming the
     # demands-nothing actions explicitly is what makes the omission deliberate.
-    _NEEDS_NOTHING = {"actions/upload-artifact", "actions/download-artifact"}
+    # azure/setup-helm downloads from get.helm.sh; with `version:` pinned it
+    # never resolves "latest" through the GitHub API, so it needs no token scope.
+    _NEEDS_NOTHING = {"actions/upload-artifact", "actions/download-artifact",
+                      "azure/setup-helm"}
     unclassified = sorted(
         {u.split("@")[0] for u in expected_uses} - set(_NEEDS) - _NEEDS_NOTHING
     )
@@ -8484,3 +8491,38 @@ def test_the_fallback_report_is_executed_not_just_pinned(
                               ("Config diff (blast radius)", diff)):
             assert name in body
             assert (outcome or "did not run") in body
+
+
+# ── GitHub apply installs the SAME helm the GitLab pipeline runs ─────────────
+@pytest.mark.parametrize(
+    "ci,deploy", [c for c in GH_COMBOS if c[1] == "helm"])
+def test_github_helm_apply_installs_the_pinned_helm_before_using_it(
+    generated, ci, deploy,
+) -> None:
+    """The GitHub apply job must not run the runner's own helm.
+
+    ⛔ Measured cause, not a style point: `ubuntu-latest` moved from Ubuntu 24.04
+    (Helm 3.22.1) to 26.04 (Helm 4.3.1) between 2026-10-19 and 2026-11-19
+    (actions/runner-images#14748; the image READMEs list both helms), so a
+    workflow that calls `helm` without installing one crossed the Helm major on
+    GitHub's schedule — the exact move `test_helm_image_stays_on_the_helm_3_line`
+    stops on the GitLab side. Equality with the GitLab image's tag, not with a
+    literal here: the two platforms deploy with one helm, and that is the
+    property, whatever version it is.
+    """
+    workflow = yaml.safe_load(
+        (generated[(ci, deploy)] / _GH_WORKFLOW).read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["apply"]["steps"]
+    setup = [i for i, s in enumerate(steps)
+             if str(s.get("uses", "")).split("@")[0] == "azure/setup-helm"]
+    helm_runs = [i for i, s in enumerate(steps)
+                 if re.search(r"(^|\s)helm\s", str(s.get("run", "")))]
+    assert helm_runs, "anti-vacuity: the helm apply job runs no `helm` command"
+    assert len(setup) == 1, (
+        f"apply job installs helm {len(setup)} time(s); expected exactly one "
+        f"azure/setup-helm step: {[s.get('uses') or s.get('name') for s in steps]}")
+    assert setup[0] < min(helm_runs), "setup-helm must run before the first `helm` call"
+    gitlab_tag = ip.GITLAB_HELM_IMAGE.rsplit(":", 1)[1]
+    assert steps[setup[0]].get("with", {}).get("version") == f"v{gitlab_tag}", (
+        f"GitHub installs helm {steps[setup[0]].get('with')!r}, GitLab runs "
+        f"{ip.GITLAB_HELM_IMAGE!r} — one generated project, two helms.")

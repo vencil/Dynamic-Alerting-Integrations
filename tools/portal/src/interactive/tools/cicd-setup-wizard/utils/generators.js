@@ -48,6 +48,11 @@ const CICD_DEFAULT_DA_TOOLS_IMAGE = 'ghcr.io/vencil/da-tools:v2.9.0';
 // the da-tools tag above; `bump_docs.py --exporter` rewrites this line at
 // release. Without `--version` the helm step installs whatever chart is newest
 // in the registry on the day it runs.
+// HELM_VERSION in scripts/tools/ops/init_project.py — the helm the generated
+// GitHub apply job installs. Not derived here: section 7 of
+// tests/ops/test_generated_ci_artifacts.py compares this preview to the CLI's
+// output byte for byte, so a drift between the two reds there.
+const CICD_HELM_VERSION = '3.22.1';
 const CICD_THRESHOLD_EXPORTER_CHART_VERSION = '2.9.0';
 
 // ⛔ There is deliberately no argocd CLI image pin here any more, and none in
@@ -336,7 +341,12 @@ const _CICD_APPLY_BLOCKS = {
   helm: {
     header: `  # ── Stage 3: Apply via Helm (manual trigger only) ─────
 `,
-    steps: `      - name: Helm upgrade threshold-exporter
+    steps: `      # Pins helm: the runner's own helm follows the runner image, which
+      # moves across Helm majors on GitHub's schedule, not ours.
+      - uses: azure/setup-helm@v4
+        with:
+          version: v${CICD_HELM_VERSION}
+      - name: Helm upgrade threshold-exporter
         run: |
           helm upgrade --install threshold-exporter \\
             oci://ghcr.io/vencil/charts/threshold-exporter --version ${CICD_THRESHOLD_EXPORTER_CHART_VERSION} \\
