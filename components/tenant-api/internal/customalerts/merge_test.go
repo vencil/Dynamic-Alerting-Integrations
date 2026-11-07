@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// The SPIKE GATE (ADR-024 §S6b-2): prove yaml.v3 yaml.Node surgery can replace
+// The SPIKE GATE (ADR-024 §3): prove yaml.v3 yaml.Node surgery can replace
 // `_custom_alerts` while preserving the rest of a human-authored tenant.yaml —
 // crucially its COMMENTS. If this can't hold, Path A (AST on the shared file)
 // is not viable and we escalate to Path B (separate machine-owned storage).

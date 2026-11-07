@@ -49,11 +49,11 @@ type TenantDetail struct {
 	Notices  []string `json:"validation_notices,omitempty"`
 	// SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it
 	// back as `base_hash` on PUT .../custom-alerts for optimistic-
-	// concurrency (ADR-024 §S6b-2): the write 409s if the file changed
+	// concurrency (ADR-024 §3): the write 409s if the file changed
 	// underneath them.
 	SourceHash string `json:"source_hash"`
 	// CustomAlerts is the tenant's `_custom_alerts` recipes as structured
-	// JSON (ADR-024 §S6b-2). The portal recipe modal reads this directly so
+	// JSON (ADR-024 §3). The portal recipe modal reads this directly so
 	// the client never parses YAML — the backend owns the round-trip on both
 	// read and write. Empty slice when the tenant has none.
 	CustomAlerts []map[string]any `json:"custom_alerts"`

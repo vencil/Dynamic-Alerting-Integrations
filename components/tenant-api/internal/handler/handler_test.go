@@ -251,7 +251,7 @@ func TestGetTenant_Success(t *testing.T) {
 	if detail.RawYAML == "" {
 		t.Error("TenantDetail.RawYAML should not be empty")
 	}
-	// ADR-024 §S6b-2: GET returns source_hash (the client's base_hash for
+	// ADR-024 §3: GET returns source_hash (the client's base_hash for
 	// PUT .../custom-alerts optimistic concurrency). Lock the exact contract:
 	// the SHA-256[:16] of the raw file content.
 	if want := cfg.ComputeSourceHash([]byte(detail.RawYAML)); detail.SourceHash != want {
