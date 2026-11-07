@@ -188,13 +188,16 @@ def lifecycle_notices(lifecycle) -> List[str]:
     return notices
 
 
-def _render(groups: List[dict]) -> str:
+def _render(groups: List[dict], regenerate: str = "make custom-alerts-compile") -> str:
+    """The pack as written: header + groups. *regenerate* is the command the
+    header tells a reader to run (`_regenerate_command`): the shipped pack's
+    make target by default, another file's own command otherwise (#3679)."""
     header = (
         "# ============================================================\n"
         "# custom-alerts Rule Pack — Tenant-authored declarative alerts\n"
         "# GENERATED from _custom_alerts declarations by\n"
         "# scripts/tools/dx/compile_custom_alerts.py — DO NOT EDIT.\n"
-        "# Run `make custom-alerts-compile` after editing recipes/conf.d.\n"
+        f"# Run `{regenerate}` after editing recipes/conf.d.\n"
         "# Rule count = SHAPE count (vectorized, not per-tenant; ADR-024 §2b).\n"
         "# ============================================================\n"
     )
@@ -232,6 +235,15 @@ def _committed_rules(out_path: Path) -> dict:
         raise
     except Exception:
         return {}
+
+
+def _committed_text(out_path: Path) -> "str | None":
+    """The pack's text as `read_text` gives it (universal newlines, so a CRLF
+    checkout compares equal), or None when it cannot be read."""
+    try:
+        return out_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
 
 
 def _erases_committed_rules(produced: dict, committed: dict) -> bool:
@@ -343,6 +355,60 @@ def _rerun_command(args) -> str:
         return ""  # no offer: see the third case above
     parts.append("--allow-empty")
     return " ".join(parts)
+
+
+def _shown_path(out_path: Path, repo: "Path | None") -> Path:
+    """*out_path* repo-relative when it is inside the repo, else as given.
+
+    `relative_to` raises ValueError for an --out outside the repo (or on another
+    drive on Windows); without the fallback the success line would crash AFTER
+    the file was written."""
+    try:
+        return out_path.relative_to(repo) if repo is not None else out_path
+    except ValueError:
+        return out_path
+
+
+def _regenerate_command(out_path: Path, config_dir: Path, repo: "Path | None") -> str:
+    """The command that rewrites *out_path* from *config_dir* (#3679): what the
+    drift message prescribes and what the pack's header says.
+
+    ⛔ THE COMPARED FILE DECIDES, NOT THE SHIPPED ONE. `--check --out X` compares
+    against X (the runtime canary's compiled bundle is one), and telling that
+    reader to run `make custom-alerts-compile` rewrites a different file and
+    leaves X red. The shipped pack keeps its documented make target.
+
+    ⛔ DERIVED FROM THE RESOLVED PATHS, NEVER FROM HOW THEY WERE SPELLED. The
+    header is part of the file `--check` compares byte for byte, and the writer
+    (`$(CURDIR)/…`, absolute) and the checkers (relative) spell the same file
+    differently; inside the repo both become repo-relative, so they agree. The
+    command runs from the repo root, through the wrapper that builds da-guard,
+    so it pastes on any checkout — never this process's interpreter path."""
+    def shown(p: Path) -> str:
+        if repo is not None:
+            try:
+                return Path(p).resolve().relative_to(repo.resolve()).as_posix()
+            except ValueError:
+                pass
+        return str(p)
+
+    if repo is not None and shown(out_path) == OUT_REL:
+        return "make custom-alerts-compile"
+    return (f"bash scripts/ops/with_da_guard.sh python3 scripts/tools/dx/compile_custom_alerts.py "
+            f"--config-dir {_shell_quote(shown(config_dir))} --out {_shell_quote(shown(out_path))}")
+
+
+def _header_command(out_path: Path, config_dir: Path, repo: "Path | None") -> str:
+    """The command the pack's header names: `_regenerate_command` when both
+    paths are in the repo (the shipped pack, the runtime canary), else a
+    placeholder. ⛔ The header is OUTPUT: a temp tree's path in it would make
+    two compiles of the same declarations differ by where they were written,
+    which is what tests/shared/test_reserved_key_probes.py compares."""
+    cmd = _regenerate_command(out_path, config_dir, repo)
+    if repo is not None and all(Path(p).resolve().is_relative_to(repo.resolve())
+                                for p in (out_path, config_dir)):
+        return cmd
+    return "compile_custom_alerts.py --config-dir <tree> --out <this file>"
 
 
 # ⛔ ONE STRING, TWO POLARITIES. The erasing branch must carry this and the ordinary
@@ -612,10 +678,22 @@ def main() -> int:
         print(f"ERROR: {cr.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    regenerate = _regenerate_command(out_path, config_dir, repo)
+    rendered = _render(groups, _header_command(out_path, config_dir, repo))
     if args.check:
         findings = sync._diff_maps(produced, committed)
+        # ⛔ THE FILE IS THE COMPILER'S WHOLE, SO IT IS COMPARED WHOLE (#3679).
+        # The rule-identity comparison above is blind to what it does not key
+        # on: a second rule under an existing name overwrites the first in its
+        # map, and group `labels` / `limit` / `query_offset` are not in it —
+        # measured, both left a hand-edited canary green. A pack this compiler
+        # writes is exactly `rendered`; anything else is a hand edit.
+        if not findings and committed and _committed_text(out_path) != rendered:
+            findings = [f"not byte-for-byte the compiler's output (a hand edit the rule "
+                        f"comparison does not key on: a duplicate rule, a group field, "
+                        f"the header or layout)"]
         if findings:
-            print(f"  ❌ {OUT_REL} drifted from custom-alert source:")
+            print(f"  ❌ {_shown_path(out_path, repo)} drifted from custom-alert source:")
             for f in findings:
                 print(f"       {f}")
             # ⛔ THE REMEDY LINE IS BRANCHED, AND THAT IS THE POINT. "Regenerate" is
@@ -639,26 +717,17 @@ def main() -> int:
                 # one file landed HERE, and following this line dropped that tenant's
                 # alerts from pack, ConfigMaps and CRD at rc=0 with every gate green.
                 print(f"\n❌ custom-alerts rule pack out of sync. "
-                      f"Run `make custom-alerts-compile` to regenerate.", file=sys.stderr)
+                      f"Run `{regenerate}` to regenerate.", file=sys.stderr)
                 print(_net_rule_change_note(produced, committed), end="", file=sys.stderr)
             return EXIT_VIOLATION
         print(f"✅ custom-alerts rule pack matches source "
               f"({pack.shapes} shape(s)).")
         return EXIT_OK
 
-    # Display repo-relative when the out path is inside the repo, else show it as
-    # given. `relative_to` raises ValueError for an --out outside the repo (or on a
-    # different drive on Windows) — without this guard the success line would crash
-    # AFTER the file was already written, turning a successful compile into a
-    # traceback + nonzero exit (false failure).
-    #
     # ⛔ COMPUTED BEFORE THE WRITE, so the refusal below names the pack the same way
     # the success line does. A refusal that prints an absolute path while every other
     # line prints a repo-relative one reads like it is talking about a different file.
-    try:
-        shown = out_path.relative_to(repo) if repo is not None else out_path
-    except ValueError:
-        shown = out_path
+    shown = _shown_path(out_path, repo)
 
     if _erases_committed_rules(produced, committed) and not args.allow_empty:
         print(f"❌ refusing to write: this compile produced no rules, and "
@@ -682,7 +751,7 @@ def main() -> int:
         return EXIT_VIOLATION
 
     with output_write(out_path, flag="--out"):
-        out_path.write_text(_render(groups), encoding="utf-8", newline="\n")
+        out_path.write_text(rendered, encoding="utf-8", newline="\n")
     if pack.shapes:
         print(f"✅ Compiled {pack.shapes} shape(s) → {shown}")
     else:

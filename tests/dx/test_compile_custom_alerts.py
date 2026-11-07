@@ -899,8 +899,17 @@ def test_cli_default_config_dir_matches_canonical_callers():
     # Measured: adding one such comment to the Makefile turned this test red while the
     # invocations were untouched. Extracting from each file's grammar drops comments
     # by construction.
+    #
+    # #3679: the runtime canary's invocations compile ANOTHER tree into ANOTHER file
+    # and say so with `--out`; only the invocations aimed at the shipped pack (no
+    # `--out`, or `--out` naming it) are held to the canonical tree. Keying on the
+    # target rather than on the tree keeps a caller that compiles some other tree
+    # into the shipped pack red here.
     for rel in ("Makefile", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
-        scanned = {tok.split()[0] for inv in _tool_invocations(rel)
+        shipped = [inv for inv in _tool_invocations(rel)
+                   if "--out" not in inv or inv.split("--out", 1)[1].split()[0].endswith(cc.OUT_REL)]
+        assert shipped, f"{rel}: no invocation aimed at the shipped pack"
+        scanned = {tok.split()[0] for inv in shipped
                    for tok in [inv.split("--config-dir", 1)[1].strip()]}
         assert scanned == {canonical}, f"{rel} scans {scanned}, CLI default is {canonical}"
 
@@ -1031,7 +1040,8 @@ def test_check_still_names_the_remedy_on_ordinary_drift(tmp_path, monkeypatch, c
                                       "--config-dir", str(src), "--out", str(out)])
     assert cc.main() == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
-    assert "make custom-alerts-compile" in err
+    # #3679: `--out` names the compared file, so the remedy rewrites THAT file.
+    assert f"--out {out}" in err and "to regenerate" in err
     assert "--allow-empty" not in err
     assert cc.DO_NOT_REGENERATE, "an empty constant would make the next line vacuous"
     assert cc.DO_NOT_REGENERATE not in err
@@ -1070,7 +1080,7 @@ def test_partial_loss_names_the_rules_regenerating_would_remove(tmp_path, monkey
                                       "--config-dir", str(src), "--out", str(out)])
     assert cc.main() == cc.EXIT_VIOLATION
     err = capsys.readouterr().err
-    assert "make custom-alerts-compile" in err       # still the right remedy here
+    assert f"--out {out}" in err                      # still the right remedy here (#3679)
     # …but not without the casualties. Rule identities are recipe_id slugs, so the
     # metric is what appears in them — NOT the tenant's `name:` for the recipe.
     assert "−" in err and "b_m" in err
@@ -1580,7 +1590,8 @@ def test_every_repo_caller_that_writes_names_its_out():
     # `--check` (writes nothing, `--out` optional) or it must carry `--out`. A new
     # writing caller that forgets it fails here rather than at rc=2 in someone's
     # terminal.
-    expected = {"Makefile": 2, ".pre-commit-config.yaml": 1, ".github/workflows/ci.yml": 1}
+    # Each file: the shipped pack's caller(s) + the runtime canary's (#3679).
+    expected = {"Makefile": 4, ".pre-commit-config.yaml": 2, ".github/workflows/ci.yml": 2}
     for rel, n in expected.items():
         calls = _tool_invocations(rel)
         # ⛔ EQUALITY, NOT A FLOOR. The floor this replaces was `total >= 3` while the
