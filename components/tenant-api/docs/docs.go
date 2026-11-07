@@ -3524,7 +3524,7 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "git_managed_reason": {
-                    "description": "GitManagedReason says why the tenant is git-managed (managed_by: git):\nnot_tenant_document (not YAML, or its root or tenants: is not a\nmapping), several_documents, yaml_indirection, tenant_count (several\ntenants), id_mismatch (the one tenant is not the file's name). A\nfixed code: it names no tenant. Absent when managed_by is api.",
+                    "description": "GitManagedReason says why the tenant is git-managed (managed_by: git):\nnot_tenant_document (not YAML, its root or tenants: is not a\nmapping, or its root has a key other than tenants),\nseveral_documents, yaml_indirection, tenant_count (several\ntenants), id_mismatch (the one tenant is not the file's name). A\nfixed code: it names no tenant. Absent when managed_by is api.",
                     "type": "string",
                     "enum": [
                         "not_tenant_document",
@@ -3681,7 +3681,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "git_managed_reason": {
-                    "description": "GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:\nnot_tenant_document (not YAML, or its root or tenants: is not a mapping), several_documents, yaml_indirection,\ntenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's\nother fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:\nit names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id\n(always so for id_mismatch) is marked metadata_incomplete: its metadata is unknown, not unlabeled.",
+                    "description": "GitManagedReason is why the tenant is git-managed (managed_by: git), the code GET /api/v1/tenants/{id} gives:\nnot_tenant_document (not YAML, its root or tenants: is not a mapping, or its root has a key other than\ntenants), several_documents, yaml_indirection,\ntenant_count (several tenants), id_mismatch (the one tenant the file declares is not the file's name — the row's\nother fields are then empty: the file's content is that other id's, which the list does not show). A fixed code:\nit names no tenant. Absent when managed_by is api. A git-managed row whose file does not declare the row's id\n(always so for id_mismatch) is marked metadata_incomplete: its metadata is unknown, not unlabeled.",
                     "type": "string",
                     "enum": [
                         "not_tenant_document",

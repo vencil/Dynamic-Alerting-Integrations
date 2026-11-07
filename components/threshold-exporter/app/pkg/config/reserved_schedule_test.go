@@ -401,7 +401,7 @@ func TestResolveEffective_ScheduledReservedShowsDefault(t *testing.T) {
 
 // tenant-api's merge: the display (what GET resolves) holds the default
 // alone; the tenant layer keeps the schedule for ValidateTenantKeys, so GET
-// reports it as a notice. The flat-KV fallback is the same.
+// reports it as a notice.
 func TestMergeTenantOverRootPlatform_ScheduledReserved(t *testing.T) {
 	t.Parallel()
 	dir := rsTree(t, nil)
@@ -409,7 +409,6 @@ func TestMergeTenantOverRootPlatform_ScheduledReserved(t *testing.T) {
 	const val = "{default: disable, overrides: [{window: \"03:00-04:00\", value: all}]}"
 	for name, data := range map[string]string{
 		"tenants block": "tenants:\n  t1:\n    _silent_mode: " + val + "\n",
-		"flat KV":       "_silent_mode: " + val + "\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
