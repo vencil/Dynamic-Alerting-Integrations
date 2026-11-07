@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import _lib_key_verdict as kv
+import _lib_tenant_values as tv
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -399,9 +400,10 @@ def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
 
 _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
         "severity": "error", "reason": "no_row", "disable": None, "switched_off_with": None,
-        "value": 1, "served": None}
+        "dead_entries": [], "value": 1, "served": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
-            "reason": "no_row", "base": None, "blocks": True}
+            "reason": "no_row", "base": None, "dead_entries": None, "blocks": True}
+_DEAD = {"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}
 
 
 def _doc(**over):
@@ -429,6 +431,15 @@ def _doc(**over):
     _doc(blocks="yes"),
     _doc(undecidable_blocks=None),
     _doc(findings=[dict(_FINDING, blocks=None)]),
+    # #3502: a dead_entry carries its entries, no other kind does; a reason
+    # outside the closed set is not read as one inside it.
+    _doc(findings=[dict(_FINDING, kind="dead_entry")]),
+    _doc(findings=[dict(_FINDING, kind="dead_entry", dead_entries=[])]),
+    _doc(findings=[dict(_FINDING, dead_entries=[_DEAD])]),
+    _doc(findings=[dict(_FINDING, kind="dead_entry", dead_entries=[dict(_DEAD, reason="covered")])]),
+    _doc(findings=[dict(_FINDING, kind="dead_entry", dead_entries=[dict(_DEAD, window=None)])]),
+    _doc(tenants={"t": [dict(_ROW, dead_entries=None)]}),
+    _doc(tenants={"t": [dict(_ROW, dead_entries=[dict(_DEAD, reason="covered")])]}),
 ], ids=lambda d: next(iter(k for k in d if d[k] != _doc()[k]), "?"))
 def test_a_document_this_reader_cannot_read_is_refused_not_read_as_another_answer(doc):
     """#3489 審查：讀不懂的值不能被讀成「判完、沒有 error」——產生器容器以
@@ -463,3 +474,29 @@ def test_a_value_unread_is_charged_to_the_layer_that_writes_it(tmp_path):
     assert [(f.file, f.key, f.tenants, f.blocks) for f in errors] == [("tb.yaml", "_metadata", ("tb",), True)]
     assert "dbType" in errors[0].reason
     assert t.blocks
+
+
+def test_a_schedule_entry_that_never_serves_is_an_error_on_the_file_that_writes_it(tmp_path):
+    """#3502：排程裡永遠不生效的條目（被前面 window 完全遮住的 window、被 window
+    蓋滿整天的 default）在寫它的檔報 error 並擋；部分重疊的 window 照常合法。"""
+    files = {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: 70\n",
+        "a.yaml": ("tenants:\n  t1:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+                   "        - window: \"22:00-06:00\"\n          value: \"1000\"\n"
+                   "        - window: \"01:00-03:00\"\n          value: \"5\"\n"
+                   "    redis_memory:\n      default: \"60\"\n      overrides:\n"
+                   "        - window: \"22:00-06:00\"\n          value: \"61\"\n"
+                   "        - window: \"05:00-08:00\"\n          value: \"62\"\n"),
+    }
+    verdict = kv.judge_tree(_tree(tmp_path, files), at="2026-07-01T03:00:00Z")
+    dead = [f for f in verdict.findings if f.kind == "dead_entry"]
+    assert [(f.severity, f.key, f.file, f.tenants, f.blocks) for f in dead] == [
+        ("error", "mysql_connections", "a.yaml", ("t1",), True)]
+    assert dead[0].dead_entries == (tv.DeadEntry("overrides[1]", "01:00-03:00", "5", "window_covered"),)
+    assert verdict.blocks
+    row = {v.key: v for v in verdict.keys["t1"]}
+    assert row["mysql_connections"].dead_entries == dead[0].dead_entries
+    assert row["redis_memory"].dead_entries == ()
+    assert kv.finding_line(dead[0], 5) == (
+        "a.yaml: error: dead_entry `mysql_connections` (never served: overrides[1] `01:00-03:00` → '5': "
+        "window_covered) — tenant(s) t1")

@@ -2224,6 +2224,27 @@
                 }
             }
         },
+        "config.DeadEntry": {
+            "type": "object",
+            "properties": {
+                "entry": {
+                    "description": "Entry: \"default\", or \"overrides[\u003ci\u003e]\" (0-based, the order written).",
+                    "type": "string"
+                },
+                "reason": {
+                    "description": "Reason: one of the DeadEntry* reasons.",
+                    "type": "string"
+                },
+                "value": {
+                    "description": "Value: the entry's value as written.",
+                    "type": "string"
+                },
+                "window": {
+                    "description": "Window: the entry's `window:` as written; absent for the default.",
+                    "type": "string"
+                }
+            }
+        },
         "config.NotServedKey": {
             "type": "object",
             "properties": {
@@ -3581,6 +3602,16 @@
                     "type": "array",
                     "items": {
                         "type": "string"
+                    }
+                },
+                "dead_entries": {
+                    "description": "DeadEntries names each threshold key of EffectiveConfig written as a\nschedule with an entry /metrics serves at no minute of the UTC day —\na window the windows before it cover, or a `default` the windows\ncover (#3502, ScheduledValue.DeadEntries) — with those entries. The\nkey itself is served, so it is not in NotServed: what never applies\nis part of its value. The file of the value is KeySources'. Filled by\nResolveEffective and EffectiveTree; omitted when no key has one.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/config.DeadEntry"
+                        }
                     }
                 },
                 "defaults_chain": {

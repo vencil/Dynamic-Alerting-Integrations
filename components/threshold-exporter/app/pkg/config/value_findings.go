@@ -36,6 +36,10 @@ type ValueFinding struct {
 	threshold bool
 	// refusal is the threshold kind's thresholdRefusal.
 	refusal thresholdRefusal
+	// dead is the #3502 kind's entries (newDeadEntryFinding): a threshold
+	// key's schedule with entries /metrics never serves. nil for any other
+	// kind.
+	dead []DeadEntry
 }
 
 // newThresholdFinding is the finding for sv, the value of threshold key key
@@ -55,6 +59,53 @@ func newThresholdFinding(tenant string, defaults map[string]float64, key string,
 		threshold: true,
 		refusal:   r,
 	}, true
+}
+
+// newDeadEntryFinding is the finding for sv, the value of threshold key key
+// (canonical spelling), when its schedule has entries /metrics serves at no
+// minute of the day (ScheduledValue.DeadEntries, #3502).
+func newDeadEntryFinding(tenant, key string, sv ScheduledValue) (ValueFinding, bool) {
+	des := sv.DeadEntries()
+	if len(des) == 0 {
+		return ValueFinding{}, false
+	}
+	return ValueFinding{
+		Tenant:  tenant,
+		Key:     key,
+		Value:   sv,
+		Problem: deadEntryProblem,
+		Message: fmt.Sprintf("WARN: tenant=%s: %s writes a schedule %s: %s. Remove %s, or reorder the windows "+
+			"(the first window that contains a minute serves it)",
+			tenant, key, deadEntryProblem, DeadEntriesText(des), deadEntryWhat(des)),
+		dead: des,
+	}, true
+}
+
+// deadEntryProblem is a dead-entry finding's tenant-free reason.
+const deadEntryProblem = "with entries /metrics serves at no minute of the day"
+
+// DeadEntriesText is des in words, for a message: each entry, its window and
+// value as written, and why it never serves.
+func DeadEntriesText(des []DeadEntry) string {
+	parts := make([]string, len(des))
+	for i, d := range des {
+		switch d.Reason {
+		case DeadEntryDefaultCovered:
+			parts[i] = fmt.Sprintf("its default %q (the windows cover the whole UTC day)", d.Value)
+		default:
+			parts[i] = fmt.Sprintf("%s `%s` → %q (the windows written before it cover every minute of it)",
+				d.Entry, d.Window, d.Value)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// deadEntryWhat names what to remove: "it" for one entry, "them" for more.
+func deadEntryWhat(des []DeadEntry) string {
+	if len(des) == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 func newValueFinding(tenant, key string, sv ScheduledValue, problem string) ValueFinding {
@@ -96,6 +147,13 @@ func (f ValueFinding) unchanged(prev ScheduledValue) bool {
 		// or adds a window through as "unchanged".
 		return sameSchedule(prev, f.Value)
 	}
+	if f.dead != nil {
+		// #3502: the dead entries as written — entry, window, value,
+		// reason (DeadEntriesReading, the reading da-guard write's ratchet
+		// compares too), so a write that changes one or makes another dead
+		// is not "unchanged".
+		return DeadEntriesReading(prev.DeadEntries()) == DeadEntriesReading(f.dead)
+	}
 	return readAlike(f.Key, prev, f.Value)
 }
 
@@ -103,6 +161,12 @@ func (f ValueFinding) unchanged(prev ScheduledValue) bool {
 func (f ValueFinding) notice() string {
 	if f.threshold {
 		return f.refusal.notice(f.Tenant)
+	}
+	if f.dead != nil {
+		return fmt.Sprintf("NOTICE: tenant=%s: %s writes a schedule %s: %s. "+
+			"It is already in the tenant file, so it does not block a write that leaves it exactly as it is; "+
+			"remove %s the next time %s is changed",
+			f.Tenant, f.Key, f.Problem, DeadEntriesText(f.dead), deadEntryWhat(f.dead), f.Key)
 	}
 	if f.schedule {
 		return fmt.Sprintf("NOTICE: tenant=%s: %s writes %s (%s) — only its default %q is read, the rest is ignored. "+

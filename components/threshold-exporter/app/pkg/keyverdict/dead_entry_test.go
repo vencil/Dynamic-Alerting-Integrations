@@ -1,0 +1,136 @@
+package keyverdict
+
+// #3502: a read key whose schedule has entries /metrics never serves is a
+// dead_entry error on the file its value comes from. Tenant ids are fixture
+// names (CLAUDE.md #9).
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
+)
+
+var deadWindow = []config.DeadEntry{{Entry: "overrides[1]", Window: "01:00-03:00", Value: "5",
+	Reason: config.DeadEntryWindowCovered}}
+
+// deadInput: each tenant reads key `mysql_connections` (served), with des
+// as its dead entries, from layer/file.
+func deadInput(layer, file string, des map[string][]config.DeadEntry) Input {
+	in := Input{Served: map[string]ServedTenant{}, Effective: map[string]EffectiveTenant{}}
+	for tenant, d := range des {
+		in.Served[tenant] = ServedTenant{Keys: map[string]ServedKey{"mysql_connections": {Exporter: true, DeadEntries: d}},
+			Values: map[string]any{"mysql_connections": 70.0}, Rows: map[string]bool{"mysql_connections": true}}
+		in.Effective[tenant] = EffectiveTenant{Config: map[string]any{"mysql_connections": map[string]any{}},
+			Sources: map[string]config.KeySource{"mysql_connections": {Layer: layer, File: file}}}
+	}
+	return in
+}
+
+func deadFindings(tree Tree) []Finding {
+	var out []Finding
+	for _, f := range tree.Findings {
+		if f.Kind == KindDeadEntry {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+func TestJudge_DeadEntryIsAnErrorOnTheTenantsFile(t *testing.T) {
+	t.Parallel()
+	tree := Judge(deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow}))
+	v := one(t, tree, "t1", "mysql_connections")
+	if v.Verdict != Read || !reflect.DeepEqual(v.DeadEntries, deadWindow) {
+		t.Fatalf("verdict %+v", v)
+	}
+	fs := deadFindings(tree)
+	if len(fs) != 1 {
+		t.Fatalf("dead_entry findings %+v", fs)
+	}
+	f := fs[0]
+	if f.Severity != SeverityError || !f.Blocks || deref(f.File) != "a.yaml" ||
+		!reflect.DeepEqual(f.Tenants, []string{"t1"}) || deref(f.Reason) != config.DeadEntryWindowCovered ||
+		!reflect.DeepEqual(f.DeadEntries, deadWindow) {
+		t.Fatalf("finding %+v", f)
+	}
+	if !tree.Blocks {
+		t.Fatal("a dead entry does not block the tree")
+	}
+	// A key with no dead entry has none, and its row carries [] (a JSON list).
+	clean := Judge(deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": nil}))
+	if fs := deadFindings(clean); len(fs) != 0 {
+		t.Fatalf("no dead entry, findings %+v", fs)
+	}
+	if v := one(t, clean, "t1", "mysql_connections"); v.DeadEntries == nil || len(v.DeadEntries) != 0 {
+		t.Fatalf("no dead entry: dead_entries %#v, want []", v.DeadEntries)
+	}
+}
+
+// A profile's schedule reaches every tenant that binds it: one finding on
+// the profile file, naming them all.
+func TestJudge_DeadEntryInAProfileIsOneFindingOnTheProfile(t *testing.T) {
+	t.Parallel()
+	tree := Judge(deadInput(config.KeyLayerProfile, "_profiles.yaml",
+		map[string][]config.DeadEntry{"t1": deadWindow, "t2": deadWindow}))
+	fs := deadFindings(tree)
+	if len(fs) != 1 || deref(fs[0].File) != "_profiles.yaml" || !reflect.DeepEqual(fs[0].Tenants, []string{"t1", "t2"}) {
+		t.Fatalf("findings %+v", fs)
+	}
+}
+
+// A root platform file's `tenants:` writes one key per tenant with its own
+// value: the same file and key with other entries are other findings.
+func TestJudge_DeadEntriesOfTwoPlatformEntriesAreTwoFindings(t *testing.T) {
+	t.Parallel()
+	other := []config.DeadEntry{{Entry: "default", Value: "70", Reason: config.DeadEntryDefaultCovered}}
+	tree := Judge(deadInput(config.KeyLayerPlatform, "_platform.yaml",
+		map[string][]config.DeadEntry{"t1": deadWindow, "t2": other}))
+	fs := deadFindings(tree)
+	if len(fs) != 2 {
+		t.Fatalf("findings %+v", fs)
+	}
+	for _, f := range fs {
+		if len(f.Tenants) != 1 {
+			t.Fatalf("finding names %v", f.Tenants)
+		}
+		want := deadWindow
+		if f.Tenants[0] == "t2" {
+			want = other
+		}
+		if !reflect.DeepEqual(f.DeadEntries, want) {
+			t.Errorf("%s: entries %+v, want %+v", f.Tenants[0], f.DeadEntries, want)
+		}
+	}
+}
+
+// An unread key is the unread error; its dead entries add nothing.
+func TestJudge_AnUnreadKeyGetsNoDeadEntryFinding(t *testing.T) {
+	t.Parallel()
+	in := deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow})
+	in.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connections": {Reason: "no_row", DeadEntries: deadWindow}}}
+	if fs := deadFindings(Judge(in)); len(fs) != 0 {
+		t.Fatalf("findings %+v", fs)
+	}
+}
+
+// The ratchet (decision 6): a write that leaves the dead entries as they
+// are written adds no block; one that changes them adds one.
+func TestNewBlocks_DeadEntryRatchetsOnTheEntriesAsWritten(t *testing.T) {
+	t.Parallel()
+	written := func(string) bool { return true }
+	before := Judge(deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow}))
+	if bs := NewBlocks(before, before, written); len(bs) != 0 {
+		t.Fatalf("unchanged: new blocks %+v", bs)
+	}
+	changed := []config.DeadEntry{{Entry: "overrides[1]", Window: "01:00-03:00", Value: "6",
+		Reason: config.DeadEntryWindowCovered}}
+	after := Judge(deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": changed}))
+	if bs := NewBlocks(before, after, written); len(bs) != 1 || bs[0].Kind != KindDeadEntry {
+		t.Fatalf("changed: new blocks %+v", bs)
+	}
+	clean := Judge(deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": nil}))
+	if bs := NewBlocks(clean, before, written); len(bs) != 1 {
+		t.Fatalf("new: new blocks %+v", bs)
+	}
+}

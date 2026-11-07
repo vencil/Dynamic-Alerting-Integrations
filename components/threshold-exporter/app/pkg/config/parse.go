@@ -107,17 +107,34 @@ func (sv ScheduledValue) resolveValue(now time.Time, logf func(format string, ar
 }
 
 // valueAtMinute is the value sv resolves to at minute (0..1439) of the UTC
-// day: the FIRST override whose window contains the minute, else the
-// default. A window that does not parse matches no minute (logf, nil =
-// silent, is told). resolveValue and DaySegments both read a schedule
-// through it.
+// day: the value of the entry entryAtMinute picks. resolveValue and
+// DaySegments both read a schedule through it.
 func (sv ScheduledValue) valueAtMinute(minute int, logf func(format string, args ...any)) string {
-	for _, o := range sv.Overrides {
-		if start, end, ok := parseTimeWindow(o.Window, logf); ok && windowContains(start, end, minute) {
-			return o.Value
-		}
+	if i := sv.entryAtMinute(minute, logf); i != entryDefault {
+		return sv.Overrides[i].Value
 	}
 	return sv.Default
+}
+
+// entryDefault is entryAtMinute's answer for the `default` entry.
+const entryDefault = -1
+
+// entryAtMinute is the entry of sv that serves minute (0..1439) of the UTC
+// day: the index of the FIRST override whose window contains the minute,
+// else entryDefault. A window that does not parse matches no minute (logf,
+// nil = silent, is told).
+//
+// ⛔ The one reading of "which entry serves": valueAtMinute (the value
+// /metrics serves) and DeadEntries (#3502: the entries that never serve)
+// both ask it, so the analysis cannot disagree with what is served. Reading
+// the VALUE instead cannot tell two entries apart that write the same value.
+func (sv ScheduledValue) entryAtMinute(minute int, logf func(format string, args ...any)) int {
+	for i, o := range sv.Overrides {
+		if start, end, ok := parseTimeWindow(o.Window, logf); ok && windowContains(start, end, minute) {
+			return i
+		}
+	}
+	return entryDefault
 }
 
 // MatchTimeWindow checks if the given time falls within a UTC "HH:MM-HH:MM" window.

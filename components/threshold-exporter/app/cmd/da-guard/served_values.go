@@ -389,6 +389,13 @@ type servedKey struct {
 	// some part of the day, that base (as the tenant's config spells it) —
 	// read off /metrics by the same counterfactual (#3046).
 	SwitchedOffWith string `json:"switched_off_with,omitempty"`
+	// DeadEntries (#3502), for a threshold key the tenant's merged config
+	// writes as a schedule: the entries of that schedule /metrics serves at
+	// no minute of the UTC day (config.ScheduledValue.DeadEntries — the
+	// resolver's own reading of which entry serves a minute). Absent when
+	// none, and for a key whose value is not the one served (a retired
+	// spelling its canonical key shadows, an undeliverable subtree value).
+	DeadEntries []config.DeadEntry `json:"dead_entries,omitempty"`
 }
 
 // Reasons of servedKey.Reason — a closed set.
@@ -1161,6 +1168,9 @@ func servedKeys(tv servedTenantValues,
 				if r := config.RefusedValueAt(canon, sv, at); r != "" && isRecordedRefusal(recorded(canon)) {
 					refused = r
 				}
+			}
+			if written && !inUndeliverable && (!isAlias || !canonWritten) {
+				e.DeadEntries = sv.DeadEntries()
 			}
 			switch {
 			case isAlias && canonWritten:

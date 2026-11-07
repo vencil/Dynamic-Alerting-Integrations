@@ -1859,6 +1859,14 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				v.Errors = append(v.Errors, f.Message)
 				v.Values = append(v.Values, f)
 			}
+			// #3502: a schedule entry /metrics serves at no minute of the
+			// day is refused where it is written; one already on disk, left
+			// as it is, is a notice (Ratchet, by the dead entries as
+			// written).
+			if f, ok := newDeadEntryFinding(tenant, canonKey, sv); ok {
+				v.Errors = append(v.Errors, f.Message)
+				v.Values = append(v.Values, f)
+			}
 
 			// ADR-024 OQ-6: a dimensional key's `version` label is a value
 			// check, judged whatever the base.

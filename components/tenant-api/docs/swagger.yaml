@@ -204,6 +204,21 @@ definitions:
       reason:
         type: string
     type: object
+  config.DeadEntry:
+    properties:
+      entry:
+        description: 'Entry: "default", or "overrides[<i>]" (0-based, the order written).'
+        type: string
+      reason:
+        description: 'Reason: one of the DeadEntry* reasons.'
+        type: string
+      value:
+        description: 'Value: the entry''s value as written.'
+        type: string
+      window:
+        description: 'Window: the entry''s `window:` as written; absent for the default.'
+        type: string
+    type: object
   config.NotServedKey:
     properties:
       file:
@@ -1395,6 +1410,20 @@ definitions:
         items:
           type: string
         type: array
+      dead_entries:
+        additionalProperties:
+          items:
+            $ref: '#/definitions/config.DeadEntry'
+          type: array
+        description: |-
+          DeadEntries names each threshold key of EffectiveConfig written as a
+          schedule with an entry /metrics serves at no minute of the UTC day —
+          a window the windows before it cover, or a `default` the windows
+          cover (#3502, ScheduledValue.DeadEntries) — with those entries. The
+          key itself is served, so it is not in NotServed: what never applies
+          is part of its value. The file of the value is KeySources'. Filled by
+          ResolveEffective and EffectiveTree; omitted when no key has one.
+        type: object
       defaults_chain:
         items:
           type: string

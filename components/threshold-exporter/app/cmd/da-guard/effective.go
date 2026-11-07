@@ -104,6 +104,11 @@ type effectiveTenant struct {
 	// value shown (EffectiveConfig.NotServed, #2296). Always present ({}
 	// when none); the /effective body omits it when empty.
 	NotServed map[string]config.NotServedKey `json:"not_served"`
+	// DeadEntries: each threshold key of effective_config written as a
+	// schedule with an entry /metrics serves at no minute of the UTC day,
+	// and those entries (EffectiveConfig.DeadEntries, #3502). Always present
+	// ({} when none); the /effective body omits it when empty.
+	DeadEntries map[string][]config.DeadEntry `json:"dead_entries"`
 	// ChainParseFailed: the tenant's chain files the exporter does not read
 	// because they do not parse, read as empty here (#2296). Always present
 	// ([] when none). Such a file is in parse_failed too (exit 3).
@@ -326,6 +331,9 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 			}
 			if t.NotServed == nil {
 				t.NotServed = map[string]config.NotServedKey{}
+			}
+			if t.DeadEntries = ec.DeadEntries; t.DeadEntries == nil {
+				t.DeadEntries = map[string][]config.DeadEntry{}
 			}
 			if t.ChainParseFailed == nil {
 				t.ChainParseFailed = []string{}

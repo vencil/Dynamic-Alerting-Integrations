@@ -283,7 +283,8 @@ func servedForVerdict(served map[string]servedTenantValues) map[string]keyverdic
 		keys := make(map[string]keyverdict.ServedKey, len(sv.Keys))
 		for k, sk := range sv.Keys {
 			keys[k] = keyverdict.ServedKey{Exporter: sk.Exporter, Reason: sk.Reason, Registered: sk.Registered,
-				Declared: sk.Declared, Disable: sk.Disable, SwitchedOffWith: sk.SwitchedOffWith}
+				Declared: sk.Declared, Disable: sk.Disable, SwitchedOffWith: sk.SwitchedOffWith,
+				DeadEntries: sk.DeadEntries}
 		}
 		rows := make(map[string]bool, len(sv.Severities)+len(sv.Dropped))
 		for k := range sv.Severities {

@@ -410,7 +410,7 @@ def _doc(**tenant_over) -> dict:
     tenant = {"tenant_id": "t", "source_file": "t.yaml", "source_hash": "a", "merged_hash": "b",
               "defaults_chain": [], "effective_config": {"k": 1}, "profile": None,
               "key_sources": {"k": {"layer": "tenant", "file": "t.yaml"}}, "not_served": {},
-              "maintenance_recurring": []}
+              "dead_entries": {}, "maintenance_recurring": []}
     tenant.update(tenant_over)
     return {"schema": tv.EFFECTIVE_SCHEMA, "parse_failed": [], "unreadable": [], "tenants": {"t": tenant}}
 
@@ -452,6 +452,45 @@ def test_effective_without_not_served_is_named_too_old(tmp_path):
     with pytest.raises(tv.EffectiveError) as ei:
         tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
     assert ei.value.stale and "older than this tool" in str(ei.value)
+
+
+def test_a_not_served_reason_this_reader_does_not_know_is_refused(tmp_path):
+    """#3502：讀取端遇到未知的 not_served 原因要 fail-closed，不能當成某個已知原因讀。"""
+    doc = _doc(not_served={"k": {"reason": "window_dead", "file": "t.yaml"}})
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert "window_dead" in str(ei.value) and ei.value.binary_fault and not ei.value.stale
+
+
+# #3502: dead_entries — the schedule entries /metrics serves at no minute of the day.
+
+def test_dead_entries_are_read(tmp_path):
+    entry = {"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}
+    doc = _doc(dead_entries={"k": [entry, {"entry": "default", "value": "70", "reason": "default_covered"}]})
+    got = tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert got["t"].dead_entries == {"k": (tv.DeadEntry("overrides[1]", "01:00-03:00", "5", "window_covered"),
+                                           tv.DeadEntry("default", None, "70", "default_covered"))}
+
+
+def test_effective_without_dead_entries_is_named_too_old(tmp_path):
+    doc = _doc()
+    del doc["tenants"]["t"]["dead_entries"]
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert ei.value.stale and "dead_entries" in str(ei.value)
+
+
+@pytest.mark.parametrize("dead", [
+    {"k": {}}, {"k": [1]},
+    {"k": [{"entry": "overrides[0]", "window": "01:00-02:00", "value": "5", "reason": "covered"}]},
+    {"k": [{"entry": "default", "window": "01:00-02:00", "value": "5", "reason": "default_covered"}]},
+    {"k": [{"entry": "overrides[0]", "value": "5", "reason": "window_covered"}]},
+], ids=["not-a-list", "not-a-mapping", "unknown-reason", "default-with-window", "window-without-window"])
+def test_dead_entries_not_of_their_shape_are_refused(tmp_path, dead):
+    doc = _doc(dead_entries=dead)
+    with pytest.raises(tv.EffectiveError) as ei:
+        tv.load_effective(tmp_path, binary=_fake_da_guard(tmp_path, json.dumps(doc)))
+    assert ei.value.binary_fault and not ei.value.stale
 
 
 # #3620: maintenance_recurring — the windows maintenance-scheduler silences.

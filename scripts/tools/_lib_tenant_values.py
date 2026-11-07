@@ -154,6 +154,13 @@ for that tenant (`effective_config`, `merged_hash`, `source_file`,
   field is named as older than this tool (#2065). Which of them da-guard's
   `value_not_served` refuses is da-guard's to say (its check's findings,
   `load_guard_report`, #3387), not re-derived here.
+* `dead_entries` (#3502) — per threshold key of `effective_config` written
+  as a schedule, the entries of it /metrics serves at no minute of the UTC
+  day, a tuple of `DeadEntry(entry, window, value, reason)` (`reason` one of
+  `DEAD_ENTRY_REASONS`): a window the windows before it cover, or a
+  `default` the windows cover. The key itself is served, so it is not in
+  `not_served`. `{}` when none. A da-guard whose effective document lacks
+  the field is named as older than this tool.
 * `maintenance_recurring` (#3620) — the recurring maintenance windows of
   `_state_maintenance` that maintenance-scheduler silences, a tuple of
   `RecurringWindow(cron, duration, reason)` by the exporter's one reading of
@@ -283,6 +290,9 @@ __all__ = [
     "KeySchedule",
     "KeySource",
     "NotServedKey",
+    "DeadEntry",
+    "NOT_SERVED_REASONS",
+    "DEAD_ENTRY_REASONS",
     "ScheduleSegment",
     "Series",
     "ServedTree",
@@ -511,6 +521,9 @@ class ServedKey(NamedTuple):
     # `<base>{…}` key the tenant's base `disable` switches off in some part
     # of the day, that base; None otherwise.
     switched_off_with: str | None = None
+    # #3502: for a threshold key written as a schedule, the entries of it
+    # /metrics serves at no minute of the day; () for none.
+    dead_entries: "tuple[DeadEntry, ...]" = ()
 
 
 #: The closed set of served-values' `keys[*].refused` (pkg/config Refused*).
@@ -603,8 +616,57 @@ class KeySource(NamedTuple):
 
 
 class NotServedKey(NamedTuple):
-    reason: str
+    reason: str  # one of NOT_SERVED_REASONS
     file: str
+
+
+#: The closed set of da-guard effective's `not_served[*].reason`
+#: (pkg/config NotServedReasons; TestNotServedReasons_PythonReaderIsThisList
+#: pins this set to it). A reason outside it is output this reader cannot
+#: read, never read as some other reason (#3502).
+NOT_SERVED_REASONS = frozenset({
+    "parse_failed", "root_defaults_unwrapped", "value_rejected", "value_unparsed",
+    "value_unparsed_dropped", "window_invalid", "undeliverable", "root_null_undeclared",
+    "root_default_refused", "root_defaults_reserved", "spelling_duplicate",
+    "unregistered", "unconsumed", "profile_not_filled", "base_disabled",
+})
+
+#: The closed set of a dead schedule entry's `reason` (pkg/config
+#: DeadEntryReasons, pinned the same way; #3502).
+DEAD_ENTRY_REASONS = frozenset({"default_covered", "window_covered"})
+
+
+class DeadEntry(NamedTuple):
+    """One entry of a threshold value's schedule /metrics serves at no minute
+    of the UTC day (#3502): `entry` is "default" or "overrides[<i>]",
+    `window` the entry's `window:` as written (None for the default),
+    `value` its value as written, `reason` one of DEAD_ENTRY_REASONS."""
+    entry: str
+    window: str | None
+    value: str
+    reason: str
+
+
+def dead_entries(v: Any, what: str) -> "tuple[DeadEntry, ...]":
+    """A `dead_entries` list as da-guard writes it, checked: every field of
+    its type, every reason from DEAD_ENTRY_REASONS, a window exactly on a
+    window's entry."""
+    if not isinstance(v, list):
+        raise TypeError(f"{what}: not a list: {v!r}")
+    out = []
+    for e in v:
+        if not isinstance(e, dict):
+            raise TypeError(f"{what}: not an object: {e!r}")
+        entry, value, reason, window = e["entry"], e["value"], e["reason"], e.get("window")
+        if not all(isinstance(x, str) for x in (entry, value, reason)) or (
+                window is not None and not isinstance(window, str)):
+            raise TypeError(f"{what}: not strings: {e!r}")
+        if reason not in DEAD_ENTRY_REASONS:
+            raise ValueError(f"{what}: reason {reason!r} is none of {sorted(DEAD_ENTRY_REASONS)}")
+        if (entry == "default") != (window is None):
+            raise ValueError(f"{what}: entry {entry!r} with window {window!r}")
+        out.append(DeadEntry(entry, window, value, reason))
+    return tuple(out)
 
 
 class TenantEffective(NamedTuple):
@@ -620,6 +682,9 @@ class TenantEffective(NamedTuple):
     profile_overlay: list[dict[str, Any]]
     warnings: list[str]
     not_served: dict[str, NotServedKey]
+    # #3502: per threshold key of effective_config written as a schedule, the
+    # entries /metrics serves at no minute of the day; {} when none.
+    dead_entries: "dict[str, tuple[DeadEntry, ...]]"
     # #3620: the recurring maintenance windows of `_state_maintenance` that
     # maintenance-scheduler silences, by the exporter's one reading of the
     # value (none when its switch says off or the exporter does not read it).
@@ -1278,8 +1343,9 @@ def _served_key(e: Any) -> ServedKey:
     switched = e.get("switched_off_with")
     if switched is not None and not isinstance(switched, str):
         raise TypeError(f"switched_off_with is a {type(switched).__name__}")
+    dead = dead_entries(e.get("dead_entries") or [], "dead_entries")
     return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint),
-                     disable, refused, switched)
+                     disable, refused, switched, dead)
 
 
 def _time_boxes(m: Any) -> dict[str, tuple[TimeBox, ...]]:
@@ -1569,8 +1635,21 @@ def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, 
                     f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant {tenant_id!r} has no `not_served` — "
                     "this da-guard is older than this tool: upgrade or rebuild it",
                     returncode, stderr, stale=True)
-            not_served = {str(k): NotServedKey(str(v["reason"]), str(v.get("file") or ""))
-                          for k, v in t["not_served"].items()}
+            not_served = {}
+            for k, v in t["not_served"].items():
+                if v["reason"] not in NOT_SERVED_REASONS:
+                    # #3502: a reason this reader does not know is not read as
+                    # one it does (fail-closed).
+                    raise ValueError(f"tenant {tenant_id!r} key {k!r}: not_served reason {v['reason']!r} "
+                                     f"is none of {sorted(NOT_SERVED_REASONS)}")
+                not_served[str(k)] = NotServedKey(str(v["reason"]), str(v.get("file") or ""))
+            if "dead_entries" not in t:
+                raise EffectiveError(
+                    f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant {tenant_id!r} has no `dead_entries` — "
+                    "this da-guard is older than this tool: upgrade or rebuild it",
+                    returncode, stderr, stale=True)
+            dead = {str(k): dead_entries(v, f"tenant {tenant_id!r} dead_entries.{k}")
+                    for k, v in t["dead_entries"].items()}
             if "maintenance_recurring" not in t:
                 raise EffectiveError(
                     f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant {tenant_id!r} has no `maintenance_recurring` — "
@@ -1593,6 +1672,7 @@ def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, 
                 profile_overlay=list(t.get("profile_overlay") or []),
                 warnings=list(t.get("warnings") or []),
                 not_served=not_served,
+                dead_entries=dead,
                 maintenance_recurring=recurring,
             )
     except (ValueError, KeyError, TypeError, AttributeError) as e:

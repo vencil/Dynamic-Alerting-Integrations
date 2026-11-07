@@ -86,6 +86,15 @@ const (
 	// file's `tenants:` entry or a profile, which the tenant cannot fix in
 	// its own file.
 	KindValueUnread = "value_unread"
+	// KindDeadEntry (#3502): a key read, whose schedule has an entry
+	// /metrics serves at no minute of the UTC day — a window the windows
+	// written before it cover, or a `default` the windows cover
+	// (config.ScheduledValue.DeadEntries, the served reading's
+	// dead_entries). An error on the file the value comes from — the
+	// tenant's own file, a root platform file's entry, a profile or a
+	// subtree `_defaults.yaml` (decision 6): the author wrote a value that
+	// never applies. DeadEntries lists the entries; Reason is the first's.
+	KindDeadEntry = "dead_entry"
 )
 
 // Reasons this package reads from the served reading or gives itself. The
@@ -143,6 +152,9 @@ type ServedKey struct {
 	// SwitchedOffWith: the base whose `disable` switches this key off in
 	// some part of the day (#3046); "" for none.
 	SwitchedOffWith string
+	// DeadEntries: the entries of the key's schedule /metrics serves at no
+	// minute of the day (#3502); nil for none.
+	DeadEntries []config.DeadEntry
 }
 
 // ServedTenant is one tenant's served reading.
@@ -225,6 +237,10 @@ type KeyVerdict struct {
 	// SwitchedOffWith: the base whose `disable` switches this key off in
 	// some part of the day (#3046); nil for none.
 	SwitchedOffWith *string `json:"switched_off_with"`
+	// DeadEntries (#3502): the entries of the key's schedule /metrics
+	// serves at no minute of the UTC day, as the served reading names them;
+	// [] for none.
+	DeadEntries []config.DeadEntry `json:"dead_entries"`
 	// Value: the effective config's value as written; nil when absent.
 	Value any `json:"value"`
 	// Served: what /metrics serves for it; nil when nothing.
@@ -244,14 +260,18 @@ type Finding struct {
 	// Base: a disable_cascade's base, whose `disable` switches the key off;
 	// nil for any other kind.
 	Base *string `json:"base"`
+	// DeadEntries: a dead_entry's entries, in the order written; nil for
+	// any other kind.
+	DeadEntries []config.DeadEntry `json:"dead_entries"`
 	// Blocks: a gate that judges the whole tree refuses it (Blocking).
 	Blocks bool `json:"blocks"`
 	// own: the finding is about the entry of its one tenant in File (a
 	// value_unread in a tenant file) — what Blocks reads as Block.Own where
 	// the key's verdict row has no file (effective carries no `_metadata`).
 	own bool
-	// reading: a value_unread's value as its reader reads it — what makes
-	// two such Blocks the same one (NewBlocks); "" for any other kind.
+	// reading: a value_unread's value as its reader reads it, a
+	// dead_entry's entries as written (config.DeadEntriesReading) — what
+	// makes two such Blocks the same one (NewBlocks); "" for any other kind.
 	reading string
 }
 
@@ -479,7 +499,8 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 	return KeyVerdict{
 		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc),
 		ReadBy: sortedKeys(readBy), Verdict: verdict, Severity: optional(severity), Reason: optional(reason),
-		Disable: optional(disable), SwitchedOffWith: optional(sk.SwitchedOffWith), Value: value, Served: servedValue,
+		Disable: optional(disable), SwitchedOffWith: optional(sk.SwitchedOffWith),
+		DeadEntries: nonNilEntries(sk.DeadEntries), Value: value, Served: servedValue,
 	}
 }
 
@@ -506,11 +527,16 @@ func canonicalSpelling(key string) string {
 	return c
 }
 
-// groupKey groups the findings of keys: (kind, file, key, own tenant).
+// groupKey groups the findings of keys: (kind, file, key, own tenant,
+// reading).
 type groupKey struct {
 	kind, key string
 	file      *string
 	tenant    string // the tenant for a key of the tenant's own file; "" else
+	// reading: a dead_entry's entries (config.DeadEntriesReading) — a root
+	// platform file's `tenants:` entries write one key with one value per
+	// tenant, so the same file and key are not the same entries.
+	reading string
 }
 
 func (g groupKey) id() string {
@@ -518,7 +544,7 @@ func (g groupKey) id() string {
 	if g.file != nil {
 		f = *g.file
 	}
-	return g.kind + "\x00" + f + "\x00" + g.key + "\x00" + g.tenant
+	return g.kind + "\x00" + f + "\x00" + g.key + "\x00" + g.tenant + "\x00" + g.reading
 }
 
 // findingsOf is the findings of keys: deduplicated by (kind, file, key) for
@@ -558,6 +584,10 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 				// switches off — a sibling it inherits is the cascade asked.
 				kinds = append(kinds, KindDisableCascade)
 			}
+			if v.Verdict == Read && len(v.DeadEntries) > 0 {
+				// #3502: read, and part of its value never applies.
+				kinds = append(kinds, KindDeadEntry)
+			}
 			for _, kind := range kinds {
 				var gk groupKey
 				if deref(v.Reason) == ReasonStateFilterUndeclared {
@@ -572,6 +602,9 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 					gk = groupKey{kind: kind, file: v.File, key: v.Key}
 					if deref(v.Layer) == config.KeyLayerTenant {
 						gk.tenant = v.Tenant
+					}
+					if kind == KindDeadEntry {
+						gk.reading = config.DeadEntriesReading(v.DeadEntries)
 					}
 				}
 				add(gk, v)
@@ -591,9 +624,14 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 		}
 		f := Finding{Severity: sev, Kind: g.gk.kind, Key: g.gk.key, File: g.gk.file,
 			Tenants: sortedKeys(tenantSet), Reason: g.vs[0].Reason}
-		if g.gk.kind == KindDisableCascade {
+		switch g.gk.kind {
+		case KindDisableCascade:
 			reason := ReasonBaseDisabled
 			f.Severity, f.Reason, f.Base = SeverityWarning, &reason, g.vs[0].SwitchedOffWith
+		case KindDeadEntry:
+			des := g.vs[0].DeadEntries
+			reason := des[0].Reason
+			f.Severity, f.Reason, f.DeadEntries, f.reading = SeverityError, &reason, des, g.gk.reading
 		}
 		out = append(out, f)
 	}
@@ -879,6 +917,14 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// nonNilEntries is des, [] for none (a JSON list, never null).
+func nonNilEntries(des []config.DeadEntry) []config.DeadEntry {
+	if des == nil {
+		return []config.DeadEntry{}
+	}
+	return des
 }
 
 func optional(s string) *string {

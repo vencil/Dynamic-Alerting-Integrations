@@ -13,7 +13,11 @@ package config
 // changes, so one reading per piece is the reading of every minute in it
 // (TestDaySegments_AgreeWithResolveValueEveryMinute checks all 1440).
 
-import "sort"
+import (
+	"fmt"
+	"sort"
+	"strings"
+)
 
 // MinutesPerDay is the length of the UTC day the schedule windows cut.
 const MinutesPerDay = 24 * 60
@@ -34,13 +38,7 @@ type ValueSegment struct {
 // the at-instant reading skips them (silently here: the resolver already
 // WARNs about them on every reading).
 func (sv ScheduledValue) DaySegments() []ValueSegment {
-	cuts := []int{0, MinutesPerDay}
-	for _, o := range sv.Overrides {
-		if start, end, ok := parseTimeWindow(o.Window, nil); ok {
-			cuts = append(cuts, start, end)
-		}
-	}
-	sort.Ints(cuts)
+	cuts := sv.dayCuts()
 	var out []ValueSegment
 	for i := 0; i+1 < len(cuts); i++ {
 		from, to := cuts[i], cuts[i+1]
@@ -53,6 +51,137 @@ func (sv ScheduledValue) DaySegments() []ValueSegment {
 			continue
 		}
 		out = append(out, ValueSegment{From: from, To: to, Value: v})
+	}
+	return out
+}
+
+// dayCuts is 0, MinutesPerDay and the start and end of every window of sv
+// that parses, sorted (duplicates kept): between two consecutive cuts no
+// window's membership changes, so the entry that serves the first minute of
+// the piece serves all of it.
+func (sv ScheduledValue) dayCuts() []int {
+	cuts := []int{0, MinutesPerDay}
+	for _, o := range sv.Overrides {
+		if start, end, ok := parseTimeWindow(o.Window, nil); ok {
+			cuts = append(cuts, start, end)
+		}
+	}
+	sort.Ints(cuts)
+	return cuts
+}
+
+// DeadEntry is one entry of a threshold value's schedule that /metrics serves
+// at no minute of the UTC day (#3502): the windows before it, or the windows
+// together, cover every minute it would serve. The key itself is served —
+// what never applies is this entry.
+type DeadEntry struct {
+	// Entry: "default", or "overrides[<i>]" (0-based, the order written).
+	Entry string `json:"entry"`
+	// Window: the entry's `window:` as written; absent for the default.
+	Window string `json:"window,omitempty"`
+	// Value: the entry's value as written.
+	Value string `json:"value"`
+	// Reason: one of the DeadEntry* reasons.
+	Reason string `json:"reason"`
+}
+
+// Reasons of DeadEntry.Reason — a closed set (DeadEntryReasons).
+const (
+	// DeadEntryDefaultCovered: the windows together cover the whole UTC
+	// day, so the `default` is never served. One window cannot (a window
+	// whose start equals its end is refused, window_invalid), so it takes
+	// two or more.
+	DeadEntryDefaultCovered = "default_covered"
+	// DeadEntryWindowCovered: every minute of the window is in a window
+	// written before it; the first window that contains a minute serves it.
+	DeadEntryWindowCovered = "window_covered"
+)
+
+// DeadEntryReasons is the closed set of DeadEntry.Reason, in the order a
+// reader lists them.
+func DeadEntryReasons() []string {
+	return []string{DeadEntryDefaultCovered, DeadEntryWindowCovered}
+}
+
+// DeadEntries is every entry of sv that serves no minute of the UTC day, in
+// the order written (the default first); nil when every entry serves some
+// minute, and for a value with no schedule. Which entry serves a minute is
+// entryAtMinute — the reading /metrics serves by — asked once per piece of
+// the day between two cuts (dayCuts), as DaySegments reads it.
+//
+// ⚠️ Not here: a window that does not parse. It serves no minute either,
+// but it is already NotServedWindowInvalid on the key (noteInvalidWindows),
+// an error of its own; listing it again would report one defect twice. A
+// default written as null (`{default: null, …}`) writes no value and is
+// not an entry. `expires:` changes nothing here: before it passes the
+// schedule is served as written, after it none of it is — no entry is
+// reachable after it that was not before (the key's own verdict).
+func (sv ScheduledValue) DeadEntries() []DeadEntry {
+	if len(sv.Overrides) == 0 {
+		return nil
+	}
+	cuts := sv.dayCuts()
+	live := make(map[int]bool, len(sv.Overrides)+1)
+	for i := 0; i+1 < len(cuts); i++ {
+		if cuts[i] != cuts[i+1] {
+			live[sv.entryAtMinute(cuts[i], nil)] = true
+		}
+	}
+	var out []DeadEntry
+	if !live[entryDefault] && sv.Default != "" {
+		out = append(out, DeadEntry{Entry: "default", Value: sv.Default, Reason: DeadEntryDefaultCovered})
+	}
+	for i, o := range sv.Overrides {
+		if _, _, ok := parseTimeWindow(o.Window, nil); !ok || live[i] {
+			continue
+		}
+		out = append(out, DeadEntry{Entry: fmt.Sprintf("overrides[%d]", i), Window: o.Window, Value: o.Value,
+			Reason: DeadEntryWindowCovered})
+	}
+	return out
+}
+
+// DeadEntriesReading is des as one string — entry, window, value and reason
+// of each, in order — what makes two dead-entry findings the same one for a
+// ratchet (keyverdict's reading): the schedule as written, so a write that
+// changes a dead entry, or makes another one dead, is a new finding, and one
+// that leaves them as they are is not.
+func DeadEntriesReading(des []DeadEntry) string {
+	var b strings.Builder
+	for i, d := range des {
+		if i > 0 {
+			b.WriteString("\x00")
+		}
+		fmt.Fprintf(&b, "%s\x01%s\x01%s\x01%s", d.Entry, d.Window, d.Value, d.Reason)
+	}
+	return b.String()
+}
+
+// deadEntriesOfView is, for every threshold key of view (an effective
+// config as shown) written as a schedule, its DeadEntries — read from the
+// value as /metrics reads it (scheduledValueFromRaw, the build's one
+// decode of a raw value); nil when no key has one. A reserved key's
+// schedule is not read (#3269: only its `default` is), so it has none.
+func deadEntriesOfView(view map[string]any) map[string][]DeadEntry {
+	var out map[string][]DeadEntry
+	for k, v := range view {
+		m, ok := v.(map[string]any)
+		if !ok || strings.HasPrefix(k, "_") {
+			continue
+		}
+		if _, scheduled := m["overrides"]; !scheduled {
+			continue
+		}
+		sv, ok := scheduledValueFromRaw(v)
+		if !ok {
+			continue
+		}
+		if des := sv.DeadEntries(); len(des) > 0 {
+			if out == nil {
+				out = map[string][]DeadEntry{}
+			}
+			out[k] = des
+		}
 	}
 	return out
 }
