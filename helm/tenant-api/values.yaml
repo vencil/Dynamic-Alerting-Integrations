@@ -203,6 +203,11 @@ confDir:
     size: 1Gi
     accessMode: ReadWriteOnce
     # Use this PVC instead of creating <name>-conf (the chart then creates none).
+    # Needs type: pvc — with any other type the render fails rather than
+    # ignoring it. Moving an install that used the chart's own PVC: that PVC is
+    # kept (helm.sh/resource-policy: keep) and stops being managed, with the
+    # repository still in it — point existingClaim at <name>-conf to keep using
+    # it, or move the data and delete it yourself.
     existingClaim: ""
 
 # Git repository to clone on startup (optional for `direct`; required for the

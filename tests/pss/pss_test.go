@@ -372,10 +372,13 @@ var (
 	workloadKindRE = regexp.MustCompile(`(?m)^kind:\s*(Deployment|DaemonSet|StatefulSet|ReplicaSet|CronJob|Job|Pod)\b`)
 	// A branching action, or a variable assignment (`$x := not .Values.y`
 	// feeds a later `if $x`).
-	actionRE      = regexp.MustCompile(`\{\{-?\s*(?:(?:else\s+)?(?:if|with|range)\b|\$[A-Za-z0-9_]+\s*:?=)([^}]*)\}\}`)
-	failNextRE    = regexp.MustCompile(`^\s*\{\{-?\s*(?:fail|required)\b`)
-	negatedPathRE = regexp.MustCompile(`\bnot\s+\(?\s*\$?\.Values\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)`)
-	valuesPathRE  = regexp.MustCompile(`\$?\.Values\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)`)
+	actionRE   = regexp.MustCompile(`\{\{-?\s*(?:(?:else\s+)?(?:if|with|range)\b|\$[A-Za-z0-9_]+\s*:?=)([^}]*)\}\}`)
+	failNextRE = regexp.MustCompile(`^\s*\{\{-?\s*(?:fail|required)\b`)
+	// Only `fail` ends a render unconditionally; `required` returns its value
+	// when set and the template carries on rendering after it.
+	failOnlyNextRE = regexp.MustCompile(`^\s*\{\{-?\s*fail\b`)
+	negatedPathRE  = regexp.MustCompile(`\bnot\s+\(?\s*\$?\.Values\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)`)
+	valuesPathRE   = regexp.MustCompile(`\$?\.Values\.([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*)`)
 )
 
 func truthy(v interface{}) bool {
@@ -445,7 +448,11 @@ func loadValues(t *testing.T, p string) map[string]interface{} {
 // that branch. Every .Values path a branching action (or a variable assignment
 // feeding one) reads — in a template that renders a workload, or in a .tpl
 // helper those templates include — must be truthy in the defaults or one ci/
-// file; a path read under `not` must also be falsy in one of them.
+// file; a path read under `not` must also be falsy in one of them. A branch
+// whose body is a guard is judged by the arm that renders: under `not` (fail or
+// required) only "on" is required; read without `not` and followed by `fail`,
+// the path adds no requirement (its "on" arm never renders). `required`
+// without `not` stays a shaping branch — it renders when its value is set.
 //
 // Limits (this reads template text): an `eq .Values.x "a"` branch is covered
 // only for the values the sets choose; a path reached through an alias other
@@ -498,15 +505,18 @@ func TestWorkloadConditionalsAreExercised(t *testing.T) {
 				//     fails and its "off" arm is every other render, already
 				//     judged — so it adds no requirement at all. Requiring "on"
 				//     here would demand a values set that cannot render (#1018:
-				//     the removed confDir.hostPath guard).
+				//     the removed confDir.hostPath guard). ⛔ `fail` only:
+				//     `{{ if .Values.x }}{{ required "…" .Values.y | toYaml }}`
+				//     RENDERS when y is set, so it stays a shaping branch.
 				guard := failNextRE.Match(b[idx[1]:])
+				failOnly := failOnlyNextRE.Match(b[idx[1]:])
 				negated := map[string]bool{}
 				for _, nm := range negatedPathRE.FindAllSubmatch(a[1], -1) {
 					negated[string(nm[1])] = true
 				}
 				for _, pm := range valuesPathRE.FindAllSubmatch(a[1], -1) {
 					k := string(pm[1])
-					if guard && !negated[k] {
+					if failOnly && !negated[k] {
 						continue
 					}
 					if paths[k] == nil {

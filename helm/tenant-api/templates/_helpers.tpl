@@ -57,14 +57,17 @@ only so the old values reach this fail with the migration steps instead of a
 bare schema error — and so a values file started from `helm show values`
 (which carried `hostPath: ""`) still renders.
 */}}
-{{- define "tenant-api.confDirRemovedGuard" -}}
+{{- define "tenant-api.confDirGuard" -}}
 {{- if or (eq .Values.confDir.type "hostPath") .Values.confDir.hostPath -}}
 {{- fail "confDir.type=hostPath (and confDir.hostPath) were removed (#1018): a hostPath volume fails Pod Security baseline, and fsGroup does not apply to it. Put the repository on a PersistentVolume instead — e.g. a local or hostPath PV on the node, chown'd to podSecurityContext.runAsUser (65534 by default) — bind a PVC to it, then set confDir.type=pvc and confDir.pvc.existingClaim=<that PVC>; or set gitRepoUrl and let the chart clone. Remove confDir.hostPath from your values." -}}
+{{- end -}}
+{{- if and .Values.confDir.pvc.existingClaim (ne .Values.confDir.type "pvc") -}}
+{{- fail (printf "confDir.pvc.existingClaim=%s is only read with confDir.type=pvc (got %q): without it the claim is ignored and conf.d is an emptyDir. Set confDir.type=pvc, or clear existingClaim." .Values.confDir.pvc.existingClaim .Values.confDir.type) -}}
 {{- end -}}
 {{- end }}
 
 {{- define "tenant-api.confDirVolume" -}}
-{{- include "tenant-api.confDirRemovedGuard" . -}}
+{{- include "tenant-api.confDirGuard" . -}}
 {{- if eq .Values.confDir.type "pvc" }}
 persistentVolumeClaim:
   claimName: {{ .Values.confDir.pvc.existingClaim | default (printf "%s-conf" (include "tenant-api.name" .)) }}
@@ -339,9 +342,10 @@ tenant-api.humanSocketPath, not a value.)
 {{- /* ADR-036 §3: the generator reads only git objects; "git 為必要". An
      emptyDir conf.d with no gitRepoUrl never holds a repository, so the
      container could only crash-loop (and keep the pod out of Ready). */ -}}
-{{- /* Before the repository check: a removed confDir.type=hostPath has to
-     read as "removed, here is how to migrate", not as "no repository". */ -}}
-{{- include "tenant-api.confDirRemovedGuard" . -}}
+{{- /* Before the repository check: a removed confDir.type=hostPath, or an
+     existingClaim the type ignores, has to read as that, not as "no
+     repository". */ -}}
+{{- include "tenant-api.confDirGuard" . -}}
 {{- if and (not .Values.gitRepoUrl) (ne .Values.confDir.type "pvc") -}}
 {{- fail "the generator container (required, #2903) needs a git repository in conf.d: set gitRepoUrl, or confDir.type=pvc (optionally confDir.pvc.existingClaim) holding an existing repository. An emptyDir conf.d without gitRepoUrl is never a repository, and the generator reads only git objects (ADR-036 §3, #2902)." -}}
 {{- end -}}

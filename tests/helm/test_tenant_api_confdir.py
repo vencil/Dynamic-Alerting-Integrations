@@ -83,16 +83,31 @@ def test_a_typo_is_refused_not_turned_into_emptydir(args) -> None:
     assert out.returncode != 0, "a misspelled confDir value rendered (it used to become emptyDir)"
 
 
-def test_values_started_from_the_old_helm_show_values_still_render() -> None:
+def test_values_started_from_the_old_helm_show_values_still_render(tmp_path: Path) -> None:
     old = {"confDir": {"type": "pvc", "hostPath": "",
                        "pvc": {"storageClass": "", "size": "1Gi", "accessMode": "ReadWriteOnce"}}}
-    path = _ROOT / ".pytest-confdir-old-values.yaml"
-    try:
-        path.write_text(yaml.safe_dump(old) + "\n", encoding="utf-8")
-        out = _render("-f", str(path))
-    finally:
-        path.unlink(missing_ok=True)
+    path = tmp_path / "old-values.yaml"
+    path.write_text(yaml.safe_dump(old) + "\n", encoding="utf-8")
+    out = _render("-f", str(path))
     assert out.returncode == 0, out.stderr[-600:]
+
+
+def test_existing_claim_without_type_pvc_is_refused_not_ignored() -> None:
+    out = _render("--set", "confDir.type=emptyDir", "--set", "gitRepoUrl=https://git.example.com/o/c.git",
+                  "--set", "confDir.pvc.existingClaim=my-repo-pvc")
+    assert out.returncode != 0 and "only read with confDir.type=pvc" in out.stderr, out.stderr[-600:]
+
+
+def test_emptydir_creates_no_pvc() -> None:
+    out = _render("--set", "confDir.type=emptyDir", "--set", "gitRepoUrl=https://git.example.com/o/c.git")
+    assert out.returncode == 0, out.stderr[-600:]
+    assert _conf_volume(out.stdout) == {"name": "conf-dir", "emptyDir": {}}
+    assert not [d for d in _docs(out.stdout) if d.get("kind") == "PersistentVolumeClaim"]
+
+
+def test_size_is_a_quantity_string() -> None:
+    out = _render("--set-json", 'confDir.pvc.size=10')
+    assert out.returncode != 0, "a bare number size (bytes) rendered"
 
 
 def test_existing_claim_is_mounted_and_no_pvc_is_created() -> None:

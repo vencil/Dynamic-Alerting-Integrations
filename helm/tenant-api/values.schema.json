@@ -86,10 +86,8 @@
               "type": "string"
             },
             "size": {
-              "type": [
-                "string",
-                "integer"
-              ]
+              "description": "A Kubernetes quantity string such as \"1Gi\"; a bare number would be read as bytes.",
+              "type": "string"
             },
             "accessMode": {
               "type": "string"
