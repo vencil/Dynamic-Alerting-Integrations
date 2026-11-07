@@ -159,11 +159,10 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	if err != nil {
 		return keyVerdictResult{}, err
 	}
-	var setAside map[string]bool
+	var setAside, setAsideFiles map[string]bool
 	if scan.Conflict != nil && opts.scan.SkipDuplicated {
-		var files map[string]bool
-		files, setAside = duplicateDeclarers(scan)
-		if overlays, err = setAsideOverlays(scan.AbsRoot, overlays, files); err != nil {
+		setAsideFiles, setAside = duplicateDeclarers(scan)
+		if overlays, err = setAsideOverlays(scan.AbsRoot, overlays, setAsideFiles); err != nil {
 			return keyVerdictResult{}, err
 		}
 		if scan, err = config.ScanDirTreeWith(dir, nil, nil, discard, config.ScanOptions{
@@ -243,7 +242,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 	}
 	in.RootProfiles = opts.profiles
 	in.Values = rep.ValueProblems
-	in.TenantFiles = judgedTenantFiles(opts.tenantFiles, scan, opts.tenants)
+	in.TenantFiles = judgedTenantFiles(opts.tenantFiles, scan, opts.tenants, setAsideFiles)
 	// A profile no tenant binds is known only over every tenant (#3395):
 	// not with a --tenant subset, and not when a file the load drops, or a
 	// tenant set aside, may be the one binding it.
@@ -342,10 +341,15 @@ func tenantFileKeysOf(doc *parseTreeDoc) map[string][]string {
 }
 
 // judgedTenantFiles is files restricted to the ones the verdict judges: a
-// tenant file the exporter's walk (scan) kept and decoded — not one set aside
-// (SkipDuplicated) or one the load drops (parse_failed, which is reported as
-// such) — and, with a --tenant subset, one that declares a requested tenant.
-func judgedTenantFiles(files map[string][]string, scan *config.TreeScan, tenants []string) map[string][]string {
+// tenant file the exporter's walk (scan) kept and decoded — not one the load
+// drops (parse_failed, which is reported as such) — and, with a --tenant
+// subset, one that declares a requested tenant. A file set aside
+// (SkipDuplicated, aside) is judged too, over the whole tree: its top-level
+// keys are the file's, whatever tenant it declares, and leaving them out of a
+// write's baseline makes a batch that removes the duplicate copy look as if
+// it added them.
+func judgedTenantFiles(files map[string][]string, scan *config.TreeScan, tenants []string,
+	aside map[string]bool) map[string][]string {
 	if files == nil {
 		return nil
 	}
@@ -355,6 +359,10 @@ func judgedTenantFiles(files map[string][]string, scan *config.TreeScan, tenants
 	}
 	out := map[string][]string{}
 	for file, keys := range files {
+		if aside[file] && tenants == nil {
+			out[file] = keys
+			continue
+		}
 		f, ok := scan.Files[file]
 		if !ok || f.ParseFailed {
 			continue

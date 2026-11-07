@@ -114,3 +114,32 @@ func TestWrite_AStrayTopLevelKeyInATenantFileWorsensTheTree(t *testing.T) {
 			worsenedOf(res), res.Message)
 	}
 }
+
+// A stray key is the file's, whatever tenant the file declares: a file set
+// aside as a duplicate declarer keeps it in the baseline, so a batch that
+// removes the other copy is not charged with it (review of #3671).
+func TestWrite_RemovingADuplicateCopyBesideAStrayKeyPasses(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+		"a.yaml": "defaults: {x: 1}\ntenants: {tz: {}}\n", "b.yaml": "tenants: {tz: {}}\n"})
+	in := `{"files":[{"path":"b.yaml","delete":true},{"path":"a.yaml","ops":[{"op":"set",` +
+		`"path":["tenants","tz","mysql_connections"],"value":{"str":"5"}}]}]}`
+	if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+		t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+	}
+}
+
+// ⚠️ Pinned as it is, not as settled: a stray key's place is its file and
+// key, as every finding on a file is (a profile's, a platform file's), so a
+// file moved with one makes it new at the new path. A tenant's own key keeps
+// its baseline across a move; whether this should too is the owner's call
+// (#3671).
+func TestWrite_MovingAFileWithAStrayKeyIsANewPlace(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+		"a.yaml": "defaults: {x: 1}\ntenants: {t1: {}}\n"})
+	code, res := runBatch(t, writeCmd, `{"files":[{"path":"c.yaml","from":"a.yaml"}]}`, "--config-dir", root)
+	if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread c.yaml "}) {
+		t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+	}
+}
