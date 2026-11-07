@@ -70,7 +70,9 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import csv
 import io
+from datetime import datetime
 import json
 import os
 import stat
@@ -121,7 +123,7 @@ def _is_selector(select: Any) -> bool:
 
 
 #: ``Document.fmt``: what the bytes of the file are read as.
-FORMATS = ("json", "yaml", "text")
+FORMATS = ("json", "yaml", "text", "csv")
 
 #: What a top-level type is called in a refusal, per language.
 _NOUN = {
@@ -147,15 +149,24 @@ def _wanted_words(top: Any, lang: str) -> str:
 class Document(NamedTuple):
     """``decode``: the input is a FILE whose content the tool reads.
 
-    *fmt* — ``"json"``, ``"yaml"`` or ``"text"`` (strict UTF-8, no parse).
-    *top* — the type the top level must be (``dict``, ``list``, ``str``
-    for text), or a tuple of them. *empty_is* — YAML only: an empty
-    document (no node, ``~``) is refused as of the wrong type unless a tool
-    reads it so on purpose; then this is that type (``dict``: read as
-    ``{}``), declared here, never a quiet ``or {}`` in the tool."""
+    *fmt* — ``"json"``, ``"yaml"``, ``"text"`` (strict UTF-8, no parse) or
+    ``"csv"`` (#3662). *top* — the type the top level must be (``dict``,
+    ``list``, ``str`` for text, ``list`` for csv), or a tuple of them.
+    *empty_is* — YAML only: an empty document (no node, ``~``) is refused as
+    of the wrong type unless a tool reads it so on purpose; then this is
+    that type (``dict``: read as ``{}``), declared here, never a quiet
+    ``or {}`` in the tool. *columns* — csv only, and required there: the
+    header the file must have, exactly (names and order); ⛔ the producer of
+    the file writes its header from the same tuple, so the two cannot
+    drift. *formats* — csv only: ``(column, strptime format)`` pairs, the
+    form each such column's every value must have (a timestamp). A csv
+    document is its data rows as dicts (column → value); a file with no data
+    row is refused — an empty report is no evidence."""
     fmt: str
     top: Any
     empty_is: Any = None
+    columns: tuple = ()
+    formats: tuple = ()
 
     @property
     def wanted(self) -> str:
@@ -170,7 +181,7 @@ class DocumentError(Exception):
     a ``yaml.YAMLError``)."""
 
     def __init__(self, problem: str, info: str, cause: BaseException) -> None:
-        self.problem = problem   # "utf8" | "json" | "yaml"
+        self.problem = problem   # "utf8" | "json" | "yaml" | "csv"
         self.info = info
         self.cause = cause
         super().__init__(self.detail("en"))
@@ -203,6 +214,11 @@ def decode_bytes(raw: bytes, *, fmt: str, name: str) -> Any:
         raise DocumentError("utf8", str(exc.start), exc) from exc
     if fmt == "text":
         return text
+    if fmt == "csv":
+        try:  # strict: a quote left open is an error, not a value that eats the file
+            return list(csv.reader(io.StringIO(text.removeprefix("\ufeff")), strict=True))
+        except csv.Error as exc:
+            raise DocumentError("csv", " ".join(str(exc).split()), exc) from exc
     if fmt == "json":
         try:
             return json.loads(text)
@@ -305,6 +321,12 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
         tops = decode.top if isinstance(decode.top, tuple) else (decode.top,)
         if decode.empty_is is not None and decode.empty_is not in tops:
             raise ValueError(f"empty_is {decode.empty_is!r} is not a declared top {decode.top!r}")
+        if (decode.fmt == "csv") != bool(decode.columns) or (
+                decode.fmt == "csv" and decode.top is not list):
+            raise ValueError("a csv document takes columns= (its header) and top=list; "
+                             "columns= is for a csv document only")
+        if any(col not in decode.columns for col, _f in decode.formats):
+            raise ValueError("formats= names columns of columns= only (a csv document)")
     elif not (select == DA_GUARD_LISTS or _is_selector(select)):
         raise TypeError("select must be a selector (choose(directory, names), wanted) "
                         f"or DA_GUARD_LISTS, not {select!r}")
@@ -501,8 +523,45 @@ def document(args: argparse.Namespace, dest: str, *, lang: str) -> Any:
     except DocumentError as exc:
         raise _caller_error(f"{label}: {safe_label(exc.detail(lang))}",
                             "file_unreadable") from exc
+    if doc.fmt == "csv":
+        return _csv_records(data, doc.columns, doc.formats, label, lang)
     if data is None and doc.empty_is is not None:
         data = doc.empty_is()  # judged by the top-level check like any value
     if not isinstance(data, doc.top):
         raise refuse_top(label, kind_of(data), doc.top, lang=lang)
     return data
+
+
+def _csv_records(rows: "list[list[str]]", columns: tuple, formats: tuple, label: str,
+                 lang: str) -> "list[dict[str, str]]":
+    """The data rows of a csv document as dicts, judged against its
+    declared *columns* (#3662): the header must be exactly *columns*, every
+    row must have as many fields, and at least one data row must be there.
+    Each refusal is reason ``file_unreadable``, naming *label*."""
+    zh = lang == "zh"
+    rows = [r for r in rows if r]  # a blank line is no row (as csv.DictReader reads it)
+    wanted = ",".join(columns)
+    header = rows[0] if rows else None
+    if header is None or tuple(header) != tuple(columns):
+        got = ",".join(header) if header else ("（無）" if zh else "(none)")
+        said = (f"表頭不是 {wanted}（實為 {got}）" if zh
+                else f"the header is not {wanted} (got {got})")
+        raise _caller_error(f"{label}: {safe_label(said)}", "file_unreadable")
+    for n, row in enumerate(rows[1:], start=1):
+        if len(row) != len(columns):
+            said = (f"第 {n} 筆資料列有 {len(row)} 個欄位，表頭有 {len(columns)} 個" if zh
+                    else f"data row {n} has {len(row)} fields, the header {len(columns)}")
+            raise _caller_error(f"{label}: {said}", "file_unreadable")
+    if len(rows) == 1:
+        said = "只有表頭，沒有資料列" if zh else "a header and no data row"
+        raise _caller_error(f"{label}: {said}", "file_unreadable")
+    records = [dict(zip(columns, row)) for row in rows[1:]]
+    for n, record in enumerate(records, start=1):
+        for col, form in formats:
+            try:
+                datetime.strptime(record[col].strip(), form)
+            except ValueError:
+                said = (f"第 {n} 筆資料列的 {col} {record[col]!r} 不是 {form}" if zh
+                        else f"data row {n}: {col} {record[col]!r} is not {form}")
+                raise _caller_error(f"{label}: {safe_label(said)}", "file_unreadable") from None
+    return records

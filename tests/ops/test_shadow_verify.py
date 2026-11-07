@@ -18,6 +18,7 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import shadow_verify as sv  # noqa: E402
 import _lib_prometheus  # noqa: E402  (#3133: queries are read by the lib)
+from _lib_shadow_report import REPORT_COLUMNS, parse_timestamp  # noqa: E402  (#3662)
 from _lib_exitcodes import CallerError, emit_result, exit_on_crash  # noqa: E402  (#3216: in-process main() → exit status)
 
 
@@ -81,7 +82,8 @@ def _write_mapping(tmp_path, content):
 def _write_csv(tmp_path, rows, name="report.csv"):
     p = tmp_path / name
     with open(p, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["Tenant", "Status", "Timestamp"])
+        # #3662: the report's one header; a field a row leaves out is empty.
+        writer = csv.DictWriter(f, fieldnames=REPORT_COLUMNS, restval="")
         writer.writeheader()
         for row in rows:
             writer.writerow(row)
@@ -180,11 +182,13 @@ class TestInputsAreJudged:
                                ["preflight", "runtime"]) == {}
 
     def test_usable_inputs_are_read(self, tmp_path):
+        row = {"Tenant": "db-a", "Status": "match", "Timestamp": "2026-03-15 10:00:00"}
         inputs = sv.judge_inputs(_parsed(mapping=_write_mapping(tmp_path, {"m": {}}),
-                                         report_csv=_write_csv(tmp_path, []),
+                                         report_csv=_write_csv(tmp_path, [row]),
                                          readiness_json=_write_readiness(tmp_path, {})),
                                  ["preflight", "runtime", "convergence"])
-        assert inputs == {"mapping": {"m": {}}, "report_csv": "Tenant,Status,Timestamp\r\n",
+        assert inputs == {"mapping": {"m": {}},
+                          "report_csv": [{c: row.get(c, "") for c in REPORT_COLUMNS}],
                           "readiness_json": {}}
 
     @pytest.mark.parametrize("dest, flag, content, detail", [
@@ -204,12 +208,57 @@ class TestInputsAreJudged:
         assert str(exc.value) == f"{flag} {path}: {detail}"
 
     def test_a_leading_bom_in_the_csv_is_dropped(self, tmp_path):
-        """`utf-8-sig`, as the CSV was opened before #3445."""
+        """`utf-8-sig`, as the CSV was opened before #3445 — and as
+        `validate` writes it: the header still matches."""
         rows = [{"Tenant": "db-a", "Status": "match", "Timestamp": "2026-03-15 10:00:00"}]
-        text = "\ufeff" + open(_write_csv(tmp_path, rows), encoding="utf-8").read()
-        with patch.object(sv, "query_prometheus", return_value=([], None)):
-            checks = sv.check_runtime(_args(), {"report_csv": text})
-        assert next(c for c in checks if c["check"] == "csv_tenant_coverage")["status"] == "pass"
+        path = _write_csv(tmp_path, rows)
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        with open(path, "w", encoding="utf-8", newline="") as f:
+            f.write("\ufeff" + text)
+        records = sv.judge_inputs(_parsed(report_csv=path), ["runtime"])["report_csv"]
+        assert [r["Tenant"] for r in records] == ["db-a"]
+
+    @pytest.mark.parametrize("make, detail", [
+        (lambda p: p.write_bytes(b""), "the header is not " + ",".join(REPORT_COLUMNS)
+         + " (got (none))"),
+        (lambda p: p.write_text("a,b\n1,2\n", encoding="utf-8"),
+         "the header is not " + ",".join(REPORT_COLUMNS) + " (got a,b)"),
+        (lambda p: p.write_text(",".join(REPORT_COLUMNS) + "\n", encoding="utf-8"),
+         "a header and no data row"),
+        (lambda p: p.write_text(",".join(REPORT_COLUMNS) + "\n" + "x," * 8 + "yesterday\n",
+                                encoding="utf-8"),
+         "data row 1: Timestamp 'yesterday' is not %Y-%m-%d %H:%M:%S"),
+    ], ids=["empty", "another-csv", "header-only", "bad-timestamp"])
+    def test_a_csv_that_is_not_a_report_is_named(self, tmp_path, make, detail):
+        """#3662: each was read as a report with no mismatch — an Overall
+        PASS, rc 0 (runtime) and a 7-day check that only warned
+        (convergence). Now rc 2, the flag and the path named."""
+        path = tmp_path / "r.csv"
+        make(path)
+        with pytest.raises(CallerError) as exc:
+            sv.judge_inputs(_parsed(report_csv=str(path)), ["runtime"])
+        assert exc.value.reason == "file_unreadable"
+        assert str(exc.value) == f"--report-csv {path}: {detail}"
+
+    def test_the_report_validate_writes_is_read(self, tmp_path, monkeypatch):
+        """#3662: the producer and the reader share `_lib_shadow_report` —
+        what `validate` writes reads back, its Timestamp in UTC now (it was
+        local time, read as UTC: measured here in a zone 8 hours off)."""
+        import time
+        import validate_migration as vm
+        monkeypatch.setenv("TZ", "Asia/Taipei")
+        time.tzset()
+        result = {"label": "l", "old_query": "o", "new_query": "n",
+                  "diffs": [{"tenant": "db-a", "old_value": 1, "new_value": 2,
+                             "delta": 1, "status": "mismatch"}]}
+        path = vm.write_csv_report([result, None], str(tmp_path))
+        (record,) = sv.judge_inputs(_parsed(report_csv=path), ["runtime"])["report_csv"]
+        assert (record["Tenant"], record["Status"]) == ("db-a", "mismatch")
+        age = datetime.now(timezone.utc) - parse_timestamp(record["Timestamp"])
+        monkeypatch.delenv("TZ")
+        time.tzset()
+        assert abs(age.total_seconds()) < 120, record["Timestamp"]
 
 
 # ---------------------------------------------------------------------------
@@ -638,7 +687,10 @@ def test_a_report_whose_records_end_in_a_bare_cr_is_read(tmp_path, phase):
     exited 2 (csv.Error), convergence could skip a recent mismatch."""
     now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     path = tmp_path / "cr.csv"
-    path.write_bytes(f"Tenant,Status,Timestamp\rdb-a,mismatch,{now}\r".encode())
+    # #3662: the report's own header (REPORT_COLUMNS), CR-only line ends
+    row = {"Tenant": "db-a", "Status": "mismatch", "Timestamp": now}
+    lines = [",".join(REPORT_COLUMNS), ",".join(row.get(c, "x") for c in REPORT_COLUMNS)]
+    path.write_bytes(("\r".join(lines) + "\r").encode())
     args = _args(report_csv=str(path))
     with patch.object(sv, "query_prometheus", return_value=([], None)):
         checks = (sv.check_runtime if phase == "runtime" else sv.check_convergence)(
