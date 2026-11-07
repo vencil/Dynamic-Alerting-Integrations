@@ -138,6 +138,9 @@ groups:
         annotations:
           summary: "ClickHouse instance is DOWN"
           summary_zh: "ClickHouse 實例已關閉"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       # --- Query Rate ---
       - alert: ClickHouseHighQueryRate
@@ -285,3 +288,6 @@ groups:
           summary_zh: "ClickHouse 查詢失敗率 > 10/秒"
           description: "Failed query rate: {{ $value | printf \"%.1f\" }} queries/sec"
           description_zh: "查詢失敗率：{{ $value | printf \"%.1f\" }} 次查詢/秒"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

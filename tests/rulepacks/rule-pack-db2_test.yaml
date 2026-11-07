@@ -59,6 +59,9 @@ tests:
               summary_zh: "DB2 實例 db2-exporter-a:9953 已關閉"
               description: "db2_up=0 for 15s on db2-exporter-a:9953"
               description_zh: "db2_up=0，持續 15 秒，實例：db2-exporter-a:9953"
+              runbook_url: ""
+              owner: ""
+              tier: ""
         # db-b (db2_up=1) produces NO alert.
 
   # ── Threshold + ratio alerts: four-tenant scaffold, one shared input set ──
