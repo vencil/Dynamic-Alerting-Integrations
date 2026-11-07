@@ -48,10 +48,10 @@ DERIVED_ROWS = {
     "config-history snapshot": lambda d: (
         ["scripts/tools/ops/config_history.py", "--config-dir", str(_conf_dir(d)), "snapshot"],
         d / ".da-history" / "snap-1" / "a.yaml"),
-    # #1560 ⑤-a: one Secret manifest per tenant, named after it.
+    # #1560 ⑤-a: one Secret manifest per tenant, named after it (with --write only).
     "migrate-credentials --manifests-out": lambda d: (
         ["scripts/tools/ops/migrate_credentials.py", "--config-dir", str(_plaintext_conf(d)),
-         "--manifests-out", str(d / "secrets")],
+         "--manifests-out", str(d / "secrets"), "--write"],
         d / "secrets" / "da-a.yaml"),
 }
 

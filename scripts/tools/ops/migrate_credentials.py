@@ -9,18 +9,21 @@ tenants' `_routing` / `overrides` / `routes` / `_routing_enforced`, and the
 platform's `_routing_defaults`, routing profiles and `_routing_enforced`) and
 produces three things:
 
-1. The rewrite: each credential a tenant writes out where only a reference is
-   taken becomes `{secret: {key: <key>}}`, the key derived from where it
-   stands (`receiver.api_url`, `overrides.0.receiver.http_config.basic_auth.
-   password`). Shown as a unified diff on stdout (every credential value in it
-   reads `<redacted:N>`); `--write` applies it, through `da-guard write`
-   (ADR-036 §2: Go writes conf.d). A list holding a rewritten value is
-   written whole: the comments inside it are not kept.
-2. The Secrets: with `--manifests-out DIR`, one Kubernetes Secret
-   `da-<tenant>` per tenant (stringData), each a file directly in DIR, opened
-   O_NOFOLLOW, mode 0600 from creation. A manifest inside a git worktree,
-   in the conf.d, or whose path is already a symlink, a non-regular file or
-   a file with another link is refused before anything is written.
+1. The rewrite plan: each credential a tenant writes out where only a
+   reference is taken becomes `{secret: {key: <key>}}`, the key derived from
+   where it stands (`receiver.api_url`, `overrides.0.receiver.http_config.
+   basic_auth.password`). Listed as file, line, place, tenant and the
+   reference it becomes; `--write` applies it through `da-guard write`
+   (ADR-036 §2: Go writes conf.d) — `git diff` then shows the change. A list
+   holding a rewritten value is written whole: the comments inside it are
+   not kept.
+2. The Secrets: with `--manifests-out DIR` and `--write`, one Kubernetes
+   Secret `da-<tenant>` per tenant (stringData), each a file directly in DIR,
+   opened O_NOFOLLOW, mode 0600 from creation — written together with the
+   conf.d rewrite or not at all. Without `--write` DIR is only checked. A
+   manifest inside a git worktree, in the conf.d, or whose path is already a
+   symlink, a non-regular file or a file with another link is refused
+   before anything is written.
 3. The rotation list: file, line, field and tenant of every credential that
    was written out (each was in the repository: rotate it — see
    docs/internal/secret-leak-remediation-sop.md). Never the value.
@@ -30,16 +33,19 @@ in places no plane reads, a URL with userinfo, the four proxy credentials
 (the platform sets HTTPS_PROXY on Alertmanager from a Secret and the tenant
 writes `proxy_from_environment: true`), an invalid tenant id, a key that
 cannot be derived or is taken, and a file whose rewritten text would still
-hold a value it moves out (an anchor or merge key sharing it, a comment).
-The rewritten tree is then judged by the generator (`--policy`): Secret
-references it would still refuse, and tenants the rewrite would drop, are
-listed, the run does not count as done, and `--write` writes nothing.
+hold a value it moves out (an anchor or merge key sharing it, another
+field, a comment). The rewritten tree is then judged by the generator
+(`--policy`): Secret references it would still refuse, and tenants the
+rewrite would drop, are listed, the run does not count as done, and
+`--write` writes nothing; so does a file that cannot be rewritten.
 
-⛔ No credential value reaches stdout, stderr or the JSON report: values go
-only into the files under --manifests-out (`_write_manifest`). Every value
-read at a credential place is watched (`_Watch`), and no text leaves this
-tool before it is checked against them: a diff that would show one is
-withheld, any other line or string that would is replaced whole.
+⛔ No credential value reaches stdout, stderr or the JSON report: nothing the
+report says is taken from a file's text (the report's sources are closed:
+see `_row`), and values go only into the files under --manifests-out
+(`_write_manifest`). Whether a value moved out of a file stays in it is
+judged on the file read back by parse-tree (`_residue`: a scalar or key
+equal to or holding it) and in its comments (`_in_comment`), never by
+searching its text for the value.
 
 Exit: 0 nothing written out and every config file read; 1 found, or a file
 no plane reads (the report is the answer); 2 usage / I/O error, no usable
@@ -78,7 +84,7 @@ import _lib_exitcodes  # noqa: E402
 import _lib_io  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report, die_caller_error  # noqa: E402
-from _lib_parse_tree import ParseTreeError  # noqa: E402
+from _lib_parse_tree import ParseTreeError, is_scalar  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402
 from _lib_validation import detect_cli_lang, is_valid_tenant_id  # noqa: E402
 from _lib_validation import (  # noqa: E402
@@ -91,19 +97,21 @@ from _lib_validation import (  # noqa: E402
     ref_path_text,
     ref_value_at,
     secret_ref_problem,
-    value_paths_to_mask,
 )
 from _grar_merge import FINDING_KINDS, OWN_NAME_PREFIX  # noqa: E402
 from _grar_parse import RawReceiver, raw_receivers  # noqa: E402
 
 TOOL = "migrate-credentials"
 SCHEMA = "da-tools.migrate-credentials/v1"
-#: How a credential value reads in the diff.
-MASK = "<redacted:{}>"
 #: A one-line stand-in for a value whose line is looked up (`_plan`).
 _LOCATE = "@@da-migrate-locate-{}@@"
-#: What replaces a whole string / line that would show a watched value.
-WITHHELD = "<withheld: it would show a credential value>"
+#: What a map key outside the conservative charset reads as (`_safe_key`).
+KEY_PLACEHOLDER = "<key>"
+#: A map key printed as it is: an HTTP token of at most 64 characters.
+_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]{1,64}")
+#: The routing steps of a receiver's path that the schema fixes.
+_FIXED_STEPS = frozenset({"tenants", "_routing", "overrides", "routes", "receiver",
+                          "_routing_defaults", "routing_profiles", "_routing_enforced"})
 
 #: Why a finding is left for a person (``Item.reason``).
 REASONS = {
@@ -140,9 +148,9 @@ REASONS = {
                              "anchor or merge key sharing it, a comment, another field): "
                              "nothing in this file is rewritten; remove the other "
                              "occurrence by hand, then run again",
-    "diff_withheld": "the diff of this file would show a credential value (through a merge "
-                     "key, a comment or another field holding it), so it is not shown; "
-                     "review the rewrite with --write on a copy",
+    "value_in_comment": "a comment in the file holds a value it moves out (the rewrite "
+                        "would drop or keep it in plain text): delete that comment by hand, "
+                        "then run again; nothing in this file is rewritten",
 }
 
 
@@ -155,65 +163,13 @@ class Item(NamedTuple):
     field: str           # the receiver-relative field, as text
     tenant: Optional[str]
     category: str
+    site: tuple = ()                 # the table row's path the finding stands on
     entry: Optional[str] = None      # the Secret data key, when rewritten
     reason: Optional[str] = None     # why not, otherwise
 
 
-# ── R1: the one output check ────────────────────────────────────────────
-
-class _Watch:
-    """The values read at credential places this run (every value
-    ``value_paths_to_mask`` names, whatever its policy), and THE check every
-    text this tool emits goes through: a text holding one of them as a
-    substring is withheld whole, never edited around the value."""
-
-    def __init__(self) -> None:
-        self._held: list[str] = []
-
-    def load(self, raws: list[RawReceiver]) -> None:
-        seen = set(self._held)
-        for r in raws:
-            for p in value_paths_to_mask(r.receiver):
-                v = ref_value_at(r.receiver, p)
-                text = (v if isinstance(v, str) else
-                        str(v) if isinstance(v, (int, float)) and not isinstance(v, bool)
-                        else "")
-                if text and text not in seen:
-                    seen.add(text)
-                    self._held.append(text)
-
-    def hits(self, text: str) -> bool:
-        return any(v in text for v in self._held)
-
-    def line(self, text: str) -> str:
-        """*text*, or ``WITHHELD`` when it holds a watched value."""
-        return WITHHELD if self.hits(text) else text
-
-    def doc(self, value: Any) -> tuple[Any, bool]:
-        """*value* (a JSON-able document) with every string that holds a
-        watched value replaced whole by ``WITHHELD``; and whether any was."""
-        if isinstance(value, str):
-            return (WITHHELD, True) if self.hits(value) else (value, False)
-        if isinstance(value, dict):
-            out, hit = {}, False
-            for k, v in value.items():
-                key, kh = self.doc(k) if isinstance(k, str) else (k, False)
-                val, vh = self.doc(v)
-                out[key] = val
-                hit = hit or kh or vh
-            return out, hit
-        if isinstance(value, list):
-            items = [self.doc(v) for v in value]
-            return [v for v, _h in items], any(h for _v, h in items)
-        return value, False
-
-
-_WATCH = _Watch()
-
-
 def _die(message: str) -> None:
-    """``die_caller_error`` through the output check."""
-    die_caller_error("\n".join(_WATCH.line(m) for m in message.split("\n")))
+    die_caller_error(message)
 
 
 #: --help in the operator's language (dev-rules §9: detect_cli_lang).
@@ -223,19 +179,20 @@ _HELP = {
                        "a tenant owns as Secret references, and list what to rotate "
                        "(#1560; report only: nothing is refused yet).",
         "config_dir": "conf.d root (read through da-guard)",
-        "write": "apply the rewrite to the conf.d files (default: print the diff); "
-                 "needs --manifests-out",
-        "manifests_out": "write one Kubernetes Secret da-<tenant> per tenant into DIR "
-                         "(mode 0600; DIR may not be inside a git worktree)",
+        "write": "apply the rewrite to the conf.d files and write the manifests "
+                 "(default: print the plan); needs --manifests-out",
+        "manifests_out": "with --write, write one Kubernetes Secret da-<tenant> per tenant "
+                         "into DIR (mode 0600; DIR may not be inside a git worktree); "
+                         "without it, DIR is only checked",
         "json": "print the report as one JSON document",
     },
     "zh": {
         "description": "找出 conf.d 裡明文寫出的 receiver 憑證：租戶自己的改寫成 Secret "
                        "參照，並列出要輪替的位置（#1560；只報告，目前不拒收）。",
         "config_dir": "conf.d 根目錄（經 da-guard 讀）",
-        "write": "把改寫寫回 conf.d（預設只印 diff）；須同時給 --manifests-out",
-        "manifests_out": "在 DIR 為每個租戶寫一份 Kubernetes Secret da-<tenant>"
-                         "（0600；DIR 不得在 git worktree 內）",
+        "write": "把改寫寫回 conf.d 並寫出清單（預設只印改寫計畫）；須同時給 --manifests-out",
+        "manifests_out": "搭配 --write 時在 DIR 為每個租戶寫一份 Kubernetes Secret "
+                         "da-<tenant>（0600；DIR 不得在 git worktree 內）；不帶 --write 只檢查路徑",
         "json": "報告以一份 JSON 文件輸出",
     },
 }
@@ -384,7 +341,7 @@ def _judge(raws: list[RawReceiver]) -> list[Item]:
     for r in raws:
         for f in plaintext_credential_findings(r.receiver):
             base = Item(r.file, r.path + f.path, r.path, ref_path_text(f.path), r.tenant,
-                        f.category)
+                        f.category, f.site)
             why = _reason(r, f.category, ref_value_at(r.receiver, f.path))
             if why is not None:
                 items.append(base._replace(reason=why))
@@ -410,6 +367,45 @@ def _drop(items: list[Item], reason: str, *, file: Optional[str] = None,
             if it.entry is not None and (file is None or it.file == file)
             and (under is None or it.path[:len(under)] == under) else it
             for it in items]
+
+
+# ── what the report may say about a place (closed sources) ─────────────
+
+def _safe_key(key: object) -> str:
+    """A map key the user chose (a header name, a profile name), printed
+    only when it is a short HTTP token; ``KEY_PLACEHOLDER`` otherwise."""
+    return key if isinstance(key, str) and _TOKEN.fullmatch(key) else KEY_PLACEHOLDER
+
+
+def _safe_parts(it: Item) -> list:
+    """The steps of *it*'s path from its file's top level, each from a
+    closed source: a list index; a step the schema or the routing layout
+    fixes (from the table row, or the layout's own names); a valid tenant
+    id; a user-chosen key passed through ``_safe_key``."""
+    rp, out = it.receiver_path, []
+    for i, p in enumerate(rp):
+        if isinstance(p, int):
+            out.append(p)
+        elif i == 1 and rp[0] == "tenants":
+            out.append(p if is_valid_tenant_id(p) else KEY_PLACEHOLDER)
+        elif i == 1 and rp[0] == "routing_profiles":
+            out.append(_safe_key(p))
+        else:
+            out.append(next((f for f in _FIXED_STEPS if f == p), KEY_PLACEHOLDER))
+    for p, step in zip(it.path[len(rp):], it.site):
+        out.append(p if isinstance(p, int) else _safe_key(p) if step == "*" else step)
+    return out
+
+
+def _render(parts: list) -> str:
+    out = ""
+    for part in parts:
+        out += f"[{part}]" if isinstance(part, int) else (f".{part}" if out else str(part))
+    return out
+
+
+def _safe_tenant(tenant: Optional[str]) -> Optional[str]:
+    return None if tenant is None else tenant if is_valid_tenant_id(tenant) else KEY_PLACEHOLDER
 
 
 # ── edits: what `da-guard write` is asked to do ─────────────────────────
@@ -524,13 +520,11 @@ def _marker_lines(original: str, located: str, markers: dict[str, Any]) -> dict[
 
 
 class Plan(NamedTuple):
-    diff: str
-    rewritten: dict[str, str]     # file → text with the rewrite (no masking)
+    rewritten: dict[str, str]     # file → text with the rewrite
     lines: dict[tuple, int]       # (file, path) → line
     exact: set                    # (file, path) whose line is the value's own
     notes: list[str]
     items: list[Item]
-    withheld: list[str]           # files whose diff is not shown (R1)
 
 
 def _read_text(path: str) -> str:
@@ -573,6 +567,81 @@ def _lines(config_dir: str, nodes: dict, by_file: dict, notes: list[str]
     return lines, exact
 
 
+#: parse-tree's tagged nodes, unconverted: each scalar with its tag.
+_NODES = _lib_parse_cache.ParseMode("parse-tree:nodes", lambda node: node)
+
+
+def _holds(text: str, moved: list[str]) -> bool:
+    return any(v == text or v in text for v in moved)
+
+
+def _residue(config_dir: str, rel: str, text: str, moved: list[str]) -> bool:
+    """R2, by structure: whether *text* (file *rel* after the rewrite, its
+    moved keys dropped: `_plan`'s probe), read
+    back as yaml.v3 reads it (parse-tree's file mode: anchors, aliases and
+    merge keys resolved), has a scalar — a value or a key — equal to or
+    holding one of the *moved* values. A text comparison cannot answer
+    this: the file spells a value with escapes, folds and indentation that
+    the value itself does not have."""
+    node = _lib_parse_cache.read_text_as(config_dir, rel, text.encode("utf-8"), _NODES)
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if is_scalar(n):
+            value = n.get("value")
+            if _holds(value if isinstance(value, str) else n["text"], moved):
+                return True
+        elif isinstance(n, dict):
+            for k, v in n.items():
+                if _holds(k, moved):
+                    return True
+                stack.append(v)
+        elif isinstance(n, list):
+            stack.extend(n)
+    return False
+
+
+def _comment(line: str) -> str:
+    """The comment of one line of YAML: from the first ``#`` that starts a
+    token (line start or after white space) outside a quoted scalar. A line
+    that ends inside a quote (a quoted scalar continued on the next line)
+    is taken whole: which ``#`` would start a comment cannot be told."""
+    quote, i = None, 0
+    while i < len(line):
+        c = line[i]
+        if quote == '"':
+            if c == "\\":
+                i += 2
+                continue
+            if c == '"':
+                quote = None
+        elif quote == "'":
+            if c == "'":
+                if line[i + 1:i + 2] == "'":
+                    i += 2
+                    continue
+                quote = None
+        elif c in "\"'" and (i == 0 or line[i - 1] in " \t:[{,-?"):
+            quote = c
+        elif c == "#" and (i == 0 or line[i - 1] in " \t"):
+            return line[i:]
+        i += 1
+    return line if quote else ""
+
+
+def _in_comment(texts: list[str], moved: list[str]) -> bool:
+    """Whether a comment of any of *texts* holds a *moved* value — or, for a
+    value on several lines, any of its non-blank lines. A comment is source
+    text with no escapes, so comparing text is sound here (and only here)."""
+    needles = set()
+    for v in moved:
+        needles.add(v)
+        needles.update(part.strip() for part in v.splitlines() if part.strip())
+    needles.discard("")
+    return any(n in _comment(line) for text in texts for line in text.splitlines()
+               for n in needles)
+
+
 def _plan(config_dir: str, reader: Any, items: list[Item], raws: list[RawReceiver]) -> Plan:
     notes: list[str] = []
     by_file: dict[str, list[Item]] = {}
@@ -605,57 +674,55 @@ def _plan(config_dir: str, reader: Any, items: list[Item], raws: list[RawReceive
             notes.append(f"the rewrite was refused: {_refusal_text(exc)}")
             for f in plain:
                 final = _drop(final, "rewrite_refused", file=f)
-    # R2: a value moved out of a file must not still be in its text.
+    # R2: a value moved out of a file must not stay in it — in a value or a
+    # key (by structure, `_residue`), or in a comment, before or after the
+    # rewrite (`da-guard write` drops the comment of a line it rewrites).
+    # parse-tree resolves merge keys, so a merged value the rewrite overrides
+    # is not in the rewritten file's reading: the probe drops each moved key
+    # written in a mapping instead of overriding it, and what a merge key
+    # still supplies there shows through. (A list is written whole from
+    # parse-tree's reading, merges already resolved: nothing hides in it.)
+    probes: dict[str, list[dict]] = {}
+    for f in rewritten:
+        paths = [it.path for it in final if it.file == f and it.entry is not None]
+        direct = [q for q in paths if _list_prefix(q) is None]
+        listed, _failed = _ops(nodes[f], {q: _ref_node("probe") for q in paths
+                                          if _list_prefix(q) is not None})
+        probes[f] = [_lib_confedit.unset_op(list(q)) for q in direct] + listed
+    probed: dict[str, Optional[str]] = {}
+    for f, ops in probes.items():
+        try:
+            probed[f] = _dry_run(config_dir, {f: ops})[f]
+        except _lib_confedit.EditsRefused as exc:
+            # A dropped key that still reads back (da-guard's read_back_mismatch)
+            # is a key a merge supplies: the value is still there.
+            probed[f] = None
+            if not all(r.reason == "read_back_mismatch" for r in exc.refusals):
+                notes.append(f"{f}: the rewrite could not be checked: {_refusal_text(exc)}")
+        except _EDIT_ERRORS as exc:
+            probed[f] = None
+            notes.append(f"{f}: the rewrite could not be checked: {_refusal_text(exc)}")
     for f in sorted(rewritten):
-        moved = [ref_value_at(receivers[(it.file, it.receiver_path)],
-                              it.path[len(it.receiver_path):])
-                 for it in final if it.file == f and it.entry is not None]
-        if any(isinstance(v, str) and v and v in rewritten[f] for v in moved):
-            final = _drop(final, "value_remains_in_file", file=f)
+        moved = [v for v in (ref_value_at(receivers[(it.file, it.receiver_path)],
+                                          it.path[len(it.receiver_path):])
+                             for it in final if it.file == f and it.entry is not None)
+                 if isinstance(v, str) and v]
+        why = None
+        if _in_comment([_read_text(os.path.join(config_dir, f)), rewritten[f]], moved):
+            why = "value_in_comment"
+        elif (_residue(config_dir, f, rewritten[f], moved) or probed.get(f) is None
+              or _residue(config_dir, f, probed[f], moved)):
+            why = "value_remains_in_file"
+        if why is not None:
+            final = _drop(final, why, file=f)
             del rewritten[f]
     for f in sorted(rewritten):
         for prefix in sorted({_list_prefix(it.path) for it in final
                               if it.file == f and it.entry is not None} - {None}, key=_key):
-            notes.append(f"{f}: {'.'.join(str(x) for x in prefix)} is a list written whole: "
-                         "the comments inside it are not kept")
-
-    # The diff of what is left, every watched value masked; a file whose
-    # diff would still show one is withheld (R1).
-    masks_by_file: dict[str, list[tuple]] = {}
-    for r in raws:
-        if r.file in rewritten:
-            masks_by_file.setdefault(r.file, []).extend(
-                r.path + p for p in value_paths_to_mask(r.receiver))
-    before: dict[str, list[dict]] = {}
-    after: dict[str, list[dict]] = {}
-    for f in rewritten:
-        masked = {p: _str_node(MASK.format(i))
-                  for i, p in enumerate(sorted(set(masks_by_file.get(f, [])), key=_key))}
-        rewrite = {it.path: _ref_node(it.entry) for it in final
-                   if it.file == f and it.entry is not None}
-        before[f], _f1 = _ops(nodes[f], masked)
-        after[f], _f2 = _ops(nodes[f], {**masked, **rewrite})
-    diff, withheld = "", []
-    if rewritten:
-        try:
-            old = _dry_run(config_dir, before)
-            new = _dry_run(config_dir, after)
-        except _EDIT_ERRORS as exc:
-            notes.append(f"the diff could not be shown: {_refusal_text(exc)}")
-            old = new = {}
-        parts = []
-        for f in sorted(new):
-            one = "".join(difflib.unified_diff(old.get(f, "").splitlines(True),
-                                               new[f].splitlines(True),
-                                               fromfile=f"a/{f}", tofile=f"b/{f}"))
-            if _WATCH.hits(one):
-                withheld.append(f)
-                notes.append(f"{f}: the diff is not shown: it would show a credential value "
-                             "(a merge key, a comment or another field holds it)")
-            else:
-                parts.append(one)
-        diff = "".join(parts)
-    return Plan(diff, rewritten, lines, exact, notes, final, withheld)
+            holder = next(it for it in final if it.file == f and it.path[:len(prefix)] == prefix)
+            notes.append(f"{f}: {_render(_safe_parts(holder)[:len(prefix)])} is a list "
+                         "written whole: the comments inside it are not kept")
+    return Plan(rewritten, lines, exact, notes, final)
 
 
 # ── the rewritten tree, judged by the generator ─────────────────────────
@@ -786,19 +853,15 @@ def _manifest_plan(raws: list[RawReceiver], items: list[Item]
     return by_tenant
 
 
-def _write_manifests(out: str, by_tenant: dict, paths: dict[str, str]) -> list[dict]:
+def _write_manifests(out: str, by_tenant: dict, paths: dict[str, str]) -> None:
     try:
         os.makedirs(out, mode=0o700, exist_ok=True)
     except OSError as exc:
         _die(f"ERROR: cannot create --manifests-out {_lib_io.safe_label(out)}: "
              f"{exc.strerror}; nothing was written")
-    written = []
     for tenant in sorted(by_tenant):
-        name = _object_name(tenant)
-        _write_manifest(paths[tenant], _manifest_text(name, sorted(by_tenant[tenant])))
-        written.append({"name": name, "tenant": tenant, "path": paths[tenant],
-                        "entries": sorted(e for e, _v in by_tenant[tenant])})
-    return written
+        _write_manifest(paths[tenant], _manifest_text(_object_name(tenant),
+                                                      sorted(by_tenant[tenant])))
 
 
 def _write_confd(config_dir: str, entries: list[dict], manifests: list[dict]) -> None:
@@ -819,57 +882,67 @@ def _write_confd(config_dir: str, entries: list[dict], manifests: list[dict]) ->
 
 
 # ── the report ──────────────────────────────────────────────────────────
+# ⛔ Every string below comes from a closed source: this tool's constants,
+# a file path, a valid tenant id, a derived data key (secret_ref_problem),
+# a place's path (`_safe_parts`), a closed vocabulary (`_vocab_*`), a code
+# da-guard or parse-tree answers with. Nothing is taken from a file's text.
 
 def _row(it: Item, plan: Plan) -> dict:
+    parts = _safe_parts(it)
     return {"file": it.file, "line": plan.lines.get((it.file, it.path)),
             "line_is_field": (it.file, it.path) in plan.exact,
-            "field": it.field, "location": ref_path_text(it.path),
-            "tenant": it.tenant, "category": it.category}
+            "field": _render(parts[len(it.receiver_path):]), "location": _render(parts),
+            "tenant": _safe_tenant(it.tenant), "category": it.category}
 
 
 def _print_text(doc: dict) -> None:
-    def say(text: str) -> None:
-        for line in text.split("\n"):
-            print(_WATCH.line(line))
-
     def where(row: dict) -> str:
         line = f":{row['line']}" if row["line"] is not None else ""
         held = "" if row["line_is_field"] or row["line"] is None else " (in the list there)"
-        return f"{row['file']}{line} {row['location'] or ''}{held}"
+        return f"{row['file']}{line} {row['location']}{held}"
 
-    if doc["diff"]:
-        say("== Rewrite (credential values read <redacted:N>) ==")
-        say(doc["diff"].rstrip("\n"))
-        say("(applied)" if doc["written"] else "(not applied: add --write)")
+    if doc["plan"]:
+        print("== Rewrite plan (after --write, `git diff` shows the change) ==")
+        for row in doc["plan"]:
+            print(f"  {where(row)} [{row['tenant']}] -> "
+                  f"{{secret: {{key: {row['result']['secret']['key']}}}}}")
+        print("(applied)" if doc["written"] else "(not applied: add --write)")
     if doc["manifests"]:
-        say("== Kubernetes Secrets ==")
+        print("== Kubernetes Secrets ==")
         for m in doc["manifests"]:
-            dest = m["path"] or "not written"
-            say(f"  {m['name']} ({', '.join(m['entries'])}) -> {dest}")
+            dest = (m["path"] or "no --manifests-out given") + (
+                " (written)" if m["written"] else " (written with --write)" if m["path"] else "")
+            print(f"  {m['name']} ({', '.join(m['entries'])}) -> {dest}")
     if doc["decisions"]:
-        say("== Left for a person ==")
+        print("== Left for a person ==")
         for row in doc["decisions"]:
-            say(f"  {where(row)} [{row['tenant'] or 'platform'}] {REASONS[row['reason']]}")
+            print(f"  {where(row)} [{row['tenant'] or 'platform'}] {REASONS[row['reason']]}")
     if doc["rotate"]:
-        say("== Rotate (written out in the repository; "
-            "docs/internal/secret-leak-remediation-sop.md) ==")
+        print("== Rotate (written out in the repository; "
+              "docs/internal/secret-leak-remediation-sop.md) ==")
         for row in doc["rotate"]:
-            say(f"  {where(row)} [{row['tenant'] or 'platform'}] {row['category']}")
+            print(f"  {where(row)} [{row['tenant'] or 'platform'}] {row['category']}")
     if doc["blocked_after_rewrite"]:
-        say("== Still refused after the rewrite (not done) ==")
+        print("== Still refused after the rewrite (not done) ==")
         for row in doc["blocked_after_rewrite"]:
-            say(f"  {row['kind']} [{row['tenant'] or 'platform'}] {row['field'] or ''}")
+            print(f"  {row['kind']} [{row['tenant'] or 'platform'}] {row['field'] or ''}")
     if doc["unread"]:
-        say("== Not read (no plane reads these files; what they write is not judged) ==")
+        print("== Not read (no plane reads these files; what they write is not judged) ==")
         for row in doc["unread"]:
-            say(f"  {row['file']} ({row['reason']})")
+            print(f"  {row['file']} ({row['reason']})")
     for note in doc["notes"]:
-        say(f"NOTE: {note}")
+        print(f"NOTE: {note}")
     if not doc["rotate"] and not doc["unread"]:
-        say("No credential is written out.")
+        print("No credential is written out.")
 
 
-def _run(argv: Optional[list[str]]) -> Any:
+#: A file-level reason that stops `--write` whole (N3: the manifests and
+#: conf.d are written together or not at all).
+_STOPS_WRITE = frozenset({"value_remains_in_file", "value_in_comment", "rewrite_refused"})
+
+
+@_lib_parse_cache.exit_on_parse_tree_error
+def main(argv: Optional[list[str]] = None) -> Any:
     import generate_alertmanager_routes as gar
     args = _parse_args(argv)
     problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
@@ -885,82 +958,71 @@ def _run(argv: Optional[list[str]]) -> Any:
         die_caller_error(str(exc))
     reader = _lib_parse_cache.reader_for(args.config_dir)
     found = raw_receivers(args.config_dir, reader)
-    _WATCH.load(found.receivers)
     if found.unreadable:
         _die("ERROR: these files cannot be read, so the credentials they write cannot be "
              "judged: " + "; ".join(f"{_lib_io.safe_label(f)} ({_lib_io.safe_label(why)})"
                                     for f, why in found.unreadable))
     items = _judge(found.receivers)
     plan = (_plan(args.config_dir, reader, items, found.receivers) if items else
-            Plan("", {}, {}, set(), [], [], []))
+            Plan({}, {}, set(), [], []))
     items = plan.items
     blocked = (_still_refused(args.config_dir, plan.rewritten, policy)
                if plan.rewritten else [])
     by_tenant = _manifest_plan(found.receivers, items)
-    manifests = [{"name": _object_name(t), "tenant": t, "path": None,
-                  "entries": sorted(e for e, _v in by_tenant[t])} for t in sorted(by_tenant)]
-    written = False
-    if blocked and args.write:
-        plan.notes.append("--write wrote nothing (no manifest, no conf.d file): the rewrite "
-                          "would make the generator refuse what is listed under "
-                          "blocked_after_rewrite; fix the policy or the receivers' "
-                          "http_config first, then run again")
-    elif args.manifests_out is not None and by_tenant:
+    paths: dict[str, str] = {}
+    if args.manifests_out is not None and by_tenant:
         paths = {t: _manifest_path(args.manifests_out, t) for t in by_tenant}
         conf_files = sorted({os.path.join(args.config_dir, r.file) for r in found.receivers})
         _check_manifest_targets(args.manifests_out, sorted(paths.values()), args.config_dir,
                                 conf_files)
-        manifests = _write_manifests(args.manifests_out, by_tenant, paths)
-        if args.write and plan.rewritten:
-            entries = []
-            for f in sorted(plan.rewritten):
-                node = reader.node(os.path.join(args.config_dir, f))
-                rewrite = {it.path: _ref_node(it.entry) for it in items
-                           if it.file == f and it.entry is not None}
-                ops, _failed = _ops(node, rewrite)   # the lists that failed are out of items
-                entries.append(_lib_confedit.edit_entry(f, ops))
-            _write_confd(args.config_dir, entries, manifests)
-            written = True
+    manifests = [{"name": _object_name(t), "tenant": t, "path": paths.get(t),
+                  "entries": sorted(e for e, _v in by_tenant[t]), "written": False}
+                 for t in sorted(by_tenant)]
+    stops = sorted({it.reason for it in items if it.reason in _STOPS_WRITE})
+    written = False
+    if args.write and (blocked or stops):
+        plan.notes.append("--write wrote nothing (no manifest, no conf.d file): "
+                          + ("the rewrite would make the generator refuse what is listed "
+                             "under blocked_after_rewrite; fix the policy or the receivers' "
+                             "http_config first" if blocked else
+                             "a file cannot be rewritten (" + ", ".join(stops) + "); "
+                             "see the decisions")
+                          + ", then run again")
+    elif args.write and plan.rewritten:
+        _write_manifests(args.manifests_out, by_tenant, paths)
+        for m in manifests:
+            m["written"] = True
+        entries = []
+        for f in sorted(plan.rewritten):
+            node = reader.node(os.path.join(args.config_dir, f))
+            rewrite = {it.path: _ref_node(it.entry) for it in items
+                       if it.file == f and it.entry is not None}
+            ops, _failed = _ops(node, rewrite)   # the lists that failed are out of items
+            entries.append(_lib_confedit.edit_entry(f, ops))
+        _write_confd(args.config_dir, entries, manifests)
+        written = True
     if blocked:
         plan.notes.append("the rewrite is not complete: the generator would still refuse "
                           "what is listed under blocked_after_rewrite")
-    decisions = [{**_row(it, plan), "reason": it.reason} for it in items if it.entry is None]
-    decisions += [{"file": f, "line": None, "line_is_field": False, "field": None,
-                   "location": None, "tenant": None, "category": None,
-                   "reason": "diff_withheld"} for f in plan.withheld]
     doc = {
         "schema": SCHEMA,
         "config_dir": args.config_dir,
         "written": written,
-        "diff": plan.diff,
+        "plan": [{**_row(it, plan), "result": {"secret": {"key": it.entry}}}
+                 for it in items if it.entry is not None],
         "manifests": manifests,
-        "decisions": decisions,
+        "decisions": [{**_row(it, plan), "reason": it.reason}
+                      for it in items if it.entry is None],
         "rotate": [_row(it, plan) for it in items],
         "blocked_after_rewrite": blocked,
         "unread": [{"file": f, "reason": why} for f, why in found.unread],
         "notes": plan.notes,
     }
-    doc, hit = _WATCH.doc(doc)
-    if hit:
-        doc["notes"].append(f"some text of this report is replaced by {WITHHELD!r}")
     status = EXIT_VIOLATION if items or found.unread else EXIT_OK
     if args.json_output:
         return Report(doc, status)
     _print_text(doc)
     return status
-
-
-@_lib_parse_cache.exit_on_parse_tree_error
-def main(argv: Optional[list[str]] = None) -> Any:
-    try:
-        return _run(argv)
-    except Exception as exc:
-        # R1: an exception's text passes the output check too. One that would
-        # show a watched value goes on as a RuntimeError with no text of it
-        # (the shared crash line, rc 2); any other goes on as it is.
-        if not isinstance(exc, ParseTreeError) and _WATCH.hits(f"{exc!s} {exc!r}"):
-            raise RuntimeError(WITHHELD) from None
-        raise
 
 
 if __name__ == "__main__":

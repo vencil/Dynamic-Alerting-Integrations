@@ -1746,15 +1746,15 @@ promtool query instant 'count(ALERTS{alertstate="firing"})'
 
 **輸出**
 
-1. **改寫**：租戶 `_routing` 裡拒收的明文換成 `{secret: {key: <key>}}`。key 由位置與欄位路徑推導（`receiver.api_url`、`overrides.0.receiver.http_config.basic_auth.password`），須符合 Secret data key 規則且在租戶內唯一，推導不出或撞名就不改、列給人決定。預設把 unified diff 印到 stdout（憑證值一律顯示為 `<redacted:N>`）；`--write` 才經 `da-guard write` 寫回。⚠️ 被改寫的值在 list 裡（`overrides`／`routes`／`http_headers.*.secrets`）時整個 list 重寫，list 內的註解不保留。
-2. **Secret 清單**：`--manifests-out DIR` 為每個租戶寫一份 `da-<tenant>.yaml`（`kind: Secret`、`stringData`），建檔即 0600。
+1. **改寫計畫**：租戶 `_routing` 裡拒收的明文換成 `{secret: {key: <key>}}`。key 由位置與欄位路徑推導（`receiver.api_url`、`overrides.0.receiver.http_config.basic_auth.password`），須符合 Secret data key 規則且在租戶內唯一，推導不出或撞名就不改、列給人決定。預設印出結構化的計畫（`plan`：檔名、行號、位置路徑、租戶、改寫結果），文字與 `--json` 兩種格式；不印任何取自檔案文字的內容，所以沒有 diff——要看實際差異，`--write` 之後自己跑 `git diff`。`--write` 經 `da-guard write` 寫回。⚠️ 被改寫的值在 list 裡（`overrides`／`routes`／`http_headers.*.secrets`）時整個 list 重寫，list 內的註解不保留。
+2. **Secret 清單**：`--manifests-out DIR` 搭配 `--write` 時為每個租戶寫一份 `da-<tenant>.yaml`（`kind: Secret`、`stringData`），建檔即 0600，與 conf.d 的改寫一起成敗：任一處被擋（`blocked_after_rewrite`、`value_remains_in_file`、`value_in_comment`、`rewrite_refused`）兩者都不寫。不帶 `--write` 時只檢查路徑，`manifests[].path` 顯示將會寫到哪裡（`written: false`）。
 3. **待輪替清單**：每一處明文的檔名、行號、欄位路徑、所屬租戶，不含值；處置見 [secret-leak-remediation-sop](internal/secret-leak-remediation-sop.md)。值在 list 裡時行號是那個 list 的鍵所在行（`--json` 的 `line_is_field: false`）。
 
 不自動處理、列給人決定（`decisions`，附原因）：平台位置的明文（含帶 userinfo 的 URL，建議文字另寫）、沒有任何 plane 讀的位置（租戶的 `_routing_enforced`、非 `_` 開頭檔頂層的 `_routing_enforced`、非 carrier 的 `_routing_defaults` 等：建議刪除，但照樣列進待輪替清單）、不合法的 tenant id（`tenant_id_invalid`，不改寫、不產生清單）、帶 userinfo 的 webhook url、四處代理憑證、推導不出或撞名的 key、list 裡有寫不回去的值（只有那個 list 退場）、改寫後檔案文字仍含被遷出的值（`value_remains_in_file`：anchor／merge key 共用、註解、其他欄位；整檔不改寫）。沒有任何 plane 讀的檔（例如同目錄第二個 defaults carrier）列在 `unread`，結束碼至少 1，不會印「No credential is written out」。
 
 改寫後的樹會在暫存複本上交給產生器判定（套 `--policy`）：仍會被擋的參照（例如 `auth_password` 需要 policy 的 `allowed_domains`、`http_config` 的參照需要 `follow_redirects: false`），以及改寫前有路由、改寫後消失的租戶，列在 `blocked_after_rewrite`（kind／field 只用封閉詞彙，對不上的寫 `other`）。這時不算完成，而且 **`--write` 什麼都不寫**（清單與 conf.d 都不寫）、結束碼 1：先修好 policy 或 `http_config` 再跑。
 
-⛔ 憑證值只會寫進 `--manifests-out` 的檔。本次讀到的每個憑證位置的值都受監看：任何要送出的文字（stdout、stderr、`--json`、diff、例外訊息）含其中一個子字串，diff 整檔不顯示並列給人決定（`diff_withheld`），其他字串或行整段換成 `<withheld: …>`。
+⛔ 憑證值只會寫進 `--manifests-out` 的檔。報告裡的字串只來自工具自己的常數、檔案路徑、合法的 tenant id、推導出的 key 與位置路徑；位置路徑裡使用者自取的 map key（header 名稱、profile 名稱）只在是 64 字以內的 HTTP token 時照印，否則印 `<key>`。改寫後被遷出的值是否還留在檔案裡，以 parse-tree 讀回的解析值判定（anchor、alias、merge key 都解開；被改寫覆蓋的 merge 值另以拿掉該鍵的試寫判出）：任何 scalar 或 key 等於或包含它就判 `value_remains_in_file`、整檔不改寫；註解（改寫前後的文字都查）含它、或多行值的任一非空行，就判 `value_in_comment`，先刪掉註解再重跑。
 
 **語法**
 
@@ -1767,10 +1767,10 @@ da-tools migrate-credentials --config-dir <DIR> [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--config-dir <DIR>` | conf.d 根目錄；經 da-guard 讀（找不到 da-guard 結束碼 `2`） | （必填） |
-| `--write` | 把改寫寫回 conf.d（經 `da-guard write`，整批一起判、全有或全無）。必須同時給 `--manifests-out`，否則結束碼 `2`、什麼都不寫——值離開 conf.d 之後要有地方放；Secret 清單先寫，conf.d 後寫。`blocked_after_rewrite` 非空時什麼都不寫（見上）。`da-guard write` 失敗時結束碼 `2`，訊息點名「清單已寫出、conf.d 未改」（或部分寫入時改了哪些檔）與清單路徑 | false |
-| `--manifests-out <DIR>` | 每個租戶一份 `da-<tenant>.yaml`（0600，以 `O_NOFOLLOW` 開檔），必須是 DIR 的直接子項、tenant id 必須合法。DIR 不是目錄、是 conf.d 或在它底下、在 git worktree 內；任一份清單的實際路徑在 git worktree 內；或清單路徑已存在且是 symlink、不是一般檔、有其他 hard link、或就是某個 conf.d 檔 ⇒ 結束碼 `2`，寫任何東西之前 | 無 |
+| `--write` | 把改寫寫回 conf.d（經 `da-guard write`，整批一起判、全有或全無）。必須同時給 `--manifests-out`，否則結束碼 `2`、什麼都不寫——值離開 conf.d 之後要有地方放；Secret 清單先寫，conf.d 後寫。`blocked_after_rewrite` 非空、或有檔不能改寫（`value_remains_in_file`、`value_in_comment`、`rewrite_refused`）時什麼都不寫（見上）。`da-guard write` 失敗時結束碼 `2`，訊息點名「清單已寫出、conf.d 未改」（或部分寫入時改了哪些檔）與清單路徑 | false |
+| `--manifests-out <DIR>` | 搭配 `--write` 時每個租戶一份 `da-<tenant>.yaml`（0600，以 `O_NOFOLLOW` 開檔），必須是 DIR 的直接子項、tenant id 必須合法。DIR 不是目錄、是 conf.d 或在它底下、在 git worktree 內；任一份清單的實際路徑在 git worktree 內；或清單路徑已存在且是 symlink、不是一般檔、有其他 hard link、或就是某個 conf.d 檔 ⇒ 結束碼 `2`，寫任何東西之前 | 無 |
 | `--policy <PATH>` | 部署端 policy（`allowed_domains`、`shared_secrets`），改寫後的綁定判定照它判；同 `generate-routes --policy` | 無 |
-| `--json` | 報告以一份 JSON 文件印到 stdout（`schema: da-tools.migrate-credentials/v1`；`diff`、`manifests`、`decisions`、`rotate`、`blocked_after_rewrite`、`unread`、`notes`） | false |
+| `--json` | 報告以一份 JSON 文件印到 stdout（`schema: da-tools.migrate-credentials/v1`；`plan`、`manifests`、`decisions`、`rotate`、`blocked_after_rewrite`、`unread`、`notes`） | false |
 
 **結束碼**
 
@@ -1783,10 +1783,10 @@ da-tools migrate-credentials --config-dir <DIR> [options]
 **範例**
 
 ```bash
-# 只看：diff、要建的 Secret、要輪替的位置
+# 只看：改寫計畫、要建的 Secret、要輪替的位置
 da-tools migrate-credentials --config-dir conf.d
 
-# 套用：先寫 Secret 清單（repo 之外），再改寫 conf.d
+# 套用：Secret 清單（repo 之外）與 conf.d 一起寫；之後用 git diff 看改了什麼
 da-tools migrate-credentials --config-dir conf.d --manifests-out ~/da-secrets --write \
   --policy policy.yaml
 

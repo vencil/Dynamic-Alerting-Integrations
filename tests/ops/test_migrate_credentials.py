@@ -1,6 +1,6 @@
 """`da-tools migrate-credentials`（#1560 ⑤-a）與它讀 receiver 的走訪器。
 
-工具只報告：把租戶明文寫的憑證改寫成 Secret 參照（diff／`--write`）、寫出每個租戶的
+工具只報告：把租戶明文寫的憑證改寫成 Secret 參照（計畫／`--write`）、寫出每個租戶的
 Secret（`--manifests-out`，0600）、列出待輪替清單。⛔ 憑證值只能進清單檔：每個情境都
 放一個 canary 值，斷言它不在 stdout／stderr／JSON 報告裡。
 """
@@ -146,17 +146,20 @@ def test_clean_tree_is_rc0(tmp_path):
     assert "No credential is written out." in proc.stdout
 
 
-def test_diff_mode_changes_nothing_and_masks_values(tmp_path):
+def test_default_mode_prints_the_plan_and_changes_nothing(tmp_path):
     root = _tree(tmp_path, {"team-a.yaml": TENANT})
     before = _snapshot(root)
     proc = _run("--config-dir", root)
     assert proc.returncode == 1, proc.stderr
     _no_canary(proc)
     assert _snapshot(root) == before
-    assert '-        api_url: "<redacted:0>" # the hook' in proc.stdout
-    assert '+            key: "receiver.api_url"' in proc.stdout
-    assert "team-a.yaml:9 tenants.team-a._routing.receiver.api_url [team-a]" in proc.stdout
+    assert ("team-a.yaml:9 tenants.team-a._routing.receiver.api_url [team-a] -> "
+            "{secret: {key: receiver.api_url}}") in proc.stdout
     assert "(not applied: add --write)" in proc.stdout
+    doc = json.loads(_run("--config-dir", root, "--json").stdout)
+    assert [(r["location"], r["result"]) for r in doc["plan"]] == [
+        ("tenants.team-a._routing.receiver.api_url", {"secret": {"key": "receiver.api_url"}})]
+    assert "diff" not in doc
 
 
 def test_write_rewrites_keeps_comments_and_writes_a_0600_manifest(tmp_path):
@@ -189,7 +192,7 @@ def test_manifest_is_created_0600_under_a_loose_umask(tmp_path):
     out = tmp_path / "secrets"
     proc = subprocess.run(
         ["sh", "-c", f'umask 000 && exec "{sys.executable}" "{TOOL}" --config-dir "{root}" '
-                     f'--manifests-out "{out}"'],
+                     f'--manifests-out "{out}" --write'],
         capture_output=True, text=True, encoding="utf-8", check=False, timeout=300)
     assert proc.returncode == 1, proc.stderr
     assert stat.S_IMODE((out / "da-team-a.yaml").stat().st_mode) == 0o600
@@ -299,7 +302,8 @@ def test_json_report_sorts_what_is_rewritten_from_what_is_left(tmp_path):
     assert doc["manifests"] == [{"name": "da-team-b", "tenant": "team-b", "path": None,
                                  "entries": [
                                      "overrides.0.receiver.auth_password",
-                                     "receiver.http_config.bearer_token"]}]
+                                     "receiver.http_config.bearer_token"],
+                                 "written": False}]
     decisions = {(d["location"], d["reason"]) for d in doc["decisions"]}
     assert decisions == {
         ("_routing_defaults.receiver.routing_key", "platform_place"),
@@ -308,7 +312,8 @@ def test_json_report_sorts_what_is_rewritten_from_what_is_left(tmp_path):
         ("tenants.team-b._routing.receiver.http_config.proxy_url", "proxy_credential"),
         ("tenants.team-b._routing.receiver.http_config.proxy_connect_header",
          "proxy_credential"),
-        ('tenants.team-b._routing.receiver.http_config.http_headers.X Token.secrets[0]',
+        # a header name outside the HTTP-token charset is not printed
+        ('tenants.team-b._routing.receiver.http_config.http_headers.<key>.secrets[0]',
          "key_invalid"),
         ("tenants.team-b._routing.overrides[1].receiver.url", "userinfo"),
         ("tenants.team-b._routing_enforced.receiver.api_url", "unread_place"),
@@ -346,7 +351,7 @@ def test_a_taken_key_is_left_for_a_person(tmp_path):
     doc = json.loads(proc.stdout)
     assert [(d["location"], d["reason"]) for d in doc["decisions"]] == [
         ("tenants.team-a._routing.receiver.api_url", "key_taken")]
-    assert doc["diff"] == "" and doc["manifests"] == []
+    assert doc["plan"] == [] and doc["manifests"] == []
 
 
 MAIL = f"""\
@@ -439,34 +444,14 @@ tenants:
 """
 
 
-@pytest.mark.parametrize("text,withheld", [
-    (R1_SUBSTRING, True),        # a watched value inside another field's value
-    (R1_COMMENT, True),          # a watched value in a comment beside the change
-    (R1_FLOW_MERGE, False),      # a merge key (flow) holding the moved value: R2 first
-])
-def test_r1_no_watched_value_reaches_any_output(tmp_path, text, withheld):
+@pytest.mark.parametrize("text", [R1_SUBSTRING, R1_COMMENT, R1_FLOW_MERGE],
+                         ids=["value-inside-another-field", "value-in-a-comment",
+                              "flow-merge-key"])
+def test_no_value_reaches_any_output_whatever_the_file_says_around_it(tmp_path, text):
     root = _tree(tmp_path, {"t.yaml": text})
     for proc in _all_outputs(root):
         assert proc.returncode == 1, proc.stderr
         _no_canary(proc)
-    doc = json.loads(_all_outputs(root)[1].stdout)
-    assert ({d["reason"] for d in doc["decisions"]} >= {"diff_withheld"}) == withheld
-    if withheld:
-        assert doc["diff"] == ""
-        assert any("the diff is not shown" in n for n in doc["notes"])
-
-
-def test_r1_the_watch_withholds_whole_strings():
-    w = mc._Watch()
-    w.load([mc.RawReceiver("f", ("r",), "t", "tenant_routing",
-                           {"type": "slack", "api_url": "SEKRIT-1"})])
-    assert w.line("x SEKRIT-1 y") == mc.WITHHELD
-    assert w.line("nothing here") == "nothing here"
-    doc, hit = w.doc({"a": ["ok", "has SEKRIT-1"], "SEKRIT-1": 1})
-    assert hit and mc.WITHHELD in doc and doc["a"] == ["ok", mc.WITHHELD]
-    w2 = mc._Watch()
-    w2.load([mc.RawReceiver("f", ("r",), "t", "tenant_routing", {"type": "slack", "api_url": ""})])
-    assert not w2.hits("anything")          # the empty string is not watched
 
 
 E9 = f"""\
@@ -491,7 +476,7 @@ def test_r2_a_value_left_in_the_file_stops_its_rewrite(tmp_path):
     _no_canary(proc)
     doc = json.loads(proc.stdout)
     assert [d["reason"] for d in doc["decisions"]] == ["value_remains_in_file"]
-    assert doc["manifests"] == [] and doc["written"] is False and doc["diff"] == ""
+    assert doc["manifests"] == [] and doc["written"] is False and doc["plan"] == []
     assert _snapshot(root) == before and not out.exists()
     again = _run("--config-dir", root)
     assert again.returncode == 1 and "needs_reference" in again.stdout
@@ -617,7 +602,7 @@ def test_r5_write_writes_nothing_while_the_rewrite_is_blocked(tmp_path):
     _no_canary(proc)
     doc = json.loads(proc.stdout)
     assert doc["written"] is False and doc["blocked_after_rewrite"]
-    assert all(m["path"] is None for m in doc["manifests"])
+    assert doc["manifests"] and not any(m["written"] for m in doc["manifests"])
     assert any("--write wrote nothing" in n for n in doc["notes"])
     assert _snapshot(root) == before and not out.exists()
 
@@ -705,12 +690,221 @@ def test_r9_vocabulary():
     assert mc._vocab_tenant("team-a") == "team-a" and mc._vocab_tenant("Bad Id") is None
 
 
-def test_r1_an_exception_that_would_show_a_value_is_withheld(monkeypatch, tmp_path):
-    root = _tree(tmp_path, {"team-a.yaml": TENANT})
 
-    def boom(*_a, **_k):
-        raise KeyError(SLACK)
-    monkeypatch.setattr(mc, "_judge", boom)
-    with pytest.raises(RuntimeError) as e:
-        mc.main(["--config-dir", str(root)])
-    assert CANARY not in str(e.value) and e.value.__cause__ is None
+
+# ── round 3: no text of a file reaches the report (review2 shapes) ──────
+
+CORE = "cnry7f1e"
+
+#: name → (the conf.d files, the reason a person gets the file, or None when
+#: the rewrite goes through; the text that must never be printed)
+SHAPES = {
+    # x1c: a two-line block scalar, the same lines again under _metadata.
+    "x1c": ({"team-a.yaml": f"""\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: pagerduty
+        routing_key: |-
+          {CORE}-part1
+          {CORE}-part2
+    _metadata:
+      note: |-
+        {CORE}-part1
+        {CORE}-part2
+"""}, "value_remains_in_file", CORE),
+    # x2b: a tab-escaped value in an anchor merged into the receiver.
+    "x2b": ({"team-a.yaml": f"""\
+_base: &base
+  type: slack
+  api_url: "https://hooks.slack.example.com/T/B/{CORE}\\t"
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        <<: *base
+        channel: "#x"
+"""}, "value_remains_in_file", CORE),
+    # x2d: the anchor defined in a flow mapping under the merge key itself.
+    "x2d": ({"team-a.yaml": f"""\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        <<: &base {{type: slack, api_url: "https://hooks.slack.example.com/T/B/{CORE}\\t"}}
+        channel: "#x"
+"""}, "value_remains_in_file", CORE),
+    # x2e: backslash and quote escapes, merged into basic_auth.
+    "x2e": ({"team-a.yaml": f"""\
+_auth: &auth
+  username: bob
+  password: "{CORE}\\\\q\\"z"
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: webhook
+        url: https://h.example.com/x
+        http_config:
+          basic_auth:
+            <<: *auth
+"""}, "value_remains_in_file", CORE),
+    # b16: a header named Authorization, an oauth2 secret, an endpoint_params
+    # key named `secret` (allowed, stays): the rewrite is refused by the
+    # binding, so --write writes nothing.
+    "b16": ({"team-a.yaml": f"""\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: webhook
+        url: https://h.example.com/x
+        http_config:
+          http_headers:
+            Authorization:
+              secrets: ["Bearer {CORE}"]
+          oauth2:
+            client_id: id
+            client_secret: "{CORE}-cs"
+            token_url: https://t.example.com
+            endpoint_params:
+              secret: "{CORE}-ep"
+"""}, None, CORE),
+    # x5: a value of three characters.
+    "x5": ({"team-a.yaml": """\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: pagerduty
+        routing_key: "Q7z"
+"""}, None, "Q7z"),
+    # s3: the old value in the comment of the line rewritten (da-guard
+    # write would drop that comment), and part of it in another field.
+    "s3": ({"team-a.yaml": f"""\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: slack
+        api_url: "https://hooks.slack.example.com/T/B/{CORE}"   # was https://hooks.slack.example.com/T/B/{CORE}
+        channel: '#alerts'
+        title: "{CORE}-in-title"
+"""}, "value_in_comment", CORE),
+    # Escapes: tab, backslash, quote, NEL (\\N) in one value.
+    "escapes": ({"team-a.yaml": f"""\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: pagerduty
+        routing_key: "{CORE}\\t\\\\\\"\\N-x"
+"""}, None, CORE),
+    # A multi-line PEM-shaped value.
+    "pem": ({"team-a.yaml": f"""\
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: pagerduty
+        routing_key: |
+          -----BEGIN PRIVATE KEY-----
+          {CORE}AAAAline1
+          {CORE}BBBBline2
+          -----END PRIVATE KEY-----
+"""}, None, CORE),
+}
+
+
+def _files_holding(base, text):
+    return sorted(str(p.relative_to(base)) for p in base.rglob("*") if p.is_file()
+                  and text in p.read_text(encoding="utf-8", errors="replace"))
+
+
+@pytest.mark.parametrize("shape", sorted(SHAPES))
+def test_values_only_ever_reach_the_manifest(tmp_path, shape):
+    """⛔ Every mode and every error path: the value's text is on no output
+    stream and in no file but the manifest (or still where it was, in a file
+    the tool did not rewrite)."""
+    files, held, core = SHAPES[shape]
+    root = _tree(tmp_path, files)
+    original = _snapshot(root)
+    out = tmp_path / "secrets"
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    runs = [
+        (["--config-dir", root], {1}),
+        (["--config-dir", root, "--json"], {1}),
+        (["--config-dir", root, "--manifests-out", out], {1}),
+        (["--config-dir", root, "--write"], {2}),
+        (["--config-dir", root, "--manifests-out", repo / "s", "--write"], {1, 2}),
+        (["--config-dir", root, "--manifests-out", out, "--write", "--json"], {1}),
+    ]
+    docs = []
+    for argv, rcs in runs:
+        proc = _run(*argv)
+        assert proc.returncode in rcs, (argv, proc.returncode, proc.stderr)
+        assert core not in proc.stdout and core not in proc.stderr, argv
+        if "--json" in argv:
+            docs.append(json.loads(proc.stdout))
+    last = docs[-1]
+    allowed = {str(p.relative_to(tmp_path)) for p in out.glob("da-*.yaml")}
+    leftover = [f for f in _files_holding(tmp_path, core)
+                if f not in allowed and not f.startswith("conf.d/")]
+    assert leftover == []
+    if held is not None:
+        assert held in {d["reason"] for d in last["decisions"]}
+        assert last["written"] is False and not out.exists()
+        assert _snapshot(root) == original
+        assert _run("--config-dir", root).returncode == 1      # still listed
+    elif last["blocked_after_rewrite"]:
+        assert last["written"] is False and not out.exists()
+    else:
+        assert last["written"] is True
+        assert _files_holding(root, core) == []
+        manifest = yaml.safe_load((out / "da-team-a.yaml").read_text(encoding="utf-8"))
+        assert all(core in v for v in manifest["stringData"].values())
+
+
+def test_manifests_out_without_write_only_checks_the_path(tmp_path):
+    """N3: without --write nothing is written; the plan says where it would be."""
+    root = _tree(tmp_path, {"team-a.yaml": TENANT})
+    out = tmp_path / "secrets"
+    proc = _run("--config-dir", root, "--manifests-out", out, "--json")
+    assert proc.returncode == 1, proc.stderr
+    doc = json.loads(proc.stdout)
+    assert doc["manifests"] == [{"name": "da-team-a", "tenant": "team-a",
+                                 "path": str(out / "da-team-a.yaml"),
+                                 "entries": ["receiver.api_url"], "written": False}]
+    assert not out.exists()
+    worktree_out = tmp_path / "repo" / "s"
+    (tmp_path / "repo" / ".git").mkdir(parents=True)
+    assert _run("--config-dir", root, "--manifests-out", worktree_out).returncode == 2
+
+
+def test_a_file_that_cannot_be_rewritten_stops_the_whole_write(tmp_path):
+    """N3: manifests and conf.d are written together or not at all — a
+    second file held back for a comment stops the first one's write too."""
+    root = _tree(tmp_path, {"team-x.yaml": TENANT.replace("team-a", "team-x"),
+                            "team-a.yaml": SHAPES["s3"][0]["team-a.yaml"]})
+    out = tmp_path / "secrets"
+    before = _snapshot(root)
+    proc = _run("--config-dir", root, "--manifests-out", out, "--write", "--json")
+    assert proc.returncode == 1, proc.stderr
+    doc = json.loads(proc.stdout)
+    assert doc["written"] is False and not out.exists() and _snapshot(root) == before
+    assert any("value_in_comment" in n for n in doc["notes"])
+
+
+def test_a_comment_holding_one_line_of_a_multiline_value_is_found():
+    assert mc._in_comment(["a: 1  # see line2-xyz\n"], ["line1-abc\nline2-xyz"])
+    assert not mc._in_comment(['a: "x # line2-xyz"\n'], ["line1-abc\nline2-xyz"])
+    assert not mc._in_comment(["a: x#line2-xyz\n"], ["line2-xyz"])      # not a comment
+    assert mc._in_comment(['a: "open quote line2-xyz\n'], ["line2-xyz"])  # conservative
+
+
+def test_a_user_key_outside_the_http_token_charset_is_not_printed():
+    assert mc._safe_key("X-Token") == "X-Token"
+    for bad in ("X Token", "a\tb", "x" * 65, "é", ""):
+        assert mc._safe_key(bad) == "<key>"

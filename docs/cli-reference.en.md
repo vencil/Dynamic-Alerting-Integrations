@@ -1749,15 +1749,15 @@ It reads each receiver **as its file writes it** (not merged): the tenant's `_ro
 
 **Output**
 
-1. **Rewrite**: each refused value in a tenant's `_routing` becomes `{secret: {key: <key>}}`. The key is derived from the place and the field path (`receiver.api_url`, `overrides.0.receiver.http_config.basic_auth.password`); it must be a valid Secret data key and unique in the tenant, otherwise the value is left and listed for a person. By default a unified diff goes to stdout (every credential value reads `<redacted:N>`); `--write` applies it through `da-guard write`. ⚠️ A value inside a list (`overrides` / `routes` / `http_headers.*.secrets`) rewrites the whole list: comments inside it are not kept.
-2. **Secret manifests**: `--manifests-out DIR` writes one `da-<tenant>.yaml` per tenant (`kind: Secret`, `stringData`), created 0600.
+1. **Rewrite plan**: each refused value in a tenant's `_routing` becomes `{secret: {key: <key>}}`. The key is derived from the place and the field path (`receiver.api_url`, `overrides.0.receiver.http_config.basic_auth.password`); it must be a valid Secret data key and unique in the tenant, otherwise the value is left and listed for a person. By default the plan is printed as rows (`plan`: file, line, place, tenant, the reference it becomes), as text or `--json`; nothing taken from a file's text is printed, so there is no diff — run `git diff` after `--write` to see the change. `--write` applies it through `da-guard write`. ⚠️ A value inside a list (`overrides` / `routes` / `http_headers.*.secrets`) rewrites the whole list: comments inside it are not kept.
+2. **Secret manifests**: `--manifests-out DIR` with `--write` writes one `da-<tenant>.yaml` per tenant (`kind: Secret`, `stringData`), created 0600, together with the conf.d rewrite or not at all: anything held back (`blocked_after_rewrite`, `value_remains_in_file`, `value_in_comment`, `rewrite_refused`) writes neither. Without `--write` DIR is only checked, and `manifests[].path` says where they would go (`written: false`).
 3. **Rotation list**: file, line, field path and tenant of every written-out credential, never the value; what to do is in [secret-leak-remediation-sop](internal/secret-leak-remediation-sop.md). For a value inside a list the line is the list key's (`line_is_field: false` in `--json`).
 
 Left for a person (`decisions`, with the reason): values in platform places (a URL with userinfo there has its own advice), in places no plane reads (a tenant's `_routing_enforced`, a top-level `_routing_enforced` in a file not named `_…`, a `_routing_defaults` outside its carrier, …: delete it, but it is still on the rotation list), an invalid tenant id (`tenant_id_invalid`: no rewrite, no manifest), a webhook url with userinfo, the four proxy credentials, a key that cannot be derived or is taken, a list holding a value that cannot be written back (only that list is left), and a file whose rewritten text would still hold a value it moves out (`value_remains_in_file`: an anchor / merge key sharing it, a comment, another field; nothing in the file is rewritten). A file no plane reads (a second defaults carrier in a directory, say) is listed under `unread`: the exit code is at least 1, and "No credential is written out" is not printed.
 
 The rewritten tree, on a temporary copy, is judged by the generator (under `--policy`): a reference it would still refuse (say `auth_password` without the policy's `allowed_domains`, an `http_config` reference without `follow_redirects: false`), and a tenant with routing before the rewrite and none after, is listed under `blocked_after_rewrite` (kind / field from a closed vocabulary, `other` otherwise). The run does not count as done, and **`--write` writes nothing** (no manifest, no conf.d file), exit 1: fix the policy or the `http_config` first, then run again.
 
-⛔ Credential values are written only into the `--manifests-out` files. Every value read at a credential place this run is watched: any text the tool would emit (stdout, stderr, `--json`, the diff, an exception's message) holding one as a substring is not emitted as is — a file's diff is withheld and left for a person (`diff_withheld`), any other string or line is replaced whole by `<withheld: …>`.
+⛔ Credential values are written only into the `--manifests-out` files. Every string of the report comes from the tool's own constants, file paths, valid tenant ids, derived keys and place paths; a key the user chose in a place path (a header name, a profile name) is printed only as an HTTP token of at most 64 characters, `<key>` otherwise. Whether a moved value stays in a file is judged on the file read back by parse-tree (anchors, aliases and merge keys resolved; a merged value the rewrite overrides is found by a trial write that drops the key): a scalar or key equal to or holding it is `value_remains_in_file`, and nothing in the file is rewritten; a comment (before or after the rewrite) holding it, or a non-blank line of a multi-line value, is `value_in_comment` — delete the comment, then run again.
 
 **Syntax**
 
@@ -1770,10 +1770,10 @@ da-tools migrate-credentials --config-dir <DIR> [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--config-dir <DIR>` | conf.d root; read through da-guard (none usable: exit `2`) | (required) |
-| `--write` | Write the rewrite back into conf.d (through `da-guard write`, one batch, all or nothing). Needs `--manifests-out`, else exit `2` and nothing is written — the values need somewhere to go once they leave conf.d; the manifests are written first, conf.d after. With `blocked_after_rewrite` non-empty nothing is written (above). A failed `da-guard write` is exit `2`, naming that the manifests were written and conf.d was not changed (or which files a part-way write changed), with the manifest paths | false |
-| `--manifests-out <DIR>` | One `da-<tenant>.yaml` per tenant (0600, opened `O_NOFOLLOW`), directly in DIR, for a valid tenant id only. DIR not a directory, the conf.d or inside it, inside a git worktree; a manifest whose real path is inside a git worktree; or a manifest path already there as a symlink, a file that is not regular, a file with another hard link, or a conf.d file ⇒ exit `2`, before anything is written | none |
+| `--write` | Write the rewrite back into conf.d (through `da-guard write`, one batch, all or nothing). Needs `--manifests-out`, else exit `2` and nothing is written — the values need somewhere to go once they leave conf.d; the manifests are written first, conf.d after. With `blocked_after_rewrite` non-empty, or a file that cannot be rewritten (`value_remains_in_file`, `value_in_comment`, `rewrite_refused`), nothing is written (above). A failed `da-guard write` is exit `2`, naming that the manifests were written and conf.d was not changed (or which files a part-way write changed), with the manifest paths | false |
+| `--manifests-out <DIR>` | With `--write`, one `da-<tenant>.yaml` per tenant (0600, opened `O_NOFOLLOW`), directly in DIR, for a valid tenant id only. DIR not a directory, the conf.d or inside it, inside a git worktree; a manifest whose real path is inside a git worktree; or a manifest path already there as a symlink, a file that is not regular, a file with another hard link, or a conf.d file ⇒ exit `2`, before anything is written | none |
 | `--policy <PATH>` | The deployment policy (`allowed_domains`, `shared_secrets`) the rewritten binding is judged under; as `generate-routes --policy` | none |
-| `--json` | The report as one JSON document on stdout (`schema: da-tools.migrate-credentials/v1`; `diff`, `manifests`, `decisions`, `rotate`, `blocked_after_rewrite`, `unread`, `notes`) | false |
+| `--json` | The report as one JSON document on stdout (`schema: da-tools.migrate-credentials/v1`; `plan`, `manifests`, `decisions`, `rotate`, `blocked_after_rewrite`, `unread`, `notes`) | false |
 
 **Exit codes**
 
@@ -1786,10 +1786,10 @@ da-tools migrate-credentials --config-dir <DIR> [options]
 **Examples**
 
 ```bash
-# Look only: the diff, the Secrets to create, the places to rotate
+# Look only: the rewrite plan, the Secrets to create, the places to rotate
 da-tools migrate-credentials --config-dir conf.d
 
-# Apply: the manifests first (outside the repository), then conf.d
+# Apply: the manifests (outside the repository) and conf.d together; then git diff shows the change
 da-tools migrate-credentials --config-dir conf.d --manifests-out ~/da-secrets --write \
   --policy policy.yaml
 
