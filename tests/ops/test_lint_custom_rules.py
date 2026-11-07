@@ -316,6 +316,15 @@ def test_load_policy_no_policy_uses_defaults():
     policy = lint_custom_rules.load_policy(None)
     assert policy == lint_custom_rules.DEFAULT_POLICY
 
+def _read_policy(path):
+    """--policy *path* as the tool reads it (#3445: `_lib_input.document`)."""
+    import argparse
+    import _lib_input
+    parser = argparse.ArgumentParser()
+    _lib_input.add_input(parser, "--policy", decode=lint_custom_rules.POLICY_DOCUMENT)
+    return _lib_input.document(parser.parse_args(["--policy", str(path)]), "policy", lang="en")
+
+
 def test_load_policy_custom_policy_overrides():
     """測試自訂政策覆寫。"""
     custom = {"max_range_duration": "2h", "denied_functions": ["my_func"]}
@@ -325,7 +334,7 @@ def test_load_policy_custom_policy_overrides():
         yaml.safe_dump(custom, f)
         fpath = f.name
     try:
-        policy = lint_custom_rules.load_policy(fpath)
+        policy = lint_custom_rules.load_policy(_read_policy(fpath))
         assert policy["max_range_duration"] == "2h"
         assert policy["denied_functions"] == ["my_func"]
         # Unspecified keys should retain defaults
@@ -333,18 +342,54 @@ def test_load_policy_custom_policy_overrides():
     finally:
         os.unlink(fpath)
 
-def test_load_policy_unreadable_policy_is_caller_error():
+def test_load_policy_unreadable_policy_is_caller_error(tmp_path, monkeypatch, capsys):
     """讀不到的 --policy 必須 exit 2，不可回退到內建預設。
 
     ⛔ 這條原本叫 `test_load_policy_invalid_policy_falls_back`，斷言
     `== DEFAULT_POLICY`（#1556）。「回退」的實際後果是：`lint --policy <打錯的路徑>`
     拿內建規則去 lint、印一行沒人在 CI 裡讀的 stderr 警告、然後 exit 0——
     操作者以為自己的政策生效了。dev-rules #13 把「檔案/路徑不存在」歸在
-    EXIT_CALLER_ERROR。
+    EXIT_CALLER_ERROR。#3445：讀取改由 `_lib_input.document`（CallerError，
+    run() 收成 rc 2）。
     """
-    with pytest.raises(SystemExit) as exc:
-        lint_custom_rules.load_policy("/nonexistent/policy.yaml")
-    assert exc.value.code == 2
+    from _lib_exitcodes import CallerError
+    (tmp_path / "r.yaml").write_text(_HOLT_RULE, encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", "--policy",
+                                      "/nonexistent/policy.yaml", str(tmp_path / "r.yaml")])
+    with pytest.raises(CallerError) as exc:
+        lint_custom_rules.main()
+    assert exc.value.reason == "file_not_found"
+    assert str(exc.value).startswith("--policy /nonexistent/policy.yaml: ")
+
+
+@pytest.mark.parametrize("content, got", [
+    ("[]\n", "a list"), ("0\n", "a number"), ('""\n', "a string"), ("false\n", "a boolean"),
+])
+def test_a_policy_that_is_no_mapping_is_refused_not_the_default(tmp_path, monkeypatch,
+                                                                content, got):
+    """#3445: `yaml.safe_load(f) or {}` read `[]` (and `0`, `""`, `false`) as
+    no override — the run linted against the built-in policy at rc 0, the
+    operator's file never applied. A top level that is no mapping is refused,
+    named."""
+    from _lib_exitcodes import CallerError
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(content, encoding="utf-8")
+    (tmp_path / "r.yaml").write_text(_HOLT_RULE, encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", "--policy", str(policy),
+                                      str(tmp_path / "r.yaml")])
+    with pytest.raises(CallerError) as exc:
+        lint_custom_rules.main()
+    assert exc.value.reason == "file_unreadable"
+    assert str(exc.value) == f"--policy {policy}: the top level is not a mapping (got {got})"
+
+
+@pytest.mark.parametrize("content", ["", "~\n", "# only a comment\n"])
+def test_an_empty_policy_is_no_override(tmp_path, content):
+    """Declared (`empty_is=dict`): an empty document is no override — what the
+    old `or {}` meant it for."""
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(content, encoding="utf-8")
+    assert lint_custom_rules.load_policy(_read_policy(policy)) == lint_custom_rules.DEFAULT_POLICY
 
 
 # ── #1618: scan targets that do not exist / files that cannot be decoded ──
@@ -601,7 +646,7 @@ def compiled_forecast_pack(tmp_path, da_guard_env):  # the compiler reads throug
 
 def test_forecast_in_generated_pack_passes_real_policy(compiled_forecast_pack):
     """forecast shape 出現在 compiled pack 時，真 policy 檔不誤殺（0 ERROR）。"""
-    policy = lint_custom_rules.load_policy(_REAL_POLICY)
+    policy = lint_custom_rules.load_policy(_read_policy(_REAL_POLICY))
     assert os.path.isfile(_REAL_POLICY)      # guard: fallback-to-defaults would hide drift
     results, count = lint_custom_rules.lint_file(str(compiled_forecast_pack), policy)
     errors = [r for r in results if r.severity == "ERROR"]
@@ -681,7 +726,7 @@ def test_committed_pack_and_policy_in_sync():
         head = list(itertools.islice(f, lint_custom_rules.GENERATED_MARKER_SCAN_LINES))
     assert any(lint_custom_rules.GENERATED_MARKER in line for line in head)
 
-    real = lint_custom_rules.load_policy(_REAL_POLICY)
+    real = lint_custom_rules.load_policy(_read_policy(_REAL_POLICY))
     assert real["file_overrides"] == lint_custom_rules.DEFAULT_POLICY["file_overrides"]
 
 

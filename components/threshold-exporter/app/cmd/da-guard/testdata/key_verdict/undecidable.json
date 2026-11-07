@@ -16,6 +16,7 @@
         "reason": "unregistered",
         "disable": "noop",
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "disable",
         "served": null
       },
@@ -29,6 +30,7 @@
         "reason": "no_row",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 70,
         "served": null
       }
@@ -45,6 +47,7 @@
       ],
       "reason": "unregistered",
       "base": null,
+      "dead_entries": null,
       "blocks": true
     }
   ],

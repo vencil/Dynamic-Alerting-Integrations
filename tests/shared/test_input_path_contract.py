@@ -443,21 +443,17 @@ class TestArgvErrorIsNotDownstreamOfTheConfigTree:
 #     with a message forbidding the only correct response.
 #
 # ⚠️ `_lib_io.read_onboard_hints` still collapses the two cases. Its one call
-# site (`scaffold_tenant.run_from_onboard`) judges the path first and names a
-# file that is not JSON (#3415, pinned in tests/shared/test_caller_paths.py);
-# nothing here watches that.
+# site, `scaffold_tenant.run_from_onboard`, left it in #3445: --from-onboard
+# is declared with `_lib_input.add_input(decode=...)` and read by
+# `_lib_input.document`, which names a missing, unreadable, non-JSON or
+# non-object file (the rows are made from the declaration in
+# tests/shared/test_caller_paths.py). The helper has no caller in
+# scripts/tools today — a snapshot, not a guard: nothing here stops a new
+# caller from collapsing the two cases again.
 #
-# ⛔ Nor the call-site count itself. `test_known_site_still_has_exactly_one_
-# caller` went out with the scan, and it did NOT depend on the scan: it pinned
-# that a second, non-compensating caller cannot appear (V9 above). Re-measured
-# by hand today — still exactly one, `scaffold_tenant.py` inside
-# `run_from_onboard`. That is a snapshot, not a guard; the withdrawal traded
-# this assertion away and the first version of this block failed to say so.
-#
-# ⚠️ And the compensation is itself of the family: `scaffold --from-onboard`
-# on a readable file whose content is `{}` also exits 2 saying "Cannot read
-# onboard hints". A falsy return cannot distinguish "unreadable" from "read
-# fine, empty".
+# (The compensation that was itself of the family — `{}` exiting 2 as
+# "Cannot read onboard hints" — went with it: `{}` is read, and holds no
+# tenant.)
 # ---------------------------------------------------------------------------
 
 

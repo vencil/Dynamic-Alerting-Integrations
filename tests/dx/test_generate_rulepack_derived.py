@@ -288,13 +288,13 @@ _STRAY_SELECTORS = [
 def _page_alert_muted_by(tmp_path, selector: str) -> Path:
     rp = tmp_path / "rule-packs"
     shutil.copytree(_REPO / "rule-packs", rp)
-    p = rp / "rule-pack-clickhouse.yaml"
+    p = rp / "rule-pack-redis.yaml"
     text = p.read_text(encoding="utf-8")
-    old = '      - alert: ClickHouseDown\n        expr: up{job="clickhouse"} == 0\n'
-    assert old in text, "fixture anchor moved: ClickHouseDown's expr"
+    old = '      - alert: RedisDown\n        expr: redis_up == 0\n'
+    assert old in text, "fixture anchor moved: RedisDown's expr"
     p.write_text(text.replace(old, (
-        '      - alert: ClickHouseDown\n        expr: |\n'
-        '          up{job="clickhouse"} == 0\n'
+        '      - alert: RedisDown\n        expr: |\n'
+        '          redis_up == 0\n'
         f'          unless on(tenant) ({selector} == 1)\n'), 1), encoding="utf-8")
     return rp
 

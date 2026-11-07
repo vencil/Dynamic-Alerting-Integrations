@@ -16,7 +16,7 @@ import (
 
 // `tenant-api config check --kind scope` (ADR-027 §7, §9 item 7): the
 // offline list of tenants the enforced scope axes stop granting because they
-// carry no label. Every input is read with the function the server reads it
+// carry no label, or because their metadata cannot be read. Every input is read with the function the server reads it
 // with — the RBAC config with rbac.ParseCandidateConfig, the organization
 // mapping with tenantorg.ParseConfig, the tenants with the loader GET
 // /api/v1/tenants is served from (handler.LoadTenantScopeLabels) — and the
@@ -79,7 +79,10 @@ type scopeCheckDoc struct {
 }
 
 // runScopeCheck runs `config check --kind scope` and returns the exit code:
-// 0 nothing found, 1 a finding or a problem, 2 an input cannot be opened.
+// 0 nothing found, 1 a finding or a config problem, 2 an input cannot be
+// opened. A tenant problem alone does not set it: such a tenant is a finding
+// wherever a restricting rule applies to it (UnlabeledScopeGaps), and the
+// server grants it as before under every other rule.
 func runScopeCheck(a scopeCheckArgs, stdout, stderr io.Writer) int {
 	fail := func(format string, args ...any) int {
 		fmt.Fprintf(stderr, "config check: "+format+"\n", args...)
@@ -190,7 +193,7 @@ func runScopeCheck(a scopeCheckArgs, stdout, stderr io.Writer) int {
 	if err := enc.Encode(doc); err != nil {
 		return fail("write output: %v", err)
 	}
-	if len(doc.Findings) > 0 || len(doc.TenantProblems) > 0 || len(doc.ConfigProblems) > 0 {
+	if len(doc.Findings) > 0 || len(doc.ConfigProblems) > 0 {
 		return 1
 	}
 	return 0

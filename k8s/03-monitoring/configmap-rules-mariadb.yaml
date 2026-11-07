@@ -19,21 +19,18 @@ data:
     \    expr: max by(tenant) (mysql_global_status_threads_connected)\n  - record:\
     \ tenant:mysql_connection_usage:ratio\n    expr: 'sum by(tenant) (mysql_global_status_threads_connected)\n\
     \n      / sum by(tenant) (mysql_global_variables_max_connections)\n\n      '\n\
-    \  - record: tenant:mysql_uptime:hours\n    expr: min by(tenant) (mysql_global_status_uptime)\
-    \ / 3600\n  - record: tenant:mysql_slow_queries:rate5m\n    expr: sum by(tenant)\
-    \ (rate(mysql_global_status_slow_queries[5m]))\n  - record: tenant:mysql_aborted_connections:rate5m\n\
-    \    expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))\n \
-    \ - record: tenant:mysql_buffer_pool_usage:ratio\n    expr: 'sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_data)\n\
-    \n      / sum by(tenant) (mysql_global_status_innodb_buffer_pool_pages_total)\n\
-    \n      '\n  - record: tenant:mysql_replication_lag:max\n    expr: \"max by(tenant)\
-    \ (\\n  mysql_slave_status_seconds_behind_master\\n  - (mysql_slave_status_sql_delay\
-    \ or 0 * mysql_slave_status_seconds_behind_master)\\n)\\n\"\n- name: mariadb-threshold-normalization\n\
-    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:mysql_connections\n\
-    \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"connections\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:mysql_threads_running\n\
-    \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"threads_running\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:mysql_replication_lag\n\
-    \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"replication_lag\"\
+    \  - record: tenant:mysql_slow_queries:rate5m\n    expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))\n\
+    \  - record: tenant:mysql_aborted_connections:rate5m\n    expr: sum by(tenant)\
+    \ (rate(mysql_global_status_aborted_connects[5m]))\n  - record: tenant:mysql_replication_lag:max\n\
+    \    expr: \"max by(tenant) (\\n  mysql_slave_status_seconds_behind_master\\n\
+    \  - (mysql_slave_status_sql_delay or 0 * mysql_slave_status_seconds_behind_master)\\\
+    n)\\n\"\n- name: mariadb-threshold-normalization\n  interval: 15s\n  rules:\n\
+    \  - record: tenant:alert_threshold:mysql_connections\n    expr: max by(tenant)\
+    \ (user_threshold{component=\"mysql\", metric=\"connections\", severity=\"warning\"\
+    })\n  - record: tenant:alert_threshold:mysql_threads_running\n    expr: max by(tenant)\
+    \ (user_threshold{component=\"mysql\", metric=\"threads_running\", severity=\"\
+    warning\"})\n  - record: tenant:alert_threshold:mysql_replication_lag\n    expr:\
+    \ max by(tenant) (user_threshold{component=\"mysql\", metric=\"replication_lag\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:mysql_connections_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"connections\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:mysql_threads_running_critical\n\

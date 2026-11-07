@@ -31,9 +31,11 @@ description: 全 component 週期性深度安全稽核 — Recon→平行 Hunt(V
    Workflow({
      scriptPath: ".claude/skills/vibe-security-audit/audit-workflow.js",
      args: { target: "<abs>/.claude/worktrees/sec-audit/components/tenant-api",
+             workspaceRoot: "<abs>/.claude/worktrees/sec-audit",
              componentLabel: "tenant-api" }
    })
    ```
+   `workspaceRoot` 必填、須為絕對路徑，且 `target` 必須在它底下（#1488）。攻擊類別以 `components/...`、`scripts/...` 點名的跨元件檔案一律對它解析；少了它，agent 會對自己的 cwd（主樹）解析，而稽核輸出看不出讀錯了樹。腳本對缺漏、非字串、相對路徑、檔案系統根、含 `.`／`..` 路徑段、target 不在其下都直接拒跑（比對是字串層級，腳本讀不到檔案系統，所以 `..` 一律拒收而不是幫你化簡；磁碟代號大小寫與重複分隔符視為同一路徑）。
    要換 target 或攻擊面向,傳 `attackClasses: [{key,title,scope,files}]` 覆蓋預設 4 類。
 4. **收尾親驗(鐵律①)**:對每個 `CONFIRMED` finding,**自己** grep+cite 最吃重的 `file:line`,不照收 agent 自評;把跨組件 sink(如 `custom_alert_compile.go` 內插)也驗。
 5. **產出**:呈現 `domain_awareness_verdict` + confirmed vs rejected + coverage(空的攻擊類=該區 hardened,非未稽核);真 finding 用 `spawn_task` 開 track+fix task(帶對抗式 role prompt)。fix 後的對抗式重驗 verifier 遵循 [vibe-subagent-review](../vibe-subagent-review/references/discipline.md) 的〈長時驗證 agent 可觀測性協議〉— Workflow-first;raw 背景 `Agent` 必寫 `dev/<scope>/PROGRESS.jsonl` 里程碑 ledger;單 agent ~15 分鐘上限,超過拆 staged agents。
@@ -48,6 +50,7 @@ description: 全 component 週期性深度安全稽核 — Recon→平行 Hunt(V
 
 - [ ] `agentType: 'vibe-sec-*'` 真的解析到 `.claude/agents/` 定義(看 agent 是否帶上 read-only tool 限制與角色 stance);若沒解析,workflow 的 inline task prompt 仍可運作但少了角色 stance。
 - [ ] progress log 的 promptPreview **不含 `undefined`**(確認 `args.target` 有進去、隔離 worktree 真被讀)。
+- [ ] Hunt / Validate 的 promptPreview 帶著 `PATH RESOLUTION: the audited snapshot is the worktree at <workspaceRoot>`。prompt 有這句由 `tests/dx/test_security_audit_workflow.py` 執行腳本釘住；agent 是否真的照它解析是模型行為，只能在這裡看。
 - [ ] 空 Hunt 結果有被 Synthesize 當「hardened」credit(看 `coverage_note`)。
 
 ## 反模式(別做)

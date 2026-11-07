@@ -36,7 +36,6 @@
 
 import sys
 import os
-import json
 import subprocess
 import argparse
 import datetime
@@ -51,7 +50,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
 from _lib_python import add_prometheus_arg  # noqa: E402
-from _lib_paths import classify_path  # noqa: E402  (#3415)
+import _lib_input  # noqa: E402  (#3445: --readiness-json is read by the lib)
 from _lib_prometheus import (  # noqa: E402
     QueryError, collapse_replicas, prometheus_instant, vector_count,
 )
@@ -78,15 +77,19 @@ REQUIRED_READINESS_FIELDS = {"ready", "timestamp", "convergence_percentage",
 CALLER_ERROR_PREFIX = "[caller-error] "
 
 
-def load_cutover_readiness(json_path):
-    """Load and validate cutover-readiness.json.
+#: --readiness-json: a JSON object. A path or content that cannot be read,
+#: or a top level that is no object, is a caller error named by the lib
+#: (#3415 / #3445) before any step runs.
+READINESS_DOCUMENT = _lib_input.Document("json", dict)
 
-    Returns dict with at least: ready, timestamp, convergence_percentage,
-    converged_count, total_pairs.
-    Raises ValueError on schema violation, FileNotFoundError if missing.
+
+def load_cutover_readiness(data):
+    """Validate a parsed cutover-readiness.json (`READINESS_DOCUMENT`).
+
+    Returns *data*, which holds at least: ready, timestamp,
+    convergence_percentage, converged_count, total_pairs.
+    Raises ValueError on schema violation.
     """
-    with open(json_path, encoding="utf-8") as fh:
-        data = json.load(fh)
     missing = REQUIRED_READINESS_FIELDS - set(data.keys())
     if missing:
         raise ValueError(f"Missing required fields: {sorted(missing)}")
@@ -222,9 +225,10 @@ def verify_health(tenant, prometheus_url, dry_run=False):
 # Orchestrator
 # ---------------------------------------------------------------------------
 
-def apply_cutover(readiness_json, tenant, prometheus_url,
+def apply_cutover(readiness_doc, tenant, prometheus_url,
                   namespace="monitoring", dry_run=False, force=False):
-    """Execute all cutover steps in sequence.
+    """Execute all cutover steps in sequence. *readiness_doc* is the parsed
+    --readiness-json (``_lib_input.document``: read and judged before this).
 
     Returns dict: {success, steps_completed, failed_step, message, timestamp}
     """
@@ -242,20 +246,10 @@ def apply_cutover(readiness_json, tenant, prometheus_url,
     }
 
     # ── Check readiness ───────────────────────────────────────────────
-    # #3415: judged before the open — a directory or a path under a parent
-    # the caller cannot enter was an IsADirectoryError / PermissionError
-    # traceback; it is the same caller error as a missing file, named.
-    readiness_problem = classify_path(readiness_json, "file", lang="en",
-                                      flag="--readiness-json")
-    if readiness_problem is not None:
-        report["failed_step"] = "load_readiness"
-        report["message"] = readiness_problem.message
-        report["caller_error"] = True
-        return report
     try:
-        readiness = load_cutover_readiness(readiness_json)
-    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
-        # #452/#737: missing/malformed readiness JSON = input/load precondition
+        readiness = load_cutover_readiness(readiness_doc)
+    except ValueError as exc:
+        # #452/#737: a readiness JSON without its fields = input precondition
         # failure = caller-error (exit 2), not a cutover finding (exit 1).
         report["failed_step"] = "load_readiness"
         report["message"] = str(exc)
@@ -321,8 +315,8 @@ def build_parser():
         description="One-command Shadow Monitoring cutover (§7.1).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--readiness-json", required=True,
+    _lib_input.add_input(
+        parser, "--readiness-json", decode=READINESS_DOCUMENT, required=True,
         help="Path to cutover-readiness.json from validate_migration.py",
     )
     parser.add_argument(
@@ -359,7 +353,9 @@ def main():
     args = parser.parse_args()
 
     report = apply_cutover(
-        readiness_json=args.readiness_json,
+        # #3415 / #3445: missing, unreadable, not JSON, not an object — rc 2,
+        # named, before any step runs.
+        readiness_doc=_lib_input.document(args, "readiness_json", lang="en"),
         tenant=args.tenant,
         prometheus_url=args.prometheus,
         namespace=args.namespace,

@@ -42,6 +42,12 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 import _lib_io  # noqa: E402
 from _lib_exitcodes import EXIT_OK, die_caller_error  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+import _lib_input  # noqa: E402  (#3445: --existing-jwks is read by the lib)
+
+#: --existing-jwks: a JWKS, a JSON object. Read before the keypair is made
+#: (#3445: content that was not UTF-8, or a top level that is no object, was
+#: an "unexpected internal error").
+JWKS_DOCUMENT = _lib_input.Document("json", dict)
 
 
 def _b64u(raw: bytes) -> str:
@@ -132,17 +138,13 @@ def _secret_manifest(pem: str, name: str, namespace: str, key: str) -> str:
     )
 
 
-def _merge_jwks(existing_path: str, new_jwk: dict) -> dict:
-    """Append new_jwk to the JWKS at existing_path (dedupe by kid).
+def _merge_jwks(doc: dict, new_jwk: dict, *, existing_path: str) -> dict:
+    """Append new_jwk to the JWKS *doc* (the parsed --existing-jwks, at
+    *existing_path*; dedupe by kid).
 
     Rotation overlap: both the old and new public keys live in the JWKS so
     tokens signed before the cutover keep verifying until they expire.
     """
-    try:
-        with open(existing_path, encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, json.JSONDecodeError) as exc:
-        die_caller_error(f"error: cannot read --existing-jwks {existing_path}: {exc}")
     keys = doc.get("keys")
     if not isinstance(keys, list):
         die_caller_error(f"error: {existing_path} is not a JWKS document (missing `keys` array)")
@@ -161,8 +163,8 @@ def main() -> int:
     )
     parser.add_argument("--rotate", action="store_true",
                         help="rotation mode — merge the new public key into --existing-jwks")
-    parser.add_argument("--existing-jwks", metavar="PATH",
-                        help="current JWKS file to merge into (required with --rotate)")
+    _lib_input.add_input(parser, "--existing-jwks", decode=JWKS_DOCUMENT, metavar="PATH",
+                         help="current JWKS file to merge into (required with --rotate)")
     parser.add_argument("--jwks-out", metavar="PATH", default="federation-jwks.json",
                         help="where to write the JWKS (default: ./federation-jwks.json)")
     parser.add_argument("--namespace", default="monitoring",
@@ -179,6 +181,9 @@ def main() -> int:
         parser.error("--rotate requires --existing-jwks")
     if args.key_bits < 2048:
         parser.error("--key-bits must be >= 2048 (tenant-api rejects weaker signing keys)")
+    # #3445: missing, unreadable, not JSON, not an object — rc 2, named,
+    # before a keypair is made.
+    existing = _lib_input.document(args, "existing_jwks", lang="en") if args.rotate else None
 
     # TTY guard: the private-key Secret manifest goes to stdout for a pipe.
     # If stdout is an interactive terminal the operator forgot the `| kubectl`
@@ -197,7 +202,7 @@ def main() -> int:
     priv_pem, jwk = _generate_keypair(args.key_bits)
 
     if args.rotate:
-        jwks = _merge_jwks(args.existing_jwks, jwk)
+        jwks = _merge_jwks(existing, jwk, existing_path=args.existing_jwks)
     else:
         jwks = {"keys": [jwk]}
 

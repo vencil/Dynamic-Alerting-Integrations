@@ -858,7 +858,7 @@ func (m *Manager) ScopeAllowedUnknownMetadata(p *VerifiedPrincipal, tenantID str
 		if !tenantMatches(rule.Tenants, tenantID) {
 			continue
 		}
-		if len(rule.Environments) != 0 || len(rule.Domains) != 0 {
+		if ruleRestrictsMetadata(rule) {
 			continue // restricted on a metadata axis whose value is unknown
 		}
 		if rule.OrgScope == "" || scopeSetPasses(subject.claims[rule.OrgScope], tenantOrgs) {

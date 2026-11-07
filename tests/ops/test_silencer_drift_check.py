@@ -102,38 +102,39 @@ def rule_pack_file(tmp_path: Path) -> Path:
 # ─── load_silences ────────────────────────────────────────────────────
 
 
-def test_load_silences_valid(silences_file):
-    data = sdc.load_silences(silences_file)
-    assert data is not None
-    assert len(data) == 1
-    assert data[0]["id"] == "abc123"
+def _silences_refusal(path, rule_pack_file):
+    from _lib_exitcodes import CallerError
+    with pytest.raises(CallerError) as exc:
+        sdc.main(["--silences-file", str(path), "--rule-source", str(rule_pack_file)])
+    return exc.value
 
 
-def test_load_silences_missing(tmp_path, capsys):
-    data = sdc.load_silences(tmp_path / "nope.json")
-    assert data is None
-    assert "cannot read" in capsys.readouterr().err
+def test_load_silences_valid(silences_file, rule_pack_file):
+    assert emit_result(sdc.main(["--silences-file", str(silences_file),
+                                 "--rule-source", str(rule_pack_file)])) == 0
 
 
-def test_load_silences_invalid_json(tmp_path, capsys):
+def test_load_silences_missing(tmp_path, rule_pack_file):
+    exc = _silences_refusal(tmp_path / "nope.json", rule_pack_file)
+    assert exc.reason == "file_not_found"
+    assert str(exc).startswith(f"--silences-file {tmp_path / 'nope.json'}: ")
+
+
+def test_load_silences_invalid_json(tmp_path, rule_pack_file):
     p = tmp_path / "broken.json"
     p.write_text("not json", encoding="utf-8")
-    data = sdc.load_silences(p)
-    assert data is None
-    assert "invalid JSON" in capsys.readouterr().err
+    exc = _silences_refusal(p, rule_pack_file)
+    assert str(exc) == f"--silences-file {p}: not valid JSON: Expecting value: line 1 column 1 (char 0)"
 
 
-def test_load_silences_top_level_not_array(tmp_path, capsys):
+def test_load_silences_top_level_not_array(tmp_path, rule_pack_file):
     """amtool silence query -o json produces a JSON array. If somebody
     pipes the wrong shape (e.g. {silences: [...]} or a single object),
     fail loudly rather than silently producing zero results."""
     p = tmp_path / "wrong.json"
     p.write_text(json.dumps({"silences": []}), encoding="utf-8")
-    data = sdc.load_silences(p)
-    assert data is None
-    err = capsys.readouterr().err
-    assert "top-level must be a JSON array" in err
-    assert "dict" in err
+    exc = _silences_refusal(p, rule_pack_file)
+    assert str(exc) == f"--silences-file {p}: the top level is not a list (got a mapping)"
 
 
 # ─── extract_alerts_from_pack ─────────────────────────────────────────
@@ -970,15 +971,11 @@ def test_main_json_coverage_name_list_is_not_truncated(tmp_path, capsys):
 
 
 def test_main_missing_silences_file(rule_pack_file, tmp_path):
-    rc = emit_result(sdc.main(
-        [
-            "--silences-file",
-            str(tmp_path / "nope.json"),
-            "--rule-source",
-            str(rule_pack_file),
-        ]
-    ))
-    assert rc == 2
+    from _lib_exitcodes import CallerError  # rc 2 at run()'s exit (#3445)
+    with pytest.raises(CallerError) as exc:
+        sdc.main(["--silences-file", str(tmp_path / "nope.json"),
+                  "--rule-source", str(rule_pack_file)])
+    assert exc.value.reason == "file_not_found"
 
 
 def test_main_missing_rule_source(silences_file, tmp_path, capsys):

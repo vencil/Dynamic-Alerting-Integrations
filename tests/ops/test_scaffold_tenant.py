@@ -875,6 +875,20 @@ class TestRunNonInteractive:
 # run_from_onboard
 # ---------------------------------------------------------------------------
 
+def _onboard_ns(from_onboard, **kw):
+    """The namespace `--from-onboard <path>` parses to (#3445: the flag is a
+    `_lib_input` file declaration), plus *kw*."""
+    import _lib_input
+    import scaffold_tenant
+    parser = argparse.ArgumentParser()
+    _lib_input.add_input(parser, "--from-onboard",
+                         decode=scaffold_tenant.ONBOARD_HINTS_DOCUMENT)
+    args = parser.parse_args(["--from-onboard", from_onboard])
+    for key, value in kw.items():
+        setattr(args, key, value)
+    return args
+
+
 class TestRunFromOnboard:
     """run_from_onboard() 測試。"""
 
@@ -892,7 +906,7 @@ class TestRunFromOnboard:
             with open(hints_path, "w", encoding="utf-8") as f:
                 json.dump(hints, f)
 
-            args = argparse.Namespace(
+            args = _onboard_ns(
                 from_onboard=hints_path, output_dir=d,
             )
             run_from_onboard(args)
@@ -912,7 +926,7 @@ class TestRunFromOnboard:
             hints_path = os.path.join(d, "hints.json")
             with open(hints_path, "w", encoding="utf-8") as f:
                 json.dump(hints, f)
-            run_from_onboard(argparse.Namespace(from_onboard=hints_path, output_dir=d))
+            run_from_onboard(_onboard_ns(from_onboard=hints_path, output_dir=d))
             with open(os.path.join(d, "_defaults.yaml"), encoding="utf-8") as f:
                 written = yaml.safe_load(f)
             with open(os.path.join(d, "db-a.yaml"), encoding="utf-8") as f:
@@ -941,7 +955,7 @@ class TestRunFromOnboard:
             with open(hints_path, "w", encoding="utf-8") as f:
                 json.dump(hints, f)
             out = os.path.join(d, "out")
-            run_from_onboard(argparse.Namespace(from_onboard=hints_path, output_dir=out))
+            run_from_onboard(_onboard_ns(from_onboard=hints_path, output_dir=out))
             assert sorted(os.listdir(out)) == [
                 "_defaults.yaml", "db-a.yaml", "db-b.yaml", "scaffold-report.txt"]
 
@@ -963,7 +977,7 @@ class TestRunFromOnboard:
             with open(hints_path, "w", encoding="utf-8") as f:
                 json.dump(hints, f)
 
-            args = argparse.Namespace(
+            args = _onboard_ns(
                 from_onboard=hints_path, output_dir=d,
             )
             run_from_onboard(args)
@@ -974,12 +988,16 @@ class TestRunFromOnboard:
 
     def test_invalid_hints_exits(self):
         with tempfile.TemporaryDirectory() as d:
-            args = argparse.Namespace(
+            args = _onboard_ns(
                 from_onboard=os.path.join(d, "nonexistent.json"),
                 output_dir=d,
             )
-            with pytest.raises(SystemExit):
+            # #3445: refused by the lib's reading, named (a CallerError
+            # run() turns into rc 2).
+            from _lib_exitcodes import CallerError
+            with pytest.raises(CallerError) as exc:
                 run_from_onboard(args)
+            assert exc.value.reason == "file_not_found"
 
     # ADR-035 (blind review F1): every id in the hints is judged BEFORE the
     # first file is written — `Team_A` used to produce Team_A.yaml at rc 0,
@@ -991,7 +1009,7 @@ class TestRunFromOnboard:
             with open(hints_path, "w", encoding="utf-8") as f:
                 json.dump({"tenants": tenants, "db_types": {}, "routing_hints": {}}, f)
             out = os.path.join(d, "out")
-            args = argparse.Namespace(from_onboard=hints_path, output_dir=out)
+            args = _onboard_ns(from_onboard=hints_path, output_dir=out)
             with pytest.raises(SystemExit) as exc_info:
                 run_from_onboard(args)
             assert exc_info.value.code == EXIT_CALLER_ERROR
@@ -1009,7 +1027,7 @@ class TestRunFromOnboard:
                 json.dump({"tenants": [bad, "db-b"], "db_types": {}, "routing_hints": {}}, f)
             out = os.path.join(d, "out")
             with pytest.raises(SystemExit) as exc_info:
-                run_from_onboard(argparse.Namespace(from_onboard=hints_path, output_dir=out))
+                run_from_onboard(_onboard_ns(from_onboard=hints_path, output_dir=out))
             assert exc_info.value.code == EXIT_CALLER_ERROR
             assert not os.path.exists(out), os.listdir(out)
         err = capsys.readouterr().err
@@ -1021,7 +1039,7 @@ class TestRunFromOnboard:
             with open(hints_path, "w", encoding="utf-8") as f:
                 json.dump({"tenants": []}, f)
 
-            args = argparse.Namespace(
+            args = _onboard_ns(
                 from_onboard=hints_path, output_dir=d,
             )
             with pytest.raises(SystemExit):

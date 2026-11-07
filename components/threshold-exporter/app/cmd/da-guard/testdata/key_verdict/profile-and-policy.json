@@ -16,6 +16,7 @@
         "reason": "not_exporter_key",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": [
           "a"
         ],
@@ -33,6 +34,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "gold",
         "served": null
       },
@@ -46,6 +48,7 @@
         "reason": "unregistered",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "x",
         "served": null
       },
@@ -61,6 +64,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 80,
         "served": 80
       },
@@ -76,6 +80,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "x",
         "served": null
       }
@@ -91,6 +96,7 @@
         "reason": "not_exporter_key",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": [
           "a"
         ],
@@ -108,6 +114,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "gold",
         "served": null
       },
@@ -121,6 +128,7 @@
         "reason": "unregistered",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "x",
         "served": null
       },
@@ -136,6 +144,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 80,
         "served": 80
       },
@@ -149,6 +158,7 @@
         "reason": "no_row",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "x",
         "served": null
       }
@@ -166,6 +176,7 @@
       ],
       "reason": "not_read_in_profile",
       "base": null,
+      "dead_entries": null,
       "blocks": true
     },
     {
@@ -179,6 +190,7 @@
       ],
       "reason": "unregistered",
       "base": null,
+      "dead_entries": null,
       "blocks": true
     },
     {
@@ -191,6 +203,7 @@
       ],
       "reason": "no_row",
       "base": null,
+      "dead_entries": null,
       "blocks": true
     }
   ],

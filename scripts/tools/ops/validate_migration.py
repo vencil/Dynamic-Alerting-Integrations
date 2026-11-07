@@ -52,7 +52,6 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -66,7 +65,8 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import ensure_dir_or_die, write_text_or_die, write_json_or_die, add_prometheus_arg, non_negative_seconds  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_paths import require_file  # noqa: E402  (#3415)
+import _lib_input  # noqa: E402  (#3445: --mapping is read by the lib)
+from _lib_shadow_report import REPORT_COLUMNS, TIMESTAMP_FORMAT  # noqa: E402  (#3662)
 # #3133: a query not answered raises QueryError; a sample is read once, by
 # the lib (#3213).
 from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noqa: E402
@@ -149,8 +149,13 @@ def run_single_comparison(prom_url, old_query, new_query, label, tolerance=0.001
     }
 
 
-def load_mapping_pairs(mapping_path):
-    """從 prefix-mapping.yaml 載入比對組。
+#: --mapping：prefix-mapping.yaml，頂層是映射（#3445：內容讀不了、或頂層型別不對，
+#: 都是點名旗標與路徑的 caller error，不是 traceback）。
+MAPPING_DOCUMENT = _lib_input.Document("yaml", dict)
+
+
+def load_mapping_pairs(args):
+    """從 `--mapping`（prefix-mapping.yaml，`MAPPING_DOCUMENT`）載入比對組。
 
     migrate 會為每個 key 寫下 `old_query`（原規則 LHS 依租戶聚合）與
     `new_query`（recording rule 名），兩邊同量綱、同聚合。舊版 migrate 產的
@@ -161,10 +166,10 @@ def load_mapping_pairs(mapping_path):
     改用黃金標準（有 `golden_rule`）的項沒有 migrate 產出的 recording rule，
     舊檔對它們組出的 `tenant:<key>:max` 不存在、只會報新側缺值，所以跳過並說明。
     """
-    # #3415: missing, not a file, or not openable — named, not a traceback.
-    require_file(mapping_path, lang="zh", flag="--mapping")
-    with open(mapping_path, 'r', encoding='utf-8') as f:
-        mapping = yaml.safe_load(f) or {}
+    # #3415 / #3445: the path and the content judged by the lib — missing,
+    # not a file, not openable, not UTF-8, not YAML, not a mapping: named.
+    mapping_path = args.mapping
+    mapping = _lib_input.document(args, "mapping", lang="zh")
 
     pairs = []
     legacy = []
@@ -297,28 +302,29 @@ def write_csv_report(all_results, output_dir):
     # now pins newline="\n" itself, so NO translation happens any more and this
     # file is LF on every platform — previously it was CRLF on Windows and LF
     # on Linux. Do NOT "restore" the old reasoning: that translation is gone.
-    writer = csv.writer(buf, lineterminator='\n')
-    writer.writerow([
-        "Label", "Tenant", "Old Query", "New Query",
-        "Old Value", "New Value", "Delta", "Status",
-        "Timestamp",
-    ])
-    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    # #3662: the header, the row keys and the timestamp format are
+    # `_lib_shadow_report`'s — the one definition `shadow-verify
+    # --report-csv` reads the file by. DictWriter refuses a key that is no
+    # column, so a row cannot drift from the header. The timestamp is UTC,
+    # as the reader takes it (it was local time, read as UTC).
+    writer = csv.DictWriter(buf, fieldnames=REPORT_COLUMNS, lineterminator='\n')
+    writer.writeheader()
+    ts = time.strftime(TIMESTAMP_FORMAT, time.gmtime())
     for result in all_results:
         if result is None:
             continue
         for d in result["diffs"]:
-            writer.writerow([
-                result["label"],
-                d["tenant"],
-                result["old_query"],
-                result["new_query"],
-                d["old_value"],
-                d["new_value"],
-                d["delta"],
-                d["status"],
-                ts,
-            ])
+            writer.writerow({
+                "Label": result["label"],
+                "Tenant": d["tenant"],
+                "Old Query": result["old_query"],
+                "New Query": result["new_query"],
+                "Old Value": d["old_value"],
+                "New Value": d["new_value"],
+                "Delta": d["delta"],
+                "Status": d["status"],
+                "Timestamp": ts,
+            })
     write_text_or_die(csv_path, "\ufeff" + buf.getvalue(), flag="-o/--output-dir")
     return csv_path
 
@@ -450,7 +456,8 @@ def main():
 
     # 比對來源
     group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--mapping", help="prefix-mapping.yaml 檔案路徑 (批次比對)")
+    _lib_input.add_input(group, "--mapping", decode=MAPPING_DOCUMENT,
+                         help="prefix-mapping.yaml 檔案路徑 (批次比對)")
     group.add_argument("--old", help="舊 Recording Rule 的 PromQL 查詢")
 
     parser.add_argument("--new", help="新 Recording Rule 的 PromQL 查詢 (搭配 --old)")
@@ -480,7 +487,7 @@ def main():
     # 構造比對組
     pairs = []
     if args.mapping:
-        pairs = load_mapping_pairs(args.mapping)
+        pairs = load_mapping_pairs(args)
         print(f"📂 載入 {len(pairs)} 組比對自 {args.mapping}")
     elif args.old and args.new:
         pairs = [{

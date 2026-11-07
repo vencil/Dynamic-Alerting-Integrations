@@ -603,9 +603,10 @@ def _mapping_yaml(tmp: Path) -> str:
 
 
 def _report_csv(tmp: Path) -> str:
+    # #3662: a report as `validate` writes it (`_lib_shadow_report`'s header).
     return _write(tmp / "validation-report.csv",
-                  "tenant,metric,legacy_value,new_value,match\n"
-                  "tenant-one,conn_count,10,10,true\n")
+                  "Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp\n"
+                  "conn,tenant-one,old_q,new_q,10,10,0,match,2026-01-01 00:00:00\n")
 
 
 def _alerts_json(tmp: Path) -> str:
