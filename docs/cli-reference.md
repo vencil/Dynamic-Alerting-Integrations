@@ -2627,7 +2627,7 @@ da-tools lint --rule-pack-dir ./rule-packs --ci
 **語法**
 
 ```bash
-da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
+da-tools onboard [--alertmanager-config <FILE>] [--rule-files <PATH>...] \
   [--scrape-config <FILE>] [options]
 ```
 
@@ -2638,8 +2638,8 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
 | `--alertmanager-config <FILE>` | Phase 1：Alertmanager 設定。可以是設定檔本身，或 ConfigMap YAML；⚠️ ConfigMap 的鍵名必須是 `alertmanager.yml`，其他鍵名（例如 prometheus-operator 慣用的 `alertmanager.yaml`）與 Secret 都會解析失敗、rc=2。檔案先以 Kubernetes 的讀法（`da-crdecode`）判斷是不是 ConfigMap，設定本身以 Alertmanager 自己的載入函式（`da-read alertmanager`）讀：值是 Alertmanager 的讀法（`match: {tenant: 010}` 是租戶 `010`），只取原文寫了的鍵，Alertmanager 拒收的設定（例如沒有 `route`）rc=2 並印出原因（[ADR-036](adr/036-single-parser-effective-config.md) §12，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)） | — |
 | `--da-crdecode-binary <PATH>` | Phase 1 與 Phase 3 用的 `da-crdecode` | `$DA_CRDECODE_BINARY`，否則 PATH（映像內建） |
 | `--da-read-binary <PATH>` | Phase 1 與 Phase 3 用的 `da-read` | `$DA_READ_BINARY`，否則 PATH（映像內建） |
-| `--rule-files '<GLOB>'` | Phase 2：Prometheus 規則檔的 glob（支援 `**`）；配到目錄時遞迴取其中的 `*.yaml`／`*.yml`。每個選到的檔（減去 `--exclude`）都要讀得成 rule file 或 manifest：純 rule file、ConfigMap 宣告為 rule file 的 data 值、PrometheusRule 的 `spec` 都會讀；不是的檔（`Chart.yaml`、`groups` 拼錯、缺 `kind`）點名並建議 `--exclude`，結束碼 `2`；目錄走訪、讀不了的項目、`--exclude` 排光、零物件的檔同 [`lint`](#lint)（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。⚠️ 要加引號：沒加時 shell 先展開，配到多個檔就只有第一個被當成值、其餘變成 `unrecognized arguments`（rc=2）；只配到一個檔時 rc=0 卻只分析了那一個（例如沒開 globstar 的 bash 把 `**` 當成 `*`）。沒有 glob 字元（`*`、`?`、`[`）的值當成一個路徑判定：不存在或是 symlink 迴圈 ⇒ stderr 點名該路徑與原因（懸空 symlink 由上述 #3426 的讀法點名）；什麼檔都沒選到（glob 沒配到東西、配到的目錄裡沒有 `*.yaml`／`*.yml`、值是空字串 `''`）⇒ `--rule-files <GLOB>: selects no file`；都是結束碼 `2`，同時給了其他 phase 也一樣，任何 phase 執行、任何檔寫出之前就停，上述 #3426 的拒絕也提前到這裡（[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)，先前印 WARN、建出空的輸出目錄、結束碼 1；同時給了其他 phase 時照樣寫出、結束碼 0；`''` 被當成沒給） | — |
-| `--exclude <GLOB>` | Phase 2：排除 `--rule-files` 選到的檔（可重複；不讀）。語意與 [`lint`](#lint) 的 `--exclude` 相同：不含 `/` 比對檔名，含 `/` 比對相對於 glob 配到的目錄的路徑；⚠️ glob 直接配到的檔比對的是**配到的整條路徑**，所以 `--rule-files 'rules/**/*.yaml'` 要排除 `rules/recipes/` 底下的檔得寫 `--exclude '*/recipes/*'`（`recipes/*` 配不到 `rules/recipes/a.yaml`）；給目錄時（`--rule-files rules/`）才比對相對於它的路徑，`--exclude 'recipes/*'` 即可。`fnmatch.fnmatchcase` | — |
+| `--rule-files <PATH>...` | Phase 2：Prometheus 規則檔或目錄，可給多個；目錄遞迴取其中的 `*.yaml`／`*.yml`。可重複給，值會累加。**只吃路徑、不展開 glob**，與 [`lint`](#lint)、`silencer-drift-check` 相同：`rules/b[1].yaml` 就是那個檔；要用萬用字元就交給 shell 展開（不加引號），加了引號的 `'rules/*.yaml'` 是一個不存在的路徑、結束碼 `2`；Kubernetes Job 的 `args` 不經過 shell，直接給目錄（[#3463](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3463)）。每個選到的檔（減去 `--exclude`）都要讀得成 rule file 或 manifest：純 rule file、ConfigMap 宣告為 rule file 的 data 值、PrometheusRule 的 `spec` 都會讀；不是的檔（`Chart.yaml`、`groups` 拼錯、缺 `kind`）點名並建議 `--exclude`，結束碼 `2`；目錄走訪、讀不了的項目、`--exclude` 排光、零物件的檔同 [`lint`](#lint)（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。每個值當成一個路徑判定：不存在、symlink 迴圈或上層目錄進不去 ⇒ stderr 點名該路徑與原因（懸空 symlink 由上述 #3426 的讀法點名）；給的目錄裡什麼檔都沒選到 ⇒ `--rule-files <PATH>: selects nothing (…)`；值是空字串 `''` ⇒ `--rule-files '': an empty value names no file`；都是結束碼 `2`，同時給了其他 phase 也一樣，任何 phase 執行、任何檔寫出之前就停，上述 #3426 的拒絕也提前到這裡（[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)，先前印 WARN、建出空的輸出目錄、結束碼 1；同時給了其他 phase 時照樣寫出、結束碼 0；`''` 被當成沒給）。⚠️ v2.9.0 映像仍把值當成一個 glob、只收一個值，給目錄什麼檔都選不到（WARN、結束碼 1）；用那個映像時給加引號的 glob（`'rules/*.yaml'`）或單一檔 <!-- image-caveat: v2.9.0 --> | — |
+| `--exclude <GLOB>` | Phase 2：排除 `--rule-files` 選到的檔（可重複；不讀）。語意與 [`lint`](#lint) 的 `--exclude` 相同：不含 `/` 比對檔名，含 `/` 比對相對於給的目錄的路徑；⚠️ 直接給的檔（包括 shell 展開出來的）比對的是**給的整條路徑**，所以 `--rule-files rules/*.yaml rules/recipes/*.yaml`（由 shell 展開）要排除 `rules/recipes/` 底下的檔得寫 `--exclude '*/recipes/*'`（`recipes/*` 配不到 `rules/recipes/a.yaml`）；給目錄時（`--rule-files rules/`）才比對相對於它的路徑，`--exclude 'recipes/*'` 即可。`fnmatch.fnmatchcase` | — |
 | `--scrape-config <FILE>` | Phase 3：Prometheus 設定（`prometheus.yml`）。可以是設定檔本身，或 ConfigMap YAML（鍵名必須是 `prometheus.yml`）。讀法同 Phase 1：外層以 Kubernetes 的讀法（`da-crdecode`）判斷是不是 ConfigMap，設定本身以 Prometheus 自己的載入函式（`da-read prometheus`，已註冊全部服務探索）讀，只取原文寫了的鍵、值是 Prometheus 的讀法（例如 relabel 的 `action: Keep` 是 `keep`）；Prometheus 拒收的設定（不認得的鍵、重複的 `job_name`、壞掉的 regex）rc=2 並印出原因（[ADR-036](adr/036-single-parser-effective-config.md) §12，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)） | — |
 | `--tenant-label <NAME>` | 租戶標籤名稱 | `tenant` |
 | `-o, --output-dir <DIR>` | 輸出**目錄**（給檔名會得到一個同名目錄） | `onboard_output` |
@@ -2665,10 +2665,13 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
 # 只分析 Alertmanager
 da-tools onboard --alertmanager-config ./alertmanager.yaml -o onboard_output
 
-# Alertmanager 加規則檔，glob 要加引號
+# Alertmanager 加規則檔（給目錄：遞迴取其中的 *.yaml／*.yml）
 da-tools onboard --alertmanager-config ./alertmanager.yaml \
-  --rule-files './rules/*.yaml' -o onboard_output
+  --rule-files ./rules/ -o onboard_output
 ```
+<!-- image-caveat: v2.9.0 -->
+
+v2.9.0 映像上這個範例的目錄選不到檔，見上方選項表 `--rule-files` 一列。 <!-- image-caveat: v2.9.0 -->
 
 **結束碼**
 

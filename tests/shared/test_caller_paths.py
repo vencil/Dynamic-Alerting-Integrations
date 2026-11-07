@@ -853,32 +853,36 @@ def test_a_missing_input_is_named_not_read_as_empty(tmp_path, script, argv, flag
     assert not out_dir.exists(), "an output was written before the input was judged"
 
 
-@pytest.mark.parametrize("pattern, made", [
-    ("*.yml", []),                 # a glob that matches nothing
-    ("d", ["d/"]),                 # a directory with no *.yaml / *.yml (#3426 walks it)
-    ("*.yml", ["d.yml/"]),         # a glob that matches only such a directory
+@pytest.mark.parametrize("targets, made", [
+    (["d"], ["d/"]),                     # a directory with no *.yaml / *.yml (#3426 walks it)
+    (["d", "e"], ["d/", "e/", "e/x.txt"]),  # two of them (#3463: --rule-files takes paths)
+    (["d.yml"], ["d.yml/"]),             # a directory named like a rule file
 ])
 @pytest.mark.parametrize("other_phase", [False, True], ids=["alone", "with-phase-1"])
-def test_onboard_rule_files_that_select_no_file_are_a_caller_error(tmp_path, pattern, made,
+def test_onboard_rule_files_that_select_no_file_are_a_caller_error(tmp_path, targets, made,
                                                                    other_phase):
     """onboard --rule-files: a value that selects no file was a WARN, an
     empty output tree and rc 1 — rc 0 with phase 1's output written when
-    another phase was given; rc 2 now either way (`file_not_found`), nothing
-    written (owner ruling on #3392)."""
+    another phase was given; rc 2 now either way, nothing written (owner
+    ruling on #3392), in `_lib_input.refuse_empty`'s one wording (#3463)."""
     rules = tmp_path / "rules"
     rules.mkdir()
     for name in made:
-        (rules / name.rstrip("/")).mkdir()
+        if name.endswith("/"):
+            (rules / name).mkdir()
+        else:
+            (rules / name).write_text("x\n", encoding="utf-8")
     out_dir = tmp_path / "out"
     extra = []
     if other_phase:
         am = tmp_path / "am.yml"
         am.write_text("route:\n  receiver: r\nreceivers:\n- name: r\n", encoding="utf-8")
         extra = ["--alertmanager-config", str(am)]
-    proc = _run_ops("onboard_platform.py", ["--rule-files", str(rules / pattern), *extra,
+    given = [str(rules / t) for t in targets]
+    proc = _run_ops("onboard_platform.py", ["--rule-files", *given, *extra,
                                             "--output-dir", str(out_dir), "--json"])
     assert proc.returncode == 2, proc.stdout + proc.stderr
-    assert f"--rule-files {rules / pattern}: selects no file" in proc.stderr
+    assert f"--rule-files {', '.join(given)}: selects nothing (" in proc.stderr, proc.stderr
     assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
     assert not out_dir.exists()
 
