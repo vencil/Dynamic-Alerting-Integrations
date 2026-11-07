@@ -75,5 +75,28 @@ consumer it has to provision from one render, not one per attempt. */ -}}
 {{- if $missing -}}
 {{- fail (printf "auth.mode=enforce (the default) needs auth.consumers[].existingSecret for every consumer — missing: %s. Create one Secret per consumer in this namespace with key `password` (hex, no trailing newline) and name it there, or remove consumers you do not run; to roll credentials out first, set auth.mode=observe. See docs/internal/platform-log-aggregation-runbook.md §1.2 (#1295)" (join ", " $missing)) -}}
 {{- end -}}
+{{- /* A named Secret that is not there is an OUTAGE on upgrade, not a broken
+consumer: vmauth reads every password through secretKeyRef, the strategy is
+Recreate, so the running pod is deleted first and the new one sits in
+CreateContainerConfigError with the Service empty. Checked only when this
+release's Deployment already exists: that is the case with a pod to lose,
+and it proves `lookup` is talking to a cluster (it returns empty under
+`helm template` and client-side dry-run, so offline and GitOps renders are
+unaffected). Applies in observe too — a Secret named there is mounted the
+same way. */ -}}
+{{- if lookup "apps/v1" "Deployment" .Release.Namespace (include "victorialogs.name" .) -}}
+{{- $broken := list -}}
+{{- range $out -}}
+{{- $secret := lookup "v1" "Secret" $.Release.Namespace (toString .existingSecret) -}}
+{{- if not $secret -}}
+{{- $broken = append $broken (printf "%s: Secret %q not found" .name .existingSecret) -}}
+{{- else if not (index ($secret.data | default dict) "password") -}}
+{{- $broken = append $broken (printf "%s: Secret %q has no non-empty key `password`" .name .existingSecret) -}}
+{{- end -}}
+{{- end -}}
+{{- if $broken -}}
+{{- fail (printf "auth.consumers name Secrets this namespace (%s) cannot serve — %s. The Deployment uses Recreate, so upgrading now would delete the running store pod and leave the new one unable to start. Create the Secret(s) with key `password` first, then re-run. See docs/internal/platform-log-aggregation-runbook.md §1.2 (#1295)" $.Release.Namespace (join "; " $broken)) -}}
+{{- end -}}
+{{- end -}}
 {{- toYaml $out -}}
 {{- end }}

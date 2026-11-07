@@ -2250,21 +2250,40 @@ groups:
       # Secret missing on the Vector side loses every event while the buffer
       # stays empty — VectorBufferEventsDropped above never sees it.
       # Intentional discards (filters, route drops) carry intentional="true"
-      # and are excluded.
+      # and are excluded. An operator-added store sink (helm/vector
+      # additionalSinks) is covered when it is named `victorialogs_<x>`.
+      #
+      # Vector creates this counter at the FIRST drop, already non-zero
+      # (measured on 0.61.0: absent before, 1 after one refused event), so
+      # rate() alone never sees that first loss — a single refused batch would
+      # stay silent for good. The second clause catches a series born in the
+      # last 10m: it holds for 10m, long enough for the 5m hold-down. It also
+      # fires when Prometheus first sees a Vector pod that dropped events
+      # earlier (Prometheus restarted without its data, a new scrape target):
+      # those events were lost too, just before Prometheus was watching.
+      # ⛔ Keep `> 0` on the increase() side: `or` matches label sets WITHOUT
+      # the metric name, so a zero increase() sample would shadow the
+      # new-series sample and the single-drop case would go silent again.
       - alert: VectorStoreSinkDroppingEvents
         expr: |
           sum by (component_id) (
-            rate(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|vl_tenant_.+",intentional="false"}[5m])
+            (increase(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}[5m]) > 0)
+            or
+            (
+              vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"}
+              unless
+              vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|victorialogs_.+|vl_tenant_.+",intentional="false"} offset 10m
+            )
           ) > 0
         for: 5m
         labels:
           severity: critical
           alert_source: platform
         annotations:
-          summary: "Vector sink {{ $labels.component_id }} is losing events to the log store for 5m"
+          summary: "Vector sink {{ $labels.component_id }} lost events the log store refused"
           description: |
-            VictoriaLogs (through its vmauth) is refusing the batches this
-            sink sends, and Vector drops a refused batch without retrying.
+            VictoriaLogs (through its vmauth) refused batches this sink
+            sent, and Vector drops a refused batch without retrying.
             Every event in it is lost, including the audit trail and the
             revocation evidence. Most likely the Vector side sends no or
             the wrong credentials: check victorialogs.auth.existingSecret

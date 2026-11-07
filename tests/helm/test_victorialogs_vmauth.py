@@ -240,3 +240,30 @@ def test_render_baseline_restates_the_registry() -> None:
     baseline = yaml.safe_load(BASELINE.read_text(encoding="utf-8"))["auth"]["consumers"]
     assert strip(baseline) == strip(_values()["auth"]["consumers"])
     assert all(c.get("existingSecret") for c in baseline), "the baseline must name a Secret per consumer"
+
+
+def test_upgrade_checks_named_secrets_exist_before_recreating_the_pod() -> None:
+    """A named Secret that is missing (or lacks `password`) is an outage on
+    upgrade: the strategy is Recreate, so the running pod goes first and the new
+    one stays in CreateContainerConfigError. The helper looks the Secrets up —
+    but only once this release's Deployment exists, which is both the case with
+    a pod to lose and proof that `lookup` reaches a cluster (it returns empty
+    under `helm template`, so offline renders must keep working).
+
+    Firing needs a real API server; measured on k3s v1.31 (PR description):
+    missing Secret / missing key / empty value each fail `helm upgrade`, a fresh
+    install does not, and removing the guard lets the upgrade through. What a
+    render can pin is the wiring, below, and that offline renders still pass."""
+    tmpl = (CHART / "templates" / "_helpers.tpl").read_text(encoding="utf-8")
+    block = tmpl[tmpl.index("{{- define \"victorialogs.authConsumers\""):]
+    block = block[:block.index("{{- end }}")]
+    gate = re.search(r'\{\{- if lookup "apps/v1" "Deployment" \.Release\.Namespace '
+                     r'\(include "victorialogs\.name" \.\) -\}\}(.*?)\{\{- toYaml \$out', block, re.S)
+    assert gate, "the Secret check must be gated on this release's live Deployment"
+    body = gate.group(1)
+    assert re.search(r'\{\{- range \$out -\}\}\s*\{\{- \$secret := lookup "v1" "Secret" '
+                     r'\$\.Release\.Namespace \(toString \.existingSecret\)', body), \
+        "every consumer the Deployment mounts ($out) must be looked up"
+    assert 'index ($secret.data | default dict) "password"' in body, "the `password` key must be checked"
+    assert "{{- fail" in body
+    assert _helm().returncode == 0, "offline render must not treat an unreachable cluster as missing Secrets"
