@@ -1265,10 +1265,21 @@ _BROKEN = {"json": b"{bad", "yaml": b"a: [\n"}
 #: class: nesting deeper than the recursion limit (RecursionError, both
 #: formats), and a YAML timestamp SafeLoader's constructor cannot build
 #: (ValueError). Both escaped as "unexpected internal error" (#3445 review).
+#: ⚠️ Whether a nesting this deep is a RecursionError depends on the Python
+#: build (3.13's json raised it; CI's parsed it), so a deep case is nested
+#: in a container the document does NOT take: parsed, it is the wrong top
+#: level; not parsed, it is a RecursionError — refused, named, either way.
+#: A document taking both lists and mappings gets no deep case here; the
+#: RecursionError path itself is pinned in test_lib_input.py.
 _DEEP = 100_000
-_BEYOND = {"json": (("deep", b"[" * _DEEP + b"]" * _DEEP),),
-           "yaml": (("deep", b"[" * _DEEP + b"]" * _DEEP),
-                    ("timestamp", b"a: 2020-99-99\n"))}
+_NESTED = {list: b"[" * _DEEP + b"]" * _DEEP,
+           dict: b'{"a":' * _DEEP + b"1" + b"}" * _DEEP}
+_BEYOND = {"json": (), "yaml": (("timestamp", b"a: 2020-99-99\n"),)}
+
+
+def _deep_cases(tops) -> "list[tuple[str, bytes]]":
+    return [(f"deep_{kind.__name__}", raw) for kind, raw in _NESTED.items()
+            if kind not in tops][:1] if not {list, dict} <= set(tops) else []
 #: Top levels of each type, and the type each parses to.
 _TOPS = ((b"[]\n", list), (b"{}\n", dict), (b"1\n", int))
 
@@ -1280,6 +1291,7 @@ def _bad_contents(doc) -> "list[tuple[str, bytes]]":
         cases.append(("syntax", _BROKEN[doc.fmt]))
         cases += list(_BEYOND[doc.fmt])
         tops = doc.top if isinstance(doc.top, tuple) else (doc.top,)
+        cases += _deep_cases(tops)
         cases += [(f"top_{kind.__name__}", raw) for raw, kind in _TOPS if kind not in tops]
     return cases
 

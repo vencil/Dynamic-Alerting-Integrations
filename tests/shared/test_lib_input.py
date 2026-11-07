@@ -454,3 +454,29 @@ def test_the_module_reads_json_without_pyyaml(tmp_path):
     proc = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True,
                           encoding="utf-8", timeout=60)
     assert (proc.returncode, proc.stdout.strip()) == (0, "{}"), proc.stderr
+
+
+# ── #3445 review: a parser error that is not the parser's own class ─────
+
+@pytest.mark.parametrize("fmt", ["json", "yaml"])
+def test_a_recursion_error_while_parsing_is_a_document_error(fmt, monkeypatch):
+    """Nesting past the recursion limit raised RecursionError past the
+    decoder's own error class: a traceback. Whether a given depth does is
+    the Python build's business, so the error is forced here."""
+    import json
+
+    import yaml
+
+    def deep(*_a, **_k):
+        raise RecursionError("maximum recursion depth exceeded")
+    monkeypatch.setattr(json if fmt == "json" else yaml, "loads" if fmt == "json" else "load",
+                        deep)
+    with pytest.raises(_lib_input.DocumentError) as exc:
+        _lib_input.decode_bytes(b"[1]", fmt=fmt, name="x")
+    assert str(exc.value) == f"not valid {fmt.upper()}: nested too deeply to read"
+
+
+def test_a_value_safeloader_cannot_build_is_a_document_error():
+    with pytest.raises(_lib_input.DocumentError) as exc:
+        _lib_input.decode_bytes(b"a: 2020-99-99\n", fmt="yaml", name="x")
+    assert str(exc.value).startswith("not valid YAML: ")
