@@ -251,7 +251,18 @@ GITLAB_KUBECTL_IMAGE = 'alpine/kubectl:1.37.2'
 # ⓘ Measured: ships a shell, but `ENTRYPOINT ["helm"]` — see the
 # `entrypoint: [""]` override in the emitted job, without which the job dies
 # before its first script line.
-GITLAB_HELM_IMAGE = 'alpine/helm:3.22.1'
+#: The ONE Helm version a generated project deploys with, on BOTH CI platforms.
+#: GitLab runs it as the `alpine/helm` image below; GitHub installs it with
+#: `azure/setup-helm` in the apply job (#1269 follow-up). Before that step
+#: existed the GitHub workflow used whatever helm the runner image carried, and
+#: `ubuntu-latest` moving from 24.04 (Helm 3.22.1) to 26.04 (Helm 4.3.1) between
+#: 2026-10-19 and 2026-11-19 (actions/runner-images#14748) walked every GitHub
+#: customer across the major boundary the pin below exists to hold.
+#: ⚠️ Helm 3 security fixes end 2027-02-10 (helm.sh/blog/helm-v3-end-of-life):
+#: moving this to 4.x is a planned decision, taken with the generated
+#: `helm upgrade` flags, before that date.
+HELM_VERSION = '3.22.1'
+GITLAB_HELM_IMAGE = f'alpine/helm:{HELM_VERSION}'
 
 # ⛔ There is deliberately no ARGOCD_CLI_IMAGE any more. `--deploy argocd` was
 # retired (#1351): it scaffolded no ArgoCD Application while its apply stage
@@ -285,7 +296,7 @@ GITLAB_HELM_IMAGE = 'alpine/helm:3.22.1'
 # tracked major runs on every runner a customer may use (GitHub Enterprise
 # Server, self-hosted, older `ubuntu-*` images). We measure agreement with the
 # platform, not universal availability. A customer on a runner that cannot take
-# the tracked major edits the two `uses:` lines in their own repository — the
+# the tracked major edits the `uses:` lines in their own repository — the
 # delivered pipeline is theirs once written.
 
 # The tool image every generated project runs, and the only ref that reaches
@@ -1415,6 +1426,11 @@ def _build_github_apply_stage(
           cancel-in-progress: false
         steps:
           - uses: actions/checkout@v6
+          # Pins helm: the runner's own helm follows the runner image, which
+          # moves across Helm majors on GitHub's schedule, not ours.
+          - uses: azure/setup-helm@v4
+            with:
+              version: v{helm_version}
           - name: Helm upgrade threshold-exporter
             run: |
               helm upgrade --install threshold-exporter \\
@@ -1423,6 +1439,7 @@ def _build_github_apply_stage(
                 -n ${{{{ env.MONITORING_NS }}}} \\
                 --wait --timeout 5m
     """).format(namespace=namespace,
+                helm_version=HELM_VERSION,
                 chart=THRESHOLD_EXPORTER_CHART,
                 chart_version=THRESHOLD_EXPORTER_CHART_VERSION,
                 helm_values=_offset_path(offset, _HELM_VALUES_REL.as_posix()))
