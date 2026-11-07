@@ -47,13 +47,13 @@ victorialogs mode, jwt.audience MUST be `tenant-federation-logs`.
 {{- fail (printf "federation-gateway: victorialogs mode requires jwt.audience=\"tenant-federation-logs\" (a metrics-pull token must not query the log store), got %q" .Values.jwt.audience) }}
 {{- end }}
 {{- end }}
-{{- with .Values.victorialogs.auth.existingSecret }}
+{{- with include "federation-gateway.vlAuthSecret" . }}
 {{- if ne $.Values.mode "victorialogs" }}
 {{- fail (printf "federation-gateway: victorialogs.auth.existingSecret is only used in mode=victorialogs (got mode %q); unset it" $.Values.mode) }}
 {{- end }}
 {{- /* The username is templated into revoked_check.lua as a string literal. */}}
-{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" (toString $.Values.victorialogs.auth.username)) }}
-{{- fail (printf "federation-gateway: victorialogs.auth.username %q must be lowercase letters, digits and dashes (the helm/victorialogs auth.consumers name)" (toString $.Values.victorialogs.auth.username)) }}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" (include "federation-gateway.vlAuthUser" $)) }}
+{{- fail (printf "federation-gateway: victorialogs.auth.username %q must be lowercase letters, digits and dashes (the helm/victorialogs auth.consumers name)" (include "federation-gateway.vlAuthUser" $)) }}
 {{- end }}
 {{- end }}
 {{- include "federation-gateway.validateRevokedSet" . }}
@@ -65,7 +65,7 @@ Whether the gateway authenticates to the log store (#1295): victorialogs mode
 with a Secret named. One definition for the Lua, the volume and the mount.
 */}}
 {{- define "federation-gateway.victorialogsAuth" -}}
-{{- if and (eq .Values.mode "victorialogs") .Values.victorialogs.auth.existingSecret }}true{{- end }}
+{{- if and (eq .Values.mode "victorialogs") (include "federation-gateway.vlAuthSecret" .) }}true{{- end }}
 {{- end }}
 
 {{/*
@@ -148,4 +148,22 @@ a gateway that accepts a revoked set the reconciler reads differently.
 {{- fail (printf "federation-gateway: revokedSet.tokenIdPattern contains %q, which does not mean the same thing in all three dialects the contract has to hold in (this Lua pattern, tenant-api's Go regexp, the reconciler's Python re). Braces/backslash/alternation are regex-only and Lua takes them literally; %% is Lua-only and Go and Python take it literally. Either way the three sides stop agreeing while their literals still look identical, which is exactly the drift #1235 exists to close. If the contract genuinely needs to change it must change on all three sides together and stay expressible in all three. Got %q" $bad $p) }}
 {{- end }}
 {{- end }}
+{{- end }}
+
+{{/*
+Store credentials (#1295), read null-safe. A release upgraded with
+--reuse-values from a chart older than this one carries no
+victorialogs.auth at all (Helm then does not merge the new defaults in),
+and an operator following the README may set only existingSecret. So: a
+missing `auth` is an empty map, and a missing username is the chart name —
+which is this consumer's name in helm/victorialogs auth.consumers
+(tests/shared/test_victorialogs_consumers.py renders both ways).
+*/}}
+{{- define "federation-gateway.vlAuthSecret" -}}
+{{- $auth := .Values.victorialogs.auth | default dict -}}
+{{- $auth.existingSecret | default "" -}}
+{{- end }}
+{{- define "federation-gateway.vlAuthUser" -}}
+{{- $auth := .Values.victorialogs.auth | default dict -}}
+{{- $auth.username | default .Chart.Name -}}
 {{- end }}

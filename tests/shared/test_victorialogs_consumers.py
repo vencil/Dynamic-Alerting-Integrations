@@ -223,8 +223,8 @@ def _basic_user(header: str | None, where: str) -> str:
     return user
 
 
-def probe_vector() -> Observed:
-    docs = _render("vector", f"victorialogs.auth.existingSecret={SECRET}",
+def probe_vector(*extra: str) -> Observed:
+    docs = _render("vector", f"victorialogs.auth.existingSecret={SECRET}", *extra,
                    "tenantProjections[0].tenantId=tenant-alpha",
                    "tenantProjections[0].accountId=1000",
                    "projectionGate.registry.configMapName=reg")
@@ -250,7 +250,9 @@ def probe_vector() -> Observed:
         assert auth.get("strategy") == "basic" and auth.get("password") == f"${{{env}}}", (
             f"vector sink {name} writes to the store without the Secret-backed basic auth: {auth}")
         users.add(auth.get("user"))
-        paths += ["/" + u[len(store):] for u in sink["endpoints"]]
+        # The elasticsearch sink POSTs to <endpoint>_bulk; check that, not the
+        # endpoint base, against the grant.
+        paths += ["/" + u[len(store):].rstrip("/") + "/_bulk" for u in sink["endpoints"]]
     assert len(users) == 1, f"vector sinks disagree on the username: {users}"
     return Observed(users.pop(), paths)
 
@@ -280,14 +282,14 @@ def _run_chargeback(docs: list[dict], tmp: Path) -> Observed:
     return Observed(users.pop(), [sent_path])
 
 
-def probe_chargeback(tmp: Path) -> Observed:
+def probe_chargeback(tmp: Path, *extra: str) -> Observed:
     docs = _render("chargeback-aggregator", f"victorialogs.auth.existingSecret={SECRET}",
-                   "manualJob.enabled=true")
+                   "manualJob.enabled=true", *extra)
     return _run_chargeback(docs, tmp)
 
 
-def probe_reconciler() -> Observed:
-    docs = _render("federation-reconciler", f"victorialogs.auth.existingSecret={SECRET}")
+def probe_reconciler(*extra: str) -> Observed:
+    docs = _render("federation-reconciler", f"victorialogs.auth.existingSecret={SECRET}", *extra)
     c = next(c for c in _pod_spec(next(d for d in docs if d["kind"] == "Deployment"))["containers"]
              if c["name"] == "reconciler")
     env_name = _the_password_env(c, "reconciler container")
@@ -307,9 +309,9 @@ def probe_reconciler() -> Observed:
     return Observed(_basic_user(header, "reconciler"), [path])
 
 
-def probe_gateway() -> Observed:
+def probe_gateway(*extra: str) -> Observed:
     docs = _render("federation-gateway", "mode=victorialogs", "jwt.audience=tenant-federation-logs",
-                   f"victorialogs.auth.existingSecret={SECRET}")
+                   f"victorialogs.auth.existingSecret={SECRET}", *extra)
     pod = _pod_spec(next(d for d in docs if d["kind"] == "Deployment"))
     vols = [v["name"] for v in pod["volumes"] if (v.get("secret") or {}).get("secretName") == SECRET]
     assert len(vols) == 1, f"gateway mounts Secret {SECRET} {len(vols)} times"
@@ -381,6 +383,30 @@ def test_consumer_sends_its_registered_identity_on_granted_paths(consumer: str, 
 
 
 # ── no Secret, no credentials (observe-mode installs keep working) ──────────
+
+
+# ── values from an older chart (#1295 review) ──────────────────────────────
+# `helm upgrade --reuse-values` from a chart older than #1295 keeps the old
+# values and does NOT merge the new defaults in, so victorialogs.auth is
+# absent; an operator following the README may then add only existingSecret.
+CHART_CONSUMERS = ["vector", "chargeback-aggregator", "federation-reconciler", "federation-gateway"]
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", CHART_CONSUMERS)
+def test_values_without_an_auth_block_still_render(chart: str) -> None:
+    _render(chart, "victorialogs.auth=null")
+
+
+@_needs_helm
+@pytest.mark.parametrize("consumer", CHART_CONSUMERS)
+def test_a_secret_without_a_username_still_sends_the_registered_identity(consumer: str, tmp_path: Path) -> None:
+    probe = PROBES[consumer]
+    unset = "victorialogs.auth.username=null"
+    obs = probe(tmp_path, unset) if probe is probe_chargeback else probe(unset)
+    assert obs.username == consumer, (
+        f"{consumer} with no username authenticates as {obs.username!r}; the fallback must be the "
+        "registered name")
 
 
 @_needs_helm

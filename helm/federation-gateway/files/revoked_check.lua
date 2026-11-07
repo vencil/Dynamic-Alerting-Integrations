@@ -30,7 +30,7 @@ local PAYLOAD_KEY = "fed_payload"
 -- Log-store credential (#1295): victorialogs mode with
 -- victorialogs.auth.existingSecret set. nil = send none.
 {{- if include "federation-gateway.victorialogsAuth" . }}
-local VL_AUTH_USER = {{ .Values.victorialogs.auth.username | quote }}
+local VL_AUTH_USER = {{ include "federation-gateway.vlAuthUser" . | quote }}
 local VL_AUTH_FILE = "/etc/victorialogs-auth/password"
 {{- else }}
 local VL_AUTH_USER = nil

@@ -310,7 +310,7 @@ spec:
         # which is better than a gateway that cannot reach the store.
         - name: victorialogs-auth
           secret:
-            secretName: {{ .Values.victorialogs.auth.existingSecret | quote }}
+            secretName: {{ include "federation-gateway.vlAuthSecret" . | quote }}
             items:
               - key: password
                 path: password

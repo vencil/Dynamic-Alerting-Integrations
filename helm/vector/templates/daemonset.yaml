@@ -162,7 +162,7 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
-            {{- with .Values.victorialogs.auth.existingSecret }}
+            {{- with include "vector.vlAuthSecret" . }}
             # Store credential (#1295), interpolated into the victorialogs
             # sinks' basic auth — see vector.victorialogsAuth.
             - name: VICTORIALOGS_PASSWORD

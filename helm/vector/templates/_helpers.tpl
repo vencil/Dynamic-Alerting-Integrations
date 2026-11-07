@@ -63,10 +63,28 @@ nothing is rendered without a Secret, so the default config still contains
 no `$`. Indented for a sink body.
 */}}
 {{- define "vector.victorialogsAuth" -}}
-{{- with .Values.victorialogs.auth.existingSecret }}
+{{- with include "vector.vlAuthSecret" . }}
 auth:
   strategy: basic
-  user: {{ required "victorialogs.auth.username is required when victorialogs.auth.existingSecret is set" $.Values.victorialogs.auth.username | quote }}
+  user: {{ include "vector.vlAuthUser" $ | quote }}
   password: "${VICTORIALOGS_PASSWORD}"
 {{- end }}
+{{- end }}
+
+{{/*
+Store credentials (#1295), read null-safe. A release upgraded with
+--reuse-values from a chart older than this one carries no
+victorialogs.auth at all (Helm then does not merge the new defaults in),
+and an operator following the README may set only existingSecret. So: a
+missing `auth` is an empty map, and a missing username is the chart name —
+which is this consumer's name in helm/victorialogs auth.consumers
+(tests/shared/test_victorialogs_consumers.py renders both ways).
+*/}}
+{{- define "vector.vlAuthSecret" -}}
+{{- $auth := .Values.victorialogs.auth | default dict -}}
+{{- $auth.existingSecret | default "" -}}
+{{- end }}
+{{- define "vector.vlAuthUser" -}}
+{{- $auth := .Values.victorialogs.auth | default dict -}}
+{{- $auth.username | default .Chart.Name -}}
 {{- end }}

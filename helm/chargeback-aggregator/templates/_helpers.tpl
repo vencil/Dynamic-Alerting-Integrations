@@ -32,13 +32,31 @@ aggregate script sends as HTTP basic auth. Nothing without a Secret.
 Shared by the CronJob and the manual Job so the two cannot drift.
 */}}
 {{- define "chargeback.victorialogsAuthEnv" -}}
-{{- with .Values.victorialogs.auth.existingSecret }}
+{{- with include "chargeback.vlAuthSecret" . }}
 - name: VICTORIALOGS_USERNAME
-  value: {{ required "victorialogs.auth.username is required when victorialogs.auth.existingSecret is set" $.Values.victorialogs.auth.username | quote }}
+  value: {{ include "chargeback.vlAuthUser" $ | quote }}
 - name: VICTORIALOGS_PASSWORD
   valueFrom:
     secretKeyRef:
       name: {{ . | quote }}
       key: password
 {{- end }}
+{{- end }}
+
+{{/*
+Store credentials (#1295), read null-safe. A release upgraded with
+--reuse-values from a chart older than this one carries no
+victorialogs.auth at all (Helm then does not merge the new defaults in),
+and an operator following the README may set only existingSecret. So: a
+missing `auth` is an empty map, and a missing username is the chart name —
+which is this consumer's name in helm/victorialogs auth.consumers
+(tests/shared/test_victorialogs_consumers.py renders both ways).
+*/}}
+{{- define "chargeback.vlAuthSecret" -}}
+{{- $auth := .Values.victorialogs.auth | default dict -}}
+{{- $auth.existingSecret | default "" -}}
+{{- end }}
+{{- define "chargeback.vlAuthUser" -}}
+{{- $auth := .Values.victorialogs.auth | default dict -}}
+{{- $auth.username | default .Chart.Name -}}
 {{- end }}

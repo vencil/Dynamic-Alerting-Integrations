@@ -111,7 +111,9 @@ victorialogs:
   # Authorization header on every forwarded request (jwt_authn has already
   # consumed and stripped the tenant's bearer token). Empty = send no
   # credentials, which only works while the store runs `auth.mode: observe`.
-  # Only valid with mode=victorialogs; render fails otherwise.
+  # A non-empty existingSecret is only valid with mode=victorialogs and fails
+  # the render otherwise; `username` alone is ignored outside that mode.
+  # An empty username falls back to the chart name.
   auth:
     username: federation-gateway
     existingSecret: ""
