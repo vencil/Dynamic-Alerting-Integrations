@@ -15,6 +15,9 @@
   的 receiver 的 mapping，與一個帶 userinfo 的 canary URL 字串。
 * 跑 `--validate --strict --findings-json`：stdout、stderr、findings 都不得出現
   canary。PATH 裡不放 amtool：amtool 的原文轉印是另一條通道（另開票）。
+* 每格還要證明那個位置真的被讀了（第 6 輪）：findings 不得為空、要有該鍵角色的
+  標記 kind（`_marker_kinds`），且不得出現情境帶不出的 kind（`_allowed_kinds`）。
+  沒有判到東西的 run 也沒有 canary 可漏，只驗「沒漏」會把它當成綠。
 """
 from __future__ import annotations
 
@@ -173,6 +176,62 @@ _KEY_PLACES = sorted(set(_PLACES) - {"tenant"})
 _CASES += [(where, _KEY_CANARY, "key_name") for where in _KEY_PLACES]
 
 
+#: Round 6, N-2: the finding that proves the run read the value at that
+#: place — a run that read nothing (or judged the wrong thing) has no canary
+#: to leak either. Keyed by the key's role, not by place; a case whose
+#: findings hold none of its marker kinds fails.
+_TIMING = ("group_wait", "group_interval", "repeat_interval")
+_MATCHERS = ("alertname", "metric_group")
+#: the override entry was read (its receiver repeats the block's, or its
+#: matchers clash with another entry's).
+_OVERRIDE_READ = {"redundant_override_receiver", "duplicate_override_matcher",
+                  "conflicting_override_matcher"}
+
+
+def _marker_kinds(where: str, key: str, kind: str) -> set[str]:
+    if kind == "key_name":
+        # Route entries refuse a key they do not know; every other place
+        # ignores it, and says so.
+        return {"invalid_route_entry"} if where.startswith("route_entry") else {"routing_key_ignored"}
+    if key in _TIMING:
+        return {"timing_value_replaced"}
+    if key == "group_by":
+        return {"routing_group_by_invalid"}
+    if key == "receiver":
+        return {"missing_receiver_field"}
+    if key == "overrides":
+        return {"invalid_override_entry"}
+    if key == "routes":
+        return {"invalid_route_entry"}
+    if key == "enabled":
+        return {"routing_enforced_enabled_invalid"}
+    if key == "match":
+        return {"routing_enforced_match_invalid"} if where == "routing_enforced" else {"invalid_route_entry"}
+    if key in _MATCHERS:
+        # A URL is a valid matcher string: only the entry having been read
+        # shows; a mapping is not a string.
+        return {"routing_value_not_string"} if kind == "receiver_mapping" else _OVERRIDE_READ
+    if key == "_routing_profile":
+        # ⚠️ A string naming no profile is a WARN the findings classify as
+        # `unclassified` (no kind of its own yet); a mapping is a type error.
+        return {"routing_profile_invalid"} if kind == "receiver_mapping" else {"unclassified"}
+    raise KeyError((where, key, kind))
+
+
+def _allowed_kinds(where: str, key: str, kind: str) -> set[str]:
+    """The marker plus what the case's surroundings legitimately add."""
+    out = _marker_kinds(where, key, kind) | {"refusal_summary"}
+    if where.startswith("override_entry"):
+        out |= _OVERRIDE_READ
+    if kind == "receiver_mapping" or key in ("receiver", "overrides", "routes"):
+        # A receiver the walk does not reach (a mapping where a value goes,
+        # a receiver missing its fields, a list that is not one).
+        out.add("credential_unjudged")
+    if kind == "receiver_mapping" and key == "match":
+        out.add("routing_value_not_string")
+    return out
+
+
 def test_the_matrix_covers_every_place_and_key():
     assert ("tenant", "_routing_profile") in {(w, k) for w, k, _ in _CASES}
     for where in ("tenant_routing", "override_entry", "route_entry", "routing_defaults",
@@ -203,6 +262,12 @@ def test_no_routing_value_reaches_a_message(tmp_path, where, key, kind):
     assert p.returncode in (0, 1), (p.returncode, p.stderr)
     assert out.exists(), p.stderr
     findings = json.loads(out.read_text(encoding="utf-8"))["findings"]
-    assert "run_failed" not in {f["kind"] for f in findings}, findings
+    kinds = {f["kind"] for f in findings}
+    assert "run_failed" not in kinds, findings
+    # Round 6, N-2: the place was read — its marker finding is there, and
+    # nothing else the case cannot cause.
+    assert findings, "no finding: the value at this place was not judged"
+    assert kinds & _marker_kinds(where, key, kind), (sorted(kinds), _marker_kinds(where, key, kind))
+    assert kinds <= _allowed_kinds(where, key, kind), sorted(kinds - _allowed_kinds(where, key, kind))
     text = p.stdout + p.stderr + out.read_text(encoding="utf-8")
     assert "CANARY" not in text, text
