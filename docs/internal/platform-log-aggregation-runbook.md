@@ -180,8 +180,8 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
    | `federation-gateway` | chart `victorialogs.auth.existingSecret`（只在 `mode: victorialogs`） | 掛成檔案，Lua 依 `revokedSet.reloadIntervalSeconds` 重讀 | 不用重啟（kubelet 同步 Secret 後下一個重讀週期） |
    | `federation-reconciler` | chart `victorialogs.auth.existingSecret` | env | rollout restart Deployment |
 
-   ⚠️ reconciler 的程式在 da-tools 映像裡，不在 chart 裡：映像早於帶有
-   #1295 的版本時，它會忽略這組 env、繼續不帶帳密查詢。切 enforce 前要確認
+   ⚠️ reconciler 的程式在 da-tools 映像裡，不在 chart 裡：映像早於帶有 #1295
+   的版本時，它會忽略這組 env、繼續不帶帳密查詢。切 enforce 前要確認
    `image.tag` 已升到該版本。
    各 chart 的 `victorialogs.auth.username` 預設就是登錄裡的名稱；
    `tests/shared/test_victorialogs_consumers.py` 要求登錄與五個消費端一一
