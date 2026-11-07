@@ -227,7 +227,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_leftouterjoin_enrichment.py": _R_LINT,
     "check_lint_toolchain_fit.py": _R_LINT,
     "check_log_egress_policy.py": _R_LINT,
-    "check_maintenance_symmetry.py": _R_LINT,
     "check_md_yaml_drift.py": _R_LINT,
     "check_open_encoding.py": _R_LINT,
     "check_orphan_docs.py": _R_LINT,
