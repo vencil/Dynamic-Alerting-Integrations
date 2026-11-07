@@ -264,3 +264,62 @@ def test_only_a_label_key_counts_not_text_inside_a_label_value():
 def test_a_near_miss_filter_value_is_refused():
     with pytest.raises(grd.ShapeError):
         grd.clause_count('x unless on(tenant) (user_state_filter{filter=~"mainten.+"} == 1)')
+
+
+# ── check 4: selectors that reach the maintenance series (Prometheus' reading) ──
+
+#: Spellings that select the maintenance series without the canonical clause:
+#: the first from the review that retired check_maintenance_symmetry (#1200),
+#: the rest from the review of a text check that replaced it — each passed
+#: every other hook, and in a `page` alert muted it in a maintenance window
+#: (promtool-verified by the reviewer).
+_STRAY_SELECTORS = [
+    'user_state_filter{filter=~"main.*"}',
+    'user_state_filter{filter!="container_crashloop"}',
+    r'user_state_filter{filter="mai\x6etenance"}',
+    '{__name__=~"user_state_.*", filter=~"main.*"}',
+    '{__name__=~"user_state_.*", filter=`maintenance`}',
+    "{__name__=~\"user_state_.*\", filter='maintenance'}",
+    '{filter="maintenance"}',
+    'user_state_filter',
+]
+
+
+def _page_alert_muted_by(tmp_path, selector: str) -> Path:
+    rp = tmp_path / "rule-packs"
+    shutil.copytree(_REPO / "rule-packs", rp)
+    p = rp / "rule-pack-clickhouse.yaml"
+    text = p.read_text(encoding="utf-8")
+    old = '      - alert: ClickHouseDown\n        expr: up{job="clickhouse"} == 0\n'
+    assert old in text, "fixture anchor moved: ClickHouseDown's expr"
+    p.write_text(text.replace(old, (
+        '      - alert: ClickHouseDown\n        expr: |\n'
+        '          up{job="clickhouse"} == 0\n'
+        f'          unless on(tenant) ({selector} == 1)\n'), 1), encoding="utf-8")
+    return rp
+
+
+@pytest.mark.parametrize("selector", _STRAY_SELECTORS)
+def test_a_page_alert_muted_by_any_spelling_fails_the_check(da_read_env, tmp_path, capsys, selector):
+    rp = _page_alert_muted_by(tmp_path, selector)
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    assert "could select the maintenance series outside the maintenance clause" in capsys.readouterr().err
+
+
+def test_selecting_another_filter_by_name_passes(da_read_env, tmp_path):
+    """Negative control: the same edit with a filter that is not maintenance."""
+    rp = _page_alert_muted_by(tmp_path, 'user_state_filter{filter="container_crashloop"}')
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
+
+
+def test_stray_selector_offsets_are_bytes_mapped_to_characters():
+    """da-read reports byte offsets; a non-ASCII comment before the clause must
+    not shift the containment test."""
+    expr = "x # 註解\n" + TAIL
+    start = expr.encode("utf-8").index(b"user_state_filter")
+    hit = {"selector": grd.MAINTENANCE_SERIES, "start": start,
+           "end": start + len(grd.MAINTENANCE_SERIES)}
+    assert grd.stray_selector_problems([("p", "alert A", expr)], lambda exprs: [[hit]]) == []
+    outside = "user_state_filter{filter=\"maintenance\"} > 0\n" + TAIL
+    hit2 = {"selector": grd.MAINTENANCE_SERIES, "start": 0, "end": len(grd.MAINTENANCE_SERIES)}
+    assert len(grd.stray_selector_problems([("p", "alert B", outside)], lambda exprs: [[hit2]])) == 1

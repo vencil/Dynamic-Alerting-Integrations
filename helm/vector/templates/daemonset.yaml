@@ -139,7 +139,9 @@ spec:
             # contains no `$` at all (pinned by
             # tests/shared/test_helm_chart_log_aggregation.py), so the only
             # interpolation sites are the ones an operator writes into
-            # additionalSinks. Credential values must not contain `"`; a literal
+            # additionalSinks, plus ${VICTORIALOGS_PASSWORD} in the store sinks
+            # when victorialogs.auth.existingSecret is set (#1295; the env var
+            # is set below in that case). Credential values must not contain `"`; a literal
             # dollar in an additionalSinks string is written `$$`.
             - name: VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION
               value: "true"
@@ -160,6 +162,15 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- with include "vector.vlAuthSecret" . }}
+            # Store credential (#1295), interpolated into the victorialogs
+            # sinks' basic auth — see vector.victorialogsAuth.
+            - name: VICTORIALOGS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ . | quote }}
+                  key: password
+            {{- end }}
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

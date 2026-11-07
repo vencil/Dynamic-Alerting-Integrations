@@ -4,28 +4,37 @@
 # the federation-gateway chart in `mode=victorialogs` into rendered/victorialogs/
 # before `compose up`.
 #
-# Stack (gateway-focused, not full-stack VictoriaLogs):
-#   mock-logstore <-- federation-gateway(victorialogs mode) <-- pytest driver (host)
+# Stack:
+#   mock-logstore <-- vmauth (real, enforce) <-- federation-gateway(victorialogs mode) <-- pytest driver (host)
+#                        ^-- pytest driver, as each registered consumer (#1295)
+#
+# vmauth is the real image with the real args and auth.yml, rendered from
+# helm/victorialogs by render_vmauth.py into rendered/victorialogs/vmauth.compose.yml
+# (a compose override the runner passes with -f): `auth.mode: enforce` and a password
+# for every registered consumer, so the gateway's requests reach the store only if
+# the gateway really authenticates. The mock listens on the backend port INSIDE
+# vmauth's network namespace — the same loopback-only hop VictoriaLogs has in the pod.
 #
 # The mock-logstore echoes the AccountID/ProjectID headers the gateway injected (it
 # does NOT reimplement VictoriaLogs partitioning — see mock_logstore.py + README
 # §victorialogs fidelity boundary). The assertion target is the gateway's header
 # handling: JWT-verified AccountID always wins over any client spoof, fail-closed on
-# a missing/malformed claim, audience-bound (metrics token 401s), endpoint allowlist.
+# a missing/malformed claim, audience-bound (metrics token 401s), endpoint allowlist;
+# and vmauth's per-consumer authorization.
 
 services:
   # Stand-in for VictoriaLogs — a pure-stdlib echo server. python:alpine has no pip
   # deps needed (mock_logstore.py is stdlib only).
   mock-logstore:
     image: python:3.14.10-alpine3.23
-    command: ["python", "/app/mock_logstore.py", "9428"]
+    command: ["python", "/app/mock_logstore.py", "${E2E_VL_BACKEND_PORT:?set by federation_e2e_run.sh from helm/victorialogs auth.backendPort}"]
+    # vmauth's network namespace: reachable only through vmauth, as in the pod.
+    network_mode: "service:vmauth"
     volumes:
       - ./mock_logstore.py:/app/mock_logstore.py:ro
-    expose:
-      - "9428"
     healthcheck:
       # The echo server answers any path; /healthz is fine. wget is in alpine.
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9428/healthz"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:${E2E_VL_BACKEND_PORT}/healthz"]
       interval: 2s
       timeout: 1s
       retries: 30
@@ -44,8 +53,12 @@ services:
       - ./rendered/victorialogs/audit_extract.lua:/etc/envoy/audit_extract.lua:ro
       - ./rendered/jwks.json:/etc/jwks/jwks.json:ro
       - ./rendered/victorialogs/revoked.txt:/etc/revoked/revoked.txt
+      # The chart mounts the Secret here (federation-gateway deployment.yaml).
+      - ./rendered/victorialogs/gateway-password:/etc/victorialogs-auth/password:ro
     ports:
       - "${E2E_VL_GATEWAY_PORT:-18081}:8080"
     depends_on:
       mock-logstore:
         condition: service_healthy
+  # `vmauth` (store-side authorization, #1295) is defined entirely by
+  # rendered/victorialogs/vmauth.compose.yml — see render_vmauth.py.

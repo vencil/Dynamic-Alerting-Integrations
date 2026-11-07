@@ -286,6 +286,7 @@ exposed, 1 = one ingress, …).
 |---|---|---|
 | `mode` | `prom-label-proxy` | `prom-label-proxy` \| `vm-cluster` \| `victorialogs` |
 | `victorialogs.allowedEndpoints` | LogsQL query/metadata list | **`victorialogs` mode only.** Default-deny allowlist; everything else (incl. `/tail`, `/insert/*`, `/select/tenant_ids`) gets `403`. Adding an endpoint is an explicit maintainer action |
+| `victorialogs.auth.existingSecret` | `""` | **`victorialogs` mode only** (#1295). Secret (key `password`) whose value matches the store's vmauth consumer `victorialogs.auth.username` (default `federation-gateway`). Mounted as a file; the Lua sends it as HTTP basic auth on every forwarded query and re-reads it on the revoked-set cadence, so rotation needs no restart. Empty ⇒ no credential, which only works while helm/victorialogs runs `auth.mode: observe` |
 | `emergencyGlobalBlock` | `false` | Incident kill switch — `true` ⇒ a `direct_response` 503 to every request (see "Emergency global block") |
 | `jwt.jwks` | `""` | **Required.** Public JWKS of tenant-api's RS256 key. Empty ⇒ keyless JWKS ⇒ Envoy refuses to start (fail-loud CrashLoopBackOff). Produced by IV-2l (#518) |
 | `jwt.issuer` / `jwt.audience` | `tenant-api` / `tenant-federation` | Must match what tenant-api signs. **`victorialogs` mode requires `jwt.audience: tenant-federation-logs`** (fail-loud at render) |
