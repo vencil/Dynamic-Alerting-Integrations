@@ -517,8 +517,8 @@ groups:
       # exact silent-failure class this coverage exists to close. The two constants are
       # therefore inline; a tenant that wants a different OOM policy has the
       # maintenance opt-out and (for bespoke shapes) the custom-alerts route.
-      # Maintenance suppression is factored HERE, once, so both alert bodies below carry
-      # ZERO maintenance clauses (the 0-copy shape check_maintenance_symmetry expects).
+      # No maintenance clause here: it sits on each alert that reads these cores,
+      # written from the alert's `maintenance:` label by generate_rulepack_derived.py (#3309).
       # No `version` dimension: unlike cpu/memory these cores are not part of the
       # ADR-024 version pilot (no threshold to resolve per version), so the alert labels
       # stay (tenant) only and Alertmanager groups one OOM notification per tenant.

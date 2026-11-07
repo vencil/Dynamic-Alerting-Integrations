@@ -97,7 +97,7 @@ tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/
 對於已有成熟監控體系的企業，`da-tools onboard` **反向分析** Alertmanager / Prometheus rules / scrape config，自動產出遷移計畫（沒有既有監控可跳過此步）：
 
 - Alertmanager（`--alertmanager-config`）→ `phase1-routing/`：每個租戶 route 的路由摘要與 `<租戶>.yaml` 路由片段，以及 `onboard-hints.json`（找得到租戶 route 時）
-- 規則檔（`--rule-files '<glob>'`）→ `phase2-rules/migration-plan.csv`（每條告警規則的 `status`：`perfect` / `complex` / `unparseable`）與 `_defaults-suggestion.yaml`
+- 規則檔（`--rule-files <檔或目錄>...`；v2.9.0 映像給目錄選不到檔，改給加引號的 glob <!-- image-caveat: v2.9.0 -->）→ `phase2-rules/migration-plan.csv`（每條告警規則的 `status`：`perfect` / `complex` / `unparseable`）與 `_defaults-suggestion.yaml`
 - scrape config（`--scrape-config`）→ `phase3-scrape/`：`scrape-analysis.yaml` 與各 job 的 `<job>-relabel-suggestion.yaml`
 
 完整 flag、輸出條件與結束碼：[`cli-reference.md#onboard`](cli-reference.md#onboard)。`onboard-hints.json` 可餵 `scaffold --from-onboard`；規則轉換用 `migrate`，它直接吃舊規則檔。
