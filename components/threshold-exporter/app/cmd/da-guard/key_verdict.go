@@ -238,6 +238,7 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 			NotServed: ec.NotServed}
 	}
 	in.RootProfiles = opts.profiles
+	in.Values = rep.ValueProblems
 	// A profile no tenant binds is known only over every tenant (#3395):
 	// not with a --tenant subset, and not when a file the load drops, or a
 	// tenant set aside, may be the one binding it.

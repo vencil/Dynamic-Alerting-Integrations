@@ -50,6 +50,8 @@ Revised 2026-11-04: a threshold key of a profile no tenant binds is not judged a
 
 Revised 2026-11-05: a `dimensions:` base is never a `<key>_critical`: such a declaration declares nothing and no `<key>_critical{…}` key has a row (decision 11).
 
+Revised 2026-11-07: a reserved key that is read but whose value the reader does not read joins the shared verdict (`value_unread`), judged in the file and layer that writes it, never on the merged value: an error in a tenant file, a notice in a profile or a root platform file's `tenants:`; `_metadata`'s sub-keys and `_severity_dedup` each get their reader's value check. tenant-api refuses nothing more on such a finding and keeps decision 12's write check (decisions 10, 12).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -374,8 +376,14 @@ The documentation will say: the tools try to report problems, but whether values
 |---|---|---|
 | Served, but no rule reads it (for example, a typo in the root defaults, or a dimension key on a declared base that no rule reads) | The reader is the deployed alert rules. Judged by the index of the rule packs in the repo, covering rules that read it indirectly through a recording rule, rules that query `user_threshold` directly, and `_critical` keys; an "external reader" (the customer's own Prometheus rules) can be declared | Always advisory only |
 | Whole files no reader reads (files in the tenant area without `tenants:`, `_defaults` files in sub-directories that are not selected) | Reuse the existing `skipped` / `unread_keys` of served-values | notice: a newly created file that has no `tenants:` yet must not freeze writes |
-| Unknown sub-keys of `_metadata` | The Go `TenantMetadata` is the source of truth; today only validate-config's schema check reports them | Tenant file: error; platform files and profiles: notice |
-| Read, but the value is invalid (`_silent_mode: garbage`, `_severity_dedup: maybe`, `_routing_profile: 5`) | Today neither the generator nor da-guard reports them, and validate-config catches only two of them (`_severity_dedup: maybe` gets no hint at all). A key with only one reader is validated by that reader; for `_severity_dedup`, which both readers read, one shared table of cases pins the values the two sides accept to be the same | error |
+| Unknown sub-keys of `_metadata` | The Go `TenantMetadata` is the source of truth; the verdict reports `value_unread`. The schema's `_metadata` field list is pinned to it in both directions by a Go test | Tenant file: error; platform files and profiles: notice |
+| Read, but the value is invalid (`_silent_mode: garbage`, `_severity_dedup: maybe`, a `_profile` naming no profile) | The program that reads it decides: the registry's `value.check` binds the key to the exporter's reading function, and the verdict reports `value_unread`. For `_severity_dedup`, which both readers read, a test pins the generator's accepted words to the exporter's. `_routing_profile`, read by the generator alone, is refused by the generator itself | Tenant file: error; platform files and profiles: notice |
+
+A value is judged in the file and layer that writes it, never on the merged value. A tenant's merged config already holds what its profile and the root platform files' `tenants:` fill in; judged there, one typo in a profile would be charged to every tenant that elects it and block their writes that have nothing to do with the value, a value none of them can fix in its own file. For example, profile `gold` writes `_silent_mode: purple`; `ta` and `tb`, which elect it, get one notice on the profile's file that names them:
+
+```
+_defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode "purple" (valid: warning, critical, all, disable)) — tenant(s) ta, tb
+```
 
 Measured on the main conf.d with the existing rule index, 18 keys are served but no rule reading them can be found. 3 of them are `_critical` keys whose base is read by an alert; the index just does not handle the `_critical` suffix yet, which the implementation must add. The other 15 are dimension keys whose base no rule reads; they are exactly the keys behind the 15 key-name warnings in the Background section. These are neither deleted nor given a looser check; instead they go into a known list with issue links, and the list may only shrink. This check asks "is every served value read by some rule"; the existing check "can the thresholds that alerts need be served" asks "is every value a rule needs served". The two run in opposite directions and complement each other.
 
@@ -423,6 +431,7 @@ When the write gate gains a value check, the repo may already hold values that f
 - **It applies only to the newly added value checks.** The existing checks (for example, `_profile` naming a profile that does not exist, or a scheduled value's `expires:` not being an RFC3339 time) are not relaxed by it.
 - **It applies to every tenant in the file**: one file can hold several tenants, and when one of them is written, an untouched bad value of another is also only a notice.
 - Reading a tenant's config (GET) uses the content on disk as its own baseline and reports an existing bad value as a notice.
+- The shared verdict's `value_unread` refuses nothing more in tenant-api: it sees only the tree after the write, so it cannot tell whether this write changed the value; a tenant-layer value is refused by the write check under the rules above, and the verdict's finding is returned as advice. validate-config refuses the whole tree on the verdict, and `da-guard write` refuses only what is new.
 
 This differs from how the generator gate treats a problem that was already there before the write. The generator gate marks it `pre_existing` but blocks all the same. The difference is in the failure direction and the blast radius: a bad `_silent_mode` makes the exporter silence nothing, so alerts are still sent, which fails on the safe side and affects only that one key; blocking would leave the tenant unable to change anything until it is fixed. Some of the problems the generator blocks make the whole conf.d refuse to render (for example, a `_severity_dedup` value the generator does not know), so letting them through costs far more.
 

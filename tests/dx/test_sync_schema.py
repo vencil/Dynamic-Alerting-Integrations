@@ -307,7 +307,8 @@ class TestValueAndBatchDerivations:
         assert d["batch_unsettable"] == ["_routing", "_routing_receiver_type"]
         # #3227: `_silent_mode` is judged by the exporter's reader at the
         # write gate (valueChecks in pkg/config/reserved_values.go).
-        assert d["value_checks"] == {"_silent_mode": "silent_mode"}
+        assert d["value_checks"] == {"_metadata": "metadata", "_severity_dedup": "severity_dedup",
+                                     "_silent_mode": "silent_mode"}
         # #3620: every `_state_<filter>` by the exporter's one state-value reading.
         assert d["prefix_value_checks"] == {"_state_": "state_filter"}
 
@@ -332,7 +333,8 @@ class TestValueAndBatchDerivations:
         assert _cli("--root", str(root), "--update").returncode == 0
         go = _read(root, ss.GO_REL)
         assert '"_namespaces":       "scalar",' in go
-        assert 'var reservedValueChecks = map[string]string{\n\t"_silent_mode": "silent_mode",\n}' in go
+        assert ('var reservedValueChecks = map[string]string{\n\t"_metadata":       "metadata",\n'
+                '\t"_severity_dedup": "severity_dedup",\n\t"_silent_mode":    "silent_mode",\n}') in go
         assert 'var reservedPrefixValueChecks = map[string]string{\n\t"_state_": "state_filter",\n}' in go
         assert "var scopeMetadataKeys = []string{}\n" in go
 

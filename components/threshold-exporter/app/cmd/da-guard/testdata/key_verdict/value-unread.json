@@ -1,0 +1,191 @@
+{
+  "schema": "da-guard.key-verdict/v2",
+  "at": "2026-07-01T03:00:00Z",
+  "undecidable": false,
+  "blocks": true,
+  "undecidable_blocks": false,
+  "tenants": {
+    "ta": [
+      {
+        "key": "_metadata",
+        "layer": null,
+        "file": null,
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "switched_off_with": null,
+        "value": null,
+        "served": {
+          "db_type": "",
+          "domain": "",
+          "environment": "",
+          "groups": [],
+          "owner": "a",
+          "region": "",
+          "runbook_url": "",
+          "tags": [],
+          "tier": ""
+        }
+      },
+      {
+        "key": "_profile",
+        "layer": "tenant",
+        "file": "ta.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "switched_off_with": null,
+        "value": "gold",
+        "served": null
+      },
+      {
+        "key": "_severity_dedup",
+        "layer": "tenant",
+        "file": "ta.yaml",
+        "read_by": [
+          "exporter",
+          "generator"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "switched_off_with": null,
+        "value": "maybe",
+        "served": "enable"
+      },
+      {
+        "key": "_silent_mode",
+        "layer": "profile",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "switched_off_with": null,
+        "value": "purple",
+        "served": []
+      },
+      {
+        "key": "mysql_connections",
+        "layer": "defaults",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "switched_off_with": null,
+        "value": 80,
+        "served": 80
+      }
+    ],
+    "tb": [
+      {
+        "key": "_profile",
+        "layer": "tenant",
+        "file": "tb.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "switched_off_with": null,
+        "value": "silver",
+        "served": null
+      },
+      {
+        "key": "mysql_connections",
+        "layer": "defaults",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "switched_off_with": null,
+        "value": 80,
+        "served": 80
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "error",
+      "kind": "value_unread",
+      "key": "_severity_dedup",
+      "file": "ta.yaml",
+      "tenants": [
+        "ta"
+      ],
+      "reason": "unknown severity_dedup value \"maybe\" (valid: enable, disable)",
+      "base": null,
+      "blocks": true
+    },
+    {
+      "severity": "error",
+      "kind": "value_unread",
+      "key": "_profile",
+      "file": "tb.yaml",
+      "tenants": [
+        "tb"
+      ],
+      "reason": "references unknown profile \"silver\"",
+      "base": null,
+      "blocks": true
+    },
+    {
+      "severity": "notice",
+      "kind": "value_unread",
+      "key": "_silent_mode",
+      "file": "_defaults.yaml",
+      "tenants": [
+        "ta"
+      ],
+      "reason": "unknown silent mode \"purple\" (valid: warning, critical, all, disable)",
+      "base": null,
+      "blocks": false
+    },
+    {
+      "severity": "notice",
+      "kind": "value_unread",
+      "key": "_metadata",
+      "file": "_platform.yaml",
+      "tenants": [
+        "ta"
+      ],
+      "reason": "unknown field(s) bogus_field (known: db_type, domain, environment, groups, owner, region, runbook_url, tags, tier)",
+      "base": null,
+      "blocks": false
+    }
+  ],
+  "key_checks": {
+    "ta": {
+      "version_labels": [],
+      "renames": []
+    },
+    "tb": {
+      "version_labels": [],
+      "renames": []
+    }
+  },
+  "parse_failed": [],
+  "unreadable": []
+}

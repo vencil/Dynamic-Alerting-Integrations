@@ -58,6 +58,11 @@ const (
 	// unread at ERROR (key_verdict.go); Finding is the verdict's reason
 	// (no_row, unregistered, …), Path the file the tenant's value comes from.
 	worsenUnread = "unread"
+	// worsenValueUnread (#3591): a reserved value of a tenant's own entry
+	// its reader does not read (the verdict's value_unread); Finding is the
+	// reader's problem. The key is read: its value is to fix, not the key
+	// to remove.
+	worsenValueUnread = "value_unread"
 )
 
 // writeReasonWorsensTree is the call's reason (status refused, exit 1) when
@@ -239,8 +244,11 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 		if b.Tenant == "" {
 			who = "no tenant"
 		}
-		what := "would be unread" + why + " — no reader reads it"
-		out = append(out, writeWorsened{Kind: worsenUnread, Path: b.File, Tenant: b.Tenant, Finding: b.Reason,
+		kind, what := worsenUnread, "would be unread"+why+" — no reader reads it"
+		if b.Kind == keyverdict.KindValueUnread {
+			kind, what = worsenValueUnread, "would have a value its reader does not read"+why+" — fix the value"
+		}
+		out = append(out, writeWorsened{Kind: kind, Path: b.File, Tenant: b.Tenant, Finding: b.Reason,
 			Message: fmt.Sprintf("%s: key %q %s", who, b.Key, what)})
 	}
 	return out, nil

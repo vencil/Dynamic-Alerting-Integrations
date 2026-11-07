@@ -150,22 +150,20 @@ def test_synthetic_v2_yaml_has_extra_threshold_keys(fixture_module, tmp_path):
     assert found_extra, "expected at least one tenant with extra_threshold_NN key (Zipf size>1)"
 
 
-def test_synthetic_v2_yaml_has_overlay_blocks(fixture_module, tmp_path):
-    """At least some tenants should have `_overlay_l0` nested overlay
-    blocks from the power-law depth>0 sample.
+def test_synthetic_v2_yaml_has_no_overlay_blocks(fixture_module, tmp_path):
+    """#3591: no tenant carries a nested `_overlay_l<N>` block — a `_metadata`
+    field TenantMetadata does not know, which the exporter drops and the
+    shared key verdict refuses — although the power-law depth is still
+    drawn (some tenants have depth>0 at this seed).
     """
     out = tmp_path / "synthetic-v2"
     fixture_module.generate_synthetic_v2(count=500, output_dir=out, with_defaults=False, seed=42)
 
-    found_overlay = False
-    for p in out.rglob("*.yaml"):
-        if p.name == "_defaults.yaml":
-            continue
-        text = p.read_text(encoding="utf-8")
-        if "_overlay_l0" in text:
-            found_overlay = True
-            break
-    assert found_overlay, "expected at least one tenant with _overlay_l0 nested block (power-law depth>0)"
+    import random
+    depths = fixture_module._power_law_depths(500, alpha=2.0, max_depth=3, rng=random.Random(0))
+    assert any(depths), "the depth sample has no depth>0 tenant: the test would pass vacuously"
+    found = [p.name for p in out.rglob("*.yaml") if "_overlay_l" in p.read_text(encoding="utf-8")]
+    assert found == [], found[:5]
 
 
 def test_synthetic_v2_seed_reproducible(fixture_module, tmp_path):

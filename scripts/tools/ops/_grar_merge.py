@@ -266,6 +266,10 @@ FINDING_KINDS: dict[str, str] = {
     "key_profile_not_judged":
         "A threshold key of a profile no tenant binds, which the shared key "
         "verdict does not judge (ADR-038 decision 4, #3395); a notice.",
+    "key_value_unread":
+        "A reserved key's value the exporter does not read, in the file that "
+        "writes it (ADR-038 decision 10, #3591): an error in a tenant file, "
+        "a notice in a profile or a root platform file's `tenants:` entry.",
     "key_undecidable":
         "No root platform file was read, so the threshold keys were not "
         "judged (ADR-038 decision 7); with any such key, --validate fails.",
