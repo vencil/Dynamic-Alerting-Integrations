@@ -3,6 +3,7 @@ package gitops
 import (
 	"context"
 	"errors"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -184,7 +185,7 @@ func TestGitExecTimeout_SelfHealsIndexLock(t *testing.T) {
 	}
 	dir := initRepoOnMain(t)
 	stub := filepath.Join(t.TempDir(), "slowgit.sh")
-	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
+	if err := testutil.WriteExecutable(stub, []byte("#!/bin/sh\nexec sleep 30\n"), 0o755); err != nil {
 		t.Fatalf("write stub: %v", err)
 	}
 	lock := filepath.Join(dir, ".git", "index.lock")

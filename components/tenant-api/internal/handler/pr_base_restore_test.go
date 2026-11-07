@@ -13,6 +13,7 @@ package handler
 
 import (
 	"bytes"
+	"github.com/vencil/tenant-api/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -40,7 +41,7 @@ func repoWithLockingPrePush(t *testing.T, files map[string]string) string {
 	hooks := t.TempDir()
 	lockPath := filepath.Join(dir, ".git", "index.lock")
 	hook := "#!/bin/sh\n: > '" + lockPath + "'\nexit 0\n"
-	if err := os.WriteFile(filepath.Join(hooks, "pre-push"), []byte(hook), 0o755); err != nil {
+	if err := testutil.WriteExecutable(filepath.Join(hooks, "pre-push"), []byte(hook), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Remove(lockPath) })
