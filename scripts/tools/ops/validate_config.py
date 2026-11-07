@@ -130,7 +130,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
-from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_python import YamlFileError, detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
@@ -2236,7 +2236,8 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
                   and not v.key.startswith("_") and v.served is not None]
         spell = tv_key_spellings(sorted({v.key.partition("{")[0] for v in served}))
         severities = {t: tv.severities for t, tv in load_served_tree(config_dir, partial=True).tenants.items()}
-    except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError) as exc:
+    except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError,
+            YamlFileError) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
     # ONE LINE PER KEY (#3591): what is judged is the key — no shipped alert
     # compares it, whatever file writes it — so the line is the key's in the
