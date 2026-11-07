@@ -122,3 +122,16 @@ def test_a_clean_node_pass_is_rc_0(tmp_path):
     proc = _run(tmp_path, ci=True, mode="ok")
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "did not run" not in proc.stderr
+
+
+def test_exactly_one_hook_runs_the_jsx_lint_in_its_strictest_mode():
+    """#3611 B2: one hook, not two. The second (`--ci --strict-linecount`,
+    same files:) was a strict superset of the first, so every commit ran the
+    Babel pass twice; the remaining hook carries the superset's flags."""
+    import yaml
+    cfg = yaml.safe_load((_SCRIPT.parents[3] / ".pre-commit-config.yaml").read_text(
+        encoding="utf-8"))
+    hooks = [h for r in cfg["repos"] for h in r.get("hooks", [])
+             if "lint_jsx_babel.py" in h.get("entry", "")]
+    assert [h["id"] for h in hooks] == ["jsx-babel-check"], hooks
+    assert "--strict-linecount" in hooks[0]["entry"].split()
