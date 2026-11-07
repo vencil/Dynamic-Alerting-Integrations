@@ -16,6 +16,7 @@
         "reason": "no_row",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 5,
         "served": null
       },
@@ -31,6 +32,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 80,
         "served": 80
       },
@@ -46,6 +48,7 @@
         "reason": null,
         "disable": "effective",
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "disable",
         "served": null
       },
@@ -61,6 +64,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": "redis_memory",
+        "dead_entries": [],
         "value": 95,
         "served": null
       }
@@ -76,6 +80,7 @@
         "reason": "no_row",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 5,
         "served": null
       },
@@ -91,6 +96,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 80,
         "served": 80
       },
@@ -106,6 +112,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 70,
         "served": 70
       },
@@ -119,6 +126,7 @@
         "reason": "no_row",
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 3,
         "served": null
       }
@@ -136,6 +144,7 @@
       ],
       "reason": "no_row",
       "base": null,
+      "dead_entries": null,
       "blocks": true
     },
     {
@@ -148,6 +157,7 @@
       ],
       "reason": "no_row",
       "base": null,
+      "dead_entries": null,
       "blocks": true
     }
   ],

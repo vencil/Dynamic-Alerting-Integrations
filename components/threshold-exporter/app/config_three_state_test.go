@@ -8,6 +8,7 @@ package main
 
 import (
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -421,6 +422,13 @@ func TestParseHHMM(t *testing.T) {
 		{"12:-5", 0, 0, false}, // invalid minute (below lower bound)
 		{"abc", 0, 0, false},   // garbage
 		{"12", 0, 0, false},    // no colon
+	}
+	// A value with no colon is refused as malformed by the split check
+	// itself, not by an empty minute further down (#3502: SplitN became
+	// strings.Cut, so dropping the check no longer panics — the Go
+	// mutation pilot's "drop format split check" needs this to be killed).
+	if _, _, err := parseHHMM("12"); err == nil || !strings.Contains(err.Error(), "invalid HH:MM format") {
+		t.Errorf("parseHHMM(%q): error %v, want the HH:MM format error", "12", err)
 	}
 
 	for _, tt := range tests {

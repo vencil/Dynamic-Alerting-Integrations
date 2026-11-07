@@ -181,6 +181,49 @@ const (
 	NotServedBaseDisabled = "base_disabled"
 )
 
+// notServedReasonTable is every NotServed* reason — the closed set of
+// NotServedKey.Reason, in declaration order — and whether, under it, the
+// key's value is still served in some part of the day (keyServed): the
+// reason names part of the value (a window it cannot read, a value of one
+// part of the day it refuses) or a switch-off, not a key /metrics serves
+// nothing of. TestNotServedReasons_EveryConstant reads the constants from
+// this file's syntax tree, so a reason added above and not here is red.
+var notServedReasonTable = []struct {
+	reason    string
+	keyServed bool
+}{
+	{NotServedParseFailed, false}, {NotServedRootDefaultsUnwrapped, false}, {NotServedValueRejected, false},
+	{NotServedValueUnparsed, true}, {NotServedValueUnparsedDropped, true}, {NotServedWindowInvalid, true},
+	{NotServedUndeliverable, false}, {NotServedRootNullUndeclared, false}, {NotServedRootDefaultRefused, false},
+	{NotServedRootDefaultsReserved, false}, {NotServedSpellingDuplicate, false}, {NotServedUnregistered, false},
+	{NotServedUnconsumed, false}, {NotServedProfileNotFilled, false}, {NotServedBaseDisabled, true},
+}
+
+// NotServedReasons is a copy of the closed set of NotServedKey.Reason —
+// what a reader of `da-guard effective`'s not_served may meet, and refuses
+// anything else (scripts/tools/_lib_tenant_values.py NOT_SERVED_REASONS,
+// pinned to this list by TestNotServedReasons_PythonReaderIsThisList).
+func NotServedReasons() []string {
+	out := make([]string, len(notServedReasonTable))
+	for i, r := range notServedReasonTable {
+		out[i] = r.reason
+	}
+	return out
+}
+
+// notServedKeyServed reports whether a key not_served for reason still has
+// its value served in some part of the day (notServedReasonTable) — and so
+// whether entries of its schedule can be dead (#3502): a key /metrics serves
+// nothing of has no entry that serves, and listing them would say otherwise.
+func notServedKeyServed(reason string) bool {
+	for _, r := range notServedReasonTable {
+		if r.reason == reason {
+			return r.keyServed
+		}
+	}
+	return false
+}
+
 // NotServedKey is why /metrics does not serve one key of an effective config
 // as the effective config shows it.
 type NotServedKey struct {
@@ -449,14 +492,50 @@ func ValueNotServedAsWritten(key, reason string) bool {
 	return false
 }
 
-// valueNotServedReasons is the reasons ValueNotServedAsWritten selects: the
-// ones whose cause is a value as written. spelling_duplicate (#2031): a
+// valueNotServedReason is one reason ValueNotServedAsWritten selects, with
+// the words every reader of the list says it in (#3502: the gauge's HELP and
+// the exporter's WARN were hand-written lists, and both had missed
+// spelling_duplicate).
+type valueNotServedReason struct {
+	reason string
+	// help: what the reason means and what /metrics serves instead — the
+	// gauge's HELP.
+	help string
+	// effect: what /metrics does with the value, in a few words — the
+	// WARN's.
+	effect string
+}
+
+// valueNotServedReasonTable is the reasons ValueNotServedAsWritten selects:
+// the ones whose cause is a value as written. spelling_duplicate (#2031): a
 // spelling of a threshold the same map also writes under the spelling
 // /metrics serves. Not unconsumed (#3378; see ValueNotServedAsWritten).
-var valueNotServedReasons = []string{
-	NotServedValueUnparsed, NotServedValueUnparsedDropped, NotServedWindowInvalid,
-	NotServedValueRejected, NotServedSpellingDuplicate,
+var valueNotServedReasonTable = []valueNotServedReason{
+	{NotServedValueUnparsed, "a tenant value that is not a number the exporter reads, or whose `:severity` is not " +
+		"warning or critical, e.g. `70:high` or `70:` (#3071); the platform default is served instead",
+		"serves the platform default"},
+	{NotServedValueUnparsedDropped, "the same for a `_critical`, dimensional or optional_overrides key, which has " +
+		"no default to fall back to: no series is served",
+		"serves no series"},
+	{NotServedWindowInvalid, "a schedule override whose `window:` is not a UTC HH:MM-HH:MM with start different " +
+		"from end; that window never applies",
+		"never applies that schedule window"},
+	{NotServedValueRejected, "a subtree _defaults.yaml value that is not threshold-shaped and is the value the " +
+		"tenant is shown; the tenant keeps a shallower level's value",
+		"keeps a shallower level's value"},
+	{NotServedSpellingDuplicate, "a second spelling of a threshold the same mapping also writes — both #1231 " +
+		"spellings, or two spellings of one dimensional key (#2031); only the other one is served",
+		"is a second spelling of a threshold the same mapping writes and only the other one is served"},
 }
+
+// valueNotServedReasons is the reason names of valueNotServedReasonTable.
+var valueNotServedReasons = func() []string {
+	out := make([]string, len(valueNotServedReasonTable))
+	for i, r := range valueNotServedReasonTable {
+		out[i] = r.reason
+	}
+	return out
+}()
 
 // ValueNotServedReasons is a copy of the reasons ValueNotServedAsWritten
 // selects — the closed label set of the exporter's
@@ -464,6 +543,36 @@ var valueNotServedReasons = []string{
 // value_not_served read one list.
 func ValueNotServedReasons() []string {
 	return append([]string(nil), valueNotServedReasons...)
+}
+
+// ValueNotServedReasonsHelp is every reason of ValueNotServedReasons with
+// what it means, in order — "value_unparsed (…), …, and spelling_duplicate
+// (…)": the gauge's HELP lists the reasons from the table, never by hand.
+func ValueNotServedReasonsHelp() string {
+	parts := make([]string, len(valueNotServedReasonTable))
+	for i, r := range valueNotServedReasonTable {
+		parts[i] = r.reason + " (" + r.help + ")"
+	}
+	return joinWithAnd(parts)
+}
+
+// ValueNotServedReasonsEffect is every reason of ValueNotServedReasons with
+// what /metrics does with such a value, in order — "value_unparsed serves
+// the platform default, …": the WARN's list.
+func ValueNotServedReasonsEffect() string {
+	parts := make([]string, len(valueNotServedReasonTable))
+	for i, r := range valueNotServedReasonTable {
+		parts[i] = r.reason + " " + r.effect
+	}
+	return strings.Join(parts, ", ")
+}
+
+// joinWithAnd is parts joined by ", " with ", and " before the last.
+func joinWithAnd(parts []string) string {
+	if len(parts) < 2 {
+		return strings.Join(parts, "")
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + ", and " + parts[len(parts)-1]
 }
 
 // ValuesNotServed is what the resolver behind /metrics records about the

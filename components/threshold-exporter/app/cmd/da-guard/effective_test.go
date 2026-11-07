@@ -121,7 +121,7 @@ func assertMatchesResolveEffective(t *testing.T, dir string, doc effectiveOut) {
 		// #2296: always present here, omitted from the /effective body when
 		// empty — so an empty one is dropped before the comparison, and a
 		// non-empty one must be the body's own.
-		for field, empty := range map[string]string{"not_served": "{}", "chain_parse_failed": "[]"} {
+		for field, empty := range map[string]string{"not_served": "{}", "dead_entries": "{}", "chain_parse_failed": "[]"} {
 			v, ok := got[field]
 			if !ok {
 				t.Errorf("tenant %q: %s missing — it is always present", id, field)

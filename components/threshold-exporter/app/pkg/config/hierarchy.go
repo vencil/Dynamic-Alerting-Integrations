@@ -105,6 +105,18 @@ type EffectiveConfig struct {
 	// ResolveEffective and EffectiveTree; nil from ScopeEffective, and
 	// omitted when no key is named.
 	NotServed map[string]NotServedKey `json:"not_served,omitempty"`
+	// DeadEntries names each threshold key of EffectiveConfig written as a
+	// schedule with an entry /metrics serves at no minute of the UTC day —
+	// a window the windows before it cover, or a `default` the windows
+	// cover (#3502, ScheduledValue.DeadEntries) — with those entries. Not
+	// part of NotServed: the key is still served in some part of the day,
+	// and what never applies is an entry of its value. A key may be in both
+	// (its schedule also has a window that does not parse, window_invalid);
+	// a key NotServed names for a reason under which none of its value is
+	// served (undeliverable, unconsumed, …) has no dead entry. The file of
+	// the value is KeySources'. Filled by
+	// ResolveEffective and EffectiveTree; omitted when no key has one.
+	DeadEntries map[string][]DeadEntry `json:"dead_entries,omitempty"`
 	// ChainParseFailed is every file of DefaultsChain that does not parse
 	// and that /metrics therefore does not read at all (it is in the build's
 	// ParseFailed): the resolve reads it as an empty file, as the exporter
@@ -486,6 +498,7 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 		ec.NotServed = withNotCarried(ec.NotServed, view, notCarried, relChain)
 		ec.NotServed = withProfileNotFilled(ec.NotServed, view, parts.profileNotFilled)
 	}
+	ec.DeadEntries = deadEntriesOfView(view, ec.NotServed)
 	return ec, nil
 }
 
