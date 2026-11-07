@@ -99,6 +99,22 @@ upstream:
 # (1) fail-closed on a missing/invalid account_id claim (revoked_check.lua),
 # (2) a default-deny endpoint allowlist (below). See the chart README.
 victorialogs:
+  # Credentials toward the store's vmauth (helm/victorialogs `auth`, #1295).
+  # `username` is this consumer's entry in helm/victorialogs
+  # `auth.consumers` — tests/shared/test_victorialogs_consumers.py holds the
+  # two to each other. `existingSecret` names a Secret in THIS release's
+  # namespace whose key `password` equals the store-side Secret of the same
+  # consumer (hex only, no trailing newline — see helm/victorialogs
+  # values.yaml). The Secret is mounted as a file and revoked_check.lua
+  # re-reads it on the revoked-set cadence (revokedSet.reloadIntervalSeconds),
+  # so a rotated password is picked up without a restart. It REPLACES the
+  # Authorization header on every forwarded request (jwt_authn has already
+  # consumed and stripped the tenant's bearer token). Empty = send no
+  # credentials, which only works while the store runs `auth.mode: observe`.
+  # Only valid with mode=victorialogs; render fails otherwise.
+  auth:
+    username: federation-gateway
+    existingSecret: ""
   # Endpoint allowlist — DEFAULT-DENY. Only the VictoriaLogs LogsQL
   # query / metadata endpoints below are forwarded; EVERYTHING else (incl.
   # `/select/logsql/tail`, `/insert/*`, and any unknown/future endpoint)

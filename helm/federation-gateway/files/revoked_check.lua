@@ -27,6 +27,15 @@ local RELOAD_INTERVAL = {{ .Values.revokedSet.reloadIntervalSeconds }}
 local TOKEN_ID_PATTERN = {{ .Values.revokedSet.tokenIdPattern | quote }}
 local JWT_NS = "envoy.filters.http.jwt_authn"
 local PAYLOAD_KEY = "fed_payload"
+-- Log-store credential (#1295): victorialogs mode with
+-- victorialogs.auth.existingSecret set. nil = send none.
+{{- if include "federation-gateway.victorialogsAuth" . }}
+local VL_AUTH_USER = {{ .Values.victorialogs.auth.username | quote }}
+local VL_AUTH_FILE = "/etc/victorialogs-auth/password"
+{{- else }}
+local VL_AUTH_USER = nil
+local VL_AUTH_FILE = nil
+{{- end }}
 
 -- Per-worker revoked-set cache. Declared at module scope, so it persists
 -- for the life of this worker thread. Envoy's Lua filter has no
@@ -177,6 +186,33 @@ local function reload_revoked(handle, now)
   end
 end
 
+-- Per-worker cache of the Authorization value toward the log store (#1295).
+local vl_auth_header = nil
+local vl_auth_loaded_at = 0
+
+-- reload_vl_auth re-reads the mounted password on the revoked-set cadence, so
+-- a rotated Secret reaches every worker without a restart. The password is
+-- used byte-for-byte (vmauth compares it as-is). A failed read KEEPS the
+-- previous value: a rotation mid-swap must not cut the store off.
+local function reload_vl_auth(handle, now)
+  vl_auth_loaded_at = now
+  local ok, value = pcall(function()
+    local f = io.open(VL_AUTH_FILE, "rb")
+    if not f then
+      return nil
+    end
+    local data = f:read("*a")
+    f:close()
+    return data
+  end)
+  if ok and value and value ~= "" then
+    vl_auth_header = "Basic " .. handle:base64Escape(VL_AUTH_USER .. ":" .. value)
+  else
+    handle:logWarn("federation: log-store credential unreadable: " .. VL_AUTH_FILE ..
+      (vl_auth_header and "; keeping the previous one" or "; refusing log queries"))
+  end
+end
+
 function envoy_on_request(handle)
   local meta = handle:streamInfo():dynamicMetadata():get(JWT_NS)
   local payload = meta and meta[PAYLOAD_KEY]
@@ -259,5 +295,25 @@ function envoy_on_request(handle)
     --               this PR is (b)-only and hard-codes 0 by design.
     handle:headers():replace("AccountID", string.format("%d", n))
     handle:headers():replace("ProjectID", "0")
+
+    -- Authenticate to the store's vmauth as this gateway (#1295). replace()
+    -- overwrites whatever a client sent; jwt_authn has already removed the
+    -- bearer token it verified. With a credential configured but never
+    -- loaded, refuse rather than forward without one: under auth.mode
+    -- enforce that would 401 every tenant with a message about a header
+    -- they did not send.
+    if VL_AUTH_FILE then
+      -- Same time gate as the revoked set, including after a failed read:
+      -- retrying per request would put a file open and a warning on the
+      -- hot path of every refused query.
+      if now - vl_auth_loaded_at >= RELOAD_INTERVAL then
+        reload_vl_auth(handle, now)
+      end
+      if vl_auth_header == nil then
+        handle:respond({[":status"] = "503"}, "federation: log store credential unavailable")
+        return
+      end
+      handle:headers():replace("authorization", vl_auth_header)
+    end
   end
 end

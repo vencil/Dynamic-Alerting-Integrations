@@ -54,3 +54,19 @@ callers test with a plain `if`.
 {{- if hasKey $ec "gatewayNamespace" }}{{- $ns = ($ec.gatewayNamespace | toString) }}{{- end -}}
 {{- $ns -}}
 {{- end }}
+
+{{/*
+Basic auth toward the store's vmauth (#1295), for every sink that writes to
+helm/victorialogs. The password reaches Vector as an env var from
+victorialogs.auth.existingSecret (daemonset.yaml) and is interpolated here;
+nothing is rendered without a Secret, so the default config still contains
+no `$`. Indented for a sink body.
+*/}}
+{{- define "vector.victorialogsAuth" -}}
+{{- with .Values.victorialogs.auth.existingSecret }}
+auth:
+  strategy: basic
+  user: {{ required "victorialogs.auth.username is required when victorialogs.auth.existingSecret is set" $.Values.victorialogs.auth.username | quote }}
+  password: "${VICTORIALOGS_PASSWORD}"
+{{- end }}
+{{- end }}

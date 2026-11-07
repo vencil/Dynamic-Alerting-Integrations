@@ -824,6 +824,7 @@ data:
           - federation_evidence
         endpoints:
           - http://{{ .Values.victorialogs.host }}:{{ .Values.victorialogs.port }}/insert/elasticsearch/
+        {{- include "vector.victorialogsAuth" . | nindent 8 }}
         api_version: v8
         compression: gzip
         healthcheck:
@@ -945,6 +946,7 @@ data:
           - tenant_route.t_{{ $p.accountId }}
         endpoints:
           - http://{{ $.Values.victorialogs.host }}:{{ $.Values.victorialogs.port }}/insert/elasticsearch/
+        {{- include "vector.victorialogsAuth" $ | nindent 8 }}
         api_version: v8
         compression: gzip
         healthcheck:

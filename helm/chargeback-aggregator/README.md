@@ -46,6 +46,13 @@ Rows whose `params.query` doesn't contain `{tenant_id="..."}` are bucketed as `t
 # additional source enabled) are running:
 helm install chargeback ./helm/chargeback-aggregator -n monitoring
 
+# Authenticate to the store's vmauth (#1295): a Secret (key `password`)
+# holding the same value as helm/victorialogs'
+# auth.consumers[name=chargeback-aggregator].existingSecret. In `monitoring`
+# both sides can name the same Secret. Runbook §1.2 has the steps.
+helm upgrade chargeback ./helm/chargeback-aggregator -n monitoring \
+  --reuse-values --set victorialogs.auth.existingSecret=victorialogs-chargeback
+
 # Smoke-test: run once immediately + watch
 helm upgrade chargeback ./helm/chargeback-aggregator -n monitoring \
   --reuse-values --set manualJob.enabled=true

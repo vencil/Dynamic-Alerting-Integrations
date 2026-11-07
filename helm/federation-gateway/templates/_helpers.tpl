@@ -47,8 +47,25 @@ victorialogs mode, jwt.audience MUST be `tenant-federation-logs`.
 {{- fail (printf "federation-gateway: victorialogs mode requires jwt.audience=\"tenant-federation-logs\" (a metrics-pull token must not query the log store), got %q" .Values.jwt.audience) }}
 {{- end }}
 {{- end }}
+{{- with .Values.victorialogs.auth.existingSecret }}
+{{- if ne $.Values.mode "victorialogs" }}
+{{- fail (printf "federation-gateway: victorialogs.auth.existingSecret is only used in mode=victorialogs (got mode %q); unset it" $.Values.mode) }}
+{{- end }}
+{{- /* The username is templated into revoked_check.lua as a string literal. */}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" (toString $.Values.victorialogs.auth.username)) }}
+{{- fail (printf "federation-gateway: victorialogs.auth.username %q must be lowercase letters, digits and dashes (the helm/victorialogs auth.consumers name)" (toString $.Values.victorialogs.auth.username)) }}
+{{- end }}
+{{- end }}
 {{- include "federation-gateway.validateRevokedSet" . }}
 {{- include "federation-gateway.validatePreflight" . }}
+{{- end }}
+
+{{/*
+Whether the gateway authenticates to the log store (#1295): victorialogs mode
+with a Secret named. One definition for the Lua, the volume and the mount.
+*/}}
+{{- define "federation-gateway.victorialogsAuth" -}}
+{{- if and (eq .Values.mode "victorialogs") .Values.victorialogs.auth.existingSecret }}true{{- end }}
 {{- end }}
 
 {{/*
