@@ -1,15 +1,15 @@
-"""#1560 ⑤-b（第 3 輪）：conf.d 的值只經兩個出口進訊息。
+"""#1560 ⑤-b：conf.d 的值進訊息只經一個出口——AST 守衛（輔助）。
 
-route generator 的訊息會進 stderr、`--findings-json` 與 tenant-api 的 log。
-一個 receiver 欄位的值經 `_lib_validation.receiver_value_repr`（憑證位置印
-`<masked>`），其他 conf.d 的值經 `_lib_validation.scalar_text`（純量照印，
-list／mapping 只印型別與長度：容器可能裝著 receiver）。
+⚠️ 這支**只攔 repr 類寫法**（f-string 的 `!r`、`repr(...)`、字串裡的 `%r`）。
+f-string 直接插值（`'{val}'`）它抓不到，用字串述詞守「值不進訊息」已記為
+死路（第 3 輪審查 F-B）。**主守衛是動態 canary 矩陣**
+`tests/ops/test_routing_value_canary_matrix.py`：由 schema 推導 routing 的每個鍵、
+在每種位置塞 canary、跑產生器，照行為斷言 canary 不出現。
 
-這支測試掃 `scripts/tools/_lib_validation.py` 與 `scripts/tools/ops/_grar_*.py`：
-凡是 f-string 的 `!r`、`repr(...)` 呼叫、字串裡的 `%r`，都必須在下面的白名單裡，
-每一條附理由（為什麼它不是 conf.d 的值，或為什麼可以照印）。新增一個 `!r`，
-這裡先轉紅：改走上面兩個出口，或把它連同理由加進白名單。白名單裡對不到
-程式的條目也會轉紅，名單不會腐爛。
+出口是 `_lib_validation.shown_value`（`receiver_value_repr`、`scalar_text`、
+`value_text` 都經它）。這裡掃 `scripts/tools/_lib_validation.py` 與
+`scripts/tools/ops/_grar_*.py`，每個 repr 類寫法都必須在下面的白名單裡並附理由；
+白名單裡對不到程式的條目也會轉紅。
 """
 from __future__ import annotations
 
@@ -27,10 +27,27 @@ _SCHEMA = "the tenant-config schema shipped with the tool, not a conf.d value"
 
 #: (file name, enclosing function, kind, expression) → why it may be quoted.
 ALLOWED: dict[tuple[str, str, str, str], str] = {
-    ("_lib_validation.py", "receiver_value_repr", "repr(", "value"):
-        "THE receiver-value exit: masks every credential path first",
-    ("_lib_validation.py", "scalar_text", "repr(", "value"):
-        "THE other exit: reached for scalars only, containers print type and length",
+    ("_lib_validation.py", "shown_value", "repr(", "value"):
+        "THE exit: a credential path is masked first, a container prints type and "
+        "length, a string only when it is name-like",
+    # F-A (round 4): the URL flags of the tools — every value is the person's
+    # own command-line argument or environment variable, echoed back to them.
+    ("_lib_validation.py", "url_problem", "!r", "bad"):
+        "one character of a URL the person passed on the command line or in the "
+        "environment (whitespace / control / non-ASCII), not a conf.d value",
+    ("_lib_validation.py", "_one", "!r", "value"):
+        "a URL the person passed on the command line / in the environment (argparse "
+        "type=), echoed to them; not a conf.d value",
+    ("_lib_validation.py", "__call__", "!r", "value"):
+        "the same argparse type= URL list item, the person's own argv / env",
+    ("_lib_validation.py", "__call__", "!r", "self.separator"):
+        "the separator a tool's code passes to url_list_type, a constant",
+    ("_lib_validation.py", "__init__", "!r", "empty"):
+        "the empty= mode a tool's code passes to url_type, a constant",
+    ("_lib_validation.py", "__repr__", "!r", "self.empty"):
+        "UrlArg's own repr: the empty= mode, a constant of the calling tool",
+    ("_lib_validation.py", "__repr__", "!r", "self.separator"):
+        "UrlArg's own repr: the separator, a constant of the calling tool",
     ("_lib_validation.py", "positive_seconds", "!r", "value"): _ARGV,
     ("_lib_validation.py", "non_negative_seconds", "!r", "value"): _ARGV,
     ("_lib_validation.py", "positive_int", "!r", "value"): _ARGV,
@@ -98,8 +115,8 @@ def test_every_repr_is_one_of_the_allowed_exits():
     assert found, "the scan found nothing: it is not reading the files"
     unknown = [f"{h[0]}:{h[4]} {h[1]}: {h[2]} {h[3]}" for h in found if h[:4] not in ALLOWED]
     assert not unknown, (
-        "a value is quoted into a message outside the two exits (receiver_value_repr, "
-        "scalar_text): route it through one, or allow it below with the reason:\n  "
+        "a value is quoted into a message outside the exit (shown_value): route it "
+        "through it, or allow it below with the reason:\n  "
         + "\n  ".join(unknown))
 
 

@@ -43,7 +43,8 @@ from _lib_validation import (  # noqa: E402  (#2766 finding kinds)
 from _lib_validation import (  # noqa: E402  (#1560 Secret references)
     CREDENTIAL_REF_SITES, HOST_PORT_DESTINATIONS, CredentialRefSite, RefPath,
     find_credential_refs,
-    is_secret_ref, receiver_value_repr, ref_path_text, ref_value_at, site_path_text,
+    is_secret_ref, receiver_value_repr, ref_path_text, ref_value_at, shown_value,
+    site_path_text,
 )
 
 
@@ -546,7 +547,7 @@ def _apply_timing_params(source_dict: dict, context_name: str, *,
             if am_duration_seconds(str(val)) is None:
                 default = PLATFORM_DEFAULTS[param]
                 warnings.append(replaced_value_warning(
-                    f"  WARN: {context_name}: invalid {param} '{val}' "
+                    f"  WARN: {context_name}: invalid {param} {shown_value(val)} "
                     f"({INVALID_DURATION_HINT}), rendering the platform default "
                     f"{default} in its place; generate-routes --validate and "
                     "validate-config refuse this config",
@@ -1177,7 +1178,7 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
     if rtype not in RECEIVER_TYPES:
         supported = ", ".join(sorted(RECEIVER_TYPES.keys()))
         warnings.append(skipped_entry_warning(
-            f"  WARN: {tenant}: unknown receiver type '{rtype}' "
+            f"  WARN: {tenant}: unknown receiver type '{shown_value(rtype, bare=True)}' "
             f"(supported: {supported}), skipping",
             kind="unknown_receiver_type", **at(".type")))
         return None, warnings

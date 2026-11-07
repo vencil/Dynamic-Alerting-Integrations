@@ -468,3 +468,46 @@ def test_the_shipped_trees_have_no_credential_finding():
                 "tests/fixtures/da-tools-smoke/old/conf.d"):
         tree = gar.load_tenant_tree(str(REPO / rel))
         assert gar.credential_findings(tree) == [], rel
+
+
+# ── 9. 深掃的誤報（第 4 輪 F-C、F-D）──────────────────────────────────────
+
+_REF = {"type": "slack", "api_url": {"secret": {"key": "k"}}}
+
+
+@pytest.mark.parametrize("match", [{"receiver": "team-a", "severity": "critical"},
+                                   {"type": "slack"}, {"receiver": "team-a", "type": "slack"}],
+                         ids=["label-receiver", "label-type", "both"])
+def test_match_labels_named_receiver_or_type_are_labels(tmp_path, match):
+    """F-C：`match` 底下的鍵是 label；只有 mapping 值才算 receiver 形狀。"""
+    import yaml
+    d = _tree(tmp_path, {"t-a.yaml": yaml.safe_dump({"tenants": {"t-a": {
+        "cpu_usage_percent": "85", "_routing": {
+            "receiver": _REF, "routes": [{"match": match, "receiver": _REF}]}}}})})
+    rc, text, findings = _validate(d)
+    assert rc == 0, text
+    assert _credential(findings) == []
+
+
+def test_a_mapping_under_match_is_still_a_receiver(tmp_path):
+    import yaml
+    d = _tree(tmp_path, {"t-a.yaml": yaml.safe_dump({"tenants": {"t-a": {
+        "cpu_usage_percent": "85", "_routing": {
+            "receiver": _REF, "routes": [{"match": {"receiver": {
+                "type": "slack", "api_url": f"https://h.example/{CANARY}"}}, "receiver": _REF}]}}}})})
+    rc, text, findings = _validate(d)
+    assert rc == 1
+    assert ("credential_unjudged", "t-a.yaml",
+            "tenants.t-a._routing.routes[0].match.receiver", "validate") in _credential(findings)
+    assert CANARY not in text
+
+
+def test_a_route_entry_with_a_type_label_is_not_a_receiver(tmp_path):
+    """F-D：`overrides[i]`／`routes[i]` 的直接項目是 route entry，不套 `type` 規則。"""
+    import yaml
+    d = _tree(tmp_path, {"t-a.yaml": yaml.safe_dump({"tenants": {"t-a": {
+        "cpu_usage_percent": "85", "_routing": {
+            "receiver": _REF, "overrides": [{"alertname": "x", "type": "slack",
+                                             "receiver": _REF}]}}}})})
+    _rc, _text, findings = _validate(d)
+    assert not [f for f in findings if f["kind"] == "credential_unjudged"], findings

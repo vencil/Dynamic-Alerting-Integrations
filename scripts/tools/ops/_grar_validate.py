@@ -54,7 +54,7 @@ from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _lib_validation import (  # noqa: E402  (#1560)
     MASKED_VALUE, is_credential_path, is_secret_ref, receiver_value_repr, scalar_text,
-    secret_ref_rule, value_text,
+    secret_ref_rule, shown_value, value_text,
     shared_secret_field_texts,
 )
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
@@ -1268,7 +1268,7 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
                      if where else "")
             warnings.append(unclassified(
                 f"  WARN: {tenant}: _routing_profile references unknown "
-                f"profile '{profile_name}'{extra}", blocks="never"))
+                f"profile {scalar_text(profile_name)}{extra}", blocks="never"))
     return warnings
 
 
@@ -1582,13 +1582,13 @@ def _timing_bound_violations(
          lambda v, b: v > b,
          "'30m' or '1h30m'",
          lambda raw: (f"lower {who('repeat_interval')} repeat_interval to "
-                      f"'{raw}' or less, or raise the policy's "
+                      f"{scalar_text(raw)} or less, or raise the policy's "
                       f"max_repeat_interval")),
         ("group_wait", min_group_wait, min_sec, "minimum", "below minimum",
          lambda v, b: v < b,
          "'30s' or '1m30s'",
          lambda raw: (f"raise {who('group_wait')} group_wait to "
-                      f"'{raw}' or more, or lower the policy's "
+                      f"{scalar_text(raw)} or more, or lower the policy's "
                       f"min_group_wait")),
     )
     for key, raw, bound, noun, verb, breaks, example, fix in checks:
@@ -1602,15 +1602,15 @@ def _timing_bound_violations(
             out.append((
                 key,
                 f"domain_policy '{policy_name}', {subject}: {key} "
-                f"'{value}'{src(key)} is not a valid duration "
-                f"— cannot check against {noun} '{raw}'",
+                f"{scalar_text(value)}{src(key)} is not a valid duration "
+                f"— cannot check against {noun} {scalar_text(raw)}",
                 f"use Alertmanager duration syntax such as {example} "
                 "(whole numbers, units largest first)"))
         elif breaks(sec, bound):
             out.append((
                 key,
                 f"domain_policy '{policy_name}', {subject}: {key} "
-                f"'{value}'{src(key)} {verb} '{raw}'",
+                f"{scalar_text(value)}{src(key)} {verb} {scalar_text(raw)}",
                 fix(raw)))
     return out
 
@@ -2354,7 +2354,7 @@ def group_by_problem_text(field: str, kind: str, value: object) -> str:
         return (f"{field} is an empty string — Alertmanager refuses an empty "
                 "label name; remove it")
     if kind == "duplicate":
-        return (f"{field} repeats label '{value}' listed earlier — "
+        return (f"{field} repeats label '{shown_value(value, bare=True)}' listed earlier — "
                 "Alertmanager refuses a repeated non-wildcard group_by label; "
                 "remove it")
     return (f"{field} is '...' alongside other labels — Alertmanager refuses "
@@ -2519,8 +2519,8 @@ def list_tenant_subroutes(
             continue
         if not override.get("receiver"):
             continue
-        match = (f"alertname={alertname}" if alertname
-                 else f"metric_group={metric_group}")
+        match = (f"alertname={shown_value(alertname, bare=True)}" if alertname
+                 else f"metric_group={shown_value(metric_group, bare=True)}")
         subroutes.append((f"override[{idx}]", match, *_effective(override)))
 
     # #2245: ADR-007 label-match `routes`, rendered after the overrides.
@@ -2530,7 +2530,8 @@ def list_tenant_subroutes(
         matchers, _warnings = route_entry_matchers(entry, idx, "")
         if matchers is None or not entry.get("receiver"):
             continue
-        match = ",".join(f"{k}={v}" for k, v in entry["match"].items())
+        match = ",".join(f"{shown_value(k, bare=True)}={shown_value(v, bare=True)}"
+                         for k, v in entry["match"].items())
         subroutes.append((f"routes[{idx}]", match, *_effective(entry)))
     return subroutes
 
@@ -2659,7 +2660,8 @@ def critical_escalation_findings(routing_config: dict,
                for earlier in matches[:pos]):
             continue
         leaks.append((ref, match_str, rtype,
-                      ", ".join(f"{k}={v}" for k, v in caught.items())))
+                      ", ".join(f"{shown_value(k, bare=True)}={shown_value(v, bare=True)}"
+                                for k, v in caught.items())))
     return EscalationFindings(target, leaks)
 
 
@@ -2683,7 +2685,7 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
             f"domain_policy '{policy_name}', tenant '{tenant}': "
             f"require_critical_escalation is set but severity=critical alerts "
             f"do not reach a receiver of type {escalation} (main receiver "
-            f"type '{main_type}', and no rendered routes entry matches "
+            f"type '{shown_value(main_type, bare=True)}', and no rendered routes entry matches "
             f"severity=critical with such a receiver)",
             "add `routes: - match: {severity: critical}` with a pagerduty "
             "receiver to the tenant's _routing or its routing profile, or "
@@ -2695,7 +2697,7 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
         if match:
             messages.append(Finding(
                 f"  WARN: domain_policy '{policy_name}', tenant '{tenant}' "
-                f"{ref} ({match}): receiver type '{rtype}' catches alerts "
+                f"{ref} ({match}): receiver type '{shown_value(rtype, bare=True)}' catches alerts "
                 f"with {caught} before any receiver of type {escalation} "
                 f"does, so they never reach one",
                 kind="critical_escalation_leak", blocks="never", tenant=tenant,
@@ -2845,7 +2847,7 @@ def check_domain_policies(
                     if forbidden_types and recv_type in forbidden_types:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
-                            f"{subject}: receiver type '{recv_type}' "
+                            f"{subject}: receiver type '{shown_value(recv_type, bare=True)}' "
                             f"is forbidden",
                             f"domain forbids {sorted(forbidden_types)}; switch "
                             f"{whose} receiver.type to a compliant type "
@@ -2853,7 +2855,7 @@ def check_domain_policies(
                     if allowed_types and recv_type not in allowed_types:
                         messages.append(_fmt(
                             f"domain_policy '{policy_name}', "
-                            f"{subject}: receiver type '{recv_type}' "
+                            f"{subject}: receiver type '{shown_value(recv_type, bare=True)}' "
                             f"not in allowed types {sorted(allowed_types)}",
                             f"switch {whose} receiver.type to one of "
                             f"{sorted(allowed_types)} or amend the domain policy",
