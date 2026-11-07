@@ -15,6 +15,7 @@
 //	da-read prometheus <file|->
 //	da-read prometheus-rules <file|->...
 //	da-read promql-selectors <series> -
+//	da-read promql-label-flow <label> -
 //
 // `alertmanager` reads the file with Alertmanager's own config loader
 // (github.com/prometheus/alertmanager/config.Load, the version of the amtool
@@ -42,6 +43,11 @@
 // input and prints, per expression, the vector selectors that could select
 // the series <series> as Prometheus' parser and label matchers read them
 // (promql_selectors.go): {"documents": [[[{"selector", "start", "end"}, …], …]]}.
+//
+// `promql-label-flow` reads a JSON array of PromQL expressions on standard
+// input and prints, per expression, every `and` / `unless` matching on
+// <label> and whether its left side keeps <label> (promql_label_flow.go):
+// {"documents": [[[{"op", "start", "end", "lhs"}, …], …]]}.
 //
 // `-` reads standard input — how a file held in a ConfigMap is handed over
 // once its outer layer is read the Kubernetes way (da-crdecode); for
@@ -92,13 +98,15 @@ func usage(stderr io.Writer) int {
 	say(stderr, "       %s prometheus <file|->\n", programName)
 	say(stderr, "       %s prometheus-rules <file|->...\n", programName)
 	say(stderr, "       %s promql-selectors <series> -\n", programName)
+	say(stderr, "       %s promql-label-flow <label> -\n", programName)
 	say(stderr, "Reads an Alertmanager config, a prometheus.yml or Prometheus rule files with "+
 		"their consumer's own loader and prints the reading as JSON, keeping only the keys "+
 		"the file writes: {\"documents\": [<config>]}, or for prometheus-rules "+
 		"{\"files\": [{\"path\", \"documents\", \"problem\"}]}. `-` reads standard input "+
 		"(at most once). promql-selectors reads a JSON array of PromQL expressions on "+
 		"standard input and prints, per expression, the selectors that could select "+
-		"<series>. Exit 2 when a file is refused.\n")
+		"<series>; promql-label-flow prints, per expression, whether the left side of "+
+		"each `and`/`unless on(<label>)` keeps <label>. Exit 2 when a file is refused.\n")
 	return exitCallerErr
 }
 
@@ -123,6 +131,22 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	if args[0] == "prometheus-rules" {
 		return runRules(args[1:], stdin, stdout, stderr)
+	}
+	if args[0] == "promql-label-flow" {
+		if len(args) != 3 || args[2] != "-" {
+			return usage(stderr)
+		}
+		data, err := io.ReadAll(stdin)
+		if err != nil {
+			say(stderr, "%s: %v\n", programName, err)
+			return exitCallerErr
+		}
+		out, err := guarded(func(d []byte) ([]byte, error) { return readPromQLLabelFlow(args[1], d) }, data)
+		if err != nil {
+			say(stderr, "%s: %s: %v\n", programName, stdinName, err)
+			return exitCallerErr
+		}
+		return write(stdout, stderr, append(out, '\n'), exitOK)
 	}
 	if args[0] == "promql-selectors" {
 		if len(args) != 3 || args[2] != "-" {
