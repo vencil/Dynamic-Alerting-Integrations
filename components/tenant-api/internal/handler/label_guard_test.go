@@ -593,3 +593,39 @@ func TestScopeGateDirectRelabelLandsFirst(t *testing.T) {
 		}
 	})
 }
+
+// A tenant whose first op of the batch changes nothing (unsetting a key it
+// does not have) is still judged under the lock: a later op that touches no
+// scope key is judged on the post-state when the pre-state cannot be read.
+// The same data refuses alike whatever the order of the ops. The file's
+// labels turned unreadable outside the API (a git change between the gates
+// and the lock: the API refuses such a write).
+func TestScopeGateDirectNoopFirstOpStillJudged(t *testing.T) {
+	t.Parallel()
+	broken := "tenants:\n  " + lgTenant + ":\n    _metadata:\n      environment: [dev]\n      domain: finance\n" +
+		"    mysql_connections: '80'\n"
+	for _, c := range []struct {
+		name, ops string
+		refusedOp int
+	}{
+		{"patch alone", `[{"tenant_id":"` + lgTenant + `","patch":{"mysql_connections":"95"}}]`, 0},
+		{"no-op first", `[{"tenant_id":"` + lgTenant + `","unset":["_routing"]},` +
+			`{"tenant_id":"` + lgTenant + `","patch":{"mysql_connections":"95"}}]`, 1},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			d := lgDirectDeps(t)
+			d.afterWriteGates = func() {
+				if err := os.WriteFile(filepath.Join(d.ConfigDir, lgTenant+".yaml"), []byte(broken), 0o644); err != nil {
+					t.Error(err)
+				}
+				runGit(t, d.ConfigDir, "commit", "-qam", "labels broken outside the API")
+			}
+			w := lgBatch(t, d, lgEnvAdmins, c.ops)
+			assertRejectedOp(t, w, c.refusedOp, lgTenant, string(errcode.Forbidden), proposedScopeDeniedText(lgTenant, false))
+			if got := lgReadFile(t, d.ConfigDir, lgTenant+".yaml"); got != broken {
+				t.Errorf("a rejected batch wrote: %q", got)
+			}
+		})
+	}
+}

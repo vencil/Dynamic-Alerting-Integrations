@@ -140,15 +140,15 @@ fault=false | 403 FORBIDDEN counted=uncounted extra={"tenant_id":"tu-a"} error="
   <- freshBaseScopeError{Put, Labels}
 fault=false | 403 FORBIDDEN counted=uncounted extra={"operation":2,"tenant_id":"tu-a"} error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, and the labels its current tenant file holds cannot be read, so this write cannot be shown to leave them as they were and is refused (ADR-027). On the latest base branch operations[2] (tenant tu-a) writes over them. Nothing in this batch was written and no PR/MR was opened."
   <- freshBaseScopeError{Op: 2, Labels, LabelsUnknown}
-fault=false | 403 FORBIDDEN counted=uncounted extra={"tenant_id":"tu-a"} error="insufficient permissions for tenant tu-a (permission and organization-scope checks, ADR-027)"
+fault=false | 403 FORBIDDEN counted=uncounted error="insufficient permissions for tenant tu-a (permission and organization-scope checks, ADR-027)"
   <- freshBaseScopeError{Put, PreState, Direct}
-fault=false | 403 FORBIDDEN counted=uncounted extra={"tenant_id":"tu-a"} error="insufficient permissions for the tenant metadata this write proposes — the environment/domain in the body places tenant tu-a outside your scope (#1597)"
+fault=false | 403 FORBIDDEN counted=uncounted error="insufficient permissions for the tenant metadata this write proposes — the environment/domain in the body places tenant tu-a outside your scope (#1597)"
   <- freshBaseScopeError{Put, Direct}
-fault=false | 403 FORBIDDEN counted=uncounted extra={"tenant_id":"tu-a"} error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, and the labels its current tenant file holds cannot be read, so this write cannot be shown to leave them as they were and is refused (ADR-027)"
+fault=false | 403 FORBIDDEN counted=uncounted error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, and the labels its current tenant file holds cannot be read, so this write cannot be shown to leave them as they were and is refused (ADR-027)"
   <- freshBaseScopeError{Put, Labels, LabelsUnknown, Direct}
-fault=false | 403 FORBIDDEN counted=uncounted extra={"operation":2,"tenant_id":"tu-a"} error="insufficient permissions for tenant tu-a"
+fault=false | 403 FORBIDDEN counted=uncounted error="insufficient permissions for tenant tu-a"
   <- freshBaseScopeError{Op: 2, PreState, Direct}
-fault=false | 403 FORBIDDEN counted=uncounted extra={"operation":2,"tenant_id":"tu-a"} error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, so this write, which would change them, is refused (ADR-027)"
+fault=false | 403 FORBIDDEN counted=uncounted error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, so this write, which would change them, is refused (ADR-027)"
   <- freshBaseScopeError{Op: 2, Labels, Direct}
 [hidden] fault=false | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"}],"findings_compared_with_base":true,"unrelated_findings_withheld":2} error=findingsText(compared)
 [visible] fault=false | 422 GENERATOR_FINDINGS counted=uncounted extra={"findings":[{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for tu-a","policy":null,"related":true,"severity":"error","tenant":"tu-a"},{"blocks":"write","field":null,"file":null,"kind":"route","message":"receiver unreachable for zz-other","policy":null,"related":true,"severity":"error","tenant":"zz-other"},{"blocks":"write","field":null,"file":"zz-other.yaml","kind":"policy","message":"domain policy violated","policy":null,"related":false,"severity":"error","tenant":null}],"findings_compared_with_base":true} error=findingsText(compared)
@@ -266,15 +266,15 @@ written=true | 403 FORBIDDEN counted=uncounted extra={"tenant_id":"tu-a"} error=
   <- freshBaseScopeError{Put, Labels}
 written=true | 403 FORBIDDEN counted=uncounted extra={"operation":2,"tenant_id":"tu-a"} error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, and the labels its current tenant file holds cannot be read, so this write cannot be shown to leave them as they were and is refused (ADR-027). On the latest base branch operations[2] (tenant tu-a) writes over them. Nothing in this batch was written and no PR/MR was opened."
   <- freshBaseScopeError{Op: 2, Labels, LabelsUnknown}
-written=true | 403 FORBIDDEN counted=uncounted extra={"tenant_id":"tu-a"} error="insufficient permissions for tenant tu-a (permission and organization-scope checks, ADR-027)"
+written=true | 403 FORBIDDEN counted=uncounted error="insufficient permissions for tenant tu-a (permission and organization-scope checks, ADR-027)"
   <- freshBaseScopeError{Put, PreState, Direct}
-written=true | 403 FORBIDDEN counted=uncounted extra={"tenant_id":"tu-a"} error="insufficient permissions for the tenant metadata this write proposes — the environment/domain in the body places tenant tu-a outside your scope (#1597)"
+written=true | 403 FORBIDDEN counted=uncounted error="insufficient permissions for the tenant metadata this write proposes — the environment/domain in the body places tenant tu-a outside your scope (#1597)"
   <- freshBaseScopeError{Put, Direct}
-written=true | 403 FORBIDDEN counted=uncounted extra={"tenant_id":"tu-a"} error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, and the labels its current tenant file holds cannot be read, so this write cannot be shown to leave them as they were and is refused (ADR-027)"
+written=true | 403 FORBIDDEN counted=uncounted error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, and the labels its current tenant file holds cannot be read, so this write cannot be shown to leave them as they were and is refused (ADR-027)"
   <- freshBaseScopeError{Put, Labels, LabelsUnknown, Direct}
-written=true | 403 FORBIDDEN counted=uncounted extra={"operation":2,"tenant_id":"tu-a"} error="insufficient permissions for tenant tu-a"
+written=true | 403 FORBIDDEN counted=uncounted error="insufficient permissions for tenant tu-a"
   <- freshBaseScopeError{Op: 2, PreState, Direct}
-written=true | 403 FORBIDDEN counted=uncounted extra={"operation":2,"tenant_id":"tu-a"} error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, so this write, which would change them, is refused (ADR-027)"
+written=true | 403 FORBIDDEN counted=uncounted error="only a platform administrator may change the environment or domain labels (_metadata) of tenant tu-a: they decide which RBAC rules' environments/domains cover it, so this write, which would change them, is refused (ADR-027)"
   <- freshBaseScopeError{Op: 2, Labels, Direct}
 written=true | 500 CONFIG_DECODE_ERROR counted=error error="the tenant organization file (_tenant_orgs.yaml) on the latest base branch cannot be read, so this write's organization scope cannot be judged. Nothing was written and no PR/MR was opened; repair the file on the base branch."
   <- freshBaseOrgsError
