@@ -24,7 +24,7 @@
       "category": "database",
       "exporter": "mysqld_exporter",
       "configMap": "prometheus-rules-mariadb",
-      "recordingRules": 14,
+      "recordingRules": 12,
       "alertRules": 18,
       "required": false,
       "defaults": {
@@ -70,7 +70,7 @@
       "category": "database",
       "exporter": "postgres_exporter",
       "configMap": "prometheus-rules-postgresql",
-      "recordingRules": 11,
+      "recordingRules": 8,
       "alertRules": 9,
       "required": false,
       "defaults": {
@@ -108,7 +108,7 @@
       "category": "database",
       "exporter": "redis_exporter",
       "configMap": "prometheus-rules-redis",
-      "recordingRules": 11,
+      "recordingRules": 9,
       "alertRules": 6,
       "required": false,
       "defaults": {
@@ -156,7 +156,7 @@
       "category": "database",
       "exporter": "mongodb_exporter",
       "configMap": "prometheus-rules-mongodb",
-      "recordingRules": 10,
+      "recordingRules": 8,
       "alertRules": 8,
       "required": false,
       "defaults": {
@@ -198,7 +198,7 @@
       "category": "database",
       "exporter": "elasticsearch_exporter",
       "configMap": "prometheus-rules-elasticsearch",
-      "recordingRules": 11,
+      "recordingRules": 10,
       "alertRules": 7,
       "required": false,
       "defaults": {
@@ -343,7 +343,7 @@
       "category": "database",
       "exporter": "clickhouse_exporter",
       "configMap": "prometheus-rules-clickhouse",
-      "recordingRules": 12,
+      "recordingRules": 11,
       "alertRules": 7,
       "required": false,
       "defaults": {

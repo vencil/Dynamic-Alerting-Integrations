@@ -1,10 +1,10 @@
 """Tests for scripts/tools/lint/check_orphan_recordings.py (TRK-339 WS2a / #1200).
 
 The gate asserts every recording rule across the two rule trees has a consumer
-(rule exprs / Grafana dashboards / observed map), grandfathering the 12 records
-already orphaned when it landed (#1204). Each test pins one branch of that
+(rule exprs / Grafana dashboards / observed map), grandfathering the records
+already orphaned when it landed (#1204; 1 left after D-del). Each test pins one branch of that
 contract:
-  - the live repo is green (12 grandfathered + 1 exempt, 0 new drift)
+  - the live repo is green (1 grandfathered + 1 exempt, 0 new drift)
   - a NEW orphan fails --ci
   - consumption is exact full-token identity — the substring/colon-adjacency
     trap (old-name-is-a-prefix-of-new-name) must NOT count as consumption
@@ -33,11 +33,11 @@ def test_real_repo_has_no_new_drift():
     assert result["errors"] == [], result["errors"]
 
 
-def test_grandfather_list_is_exactly_the_12_orphans():
+def test_grandfather_list_is_exactly_the_one_orphan_left():
     """Every KNOWN_ORPHANS record must actually be orphaned on the real repo
     (else it is a stale exemption). Guards the list against drifting."""
     result = gate.run_check()
-    assert len(result["infos"]) == len(gate.KNOWN_ORPHANS) == 12
+    assert len(result["infos"]) == len(gate.KNOWN_ORPHANS) == 1
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
 

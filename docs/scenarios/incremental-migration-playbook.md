@@ -208,7 +208,7 @@ kubectl apply -f k8s/03-monitoring/configmap-rules-redis.yaml
 
 ```bash
 kubectl port-forward -n monitoring svc/prometheus 9090:9090 &
-curl -s 'http://localhost:9090/api/v1/query?query=tenant:redis_memory_usage:ratio'
+curl -s 'http://localhost:9090/api/v1/query?query=tenant:redis_memory_used_bytes:max'
 curl -s 'http://localhost:9090/api/v1/query?query=tenant:alert_threshold:redis_memory_used_bytes'
 ```
 
