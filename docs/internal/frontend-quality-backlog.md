@@ -37,7 +37,7 @@ lang: zh
 
 ## 目前待辦（active）
 
-停下的 E2E 測試以 `--list` 為準（見上方）。目前是 `visual.spec.ts` 的 5 支 baseline 測試，由 [#3642](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3642) 追蹤；它們原本以 block comment 停著，#1449 起改為宣告式 fixme。其他類型（axe waiver、長期 stub）：_無登記項目。_
+停下的 E2E 測試以 `--list` 為準（見上方）。目前沒有停下的測試：`visual.spec.ts` 原本停著的 5 支 baseline 測試已由 [#3642](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3642) 補上 baseline 啟用。其他類型（axe waiver、長期 stub）：_無登記項目。_
 
 ## 歷史清零紀錄
 

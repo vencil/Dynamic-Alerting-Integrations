@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 import _lib_key_verdict as kv
+import _lib_tenant_values as tv
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -384,8 +385,14 @@ def _da_guard_answering(tmp_path, document: str) -> str:
     ' "tenants": ["t"], "reason": null, "served_family": ["k_critical"], "served_from": ["b.yaml"],'
     ' "blocks": false}], "key_checks": {}, "parse_failed": [], "unreadable": [], "blocks": false,'
     ' "undecidable_blocks": false}',
+    # #3502: before rows carried dead_entries.
+    '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {"t": [{"key": "k",'
+    ' "layer": "tenant", "file": "a.yaml", "read_by": ["exporter"], "verdict": "read", "severity": null,'
+    ' "reason": null, "disable": null, "switched_off_with": null, "value": "70", "served": 70}]},'
+    ' "findings": [], "key_checks": {}, "parse_failed": [], "unreadable": [],'
+    ' "blocks": false, "undecidable_blocks": false}',
 ], ids=["v1", "v2-without-parse_failed", "v2-without-blocks", "v2-without-undecidable_blocks",
-        "partial-disable", "disable_partial-finding"])
+        "partial-disable", "disable_partial-finding", "v2-without-dead_entries"])
 def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
     """#3489 審查：舊版 da-guard 的文件要說「比這支工具舊」（stale），不是「壞掉」——
     呼叫端與使用者據此知道要升級 da-guard，而不是去查樹。"""
@@ -399,9 +406,10 @@ def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
 
 _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
         "severity": "error", "reason": "no_row", "disable": None, "switched_off_with": None,
-        "value": 1, "served": None}
+        "dead_entries": [], "value": 1, "served": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
-            "reason": "no_row", "base": None, "blocks": True}
+            "reason": "no_row", "base": None, "dead_entries": None, "blocks": True}
+_DEAD = {"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}
 
 
 def _doc(**over):
@@ -429,6 +437,15 @@ def _doc(**over):
     _doc(blocks="yes"),
     _doc(undecidable_blocks=None),
     _doc(findings=[dict(_FINDING, blocks=None)]),
+    # #3502: a dead_entry carries its entries, no other kind does; a reason
+    # outside the closed set is not read as one inside it.
+    _doc(findings=[dict(_FINDING, kind="dead_entry")]),
+    _doc(findings=[dict(_FINDING, kind="dead_entry", dead_entries=[])]),
+    _doc(findings=[dict(_FINDING, dead_entries=[_DEAD])]),
+    _doc(findings=[dict(_FINDING, kind="dead_entry", dead_entries=[dict(_DEAD, reason="covered")])]),
+    _doc(findings=[dict(_FINDING, kind="dead_entry", dead_entries=[dict(_DEAD, window=None)])]),
+    _doc(tenants={"t": [dict(_ROW, dead_entries=None)]}),
+    _doc(tenants={"t": [dict(_ROW, dead_entries=[dict(_DEAD, reason="covered")])]}),
 ], ids=lambda d: next(iter(k for k in d if d[k] != _doc()[k]), "?"))
 def test_a_document_this_reader_cannot_read_is_refused_not_read_as_another_answer(doc):
     """#3489 審查：讀不懂的值不能被讀成「判完、沒有 error」——產生器容器以
@@ -463,3 +480,43 @@ def test_a_value_unread_is_charged_to_the_layer_that_writes_it(tmp_path):
     assert [(f.file, f.key, f.tenants, f.blocks) for f in errors] == [("tb.yaml", "_metadata", ("tb",), True)]
     assert "dbType" in errors[0].reason
     assert t.blocks
+
+
+def test_a_schedule_entry_that_never_serves_is_an_error_on_the_file_that_writes_it(tmp_path):
+    """#3502：排程裡永遠不生效的條目（被前面 window 完全遮住的 window、被 window
+    蓋滿整天的 default）在寫它的檔報 error 並擋；部分重疊的 window 照常合法。"""
+    files = {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: 70\n",
+        "a.yaml": ("tenants:\n  t1:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+                   "        - window: \"22:00-06:00\"\n          value: \"1000\"\n"
+                   "        - window: \"01:00-03:00\"\n          value: \"5\"\n"
+                   "    redis_memory:\n      default: \"60\"\n      overrides:\n"
+                   "        - window: \"22:00-06:00\"\n          value: \"61\"\n"
+                   "        - window: \"05:00-08:00\"\n          value: \"62\"\n"),
+    }
+    verdict = kv.judge_tree(_tree(tmp_path, files), at="2026-07-01T03:00:00Z")
+    dead = [f for f in verdict.findings if f.kind == "dead_entry"]
+    assert [(f.severity, f.key, f.file, f.tenants, f.blocks) for f in dead] == [
+        ("error", "mysql_connections", "a.yaml", ("t1",), True)]
+    assert dead[0].dead_entries == (tv.DeadEntry("overrides[1]", "01:00-03:00", "5", "window_covered"),)
+    assert verdict.blocks
+    row = {v.key: v for v in verdict.keys["t1"]}
+    assert row["mysql_connections"].dead_entries == dead[0].dead_entries
+    assert row["redis_memory"].dead_entries == ()
+    assert kv.finding_line(dead[0], 5) == (
+        "a.yaml: error: dead_entry `mysql_connections` (never served: overrides[1] `01:00-03:00` → '5': "
+        "window_covered) — tenant(s) t1")
+
+
+def test_a_profile_key_the_platform_does_not_fill_still_reads(tmp_path):
+    """#3502 審查：profile 寫了、根只宣告不給值的鍵（profile_not_filled）那一列
+    也要帶 `dead_entries: []`；帶 null 時整份判決讀不進來（validate-config 變成
+    verdict incomplete）。"""
+    files = {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - kafka_lag\n"
+                          "profiles:\n  gold:\n    kafka_lag: \"5\"\n",
+        "tx.yaml": "tenants:\n  tx:\n    _profile: gold\n",
+    }
+    verdict = kv.judge_tree(_tree(tmp_path, files), at="2026-07-01T03:00:00Z")
+    row = {v.key: v for v in verdict.keys["tx"]}["kafka_lag"]
+    assert (row.reason, row.dead_entries) == ("profile_not_filled", ())

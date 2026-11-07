@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import find_metric_dictionary, safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import YamlFileError  # noqa: E402
 from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3445: --metric-dictionary is read by the lib)
 import _lib_parse_cache  # noqa: E402  (#2906: the single file through parse-tree)
 from _lib_parse_tree import FileUnreadable, Timestamp  # noqa: E402
 from _lib_python import (  # noqa: E402
@@ -72,16 +73,29 @@ RULE_PACK_PREFIXES = {
 }
 
 
+#: The kind of a top level da-guard reports as not a mapping (its message:
+#: "the top level is a sequence" / "a scalar (!!int)"), as `_lib_input`
+#: words it.
+_PARSE_TREE_KIND = (("sequence", list), ("(!!int)", int), ("(!!float)", float),
+                    ("(!!bool)", bool), ("(!!str)", str))
+
+
 def _read_tenant_file(path):
-    """*path* as `da-guard parse-tree` reads it alone (#2906): its content,
-    or None for a top level that is not a mapping (the caller's "no keys").
-    Any other file parse-tree cannot read raises YamlFileError (``cause`` is
-    the `FileUnreadable`), so it exits 2 named, as bad syntax always did."""
+    """*path* (--tenant-config) as `da-guard parse-tree` reads it alone
+    (#2906): its content (an empty or null document reads as ``{}``). A top
+    level that is not a mapping is refused (#3445: it was read as a tenant
+    with no keys, rc 0) — `_lib_input.refuse_top`, the wording every input
+    file's wrong top level has, a CallerError (rc 2). Any other file
+    parse-tree cannot read raises YamlFileError (``cause`` is the
+    `FileUnreadable`), so it exits 2 named, as bad syntax always did."""
     try:
         return _lib_parse_cache.read_file_alone(path, _lib_parse_cache.VALUES)
     except FileUnreadable as exc:
         if exc.kind == "top_level_not_mapping":
-            return None
+            got = next((kind for word, kind in _PARSE_TREE_KIND if word in exc.message),
+                       "scalar")
+            raise _lib_input.refuse_top(f"--tenant-config {safe_label(path)}", got, dict,
+                                        lang="en") from exc
         raise YamlFileError(str(path), exc) from exc
 
 
@@ -118,7 +132,8 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
       "010") and a date is a `_lib_parse_tree.Timestamp`. It unwraps the
       ``tenants:`` wrapper, and derives the flat-format tenant name via
       ``splitext`` (so ``x.yml`` → ``x``); a top level that is not a
-      mapping (a list, a scalar) is that name with no keys. A file
+      mapping (a list, a scalar) is a CallerError naming the flag and the
+      file (#3445: it was that name with no keys, rc 0). A file
       parse-tree cannot read (bad syntax, a key written twice — ``123`` and
       ``"123"`` are one key —, more than one document, not UTF-8) raises
       YamlFileError naming it; no usable da-guard raises
@@ -137,9 +152,7 @@ def load_tenant_configs(config_dir=None, tenant_config=None):
                     configs[t_name] = t_data
         else:
             name = os.path.splitext(os.path.basename(tenant_config))[0]
-            # Non-dict yaml (list/scalar) → {}: extract_custom_metrics
-            # needs .items().
-            configs[name] = data if isinstance(data, dict) else {}
+            configs[name] = data
     elif config_dir:
         tree = load_served_tree(config_dir)
         print_load_warnings(tree)
@@ -171,14 +184,26 @@ def extract_custom_metrics(configs):
     return custom_metrics
 
 
+#: --metric-dictionary: a YAML mapping. Content that cannot be read, or a
+#: top level that is no mapping (an empty file, ``[]``), is rc 2 named
+#: (#3445: ``[]`` read as no dictionary, rc 0).
+DICTIONARY_DOCUMENT = _lib_input.Document("yaml", dict)
+
+
 def load_metric_dictionary(path):
-    """Load metric dictionary for matching.
+    """Load the metric dictionary at *path* for matching — the one shipped
+    beside the tool, when --metric-dictionary is not given.
 
     Returns dict: {metric_name: {pack, description, ...}}
     """
-    data = load_yaml_file(path, default={})
-    if not data:
-        return {}
+    return metric_lookup(load_yaml_file(path, default={}) or {})
+
+
+def metric_lookup(data):
+    """The lookup of a parsed metric dictionary (a mapping).
+
+    Returns dict: {metric_name: {pack, description, ...}}
+    """
     # The metric dictionary maps golden_name → {original, description, ...}
     # We need to build a reverse lookup
     lookup = {}
@@ -363,8 +388,8 @@ def main():
         "--tenant-config",
         help="Single tenant config YAML file",
     )
-    parser.add_argument(
-        "--metric-dictionary",
+    _lib_input.add_input(
+        parser, "--metric-dictionary", decode=DICTIONARY_DOCUMENT,
         help="Path to metric-dictionary.yaml (default: the one shipped beside "
              "the tool, or one level up in the repository layout)",
     )
@@ -387,12 +412,13 @@ def main():
     # caller cannot enter it is named as such, not "no such directory".
     raise_path_problems([classify_path(path, kind, lang="en", flag=flag)
                          for flag, path, kind in (("--config-dir", args.config_dir, "dir"),
-                                                  ("--tenant-config", args.tenant_config, "file"),
-                                                  ("--metric-dictionary", args.metric_dictionary,
-                                                   "file"))
+                                                  ("--tenant-config", args.tenant_config, "file"))
                          if path])
-    dictionary_path = args.metric_dictionary or find_metric_dictionary(SCRIPT_DIR)
-    if dictionary_path is None:
+    # #3445: a --metric-dictionary given is read by the lib (path and
+    # content, named); the shipped one is the default.
+    dictionary = _lib_input.document(args, "metric_dictionary", lang="en")
+    dictionary_path = None if dictionary is not None else find_metric_dictionary(SCRIPT_DIR)
+    if dictionary is None and dictionary_path is None:
         print("WARN: metric-dictionary.yaml not found beside the tool or one level "
               "up; matches fall back to prefix and token heuristics. "
               "Pass --metric-dictionary to use one.", file=sys.stderr)
@@ -403,7 +429,8 @@ def main():
         tenant_config=args.tenant_config,
     )
     custom_metrics = extract_custom_metrics(configs)
-    metric_dict = load_metric_dictionary(dictionary_path) if dictionary_path else {}
+    metric_dict = (metric_lookup(dictionary) if dictionary is not None
+                   else load_metric_dictionary(dictionary_path) if dictionary_path else {})
 
     # Analyze
     results = analyze_gaps(custom_metrics, metric_dict)

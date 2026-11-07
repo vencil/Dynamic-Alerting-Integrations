@@ -42,7 +42,6 @@ import argparse
 import contextlib
 import json
 import os
-import stat
 import sys
 import textwrap
 from types import MappingProxyType
@@ -1419,6 +1418,7 @@ _KEY_VERDICT_KINDS = {
     "disable_cascade": "key_disable_cascade",
     "profile_not_judged": "key_profile_not_judged",
     "value_unread": "key_value_unread",
+    "dead_entry": "key_dead_entry",
 }
 
 # The exporter's key checks (`_lib_key_verdict.key_check_lines`) → FINDING_KINDS.
@@ -1573,30 +1573,10 @@ def _assembled_judge(undelivered: list[UndeliveredCustomAlerts], *, strict: bool
     return judge
 
 
-def _is_special_file(path: str) -> bool:
-    """Whether *path* is there and is not a regular file (``/dev/null``, a
-    tty, a FIFO): writing it replaces nothing, so it collides with nothing.
-    Whether it is fd 1 is the stdout owners' question, not this one."""
-    try:
-        return not stat.S_ISREG(os.stat(path).st_mode)
-    except OSError:
-        return False
-
-
-def _same_file(a: str | None, b: str | None) -> bool:
-    """Whether paths *a* and *b* name one file, so that writing one replaces
-    the other: the same path once symlinks are resolved
-    (``os.path.realpath`` — also for a file not created yet), or the same
-    inode (``os.path.samefile`` — a hard link). A path that is not a regular
-    file (``_is_special_file``) is never the same file."""
-    if not a or not b or _is_special_file(a) or _is_special_file(b):
-        return False
-    if os.path.realpath(a) == os.path.realpath(b):
-        return True
-    try:
-        return os.path.exists(a) and os.path.exists(b) and os.path.samefile(a, b)
-    except OSError:
-        return False
+# #1560 ⑤-a: the one "do these two outputs land in one file" judgement,
+# shared with migrate-credentials (``_lib_io.same_file``).
+_is_special_file = _lib_io.is_special_file
+_same_file = _lib_io.same_file
 
 
 def _names_the_source(dest: str | None, base_config: str | None) -> bool:

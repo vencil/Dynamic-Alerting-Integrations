@@ -78,6 +78,7 @@ def _build_help_text(lang):
     operator-check    驗證 Operator CRD 部署狀態 (5 項檢查 + 診斷報告)
     runtime-audit     Git rule-packs ↔ Prometheus runtime 唯讀對帳 (#747；MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator ConfigMap 格式遷移至 Operator 原生 CRD (含遷移清單與預檢)
+    migrate-credentials 找出 conf.d 裡明文的 receiver 憑證：改寫成 Secret 參照、產出 Secret 清單與待輪替清單 (#1560，只報告)
 
 命令 (Federation — 多叢集):
     rule-pack-split   Rule Pack 分層拆分 (edge Part 1 + central Part 2+3)
@@ -168,6 +169,7 @@ Commands (Operator-Native — CRD generation & validation):
     operator-check    Validate Operator CRD deployment status (5 checks + diagnostic report)
     runtime-audit     Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator Migrate ConfigMap format to Operator native CRD (migration checklist + pre-check)
+    migrate-credentials Find receiver credentials written out in conf.d: rewrite as Secret references, Secret manifests, rotation list (#1560, report only)
 
 Commands (Federation — multi-cluster):
     rule-pack-split   Rule Pack stratification (edge Part 1 + central Parts 2+3)
@@ -394,6 +396,9 @@ COMMAND_MAP = {
     # self-healing / a standing controller. See docs/custom-rule-governance.md §7.1.
     "runtime-audit": "runtime_audit.py",
     "migrate-to-operator": "migrate_to_operator.py",
+    # #1560 ⑤-a — receiver credentials written out in conf.d → Secret
+    # references + Secret manifests + rotation list (report only).
+    "migrate-credentials": "migrate_credentials.py",
     # Group E: Federation (multi-cluster)
     "rule-pack-split": "generate_rule_pack_split.py",
     # Tenant federation (ADR-020 IV-2l) — RS256 signing-key generation /

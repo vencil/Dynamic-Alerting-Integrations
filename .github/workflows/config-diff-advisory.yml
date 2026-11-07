@@ -37,10 +37,14 @@
 #
 # What triggers it: the platform's conf.d tree, config-diff and the modules
 # that decide what it compares (the renderers, the masking, which files count
-# as config files), and this file. ⚠️ Not everything the result depends on is
-# in the list — the da-guard Go sources and the other shared `_lib_*` modules
-# are not — so a change there alone does not run this; the next conf.d PR
-# does.
+# as config files), `scripts/ops/go_build.sh`, and this file. ⚠️ Not
+# everything the result depends on is in the list — the da-guard Go sources
+# and the other shared `_lib_*` modules are not — so a change there alone does
+# not run this; the next conf.d PR does. go_build.sh is the exception because
+# a flag change can stop this job's own "Build da-guard" step from building or
+# starting the binary at all, which nothing else runs this workflow to notice;
+# what the Go sources compute is covered by the Go tests and
+# guard-defaults-impact.yml.
 #
 # A PR from a fork gets a read-only token: the comment step then fails and
 # the job is red although the report was computed (it is in the artifact).
@@ -63,6 +67,10 @@ on:
       - "scripts/tools/_lib_parse_cache.py"
       - "scripts/tools/_threshold_alerts.py"
       - "scripts/tools/_lib_tenant_values.py"
+      # The build flags of the da-guard this workflow builds (#3601 follow-up).
+      # Unlike the Go sources (see the header): a flag change can break this
+      # job's own build/start of the binary, which only this run would show.
+      - "scripts/ops/go_build.sh"
       - ".github/workflows/config-diff-advisory.yml"
 
 permissions:

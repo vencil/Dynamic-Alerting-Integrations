@@ -19,7 +19,7 @@ constant `getattr(yaml, "safe_load")` are counted under the canonical name
 (`tests/shared/_ast_refs.py`, shared with `test_rewrite_layer_is_gone.py`).
 `except yaml.YAMLError` and `yaml.dump` / `yaml.safe_dump` are not points (a
 writer is not a reader). The readers in `_lib_io` (`WRAPPER_HOMES`;
-`_lib_yaml_keys` was deleted in step 13) — every top-level function, class or assignment there whose
+`_lib_yaml_keys` was deleted in step 13; `_lib_input`, #3445) — every top-level function, class or assignment there whose
 definition reaches an entry, directly or through another one — are entries
 themselves, computed from the AST (`wrappers()`): where they are defined is
 not a point, where they are used is. A module that re-exports an entry
@@ -91,8 +91,12 @@ RUAMEL_ENTRIES = frozenset({
 })
 
 #: The shared readers whose definitions reaching an entry make them entries
-#: (`_lib_yaml_keys`, the other one, was deleted in step 13).
-WRAPPER_HOMES = ("scripts/tools/_lib_io.py",)
+#: (`_lib_yaml_keys`, the other one, was deleted in step 13). #3445:
+#: `_lib_input.decode_bytes` is the one decoding of a caller's input file, and
+#: `_lib_io.load_yaml_file` decodes through it — so `decode_bytes` and
+#: `document` are entries, and where a tool reads a declared input file
+#: (`document`) is a point, whatever its format: the scan reads names.
+WRAPPER_HOMES = ("scripts/tools/_lib_io.py", "scripts/tools/_lib_input.py")
 
 Key = "tuple[str, str]"
 
@@ -186,6 +190,7 @@ def test_the_files_are_read(found: Scan) -> None:
         assert must in paths, must
     # the wrappers are derived, not listed: the two everyone uses must be among them
     assert {"load_yaml_file", "strict_safe_load"} <= found.wrappers["_lib_io"]
+    assert {"decode_bytes", "document"} <= found.wrappers["_lib_input"]
     assert not (REPO / "scripts/tools/_lib_yaml_keys.py").exists()
 
 

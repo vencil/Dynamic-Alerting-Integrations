@@ -20,6 +20,7 @@ from typing import Any, Callable, Iterator, Optional, TypeVar
 import yaml
 
 from _lib_constants import ONBOARD_HINTS_FILENAME
+import _lib_input  # noqa: E402  (#3445: the one decoding of an input file)
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 import _lib_exitcodes  # noqa: E402
 from _lib_label import safe_label  # noqa: E402,F401  (re-export, #3276)
@@ -99,11 +100,11 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
         return default
     raw = Path(path).read_bytes()
     try:
-        stream = io.StringIO(raw.decode("utf-8"))
-        stream.name = str(path)
-        data = yaml.safe_load(stream)   # deliberately the pure parser: see above
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise YamlFileError(str(path), exc) from exc
+        # #3445: the one decoding of an input file (`_lib_input.decode_bytes`):
+        # strict UTF-8, the pure parser (see above), the stream named.
+        data = _lib_input.decode_bytes(raw, fmt="yaml", name=str(path))
+    except _lib_input.DocumentError as exc:
+        raise YamlFileError(str(path), exc.cause) from exc.cause
     return data if data is not None else default
 
 
@@ -960,15 +961,19 @@ _O_OPERATOR = (os.O_WRONLY | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
                | getattr(os, "O_NOCTTY", 0) | getattr(os, "O_BINARY", 0))
 
 
-def _kernel_open_operator_output(path: str, mode: int, append: bool) -> tuple[int, bool]:
+def _kernel_open_operator_output(path: str, mode: int, append: bool,
+                                  nofollow: bool = False) -> tuple[int, bool]:
     """``open(2)`` *path* for writing; return ``(fd, created)``.
 
     O_NONBLOCK only for the open itself: a FIFO with no reader fails with
     ENXIO instead of blocking forever; it is cleared before any write. A
-    socket fails the open (ENXIO) on its own.
+    socket fails the open (ENXIO) on its own. *nofollow*: O_NOFOLLOW — a
+    symlink at *path* fails the open (ELOOP) instead of being written through.
     """
     nonblock = getattr(os, "O_NONBLOCK", 0)
     flags = _O_OPERATOR | (os.O_APPEND if append else os.O_TRUNC) | nonblock
+    if nofollow:
+        flags |= getattr(os, "O_NOFOLLOW", 0)
     fd = os.open(path, flags, mode)
     try:
         # Only where O_NONBLOCK was set: on Windows (3.12+) set_blocking
@@ -1003,7 +1008,8 @@ def _kernel_open_operator_output(path: str, mode: int, append: bool) -> tuple[in
 
 @contextlib.contextmanager
 def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
-                         append: bool = False) -> Iterator[io.TextIOBase]:
+                         append: bool = False,
+                         nofollow: bool = False) -> Iterator[io.TextIOBase]:
     """Open an operator-named output path for UTF-8/LF text writing.
 
     * ``-`` ⇒ stdout (claimed for *flag*; never closed).
@@ -1011,6 +1017,8 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
     * anything else ⇒ ``open(2)`` by the kernel (``O_CREAT|O_TRUNC``, or
       ``O_APPEND``); *mode* applies to a regular file this euid owns and did
       not reach through a symlink — created now or already there (V15).
+      *nofollow*: a symlink at *path* is refused (O_NOFOLLOW), never written
+      through (#1560: a file that holds credential values).
     * any ``OSError`` ⇒ :class:`OutputWriteError` naming *path* and *flag*.
       A write into a regular file that raises leaves it empty, not a prefix
       (a process killed mid-write can still leave one).
@@ -1026,7 +1034,7 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
             yield sink
             sink.flush()
             return
-        fd, regular = _kernel_open_operator_output(path, mode, append)
+        fd, regular = _kernel_open_operator_output(path, mode, append, nofollow)
         fh = io.open(fd, "w", encoding="utf-8", newline="\n", closefd=True)
         try:
             yield fh
@@ -1048,20 +1056,51 @@ def open_operator_output(path: str, *, flag: Optional[str], mode: int = 0o600,
 
 
 def write_operator_output(path: str, content: str, *, flag: Optional[str],
-                          mode: int = 0o600, append: bool = False) -> None:
+                          mode: int = 0o600, append: bool = False,
+                          nofollow: bool = False) -> None:
     """Write *content* to an operator-named path; see :func:`open_operator_output`."""
-    with open_operator_output(path, flag=flag, mode=mode, append=append) as fh:
+    with open_operator_output(path, flag=flag, mode=mode, append=append,
+                              nofollow=nofollow) as fh:
         fh.write(content)
 
 
 def write_operator_output_or_die(path: str, content: str, *, flag: Optional[str],
                                  mode: int = 0o600, append: bool = False,
-                                 exit_code: Optional[int] = None) -> None:
+                                 exit_code: Optional[int] = None,
+                                 nofollow: bool = False) -> None:
     """:func:`write_operator_output`; an unusable path exits (rc 2, one line)."""
     try:
-        write_operator_output(path, content, flag=flag, mode=mode, append=append)
+        write_operator_output(path, content, flag=flag, mode=mode, append=append,
+                              nofollow=nofollow)
     except OutputWriteError as exc:
         _die_on_write_error(exc, exit_code)
+
+
+def is_special_file(path: str) -> bool:
+    """Whether *path* is there and is not a regular file (``/dev/null``, a
+    tty, a FIFO): writing it replaces nothing, so it collides with nothing.
+    Whether it is fd 1 is the stdout owners' question, not this one."""
+    try:
+        return not stat.S_ISREG(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
+def same_file(a: Optional[str], b: Optional[str]) -> bool:
+    """Whether paths *a* and *b* name one file, so that writing one replaces
+    the other (#3615): the same path once symlinks are resolved
+    (``os.path.realpath`` — also for a file not created yet), or the same
+    inode (``os.path.samefile`` — a hard link). A path that is not a regular
+    file (``is_special_file``) is never the same file. generate-routes'
+    output clashes and migrate-credentials' outputs both judge by it."""
+    if not a or not b or is_special_file(a) or is_special_file(b):
+        return False
+    if os.path.realpath(a) == os.path.realpath(b):
+        return True
+    try:
+        return os.path.exists(a) and os.path.exists(b) and os.path.samefile(a, b)
+    except OSError:
+        return False
 
 
 def check_repo_artifact(path: Any, *, flag: Optional[str] = None) -> str:

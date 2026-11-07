@@ -3,20 +3,20 @@
 
 | Rule Pack | Exporter | Recording | Alert |
 |-----------|----------|-----------|-------|
-| clickhouse | clickhouse_exporter | 12 | 7 |
+| clickhouse | built-in /metrics | 11 | 7 |
 | db2 | db2_exporter | 13 | 8 |
-| elasticsearch | elasticsearch_exporter | 11 | 7 |
+| elasticsearch | elasticsearch_exporter | 10 | 7 |
 | jvm | jmx_exporter | 9 | 7 |
 | kafka | kafka_exporter | 13 | 9 |
 | kubernetes | cAdvisor + kube-state-metrics | 30 | 14 |
 | liveness | threshold-exporter heartbeat | 0 | 1 |
-| mariadb | mysqld_exporter (Percona) | 14 | 18 |
-| mongodb | mongodb_exporter | 10 | 8 |
+| mariadb | mysqld_exporter (Percona) | 12 | 18 |
+| mongodb | mongodb_exporter | 8 | 8 |
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter operational mode | 0 | 4 |
 | oracle | oracledb_exporter | 11 | 7 |
 | platform | threshold-exporter self-monitoring | 0 | 53 |
-| postgresql | postgres_exporter | 11 | 9 |
+| postgresql | postgres_exporter | 8 | 9 |
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
-| redis | redis_exporter | 11 | 6 |
-| **Total** | | **166** | **172** |
+| redis | redis_exporter | 9 | 6 |
+| **Total** | | **155** | **172** |

@@ -608,7 +608,9 @@ func (m *Manager) evalScope(p *VerifiedPrincipal, q scopeQuery) scopeEval {
 //
 // ⛔ Allowed(p, "*", PermAdmin) is NOT a platform-admin bar: an ORG-SCOPED
 // "*" admin rule passes it. A platform-admin decision uses
-// PlatformAdminNonOrgScoped (reverse.go).
+// PlatformAdminUnrestricted by default; PlatformAdminNonOrgScoped (reverse.go)
+// only where environments and domains do not bear on the decision, at the
+// call sites platform_gate_arch_test.go lists.
 //
 // Allowed records nothing: a scope-blind decision cannot be denied by scope.
 func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission) bool {
@@ -858,7 +860,7 @@ func (m *Manager) ScopeAllowedUnknownMetadata(p *VerifiedPrincipal, tenantID str
 		if !tenantMatches(rule.Tenants, tenantID) {
 			continue
 		}
-		if len(rule.Environments) != 0 || len(rule.Domains) != 0 {
+		if ruleRestrictsMetadata(rule) {
 			continue // restricted on a metadata axis whose value is unknown
 		}
 		if rule.OrgScope == "" || scopeSetPasses(subject.claims[rule.OrgScope], tenantOrgs) {

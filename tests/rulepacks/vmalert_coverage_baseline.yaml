@@ -14,7 +14,6 @@
 # Regenerate after an intentional change: python scripts/tools/lint/check_vmalert_coverage.py --generate
 uncovered:
   rule-pack-clickhouse.yaml:
-  - ClickHouseDown
   - ClickHouseHighMemoryUsage
   - ClickHouseHighPartCount
   - ClickHouseHighQueryRate

@@ -2232,6 +2232,27 @@ const docTemplate = `{
                 }
             }
         },
+        "config.DeadEntry": {
+            "type": "object",
+            "properties": {
+                "entry": {
+                    "description": "Entry: \"default\", or \"overrides[\u003ci\u003e]\" (0-based, the order written).",
+                    "type": "string"
+                },
+                "reason": {
+                    "description": "Reason: one of the DeadEntry* reasons.",
+                    "type": "string"
+                },
+                "value": {
+                    "description": "Value: the entry's value as written.",
+                    "type": "string"
+                },
+                "window": {
+                    "description": "Window: the entry's ` + "`" + `window:` + "`" + ` as written; absent for the default.",
+                    "type": "string"
+                }
+            }
+        },
         "config.NotServedKey": {
             "type": "object",
             "properties": {
@@ -3589,6 +3610,16 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
+                    }
+                },
+                "dead_entries": {
+                    "description": "DeadEntries names each threshold key of EffectiveConfig written as a\nschedule with an entry /metrics serves at no minute of the UTC day —\na window the windows before it cover, or a ` + "`" + `default` + "`" + ` the windows\ncover (#3502, ScheduledValue.DeadEntries) — with those entries. Not\npart of NotServed: the key is still served in some part of the day,\nand what never applies is an entry of its value. A key may be in both\n(its schedule also has a window that does not parse, window_invalid);\na key NotServed names for a reason under which none of its value is\nserved (undeliverable, unconsumed, …) has no dead entry. The file of\nthe value is KeySources'. Filled by\nResolveEffective and EffectiveTree; omitted when no key has one.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/definitions/config.DeadEntry"
+                        }
                     }
                 },
                 "defaults_chain": {

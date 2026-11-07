@@ -48,6 +48,11 @@ DERIVED_ROWS = {
     "config-history snapshot": lambda d: (
         ["scripts/tools/ops/config_history.py", "--config-dir", str(_conf_dir(d)), "snapshot"],
         d / ".da-history" / "snap-1" / "a.yaml"),
+    # #1560 ⑤-a: one Secret manifest per tenant, named after it (with --write only).
+    "migrate-credentials --manifests-out": lambda d: (
+        ["scripts/tools/ops/migrate_credentials.py", "--config-dir", str(_plaintext_conf(d)),
+         "--manifests-out", str(d / "secrets"), "--write"],
+        d / "secrets" / "da-a.yaml"),
 }
 
 # Artifacts (#3107 risk 1, owner 2026-10-24: cmasm is one): replaced
@@ -65,6 +70,16 @@ def _conf_dir(d: Path) -> Path:
     c = d / "conf"
     c.mkdir(exist_ok=True)
     (c / "a.yaml").write_text("a: 1\n", encoding="utf-8")
+    return c
+
+
+def _plaintext_conf(d: Path) -> Path:
+    """A conf.d whose tenant `a` writes its Slack URL out."""
+    c = d / "plain-conf"
+    c.mkdir(exist_ok=True)
+    (c / "a.yaml").write_text(
+        "tenants:\n  a:\n    _routing:\n      receiver:\n        type: slack\n"
+        "        api_url: https://hooks.slack.example.com/services/x\n", encoding="utf-8")
     return c
 
 

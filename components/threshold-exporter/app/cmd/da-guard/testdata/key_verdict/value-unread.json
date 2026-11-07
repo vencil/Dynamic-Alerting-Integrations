@@ -18,6 +18,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": null,
         "served": {
           "db_type": "",
@@ -43,6 +44,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "gold",
         "served": null
       },
@@ -59,6 +61,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "maybe",
         "served": "enable"
       },
@@ -74,6 +77,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "purple",
         "served": []
       },
@@ -89,6 +93,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 80,
         "served": 80
       }
@@ -106,6 +111,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": "silver",
         "served": null
       },
@@ -121,6 +127,7 @@
         "reason": null,
         "disable": null,
         "switched_off_with": null,
+        "dead_entries": [],
         "value": 80,
         "served": 80
       }
@@ -137,6 +144,7 @@
       ],
       "reason": "unknown severity_dedup value \"maybe\" (valid: enable, disable)",
       "base": null,
+      "dead_entries": null,
       "blocks": true
     },
     {
@@ -149,6 +157,7 @@
       ],
       "reason": "references unknown profile \"silver\"",
       "base": null,
+      "dead_entries": null,
       "blocks": true
     },
     {
@@ -161,6 +170,7 @@
       ],
       "reason": "unknown silent mode \"purple\" (valid: warning, critical, all, disable)",
       "base": null,
+      "dead_entries": null,
       "blocks": false
     },
     {
@@ -173,6 +183,7 @@
       ],
       "reason": "unknown field(s) bogus_field (known: db_type, domain, environment, groups, owner, region, runbook_url, tags, tier)",
       "base": null,
+      "dead_entries": null,
       "blocks": false
     }
   ],

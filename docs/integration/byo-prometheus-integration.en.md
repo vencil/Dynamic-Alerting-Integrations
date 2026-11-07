@@ -217,15 +217,15 @@ Load pre-written Recording Rules + Alert Rules into your Prometheus to enable dy
 <!-- BYO_RULEPACK_TABLE_START -->
 | ConfigMap Name | Contents | Rules |
 |---|---|---|
-| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 14R + 18A |
+| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 12R + 18A |
 | `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 30R + 14A |
-| `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 11R + 6A |
-| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 8A |
-| `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 11R + 7A |
+| `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 9R + 6A |
+| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 8R + 8A |
+| `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 10R + 7A |
 | `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 11R + 7A |
 | `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 13R + 8A |
-| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 7A |
-| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 11R + 9A |
+| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 11R + 7A |
+| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 8R + 9A |
 | `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 13R + 9A |
 | `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 12R + 8A |
 | `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |

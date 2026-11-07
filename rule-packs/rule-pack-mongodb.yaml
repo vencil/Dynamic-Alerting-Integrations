@@ -36,10 +36,6 @@ groups:
       - record: tenant:mongodb_connections_current:max
         expr: max by(tenant) (mongodb_connections{state="current"})
 
-      # Available connections
-      - record: tenant:mongodb_connections_available:min
-        expr: min by(tenant) (mongodb_connections{state="available"})
-
       # Connection usage ratio
       - record: tenant:mongodb_connection_usage:ratio
         expr: |
@@ -56,10 +52,6 @@ groups:
       # Operations per second
       - record: tenant:mongodb_opcounters:rate5m
         expr: sum by(tenant) (rate(mongodb_opcounters_total[5m]))
-
-      # Document operations per second
-      - record: tenant:mongodb_document_ops:rate5m
-        expr: sum by(tenant) (rate(mongodb_mongod_metrics_document_total[5m]))
 
       # Page faults
       - record: tenant:mongodb_page_faults:rate5m
