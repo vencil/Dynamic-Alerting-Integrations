@@ -99,6 +99,20 @@ preflight:
 # VictoriaLogs endpoint the reconciler queries (matches helm/victorialogs).
 victorialogs:
   url: "http://victorialogs.monitoring.svc.cluster.local:9428"
+  # Credentials toward the store's vmauth (helm/victorialogs `auth`, #1295).
+  # `username` is this consumer's entry in helm/victorialogs
+  # `auth.consumers` — tests/shared/test_victorialogs_consumers.py holds the
+  # two to each other. `existingSecret` names a Secret in THIS release's
+  # namespace whose key `password` equals the store-side Secret of the same
+  # consumer (hex only, no trailing newline — see helm/victorialogs
+  # values.yaml). Empty = send no credentials, which only works while the
+  # store runs `auth.mode: observe`.
+  # ⚠️ The reconciler code ships in the da-tools image (`image.tag`), not in
+  # this chart: an image older than the release that carries #1295 ignores
+  # these env vars and keeps querying without credentials.
+  auth:
+    username: federation-reconciler
+    existingSecret: ""
 
 reconcile:
   # Must be above 0 (fractions allowed): 0 or a negative value makes the

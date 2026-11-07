@@ -24,6 +24,17 @@ data:
         url: http://victorialogs.monitoring.svc.cluster.local:9428
         isDefault: false
         editable: true
+        # Credentials toward the store's vmauth (helm/victorialogs `auth`,
+        # #1295). basicAuthUser is this consumer's entry in helm/victorialogs
+        # `auth.consumers` — tests/shared/test_victorialogs_consumers.py holds
+        # the two to each other. The password comes from the Secret
+        # `victorialogs-grafana` via deployment-grafana.yaml; while that Secret
+        # does not exist the password is empty, which only works while the
+        # store runs `auth.mode: observe`.
+        basicAuth: true
+        basicAuthUser: grafana
+        secureJsonData:
+          basicAuthPassword: ${VICTORIALOGS_PASSWORD}
 
   dashboards.yaml: |
     apiVersion: 1

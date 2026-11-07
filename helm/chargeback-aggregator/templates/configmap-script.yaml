@@ -27,6 +27,7 @@ data:
       2  output write failed (PVC full, permission)
       3  argv / env misuse
     """
+    import base64
     import csv
     import datetime as dt
     import hashlib
@@ -44,6 +45,11 @@ data:
     RETENTION_DAYS = int(os.environ.get("RETENTION_DAYS", "90"))
     ACCOUNT_ID = os.environ.get("ACCOUNT_ID", "")
     PROJECT_ID = os.environ.get("PROJECT_ID", "")
+    # Store credentials (#1295), from victorialogs.auth. The password is used
+    # byte-for-byte: vmauth compares it as-is, so stripping a newline here
+    # would only hide a malformed Secret until another consumer trips on it.
+    VL_USER = os.environ.get("VICTORIALOGS_USERNAME", "")
+    VL_PASSWORD = os.environ.get("VICTORIALOGS_PASSWORD", "")
 
     # ── Step 1: build the LogsQL query ─────────────────────────────────
     # NOTE: tenant_id is a STREAM field (#539 §3 schema), so `stats by
@@ -96,6 +102,9 @@ data:
         req.add_header("AccountID", ACCOUNT_ID)
     if PROJECT_ID:
         req.add_header("ProjectID", PROJECT_ID)
+    if VL_USER:
+        cred = base64.b64encode(f"{VL_USER}:{VL_PASSWORD}".encode("utf-8")).decode("ascii")
+        req.add_header("Authorization", f"Basic {cred}")
 
     try:
         with urllib.request.urlopen(req, timeout=60) as r:

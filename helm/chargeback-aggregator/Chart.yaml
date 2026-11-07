@@ -10,7 +10,8 @@ type: application
 # 0.2.1 — #902 L2 slice-2: pin the python base image by digest (image.digest)
 # 0.2.2 — CSV report opened with explicit encoding="utf-8" (no longer follows the container locale)
 # 0.2.3 — #1243: image python:3.14-slim → gcr.io/distroless/python3-debian13:nonroot (no pip, no shell)
-version: 0.2.3
+# 0.3.0 — #1295: victorialogs.auth {username, existingSecret}. With a Secret named, the CronJob and the manual Job send HTTP basic auth to the store's vmauth. No Secret = no change.
+version: 0.3.0
 # appVersion: Python version inside the pinned image
 appVersion: "3.13"
 keywords:

@@ -21,6 +21,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 E2E_DIR="$REPO_ROOT/tests/federation-e2e"
 RENDERED="$E2E_DIR/rendered"
 GATEWAY_CHART="$REPO_ROOT/helm/federation-gateway"
+STORE_CHART="$REPO_ROOT/helm/victorialogs"
+# The victorialogs stack is the static compose file plus the vmauth service
+# rendered from helm/victorialogs (Step 2b). Every compose call names both.
+VL_COMPOSE=(-p fedvl -f victorialogs-compose.yml -f rendered/victorialogs/vmauth.compose.yml)
 VENV="$E2E_DIR/.venv"
 PY="$VENV/bin/python"
 
@@ -35,7 +39,11 @@ _cleanup() {
     # The victorialogs-mode stack (ADR-021 #609 PR-5) is a SEPARATE compose
     # project file — tear it down too. -p keeps its containers/network
     # namespaced apart from the metrics stack so neither clobbers the other.
-    (cd "$E2E_DIR" && docker compose -p fedvl -f victorialogs-compose.yml down -v 2>/dev/null || true)
+    # By project name only, no compose files: the rendered vmauth override
+    # does not exist yet when the run fails before Step 2b, and `down` with a
+    # missing -f file exits non-zero (swallowed below) and removes nothing.
+    # Compose finds the project's containers by label.
+    (cd "$E2E_DIR" && docker compose -p fedvl down -v 2>/dev/null || true)
 }
 trap _cleanup EXIT
 
@@ -111,14 +119,26 @@ PYEOF
 # this mode). upstream points at the mock log store. Generous rate limits —
 # the victorialogs scenarios are isolation/spoofing, not rate-limit, tests.
 # ---------------------------------------------------------------------------
-echo "[fed-e2e] rendering victorialogs-mode gateway into rendered/victorialogs/"
 mkdir -p "$RENDERED/victorialogs"
+# The store side first (#1295): a real vmauth in enforce mode, rendered from
+# helm/victorialogs, in front of the mock store. Its listen port is where the
+# gateway forwards; the backend port is where the mock listens (it shares
+# vmauth's network namespace, as VictoriaLogs shares the pod's loopback).
+echo "[fed-e2e] rendering the store-side vmauth (helm/victorialogs, enforce) into rendered/victorialogs/"
+# A command substitution, not `read < <(...)`: set -e does not see a failed
+# process substitution, and the run would go on with empty ports.
+vmauth_ports="$("$PY" "$E2E_DIR/render_vmauth.py" "$STORE_CHART" "$RENDERED/victorialogs")"
+read -r VMAUTH_PORT E2E_VL_BACKEND_PORT <<<"$vmauth_ports"
+: "${VMAUTH_PORT:?render_vmauth.py printed no listen port}" "${E2E_VL_BACKEND_PORT:?render_vmauth.py printed no backend port}"
+export E2E_VL_BACKEND_PORT
+echo "[fed-e2e] rendering victorialogs-mode gateway into rendered/victorialogs/"
 helm template fedlogs "$GATEWAY_CHART" \
     --show-only templates/configmap-envoy.yaml \
     --set mode=victorialogs \
     --set jwt.audience=tenant-federation-logs \
-    --set upstream.host=mock-logstore \
-    --set upstream.port=9428 \
+    --set victorialogs.auth.existingSecret=e2e-federation-gateway \
+    --set upstream.host=vmauth \
+    --set "upstream.port=$VMAUTH_PORT" \
     --set network.xffTrustedHops=0 \
     --set rateLimit.perTenant.maxTokens=100000 \
     --set rateLimit.perTenant.tokensPerFill=100000 \
@@ -196,7 +216,7 @@ docker compose down -v
 # ---------------------------------------------------------------------------
 if [[ "$rc" -eq 0 ]]; then
     echo "[fed-e2e] docker compose up (victorialogs stack)..."
-    docker compose -p fedvl -f victorialogs-compose.yml up -d
+    docker compose "${VL_COMPOSE[@]}" up -d
     set +e
     # E2E_METRICS_STACK=0 tells the shared conftest.py to skip its metrics
     # readiness probe (autouse) — the metrics stack is down in this phase.
@@ -205,9 +225,9 @@ if [[ "$rc" -eq 0 ]]; then
     set -e
     if [[ "$rc" -ne 0 ]]; then
         echo "[fed-e2e] ===== victorialogs scenario failure — container logs ====="
-        docker compose -p fedvl -f victorialogs-compose.yml logs --tail=100 || true
+        docker compose "${VL_COMPOSE[@]}" logs --tail=100 || true
     fi
-    docker compose -p fedvl -f victorialogs-compose.yml down -v
+    docker compose "${VL_COMPOSE[@]}" down -v
 fi
 
 # ---------------------------------------------------------------------------

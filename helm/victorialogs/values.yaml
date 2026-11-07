@@ -90,8 +90,12 @@ extraArgs: []
 # paths. The username is the consumer's `name`; its password is key
 # `password` of `existingSecret`, a Secret in THIS namespace that the operator
 # creates (the chart never generates one: `helm template` / Argo CD cannot keep
-# a generated value stable across renders). Each consumer chart reads the same
-# password from its own namespace.
+# a generated value stable across renders). Each consumer sends the same
+# password from its own namespace: the consumer charts through
+# `victorialogs.auth.{username,existingSecret}`, Grafana through its
+# datasource's basic auth (k8s/03-monitoring). Adding, removing or renaming a
+# consumer here must be matched on that side —
+# tests/shared/test_victorialogs_consumers.py fails otherwise.
 # ⛔ Password format: hex only, no trailing newline —
 #   kubectl create secret generic <name> --from-literal=password="$(openssl rand -hex 32)"
 # vmauth substitutes the value into its YAML config as raw text before parsing

@@ -13,3 +13,6 @@ manualJob:
 victorialogs:
   accountId: "1"
   projectId: "1"
+  # Store credentials (#1295): env from a Secret.
+  auth:
+    existingSecret: pss-gate

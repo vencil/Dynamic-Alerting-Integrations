@@ -27,6 +27,7 @@ distinct from the metrics gateway's 18080) with its own readiness probe.
 import http.client
 import json
 import os
+import re
 import time
 from urllib.parse import urlencode
 
@@ -337,3 +338,80 @@ def test_vl6_default_deny_endpoint_allowlist(vl_gateway_url, logs_signer):
                            headers=hdr, timeout=35)
     assert allowed.status_code == 200, (allowed.status_code, allowed.text[:200])
     assert allowed.json()["received_account_id"] == str(TENANT_A[1])
+
+
+# ── VL7–VL9 — the store's vmauth (#1295) ──────────────────────────────────────
+# vmauth runs in enforce mode with the chart's own config (render_vmauth.py), so
+# every scenario above already depends on the gateway authenticating: without
+# its credential vmauth answers 401 and VL1's readiness probe never passes.
+# These make that explicit and cover the other registered consumers, which are
+# not in this stack — the driver presents each one's credential directly.
+VL_VMAUTH_URL = "http://127.0.0.1:" + os.environ.get("E2E_VL_VMAUTH_PORT", "18428")
+_CONSUMERS_FILE = os.path.join(os.path.dirname(__file__), "rendered", "victorialogs", "consumers.json")
+# One write path and one read path; each consumer's grant must admit exactly one.
+_PROBE_PATHS = {"/insert/jsonline": "POST", "/select/logsql/query": "GET"}
+
+
+def _consumers():
+    with open(_CONSUMERS_FILE, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _store(path, *, auth=None, method="GET"):
+    return requests.request(method, VL_VMAUTH_URL + path, auth=auth,
+                            params={"query": "*"}, data=b"{}" if method == "POST" else None,
+                            timeout=10)
+
+
+def _reached_store(resp):
+    """True when the mock answered — it always replies 200 with this key, so any
+    other answer came from vmauth."""
+    try:
+        return resp.status_code == 200 and "received_account_id" in resp.json()
+    except ValueError:
+        return False
+
+
+def test_vl7_gateway_reaches_the_store_as_its_registered_consumer(vl_gateway_url, logs_signer):
+    tenant, acct = TENANT_A
+    _, token = logs_signer(tenant, acct)
+    resp = _query(vl_gateway_url, token)
+    assert _reached_store(resp), (
+        f"the gateway's query did not get past vmauth (enforce): {resp.status_code} {resp.text[:200]}")
+
+
+@pytest.mark.parametrize("name", sorted(_consumers()) if os.path.exists(_CONSUMERS_FILE) else [])
+def test_vl8_each_consumer_reaches_only_its_granted_paths(name):
+    c = _consumers()[name]
+    granted = {p for p in _PROBE_PATHS if any(re.fullmatch(g, p) for g in c["paths"])}
+    assert len(granted) == 1, f"{name}: grant {c['paths']} admits {granted}; expected exactly one probe path"
+    for path, method in _PROBE_PATHS.items():
+        resp = _store(path, auth=(name, c["password"]), method=method)
+        if path in granted:
+            assert _reached_store(resp), f"{name} {method} {path}: {resp.status_code} {resp.text[:200]}"
+        else:
+            assert not _reached_store(resp) and resp.status_code >= 400, (
+                f"{name} reached {path} outside its grant {c['paths']}: {resp.status_code}")
+
+
+def test_vl8b_consumers_file_was_rendered():
+    """VL8 parametrizes over the rendered registry; an absent file would make it
+    collect zero cases and pass silently."""
+    assert os.path.exists(_CONSUMERS_FILE), f"{_CONSUMERS_FILE} missing — run via federation_e2e_run.sh"
+    assert _consumers(), "the rendered consumer registry is empty"
+
+
+def test_vl9_unknown_and_unauthenticated_callers_reach_nothing_but_probes():
+    name, c = next(iter(_consumers().items()))
+    callers = {
+        "no credentials": None,
+        "unknown user": ("not-a-consumer", c["password"]),
+        "known user, wrong password": (name, "0" * 64),
+    }
+    for label, auth in callers.items():
+        for path, method in _PROBE_PATHS.items():
+            resp = _store(path, auth=auth, method=method)
+            assert resp.status_code == 401 and not _reached_store(resp), (
+                f"{label} {method} {path}: {resp.status_code} {resp.text[:200]}")
+    # The probes and the metrics scrape stay open (kubelet sends no credentials).
+    assert _reached_store(_store("/health")), "unauthenticated /health must reach the store"
