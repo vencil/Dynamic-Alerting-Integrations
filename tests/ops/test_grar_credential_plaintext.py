@@ -77,7 +77,8 @@ _CASES = [
      "tenants.t-a._routing.receiver.api_url"),
     # webhook url 帶 userinfo
     ("userinfo", f"      receiver:\n        type: webhook\n"
-                 f"        url: https://u:{CANARY}@hooks.example.com/a\n",
+                 # A test canary, not a credential: no real host, user or password.
+                 f"        url: https://u:{CANARY}@hooks.example.com/a\n",  # trufflehog:ignore
      "tenants.t-a._routing.receiver.url"),
     # 代理憑證：proxy_connect_header 出現就擋、proxy_url 帶 userinfo
     ("proxy_credential", "      receiver:\n        type: webhook\n"
@@ -88,7 +89,8 @@ _CASES = [
     ("proxy_credential", "      receiver:\n        type: webhook\n"
                          "        url: https://hooks.example.com/a\n"
                          "        http_config:\n"
-                         f"          proxy_url: http://u:{CANARY}@proxy.example.com:3128\n",
+                         # A test canary, not a credential: no real host, user or password.
+                         f"          proxy_url: http://u:{CANARY}@proxy.example.com:3128\n",  # trufflehog:ignore
      "tenants.t-a._routing.receiver.http_config.proxy_url"),
     # http_config 的認證子欄位
     ("needs_reference", "      receiver:\n        type: webhook\n"

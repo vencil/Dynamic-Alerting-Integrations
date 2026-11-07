@@ -576,14 +576,14 @@ def secret_ref_problem(value: Any) -> Optional[str]:
     this and jsonschema the same cases.
     """
     if not isinstance(value, dict) or set(value) != {"secret"}:
-        keys = sorted(str(k) for k in value) if isinstance(value, dict) else []
+        keys = (sorted(shown_key(k) for k in value) if isinstance(value, dict) else [])
         has = f": it has {keys}" if keys else ""
         return f"is not a Secret reference ({SECRET_REF_SHAPES}){has}"
     inner = value["secret"]
     if not isinstance(inner, dict):
         return (f"is not a Secret reference ({SECRET_REF_SHAPES}): 'secret' is "
                 f"{_type_name(inner, shown=MASKED_VALUE)}")
-    unknown = sorted(str(k) for k in inner if k not in ("key", "shared"))
+    unknown = sorted(shown_key(k) for k in inner if k not in ("key", "shared"))
     if unknown:
         hint = (" — a reference never names its Secret: the tenant's own is "
                 "da-<tenant>, a shared one is an alias the deployment policy's "
@@ -1276,6 +1276,27 @@ def shown_value(value: Any, *, rtype: Any = _NO_RTYPE, path: tuple = (),
     return repr(value)
 
 
+def shown_key(key: Any) -> str:
+    """A key the config author wrote (a mapping key: a routing key, a policy
+    or profile name, a header name) as a message names it:
+    ``shown_value(key, bare=True)`` — keys are content too (#1560 ⑤-b
+    round 5)."""
+    return shown_value(key, bare=True)
+
+
+#: What a structured path (``Finding.field`` / ``policy``) holds in place of
+#: a key that is not name-like.
+KEY_PLACEHOLDER = "<key>"
+
+
+def key_segment(key: Any) -> str:
+    """One segment of a structured path (``Finding.field``, ``policy``) that
+    the config author wrote: the key when it is name-like
+    (``_NAME_LIKE_RE``), else ``KEY_PLACEHOLDER`` — a path never carries a
+    URL a key may be (#1560 ⑤-b round 5)."""
+    return key if isinstance(key, str) and _NAME_LIKE_RE.fullmatch(key) else KEY_PLACEHOLDER
+
+
 def receiver_value_repr(rtype: Any, path: tuple, value: Any) -> str:
     """``shown_value`` of a receiver's value at *path*."""
     return shown_value(value, rtype=rtype, path=path)
@@ -1461,13 +1482,13 @@ def file_reference_paths(value: Any, path: str = "", *,
     out: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
-            name = key if isinstance(key, str) else scalar_text(key)
+            name = key_segment(key)
             here = f"{path}.{name}" if path else name
             if not isinstance(key, str) or is_file_reference_key(key):
                 out.append(here)
             elif key in label_maps and isinstance(item, dict):
                 for label, v in item.items():
-                    lname = label if isinstance(label, str) else scalar_text(label)
+                    lname = key_segment(label)
                     out.extend(file_reference_paths(v, f"{here}.{lname}", label_maps=label_maps,
                                                     receiver_keys=receiver_keys))
             elif key in receiver_keys:

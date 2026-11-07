@@ -120,9 +120,11 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 		case ResultRejected:
 			return nil, g.reject(ctx, v.Reason, v.Message)
 		case ResultFindings:
-			if v.StderrTail != "" {
-				slog.Info("generator: write refused with findings", "base", base, "files", len(files), "stderr_tail", v.StderrTail)
-			}
+			// #1560 ⑤-b: only structured fields reach the platform log —
+			// never stderr_tail, a finding's message or its field, which
+			// quote what the tenants wrote. The caller sees the findings
+			// in the 422 (disclosedFindings, by RBAC); the CLI on its tree.
+			slog.Info("generator: write refused with findings", findingsLogAttrs(base, len(files), v)...)
 			return nil, g.findings(ctx, deadline, base, files, v)
 		}
 		problem := mismatch(v.Validated, base, files, policy)
@@ -139,6 +141,34 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 			return nil, g.reject(ctx, ReasonMismatch, "the generator judged other content than tenant-api would write, twice: "+problem+"; retry")
 		}
 	}
+}
+
+// findingsLogAttrs is what the platform log keeps of a `findings` verdict
+// (#1560 ⑤-b): base, the number of files, the exit code and, per finding
+// kind (a closed vocabulary), how many there were. Never stderr_tail nor a
+// finding's message, field, tenant, policy or file: those quote conf.d,
+// and the log crosses a trust boundary the 422 does not.
+func findingsLogAttrs(base string, files int, v *Verdict) []any {
+	counts := map[string]int{}
+	if v.Findings != nil {
+		for _, f := range v.Findings.Findings {
+			counts[f.Kind]++
+		}
+	}
+	kinds := make([]string, 0, len(counts))
+	for k := range counts {
+		kinds = append(kinds, k)
+	}
+	sort.Strings(kinds)
+	perKind := make([]string, 0, len(kinds))
+	for _, k := range kinds {
+		perKind = append(perKind, fmt.Sprintf("%s=%d", k, counts[k]))
+	}
+	rc := -1
+	if v.RC != nil {
+		rc = *v.RC
+	}
+	return []any{"base", base, "files", files, "rc", rc, "findings_by_kind", strings.Join(perKind, ",")}
 }
 
 // refuseUnjudged refuses a pass whose key verdict is missing or did not

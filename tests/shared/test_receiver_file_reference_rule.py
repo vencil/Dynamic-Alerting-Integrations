@@ -268,8 +268,10 @@ def test_a_key_that_is_not_a_string_is_refused():
     # the rule cannot read a bytes key's name, so it refuses any non-string
     # key rather than rely on the file reader rejecting the tag first.
     receiver = _hook({"basic_auth": {b"password_file": "/p"}, "tls_config": {1: "x"}})
+    # #1560 ⑤-b (round 5): a path segment the author wrote is named only when
+    # it is name-like; any other key is `<key>` (a key can be a URL).
     assert file_reference_paths(receiver) == [
-        "http_config.basic_auth.b'password_file'", "http_config.tls_config.1"]
+        "http_config.basic_auth.<key>", "http_config.tls_config.<key>"]
 
 
 # ── 3. the generator refuses the whole tree, wherever the receiver sits ──

@@ -83,9 +83,11 @@ _SLACK = {"type": "slack", "api_url": {"secret": {"key": "slack-url"}}}
 
 def _canary_values(tag: str) -> dict[str, object]:
     canary = f"CANARY-{tag}"
+    # Test canaries, not credentials: no real host, user or password.
     return {"receiver_mapping": {"receiver": {"type": "slack",
                                               "api_url": f"https://hooks.example/{canary}"}},
-            "url_string": f"https://u:CANARYPW@hooks.example/{canary}"}
+            "url_string": f"https://u:CANARYPW@hooks.example/{canary}",  # trufflehog:ignore
+            "key_name": 1}
 
 
 def _place(where: str, key: str, value: object) -> dict[str, dict]:
@@ -96,14 +98,18 @@ def _place(where: str, key: str, value: object) -> dict[str, dict]:
         block = {"receiver": copy.deepcopy(_SLACK)}
         block[key] = value
         tenant["_routing"] = block
-    elif where == "override_entry":
+    elif where in ("override_entry", "override_entry_dup"):
         entry = {"alertname": "X", "receiver": copy.deepcopy(_SLACK)}
+        if key == "metric_group" and where.endswith("_dup"):
+            del entry["alertname"]  # one matcher per entry: the duplicate is on it
         entry[key] = value
-        tenant["_routing"] = {"receiver": copy.deepcopy(_SLACK), "overrides": [entry]}
-    elif where == "route_entry":
+        entries = [entry, copy.deepcopy(entry)] if where.endswith("_dup") else [entry]
+        tenant["_routing"] = {"receiver": copy.deepcopy(_SLACK), "overrides": entries}
+    elif where in ("route_entry", "route_entry_dup"):
         entry = {"match": {"team": "a"}, "receiver": copy.deepcopy(_SLACK)}
         entry[key] = value
-        tenant["_routing"] = {"receiver": copy.deepcopy(_SLACK), "routes": [entry]}
+        entries = [entry, copy.deepcopy(entry)] if where.endswith("_dup") else [entry]
+        tenant["_routing"] = {"receiver": copy.deepcopy(_SLACK), "routes": entries}
     elif where == "routing_defaults":
         block = {"receiver": copy.deepcopy(_SLACK)}
         block[key] = value
@@ -124,18 +130,47 @@ def _place(where: str, key: str, value: object) -> dict[str, dict]:
     return files
 
 
+#: How the matrix writes a value into each routing block of the schemas
+#: (round 5, ③): a block key the schemas add without a place here fails
+#: `test_every_schema_block_has_a_place` instead of being left untested.
+_BLOCK_PLACES = {"_routing": "tenant_routing", "_routing_defaults": "routing_defaults",
+                 "_routing_enforced": "routing_enforced", "routing_profiles": "routing_profile"}
+
+
+def _block_definition(block_key: str) -> str:
+    """The routing definition the schemas give *block_key* (the block, not
+    its entries: routingOverride / routingRoute are the entries')."""
+    for props in (_DEFS["tenantConfig"]["properties"], _PLATFORM["properties"],
+                  _PROFILES.get("properties", {})):
+        hit = _refs(props.get(block_key, {})) & {"routing", "routingDefaults", "routingEnforced"}
+        if hit:
+            return sorted(hit)[0]
+    raise KeyError(block_key)
+
+
 _PLACES = {
-    "tenant_routing": _keys("routing"),
+    **{place: _keys(_block_definition(bk)) for bk, place in _BLOCK_PLACES.items()
+       if bk in _schema_block_keys()},
     "override_entry": _keys("routingOverride"),
     "route_entry": _keys("routingRoute"),
-    "routing_defaults": _keys("routingDefaults"),
-    "routing_profile": _keys("routing"),
-    "routing_enforced": _keys("routingEnforced"),
+    # Round 5, ④: two identical entries — the messages only a repeat triggers.
+    "override_entry_dup": _keys("routingOverride"),
+    "route_entry_dup": _keys("routingRoute"),
     "tenant": sorted(k for k in _DEFS["tenantConfig"]["properties"]
                      if k.startswith("_routing") and k not in ROUTING_BLOCK_KEYS),
 }
+
+
+def test_every_schema_block_has_a_place():
+    """③：矩陣的區塊層位置由 schema 推導；schema 多一個 routing 區塊而這裡沒有寫法 → 紅。"""
+    assert set(_BLOCK_PLACES) == _schema_block_keys()
 _CASES = [(where, key, kind) for where, keys in sorted(_PLACES.items()) for key in keys
           for kind in ("receiver_mapping", "url_string")]
+# Round 5, ② (keys are content too): one unknown key whose NAME is a canary
+# URL, in each routing place. A test canary, no real credential.
+_KEY_CANARY = "https://u:CANARYPW@hooks.example/CANARY-key-name"  # trufflehog:ignore
+_KEY_PLACES = sorted(set(_PLACES) - {"tenant"})
+_CASES += [(where, _KEY_CANARY, "key_name") for where in _KEY_PLACES]
 
 
 def test_the_matrix_covers_every_place_and_key():
@@ -146,7 +181,8 @@ def test_the_matrix_covers_every_place_and_key():
 
 
 @pytest.mark.parametrize("where,key,kind", _CASES,
-                         ids=[f"{w}-{k}-{v}" for w, k, v in _CASES])
+                         ids=[f"{w}-{'canary-key' if v == 'key_name' else k}-{v}"
+                              for w, k, v in _CASES])
 def test_no_routing_value_reaches_a_message(tmp_path, where, key, kind):
     tag = f"{where}-{key}-{kind}"
     value = _canary_values(tag)[kind]
@@ -162,5 +198,11 @@ def test_no_routing_value_reaches_a_message(tmp_path, where, key, kind):
                        capture_output=True, text=True, encoding="utf-8", timeout=300,
                        env={**os.environ, "PATH": str(empty)})
     assert "Traceback" not in p.stderr, p.stderr
-    text = p.stdout + p.stderr + (out.read_text(encoding="utf-8") if out.exists() else "")
+    # Round 5, ①: a run that judged nothing must not pass — no da-guard is
+    # rc 2, "stopping before any work", with no canary to find.
+    assert p.returncode in (0, 1), (p.returncode, p.stderr)
+    assert out.exists(), p.stderr
+    findings = json.loads(out.read_text(encoding="utf-8"))["findings"]
+    assert "run_failed" not in {f["kind"] for f in findings}, findings
+    text = p.stdout + p.stderr + out.read_text(encoding="utf-8")
     assert "CANARY" not in text, text

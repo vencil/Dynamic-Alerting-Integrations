@@ -53,8 +53,8 @@ from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
 from _lib_validation import (  # noqa: E402  (#1560)
-    MASKED_VALUE, is_credential_path, is_secret_ref, receiver_value_repr, scalar_text,
-    secret_ref_rule, shown_value, value_text,
+    MASKED_VALUE, is_credential_path, is_secret_ref, key_segment, receiver_value_repr,
+    scalar_text, secret_ref_rule, shown_key, shown_value, value_text,
     shared_secret_field_texts,
 )
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
@@ -1314,7 +1314,7 @@ def check_policy_scope(
             if where is None or level_contains(scope, where):
                 continue
             rows.append((name, t))
-            msg = (f"  {severity}: domain_policy '{name}' in {source} names "
+            msg = (f"  {severity}: domain_policy '{shown_key(name)}' in {source} names "
                    f"tenant '{t}', which lives outside this policy's subtree "
                    f"{scope}/ (its file is in "
                    f"{'the conf.d root' if where == ROOT_LEVEL else where + '/'})"
@@ -1327,8 +1327,8 @@ def check_policy_scope(
             # #2766: the tree record's kind for the same entry.
             messages.append(Finding(
                 msg, kind="domain_policy_out_of_scope", blocks="strict",
-                tenant=t, policy=name, file=(policy_files or {}).get(name),
-                field=f"domain_policies.{name}.tenants"))
+                tenant=t, policy=key_segment(name), file=(policy_files or {}).get(name),
+                field=f"domain_policies.{key_segment(name)}.tenants"))
     return messages, rows
 
 
@@ -1601,7 +1601,7 @@ def _timing_bound_violations(
         if sec is None:
             out.append((
                 key,
-                f"domain_policy '{policy_name}', {subject}: {key} "
+                f"domain_policy '{shown_key(policy_name)}', {subject}: {key} "
                 f"{scalar_text(value)}{src(key)} is not a valid duration "
                 f"— cannot check against {noun} {scalar_text(raw)}",
                 f"use Alertmanager duration syntax such as {example} "
@@ -1609,7 +1609,7 @@ def _timing_bound_violations(
         elif breaks(sec, bound):
             out.append((
                 key,
-                f"domain_policy '{policy_name}', {subject}: {key} "
+                f"domain_policy '{shown_key(policy_name)}', {subject}: {key} "
                 f"{scalar_text(value)}{src(key)} {verb} {scalar_text(raw)}",
                 fix(raw)))
     return out
@@ -1697,10 +1697,10 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
               in_override: bool = False) -> None:
         for key in sorted(k for k in obj if isinstance(k, str) and k not in keys):
             out.append(ignored_key_warning(
-                f"  WARN: {label}{in_file}: '{key}' is not read by the route generator "
+                f"  WARN: {label}{in_file}: '{shown_key(key)}' is not read by the route generator "
                 f"({_ignored_hint(key, keys, in_override)}); the rest is rendered as if "
                 f"it were absent", kind="routing_key_ignored", tenant=tenant, file=file,
-                field=f"{path}{key}"))
+                field=f"{path}{key_segment(key)}"))
 
     def check_receiver(recv: object, label: str, path: str) -> None:
         if not isinstance(recv, dict):
@@ -2051,9 +2051,9 @@ def unknown_routing_keys(obj: object, *, layer: str, where: str,
     in_file = f" in {file}" if file else ""
     return [
         ignored_key_warning(
-            f"  WARN: {where}{in_file}: '{key}' is not a key the route generator reads "
+            f"  WARN: {where}{in_file}: '{shown_key(key)}' is not a key the route generator reads "
             f"({_unknown_routing_hint(key, layer)}); it has no effect",
-            kind="routing_key_ignored", tenant=tenant, file=file, field=key)
+            kind="routing_key_ignored", tenant=tenant, file=file, field=key_segment(key))
         for key in sorted(k for k in obj
                           if isinstance(k, str) and k.startswith("_routing")
                           and k not in allowed)
@@ -2102,7 +2102,7 @@ def route_entry_matchers(entry: object, idx: int,
              "field": f"routes[{idx}]"}
     if not isinstance(entry, dict):
         return None, [skipped_entry_warning(f"  WARN: {ctx} must be a dict, skipping", **where)]
-    unsupported = sorted(str(k) for k in entry if k not in ROUTE_ENTRY_KEYS)
+    unsupported = sorted(shown_key(k) for k in entry if k not in ROUTE_ENTRY_KEYS)
     if unsupported:
         return None, [
             skipped_entry_warning(f"  WARN: {ctx} has unsupported key(s) {unsupported} (supported: "
@@ -2682,7 +2682,7 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
     if target is None:
         main_type = _subroute_receiver_type(routing_config)
         messages.append(fmt(
-            f"domain_policy '{policy_name}', tenant '{tenant}': "
+            f"domain_policy '{shown_key(policy_name)}', tenant '{tenant}': "
             f"require_critical_escalation is set but severity=critical alerts "
             f"do not reach a receiver of type {escalation} (main receiver "
             f"type '{shown_value(main_type, bare=True)}', and no rendered routes entry matches "
@@ -2696,20 +2696,20 @@ def _check_critical_escalation(messages: list[str], fmt, policy_name: str,
     for ref, match, rtype, caught in leaks:
         if match:
             messages.append(Finding(
-                f"  WARN: domain_policy '{policy_name}', tenant '{tenant}' "
+                f"  WARN: domain_policy '{shown_key(policy_name)}', tenant '{tenant}' "
                 f"{ref} ({match}): receiver type '{shown_value(rtype, bare=True)}' catches alerts "
                 f"with {caught} before any receiver of type {escalation} "
                 f"does, so they never reach one",
                 kind="critical_escalation_leak", blocks="never", tenant=tenant,
-                policy=policy_name, field=f"{ref}.receiver.type"))
+                policy=key_segment(policy_name), field=f"{ref}.receiver.type"))
         else:
             messages.append(Finding(
-                f"  WARN: domain_policy '{policy_name}', tenant '{tenant}': "
+                f"  WARN: domain_policy '{shown_key(policy_name)}', tenant '{tenant}': "
                 f"severity=critical alerts that no sub-route catches go to "
                 f"the main receiver (type '{rtype}'), not a receiver of type "
                 f"{escalation}",
                 kind="critical_escalation_leak", blocks="never", tenant=tenant,
-                policy=policy_name, field="receiver.type"))
+                policy=key_segment(policy_name), field="receiver.type"))
 
 
 def check_domain_policies(
@@ -2805,7 +2805,7 @@ def check_domain_policies(
             if (require_escalation and isinstance(tenant_rc, dict)
                     and tenant_rc.get("receiver")):
                 _check_critical_escalation(
-                    messages, functools.partial(_fmt, policy=policy_name),
+                    messages, functools.partial(_fmt, policy=key_segment(policy_name)),
                     policy_name, tenant, tenant_rc)
             targets = [(f"tenant '{tenant}'", None, tenant_rc, frozenset())]
             targets.extend(
@@ -2832,7 +2832,7 @@ def check_domain_policies(
                 def _at(key: str, _ref: str | None = ref,
                         _tenant: str = tenant) -> dict:
                     return {"kind": "domain_policy_violation",
-                            "policy": policy_name, "tenant": _tenant,
+                            "policy": key_segment(policy_name), "tenant": _tenant,
                             "field": key if _ref is None else f"{_ref}.{key}"}
 
                 # Check receiver type constraints
@@ -2846,7 +2846,7 @@ def check_domain_policies(
                 if recv_type:
                     if forbidden_types and recv_type in forbidden_types:
                         messages.append(_fmt(
-                            f"domain_policy '{policy_name}', "
+                            f"domain_policy '{shown_key(policy_name)}', "
                             f"{subject}: receiver type '{shown_value(recv_type, bare=True)}' "
                             f"is forbidden",
                             f"domain forbids {sorted(forbidden_types)}; switch "
@@ -2854,7 +2854,7 @@ def check_domain_policies(
                             f"or amend the domain policy", **_at("receiver.type")))
                     if allowed_types and recv_type not in allowed_types:
                         messages.append(_fmt(
-                            f"domain_policy '{policy_name}', "
+                            f"domain_policy '{shown_key(policy_name)}', "
                             f"{subject}: receiver type '{shown_value(recv_type, bare=True)}' "
                             f"not in allowed types {sorted(allowed_types)}",
                             f"switch {whose} receiver.type to one of "
@@ -2881,7 +2881,7 @@ def check_domain_policies(
                         missing = set(enforce_group_by) - set(tenant_gb)
                         if missing:
                             messages.append(_fmt(
-                                f"domain_policy '{policy_name}', "
+                                f"domain_policy '{shown_key(policy_name)}', "
                                 f"{subject}: group_by{_src('group_by')} missing required "
                                 f"labels: {sorted(missing)}",
                                 f"add {sorted(missing)} to {_who('group_by')} group_by "
@@ -2889,7 +2889,7 @@ def check_domain_policies(
                                 **_at("group_by")))
                     elif strict:
                         messages.append(_fmt(
-                            f"domain_policy '{policy_name}', "
+                            f"domain_policy '{shown_key(policy_name)}', "
                             f"{subject}: group_by must be a list, got "
                             f"{type(tenant_gb).__name__} — cannot check "
                             f"enforce_group_by",

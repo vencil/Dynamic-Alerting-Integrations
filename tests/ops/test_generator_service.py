@@ -1495,3 +1495,33 @@ def test_a_config_subdir_outside_the_repository_refuses_to_start(tmp_path, world
     assert svc.proc.wait(60) == 2
     assert "--config-subdir" in svc.log.read_text(encoding="utf-8")
     svc.stop()
+
+
+# ── #1560 ⑤-b: the container's own log never carries the generator's text ──
+
+def test_the_service_log_never_carries_the_generators_text(tmp_path):
+    """The judgement process writes the generator's stdout / stderr to files in
+    its job directory (fd 1 / 2 re-opened there before anything is judged);
+    only a tail goes back, in the reply. The service's own stderr — the
+    container log — must hold none of it: a finding quotes what tenants
+    wrote. The canary rides a written value the generator prints (a refused
+    group_wait) — a test canary, not a credential."""
+    canary = "CANARY-gsvc-log-5b"
+    repo = h.init_repo(tmp_path / "repo")
+    commit = h.commit_tree(repo, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: 70\n"})
+    body = ("tenants:\n  t-a:\n    mysql_connections: 70\n    _routing:\n"
+            "      receiver:\n        type: webhook\n        url: https://hooks.example.com/a\n"
+            f"      group_wait: x-{canary}\n")
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
+    with h.Service(tmp_path / "svc", repo, bin_dir=bin_dir) as svc:
+        status, doc = svc.validate(commit, [{"path": "t-a.yaml", "content_b64": h.b64(body)}])
+        assert status == 200 and doc["result"] == "findings", doc
+        # Positive control: the generator did print it (to its own files,
+        # whose tail is in the reply).
+        assert canary in doc["stderr_tail"], doc["stderr_tail"]
+    log = svc.log.read_text(encoding="utf-8", errors="replace")
+    assert "listening on" in log, log
+    assert canary not in log, log
