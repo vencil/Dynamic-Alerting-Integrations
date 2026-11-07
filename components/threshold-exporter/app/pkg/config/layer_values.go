@@ -113,10 +113,6 @@ func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
 	return out
 }
 
-// layerValueProblem is the problem of key's value sv, written in layer
-// beside the other keys of its map (values): "" for a threshold key, a key
-// the exporter does not read in layer, a deprecated spelling its canonical
-// sibling overrides (resolve ignores it), or a value the exporter reads.
 // ValueReading is sv, the value of reserved key k, as its reader reads it,
 // as text: the reading k's `value.check` is bound to, `_profile`'s name, or
 // the value as written when k has neither.
@@ -130,6 +126,10 @@ func ValueReading(k string, sv ScheduledValue) string {
 	return sv.Default
 }
 
+// layerValueProblem is the problem of key's value sv, written in layer
+// beside the other keys of its map (values): "" for a threshold key, a key
+// the exporter does not read in layer, a deprecated spelling its canonical
+// sibling overrides (resolve ignores it), or a value the exporter reads.
 func layerValueProblem(layer, key string, sv ScheduledValue, values map[string]ScheduledValue,
 	profiles map[string]map[string]ScheduledValue) string {
 	if !strings.HasPrefix(key, "_") {
