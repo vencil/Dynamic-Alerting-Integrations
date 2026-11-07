@@ -6,11 +6,10 @@
 #
 # The chart also refuses to render without a git repository in conf.d: the
 # generator container is required (#2903) and reads only git objects. A
-# hostPath conf.d stands for "a repository already there" — no clone, no
-# PVC; it adds the git-gc-off init container.
+# pvc conf.d with no gitRepoUrl stands for "a repository already there" — no
+# clone; it adds the git-gc-off init container (and the chart's own PVC).
 confDir:
-  type: hostPath
-  hostPath: /srv/conf.d
+  type: pvc
 writeBack:
   mode: direct
   directAcknowledgeNotDelivered: true
