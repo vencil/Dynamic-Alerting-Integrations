@@ -424,6 +424,11 @@ _REFUSED_ROWS = {"blind_spot_discovery", "policy_engine tenant", "policy_opa_bri
                  "policy_opa_bridge _defaults", "threshold_recommend",
                  "maintenance_scheduler --dry-run", "notification_tester --dry-run"}
 assert _REFUSED_ROWS <= set(_ROW_IDS), _REFUSED_ROWS - set(_ROW_IDS)
+#: #3445: a file input declared with `_lib_input.add_input(decode=...)` is read
+#: by `_lib_input.document`: one line naming the flag and the path, the
+#: reason in words ("not valid UTF-8 (byte N)") instead of a cause class.
+_DOCUMENT_ROWS = {"analyze_gaps --metric-dictionary"}
+assert _DOCUMENT_ROWS <= set(_ROW_IDS), _DOCUMENT_ROWS - set(_ROW_IDS)
 
 def _expected_bad_rc(script: Path) -> int:
     """Derived from the tool's CLASS, not a per-label table (re-review).
@@ -457,6 +462,10 @@ def test_tool_names_the_unreadable_file_with_its_class_rc(fx, label, script, bad
         # unreadable file, carrying its decode reason.
         assert "could not be read" in p.stderr, p.stderr[-500:]
         assert "not valid UTF-8" in p.stderr, "the generator's parse reason must reach the operator"
+        return
+    if label in _DOCUMENT_ROWS:
+        assert f": not valid UTF-8 (byte " in p.stderr, p.stderr[-500:]
+        assert p.stderr.count("\n") == 1, f"{label}: one line, got {p.stderr[-500:]!r}"
         return
     assert "cannot read" in p.stderr or "cannot compare" in p.stderr, p.stderr[-500:]
     if label in _PARSE_TREE_ROWS:

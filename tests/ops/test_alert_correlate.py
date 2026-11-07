@@ -359,9 +359,7 @@ class TestLoadAlerts:
              "startsAt": "2026-03-15T10:00:00Z",
              "endsAt": "2026-03-15T10:05:00Z"},
         ]
-        p = tmp_path / "alerts.json"
-        p.write_text(json.dumps(data), encoding="utf-8")
-        alerts = ac.load_alerts_from_json(str(p))
+        alerts = ac.alerts_from_document(data)
         assert len(alerts) == 1
         assert alerts[0].alertname == "A"
 
@@ -369,15 +367,14 @@ class TestLoadAlerts:
         data = {"data": [
             {"labels": {"alertname": "B"}, "startsAt": ""},
         ]}
-        p = tmp_path / "alerts.json"
-        p.write_text(json.dumps(data), encoding="utf-8")
-        alerts = ac.load_alerts_from_json(str(p))
+        alerts = ac.alerts_from_document(data)
         assert len(alerts) == 1
 
     def test_load_from_json_invalid(self, tmp_path):
-        p = tmp_path / "alerts.json"
-        p.write_text('{"unexpected": true}', encoding="utf-8")
-        alerts = ac.load_alerts_from_json(str(p))
+        # An object with no `data` holds no alerts; a top level that is
+        # neither is refused before this (#3445: the CLI rows in
+        # tests/shared/test_caller_paths.py).
+        alerts = ac.alerts_from_document({"unexpected": True})
         assert alerts == []
 
 

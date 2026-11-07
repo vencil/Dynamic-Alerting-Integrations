@@ -32,7 +32,7 @@ Usage:
 
 import argparse
 import csv
-import json
+import io
 import os
 import subprocess
 import sys
@@ -40,7 +40,6 @@ import urllib.parse
 from collections import defaultdict
 from datetime import datetime, timezone
 
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -59,8 +58,17 @@ MAINTENANCE_QUERY = collapse_replicas('user_state_filter{filter="maintenance"}')
 # the run must read (#3133, owner 2026-10-23: an optional source).
 _DEFAULT_ALERTMANAGER = "http://localhost:9093"
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, partial_answer)
-from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3392)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, partial_answer)
+import _lib_input  # noqa: E402  (#3445: the input files are read by the lib)
+
+#: The input files (#3445): read by `_lib_input.document` before any phase
+#: runs — a path or content that cannot be read, or a top level of another
+#: type, is rc 2 naming the flag and the path. The CSV is text: strict UTF-8,
+#: parsed by the csv module here (a leading BOM is dropped, as `utf-8-sig`
+#: did).
+MAPPING_DOCUMENT = _lib_input.Document("yaml", dict)
+READINESS_DOCUMENT = _lib_input.Document("json", dict)
+REPORT_CSV_DOCUMENT = _lib_input.Document("text", str)
 
 # The module's one query call: (rows, None) or (None, why).
 query_prometheus = instant_or_error
@@ -96,15 +104,22 @@ def run_cmd(cmd):
         return None
 
 
-def check_preflight(args):
-    """Pre-flight checks before starting shadow monitoring."""
-    checks = []
+def _csv_rows(text):
+    """The rows of a --report-csv's text (`REPORT_CSV_DOCUMENT`)."""
+    return csv.DictReader(io.StringIO(text.removeprefix("\ufeff")))
 
-    # 1. Mapping file — judged by `judge_inputs` before any phase runs
-    # (#3392: a missing one was this check's "fail", rc 1, a finding).
-    if args.mapping:
-        with open(args.mapping, encoding="utf-8") as f:
-            mapping = yaml.safe_load(f) or {}
+
+def check_preflight(args, inputs=None):
+    """Pre-flight checks before starting shadow monitoring. *inputs*: the
+    documents `judge_inputs` read, by argparse dest."""
+    checks = []
+    inputs = inputs or {}
+
+    # 1. Mapping file — read and judged by `judge_inputs` before any phase
+    # runs (#3392: a missing one was this check's "fail", rc 1, a finding;
+    # #3445: content it cannot read is named there too).
+    mapping = inputs.get("mapping")
+    if mapping is not None:
         pair_count = sum(1 for v in mapping.values()
                         if isinstance(v, dict) and v.get("original_metric"))
         checks.append({
@@ -192,28 +207,29 @@ def check_preflight(args):
     return checks
 
 
-def check_runtime(args):
-    """Runtime health checks during shadow monitoring."""
+def check_runtime(args, inputs=None):
+    """Runtime health checks during shadow monitoring. *inputs*: as
+    `check_preflight`."""
     checks = []
+    inputs = inputs or {}
 
-    # 1. CSV report analysis (judged by `judge_inputs`, #3392: a missing
-    # one was a "skip" and an Overall PASS)
-    csv_path = args.report_csv
-    if csv_path:
+    # 1. CSV report analysis (read by `judge_inputs`, #3392: a missing
+    # one was a "skip" and an Overall PASS; #3445: content that was not
+    # UTF-8 was a traceback)
+    csv_text = inputs.get("report_csv")
+    if csv_text is not None:
         mismatch_count = 0
         total_rows = 0
         tenants = set()
         try:
-            with open(csv_path, encoding="utf-8-sig") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    total_rows += 1
-                    if row.get("Status", "").strip() == "mismatch":
-                        mismatch_count += 1
-                    tenant = row.get("Tenant", "").strip()
-                    if tenant:
-                        tenants.add(tenant)
-        except OSError as e:
+            for row in _csv_rows(csv_text):
+                total_rows += 1
+                if row.get("Status", "").strip() == "mismatch":
+                    mismatch_count += 1
+                tenant = row.get("Tenant", "").strip()
+                if tenant:
+                    tenants.add(tenant)
+        except csv.Error as e:
             checks.append({
                 "check": "csv_report",
                 "status": "fail",
@@ -276,16 +292,16 @@ def check_runtime(args):
     return checks
 
 
-def check_convergence(args):
-    """Convergence checks before cutover decision."""
+def check_convergence(args, inputs=None):
+    """Convergence checks before cutover decision. *inputs*: as
+    `check_preflight`."""
     checks = []
+    inputs = inputs or {}
 
-    # 1. cutover-readiness.json (judged by `judge_inputs`, #3392: a missing
+    # 1. cutover-readiness.json (read by `judge_inputs`, #3392: a missing
     # one was a "skip" and an Overall PASS)
-    readiness_path = args.readiness_json
-    if readiness_path:
-        with open(readiness_path, encoding="utf-8") as f:
-            report = json.load(f)
+    report = inputs.get("readiness_json")
+    if report is not None:
         ready = report.get("ready", False)
         pct = report.get("convergence_percentage", 0)
         unconverged = report.get("unconverged_pairs", [])
@@ -297,30 +313,28 @@ def check_convergence(args):
         })
 
     # 2. 7-day zero-mismatch (from CSV)
-    csv_path = args.report_csv
-    if csv_path:
+    csv_text = inputs.get("report_csv")
+    if csv_text is not None:
         now = datetime.now(timezone.utc)
         recent_mismatches = 0
         recent_rows = 0
         try:
-            with open(csv_path, encoding="utf-8-sig") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    ts_str = row.get("Timestamp", "").strip()
-                    if not ts_str:
-                        continue
-                    try:
-                        ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(
-                            tzinfo=timezone.utc
-                        )
-                    except ValueError:
-                        continue
-                    age_days = (now - ts).total_seconds() / 86400
-                    if age_days <= 7:
-                        recent_rows += 1
-                        if row.get("Status", "").strip() == "mismatch":
-                            recent_mismatches += 1
-        except Exception:
+            for row in _csv_rows(csv_text):
+                ts_str = row.get("Timestamp", "").strip()
+                if not ts_str:
+                    continue
+                try:
+                    ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S").replace(
+                        tzinfo=timezone.utc
+                    )
+                except ValueError:
+                    continue
+                age_days = (now - ts).total_seconds() / 86400
+                if age_days <= 7:
+                    recent_rows += 1
+                    if row.get("Status", "").strip() == "mismatch":
+                        recent_mismatches += 1
+        except csv.Error:
             pass
 
         if recent_rows > 0:
@@ -348,9 +362,10 @@ _PHASE_INPUTS = {
 
 
 def judge_inputs(args, phases):
-    """Raise one `CallerError` (rc 2, a `file_*` reason under ``--json``)
-    naming every file the given *phases* read that is not there, not a
-    regular file, or cannot be opened — before any phase runs or prints.
+    """The documents of the files the given *phases* read, by argparse dest
+    (``_lib_input.document``) — or one `CallerError` (rc 2) naming every
+    file that is not there, not a regular file, cannot be opened, or whose
+    content cannot be read (#3445) — before any phase runs or prints.
 
     #3392: a missing --mapping was the preflight check's "fail" (rc 1, read
     as a finding); a missing --report-csv / --readiness-json was a "skip"
@@ -358,13 +373,20 @@ def judge_inputs(args, phases):
     checks' own ``if args.x:`` reads it — stays each check's skip, and a flag
     no chosen phase reads is not judged.
     """
-    given = {}
+    given = []
     for phase in phases:
-        for flag, dest in _PHASE_INPUTS.get(phase, ()):
-            if getattr(args, dest):
-                given[flag] = getattr(args, dest)
-    raise_path_problems([classify_path(value, "file", lang="en", flag=flag)
-                         for flag, value in given.items()])
+        for _flag, dest in _PHASE_INPUTS.get(phase, ()):
+            if getattr(args, dest) and dest not in given:
+                given.append(dest)
+    inputs, refused = {}, []
+    for dest in given:
+        try:
+            inputs[dest] = _lib_input.document(args, dest, lang="en")
+        except CallerError as exc:
+            refused.append(exc)
+    if refused:
+        raise CallerError("\nERROR: ".join(str(e) for e in refused), refused[0].reason)
+    return inputs
 
 
 def format_output(phase, checks, json_output=False):
@@ -385,8 +407,9 @@ def format_output(phase, checks, json_output=False):
     return None
 
 
-def main():
-    """CLI entry point: Shadow Monitoring readiness and convergence verification."""
+def build_parser():
+    """The shadow-verify parser (#3445: its input files declared with
+    `_lib_input`)."""
     parser = argparse.ArgumentParser(
         description="Shadow Monitoring readiness and convergence verification",
     )
@@ -395,12 +418,12 @@ def main():
         choices=["preflight", "runtime", "convergence", "all"],
         help="Verification phase to run",
     )
-    parser.add_argument("--mapping",
-                        help="Path to prefix-mapping.yaml")
-    parser.add_argument("--report-csv",
-                        help="Path to validation-report.csv")
-    parser.add_argument("--readiness-json",
-                        help="Path to cutover-readiness.json")
+    _lib_input.add_input(parser, "--mapping", decode=MAPPING_DOCUMENT,
+                         help="Path to prefix-mapping.yaml")
+    _lib_input.add_input(parser, "--report-csv", decode=REPORT_CSV_DOCUMENT,
+                         help="Path to validation-report.csv")
+    _lib_input.add_input(parser, "--readiness-json", decode=READINESS_DOCUMENT,
+                         help="Path to cutover-readiness.json")
     add_prometheus_arg(parser,
                        help_text="Prometheus Query API URL "
                                  "(default: $PROMETHEUS_URL, else http://localhost:9090)")
@@ -410,7 +433,12 @@ def main():
                              "the default not answering is a skip)")
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON (for CI integration)")
-    args = parser.parse_args()
+    return parser
+
+
+def main():
+    """CLI entry point: Shadow Monitoring readiness and convergence verification."""
+    args = build_parser().parse_args()
 
     all_checks = []
     all_results = []
@@ -422,15 +450,15 @@ def main():
         if args.phase == "all"
         else [args.phase]
     )
-    judge_inputs(args, phases)  # #3392: before any phase runs or prints
+    inputs = judge_inputs(args, phases)  # #3392 / #3445: before any phase runs or prints
 
     for phase in phases:
         if phase == "preflight":
-            checks = check_preflight(args)
+            checks = check_preflight(args, inputs)
         elif phase == "runtime":
-            checks = check_runtime(args)
+            checks = check_runtime(args, inputs)
         elif phase == "convergence":
-            checks = check_convergence(args)
+            checks = check_convergence(args, inputs)
         else:
             continue
 

@@ -140,12 +140,22 @@ def _migrate(tmp_path, fixture=_MULTIDB):
     return out
 
 
+
+def _mapping_args(path):
+    """The namespace `validate --mapping <path>` parses to (#3445: a
+    `_lib_input` file declaration, read by `load_mapping_pairs`)."""
+    import argparse
+    import _lib_input
+    parser = argparse.ArgumentParser()
+    _lib_input.add_input(parser, "--mapping", decode=vm.MAPPING_DOCUMENT)
+    return parser.parse_args(["--mapping", str(path)])
+
 def test_mapping_pairs_point_at_the_real_record_and_keep_rate(tmp_path):
     out = _migrate(tmp_path)
     records = {r["record"] for g in yaml.safe_load(
         (out / "platform-recording-rules.yaml").read_text(encoding="utf-8"))["groups"]
         for r in g["rules"]}
-    pairs = {p["label"]: p for p in vm.load_mapping_pairs(str(out / "prefix-mapping.yaml"))}
+    pairs = {p["label"]: p for p in vm.load_mapping_pairs(_mapping_args(out / "prefix-mapping.yaml"))}
     assert pairs, "prefix-mapping 沒有任何比對組"
     for label, p in pairs.items():
         assert p["new_query"] in records, (label, p["new_query"])
@@ -160,7 +170,7 @@ def test_legacy_mapping_file_falls_back_and_warns(tmp_path, capsys):
         "custom_x": {"original_metric": "x", "alert_name": "A"},
         "custom_x_critical": {"original_metric": "x", "alert_name": "B"},
     }), encoding="utf-8")
-    pairs = vm.load_mapping_pairs(str(p))
+    pairs = vm.load_mapping_pairs(_mapping_args(p))
     assert [(q["old_query"], q["new_query"]) for q in pairs] == [
         ("x", "tenant:custom_x:max"), ("x", "tenant:custom_x:max")]
     err = capsys.readouterr().err
@@ -172,7 +182,7 @@ def test_new_mapping_file_is_silent(tmp_path, capsys):
     p.write_text(yaml.safe_dump({"custom_x": {
         "original_metric": "x", "old_query": "sum by(tenant) (x)",
         "new_query": "tenant:custom_x:sum"}}), encoding="utf-8")
-    assert [(q["old_query"], q["new_query"]) for q in vm.load_mapping_pairs(str(p))] == [
+    assert [(q["old_query"], q["new_query"]) for q in vm.load_mapping_pairs(_mapping_args(p))] == [
         ("sum by(tenant) (x)", "tenant:custom_x:sum")]
     assert capsys.readouterr().err == ""
 
@@ -186,7 +196,7 @@ def test_annotations_and_pairs_under_promtool(tmp_path):
     """annotation 渲染出值；rate 類比對組的新舊兩邊在同一時間點相等。"""
     out = _migrate(tmp_path)
     ev = {p["label"]: p for p in vm.load_mapping_pairs(
-        str(out / "prefix-mapping.yaml"))}["custom_redis_evicted_keys_total"]
+        _mapping_args(out / "prefix-mapping.yaml"))}["custom_redis_evicted_keys_total"]
     test = {
         "rule_files": [str(out / "platform-recording-rules.yaml"),
                        str(out / "platform-alert-rules.yaml")],
@@ -250,7 +260,7 @@ def test_golden_entries_get_no_pair(tmp_path, capsys):
     golden = [k for k, v in mapping.items() if v.get("golden_rule")]
     assert golden, "fixture 應有字典判定改用黃金標準的項"
     assert all("new_query" not in mapping[k] for k in golden)
-    labels = {p["label"] for p in vm.load_mapping_pairs(str(out / "prefix-mapping.yaml"))}
+    labels = {p["label"] for p in vm.load_mapping_pairs(_mapping_args(out / "prefix-mapping.yaml"))}
     assert not labels & set(golden)
     err = capsys.readouterr().err
     assert "黃金標準" in err and "old_query" not in err
@@ -263,7 +273,7 @@ def test_non_mapping_entries_are_skipped(tmp_path):
         "custom_bad": "not-a-mapping",
         "custom_x": {"original_metric": "x", "old_query": "max by(tenant) (x)",
                      "new_query": "tenant:custom_x:max"}}), encoding="utf-8")
-    assert [q["label"] for q in vm.load_mapping_pairs(str(p))] == ["custom_x"]
+    assert [q["label"] for q in vm.load_mapping_pairs(_mapping_args(p))] == ["custom_x"]
 
 
 def test_every_label_value_is_a_double_quoted_scalar():

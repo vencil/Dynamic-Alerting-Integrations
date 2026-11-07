@@ -46,7 +46,6 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -431,48 +430,35 @@ def resolve_file_policy(filepath, content, policy):
     return policy, []
 
 
-def load_policy(policy_path):
-    """Load policy from YAML file; the built-in policy is the DEFAULT, not a
-    fallback for a broken ``--policy``.
+#: --policy: the custom-rule lint policy, a YAML mapping merged over the
+#: built-in one. An empty (or null) document reads as no override, declared
+#: here (`empty_is`), as the old ``or {}`` did — but that ``or {}`` also read
+#: ``[]``, ``0`` and ``""`` as no override and linted against the built-in
+#: policy at rc 0 (#3445): any top level that is not a mapping is rc 2 now,
+#: named, as is a path or content that cannot be read.
+POLICY_DOCUMENT = _lib_input.Document("yaml", dict, empty_is=dict)
+
+
+def load_policy(custom):
+    """The policy to lint against: the built-in policy (the DEFAULT, not a
+    fallback for a broken ``--policy``) with *custom* — the parsed
+    --policy (``_lib_input.document``), None when not given — merged over it.
 
     ⛔ #1556: the previous version warned on stderr and carried on with the
     built-in policy, so `lint --policy <typo>` linted against different rules
     than the operator asked for and still exited 0. A warning nobody reads in
     CI is not a control. dev-rules #13 files "檔案/路徑不存在" and
-    "malformed 輸入" under EXIT_CALLER_ERROR.
+    "malformed 輸入" under EXIT_CALLER_ERROR. #3445: the reading is
+    ``_lib_input.document``'s — ``''`` (an unset shell variable) is supplied
+    and refused there, never taken for "not given".
     """
-    # ⛔ `is None`, not `not policy_path`. An empty string is SUPPLIED — it is
-    # what an unset shell variable expands to — and the falsy test routed it
-    # into the omitted branch, silently linting against the built-in policy
-    # instead of the operator's. The flag's argparse default is None, so
-    # nothing else reaches this branch. Same split as #1616's --base-config.
-    if policy_path is None:
+    if custom is None:
         # ⛔ deepcopy, not `.copy()`: the latter is shallow, so a caller
         # appending to one of the nested lists reaches into the module default
         # and changes what every later call in the process returns. Same shape
         # as #1616's load_base_config fix; fixed here for symmetry rather than
         # because a mutating caller exists today.
         return copy.deepcopy(DEFAULT_POLICY)
-    try:
-        with open(policy_path, 'r', encoding='utf-8') as f:
-            custom = yaml.safe_load(f) or {}
-    except OSError as e:
-        # ⛔ `!r` so an empty value is visible as '' rather than as a message
-        # that stops after the colon.
-        die_caller_error(
-            f"--policy: cannot read {policy_path!r}: {e}\n"
-            "  ⛔ Do not drop the flag to clear this — that silently lints "
-            "against the built-in policy instead of yours.")
-    except UnicodeDecodeError as e:
-        # ⛔ NOT an OSError — it is a ValueError, so the handler above does not
-        # see it and a non-UTF-8 policy file escaped as a traceback with rc=1.
-        die_caller_error(f"--policy: {policy_path!r} is not valid UTF-8: {e}")
-    except yaml.YAMLError as e:
-        die_caller_error(f"--policy: {policy_path!r} is not valid YAML: {e}")
-    if not isinstance(custom, dict):
-        die_caller_error(
-            f"--policy: top level of {policy_path!r} is "
-            f"{type(custom).__name__}, expected a mapping")
     # Merge: custom overrides defaults
     merged = copy.deepcopy(DEFAULT_POLICY)
     merged.update(custom)
@@ -507,8 +493,8 @@ def main():
              "platform packs are not linted: this policy governs tenant packs. "
              "Instead of paths; not with --exclude"
     )
-    parser.add_argument(
-        "--policy", default=None,
+    _lib_input.add_input(
+        parser, "--policy", decode=POLICY_DOCUMENT,
         help="Path to custom-rule-policy.yaml (default: built-in policy)"
     )
     parser.add_argument(
@@ -531,7 +517,9 @@ def main():
         die_caller_error("--exclude does not go with --rule-pack-dir: the rule packs are "
                          "declared by _lib_consumer_read.rule_pack_files, not by patterns")
 
-    policy = load_policy(args.policy)
+    # ⛔ Do not drop --policy to clear a refusal here — that silently lints
+    # against the built-in policy instead of yours.
+    policy = load_policy(_lib_input.document(args, "policy", lang="en"))
 
     # ⛔ #1618 (D-06): a scan target that does not exist is a caller error,
     # not a clean scan. `collect_files` simply skipped it, so

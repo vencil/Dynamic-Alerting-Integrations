@@ -28,6 +28,12 @@ argv is what ``test_caller_paths.py``'s ``test_a_declared_input_*`` rows and
 ``dir``, as a manifest ``dir`` line would be: a locked directory only, a
 ``dir_*`` reason, one declaration per site.
 
+#3445: a flag declared with ``add_input(decode=Document(...))`` is a FILE
+whose content the tool reads (``_lib_input.document``). It is held to
+``file`` the same way: a row that hands it a locked file ({F}), a ``file_*``
+reason. That row's argv is what ``test_a_declared_document_*`` (content that
+cannot be read, for every declaration) and the content audit run.
+
 A declaration the parser no longer has is a fault too: the manifest may not
 outlive the flag it describes.
 
@@ -145,6 +151,12 @@ def parsed_arguments(specs: "dict | None" = None) -> tuple[dict[tuple[str, str],
     return found, sorted(u.split()[0] for u in unscoreable)
 
 
+def is_document(spec: object) -> bool:
+    """Whether an ``add_input`` declaration is a file whose content is read
+    (``decode=``, #3445) rather than a directory (``select=``)."""
+    return getattr(spec, "decode", None) is not None
+
+
 def load_manifest(path: pathlib.Path = MANIFEST) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -192,25 +204,30 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
                       "manifest line (one declaration per flag)")
     claims: dict[tuple, list[str]] = {}
     for key in sorted(set(specs) & set(parsed)):
-        # Every add_input selection is a directory (TopLevel, DA_GUARD_LISTS):
-        # its rows are held to `dir` exactly as a manifest `dir` line is.
+        # An add_input selection (select=: TopLevel, DA_GUARD_LISTS) is a
+        # directory, its rows held to `dir` exactly as a manifest `dir` line
+        # is; a file whose content is read (decode=, #3445) is held to `file`.
         where = f"{key[0]} {key[1]}"
         site = (parsed[key], key[1] if key[1].startswith("-") else None)
+        kind = "file" if is_document(specs[key]) else "dir"
+        noun = {"dir": "directory", "file": "file"}[kind]
+        other = {"dir": "file", "file": "directory"}[kind]
         holders = {holder for holder, _reason in rows.get(site, [])}
-        if "D" not in holders:
+        if kind[0].upper() not in holders:
             faults.append(f"{where}: declared with _lib_input.add_input but no "
-                          "OPS_SITES row hands it a locked directory — the declared-input "
-                          "rows and the listing audit are made from that row")
+                          f"OPS_SITES row hands it a locked {noun} — the declared-input "
+                          f"rows and the {'content' if kind == 'file' else 'listing'} audit "
+                          "are made from that row")
         if site in rows:
             claims.setdefault(site, []).append(where)
             for holder, reason in rows[site]:
-                if holder != "D":
+                if holder != kind[0].upper():
                     faults.append(f"{where}: declared with _lib_input.add_input (a "
-                                  "directory), its row hands it a locked file")
+                                  f"{noun}), its row hands it a locked {other}")
                 if reason is not None and reason.startswith(tuple(REASON_PREFIX.values())) \
-                        and not reason.startswith(REASON_PREFIX["dir"]):
+                        and not reason.startswith(REASON_PREFIX[kind]):
                     faults.append(f"{where}: declared with _lib_input.add_input (a "
-                                  f"directory), its row answers {reason}")
+                                  f"{noun}), its row answers {reason}")
     for key in sorted(set(entries) - set(parsed)):
         faults.append(f"{key[0]} {key[1]}: declared, but the parser has no such argument")
     # A flag declared both ways already has its fault above; its manifest
@@ -555,3 +572,26 @@ def test_an_add_input_flag_is_held_to_dir_like_a_manifest_dir_line():
                              {("t", "--d"): spec})
     assert faults == ["t --d / u --d: one row (ops/t.py --d) cannot answer for more than "
                       "one declaration"], faults
+
+
+def test_an_add_input_document_is_held_to_file():
+    """#3445: a `decode=` declaration (a file whose content is read) is held
+    to `file` as a manifest `file` line is: a locked-file row, `file_*`."""
+    class _Doc:
+        decode = object()
+    spec = _Doc()
+    parsed = {("t", "--f"): "ops/t.py"}
+    ok = {("ops/t.py", "--f"): [("F", "file_not_accessible")]}
+    assert manifest_faults(parsed, [], {"commands": {}}, ok, frozenset(),
+                           {("t", "--f"): spec}) == []
+    faults = manifest_faults(parsed, [], {"commands": {}}, {}, frozenset(),
+                             {("t", "--f"): spec})
+    assert len(faults) == 1 and "no OPS_SITES row hands it a locked file" in faults[0], faults
+    dir_row = {("ops/t.py", "--f"): [("F", None), ("D", None)]}
+    assert manifest_faults(parsed, [], {"commands": {}}, dir_row, frozenset(),
+                           {("t", "--f"): spec}) == [
+        "t --f: declared with _lib_input.add_input (a file), its row hands it a locked directory"]
+    wrong = {("ops/t.py", "--f"): [("F", "dir_not_found")]}
+    assert manifest_faults(parsed, [], {"commands": {}}, wrong, frozenset(),
+                           {("t", "--f"): spec}) == [
+        "t --f: declared with _lib_input.add_input (a file), its row answers dir_not_found"]

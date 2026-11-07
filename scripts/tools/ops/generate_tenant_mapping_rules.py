@@ -47,7 +47,8 @@ from _lib_python import (  # noqa: E402
     write_text_or_die,
 )
 from _lib_io import YamlFileError  # noqa: E402  (#3276)
-from _lib_paths import require_dir, require_file  # noqa: E402  (#3276)
+from _lib_paths import require_dir  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3445: --metric-dictionary is read by the lib)
 # ADR-036 step 4 (#2906): conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
@@ -238,6 +239,17 @@ def load_metrics_from_dictionary(dict_path: str) -> list[str]:
     data = load_yaml_file(dict_path)
     if not data or not isinstance(data, dict):
         return []
+    return metrics_in_dictionary(data)
+
+
+#: --metric-dictionary: a YAML mapping (#3445: a list or a scalar there was
+#: "no metrics to map"; it is the named wrong-type refusal now).
+DICTIONARY_DOCUMENT = _lib_input.Document("yaml", dict)
+
+
+def metrics_in_dictionary(data: dict) -> list[str]:
+    """The raw exporter metric names of a parsed metric dictionary: its keys
+    whose entry is a mapping (see `load_metrics_from_dictionary`)."""
     return sorted(str(raw) for raw, info in data.items() if isinstance(info, dict))
 
 
@@ -413,7 +425,8 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument('--config-dir', required=True, help=_h('config_dir'))
-    parser.add_argument('--metric-dictionary', default=None, help=_h('metric_dict'))
+    _lib_input.add_input(parser, '--metric-dictionary', decode=DICTIONARY_DOCUMENT,
+                         help=_h('metric_dict'))
     parser.add_argument('--metrics', default=None, help=_h('metrics'))
     parser.add_argument('--format', choices=['yaml', 'configmap'], default='yaml',
                         help=_h('format'))
@@ -444,17 +457,17 @@ def main() -> None:
         metrics = [m.strip() for m in args.metrics.split(',') if m.strip()]
     else:
         # Auto-detect from metric-dictionary.yaml
-        dict_path = args.metric_dictionary
-        if dict_path:
-            require_file(dict_path, lang="en", flag="--metric-dictionary")  # #3276
-        else:
-            this_dir = Path(_THIS_DIR)
-            candidate = this_dir.parent / "metric-dictionary.yaml"
-            if not candidate.is_file():
-                candidate = this_dir / "metric-dictionary.yaml"
-            dict_path = str(candidate)
-        if Path(dict_path).is_file():
-            metrics = load_metrics_from_dictionary(dict_path)
+        # #3276 / #3445: one given is read by the lib — path and content,
+        # named; the shipped one is the default.
+        dictionary = _lib_input.document(args, "metric_dictionary", lang="en")
+        this_dir = Path(_THIS_DIR)
+        dict_path = this_dir.parent / "metric-dictionary.yaml"
+        if not dict_path.is_file():
+            dict_path = this_dir / "metric-dictionary.yaml"
+        if dictionary is not None:
+            metrics = metrics_in_dictionary(dictionary)
+        elif dict_path.is_file():
+            metrics = load_metrics_from_dictionary(str(dict_path))
         else:
             print("ERROR: no --metrics specified and metric-dictionary.yaml not found",
                   file=sys.stderr)
