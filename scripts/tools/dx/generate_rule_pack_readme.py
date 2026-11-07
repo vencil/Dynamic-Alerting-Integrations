@@ -239,7 +239,7 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("- **elasticsearch_exporter**: https://github.com/prometheus-community/elasticsearch_exporter")
     lines.append("- **oracledb_exporter**: https://github.com/iamseth/oracledb_exporter")
     lines.append("- **ibm_db2_exporter**: https://github.com/IBM/db2-prometheus-exporter (community)")
-    lines.append("- **clickhouse_exporter**: https://github.com/ClickHouse/clickhouse_exporter (或 ClickHouse 內建 /metrics)")
+    lines.append("- **ClickHouse 內建 /metrics**：沒有獨立 exporter（本 pack 讀的指標名不是 clickhouse_exporter 的）")
     lines.append("- **kafka_exporter**: https://github.com/danielqsj/kafka-exporter")
     lines.append("- **rabbitmq_exporter**: https://github.com/kbudde/rabbitmq_exporter")
     lines.append("- **kube-state-metrics**: https://github.com/kubernetes/kube-state-metrics")

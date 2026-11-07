@@ -245,7 +245,7 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 <!-- RULE_PACK_STATS_START -->
 | 規則包 | Exporter | Recording | Alert |
 |--------|----------|-----------|-------|
-| clickhouse | clickhouse_exporter | 11 | 7 |
+| clickhouse | built-in /metrics | 11 | 7 |
 | db2 | db2_exporter | 13 | 8 |
 | elasticsearch | elasticsearch_exporter | 10 | 7 |
 | jvm | jmx_exporter | 9 | 7 |

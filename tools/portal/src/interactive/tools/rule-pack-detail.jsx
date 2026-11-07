@@ -142,7 +142,7 @@ const RULE_PACKS = {
     label: 'ClickHouse',
     category: 'Database',
     description: 'ClickHouse monitoring: query performance, merge operations, memory usage, replication queue.',
-    exporter: 'clickhouse_exporter',
+    exporter: 'built-in /metrics',
     recording: [
       { name: 'tenant:clickhouse_queries:rate5m', expr: 'sum by(tenant) (rate(ClickHouseProfileEvents_Query{tenant!=""}[5m]))', desc: 'Query rate (5m)' },
       { name: 'tenant:clickhouse_memory_tracking:max', expr: 'max by(tenant) (ClickHouseMetrics_MemoryTracking{tenant!=""})', desc: 'Tracked memory in bytes per tenant' },

@@ -341,7 +341,7 @@
     "clickhouse": {
       "label": "ClickHouse",
       "category": "database",
-      "exporter": "clickhouse_exporter",
+      "exporter": "built-in /metrics",
       "configMap": "prometheus-rules-clickhouse",
       "recordingRules": 11,
       "alertRules": 7,
