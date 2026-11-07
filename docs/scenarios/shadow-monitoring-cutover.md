@@ -191,15 +191,15 @@ python3 scripts/tools/ops/validate_config.py \
 ```bash
 # 2.1 執行規則轉換（輸入是舊的 Prometheus 規則檔，一次一個檔）
 python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
-  --output-dir migration_output/
+  --tenant db-a --output-dir migration_output/
 # 產出（migration_output/）：
 #   - platform-recording-rules.yaml、platform-alert-rules.yaml
 #     （新規則；alert rule 帶 migration_status: shadow label）
-#   - defaults-snippet.yaml（先合併進 _defaults.yaml 的 defaults: 區塊；exporter 只發射
-#     宣告過的 key。值取自原規則，warning 層對所有租戶生效）
-#   - tenant-config.yaml（warning 層只有要和預設值不同的租戶才需要；<key>_critical
-#     不能放 defaults，要 critical 的租戶都要貼進自己的 conf.d 檔；只有 critical 的
-#     舊規則例外，它改讀 base 列，值已在 defaults-snippet.yaml）
+#   - _defaults.yaml（它的 defaults: 區塊先合併進 conf.d 根的 _defaults.yaml，合併、
+#     不要整份覆蓋；exporter 只發射宣告過的 key。值取自原規則，warning 層對所有租戶生效）
+#   - db-a.yaml（--tenant 給的租戶，閾值寫在 tenants.db-a 底下。warning 層只有要和預設值
+#     不同的租戶才需要；<key>_critical 不能放 defaults，要 critical 的租戶都要寫進自己的
+#     conf.d 檔；只有 critical 的舊規則例外，它改讀 base 列，值已在 _defaults.yaml）
 #   - prefix-mapping.yaml（階段 3 validate_migration 的比對組）
 #   - migration-report.txt、triage-report.csv（轉換報告）
 # 工具沒有「只轉某些租戶」的選項；某個租戶不要這條告警，在該租戶檔把 key 設成 "disable"。

@@ -44,12 +44,12 @@ echo ""
 # Test Group 0: 基本輸出驗證
 # ============================================================
 echo "[Test Group 0] 檔案化輸出"
-STDOUT=$(python3 "$TOOL" "$INPUT" -o "$OUTPUT_DIR" 2>&1)
+STDOUT=$(python3 "$TOOL" "$INPUT" --tenant t1 -o "$OUTPUT_DIR" 2>&1)
 
 assert_contains "成功解析計數" "成功解析.*7" "$STDOUT"
 assert_contains "需人工處理" "1.*需人工處理" "$STDOUT"
 
-TENANT_CONTENT=$(cat "$OUTPUT_DIR/tenant-config.yaml")
+TENANT_CONTENT=$(cat "$OUTPUT_DIR/t1.yaml")
 RECORDING_CONTENT=$(cat "$OUTPUT_DIR/platform-recording-rules.yaml")
 REPORT_CONTENT=$(cat "$OUTPUT_DIR/migration-report.txt")
 

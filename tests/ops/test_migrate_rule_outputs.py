@@ -277,7 +277,7 @@ class TestWriteOutputs:
             recording_rules=[{"record": "tenant:custom_cpu:max", "expr": "max(x)"}],
         )]
         dest = tmp_path / "out"
-        mr.write_outputs(results, str(dest), prefix="custom_", dictionary={})
+        mr.write_outputs(results, str(dest), prefix="custom_", dictionary={}, tenant="t1")
         # Directory was created.
         assert dest.is_dir()
         # Some output files exist (don't pin specific filenames — implementation
@@ -287,7 +287,7 @@ class TestWriteOutputs:
     def test_handles_empty_results(self, tmp_path):
         # Empty list shouldn't crash.
         dest = tmp_path / "out"
-        result = mr.write_outputs([], str(dest), prefix="custom_", dictionary={})
+        result = mr.write_outputs([], str(dest), prefix="custom_", dictionary={}, tenant="t1")
         # Returns 4-tuple (perfect, complex, unparseable, golden).
         assert result == (0, 0, 0, 0)
 
@@ -307,7 +307,7 @@ class TestWriteOutputs:
         ]
         dest = tmp_path / "out"
         n_perfect, n_complex, n_unparseable, n_golden = mr.write_outputs(
-            results, str(dest), prefix="custom_", dictionary={}
+            results, str(dest), prefix="custom_", dictionary={}, tenant="t1"
         )
         assert n_perfect == 2
         assert n_complex == 1
@@ -334,30 +334,30 @@ class TestRenderTenantConfig:
     def test_golden_simple_perfect(self):
         r = _make_result("CPU", status="perfect", severity="warning",
                          tenant_config={"custom_cpu": "0.9"})
+        # #3671: the keys are under `tenants.<tenant>` — at the top level a
+        # tenant file's key other than `tenants` is read by no reader.
         expected = (
             "# ============================================================\n"
-            "# Tenant Config — 複製到 conf.d/<tenant>.yaml\n"
+            "# 租戶 t1 — 合併進 conf.d 的租戶檔（tenants.t1）\n"
             "# ============================================================\n"
-            "# ⚠️ 先把 defaults-snippet.yaml 合併進 _defaults.yaml：沒宣告的 key\n"
-            "#    exporter 不會發射。warning 層的值與 defaults 相同，只有要和預設值\n"
-            "#    不同的租戶才需要寫；<key>_critical 則是要 critical 的租戶都要寫。\n"
-            "# 請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：\n"
-            "# tenants:\n"
-            "#   my-tenant-name:\n"
-            '#     custom_cpu: "0.9"\n'
+            "# ⚠️ 先把同目錄的 _defaults.yaml 合併進 conf.d 根的 _defaults.yaml：沒宣告\n"
+            "#    的 key exporter 不會發射。warning 層的值與 defaults 相同，只有要和預設\n"
+            "#    值不同的租戶才需要寫；<key>_critical 則是要 critical 的租戶都要寫。\n"
             "\n"
-            "# --- From: CPU (severity: warning) ---\n"
-            'custom_cpu: "0.9"\n'
+            "tenants:\n"
+            "  t1:\n"
+            "    # --- From: CPU (severity: warning) ---\n"
+            '    custom_cpu: "0.9"\n'
         )
         # The text is Go's (da-guard write, #3206): no trailing blank line.
-        assert mr.render_tenant_config([r]) == expected
+        assert mr.render_tenant_config([r], "t1") == expected
 
     def test_excludes_unparseable_and_use_golden(self):
         good = _make_result("Good", tenant_config={"custom_a": "1"})
         bad = _make_result("Bad", status="unparseable")
         gold = _make_result("Gold", tenant_config={"custom_g": "9"},
                             triage_action="use_golden")
-        out = mr.render_tenant_config([good, bad, gold])
+        out = mr.render_tenant_config([good, bad, gold], "t1")
         assert "custom_a" in out
         assert "Bad" not in out       # unparseable excluded entirely
         assert "custom_g" not in out  # use_golden excluded from tenant config
@@ -367,7 +367,7 @@ class TestRenderTenantConfig:
         r = _make_result("CPU", tenant_config={"custom_cpu": "0.9"},
                          notes=["a note"])
         r.dim_hints = [{"labels": {"instance": "db01"}}]
-        out = mr.render_tenant_config([r])
+        out = mr.render_tenant_config([r], "t1")
         assert "# 📖 a note\n" in out
         assert "# 維度標籤替代語法:\n" in out
         assert 'custom_cpu{instance="db01"}' in out
@@ -583,9 +583,9 @@ class TestWriteOutputsIsThinWriter:
             _make_result("U", status="unparseable", llm_prompt="LLM"),
         ]
         dest = tmp_path / "out"
-        mr.write_outputs(results, str(dest), prefix="custom_", dictionary={})
-        assert (dest / "tenant-config.yaml").read_text(encoding="utf-8") == \
-            mr.render_tenant_config(results)
+        mr.write_outputs(results, str(dest), prefix="custom_", dictionary={}, tenant="t1")
+        assert (dest / "t1.yaml").read_text(encoding="utf-8") == \
+            mr.render_tenant_config(results, "t1")
         assert (dest / "platform-recording-rules.yaml").read_text(encoding="utf-8") == \
             mr.render_recording_rules(results, "custom_")
         assert (dest / "platform-alert-rules.yaml").read_text(encoding="utf-8") == \
@@ -714,7 +714,7 @@ class TestMain:
         f = tmp_path / "in.yaml"
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
         out_dir = tmp_path / "out"
-        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir))
+        cli_argv("migrate_rule.py", str(f), "--tenant", "t1", "-o", str(out_dir))
         mr.main()
         # Output directory exists and contains files.
         assert out_dir.is_dir()
@@ -724,7 +724,7 @@ class TestMain:
         f = tmp_path / "in.yaml"
         f.write_text(self.SIMPLE_YAML, encoding="utf-8")
         out_dir = tmp_path / "out"
-        cli_argv("migrate_rule.py", str(f), "-o", str(out_dir), "--no-prefix")
+        cli_argv("migrate_rule.py", str(f), "--tenant", "t1", "-o", str(out_dir), "--no-prefix")
         mr.main()
         # No prefix-mapping.yaml when --no-prefix.
         assert not (out_dir / "prefix-mapping.yaml").exists()
@@ -763,7 +763,7 @@ class TestMain:
 
 
 # ---------------------------------------------------------------------------
-# tenant-config.yaml / defaults-snippet.yaml through da-guard write (#3206 10c)
+# <tenant>.yaml / _defaults.yaml through da-guard write (#3206 10c; #3671)
 # ---------------------------------------------------------------------------
 class TestConfdThroughDaGuardWrite:
     def test_comments_keep_their_order_and_the_last_ones_are_the_foot(self):
@@ -775,29 +775,30 @@ class TestConfdThroughDaGuardWrite:
         b = _make_result("B", tenant_config={"custom_b": "2"})
         b.dim_hints = [{"labels": {"instance": "db02"}}]
         dup = _make_result("Dup", tenant_config={"custom_a": "9"})
-        text = mr.render_tenant_config([a, b, dup])
-        order = ['\ncustom_a: "1"\n', 'custom_a{instance="db01"}', "# --- From: B",
-                 '\ncustom_b: "2"\n', 'custom_b{instance="db02"}', "# --- From: Dup",
+        text = mr.render_tenant_config([a, b, dup], "t1")
+        order = ['\n    custom_a: "1"\n', 'custom_a{instance="db01"}', "# --- From: B",
+                 '\n    custom_b: "2"\n', 'custom_b{instance="db02"}', "# --- From: Dup",
                  '# custom_a: "9"  ← 與上方同一個 key，未採用']
         at = [text.index(s) for s in order]
         assert at == sorted(at), text
-        body = [ln for ln in text.splitlines() if ln and not ln.startswith("#")]
-        assert body == ['custom_a: "1"', 'custom_b: "2"'], text
+        body = [ln for ln in text.splitlines() if ln and not ln.lstrip().startswith("#")]
+        assert body == ["tenants:", "  t1:", '    custom_a: "1"', '    custom_b: "2"'], text
         # the foot is set off by a blank line after the last key
         assert 'custom_b: "2"\n\n# 維度標籤替代語法:' in text, text
 
     def test_no_key_is_a_file_of_comments_and_an_empty_top_level(self):
         gold = _make_result("Gold", tenant_config={"custom_g": "9"},
                             triage_action="use_golden")
-        text = mr.render_tenant_config([gold])
-        assert [ln for ln in text.splitlines() if ln and not ln.startswith("#")] == ["{}"]
+        text = mr.render_tenant_config([gold], "t1")
+        assert [ln for ln in text.splitlines() if ln and not ln.startswith("#")] == \
+            ["tenants:", "  t1: {}"]
         assert "defaults: {}\n" in mr.render_defaults_snippet([gold])
 
     def test_an_alert_name_a_comment_cannot_carry_is_exit_2_naming_it(self, tmp_path, capsys):
         r = _make_result("Bad Name", tenant_config={"custom_a": "1"})
         dest = tmp_path / "out"
         with pytest.raises(SystemExit) as exc:
-            mr.write_outputs([r], str(dest), prefix="custom_", dictionary={})
+            mr.write_outputs([r], str(dest), prefix="custom_", dictionary={}, tenant="t1")
         assert exc.value.code == 2
         err = capsys.readouterr().err
         assert "the alert name" in err and "U+2028" in err and "nothing was written" in err, err
@@ -807,18 +808,18 @@ class TestConfdThroughDaGuardWrite:
         import _lib_confedit
 
         def stopped(root, entries, **_kw):
-            raise _lib_confedit.PartialWrite(["tenant-config.yaml"], "defaults-snippet.yaml",
+            raise _lib_confedit.PartialWrite(["t1.yaml"], "_defaults.yaml",
                                              OSError("disk full"),
-                                             maybe_written=["defaults-snippet.yaml"])
+                                             maybe_written=["_defaults.yaml"])
         monkeypatch.setattr(_lib_confedit, "write_all", stopped)
         dest = tmp_path / "out"
         with pytest.raises(SystemExit) as exc:
             mr.write_outputs([_make_result("A", tenant_config={"custom_a": "1"})],
-                             str(dest), prefix="custom_", dictionary={})
+                             str(dest), prefix="custom_", dictionary={}, tenant="t1")
         assert exc.value.code == 2
         err = capsys.readouterr().err
-        assert "stopped part-way" in err and "tenant-config.yaml" in err \
-            and "defaults-snippet.yaml" in err and "not rolled back" in err, err
+        assert "stopped part-way" in err and "t1.yaml" in err \
+            and "_defaults.yaml" in err and "not rolled back" in err, err
         # nothing after the batch is written either
         assert not (dest / "platform-alert-rules.yaml").exists()
 
