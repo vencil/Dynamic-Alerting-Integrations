@@ -21,13 +21,13 @@ Usage:
   python3 onboard_platform.py --alertmanager-config alertmanager.yml -o output/
 
   # Phase 2 only — Rule file analysis
-  python3 onboard_platform.py --rule-files 'rules/*.yml' -o output/
+  python3 onboard_platform.py --rule-files rules/ -o output/
 
   # Phase 3 only — Scrape config analysis
   python3 onboard_platform.py --scrape-config prometheus.yml -o output/
 
   # All three phases
-  python3 onboard_platform.py --alertmanager-config am.yml --rule-files 'rules/*.yml' \\
+  python3 onboard_platform.py --alertmanager-config am.yml --rule-files rules/ \\
       --scrape-config prom.yml -o output/
 
   # Custom tenant label (for enterprises using non-standard label names)
@@ -37,13 +37,11 @@ import argparse
 import csv
 import io
 from collections import Counter
-import glob
 import math
 import os
 import re
 import sys
 import textwrap
-from pathlib import Path
 from pathlib import Path
 
 import yaml
@@ -80,6 +78,7 @@ import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Alertmanager config 
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 from _lib_paths import require_path  # noqa: E402  (#3392)
+import _lib_input  # noqa: E402  (#3463: the one wording of "selected nothing")
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -567,17 +566,17 @@ def _tenant_routing_docs(tenant_routings, dedup_info=None):
 # Phase 2: Prometheus Rule File Analysis
 # ============================================================
 
-def scan_rule_files(pattern, exclude=()):
-    """The rule files `--rule-files` names: every path the glob *pattern*
-    matches, taken by `_lib_consumer_read.files_to_read` (#3426) — a file as
-    given, a directory's *.yaml / *.yml recursively — less the ones an
-    *exclude* pattern matches (`--exclude`, the same meaning as in `lint`
-    and `silencer-drift-check`).
+def scan_rule_files(targets, exclude=()):
+    """The rule files `--rule-files` names: `_lib_consumer_read.files_to_read`
+    (#3426) of the *targets* as given — a file as given, a directory's
+    *.yaml / *.yml recursively — less the ones an *exclude* pattern matches
+    (`--exclude`, the same meaning as in `lint` and `silencer-drift-check`).
+    ⛔ No glob is expanded (#3463): a target is a path, as in those two;
+    expanding a pattern is the shell's job.
 
     Returns list of file paths.
     """
-    return _lib_consumer_read.files_to_read(sorted(glob.glob(pattern, recursive=True)),
-                                            exclude)
+    return _lib_consumer_read.files_to_read(targets, exclude)
 
 
 def _dangling_symlink(path):
@@ -590,27 +589,28 @@ def _dangling_symlink(path):
     return False
 
 
-def judge_rule_files(pattern, exclude=()):
-    """The rule files --rule-files (less --exclude) selects, judged before
-    any phase runs or anything is written (#3392: a pattern that selected
-    nothing was a WARN, an empty output tree and rc 1).
+def judge_rule_files(targets, exclude=()):
+    """The rule files the --rule-files *targets* (less --exclude) select,
+    judged before any phase runs or anything is written (#3392: a value
+    that selected nothing was a WARN, an empty output tree and rc 1).
 
-    A *pattern* with no glob character (``*``, ``?``, ``[``) is a path the
-    caller wrote out, judged by `_lib_paths` like any other caller-given
-    path: nothing there is ``path_not_found``, a symlink loop
-    ``path_not_accessible``. An entry `scan_rule_files` cannot choose from
-    (#3426) is named, rc 2. A pattern that selects no file at all — a glob
-    that matched nothing, a directory with no *.yaml / *.yml — is
-    ``file_not_found``, rc 2.
+    Each target is a path the caller wrote out (#3463: ``rules/b[1].yaml``
+    is that file, never a pattern), judged by `_lib_paths` like any other
+    caller-given path: nothing there is ``path_not_found``, a symlink loop
+    or a parent that cannot be entered ``path_not_accessible``. An entry
+    `scan_rule_files` cannot choose from (#3426) is named, rc 2. Targets
+    that select no file at all — directories with no *.yaml / *.yml — are
+    refused by `_lib_input.refuse_empty` (``input_empty``), rc 2.
     """
-    if pattern == "":
+    if "" in targets:
         # #3392 (owner ruling): '' names nothing — never "no --rule-files".
         raise CallerError("--rule-files '': an empty value names no file", "file_not_found")
-    if not glob.has_magic(pattern) and not _dangling_symlink(pattern):
-        # A dangling symlink is there (ls lists it): #3426's reading names it.
-        require_path(pattern, "any", lang="en", flag="--rule-files")
+    for target in targets:
+        if not _dangling_symlink(target):
+            # A dangling symlink is there (ls lists it): #3426's reading names it.
+            require_path(target, "any", lang="en", flag="--rule-files")
     try:
-        files = scan_rule_files(pattern, exclude)
+        files = scan_rule_files(targets, exclude)
     except _lib_consumer_read.InputRefused as e:
         # #3426: an entry that cannot be chosen (a dangling symlink, a
         # directory that cannot be listed) or an --exclude that leaves
@@ -619,8 +619,9 @@ def judge_rule_files(pattern, exclude=()):
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
     if not files:
-        raise CallerError(f"--rule-files {safe_label(pattern)}: selects no file",
-                          "file_not_found")
+        raise _lib_input.refuse_empty(
+            "--rule-files " + ", ".join(safe_label(t) for t in targets),
+            _lib_consumer_read.FILES_TO_READ_WANTED, lang="en")
     return files
 
 
@@ -1580,22 +1581,24 @@ def main():
         epilog=textwrap.dedent("""\
             Examples:
               %(prog)s --alertmanager-config alertmanager.yml -o output/
-              %(prog)s --rule-files 'rules/*.yml' -o output/
+              %(prog)s --rule-files rules/ -o output/
               %(prog)s --scrape-config prometheus.yml -o output/
-              %(prog)s --alertmanager-config am.yml --rule-files 'rules/*.yml' -o output/
+              %(prog)s --alertmanager-config am.yml --rule-files rules/ -o output/
               %(prog)s --alertmanager-config am.yml --tenant-label instance -o output/
         """),
     )
     parser.add_argument("--alertmanager-config",
                         help="Phase 1: Alertmanager config file (YAML or ConfigMap)")
-    parser.add_argument("--rule-files",
-                        help="Phase 2: Prometheus rule files glob pattern; a directory it "
-                             "matches is walked for *.yaml / *.yml")
+    parser.add_argument("--rule-files", nargs="+", action="extend", metavar="PATH",
+                        help="Phase 2: Prometheus rule file(s) or directory(ies); a "
+                             "directory is walked for *.yaml / *.yml. Paths, not patterns: "
+                             "no glob is expanded (let the shell expand one). Repeatable: "
+                             "the values add up")
     parser.add_argument("--exclude", action="append", default=[], metavar="GLOB",
                         help="Phase 2: leave out rule files this glob matches (repeatable; "
                              "not read). A GLOB without '/' matches the file name at any "
                              "depth; one with '/' the path relative to the directory "
-                             "--rule-files matched, or a file's path as matched (fnmatch, "
+                             "--rule-files gave, or a file's path as given (fnmatch, "
                              "case-sensitive, '*' crosses '/'). Every other file must be a "
                              "rule file or a Kubernetes manifest, or the run exits 2")
     parser.add_argument("--scrape-config",
@@ -1679,7 +1682,8 @@ def main():
 
     # Phase 2: Rule files
     if rule_files:
-        print(f"Phase 2: Analyzing rule files: {args.rule_files}", file=sys.stderr)
+        print("Phase 2: Analyzing rule files: " + ", ".join(safe_label(t) for t in args.rule_files),
+              file=sys.stderr)
         if not HAS_MIGRATE:
             print("  WARN: migrate_rule.py not available, Phase 2 will have limited analysis",
                   file=sys.stderr)
