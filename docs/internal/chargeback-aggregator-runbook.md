@@ -47,10 +47,10 @@ helm install chargeback ./helm/chargeback-aggregator -n monitoring
 驗 query log 真的進去 store：
 
 ```sh
-# 安全性設定（--overrides）讓 debug pod 能在 enforce restricted 的 namespace 起來（#1018）
-kubectl run vl-q --rm -i --restart=Never --image=busybox:1.36 --quiet \
-  --override-type=strategic --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"vl-q","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' -- \
-  wget -qO- 'http://victorialogs.monitoring.svc:9428/select/logsql/query?query=log_type%3Aprometheus_query_log&limit=2'
+# 經 vmauth 容器（帶 busybox wget）打 pod 內 loopback 上的 VictoriaLogs 本體：
+# 不經 vmauth、不需帳密（store 預設強制認證，#1295），能 exec 進 pod 才碰得到。
+kubectl exec -n monitoring deploy/victorialogs -c vmauth -- \
+  wget -qO- 'http://127.0.0.1:9429/select/logsql/query?query=log_type%3Aprometheus_query_log&limit=2'
 # 期望看到 _stream={app="prometheus",k8s_namespace="monitoring",log_type="prometheus_query_log",...}
 # 內含 params.query, samples_scanned, exec_time_s 等欄位
 # （Prometheus 原生輸出 *Total*Time 單位為「秒」）

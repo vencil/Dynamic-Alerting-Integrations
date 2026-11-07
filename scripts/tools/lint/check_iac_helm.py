@@ -249,6 +249,16 @@ RENDER_BASE_SETS: dict[str, list[str]] = {
 }
 
 
+# Values files a chart refuses to render without, applied before the variant's
+# -f: helm/victorialogs defaults to auth.mode=enforce and needs a Secret named
+# per consumer (#1295). Its baseline restates the consumer registry and
+# tests/helm/test_victorialogs_vmauth.py holds the two equal, so kube-linter
+# judges the production shape (enforce, Secret-backed env vars).
+RENDER_BASE_VALUES: dict[str, str] = {
+    "victorialogs": "tests/helm/victorialogs_render_baseline.yaml",
+}
+
+
 def helm_render(chart_dir: str, values_rel: str | None) -> "_lib_engine.Result":
     """Render a chart (optionally with a -f values override): a Ran whose
     ``data`` is the rendered text, or a NoVerdict (helm missing, failed, or
@@ -261,6 +271,9 @@ def helm_render(chart_dir: str, values_rel: str | None) -> "_lib_engine.Result":
         args += ["--set", kv]
     root = str(REPO_ROOT) if located.mode == "binary" else "/repo"
     args.append(f"{root}/{chart_dir}")
+    # Before the variant's -f, so a variant still overrides it.
+    if chart_name(chart_dir) in RENDER_BASE_VALUES:
+        args += ["-f", f"{root}/{RENDER_BASE_VALUES[chart_name(chart_dir)]}"]
     if values_rel:
         args += ["-f", f"{root}/{values_rel}"]
     args += ["--namespace", LINT_NAMESPACE]

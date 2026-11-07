@@ -45,13 +45,27 @@ kubectl apply -f k8s/00-namespaces/namespace-vector.yaml
 
 # 1) Store first — Vector 啟動時會嘗試握手 sink。victorialogs 續留
 #    monitoring；chart ≥0.3.0 的 netpol 預設放行 vector ns（ingest）。
+#    chart 0.5.0 起預設 auth.mode=enforce：先建每個消費端的 Secret 並在
+#    auth.consumers[].existingSecret 指名，否則 render 失敗（§1.2）。
+#    my-consumers.yaml 列出 auth.consumers 全部（含 paths），各帶
+#    existingSecret: victorialogs-<name>；不跑的消費端從清單移除。
+for c in vector grafana chargeback-aggregator federation-gateway federation-reconciler; do
+  kubectl -n monitoring create secret generic "victorialogs-$c" \
+    --from-literal=password="$(openssl rand -hex 32)"
+done
 helm install victorialogs ./helm/victorialogs -n monitoring \
   --set persistence.size=20Gi \
-  --set retentionPeriod=30d
+  --set retentionPeriod=30d \
+  -f my-consumers.yaml
 
 # 2) Shipper second — 裝進 vector ns；sink host 本來就是 FQDN，跨 ns 不用改。
+#    vector 在自己的 namespace，要把 store 側同一個密碼複製一份過來。
+kubectl -n monitoring get secret victorialogs-vector -o jsonpath='{.data.password}' \
+  | base64 -d | xargs -I{} kubectl -n vector create secret generic victorialogs-vector \
+      --from-literal=password={}
 helm install vector ./helm/vector -n vector \
-  --set victorialogs.host=victorialogs.monitoring.svc
+  --set victorialogs.host=victorialogs.monitoring.svc \
+  --set victorialogs.auth.existingSecret=victorialogs-vector
 
 #    多租戶（tenantProjections 有設）再多一步前置：projection-gate 掛的
 #    registry ConfigMap（key `_account_registry.yaml`）是 namespaced —— 必須
@@ -142,7 +156,7 @@ kubectl logs -n monitoring deploy/grafana | grep -i 'victoriametrics-logs-dataso
 
 ### 1.2 消費端認證：vmauth（#1295）
 
-chart 0.4.0 起，VictoriaLogs 只監聽 pod 內的 loopback，Service 的 :9428
+chart 0.4.0 起（0.5.0 起預設 enforce），VictoriaLogs 只監聽 pod 內的 loopback，Service 的 :9428
 由 vmauth sidecar 接手，依 `auth.consumers` 把每個消費端限制在自己的路徑：
 `vector` 只能 `/insert`，Grafana、chargeback、federation-gateway、
 federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /insert` 的
@@ -152,8 +166,29 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
 
 | `auth.mode` | 沒帶帳密的請求 | 用途 |
 |---|---|---|
-| `observe`（預設） | 所有路徑照常通過 | 遷移期：逐一接上消費端，期間不斷線。⚠️ 不是安全邊界 |
-| `enforce` | 只有 `/health`、`/ping`、`/metrics` | 每個消費端都帶帳密後切換 |
+| `enforce`（chart 0.5.0 起為預設） | 只有 `/health`、`/ping`、`/metrics` | 正式狀態 |
+| `observe` | 所有路徑照常通過 | 遷移期：逐一接上消費端，期間不斷線。⚠️ 不是安全邊界 |
+
+⛔ 預設是 enforce，所以沒有替每個消費端指定 Secret 時，chart **拒絕
+render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費端請從
+`auth.consumers` 移除。
+
+⚠️ **render 只檢查 store 這一側**：它看得到 `auth.consumers[].existingSecret`
+有沒有填，看不到消費端那一側有沒有帶帳密。store 側都指名了、而某個消費端
+沒接上，render 照樣通過，該消費端從此收到 401。對 Vector 這代表資料**當下
+遺失**：elasticsearch sink 遇到 4xx 不重試，整批丟掉（下面「注意」）。所以
+切到 enforce 之前，一定要先做步驟 2 的確認。
+
+- **新裝**：先做步驟 1 的 Secret，store 與消費端兩側都指名，裝好後照步驟 2
+  確認每個消費端都有帶帳密進來。
+- **從 0.4.0（預設 observe）升級**：在 values 明寫 `auth.mode: observe` 再
+  升級，照步驟 1–2 接上並確認，最後拿掉這個覆寫，回到預設 enforce。
+  - 一個 Secret 都沒指名就升級：render 失敗、升級中止。
+  - 已照 0.4.0 的步驟 1 在 store 側指名了 Secret：render 會**通過並直接
+    進 enforce**，沒接上的消費端立刻 401。
+  - 用 `helm upgrade --reuse-values`：Helm 沿用上一版的 values（含當時的
+    預設 `mode: observe`），**不會**變成 enforce；要切換得明寫
+    `--set auth.mode=enforce`。
 
 **遷移步驟**
 
@@ -208,8 +243,8 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
    curl -s localhost:9428/metrics | grep -E '^vl_http_requests_total\{path="/(insert|select)/'
    ```
 
-3. 切 `auth.mode: enforce`。沒帶帳密、或帳密錯誤的請求會收到 401；帳密對但
-   路徑不在允許範圍的，收到 400。
+3. 拿掉 `auth.mode: observe` 覆寫（回到預設 enforce）。沒帶帳密、或帳密錯誤
+   的請求會收到 401；帳密對但路徑不在允許範圍的，收到 400。
 
 **注意**：
 
@@ -222,7 +257,27 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
 - vmauth 的內部 port（`auth.internalPort`）不經認證提供 `/debug/pprof`、
   `/flags`；只靠 NetworkPolicy 只放行 Service port 擋住，`networkPolicy` 要
   保持開啟。
-- runbook 裡那些起 busybox 直接打 :9428 的除錯 pod，在 enforce 下需要帶帳密。
+- 打 :9428 的請求在 enforce 下都要帶帳密。本 runbook 的查詢指令改成 exec 進
+  pod、經 vmauth 容器打 loopback 上的 VictoriaLogs 本體（`127.0.0.1:9429`），
+  不需帳密（見 §2）。
+- **federation-gateway 的憑證讀取**：每個 Envoy worker 各自快取，讀取失敗時
+  **沿用上一次讀到的值**。只有從未讀到過的 worker 會回 503（`federation:
+  log store credential unavailable`），不轉送沒帶帳密的請求；gateway log 有
+  `log-store credential unreadable`。換了 Secret 之後的生效時間由三段組成：
+  kubelet 把 Secret 同步進掛載（sync 週期加上快取，約一到兩分鐘）、每個
+  worker 的重讀時間閘（`revokedSet.reloadIntervalSeconds`），以及該 worker
+  收到下一個查詢（重讀只在請求進來時觸發）。低流量時會晚於前兩段之和。
+- 消費端拿到 401 時各自的症狀：
+  - **Vector**：寫入 store 的 sink 是 elasticsearch sink，遇到 4xx 不重試，
+    整批事件當下丟掉（Vector log：`Not retriable; dropping the request`），
+    計入 `vector_component_discarded_events_total{intentional="false"}`。
+    buffer 是空的，所以 `VectorBufferEventsDropped` **不會**響；會響的是
+    `VectorStoreSinkDroppingEvents`（critical，5 分鐘）。稍晚
+    `FederationRevocationEvidenceChannelDown` 也會響：tenant-api 的心跳寫不進
+    store，reconciler 讀不到（前提是 reconciler 有部署、且自己帶了帳密）。
+  - **reconciler**：觸發 `FederationRevocationReconcileStale`。
+  - **chargeback**：Job 以 exit 1 結束。
+  - **Grafana**：查詢顯示錯誤。
 
 ## 2. Smoke-test LogsQL（#539 §4 AC5）
 
@@ -244,8 +299,11 @@ federation-reconciler 只能 `/select`。威脅模型：任何能直接 `POST /i
 從 CLI 跑同樣的 query：
 
 ```sh
-kubectl exec -n monitoring deploy/victorialogs -- \
-  wget -qO- 'http://localhost:9428/select/logsql/query?query=log_type:federation_audit&limit=10'
+# 經 vmauth 容器（帶 busybox wget）打 pod 內 loopback 上的 VictoriaLogs 本體
+# （127.0.0.1:<auth.backendPort>，預設 9429）：不經 vmauth、不需帳密，能 exec
+# 進 pod 才碰得到。victorialogs 容器的映像沒有 shell 也沒有 wget。
+kubectl exec -n monitoring deploy/victorialogs -c vmauth -- \
+  wget -qO- 'http://127.0.0.1:9429/select/logsql/query?query=log_type:federation_audit&limit=10'
 ```
 
 ## 3. Stream-field schema（#539 §3 load-bearing table）
@@ -283,8 +341,9 @@ kubectl logs -n vector -l app.kubernetes.io/name=vector --tail=50 \
   | grep -i 'federation-gateway\|added file\|matched'
 
 # c) Vector → VictoriaLogs 連得到嗎？
-kubectl exec -n monitoring deploy/victorialogs -- \
-  wget -qO- 'http://localhost:9428/metrics' | grep -E 'vl_(rows_ingested|free_disk)'
+#    （查法同 §2：經 vmauth 容器打 loopback 上的本體）
+kubectl exec -n monitoring deploy/victorialogs -c vmauth -- \
+  wget -qO- 'http://127.0.0.1:9429/metrics' | grep -E 'vl_(rows_ingested|free_disk)'
 ```
 
 ### 4.2 「VictoriaLogs pod 起不來」
@@ -401,11 +460,9 @@ EOF
 驗 fan-out 兩條都收到：
 
 ```sh
-# 看 VictoriaLogs（既有 query 一樣）
-# 安全性設定（--overrides）讓 debug pod 能在 enforce restricted 的 namespace 起來（#1018）
-kubectl run vlq --rm -i --restart=Never --image=busybox:1.36 --quiet \
-  --override-type=strategic --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"vlq","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' -- \
-  wget -qO- 'http://victorialogs.monitoring.svc:9428/select/logsql/query?query=*&limit=1'
+# 看 VictoriaLogs（既有 query 一樣；經 vmauth 容器打 loopback 上的本體，見 §2）
+kubectl exec -n monitoring deploy/victorialogs -c vmauth -- \
+  wget -qO- 'http://127.0.0.1:9429/select/logsql/query?query=*&limit=1'
 
 # 看 SIEM 端是否到貨（依 SIEM 操作；若是 mock HTTP 就 kubectl logs）
 ```
@@ -639,8 +696,9 @@ tenantProjections:
 2. 在 `0:0`（平台完整副本）反查它，拿回完整 node/pod 拓樸：
 
 ```sh
-kubectl exec -n monitoring deploy/victorialogs -- \
-  wget -qO- 'http://localhost:9428/select/logsql/query?query=log_event_id:"<那個 id>"&limit=5'
+# 經 vmauth 容器打 loopback 上的 VictoriaLogs 本體（不需帳密；見 §2）
+kubectl exec -n monitoring deploy/victorialogs -c vmauth -- \
+  wget -qO- 'http://127.0.0.1:9429/select/logsql/query?query=log_event_id:"<那個 id>"&limit=5'
 # 不帶 AccountID header = 查 0:0（平台分區），可見 pod_node / pod_name / 完整 audit
 ```
 

@@ -2240,6 +2240,39 @@ groups:
             audit-trail integrity event — investigate immediately.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
 
+      # ── Vector store sinks rejected by the log store (#1295) ────
+      # The sinks that write to VictoriaLogs (the 0:0 `victorialogs` sink and
+      # each tenant projection `vl_tenant_<id>`) are elasticsearch sinks: a
+      # 4xx answer is not retried — the batch is dropped on the spot and
+      # counted as an UNINTENTIONAL discard (measured on Vector 0.61.0 against
+      # a 401: "Not retriable; dropping the request"). The store's vmauth
+      # answers 401 when Vector sends no or wrong credentials, so a consumer
+      # Secret missing on the Vector side loses every event while the buffer
+      # stays empty — VectorBufferEventsDropped above never sees it.
+      # Intentional discards (filters, route drops) carry intentional="true"
+      # and are excluded.
+      - alert: VectorStoreSinkDroppingEvents
+        expr: |
+          sum by (component_id) (
+            rate(vector_component_discarded_events_total{component_kind="sink",component_id=~"victorialogs|vl_tenant_.+",intentional="false"}[5m])
+          ) > 0
+        for: 5m
+        labels:
+          severity: critical
+          alert_source: platform
+        annotations:
+          summary: "Vector sink {{ $labels.component_id }} is losing events to the log store for 5m"
+          description: |
+            VictoriaLogs (through its vmauth) is refusing the batches this
+            sink sends, and Vector drops a refused batch without retrying.
+            Every event in it is lost, including the audit trail and the
+            revocation evidence. Most likely the Vector side sends no or
+            the wrong credentials: check victorialogs.auth.existingSecret
+            in the vector chart against the store's consumer `vector`
+            (platform-log-aggregation-runbook.md §1.2), and the Vector
+            logs for the response code.
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+
       # ── Tenant log-query rejection surge (ADR-021 #609 PR-4) ────
       # Symmetric to FederationRejectionRateAnomaly above, but for the
       # LOG-query plane: >50% of an account partition's log-query

@@ -415,3 +415,51 @@ def test_vl9_unknown_and_unauthenticated_callers_reach_nothing_but_probes():
                 f"{label} {method} {path}: {resp.status_code} {resp.text[:200]}")
     # The probes and the metrics scrape stay open (kubelet sends no credentials).
     assert _reached_store(_store("/health")), "unauthenticated /health must reach the store"
+
+
+# ── VL10 — the gateway picks up a rotated credential without a restart ────────
+_GATEWAY_PASSWORD_FILE = os.path.join(os.path.dirname(__file__), "rendered", "victorialogs", "gateway-password")
+
+
+def _gateway_status_until(vl_gateway_url, token, want, timeout_s=20.0):
+    """Query until `want(status)` holds. Each Envoy worker keeps its own copy of
+    the credential and re-reads it on the reload interval (2s in this harness),
+    and only when a request reaches it — so poll rather than sleep once."""
+    deadline = time.monotonic() + timeout_s
+    status = None
+    while time.monotonic() < deadline:
+        status = _query(vl_gateway_url, token).status_code
+        if want(status):
+            return status
+        time.sleep(0.5)
+    return status
+
+
+def test_vl10_gateway_rereads_a_rotated_password(vl_gateway_url, logs_signer):
+    """The chart mounts the Secret as a file and revoked_check.lua re-reads it,
+    so rotating the Secret needs no restart. Swap the mounted file for a wrong
+    password: vmauth (enforce) must start refusing the gateway; put the right
+    one back: queries must recover — all without touching the container."""
+    tenant, acct = TENANT_A
+    _, token = logs_signer(tenant, acct)
+    # The gateway runs one Envoy worker (victorialogs-compose.yml), so this
+    # 200 means THE worker holds the right password: a 401 after the swap can
+    # only come from re-reading the file, not from a worker's first read.
+    assert _query(vl_gateway_url, token).status_code == 200, "the gateway is not serving before the swap"
+    with open(_GATEWAY_PASSWORD_FILE, encoding="utf-8") as fh:
+        right = fh.read()
+    try:
+        # Rewrite in place (same inode): a bind-mounted file follows its inode.
+        with open(_GATEWAY_PASSWORD_FILE, "r+", encoding="utf-8") as fh:
+            fh.seek(0)
+            fh.write("0" * len(right))
+            fh.truncate()
+        refused = _gateway_status_until(vl_gateway_url, token, lambda s: s == 401)
+        assert refused == 401, f"the gateway never picked up the rotated (wrong) password: last status {refused}"
+    finally:
+        with open(_GATEWAY_PASSWORD_FILE, "r+", encoding="utf-8") as fh:
+            fh.seek(0)
+            fh.write(right)
+            fh.truncate()
+    recovered = _gateway_status_until(vl_gateway_url, token, lambda s: s == 200)
+    assert recovered == 200, f"the gateway did not recover after the password was restored: last status {recovered}"

@@ -37,13 +37,20 @@ TWO_CONSUMERS = ('auth.consumers=[{"name":"vector","paths":["/insert/.*"],"exist
                  '{"name":"federation-gateway","paths":["/select/.*"],"existingSecret":"vl-gw"}]')
 
 
-def _helm(*args: str) -> subprocess.CompletedProcess:
-    return subprocess.run(["helm", "template", "t", str(CHART), "-n", "monitoring", *args],
+# The default is auth.mode=enforce, which refuses to render until every
+# consumer names its Secret; tests not about that render the shared baseline
+# (one Secret per consumer). `--set` after `-f` still overrides it.
+BASELINE = Path(__file__).resolve().parent / "victorialogs_render_baseline.yaml"
+
+
+def _helm(*args: str, baseline: bool = True) -> subprocess.CompletedProcess:
+    base = ["-f", str(BASELINE)] if baseline else []
+    return subprocess.run(["helm", "template", "t", str(CHART), "-n", "monitoring", *base, *args],
                           capture_output=True, text=True, encoding="utf-8", timeout=120, check=False)
 
 
-def _render(*args: str) -> list[dict]:
-    out = _helm(*args)
+def _render(*args: str, baseline: bool = True) -> list[dict]:
+    out = _helm(*args, baseline=baseline)
     assert out.returncode == 0, out.stderr
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
@@ -146,7 +153,7 @@ def test_enforce_passes_only_probes_and_metrics_without_credentials() -> None:
 def test_observe_still_passes_unauthenticated_traffic() -> None:
     """The migration step: until every consumer authenticates, requests without
     credentials keep reaching every path (it is NOT a boundary)."""
-    unauth = _auth(_render())["unauthorized_user"]
+    unauth = _auth(_render("--set", "auth.mode=observe"))["unauthorized_user"]
     assert [e["src_paths"] for e in unauth["url_map"]] == [["/.*"]], unauth
 
 
@@ -175,11 +182,13 @@ def test_passwords_come_from_secrets_not_the_configmap() -> None:
 
 
 def test_observe_skips_consumers_without_a_secret() -> None:
-    assert "users" not in _auth(_render()), "observe rendered a user with no Secret behind it"
+    assert "users" not in _auth(_render("--set", "auth.mode=observe", baseline=False)), (
+        "observe rendered a user with no Secret behind it")
 
 
 @pytest.mark.parametrize("args, needle", [
-    (["--set", "auth.mode=enforce"], "existingSecret is required when auth.mode=enforce"),
+    (["--set-json", 'auth.consumers=[{"name":"a","paths":["/x"],"existingSecret":"s"},'
+                    '{"name":"b","paths":["/y"]}]'], "missing: b."),
     (["--set", "auth.mode=open"], "auth.mode must be observe or enforce"),
     (["--set-json", 'auth.consumers=[{"name":"a","paths":["/x"],"existingSecret":"s"},'
                     '{"name":"a","paths":["/y"],"existingSecret":"s"}]'], "is listed twice"),
@@ -195,7 +204,7 @@ def test_render_refuses(args: list[str], needle: str) -> None:
 def test_unauthenticated_traffic_is_not_capped_below_the_global_limit() -> None:
     """In observe every request without credentials is ONE vmauth user; the
     default per-user cap (100) would be a new ceiling on all of them."""
-    args = _containers(_render())["vmauth"]["args"]
+    args = _containers(_render("--set", "auth.mode=observe"))["vmauth"]["args"]
     cap = _values()["auth"]["maxConcurrentRequests"]
     assert f"-maxConcurrentPerUserRequests={cap}" in args and f"-maxConcurrentRequests={cap}" in args, args
 
@@ -205,3 +214,29 @@ def test_pod_rolls_when_the_auth_config_changes() -> None:
         ann = _one(_render(*args), "Deployment")["spec"]["template"]["metadata"]["annotations"]
         return ann["checksum/vmauth"]
     assert checksum() != checksum("--set-json", TWO_CONSUMERS)
+
+
+# ── enforce is the default (#1295 phase 3) ──────────────────────────────────
+
+
+def test_enforce_is_the_default() -> None:
+    assert _values()["auth"]["mode"] == "enforce"
+
+
+def test_a_bare_install_names_every_consumer_it_must_provision() -> None:
+    """Breaking on purpose: with no Secrets named the render fails, and it says
+    which consumers at once rather than one per attempt."""
+    out = _helm(baseline=False)
+    names = [c["name"] for c in _values()["auth"]["consumers"]]
+    assert out.returncode != 0 and f"missing: {', '.join(names)}." in out.stderr, out.stderr[-600:]
+    assert "auth.mode=observe" in out.stderr, "the error must name the migration way out"
+
+
+def test_render_baseline_restates_the_registry() -> None:
+    """Helm replaces lists wholesale, so the baseline repeats the registry; it
+    must repeat it exactly, or every test using it judges a different store."""
+    def strip(consumers: list[dict]) -> list[dict]:
+        return [{k: v for k, v in c.items() if k != "existingSecret"} for c in consumers]
+    baseline = yaml.safe_load(BASELINE.read_text(encoding="utf-8"))["auth"]["consumers"]
+    assert strip(baseline) == strip(_values()["auth"]["consumers"])
+    assert all(c.get("existingSecret") for c in baseline), "the baseline must name a Secret per consumer"

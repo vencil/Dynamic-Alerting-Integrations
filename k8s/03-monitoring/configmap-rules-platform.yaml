@@ -743,21 +743,35 @@ data:
     \ this is an\n\n        audit-trail integrity event — investigate immediately.\n\
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Vector sink {{ $labels.component_id }} dropping events for 5m\n\
-    \  - alert: TenantLogQueryRejectionRateAnomaly\n    expr: \"(\\n  sum by (account_id)\
-    \ (\\n    rate(tenant_log_query_requests_total{status=~\\\"rate_limited|auth_failed|bad_request\\\
-    \"}[10m])\\n  )\\n  /\\n  sum by (account_id) (rate(tenant_log_query_requests_total[10m]))\\\
-    n) > 0.5\\nand\\nsum by (account_id) (\\n  rate(tenant_log_query_requests_total{status=~\\\
-    \"rate_limited|auth_failed|bad_request\\\"}[10m])\\n) > 0.0167\\n\"\n    for:\
-    \ 15m\n    labels:\n      alert_source: platform\n      severity: warning\n  \
-    \  annotations:\n      description: 'Over 50% of account {{ $labels.account_id\
-    \ }}''s tenant\n\n        log-query requests have been rejected (rate-limited\
-    \ /\n\n        auth-failed / bad-request) for 15m. Check the\n\n        tenant-log-query\
-    \ dashboard — likely a REVOKED token (Lua\n\n        403), a tenant exceeding\
-    \ its rate limit, or a client hitting\n\n        the victorialogs-mode endpoint\
-    \ allowlist. NOTE: this counts\n\n        POST-JWT rejections only — an EXPIRED\
-    \ / bad-signature / wrong-\n\n        audience token 401s at jwt_authn BEFORE\
-    \ account_id is stamped,\n\n        so it is NOT counted here (attack noise; see\
-    \ jwt_authn stats,\n\n        per ADR-020).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
+    \  - alert: VectorStoreSinkDroppingEvents\n    expr: \"sum by (component_id) (\\\
+    n  rate(vector_component_discarded_events_total{component_kind=\\\"sink\\\",component_id=~\\\
+    \"victorialogs|vl_tenant_.+\\\",intentional=\\\"false\\\"}[5m])\\n) > 0\\n\"\n\
+    \    for: 5m\n    labels:\n      alert_source: platform\n      severity: critical\n\
+    \    annotations:\n      description: 'VictoriaLogs (through its vmauth) is refusing\
+    \ the batches this\n\n        sink sends, and Vector drops a refused batch without\
+    \ retrying.\n\n        Every event in it is lost, including the audit trail and\
+    \ the\n\n        revocation evidence. Most likely the Vector side sends no or\n\
+    \n        the wrong credentials: check victorialogs.auth.existingSecret\n\n  \
+    \      in the vector chart against the store''s consumer `vector`\n\n        (platform-log-aggregation-runbook.md\
+    \ §1.2), and the Vector\n\n        logs for the response code.\n\n        '\n\
+    \      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
+    \      summary: Vector sink {{ $labels.component_id }} is losing events to the\
+    \ log store for 5m\n  - alert: TenantLogQueryRejectionRateAnomaly\n    expr: \"\
+    (\\n  sum by (account_id) (\\n    rate(tenant_log_query_requests_total{status=~\\\
+    \"rate_limited|auth_failed|bad_request\\\"}[10m])\\n  )\\n  /\\n  sum by (account_id)\
+    \ (rate(tenant_log_query_requests_total[10m]))\\n) > 0.5\\nand\\nsum by (account_id)\
+    \ (\\n  rate(tenant_log_query_requests_total{status=~\\\"rate_limited|auth_failed|bad_request\\\
+    \"}[10m])\\n) > 0.0167\\n\"\n    for: 15m\n    labels:\n      alert_source: platform\n\
+    \      severity: warning\n    annotations:\n      description: 'Over 50% of account\
+    \ {{ $labels.account_id }}''s tenant\n\n        log-query requests have been rejected\
+    \ (rate-limited /\n\n        auth-failed / bad-request) for 15m. Check the\n\n\
+    \        tenant-log-query dashboard — likely a REVOKED token (Lua\n\n        403),\
+    \ a tenant exceeding its rate limit, or a client hitting\n\n        the victorialogs-mode\
+    \ endpoint allowlist. NOTE: this counts\n\n        POST-JWT rejections only —\
+    \ an EXPIRED / bad-signature / wrong-\n\n        audience token 401s at jwt_authn\
+    \ BEFORE account_id is stamped,\n\n        so it is NOT counted here (attack noise;\
+    \ see jwt_authn stats,\n\n        per ADR-020).\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Log-query requests for account {{ $labels.account_id }} are mostly\
     \ rejected\n  - alert: TenantProjectionMappingErrors\n    expr: \"sum without\
     \ (instance, pod, host) (\\n  (\\n    vector_component_discarded_events_total{component_id=\\\

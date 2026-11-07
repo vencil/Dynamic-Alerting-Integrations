@@ -3083,6 +3083,9 @@ _PLATFORM_LOCAL_BY_SELECTOR: dict[str, str] = {
 # nightly matrix guards, where `*_EXTRA_SCANNED` emptied both sides at once).
 _EXPECTED_EDGE_LOCAL_ALERTS = frozenset({
     "VectorBufferEventsDropped",
+    # #1295: reads Vector's own sink counters like the buffer alert above —
+    # Vector runs on the edge, so its alerts route there as that one does.
+    "VectorStoreSinkDroppingEvents",
     "TenantProjectionMappingErrors",
     "TenantProjectionFanoutDiscardSpike",
     "VectorProjectionGateMismatch",
