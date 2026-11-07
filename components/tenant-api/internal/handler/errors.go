@@ -880,7 +880,10 @@ func generatorOpResult(tenantID string, err error) (BatchResult, bool) {
 	case errkind.GeneratorRejectedRetryable, errkind.GeneratorRejected:
 		var rej *generator.RejectedError
 		errors.As(err, &rej)
-		slog.Warn("batch op refused: the generator gave no verdict", "tenant", tenantID, "reason", rej.Reason, "error", err)
+		// #1560 ⑤-b: the reason code only — the container's message is free
+		// text the log must not carry (generatorRejectedText is the client's).
+		slog.Warn("batch op refused: the generator gave no verdict", "tenant", tenantID,
+			"reason", generator.ClientReason(rej.Reason))
 		msg = generatorRejectedText(rej)
 	default: // ValidatorUnavailable, PolicyUnavailable
 		var unav *generator.UnavailableError

@@ -176,7 +176,8 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 	case errkind.GeneratorRejectedRetryable, errkind.GeneratorRejected:
 		var rej *generator.RejectedError
 		errors.As(err, &rej)
-		slog.Warn("write refused: the generator gave no verdict", "reason", rej.Reason, "error", err)
+		// #1560 ⑤-b: the reason code only, never the container's message.
+		slog.Warn("write refused: the generator gave no verdict", "reason", generator.ClientReason(rej.Reason))
 		return generatorRejectedText(rej), map[string]any{"reason": generator.ClientReason(rej.Reason)}
 	case errkind.ValidatorUnavailable, errkind.PolicyUnavailable:
 		var unav *generator.UnavailableError

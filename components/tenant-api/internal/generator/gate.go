@@ -177,7 +177,8 @@ func findingsLogAttrs(base string, files int, v *Verdict) []any {
 // older than that decision: the container is unavailable (ADR-036 §3). A
 // verdict that did not complete refuses this write (keyVerdictReasons):
 // retryable when time ran out, otherwise not. The service's message is
-// logged, not passed on: it can carry a platform path or a program's
+// neither passed on nor logged (#1560 ⑤-b: the log keeps structured fields
+// only — keyVerdictLogReason); it can carry a platform path or a program's
 // stderr.
 func (g *Gate) refuseUnjudged(ctx context.Context, kv *KeyVerdict, base string, files int) error {
 	if kv == nil {
@@ -198,12 +199,22 @@ func (g *Gate) refuseUnjudged(ctx context.Context, kv *KeyVerdict, base string, 
 		return nil
 	}
 	slog.Info("generator: write refused, key verdict not completed", "base", base, "files", files,
-		"reason", kv.Reason, "message", kv.Message, "tenants", kv.Tenants, "seconds", kv.Seconds)
+		"reason", keyVerdictLogReason(kv.Reason), "tenants", kv.Tenants, "seconds", kv.Seconds)
 	r, ok := keyVerdictReasons[kv.Reason]
 	if !ok {
 		r = keyVerdictReasons["error"]
 	}
 	return g.reject(ctx, r.reason, r.message)
+}
+
+// keyVerdictLogReason is *reason* as the log may keep it (#1560 ⑤-b): a
+// reason keyVerdictReasons knows, else "unknown" — a closed vocabulary,
+// never the service's free text.
+func keyVerdictLogReason(reason string) string {
+	if _, ok := keyVerdictReasons[reason]; ok {
+		return reason
+	}
+	return ReasonUnknown
 }
 
 // keyVerdictReasons maps the generator's reason for a key verdict that did
@@ -228,14 +239,14 @@ var keyVerdictReasons = map[string]struct{ reason, message string }{
 // keyVerdict is a pass's key verdict for the Writer (ADR-038 decision 5):
 // kv as gitops has it, or a not_completed one with reason not_reported when
 // the service sent none — "not judged" is said, never left to look like
-// "nothing found". The service's message is logged, not passed on.
+// "nothing found". The service's message is neither passed on nor logged.
 func keyVerdict(kv *KeyVerdict, base string, files int) *gitops.KeyVerdict {
 	if kv == nil {
 		return &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: gitops.KeyVerdictNotReported}
 	}
 	if kv.Status != gitops.KeyVerdictComplete {
 		slog.Info("generator: key verdict not completed", "base", base, "files", files,
-			"reason", kv.Reason, "message", kv.Message, "tenants", kv.Tenants, "seconds", kv.Seconds)
+			"reason", keyVerdictLogReason(kv.Reason), "tenants", kv.Tenants, "seconds", kv.Seconds)
 		return &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: kv.Reason}
 	}
 	out := &gitops.KeyVerdict{Status: gitops.KeyVerdictComplete, Truncated: kv.Truncated,
