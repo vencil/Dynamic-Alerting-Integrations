@@ -121,7 +121,7 @@ groups:
 - **elasticsearch_exporter**: https://github.com/prometheus-community/elasticsearch_exporter
 - **oracledb_exporter**: https://github.com/iamseth/oracledb_exporter
 - **ibm_db2_exporter**: https://github.com/IBM/db2-prometheus-exporter (community)
-- **clickhouse_exporter**: https://github.com/ClickHouse/clickhouse_exporter (或 ClickHouse 內建 /metrics)
+- **ClickHouse 內建 /metrics**：沒有獨立 exporter（本 pack 讀的指標名不是 clickhouse_exporter 的）
 - **kafka_exporter**: https://github.com/danielqsj/kafka-exporter
 - **rabbitmq_exporter**: https://github.com/kbudde/rabbitmq_exporter
 - **kube-state-metrics**: https://github.com/kubernetes/kube-state-metrics

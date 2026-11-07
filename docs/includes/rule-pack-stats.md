@@ -3,7 +3,7 @@
 
 | 規則包 | Exporter | Recording | Alert |
 |--------|----------|-----------|-------|
-| clickhouse | clickhouse_exporter | 11 | 7 |
+| clickhouse | built-in /metrics | 11 | 7 |
 | db2 | db2_exporter | 13 | 8 |
 | elasticsearch | elasticsearch_exporter | 10 | 7 |
 | jvm | jmx_exporter | 9 | 7 |

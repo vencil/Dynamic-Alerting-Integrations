@@ -1,0 +1,100 @@
+# ============================================================
+# ClickHouse liveness (#3618, owner decision B′).
+#
+# ClickHouse serves /metrics itself (no separate exporter), so its target
+# being down IS the server being down, and TenantExporterAbsent
+# (rule-pack-liveness.yaml) is what pages for it. ClickHouseDown is a
+# one-release deprecation shim; before #3618 it read up{job="clickhouse"},
+# a job the shipped scrape config does not have, so it never fired.
+#
+# Two tenants are down at once — a ClickHouse one and a PostgreSQL one — both
+# scraped by the shipped job tenant-exporters:
+#   1m30s  nothing yet (the shim keeps its for: 2m).
+#   2m30s  ClickHouseDown (for: 2m) fires for the ClickHouse tenant ONLY;
+#          TenantExporterAbsent (for: 3m) not yet.
+#   3m30s  TenantExporterAbsent fires for BOTH tenants; the shim still fires.
+# Tenant ids are fixture-local placeholders.
+# ============================================================
+rule_files:
+  - ../../rule-packs/rule-pack-clickhouse.yaml
+  - ../../rule-packs/rule-pack-liveness.yaml
+
+evaluation_interval: 30s
+
+tests:
+  - interval: 30s
+    input_series:
+      - series: 'up{job="tenant-exporters", instance="t-ch", tenant="t-ch"}'
+        values: '0x10'
+      - series: 'up{job="tenant-exporters", instance="t-pg", tenant="t-pg"}'
+        values: '0x10'
+      - series: 'tenant_expected_exporter{tenant="t-ch", db_type="clickhouse"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{tenant="t-pg", db_type="postgresql"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: ClickHouseDown
+        exp_alerts: []
+      - eval_time: 2m30s
+        alertname: ClickHouseDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              job: tenant-exporters
+              instance: t-ch
+              tenant: t-ch
+            exp_annotations:
+              summary: "ClickHouse instance is DOWN"
+              summary_zh: "ClickHouse 實例已關閉"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 2m30s
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+      - eval_time: 3m30s
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              tenant: t-ch
+              db_type: clickhouse
+            exp_annotations:
+              summary: "Exporter absent for tenant t-ch (clickhouse)"
+              summary_zh: "租戶 t-ch (clickhouse) 的 exporter 缺席"
+              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t-ch (db_type=clickhouse) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t-ch (db_type=clickhouse) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              tenant: t-pg
+              db_type: postgresql
+            exp_annotations:
+              summary: "Exporter absent for tenant t-pg (postgresql)"
+              summary_zh: "租戶 t-pg (postgresql) 的 exporter 缺席"
+              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t-pg (db_type=postgresql) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t-pg (db_type=postgresql) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 3m30s
+        alertname: ClickHouseDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              job: tenant-exporters
+              instance: t-ch
+              tenant: t-ch
+            exp_annotations:
+              summary: "ClickHouse instance is DOWN"
+              summary_zh: "ClickHouse 實例已關閉"
+              runbook_url: ""
+              owner: ""
+              tier: ""
