@@ -2164,8 +2164,8 @@ func nonFiniteWrites(tenantID string, tcfg cfg.ThresholdConfig, carried []byte) 
 //     check runs in POST /{id}/validate so the dry-run and the write agree.
 //  2. Structural — run on the RAW body: it must be valid YAML and declare the
 //     target tenant. Kept separate from the merge so a body missing
-//     tenants.{id} is rejected outright rather than silently synthesised by
-//     MergeTenantWithRootDefaults' flat-KV fallback.
+//     tenants.{id} is rejected outright: the merge gives such a tenant
+//     nothing (#3504), which would read as an empty config, not an error.
 //  3. Key validation — the _defaults.yaml at configDir is merged in BEFORE
 //     ValidateTenantKeys, so a tenant-only body's metric keys resolve against
 //     the inherited platform defaults. Without this merge, ValidateTenantKeys
@@ -2381,9 +2381,7 @@ func keyChecks(configDir, yamlContent string, tcfg cfg.ThresholdConfig) cfg.KeyV
 		return kvCfg.ValidateTenantKeysByTenant()
 	}
 	// The parsed variant of MergeTenantWithRootDefaults (#708): the body is
-	// decoded above. The caller proved kvCfg.Tenants[tenantID] present, so
-	// the byte variant's flat-KV fallback — the only behavior the parsed
-	// sibling omits — is unreachable here.
+	// decoded above; the caller proved kvCfg.Tenants[tenantID] present.
 	merged := cfg.MergeParsedTenantWithRootDefaults(configDir, kvCfg)
 	return merged.ValidateTenantKeysByTenant()
 }
