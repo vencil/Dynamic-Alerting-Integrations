@@ -3138,12 +3138,20 @@ def test_a_pr_that_deletes_a_whole_tree_resolves_it_as_removed(tmp_path) -> None
 
 
 @needs_bash
-def test_a_pr_that_deletes_a_nested_tree_targets_the_outer_one(tmp_path) -> None:
+@pytest.mark.parametrize("added_elsewhere", [False, True],
+                         ids=["plain-delete", "identical-file-added-elsewhere"])
+def test_a_pr_that_deletes_a_nested_tree_targets_the_outer_one(
+        tmp_path, added_elsewhere) -> None:
     """#3694, end to end: the PR deletes `a/conf.d/b/conf.d` and leaves
     `a/conf.d`. The inner files were part of the outer tree, so the outer tree
     changed and must come out a `target` next to the inner `removed` row.
     After #3664 only the `removed` row came out, the workflow fell back to the
-    auto-detected tree, and the outer tree was neither validated nor named."""
+    auto-detected tree, and the outer tree was neither validated nor named.
+
+    `identical-file-added-elsewhere`: the same PR adds a `_defaults.yaml` with
+    the SAME content to another tree. Without `--no-renames` on both listings
+    git reports the pair as a rename — the deletion is in neither list, so no
+    `removed` row and no outer target come out at all (measured)."""
     chain, _env = _scope_pipeline()
     step = chain[-1]
     runner_temp = tmp_path / "runner-temp"
@@ -3165,6 +3173,11 @@ def test_a_pr_that_deletes_a_nested_tree_targets_the_outer_one(tmp_path) -> None
     _git(repo, "commit", "-qm", "base")
     _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
     _git(repo, "rm", "-q", "-r", "a/conf.d/b")
+    if added_elsewhere:
+        (repo / "kept" / "conf.d").mkdir(parents=True)
+        (repo / "kept" / "conf.d" / "_defaults.yaml").write_text(
+            "defaults:\n  cpu: 1\n", encoding="utf-8", newline="\n")
+        _git(repo, "add", "-A")
     _git(repo, "commit", "-qm", "pr removes only the inner tree")
     assert (repo / "a" / "conf.d").is_dir()
     assert not (repo / "a" / "conf.d" / "b").exists()
@@ -3177,8 +3190,10 @@ def test_a_pr_that_deletes_a_nested_tree_targets_the_outer_one(tmp_path) -> None
     })
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
     rows = (runner_temp / "guard-targets.tsv").read_text(encoding="utf-8").splitlines()
-    assert rows == ["target\ta/conf.d\t.", "removed\ta/conf.d/b/conf.d"], (
-        f"{rows}\n{proc.stdout}\n{proc.stderr}")
+    expected = ["target\ta/conf.d\t.", "removed\ta/conf.d/b/conf.d"]
+    if added_elsewhere:
+        expected.insert(1, "target\tkept/conf.d\t.")
+    assert rows == expected, f"{rows}\n{proc.stdout}\n{proc.stderr}"
 
 
 def test_the_scope_helper_is_told_that_its_input_is_nul_separated():
