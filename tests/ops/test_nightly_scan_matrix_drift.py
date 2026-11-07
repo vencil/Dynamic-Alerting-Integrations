@@ -4125,17 +4125,31 @@ def test_swallow_guard_catches_the_multiline_form() -> None:
     )
 
 
-def test_remediation_prose_states_no_finding_count() -> None:
-    """The nightly alert prose must not carry a per-image finding COUNT.
 
-    It is re-sent every night while the issue body beside it is regenerated, so a
-    count in the prose drifts the moment upstream publishes the next advisory —
-    measured: it said "mariadb's 15 findings" while #1243 listed 26 for mariadb.
-    Historical counts of a past triage ("cleared 58 of 120") are not per-image
-    current state and are not matched.
+# A count of findings/CVEs written into prose, in the shapes it takes in English.
+_FINDING_COUNT_RE = re.compile(
+    r"\b\d+\s+(?:[\w.'’-]+\s+){0,3}?(?:findings?|CVEs?|vulnerabilit(?:y|ies))\b"
+    r"|(?:findings?|CVEs?)\s*[:(]\s*\d+", re.IGNORECASE)
+
+
+def test_remediation_prose_states_no_finding_count() -> None:
+    """No `file_cve_report.sh` argument carries a finding COUNT.
+
+    The remediation text is re-sent every night while the issue body beside it
+    is regenerated, so a count in it drifts the moment upstream publishes the
+    next advisory — measured: it said "mariadb's 15 findings" while #1243 listed
+    27 for mariadb. Only the ARGUMENTS are read (workflow comments may keep a
+    dated record of a past triage), and a past triage's ratio ("cleared 58 of
+    120") names no finding word, so it is not matched.
     """
-    text = (Path(__file__).resolve().parents[2]
-            / ".github/workflows/nightly-image-scan.yaml").read_text(encoding="utf-8")
-    stale = re.findall(r"[A-Za-z][\w.-]*'s \d+ findings", text)
-    assert "gosu" in text, "anti-vacuity: the mariadb/gosu remediation prose moved"
-    assert not stale, f"per-image finding count(s) in the remediation prose: {stale}"
+    for shape in ("mariadb's 15 findings", "26 mariadb findings", "mariadb (26 findings)",
+                  "findings: 26", "the 26 gosu CVEs", "mariadb’s 1 finding",
+                  "mariadb's 26 HIGH findings"):
+        assert _FINDING_COUNT_RE.search(shape), f"self-test: {shape!r} not matched"
+    assert not _FINDING_COUNT_RE.search("#1243 cleared 58 of 120 this way")
+    args = [a for call in _report_calls() for a in call]
+    assert any("gosu" in a for a in args), (
+        "anti-vacuity: no report argument mentions gosu — the remediation prose "
+        "this guards moved or the call-site scan broke")
+    hits = sorted({m.group(0) for a in args for m in _FINDING_COUNT_RE.finditer(a)})
+    assert not hits, f"finding count(s) in the remediation arguments: {hits}"
