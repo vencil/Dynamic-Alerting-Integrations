@@ -3137,6 +3137,50 @@ def test_a_pr_that_deletes_a_whole_tree_resolves_it_as_removed(tmp_path) -> None
         f"{rows}\n{proc.stdout}\n{proc.stderr}")
 
 
+@needs_bash
+def test_a_pr_that_deletes_a_nested_tree_targets_the_outer_one(tmp_path) -> None:
+    """#3694, end to end: the PR deletes `a/conf.d/b/conf.d` and leaves
+    `a/conf.d`. The inner files were part of the outer tree, so the outer tree
+    changed and must come out a `target` next to the inner `removed` row.
+    After #3664 only the `removed` row came out, the workflow fell back to the
+    auto-detected tree, and the outer tree was neither validated nor named."""
+    chain, _env = _scope_pipeline()
+    step = chain[-1]
+    runner_temp = tmp_path / "runner-temp"
+    runner_temp.mkdir()
+    repo = tmp_path / "repo"
+    ops = repo / "scripts" / "ops"
+    ops.mkdir(parents=True)
+    for rel in ("scripts/ops/guard_defaults_scopes.py",
+                "scripts/tools/_lib_exitcodes.py", "scripts/tools/_lib_compat.py"):
+        (ops / Path(rel).name).write_bytes((ROOT / rel).read_bytes())
+    for tree in ("conf.d", "a/conf.d", "a/conf.d/b/conf.d"):
+        (repo / tree).mkdir(parents=True, exist_ok=True)
+        (repo / tree / "_defaults.yaml").write_text(
+            "defaults:\n  cpu: 1\n", encoding="utf-8", newline="\n")
+    _git(repo, "init", "-q", ".")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "base")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "rm", "-q", "-r", "a/conf.d/b")
+    _git(repo, "commit", "-qm", "pr removes only the inner tree")
+    assert (repo / "a" / "conf.d").is_dir()
+    assert not (repo / "a" / "conf.d" / "b").exists()
+
+    script = _render("\n".join(s.script for s in chain), {})
+    proc = _run(step, script, repo, {
+        "BASE_REF": "main",
+        "CONF_D": "conf.d",
+        "RUNNER_TEMP": str(runner_temp.as_posix()),
+    })
+    assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
+    rows = (runner_temp / "guard-targets.tsv").read_text(encoding="utf-8").splitlines()
+    assert rows == ["target\ta/conf.d\t.", "removed\ta/conf.d/b/conf.d"], (
+        f"{rows}\n{proc.stdout}\n{proc.stderr}")
+
+
 def test_the_scope_helper_is_told_that_its_input_is_nul_separated():
     """The producer's `-z` and the consumer's `--null` are one decision.
 
