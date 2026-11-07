@@ -34,12 +34,11 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import (  # noqa: E402
-    read_onboard_hints, detect_cli_lang, ensure_dir_or_die, write_text_or_die,
+    detect_cli_lang, ensure_dir_or_die, write_text_or_die,
     DOCS_INSTALL_URL, DOCS_SITE_BASE,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error  # noqa: E402
-from _lib_paths import classify_path  # noqa: E402  (#3415)
-from _lib_label import safe_label  # noqa: E402  (#3415)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+import _lib_input  # noqa: E402  (#3445: --from-onboard is read by the lib)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: the conf.d files go to da-guard write)
 
@@ -1455,25 +1454,21 @@ def run_non_interactive(args: argparse.Namespace) -> None:
     print("\n✅ 完成 (所有核心 Rule Packs (包含自我監控) 已透過 Projected Volume 預載於平台，無需額外掛載)")
 
 
+#: --from-onboard: onboard-hints.json, a JSON object (#3445).
+ONBOARD_HINTS_DOCUMENT = _lib_input.Document("json", dict)
+
+
 def run_from_onboard(args: argparse.Namespace) -> None:
     """Auto-scaffold tenants from onboard-hints.json.
 
     Reads hints produced by onboard_platform.py and generates config
     for each tenant with pre-filled DB types and routing hints.
     """
-    # #3415: a path that is missing, not a file, or cannot be opened is named
-    # by the shared judgement; a file that is not JSON is named too, not a
-    # JSONDecodeError traceback.
-    problem = classify_path(args.from_onboard, "file", lang=_LANG, flag="--from-onboard")
-    if problem is not None:
-        die_caller_error(f"ERROR: {problem.message}", problem.reason)
-    try:
-        hints = read_onboard_hints(args.from_onboard)
-    except (OSError, ValueError) as exc:
-        die_caller_error(f"ERROR: --from-onboard {safe_label(args.from_onboard)}: {exc}")
-    if not hints:
-        print(f"ERROR: Cannot read onboard hints: {args.from_onboard}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+    # #3415 / #3445: the path and the content judged by the lib — missing,
+    # not a file, not openable, not UTF-8, not JSON, not an object: rc 2,
+    # the flag and the path named (a top level that was no object was an
+    # AttributeError traceback).
+    hints = _lib_input.document(args, "from_onboard", lang=_LANG)
 
     tenants = hints.get("tenants", [])
     if not tenants:
@@ -1576,7 +1571,8 @@ def main() -> None:
     parser.add_argument("--routing-group-interval", help=_h('routing_group_interval'))
     parser.add_argument("--routing-repeat-interval", help=_h('routing_repeat_interval'))
     parser.add_argument("--profile", help=_h('profile'))
-    parser.add_argument("--from-onboard", help=_h('from_onboard'))
+    _lib_input.add_input(parser, "--from-onboard", decode=ONBOARD_HINTS_DOCUMENT,
+                         help=_h('from_onboard'))
     parser.add_argument("--generate-profile", help=_h('generate_profile'))
     parser.add_argument("--tier", choices=["prod", "staging"], default="prod",
                         help=_h('tier'))
