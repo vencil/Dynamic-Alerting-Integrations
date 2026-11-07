@@ -399,21 +399,40 @@ def _ownership_error(config_dir: Path, cr: dict) -> str:
     if own.is_symlink() or (own.exists() and not own.is_dir()):
         return (f"{name} in --config-dir is not a directory; the CR's files go in "
                 f"its own directory {name}/ (#3671). Rename the CR or move that path")
-    mine = {_output_filename(cr), _defaults_filename(cr)}
-    if own.is_dir():
-        for p in sorted(own.rglob("*")):
-            rel = p.relative_to(config_dir).as_posix()
-            if rel not in mine or _rendered_cr_name(p) != name:
-                return (f"{rel} was not rendered by this tool for CR {name}: a CR owns "
-                        f"its directory {name}/ whole (#3671), and a subtree "
-                        f"_defaults.yaml there applies to every tenant below it. Rename "
-                        f"the CR or move that directory; nothing was written")
+    foreign = _foreign_paths(config_dir, cr)
+    if foreign:
+        return (f"{', '.join(foreign)} not rendered by this tool for CR {name}: a CR "
+                f"owns its directory {name}/ whole (#3671), and a subtree "
+                f"_defaults.yaml there applies to every tenant below it. Rename "
+                f"the CR or move that directory; nothing was written")
     legacy = config_dir / _legacy_filename(cr)
     if (legacy.exists() or legacy.is_symlink()) and _rendered_cr_name(legacy) != name:
         return (f"{_legacy_filename(cr)} was not rendered by this tool for CR {name}, "
                 f"and the CR replaces the file an earlier version rendered there "
                 f"(#3671). Rename the CR or move that file; nothing was written")
     return ""
+
+
+def _foreign_paths(config_dir: Path, cr: dict) -> "list[str]":
+    """The config files under *cr*'s directory that are not its own
+    (`_ownership_error`), as --config-dir-relative paths in walk order.
+
+    The directory as the exporter's walk sees it — da-guard's list-only
+    walk, fresh on every call (the controller is long-running): its config
+    files are what a reader takes from it. A hidden or non-config name is
+    read by no reader, so it is no tenant's and not listed."""
+    name = _cr_name(cr)
+    own = config_dir / name
+    if own.is_symlink() or not own.is_dir():
+        return []
+    import _lib_parse_tree  # noqa: PLC0415
+    mine = {_output_filename(cr), _defaults_filename(cr)}
+    out = []
+    for e in _lib_parse_tree.list_tree(own).config_files():
+        rel = f"{name}/{e.path}"
+        if rel not in mine or _rendered_cr_name(own / e.path) != name:
+            out.append(rel)
+    return out
 
 
 def owned_paths(config_dir: Path, cr: dict) -> "list[str]":
