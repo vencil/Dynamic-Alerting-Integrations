@@ -183,7 +183,12 @@ def test_a_declared_input_file_is_read_only_by_lib_input(declared_documents, tmp
         case = tmp_path / f"doc-{n}"
         case.mkdir()
         sentinel = case / "sentinel"
-        sentinel.write_text(_ACCEPTED[(doc.fmt, top)], encoding="utf-8")
+        if doc.fmt == "csv":
+            # #3662: its declared header and one row the declaration accepts.
+            accepted = ",".join(doc.columns) + "\n" + _tables()._valid_csv_row(doc) + "\n"
+        else:
+            accepted = _ACCEPTED[(doc.fmt, top)]
+        sentinel.write_text(accepted, encoding="utf-8")
         subst = {**_subst(case), "{F}": str(sentinel)}
         args = []
         for a in argv:

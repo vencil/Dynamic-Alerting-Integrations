@@ -1288,6 +1288,23 @@ def _deep_cases(tops) -> "list[tuple[str, bytes]]":
 _TOPS = ((b"[]\n", list), (b"{}\n", dict), (b"1\n", int))
 
 
+#: #3662: what each csv case is refused FOR (`_lib_input._csv_records`).
+_CSV_SAYS = {"empty": "the header is not", "other_header": "the header is not",
+             "header_renamed": "the header is not", "header_reordered": "the header is not",
+             "header_only": "a header and no data row", "row_short": "fields, the header",
+             "csv_syntax": "not valid CSV", "form_": " is not "}
+
+
+def _valid_csv_row(doc, broken=None) -> str:
+    """A data row a csv `Document` *doc* accepts — "x" in a free column, a
+    value of its declared form in a formatted one — with the column
+    *broken* "x" instead."""
+    from datetime import datetime
+    forms = dict(doc.formats)
+    return ",".join("x" if col == broken or col not in forms
+                    else datetime(2026, 1, 1).strftime(forms[col]) for col in doc.columns)
+
+
 def _bad_contents(doc) -> "list[tuple[str, bytes]]":
     """(case, content) for a `Document` *doc*: what its reading must refuse."""
     cases = [("not_utf8", _NOT_UTF8)]
@@ -1297,6 +1314,29 @@ def _bad_contents(doc) -> "list[tuple[str, bytes]]":
         tops = doc.top if isinstance(doc.top, tuple) else (doc.top,)
         cases += _deep_cases(tops)
         cases += [(f"top_{kind.__name__}", raw) for raw, kind in _TOPS if kind not in tops]
+    if doc.fmt == "csv":
+        # #3662: derived from the declared header — a file that is not the
+        # report (no header, another header, one column short), a header
+        # with no data row, a row short of fields, and a quote left open.
+        # Each case breaks one rule only: the header cases keep the field
+        # count, so a row-length refusal cannot stand in for the header one.
+        header = ",".join(doc.columns).encode()
+        row = _valid_csv_row(doc).encode()
+        renamed = ",".join([*doc.columns[:-1], doc.columns[-1] + "X"]).encode()
+        reordered = ",".join(doc.columns[::-1]).encode()
+        cases += [("empty", b""),
+                  ("other_header", b",".join(b"c%d" % i for i in range(len(doc.columns)))
+                   + b"\n" + row + b"\n"),
+                  ("header_renamed", renamed + b"\n" + row + b"\n"),
+                  ("header_reordered", reordered + b"\n" + row + b"\n"),
+                  ("header_only", header + b"\n"),
+                  ("row_short", header + b"\n" + row[2:] + b"\n"),
+                  ("csv_syntax", header + b'\n"x\n')]
+        # each declared value form, broken in one column of an otherwise
+        # valid row
+        for col, _form in doc.formats:
+            cases.append((f"form_{col}", header + b"\n"
+                          + _valid_csv_row(doc, broken=col).encode() + b"\n"))
     return cases
 
 
@@ -1338,6 +1378,11 @@ def test_a_declared_document_refuses_content_it_cannot_read(tmp_path, declared_d
                 why.append("a crash")
             if f"{flag} {given}:" not in proc.stderr:
                 why.append("the flag and the path not named on stderr")
+            elif (says := _CSV_SAYS.get(case if not case.startswith("form_") else "form_")) \
+                    and says not in proc.stderr:
+                # a later check (a value the tool refuses) must not stand in
+                # for the header / row rule this case breaks
+                why.append(f"refused, but not for {says!r}")
             if "--json" in argv and proc.stdout != "":
                 why.append("a document on stdout")
             if why:
@@ -1350,20 +1395,30 @@ def test_a_declared_document_refuses_content_it_cannot_read(tmp_path, declared_d
 #: empty_is). The rows above prove each tool refuses what its declaration
 #: says; this proves the declaration is the judged one — a new file input,
 #: or a changed format or top level, is an edit here, reviewed.
+def _report_schema():
+    sys.path.insert(0, str(REPO / "scripts" / "tools"))
+    from _lib_shadow_report import REPORT_COLUMNS, REPORT_FORMATS
+    return REPORT_COLUMNS, REPORT_FORMATS
+
+
+#: #3662: the header (and the value forms) `--report-csv` must have are the
+#: report's one definition.
+_REPORT_COLUMNS, _REPORT_FORMATS = _report_schema()
+
 JUDGED_DOCUMENTS = {
-    "alert-correlate --input": ("json", (list, dict), None),
-    "analyze-gaps --metric-dictionary": ("yaml", dict, None),
-    "cutover --readiness-json": ("json", dict, None),
-    "fed-key --existing-jwks": ("json", dict, None),
-    "grafana-import --dashboard": ("json", dict, None),
-    "lint --policy": ("yaml", dict, dict),
-    "runtime-audit --runtime-json": ("json", dict, None),
-    "scaffold --from-onboard": ("json", dict, None),
-    "shadow-verify --mapping": ("yaml", dict, None),
-    "shadow-verify --readiness-json": ("json", dict, None),
-    "shadow-verify --report-csv": ("text", str, None),
-    "silencer-drift-check --silences-file": ("json", list, None),
-    "validate --mapping": ("yaml", dict, None),
+    "alert-correlate --input": ("json", (list, dict), None, (), ()),
+    "analyze-gaps --metric-dictionary": ("yaml", dict, None, (), ()),
+    "cutover --readiness-json": ("json", dict, None, (), ()),
+    "fed-key --existing-jwks": ("json", dict, None, (), ()),
+    "grafana-import --dashboard": ("json", dict, None, (), ()),
+    "lint --policy": ("yaml", dict, dict, (), ()),
+    "runtime-audit --runtime-json": ("json", dict, None, (), ()),
+    "scaffold --from-onboard": ("json", dict, None, (), ()),
+    "shadow-verify --mapping": ("yaml", dict, None, (), ()),
+    "shadow-verify --readiness-json": ("json", dict, None, (), ()),
+    "shadow-verify --report-csv": ("csv", list, None, _REPORT_COLUMNS, _REPORT_FORMATS),
+    "silencer-drift-check --silences-file": ("json", list, None, (), ()),
+    "validate --mapping": ("yaml", dict, None, (), ()),
 }
 
 

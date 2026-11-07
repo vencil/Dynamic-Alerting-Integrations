@@ -502,7 +502,7 @@ da-tools validate [--mapping <file> | --old <query> --new <query>] [options]
 
 **輸出**
 
-`<output-dir>/validation-report.csv`，各行為一個 rule 的比對結果（舊值、新值、差異百分比、收斂狀態）；摘要另印到 stdout。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
+`<output-dir>/validation-report.csv`，每個 rule 對每個租戶一列，欄位固定為 `Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp`（`Timestamp` 為 UTC；沒有任何比對結果時只寫表頭，這樣的檔 `shadow-verify --report-csv` 會拒收；`shadow-verify` 依同一份欄位定義讀，[#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)）；摘要另印到 stdout。⚠️ 沒有「輸出到單一檔案」的旗標——`--output <FILE>` 會被 argparse 當成 `--output-dir` 的縮寫，於是產生一個叫 `<FILE>` 的**目錄**。
 
 `--watch` 搭配 `--auto-detect-convergence` 時，額外在同一目錄寫入 `cutover-readiness.json` 供 `cutover` 命令使用（`--convergence-output <FILE>` 可改路徑）；單次模式（無 `--watch`）不會產出這個檔。
 
@@ -837,7 +837,7 @@ da-tools shadow-verify <phase> [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--mapping <FILE>` | prefix-mapping.yaml 路徑（preflight 用） | （無） |
-| `--report-csv <FILE>` | validation-report.csv 路徑（runtime/convergence 用） | （無） |
+| `--report-csv <FILE>` | `validate` 產出的 validation-report.csv 路徑（runtime/convergence 用）。表頭必須正好是 `validate` 寫出的那 9 欄（`Label,Tenant,Old Query,New Query,Old Value,New Value,Delta,Status,Timestamp`，同一份定義），至少一筆資料列，每列欄數相同、`Timestamp` 為 `YYYY-MM-DD HH:MM:SS`（UTC）；否則結束碼 2、點名旗標與路徑。⚠️ 先前空檔、只有表頭、別的工具的 CSV、欄位過多的列、時間格式錯都讀成「沒有 mismatch」，`runtime` 判 PASS、`convergence` 的 7 天檢查只給 warn，結束碼 0；欄位過少的列是 traceback（結束碼 2）（[#3662](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3662)） | （無） |
 | `--readiness-json <FILE>` | cutover-readiness.json 路徑（convergence 用） | （無） |
 | `--prometheus <URL>` | Prometheus Query API URL | `http://localhost:9090` |
 | `--alertmanager <URL>` | Alertmanager API URL。明確給了卻讀不到（連不上、回錯或回應格式不對）時 shadow 路由那一項 FAIL、結束碼 2；不給時讀預設值，讀不到照舊 skip（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。回應格式不對包含缺 `config` 或 `config.original`（AM v2 API 必填）：這種回答先前被當成空設定、報 warn「No migration_status matcher found」、結束碼 0 | `http://localhost:9093` |
@@ -866,7 +866,7 @@ da-tools shadow-verify all --mapping mapping.yaml --report-csv report.csv --json
 |------|------|
 | `0` | 所有檢查通過 |
 | `1` | 一項或多項檢查失敗 |
-| `2` | 呼叫端錯誤：`preflight`（含 `all`）或 `runtime`（含 `all`）的 Prometheus 連不上、查詢失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1）、`runtime`（含 `all`）的 `--report-csv` 解析不了（單獨跑 `convergence` 會略過這個錯誤），或 argparse 拒絕的參數。所選階段要讀的 `--mapping`（`preflight`）、`--report-csv`（`runtime`、`convergence`）、`--readiness-json`（`convergence`）不存在、不是一般檔、是 symlink 迴圈、打不開，或內容讀不了時，也是 2：任何階段執行之前就一次點名每一個——內容讀不了是指不是 UTF-8（三者皆然；`--report-csv` 先前是 traceback）、不是合法 YAML／JSON、頂層不是 mapping／物件（`--mapping` 空檔亦同：⚠️ 先前 `preflight` 讀成 0 組、PASS、結束碼 0，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)））。⚠️ **行為變更**（[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）：先前 `--mapping` 不存在列為 FAIL、結束碼 1；`--report-csv`／`--readiness-json` 不存在則略過該項分析，仍是 `Overall: PASS`、結束碼 0。沒給（含 `''`）的旗標照舊略過該項；所選階段不讀的旗標不判定。`runtime` 的維護／靜默模式查詢失敗先前不產生檢查項，結果是 `Overall: PASS`、結束碼 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。`--alertmanager` 明確給了卻讀不到（連不上、回錯或回應格式不對）也是 2；沒給時讀預設值，讀不到那一項仍是 skip |
+| `2` | 呼叫端錯誤：`preflight`（含 `all`）或 `runtime`（含 `all`）的 Prometheus 連不上、查詢失敗、回應格式不對或計數不是有限數字（該項檢查同樣列為 FAIL，但結束碼是 2 不是 1），或 argparse 拒絕的參數。所選階段要讀的 `--mapping`（`preflight`）、`--report-csv`（`runtime`、`convergence`）、`--readiness-json`（`convergence`）不存在、不是一般檔、是 symlink 迴圈、打不開，或內容讀不了時，也是 2：任何階段執行之前就一次點名每一個——內容讀不了是指不是 UTF-8（三者皆然；`--report-csv` 先前是 traceback）、不是合法 YAML／JSON／CSV、頂層不是 mapping／物件、`--report-csv` 不是 `validate` 的 report（見選項表）（`--mapping` 空檔亦同：⚠️ 先前 `preflight` 讀成 0 組、PASS、結束碼 0，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)））。⚠️ **行為變更**（[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）：先前 `--mapping` 不存在列為 FAIL、結束碼 1；`--report-csv`／`--readiness-json` 不存在則略過該項分析，仍是 `Overall: PASS`、結束碼 0。沒給（含 `''`）的旗標照舊略過該項；所選階段不讀的旗標不判定。`runtime` 的維護／靜默模式查詢失敗先前不產生檢查項，結果是 `Overall: PASS`、結束碼 0（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)）。`--alertmanager` 明確給了卻讀不到（連不上、回錯或回應格式不對）也是 2；沒給時讀預設值，讀不到那一項仍是 skip |
 
 ---
 

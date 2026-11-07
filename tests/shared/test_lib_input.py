@@ -488,3 +488,33 @@ def test_an_empty_is_that_is_not_a_declared_top_is_refused_at_declaration():
     with pytest.raises(ValueError):
         _lib_input.add_input(argparse.ArgumentParser(), "--f",
                              decode=_lib_input.Document("yaml", list, empty_is=dict))
+
+
+# ── #3662: a csv document ───────────────────────────────────────────────
+
+@pytest.mark.parametrize("doc", [
+    _lib_input.Document("csv", list),                      # no columns
+    _lib_input.Document("csv", dict, columns=("a",)),      # top is not list
+    _lib_input.Document("json", dict, columns=("a",)),     # columns on another format
+])
+def test_a_csv_declaration_needs_its_header_and_only_csv_has_one(doc):
+    with pytest.raises(ValueError):
+        _lib_input.add_input(argparse.ArgumentParser(), "--f", decode=doc)
+
+
+def test_a_csv_document_is_its_rows_against_the_declared_header(tmp_path):
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--f", decode=_lib_input.Document("csv", list, columns=("a", "b")))
+    f = tmp_path / "r.csv"
+    f.write_text("\ufeffa,b\n1,2\n\n3,4\n", encoding="utf-8")  # BOM, a blank line
+    assert _lib_input.document(p.parse_args(["--f", str(f)]), "f", lang="en") == [
+        {"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
+
+
+def test_a_csv_document_whose_records_end_in_a_bare_cr_is_read(tmp_path):
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--f", decode=_lib_input.Document("csv", list, columns=("a", "b")))
+    f = tmp_path / "r.csv"
+    f.write_bytes(b"a,b\r1,2\r")
+    assert _lib_input.document(p.parse_args(["--f", str(f)]), "f", lang="en") == [
+        {"a": "1", "b": "2"}]
