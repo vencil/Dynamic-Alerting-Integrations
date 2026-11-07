@@ -509,3 +509,12 @@ def test_a_csv_document_is_its_rows_against_the_declared_header(tmp_path):
     f.write_text("\ufeffa,b\n1,2\n\n3,4\n", encoding="utf-8")  # BOM, a blank line
     assert _lib_input.document(p.parse_args(["--f", str(f)]), "f", lang="en") == [
         {"a": "1", "b": "2"}, {"a": "3", "b": "4"}]
+
+
+def test_a_csv_document_whose_records_end_in_a_bare_cr_is_read(tmp_path):
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--f", decode=_lib_input.Document("csv", list, columns=("a", "b")))
+    f = tmp_path / "r.csv"
+    f.write_bytes(b"a,b\r1,2\r")
+    assert _lib_input.document(p.parse_args(["--f", str(f)]), "f", lang="en") == [
+        {"a": "1", "b": "2"}]

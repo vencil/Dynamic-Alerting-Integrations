@@ -216,7 +216,10 @@ def decode_bytes(raw: bytes, *, fmt: str, name: str) -> Any:
         return text
     if fmt == "csv":
         try:  # strict: a quote left open is an error, not a value that eats the file
-            return list(csv.reader(io.StringIO(text.removeprefix("\ufeff")), strict=True))
+            # newline=None: universal newlines (a report whose records end in a
+            # bare CR is read as the text-mode open read it, #3661 review)
+            return list(csv.reader(io.StringIO(text.removeprefix("\ufeff"), newline=None),
+                                   strict=True))
         except csv.Error as exc:
             raise DocumentError("csv", " ".join(str(exc).split()), exc) from exc
     if fmt == "json":
