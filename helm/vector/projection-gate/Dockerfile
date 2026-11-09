@@ -19,7 +19,7 @@
 # 3.23.6, not 3.23.5: .5 ships libcrypto3 3.5.7-r0 (CVE-2026-14456, fixed in
 # 3.5.8-r0 — the one finding #1278 lists for this image); .6 ships 3.5.8-r0.
 # (Earlier: .4 shipped libcrypto3 3.5.6-r0 + libexpat 2.8.1-r0.)
-FROM alpine:3.23.6
+FROM alpine:3.24.4
 # python3 + PyYAML (the gate parses the registry + projections YAML). py3-yaml is
 # the distro package, so the image carries no pip and no build toolchain.
 RUN apk add --no-cache python3 py3-yaml \

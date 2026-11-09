@@ -16,7 +16,7 @@
 # NB: when bumping this base tag, re-diff the stock /etc/nginx/nginx.conf
 # against components/da-portal/nginx-main.conf (self-carried main config —
 # must stay in lockstep; see that file's header).
-FROM nginx:1.30-alpine3.23
+FROM nginx:1.31-alpine3.23
 
 LABEL org.opencontainers.image.title="da-portal" \
       org.opencontainers.image.description="Dynamic Alerting Interactive Tools Portal" \

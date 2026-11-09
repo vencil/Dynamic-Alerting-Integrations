@@ -26,7 +26,7 @@
 # (nightly), component-docker-build.yaml (PR) and `make trivy-scan-all` (pre-tag).
 
 # 3.23.6: libcrypto3 3.5.8-r0 (CVE-2026-14456; 3.23.5 ships 3.5.7-r0), #1278.
-FROM alpine:3.23.6
+FROM alpine:3.24.4
 # logrotate from the Alpine repo. busybox already supplies sh + wget
 # (wget --post-data is enough to POST Envoy's admin /reopen_logs), so the
 # image carries no curl.
