@@ -25,7 +25,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: prometheus
-          image: prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2
+          image: prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -127,7 +127,7 @@ spec:
         # 份舊檔。改 prometheus.yml 仍必須重啟 Pod。故這裡只 watch rules 目錄，
         # 不 watch /etc/prometheus，避免暗示後者也會自動生效。
         - name: config-reloader
-          image: quay.io/prometheus-operator/prometheus-config-reloader:v0.94.2@sha256:a1897c67478bc23434534e91ad3855280771196b1daf17144db9dbcb655bef71
+          image: quay.io/prometheus-operator/prometheus-config-reloader:v0.95.1@sha256:39bdbade0c64f7c38bb6d18d6f602b14ad489bc189b709dc9266b49e6647aac1
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

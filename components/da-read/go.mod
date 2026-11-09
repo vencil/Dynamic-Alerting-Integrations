@@ -32,7 +32,7 @@ go 1.26.10
 require (
 	github.com/prometheus/alertmanager v0.34.2
 	github.com/prometheus/common v0.71.0
-	github.com/prometheus/prometheus v0.315.1
+	github.com/prometheus/prometheus v0.316.0
 	go.yaml.in/yaml/v2 v2.4.4
 	go.yaml.in/yaml/v3 v3.0.5
 	gopkg.in/yaml.v2 v2.4.0
