@@ -138,18 +138,18 @@ helm install da-portal helm/da-portal -n monitoring \
 
 #### Relay Token (legacy; removed by ADR-027 §5)
 
-When `portal.relayToken.enabled=true`, nginx reads the pod's audience-bound
-projected ServiceAccount token (`aud=tenant-api`, TTL 900s, kubelet-rotated)
-on every `/api/v1` request and presents it as `Authorization: Bearer` to
-tenant-api's machine-identity audit — da-portal becomes the third verified
-relay, after threshold-govern and recipe-preview (GHSA-3g2h-rf85-5rrv
-hardening series). Audit-only: user authorization still rides the
-oauth2-proxy `X-Forwarded-*` headers; a missing/unreadable token drops the
-header and never breaks the request.
+⚠ **Legacy — leave it off.** This option predates ADR-027 and is kept only
+until ADR-027 §5 removes da-portal's reverse proxy, taking the option with it.
+tenant-api no longer runs the machine-identity audit (#3628), so nothing reads
+the token any more.
 
-⚠ **Legacy**: this predates ADR-027. tenant-api no longer runs the
-machine-identity audit (#3628), so the token is presented to nothing; ADR-027
-§5 removes da-portal's reverse proxy, and this option goes with it.
+What it did: when `portal.relayToken.enabled=true`, nginx read the pod's
+audience-bound projected ServiceAccount token (`aud=tenant-api`, TTL 900s,
+kubelet-rotated) on every `/api/v1` request and presented it as
+`Authorization: Bearer` to tenant-api's machine-identity audit, which recorded
+da-portal as a verified relay (GHSA-3g2h-rf85-5rrv hardening series). It was
+audit-only: user authorization rode the oauth2-proxy `X-Forwarded-*` headers,
+and a missing/unreadable token dropped the header without breaking the request.
 
 ⚠ **Prerequisites**: the da-portal image must carry the njs main config
 (`portal/v2.10.0`+; older images fail loud at startup on `js_import`), and

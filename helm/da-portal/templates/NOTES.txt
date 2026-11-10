@@ -13,9 +13,8 @@ SECURITY (GHSA-3g2h-rf85-5rrv) — header-trust surface:
 {{- if .Values.portal.relayToken.enabled }}
 RELAY TOKEN (legacy; removed by ADR-027 §5): ENABLED — nginx presents the pod's
   audience-bound SA token (aud=tenant-api, TTL 900s, kubelet-rotated) as
-  Authorization: Bearer on every /api/v1 request; tenant-api's machine-identity
-  audit sees da-portal as its third verified relay. Audit-only: the token never
-  gates user authorization.
+  Authorization: Bearer on every /api/v1 request. It never gated user
+  authorization; it fed tenant-api's machine-identity audit, which is gone.
   ⚠ PREREQUISITE: needs the njs-enabled da-portal image (portal/v2.10.0+) —
   older images FAIL LOUD at startup (unknown directive "js_import"). Also
   requires the tenant-api chart >= 2.9.13 (da-portal admitted on the port-8080
@@ -23,15 +22,12 @@ RELAY TOKEN (legacy; removed by ADR-027 §5): ENABLED — nginx presents the pod
   If this was flipped on with an OLD image by mistake, flip back IMMEDIATELY —
   the ConfigMap mutates in place, so a container restart of the still-running
   old pod would also hit js_import and take the portal down.
-  Verify after flip: tenant-api's machine-identity audit should converge
-  no_token -> verified for this workload (audit-only success is otherwise
-  invisible; an unreadable token logs "relay token unreadable" in the nginx
-  error log and still degrades to no_token).
+  Nothing reads the token any more: tenant-api dropped its machine-identity
+  audit (#3628), and ADR-027 §5 removes this option with the reverse proxy.
+  Leave it off.
 {{- else }}
-RELAY TOKEN (legacy; removed by ADR-027 §5): disabled — /api/v1 requests carry no machine
-  identity, so tenant-api's port-8080 audit records this plane as no_token.
-  Flip portal.relayToken.enabled=true once the portal image line is
-  portal/v2.10.0+ AND the tenant-api chart is >= 2.9.13.
+RELAY TOKEN (legacy; removed by ADR-027 §5): disabled — leave it off. tenant-api
+  no longer audits machine identity (#3628), so nothing reads the token.
 {{- end }}
 
 NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some managed
