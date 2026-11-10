@@ -267,9 +267,20 @@ if not _REGISTRY_METADATA_FIELDS or "value" not in registry_lib._FIELD_ORDER:
 class _DimensionalKey(str):
     """A registry key read from a dimensional spelling (`container_cpu{version="v3"}`):
     equal to its base everywhere, but carries the fact that its value applies
-    to one selector only. Tier ordering compares plain keys alone (#3658): the
-    base and its `_critical` key written with different selectors are not one
-    pair, and two selectors of one base would otherwise overwrite each other."""
+    to one selector only (#3658). The exporter serves the `_critical` tier
+    without dimensions, so a plain `<base>_critical` is the critical tier of
+    every selector of the base: a dimensional WARNING value is compared with
+    it; a dimensional `_critical` spelling is not served and pairs with
+    nothing, and a dimensional `"N:critical"` value is a critical row itself
+    (``critical`` set), not a warning."""
+
+    critical = False
+
+
+def _dimensional(base: str, node) -> "_DimensionalKey":
+    key = _DimensionalKey(base)
+    key.critical = isinstance(node, str) and node.strip().lower().endswith(":critical")
+    return key
 
 
 def _walk_literals(node, key_of_interest: str | None = None):
@@ -297,6 +308,8 @@ def _walk_literals(node, key_of_interest: str | None = None):
     elif isinstance(node, list):
         for item in node:
             yield from _walk_literals(item, key_of_interest)
+    elif isinstance(key_of_interest, _DimensionalKey):
+        yield _dimensional(str(key_of_interest), node), node
     elif key_of_interest is not None:
         yield key_of_interest, node
 
@@ -570,6 +583,8 @@ def run_check(
 
     # 2. Value-in-domain.
     per_surface: dict[str, dict[str, float]] = {}
+    # surface -> base -> dimensional warning values (a plain critical holds for them)
+    dim_warnings: dict[str, dict[str, list[float]]] = {}
     unreadable: list[tuple[str, str]] = []
     exempted: list[tuple[str, str]] = []
     collected = _collect(root, unreadable, exempted)
@@ -583,8 +598,12 @@ def run_check(
         msg = _domain_error(dimension, unit, value)
         if msg:
             errors.append(f"OUT-OF-DOMAIN: {surface}: {key} = {value:g} — {msg}")
-        if is_threshold and not isinstance(key, _DimensionalKey):
+        if not is_threshold:
+            continue
+        if not isinstance(key, _DimensionalKey):
             per_surface.setdefault(surface, {})[key] = value
+        elif not key.critical and not spec[key].get("critical_of"):
+            dim_warnings.setdefault(surface, {}).setdefault(str(key), []).append(value)
 
     # 3. Tier ordering. The registry knows which key is the critical tier of
     #    which (`critical_of`), so an inverted pair is mechanically detectable.
@@ -592,8 +611,9 @@ def run_check(
     #    warning the critical arm fires first or together, and ADR-001's
     #    severity-dedup (shared `metric_group`) then suppresses the warning
     #    permanently — the warning tier becomes dead config that still reads
-    #    like protection. Plain keys only: a dimensional spelling holds for one
-    #    selector, so it pairs with no other spelling (_DimensionalKey, #3658).
+    #    like protection. A dimensional warning value is held to the plain
+    #    critical tier too: that tier is served for every selector of the base
+    #    (_DimensionalKey, #3658).
     for surface, values in sorted(per_surface.items()):
         for key, value in sorted(values.items()):
             base = spec[key].get("critical_of")
@@ -606,6 +626,16 @@ def run_check(
                     "first or together, and severity-dedup then suppresses the "
                     "warning permanently."
                 )
+        for key, value in sorted(values.items()):
+            base = spec[key].get("critical_of")
+            for warn in sorted(set(dim_warnings.get(surface, {}).get(base or "", []))):
+                if value <= warn:
+                    errors.append(
+                        f"TIER-INVERSION: {surface}: {key} = {value:g} is not above a "
+                        f"dimensional warning of {base} = {warn:g} — the critical tier "
+                        "is served for every selector of the base, so for that "
+                        "selector the critical arm fires first or together."
+                    )
 
     return {"errors": sorted(set(errors)), "exempted": exempted}
 

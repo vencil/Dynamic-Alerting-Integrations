@@ -350,6 +350,7 @@ def test_tier_classification():
     'tenant:alert_threshold:k{severity=~"crit.*"}',
     '{__name__="tenant:alert_threshold:k"}',
     'custom:alert_threshold:k',
+    'tenant_version:alert_threshold:k{severity="\\x63ritical"}',
 ])
 def test_unjudged_reference_fails_closed(expr):
     doc = _clean_doc()
@@ -456,3 +457,14 @@ def test_a_record_in_a_cycle_is_named_as_an_undeclared_reader():
     ])
     joined = _one_error(_run(doc), "UNDECLARED-CRITICAL-TIER")
     assert "record 'r:b'" in joined, joined
+
+
+@pytest.mark.parametrize("which", ["a-form", "b-form"])
+def test_a_critical_record_with_other_labels_is_not_a_twin(which):
+    """#3658 review: a record's `labels:` rewrites its series; a critical record
+    that sets `tenant` (or anything) the warning record does not is no twin."""
+    doc = _clean_doc()
+    name = ("tenant:alert_threshold:foo_load_critical" if which == "a-form"
+            else "rp_foo:cpu_critical:core")
+    _find(doc, name)["labels"] = {"tenant": "other"}
+    _one_error(_run(doc), "NOT-A-TWIN", "labels")

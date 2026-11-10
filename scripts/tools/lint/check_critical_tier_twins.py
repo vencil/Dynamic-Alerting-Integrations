@@ -51,7 +51,7 @@ CHECKS (rule packs = the tenant packs, `_lib_consumer_read.tenant_rule_pack_file
 
 FAIL-CLOSED: a threshold reference this gate cannot judge — a selector whose
 matchers it cannot parse, a `severity` matcher with an operator other than
-`=`, a string or a name with `alert_threshold:` in another shape — is an
+`=` or an escape in its value, a string or a name with `alert_threshold:` in another shape — is an
 error, never a silent pass.
 
 A threshold record that keeps `severity` as a dimension (no `severity`
@@ -267,6 +267,10 @@ def threshold_reads(tokens: list[tuple[str, str]]) -> list[Read]:
                 if op not in ("=", "!=", "=~", "!~"):
                     raise Unjudged(f"cannot parse the matchers of {text!r}")
                 if label == "severity":
+                    if "\\" in value:
+                        raise Unjudged(
+                            f"{text!r} has a severity matcher with an escape "
+                            f"({value!r}) — PromQL decodes it; write the value plainly")
                     if op != "=":
                         raise Unjudged(
                             f"{text!r} has a severity matcher with {op!r} — only "
@@ -418,6 +422,10 @@ def _record_shape_problems(ix: Index, file: str, prefix: str, base: str) -> list
     if ix.tokens[id(c_rec)] != want:
         return [f"record {c_name!r} is not record {w_name!r} with severity=\"warning\" -> "
                 f"severity=\"critical\" — write its expr as exactly that"]
+    if c_rec.labels != w_rec.labels:
+        return [f"record {c_name!r} sets labels {c_rec.labels!r}, record {w_name!r} sets "
+                f"{w_rec.labels!r} — a record's labels rewrite its series (a `tenant` "
+                "there breaks the join); give both the same labels"]
     return []
 
 
@@ -488,6 +496,9 @@ def _expr_problems(ix: Index, w: Rule, c: Rule, base: str) -> list[str]:
                 probs.append(f"expr: record {rc.name!r} is not record {rw.name!r} with "
                              f"severity=\"warning\" -> severity=\"critical\" on the "
                              f"selectors reading {base!r} — write it as exactly that")
+            elif rc.labels != rw.labels:
+                probs.append(f"labels: record {rc.name!r} sets {rc.labels!r}, record "
+                             f"{rw.name!r} sets {rw.labels!r} — give both the same labels")
             continue
         probs.append(f"expr: token {k} is {_fmt(a)!s} in {w.name!r} but {_fmt(b)!s} in "
                      f"{c.name!r} — only the threshold token for {base!r} (or a record "
