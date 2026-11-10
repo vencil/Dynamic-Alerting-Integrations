@@ -23,7 +23,7 @@ import (
 
 // gateBatchOp runs the per-op access gate shared by the tenant and group batch
 // execution loops: tenant-id validation followed by the org-scoped write
-// permission check (ADR-027 / LD-6 P4b), resolved at execution time. It returns
+// permission check (ADR-027 §7), resolved at execution time. It returns
 // the error BatchResult and true when the op is rejected — the caller should
 // append it and `continue` — or a zero BatchResult and false when the op passes
 // and execution should proceed.

@@ -1078,7 +1078,7 @@ definitions:
           type: string
         description: |-
           Claims are the named verified claims carried by the request principal
-          (ADR-027 / LD-6 P2; injected per the oauth2-proxy config). omitempty:
+          (ADR-027 §7; injected per the oauth2-proxy config). omitempty:
           with no claim axes declared (nil map) the key is absent, keeping the
           zero-config response body byte-identical to pre-P2. Go serialises map
           keys sorted, so the rendering is deterministic.
@@ -1092,7 +1092,7 @@ definitions:
       org_claim_keys:
         description: |-
           OrgClaimKeys are the org-scope claim keys of the rules THIS caller
-          matches (ADR-027 / LD-6 P7) — a caller-relative fact ("which of my
+          matches (ADR-027 §7) — a caller-relative fact ("which of my
           claims act as an org axis for me"), NOT "does the platform run an org
           axis". Intersected with the principal's present claims by construction:
           the redacted reverse report strips claim keys as customer-recognizable

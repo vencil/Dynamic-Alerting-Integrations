@@ -61,7 +61,7 @@ func ListGroups(d *Deps) http.HandlerFunc {
 }
 
 // hasAccessibleMember returns true if the user can access at least one member.
-// Org-aware read (ADR-027 / LD-6 P4c): each member tenant is checked through
+// Org-aware read (ADR-027 §7): each member tenant is checked through
 // OrgAllowedRead, so a group with only other-org members is hidden from an
 // org-scoped caller (records on axis="org"). tenantOrg
 // may be nil (nil-receiver-safe → unlabeled).

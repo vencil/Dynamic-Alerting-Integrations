@@ -668,6 +668,7 @@ jobs:
           pre-commit run doc-map-check --all-files
           pre-commit run rule-pack-stats-check --all-files
           pre-commit run byo-rulepack-table-check --all-files
+          pre-commit run adr-section-refs --all-files
           # #1495: the documented `docker run` examples are a customer's first
           # contact with the tool. Listed here because this job runs the hooks
           # BY NAME — a hook that is only in .pre-commit-config.yaml has no CI

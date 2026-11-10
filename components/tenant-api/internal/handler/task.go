@@ -115,7 +115,7 @@ func submitTask(w http.ResponseWriter, r *http.Request, d *Deps, taskID string, 
 
 // filterTaskResults returns the subset of results visible to the
 // caller. Open-mode RBAC (no _rbac.yaml) returns the input as-is
-// (OrgAllowedRead short-circuits). Org-aware read (ADR-027 / LD-6 P4c):
+// (OrgAllowedRead short-circuits). Org-aware read (ADR-027 §7):
 // mirrors filterAccessibleMembers / filterAccessiblePRs via the shared
 // filterByRBAC generic. tenantOrg may be nil (nil-receiver-safe → unlabeled).
 func filterTaskResults(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, results []async.TaskResult) []async.TaskResult {

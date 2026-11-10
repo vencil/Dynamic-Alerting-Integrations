@@ -1,6 +1,6 @@
 package handler
 
-// ADR-027 / LD-6 P4c — read/visibility-plane org-scope harness.
+// ADR-027 §7 — read/visibility-plane org-scope harness.
 //
 // P4c closes the read-only IDOR/enumeration-oracle: a caller who knows another
 // org's tenant id could GET /api/v1/tenants/{id} (and /diff, /validate,

@@ -140,6 +140,7 @@ lang: zh
 | `check_account_registry_monotonic.py` | guard _account_registry.yaml's |
 | `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
 | `check_admin_config_schema.py` | validate tenant-api admin meta-config YAML against JSON Schemas. |
+| `check_adr_section_refs.py` | an ADR section reference must name a section that exists. |
 | `check_bat_ascii_purity.py` | - L1 guard for pitfall #45 (CJK-in-.bat). |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
 | `check_bilingual_content.py` | 雙語內容一致性 lint |

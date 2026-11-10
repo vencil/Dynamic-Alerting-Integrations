@@ -257,7 +257,7 @@ func TestWritePlaneAllowedCallsConfinedToAllowlist(t *testing.T) {
 
 	if len(violations) > 0 {
 		t.Errorf("org-blind rbac Allowed call in production code outside the sanctioned sites "+
-			"(ADR-027 / LD-6 P4b — the scope axes are invisible to Allowed, so a write gate here "+
+			"(ADR-027 §7 — the scope axes are invisible to Allowed, so a write gate here "+
 			"silently ignores org and environment/domain restrictions):\n  %s\n"+
 			"Fix: per-tenant WRITE/ADMIN decisions must use handler.OrgAllowed / rbac.AllowedInOrg; "+
 			"platform-level gates must pass the literal \"*\" as the tenant argument; a genuine "+

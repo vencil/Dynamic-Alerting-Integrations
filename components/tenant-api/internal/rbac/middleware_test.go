@@ -197,7 +197,7 @@ func TestMiddleware_EmptyGroups(t *testing.T) {
 	}
 }
 
-// --- claims seam attachment (ADR-027 / LD-6 P2) ---
+// --- claims seam attachment (ADR-027 §7) ---
 // A claim-configured Manager (SetClaimHeaders) must attach a principal whose
 // Claims are populated, while the legacy accessors (RequestEmail /
 // RequestGroups) stay byte-identical — the seam is additive, exactly like the
