@@ -20,6 +20,7 @@ definitions:
     - GROUP_ID_UNAVAILABLE
     - UPSTREAM_ERROR
     - NOT_IMPLEMENTED
+    - SIMULATE_NOT_PROVIDED
     - FORGE_UNAVAILABLE
     - FORGE_FORBIDDEN
     - WRITE_OVERLOADED
@@ -65,6 +66,7 @@ definitions:
     - GroupIDUnavailable
     - Upstream
     - NotImplemented
+    - SimulateNotProvided
     - ForgeUnavailable
     - ForgeForbidden
     - WriteOverloaded
@@ -3514,6 +3516,22 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Search tenants
+      tags:
+      - tenants
+  /api/v1/tenants/simulate:
+    post:
+      description: 'Simulate preview (merging a tenant.yaml with defaults) is threshold-exporter''s
+        endpoint, which this deployment does not offer. Always 501 SIMULATE_NOT_PROVIDED;
+        the portal widget shows "not provided" on it. Only POST: other methods on
+        this path address a tenant named simulate.'
+      produces:
+      - application/json
+      responses:
+        "501":
+          description: code SIMULATE_NOT_PROVIDED, always
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Simulate preview is not provided
       tags:
       - tenants
   /api/v1/views:

@@ -1114,6 +1114,26 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/v1/tenants/simulate": {
+            "post": {
+                "description": "Simulate preview (merging a tenant.yaml with defaults) is threshold-exporter's endpoint, which this deployment does not offer. Always 501 SIMULATE_NOT_PROVIDED; the portal widget shows \"not provided\" on it. Only POST: other methods on this path address a tenant named simulate.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Simulate preview is not provided",
+                "responses": {
+                    "501": {
+                        "description": "code SIMULATE_NOT_PROVIDED, always",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tenants/{id}": {
             "get": {
                 "description": "Returns the raw YAML and resolved thresholds for a single tenant.\nmanaged_by says who changes the tenant (#3064). \"api\": its conf.d file (located by its name) is API-shaped —\none YAML document declaring only this tenant (or none yet), with no anchor, alias, merge key (\u003c\u003c) or tagged\nkey at the top level or directly under tenants: — so raw_yaml, source_hash and custom_alerts are that\ntenant's alone. \"git\": any other file (shared with other tenants, a name that is not the declared id, several\ndocuments, YAML indirection where tenants are declared, not YAML), with git_managed_reason; the answer is the\neffective view only — resolved_thresholds and validation_warnings / validation_notices, or config_error —\nand raw_yaml, source_hash and custom_alerts are ABSENT, for every caller. Every write to such a tenant is\nrefused with 409 TENANT_GIT_MANAGED; change it in git.\nWhen an API-managed tenant's file cannot be loaded as a tenant config, the answer is still 200 with raw_yaml\nand source_hash, plus ` + "`" + `config_error` + "`" + ` (invalid_config, as on the list row); threshold-exporter skips such a\nfile, so resolved_thresholds, custom_alerts and the validation fields are absent (not empty: the file's\ncontent is not vouched for). Partial writes refuse such a file (409 TENANT_CONFIG_NOT_LOADABLE) until it is\nrepaired; a whole-file PUT can replace it. When the end-of-life check cannot decode the current file's\ntenants: block, that PUT requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] granting\nwrite and no org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused\nwith 400, file unchanged — fix it in git then. When the file's environment/domain labels cannot be read\neither (it does not parse, or its _metadata does not decode), only a platform administrator (such a rule\ngranting admin) may replace it, others get 403 (ADR-027 §7); when allowed, its end-of-life recipe usage counts as none, so\na body with an end-of-life recipe is refused. A file that exists but cannot be read at all (permissions, I/O,\na directory) refuses the write.\nA caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by\n\"\u003cmasked: write permission required\u003e\" and comments removed, custom_alerts masked the same way and\nsource_hash empty (masked: true);\nor raw_yaml, custom_alerts and source_hash empty with raw_yaml_withheld: true when the file uses an anchor or alias\n(inside the tenant's own section: anywhere else makes the tenant git-managed).\ndeclared_elsewhere (#3172), on every 200 shape: true when, in the tree this server reads now, a conf.d file\nother than the tenant's own declares the tenant id — the condition of 409 TENANT_DECLARED_ELSEWHERE, judged\nas /diff judges it. Not a promise of a write's answer: a write can be refused earlier for another reason, and\na PR-mode write judges the latest base branch. When the tenant's own file declares the id too (a duplicate),\nthreshold-exporter keeps the whole tree on its last good load; when only the other file declares it, the\nexporter loads it from there. It names no file and no other tenant. Absent (not false) when the conf.d walk\nbehind it could not run.",
@@ -2030,6 +2050,7 @@ const docTemplate = `{
                 "GROUP_ID_UNAVAILABLE",
                 "UPSTREAM_ERROR",
                 "NOT_IMPLEMENTED",
+                "SIMULATE_NOT_PROVIDED",
                 "FORGE_UNAVAILABLE",
                 "FORGE_FORBIDDEN",
                 "WRITE_OVERLOADED",
@@ -2075,6 +2096,7 @@ const docTemplate = `{
                 "GroupIDUnavailable",
                 "Upstream",
                 "NotImplemented",
+                "SimulateNotProvided",
                 "ForgeUnavailable",
                 "ForgeForbidden",
                 "WriteOverloaded",

@@ -85,6 +85,8 @@ var writeRouteManifest = map[string]string{
 		" — site #9: PermAdmin on path {id}, same bar as token issuance",
 	"POST /api/v1/tenants/batch": gateHelperFunnel +
 		" — sites #3/#4: PR-mode pre-validation inline OrgAllowed + executeBatchOps (sync/async, orgs resolved at execution time)",
+	"POST /api/v1/tenants/simulate": gateReadOp +
+		" — answers a fixed 501 SIMULATE_NOT_PROVIDED to any signed-in caller (ADR-027 §5); reads and writes nothing",
 	"POST /api/v1/tenants/{id}/diff": gateReadOp +
 		" — diff preview only; route middleware enforces PermRead on {id}; commits nothing",
 	"POST /api/v1/tenants/{id}/validate": gateReadOp +
