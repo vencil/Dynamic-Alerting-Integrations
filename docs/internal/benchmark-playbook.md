@@ -289,7 +289,7 @@ gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integr
 - **`go test -list` 自己失敗（樹編不過、或 regex 語法非法）會被單獨報成「建置或 regex 語法問題」並附原文**，不會被收斂成「選不到 benchmark」。⛔ 這是自審時實測補的：初版把兩者都變成 `sel=0`，於是一個編不過的樹會把人送去改 regex，而真正的問題在別處——fail-closed 沒錯，但**診斷指向錯的地方**。
 - ⛔ **目前真正在發揮作用的是「第一分鐘印出預估 + warning」**：實測最多 41 支 ⇒ 預估上限 84 分 < 預算 100 分，所以那條硬擋**現在打不到**，它是給 benchmark 數量成長之後用的後備。（寫出來是因為「宣稱有一道擋著、實際上打不到」比沒有那道更糟。）
 
-⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) `(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
+⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) **只在參考是夜跑的釘死參考時**：`(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（其他參考下沒有這道對照，只剩 canary；見下方「參考版本與夜跑解耦」）（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
 
 ⚠️ **overlay 的已知弱點與它的守衛。** `*bench_test.go` 由 `find` **推導**（新增／改名／刪除自動跟上），但 helper 檔是一份**列舉**（`overlay_helpers` 輸入），而列舉錯了的失效模式本來是**靜默的**：漏掉的 helper 會綁到參考版本的版本，`W` 就變成混血樹而畫面上看不出來。
 

@@ -3854,7 +3854,8 @@ WORKFLOW_PATHS_PENDING: dict[tuple[str, str], str] = {}
 # claim stops holding, `..._is_still_needed` when the pair becomes covered
 # (the entry would then excuse a regression of the same pair). Both red.
 # (bench-workload-effect.yaml's two entries left in #2348: its self-test now
-# uses the PR's merge base as the reference, builds, and runs both scripts,
+# uses the merge commit's first parent (main's tip) as the reference, builds,
+# and runs both scripts,
 # so they are in its `on.pull_request.paths` instead.)
 # ⚠️ bench-gate-pr.yaml documents a future FLIP that drops its pull_request
 # block; the "workflow" entries naming it then turn red, correctly.
