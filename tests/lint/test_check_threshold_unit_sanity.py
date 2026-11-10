@@ -424,6 +424,55 @@ def test_equal_tiers_are_flagged(tmp_path):
     assert any("TIER-INVERSION" in e for e in errs), errs
 
 
+def test_dimensional_spellings_are_no_tier_pair(tmp_path):
+    """#3658: `k{version="v9"}` and `k_critical{version="v3"}` select disjoint
+    series — not one pair, so no TIER-INVERSION. The values are still
+    domain-checked (test_dimensional_key_resolves_to_its_base)."""
+    _conf_d(tmp_path, {"tenants": {"t": {'k{version="v9"}': "99",
+                                         'k_critical{version="v3"}': "98"}}})
+    errs = _errors(_registry(
+        k=_spec(80, "count"),
+        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+    ), tmp_path)
+    assert not any("TIER-INVERSION" in e for e in errs), errs
+
+
+def test_a_dimensional_spelling_does_not_mask_the_plain_pair(tmp_path):
+    """#3658: a later dimensional spelling of the base used to overwrite the
+    plain value, hiding an inversion of the plain pair."""
+    _conf_d(tmp_path, {"tenants": {"t": {"k": "99", "k_critical": "98",
+                                         'k{pod="zzz"}': "50"}}})
+    errs = _errors(_registry(
+        k=_spec(80, "count"),
+        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+    ), tmp_path)
+    assert any("TIER-INVERSION" in e for e in errs), errs
+
+
+def test_a_dimensional_warning_is_held_to_the_plain_critical(tmp_path):
+    """#3658 review: the critical tier is served without dimensions, so a
+    plain `k_critical` is the critical tier of `k{version="v2"}` too."""
+    _conf_d(tmp_path, {"tenants": {"t": {"k": "80", "k_critical": "95",
+                                         'k{version="v2"}': "99"}}})
+    errs = _errors(_registry(
+        k=_spec(80, "count"),
+        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+    ), tmp_path)
+    assert any("TIER-INVERSION" in e and "dimensional warning" in e for e in errs), errs
+
+
+def test_a_dimensional_critical_value_is_no_warning(tmp_path):
+    """`k{instance="x"}: "500:critical"` is a critical row itself, not a
+    warning the plain critical must exceed."""
+    _conf_d(tmp_path, {"tenants": {"t": {"k": "80", "k_critical": "95",
+                                         'k{instance="x"}': "500:critical"}}})
+    errs = _errors(_registry(
+        k=_spec(80, "count"),
+        k_critical=_spec(120, "count", tier="optional_overrides", critical_of="k"),
+    ), tmp_path)
+    assert not any("TIER-INVERSION" in e for e in errs), errs
+
+
 def test_percentiles_do_not_feed_tier_ordering(tmp_path):
     """REGRESSION: p50/p95/p99 are OBSERVATIONS — a critical key legitimately
     shares its base key's distribution, and that is not an inversion."""
