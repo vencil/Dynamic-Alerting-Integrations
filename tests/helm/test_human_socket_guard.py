@@ -8,7 +8,7 @@ This test guards the Helm surface of that:
   * static (no helm needed) — the socket path is a chart constant
     (tenant-api.humanSocketPath; ADR-027 §6 removed the humanSocket key, which
     test_tenant_api_machine_identity_removed.py guards), and the oauth2-proxy
-    config's upstream is the socket and nothing else;
+    config's api upstream is the socket (the other is the portal container);
   * render (helm-gated) — the default render points oauth2-proxy at unix:// and
     mounts the socket volume into BOTH containers with NO per-container
     runAsUser (uid alignment); turning oauth2Proxy off fails the render instead
@@ -121,8 +121,10 @@ def test_render_default_points_upstream_at_socket(repo_root: Path):
     res = _helm_template(repo_root)
     assert res.returncode == 0, f"enabled render must succeed: {res.stderr}"
     out = res.stdout
-    assert _upstream_uris(out) == ["unix:///run/ta-human/human.sock"], (
-        "enabled render must point oauth2-proxy at the unix socket"
+    # ADR-027 §10: /api/ → the socket; / → the portal container on loopback
+    # (test_tenant_api_portal_container.py).
+    assert _upstream_uris(out) == ["unix:///run/ta-human/human.sock", "http://127.0.0.1:8081"], (
+        "enabled render must point oauth2-proxy's api upstream at the unix socket"
     )
     assert "http://localhost:8080" not in out, (
         "enabled render must NOT leave the http upstream behind (else both would render)"
