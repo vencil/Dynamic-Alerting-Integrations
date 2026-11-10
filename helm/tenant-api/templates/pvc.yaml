@@ -1,4 +1,4 @@
-{{- if eq .Values.confDir.type "pvc" }}
+{{- if and (eq .Values.confDir.type "pvc") (not .Values.confDir.pvc.existingClaim) }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

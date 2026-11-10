@@ -8,7 +8,11 @@ hook (``_input_audit/sitecustomize.py``) that logs every ``os.listdir`` /
 sentinel, with the stack that raised it. Each must come from a
 ``_lib_input`` frame: a tool that lists the directory itself (a ``glob``, an
 ``iterdir``, an ``os.listdir`` of its own) is red, whatever it is spelled.
-A run that never lists the sentinel from Python is a dead row, also red.
+A run that never lists the sentinel from Python is a dead row, also red —
+except a directory declared ``select=DA_GUARD_LISTS`` (#3693): da-guard
+lists it (a child process, which this hook does not see), so a run that
+lists nothing from Python is what it should be; a listing from any frame
+but ``_lib_input``'s is a fault for it too.
 
 The rows are not written here: they are the declarations themselves (read
 off the parsers by G1's walk), so a new ``add_input`` flag is audited
@@ -70,7 +74,8 @@ def _subst(tmp: Path) -> dict:
             "{BOX}": str(tmp)}
 
 
-def _run_audited(script: str, argv: list[str], sentinel: Path, tmp: Path) -> list[dict]:
+def _run_audited(script: str, argv: list[str], sentinel: Path, tmp: Path,
+                 may_log_nothing: bool = False) -> list[dict]:
     log = tmp / "audit.jsonl"
     env = dict(os.environ, DA_INPUT_AUDIT_LOG=str(log), DA_INPUT_AUDIT_SENTINEL=str(sentinel),
                DA_LANG="en",
@@ -79,6 +84,8 @@ def _run_audited(script: str, argv: list[str], sentinel: Path, tmp: Path) -> lis
                            *argv], cwd=tmp, env=env, capture_output=True, text=True,
                           encoding="utf-8", timeout=300, check=False, stdin=subprocess.DEVNULL)
     if not log.exists():
+        if may_log_nothing:
+            return []
         pytest.fail(f"{script}: the audit hook logged nothing — it did not load, or the row is "
                     f"dead (rc {proc.returncode}): {(proc.stdout + proc.stderr)[-2000:]}")
     return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
@@ -86,8 +93,10 @@ def _run_audited(script: str, argv: list[str], sentinel: Path, tmp: Path) -> lis
 
 @pytest.mark.usefixtures("da_guard_env", "da_read_env")
 def test_a_declared_input_directory_is_listed_only_by_lib_input(declared, tmp_path):
+    import _lib_input
     faults = []
-    for n, (rid, script, _flag, _spec, argv, _reason) in enumerate(declared):
+    for n, (rid, script, _flag, spec, argv, _reason) in enumerate(declared):
+        da_guard_lists = spec.select == _lib_input.DA_GUARD_LISTS
         case = tmp_path / f"row-{n}"
         case.mkdir()
         sentinel = case / "sentinel"
@@ -99,9 +108,9 @@ def test_a_declared_input_directory_is_listed_only_by_lib_input(declared, tmp_pa
             for k, v in subst.items():
                 a = a.replace(k, v)
             args.append(a)
-        events = _run_audited(script, args, sentinel, case)
+        events = _run_audited(script, args, sentinel, case, may_log_nothing=da_guard_lists)
         listed = [e for e in events if e["ev"] != "open"]
-        if not listed:
+        if not listed and not da_guard_lists:
             faults.append(f"{rid}: the run never listed {sentinel} from Python — dead row")
         faults += [f"{rid}: {e['ev']}({e['path']}) outside _lib_input: {e['stack'][:6]}"
                    for e in events if not any(f.startswith(LISTER) for f in e["stack"])]

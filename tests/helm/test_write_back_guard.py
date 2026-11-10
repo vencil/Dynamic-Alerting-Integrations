@@ -129,8 +129,8 @@ def test_direct_acknowledgement_is_the_boolean_true_only(tmp_path, ack):
 @_needs_helm
 def test_acknowledged_direct_is_explicit_and_carries_no_forge_wiring():
     # #2903: the required generator container needs a git repository in
-    # conf.d; a hostPath conf.d stands for one (no clone).
-    res = _render(*_DIRECT_ACK, "confDir.type=hostPath", "confDir.hostPath=/srv/conf.d")
+    # conf.d; a pvc conf.d stands for one (no clone).
+    res = _render(*_DIRECT_ACK, "confDir.type=pvc")
     assert res.returncode == 0, res.stderr
     cs = _containers(res.stdout)
     assert "git-clone" not in cs  # no gitRepoUrl

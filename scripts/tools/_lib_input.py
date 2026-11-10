@@ -6,7 +6,10 @@ end up with, and what does it read from them". Standard library only, and
 when a refusal is raised, as in `_lib_paths`.
 
 * ``add_input(parser, flag, *, select, empty, default, absent_default)`` —
-  declares an input flag. ⛔ The declaration is on the argparse action
+  declares an input flag; ``missing`` (#3693) says what a value the caller
+  GAVE with nothing at it is (``ABSENT_REFUSED``, the default:
+  ``dir_not_found``; ``ABSENT_EMPTY``: selects nothing — a diff's base side,
+  where no directory is a first import). ⛔ The declaration is on the argparse action
   (``action.input_spec``, an :class:`InputSpec`), in the program: the
   da-tools image ships no tests/, so a table in a test could not say what
   the shipped parser takes. The G1 gate
@@ -17,6 +20,10 @@ when a refusal is raised, as in `_lib_paths`.
   ``dir_not_found`` / ``dir_not_accessible`` (``_lib_paths.classify_path``,
   and a directory that stats but cannot be listed), ``input_empty`` (the
   declaration says an empty selection is refused).
+* ``require_listed(flag, path, root, *, lang)`` (#3693) — a directory
+  da-guard lists (``DA_GUARD_LISTS``) whose root entry it reports
+  ``unlistable_dir`` is ``dir_not_accessible``: ⛔ the one wording of it,
+  never read as an empty tree.
 * ``require_selection(args, dest, chosen, *, wanted, lang)`` — the same
   ``empty`` judgement for a selection made elsewhere (``DA_GUARD_LISTS``:
   what da-guard's listing chose), and ``refuse_empty(label, wanted, *,
@@ -58,7 +65,8 @@ module's is a fault.
 
 A tree da-guard walks (the exporter's own walk) is listed by da-guard,
 never here (``select=DA_GUARD_LISTS``): ``selected`` judges the directory itself, and
-the tool refuses a listing whose root da-guard reports ``unlistable_dir``.
+the tool refuses a listing whose root da-guard reports ``unlistable_dir``
+(``require_listed``).
 
 ⛔ ``select`` (#3462) is a selector: :class:`TopLevel`, or any declaration of
 which top-level names are the input — ``_lib_consumer_read.RuleSource``
@@ -258,6 +266,9 @@ class InputSpec(NamedTuple):
     """``ABSENT_EMPTY`` / ``ABSENT_REFUSED``; None when there is no default."""
     decode: Optional[Document] = None
     """The :class:`Document` of a file input; None for a directory."""
+    missing: str = ABSENT_REFUSED
+    """A given value with nothing at it (``_nothing_at``): ``ABSENT_REFUSED``
+    (``dir_not_found``) or ``ABSENT_EMPTY`` (selects nothing), #3693."""
 
 
 class _Value(str):
@@ -288,7 +299,7 @@ class _InputAction(argparse._StoreAction):
 def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
               decode: Optional[Document] = None, empty: str = EMPTY_ALLOWED,
               default: Optional[str] = None, absent_default: Optional[str] = None,
-              **kwargs: Any) -> argparse.Action:
+              missing: str = ABSENT_REFUSED, **kwargs: Any) -> argparse.Action:
     """Add the input flag *flag* (and its short *aliases*, ``-i``) to
     *parser* and declare what it is: exactly one of *select* or *decode*.
 
@@ -299,7 +310,10 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
     (``rule-packs``, not ``rule-packs/``: the value is shown in messages as
     the caller would type it); *absent_default* (required with one,
     ``ABSENT_EMPTY`` / ``ABSENT_REFUSED``) is what that default is when
-    nothing is there.
+    nothing is there. *missing*: what a value the caller gave is when
+    nothing is there (``ABSENT_REFUSED`` / ``ABSENT_EMPTY``, #3693) — only
+    nothing: a regular file, a dangling link or a path it cannot reach is
+    refused either way, as for a default.
 
     *decode* — a file input whose content the tool reads: a
     :class:`Document`, read by :func:`document`. It takes no *empty*,
@@ -317,8 +331,10 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
     if decode is not None:
         if not isinstance(decode, Document) or decode.fmt not in FORMATS:
             raise TypeError(f"decode must be a Document with fmt in {FORMATS}, not {decode!r}")
-        if empty != EMPTY_ALLOWED or default is not None or absent_default is not None:
-            raise ValueError("a decode= input takes no empty=, default= or absent_default=")
+        if (empty != EMPTY_ALLOWED or default is not None or absent_default is not None
+                or missing != ABSENT_REFUSED):
+            raise ValueError("a decode= input takes no empty=, default=, absent_default= "
+                             "or missing=")
         if decode.empty_is is not None and decode.fmt != "yaml":
             raise ValueError("empty_is is for a YAML document only")
         tops = decode.top if isinstance(decode.top, tuple) else (decode.top,)
@@ -339,10 +355,13 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
         raise ValueError("a default needs absent_default, and only a default has one")
     if absent_default not in (None, ABSENT_EMPTY, ABSENT_REFUSED):
         raise ValueError(f"absent_default must be {ABSENT_EMPTY!r} or {ABSENT_REFUSED!r}")
+    if missing not in (ABSENT_EMPTY, ABSENT_REFUSED):
+        raise ValueError(f"missing must be {ABSENT_EMPTY!r} or {ABSENT_REFUSED!r}")
     if default is not None and len(default) > 1 and default.endswith(("/", os.sep)):
         raise ValueError(f"default {default!r}: no trailing separator (see add_input)")
     action = parser.add_argument(flag, *aliases, action=_InputAction, default=None, **kwargs)
-    spec = InputSpec(flag, action.dest, select, empty, default, absent_default, decode)
+    spec = InputSpec(flag, action.dest, select, empty, default, absent_default, decode,
+                     missing)
     action.input_spec = spec
     if default is not None:
         action.default = _Value(default, spec, False)
@@ -367,6 +386,25 @@ def refuse_empty(label: str, wanted: str, *, lang: str) -> BaseException:
     one wording of it (#3462)."""
     said = (f"沒有選到任何項目（{wanted}）" if lang == "zh" else f"selects nothing ({wanted})")
     return _caller_error(f"{label}: {said}", "input_empty")
+
+
+def require_listed(flag: str, path: "str | os.PathLike[str]", root: Any, *,
+                   lang: str) -> None:
+    """Refuse a directory da-guard could not list (#3693): *root* is the
+    root entry (``"."``) of da-guard's listing of *path*, the directory
+    given as *flag* (a ``_lib_parse_tree.Entry``: ``unlistable_dir``,
+    ``problem``), or None when the listing has none. A root it reports
+    ``unlistable_dir`` raises ``dir_not_accessible`` (rc 2), named with
+    da-guard's reason. ⛔ The one wording of it: a tree whose root cannot be
+    listed was read as one holding no config file — config-diff's base side
+    as a first import (rc 1), migrate-to-operator's source as no file (rc 0,
+    #3446)."""
+    if root is None or not root.unlistable_dir:
+        return
+    why = safe_label(root.problem[1]) if root.problem else root.role
+    said = (f"無法列出目錄內容（da-guard: {why}）" if lang == "zh"
+            else f"cannot list the directory (da-guard: {why})")
+    raise _caller_error(f"{_label(path, flag)}: {said}", "dir_not_accessible")
 
 
 def require_selection(args: argparse.Namespace, dest: str, chosen: "list[Any]", *,
@@ -426,7 +464,8 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
     A value that is not a usable directory is refused
     (``_lib_paths.classify_path``: ``dir_not_found`` /
     ``dir_not_accessible``) — given, or a default — except a default nobody
-    gave with nothing there, which selects nothing under ``ABSENT_EMPTY``.
+    gave with nothing there, which selects nothing under ``ABSENT_EMPTY`` —
+    and a value given with nothing there under ``missing=ABSENT_EMPTY``.
     A directory that cannot be listed is ``dir_not_accessible``, given or
     default. A selector: what its ``choose`` takes of the sorted listing;
     none, under ``EMPTY_REFUSED``, is ``input_empty``. ``DA_GUARD_LISTS``:
@@ -444,7 +483,8 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
         raise TypeError(f"{dest} is a file input (decode=): read it with document()")
     problem = classify_path(value, "dir", lang=lang, flag=spec.flag)
     if problem is not None:
-        if value.given or spec.absent_default == ABSENT_REFUSED or not _nothing_at(value):
+        nothing = (spec.missing if value.given else spec.absent_default) == ABSENT_EMPTY
+        if not (nothing and _nothing_at(value)):
             raise _caller_error(problem.message, problem.reason)
         return []
     if spec.select == DA_GUARD_LISTS:
