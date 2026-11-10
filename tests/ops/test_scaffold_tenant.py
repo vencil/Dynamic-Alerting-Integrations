@@ -1208,22 +1208,29 @@ class TestSaturationRulePacksIntegrity:
     """RULE_PACKS metric_class 完整性。"""
 
     def test_metric_class_value_domain(self):
-        """metric_class 值域僅 {"saturation"}。"""
-        values = {
-            info["metric_class"]
-            for pack in RULE_PACKS.values()
-            for section in ("defaults", "optional_overrides")
-            for info in pack.get(section, {}).values()
-            if "metric_class" in info
-        }
-        assert values == {"saturation"}
+        """D-A PR-3 起 RULE_PACKS 由 registry 生成，每個鍵都帶 metric_class，
+        值域即 registry schema 的 enum。消費端（saturation 教育段、portal）
+        只認 defaults tier 的 "saturation"，所以多出的類別不改變任何輸出。"""
+        schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                   "docs", "schemas", "threshold-registry.schema.json")
+        with open(schema_path, encoding="utf-8") as fh:
+            schema = json.load(fh)
+        (key_schema,) = schema["properties"]["keys"]["patternProperties"].values()
+        enum = set(key_schema["properties"]["metric_class"]["enum"])
+        for name, pack in RULE_PACKS.items():
+            for section in ("defaults", "optional_overrides"):
+                for key, info in pack.get(section, {}).items():
+                    assert info.get("metric_class") in enum, f"{name}.{section}.{key}"
 
-    def test_metric_class_only_in_defaults(self):
-        """metric_class 只出現在 defaults，不出現在 optional_overrides。"""
+    def test_saturation_outside_defaults_is_only_a_critical_variant(self):
+        """optional_overrides 裡的 saturation 只能是 saturation base 的
+        `_critical`（繼承而來）——不會長出新的 defaults 外飽和鍵。"""
+        bases = saturation_default_keys()
         for name, pack in RULE_PACKS.items():
             for key, info in pack.get("optional_overrides", {}).items():
-                assert "metric_class" not in info, \
-                    f"{name}.optional_overrides.{key} 不應有 metric_class"
+                if info.get("metric_class") == "saturation":
+                    assert key.endswith("_critical") and key[:-len("_critical")] in bases, \
+                        f"{name}.optional_overrides.{key}"
 
     def test_saturation_set_matches_expected(self):
         """被標 set == 預期常數（真 N=22）。"""

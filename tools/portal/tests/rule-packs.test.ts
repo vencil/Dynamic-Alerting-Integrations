@@ -133,11 +133,17 @@ describe('rule-packs fallback — saturation metricClass tagging', () => {
     expect(tagged).toEqual(EXPECTED_FALLBACK_SATURATION_KEYS);
   });
 
-  it('metricClass values are only ever "saturation"', async () => {
+  it('metricClass values are the registry schema classes', async () => {
+    // Since D-A PR-3 every key carries one (the registry is the source);
+    // only 'saturation' drives anything here, and its set is pinned above.
+    const schema = JSON.parse(readFileSync(
+      resolve(__dirname, '../../../docs/schemas/threshold-registry.schema.json'), 'utf-8'));
+    const [keySchema] = Object.values(schema.properties.keys.patternProperties) as any[];
+    const classes = new Set(keySchema.properties.metric_class.enum);
     const { RULE_PACK_DATA } = await import('../src/interactive/tools/_common/data/rule-packs.js');
     for (const pack of Object.values(RULE_PACK_DATA) as any[]) {
       for (const meta of Object.values(pack.defaults ?? {}) as any[]) {
-        if ('metricClass' in meta) expect(meta.metricClass).toBe('saturation');
+        if ('metricClass' in meta) expect(classes).toContain(meta.metricClass);
       }
     }
   });
