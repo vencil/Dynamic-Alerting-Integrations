@@ -443,9 +443,11 @@ the humanSocket key, and nothing outside the pod names this path.
 The oauth2-proxy structured config (--alpha-config). Built as a dict and
 rendered with toYaml, so every value is quoted as YAML needs.
 
-  upstreamConfig        one upstream: tenant-api's Unix socket, the only
-                        place it serves its API (ADR-027 §2; port 8080 has
-                        only /health, /ready and /metrics)
+  upstreamConfig        two upstreams (ADR-027 §10): /api/ to tenant-api's
+                        Unix socket, the only place it serves its API
+                        (ADR-027 §2; port 8080 has only /health, /ready and
+                        /metrics), and / to the portal container
+                        (tenant-api.portalAddress)
   injectRequestHeaders  X-Forwarded-Email ← email, X-Forwarded-Groups ←
                         groups, plus one header per oauth2Proxy.claimHeaders
                         entry (claim name → header name); the client's copy
@@ -496,10 +498,124 @@ rendered with toYaml, so every value is quoted as YAML needs.
 {{- with $o.claimHeaders -}}
 {{- $_ := set $provider "additionalClaims" (keys . | sortAlpha) -}}
 {{- end -}}
+{{- /* ADR-027 §5, §10: /api/ → tenant-api's Unix socket, everything else →
+     the portal static-file container in this pod (loopback only). */ -}}
+{{- $portal := printf "http://%s" (include "tenant-api.portalAddress" .) -}}
 {{- $config := dict
-      "upstreamConfig" (dict "upstreams" (list (dict "id" "tenant-api" "path" "/" "uri" $upstream)))
+      "upstreamConfig" (dict "upstreams" (list
+        (dict "id" "api" "path" "/api/" "uri" $upstream)
+        (dict "id" "portal" "path" "/" "uri" $portal)))
       "injectRequestHeaders" $headers
       "providers" (list $provider)
       "server" (dict "bindAddress" "0.0.0.0:4180") -}}
 {{- toYaml $config -}}
+{{- end -}}
+
+{{/*
+The portal static-file container (ADR-027 §5): it listens on the pod's
+loopback only, so nothing outside the pod reaches it but through
+oauth2-proxy's "/" upstream. A constant: nothing else names it.
+*/}}
+{{- define "tenant-api.portalAddress" -}}
+127.0.0.1:8081
+{{- end -}}
+{{- define "tenant-api.portalConfigDir" -}}
+/etc/portal-nginx
+{{- end -}}
+{{- define "tenant-api.portalConfigMap" -}}
+{{ include "tenant-api.name" . }}-portal-nginx-{{ include "tenant-api.portalNginxConfig" . | sha256sum | trunc 10 }}
+{{- end -}}
+
+{{/*
+The security headers every portal response carries. Repeated in each
+location that sets add_header: nginx drops the server-level add_header
+directives in a location that has its own.
+*/}}
+{{- define "tenant-api.portalSecurityHeaders" -}}
+add_header X-Frame-Options "DENY" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'self'" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+{{- end -}}
+
+{{/*
+The whole nginx configuration the portal container loads (`nginx -c`): it
+serves the image's static files and nothing else. ⛔ No proxy_pass or any
+other *_pass, no njs, no include but mime.types (ADR-027 §5, §9 item 3:
+tests/helm/test_tenant_api_portal_container.py). The image's own
+/etc/nginx/nginx.conf and conf.d (which forward /api/v1/ and /preview for
+the standalone da-portal chart) are never read. Runs as the pod's non-root
+uid on a read-only root filesystem: pid and temp paths under /tmp.
+*/}}
+{{- define "tenant-api.portalNginxConfig" -}}
+worker_processes 1;
+pid /tmp/nginx.pid;
+error_log /dev/stderr notice;
+
+events {
+    worker_connections 256;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log /dev/stdout;
+    server_tokens off;
+    sendfile on;
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+
+    server {
+        listen {{ include "tenant-api.portalAddress" . }};
+        server_name _;
+        root /usr/share/nginx/html;
+        index interactive/index.html;
+        {{- include "tenant-api.portalSecurityHeaders" . | nindent 8 }}
+
+        location ~* \.(js|css|png|svg|ico|woff2?)$ {
+            expires 7d;
+            add_header Cache-Control "public, immutable";
+            {{- include "tenant-api.portalSecurityHeaders" . | nindent 12 }}
+        }
+
+        location ~* \.(json|yaml)$ {
+            expires -1;
+            add_header Cache-Control "no-cache";
+            {{- include "tenant-api.portalSecurityHeaders" . | nindent 12 }}
+        }
+
+        # /api/ is oauth2-proxy's other upstream and never reaches this
+        # container; if it ever did, a 404 says so instead of the SPA page.
+        location /api/ {
+            return 404;
+        }
+
+        location / {
+            try_files $uri $uri/ /interactive/index.html;
+        }
+
+        location = /healthz {
+            access_log off;
+            default_type text/plain;
+            return 200 "ok\n";
+        }
+
+        location ~ /\. {
+            deny all;
+            access_log off;
+            log_not_found off;
+        }
+
+        location ~ ~$ {
+            deny all;
+            access_log off;
+            log_not_found off;
+        }
+    }
+}
 {{- end -}}

@@ -1029,6 +1029,20 @@ def _build_portal_rules():
         "replacement": lambda v: f'appVersion: "{v}"',
     })
 
+    # helm/tenant-api runs the portal's image in its own pod (ADR-027 §5),
+    # pinned the two-line repository/tag way under `portal.image`, as the
+    # da-tools rule does `generator.image`. Only the pin: the chart's own
+    # version is on the tenant-api line.
+    rules.append({
+        "file": "helm/tenant-api/values.yaml",
+        "desc": "da-portal image tag in helm/tenant-api/values.yaml (portal.image, two-line repository/tag pin)",
+        "pair_anchor": r"^[ \t]*repository:[ \t]*ghcr\.io/vencil/da-portal[ \t]*$",
+        "pair_key": "tag",
+        "pattern": r'"v?' + _SEMVER + r'"',
+        "replacement": lambda v: f'"v{v}"',
+        "require_match": True,
+    })
+
     # da-portal README H1 title — `# da-portal (vX.Y.Z)`
     rules.append({
         "file": "components/da-portal/README.md",
