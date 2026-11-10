@@ -57,6 +57,7 @@ var generatorRoutes = map[string]string{
 var noGeneratorRoutes = map[string]string{
 	"PUT /api/v1/tenants/{id}/federation":                   "federation state, not conf.d (statestore)",
 	"POST /api/v1/tenants/{id}/diff":                        "a diff of the body against the file; judges nothing",
+	"POST /api/v1/tenants/simulate":                         "always 501 SIMULATE_NOT_PROVIDED; reads nothing",
 	"PUT /api/v1/groups/{id}/":                              "group records (statestore), not conf.d",
 	"DELETE /api/v1/groups/{id}/":                           "group records (statestore), not conf.d",
 	"PUT /api/v1/views/{id}/":                               "saved views (statestore)",
@@ -634,6 +635,7 @@ func logMatrixMetrics(t *testing.T) {
 var noGeneratorRequests = map[string]struct{ method, path, body string }{
 	"PUT /api/v1/tenants/{id}/federation":                   {"PUT", "/api/v1/tenants/t-a/federation", `{"metrics":["up"]}`},
 	"POST /api/v1/tenants/{id}/diff":                        {"POST", "/api/v1/tenants/t-a/diff", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n"},
+	"POST /api/v1/tenants/simulate":                         {"POST", "/api/v1/tenants/simulate", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n"},
 	"PUT /api/v1/groups/{id}/":                              {"PUT", "/api/v1/groups/g-ok", `{"label":"OK2","members":["t-a","t-b"]}`},
 	"DELETE /api/v1/groups/{id}/":                           {"DELETE", "/api/v1/groups/g-one", ""},
 	"PUT /api/v1/views/{id}/":                               {"PUT", "/api/v1/views/v1", `{"label":"x","filters":{"a":"b"}}`},
