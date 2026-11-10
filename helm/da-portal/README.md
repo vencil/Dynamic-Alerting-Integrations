@@ -151,16 +151,9 @@ da-portal as a verified relay (GHSA-3g2h-rf85-5rrv hardening series). It was
 audit-only: user authorization rode the oauth2-proxy `X-Forwarded-*` headers,
 and a missing/unreadable token dropped the header without breaking the request.
 
-⚠ **Prerequisites**: the da-portal image must carry the njs main config
-(`portal/v2.10.0`+; older images fail loud at startup on `js_import`), and
-the tenant-api chart must be ≥ 2.9.13 (da-portal admitted on the port-8080
-NetworkPolicy).
-
-```bash
-helm upgrade da-portal helm/da-portal -n monitoring \
-  -f your-values.yaml \
-  --set portal.relayToken.enabled=true
-```
+If a release still has it on, turn it off (`--set portal.relayToken.enabled=false`).
+Turning it on needed the njs main config in the da-portal image
+(`portal/v2.10.0`+; older images fail loud at startup on `js_import`).
 
 #### Custom Data (platform-data.json, flows.json, etc.)
 
