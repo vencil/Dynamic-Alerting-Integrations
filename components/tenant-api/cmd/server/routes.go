@@ -127,6 +127,10 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	platformWrite := rbacMgr.Middleware(rbac.PermWrite, nil)
 
 	r := chi.NewRouter()
+	// ADR-027 §5: every answer — error envelopes included — carries the
+	// security headers the standalone portal's nginx used to add. First, so a
+	// middleware added above the others later cannot answer without them.
+	r.Use(handler.SecurityHeaders)
 	r.Use(middleware.RequestID)
 	r.Use(handler.RequestIDResponse) // v2.8.0 B-6 PR-1: echo X-Request-ID
 	// ADR-027 §2: the caller is resolved once, here, from the oauth2-proxy
@@ -190,6 +194,12 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		// Snapshot cache shared with /tenants via Deps.SearchCache.
 		r.With(anyTenantRead).
 			Get("/tenants/search", handler.SearchTenants(deps))
+
+		// ADR-027 §5: the portal's simulate-preview widget is answered here
+		// now that every /api/ request reaches tenant-api (#2125). POST only,
+		// so the other methods still address a tenant named "simulate".
+		r.With(rbacMgr.MiddlewareAuthenticated()).
+			Post("/tenants/simulate", handler.SimulateNotProvided)
 
 		// Per-tenant routes
 		r.Route("/tenants/{id}", func(r chi.Router) {
