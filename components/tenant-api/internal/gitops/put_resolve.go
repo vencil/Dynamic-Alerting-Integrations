@@ -164,7 +164,7 @@ func (w *Writer) PreviewPut(ctx context.Context, tenantID, yamlContent string) (
 			return err
 		}
 		if err != nil {
-			slog.Warn("tenant preview: could not check the tenant file against HEAD; previewing without it",
+			slog.Warn("tenant preview: could not check the tenant file and the root platform files against HEAD; previewing without it",
 				"tenant", tenantID, "error", err)
 		}
 		return nil

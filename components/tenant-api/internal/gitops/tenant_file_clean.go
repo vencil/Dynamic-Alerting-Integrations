@@ -315,12 +315,15 @@ func (w *Writer) rootPlatformCleanPaths(top string) ([]string, error) {
 	if rel != "." {
 		spec = filepath.ToSlash(rel) + "/"
 	}
-	if !w.gitCheck("rev-parse", "--verify", "--quiet", "HEAD^{commit}") {
-		return out, nil // no commit yet: HEAD holds no file to differ from
-	}
 	listing, err := w.gitOutput(top, "ls-tree", "-z", "--name-only", "HEAD", "--", spec)
 	if err != nil {
-		return nil, err
+		// Only a branch with no commit yet means "HEAD holds no file";
+		// any other git failure is an error, never a pass.
+		unborn, uerr := w.headUnborn(top)
+		if uerr != nil || !unborn {
+			return nil, err
+		}
+		return out, nil
 	}
 	for _, name := range strings.Split(string(listing), "\x00") {
 		if name == "" || !strings.HasPrefix(path.Base(name), "_") {
@@ -331,4 +334,19 @@ func (w *Writer) rootPlatformCleanPaths(top string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// headUnborn reports whether HEAD names a branch with no commit yet — the
+// one case in which HEAD has no tree to list. It is asked with commands
+// that succeed either way, so a git failure is an error, not an answer.
+func (w *Writer) headUnborn(top string) (bool, error) {
+	ref, err := w.gitOutput(top, "symbolic-ref", "-q", "HEAD")
+	if err != nil {
+		return false, err // a detached HEAD names a commit; anything else failed
+	}
+	obj, err := w.gitOutput(top, "for-each-ref", "--format=%(objectname)", strings.TrimSpace(string(ref)))
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(obj)) == "", nil
 }
