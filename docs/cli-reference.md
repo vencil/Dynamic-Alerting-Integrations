@@ -1070,7 +1070,7 @@ da-tools grafana-import --dashboard overview.json --dry-run
 |------|------|
 | `0` | 成功 |
 | `1` | `--verify` 發現問題（ConfigMap 內的 dashboard JSON 無效）。⚠️ 匯入模式的失敗全是 2 不是 1；`kubectl` 不在 PATH 是未捕捉例外（匯入與 `--verify` 皆 traceback、rc 1） |
-| `2` | 呼叫端錯誤：`--dashboard` 檔不存在、讀不了（不是 UTF-8、不是合法 JSON、頂層不是物件——匯入之前一行點名旗標與路徑，`--json` 時 stdout 為空；頂層是清單或純量先前報成 `Invalid JSON: 'int' object has no attribute 'get'`，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）、`--dashboard-dir` 不存在或裡面沒有 `*.json`；匯入時 `kubectl create／apply／label` 失敗；`--verify` 時 `kubectl get` 失敗或輸出解析不了；三個模式旗標一個都沒給 |
+| `2` | 呼叫端錯誤：`--dashboard` 檔不存在、讀不了（不是 UTF-8、不是合法 JSON、頂層不是物件——匯入之前一行點名旗標與路徑，`--json` 時 stdout 為空；頂層是清單或純量先前報成 `Invalid JSON: 'int' object has no attribute 'get'`，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）、`--dashboard-dir` 不存在、列不出內容或裡面沒有 `*.json`（一行點名旗標與路徑；先前列不出內容與空目錄都只印 `No dashboard files found.`，[#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)）；匯入時 `kubectl create／apply／label` 失敗；`--verify` 時 `kubectl get` 失敗或輸出解析不了；三個模式旗標一個都沒給 |
 
 ---
 
@@ -2766,8 +2766,8 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 | 參數 | 說明 |
 |------|------|
-| `--old-dir <PATH>` | 舊配置目錄（base）。不存在或沒有設定檔時視為第一次匯入，所有租戶都算新增。symlink 迴圈不算「不存在」（`ls` 看得到那個項目），是結束碼 `2`、stderr 點名無法存取（先前與不存在逐字相同、被當成第一次匯入、結束碼 1，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)） |
-| `--new-dir <PATH>` | 新配置目錄（PR） |
+| `--old-dir <PATH>` | 舊配置目錄（base）。路徑上什麼都沒有、或沒有設定檔時視為第一次匯入，所有租戶都算新增。其他不能用的情況都是結束碼 `2`、stderr 一行點名旗標與路徑：一般檔案；symlink 迴圈（`ls` 看得到那個項目，先前與不存在逐字相同、被當成第一次匯入、結束碼 1，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；懸空 symlink、一般檔案底下的路徑、目錄 stat 得到但列不出內容（例如 0311）——這三種先前都被當成第一次匯入、結束碼 1（[#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)） |
+| `--new-dir <PATH>` | 新配置目錄（PR）。不存在、列不出內容、或沒有任何設定檔時是結束碼 `2`，stderr 一行點名旗標與路徑、不輸出報告（先前列不出內容與沒有設定檔都報成 `has no config file`，[#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)） |
 
 **選項**
 
@@ -2821,7 +2821,7 @@ da-tools config-diff --old-dir ./conf.d-old --new-dir ./conf.d-new --json-output
 |------|------|
 | `0` | 無配置變更 |
 | `1` | 偵測到變更；或有要審的平台設定（見上方「平台設定」：值變了而渲染沒有差異的鍵、兩支渲染程式都不讀的鍵、寫在讀取端不讀的位置的鍵、讀不了的 `_` 檔；只改註解或排版，以及寫在檢查會讀的位置的 `_policies`／`domain_policies`，不算）；或 base 側設定壞了、渲染不出來（該面向列為 Not Compared，不擋修好它的 PR） |
-| `2` | 沒有算出結果：PR 側有檔讀不了（stderr 點名該檔與 exporter／產生器自己的原因）、PR 側沒有設定檔、找不到 da-guard 或工具本身失敗，或參數錯誤（例如 `--at` 不是 RFC3339、目錄位置是一個檔）。上述情況中，參數錯誤以外報告仍會輸出並寫明哪個面向沒有計算（`da-guard parse-tree` 失敗時是平台設定面向沒有計算）；工具未預期的錯誤則只在 stderr 印一行 `ERROR:`，不輸出報告 |
+| `2` | 沒有算出結果：PR 側有檔讀不了（stderr 點名該檔與 exporter／產生器自己的原因）、任一側目錄列不出內容或 PR 側沒有設定檔（一行點名，不輸出報告）、找不到 da-guard 或工具本身失敗，或參數錯誤（例如 `--at` 不是 RFC3339、目錄位置是一個檔）。PR 側檔案讀不了、找不到 da-guard 或工具本身失敗時，報告仍會輸出並寫明哪個面向沒有計算（`da-guard parse-tree` 失敗時是平台設定面向沒有計算）；工具未預期的錯誤則只在 stderr 印一行 `ERROR:`，不輸出報告 |
 
 > ⚠️ **`1` 是「有變更」，不是失敗。** 裸呼叫這個命令的 CI 步驟，會在它正常運作時失敗。
 > 可照抄的消費端寫法（`set +e` / `rc=$?`）在

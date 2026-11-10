@@ -256,3 +256,8 @@ tests/ops/test_threshold_govern.py
 # #3572: operator-generate no longer emits AlertmanagerConfig; its receiver /
 # inhibit / tenant-discovery test classes are removed, not truncated.
 tests/ops/test_operator_generate_v2.py
+
+# #1428: the Playwright smoke job moved from playwright.yml to ci.yml
+# (`smoke-tests-run` + the `Smoke Tests (Chromium)` aggregate gate);
+# playwright.yml keeps only the A-13 spec lint — 12196 → ~5300 bytes.
+.github/workflows/playwright.yml
