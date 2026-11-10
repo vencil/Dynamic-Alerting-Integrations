@@ -17,7 +17,7 @@ portal:
   tenantApiUrl: "http://tenant-api.tenant-api.svc.cluster.local:8080"
   # recipe-preview URL for reverse proxy /preview (#657 would-fire preview)
   recipePreviewUrl: "http://recipe-preview.monitoring.svc.cluster.local:8082"
-  # Machine-identity relay token (ADR-027 §5, GHSA-3g2h-rf85-5rrv series).
+  # Machine-identity relay token (legacy, removed by ADR-027 §5; GHSA-3g2h-rf85-5rrv series).
   # When enabled, nginx reads the pod's audience-bound projected SA token
   # (aud=tenant-api, TTL 900s — hardcoded in the deployment template, mirroring
   # helm/recipe-preview) on EVERY /api/v1 request and presents it as

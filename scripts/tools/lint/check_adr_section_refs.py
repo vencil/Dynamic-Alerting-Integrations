@@ -144,10 +144,14 @@ def read_headings(path: Path) -> list[Heading]:
     return out
 
 
-def load_adrs(root: Path) -> dict[str, list[Heading]]:
-    """ADR number → the headings of its files (every language)."""
+def load_adrs(root: Path, tracked: set[str] | None = None) -> dict[str, list[Heading]]:
+    """ADR number → the headings of its files (every language). With tracked,
+    only the ADR files git tracks count: an ADR left unstaged must not make a
+    reference pass here that fails on a clean checkout in CI."""
     adrs: dict[str, list[Heading]] = {}
     for p in sorted((root / ADR_DIR).glob("[0-9][0-9][0-9]-*.md")):
+        if tracked is not None and (ADR_DIR / p.name).as_posix() not in tracked:
+            continue
         adrs.setdefault(p.name[:3], []).extend(read_headings(p))
     return adrs
 
@@ -206,11 +210,12 @@ def tracked_files(root: Path) -> list[str]:
 
 def find_findings(root: Path | None = None) -> list[Finding]:
     base = root if root is not None else REPO_ROOT
-    adrs = load_adrs(base)
+    files = tracked_files(base)
+    adrs = load_adrs(base, set(files))
     if not adrs:
-        raise FileNotFoundError(f"no ADR under {base / ADR_DIR}")
+        raise FileNotFoundError(f"no tracked ADR under {base / ADR_DIR}")
     out: list[Finding] = []
-    for rel in tracked_files(base):
+    for rel in files:
         if rel in SKIP_PATHS or rel.endswith(SKIP_SUFFIXES):
             continue
         try:

@@ -136,7 +136,7 @@ helm install da-portal helm/da-portal -n monitoring \
   --set 'portal.tenantApiUrl=http://tenant-api.tenant-api-staging.svc.cluster.local:8080'
 ```
 
-#### Relay Token (ADR-027 §5)
+#### Relay Token (legacy; removed by ADR-027 §5)
 
 When `portal.relayToken.enabled=true`, nginx reads the pod's audience-bound
 projected ServiceAccount token (`aud=tenant-api`, TTL 900s, kubelet-rotated)
@@ -146,6 +146,10 @@ relay, after threshold-govern and recipe-preview (GHSA-3g2h-rf85-5rrv
 hardening series). Audit-only: user authorization still rides the
 oauth2-proxy `X-Forwarded-*` headers; a missing/unreadable token drops the
 header and never breaks the request.
+
+⚠ **Legacy**: this predates ADR-027. tenant-api no longer runs the
+machine-identity audit (#3628), so the token is presented to nothing; ADR-027
+§5 removes da-portal's reverse proxy, and this option goes with it.
 
 ⚠ **Prerequisites**: the da-portal image must carry the njs main config
 (`portal/v2.10.0`+; older images fail loud at startup on `js_import`), and
@@ -191,7 +195,7 @@ helm install da-portal helm/da-portal -n monitoring \
 |-----|------|---------|-------------|
 | portal.listenPort | int | 80 | nginx listening port |
 | portal.tenantApiUrl | string | `http://tenant-api.tenant-api.svc.cluster.local:8080` | Reverse proxy target |
-| portal.relayToken.enabled | bool | false | Inject the audience-bound SA relay token on /api/v1 (ADR-027 §5; needs the portal/v2.10.0+ image) |
+| portal.relayToken.enabled | bool | false | Inject the audience-bound SA relay token on /api/v1 (legacy, removed by ADR-027 §5; needs the portal/v2.10.0+ image) |
 
 ### OAuth2 Proxy
 

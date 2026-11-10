@@ -121,6 +121,19 @@ def test_find_findings_scans_tracked_files_and_skips_changelog(tmp_path: Path):
     assert [(f.path, f.line, f.section) for f in found] == [("a.go", 1, "S5")]
 
 
+def test_an_untracked_adr_does_not_satisfy_a_reference(tmp_path: Path):
+    # A new ADR left unstaged must not make a reference pass locally that
+    # fails on CI's clean checkout.
+    (tmp_path / "docs" / "adr").mkdir(parents=True)
+    (tmp_path / "docs" / "adr" / "024-example.md").write_text(ADR_024, encoding="utf-8")
+    (tmp_path / "docs" / "adr" / "099-new.md").write_text("# ADR-099\n\n## 1. New\n", encoding="utf-8")
+    (tmp_path / "a.go").write_text("// ADR-099 §1 new decision\n", encoding="utf-8")
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, timeout=30)
+    subprocess.run(["git", "add", "docs/adr/024-example.md", "a.go"], cwd=tmp_path, check=True, timeout=30)
+    found = lint.find_findings(tmp_path)
+    assert [(f.path, f.adr, f.reason) for f in found] == [("a.go", "099", "no such ADR under docs/adr/")]
+
+
 def test_find_findings_without_adrs_cannot_run(tmp_path: Path):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, timeout=30)
     with pytest.raises(FileNotFoundError):

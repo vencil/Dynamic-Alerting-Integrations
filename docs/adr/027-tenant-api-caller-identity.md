@@ -163,7 +163,7 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 5. 掃描 helm、k8s manifest 與 rule-pack：沒有任何設定把身分 header 跨網路轉送給任何元件；§6 刪除的 chart key 不存在；threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。§6 刪除的環境變數不在 tenant-api 的已知清單裡。（§4、§5、§6）
 6. oauth2-proxy 設定檔不符合 §2 的形狀時 tenant-api 拒絕啟動，fixture 至少涵蓋：保留 client 值、固定值、前綴、claim 對錯、缺 email 或 group、環境變數參照、非標準拼法的欄位名稱；沒有規則的 `_rbac.yaml` 拒絕所有存取，且不存在恢復 open mode 的開關；非平台管理員的寫入若變更租戶的環境或 domain 標記、或覆寫標記讀不到的租戶檔，即被拒絕；這項判定與寫入範圍都在寫入鎖內、對寫入落地的那棵樹進行。（§7）
 7. `tenant-api config check` 對每條範圍軸列出未標記與標記讀不到的租戶並非零退出，以固定 fixture 測試，並逐條規則比對它與 server 租戶清單的判定一致；CI 對 repo 內的範例設定執行它。（§7）
-8. 引用檢查：repo 內每個 `ADR-NNN` 後接的小節引用都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）；`ADR-027` 後接 2026-07 草稿的小節編號（`D2-B`、`LD-6 P4b`、`MED-8` 之類，完整清單在檢查本身）一律失敗。（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）
+8. 引用檢查：repo 內寫成 `ADR-NNN §小節` 的引用（同一行緊接著列出的其他小節也算）都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）；`ADR-027` 後接 2026-07 草稿的小節編號（`D2-B`、`LD-6 P4b`、`MED-8` 之類，完整清單在檢查本身）一律失敗。（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）
 9. CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`），並以同版本的 oauth2-proxy 程式庫斷言分流結果與 §10 的範例一致。（§10）
 
 ### 10. oauth2-proxy 的分流設定
