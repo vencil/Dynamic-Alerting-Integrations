@@ -19,7 +19,7 @@ correctness both live in the chart, so the chart is what these tests pin:
   * work-dir is a DISK emptyDir; the deployment policy ConfigMap key is mounted
     at the same path in both containers and passed as --policy.
   * request = limit (render fails otherwise); gc.auto=0 on every repository
-    shape (clone, existing pvc/hostPath repo), with the init scripts RUN here.
+    shape (clone, existing pvc / existingClaim repo), with the init scripts RUN here.
   * body limits follow tenant-api's: a tenant-api cap whose base64 form does
     not fit the generator's default raises the generator's two limits.
 
@@ -58,7 +58,7 @@ _GIT = shutil.which("git")
 _needs_sh_git = pytest.mark.skipif(_SH is None or _GIT is None, reason="no sh / git on PATH")
 
 # The generator is always on (#2903); a clone shape on top of the render
-# baseline's hostPath conf.d.
+# baseline's pvc conf.d.
 _ON = ("gitRepoUrl=https://git.example.com/org/conf.git",)
 _SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount"
 
@@ -150,7 +150,8 @@ def test_values_required_with_explicit_pin() -> None:
 
 
 @_needs_helm
-@pytest.mark.parametrize("shape", [(), _ON, ("confDir.type=pvc",)], ids=["hostPath", "clone", "pvc"])
+@pytest.mark.parametrize("shape", [(), _ON, ("confDir.pvc.existingClaim=conf-repo",)],
+                         ids=["pvc", "clone", "existingClaim"])
 def test_generator_always_rendered_and_wired_to_tenant_api(shape) -> None:
     """Every repository shape renders the generator, and tenant-api dials
     exactly the socket the generator listens on."""
@@ -216,8 +217,8 @@ _EVERYTHING = (*_ON, "federation.enabled=true", "oauth2Proxy.enabled=true",
 
 @_needs_helm
 @pytest.mark.parametrize("shape", [
-    (), ("confDir.type=pvc", "gitRepoUrl="), ("confDir.type=hostPath", "confDir.hostPath=/x", "gitRepoUrl="),
-], ids=["clone", "pvc", "hostPath"])
+    (), ("confDir.type=pvc", "gitRepoUrl="), ("confDir.type=pvc", "confDir.pvc.existingClaim=conf-repo", "gitRepoUrl="),
+], ids=["clone", "pvc", "existingClaim"])
 def test_only_generator_and_tenant_api_mount_the_socket_dir(shape) -> None:
     pod = _pod(_render(*_EVERYTHING, *shape))
     names = [c["name"] for c in _all_containers(pod)]
@@ -393,8 +394,8 @@ def test_clone_init_sets_gc_auto_and_keeps_a_failed_pull_failing(tmp_path: Path)
 
 @_needs_helm
 @pytest.mark.parametrize("shape", [("confDir.type=pvc",),
-                                   ("confDir.type=hostPath", "confDir.hostPath=/x")],
-                         ids=["pvc", "hostPath"])
+                                   ("confDir.type=pvc", "confDir.pvc.existingClaim=conf-repo")],
+                         ids=["pvc", "existingClaim"])
 def test_existing_repo_shapes_get_a_gc_off_init(shape) -> None:
     pod = _pod(_render(*shape))
     names = [c["name"] for c in pod["initContainers"]]

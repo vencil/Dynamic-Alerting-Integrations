@@ -1,0 +1,36 @@
+# Demo rule extract (#3678) — the two shapes `generate_rulepack_derived.py
+# --check` refuses (checks 5 and 6), kept here so promtool shows WHY.
+#
+# NOT a deployed pack, and NOT tenant rule-pack material: the shapes below are
+# exactly what the generator rejects in rule-packs/. Paired with
+# maintenance-derived-gaps_test.yaml, which asserts the defect each shape has.
+#
+#  F1  a `page` alert that reads ALERTS of a `mute` alert is muted with it.
+#  F2  a `mute` alert whose clause's left side dropped `tenant` never matches
+#      the maintenance series, so it fires through the window.
+groups:
+  - name: maintenance-derived-gaps-demo
+    rules:
+      # A well-formed mute alert (canonical tail).
+      - alert: GapScrapeGate
+        expr: |
+          up{job="gap-demo"} == 0
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        labels:
+          maintenance: mute
+
+      # F1: page, but gated on the mute alert's ALERTS series.
+      - alert: GapPageViaAlerts
+        expr: up{job="gap-demo"} == 0 and on(tenant) ALERTS{alertname="GapScrapeGate"}
+        labels:
+          maintenance: page
+
+      # F2: mute, but the left side lost `tenant` before the clause.
+      - alert: GapMuteDropsTenant
+        expr: |
+          sum without(tenant) (up{job="gap-demo"} == 0)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        labels:
+          maintenance: mute

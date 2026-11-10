@@ -113,7 +113,7 @@ spec:
       {{- end }}
       {{- if $gcOffInit }}
         # ADR-036 §3 (#2902): gc.auto=0 on a repository that is already in a
-        # pvc / hostPath conf.d (no gitRepoUrl, so git-clone above does not run
+        # pvc conf.d (no gitRepoUrl, so git-clone above does not run
         # and cannot set it). No repository yet = nothing to set: skipped, not
         # failed. Same pinned alpine/git image as git-clone — tools/v2.9.0's
         # da-tools image has no git, and a da-tools container running git is

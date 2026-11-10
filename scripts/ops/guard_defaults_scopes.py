@@ -53,6 +53,12 @@ guard 驗錯樹之後貼上綠色 sticky comment。
 ⚠️ 沒給 `--deleted` ＝ 沒有刪除資訊 ＝ 永遠不給 `removed`，維持舊行為（紅燈）；
 失敗方向是「多驗一次而紅」，不是「少驗而綠」。
 
+巢狀（#3694）：被判 `removed` 的樹若位在一棵**仍存在**的 conf.d 樹底下
+（`a/conf.d/b/conf.d` 刪了、`a/conf.d` 還在），那棵外層樹也被這個 PR 改了——
+da-guard 會走進 `--config-dir` 底下所有非隱藏子目錄，內層的檔本來就算外層的。
+所以外層同時輸出一列 `target`（見 `surviving_ancestors()`），`removed` 列照樣點名
+被刪的那棵。外層也整棵刪掉時兩棵都是 `removed`、沒有 target。
+
 用法
 ----
   python3 scripts/ops/guard_defaults_scopes.py <changed-path>...
@@ -213,9 +219,15 @@ def conf_d_root(path: str) -> str | None:
     return None
 
 
-def resolve(paths: list[str]) -> tuple[list[tuple[str, str]], list[str]]:
-    """(targets, unmanaged)；targets 為 (config_dir, scope)，依 config_dir 排序。"""
-    by_root: dict[str, set[str]] = {}
+def resolve(paths: list[str], extra: dict[str, set[str]] | None = None,
+            ) -> tuple[list[tuple[str, str]], list[str]]:
+    """(targets, unmanaged)；targets 為 (config_dir, scope)，依 config_dir 排序。
+
+    `extra`：root → 額外要併進該根的目錄（repo 相對），來自
+    `surviving_ancestors()`（#3694）。與變更檔的目錄走同一條收窄／放寬規則：
+    同一個根底下合計只有一個目錄才收窄，否則整棵重驗。"""
+    by_root: dict[str, set[str]] = {
+        root: set(dirs) for root, dirs in (extra or {}).items()}
     unmanaged: list[str] = []
     for raw in paths:
         # ⛔ The path is used AS GIVEN. This used to be `raw.strip()`, which is
@@ -275,6 +287,48 @@ def removed_roots(paths: list[str], deleted: set[str],
             by_root.setdefault(root, []).append(path)
     return {root for root, members in by_root.items()
             if all(p in deleted for p in members) and not exists(root)}
+
+
+def surviving_ancestors(removed: set[str],
+                        exists=os.path.lexists) -> dict[str, set[str]]:
+    """For each removed root nested inside a conf.d tree that still exists
+    (#3694): that tree → the directories it must be validated over.
+
+    `a/conf.d/b/conf.d` removed while `a/conf.d` remains: the inner tree's
+    files were part of the outer tree too (da-guard walks every non-hidden
+    subdirectory of `--config-dir`), so deleting the inner tree CHANGED the
+    outer one. Before #3664 the inner row was a `target` and da-guard's exit 2
+    turned the job red; #3664 made it `removed` and nothing named the outer
+    tree, so the comment went green about a tree that changed and was never
+    checked. This puts the outer tree back as a `target`.
+
+    * config-dir = the NEAREST conf.d ancestor that still exists. Ancestors
+      that are gone are skipped: everything beneath a missing directory is
+      missing too, so the nearest surviving one is the tree that changed.
+    * scope = the deepest directory on the way from the removed root up to
+      that ancestor that still exists (`a/conf.d/b` if it survives, else the
+      ancestor itself). Never a directory that does not exist — that would be
+      da-guard exit 2 about nothing.
+    * Several removed roots under one ancestor are merged by `resolve()`'s own
+      rule (more than one directory ⇒ the whole tree).
+
+    ⚠️ Only removed roots are walked. A root that is merely absent but was not
+    deleted is still a red `target` (see `removed_roots`), so it needs no
+    help. ⚠️ Not measured here: what a nested tree that is EDITED (not
+    removed) does to its outer tree — that was the behaviour before #3664 as
+    well and is outside #3694.
+    """
+    found: dict[str, set[str]] = {}
+    for root in removed:
+        start = PurePosixPath(root)
+        ancestor = next((str(p) for p in start.parents
+                         if p.name == CONF_D and exists(str(p))), None)
+        if ancestor is None:
+            continue
+        scope = next(str(p) for p in start.parents
+                     if str(p) == ancestor or exists(str(p)))
+        found.setdefault(ancestor, set()).add(scope)
+    return found
 
 
 def read_deleted(path: str) -> set[str]:
@@ -436,12 +490,14 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_UNREPRESENTABLE_PATH
 
     kept, excluded = partition(paths)
-    targets, unmanaged = resolve(kept)
     # ⛔ No `--deleted` ⇒ no deletion facts ⇒ nothing is `removed`: the tree
     # stays a target and da-guard's exit 2 keeps the job red. Never inferred
     # from the directory being absent alone (see removed_roots).
     removed = (removed_roots(kept, read_deleted(deleted_file))
                if deleted_file is not None else set())
+    # #3694: a removed tree nested in a surviving one changed that one — it
+    # becomes a target, alongside the `removed` row that names the deletion.
+    targets, unmanaged = resolve(kept, surviving_ancestors(removed))
     lines = [f"target{FIELD_SEP}{config_dir}{FIELD_SEP}{scope}{ROW_SEP}"
              for config_dir, scope in targets if config_dir not in removed]
     lines += [f"removed{FIELD_SEP}{root}{ROW_SEP}" for root in sorted(removed)]
