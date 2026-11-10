@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 
+from _platform_fs import symlink_or_skip
 from _tree import repo_files
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -1092,14 +1093,13 @@ class TestRemovedTreesAreNamedNotGuarded:
         assert rc == 0, rows
         assert rows == ["target\ta/conf.d/.h/conf.d\t."], rows
 
-    @pytest.mark.skipif(not hasattr(os, "symlink") or sys.platform == "win32",
-                        reason="needs POSIX symlinks")
     def test_a_symlinked_conf_d_below_a_root_is_not_nesting(
             self, tmp_path, monkeypatch, capsys):
         """walker 不跟隨目錄 symlink（#1972），那裡的 conf.d 不屬於外層的有效設定。"""
         (tmp_path / "x" / "conf.d").mkdir(parents=True)
         (tmp_path / "b" / "conf.d").mkdir(parents=True)
-        os.symlink("../../x/conf.d", tmp_path / "b" / "conf.d" / "conf.d")
+        symlink_or_skip("../../x/conf.d", tmp_path / "b" / "conf.d" / "conf.d",
+                        target_is_directory=True)
         rc, rows = self._run(tmp_path, monkeypatch, capsys, ["b/conf.d/_defaults.yaml"], [])
         assert rc == 0, rows
         assert rows == ["target\tb/conf.d\t."], rows
