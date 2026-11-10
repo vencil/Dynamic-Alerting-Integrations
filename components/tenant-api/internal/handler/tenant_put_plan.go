@@ -110,7 +110,7 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 	}
 	p := &putPlan{tenantID: tenantID}
 
-	// ADR-027 / LD-6 P4b: org-scope-aware write gate, BEFORE the body is
+	// ADR-027 §7: org-scope-aware write gate, BEFORE the body is
 	// read, so a denied caller triggers no side effect and learns nothing
 	// from policy-violation details. Judged once (a second OrgAllowed would
 	// count a second scope denial).

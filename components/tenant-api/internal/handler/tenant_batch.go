@@ -643,7 +643,7 @@ type directBatchRun struct {
 // PR-mode batch always did. Before #2900 each op was written before the next
 // was judged, which read the same state from disk.
 //
-// The per-op permission check is org-scope-aware (ADR-027 / LD-6 P4b) and the
+// The per-op permission check is org-scope-aware (ADR-027 §7) and the
 // tenant's org list is resolved here, at execution time — not at submit time.
 // The async path runs this after the HTTP request has returned, so a
 // submit-time snapshot could authorize against orgs that a _tenant_orgs.yaml

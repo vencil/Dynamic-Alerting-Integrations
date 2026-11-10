@@ -124,7 +124,7 @@ func WriteScopeMeta(configDir string) ScopeMetaFunc {
 }
 
 // OrgAllowed is the single composition point of tenantorg.OrgsForTenant and
-// rbac.AllowedInOrg (ADR-027 / LD-6 P4b): it resolves the target tenant's
+// rbac.AllowedInOrg (ADR-027 §7): it resolves the target tenant's
 // organization list AT DECISION TIME and feeds it to the org-scope-aware
 // write-plane permission check. Every per-tenant write/admin authorization
 // decision in the handler tree goes through here (or through the
@@ -390,7 +390,7 @@ func mayReplaceUnparseable(r *http.Request, d *Deps) bool {
 // it produces a forbidden list equal to `tenantIDs` (anonymous →
 // cannot write anything).
 //
-// The check is org-scope-aware (ADR-027 / LD-6 P4b): each tenant is
+// The check is org-scope-aware (ADR-027 §7): each tenant is
 // evaluated through OrgAllowed, so an org-scoped rule only grants a
 // member tenant it covers. tenantOrg may be nil (test literals) —
 // see OrgAllowed.
@@ -430,7 +430,7 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manage
 // Empty / nil input → returned as-is. No rules (no _rbac.yaml) →
 // OrgAllowedRead denies every tenant, so the result is empty.
 //
-// Org-aware read filter (ADR-027 / LD-6 P4c): each item's tenant is checked
+// Org-aware read filter (ADR-027 §7): each item's tenant is checked
 // through OrgAllowedRead, so a group-member / PR / task entry belonging to a
 // tenant outside the caller's org is filtered out — the read plane closes in
 // lockstep with read-by-id (P4c converted this from the pre-P4c org-blind

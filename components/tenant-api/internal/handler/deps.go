@@ -77,7 +77,7 @@ type Deps struct {
 
 	// ClaimHeaders is the claim-name→headerName map read from
 	// the oauth2-proxy config (proxyconfig.Load), the SAME map the
-	// RBAC manager was constructed with (ADR-027 / LD-6 P7). Handlers that
+	// RBAC manager was constructed with (ADR-027 §7). Handlers that
 	// validate a candidate _rbac.yaml (rbac.ParseCandidateConfig) need it so
 	// the candidate is checked against the identity axes this deployment
 	// actually runs. nil — no claim axes declared — is a valid value and
@@ -86,7 +86,7 @@ type Deps struct {
 	ClaimHeaders map[string]string
 
 	// TenantOrg maps tenants to their organizations (_tenant_orgs.yaml,
-	// ADR-027 / LD-6 P4). Read on BOTH scope planes: by the list/search RBAC
+	// ADR-027 §7). Read on BOTH scope planes: by the list/search RBAC
 	// filter to feed the org-scope axis of ScopeAllowed (P4a), and by
 	// handler.OrgAllowed / RequireOrgWrite to feed AllowedInOrg on the
 	// write plane (P4b, incl. the federation handlers). Optional — nil when
@@ -203,7 +203,7 @@ type Deps struct {
 	MaxBodyBytes int64
 
 	// HumanSocketPath is the pod-internal Unix domain socket serving the human
-	// (oauth2-proxy) plane (ADR-027 D2-B, --human-socket). Empty when the human
+	// (oauth2-proxy) plane (ADR-027 §2, --human-socket). Empty when the human
 	// socket is disabled (the default). When set, Ready self-dials GET /health
 	// over it so a dead human listener surfaces as pod NotReady instead of a
 	// silent human-plane outage that the kubelet's TCP-only probe would miss.

@@ -3327,7 +3327,7 @@
                     }
                 },
                 "claims": {
-                    "description": "Claims are the named verified claims carried by the request principal\n(ADR-027 / LD-6 P2; injected per the oauth2-proxy config). omitempty:\nwith no claim axes declared (nil map) the key is absent, keeping the\nzero-config response body byte-identical to pre-P2. Go serialises map\nkeys sorted, so the rendering is deterministic.",
+                    "description": "Claims are the named verified claims carried by the request principal\n(ADR-027 §7; injected per the oauth2-proxy config). omitempty:\nwith no claim axes declared (nil map) the key is absent, keeping the\nzero-config response body byte-identical to pre-P2. Go serialises map\nkeys sorted, so the rendering is deterministic.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -3343,7 +3343,7 @@
                     }
                 },
                 "org_claim_keys": {
-                    "description": "OrgClaimKeys are the org-scope claim keys of the rules THIS caller\nmatches (ADR-027 / LD-6 P7) — a caller-relative fact (\"which of my\nclaims act as an org axis for me\"), NOT \"does the platform run an org\naxis\". Intersected with the principal's present claims by construction:\nthe redacted reverse report strips claim keys as customer-recognizable\nidentifiers (they name the identity axes a deployment runs), so /me\nmust not reveal an org-scope key name the caller does not already\ncarry a value for. Sorted, de-duplicated; omitempty keeps the zero-org\n(and pre-P7) response body byte-identical.",
+                    "description": "OrgClaimKeys are the org-scope claim keys of the rules THIS caller\nmatches (ADR-027 §7) — a caller-relative fact (\"which of my\nclaims act as an org axis for me\"), NOT \"does the platform run an org\naxis\". Intersected with the principal's present claims by construction:\nthe redacted reverse report strips claim keys as customer-recognizable\nidentifiers (they name the identity axes a deployment runs), so /me\nmust not reveal an org-scope key name the caller does not already\ncarry a value for. Sorted, de-duplicated; omitempty keeps the zero-org\n(and pre-P7) response body byte-identical.",
                     "type": "array",
                     "items": {
                         "type": "string"

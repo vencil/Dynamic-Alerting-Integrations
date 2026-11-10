@@ -1,5 +1,5 @@
 // relay_token.js — da-portal machine-identity relay token injector
-// (ADR-027 D2-B O1, GHSA-3g2h-rf85-5rrv hardening series).
+// (ADR-027 §5, GHSA-3g2h-rf85-5rrv hardening series).
 //
 // njs handler for `js_set $relay_auth`: returns the Authorization header
 // value for the /api/v1 reverse proxy to tenant-api, read from the

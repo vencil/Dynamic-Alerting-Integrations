@@ -1,6 +1,6 @@
 package rbac
 
-// Dogfood drift-invariant suite for the reverse access report (ADR-027 / LD-6
+// Dogfood drift-invariant suite for the reverse access report (ADR-027 §7
 // P6, spec §5). The reverse report BORROWS the forward predicates; these tests
 // pin that the borrowing cannot drift:
 //

@@ -1,6 +1,6 @@
 package handler
 
-// Reverse access-report endpoint (ADR-027 / LD-6 P6):
+// Reverse access-report endpoint (ADR-027 §7):
 //
 //	GET /api/v1/audit/tenants/{id}/access-report?include=org_values&view=redacted
 //

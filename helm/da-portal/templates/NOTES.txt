@@ -11,7 +11,7 @@ SECURITY (GHSA-3g2h-rf85-5rrv) — header-trust surface:
   oauth2Proxy.enabled=false forbids a non-empty reverse-proxy target (render fails).
 
 {{- if .Values.portal.relayToken.enabled }}
-RELAY TOKEN (ADR-027 D2-B O1): ENABLED — nginx presents the pod's
+RELAY TOKEN (ADR-027 §5): ENABLED — nginx presents the pod's
   audience-bound SA token (aud=tenant-api, TTL 900s, kubelet-rotated) as
   Authorization: Bearer on every /api/v1 request; tenant-api's machine-identity
   audit sees da-portal as its third verified relay. Audit-only: the token never
@@ -28,7 +28,7 @@ RELAY TOKEN (ADR-027 D2-B O1): ENABLED — nginx presents the pod's
   invisible; an unreadable token logs "relay token unreadable" in the nginx
   error log and still degrades to no_token).
 {{- else }}
-RELAY TOKEN (ADR-027 D2-B O1): disabled — /api/v1 requests carry no machine
+RELAY TOKEN (ADR-027 §5): disabled — /api/v1 requests carry no machine
   identity, so tenant-api's port-8080 audit records this plane as no_token.
   Flip portal.relayToken.enabled=true once the portal image line is
   portal/v2.10.0+ AND the tenant-api chart is >= 2.9.13.

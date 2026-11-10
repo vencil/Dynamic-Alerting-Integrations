@@ -1,6 +1,6 @@
 package rbac
 
-// Reverse access report (ADR-027 / LD-6 P6): answers "who can access tenant X,
+// Reverse access report (ADR-027 §7): answers "who can access tenant X,
 // via which rule, under which conditions" by ENUMERATING the live config
 // against the SAME unexported predicates the forward gates run.
 //

@@ -1,6 +1,6 @@
 package handler
 
-// ADR-027 / LD-6 P3 — /api/v1/me exposure of match-block rule hits.
+// ADR-027 §7 — /api/v1/me exposure of match-block rule hits.
 //
 // /me's permissions map is built from rbac.RulesMatching (the same
 // ruleMatches predicate authz uses), so:

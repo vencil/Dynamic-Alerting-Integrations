@@ -18,6 +18,8 @@ Revised 2026-11-05: §10 now records the test result and adopts oauth2-proxy's s
 
 Revised 2026-11-07: the offline check of §7 also lists tenants whose tags cannot be read but that a scope-restricted rule applies to, and a broken file no restricting rule applies to no longer affects its exit code; environment and domain tags are changed by a platform admin restricted on no scope axis, and an admin restricted to some environments or domains can no longer change them.
 
+The reference check (§9 item 8) is in place: references in the repo that cited this ADR by the draft's IDs have been rewritten and the legacy-reference table deleted.
+
 This ADR replaces an unpublished draft from 2026-07. That draft's direction was "authenticate every hop": each component relaying identity to tenant-api would attach its own workload token, first in audit-only mode, then enforced after a multi-week soak. The code merged under that direction is either audit-only or off by default, and none of it is in any released tenant-api image. This ADR withdraws that direction; see §Context and §Alternatives considered. Fixes completed in that period that do not depend on the direction (an empty `_rbac.yaml` denies access; the middleware that derived the source IP from headers is gone) are kept.
 
 Implementation and release are tracked in [#1040](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1040).
@@ -155,7 +157,7 @@ This document is explanation; the checks below are the single source of truth fo
 5. A scan of helm, k8s manifests and rule packs: no configuration relays identity headers over the network to any component; the chart keys deleted in §6 do not exist; threshold-govern's CronJob, its NetworkPolicy allowance and its alert do not exist. The environment variables deleted in §6 are not in tenant-api's known list. (§4, §5, §6)
 6. tenant-api refuses to start when oauth2-proxy's configuration file does not have the shape in §2, with fixtures covering at least: keeping the client's value, a fixed value, a prefix, the wrong claim, missing email or groups, environment-variable references, and non-canonical field-name spellings; an `_rbac.yaml` with no rules denies all access, and no switch exists that restores open mode; a write by a non-platform-admin that changes a tenant's environment or domain tags is rejected. (§7)
 7. `tenant-api config check` lists untagged tenants and tenants whose tags cannot be read per scope axis and exits non-zero, tested against a fixed fixture and checked rule by rule against the server's tenant-list decision; CI runs it against the sample configuration in the repo. (§7)
-8. Reference check: every section reference after an `ADR-NNN` in the repo must resolve to an existing section of that ADR (matched by the section heading's number or name); `ADR-027` followed by a legacy ID from §Legacy references always fails. (This ADR and [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667))
+8. Reference check: every section reference after an `ADR-NNN` in the repo must resolve to an existing section of that ADR (matched by the section heading's number or name); `ADR-027` followed by a section ID of the 2026-07 draft (`D2-B`, `LD-6 P4b`, `MED-8` and the like; the full list is in the check itself) always fails. (This ADR and [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667))
 9. CI runs oauth2-proxy's configuration check (`--config-test`) with the image pinned by the chart (the same digest) against the configuration file the chart generates, and uses the same version of the oauth2-proxy library to assert that routing matches the example in §10. (§10)
 
 ### 10. oauth2-proxy routing configuration
@@ -233,20 +235,6 @@ Fallback (not adopted, kept for the record): the Ingress routes `/api/` by path 
 - tenant-api's pod carries the API, the portal and recipe-preview, which scale together.
 - A user removed from a group keeps permissions until the session updates (§8).
 - GHSA-3g2h-rf85-5rrv currently lists the L4 stopgap release as the patched version; once this ADR's release ships, the advisory's patched version and description need updating.
-
-## Legacy references
-
-Existing code cites this ADR with the numbering of the 2026-07 draft. Those references are rewritten when the reference check in §9 item 8 lands, and this table is then deleted; until then, map them as follows:
-
-| Legacy reference | This ADR |
-|---|---|
-| `D1`, `G4`, and machine-identity audit references tagged with implementation PR numbers | §4 (machine identity deferred) |
-| `D2-B`, `O1`, `L7` | §1, §2, §5 (da-portal relay removed) |
-| `Phase-1` | §6 (no soak) |
-| `§2.3`, `§2.5` | §2 |
-| `MED-7` | §3 |
-| `MED-8`, `D4`, `LD-6 P1`–`P7d` | §7 |
-| `D2-A` | §Alternatives considered (deferred) |
 
 ## Implementation
 

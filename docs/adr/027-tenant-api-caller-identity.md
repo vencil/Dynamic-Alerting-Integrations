@@ -24,6 +24,8 @@ updated_at: 2026-11-07
 
 2026-11-07 修訂：§7 的離線檢查也列出標記讀不到、卻被有範圍限制的規則套到的租戶，沒有限制規則套到的壞檔不再影響結束碼；環境與 domain 標記改由不受任何範圍限制的平台管理員變更，只限部分環境或 domain 的管理員不再能改。
 
+引用檢查（§9 第 8 項）已上線：repo 內以草稿編號引用本 ADR 的地方已改寫，舊編號對照表刪除。
+
 本 ADR 取代 2026-07 一份未公開的草稿。那份草稿的方向是「逐跳認證」：每個把身分轉給 tenant-api 的元件各自加上 workload token，先只做稽核、觀察數週後再強制。依那個方向合併的程式碼不是只做稽核、就是預設關閉，而且都不在任何已發布的 tenant-api image 裡。本 ADR 撤回那個方向，理由見 §背景 與 §考慮過但否決；那段期間完成、與方向無關的修正（`_rbac.yaml` 空檔拒絕存取、移除以 header 決定來源 IP 的中介層）保留。
 
 實作與發布追蹤在 [#1040](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1040)。
@@ -161,7 +163,7 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 5. 掃描 helm、k8s manifest 與 rule-pack：沒有任何設定把身分 header 跨網路轉送給任何元件；§6 刪除的 chart key 不存在；threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。§6 刪除的環境變數不在 tenant-api 的已知清單裡。（§4、§5、§6）
 6. oauth2-proxy 設定檔不符合 §2 的形狀時 tenant-api 拒絕啟動，fixture 至少涵蓋：保留 client 值、固定值、前綴、claim 對錯、缺 email 或 group、環境變數參照、非標準拼法的欄位名稱；沒有規則的 `_rbac.yaml` 拒絕所有存取，且不存在恢復 open mode 的開關；非平台管理員的寫入若變更租戶的環境或 domain 標記即被拒絕。（§7）
 7. `tenant-api config check` 對每條範圍軸列出未標記與標記讀不到的租戶並非零退出，以固定 fixture 測試，並逐條規則比對它與 server 租戶清單的判定一致；CI 對 repo 內的範例設定執行它。（§7）
-8. 引用檢查：repo 內每個 `ADR-NNN` 後接的小節引用都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）；`ADR-027` 後接 §舊引用對照 表中的舊編號一律失敗。（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）
+8. 引用檢查：repo 內每個 `ADR-NNN` 後接的小節引用都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）；`ADR-027` 後接 2026-07 草稿的小節編號（`D2-B`、`LD-6 P4b`、`MED-8` 之類，完整清單在檢查本身）一律失敗。（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）
 9. CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`），並以同版本的 oauth2-proxy 程式庫斷言分流結果與 §10 的範例一致。（§10）
 
 ### 10. oauth2-proxy 的分流設定
@@ -239,20 +241,6 @@ upstreamConfig:
 - tenant-api 的 pod 同時承載 API、portal 與 recipe-preview，三者一起擴縮。
 - 被移出 group 的使用者，權限在 session 更新前仍有效（§8）。
 - GHSA-3g2h-rf85-5rrv 目前列出的修補版本是 L4 止血那一版；本 ADR 的 release 發布後，需更新該 advisory 的修補版本與說明。
-
-## 舊引用對照
-
-repo 內既有程式碼以 2026-07 草稿的編號引用本 ADR。§9 第 8 項的引用檢查上線時，這些引用會一併改寫，本表隨之刪除；在那之前依下表對照：
-
-| 舊引用 | 本 ADR |
-|---|---|
-| `D1`、`G4`，以及以實作 PR 編號標記的機器身分稽核引用 | §4（機器身分延後） |
-| `D2-B`、`O1`、`L7` | §1、§2、§5（da-portal 轉送移除） |
-| `Phase-1` | §6（不設觀察期） |
-| `§2.3`、`§2.5` | §2 |
-| `MED-7` | §3 |
-| `MED-8`、`D4`、`LD-6 P1`–`P7d` | §7 |
-| `D2-A` | §考慮過但否決（延後） |
 
 ## 實作位置
 

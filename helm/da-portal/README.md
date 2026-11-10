@@ -136,7 +136,7 @@ helm install da-portal helm/da-portal -n monitoring \
   --set 'portal.tenantApiUrl=http://tenant-api.tenant-api-staging.svc.cluster.local:8080'
 ```
 
-#### Relay Token (ADR-027 D2-B O1)
+#### Relay Token (ADR-027 §5)
 
 When `portal.relayToken.enabled=true`, nginx reads the pod's audience-bound
 projected ServiceAccount token (`aud=tenant-api`, TTL 900s, kubelet-rotated)
@@ -191,7 +191,7 @@ helm install da-portal helm/da-portal -n monitoring \
 |-----|------|---------|-------------|
 | portal.listenPort | int | 80 | nginx listening port |
 | portal.tenantApiUrl | string | `http://tenant-api.tenant-api.svc.cluster.local:8080` | Reverse proxy target |
-| portal.relayToken.enabled | bool | false | Inject the audience-bound SA relay token on /api/v1 (ADR-027 D2-B O1; needs the portal/v2.10.0+ image) |
+| portal.relayToken.enabled | bool | false | Inject the audience-bound SA relay token on /api/v1 (ADR-027 §5; needs the portal/v2.10.0+ image) |
 
 ### OAuth2 Proxy
 

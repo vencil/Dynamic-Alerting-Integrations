@@ -1,6 +1,6 @@
 package rbac
 
-// Candidate-config seam tests (ADR-027 / LD-6 P7): the dry-run's value rests
+// Candidate-config seam tests (ADR-027 §7): the dry-run's value rests
 // on two invariants — a candidate report is indistinguishable from a
 // path-loaded report except for the anchor (fidelity), and an empty candidate
 // reports fail_closed_empty exactly as a live manager does (ADR-027 §7).
