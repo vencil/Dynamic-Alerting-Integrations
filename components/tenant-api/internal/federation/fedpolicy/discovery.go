@@ -56,7 +56,7 @@ const (
 	// tenant". 24h (not a short window) deliberately covers daily batch /
 	// CronJob and other intermittent metrics — the authoring pain is "I
 	// can't find the metric I just wrote", far worse than seeing an old
-	// dead metric (ADR-024 §3 lookback decision).
+	// dead metric.
 	discoveryWindow = 24 * time.Hour
 	// DefaultDiscoveryLimit caps how many metric names a single discovery
 	// call returns. The portal autocomplete only needs enough to filter;

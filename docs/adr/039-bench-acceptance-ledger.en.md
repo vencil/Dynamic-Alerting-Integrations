@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (2026-10-31). The ledger and the verdicts of both gates (the bench gate on PRs and the per-commit attribution after merging to main) are live. A cumulative budget, blocking merges on PRs, and what the ledger does when the reference version is changed are covered in §Not yet decided.
 
-**Revised 2026-11-01**: the absolute-ns/op nightly monitor was retired ([ADR-032](032-paired-interleaved-bench-measurement.md) §Open question 6 withdrawn), so the cumulative budget for the deterministic metrics is now the only planned nightly trend detector; until it ships, drift that stays below the per-commit threshold is not detected nightly, and only the release-time Tier 2 comparison (`bench-gate-release.yaml`) still reports regressions of 10% or more against the previous platform release.
+**Revised 2026-11-01**: the absolute-ns/op nightly monitor was retired ([ADR-032](032-paired-interleaved-bench-measurement.md) §待決 6 withdrawn), so the cumulative budget for the deterministic metrics is now the only planned nightly trend detector; until it ships, drift that stays below the per-commit threshold is not detected nightly, and only the release-time Tier 2 comparison (`bench-gate-release.yaml`) still reports regressions of 10% or more against the previous platform release.
 
 ## Context
 
@@ -25,7 +25,7 @@ There are two bench gates, and they share one verdict:
 
 Some regressions are deliberate: an extra decode for correctness, one more field in a struct. Until now the author wrote the trade-off in a PR comment and merged. The post-merge gate cannot read PR comments, so it measured again and opened an issue; a real trade-off never comes back clean on a re-run, so the issue stayed open. An inventory on 2026-10-31 found 8 such issues open at once, the oldest for five weeks; in 3 of them the trade-off had been written on the PR before it merged.
 
-[ADR-032](032-paired-interleaved-bench-measurement.md) §Open question 7 saw the same thing from the nightly monitor's side: the monitor needs a third exit, "attributed and accepted", with open sub-questions including where the mark lives and how fine-grained it is.
+[ADR-032](032-paired-interleaved-bench-measurement.md) §待決 7 saw the same thing from the nightly monitor's side: the monitor needs a third exit, "attributed and accepted", with open sub-questions including where the mark lives and how fine-grained it is.
 
 ## Decision
 
@@ -138,5 +138,5 @@ Which commit an entry belongs to is decided by git (the commit that added it); t
 
 ## Related
 
-- [ADR-032](032-paired-interleaved-bench-measurement.md): paired interleaved nightly measurement; this ADR answers "where the mark lives" and "how fine-grained" from its §Open question 7
+- [ADR-032](032-paired-interleaved-bench-measurement.md): paired interleaved nightly measurement; this ADR answers "where the mark lives" and "how fine-grained" from its §待決 7
 - [#3468](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3468): lifecycle of performance-regression issues
