@@ -15,6 +15,7 @@ import (
 	"runtime/debug"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 )
 
@@ -28,6 +29,29 @@ const (
 	msgRequestTimeout   = "the request reached the server's per-request deadline before it was answered; " +
 		"a write it made may or may not have taken effect — read before resending"
 )
+
+// msgSimulateNotProvided is the standalone portal nginx's text for the same
+// answer (components/da-portal/nginx.conf), word for word.
+const msgSimulateNotProvided = "simulate preview is not provided by this deployment: " +
+	"the portal does not proxy /api/v1/tenants/simulate (served by threshold-exporter)"
+
+// SimulateNotProvided answers the portal's simulate-preview widget: simulate
+// is threshold-exporter's endpoint, which this deployment does not offer
+// (#2125). The standalone portal's nginx answered it; since the portal is
+// served from tenant-api's pod and every /api/ request reaches tenant-api
+// (ADR-027 §5), tenant-api does — the same status and code, which is what the
+// widget keys on. POST only: GET, PUT and DELETE of /api/v1/tenants/simulate
+// still address a tenant named "simulate".
+//
+// @Summary     Simulate preview is not provided
+// @Description Simulate preview (merging a tenant.yaml with defaults) is threshold-exporter's endpoint, which this deployment does not offer. Always 501 SIMULATE_NOT_PROVIDED; the portal widget shows "not provided" on it. Only POST: other methods on this path address a tenant named simulate.
+// @Tags        tenants
+// @Produce     json
+// @Failure     501 {object} ErrorResponse "code SIMULATE_NOT_PROVIDED, always"
+// @Router      /api/v1/tenants/simulate [post]
+func SimulateNotProvided(w http.ResponseWriter, r *http.Request) {
+	WriteJSONErrorWithCode(w, r, http.StatusNotImplemented, errcode.SimulateNotProvided, msgSimulateNotProvided)
+}
 
 // NotFound answers a request no route matches (chi Mux.NotFound).
 func NotFound(w http.ResponseWriter, r *http.Request) {
