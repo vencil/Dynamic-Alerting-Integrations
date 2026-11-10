@@ -185,7 +185,7 @@ spec:
           for: 5m
           labels:
             severity: warning
-            metric_group: mariadb-connections
+            metric_group: mysql_connections
 ```
 
 ### Verify PrometheusRule
