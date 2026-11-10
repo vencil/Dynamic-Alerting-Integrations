@@ -18,7 +18,7 @@ lang: zh
 > - **列出全部**：`cd tests/e2e && npx playwright test --list --reporter=json` 列得出所有宣告式的停車測試。
 > - **ESLint 的角色**：只擋 `.skip()`（任何形式），作為 commit 時的快速回饋。
 > - **看不到的**：沒被收進或沒被執行的測試，例如 `--grep`、`--grep-invert`、`testIgnore`、`--shard` 排除的，以及刪掉的測試。也不檢查 issue 是否還 open。
-> - **執行點**：本機每次 `playwright test`，以及 CI 的 `Smoke Tests (Chromium)`。⚠️ 該 job 不在 main 的 required checks 內，紅了不擋 merge。
+> - **執行點**：本機每次 `playwright test`，以及 CI 的 `Smoke Tests (Chromium)`。它是 main 的 required check，由 `ci.yml` 的 aggregate gate 回報，紅了會擋 merge（[#1428](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1428)）。
 
 ## 登記規則
 

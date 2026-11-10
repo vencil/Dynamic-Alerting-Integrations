@@ -50,6 +50,20 @@ Checking (``--check``)
      reach the series without spelling it, and in a ``page`` alert would mute
      it in a maintenance window (#1200). No list of the other filters' names
      is kept: a selector that cannot match the series is not reported.
+  5. No selector could select ``ALERTS`` or ``ALERTS_FOR_STATE`` (#3678 F1).
+     Those series exist only while an alert fires, and a ``mute`` alert stops
+     firing in a maintenance window: a ``page`` alert that reads them is
+     muted with it, through no clause any check here follows. Prometheus
+     decides which selectors could (``da-read promql-selectors``).
+  6. The left side of every maintenance clause keeps ``tenant`` (#3678 F2):
+     ``sum without(tenant) (X) unless on(tenant) (…)`` never matches the
+     maintenance series, so the clause is there only in its spelling and
+     the alert fires through the window. Prometheus' parse tree decides
+     (``da-read promql-label-flow``), following the recording rules the left
+     side reads — a record that aggregated ``tenant`` away hides nothing. A
+     left side whose label flow that reading cannot prove (a ``label_replace``
+     writing ``tenant``, a ``__name__`` regex that could read a record) is
+     refused too, not assumed.
 
 Exit codes: 0 ok / wrote, 1 drift or a violation, 2 caller error (a pack the
 loader refuses, an expr shape this tool does not understand).
@@ -94,6 +108,15 @@ VALUES = (MUTE, PAGE)
 
 #: The series the maintenance clause reads, as a selector (check 4).
 MAINTENANCE_SERIES = 'user_state_filter{filter="maintenance"}'
+
+#: Labels whose whole value IS the tenant (check 6): Prometheus writes
+#: `tenant` from the namespace (k8s/03-monitoring/configmap-prometheus.yaml,
+#: `target_label: tenant` from `__meta_kubernetes_namespace`), so a
+#: `label_replace` copying `namespace` into `tenant` keeps the tenant.
+TENANT_ALIASES = ("namespace",)
+
+#: The series Prometheus derives from firing alerts (check 5).
+ALERT_SERIES = ("ALERTS", "ALERTS_FOR_STATE")
 
 #: The one spelling of the maintenance clause (= Go's maintenanceTail).
 MAINTENANCE_TAIL = 'unless on(tenant)\n(user_state_filter{filter="maintenance"} == 1)'
@@ -498,9 +521,66 @@ def stray_selector_problems(rules: "list[tuple[str, str, str]]", selectors_of=No
     return problems
 
 
-def semantic_problems(rule_files: list, selectors_of=None) -> list[str]:
-    """Checks 2 and 4 of the module docstring, on the files as Prometheus reads them."""
+def alert_series_problems(rules: "list[tuple[str, str, str]]", selectors_of=None) -> list[str]:
+    """Check 5 of the module docstring. *rules* are (path, name, expr);
+    *selectors_of* (default: ``da-read promql-selectors``) maps a series and
+    a list of exprs to, per expr, the selectors that could select it."""
+    if selectors_of is None:
+        selectors_of = _lib_consumer_read.promql_selectors
+    exprs = [e for _, _, e in rules]
+    problems: list[str] = []
+    if not exprs:
+        return problems
+    for series in ALERT_SERIES:
+        for (path, name, _), found in zip(rules, selectors_of(series, exprs)):
+            for h in found:
+                problems.append(
+                    f"{path}: {name}: selector {h['selector']} could select {series} — the "
+                    f"series of firing alerts; a mute alert stops firing in a maintenance "
+                    f"window, so a rule reading it is muted with it without the label "
+                    f"saying so (#3678)")
+    return problems
+
+
+def clause_flow_problems(rules: "list[tuple[str, str, str]]", flow_of=None,
+                         records: "dict[str, list[dict]] | None" = None) -> list[str]:
+    """Check 6 of the module docstring. *rules* are (path, name, expr);
+    *records* the recording rules they may read ({name: [{"expr", "labels"}, …]}, followed
+    so a record cannot hide a dropped ``tenant``); *flow_of* (default: ``da-read
+    promql-label-flow tenant``) maps a list of exprs to, per expr, its
+    ``and``/``unless on(tenant)`` matches."""
+    if flow_of is None:
+        flow_of = lambda exprs: _lib_consumer_read.promql_label_flow(  # noqa: E731
+            "tenant", exprs, records, TENANT_ALIASES)
+    with_clause = [(p, n, e) for p, n, e in rules if _clauses(e)]
+    if not with_clause:
+        return []
+    problems: list[str] = []
+    for (path, name, expr), hits in zip(with_clause, flow_of([e for _, _, e in with_clause])):
+        ends = {_char_offset(expr, h["end"]): h for h in hits if h.get("op") == "unless"}
+        for _, ce in _clauses(expr):
+            h = ends.get(ce)
+            if h is None:
+                problems.append(f"{path}: {name}: Prometheus' parse tree has no `unless on(tenant)` "
+                                f"ending where the maintenance clause ends — the clause is not "
+                                f"the operator it reads as")
+            elif h["lhs"] == "dropped":
+                problems.append(f"{path}: {name}: the left side of the maintenance clause drops "
+                                f"`tenant` (an aggregation without it, a `without(tenant)`, a "
+                                f"one-to-one match not on it), so `unless on(tenant)` never "
+                                f"matches and the rule fires through a maintenance window (#3678)")
+            elif h["lhs"] != "kept":
+                problems.append(f"{path}: {name}: cannot prove the left side of the maintenance "
+                                f"clause keeps `tenant` ({h['lhs']}: e.g. a label_replace that "
+                                f"writes it); keep `tenant` from the series it was read from")
+    return problems
+
+
+def semantic_problems(rule_files: list, selectors_of=None, alert_selectors_of=None,
+                      flow_of=None) -> list[str]:
+    """Checks 2, 4, 5 and 6 of the module docstring, on the files as Prometheus reads them."""
     records: dict[str, list[str]] = {}
+    record_defs: dict[str, list[dict]] = {}
     alerts: list[tuple[str, dict]] = []
     every: list[tuple[str, str, str]] = []
     for rf in rule_files:
@@ -509,11 +589,18 @@ def semantic_problems(rule_files: list, selectors_of=None) -> list[str]:
                 for r in g.get("rules") or []:
                     if "record" in r:
                         records.setdefault(r["record"], []).append(r.get("expr", ""))
+                        # The labels Prometheus writes on the record's series:
+                        # the group's `labels:`, then the rule's (which win).
+                        record_defs.setdefault(r["record"], []).append(
+                            {"expr": r.get("expr", ""),
+                             "labels": {**(g.get("labels") or {}), **(r.get("labels") or {})}})
                         every.append((rf.path, f"record {r['record']}", r.get("expr", "")))
                     elif "alert" in r:
                         alerts.append((rf.path, r))
                         every.append((rf.path, f"alert {r['alert']}", r.get("expr", "")))
     problems: list[str] = stray_selector_problems(every, selectors_of)
+    problems += alert_series_problems(every, alert_selectors_of)
+    problems += clause_flow_problems(every, flow_of, record_defs)
 
     def count(expr: str, seen: frozenset[str]) -> int:
         n = clause_count(expr)

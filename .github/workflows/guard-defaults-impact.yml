@@ -429,8 +429,15 @@ jobs:
             # `conf.d/_arch/tenant.yaml` (a tenant under a `_` directory) and
             # misses a repo-root `_x.yaml`; `:(icase,glob)` does neither,
             # which is what the GitHub `paths:` globs above mean.
+            # ⛔ `--no-renames` on BOTH listings (#3694). git detects renames by
+            # default: a deleted `_defaults.yaml` whose content matches a file
+            # added anywhere else in the pathspec — a move, or two unrelated
+            # edits that happen to agree — is listed only under its NEW path,
+            # and not as `D` either. The deletion then never reaches the helper:
+            # no `removed` row, and the tree it was deleted from (or the outer
+            # tree a nested one sat in) is neither validated nor named — green.
             set +e
-            git diff -z --name-only "origin/${BASE_REF}...HEAD" -- \
+            git diff -z --no-renames --name-only "origin/${BASE_REF}...HEAD" -- \
               ':(icase,glob)**/_*.yaml' ':(icase,glob)**/_*.yml' \
               > "$RUNNER_TEMP/changed-defaults.txt"
             diff_rc=$?
@@ -447,7 +454,7 @@ jobs:
             # exit 2. ⚠️ A truncated list here can only make a tree LESS likely
             # to be `removed` (it stays a red target), never more.
             set +e
-            git diff -z --name-only --diff-filter=D "origin/${BASE_REF}...HEAD" -- \
+            git diff -z --no-renames --name-only --diff-filter=D "origin/${BASE_REF}...HEAD" -- \
               ':(icase,glob)**/_*.yaml' ':(icase,glob)**/_*.yml' \
               > "$RUNNER_TEMP/deleted-defaults.txt"
             diff_rc=$?
