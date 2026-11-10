@@ -286,8 +286,6 @@ TOOLS: dict[str, Tool] = {
                                              "--config-dir", "{conf}", "--ci")),
     "analyze_rule_pack_gaps": Tool((_PY, _T + "ops/analyze_rule_pack_gaps.py", "--config-dir", "{conf}")),
     "explain_route": Tool((_PY, _T + "ops/explain_route.py", "--config-dir", "{conf}")),
-    "maintenance_scheduler": Tool((_PY, _T + "ops/maintenance_scheduler.py", "--config-dir", "{conf}",
-                                   "--dry-run")),
     "notification_tester": Tool((_PY, _T + "ops/notification_tester.py", "--config-dir", "{conf}",
                                  "--dry-run")),
     "policy_engine": Tool((_PY, _T + "ops/policy_engine.py", "--config-dir", "{conf}", "--ci")),

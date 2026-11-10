@@ -191,10 +191,6 @@ commands:
     "--exclude": not_path
     "--rule-pack-dir": dir
     paths: any
-  maintenance-scheduler:
-    "--alertmanager": url
-    "--config-dir": dir
-    "--pushgateway": url
   migrate:
     "--output-dir": output
     "--prefix": not_path

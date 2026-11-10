@@ -7,10 +7,10 @@ asymmetric pair reads as "wired" on either side alone. `kubectl apply` accepts
 it, no controller complains, and the only symptom is a connection that silently
 never happens.
 
-That is not hypothetical: `allow-maintenance-scheduler-egress` permitted the
-maintenance-scheduler CronJob to reach Alertmanager on 9093, while
-`allow-alertmanager-ingress` admitted only `app: prometheus`. Every silence the
-scheduler tried to create for a planned-maintenance window was dropped at the
+That was not hypothetical: an egress policy (since removed together with its
+CronJob, #3639) permitted a silence-creating CronJob to reach Alertmanager on
+9093, while `allow-alertmanager-ingress` admitted only `app: prometheus`. Every
+silence it tried to create for a planned-maintenance window was dropped at the
 destination — and the failure is self-concealing, because the observable effect
 is "alerts fired during maintenance", which reads as an alerting-rule problem.
 
@@ -44,9 +44,9 @@ _EXPECTED_POLICIES = frozenset({
     "default-deny-all",
     "allow-alertmanager-ingress",
     "allow-alertmanager-egress",
-    "allow-maintenance-scheduler-egress",
+    "allow-prometheus-egress",
 })
-_EXPECTED_WORKLOADS = frozenset({"alertmanager", "prometheus", "maintenance-scheduler"})
+_EXPECTED_WORKLOADS = frozenset({"alertmanager", "prometheus"})
 
 _WORKLOAD_KINDS = {"Deployment", "DaemonSet", "StatefulSet", "CronJob", "Job"}
 

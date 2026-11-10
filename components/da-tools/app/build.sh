@@ -28,7 +28,6 @@
 #       ├── deprecate_rule.py
 #       ├── cutover_tenant.py
 #       ├── blind_spot_discovery.py
-#       ├── maintenance_scheduler.py
 #       ├── lint_custom_rules.py
 #       ├── config_diff.py
 #       ├── generate_alertmanager_routes.py
@@ -73,7 +72,6 @@ TOOL_FILES=(
     ops/backtest_threshold.py
     ops/cutover_tenant.py
     ops/blind_spot_discovery.py
-    ops/maintenance_scheduler.py
     # #924 / ADR-028 — revocation-reconciler daemon (runs as a Deployment via
     # direct invoke; exempt from COMMAND_MAP, see _lint_helpers.BUILD_EXEMPT).
     ops/_federation_revocation_reconciler.py

@@ -47,9 +47,10 @@ downgrade from "clean" to "skipped".
   distinct tools in `MEASURED` are the thirteen.
 
       analyze_rule_pack_gaps.py   backtest_threshold.py
-      maintenance_scheduler.py    notification_tester.py
-      policy_opa_bridge.py        threshold_govern.py
-      check_routing_profiles.py
+      notification_tester.py      policy_opa_bridge.py
+      threshold_govern.py         check_routing_profiles.py
+
+  (the seventh was deleted outright, with the feature it served, in #3639)
 
   Their ``safe_label`` calls are retained as deliberate defence in depth, and
   the owner ruled they stay. But a green run of this file — "N passed" — says
@@ -517,7 +518,7 @@ def test_the_measured_set_does_not_shrink(hostile_dirs, tmp_path):
 #   check_path_metadata_consistency.py:204   f"WARN path/metadata mismatch: {display}"
 KNOWN_CRASH_DUMP_LEAKS = {
     "analyze_rule_pack_gaps.py", "backtest_threshold.py", "blind_spot_discovery.py",
-    "maintenance_scheduler.py", "notification_tester.py", "policy_opa_bridge.py",
+    "notification_tester.py", "policy_opa_bridge.py",
     "threshold_govern.py", "threshold_recommend.py", "check_routing_profiles.py",
 }
 

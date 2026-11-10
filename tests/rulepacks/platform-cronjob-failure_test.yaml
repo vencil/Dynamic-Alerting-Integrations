@@ -9,8 +9,8 @@
 #
 # The distinguishing case is `older-failure-then-success-no-fire`: upstream
 # kubernetes-mixin's KubeJobFailed (`kube_job_failed > 0`) keeps firing on any
-# RETAINED failed Job until a human deletes it. With maintenance-scheduler on a
-# */5 schedule that turns one blip into a permanently-lit alert. We assert the
+# RETAINED failed Job until a human deletes it. With a CronJob on a */5
+# schedule that turns one blip into a permanently-lit alert. We assert the
 # "latest run" semantics instead, so a recovery self-resolves.
 #
 # Timestamps: start_time values are compared against each OTHER (never against
@@ -59,8 +59,8 @@ tests:
                 success to measure staleness against — this fires the first
                 time a run fails, including for a CronJob that has never
                 succeeded even once.
-                NOT urgent: platform CronJobs (maintenance-scheduler, every 5
-                minutes) carry no 3am action. Triage in business hours.
+                NOT urgent: a platform CronJob carries no 3am action. Triage
+                in business hours.
                 Check: (a) `kubectl get jobs -n monitoring` and the
                 failing pod's logs; (b) whether the CronJob's pinned image
                 actually contains the program it invokes — that failure mode is
@@ -80,22 +80,22 @@ tests:
     name: cronjob-older-failure-then-success-no-fire
     input_series:
       # failed run, started earlier
-      - series: 'kube_job_status_start_time{job_name="ms-1",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="fs-1",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "100x30"
-      - series: 'kube_job_failed{job_name="ms-1",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_failed{job_name="fs-1",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_job_owner{job_name="ms-1",namespace="monitoring",owner_kind="CronJob",owner_name="maintenance-scheduler",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="fs-1",namespace="monitoring",owner_kind="CronJob",owner_name="five-minute-sync",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
       # later run, SUCCEEDED. kube_job_complete{condition="true"} is what KSM
       # actually emits for a completed Job — modelling success as "a newer
       # start_time and no condition series" would make it indistinguishable
       # from a run that is still in flight, which is precisely the confusion
       # that let the for-timer-reset bug below slip through review once.
-      - series: 'kube_job_status_start_time{job_name="ms-2",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="fs-2",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "400x30"
-      - series: 'kube_job_complete{job_name="ms-2",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_complete{job_name="fs-2",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_job_owner{job_name="ms-2",namespace="monitoring",owner_kind="CronJob",owner_name="maintenance-scheduler",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="fs-2",namespace="monitoring",owner_kind="CronJob",owner_name="five-minute-sync",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
     alert_rule_test:
       - eval_time: 30m
@@ -108,8 +108,8 @@ tests:
   # including one that had only just been created. A new Job gets its
   # start_time immediately but its Failed/Complete condition only after the
   # backoff, so every new run briefly broke the equality, emptied the vector,
-  # and RESET the `for: 15m` timer. maintenance-scheduler runs every 5 minutes,
-  # so the timer could never accumulate and the alert was structurally
+  # and RESET the `for: 15m` timer. For a CronJob that runs every 5 minutes
+  # the timer could never accumulate and the alert was structurally
   # incapable of firing for it — the exact defect class this alert exists to
   # catch. Restricting the right-hand branch to TERMINAL Jobs (failed OR
   # complete) is what fixes it: an in-flight run no longer votes.
@@ -117,16 +117,16 @@ tests:
     name: newer-run-in-flight-previous-run-failed-still-fires
     input_series:
       # previous run: failed
-      - series: 'kube_job_status_start_time{job_name="ms-3",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="fs-3",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "100x40"
-      - series: 'kube_job_failed{job_name="ms-3",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_failed{job_name="fs-3",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x40"
-      - series: 'kube_job_owner{job_name="ms-3",namespace="monitoring",owner_kind="CronJob",owner_name="maintenance-scheduler",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="fs-3",namespace="monitoring",owner_kind="CronJob",owner_name="five-minute-sync",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x40"
       # next run: started, no terminal condition yet — must NOT silence the alert
-      - series: 'kube_job_status_start_time{job_name="ms-4",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="fs-4",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "_x5 400x35"
-      - series: 'kube_job_owner{job_name="ms-4",namespace="monitoring",owner_kind="CronJob",owner_name="maintenance-scheduler",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="fs-4",namespace="monitoring",owner_kind="CronJob",owner_name="five-minute-sync",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "_x5 1x35"
     alert_rule_test:
       - eval_time: 30m
@@ -135,18 +135,18 @@ tests:
           - exp_labels:
               severity: warning
               alert_source: platform
-              owner_name: maintenance-scheduler
+              owner_name: five-minute-sync
               namespace: monitoring
             exp_annotations:
               description: |
-                The most recent Job created by CronJob maintenance-scheduler
+                The most recent Job created by CronJob five-minute-sync
                 in namespace monitoring ended in a Failed
                 condition. Unlike a staleness alert — which needs a PREVIOUS
                 success to measure staleness against — this fires the first
                 time a run fails, including for a CronJob that has never
                 succeeded even once.
-                NOT urgent: platform CronJobs (maintenance-scheduler, every 5
-                minutes) carry no 3am action. Triage in business hours.
+                NOT urgent: a platform CronJob carries no 3am action. Triage
+                in business hours.
                 Check: (a) `kubectl get jobs -n monitoring` and the
                 failing pod's logs; (b) whether the CronJob's pinned image
                 actually contains the program it invokes — that failure mode is
@@ -158,7 +158,7 @@ tests:
                 anyone deleting the failed Job. Suspending the CronJob also
                 silences it.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
-              summary: "CronJob maintenance-scheduler: most recent run failed"
+              summary: "CronJob five-minute-sync: most recent run failed"
 
   # ── one alert, not two, when kube-state-metrics runs >1 replica ─────────
   # Every join operand is pre-projected with `max by (job_name, namespace)`.
@@ -198,8 +198,8 @@ tests:
                 success to measure staleness against — this fires the first
                 time a run fails, including for a CronJob that has never
                 succeeded even once.
-                NOT urgent: platform CronJobs (maintenance-scheduler, every 5
-                minutes) carry no 3am action. Triage in business hours.
+                NOT urgent: a platform CronJob carries no 3am action. Triage
+                in business hours.
                 Check: (a) `kubectl get jobs -n monitoring` and the
                 failing pod's logs; (b) whether the CronJob's pinned image
                 actually contains the program it invokes — that failure mode is

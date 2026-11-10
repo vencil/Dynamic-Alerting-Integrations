@@ -260,9 +260,16 @@ da-tools patch-config db-product-01 _silent_mode disable
 
 ⚠️ `expires` must be a full RFC3339 timestamp (with `T` and a zone, e.g. `2099-12-31T23:59:59Z`; quoting it is recommended). When the exporter cannot parse it, it logs a WARN (on every scrape) and **ignores the whole setting** — nothing is silenced and alerts keep notifying ([#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)); always confirm with the `diagnose` in step 2 above that the tenant really entered silent mode. Common parse failures: a quoted date with no time (`"2099-12-31"`), or a space between date and time (`2099-12-31 23:59:59+00:00`). If `expires` is already in the past, the silence counts as expired as soon as it is written: nothing is muted, and a `da_config_event{event="silence_expired"}` event is emitted instead. Keep a space after `target:`; the JSON form (`{"target": …}`) is not recognized.
 
-```bash
-# Scheduled maintenance windows (CronJob auto-creates Alertmanager silences)
-da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
+Recurring maintenance windows are written in the tenant config and evaluated by the threshold-exporter itself: inside a window, alerts labelled `maintenance: mute` do not fire, with no Alertmanager silence involved ([#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)). Times are UTC, and a window that crosses midnight belongs to the day it starts on; the old `cron` + `duration` form is refused (the whole value is not read and maintenance is not on).
+
+```yaml
+tenants:
+  db-product-01:
+    _state_maintenance:
+      recurring:
+        - weekdays: [sun]          # sun mon tue wed thu fri sat
+          window: "02:00-06:00"    # UTC
+          reason: weekly patching
 ```
 
 ## Phase 3: Special Operations

@@ -244,7 +244,7 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 
 ⚠️ **部署了 federation 卻沒開 ServiceMonitor，會收到兩條 critical。** `FederationRevocationReconcileStale`（指標不存在的那一半）與 `FederationAuditPipelineSilent` 以 kube-state-metrics 判斷元件是否部署（reconciler 的 Deployment、gateway 帶 `audit-metrics` 容器的 pod），不看 `up`——scrape 目標遺失正是它們要抓的狀況。所以 federation 有部署、但 `serviceMonitor.enabled` 還是預設的 `false` 時，這兩條會響：撤銷竄改偵測與稽核管線確實沒人在看。這是正確的訊號；把那兩個 chart 的 `serviceMonitor.enabled` 打開即可。沒部署 federation 的叢集不會收到。
 
-⚠️ **仍然選 `namespace="monitoring"` 的幾條**（`CronJobLastRunFailed`、`ConfigReloaderHighRestarts`、`ConfigReloaderNotStarting`）看的是本 repo `k8s/03-monitoring/` 的 raw manifest（`maintenance-scheduler` CronJob、Prometheus／Alertmanager 的 `config-reloader` sidecar），那些 manifest 寫死在 `monitoring`。Operator 模式下它們照樣輸出（kube-state-metrics 有這些 series），但只看名為 `monitoring` 的 namespace：kube-prometheus-stack 裝在那裡時，它自己 Prometheus 的 `config-reloader` sidecar 也會被看到。平台 chart 的工作負載（`TenantApiSingleWriterBreach`、`ThresholdExporterHighRestarts`）不再釘 namespace，裝在哪都看得到。
+⚠️ **仍然選 `namespace="monitoring"` 的幾條**（`CronJobLastRunFailed`、`ConfigReloaderHighRestarts`、`ConfigReloaderNotStarting`）看的是本 repo `k8s/03-monitoring/` 的 raw manifest（Prometheus／Alertmanager 的 `config-reloader` sidecar；`CronJobLastRunFailed` 看你放進 `monitoring` 的 CronJob，本 repo 目前沒出貨任何一支），那些 manifest 寫死在 `monitoring`。Operator 模式下它們照樣輸出（kube-state-metrics 有這些 series），但只看名為 `monitoring` 的 namespace：kube-prometheus-stack 裝在那裡時，它自己 Prometheus 的 `config-reloader` sidecar 也會被看到。平台 chart 的工作負載（`TenantApiSingleWriterBreach`、`ThresholdExporterHighRestarts`）不再釘 namespace，裝在哪都看得到。
 
 ---
 

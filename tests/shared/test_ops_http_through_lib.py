@@ -50,7 +50,6 @@ DIRECT_HTTP_ALLOWED: dict[str, str] = {
     "_federation_revocation_reconciler.py": "queries VictoriaLogs and serves its own endpoint",
     "discover_instance_mappings.py": "scrapes an exporter's /metrics (--endpoint)",
     "generator_service.py": "is a socket server",
-    "maintenance_scheduler.py": "writes silences and pushes to the Pushgateway",
     "notification_tester.py": "delivers test notifications to receivers",
     "policy_opa_bridge.py": "queries OPA (its own redirect-refusing opener)",
 }
@@ -288,7 +287,7 @@ def _ev(event, via_lib=False, **kw):
     ("notification_tester.py", [_ev("request", path="/api/v1/query", method="GET")], True),
     ("notification_tester.py", [_ev("request", path="/api/v1/query", method="POST")], True),
     ("notification_tester.py", [_ev("request", path="/api/v2/alerts", method="HEAD")], True),
-    ("maintenance_scheduler.py", [_ev("request", path="/api/v2/silences", method="POST")], False),
+    ("notification_tester.py", [_ev("request", path="/api/v2/silences", method="POST")], False),
     ("discover_instance_mappings.py", [_ev("request", path="/federate", method="GET")], True),
     ("discover_instance_mappings.py", [_ev("request", path="/metrics", method="GET")], False),
     ("notification_tester.py", [_ev("fetcher", argv=["sh", "-c", "curl u"])], True),

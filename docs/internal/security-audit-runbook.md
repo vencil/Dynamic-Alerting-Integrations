@@ -95,7 +95,7 @@ grep -rn "^go " --include="go.mod"
 
 # 6. Python deps
 cat requirements*.txt 2>/dev/null
-grep -E "PyYAML|promql-parser|croniter" components/*/Dockerfile 2>/dev/null
+grep -E "PyYAML|promql-parser" components/*/Dockerfile 2>/dev/null
 
 # 7. GitHub Actions（supply-chain）
 grep -rnE "uses:" .github/workflows/ | grep -v "^#"
