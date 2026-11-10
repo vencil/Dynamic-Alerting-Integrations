@@ -98,3 +98,16 @@ def test_helm_simulate_location_is_unconditional() -> None:
         "configmap-nginx.yaml 的 simulate location 位於條件區塊內（巢狀深度 "
         f"{depth}）—— Tier-1 / Tier-2 都必須渲染它"
     )
+
+
+TENANT_API_ERRCODE = REPO_ROOT / "components/tenant-api/internal/errcode/errcode.go"
+_GO_CODE_RE = re.compile(r'^\s*SimulateNotProvided Code = "([^"]+)"$', re.M)
+
+
+def test_tenant_api_answers_the_same_code():
+    """ADR-027 §5：portal 移進 tenant-api 的 pod 後，/api/ 一律到 tenant-api，
+    由它回同一個 501 code（handler.SimulateNotProvided）。"""
+    found = _GO_CODE_RE.findall(TENANT_API_ERRCODE.read_text(encoding="utf-8"))
+    assert found == [_widget_code()], (
+        f"tenant-api 的 errcode.SimulateNotProvided 應等於 widget 讀的 code，得到 {found}"
+    )
