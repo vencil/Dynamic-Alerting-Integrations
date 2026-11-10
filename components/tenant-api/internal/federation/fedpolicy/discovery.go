@@ -1,6 +1,6 @@
 package fedpolicy
 
-// Metric discovery (ADR-024 §S6 Capability B) — the read-only "what
+// Metric discovery (ADR-024 §3) — the read-only "what
 // metrics do I have?" catalog that backs the portal recipe-authoring UX.
 //
 // A tenant authoring a custom alert recipe must pick a metric, but they
@@ -13,7 +13,7 @@ package fedpolicy
 // purely to reuse the same triple-bounded Prometheus-metadata querying
 // discipline (timeout + io.LimitReader + `limit=`) and the same
 // `--federation-prometheus-url` backend. It is NOT part of the federation
-// 2-tier policy; it is a stateless proxy (ADR-024 §S6 "Dumb Pipes, Smart
+// 2-tier policy; it is a stateless proxy (ADR-024 §3 "Dumb Pipes, Smart
 // Endpoints").
 //
 // Query design (mirrors admission.go's safety rules):
@@ -56,7 +56,7 @@ const (
 	// tenant". 24h (not a short window) deliberately covers daily batch /
 	// CronJob and other intermittent metrics — the authoring pain is "I
 	// can't find the metric I just wrote", far worse than seeing an old
-	// dead metric (ADR-024 §S6 lookback decision).
+	// dead metric.
 	discoveryWindow = 24 * time.Hour
 	// DefaultDiscoveryLimit caps how many metric names a single discovery
 	// call returns. The portal autocomplete only needs enough to filter;

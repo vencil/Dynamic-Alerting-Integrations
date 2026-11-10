@@ -23,7 +23,7 @@ import (
 
 // gateBatchOp runs the per-op access gate shared by the tenant and group batch
 // execution loops: tenant-id validation followed by the org-scoped write
-// permission check (ADR-027 / LD-6 P4b), resolved at execution time. It returns
+// permission check (ADR-027 §7), resolved at execution time. It returns
 // the error BatchResult and true when the op is rejected — the caller should
 // append it and `continue` — or a zero BatchResult and false when the op passes
 // and execution should proceed.
@@ -32,9 +32,26 @@ func gateBatchOp(tenantID string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manag
 		return gateRefusal(tenantID, errkind.InvalidTenantID, err.Error()), true
 	}
 	if !OrgAllowed(rbacMgr, tenantOrg, p, tenantID, rbac.PermWrite, meta) {
-		return gateRefusal(tenantID, errkind.Forbidden, "insufficient permissions for tenant "+tenantID), true
+		return gateRefusal(tenantID, errkind.Forbidden, batchOpWriteDeniedText(tenantID)), true
 	}
 	return BatchResult{}, false
+}
+
+// batchOpWriteDeniedText is a batch op's refusal by the write scope on the
+// tenant as it is (gateBatchOp).
+func batchOpWriteDeniedText(tenantID string) string {
+	return "insufficient permissions for tenant " + tenantID
+}
+
+// proposedScopeDeniedText is the refusal by the write scope on the state a
+// write leaves (#1597): put for a PUT body, else a batch op.
+func proposedScopeDeniedText(tenantID string, put bool) string {
+	if put {
+		return "insufficient permissions for the tenant metadata this write proposes" +
+			" — the environment/domain in the body places tenant " + tenantID + " outside your scope (#1597)"
+	}
+	return "insufficient permissions for the tenant metadata this op proposes — its environment/domain would place tenant " +
+		tenantID + " outside your scope (#1597)"
 }
 
 // gateRefusal is a batch op's "error" result for a refusal of its access
@@ -50,28 +67,21 @@ func gateRefusal(tenantID string, k errkind.Kind, msg string) BatchResult {
 // batch cannot set it (cfg.PatchableAsString, #2859).
 var scopeMetadataKeys = cfg.ScopeMetadataKeys()
 
-// gateBatchOpPostState is the post-state half of a batch op's write gate, the
-// batch twin of RequireOrgWriteProposed: gateBatchOp authorized the op
+// gateBatchOpPostStateAt is the post-state half of a batch op's write gate,
+// the batch twin of RequireOrgWriteProposed: gateBatchOp authorized the op
 // against the tenant's metadata on disk; an op that sets a
 // scopeMetadataKeys key is authorized again against the metadata the tenant
-// will have once it is written (postStateScopeMeta), so a caller scoped to
-// environment=production cannot move a tenant to dev by patching its
-// `_profile`. prior is the same tenant's earlier ops of the request, merged
-// onto the same base before this one.
-func gateBatchOpPostState(configDir string, prior []BatchOperation, op BatchOperation, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) (BatchResult, bool) {
-	return gateBatchOpPostStateAt(scopePairOf(postStateScopeMeta(configDir, prior, op), op.TenantID), op, p, rbacMgr, tenantOrg)
-}
-
-// gateBatchOpPostStateAt is gateBatchOpPostState over a post-state pair the
-// caller computed (and keeps, to pass to the in-lock re-judgement).
+// will have once it is written, so a caller scoped to environment=production
+// cannot move a tenant to dev by patching its `_profile`. post is that
+// metadata (postStateScopeMeta, with the same tenant's earlier ops of the
+// request laid under this one), which the caller keeps to pass to the in-lock
+// re-judgement.
 func gateBatchOpPostStateAt(post scopePair, op BatchOperation, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) (BatchResult, bool) {
 	if !touchesScopeMetadata(op) {
 		return BatchResult{}, false
 	}
 	if !OrgAllowed(rbacMgr, tenantOrg, p, op.TenantID, rbac.PermWrite, fixedScopeMeta(post)) {
-		return gateRefusal(op.TenantID, errkind.Forbidden,
-			"insufficient permissions for the tenant metadata this op proposes — its environment/domain would place tenant "+
-				op.TenantID+" outside your scope (#1597)"), true
+		return gateRefusal(op.TenantID, errkind.Forbidden, proposedScopeDeniedText(op.TenantID, false)), true
 	}
 	return BatchResult{}, false
 }
@@ -97,7 +107,7 @@ func postStateScopeMeta(configDir string, prior []BatchOperation, op BatchOperat
 
 // stackedScopeMeta is postStateScopeMeta for any number of ops on tenantID's
 // block, none included (the block on disk alone, read the same way — the
-// "before" of the label check, gateBatchOpLabels).
+// "before" of the label check, batchLabelsBefore).
 func stackedScopeMeta(configDir, tenantID string, ops []BatchOperation) ScopeMetaFunc {
 	block := scopeBlockOnDisk(configDir, tenantID)
 	for _, o := range ops {

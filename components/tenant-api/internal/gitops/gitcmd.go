@@ -69,7 +69,7 @@ func gitTimeoutFromEnv() time.Duration {
 
 // fetchTimeoutFromEnv reads TA_GIT_FETCH_TIMEOUT as a Go duration, falling back
 // to defaultGitFetchTimeout when unset, unparseable, or non-positive. Kept
-// DELIBERATELY independent of TENANT_API_GIT_TIMEOUT (TRK-318 / ADR-023 §B): the
+// DELIBERATELY independent of TENANT_API_GIT_TIMEOUT (TRK-318 / ADR-023 §2): the
 // in-lock fetch needs an aggressive, separately-tuned deadline so a degraded
 // forge fast-fails to 503 instead of pinning the global write lock for the much
 // longer regular git timeout. The clamp keeps a fat-fingered "0"/"-5s" from

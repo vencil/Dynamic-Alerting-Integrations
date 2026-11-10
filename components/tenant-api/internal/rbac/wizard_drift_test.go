@@ -7,7 +7,7 @@ import (
 )
 
 // wizardFixtures embeds the RBAC Setup Wizard's canonical generator output
-// (ADR-027 / LD-6 P7d). Each file is byte-for-byte what tools/portal's
+// (ADR-027 §7). Each file is byte-for-byte what tools/portal's
 // rbacGenerateYaml emits for a fixed input; the JS side clamps that equality in
 // rbac-wizard-golden.drift.test.ts (Buffer-exact), and THIS side proves the
 // same bytes load through the live strict parser. Together they form the

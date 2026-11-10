@@ -35,6 +35,6 @@ func TestValidate_CustomAlertsReadErrorCarriesNoPath(t *testing.T) {
 // (#3062): PreviewPut, the production path since DryRunValidate was folded
 // into it.
 func previewDryRun(ctx context.Context, w *Writer, tenantID, body string) (errs, notices []string, err error) {
-	res, errs, err := w.PreviewPut(ctx, tenantID, body)
+	res, errs, err := w.PreviewPut(ctx, tenantID, body, nil)
 	return errs, res.Notices, err
 }

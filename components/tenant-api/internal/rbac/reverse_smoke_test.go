@@ -1,6 +1,6 @@
 package rbac
 
-// Smoke tests for the reverse access report (ADR-027 / LD-6 P6) — basic happy
+// Smoke tests for the reverse access report (ADR-027 §7) — basic happy
 // path + LOCKED bar semantics. The full dogfood drift-invariant suite
 // (witness-positive rule-isolated replay, completeness property, adversarial
 // case table, redact golden) lives in reverse_dogfood_test.go.

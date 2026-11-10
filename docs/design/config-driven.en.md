@@ -914,7 +914,7 @@ tenant-api directly imports `"github.com/vencil/threshold-exporter/pkg/config"`,
 
 **Portal Graceful Degradation:**
 
-da-portal's tenant-manager.jsx probes tenant-api availability on load. When the API is healthy, full CRUD operations are enabled; when unavailable (oauth2-proxy failure, API server restart), it automatically reads the `platform-data.json` generated at deploy time, and if that cannot be read, built-in demo data; no manual switching is needed. ⚠️ Neither is live data, and the page does not show which one it is using; when the tenant fields in `platform-data.json` are incomplete, demo tenants are mixed into the list ([#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)).
+The portal's tenant-manager.jsx probes tenant-api availability on load. When the API answers 401 (not signed in, or the session expired), the page sends the browser to oauth2-proxy's sign-in and back to the same page afterwards; it does not show other data instead ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §5). When the API is healthy, full CRUD operations are enabled; when it is unavailable (API server restart, a static site with no tenant-api), the page reads the `platform-data.json` generated at deploy time, and if that cannot be read, built-in demo data. Neither is live data: a banner says which one the page is showing, and nothing can be written meanwhile; the offline data is shown as it is, with no demo tenant or group mixed in ([#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)).
 
 > Full decision context and alternative analysis at [ADR-009: Tenant Manager CRUD API](../adr/009-tenant-manager-crud-api.en.md).
 

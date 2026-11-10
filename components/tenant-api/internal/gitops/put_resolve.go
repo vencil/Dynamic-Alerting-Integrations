@@ -127,9 +127,10 @@ func (w *Writer) resolvePut(ctx context.Context, configDir, tenantID, yamlConten
 // it. With neither, res is what the write would commit.
 //
 // ctx carries what the write's would: the #2405 bit and the caller's
-// TenantNames. The write is judged again, under the lock, on the tree it
+// TenantNames; check, when not nil, is the TreeCheck the write would pass to
+// WriteChecked. The write is judged again, under the lock, on the tree it
 // lands on.
-func (w *Writer) PreviewPut(ctx context.Context, tenantID, yamlContent string) (res PutResolution, errs []string, err error) {
+func (w *Writer) PreviewPut(ctx context.Context, tenantID, yamlContent string, check TreeCheck) (res PutResolution, errs []string, err error) {
 	if err := guardTenantID(tenantID); err != nil {
 		return res, nil, err
 	}
@@ -169,5 +170,11 @@ func (w *Writer) PreviewPut(ctx context.Context, tenantID, yamlContent string) (
 		}
 		return nil
 	}
-	return w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTreeForRead, dirty, nil)
+	// check: the caller's TreeCheck on the serving tree, as WriteChecked
+	// runs it (no lock: a preview, so the verdict a write would get now).
+	var afterResolve func(string) error
+	if check != nil {
+		afterResolve = func(string) error { return check(w.configDir) }
+	}
+	return w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTreeForRead, dirty, afterResolve)
 }

@@ -107,11 +107,11 @@ func (m *Manager) authorizeTenant(w http.ResponseWriter, r *http.Request, bPrinc
 	}
 
 	// Authorization runs off the hop-B principal through the single
-	// evaluation core (ADR-027 / LD-6 P3): the principal's groups —
+	// evaluation core (ADR-027 §7): the principal's groups —
 	// and, for rules carrying a match: block, its named claims —
 	// feed the one shared ruleMatches predicate.
 	//
-	// ADR-027 / LD-6 P4c: per-tenant READ routes additionally gate on the
+	// ADR-027 §7: per-tenant READ routes additionally gate on the
 	// org axis. A read-by-id of another org's tenant is a read-only IDOR,
 	// so when this is a read on a concrete tenant (want == PermRead AND the
 	// resolved tenant is not the platform wildcard "*"), resolve the

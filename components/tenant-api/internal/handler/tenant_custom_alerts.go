@@ -1,7 +1,7 @@
 package handler
 
 // ============================================================
-// PUT /api/v1/tenants/{id}/custom-alerts — v2.9.0 (ADR-024 §S6b-2, #741)
+// PUT /api/v1/tenants/{id}/custom-alerts — v2.9.0 (ADR-024 §3, #741)
 // ============================================================
 //
 // Server-side, comment-preserving write of a tenant's `_custom_alerts`
@@ -15,7 +15,7 @@ package handler
 // overlay and the portal has no YAML serializer, so the client would
 // have to reconstruct + re-serialise the whole tenant doc (the blocker).
 // Here the client sends only a JSON array; the server owns the robust
-// YAML round-trip. See ADR-024 §S6b-2.
+// YAML round-trip. See ADR-024 §3.
 
 import (
 	"encoding/json"
@@ -118,14 +118,14 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// ADR-027 / LD-6 P4b: org-scope-aware write gate — authorization
+		// ADR-027 §7: org-scope-aware write gate — authorization
 		// comes BEFORE feature availability (the PR-mode 501 below), so an
 		// unauthorized caller cannot probe the server's write-mode.
 		if !RequireOrgWrite(w, r, d, tenantID, rbac.PermWrite) {
 			return
 		}
 
-		// MVP scope (ADR-024 §S6b-2): the in-UI write targets DIRECT
+		// MVP scope (ADR-024 §3): the in-UI write targets DIRECT
 		// write-back mode. In PR/MR mode the recipe author uses the
 		// standalone recipe-builder + their normal PR flow (S6b-1).
 		if d.WriteMode.IsPRMode() {
