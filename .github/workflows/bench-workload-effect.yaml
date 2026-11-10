@@ -629,8 +629,13 @@ jobs:
       # on main's tip under the PR and stays green whenever the workflow works; without
       # this line that green would read as "the default dispatch works too",
       # and today it does not.
+      # ⛔ The event itself, not `env.SELF_TEST`: same meaning (SELF_TEST is
+      # defined as this test), but CodeQL's cache-poisoning query does not
+      # evaluate env, so it read these two steps as reachable from the
+      # privileged workflow_dispatch context and raised a high alert (#3727).
+      # They are not: they run only on pull_request, which has no privilege.
       - name: Checkout the pinned nightly reference (self-test probe)
-        if: env.SELF_TEST == 'true'
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v6
         with:
           ref: ${{ steps.ref.outputs.pinned_sha }}
@@ -638,7 +643,7 @@ jobs:
           persist-credentials: false
 
       - name: Probe the pinned nightly reference (self-test, notice only)
-        if: env.SELF_TEST == 'true'
+        if: github.event_name == 'pull_request'
         env:
           PINNED_SHA: ${{ steps.ref.outputs.pinned_sha }}
         run: |

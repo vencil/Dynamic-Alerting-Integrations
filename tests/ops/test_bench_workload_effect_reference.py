@@ -173,7 +173,11 @@ def test_an_unusable_pin_is_still_fatal(tmp_path) -> None:
 ], ids=["broken", "builds", "network", "silent"])
 def test_the_pinned_probe_is_a_notice_never_a_failure(tmp_path, go, word) -> None:
     step = _step("Probe the pinned nightly reference (self-test, notice only)")
-    assert step.get("if") == "env.SELF_TEST == 'true'", step.get("if")
+    # Pinned to the EVENT, not env.SELF_TEST: CodeQL does not evaluate env and
+    # flagged the env-guarded form as reachable from workflow_dispatch (#3727).
+    assert step.get("if") == "github.event_name == 'pull_request'", step.get("if")
+    checkout = _step("Checkout the pinned nightly reference (self-test probe)")
+    assert checkout.get("if") == "github.event_name == 'pull_request'", checkout.get("if")
     work = tmp_path / "work"
     app = "components/threshold-exporter/app"
     (work / app).mkdir(parents=True)
