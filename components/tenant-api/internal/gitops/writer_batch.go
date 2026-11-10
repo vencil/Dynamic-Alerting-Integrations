@@ -48,9 +48,25 @@ import (
 // which, when an earlier op of the same batch changed the file, is that op's
 // result. It returns ErrMergeNoOp when the op changes nothing; any other error
 // refuses the op.
+//
+// LockedMerge, when set, replaces Merge: it gets configDir, the conf.d of the
+// staging tree the batch is merged in (a copy of the serving tree with the
+// batch's earlier ops written), so the caller's tree-dependent verdicts — the
+// write scope and the label gate (ADR-027 §7) — are taken under the writer
+// lock on the tree the batch lands on, as PRBatchOp.FreshMerge takes them on
+// the fresh base. An error from it refuses its op, which rejects the batch.
 type BatchOp struct {
-	TenantID string
-	Merge    MergeFunc
+	TenantID    string
+	Merge       MergeFunc
+	LockedMerge func(configDir string, existing []byte) (string, error)
+}
+
+// mergeIn is op's merge on the staging tree at configDir.
+func (op BatchOp) mergeIn(configDir string) MergeFunc {
+	if op.LockedMerge != nil {
+		return func(existing []byte) (string, error) { return op.LockedMerge(configDir, existing) }
+	}
+	return op.Merge
 }
 
 // BatchOpOutcome is one op's verdict in a single-commit batch.
@@ -473,7 +489,7 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 	if err != nil {
 		return BatchOpOutcome{Err: err}, target
 	}
-	content, existing, notices, err := w.readMergeValidateIn(st.configDir, op.TenantID, filePath, op.Merge, names)
+	content, existing, notices, err := w.readMergeValidateIn(st.configDir, op.TenantID, filePath, op.mergeIn(st.configDir), names)
 	if errors.Is(err, ErrMergeNoOp) {
 		// B2: the merge changes nothing — accepted, nothing written, its
 		// notices kept (#1231 F5).
