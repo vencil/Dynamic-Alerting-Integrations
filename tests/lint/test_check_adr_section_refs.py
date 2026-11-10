@@ -140,5 +140,39 @@ def test_find_findings_without_adrs_cannot_run(tmp_path: Path):
         lint.find_findings(tmp_path)
 
 
+_ONE = [lint.Finding("a.go", 1, "024", "S5", "no heading of the ADR has this number or name")]
+
+
+@pytest.mark.parametrize("argv, findings, want", [
+    ([], _ONE, lint.EXIT_OK),             # report-only without --ci
+    (["--ci"], _ONE, lint.EXIT_VIOLATION),
+    (["--ci"], [], lint.EXIT_OK),
+])
+def test_main_exit_code(monkeypatch, capsys, argv, findings, want):
+    monkeypatch.setattr(sys, "argv", ["check_adr_section_refs.py", *argv])
+    monkeypatch.setattr(lint, "find_findings", lambda: findings)
+    assert lint.main() == want
+    if findings:
+        assert "a.go:1: ADR-024 S5" in capsys.readouterr().out
+
+
+def test_main_without_adrs_is_a_caller_error(monkeypatch):
+    def no_adrs():
+        raise FileNotFoundError("no tracked ADR")
+    monkeypatch.setattr(sys, "argv", ["check_adr_section_refs.py", "--ci"])
+    monkeypatch.setattr(lint, "find_findings", no_adrs)
+    assert lint.main() == lint.EXIT_CALLER_ERROR
+
+
+def test_main_json_report_carries_the_ci_status(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["check_adr_section_refs.py", "--json", "--ci"])
+    monkeypatch.setattr(lint, "find_findings", lambda: _ONE)
+    rep = lint.main()
+    assert isinstance(rep, lint.Report)
+    assert rep.status == lint.EXIT_VIOLATION
+    assert rep.document == [{"path": "a.go", "line": 1, "adr": "024", "section": "S5",
+                        "reason": "no heading of the ADR has this number or name"}]
+
+
 def test_the_repository_is_clean():
     assert lint.find_findings() == []
