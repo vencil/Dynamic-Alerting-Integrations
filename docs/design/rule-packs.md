@@ -27,21 +27,21 @@ parent: architecture-and-design.md
 |-----------|-----------------|-----------------|-------------|
 | MariaDB/MySQL | `prometheus-rules-mariadb` | 12 | 18 |
 | PostgreSQL | `prometheus-rules-postgresql` | 8 | 9 |
-| Redis | `prometheus-rules-redis` | 9 | 6 |
-| MongoDB | `prometheus-rules-mongodb` | 8 | 8 |
-| Elasticsearch | `prometheus-rules-elasticsearch` | 10 | 7 |
-| Oracle | `prometheus-rules-oracle` | 11 | 7 |
-| DB2 | `prometheus-rules-db2` | 13 | 8 |
-| ClickHouse | `prometheus-rules-clickhouse` | 11 | 7 |
+| Redis | `prometheus-rules-redis` | 12 | 9 |
+| MongoDB | `prometheus-rules-mongodb` | 10 | 10 |
+| Elasticsearch | `prometheus-rules-elasticsearch` | 14 | 11 |
+| Oracle | `prometheus-rules-oracle` | 13 | 9 |
+| DB2 | `prometheus-rules-db2` | 15 | 10 |
+| ClickHouse | `prometheus-rules-clickhouse` | 12 | 8 |
 | Kafka | `prometheus-rules-kafka` | 13 | 9 |
-| RabbitMQ | `prometheus-rules-rabbitmq` | 12 | 8 |
+| RabbitMQ | `prometheus-rules-rabbitmq` | 14 | 10 |
 | JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 6 |
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 1 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **總計** | | **155** | **173** (= **328** rules) |
+| **總計** | | **171** | **189** (= **360** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）

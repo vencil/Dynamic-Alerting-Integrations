@@ -274,6 +274,30 @@ keys:
       replication is normally sub-second, so 30s is unambiguous trouble (noise-averse
       pick, #1231 owner call); #1196 C identity fix, no alias'
     metric_class: replication
+  redis_connected_clients_critical:
+    pack: redis
+    tier: optional_overrides
+    value: 300
+    unit: count
+    desc: Connected clients critical
+    metric_class: saturation
+    critical_of: redis_connected_clients
+  redis_memory_used_bytes_critical:
+    pack: redis
+    tier: optional_overrides
+    value: 5368709120
+    unit: bytes
+    desc: Memory usage critical
+    metric_class: saturation
+    critical_of: redis_memory_used_bytes
+  redis_replication_lag_critical:
+    pack: redis
+    tier: optional_overrides
+    value: 50
+    unit: seconds
+    desc: Replica lag critical
+    metric_class: replication
+    critical_of: redis_replication_lag
   mongodb_connections_current:
     pack: mongodb
     tier: defaults
@@ -298,6 +322,22 @@ keys:
       (alert demands _rate) + moved optional_overrides→defaults — unwired dead key,
       no alias'
     metric_class: throughput
+  mongodb_connections_current_critical:
+    pack: mongodb
+    tier: optional_overrides
+    value: 450
+    unit: count
+    desc: Current connections critical
+    metric_class: saturation
+    critical_of: mongodb_connections_current
+  mongodb_replication_lag_critical:
+    pack: mongodb
+    tier: optional_overrides
+    value: 30
+    unit: seconds
+    desc: Replication lag critical
+    metric_class: replication
+    critical_of: mongodb_replication_lag
   es_heap_usage_percent:
     pack: elasticsearch
     tier: defaults
@@ -335,6 +375,38 @@ keys:
       (same formula, 1s/5m warning) — the only community rule semantically identical
       to ours; full derivation + calibration caveat in the pack header (#1196 D)
     metric_class: latency
+  es_disk_usage_percent_critical:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 90
+    unit: '%'
+    desc: Disk usage critical
+    metric_class: capacity
+    critical_of: es_disk_usage_percent
+  es_heap_usage_percent_critical:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 90
+    unit: '%'
+    desc: JVM heap usage critical
+    metric_class: saturation
+    critical_of: es_heap_usage_percent
+  es_pending_tasks_critical:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 150
+    unit: count
+    desc: Pending cluster tasks critical
+    metric_class: state
+    critical_of: es_pending_tasks
+  es_search_latency_ms_critical:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 2000
+    unit: ms
+    desc: Avg search latency critical
+    metric_class: latency
+    critical_of: es_search_latency_ms
   oracle_sessions_active:
     pack: oracle
     tier: defaults
@@ -385,6 +457,22 @@ keys:
       direction: over_fire
       observed: a planned stats-gather reaches 22 GB PGA
       observed_zh: 計畫性 stats-gather 會用到 22 GB PGA
+  oracle_sessions_active_critical:
+    pack: oracle
+    tier: optional_overrides
+    value: 280
+    unit: count
+    desc: Active sessions critical
+    metric_class: saturation
+    critical_of: oracle_sessions_active
+  oracle_tablespace_used_percent_critical:
+    pack: oracle
+    tier: optional_overrides
+    value: 95
+    unit: '%'
+    desc: Tablespace usage critical
+    metric_class: capacity
+    critical_of: oracle_tablespace_used_percent
   db2_connections_active:
     pack: db2
     tier: defaults
@@ -445,6 +533,22 @@ keys:
     unit: '%'
     desc: Tablespace usage warning
     metric_class: capacity
+  db2_connections_active_critical:
+    pack: db2
+    tier: optional_overrides
+    value: 400
+    unit: count
+    desc: Active connections critical
+    metric_class: saturation
+    critical_of: db2_connections_active
+  db2_lock_wait_time_critical:
+    pack: db2
+    tier: optional_overrides
+    value: 20
+    unit: s/s
+    desc: Lock wait accumulation rate critical
+    metric_class: latency
+    critical_of: db2_lock_wait_time
   clickhouse_queries_rate:
     pack: clickhouse
     tier: defaults
@@ -480,6 +584,14 @@ keys:
     unit: bytes (8GB)
     desc: Memory tracking warning
     metric_class: capacity
+  clickhouse_active_connections_critical:
+    pack: clickhouse
+    tier: optional_overrides
+    value: 300
+    unit: count
+    desc: Active TCP connections critical
+    metric_class: saturation
+    critical_of: clickhouse_active_connections
   kafka_consumer_lag:
     pack: kafka
     tier: defaults
@@ -590,6 +702,22 @@ keys:
     desc: Node memory critical
     metric_class: saturation
     critical_of: rabbitmq_node_mem_percent
+  rabbitmq_connections_critical:
+    pack: rabbitmq
+    tier: optional_overrides
+    value: 1500
+    unit: count
+    desc: Connection count critical
+    metric_class: saturation
+    critical_of: rabbitmq_connections
+  rabbitmq_unacked_messages_critical:
+    pack: rabbitmq
+    tier: optional_overrides
+    value: 50000
+    unit: messages
+    desc: Unacknowledged messages critical
+    metric_class: saturation
+    critical_of: rabbitmq_unacked_messages
   jvm_gc_pause:
     pack: jvm
     tier: defaults

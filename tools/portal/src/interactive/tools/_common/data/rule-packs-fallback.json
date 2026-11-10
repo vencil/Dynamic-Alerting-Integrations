@@ -108,8 +108,8 @@
       "category": "database",
       "exporter": "redis_exporter",
       "configMap": "prometheus-rules-redis",
-      "recordingRules": 9,
-      "alertRules": 6,
+      "recordingRules": 12,
+      "alertRules": 9,
       "required": false,
       "defaults": {
         "redis_memory_used_bytes": {
@@ -156,8 +156,8 @@
       "category": "database",
       "exporter": "mongodb_exporter",
       "configMap": "prometheus-rules-mongodb",
-      "recordingRules": 8,
-      "alertRules": 8,
+      "recordingRules": 10,
+      "alertRules": 10,
       "required": false,
       "defaults": {
         "mongodb_connections_current": {
@@ -198,8 +198,8 @@
       "category": "database",
       "exporter": "elasticsearch_exporter",
       "configMap": "prometheus-rules-elasticsearch",
-      "recordingRules": 10,
-      "alertRules": 7,
+      "recordingRules": 14,
+      "alertRules": 11,
       "required": false,
       "defaults": {
         "es_heap_usage_percent": {
@@ -246,8 +246,8 @@
       "category": "database",
       "exporter": "oracledb_exporter",
       "configMap": "prometheus-rules-oracle",
-      "recordingRules": 11,
-      "alertRules": 7,
+      "recordingRules": 13,
+      "alertRules": 9,
       "required": false,
       "defaults": {
         "oracle_sessions_active": {
@@ -289,8 +289,8 @@
       "category": "database",
       "exporter": "db2_exporter",
       "configMap": "prometheus-rules-db2",
-      "recordingRules": 13,
-      "alertRules": 8,
+      "recordingRules": 15,
+      "alertRules": 10,
       "required": false,
       "defaults": {
         "db2_connections_active": {
@@ -343,8 +343,8 @@
       "category": "database",
       "exporter": "built-in /metrics",
       "configMap": "prometheus-rules-clickhouse",
-      "recordingRules": 11,
-      "alertRules": 7,
+      "recordingRules": 12,
+      "alertRules": 8,
       "required": false,
       "defaults": {
         "clickhouse_queries_rate": {
@@ -434,8 +434,8 @@
       "category": "messaging",
       "exporter": "rabbitmq_exporter",
       "configMap": "prometheus-rules-rabbitmq",
-      "recordingRules": 12,
-      "alertRules": 8,
+      "recordingRules": 14,
+      "alertRules": 10,
       "required": false,
       "defaults": {
         "rabbitmq_queue_messages": {

@@ -706,25 +706,27 @@ def test_a_window_served_as_critical_is_backtested(
 
 def test_a_window_served_as_critical_with_no_critical_alert_is_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
-    """mongodb's threshold recording rules normalize severity="warning" only:
+    """`mongodb_opcounters_rate` has no critical tier (#3658 deliberately left
+    the throughput keys out), so its threshold record normalizes
+    severity="warning" only:
     a window overridden to `N:critical` is compared by no alert (#3017), so
     it is listed as not backtested and nothing is asked; the same key's
     warning change is backtested (control)."""
     def files(v: str) -> dict[str, str]:
-        return {"_defaults.yaml": _DEFAULTS + "  mongodb_connections_current: 100\n", "tx.yaml": (
-            "tenants:\n  tx:\n    mongodb_connections_current:\n      default: \"70\"\n"
+        return {"_defaults.yaml": _DEFAULTS + "  mongodb_opcounters_rate: 100\n", "tx.yaml": (
+            "tenants:\n  tx:\n    mongodb_opcounters_rate:\n      default: \"70\"\n"
             f"      overrides:\n        - window: \"01:00-09:00\"\n          value: \"{v}\"\n")}
     b, c = _tree(tmp_path / "base", files("1000:critical")), _tree(tmp_path / "cur", files("1500:critical"))
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [(
-        "mongodb_connections_current_critical", "not_backtested",
+        "mongodb_opcounters_rate_critical", "not_backtested",
         "skipped: no shipped alert compares this key (not in metric_observed_map.yaml)")]
     assert asked == []
     b, c = _tree(tmp_path / "base2", files("1000")), _tree(tmp_path / "cur2", files("1500"))
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     assert [r["status"] for r in json.loads(out.out)["changes"]] == ["analyzed"]
-    assert asked == ['tenant:mongodb_connections_current:max{tenant="tx"}']
+    assert asked == ['tenant:mongodb_opcounters:rate5m{tenant="tx"}']
 
 
 @pytest.fixture

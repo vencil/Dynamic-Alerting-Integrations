@@ -71,6 +71,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: redis_connected_clients
               tenant: redis-a
             exp_annotations:
               summary: "Redis high connection count on redis-a"
@@ -86,6 +87,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: redis_connected_clients
               tenant: redis-b
             exp_annotations:
               summary: "Redis high connection count on redis-b"

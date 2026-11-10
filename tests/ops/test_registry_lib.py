@@ -512,14 +512,14 @@ def test_optional_override_list_is_a_yaml_string_array():
 
 
 def test_real_registry_optional_list_is_the_nine_flat_keys():
-    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 28 the
-    tier holds. 19 of those 28 are `_critical`; listing them would make 68% of
-    the shipped list decoration."""
+    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 44 the
+    tier holds. 35 of those 44 are `_critical` (#3658 added 16); listing them
+    would make 80% of the shipped list decoration."""
     doc = lib.build_registry_doc()
     tier = {k for k, e in doc["keys"].items()
             if e.get("tier") == "optional_overrides"}
     shipped = lib.optional_override_list_keys(doc)
-    assert len(tier) == 28
+    assert len(tier) == 44
     assert shipped == [
         "oracle_wait_time_rate", "oracle_process_count",
         "oracle_pga_allocated_bytes",
@@ -645,8 +645,8 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 f"says {expected!r} (base={base!r}, "
                 f"base_in_chart={bool(base) and base in chart_defaults}, "
                 f"on_declared_list={key in shipped_list})")
-    assert checked == 28, (
-        f"expected all 28 optional_overrides keys to be covered, saw {checked}")
+    assert checked == 44, (
+        f"expected all 44 optional_overrides keys to be covered, saw {checked}")
 
 
 def test_splice_check_roundtrip_and_staleness():

@@ -223,18 +223,25 @@ KNOWN_UNWIRED: dict[str, str] = {
 # ⚠️ "chart-armed" here means A TENANT CAN ARM IT, not "it fires out of the
 # box". A `_critical` key counts as reachable when its BASE is supplied (the
 # `resolveCriticalRows` path) — but `resolveCriticalRows` iterates TENANT
-# OVERRIDES, so no `_critical` key is ever platform-supplied. Today 0 of the 16
-# demanded `_critical` keys sit in the chart set and structurally none can.
+# OVERRIDES, so no `_critical` key is ever platform-supplied: none of the
+# demanded `_critical` keys sits in the chart set, and structurally none can.
 NOT_CHART_ARMED: frozenset[str] = frozenset({
     "clickhouse_active_connections",
+    "clickhouse_active_connections_critical",
     "clickhouse_queries_rate",
     "db2_bufferpool_hit_ratio",
     "db2_connections_active",
+    "db2_connections_active_critical",
     "db2_lock_wait_time",
+    "db2_lock_wait_time_critical",
     "es_disk_usage_percent",
+    "es_disk_usage_percent_critical",
     "es_heap_usage_percent",
+    "es_heap_usage_percent_critical",
     "es_pending_tasks",
+    "es_pending_tasks_critical",
     "es_search_latency_ms",
+    "es_search_latency_ms_critical",
     "jvm_gc_pause",
     "jvm_gc_pause_critical",
     "jvm_memory",
@@ -250,8 +257,10 @@ NOT_CHART_ARMED: frozenset[str] = frozenset({
     "kafka_under_replicated_partitions",
     "kafka_under_replicated_partitions_critical",
     "mongodb_connections_current",
+    "mongodb_connections_current_critical",
     "mongodb_opcounters_rate",
     "mongodb_replication_lag",
+    "mongodb_replication_lag_critical",
     "nginx_connections",
     "nginx_connections_critical",
     "nginx_request_rate",
@@ -259,18 +268,25 @@ NOT_CHART_ARMED: frozenset[str] = frozenset({
     "nginx_waiting",
     "nginx_waiting_critical",
     "oracle_sessions_active",
+    "oracle_sessions_active_critical",
     "oracle_tablespace_used_percent",
+    "oracle_tablespace_used_percent_critical",
     "rabbitmq_connections",
+    "rabbitmq_connections_critical",
     "rabbitmq_consumers",
     "rabbitmq_node_mem_percent",
     "rabbitmq_node_mem_percent_critical",
     "rabbitmq_queue_messages",
     "rabbitmq_queue_messages_critical",
     "rabbitmq_unacked_messages",
+    "rabbitmq_unacked_messages_critical",
     "redis_connected_clients",
+    "redis_connected_clients_critical",
     "redis_evicted_keys_rate",
     "redis_memory_used_bytes",
+    "redis_memory_used_bytes_critical",
     "redis_replication_lag",
+    "redis_replication_lag_critical",
 })
 
 _CHART_VALUES = PROJECT_ROOT / "helm" / "threshold-exporter" / "values.yaml"

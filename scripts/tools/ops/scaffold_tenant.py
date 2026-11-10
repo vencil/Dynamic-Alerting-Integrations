@@ -275,6 +275,11 @@ RULE_PACKS = {
             "redis_evicted_keys_rate": {"value": 100, "unit": "keys/s", "desc": "Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"},
             "redis_replication_lag": {"value": 30, "unit": "seconds", "desc": "Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231 owner call); #1196 C identity fix, no alias"},
         },
+        "optional_overrides": {
+            "redis_connected_clients_critical": {"value": 300, "unit": "count", "desc": "Connected clients critical"},
+            "redis_memory_used_bytes_critical": {"value": 5368709120, "unit": "bytes", "desc": "Memory usage critical"},
+            "redis_replication_lag_critical": {"value": 50, "unit": "seconds", "desc": "Replica lag critical"},
+        },
         "dimensional_example": {
             "redis_connected_clients{instance=\"redis-orders:6379\"}": "500",
             "redis_evicted_keys_rate{instance=\"redis-cache:6379\"}": "500",
@@ -290,6 +295,10 @@ RULE_PACKS = {
             "mongodb_replication_lag": {"value": 10, "unit": "seconds", "desc": "Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds (alert demands mongodb_replication_lag) — unwired dead key, no alias"},
             "mongodb_opcounters_rate": {"value": 10000, "unit": "ops/s", "desc": "Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"},
         },
+        "optional_overrides": {
+            "mongodb_connections_current_critical": {"value": 450, "unit": "count", "desc": "Current connections critical"},
+            "mongodb_replication_lag_critical": {"value": 30, "unit": "seconds", "desc": "Replication lag critical"},
+        },
         "dimensional_example": {
             "mongodb_replication_lag{rs=\"rs-orders\"}": "30",
         },
@@ -304,6 +313,12 @@ RULE_PACKS = {
             "es_disk_usage_percent": {"value": 85, "unit": "%", "desc": "Disk USAGE % warning (used = 1 - available/size, recording rule tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2 tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying 15 into a used-% rule would fire permanently"},
             "es_pending_tasks": {"value": 50, "unit": "count", "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold"},
             "es_search_latency_ms": {"value": 1000, "unit": "ms", "desc": "Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 = Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) — the only community rule semantically identical to ours; full derivation + calibration caveat in the pack header (#1196 D)"},
+        },
+        "optional_overrides": {
+            "es_disk_usage_percent_critical": {"value": 90, "unit": "%", "desc": "Disk usage critical"},
+            "es_heap_usage_percent_critical": {"value": 90, "unit": "%", "desc": "JVM heap usage critical"},
+            "es_pending_tasks_critical": {"value": 150, "unit": "count", "desc": "Pending cluster tasks critical"},
+            "es_search_latency_ms_critical": {"value": 2000, "unit": "ms", "desc": "Avg search latency critical"},
         },
         "dimensional_example": {
             "es_search_latency_ms{index=\"logs-prod\"}": "2000",
@@ -325,6 +340,8 @@ RULE_PACKS = {
                                      "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a routine backup batch reaches 560 processes", "observed_zh": "例行備份批次會到 560 個 process"}},
             "oracle_pga_allocated_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "PGA allocation warning",
                                            "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a planned stats-gather reaches 22 GB PGA", "observed_zh": "計畫性 stats-gather 會用到 22 GB PGA"}},
+            "oracle_sessions_active_critical": {"value": 280, "unit": "count", "desc": "Active sessions critical"},
+            "oracle_tablespace_used_percent_critical": {"value": 95, "unit": "%", "desc": "Tablespace usage critical"},
         },
         "dimensional_example": {
             "oracle_tablespace_used_percent{tablespace_name=~\"USERS|DATA.*\"}": "90",
@@ -352,6 +369,8 @@ RULE_PACKS = {
             "db2_deadlock_rate": {"value": 5, "unit": "count/s", "desc": "Deadlock rate (5m)",
                                   "value_counterexample": {"issue": 1176, "direction": "under_fire", "observed": "a real ~90/min deadlock storm stays under 5/s (=300/min) and is missed", "observed_zh": "真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到"}},
             "db2_tablespace_used_percent": {"value": 85, "unit": "%", "desc": "Tablespace usage warning"},
+            "db2_connections_active_critical": {"value": 400, "unit": "count", "desc": "Active connections critical"},
+            "db2_lock_wait_time_critical": {"value": 20, "unit": "s/s", "desc": "Lock wait accumulation rate critical"},
         },
         "dimensional_example": {
             "db2_bufferpool_hit_ratio{bufferpool_name=~\"IBMDEFAULT.*|BP_USER.*\"}": "0.90",
@@ -371,6 +390,7 @@ RULE_PACKS = {
             "clickhouse_max_part_count": {"value": 300, "unit": "count", "desc": "Max part count per partition"},
             "clickhouse_replication_queue": {"value": 50, "unit": "count", "desc": "Replication queue size"},
             "clickhouse_memory_tracking_bytes": {"value": 8589934592, "unit": "bytes (8GB)", "desc": "Memory tracking warning"},
+            "clickhouse_active_connections_critical": {"value": 300, "unit": "count", "desc": "Active TCP connections critical"},
         },
         "dimensional_example": {
             "clickhouse_max_part_count{database=~\"prod_.*\"}": "200",
@@ -413,6 +433,8 @@ RULE_PACKS = {
         "optional_overrides": {
             "rabbitmq_queue_messages_critical": {"value": 500000, "unit": "messages", "desc": "Queue depth critical"},
             "rabbitmq_node_mem_percent_critical": {"value": 95, "unit": "%", "desc": "Node memory critical"},
+            "rabbitmq_connections_critical": {"value": 1500, "unit": "count", "desc": "Connection count critical"},
+            "rabbitmq_unacked_messages_critical": {"value": 50000, "unit": "messages", "desc": "Unacknowledged messages critical"},
         },
         "dimensional_example": {
             "rabbitmq_queue_messages{queue=\"payment-events\"}": "50000",

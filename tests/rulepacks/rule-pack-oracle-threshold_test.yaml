@@ -19,3 +19,101 @@ tests:
         exp_samples:
           - labels: 'tenant:alert_threshold:oracle_sessions_active{tenant="t1"}'
             value: 300
+
+  # #3658 critical tier: oracle_sessions_active_critical. t-fire sits above the critical
+  # threshold (280); t-quiet sits between warning (200) and critical,
+  # so only the warning twin OracleHighActiveSessions would page it — OracleHighActiveSessionsCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "oracledb_sessions_active{tenant=\"t-fire\"}"
+        values: "300x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"oracle\", metric=\"sessions_active\", severity=\"warning\"}"
+        values: "200x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"oracle\", metric=\"sessions_active\", severity=\"critical\"}"
+        values: "280x60"
+      - series: "oracledb_sessions_active{tenant=\"t-quiet\"}"
+        values: "250x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"oracle\", metric=\"sessions_active\", severity=\"warning\"}"
+        values: "200x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"oracle\", metric=\"sessions_active\", severity=\"critical\"}"
+        values: "280x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:oracle_sessions_active_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:oracle_sessions_active_critical{tenant=\"t-fire\"}"
+            value: 280
+          - labels: "tenant:alert_threshold:oracle_sessions_active_critical{tenant=\"t-quiet\"}"
+            value: 280
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: OracleHighActiveSessionsCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: OracleHighActiveSessionsCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "oracle_sessions_active"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Oracle active sessions critical on t-fire"
+              summary_zh: "t-fire 上 Oracle 活動 session 數嚴重過高"
+              platform_summary: "[] t-fire: Oracle active sessions at critical level — the SESSIONS/PROCESSES limit is near and new logins will fail; find blocking sessions now"
+              platform_summary_zh: "[] t-fire：Oracle 活動 session 數達嚴重水位 — 接近 SESSIONS／PROCESSES 上限，新登入將失敗；請立即找出阻塞的 session"
+              description: "300 active sessions (critical threshold exceeded)"
+              description_zh: "300 個活動 session（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: oracle_tablespace_used_percent_critical. t-fire sits above the critical
+  # threshold (95); t-quiet sits between warning (85) and critical,
+  # so only the warning twin OracleTablespaceAlmostFull would page it — OracleTablespaceAlmostFullCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "oracledb_tablespace_used_percent{tenant=\"t-fire\"}"
+        values: "97x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"oracle\", metric=\"tablespace_used_percent\", severity=\"warning\"}"
+        values: "85x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"oracle\", metric=\"tablespace_used_percent\", severity=\"critical\"}"
+        values: "95x60"
+      - series: "oracledb_tablespace_used_percent{tenant=\"t-quiet\"}"
+        values: "90x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"oracle\", metric=\"tablespace_used_percent\", severity=\"warning\"}"
+        values: "85x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"oracle\", metric=\"tablespace_used_percent\", severity=\"critical\"}"
+        values: "95x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:oracle_tablespace_used_percent_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:oracle_tablespace_used_percent_critical{tenant=\"t-fire\"}"
+            value: 95
+          - labels: "tenant:alert_threshold:oracle_tablespace_used_percent_critical{tenant=\"t-quiet\"}"
+            value: 95
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: OracleTablespaceAlmostFullCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: OracleTablespaceAlmostFullCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "oracle_tablespace_used_percent"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Oracle tablespace critically full on t-fire"
+              summary_zh: "t-fire 上 Oracle tablespace 嚴重接近滿容"
+              platform_summary: "[] t-fire: Oracle tablespace almost out of space — inserts will fail with ORA-01653; add a datafile or enable autoextend now"
+              platform_summary_zh: "[] t-fire：Oracle tablespace 空間即將用盡 — 寫入將以 ORA-01653 失敗；請立即新增 datafile 或啟用 autoextend"
+              description: "Tablespace usage: 97.0% (critical threshold exceeded)"
+              description_zh: "Tablespace 使用率：97.0%（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""

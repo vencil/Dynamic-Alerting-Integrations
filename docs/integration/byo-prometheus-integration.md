@@ -219,15 +219,15 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{compone
 |----------------|------|--------|
 | `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 12R + 18A |
 | `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 30R + 14A |
-| `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 9R + 6A |
-| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 8R + 8A |
-| `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 10R + 7A |
-| `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 11R + 7A |
-| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 13R + 8A |
-| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 11R + 7A |
+| `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 12R + 9A |
+| `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 10R + 10A |
+| `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 14R + 11A |
+| `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 13R + 9A |
+| `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 15R + 10A |
+| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 8A |
 | `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 8R + 9A |
 | `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 13R + 9A |
-| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 12R + 8A |
+| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 14R + 10A |
 | `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |
 | `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 6A |
 | `prometheus-rules-platform` | `platform-alert.yml` | 0R + 54A |

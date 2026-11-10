@@ -31,14 +31,16 @@ data:
     \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_active_connections\n\
     \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
     , metric=\\\"active_connections\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
-    \ tenant:alert_threshold:clickhouse_max_part_count\n    expr: \"max by(tenant)\
-    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"max_part_count\\\
-    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_replication_queue\n\
+    \ tenant:alert_threshold:clickhouse_active_connections_critical\n    expr: \"\
+    max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"\
+    active_connections\\\", severity=\\\"critical\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_max_part_count\n\
     \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
-    , metric=\\\"replication_queue\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
-    \ tenant:alert_threshold:clickhouse_memory_tracking_bytes\n    expr: \"max by(tenant)\
-    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"memory_tracking_bytes\\\
-    \", severity=\\\"warning\\\"}\\n)\\n\"\n"
+    , metric=\\\"max_part_count\\\", severity=\\\"warning\\\"}\\n)\\n\"\n  - record:\
+    \ tenant:alert_threshold:clickhouse_replication_queue\n    expr: \"max by(tenant)\
+    \ (\\n  user_threshold{component=\\\"clickhouse\\\", metric=\\\"replication_queue\\\
+    \", severity=\\\"warning\\\"}\\n)\\n\"\n  - record: tenant:alert_threshold:clickhouse_memory_tracking_bytes\n\
+    \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
+    , metric=\\\"memory_tracking_bytes\\\", severity=\\\"warning\\\"}\\n)\\n\"\n"
   clickhouse-alert.yml: "groups:\n- name: clickhouse-alerts\n  rules:\n  - alert:\
     \ ClickHouseDown\n    expr: 'up{job=\"tenant-exporters\"} == 0\n\n      and on(tenant)\
     \ tenant_expected_exporter{db_type=\"clickhouse\"}\n\n      '\n    for: 2m\n \
@@ -72,24 +74,46 @@ data:
     \ }}{{ end }}{{ end }}'\n  - alert: ClickHouseHighConnections\n    expr: \"(\\\
     n  tenant:clickhouse_active_connections:max\\n  > on(tenant) group_left\\n  tenant:alert_threshold:clickhouse_active_connections\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
-    \ $value | printf \"%.0f\" }} active connections'\n      description_zh: '{{ $value\
-    \ | printf \"%.0f\" }} 個活動連線'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: clickhouse_active_connections\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value | printf \"%.0f\" }} active connections'\n    \
+    \  description_zh: '{{ $value | printf \"%.0f\" }} 個活動連線'\n      owner: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: ClickHouse connections exceeded — client pool review'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：ClickHouse 連線已超出 — client pool 審查'\n      runbook_url: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: ClickHouse\
+    \ active connections exceed threshold\n      summary_zh: ClickHouse 活動連線超出閾值\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: ClickHouseHighConnectionsCritical\n    expr: \"(\\n  tenant:clickhouse_active_connections:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:clickhouse_active_connections_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: clickhouse_active_connections\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value | printf \"%.0f\" }} active connections (critical\
+    \ threshold exceeded)'\n      description_zh: '{{ $value | printf \"%.0f\" }}\
+    \ 個活動連線（超過嚴重閾值）'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: ClickHouse connections exceeded — client pool review'\n\
-    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ {{ $labels.tenant }}: ClickHouse connections at critical level — check headroom\
+    \ to max_connections (new clients are refused past it); cap the offending client\
+    \ pool'\n      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}：ClickHouse 連線已超出 — client pool 審查'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ ClickHouse active connections exceed threshold\n      summary_zh: ClickHouse\
-    \ 活動連線超出閾值\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: ClickHouseHighPartCount\n    expr: \"(\\n  tenant:clickhouse_max_part_count:max\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:clickhouse_max_part_count\\\
+    \ {{ $labels.tenant }}：ClickHouse 連線數達嚴重水位 — 請確認距 max_connections 的餘裕（超過後新客戶端會被拒）；限制造成問題的\
+    \ client pool'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: ClickHouse active connections exceed critical threshold\n\
+    \      summary_zh: ClickHouse 活動連線超出嚴重閾值\n      tier: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}'\n  - alert: ClickHouseHighPartCount\n    expr: \"(\\n\
+    \  tenant:clickhouse_max_part_count:max\\n  > on(tenant) group_left\\n  tenant:alert_threshold:clickhouse_max_part_count\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 10m\n    labels:\n      maintenance: mute\n      severity: warning\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Part\
