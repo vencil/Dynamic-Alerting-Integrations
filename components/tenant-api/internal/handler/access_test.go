@@ -163,7 +163,7 @@ func TestCheckTenantAccess_NoRBACPathDenies(t *testing.T) {
 	}
 }
 
-// ADR-027 MED-8: a configured --rbac path that parses to zero groups is a
+// ADR-027 §7: a configured --rbac path that parses to zero groups is a
 // misconfiguration and must fail closed — the /access probe returns 403.
 func TestCheckTenantAccess_ConfiguredEmptyFailsClosed(t *testing.T) {
 	t.Parallel()

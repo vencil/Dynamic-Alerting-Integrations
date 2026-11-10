@@ -39,6 +39,7 @@ import { DEMO_TENANTS, DEMO_GROUPS } from './tenant-manager/fixtures/demo-tenant
 import { styles } from './tenant-manager/styles.js';
 import { generateMaintenanceYaml, generateSilentModeYaml } from './tenant-manager/utils/yaml-generators.js';
 import { useTenantData } from './tenant-manager/hooks/useTenantData.js';
+import { redirectToSignIn } from './_common/auth/sign-in.js';
 import { useSavedViews } from './tenant-manager/hooks/useSavedViews.js';
 import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
 import { ApiNotificationToast } from './tenant-manager/components/ApiNotificationToast.jsx';
@@ -177,13 +178,18 @@ export default function TenantManager() {
   const [modalType, setModalType] = useState(null);
   const [modalData, setModalData] = useState('');
   const [modalExcluded, setModalExcluded] = useState([]); // #2068: [{name, code}] left out of the YAML
-  // ADR-024 §S6b-2b: the live custom-alert editor opens for one tenant.
+  // ADR-024 §3: the live custom-alert editor opens for one tenant.
   const [customAlertsTenant, setCustomAlertsTenant] = useState(null);
   const [hoveredCard, setHoveredCard] = useState(null);
   const [activeGroupId, setActiveGroupId] = useState(null);
   // Auth state
   const [authUser, setAuthUser] = useState(null);
-  const [canWrite, setCanWrite] = useState(true); // default true for demo/no-auth mode
+  // Write controls appear only when /api/v1/me says the caller may write —
+  // and only over live data (writable, below): never on the offline or demo
+  // copy, whose writes would not reach anything (#3306).
+  const [canWrite, setCanWrite] = useState(false);
+  // #3306: writes only over live data.
+  const writable = canWrite && dataSource === 'api';
   // P7c follow-up #6 (#962): server-driven auth posture from /api/v1/me.
   // 'unknown' until the fetch settles, then one of:
   //   'ok'             — authenticated, has an identity payload (authUser set)
@@ -221,14 +227,17 @@ export default function TenantManager() {
           setCanWrite(false);
           setAuthState('forbidden');
         } else if (resp.status === 401) {
-          // Unauthenticated — oauth2-proxy normally redirects, but a dev/bypass
-          // deployment can surface a bare 401. No identity, no write.
+          // ADR-027 §5: oauth2-proxy answers /api/ without a session with
+          // 401 (--api-route) — sign in, coming back here.
           setCanWrite(false);
           setAuthState('unauthenticated');
+          // false: a 401 right after signing in — stay and show the
+          // refusal banner instead of looping through the IdP.
+          redirectToSignIn();
         }
         // Any other non-ok status: leave demo defaults untouched (fail-soft).
       } catch (e) {
-        // No auth endpoint available — demo mode, allow all
+        // No auth endpoint available — demo mode, read-only (#3306).
         setAuthState('demo');
         console.info('No /api/v1/me endpoint — running in demo mode');
       }
@@ -458,6 +467,9 @@ export default function TenantManager() {
   };
 
   const handleDeleteGroup = async (groupId) => {
+    // #3306: no delete over the offline or demo copy — the group shown may
+    // be a real one, and the DELETE would reach it.
+    if (!writable) return;
     if (!window.confirm(t('確定要刪除此群組？', 'Are you sure you want to delete this group?'))) return;
     const backup = { ...groups };
     // Optimistic local update
@@ -566,6 +578,29 @@ export default function TenantManager() {
         }
         onViewScope={() => { setScopePanelOpen(true); dismissScopeCallout(); }}
       />
+
+      {/* #3306: any source but the live API is said so, every time — the
+          list looks the same otherwise. Writes are off there (writable). */}
+      {dataSource && dataSource !== 'api' && (
+        <div
+          role="status"
+          data-testid="offline-data-notice"
+          style={{
+            maxWidth: '1600px',
+            margin: '0 auto var(--da-space-4)',
+            backgroundColor: 'var(--da-color-warning-soft)',
+            border: '1px solid var(--da-color-warning)',
+            borderRadius: 'var(--da-radius-md)',
+            padding: 'var(--da-space-3) var(--da-space-4)',
+            fontSize: 'var(--da-font-size-sm-md)',
+            color: 'var(--da-color-fg)',
+          }}
+        >
+          {dataSource === 'demo'
+            ? t('示範資料：這些租戶不存在，無法寫入。', 'Demo data: these tenants do not exist, and nothing can be written.')
+            : t('離線資料：來自 platform-data.json，不是即時狀態，無法寫入。', 'Offline data: from platform-data.json, not live, and nothing can be written.')}
+        </div>
+      )}
 
       {/* P7c follow-up #6 (#962): server-driven access notice. A non-wildcard
           reader who is authenticated but has NO tenant access gets a 403 from
@@ -750,7 +785,7 @@ export default function TenantManager() {
           onSelectGroup={setActiveGroupId}
           onCreateGroup={handleCreateGroup}
           onDeleteGroup={handleDeleteGroup}
-          canWrite={canWrite}
+          canWrite={writable}
         />
 
         <div>
@@ -768,7 +803,7 @@ export default function TenantManager() {
               db_type: filterDBType,
             }}
             onApplyView={applySavedView}
-            canWrite={canWrite}
+            canWrite={writable}
             savedViews={savedViews}
           />
 
@@ -1058,12 +1093,12 @@ export default function TenantManager() {
               <div role="heading" aria-level="2" style={{ fontWeight: 'var(--da-font-weight-bold)', color: 'var(--da-color-accent)' }}>
                 {groups[activeGroupId].label}
               </div>
-              <button
+              {writable && <button
                 onClick={() => handleDeleteGroup(activeGroupId)}
                 style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error-text)' }}
               >
                 {t('刪除群組', 'Delete Group')}
-              </button>
+              </button>}
             </div>
             <div style={{ marginTop: 'var(--da-space-2)', fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-accent)' }}>
               {groups[activeGroupId].members.length} {t('個成員', 'member(s)')}

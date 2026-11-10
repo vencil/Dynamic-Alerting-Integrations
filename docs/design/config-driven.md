@@ -387,14 +387,14 @@ v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   labels:
     severity: warning
-    metric_group: connections
+    metric_group: mysql_connections
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
     ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   labels:
     severity: critical
-    metric_group: connections
+    metric_group: mysql_connections
 ```
 
 **結果：** 連線數 ≥ 150 時，warning 和 critical 均觸發（TSDB 完整），但 Alertmanager inhibit rule 攔截 warning 通知，只送出 critical 通知。
@@ -635,7 +635,7 @@ v1.2.0 採用 per-tenant inhibit rules 實現可選化：
 | `_severity_dedup: "enable"`（預設） | ✅ | ✅ | ❌ 被 AM 攔截 | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "connections"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: liveness`，使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
+**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connections"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: liveness`，使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
 
 **Tenant 配置**
 
@@ -905,7 +905,7 @@ tenant-api 直接 import `"github.com/vencil/threshold-exporter/pkg/config"`，�
 
 **Portal 優雅降級：**
 
-da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 API 健康時，啟用完整 CRUD 操作；當不可用時（oauth2-proxy 故障、API server 重啟），自動改讀部署時產生的 `platform-data.json`，讀不到再用內建示範資料，不需手動切換。⚠️ 這兩種都不是即時資料，頁面也不標示目前用的是哪一種；`platform-data.json` 的租戶欄位不完整時，清單裡還會混入示範租戶（[#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)）。
+portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。API 回 401（未登入或 session 過期）時，頁面導去 oauth2-proxy 登入、登入後回到原頁，不改顯示其他資料（[ADR-027](../adr/027-tenant-api-caller-identity.md) §5）。API 健康時啟用完整 CRUD；不可用時（API server 重啟、沒有部署 tenant-api 的靜態站）改讀部署時產生的 `platform-data.json`，讀不到再用內建示範資料。這兩種都不是即時資料：頁面以橫幅標示目前是離線資料或示範資料，此時不提供任何寫入；離線資料照原樣顯示，不混入示範租戶或群組（[#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)）。
 
 > 完整決策脈絡與替代方案分析見 [ADR-009: Tenant Manager CRUD API](../adr/009-tenant-manager-crud-api.md)。
 

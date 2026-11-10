@@ -331,17 +331,27 @@ class TestMain:
         assert exc.value.reason == "dir_not_found"
         assert str(ghost) in str(exc.value)
 
+    def test_an_empty_dashboard_dir_is_named_not_a_usage_error(self, cli_argv):
+        """#3693: `--dashboard-dir ""` (an unset variable) is judged by its
+        declaration and named — it fell through to "Provide --dashboard,
+        --dashboard-dir, or --verify"."""
+        cli_argv("grafana_import.py", "--dashboard-dir", "")
+        with pytest.raises(CallerError) as exc:
+            gi.main()
+        assert exc.value.reason == "dir_not_found"
+        assert str(exc.value).startswith("--dashboard-dir '': "), str(exc.value)
+
     def test_dashboard_dir_no_jsons_exits_caller_error(self, monkeypatch, tmp_path, capsys, cli_argv):
         d = tmp_path / "empty-dir"
         d.mkdir()
         (d / "readme.txt").write_text("x", encoding="utf-8")  # not .json
         cli_argv("grafana_import.py", "--dashboard-dir", str(d))
-        with pytest.raises(SystemExit) as exc:
-            _as_run(gi.main())
-        # #452: empty dir = caller error (2), consistent with dir-not-found
-        assert exc.value.code == 2
-        err = capsys.readouterr().err
-        assert "No dashboard files" in err
+        # #452: empty dir = caller error (2), consistent with dir-not-found;
+        # #3693: named by the declaration (flag, path, what it looks for).
+        with pytest.raises(CallerError) as exc:
+            gi.main()
+        assert exc.value.reason == "input_empty"
+        assert str(exc.value) == f"--dashboard-dir {d}: selects nothing (*.json)"
 
     def test_single_dashboard_dry_run_exits_zero(self, monkeypatch, tmp_path, capsys, cli_argv):
         f = tmp_path / "dash.json"

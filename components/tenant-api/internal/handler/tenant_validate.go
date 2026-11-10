@@ -199,6 +199,12 @@ func dryRunRefusalMessage(err error, treeVisible bool) string {
 	if errors.As(err, &gm) {
 		return gm.Error()
 	}
+	// ADR-027 §7: the verdict PUT takes under the writer lock
+	// (tree_judge.go) — its own text, the gate's outside the lock.
+	var scope *freshBaseScopeError
+	if errors.As(err, &scope) {
+		return scope.Error()
+	}
 	switch {
 	case errors.Is(err, gitops.ErrValidation):
 		return strings.TrimPrefix(err.Error(), gitops.ErrValidation.Error()+": ")

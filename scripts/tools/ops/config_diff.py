@@ -47,10 +47,11 @@ from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pai
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538; #3276)
-from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3693: --old-dir / --new-dir are declared inputs)
 import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, partial_answer)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, die_caller_error,
+    partial_answer)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 import _render_diff as rd  # noqa: E402
 
@@ -215,16 +216,28 @@ class _Token(NamedTuple):
     text: str
 
 
-def _read_tree(conf_d, timeout):
-    """parse-tree's document for `conf_d`; an empty one for a side with no
-    config (a first import: no directory, or no entry whose role is
-    `config`). Raises `_lib_parse_tree.ParseTreeError`.
+def _read_tree(conf_d, timeout, flag, absent=False):
+    """parse-tree's document for `conf_d` (given as `flag`); an empty one
+    for a side with no config (a first import: `absent` — nothing was at the
+    path when `_lib_input.selected` judged it — or no entry whose role is
+    `config`). Raises `_lib_parse_tree.ParseTreeError`, and
+    `CallerError` (`dir_not_accessible`, `_lib_input.require_listed`) for a
+    directory whose root da-guard cannot list — ⛔ #3693: that was read as
+    holding no config file, a base side as a first import (rc 1, every
+    tenant added, stderr empty) and a PR side as one with no config file.
 
     #3206: "is there any config" is asked of this same document's entries,
-    not of a listing run before it — one walk, one snapshot."""
-    if not os.path.isdir(conf_d):
+    not of a listing run before it — one walk, one snapshot.
+
+    ⛔ #3721: "is it there" is read (`absent`), never asked again here. An
+    `os.path.isdir` of its own read a base side removed after it was judged
+    as a first import — rc 1, every tenant added, stderr empty; da-guard
+    reading a directory that is gone fails closed (ParseTreeError)."""
+    if absent:
         return _EMPTY_TREE
     doc = _lib_parse_tree.run(conf_d, None, timeout)
+    root = next((e for e in _lib_parse_tree.entries_of(doc) if e.path == "."), None)
+    _lib_input.require_listed(flag, conf_d, root, lang="en")
     if not _has_config_file(doc):
         return _EMPTY_TREE
     # #2962: which reader reads a key WHERE it is written. A da-guard without
@@ -368,16 +381,17 @@ def _classify(rel, key, change, stem, doc, changed_views, view_status):
                         "render (partial coverage): it may matter elsewhere", views)
 
 
-def _platform_view(old_dir, new_dir, timeout):
+def _platform_view(old_dir, new_dir, timeout, *, old_absent=False):
     """(ViewResult, old_doc, new_doc) for the platform settings. A PR side
     parse-tree cannot read, or a tool failure on either side, is no result
-    (ADR-037 decision 4)."""
+    (ADR-037 decision 4). `old_absent`: `_lib_input.absent` of the base side
+    (#3721) — a library caller with no parser reads both sides."""
     try:
-        new_doc = _read_tree(new_dir, timeout)
+        new_doc = _read_tree(new_dir, timeout, "--new-dir")
     except _lib_parse_tree.ParseTreeError as e:
         return rd.ViewResult("not_computed", f"PR side: {e}"), None, None
     try:
-        old_doc = _read_tree(old_dir, timeout)
+        old_doc = _read_tree(old_dir, timeout, "--old-dir", old_absent)
     except _lib_parse_tree.ParseTreeError as e:
         return rd.ViewResult("not_computed", f"base side: {e}"), None, None
     return rd.ViewResult("computed", ""), old_doc, new_doc
@@ -1645,10 +1659,15 @@ def build_parser():
               %(prog)s --old-dir conf.d.baseline --new-dir conf.d/ --format json
         """),
     )
-    parser.add_argument("--old-dir", required=True,
-                        help="Baseline config directory (missing or empty: a first import)")
-    parser.add_argument("--new-dir", required=True,
-                        help="New/staged config directory")
+    # #3693: declared inputs (da-guard lists them). The base side may be
+    # missing or hold no config file (a first import); the PR side must
+    # hold one. Either side's root that da-guard cannot list is refused.
+    _lib_input.add_input(parser, "--old-dir", select=_lib_input.DA_GUARD_LISTS,
+                         missing=_lib_input.ABSENT_EMPTY, required=True,
+                         help="Baseline config directory (missing or empty: a first import)")
+    _lib_input.add_input(parser, "--new-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED, required=True,
+                         help="New/staged config directory (must hold a config file)")
     parser.add_argument("--at", type=_at, default=None,
                         help="Instant to read schedules, silences and maintenance windows at, "
                              "RFC3339 (e.g. the base commit's time). Default: now")
@@ -1688,16 +1707,17 @@ def _main():
     platform files, or the like.
     """
     args = build_parser().parse_args()
-    # A side with nothing at its path is an empty tree (a first import, see
-    # `_tree_doc`); anything else the shared judgement refuses is a caller
-    # error with its own reason — a file, or a path under a parent the caller
-    # cannot enter (#3276) — so it is asked before the catch-all below.
-    raise_path_problems([
-        p for p in (classify_path(path, "dir", lang="en", flag=flag)
-                    for flag, path in (("--old-dir", args.old_dir), ("--new-dir", args.new_dir)))
-        if p is not None and not p.missing])
+    # #3693: each side judged by its declaration (`_lib_input.selected`)
+    # before the catch-all below — a base side with nothing at its path is
+    # an empty tree (a first import); anything else that is no usable
+    # directory (a file, a dangling link, a parent the caller cannot enter,
+    # #3276) is a caller error with its own reason.
+    _lib_input.selected(args, "new_dir", lang="en")
+    _lib_input.selected(args, "old_dir", lang="en")
     try:
         return _run(args)
+    except CallerError:
+        raise  # #3693: a side da-guard cannot list, named — not "cannot compare"
     except Exception as exc:  # noqa: BLE001 — deliberate; see docstring
         # ``sys.exit`` inside ``_run`` raises SystemExit, which derives from
         # BaseException, so the tool's own 0/1/2 exits pass through untouched.
@@ -1718,7 +1738,8 @@ def _run(args):
     # #3206: ONE parse-tree document per side for the whole run — the platform
     # settings read it, and whether a side has any config file is asked of
     # its entries, not of a second listing.
-    platform = _platform_view(args.old_dir, args.new_dir, rd.DEFAULT_TIMEOUT)
+    platform = _platform_view(args.old_dir, args.new_dir, rd.DEFAULT_TIMEOUT,
+                              old_absent=_lib_input.absent(args, "old_dir"))
     view, old_doc, new_doc = platform
     if old_doc is None:
         # #3206 N-4: no document for a side is no answer for the run — never a
@@ -1729,6 +1750,12 @@ def _run(args):
             f"{safe_label(view.reason)}",
             reason="compare_failed",
         )
+    # #3693: a PR side with no config file is refused by its declaration
+    # (`empty=EMPTY_REFUSED`), in the one wording of "selects nothing" (both
+    # documents are here: no document for either side died above).
+    _lib_input.require_selection(
+        args, "new_dir", [e for e in _lib_parse_tree.entries_of(new_doc) if e.config_file],
+        wanted="a file da-guard lists as a config file", lang="en")
     has = (_has_config_file(old_doc), _has_config_file(new_doc))
     diff = rd.compare(args.old_dir, args.new_dir, at, served_report=served_sections, has=has)
     report = build_report(diff, args.old_dir, args.new_dir, platform=platform)

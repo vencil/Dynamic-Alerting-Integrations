@@ -1,6 +1,6 @@
 package main
 
-// Route-manifest tripwire (ADR-027 / LD-6 P4b §5b).
+// Route-manifest tripwire (ADR-027 §7).
 //
 // Every route that can MUTATE state (method ∈ {PUT, POST, DELETE, PATCH})
 // must carry an entry in writeRouteManifest naming its org-scope gate
@@ -85,6 +85,8 @@ var writeRouteManifest = map[string]string{
 		" — site #9: PermAdmin on path {id}, same bar as token issuance",
 	"POST /api/v1/tenants/batch": gateHelperFunnel +
 		" — sites #3/#4: PR-mode pre-validation inline OrgAllowed + executeBatchOps (sync/async, orgs resolved at execution time)",
+	"POST /api/v1/tenants/simulate": gateReadOp +
+		" — answers a fixed 501 SIMULATE_NOT_PROVIDED to any signed-in caller (ADR-027 §5); reads and writes nothing",
 	"POST /api/v1/tenants/{id}/diff": gateReadOp +
 		" — diff preview only; route middleware enforces PermRead on {id}; commits nothing",
 	"POST /api/v1/tenants/{id}/validate": gateReadOp +
@@ -111,7 +113,7 @@ var writeRouteManifest = map[string]string{
 		" — what-if dry-run over a candidate _rbac.yaml; 403 byte-identical to the GET access-report bar (P7)",
 }
 
-// Read-plane gate-mechanism labels (ADR-027 / LD-6 P4c). Reads gate in the
+// Read-plane gate-mechanism labels (ADR-027 §7). Reads gate in the
 // rbac middleware chokepoint, so — unlike the distributed write gates —
 // the manifest records which middleware path a GET route takes.
 const (
@@ -142,7 +144,7 @@ const (
 	gateReadAuthenticated = "authenticated-only gate (MiddlewareAuthenticated) — caller's own principal, no grant required"
 	// gateReadPlatformAdmin — route middleware checks read on "*" (PermRead,
 	// nil); the LOCKED authorization bar (rbac.PlatformAdminNonOrgScoped) runs
-	// at the top of the handler with a constant 403 (ADR-027 / LD-6 P6).
+	// at the top of the handler with a constant 403 (ADR-027 §7).
 	// An org-scoped wildcard admin fails this bar — the same bar as the
 	// platform-wide writes (gateWritePlatformAdmin; #3160).
 	gateReadPlatformAdmin = "platform-admin bar in handler (non-org-scoped, constant 403)"
@@ -248,7 +250,7 @@ func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
 	if len(unregistered) > 0 {
 		t.Errorf("write-method route(s) not in writeRouteManifest — every mutating endpoint "+
 			"must declare its org-scope gate mechanism (or a reasoned exemption) in "+
-			"cmd/server/routes_test.go before it ships (ADR-027 / LD-6 P4b):\n  %s",
+			"cmd/server/routes_test.go before it ships (ADR-027 §7):\n  %s",
 			strings.Join(unregistered, "\n  "))
 	}
 
@@ -269,7 +271,7 @@ func TestWriteRoutesMatchOrgGateManifest(t *testing.T) {
 }
 
 // TestReadRoutesMatchOrgGateManifest is the read-plane sibling of the write
-// manifest (ADR-027 / LD-6 P4c): every GET route must declare, in
+// manifest (ADR-027 §7): every GET route must declare, in
 // readRouteManifest, whether it is org-gated by the read-by-id middleware path
 // (gateReadByIDOrg), behind the any-tenant gate with a named handler filter
 // (gateReadAnyTenant), on the identity-only gate (gateReadAuthenticated), or
@@ -305,7 +307,7 @@ func TestReadRoutesMatchOrgGateManifest(t *testing.T) {
 	if len(unregistered) > 0 {
 		t.Errorf("GET route(s) not in readRouteManifest — every read endpoint must declare its "+
 			"org-gate story (read-by-id org gate vs org-blind list/wildcard) in cmd/server/routes_test.go "+
-			"before it ships (ADR-027 / LD-6 P4c):\n  %s", strings.Join(unregistered, "\n  "))
+			"before it ships (ADR-027 §7):\n  %s", strings.Join(unregistered, "\n  "))
 	}
 
 	var stale []string

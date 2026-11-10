@@ -3561,7 +3561,7 @@ def _unescaped_expansions(text: str) -> list[tuple[str, int]]:
     Deliberately NOT quote-state aware, and the asymmetry matters. Tracking
     single quotes would let it accept a genuinely-literal `` ` `` inside '...',
     but this prose is full of apostrophes ("Renovate's last weekly run",
-    "mariadb's 15 findings"). A naive tracker reads the first one as an opening
+    "mariadb's gosu findings"). A naive tracker reads the first one as an opening
     quote and then treats the rest of the argument as single-quoted — i.e. it
     stops reporting, silently, which is the exact failure mode this guard
     exists to end. Over-reporting a single-quoted backtick fails LOUD and costs
@@ -4123,3 +4123,41 @@ def test_swallow_guard_catches_the_multiline_form() -> None:
     assert not _swallowed_label_create(
         'if ! gh label create "$LABEL" --repo "$REPO" \\\n       --force; then\n'
     )
+
+
+
+# A count of findings/CVEs written into prose, in the shapes it takes in English.
+# A ratio ("cleared 58 of 120") is a count too: it drifts the same way.
+# A number after `#` is an issue reference, not a count.
+_FINDING_COUNT_RE = re.compile(
+    r"(?<![#\w])\d+\+?\s+(?:[\w.'’-]+\s+){0,3}?(?:findings?|CVEs?|vulnerabilit(?:y|ies))\b"
+    r"|(?:findings?|CVEs?)\s*[:(]\s*\d+"
+    r"|(?<![#\w])\d+\s+of\s+\d+\b", re.IGNORECASE)
+
+
+def test_remediation_prose_states_no_finding_count() -> None:
+    """No `file_cve_report.sh` argument carries a finding COUNT.
+
+    The remediation text is re-sent every night while the issue body beside it
+    is regenerated, so a count in it drifts the moment upstream publishes the
+    next advisory — measured: it said "mariadb's 15 findings" while #1243 listed
+    27 for mariadb. Only the ARGUMENTS are read (workflow comments may keep a
+    dated record of a past triage); inside them a past triage's ratio
+    ("cleared 58 of 120") is a count as well and is matched.
+    """
+    for shape in ("mariadb's 15 findings", "26 mariadb findings", "mariadb (26 findings)",
+                  "findings: 26", "the 26 gosu CVEs", "mariadb’s 1 finding",
+                  "mariadb's 26 HIGH findings", "26+ findings",
+                  "#1243 cleared 58 of 120 this way"):
+        assert _FINDING_COUNT_RE.search(shape), f"self-test: {shape!r} not matched"
+    for clean in ("12.x pins gosu", "runAsUser 999", "#1243 cleared findings this way",
+                  "#1243 of 2026"):
+        assert not _FINDING_COUNT_RE.search(clean), f"self-test: {clean!r} matched"
+    args = [a for call in _report_calls() for a in call]
+    remediation = [a for a in args if "triage each image" in a]
+    assert len(remediation) == 1 and "gosu" in remediation[0], (
+        "anti-vacuity: the third-party remediation argument (the one that says "
+        "'triage each image') is not found exactly once, or no longer mentions "
+        "gosu — the prose this guards moved or the call-site scan broke")
+    hits = sorted({m.group(0) for a in args for m in _FINDING_COUNT_RE.finditer(a)})
+    assert not hits, f"finding count(s) in the remediation arguments: {hits}"

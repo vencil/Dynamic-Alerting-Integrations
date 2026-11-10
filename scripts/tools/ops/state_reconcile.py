@@ -276,6 +276,7 @@ def reconcile(
     manifest_path: Path,
     state_files: list[Path],
     *,
+    state_dir_missing: bool,
     dry_run: bool = False,
 ) -> dict:
     """Core reconciliation logic. Returns a report dict suitable for JSON output.
@@ -283,12 +284,13 @@ def reconcile(
     *state_files* are the files --state-dir selects
     (`_lib_input.selected`, sorted). The old manifest is read first
     (`read_old_manifest`), before any state file is migrated: one that
-    cannot be read stops the run with nothing written."""
+    cannot be read stops the run with nothing written. *state_dir_missing*:
+    `_lib_input.absent` of --state-dir (#3721), reported as it was judged."""
     old_manifest = read_old_manifest(manifest_path)
     report: dict = {
         "state_dir": str(state_dir),
         "manifest_path": str(manifest_path),
-        "state_dir_missing": not state_dir.exists(),
+        "state_dir_missing": state_dir_missing,
         "schema_migrations": [],
         "schema_drift_unresolvable": [],
         "manifest_change": None,
@@ -512,7 +514,11 @@ def main(argv: list[str] | None = None) -> "int | Report":
     # #3107 v2: checked BEFORE the read — a FIFO or /dev/stdout would block it.
     check_repo_artifact(manifest_path, flag="--manifest-path")
 
-    report = reconcile(state_dir, manifest_path, state_files, dry_run=args.dry_run)
+    # #3721: whether it was there is what selected() judged, never a
+    # second look (`state_dir.exists()` could disagree with the files read).
+    report = reconcile(state_dir, manifest_path, state_files,
+                       state_dir_missing=_lib_input.absent(args, "state_dir"),
+                       dry_run=args.dry_run)
     report["dry_run"] = args.dry_run
 
     status = compute_exit_code(report, ci=args.ci, dry_run=args.dry_run)

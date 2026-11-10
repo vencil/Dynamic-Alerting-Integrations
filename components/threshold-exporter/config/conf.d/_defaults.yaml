@@ -12,12 +12,15 @@
 defaults:
   # >>> GENERATED:threshold-registry:dev-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
   # ── kubernetes：Kubernetes (cAdvisor + KSM) ──
-  # % — Container CPU % of limit (weakest link)
+  # % — Container CPU % of limit (weakest link)（critical 加嚴 opt-in：container_cpu_critical，registry
+  # 建議 95）
   container_cpu: 80
   # % — Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier
-  # opt-in via container_cpu_throttle_critical, suggest 50; #944)
+  # opt-in via container_cpu_throttle_critical, declared in optional_overrides; #944)（critical 加嚴
+  # opt-in：container_cpu_throttle_critical，registry 建議 50）
   container_cpu_throttle: 25
-  # % — Container memory % of limit (weakest link)
+  # % — Container memory % of limit (weakest link)（critical 加嚴
+  # opt-in：container_memory_critical，registry 建議 95）
   container_memory: 85
   # ── postgresql：PostgreSQL (postgres_exporter) ──
   # % of max_connections — Connection usage % warning（critical 加嚴

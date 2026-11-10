@@ -1,0 +1,19 @@
+{{- /*
+  ADR-027 §5: the nginx configuration the portal container loads — static
+  files only, no forwarding (tenant-api.portalNginxConfig). Immutable and
+  renamed on every change, as the oauth2-proxy config is, so a change rolls
+  the pod.
+*/ -}}
+{{- if .Values.oauth2Proxy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "tenant-api.portalConfigMap" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+immutable: true
+data:
+  nginx.conf: |
+    {{- include "tenant-api.portalNginxConfig" . | nindent 4 }}
+{{- end }}

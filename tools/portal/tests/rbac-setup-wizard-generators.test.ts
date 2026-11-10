@@ -1,5 +1,5 @@
 /**
- * Unit tests for rbac-setup-wizard generators (ADR-027 / LD-6 P7d).
+ * Unit tests for rbac-setup-wizard generators (ADR-027 §7).
  *
  * `rbacGenerateYaml` emits a `groups:` list `_rbac.yaml` matching the tenant-api
  * strict RBAC parser (rbac.go RBACConfig / GroupRule / MatchBlock); `rbacValidate`

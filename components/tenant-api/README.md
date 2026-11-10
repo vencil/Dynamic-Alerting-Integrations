@@ -76,6 +76,7 @@
 |--------|------|------|------|
 | `GET` | `/api/v1/me` | 身分(不需授權) | 當前呼叫者的 email + groups + 命中他的規則摘要;沒有任何授權也回 200(空的 `permissions` / `accessible_tenants`),缺身分 401 |
 | `GET` | `/api/v1/tenants` | read | 列出 RBAC 可見的租戶;設定檔存在但無法使用的租戶以**降級列**回傳(只有 `id` + `config_error`,見下方「降級列」),不再靜默消失;每筆的 `config_derived`(`silent_targets` / `maintenance_active`)見下方「依設定推算的狀態」;每筆帶 `managed_by`(`api` / `git`,git 時加 `git_managed_reason`),與 `GET /tenants/{id}` 對同一檔的判定相同,檔名與宣告 id 不同的檔標 `id_mismatch` 與 `metadata_incomplete`、不再是不帶任何標記的空列,可見性比照降級列(`unreadable` / `not_regular_file` 的降級列不帶這兩個欄位,[#3157](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3157)) |
+| `POST` | `/api/v1/tenants/simulate` | 身分(不需授權) | 一律回 501 `SIMULATE_NOT_PROVIDED`：simulate 預覽是 threshold-exporter 的端點，本部署不提供；portal 的 simulate 小工具據此顯示「不提供」。只有 `POST`，其他方法仍是名為 `simulate` 的租戶（[ADR-027](../../docs/adr/027-tenant-api-caller-identity.md) §5） |
 | `GET` | `/api/v1/tenants/search` | read | 伺服端 search / filter / 分頁(`q` / `environment` / `tier` / `domain` / `db_type` / `tag` / `page_size` / `offset` / `sort`);與 `/tenants` 共用快照快取。回應頂層的 `config_derivation` 附推算時間,並列出解析失敗而被跳過的檔案(`parse_failed_files`) |
 | `GET` | `/api/v1/tenants/{id}` | read | 取得 raw YAML + `resolved_thresholds`(套根目錄的 defaults carrier、根目錄平台檔的 `tenants:` 區塊與租戶選用的 `_profile`,見下方「單一租戶端點與 conf.d 範圍」);`.yaml` / `.yml` 兩種拼法皆可解析,同一 id 兩種拼法並存回 409;對該租戶沒有寫入權限的呼叫者看到遮罩後的憑證(見上方「憑證遮罩」);`declared_elsewhere` 為 `true` 表示伺服器目前讀到的樹裡,有自己的檔以外的檔宣告同一 id——也就是 409 `TENANT_DECLARED_ELSEWHERE` 判的條件,判法同 `/diff`。它不保證寫入的回應:寫入可能先因別的原因被拒,PR 模式則以最新 base 判定(只是布林、不點名檔案;conf.d walk 跑不了時欄位不出現,[#3172](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3172)) |
 | `GET` | `/api/v1/tenants/{id}/effective` | read | 沿 `_defaults.yaml` 鏈逐層合併租戶覆寫後的**設定**(對齊 `describe_tenant`),不是 exporter 會 emit 的值(見下方「單一租戶端點與 conf.d 範圍」)+ 繼承來源鏈 + 雙重 hash(`source_hash` / `merged_hash`,供變更偵測);值照原文保留,defaults 鏈、根目錄缺 `defaults:` 包裝、平台檔／profile／租戶檔值解析不了而 exporter 不送的,以及 profile 寫了卻不填入的 key,在 `not_served` 逐 key 標原因(過期 override 目前不標),defaults 鏈上 exporter 整份不讀的語法錯檔當空檔、列在 `chain_parse_failed`(仍回 200,[#2296](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2296));同一 id 的兩種拼法都宣告該租戶時回 409;對該租戶沒有寫入權限的呼叫者看到遮罩後的憑證(見上方「憑證遮罩」) |
@@ -343,11 +344,11 @@ groups:
 
 ⛔ **環境與 domain 標記只有平台管理員能變更**(ADR-027 §7):標記決定哪些規則的 `environments` / `domains` 涵蓋這個租戶,所以不論上述 scope 軸判定如何,一筆寫入若會**變更**租戶的 environment 或 domain(新增、修改、刪除都算;值不變不算;比的是上面同一套 metadata 讀法讀出的值,所以經 `_profile` 改到也算,建立一個帶標記的新租戶也算),而呼叫者不是平台管理員(一條 `tenants: ["*"]`、授予 `admin`,且不帶 `org-scope`、`environments`、`domains` 的規則;帶任一範圍限制的 `"*"` admin 都不算——標記決定其他規則涵蓋哪些租戶,只限部分環境的 admin 若能改,就能把租戶交給目的環境的每條規則),就拒絕:`PUT /tenants/{id}`(以及共用同一判定序列的 `/diff`、`/validate`)回 403 `FORBIDDEN`;`POST /tenants/batch` 與 `POST /groups/{id}/batch` 是該筆結果 `code: FORBIDDEN`、整批 422 不寫入。PR 模式同樣在寫入鎖內以最新 origin base 上的租戶檔再判一次是否變更(base 上讀不出標記時沿用本機樹判過的值),不通過時不開 PR、不留分支。
 
-org 軸(租戶→組織,`_tenant_orgs.yaml`;ADR-027 / LD-6 P4)獨立於 metadata 軸,作用於 org-scoped 規則的**三個**判定面——list 可見性(P4a)、per-tenant 寫入 / admin 授權(含 federation token 簽發,P4b)、與 read-by-id 單租戶讀取(P4c)。沒掛 org 的租戶在 org-scoped 規則下不可見、不可寫;被擋下的決定計入 `{axis="org"}`(read/visibility 面:list + read-by-id/collection)與 `{axis="org_write"}`(寫入面)。⚠️ 標記租戶前須確認 org claim 確實送達 tenant-api,否則該租戶對 org-scoped 規則立即不可見。
+org 軸(租戶→組織,`_tenant_orgs.yaml`;ADR-027 §7)獨立於 metadata 軸,作用於 org-scoped 規則的**三個**判定面——list 可見性(P4a)、per-tenant 寫入 / admin 授權(含 federation token 簽發,P4b)、與 read-by-id 單租戶讀取(P4c)。沒掛 org 的租戶在 org-scoped 規則下不可見、不可寫;被擋下的決定計入 `{axis="org"}`(read/visibility 面:list + read-by-id/collection)與 `{axis="org_write"}`(寫入面)。⚠️ 標記租戶前須確認 org claim 確實送達 tenant-api,否則該租戶對 org-scoped 規則立即不可見。
 
 ### RBAC match 規則(claims-aware)
 
-`_rbac.yaml` 規則可加選配的 `match:` 區塊(ADR-027 / LD-6 P3)。**沒有 `match:` 的規則行為完全不變**——`name` 即比對的 IdP group(同一條求值路徑的退化情形,非新分支);有 `match:` 時 `name` 變成純標籤 / 稽核識別:
+`_rbac.yaml` 規則可加選配的 `match:` 區塊(ADR-027 §7)。**沒有 `match:` 的規則行為完全不變**——`name` 即比對的 IdP group(同一條求值路徑的退化情形,非新分支);有 `match:` 時 `name` 變成純標籤 / 稽核識別:
 
 ```yaml
 groups:

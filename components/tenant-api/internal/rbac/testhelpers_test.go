@@ -27,7 +27,7 @@ func newFakeScopeRecorder() *fakeScopeRecorder {
 
 func (f *fakeScopeRecorder) IncScopeDenied(axis string) { f.counts[axis]++ }
 
-// ── legacy-equivalence fixtures (ADR-027 / LD-6 P3) ─────────────────────────
+// ── legacy-equivalence fixtures (ADR-027 §7) ─────────────────────────
 
 // equivConfig is a rule set that exercises every legacy matching feature:
 // wildcard tenants, prefix tenants, multi-permission rules, and
@@ -72,7 +72,7 @@ var equivTenants = []string{"db-a-prod", "db-b-staging", "redis-01", "*", ""}
 
 var equivPerms = []Permission{PermRead, PermWrite, PermAdmin}
 
-// ── claims-aware match fixtures (ADR-027 / LD-6 P3) ─────────────────────────
+// ── claims-aware match fixtures (ADR-027 §7) ─────────────────────────
 
 // matchEvalConfig exercises every match shape next to a legacy rule.
 func matchEvalConfig() *RBACConfig {

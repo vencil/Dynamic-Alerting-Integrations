@@ -504,8 +504,9 @@ class TestBuildReport:
         md = cd.render_markdown(_report(views={rd.VIEW_SERVED: bad, rd.VIEW_ROUTES: _OK}))
         assert "\x1b" not in md and "x\\x1b[2J.yaml" in md
         monkeypatch.setattr(cd.rd, "compare", lambda *a, **k: rd.RenderDiff(AT, bad, _OK))
-        monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path),
-                                          "--new-dir", str(tmp_path), "--at", AT])
+        _write_tenant(tmp_path / "d", {"mysql_connections": "80"})  # #3693: a PR side
+        monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path / "d"),
+                                          "--new-dir", str(tmp_path / "d"), "--at", AT])
         with pytest.raises(SystemExit) as exc:
             cd.main()
         assert exc.value.code == 2
@@ -646,11 +647,51 @@ class TestCLI:
         p = _run_cli(dirs["old"], dirs["new"])
         assert p.returncode == 2 and f"--{side}-dir {f}: not a directory" in p.stderr, p.stderr
 
-    def test_new_dir_missing_is_not_computed(self, tmp_path):
+    def test_a_base_side_gone_after_it_was_judged_is_no_first_import(
+            self, tmp_path, monkeypatch, capsys):
+        """#3721: --old-dir removed after `_lib_input.selected` judged it
+        (there) was read as a first import by an `isdir` of config-diff's
+        own — rc 1, every tenant added, stderr empty. "Was it there" is read
+        (`_lib_input.absent`), and da-guard reading the directory that is
+        gone fails closed: rc 2, the side named, no report."""
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
+        real = cd._lib_input.selected
+
+        def racing(args, dest, **kw):
+            out = real(args, dest, **kw)
+            if dest == "old_dir":
+                shutil.rmtree(tmp_path / "old")
+            return out
+
+        monkeypatch.setattr(cd._lib_input, "selected", racing)
+        monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path / "old"),
+                                          "--new-dir", str(tmp_path / "new"), "--format", "json"])
+        with pytest.raises(SystemExit) as exc:
+            cd.main()
+        assert exc.value.code == 2
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert f"--old-dir {tmp_path / 'old'}" in out.err and "base side" in out.err, out.err
+
+    def test_new_dir_missing_is_named(self, tmp_path):
+        """#3693: a PR side that is not there is the flag's own refusal
+        (`dir_not_found`), no report — it was a report whose views were
+        "not computed: has no config file"."""
         _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
         p = _run_cli(tmp_path / "old", tmp_path / "nope")
-        assert p.returncode == 2
-        assert "not computed" in p.stdout and "has no config file" in p.stderr
+        assert p.returncode == 2 and p.stdout == "", p.stdout
+        assert f"--new-dir {tmp_path / 'nope'}: No such file or directory" in p.stderr, p.stderr
+
+    def test_new_dir_with_no_config_file_selects_nothing(self, tmp_path):
+        """#3693: a PR side with no config file is refused by its declaration
+        (`empty=EMPTY_REFUSED`), in `_lib_input`'s one wording."""
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        (tmp_path / "new").mkdir()
+        p = _run_cli(tmp_path / "old", tmp_path / "new")
+        assert p.returncode == 2 and p.stdout == "", p.stdout
+        assert (f"--new-dir {tmp_path / 'new'}: selects nothing (a file da-guard lists "
+                "as a config file)") in p.stderr, p.stderr
 
     @pytest.mark.parametrize("label, write", [
         ("malformed_yaml", lambda f: f.write_text("tenants:\n  db-a: [unclosed\n   x: :\n", encoding="utf-8")),
@@ -730,6 +771,7 @@ class TestCLI:
         def boom(*a, **k):
             raise RuntimeError("boom")
         monkeypatch.setattr(cd.rd, "compare", boom)
+        _write_tenant(tmp_path / "n", {"mysql_connections": "80"})  # #3693: a PR side
         monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path / "o"),
                                           "--new-dir", str(tmp_path / "n")])
         with pytest.raises(SystemExit) as exc:
@@ -1115,7 +1157,7 @@ class TestPlatformSettings:
         base = {"db-a.yaml": self.TENANT, "_defaults.yaml": self.DEFAULTS}
         old, new = _pair(tmp_path, base, base)
         with pytest.raises(_lib_parse_tree.ParseTreeError, match="older than this tool"):
-            cd._read_tree(new, 60)
+            cd._read_tree(new, 60, "--new-dir")
 
     @pytest.mark.parametrize("rel,text,status", [
         ("_defaults.yaml", "defaults:\n  cpu: 80\n_custom_alerts: []\n", cd.SETTING_NOT_COMPARED),

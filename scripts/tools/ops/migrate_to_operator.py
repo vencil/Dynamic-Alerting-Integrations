@@ -53,14 +53,14 @@ from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, write_text_secure  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, CallerError, die_caller_error, encode_json)
+    EXIT_CALLER_ERROR, die_caller_error, encode_json)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (parse_tree_error_line)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
-from _lib_paths import classify_path, raise_path_problems, supplied  # noqa: E402  (#3392)
+from _lib_paths import supplied  # noqa: E402  (#3392)
 from _lib_constants import (  # noqa: E402  (#3572)
     DOCS_SITE_BASE, OPERATOR_ROUTING_REMEDY_EN, OPERATOR_ROUTING_REMEDY_ZH)
 import _lib_input  # noqa: E402  (#3446: --source-dir is a directory da-guard lists)
@@ -135,16 +135,11 @@ def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
     ParseTreeError (no usable da-guard).
 
     ⛔ #3446: a *source_dir* da-guard cannot list (its root entry is role
-    `unlistable_dir`) raises CallerError (`dir_not_accessible`, rc 2): it was
-    a WARNING and a migration made from no source file, rc 0."""
+    `unlistable_dir`) raises CallerError (`dir_not_accessible`, rc 2,
+    `_lib_input.require_listed`): it was a WARNING and a migration made from
+    no source file, rc 0."""
     listing = _lib_parse_tree.list_tree(source_dir)
-    root = listing.entry(".")
-    if root is not None and root.unlistable_dir:
-        why = safe_label(root.problem[1]) if root.problem else root.role
-        raise CallerError(i18n_text(
-            f"--source-dir {safe_label(str(source_dir))}: 無法列出目錄內容（da-guard: {why}）",
-            f"--source-dir {safe_label(str(source_dir))}: cannot list the directory "
-            f"(da-guard: {why})"), "dir_not_accessible")
+    _lib_input.require_listed("--source-dir", source_dir, listing.entry("."), lang=_LANG)
     warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
     try:
         # Only for the hidden names da-guard's listing leaves out (#3446:
@@ -213,7 +208,11 @@ def parse_configmap_rules(source_dir: Path,
         never an error).
 
     Raises:
-        FileNotFoundError: If directory does not exist
+        ParseTreeError: da-guard cannot list *source_dir* (not there, say) —
+            #3721: no `is_dir` of its own here; that second look, made after
+            `_lib_input.selected` judged the directory, turned a directory
+            removed in between into an `issues` WARNING and a migration made
+            from no source file, rc 0
         SourceFilesUnreadable: a file that is neither a manifest kubectl
             reads nor a plain rule file (every one named, with the reader's
             reason; #3426)
@@ -221,14 +220,6 @@ def parse_configmap_rules(source_dir: Path,
             loader refuses (RuleFilesRefused, naming each), or no
             da-read / da-crdecode — each stops the run at rc 2 in `main`
     """
-    if not source_dir.is_dir():
-        raise FileNotFoundError(
-            i18n_text(
-                f"來源目錄不存在: {source_dir}",
-                f"source directory not found: {source_dir}",
-            )
-        )
-
     # #3206 (ADR-036 §12) / #3426: which rule files a file holds is
     # `_lib_consumer_read.rule_files_in`'s answer — the one classifier: the
     # manifest kubectl reads (a `kind: List`, which `kubectl get … -o yaml`
@@ -328,22 +319,18 @@ def analyze_migration(source_dir: Path,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
-    try:
-        found = parse_configmap_rules(source_dir, source_listing)
-        cm_rules = [item for item in found if not item["already_crd"]]
-        analysis["already_crd"] = [{"file": i["file"], "name": i["name"]}
-                                   for i in found if i["already_crd"]]
-        analysis["configmap_files"] = len(cm_rules)
-        for item in cm_rules:
-            analysis["rule_groups"] += len(item.get("rule_groups", []))
-    except FileNotFoundError as exc:
-        analysis["issues"].append(i18n_text(
-            f"來源目錄錯誤: {exc}",
-            f"Source directory error: {exc}",
-        ))
+    found = parse_configmap_rules(source_dir, source_listing)
+    cm_rules = [item for item in found if not item["already_crd"]]
+    analysis["already_crd"] = [{"file": i["file"], "name": i["name"]}
+                               for i in found if i["already_crd"]]
+    analysis["configmap_files"] = len(cm_rules)
+    for item in cm_rules:
+        analysis["rule_groups"] += len(item.get("rule_groups", []))
     # #3426: a rule file the rule loader refuses, an unreadable source file
     # and a missing da-read / da-crdecode are no `issues` entry beside a
-    # partial count: they reach `main` (`_sources_or_exit`), rc 2.
+    # partial count: they reach `main` (`_sources_or_exit`), rc 2. #3721: a
+    # source directory gone since it was judged is no `issues` entry either
+    # (it was "Source directory error", a migration from no file, rc 0).
 
     analysis["estimated_crds"] = analysis["configmap_files"]
 
@@ -649,37 +636,35 @@ def generate_migration(
     }
 
     # Parse ConfigMap rules
-    try:
-        found = parse_configmap_rules(source_dir, source_listing)
-        cm_rules = [item for item in found if not item["already_crd"]]
-        result["already_crd"] = [{"file": i["file"], "name": i["name"]}
-                                 for i in found if i["already_crd"]]
-        result["configmap_files"] = len(cm_rules)
+    found = parse_configmap_rules(source_dir, source_listing)
+    cm_rules = [item for item in found if not item["already_crd"]]
+    result["already_crd"] = [{"file": i["file"], "name": i["name"]}
+                             for i in found if i["already_crd"]]
+    result["configmap_files"] = len(cm_rules)
 
-        for cm_item in cm_rules:
-            try:
-                rule_groups = cm_item.get("rule_groups", [])
-                result["rule_group_count"] += len(rule_groups)
-                rule_pack_name = cm_item["name"].replace(
-                    _lib_consumer_read.RULE_PACKS.prefix, "").lower()
+    for cm_item in cm_rules:
+        try:
+            rule_groups = cm_item.get("rule_groups", [])
+            result["rule_group_count"] += len(rule_groups)
+            rule_pack_name = cm_item["name"].replace(
+                _lib_consumer_read.RULE_PACKS.prefix, "").lower()
 
-                crd = convert_rules_to_crd(rule_groups, rule_pack_name, namespace)
-                result["prometheus_rules"].append({
-                    "name": crd["metadata"]["name"],
-                    "file": cm_item["file"],
-                    "crd": crd,
-                })
-            except Exception as exc:
-                result["errors"].append(
-                    i18n_text(
-                        f"轉換 {cm_item['file']} 失敗: {exc}",
-                        f"Failed to convert {cm_item['file']}: {exc}",
-                    )
+            crd = convert_rules_to_crd(rule_groups, rule_pack_name, namespace)
+            result["prometheus_rules"].append({
+                "name": crd["metadata"]["name"],
+                "file": cm_item["file"],
+                "crd": crd,
+            })
+        except Exception as exc:
+            result["errors"].append(
+                i18n_text(
+                    f"轉換 {cm_item['file']} 失敗: {exc}",
+                    f"Failed to convert {cm_item['file']}: {exc}",
                 )
-    except FileNotFoundError as exc:
-        result["errors"].append(str(exc))
+            )
     # ConsumerReadError (a refused rule file, no da-read / da-crdecode)
-    # reaches `main`: rc 2 before any write (#3426).
+    # reaches `main`: rc 2 before any write (#3426); so does a source
+    # directory gone since it was judged (#3721: no `is_dir` to catch).
 
     return result
 
@@ -900,11 +885,8 @@ def main():
     # #3392: a directory the caller gave that is not there or not a
     # directory is a caller error, named before anything is analysed or
     # written — it was an `issues` WARNING and a checklist / CRD set made from
-    # nothing, rc 0.
-    raise_path_problems([
-        classify_path(args.source_dir, "dir", lang=_LANG, flag="--source-dir")])
-
-    # Resolve paths
+    # nothing, rc 0. `selected` judges it (#3721: once — a `classify_path`
+    # of its own here was a second look at the same path).
     source_dir = _lib_input.selected(args, "source_dir", lang=_LANG)[0].resolve()
     # #1582：沒給 --output-dir 就沒有寫入目標。⛔ 不要在這裡塞回一個預設值。
     output_dir = args.output_dir.resolve() if args.output_dir is not None else None

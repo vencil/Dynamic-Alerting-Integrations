@@ -1,7 +1,7 @@
 package rbac
 
 // HeaderResolver unit tests: the base identity resolution (email / groups /
-// provenance) plus the ADR-027 / LD-6 P2 identity-claims seam —
+// provenance) plus the ADR-027 §7 identity-claims seam —
 //
 //   - HeaderResolver.ClaimHeaders: loading the injected claim headers into
 //     VerifiedPrincipal.Claims, including the security assertion that an
@@ -95,7 +95,7 @@ func TestHeaderResolver_ImplementsIdentityResolver(t *testing.T) {
 	}
 }
 
-// --- HeaderResolver.ClaimHeaders (ADR-027 / LD-6 P2) ---
+// --- HeaderResolver.ClaimHeaders (ADR-027 §7) ---
 
 // A configured (key, header) pair with a value present loads Claims[key],
 // trimmed but otherwise verbatim.

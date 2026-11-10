@@ -69,8 +69,6 @@ commands:
   config-diff:
     "--at": not_path
     "--format": not_path
-    "--new-dir": dir
-    "--old-dir": dir
   config-history:
     "--config-dir": {kind: dir, no_row: "every subcommand creates .da-history beside --config-dir first, so a locked parent never reaches the check; a missing one does", pinned_by: "tests/shared/test_caller_paths.py::test_config_history_says_it_in_its_own_language"}
   config-history diff:
@@ -174,7 +172,6 @@ commands:
   gitops-check local:
     "--dir": dir
   grafana-import:
-    "--dashboard-dir": dir
     "--name": not_path
     "--namespace": not_path
   init:

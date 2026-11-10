@@ -216,20 +216,29 @@ func (w *Writer) WritePR(ctx context.Context, tenantID, authorEmail, yamlContent
 	return w.WritePRChecked(ctx, tenantID, authorEmail, yamlContent, nil)
 }
 
-// PRBaseCheck judges a PR-mode write against the FRESH base the feature
-// branch is cut from: configDir is that base's conf.d as git holds it
-// (openFreshBase, #2972 — not the serving tree, whose uncommitted entries
-// the PR does not carry), before anything of the write is on it. A non-nil
-// error refuses the write — the branch is dropped, nothing is written,
-// committed or pushed — and is returned to the caller unchanged.
-type PRBaseCheck func(configDir string) error
+// TreeCheck is the caller's verdict on a write, taken under the writer lock
+// on the tree the write lands on, after the tenant's file is resolved there
+// and before anything of the write is on it. configDir is that tree's conf.d:
+//
+//   - PR mode (WritePRChecked): the FRESH base the feature branch is cut
+//     from, as git holds it (openFreshBase, #2972 — not the serving tree,
+//     whose uncommitted entries the PR does not carry);
+//   - direct mode (WriteChecked): the serving tree, which no other write can
+//     change until this one has committed.
+//
+// A caller's checks outside the lock read a tree another write may change
+// before this one runs, so they can only refuse early; this is the verdict
+// that counts (ADR-027 §7: the write scope and the label gate). A non-nil
+// error refuses the write — nothing is written, committed or pushed, and in
+// PR mode the branch is dropped — and is returned to the caller unchanged.
+type TreeCheck func(configDir string) error
 
 // WritePRChecked is WritePR plus check, run under the writer lock after the
 // branch is cut from the fresh origin base and the tenant's file is resolved
 // on it, before the body is validated and written (Step 3b'). PUT passes its
 // authoritative check here — the metadata write scope (#2857) — because its
 // pre-check reads the pod's local tree, which may lag the base. A nil check is WritePR.
-func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yamlContent string, check PRBaseCheck) (*PRWriteResult, error) {
+func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yamlContent string, check TreeCheck) (*PRWriteResult, error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -292,7 +301,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// (possibly stale) local base — a long-lived pod's local base stalls after a
 	// remote merge and would silently roll back a shared file another tenant
 	// already merged. A fetch timeout returns ErrForgeDegraded → lock released →
-	// 503 (never proceed on a stale base). See ADR-023 §B.
+	// 503 (never proceed on a stale base). See ADR-023 §2.
 	branchPoint, err := w.resolveFreshBaseRef(base)
 	if err != nil {
 		return nil, err
@@ -465,7 +474,7 @@ func (w *Writer) openFreshBase(rev, branch string) (*stagingTree, error) {
 // content is what Step 4 writes: yamlContent. A tenant git-managed on the
 // fresh base is refused there (#3064, resolvePut), whatever the serving tree
 // holds.
-func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check PRBaseCheck) (filePath, content string, notices []string, err error) {
+func (w *Writer) prResolveOnBase(ctx context.Context, branchPoint, tenantID, yamlContent string, check TreeCheck) (filePath, content string, notices []string, err error) {
 	st, err := w.openFreshBase(branchPoint, "")
 	if err != nil {
 		// A conf.d that cannot be reached is the walk failing to run, which

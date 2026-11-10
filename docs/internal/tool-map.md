@@ -140,6 +140,7 @@ lang: zh
 | `check_account_registry_monotonic.py` | guard _account_registry.yaml's |
 | `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
 | `check_admin_config_schema.py` | validate tenant-api admin meta-config YAML against JSON Schemas. |
+| `check_adr_section_refs.py` | an ADR section reference must name a section that exists. |
 | `check_bat_ascii_purity.py` | - L1 guard for pitfall #45 (CJK-in-.bat). |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
 | `check_bilingual_content.py` | 雙語內容一致性 lint |
@@ -157,6 +158,7 @@ lang: zh
 | `check_commit_scope_doc.py` | Commit-scope doc drift gate (L1 pre-commit hook + validate_all integration). |
 | `check_confd_schema.py` | validate conf.d tenant YAML + _defaults.yaml + _routing_profiles.yaml against their JSON Schemas (#880). |
 | `check_configmap_mount_completeness.py` | Guard: every `configmap-rules-*.yaml` must be mounted into Prometheus. |
+| `check_critical_tier_twins.py` | Critical-tier twin gate — every declared `<base>_critical` tier has exactly one critical alert, and it is the warning alert's twin (#3658). |
 | `check_cross_ns_url_consistency.py` | cross-namespace service-URL consistency lint (#1004) |
 | `check_design_token_usage.py` | JSX 設計 token 使用完整性 lint |
 | `check_dev_bypass_manifest.py` | ADR-022 Layer 4 (deploy-time guard). |

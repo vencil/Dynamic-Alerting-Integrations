@@ -267,6 +267,120 @@ def test_a_selector_judges_the_one_listing(tmp_path, monkeypatch):
         _lib_input.selected(p.parse_args(["--rp", str(tmp_path)]), "rp", lang="en")
 
 
+def test_a_given_value_with_nothing_there_is_as_declared_by_missing(tmp_path):
+    """#3693: ``missing`` — a value the caller GAVE with nothing at it is
+    refused by default (``dir_not_found``); ``ABSENT_EMPTY`` selects nothing
+    (config-diff's base side: a first import)."""
+    gone = str(tmp_path / "gone")
+    with pytest.raises(CallerError) as exc:
+        _select(["--d", gone])
+    assert exc.value.reason == "dir_not_found"
+    assert _select(["--d", gone], missing=_lib_input.ABSENT_EMPTY) == []
+
+
+@pytest.mark.parametrize("make", ["file", "dangling", "under_a_file"])
+def test_missing_empty_is_only_nothing_there(tmp_path, make):
+    """#3693: ``missing=ABSENT_EMPTY`` is nothing at the path, never
+    something that is no directory — a file, a dangling link, a path
+    under a regular file — refused as before."""
+    if make == "file":
+        target = tmp_path / "f"
+        target.write_text("x", encoding="utf-8")
+    elif make == "dangling":
+        target = tmp_path / "link"
+        symlink_or_skip(tmp_path / "nowhere", target)
+    else:
+        (tmp_path / "f").write_text("x", encoding="utf-8")
+        target = tmp_path / "f" / "d"
+    with pytest.raises(CallerError) as exc:
+        _select(["--d", str(target)], missing=_lib_input.ABSENT_EMPTY)
+    assert exc.value.reason.startswith("dir_"), exc.value.reason
+
+
+def test_absent_reads_what_selected_judged(tmp_path):
+    """#3721: `absent` is the one answer to "was it there" — set by
+    `selected`, read after; never a second stat."""
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--d", select=_lib_input.DA_GUARD_LISTS,
+                         missing=_lib_input.ABSENT_EMPTY)
+    _lib_input.add_input(p, "--s", select=_lib_input.TopLevel("*.json"),
+                         default=str(tmp_path / "default"),
+                         absent_default=_lib_input.ABSENT_EMPTY)
+    args = p.parse_args(["--d", str(tmp_path / "gone")])
+    with pytest.raises(TypeError):
+        _lib_input.absent(args, "d")  # nothing judged yet: no answer to read
+    assert _lib_input.selected(args, "d", lang="en") == []
+    assert _lib_input.absent(args, "d") is True
+    assert _lib_input.selected(args, "s", lang="en") == []
+    assert _lib_input.absent(args, "s") is True
+    (tmp_path / "gone").mkdir()
+    (tmp_path / "default").mkdir()
+    args = p.parse_args(["--d", str(tmp_path / "gone")])
+    _lib_input.selected(args, "d", lang="en")
+    _lib_input.selected(args, "s", lang="en")
+    assert (_lib_input.absent(args, "d"), _lib_input.absent(args, "s")) == (False, False)
+    # read, not judged again: the directory going away later changes nothing
+    (tmp_path / "gone").rmdir()
+    assert _lib_input.absent(args, "d") is False
+    assert _lib_input.absent(argparse.Namespace(d=None), "d") is True
+    with pytest.raises(TypeError):
+        _lib_input.absent(argparse.Namespace(d="x"), "d")
+
+
+def test_absent_does_not_leak_through_the_shared_default(tmp_path):
+    """#3721: argparse hands every parse the same default object; what one
+    run judged must not answer for the next parse."""
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--s", select=_lib_input.TopLevel("*.json"),
+                         default=str(tmp_path / "default"),
+                         absent_default=_lib_input.ABSENT_EMPTY)
+    first = p.parse_args([])
+    _lib_input.selected(first, "s", lang="en")
+    assert _lib_input.absent(first, "s") is True
+    with pytest.raises(TypeError):
+        _lib_input.absent(p.parse_args([]), "s")  # a new parse: not judged yet
+
+
+def test_missing_is_declared_and_checked():
+    _, action = _parser(missing=_lib_input.ABSENT_EMPTY)
+    assert action.input_spec.missing == _lib_input.ABSENT_EMPTY
+    assert _parser()[1].input_spec.missing == _lib_input.ABSENT_REFUSED
+    with pytest.raises(ValueError):
+        _parser(missing="maybe")
+    with pytest.raises(ValueError):
+        _lib_input.add_input(argparse.ArgumentParser(), "--f",
+                             decode=_lib_input.Document("json", dict),
+                             missing=_lib_input.ABSENT_EMPTY)
+
+
+class _Root:
+    """A stand-in for `_lib_parse_tree.Entry` (the fields `require_listed` reads)."""
+
+    def __init__(self, role, problem=None):
+        self.role = role
+        self.problem = problem
+
+    @property
+    def unlistable_dir(self):
+        return self.role == "unlistable_dir"
+
+
+def test_require_listed_refuses_a_root_da_guard_cannot_list(tmp_path):
+    """#3693: the one refusal of a tree whose root da-guard reports
+    `unlistable_dir` — never read as one with no config file."""
+    why = ("read_failure", "the directory cannot be listed; nothing under it is read")
+    for root in (None, _Root("dir")):
+        assert _lib_input.require_listed("--d", tmp_path, root, lang="en") is None
+    with pytest.raises(CallerError) as exc:
+        _lib_input.require_listed("--d", tmp_path, _Root("unlistable_dir", why), lang="en")
+    assert exc.value.reason == "dir_not_accessible"
+    assert str(exc.value) == (f"--d {tmp_path}: cannot list the directory (da-guard: "
+                              "the directory cannot be listed; nothing under it is read)")
+    with pytest.raises(CallerError) as exc:
+        _lib_input.require_listed("--d", tmp_path, _Root("unlistable_dir"), lang="zh")
+    assert str(exc.value) == f"--d {tmp_path}: 無法列出目錄內容（da-guard: unlistable_dir）"
+
+
 def test_require_selection_judges_a_selection_made_elsewhere(tmp_path):
     p = argparse.ArgumentParser()
     _lib_input.add_input(p, "--src", select=_lib_input.DA_GUARD_LISTS,

@@ -1,6 +1,6 @@
 package main
 
-// Router construction (ADR-027 / LD-6 P4b §5b).
+// Router construction (ADR-027 §7).
 //
 // Extracted verbatim from main() — wire.go::wirePRBackend precedent: main()
 // shows the wiring shape (flag-parse → managers → middleware config →
@@ -127,6 +127,10 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	platformWrite := rbacMgr.Middleware(rbac.PermWrite, nil)
 
 	r := chi.NewRouter()
+	// ADR-027 §5: every answer — error envelopes included — carries the
+	// security headers the standalone portal's nginx used to add. First, so a
+	// middleware added above the others later cannot answer without them.
+	r.Use(handler.SecurityHeaders)
 	r.Use(middleware.RequestID)
 	r.Use(handler.RequestIDResponse) // v2.8.0 B-6 PR-1: echo X-Request-ID
 	// ADR-027 §2: the caller is resolved once, here, from the oauth2-proxy
@@ -191,6 +195,12 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		r.With(anyTenantRead).
 			Get("/tenants/search", handler.SearchTenants(deps))
 
+		// ADR-027 §5: the portal's simulate-preview widget is answered here
+		// now that every /api/ request reaches tenant-api (#2125). POST only,
+		// so the other methods still address a tenant named "simulate".
+		r.With(rbacMgr.MiddlewareAuthenticated()).
+			Post("/tenants/simulate", handler.SimulateNotProvided)
+
 		// Per-tenant routes
 		r.Route("/tenants/{id}", func(r chi.Router) {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
@@ -209,7 +219,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/effective", handler.GetTenantEffective(deps))
 
-			// v2.9.0 ADR-024 §S6 (#741): metric discovery catalog for the
+			// v2.9.0 ADR-024 §3 (#741): metric discovery catalog for the
 			// portal recipe-authoring UX. Read-only Prometheus proxy;
 			// route middleware enforces RBAC read on {id}.
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
@@ -224,7 +234,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/access", handler.CheckTenantAccess())
 
-			// v2.9.0 ADR-024 §S6b-2 (#741): comment-preserving write of a
+			// v2.9.0 ADR-024 §3 (#741): comment-preserving write of a
 			// tenant's _custom_alerts (RecipeBuilder modal). PermWrite —
 			// this commits to GitOps.
 			r.With(rbacMgr.Middleware(rbac.PermWrite, handler.TenantIDFromPath)).
@@ -316,7 +326,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 				Put("/", federation.PutFederationPolicy(deps))
 		})
 
-		// Reverse access-report audit endpoint (ADR-027 / LD-6 P6). /audit is
+		// Reverse access-report audit endpoint (ADR-027 §7). /audit is
 		// a deliberate NEW top-level segment — NOT under /tenants/{id} — so it
 		// does not inherit the read-by-id org middleware (an org-scoped reader
 		// must never unlock the platform-wide access map). Route middleware

@@ -430,6 +430,17 @@
       "extra": []
     },
     {
+      "code": "SIMULATE_NOT_PROVIDED",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        501
+      ],
+      "retry_after_s": null,
+      "kinds": [],
+      "extra": []
+    },
+    {
       "code": "STATE_FULL",
       "remedy": "operator",
       "retryable": "never",

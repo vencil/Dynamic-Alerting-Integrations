@@ -98,6 +98,30 @@ oauth2Proxy:
   secretName: oauth2-proxy-secrets
 
 # tenant-api application settings
+# ADR-027 §5: the portal's static files, served from a container in this pod
+# behind oauth2-proxy's "/" upstream (the API is /api/ → tenant-api's Unix
+# socket). Rendered with oauth2Proxy.enabled. The container listens on the
+# pod's loopback only and runs the chart's nginx config, which forwards
+# nothing (templates/_helpers.tpl tenant-api.portalNginxConfig).
+portal:
+  image:
+    # The portal release line (portal/v*): `bump_docs.py --portal` rewrites
+    # this tag at release time (two-line repository/tag pin), as
+    # `--tools` does generator.image. A first-party image, so not Renovate's.
+    repository: ghcr.io/vencil/da-portal
+    tag: "v2.9.0"
+    # Optional digest pin. Empty = tag only. ⛔ When set, the digest is what
+    # runs: `--set portal.image.tag=…` alone would not change the image.
+    digest: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
 tenantApi:
   listenAddr: ":8080"
   reloadInterval: "30s"
@@ -114,7 +138,7 @@ tenantApi:
   # TENANT_API_GIT_TIMEOUT. Emitted only when set, so a default upgrade is a no-op.
   gitTimeout: ""
 
-  # In-lock base fetch timeout (TRK-318 / ADR-023 §B). Empty → binary default (5s).
+  # In-lock base fetch timeout (TRK-318 / ADR-023 §2). Empty → binary default (5s).
   # Before each PR write, tenant-api runs `git fetch --prune origin <base>` INSIDE
   # the write lock to anchor the branch on the freshest origin/<base> — otherwise a
   # long-lived pod branches from a base that went stale after a remote merge and
@@ -125,7 +149,7 @@ tenantApi:
   # (Go duration, e.g. "5s"). Emitted only when set, so a default upgrade is a no-op.
   gitFetchTimeout: ""
 
-  # Write-plane load-shedding queue depth (TRK-320 / ADR-023 §C). Empty → binary
+  # Write-plane load-shedding queue depth (TRK-320 / ADR-023 §3). Empty → binary
   # default (5). The write plane is a single writer; this bounds how many writes
   # may QUEUE behind the one in-flight write before further writes are shed with a
   # 503 + Retry-After (instead of piling up unbounded goroutines blocked on the
@@ -614,7 +638,7 @@ networkPolicy:
     # Same namespace scoping (prometheusNamespace) as every entry here.
     prometheusOperator:
       app.kubernetes.io/name: prometheus
-  # Egress restriction (ADR-024 §S6). DEFAULT false = egress stays
+  # Egress restriction (ADR-024 §3). DEFAULT false = egress stays
   # UNrestricted (the policy is Ingress-only), which is the historical
   # posture and lets tenant-api reach Prometheus (metric discovery),
   # the K8s API (federation ConfigMap store), the git forge (PR mode),

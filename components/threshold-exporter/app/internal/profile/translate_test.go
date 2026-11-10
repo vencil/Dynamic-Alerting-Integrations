@@ -6,7 +6,7 @@ package profile
 //   - TranslateRule: AST shape recognition for the supported
 //     "<expr> {>|>=|<|<=} <number>" form, plus failure modes
 //     (parse error, vector comparison, no comparison at all).
-//   - resolveMetricKey: ADR-018 §metric-key-resolution order
+//   - resolveMetricKey: the metric_key resolution order (translate.go header)
 //     (explicit label → alert/record snake_case → inner metric →
 //     skipped).
 //   - TranslateProposal: cluster-level aggregation, majority vote,
