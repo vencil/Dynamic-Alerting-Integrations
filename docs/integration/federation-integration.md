@@ -93,12 +93,18 @@ global:
 
 ```yaml
 scrape_configs:
-  - job_name: "tenant-exporters"
+  - job_name: "tenant-exporters"   # ⛔ 名稱固定：租戶 rule pack 選 up{job="tenant-exporters"}
     kubernetes_sd_configs:
-      - role: endpoints
+      - role: endpointslice
         namespaces:
           names: ["db-a"]
     relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
       - source_labels: [__meta_kubernetes_namespace]
         target_label: tenant
 ```
@@ -109,8 +115,14 @@ scrape_configs:
 scrape_configs:
   - job_name: "tenant-exporters"
     kubernetes_sd_configs:
-      - role: pod
+      - role: endpointslice           # target 是 Service 後的每個 pod，帶得到 pod label
     relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
       - source_labels: [__meta_kubernetes_pod_label_tenant]
         target_label: tenant
       - source_labels: [tenant]

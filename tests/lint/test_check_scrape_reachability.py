@@ -43,7 +43,7 @@ scrape_configs:
       - targets: ["localhost:9090"]
   - job_name: "tenant-exporters"
     kubernetes_sd_configs:
-      - role: service
+      - role: endpointslice
     relabel_configs:
       - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
         action: keep
@@ -51,6 +51,11 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_namespace]
         action: keep
         regex: "db-.+"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: tenant
   - job_name: "monitoring-components"
     kubernetes_sd_configs:
       - role: service
@@ -102,7 +107,7 @@ scrape_configs:
       - targets: ["localhost:9090"]
   - job_name: "tenant-exporters"
     kubernetes_sd_configs:
-      - role: service
+      - role: endpointslice
     relabel_configs:
       - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
         action: keep
@@ -110,6 +115,11 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_namespace]
         action: keep
         regex: "db-.+"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
+      - source_labels: [__meta_kubernetes_namespace]
+        target_label: tenant
       - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
         action: drop
         regex: "platform"
