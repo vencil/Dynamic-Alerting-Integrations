@@ -50,13 +50,10 @@ than truthiness — see below).
 
 ⚠️ What this module does NOT cover.
 
-It cannot check that these three names are actually configured as required
-checks — that lives in GitHub settings. `REQUIRED_CHECK_NAMES` below mirrors
-them, with the `gh api` command that produced the list.
-`docs/internal/iac-lint-baseline.md` has an in-repo checklist, but do not
-treat it as the list: its authority is line 66, the `gh api` invocation, not
-the tick-boxes at lines 44-46, which name six checks out of the nineteen that are
-actually required and do not include `Portal Tests`.
+It cannot check that these names are actually configured as required checks
+— that lives in GitHub settings. `REQUIRED_CHECK_NAMES` below is read from
+`.github/required-checks.yaml`, and `required-checks-drift.yml` is what
+compares that file with the settings (#3696).
 
 ⛔ The biggest thing it does NOT cover, named because it is adjacent enough to
 be mistaken for covered: `run: pytest … || true` on a test leg is the shell
@@ -536,54 +533,30 @@ def _path_gated_jobs(path: Path) -> dict[str, frozenset[str]]:
 UNMODELLED_GATE_SHAPED_JOBS: dict[tuple[str, str], str] = {}
 
 
-# ⛔ The branch-protection contract, mirrored. This is the one thing here that
-# CANNOT be derived from the tree: the required-check list lives in GitHub
-# settings. Verified 2026-09-25 with
-#   gh api repos/vencil/Dynamic-Alerting-Integrations/branches/main/protection\
-#     --jq '.required_status_checks.checks[] | "\(.context)@\(.app_id)"'
-# which returned 19 contexts, all app 15368 (GitHub Actions), including every
-# name below — i.e. every required check reported by a job whose verdict can
-# depend on a path filter.
+# The required checks a path filter can decide: the `kind: gate` entries of
+# .github/required-checks.yaml, the one source for main's required checks
+# (tests/ops/test_required_checks_ssot.py checks that file against the
+# workflows; required-checks-drift.yml checks it against GitHub's settings).
+# Until #3696 this was a hand-copied set dated by a comment; it had silently
+# dropped "Smoke Tests (Chromium)" until #3712 added it by hand.
 #
-# ⛔ A pin in the same file is not tamper-proof, and this comment used to
-# imply otherwise. Blind review deleted one name from the set and swapped the
-# gate's `name:` onto its path-gated leg: green, with the live API still
-# requiring that check. Only human review catches a SHRINKING edit here —
-# treat any diff that removes a line from this set as a branch-protection
-# change, because that is what it is.
+# ⚠️ Why the gate subset and not all twenty: the assertions below are about
+# aggregate gates. A required check reported by an unconditional job (`Lint`,
+# `commitlint`, …) is `kind: job` there, and its "cannot skip" rule lives in
+# test_required_checks_ssot.py.
 #
-# ⚠️ It is pinned because a rename is NOT symmetric. Renaming a gate to a name
-# nobody requires leaves the required check waiting forever — that blocks the
-# merge, so it needs no guard. But MOVING one of these names onto a job that
-# can path-skip hands the required check to a job whose skip reports Success.
-# Blind review did it by swapping `name:` between `portal-tests` and
-# `portal-tests-run`; every assertion here stayed green.
-REQUIRED_CHECK_NAMES = frozenset({
-    "Python Tests",
-    "Go Tests",
-    "Portal Tests",
-    # ci.yml's `smoke-tests` gate (#1428). Branch protection already required
-    # it while it lived as a path-filtered playwright.yml job (measured
-    # 2026-11-07: 20 contexts, this one included), which left every PR
-    # touching no portal file permanently pending.
-    "Smoke Tests (Chromium)",
-    # validate.yaml (#1398)
-    "Go Lint",
-    "Validate Tenant Config & Routes",
-    "Version Consistency",
-    # docs-ci.yaml (#1398)
-    # ⚠️ "Check Documentation Links" is still REQUIRED by branch protection but
-    # is not listed: since #2107 it is reported by the unconditional
-    # `check-links` job itself, whose verdict no path filter decides (same as
-    # "HEAD Blob Hygiene"). Gating it again reds the path-gated set in
-    # test_ci_path_filter_coverage; move the name back here if that happens.
-    "Validate Mermaid Diagrams",
-    "Check Documentation Front Matter",
-    "Check Documentation Coverage",
-    "MkDocs Build Verification",
-    "Documentation Line Count Monitor",
-    "Drift Detection (validate_all.py)",
-})
+# ⛔ A SHRINKING edit to the `kind: gate` entries is still a branch-protection
+# change. Blind review once deleted a name here and moved the gate's `name:`
+# onto its path-gated leg: green, with the live API still requiring the check.
+# The drift workflow now catches the file disagreeing with the settings; only
+# human review catches both being changed together.
+REQUIRED_CHECK_NAMES = frozenset(
+    entry["name"]
+    for entry in yaml.safe_load(
+        (ROOT / ".github/required-checks.yaml").read_text(encoding="utf-8")
+    )["required"]
+    if entry.get("kind") == "gate"
+)
 
 
 _VERSION_IN_NAME = re.compile(r"\b\d+\.\d+(?:\.\d+)?\b")

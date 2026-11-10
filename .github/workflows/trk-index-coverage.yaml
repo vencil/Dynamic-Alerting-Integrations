@@ -15,7 +15,8 @@ name: TRK Index Coverage
 #
 # The freeze itself (no row past TRK-392) is checked from the table alone, so it
 # runs in Python Tests via tests/lint/test_check_trk_index_coverage.py.
-# Not a required check. rc 2 ("could not measure") fails the job like rc 1.
+# Not a required check (`advisory:` in .github/required-checks.yaml).
+# rc 2 ("could not measure") fails the job like rc 1.
 
 on:
   issues:

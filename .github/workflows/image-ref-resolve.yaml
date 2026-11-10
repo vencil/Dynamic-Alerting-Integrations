@@ -35,9 +35,8 @@ name: Image Ref Resolve
 # decorative gate #1302 was about. So a rule-pack PR now pays two registry
 # round-trips it does not need.
 # What keeps that bounded: this job ("resolve chart/manifest image refs") is NOT
-# in main's required status checks — verified 2026-08-06 against
-# `gh api repos/{owner}/{repo}/branches/main/protection`, whose contexts list
-# does not include it — so a red run here does not block a merge. It is a signal,
+# in main's required status checks — it is under `advisory:` in
+# .github/required-checks.yaml — so a red run here does not block a merge. It is a signal,
 # and on an unrelated PR it is a signal you may read and move on from. Revisit
 # only if the noise, not the runtime, starts costing something.
 

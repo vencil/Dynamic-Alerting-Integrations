@@ -12,8 +12,9 @@
 #     compared) are both normal results;
 #   * exit 2 (no result: the PR side or a tool failed) is a `::warning::`
 #     and the comment says so — the job stays green;
-#   * the job is NOT a required status check, and must not be made one until
-#     the exit criteria below are met (that is ADR-037 decision 6, step 2).
+#   * the job is NOT a required status check (`advisory:` in
+#     .github/required-checks.yaml), and must not be made one until the exit
+#     criteria below are met (that is ADR-037 decision 6, step 2).
 #   Only this workflow's own plumbing failing (git, the da-guard build) turns
 #   the job red: that is a bug in the workflow, not a verdict on the PR.
 #   `tests/ops/test_config_diff_advisory_workflow.py` runs the steps' shell

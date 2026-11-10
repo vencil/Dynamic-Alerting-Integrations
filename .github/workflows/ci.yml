@@ -345,6 +345,9 @@ jobs:
               # workload-closure SSOT to pin bench-workload-record.yaml's
               # literal trigger against it (#1471).
               - ".github/bench-reference.yaml"
+              # #3696: the required-check SSOT, read by
+              # tests/ops/test_required_checks_ssot.py and the aggregate-gate contract.
+              - ".github/required-checks.yaml"
               # tests/shared/test_rule_source_globs_declared_once.py holds
               # its rule-family globs to the declaration (#3471).
               - ".github/CODEOWNERS"
@@ -921,7 +924,8 @@ jobs:
     # Custom Prometheus rule-pack governance linter.
     #
     # Until v2.6.0 this only ran in validate.yaml, which is path-filtered
-    # and NOT in the branch-protection required-check list. That left a
+    # and was then NOT in the branch-protection required-check list (today's
+    # list: .github/required-checks.yaml). That left a
     # hole: a PR not touching any validate.yaml path could still merge
     # rule-pack YAML via unrelated codepaths (refactors, cross-file moves,
     # etc.) without running the deny-list / required-labels / max-range
@@ -1340,8 +1344,8 @@ jobs:
     # below; dedicated (not folded into Lint) so the slow render doesn't gate
     # the fast Lint job. helm comes from setup-helm; kube-linter is installed
     # as a binary (best-effort) with the wrapper's Docker fallback as backstop.
-    # AC5: this job is the Critical->BLOCK gate for L2+L4 — add it to branch
-    # protection required checks (see docs/internal/iac-lint-baseline.md).
+    # AC5: this job is the Critical->BLOCK gate for L2+L4 — a required check
+    # (`kind: job` in .github/required-checks.yaml).
     name: Container SAST (Helm L2 + raw k8s L4)
     runs-on: ubuntu-24.04
     steps:
@@ -1828,7 +1832,8 @@ jobs:
     # flags as python-tests-run above, plus --cov: it uploads the
     # coverage-python artifact that coverage-delta.yml turns into the PR
     # comment, and it goes red on --cov-fail-under — visibly, but it backs
-    # NO required check: it is deliberately absent from the python-tests
+    # NO required check (`advisory:` in .github/required-checks.yaml): it is
+    # deliberately absent from the python-tests
     # gate's needs: and ledgered in tests/ops/test_ci_aggregate_gate_contract
     # (UNWATCHED_PATH_GATED_JOBS). Why a second job rather than --cov on the
     # required leg: the tracer made every xdist worker's collection ~4x
@@ -2216,7 +2221,7 @@ jobs:
     # Merges the python-coverage shards into one report. ADVISORY like
     # python-coverage (ledgered next to it in
     # tests/ops/test_ci_aggregate_gate_contract.py): it backs no required
-    # check. It owns what used to be the single job's tail: the coverage.xml
+    # check (`advisory:` in .github/required-checks.yaml). It owns what used to be the single job's tail: the coverage.xml
     # that coverage-delta.yml turns into the PR comment, and the fail_under
     # floor from pyproject.toml [tool.coverage.report].
     name: Python Coverage

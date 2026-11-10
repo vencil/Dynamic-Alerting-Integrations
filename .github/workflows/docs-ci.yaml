@@ -531,7 +531,8 @@ jobs:
     name: I-4 Runbook Smoke Test
     runs-on: ubuntu-24.04
     needs: detect-changes
-    # Not a required status check, but without this gate it would now run
+    # Not a required status check (`advisory:` in
+    # .github/required-checks.yaml), but without this gate it would now run
     # (downloading amtool/promtool/yq) on every PR once the workflow-level
     # `paths:` filter above is removed — this keeps today's cost profile.
     if: needs.detect-changes.outputs.docs_changed == 'true'

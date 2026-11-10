@@ -54,6 +54,8 @@ ALLOWED = {
         (1, '.pre-commit-config.yaml, read only by pre-commit (Python)'),
     ('scripts/ops/ci_flake_retry.py', 'load_registry'):
         (1, 'the flaky-test registry, a repo data file read only by CI scripts'),
+    ('scripts/ops/required_checks_drift.py', 'main'):
+        (1, '.github/required-checks.yaml, the required-check list; read by CI scripts and tests only, no Go consumer'),
     ('scripts/ops/go_test_reads.py', 'leg_gate_patterns'):
         (2, 'a GitHub workflow and its dorny path filters; read by GitHub Actions, no Go consumer'),
     ('scripts/tools/dx/_waveform_lib.py', 'load_pack'):
