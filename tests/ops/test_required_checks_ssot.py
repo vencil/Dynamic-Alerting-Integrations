@@ -303,7 +303,7 @@ _NOT_REQUIRED = re.compile(
     r"(?i)\b(?:does\s*not|doesn't|never|no\s+longer|won't|will\s+not)\s+blocks?\s+"
     r"(?:the\s+|a\s+|any\s+)?(?:pr\s+)?merges?\b"
     r"|\b(?:not|isn't|non)[\s-]+(?:(?:a|one\s+of(?:\s+main's|\s+the)?|among(?:\s+the|"
-    r"\s+main's)?|in(?:\s+main's|\s+the)?|marked|listed\s+as(?:\s+a)?)\s+)*"
+    r"\s+main's)?|in(?:\s+main's|\s+the)?|marked|listed\s+as)\s+)*"
     r"(?:branch-protection\s+)?required(?:[\s-]+status)?[\s-]+checks?\b"
     r"|\bnot\s+marked\s+required\b|\bstays\s+advisory\b|\bthis\s+job\s+is\s+not\s+required\b")
 
@@ -405,3 +405,15 @@ def test_the_gate_contract_reads_the_gate_entries_of_this_file() -> None:
     gates = {e["name"] for e in _ssot()["required"] if e.get("kind") == "gate"}
     assert gates, "no `kind: gate` entries — the gate contract would check nothing"
     assert agg.REQUIRED_CHECK_NAMES == gates, (agg.REQUIRED_CHECK_NAMES, gates)
+
+
+def test_the_prose_rule_does_not_backtrack() -> None:
+    """CodeQL flagged exponential backtracking on repeated '\ta\tlisted\tas'
+    (#3731). Measured before the fix: n=22 took seconds; this must be instant."""
+    import time
+    # 24 repetitions: the backtracking form takes seconds here (measured 1.3 s
+    # at 22, ×4 per +2) and fails the bound instead of hanging the suite.
+    hostile = "not " + "\ta\tlisted\tas" * 24 + " x"
+    start = time.perf_counter()
+    _NOT_REQUIRED.search(hostile)
+    assert time.perf_counter() - start < 0.5
