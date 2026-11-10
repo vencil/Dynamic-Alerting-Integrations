@@ -406,8 +406,8 @@ def _ownership_error(config_dir: Path, cr: dict) -> str:
                 f"_defaults.yaml there applies to every tenant below it. Rename "
                 f"the CR or move that directory; nothing was written")
     legacy = config_dir / _legacy_filename(cr)
-    if (legacy.exists() or legacy.is_symlink()) and _rendered_cr_name(legacy) != name:
-        return (f"{_legacy_filename(cr)} was not rendered by this tool for CR {name}, "
+    if (legacy.exists() or legacy.is_symlink()) and _rendered_cr_id(legacy) != _cr_id(cr):
+        return (f"{_legacy_filename(cr)} was not rendered by this tool for CR {_cr_id(cr)}, "
                 f"and the CR replaces the file an earlier version rendered there "
                 f"(#3671). Rename the CR or move that file; nothing was written")
     return ""
@@ -426,21 +426,29 @@ def _foreign_paths(config_dir: Path, cr: dict) -> "list[str]":
     if own.is_symlink() or not own.is_dir():
         return []
     import _lib_parse_tree  # noqa: PLC0415
+    me = _cr_id(cr)
     mine = {_output_filename(cr), _defaults_filename(cr)}
     out = []
     for e in _lib_parse_tree.list_tree(own).config_files():
         rel = f"{name}/{e.path}"
-        if rel not in mine or _rendered_cr_name(own / e.path) != name:
+        if rel not in mine or _rendered_cr_id(own / e.path) != me:
             out.append(rel)
     return out
 
 
 def owned_paths(config_dir: Path, cr: dict) -> "list[str]":
     """`rendered_paths` of *cr* that are there and that this tool rendered
-    for it (`_rendered_cr_name`): what deleting the CR deletes. Another
-    author's file at one of them is left alone (#3671)."""
-    name = _cr_name(cr)
-    return [p for p in rendered_paths(cr) if _rendered_cr_name(config_dir / p) == name]
+    for it — the same namespace and name in the header (`_rendered_cr_id`):
+    what deleting the CR deletes. Another author's file at one of them, or
+    another namespace's CR of the same name, is left alone (#3671). A name
+    refused as a directory (`a.yaml`) still owns the flat file an earlier
+    version rendered for it."""
+    me = _cr_id(cr)
+    try:
+        paths = rendered_paths(cr)
+    except ValueError:
+        paths = [_legacy_filename(cr)]
+    return [p for p in paths if _rendered_cr_id(config_dir / p) == me]
 
 
 def rendered_paths(cr: dict) -> "list[str]":
@@ -484,11 +492,30 @@ def _defaults_filename(cr: dict) -> str:
 
 def _legacy_filename(cr: dict) -> str:
     """``<metadata.name>.yaml``: where an earlier version wrote the CR, with
-    its ``defaults:`` in the tenant file, read by no reader (#3671)."""
-    return f"{_cr_name(cr)}.yaml"
+    its ``defaults:`` in the tenant file, read by no reader (#3671). Any
+    object name has one — a name refused as a directory (`a.yaml`) too, so
+    deleting such a CR still removes what an earlier version wrote for it."""
+    return f"{_cr_object_name(cr)}.yaml"
 
 
 def _cr_name(cr: dict) -> str:
+    """*cr*'s ``metadata.name`` as the name of its directory: `_cr_object_name`,
+    and ValueError when the name carries a config file's extension (#3671)."""
+    name = _cr_object_name(cr)
+    # #3671: the name is a directory under --config-dir, and a directory
+    # whose name carries a config file's extension (`a.yaml`) is no
+    # directory the exporter's walk takes as one. Asked of da-guard
+    # (`parse-tree --list-only --names`: the walker's own rule), not restated.
+    import _lib_parse_tree  # noqa: PLC0415
+    if _lib_parse_tree.classify_names([name])[name].config_extension:
+        raise ValueError(
+            f"metadata.name {name!r} ends in a config file extension (.yaml / .yml): "
+            "the CR's directory would carry a config file's name (#3671); rename the CR; "
+            "not written")
+    return name
+
+
+def _cr_object_name(cr: dict) -> str:
     """*cr*'s ``metadata.name``. ValueError when it is not a Kubernetes
     object name (DNS-1123 subdomain, as the API server checks it, #2396):
     the name is a path under --config-dir and goes into the header comment.
@@ -502,17 +529,14 @@ def _cr_name(cr: dict) -> str:
             "(DNS-1123 subdomain: lowercase a-z, 0-9, '-' and '.', starting "
             f"and ending alphanumeric, at most {_DNS1123_SUBDOMAIN_MAX} "
             "characters); not written")
-    # #3671: the name is a directory under --config-dir, and a directory
-    # whose name carries a config file's extension (`a.yaml`) is no
-    # directory the exporter's walk takes as one. Asked of da-guard
-    # (`parse-tree --list-only --names`: the walker's own rule), not restated.
-    import _lib_parse_tree  # noqa: PLC0415
-    if _lib_parse_tree.classify_names([name])[name].config_extension:
-        raise ValueError(
-            f"metadata.name {name!r} ends in a config file extension (.yaml / .yml): "
-            "the CR's directory would carry a config file's name (#3671); rename the CR; "
-            "not written")
     return name
+
+
+def _cr_id(cr: dict) -> str:
+    """``<namespace>/<name>``, as the header of every file this tool renders
+    for *cr* names it (`_rendered_cr_id`): ``?`` for an absent namespace."""
+    namespace = (cr.get("metadata") or {}).get("namespace") or "?"
+    return f"{namespace}/{_cr_object_name(cr)}"
 
 
 # ── File writing ─────────────────────────────────────────────────────
@@ -895,9 +919,9 @@ def run_watch(
                     # logged and the loop goes on: one CR's file never ends
                     # the watch.
                     try:
-                        filename = _output_filename(cr)
-                        removed = remove_rendered(config_dir, owned_paths(config_dir, cr),
-                                                  dry_run=dry_run)
+                        owned = owned_paths(config_dir, cr)
+                        filename = ", ".join(owned)
+                        removed = remove_rendered(config_dir, owned, dry_run=dry_run)
                     except Exception as e:  # noqa: BLE001 — logged, loop goes on
                         log.error("Failed to delete the file of CR %s/%s: %s",
                                   ns, name, e)
@@ -1081,6 +1105,29 @@ def _is_dns1123_label(text: str) -> bool:
     """RFC 1123 label, as Kubernetes checks a namespace name."""
     return (len(text) <= _DNS1123_LABEL_MAX
             and _DNS1123_LABEL_RE.fullmatch(text) is not None)
+
+
+def _rendered_cr_id(path: Path) -> str | None:
+    """The ``<namespace>/<name>`` in *path*'s da-assembler header, or None
+    (`_rendered_cr_name`'s reading, whole): what makes a file a CR's own."""
+    first = _header_line(path)
+    if first is None or not first.startswith(_HEADER_PREFIX):
+        return None
+    return first[len(_HEADER_PREFIX):]
+
+
+def _header_line(path: Path) -> str | None:
+    """*path*'s first line (CRLF tolerated), or None when it is not a
+    readable, decodable file. Only the first ``_HEADER_READ_MAX`` bytes are
+    read."""
+    try:
+        if not path.is_file():
+            return None
+        with open(path, "rb") as fh:
+            head = fh.read(_HEADER_READ_MAX)
+        return head.split(b"\n", 1)[0].removesuffix(b"\r").decode("utf-8")
+    except (OSError, ValueError):
+        return None
 
 
 def _rendered_cr_name(path: Path) -> str | None:
@@ -1413,7 +1460,14 @@ def render_cr_file(
         log.error("%s: %s", cr_path, why)
         return EXIT_CALLER_ERROR
     why = ""
-    if isinstance(spec.get("tenants"), dict):
+    if isinstance(spec.get("defaults"), dict):
+        # #3671: the CR's defaults are read now (its subtree `_defaults.yaml`),
+        # so a key Kubernetes reads as other text (`010:` → `8`) would set
+        # another threshold than the one written. Every key there is a
+        # threshold name, an id: refused when not read as written.
+        d = _not_as_written(differs, ["spec", "defaults"], below=True)
+        why = _difference_message(d) if d else ""
+    if not why and isinstance(spec.get("tenants"), dict):
         # Every key under spec.tenants is an id (owner ruling, #2476): a
         # tenant id, a metric name. And `_profile` names a profile.
         d = _not_as_written(differs, ["spec", "tenants"], below=True)
