@@ -35,7 +35,7 @@ func withTranslatedHeader(body []byte, prop ExtractionProposal, translation *Pro
 	fmt.Fprintf(&header, "# Cluster: %d member rules; dialect=%s; confidence=%s; translation=%s.\n",
 		len(prop.MemberRuleIDs), prop.Dialect, prop.Confidence, translation.Status)
 	if translation.Operator != "" {
-		fmt.Fprintf(&header, "# Comparison operator: `%s` (recorded for ADR-018 §emit-direction follow-ups).\n",
+		fmt.Fprintf(&header, "# Comparison operator: `%s` (recorded for a later emission of the direction).\n",
 			translation.Operator)
 	}
 	if translation.Severity != "" {

@@ -1402,6 +1402,7 @@ class TestGenerateTenantInteractiveMetrics:
             "",         # container_cpu → str(80)
             "disable",  # container_cpu_throttle → "disable"（保留）
             "skip",     # container_memory → None（省略）
+            "skip", "skip", "skip",   # k8s optional_overrides(3: container_cpu_critical, container_cpu_throttle_critical, container_memory_critical)
             _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
         ])
         assert res == {"tenants": {"db-c": {
@@ -1413,6 +1414,7 @@ class TestGenerateTenantInteractiveMetrics:
         """自訂數值以字串保留。"""
         res = _gen_tenant_interactive("db-c", ["kubernetes"], [
             "75", "30", "90",
+            "skip", "skip", "skip",   # k8s optional_overrides(3: container_cpu_critical, container_cpu_throttle_critical, container_memory_critical)
             _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
         ])
         assert res == {"tenants": {"db-c": {
@@ -1423,12 +1425,14 @@ class TestGenerateTenantInteractiveMetrics:
 
     def test_optional_overrides_prompted_after_defaults(self):
         """defaults 問完才問 optional_overrides（mariadb 的 _critical tiers）。"""
-        # 次序：k8s defaults(3) → mariadb defaults(3: mysql_connections, mysql_threads_running,
+        # 次序：k8s defaults(3) → k8s optional_overrides(3: container_*_critical)
+        #       → mariadb defaults(3: mysql_connections, mysql_threads_running,
         #         mysql_replication_lag)
         #       → mariadb optional_overrides(3: mysql_connections_critical,
         #         mysql_threads_running_critical, mysql_replication_lag_critical)。
         res = _gen_tenant_interactive("db-c", ["kubernetes", "mariadb"], [
             "skip", "skip", "skip",   # k8s 3 defaults
+            "skip", "skip", "skip",   # k8s 3 optional_overrides (container_*_critical)
             "skip", "skip", "skip",   # mariadb 3 defaults
             "100",                    # mysql_connections_critical → 保留
             "skip",                   # mysql_threads_running_critical → 省略
@@ -1662,6 +1666,7 @@ class TestGenerateTenantInteractiveOrder:
             "75",        # container_cpu
             "",          # container_cpu_throttle → "25"
             "skip",      # container_memory → 省略
+            "skip", "skip", "skip",   # k8s optional_overrides(3: container_cpu_critical, container_cpu_throttle_critical, container_memory_critical)
             "y", "2026-06-01T00:00:00Z", "",   # 維護 enable+expires,noreason
             "2", "",     # 靜音 warning 純字串（空 expires）
             "2",         # dedup disable

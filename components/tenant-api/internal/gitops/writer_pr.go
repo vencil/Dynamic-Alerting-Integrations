@@ -292,7 +292,7 @@ func (w *Writer) WritePRChecked(ctx context.Context, tenantID, authorEmail, yaml
 	// (possibly stale) local base — a long-lived pod's local base stalls after a
 	// remote merge and would silently roll back a shared file another tenant
 	// already merged. A fetch timeout returns ErrForgeDegraded → lock released →
-	// 503 (never proceed on a stale base). See ADR-023 §B.
+	// 503 (never proceed on a stale base). See ADR-023 §2.
 	branchPoint, err := w.resolveFreshBaseRef(base)
 	if err != nil {
 		return nil, err

@@ -74,7 +74,7 @@ package profile
 //   - PerTenantOverrides → only emit for members whose value
 //     diverges from default_threshold. Tenants matching default
 //     get NO override entry (deepMerge fall-through). This is
-//     the "Profile-as-Directory-Default" line-savings ADR-018 §1
+//     the "Profile-as-Directory-Default" line-savings ADR-018 §Profile-as-Directory-Default
 //     promises, made concrete.
 //
 //
@@ -139,8 +139,8 @@ import (
 
 // MetricKeyLabel is the conventional label customers add to a
 // PrometheusRule when they want explicit control over the
-// translator's metric_key choice. ADR-018 §metric-key-resolution
-// defines the resolution order: explicit label wins; alert/record
+// translator's metric_key choice. The resolution order (this file's
+// header — ADR-018 leaves it to the translator): explicit label wins; alert/record
 // snake-case fallback; opaque-rule fallback last.
 const MetricKeyLabel = "metric_key"
 
@@ -187,7 +187,7 @@ type RuleTranslation struct {
 
 	// Operator is the comparison operator from the rule's expression
 	// (`>`, `>=`, `<`, `<=`). Surfaced so future emission layers can
-	// preserve direction semantics if/when ADR-018 §1 grows from
+	// preserve direction semantics if/when ADR-018 §Profile-as-Directory-Default grows from
 	// "value-only" to "value+direction".
 	Operator string `json:"operator,omitempty"`
 
@@ -237,7 +237,7 @@ func TranslateRule(rule parser.ParsedRule) (RuleTranslation, error) {
 	out.Threshold = cmp.threshold
 	out.Operator = cmp.op
 
-	// metric_key resolution — ADR-018 §metric-key-resolution order.
+	// metric_key resolution — the order in this file's header.
 	out.MetricKey, out.Status, out.Warnings = resolveMetricKey(rule, cmp.metricExpr)
 
 	// Severity from rule labels (default warning).
@@ -393,7 +393,7 @@ func flipComparisonOp(op string) string {
 	return op
 }
 
-// resolveMetricKey applies the ADR-018 §metric-key-resolution order:
+// resolveMetricKey applies the resolution order in this file's header:
 //
 //  1. Explicit label `metric_key: <value>` on the rule wins. No
 //     warning needed — the customer chose this on purpose.

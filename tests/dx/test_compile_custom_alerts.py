@@ -683,7 +683,7 @@ def test_slo_one_declaration_fans_out_both_severities(tmp_path):
     assert len(shapes) == 1
     assert shapes[0]["severities"] == ["critical", "warning"]
     assert shapes[0]["recipe_id"].endswith("__minev10__for1m")   # default materialised
-    # (the "counts 2 toward the cap" half of ADR-031 §guardrail 1 is da-guard's
+    # (the "counts 2 toward the cap" half of ADR-031 §3 (guardrail 1) is da-guard's
     # and tenant-api's since #3042 — see section 9.)
 
 

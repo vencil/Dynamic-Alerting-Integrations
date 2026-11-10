@@ -76,7 +76,7 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
   labels:
     severity: warning
     maintenance: mute
-    metric_group: "connections"
+    metric_group: "mysql_connections"
     tenant: "{{ $labels.tenant }}"
   annotations:
     summary: "High connections on {{ $labels.tenant }}"

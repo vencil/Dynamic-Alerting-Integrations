@@ -23,14 +23,29 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                 'CPU lost (critical tier opt-in '
                                                                 'via '
                                                                 'container_cpu_throttle_critical, '
-                                                                'suggest 50; #944)',
+                                                                'declared in optional_overrides; '
+                                                                '#944)',
                                                         'metric_class': 'saturation'},
                              'container_memory': {'value': 85,
                                                   'unit': '%',
                                                   'desc': 'Container memory % of limit (weakest '
                                                           'link)',
                                                   'metric_class': 'saturation',
-                                                  'dimensions': ['version']}}},
+                                                  'dimensions': ['version']}},
+                'optional_overrides': {'container_cpu_critical': {'value': 95,
+                                                                  'unit': '%',
+                                                                  'desc': 'Container CPU critical',
+                                                                  'metric_class': 'saturation'},
+                                       'container_cpu_throttle_critical': {'value': 50,
+                                                                           'unit': '%',
+                                                                           'desc': 'CFS throttle '
+                                                                                   'critical',
+                                                                           'metric_class': 'saturation'},
+                                       'container_memory_critical': {'value': 95,
+                                                                     'unit': '%',
+                                                                     'desc': 'Container memory '
+                                                                             'critical',
+                                                                     'metric_class': 'saturation'}}},
  'postgresql': {'display': 'PostgreSQL (postgres_exporter)',
                 'exporter': 'prometheus-community/postgres_exporter',
                 'default_on': False,

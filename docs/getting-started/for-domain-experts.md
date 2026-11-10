@@ -76,7 +76,7 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
   labels:
     severity: warning
     maintenance: mute
-    metric_group: "connections"
+    metric_group: "mysql_connections"
     tenant: "{{ $labels.tenant }}"
   annotations:
     summary: "High connections on {{ $labels.tenant }}"

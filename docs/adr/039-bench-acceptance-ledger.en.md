@@ -14,7 +14,7 @@ lang: en
 
 ✅ **Accepted** (2026-10-31). The ledger and the verdicts of both gates (the bench gate on PRs and the per-commit attribution after merging to main) are live. A cumulative budget, blocking merges on PRs, and what the ledger does when the reference version is changed are covered in §Not yet decided.
 
-**Revised 2026-11-01**: the absolute-ns/op nightly monitor was retired ([ADR-032](032-paired-interleaved-bench-measurement.md) §Open question 6 withdrawn), so the cumulative budget for the deterministic metrics is now the only planned nightly trend detector; until it ships, drift that stays below the per-commit threshold is not detected nightly, and only the release-time Tier 2 comparison (`bench-gate-release.yaml`) still reports regressions of 10% or more against the previous platform release.
+**Revised 2026-11-01**: the absolute-ns/op nightly monitor was retired ([ADR-032](032-paired-interleaved-bench-measurement.md) §待決 6 withdrawn), so the cumulative budget for the deterministic metrics is now the only planned nightly trend detector; until it ships, drift that stays below the per-commit threshold is not detected nightly, and only the release-time Tier 2 comparison (`bench-gate-release.yaml`) still reports regressions of 10% or more against the previous platform release.
 
 ## Context
 
@@ -25,7 +25,7 @@ There are two bench gates, and they share one verdict:
 
 Some regressions are deliberate: an extra decode for correctness, one more field in a struct. Until now the author wrote the trade-off in a PR comment and merged. The post-merge gate cannot read PR comments, so it measured again and opened an issue; a real trade-off never comes back clean on a re-run, so the issue stayed open. An inventory on 2026-10-31 found 8 such issues open at once, the oldest for five weeks; in 3 of them the trade-off had been written on the PR before it merged.
 
-[ADR-032](032-paired-interleaved-bench-measurement.md) §Open question 7 saw the same thing from the nightly monitor's side: the monitor needs a third exit, "attributed and accepted", with open sub-questions including where the mark lives and how fine-grained it is.
+[ADR-032](032-paired-interleaved-bench-measurement.md) §待決 7 saw the same thing from the nightly monitor's side: the monitor needs a third exit, "attributed and accepted", with open sub-questions including where the mark lives and how fine-grained it is.
 
 ## Decision
 
@@ -114,8 +114,8 @@ Which commit an entry belongs to is decided by git (the commit that added it); t
 |---|---|
 | **A cumulative budget for the deterministic metrics**: add `B/op` and `allocs/op` to the nightly main-versus-reference ratio, to catch drift that stays below 5% per commit but adds up. This is the only planned nightly trend detector: the absolute-ns/op monitor was retired and paired ns/op is informational | The nightly run now records them: on nights where the paired measurement and the ratio computation both succeed, the output (`bench-paired/v3`) has a `deterministic` field with the `B/op` and `allocs/op` medians and ratio for each benchmark that has data on both sides, recorded and not judged; a night recorded as inconclusive has no such field (`scripts/tools/dx/pair_bench_ratio.py`). After at least four weeks of it, measure their real night-to-night noise, then choose a budget. The design must first solve a known problem: if the expected value is the product of the bounds, every accepted bound becomes headroom that later regressions can spend, and improvements are counted as headroom too |
 | **Blocking merges on PRs for undeclared deterministic regressions** | The owner decides once the ledger has been live for four weeks and every deterministic regression flagged in that period could be resolved with the ledger |
-| **What the ledger does when the reference version changes** (ADR-032 §Open question 1) | Decided together with the cumulative budget. The nightly run currently files no issues and does not read the ledger, so changing the reference closes nothing; if the cumulative budget files issues, ADR-032's invariant (changing the reference must not close an open performance issue) must hold in its design |
-| **Whether bimodal, unstable benchmarks get a class of their own** | Per ADR-032 §Open question 7, once that benchmark's measurement has a conclusion |
+| **What the ledger does when the reference version changes** (ADR-032 §待決, open question 1) | Decided together with the cumulative budget. The nightly run currently files no issues and does not read the ledger, so changing the reference closes nothing; if the cumulative budget files issues, ADR-032's invariant (changing the reference must not close an open performance issue) must hold in its design |
+| **Whether bimodal, unstable benchmarks get a class of their own** | Per ADR-032 §待決 (open question 7), once that benchmark's measurement has a conclusion |
 
 ## Alternatives considered
 
@@ -138,5 +138,5 @@ Which commit an entry belongs to is decided by git (the commit that added it); t
 
 ## Related
 
-- [ADR-032](032-paired-interleaved-bench-measurement.md): paired interleaved nightly measurement; this ADR answers "where the mark lives" and "how fine-grained" from its §Open question 7
+- [ADR-032](032-paired-interleaved-bench-measurement.md): paired interleaved nightly measurement; this ADR answers "where the mark lives" and "how fine-grained" from its §待決 7
 - [#3468](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3468): lifecycle of performance-regression issues

@@ -1,6 +1,6 @@
 // Package customalerts performs comment-preserving, AST-level edits of a
 // tenant's `_custom_alerts` list inside its (human-authored) GitOps
-// tenant.yaml (ADR-024 §S6b-2, #741).
+// tenant.yaml (ADR-024 §3, #741).
 //
 // The cardinal rule (review Reef 1 — "YAML comments wipeout"): NEVER do a
 // struct round-trip (`yaml.Unmarshal(file,&T)` → mutate → `yaml.Marshal`),
