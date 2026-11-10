@@ -169,6 +169,44 @@ func TestValidateTenantKeys_DeadEntryOnlyOnADimensionalRowServed(t *testing.T) {
 		if fs := deadFindingsOf(m.ValidateTenantKeysByTenant().Tenants["t1"]); len(fs) != tc.want {
 			t.Errorf("TenantMerge.ValidateTenantKeysByTenant %s: %d dead findings, want %d: %+v", tc.key, len(fs), tc.want, fs)
 		}
+		// The root platform file's and the profile's layers: their dead
+		// entries are notices on the file that writes them.
+		sched := "      '" + tc.key + "':\n        default: \"70\"\n        overrides:\n" +
+			"          - window: \"22:00-06:00\"\n            value: \"1000\"\n" +
+			"          - window: \"01:00-03:00\"\n            value: \"5\"\n"
+		for layer, files := range map[string]map[string]string{
+			"platform": {"_platform.yaml": "tenants:\n  t1:\n" + strings.Replace(sched, "      '", "    '", 1)},
+			"profile":  {"_profiles.yaml": "profiles:\n  strict:\n" + strings.Replace(sched, "      '", "    '", 1)},
+		} {
+			dir := t.TempDir()
+			body := "tenants:\n  t1:\n    _silent_mode: warning\n"
+			if layer == "profile" {
+				body += "    _profile: strict\n"
+			}
+			files["_defaults.yaml"] = "defaults:\n  redis_queue_length: 10\ndimensions:\n  redis_queue_length: [queue]\n"
+			files["t1.yaml"] = body
+			writeMergeTree(t, dir, files)
+			parsed, err := ParseConfigFile([]byte(body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := MergeParsedTenantWithRootDefaults(dir, parsed)
+			count := func(notices []string) int {
+				n := 0
+				for _, msg := range notices {
+					if strings.Contains(msg, deadEntryProblem) {
+						n++
+					}
+				}
+				return n
+			}
+			if n := count(m.ValidateTenantKeys().Notices); n != tc.want {
+				t.Errorf("%s layer %s: %d dead-entry notices, want %d: %q", layer, tc.key, n, tc.want, m.ValidateTenantKeys().Notices)
+			}
+			if n := count(m.ValidateTenantKeysByTenant().Tenants["t1"].Notices); n != tc.want {
+				t.Errorf("%s layer ByTenant %s: %d dead-entry notices, want %d", layer, tc.key, n, tc.want)
+			}
+		}
 	}
 }
 
