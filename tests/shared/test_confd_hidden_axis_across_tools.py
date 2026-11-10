@@ -255,6 +255,16 @@ def _config_diff(root):
 
 
 # cell id -> (defining file, relative to scripts/tools; adapter)
+def _da_assembler_foreign_paths(root):
+    # #3671: a CR owns the directory of its name; the config files there it
+    # did not render are another author's. The tree's root stands for that
+    # directory (a CR named `conf.d`, a valid object name): a hidden file
+    # there is read by no reader, so it is no one's to protect.
+    import da_assembler
+    cr = {"metadata": {"name": root.name, "namespace": "ns"}, "spec": {"tenants": {}}}
+    return da_assembler._foreign_paths(root.parent, cr)
+
+
 CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "tree_tenants": ("_lib_confd.py", _tree_tenants),
     "declared_tenants": ("_lib_parse_cache.py", _declared_tenants),
@@ -280,6 +290,7 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     # (check_confd_schema) and hidden names at all (check_retire_drift).
     "check_confd_schema": ("lint/check_confd_schema.py", _check_confd_schema),
     "check_retire_drift": ("lint/check_retire_drift.py", _check_retire_drift),
+    "da_assembler_foreign_paths": ("ops/da_assembler.py", _da_assembler_foreign_paths),
 }
 
 # Readers that STILL read hidden paths on this tree, pinned as leaking so a

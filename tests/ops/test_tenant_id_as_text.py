@@ -481,7 +481,7 @@ def _assemble(tmp_path: Path, name: str, keys, rc: int = 0) -> Path:
     out = tmp_path / "out"
     out.mkdir(exist_ok=True)
     assert da_assembler.render_cr_file(cr, out) == rc
-    return out / f"{name}.yaml"
+    return out / name / f"{name}.yaml"  # #3671: the CR's own directory
 
 
 @pytest.mark.usefixtures("da_crdecode_env")
@@ -546,10 +546,10 @@ def test_da_assembler_keeps_every_matrix_spelling(tmp_path, row):
     rc = da_assembler.render_cr_file(cr, tmp_path)
     if stored != row["exporter_key"] or not is_valid_tenant_id(stored):
         assert rc == 2
-        assert not (tmp_path / "m.yaml").exists()
+        assert not (tmp_path / "m").exists()
         return
     assert rc == 0
-    got = _as_text(tmp_path / "m.yaml")
+    got = _as_text(tmp_path / "m" / "m.yaml")
     assert got == {"tenants": {row["exporter_key"]: {"container_cpu": "2"}}}, got
 
 
@@ -588,7 +588,7 @@ def _render_values(tmp_path: Path, q: str) -> tuple[str, Path]:
     out = tmp_path / "out"
     out.mkdir()
     assert da_assembler.render_cr_file(cr, out) == 0
-    return block, out / "t1.yaml"
+    return block, out / "t1" / "t1.yaml"
 
 
 @pytest.mark.usefixtures("da_crdecode_env")
@@ -626,8 +626,8 @@ def test_da_assembler_serves_what_the_cluster_stores(tmp_path, da_guard, q):
     block, out = _render_values(tmp_path, q)
     if not q:
         block = _VALUES_AS_STORED
-    (out.parent / "_defaults.yaml").write_text(_VALUES_DEFAULTS,
-                                               encoding="utf-8")
+    root = out.parent.parent  # out/t1/t1.yaml (#3671)
+    (root / "_defaults.yaml").write_text(_VALUES_DEFAULTS, encoding="utf-8")
     ref = _tree(tmp_path / "ref", {
         "_defaults.yaml": _VALUES_DEFAULTS,
         "t1.yaml": "tenants:\n" + "".join(
@@ -635,7 +635,7 @@ def test_da_assembler_serves_what_the_cluster_stores(tmp_path, da_guard, q):
     if da_guard is None:
         pytest.skip("go not on PATH: this test needs da-guard "
                     "(set VIBE_REQUIRE_GO=1 to fail instead)")
-    got = _lib_tenant_values.load_served_values(out.parent, binary=da_guard)
+    got = _lib_tenant_values.load_served_values(root, binary=da_guard)
     want = _lib_tenant_values.load_served_values(ref, binary=da_guard)
     assert {t: (v.values, v.severities) for t, v in got.items()} == \
         {t: (v.values, v.severities) for t, v in want.items()}
@@ -669,15 +669,17 @@ def test_da_assembler_names_the_file_as_the_cr_does(tmp_path, name, want):
         assert list(out.iterdir()) == []
         return
     assert rc == 0
-    assert sorted(p.name for p in out.iterdir()) == [f"{want}.yaml"]
-    header = (out / f"{want}.yaml").read_text(encoding="utf-8").split("\n")[0]
+    assert sorted(p.name for p in out.iterdir()) == [want]
+    assert sorted(p.name for p in (out / want).iterdir()) == [f"{want}.yaml"]
+    header = (out / want / f"{want}.yaml").read_text(encoding="utf-8").split("\n")[0]
     assert header.endswith(f"ThresholdConfig ns/{want}"), header
 
 
 # A spec block that is not a mapping is not written (as before #2331). Read
-# PyYAML-typed, `defaults: 0` / `stateFilters: false` were falsy and dropped;
-# read as their text (RawPlain "0") they are truthy, and writing them out
-# made the exporter skip the whole tenant file (YamlFileError, ValueError).
+# PyYAML-typed, `defaults: 0` was falsy and dropped; read as its text
+# (RawPlain "0") it is truthy, and writing it out made the exporter skip the
+# whole tenant file (YamlFileError, ValueError). A `stateFilters` of any
+# value is refused since #3671 (`test_da_assembler_refuses_state_filters`).
 _SPEC_TENANT = '    t1:\n      mysql_connections: "70"\n'
 
 
@@ -687,10 +689,7 @@ def _cr_with_spec_extra(extra: str) -> str:
 
 @pytest.mark.parametrize("extra", [
     "  defaults: 0\n", "  defaults: false\n", "  defaults: no\n",
-    "  stateFilters: false\n", "  stateFilters: 0\n",
-    "  defaults: 0\n  stateFilters: false\n",
-], ids=["defaults-0", "defaults-false", "defaults-no", "stateFilters-false",
-        "stateFilters-0", "both"])
+], ids=["defaults-0", "defaults-false", "defaults-no"])
 @pytest.mark.usefixtures("da_crdecode_env")
 def test_da_assembler_drops_a_scalar_spec_block(tmp_path, da_guard, extra):
     cr = tmp_path / "cr.yaml"
@@ -701,7 +700,8 @@ def test_da_assembler_drops_a_scalar_spec_block(tmp_path, da_guard, extra):
     (out / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 1\n",
                                         encoding="utf-8")
     assert _served(out, da_guard)["t1"]["mysql_connections"] == 70.0
-    got = _as_text(out / "t1.yaml")
+    assert sorted(p.name for p in (out / "t1").iterdir()) == ["t1.yaml"]  # no defaults file
+    got = _as_text(out / "t1" / "t1.yaml")
     assert got == {"tenants": {"t1": {"mysql_connections": "70"}}}, got
 
 
@@ -715,25 +715,27 @@ def test_da_assembler_drops_a_scalar_tenants_block(tmp_path, tenants):
     out = tmp_path / "out"
     out.mkdir()
     assert da_assembler.render_cr_file(cr, out) == 0
-    assert _as_text(out / "t1.yaml") == {}
+    assert _as_text(out / "t1" / "t1.yaml") == {}
 
 
+@pytest.mark.parametrize("extra", [
+    "  stateFilters:\n    container_crashloop:\n"
+    "      reasons: [CrashLoopBackOff]\n      severity: critical\n",
+    "  stateFilters: {}\n", "  stateFilters: false\n", "  stateFilters: 0\n",
+], ids=["mapping", "empty", "false", "0"])
 @pytest.mark.usefixtures("da_crdecode_env")
-def test_da_assembler_still_writes_mapping_spec_blocks(tmp_path, da_guard):
-    """Control: a mapping `stateFilters` is written as before."""
-    extra = ("  stateFilters:\n    container_crashloop:\n"
-             "      reasons: [CrashLoopBackOff]\n      severity: critical\n")
+def test_da_assembler_refuses_state_filters(tmp_path, caplog, extra):
+    """#3671: the exporter reads `state_filters` from the root
+    `_defaults.yaml` alone — written into the CR's files it was read by no
+    reader (the exporter logged `should only be in _defaults.yaml,
+    ignoring`). Any value is refused, rc 2, nothing written."""
     cr = tmp_path / "cr.yaml"
     cr.write_text(_cr_with_spec_extra(extra), encoding="utf-8")
     out = tmp_path / "out"
     out.mkdir()
-    assert da_assembler.render_cr_file(cr, out) == 0
-    got = _as_text(out / "t1.yaml")
-    assert got["state_filters"] == {"container_crashloop": {
-        "reasons": ["CrashLoopBackOff"], "severity": "critical"}}, got
-    (out / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 1\n",
-                                        encoding="utf-8")
-    assert _served(out, da_guard)["t1"]["mysql_connections"] == 70.0
+    assert da_assembler.render_cr_file(cr, out) == 2
+    assert list(out.iterdir()) == []
+    assert "spec.stateFilters is set" in caplog.text, caplog.text
 
 
 # ── patch-config: the tenant patched is the tenant named (#2216, #2237) ──
