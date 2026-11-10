@@ -17,11 +17,6 @@
 // package's constants (swag reads them). The fields an envelope carries
 // beside the fixed ones, per code, are declared here too (extra.go, #3272).
 //
-// Not here: SIMULATE_NOT_PROVIDED. tenant-api never sends it — it is the
-// portal deployment's own nginx 501 for POST /api/v1/tenants/simulate, which
-// the shipped portal does not proxy (#2125); its value is pinned between the
-// two nginx configs and the widget by tests/shared/test_portal_simulate_not_provided.py.
-//
 // ⛔ A leaf: it imports nothing of this module and not net/http (depguard
 // rule errcode-leaf in .golangci.yml), so every package — the handler, the
 // RBAC middleware, the generator client, the async task store — can name a
@@ -110,6 +105,13 @@ const (
 	// NotImplemented marks a 501 (feature disabled at deploy time, e.g.
 	// custom alerts without --custom-alerts-dir).
 	NotImplemented Code = "NOT_IMPLEMENTED"
+	// SimulateNotProvided marks the 501 for POST /api/v1/tenants/simulate:
+	// simulate preview is threshold-exporter's endpoint, which this
+	// deployment does not offer (#2125). tenant-api answers it since the
+	// portal is served from its pod (ADR-027 §5); the standalone portal's
+	// nginx answers the same code (tests/shared/test_portal_simulate_not_provided.py
+	// pins the value between them and the widget).
+	SimulateNotProvided Code = "SIMULATE_NOT_PROVIDED"
 	// ForgeUnavailable marks an HTTP 503 caused by the forge circuit
 	// breaker being open (#632 / #645) or the base sync timing out — the
 	// forge (GitHub/GitLab) is degraded. Clients should retry after a short
@@ -389,6 +391,7 @@ var codeTable = []codeRow{
 	{GroupIDUnavailable, RemedyChooseOther},
 	{Upstream, RemedyRetryAfter},
 	{NotImplemented, RemedyOperator},
+	{SimulateNotProvided, RemedyOperator},
 	{ForgeUnavailable, RemedyRetryAfter},
 	{ForgeForbidden, RemedyOperator},
 	{WriteOverloaded, RemedyRetryAfter},
