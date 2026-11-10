@@ -77,7 +77,7 @@ tests:
           - exp_labels:
               maintenance: page
               severity: critical
-              metric_group: replication_lag
+              metric_group: mysql_replication_lag
               tenant: db-a
             exp_annotations:
               summary: "MariaDB replica IO thread not running for tenant db-a"
@@ -90,7 +90,7 @@ tests:
           - exp_labels:
               maintenance: page
               severity: critical
-              metric_group: replication_lag
+              metric_group: mysql_replication_lag
               tenant: db-m
             exp_annotations:
               summary: "MariaDB replica IO thread not running for tenant db-m"
@@ -106,7 +106,7 @@ tests:
           - exp_labels:
               maintenance: page
               severity: critical
-              metric_group: replication_lag
+              metric_group: mysql_replication_lag
               tenant: db-b
             exp_annotations:
               summary: "MariaDB replica SQL thread not running for tenant db-b"
@@ -191,7 +191,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: replication_lag
+              metric_group: mysql_replication_lag
               tenant: db-a
             exp_annotations:
               summary: "High replication lag on db-a"
@@ -207,7 +207,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: replication_lag
+              metric_group: mysql_replication_lag
               tenant: db-b
             exp_annotations:
               summary: "High replication lag on db-b"
@@ -246,7 +246,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: critical
-              metric_group: replication_lag
+              metric_group: mysql_replication_lag
               tenant: db-a
             exp_annotations:
               summary: "Critical replication lag on db-a"

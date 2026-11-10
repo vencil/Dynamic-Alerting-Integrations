@@ -388,7 +388,7 @@ Severity dedup is handled at the **Alertmanager inhibit layer**, not in PromQL. 
   for: 5m
   labels:
     severity: warning
-    metric_group: "connections"
+    metric_group: "mysql_connections"
 
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
@@ -397,7 +397,7 @@ Severity dedup is handled at the **Alertmanager inhibit layer**, not in PromQL. 
   for: 5m
   labels:
     severity: critical
-    metric_group: "connections"
+    metric_group: "mysql_connections"
 ```
 
 **Alertmanager inhibit rule (per-tenant, auto-generated):**
@@ -656,7 +656,7 @@ v1.2.0 implements per-tenant inhibit rules for optional configuration:
 | `_severity_dedup: "enable"` (default) | ✅ | ✅ | ❌ Intercepted by AM | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "connections"`. Each per-tenant inhibit rule limits `metric_group=~".+"`, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
+**Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "mysql_connections"`. Each per-tenant inhibit rule limits `metric_group=~".+"`, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
 
 **Tenant Configuration**
 

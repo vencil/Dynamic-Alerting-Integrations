@@ -167,7 +167,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
         // doesn't surface. routing_channel / metric_count / etc.
         // are docs-time decorations from platform-data.json —
         // they're empty in the live API path until the relevant
-        // metric pipeline lands (ADR-009 §gradual-migration).
+        // metric pipeline lands.
         apiTenants[summary.id] = {
           environment: summary.environment || 'unknown',
           region: summary.region || '',

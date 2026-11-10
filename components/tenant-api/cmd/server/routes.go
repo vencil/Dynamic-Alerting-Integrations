@@ -219,7 +219,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/effective", handler.GetTenantEffective(deps))
 
-			// v2.9.0 ADR-024 §S6 (#741): metric discovery catalog for the
+			// v2.9.0 ADR-024 §3 (#741): metric discovery catalog for the
 			// portal recipe-authoring UX. Read-only Prometheus proxy;
 			// route middleware enforces RBAC read on {id}.
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
@@ -234,7 +234,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/access", handler.CheckTenantAccess())
 
-			// v2.9.0 ADR-024 §S6b-2 (#741): comment-preserving write of a
+			// v2.9.0 ADR-024 §3 (#741): comment-preserving write of a
 			// tenant's _custom_alerts (RecipeBuilder modal). PermWrite —
 			// this commits to GitOps.
 			r.With(rbacMgr.Middleware(rbac.PermWrite, handler.TenantIDFromPath)).

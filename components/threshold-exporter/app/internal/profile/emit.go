@@ -571,7 +571,7 @@ func emitTranslatedProposal(
 			if !hasOverride {
 				// Tenant matches the default → no tenant.yaml needed
 				// (deepMerge falls through to _defaults.yaml). This is
-				// the GitOps anti-pattern fix that ADR-018 §1
+				// the GitOps anti-pattern fix that ADR-018 §Profile-as-Directory-Default
 				// motivated.
 				continue
 			}
