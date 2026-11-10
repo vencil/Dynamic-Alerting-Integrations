@@ -22,6 +22,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -35,14 +36,12 @@ type chartVariant struct {
 	Set  []string
 	// Claims are the extra claim headers the variant injects.
 	Claims map[string]string
-	// Upstream is the scheme the single upstream must use.
-	Upstream string
 }
 
 var chartVariants = []chartVariant{
-	// ADR-027 §2: the only upstream is tenant-api's Unix socket, at a path the
-	// chart fixes (there is no humanSocket key).
-	{Name: "default", Upstream: "unix"},
+	// ADR-027 §2, §10: the api upstream is tenant-api's Unix socket, at a
+	// path the chart fixes (there is no humanSocket key).
+	{Name: "default"},
 	{
 		Name: "gitlab-claims-socket",
 		Set: []string{
@@ -53,8 +52,7 @@ var chartVariants = []chartVariant{
 			"oauth2Proxy.claimHeaders.org=X-Auth-Request-Org",
 			"oauth2Proxy.claimHeaders.region=X-Auth-Request-Region",
 		},
-		Claims:   map[string]string{"org": "X-Auth-Request-Org", "region": "X-Auth-Request-Region"},
-		Upstream: "unix",
+		Claims: map[string]string{"org": "X-Auth-Request-Org", "region": "X-Auth-Request-Region"},
 	},
 }
 
@@ -215,9 +213,32 @@ func TestChartConfig(t *testing.T) {
 					t.Errorf("claim %q has a header but the provider's additionalClaims %v do not list it: the header would be empty", claim, opts.Providers[0].AdditionalClaims)
 				}
 			}
+			// ADR-027 §5, §10: /api/ → tenant-api's Unix socket, / → the
+			// portal container on the pod's loopback; nothing else.
 			ups := opts.UpstreamServers.Upstreams
-			if len(ups) != 1 || ups[0].Path != "/" || !strings.HasPrefix(ups[0].URI, v.Upstream+"://") {
-				t.Fatalf("upstreams = %+v, want one %s upstream on /", ups, v.Upstream)
+			if len(ups) != 2 ||
+				ups[0].ID != "api" || ups[0].Path != "/api/" || ups[0].URI != "unix:///run/ta-human/human.sock" ||
+				ups[1].ID != "portal" || ups[1].Path != "/" || ups[1].URI != "http://127.0.0.1:8081" {
+				t.Fatalf("upstreams = %+v, want api /api/ → unix:///run/ta-human/human.sock and portal / → http://127.0.0.1:8081", ups)
+			}
+			// ADR-027 §9 item 3: /api/ answers 401, not a redirect, without a
+			// session — and only /api/: the portal paths still redirect.
+			apiRoute := ""
+			for _, a := range r.Args {
+				if strings.HasPrefix(a, "--api-route=") {
+					if apiRoute != "" {
+						t.Fatalf("oauth2-proxy args %v: --api-route twice", r.Args)
+					}
+					apiRoute = strings.TrimPrefix(a, "--api-route=")
+				}
+				if strings.HasPrefix(a, "--skip-auth-route") || strings.HasPrefix(a, "--trusted-ip") ||
+					strings.HasPrefix(a, "--skip-auth-preflight") || strings.HasPrefix(a, "--skip-auth-regex") {
+					t.Errorf("oauth2-proxy arg %q: no request may skip login in the production chart (ADR-027 §2)", a)
+				}
+			}
+			apiRE, err := regexp.Compile(apiRoute)
+			if apiRoute == "" || err != nil {
+				t.Fatalf("oauth2-proxy args %v: want one --api-route regexp (%v)", r.Args, err)
 			}
 
 			rec := &recorder{}
@@ -228,6 +249,21 @@ func TestChartConfig(t *testing.T) {
 				AdditionalClaims: map[string]interface{}{"org": "ORG-1", "region": []interface{}{"eu", "us"}},
 			}
 			h := proxyFor(t, opts, session)
+
+			// The chart routes every path of ADR-027 §10's table where the
+			// ADR says, and --api-route covers exactly the api ones.
+			_, routes := section10(t)
+			for _, rt := range routes {
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, rt.Path, nil))
+				got := rec.take()
+				if len(got) != 1 || got[0].Upstream != rt.Upstream {
+					t.Errorf("GET %s reached %+v (status %d), want upstream %s", rt.Path, got, w.Code, rt.Upstream)
+				}
+				if p := strings.SplitN(rt.Path, "?", 2)[0]; apiRE.MatchString(p) != (rt.Upstream == "api") {
+					t.Errorf("--api-route=%s on %s: matches %v, want it to match exactly the api upstream's paths", apiRoute, p, apiRE.MatchString(p))
+				}
+			}
 
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/me?x=1", nil)
 			// A client's own copy of every header the config injects, in
@@ -244,8 +280,8 @@ func TestChartConfig(t *testing.T) {
 			}
 			h.ServeHTTP(httptest.NewRecorder(), req)
 			got := rec.take()
-			if len(got) != 1 || got[0].URI != "/api/v1/me?x=1" {
-				t.Fatalf("upstream requests = %+v, want one, path and query unchanged", got)
+			if len(got) != 1 || got[0].Upstream != "api" || got[0].URI != "/api/v1/me?x=1" {
+				t.Fatalf("upstream requests = %+v, want one to api, path and query unchanged", got)
 			}
 			hdr := got[0].Header
 			want := map[string]string{
