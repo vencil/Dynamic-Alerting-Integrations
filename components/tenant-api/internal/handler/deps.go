@@ -185,6 +185,12 @@ type Deps struct {
 	// Deps so parallel tests do not share it.
 	loadRoot func(configDir string) cfg.RootPlatform
 
+	// afterWriteGates, when not nil, runs in a direct-mode PUT or batch after
+	// the handler's gates passed and before the Writer is called — where a
+	// write queued ahead of it can still change the tree (ADR-027 §7,
+	// tree_judge.go). A test seam, per Deps; nil in every production Deps.
+	afterWriteGates func()
+
 	// readyLog receives Ready's failure lines (the config dir, socket path and
 	// error text the unauthenticated /ready body withholds, #2811); nil (every
 	// production Deps) is slog.Default(). A test seam, per Deps so parallel

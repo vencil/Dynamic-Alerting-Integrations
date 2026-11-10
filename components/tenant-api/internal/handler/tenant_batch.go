@@ -159,10 +159,10 @@ type BatchResponse struct {
 // @Success     200  {object} BatchResponse
 // @Success     202  {object} map[string]interface{}
 // @Failure     400  {object} ErrorResponse
-// @Failure     403  {object} ErrorResponse "PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api's own forge token lacks write scope to open the PR/MR — an operator must fix the token. (An operation refused by the write scope, on the local copy or on the latest base branch, rejects the batch with a 422 instead.)"
+// @Failure     403  {object} ErrorResponse "PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api's own forge token lacks write scope to open the PR/MR — an operator must fix the token. (An operation refused by the write scope or the label gate, on the local copy or under the writer lock on the tree the batch lands on, rejects the batch with a 422 instead.)"
 // @Failure     409  {object} ErrorResponse "Direct mode, code CONFLICT, with committed: false — the repository changed outside tenant-api while the batch ran; nothing was written, refresh and retry. Code BATCH_COMMITTED (#3202), with committed: true and commit — the batch WAS committed (that commit) but the write did not finish cleanly on the server; refresh before changing anything."
 // @Failure     413  {object} ErrorResponse
-// @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or (PR write-back mode) on the latest base branch the PR/MR would be cut from — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_FILE_DIRTY (direct mode, #1535: the operation's tenant file differs from HEAD in tenant-api's copy), TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, BAD_REQUEST (the operation fails validation, e.g. a _silent_mode value the exporter ignores, #3227), INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them. Also when the route generator container refuses the batch as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is judged once): every result is status error with code GENERATOR_FINDINGS (its message names the findings about that result's tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_undecidable (no root platform file: threshold keys cannot be judged), key_verdict_platform_file (the shared key verdict did not complete, ADR-038 decision 5), memory, incomplete, too_large: the files the batch produces are too large to judge in one request — split the batch, invalid_request, normalized: git attributes would commit other bytes than the ones judged). An async batch's task carries the same per-op results."
+// @Failure     422  {object} BatchResponse "Batch rejected (status rejected): at least one operation was refused — by the checks on this server's copy, or by the same checks judged again under the writer lock on the tree the batch lands on (direct mode: the serving tree; PR write-back mode: the latest base branch the PR/MR would be cut from) — so nothing was written and no PR/MR was opened. results lists every operation in request order: status error (message, code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_FILE_DIRTY (direct mode, #1535: the operation's tenant file differs from HEAD in tenant-api's copy), TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR, BAD_REQUEST (the operation fails validation, e.g. a _silent_mode value the exporter ignores, #3227), INTERNAL_ERROR) for the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) that no operation replaces; every operation not refused for another reason carries it; an operation whose own tenant file cannot be read (and is not an unresolvable symlink (dangling, looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message names the entries only for a caller with write permission on all tenants (otherwise their number); an async task's stored results never name them. Also when the route generator container refuses the batch as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is judged once): every result is status error with code GENERATOR_FINDINGS (its message names the findings about that result's tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_undecidable (no root platform file: threshold keys cannot be judged), key_verdict_platform_file (the shared key verdict did not complete, ADR-038 decision 5), memory, incomplete, too_large: the files the batch produces are too large to judge in one request — split the batch, invalid_request, normalized: git attributes would commit other bytes than the ones judged). An async batch's task carries the same per-op results."
 // @Failure     429  {object} ErrorResponse "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge); or key_verdict_no_time / key_verdict_deadline: the generator passed the write but its shared key verdict ran out of time (ADR-038 decision 5). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
 // @Failure     500  {object} ErrorResponse "Internal error; or code TENANT_STORE_FAULT (#2939): tenant-api's own copy of conf.d holds an entry the server cannot read and git cannot hold (a FIFO, socket or device named like a config file, a failed read, an unlistable directory); the batch fails whole, nothing written — it is fixed on the server or its volume, not by changing operations. Entry names as for the 422; an async task's stored results never name them"
 // @Failure     503  {object} ErrorResponse "Service unavailable: the write plane is busy (WRITE_OVERLOADED), the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator container cannot judge (reason unreachable, bad_response, amtool_missing, da_guard_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason policy_unusable, or policy_unreadable for tenant-api's own copy); Retry-After; nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the config repository failed, a timeout included: the whole batch fails, no PR/MR opened, Retry-After (the branch may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch was stopped before anything of it was committed: the request was cancelled or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch failed and the server could not read the branch back: unlike the cases above the batch may already be committed, so refresh to see whether it was before retrying (an async task says the same in its error)"
@@ -302,6 +302,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 	metaOf := WriteScopeMeta(d.ConfigDir) // one resolver: the root platform files are read once per batch
 	// lastPost[t]: the local post-state pair of t's last op taken into the PR.
 	lastPost := map[string]writeGate{}
+	judge := prTreeJudge(d, p)
 	// skipped: per op taken into the PR, its result's index and whether the
 	// in-lock merge found its tenant absent (#2882); read after WritePRBatch.
 	var skipped []skippedOp
@@ -322,10 +323,7 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		}
 		// ADR-027 §7: only a platform administrator changes the labels
 		// (label_guard.go); judged again on the fresh base below.
-		var labelsBefore scopePair
-		if touchesScopeMetadata(op) {
-			labelsBefore = scopePairOf(stackedScopeMeta(d.ConfigDir, op.TenantID, included[op.TenantID]), op.TenantID)
-		}
+		labelsBefore := batchLabelsBefore(d.ConfigDir, included[op.TenantID], op)
 		if res, refused := gateBatchOpLabelsAt(d.RBAC, p, op, labelsBefore, gatePost.pair); refused {
 			batchResults = append(batchResults, res)
 			continue
@@ -370,43 +368,9 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 		batchOps = append(batchOps, gitops.PRBatchOp{
 			TenantID: op.TenantID,
 			Merge:    merge,
-			FreshMerge: func(baseDir string, existing []byte) (string, error) {
-				// baseDir: conf.d of the staging worktree at the fresh base (#2900).
-				// #2882: an absent group member is skipped before any verdict:
-				// nothing is written for it, so there is nothing to judge.
-				*absent = op.skipAbsent && tenantAbsentIn(existing, op.TenantID)
-				if *absent {
-					return "", gitops.ErrMergeNoOp
-				}
-				// The org axis is counted on the tenant's first op only:
-				// its organizations are the same for all of them.
-				countOrg := firstOp
-				pre, judged := freshWriteScope(baseDir, op.TenantID)
-				if judged {
-					if ok, err := freshScopeAllowed(d, p, baseDir, op.TenantID, comparePre, pre, countOrg); err != nil || !ok {
-						return "", orFreshScopeError(err, &freshBaseScopeError{TenantID: op.TenantID, Op: i, PreState: true})
-					}
-					countOrg = false
-				}
-				merged, err := merge(existing)
-				if err != nil {
-					return "", err
-				}
-				if touchesScopeMetadata(op) || countOrg {
-					post := scopePairOf(proposedScopeMeta(baseDir, merged), op.TenantID)
-					if ok, err := freshScopeAllowed(d, p, baseDir, op.TenantID, gatePost, post, countOrg); err != nil || !ok {
-						return "", orFreshScopeError(err, &freshBaseScopeError{TenantID: op.TenantID, Op: i})
-					}
-					// ADR-027 §7: the label change judged on the base,
-					// existing being the tenant's file there with this
-					// request's earlier ops for it applied (label_guard.go).
-					if touchesScopeMetadata(op) &&
-						!labelChangeAllowed(d.RBAC, p, freshLabelsBefore(baseDir, existing, op.TenantID, labelsBefore), post) {
-						return "", &freshBaseScopeError{TenantID: op.TenantID, Op: i, Labels: true}
-					}
-				}
-				return merged, nil
-			},
+			// baseDir: conf.d of the staging worktree at the fresh base (#2900).
+			FreshMerge: judge.batchOpMerge(batchOp{index: i, op: op, comparePre: comparePre, gatePost: gatePost,
+				firstOp: firstOp, merge: merge, absent: absent}),
 		})
 		batchResults = append(batchResults, BatchResult{TenantID: op.TenantID, Status: "included"})
 		included[op.TenantID] = append(included[op.TenantID], op)
@@ -660,14 +624,14 @@ type directBatchRun struct {
 // partial-write refusal may name (#3039): an answer, those the caller may
 // read (tenantNamesFor); stored results, none — and whether the key
 // verdict's platform findings are shown (treeVisible, ADR-038 decision 5).
-func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, results batchResultsUse) directBatchRun {
+func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, results batchResultsUse, afterGates func()) directBatchRun {
 	treeVisible := results == batchResultsAnswer && treePathsVisible(rbacMgr, p)
 	var names gitops.TenantNames
 	if results == batchResultsAnswer {
 		names = tenantNamesFor(rbacMgr, tenantOrg, p)
 	}
 	ctx = gitops.WithTreeVisible(gitops.WithTenantNames(ctx, names), treeVisible)
-	return executeBatchOpsShown(ctx, w, configDir, ops, email, p, rbacMgr, tenantOrg, treeVisible)
+	return executeBatchOpsShown(ctx, w, configDir, ops, email, p, rbacMgr, tenantOrg, treeVisible, afterGates)
 }
 
 // executeBatch is executeBatchOps for an endpoint or an async task, counting
@@ -678,7 +642,7 @@ func executeBatchOps(ctx context.Context, w *gitops.Writer, configDir string, op
 // that failed because the client went away is not counted, clientGone) and
 // nil for an async task, which no client's leaving cancels.
 func (d *Deps) executeBatch(ctx, client context.Context, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, results batchResultsUse) directBatchRun {
-	run := executeBatchOps(ctx, d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, results)
+	run := executeBatchOps(ctx, d.Writer, d.ConfigDir, ops, email, p, d.RBAC, d.TenantOrg, results, d.afterWriteGates)
 	if res, counted := batchRunResult(run); counted && (res == writeResultOK || !clientGone(client)) {
 		d.writeResults().record(res)
 	}
@@ -735,7 +699,9 @@ const (
 
 // executeBatchOpsShown is executeBatchOps with the disclosure decided:
 // treeVisible names the entries of a TENANT_TREE_UNREADABLE result.
-func executeBatchOpsShown(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, treeVisible bool) directBatchRun {
+// afterGates, when not nil, runs after the gates passed and before the write
+// (Deps.afterWriteGates).
+func executeBatchOpsShown(ctx context.Context, w *gitops.Writer, configDir string, ops []BatchOperation, email string, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, treeVisible bool, afterGates func()) directBatchRun {
 	results := make([]BatchResult, len(ops))
 	refused := make([]bool, len(ops))
 	anyRefused := false
@@ -744,23 +710,38 @@ func executeBatchOpsShown(ctx context.Context, w *gitops.Writer, configDir strin
 	}
 	// included[t]: t's earlier ops of this request that passed, in order.
 	included := map[string][]BatchOperation{}
+	// lastPost[t]: the post-state gate of t's last op that passed.
+	lastPost := map[string]writeGate{}
+	// judged[i]: what the gates judged op i on, for its in-lock verdict.
+	judged := make([]batchOp, len(ops))
 	for i, op := range ops {
 		// A resolver per op: its metadata, the root platform layer included
 		// (#2370), is read when that op is judged.
-		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, WriteScopeMeta(configDir)); failed {
+		pre := writeGate{scopePairOf(WriteScopeMeta(configDir), op.TenantID), tenantOrgsKey(tenantOrg, op.TenantID)}
+		if res, failed := gateBatchOp(op.TenantID, p, rbacMgr, tenantOrg, fixedScopeMeta(pre.pair)); failed {
 			refuse(i, res)
 			continue
 		}
-		if res, failed := gateBatchOpPostState(configDir, included[op.TenantID], op, p, rbacMgr, tenantOrg); failed {
+		post := writeGate{scopePairOf(postStateScopeMeta(configDir, included[op.TenantID], op), op.TenantID), pre.orgs}
+		if res, failed := gateBatchOpPostStateAt(post.pair, op, p, rbacMgr, tenantOrg); failed {
 			refuse(i, res)
 			continue
 		}
 		// ADR-027 §7: only a platform administrator changes the labels
 		// (label_guard.go).
-		if res, failed := gateBatchOpLabels(rbacMgr, configDir, included[op.TenantID], op, p); failed {
+		if res, failed := gateBatchOpLabelsAt(rbacMgr, p, op, batchLabelsBefore(configDir, included[op.TenantID], op), post.pair); failed {
 			refuse(i, res)
 			continue
 		}
+		// The in-lock pre-state of a tenant's later op is its file with the
+		// earlier ops laid over it: compared with the post-state of the op
+		// before it (as runBatchPR).
+		prev, seen := lastPost[op.TenantID]
+		if !seen {
+			prev = pre
+		}
+		lastPost[op.TenantID] = post
+		judged[i] = batchOp{index: i, op: op, comparePre: prev, gatePost: post, firstOp: !seen}
 		included[op.TenantID] = append(included[op.TenantID], op)
 	}
 	if anyRefused {
@@ -771,7 +752,10 @@ func executeBatchOpsShown(ctx context.Context, w *gitops.Writer, configDir strin
 		}
 		return directBatchRun{Results: results, Rejected: true}
 	}
-	return writeBatchOps(ctx, w, ops, email, treeVisible)
+	if afterGates != nil {
+		afterGates()
+	}
+	return writeBatchOps(ctx, w, judged, directTreeJudge(rbacMgr, tenantOrg, p), email, treeVisible)
 }
 
 // writeBatchOps is the write half of executeBatchOps: one WriteBatch for every
@@ -781,20 +765,26 @@ func executeBatchOpsShown(ctx context.Context, w *gitops.Writer, configDir strin
 // comments survive. treeVisible
 // is treePathsVisible for the caller: whether a TENANT_TREE_UNREADABLE result
 // names the entries (batchErrorResult).
-func writeBatchOps(ctx context.Context, w *gitops.Writer, ops []BatchOperation, email string, treeVisible bool) directBatchRun {
+//
+// Each op's merge is its in-lock verdict too (judge.batchOpMerge, ADR-027
+// §7): the write scope and the label gate, taken again on the staging tree
+// the batch is merged in, where no other write can change the tenant before
+// this batch commits. judged holds what the gates outside the lock judged.
+func writeBatchOps(ctx context.Context, w *gitops.Writer, judged []batchOp, judge treeJudge, email string, treeVisible bool) directBatchRun {
+	ops := make([]BatchOperation, len(judged))
 	// #2882: judged inside the merge, i.e. under the writer lock on the base
 	// the write lands on, not on a read taken before it.
-	absent := make([]bool, len(ops))
+	absent := make([]bool, len(judged))
 	names := gitops.TenantNamesOf(ctx) // the Writer's validation reads the same off ctx
-	batch := make([]gitops.BatchOp, len(ops))
-	for i, op := range ops {
-		batch[i] = gitops.BatchOp{TenantID: op.TenantID, Merge: func(existing []byte) (string, error) {
-			absent[i] = op.skipAbsent && tenantAbsentIn(existing, op.TenantID)
-			if absent[i] {
-				return "", gitops.ErrMergeNoOp
-			}
+	batch := make([]gitops.BatchOp, len(judged))
+	for i, o := range judged {
+		op := o.op
+		ops[i] = op
+		o.absent = &absent[i]
+		o.merge = func(existing []byte) (string, error) {
 			return mergePatchYAML(existing, op.TenantID, op.Patch, op.Unset, names)
-		}}
+		}
+		batch[i] = gitops.BatchOp{TenantID: op.TenantID, LockedMerge: judge.batchOpMerge(o)}
 	}
 	outcomes, err := w.WriteBatch(ctx, batch, email)
 
@@ -810,7 +800,7 @@ func writeBatchOps(ctx context.Context, w *gitops.Writer, ops []BatchOperation, 
 			o := rejected.Outcomes[i]
 			switch {
 			case o.Err != nil:
-				results[i] = batchErrorResult(op.TenantID, o.Err, treeVisible)
+				results[i] = freshBaseOpResult(op.TenantID, o.Err, treeVisible)
 			case absent[i]:
 				results[i] = BatchResult{TenantID: op.TenantID, Status: "skipped", Message: msgTenantAbsent}
 			default:
@@ -856,7 +846,17 @@ func writeBatchOps(ctx context.Context, w *gitops.Writer, ops []BatchOperation, 
 // direct write the batch endpoints run, without their permission gates (which sit one layer up, in executeBatchOps). A failure of the batch
 // as a whole is that op's "error" result.
 func applyPatch(ctx context.Context, w *gitops.Writer, _ string, op BatchOperation, authorEmail string) BatchResult {
-	return writeBatchOps(ctx, w, []BatchOperation{op}, authorEmail, false).Results[0]
+	return writeBatchOps(ctx, w, ungatedBatchOps([]BatchOperation{op}), treeJudge{}, authorEmail, false).Results[0]
+}
+
+// ungatedBatchOps is ops for writeBatchOps with no gate judged: with the
+// zero treeJudge (no RBAC manager) the in-lock verdict passes every op.
+func ungatedBatchOps(ops []BatchOperation) []batchOp {
+	out := make([]batchOp, len(ops))
+	for i, op := range ops {
+		out[i] = batchOp{index: i, op: op, firstOp: true}
+	}
+	return out
 }
 
 // batchErrorResult renders a write error as the "error" result of op
@@ -978,8 +978,9 @@ func batchOpText(k errkind.Kind, tenantID string, err error, treeVisible bool) s
 	return err.Error()
 }
 
-// freshBaseOpResult renders the refusal of a PR-mode op judged on the fresh
-// base (#2900 F4) as its per-op result, with kindTable's code. The messages
+// freshBaseOpResult renders the refusal of an op judged under the writer lock
+// — a PR-mode op on the fresh base (#2900 F4), a direct-mode op on the serving
+// tree (tree_judge.go) — as its per-op result, with kindTable's code. The messages
 // name no op index: in a group batch it would count the hidden members
 // before this one (#2857).
 func freshBaseOpResult(tenantID string, err error, treeVisible bool) BatchResult {
@@ -993,8 +994,10 @@ func freshBaseOpResult(tenantID string, err error, treeVisible bool) BatchResult
 		orgs  *freshBaseOrgsError
 	)
 	switch {
+	case errors.As(err, &scope) && scope.Direct:
+		res.Message = scope.Error()
 	case errors.As(err, &scope) && scope.Labels:
-		res.Message = labelChangeDeniedText(tenantID) + " (judged on the latest base branch)"
+		res.Message = labelChangeDeniedText(tenantID, !scope.LabelsUnknown) + " (judged on the latest base branch)"
 	case errors.As(err, &scope) && scope.PreState:
 		res.Message = "insufficient permissions for tenant " + tenantID + " on the latest base branch (permission and organization-scope checks, ADR-027)"
 	case errors.As(err, &scope):

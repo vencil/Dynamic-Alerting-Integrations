@@ -364,31 +364,42 @@ func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 // covers it, write via a "*" rule restricted to an environment (a scoped
 // caller — refused on a file whose metadata cannot be read), read via an
 // unrestricted "*" rule plus write on the URL tenant only (all tenants are
-// reachable, but only for read), and write via an unrestricted "*" rule. Only
-// the last may replace a current file that cannot be parsed.
+// reachable, but only for read), write via an unrestricted "*" rule, and
+// admin via an unrestricted "*" rule (a platform administrator).
 const repairRBACYAML = "groups:\n" +
 	"  - name: ops\n    tenants: [\"svc-alpha\"]\n    permissions: [read, write]\n" +
 	"  - name: svc-team\n    tenants: [\"svc-*\"]\n    permissions: [read, write]\n" +
 	"  - name: staging-ops\n    tenants: [\"*\"]\n    permissions: [read, write]\n    environments: [staging]\n" +
 	"  - name: auditors\n    tenants: [\"*\"]\n    permissions: [read]\n" +
-	"  - name: platform\n    tenants: [\"*\"]\n    permissions: [read, write]\n"
+	"  - name: platform\n    tenants: [\"*\"]\n    permissions: [read, write]\n" +
+	"  - name: platform-admin\n    tenants: [\"*\"]\n    permissions: [read, write, admin]\n"
 
-// scopeDenied: the caller's only write rule restricts environments, and a
-// file that cannot be read for its metadata is unlabeled to the write gate,
-// which refuses it (403) before any other step (ADR-027 §7: the write plane's
-// environments/domains always bind).
+// A current file that cannot be parsed holds environment/domain labels no
+// one can read, so replacing it cannot be shown to leave them as they were:
+// only a platform administrator may (ADR-027 §7, label_guard.go) — repairs.
+// Every other caller is refused 403 FORBIDDEN, file untouched:
+// scopeDenied, whose only write rule restricts environments, by the write
+// gate before any other step (such a file is unlabeled to it — the write
+// plane's environments/domains always bind); the others by the label gate
+// under the writer lock. (Until ADR-027 §7's label gate, #2405 let a caller
+// with write on all tenants replace it.)
 var repairCallers = []struct {
-	name            string
-	groups          []string
-	platformWritten bool
-	scopeDenied     bool
+	name        string
+	groups      []string
+	repairs     bool
+	scopeDenied bool
 }{
 	{"ops", []string{"ops"}, false, false},
 	{"svc-team", []string{"svc-team"}, false, false},
 	{"staging-ops", []string{"staging-ops"}, false, true},
 	{"read-all-write-one", []string{"auditors", "ops"}, false, false},
-	{"platform", []string{"platform"}, true, false},
+	{"platform", []string{"platform"}, false, false},
+	{"platform-admin", []string{"platform-admin"}, true, false},
 }
+
+// labelsUnreadableFrag is the label gate's refusal of a write over labels
+// that cannot be read (labelChangeDeniedText).
+const labelsUnreadableFrag = "the labels its current tenant file holds cannot be read"
 
 // #2405: before the fix, a file whose YAML does not parse, whose `tenants:` is
 // not a mapping, or that repeats a key was refused by the end-of-life guard's
@@ -476,12 +487,9 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 					}
 					return
 				}
-				if !caller.platformWritten {
-					if w.Code != http.StatusBadRequest {
-						t.Fatalf("PUT status = %d, want 400; body: %s", w.Code, w.Body.String())
-					}
-					if !strings.Contains(w.Body.String(), "write permission on all tenants") {
-						t.Errorf("refusal does not name the permission it needs: %s", w.Body.String())
+				if !caller.repairs {
+					if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), labelsUnreadableFrag) {
+						t.Fatalf("PUT status = %d, want 403 naming the unreadable labels; body: %s", w.Code, w.Body.String())
 					}
 					if after != c.body {
 						t.Errorf("file changed on a refused PUT:\n%s", after)
@@ -511,9 +519,9 @@ func unreadableForEol(id string) string {
 }
 
 // #2405: in direct write mode the dry-run (POST /validate) answers what this
-// caller's PUT would: over a file that cannot be parsed, invalid for a caller
-// scoped to the tenant, valid for a caller with write on all tenants. (In PR
-// mode the dry-run checks only the body and cannot answer this.)
+// caller's PUT would: over a file that cannot be parsed, valid for a platform
+// administrator only (repairCallers). (In PR mode the dry-run checks only the
+// body and cannot answer this.)
 func TestValidateTenant_UnparseableBaseFollowsCaller(t *testing.T) {
 	t.Parallel()
 	const id = "svc-alpha"
@@ -532,19 +540,17 @@ func TestValidateTenant_UnparseableBaseFollowsCaller(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil || w.Code != http.StatusOK {
 				t.Fatalf("status = %d, err = %v; body: %s", w.Code, err, w.Body.String())
 			}
-			if got.Valid != caller.platformWritten {
-				t.Errorf("valid = %v, want %v; warnings: %q", got.Valid, caller.platformWritten, got.Warnings)
+			if got.Valid != caller.repairs {
+				t.Errorf("valid = %v, want %v; warnings: %q", got.Valid, caller.repairs, got.Warnings)
 			}
 		})
 	}
 }
 
-// #2405: the same rule in PR write mode — the caller's bit must reach
-// WritePR (local tree and origin hold the same file here, so this pins the
-// bit's path, not which of the two WritePR reads): over a
-// current file that cannot be parsed, a caller scoped to the tenant is refused
-// (400, no PR opened, no branch left behind); a caller with write on all
-// tenants gets the PR.
+// #2405: the same rule in PR write mode, judged on the fresh base (local tree
+// and origin hold the same file here): over a current file that cannot be
+// parsed, a platform administrator gets the PR; every other caller is
+// refused (403, no PR opened, no branch left behind).
 func TestPutTenant_PRMode_UnparseableBaseFollowsCaller(t *testing.T) {
 	const id = "svc-alpha"
 	const repaired = "tenants:\n  " + id + ":\n    mysql_connections: \"75\"\n"
@@ -572,17 +578,14 @@ func TestPutTenant_PRMode_UnparseableBaseFollowsCaller(t *testing.T) {
 				}
 				return
 			}
-			if caller.platformWritten {
+			if caller.repairs {
 				if w.Code != http.StatusOK || !created {
 					t.Fatalf("status = %d, PR created = %v; want 200 and a PR; body: %s", w.Code, created, w.Body.String())
 				}
 				return
 			}
-			if w.Code != http.StatusBadRequest || created {
-				t.Fatalf("status = %d, PR created = %v; want 400 and no PR; body: %s", w.Code, created, w.Body.String())
-			}
-			if !strings.Contains(w.Body.String(), "write permission on all tenants") {
-				t.Errorf("refusal does not name the permission it needs: %s", w.Body.String())
+			if w.Code != http.StatusForbidden || created || !strings.Contains(w.Body.String(), labelsUnreadableFrag) {
+				t.Fatalf("status = %d, PR created = %v; want 403 naming the unreadable labels and no PR; body: %s", w.Code, created, w.Body.String())
 			}
 			branches, _ := exec.Command("git", "-C", dir, "branch", "--format=%(refname:short)").Output()
 			if strings.TrimSpace(string(branches)) != "main" {
