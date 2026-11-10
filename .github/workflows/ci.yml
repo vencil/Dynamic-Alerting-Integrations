@@ -18,17 +18,18 @@ jobs:
   # Validate Path Changes" job.
   # ⚠️ `python` is no longer in that scheme: its filter carries a
   # catch-all, so that leg runs on every PR (rationale in the filter's
-  # own comment). Only `go`, `portal` and `docs` are still path-scoped —
-  # read the rest of this banner as being about them.
+  # own comment). Only `go`, `portal`, `e2e` and `docs` are still
+  # path-scoped — read the rest of this banner as being about them.
   #
   # Required-check safety (the "required check skipped → Expected forever"
-  # trap, see validate.yaml's banner + memory Trap 17): the two names
-  # branch protection requires — "Go Tests" and "Python Tests"
-  # — are BOTH reported by always-run aggregate gate jobs below
+  # trap, see validate.yaml's banner + memory Trap 17): the names
+  # branch protection requires — "Go Tests", "Python Tests", "Portal Tests"
+  # and "Smoke Tests (Chromium)" (#1428) — are ALL reported by always-run
+  # aggregate gate jobs below
   # (`if: always()`), never by a path-skipped job directly. A skipped leg
   # counts as PASS only when detect-changes said it was not needed; a leg
   # that RAN and failed, or a failed/cancelled detect job, fails the gate
-  # (fail-closed). No branch-protection flip is needed: both check names
+  # (fail-closed). No branch-protection flip is needed: the check names
   # keep reporting on every PR and every push to main.
   #
   # Filter philosophy: CONSERVATIVE — skip only what is provably
@@ -53,6 +54,7 @@ jobs:
       go_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.go }}
       python_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.python }}
       portal_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.portal }}
+      e2e_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.e2e }}
       docs_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.docs }}
       schema_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.schema }}
     steps:
@@ -479,6 +481,19 @@ jobs:
               # actually execute the edited gate, is skipped, and the skip reads
               # as PASS. A raised budget or a broken gate merges unexercised.
               - "scripts/tools/lint/check_portal_bundle_size.py"
+              - ".github/workflows/ci.yml"
+            # e2e: the Playwright smoke leg (#1428). Its server serves the
+            # whole docs/ tree (tests/e2e/package.json `serve:portal`:
+            # serve_threaded.py 8080 ../../docs) and the specs load the portal
+            # pages and the JSON under docs/assets/, so every file the browser
+            # can fetch is an input — not only the bundles. docs/*.md is not:
+            # mkdocs renders it elsewhere and the portal never reads it.
+            e2e:
+              - "tools/portal/**"
+              - "docs/interactive/**"
+              - "docs/assets/**"
+              - "tests/e2e/**"
+              - "package.json"
               - ".github/workflows/ci.yml"
             # docs: threshold-exporter's
             # pkg/config/docs_defaults_sample_test.go (#1327) walks
@@ -3093,6 +3108,163 @@ jobs:
             exit 0
           fi
           echo "::error::the portal test job did not succeed (result=$R_PORTAL)"
+          exit 1
+
+  smoke-tests-run:
+    # Playwright smoke suite against the portal (moved from playwright.yml,
+    # #1428). Path-gated like portal-tests-run; the REQUIRED check is the
+    # "Smoke Tests (Chromium)" AGGREGATE GATE below (job key `smoke-tests`),
+    # NOT this job. In playwright.yml the whole workflow was suppressed by a
+    # top-level `paths:` filter, so a PR touching no portal file never
+    # reported the required check at all and sat permanently pending.
+    name: Smoke Tests Run
+    runs-on: ubuntu-24.04
+    # contents: read for checkout; pull-requests: write only for the
+    # result comment at the end (as in playwright.yml).
+    permissions:
+      contents: read
+      pull-requests: write
+    needs: detect-changes
+    if: needs.detect-changes.outputs.e2e_changed == 'true'
+    # TRK-233: workers=4 runs the 192 specs in ~1.5 min; 10 min is ~6x
+    # headroom (history in playwright.yml before #1428).
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+          # LFS-tracked visual baselines under tests/e2e/*-snapshots/ must be
+          # materialised for toHaveScreenshot(); without lfs the specs see
+          # 130-byte pointer files.
+          lfs: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'npm'
+          # Keyed on the lockfile: `npm ci` installs what it pins.
+          cache-dependency-path: 'tests/e2e/package-lock.json'
+
+      - name: Install E2E dependencies
+        working-directory: tests/e2e
+        run: npm ci
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package-lock.json') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-
+
+      - name: Install Playwright browsers
+        working-directory: tests/e2e
+        run: npx playwright install chromium
+
+      - name: Start Portal server
+        working-directory: tests/e2e
+        run: |
+          npm run serve:portal &
+          echo "Portal server started with PID: $!"
+          for attempt in $(seq 1 30); do
+            echo "Checking Portal readiness (attempt $attempt/30)..."
+            if curl -sf http://localhost:8080/interactive/ > /dev/null 2>&1; then
+              echo "Portal is ready (HTTP 200)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Portal failed to start within 30 seconds"
+          curl -v http://localhost:8080/interactive/ 2>&1 || true
+          exit 1
+        timeout-minutes: 2
+
+      - name: Run Playwright smoke tests
+        working-directory: tests/e2e
+        # --workers=4: 4 vCPUs, threaded portal server (TRK-233).
+        # ⛔ NO `--reporter` here (#1449): it would replace the config's list
+        #   and drop the parked-tests reporter that fails a skipped / fixme
+        #   test naming no issue. Pinned by tests/lint/test_e2e_spec_lint.py.
+        run: npm test -- --workers=4
+        env:
+          CI: 'true'
+          BASE_URL: 'http://localhost:8080/interactive/'
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: tests/e2e/playwright-report/
+          retention-days: 7
+
+      # `always()`, not `failure()` (#1428): tests/ops/test_ci_path_filter_coverage.py
+      # accepts only `always()` as a step condition on a path-gated leg. On a
+      # green run Playwright leaves test-results/ empty, so this uploads
+      # nothing (`if-no-files-found: ignore`).
+      - name: Upload test videos
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-videos
+          path: tests/e2e/test-results/
+          retention-days: 3
+          if-no-files-found: ignore
+
+      # The event check is in the script, not the `if:` (same guard as above).
+      - name: Comment on PR with results
+        if: always()
+        uses: actions/github-script@v9
+        with:
+          script: |
+            if (context.eventName !== 'pull_request') return;
+            const fs = require('fs');
+            if (fs.existsSync('tests/e2e/playwright-report/index.html')) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: '✅ Playwright smoke tests completed. [View detailed report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).'
+              });
+            }
+
+  smoke-tests:
+    # Aggregation gate for smoke-tests-run (#1428). The job name is kept
+    # EXACTLY "Smoke Tests (Chromium)" — the check-run name branch protection
+    # requires — so it reports on every PR, path-skip included. Same verdict
+    # table as portal-tests: success → PASS; skipped while detect said not
+    # needed → PASS; anything else, or detect-changes not green → FAIL.
+    name: Smoke Tests (Chromium)
+    runs-on: ubuntu-24.04
+    # Pure result-aggregation gate — touches no repo content, needs no token.
+    permissions: {}
+    needs: [detect-changes, smoke-tests-run]
+    # always(): a skipped gate would satisfy branch protection.
+    if: always()
+    steps:
+      - name: Verify the smoke test job succeeded (or was path-skipped as not-needed)
+        env:
+          DETECT_RESULT: ${{ needs.detect-changes.result }}
+          E2E_CHANGED: ${{ needs.detect-changes.outputs.e2e_changed }}
+          R_SMOKE: ${{ needs.smoke-tests-run.result }}
+        run: |
+          echo "detect-changes:  $DETECT_RESULT (e2e_changed=$E2E_CHANGED)"
+          echo "smoke-tests-run: $R_SMOKE"
+          if [ "$DETECT_RESULT" != "success" ]; then
+            echo "::error::detect-changes did not succeed — refusing to treat a skipped smoke test as green"
+            exit 1
+          fi
+          if [ "$R_SMOKE" = "success" ]; then
+            echo "Smoke test gate satisfied."
+            exit 0
+          fi
+          if [ "$R_SMOKE" = "skipped" ] && [ "$E2E_CHANGED" != "true" ]; then
+            echo "Smoke test gate satisfied (path-skipped as not-needed)."
+            exit 0
+          fi
+          echo "::error::the smoke test job did not succeed (result=$R_SMOKE)"
           exit 1
 
   lint-docs:

@@ -113,7 +113,7 @@ spec:
       {{- end }}
       {{- if $gcOffInit }}
         # ADR-036 §3 (#2902): gc.auto=0 on a repository that is already in a
-        # pvc / hostPath conf.d (no gitRepoUrl, so git-clone above does not run
+        # pvc conf.d (no gitRepoUrl, so git-clone above does not run
         # and cannot set it). No repository yet = nothing to set: skipped, not
         # failed. Same pinned alpine/git image as git-clone — tools/v2.9.0's
         # da-tools image has no git, and a da-tools container running git is
@@ -482,8 +482,12 @@ spec:
             - --alpha-config={{ include "tenant-api.oauth2ProxyConfigPath" . }}
             - --redirect-url={{ .Values.oauth2Proxy.redirectUrl }}
             - --email-domain={{ .Values.oauth2Proxy.emailDomain }}
-            - --skip-auth-route=^/health$
-            - --skip-auth-route=^/ready$
+            # ADR-027 §5, §9 item 3: an unauthenticated request under /api/
+            # gets 401, not a redirect to the IdP; the portal turns it into
+            # a sign-in. No route skips login: /api/ never may (§2), and the
+            # rest is the portal, which needs a session too. Health checks
+            # use /ping, oauth2-proxy's own.
+            - --api-route=^/api/
             - --cookie-secure={{ .Values.oauth2Proxy.cookieSecure }}
             - --cookie-httponly={{ .Values.oauth2Proxy.cookieHttpOnly }}
             - --cookie-samesite={{ .Values.oauth2Proxy.cookieSameSite }}
@@ -527,6 +531,43 @@ spec:
               port: 4180
             initialDelaySeconds: 5
             periodSeconds: 5
+
+        # ── Sidecar: portal static files (ADR-027 §5) ─────────────────────────
+        # Serves the portal behind oauth2-proxy's "/" upstream. It listens on
+        # the pod's loopback only (tenant-api.portalAddress), reads no
+        # identity header and forwards nothing: it runs the chart's nginx
+        # config (`-c`), never the image's own, which forwards /api/v1/ and
+        # /preview for the standalone da-portal chart.
+        - name: portal
+          image: "{{ .Values.portal.image.repository }}:{{ .Values.portal.image.tag }}{{ with .Values.portal.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.portal.image.pullPolicy }}
+          command: ["nginx"]
+          args: ["-c", "{{ include "tenant-api.portalConfigDir" . }}/nginx.conf", "-g", "daemon off;"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: portal-nginx-config
+              mountPath: {{ include "tenant-api.portalConfigDir" . }}
+              readOnly: true
+            - name: portal-tmp
+              mountPath: /tmp
+          resources:
+            {{- toYaml .Values.portal.resources | nindent 12 }}
+          # Loopback only, so the kubelet cannot reach it over HTTP: the
+          # probe runs the image's wget inside the container.
+          readinessProbe:
+            exec:
+              command: ["wget", "-q", "-O", "/dev/null", "http://{{ include "tenant-api.portalAddress" . }}/healthz"]
+            periodSeconds: 10
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["wget", "-q", "-O", "/dev/null", "http://{{ include "tenant-api.portalAddress" . }}/healthz"]
+            periodSeconds: 20
+            timeoutSeconds: 3
         {{- end }}
 
       volumes:
@@ -548,6 +589,12 @@ spec:
         - name: oauth2-proxy-config
           configMap:
             name: {{ include "tenant-api.oauth2ProxyConfigMap" . }}
+        - name: portal-nginx-config
+          configMap:
+            name: {{ include "tenant-api.portalConfigMap" . }}
+        - name: portal-tmp
+          emptyDir:
+            sizeLimit: 16Mi
         # defaultMode 0440: readable by the pod's fsGroup (oauth2-proxy runs
         # as the pod-level uid/gid), not by others.
         - name: oauth2-proxy-client-secret

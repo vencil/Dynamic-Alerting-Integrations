@@ -36,14 +36,21 @@ type: application
 #          generator.enabled): tenant-api gets --generator-socket (and
 #          --deploy-policy with a policy ConfigMap); conf.d must hold a git
 #          repository or the render fails. policy.unavailableOpen removed.
-version: 2.9.24
+# 2.9.25 — #1018: confDir.type=hostPath REMOVED (BREAKING): it failed Pod Security
+#          baseline and could not run with the chart's defaults (fsGroup does not
+#          apply to a host directory). The render fails with migration steps;
+#          new confDir.pvc.existingClaim mounts an operator-made PVC (e.g. bound to
+#          a local PV holding the repository). values.schema.json now constrains
+#          confDir (type enum, no unknown keys), so `confDir.type=PVC` fails
+#          instead of silently becoming emptyDir.
+version: 2.9.25
 # appVersion == version == release tag (#3228). release.yaml publishes the
 # tenant-api image as `:v<version>` from the same commit as the chart, and the
 # deployment defaults to `:v<appVersion>`, so the two must be the same number
 # or the chart runs a binary older than its own templates. Move both with
 # `bump_docs.py --tenant-api <ver>`; release.yaml's release-tenant-api job and
 # tests/helm/test_image_tag_derivation.py fail when they differ.
-appVersion: "2.9.24"
+appVersion: "2.9.25"
 keywords:
   - dynamic-alerting
   - tenant-management

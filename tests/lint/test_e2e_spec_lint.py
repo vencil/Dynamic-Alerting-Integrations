@@ -1007,9 +1007,10 @@ def test_the_ci_legs_signal_is_not_silently_switched_off() -> None:
     """⛔ What this can prove, and what it deliberately does NOT claim.
 
     It does NOT prove A-13 is enforced. Enforcement lives in branch protection,
-    and neither this job nor `Smoke Tests (Chromium)` is among main's required
-    contexts (checked against the API on 2026-08-14), so this leg can report
-    red and a merge still happens. No in-repo test can read that setting. This
+    and this job is not among main's required contexts (checked against the
+    API on 2026-08-14), so this leg can report red and a merge still happens.
+    (`Smoke Tests (Chromium)`, which runs the parked-tests reporter, IS
+    required since #1428 — reported by ci.yml's `smoke-tests` gate.) No in-repo test can read that setting. This
     test's earlier name — "cannot be switched off without this test noticing" —
     promised exactly that, and a blind review produced the counterexample: one
     `- '!tests/e2e/**'` line in `paths:` switched the leg off with this file at
@@ -1499,9 +1500,10 @@ def test_no_playwright_invocation_replaces_the_reporter_list():
     line turns the gate off with every check still green.
     """
     found = _playwright_invocations()
-    assert any(w.startswith("playwright.yml::") for w, _c in found), (
-        "found no Playwright invocation in playwright.yml — this scan stopped "
-        f"seeing the CI run, so it checks nothing: {found}")
+    # The CI smoke run lives in ci.yml since #1428 (`smoke-tests-run`).
+    assert any(w == "ci.yml::smoke-tests-run" for w, _c in found), (
+        "found no Playwright invocation in ci.yml::smoke-tests-run — this scan "
+        f"stopped seeing the CI run, so it checks nothing: {found}")
     overriding = _overriding(found)
     assert not overriding, (
         "these Playwright invocations pass --reporter / -c / --config, which "

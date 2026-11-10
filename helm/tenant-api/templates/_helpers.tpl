@@ -44,16 +44,33 @@ cross namespaces.
 {{- end }}
 
 {{/*
-conf-dir volume definition — switches between emptyDir, hostPath, and PVC.
+conf-dir volume definition — emptyDir or a PVC (the chart's own, or
+confDir.pvc.existingClaim). The legal types are the branches here; the schema's
+confDir.type enum must equal them plus the "hostPath" tombstone
+(tests/helm/test_tenant_api_confdir.py).
+
+⛔ hostPath was removed (#1018): it was the only chart option that fails even
+Pod Security `baseline`, and with this chart's defaults it could not run at all
+(fsGroup does not apply to hostPath, and git refuses a repository another uid
+owns). "hostPath" stays in the schema enum, and confDir.hostPath stays as a key,
+only so the old values reach this fail with the migration steps instead of a
+bare schema error — and so a values file started from `helm show values`
+(which carried `hostPath: ""`) still renders.
 */}}
+{{- define "tenant-api.confDirGuard" -}}
+{{- if or (eq .Values.confDir.type "hostPath") .Values.confDir.hostPath -}}
+{{- fail "confDir.type=hostPath (and confDir.hostPath) were removed (#1018): a hostPath volume fails Pod Security baseline, and fsGroup does not apply to it. Put the repository on a PersistentVolume instead — e.g. a local or hostPath PV on the node, chown'd to podSecurityContext.runAsUser (65534 by default) — bind a PVC to it, then set confDir.type=pvc and confDir.pvc.existingClaim=<that PVC>; or set gitRepoUrl and let the chart clone. Remove confDir.hostPath from your values." -}}
+{{- end -}}
+{{- if and .Values.confDir.pvc.existingClaim (ne .Values.confDir.type "pvc") -}}
+{{- fail (printf "confDir.pvc.existingClaim=%s is only read with confDir.type=pvc (got %q): without it the claim is ignored and conf.d is an emptyDir. Set confDir.type=pvc, or clear existingClaim." .Values.confDir.pvc.existingClaim .Values.confDir.type) -}}
+{{- end -}}
+{{- end }}
+
 {{- define "tenant-api.confDirVolume" -}}
-{{- if eq .Values.confDir.type "hostPath" }}
-hostPath:
-  path: {{ .Values.confDir.hostPath | quote }}
-  type: DirectoryOrCreate
-{{- else if eq .Values.confDir.type "pvc" }}
+{{- include "tenant-api.confDirGuard" . -}}
+{{- if eq .Values.confDir.type "pvc" }}
 persistentVolumeClaim:
-  claimName: {{ include "tenant-api.name" . }}-conf
+  claimName: {{ .Values.confDir.pvc.existingClaim | default (printf "%s-conf" (include "tenant-api.name" .)) }}
 {{- else }}
 emptyDir: {}
 {{- end }}
@@ -325,8 +342,12 @@ tenant-api.humanSocketPath, not a value.)
 {{- /* ADR-036 §3: the generator reads only git objects; "git 為必要". An
      emptyDir conf.d with no gitRepoUrl never holds a repository, so the
      container could only crash-loop (and keep the pod out of Ready). */ -}}
-{{- if and (not .Values.gitRepoUrl) (not (has .Values.confDir.type (list "pvc" "hostPath"))) -}}
-{{- fail "the generator container (required, #2903) needs a git repository in conf.d: set gitRepoUrl, or confDir.type=pvc / hostPath holding an existing repository. An emptyDir conf.d without gitRepoUrl is never a repository, and the generator reads only git objects (ADR-036 §3, #2902)." -}}
+{{- /* Before the repository check: a removed confDir.type=hostPath, or an
+     existingClaim the type ignores, has to read as that, not as "no
+     repository". */ -}}
+{{- include "tenant-api.confDirGuard" . -}}
+{{- if and (not .Values.gitRepoUrl) (ne .Values.confDir.type "pvc") -}}
+{{- fail "the generator container (required, #2903) needs a git repository in conf.d: set gitRepoUrl, or confDir.type=pvc (optionally confDir.pvc.existingClaim) holding an existing repository. An emptyDir conf.d without gitRepoUrl is never a repository, and the generator reads only git objects (ADR-036 §3, #2902)." -}}
 {{- end -}}
 {{- /* ADR-036 §3: the container's request equals its limit. */ -}}
 {{- $req := ($g.resources | default dict).requests | default dict -}}
@@ -422,9 +443,11 @@ the humanSocket key, and nothing outside the pod names this path.
 The oauth2-proxy structured config (--alpha-config). Built as a dict and
 rendered with toYaml, so every value is quoted as YAML needs.
 
-  upstreamConfig        one upstream: tenant-api's Unix socket, the only
-                        place it serves its API (ADR-027 §2; port 8080 has
-                        only /health, /ready and /metrics)
+  upstreamConfig        two upstreams (ADR-027 §10): /api/ to tenant-api's
+                        Unix socket, the only place it serves its API
+                        (ADR-027 §2; port 8080 has only /health, /ready and
+                        /metrics), and / to the portal container
+                        (tenant-api.portalAddress)
   injectRequestHeaders  X-Forwarded-Email ← email, X-Forwarded-Groups ←
                         groups, plus one header per oauth2Proxy.claimHeaders
                         entry (claim name → header name); the client's copy
@@ -475,10 +498,124 @@ rendered with toYaml, so every value is quoted as YAML needs.
 {{- with $o.claimHeaders -}}
 {{- $_ := set $provider "additionalClaims" (keys . | sortAlpha) -}}
 {{- end -}}
+{{- /* ADR-027 §5, §10: /api/ → tenant-api's Unix socket, everything else →
+     the portal static-file container in this pod (loopback only). */ -}}
+{{- $portal := printf "http://%s" (include "tenant-api.portalAddress" .) -}}
 {{- $config := dict
-      "upstreamConfig" (dict "upstreams" (list (dict "id" "tenant-api" "path" "/" "uri" $upstream)))
+      "upstreamConfig" (dict "upstreams" (list
+        (dict "id" "api" "path" "/api/" "uri" $upstream)
+        (dict "id" "portal" "path" "/" "uri" $portal)))
       "injectRequestHeaders" $headers
       "providers" (list $provider)
       "server" (dict "bindAddress" "0.0.0.0:4180") -}}
 {{- toYaml $config -}}
+{{- end -}}
+
+{{/*
+The portal static-file container (ADR-027 §5): it listens on the pod's
+loopback only, so nothing outside the pod reaches it but through
+oauth2-proxy's "/" upstream. A constant: nothing else names it.
+*/}}
+{{- define "tenant-api.portalAddress" -}}
+127.0.0.1:8081
+{{- end -}}
+{{- define "tenant-api.portalConfigDir" -}}
+/etc/portal-nginx
+{{- end -}}
+{{- define "tenant-api.portalConfigMap" -}}
+{{ include "tenant-api.name" . }}-portal-nginx-{{ include "tenant-api.portalNginxConfig" . | sha256sum | trunc 10 }}
+{{- end -}}
+
+{{/*
+The security headers every portal response carries. Repeated in each
+location that sets add_header: nginx drops the server-level add_header
+directives in a location that has its own.
+*/}}
+{{- define "tenant-api.portalSecurityHeaders" -}}
+add_header X-Frame-Options "DENY" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'self'" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+{{- end -}}
+
+{{/*
+The whole nginx configuration the portal container loads (`nginx -c`): it
+serves the image's static files and nothing else. ⛔ No proxy_pass or any
+other *_pass, no njs, no include but mime.types (ADR-027 §5, §9 item 3:
+tests/helm/test_tenant_api_portal_container.py). The image's own
+/etc/nginx/nginx.conf and conf.d (which forward /api/v1/ and /preview for
+the standalone da-portal chart) are never read. Runs as the pod's non-root
+uid on a read-only root filesystem: pid and temp paths under /tmp.
+*/}}
+{{- define "tenant-api.portalNginxConfig" -}}
+worker_processes 1;
+pid /tmp/nginx.pid;
+error_log /dev/stderr notice;
+
+events {
+    worker_connections 256;
+}
+
+http {
+    include /etc/nginx/mime.types;
+    default_type application/octet-stream;
+    access_log /dev/stdout;
+    server_tokens off;
+    sendfile on;
+    client_body_temp_path /tmp/client_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+
+    server {
+        listen {{ include "tenant-api.portalAddress" . }};
+        server_name _;
+        root /usr/share/nginx/html;
+        index interactive/index.html;
+        {{- include "tenant-api.portalSecurityHeaders" . | nindent 8 }}
+
+        location ~* \.(js|css|png|svg|ico|woff2?)$ {
+            expires 7d;
+            add_header Cache-Control "public, immutable";
+            {{- include "tenant-api.portalSecurityHeaders" . | nindent 12 }}
+        }
+
+        location ~* \.(json|yaml)$ {
+            expires -1;
+            add_header Cache-Control "no-cache";
+            {{- include "tenant-api.portalSecurityHeaders" . | nindent 12 }}
+        }
+
+        # /api/ is oauth2-proxy's other upstream and never reaches this
+        # container; if it ever did, a 404 says so instead of the SPA page.
+        location /api/ {
+            return 404;
+        }
+
+        location / {
+            try_files $uri $uri/ /interactive/index.html;
+        }
+
+        location = /healthz {
+            access_log off;
+            default_type text/plain;
+            return 200 "ok\n";
+        }
+
+        location ~ /\. {
+            deny all;
+            access_log off;
+            log_not_found off;
+        }
+
+        location ~ ~$ {
+            deny all;
+            access_log off;
+            log_not_found off;
+        }
+    }
+}
 {{- end -}}

@@ -58,11 +58,88 @@
         "secretName": {}
       }
     },
+    "portal": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "ADR-027 §5: the portal static-file container in this pod (rendered with oauth2Proxy.enabled).",
+      "properties": {
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "repository",
+            "tag",
+            "digest"
+          ],
+          "properties": {
+            "repository": {
+              "type": "string",
+              "minLength": 1
+            },
+            "tag": {
+              "type": "string",
+              "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+            },
+            "digest": {
+              "type": "string",
+              "pattern": "^(sha256:[0-9a-f]{64})?$"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ]
+            }
+          }
+        },
+        "resources": {
+          "type": "object"
+        }
+      }
+    },
     "tenantApi": {
       "type": "object"
     },
     "confDir": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "description": "conf.d volume. emptyDir (needs gitRepoUrl) or pvc. \"hostPath\" is a removed value kept only so old values reach the template's fail with migration steps (#1018). The enum minus that tombstone equals the template's branches (tests/helm/test_tenant_api_confdir.py).",
+          "type": "string",
+          "enum": [
+            "emptyDir",
+            "pvc",
+            "hostPath"
+          ]
+        },
+        "hostPath": {
+          "description": "Removed (#1018). Kept as a key so values started from `helm show values` (which carried hostPath: \"\") still render; any non-empty value fails the render with migration steps.",
+          "type": "string"
+        },
+        "pvc": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "storageClass": {
+              "type": "string"
+            },
+            "size": {
+              "description": "A Kubernetes quantity string such as \"1Gi\"; a bare number would be read as bytes.",
+              "type": "string"
+            },
+            "accessMode": {
+              "type": "string"
+            },
+            "existingClaim": {
+              "description": "Use this PVC (e.g. bound to a local PV holding the repository) instead of creating <name>-conf.",
+              "type": "string"
+            }
+          }
+        }
+      }
     },
     "gitRepoUrl": {},
     "writeBack": {

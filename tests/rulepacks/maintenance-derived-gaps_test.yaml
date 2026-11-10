@@ -1,0 +1,56 @@
+# promtool proof (#3678) for maintenance-derived-gaps.rules.yaml: both shapes
+# break the maintenance contract, which is why generate_rulepack_derived.py
+# --check refuses them in rule packs (checks 5 and 6).
+#
+# Tenant ta is in maintenance, tb is not; both exporters are down.
+rule_files:
+  - ./maintenance-derived-gaps.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'up{job="gap-demo", tenant="ta"}'
+        values: '0x5'
+      - series: 'up{job="gap-demo", tenant="tb"}'
+        values: '0x5'
+      - series: 'user_state_filter{filter="maintenance", tenant="ta"}'
+        values: '1x5'
+    alert_rule_test:
+      # The mute alert behaves: only tb fires.
+      - eval_time: 2m
+        alertname: GapScrapeGate
+        exp_alerts:
+          - exp_labels: {job: gap-demo, tenant: tb, maintenance: mute}
+      # F1: the page alert should fire for BOTH tenants (page = fires in a
+      # maintenance window); through ALERTS it fires for tb only — ta is muted.
+      - eval_time: 2m
+        alertname: GapPageViaAlerts
+        exp_alerts:
+          - exp_labels: {job: gap-demo, tenant: tb, maintenance: page}
+      # F2: the mute alert should stay quiet for ta; with `tenant` dropped the
+      # clause matches nothing and it fires (no tenant label at all).
+      - eval_time: 2m
+        alertname: GapMuteDropsTenant
+        exp_alerts:
+          - exp_labels: {job: gap-demo, maintenance: mute}
+
+  # Only ta (in maintenance) is down: a working mute alert is silent.
+  - interval: 1m
+    input_series:
+      - series: 'up{job="gap-demo", tenant="ta"}'
+        values: '0x5'
+      - series: 'up{job="gap-demo", tenant="tb"}'
+        values: '1x5'
+      - series: 'user_state_filter{filter="maintenance", tenant="ta"}'
+        values: '1x5'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: GapScrapeGate
+        exp_alerts: []
+      # F2: fires anyway — the clause is there only in its spelling.
+      - eval_time: 2m
+        alertname: GapMuteDropsTenant
+        exp_alerts:
+          - exp_labels: {job: gap-demo, maintenance: mute}

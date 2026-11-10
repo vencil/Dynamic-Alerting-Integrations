@@ -98,6 +98,30 @@ oauth2Proxy:
   secretName: oauth2-proxy-secrets
 
 # tenant-api application settings
+# ADR-027 §5: the portal's static files, served from a container in this pod
+# behind oauth2-proxy's "/" upstream (the API is /api/ → tenant-api's Unix
+# socket). Rendered with oauth2Proxy.enabled. The container listens on the
+# pod's loopback only and runs the chart's nginx config, which forwards
+# nothing (templates/_helpers.tpl tenant-api.portalNginxConfig).
+portal:
+  image:
+    # The portal release line (portal/v*): `bump_docs.py --portal` rewrites
+    # this tag at release time (two-line repository/tag pin), as
+    # `--tools` does generator.image. A first-party image, so not Renovate's.
+    repository: ghcr.io/vencil/da-portal
+    tag: "v2.9.0"
+    # Optional digest pin. Empty = tag only. ⛔ When set, the digest is what
+    # runs: `--set portal.image.tag=…` alone would not change the image.
+    digest: ""
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 10m
+      memory: 16Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
 tenantApi:
   listenAddr: ":8080"
   reloadInterval: "30s"
@@ -188,19 +212,31 @@ tenantApi:
 
 # conf.d volume: holds tenant YAML files and the git repository.
 # For production, set type=pvc and provide a storageClass.
-# For Kind dev, set type=hostPath and provide path.
+# A repository already on a node (kind dev, single-node, a host-side `git pull`):
+# put it on a PersistentVolume — a local or hostPath PV, its directory owned by
+# podSecurityContext.runAsUser (fsGroup does not apply to host directories) —
+# bind a PVC to it and name it in pvc.existingClaim. The pod itself then needs
+# no hostPath and stays within Pod Security `restricted`.
 confDir:
-  # type: emptyDir | hostPath | pvc
+  # type: emptyDir | pvc   (hostPath was removed in #1018: the render fails with
+  # these migration steps if it is still set)
   type: emptyDir
-  hostPath: ""        # used when type=hostPath
+  hostPath: ""        # removed (#1018); must stay empty
   pvc:
     storageClass: ""
     size: 1Gi
     accessMode: ReadWriteOnce
+    # Use this PVC instead of creating <name>-conf (the chart then creates none).
+    # Needs type: pvc — with any other type the render fails rather than
+    # ignoring it. Moving an install that used the chart's own PVC: that PVC is
+    # kept (helm.sh/resource-policy: keep) and stops being managed, with the
+    # repository still in it — point existingClaim at <name>-conf to keep using
+    # it, or move the data and delete it yourself.
+    existingClaim: ""
 
 # Git repository to clone on startup (optional for `direct`; required for the
 # PR modes, and then it must be an https:// URL). Leave empty to skip the init
-# container (use hostPath or a pre-populated PVC instead). Do not put
+# container (use a pre-populated PVC instead, see confDir). Do not put
 # credentials in this URL: it is stored in a ConfigMap. Credentials for a
 # private repo come from writeBack.token, offered only to this URL's host.
 # tenant-api refuses to start (and to write) while the repository's git config
@@ -428,7 +464,7 @@ federation:
 #
 # ⛔ REQUIRED since #2903 — there is no switch. The chart refuses to render
 # without what the container needs: podSecurityContext.runAsUser, and a git
-# repository in conf.d (gitRepoUrl, or confDir.type pvc / hostPath holding
+# repository in conf.d (gitRepoUrl, or confDir.type pvc holding
 # one; "git 為必要", ADR-036 §3). Without the container answering, every
 # content-changing write is refused with 503 VALIDATOR_UNAVAILABLE; reads
 # keep working.
@@ -447,7 +483,7 @@ federation:
 # prunes loose objects on its own, so every tenant-api commit leaves its
 # objects loose and the repository only grows. Reclaim space by hand in a
 # maintenance window: scale the Deployment to 0 so nothing reads or writes the
-# repository, run `git gc` on it (for a pvc / hostPath conf.d, from a one-off
+# repository, run `git gc` on it (for a pvc conf.d, from a one-off
 # pod mounting the same volume as the same uid; an emptyDir conf.d is cloned
 # afresh on every pod start), then scale back to 1. Why it must not run by itself: the
 # generator reads git objects of a base commit WHILE tenant-api commits, and
