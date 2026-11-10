@@ -105,6 +105,7 @@ modules:
       receiver_type_name: "#1560 ⑤-b _type_name with its text through receiver_value_repr; pinned with it by test_no_message_quotes_a_credential_value"
       site_path_text: "#1560 ⑤-b spelling of one CREDENTIAL_REF_SITES path (keys joined by '.', '*' kept, '[]' appended); every row's text pinned by tests/ops/test_grar_secret_ref.py::test_shared_secret_fields_are_the_table_paths"
       shared_secret_field_texts: "#1560 ⑤-b set of site_path_text over CREDENTIAL_REF_SITES (data, no law); pinned with site_path_text by tests/ops/test_grar_secret_ref.py::test_shared_secret_fields_are_the_table_paths"
+      credential_shape_problems: "#1560 ⑤-b a walk of the credential site tables (data-table-driven, not a numeric/string law); example-pinned"
       value_paths_to_mask: "#1560 ⑤-a the masking list (every written-out scalar on or below a credential row); example-pinned by tests/shared/test_credential_plaintext_policy.py and the canary tests of tests/ops/test_migrate_credentials.py"
 
   scripts/tools/_lib_label.py:

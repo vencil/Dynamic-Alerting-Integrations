@@ -513,3 +513,76 @@ def test_a_route_entry_with_a_type_label_is_not_a_receiver(tmp_path):
                                              "receiver": _REF}]}}}})})
     _rc, _text, findings = _validate(d)
     assert not [f for f in findings if f["kind"] == "credential_unjudged"], findings
+
+
+# ── 憑證欄位的形狀讀不了：既不是 finding 也不是參照，沒人綁的 profile 又沒有 schema 檢查 ──
+
+_UNBOUND = "routing_profiles:\n  unbound:\n    receiver:\n{body}"
+
+
+@pytest.mark.parametrize("body,field", [
+    ("      type: slack\n      api_url: [https://hooks.slack.com/services/T/B/" + CANARY + "]\n",
+     "routing_profiles.unbound.receiver.api_url"),
+    ("      type: slack\n      api_url: {url: https://hooks.slack.com/services/T/B/" + CANARY + "}\n",
+     "routing_profiles.unbound.receiver.api_url"),
+    # A container of the wrong shape on the way to the site.
+    ("      type: webhook\n      url: https://noc.example.com/a\n"
+     "      http_config: [https://u:" + CANARY + "@proxy.example.com]\n",
+     "routing_profiles.unbound.receiver.http_config"),
+    ("      type: webhook\n      url: https://noc.example.com/a\n"
+     "      http_config:\n        http_headers:\n          X-Token:\n            secrets: " + CANARY + "\n",
+     "routing_profiles.unbound.receiver.http_config.http_headers.X-Token.secrets"),
+])
+def test_a_credential_field_that_is_not_a_value_is_unjudged(tmp_path, body, field):
+    d = _tree(tmp_path, {"_routing_profiles.yaml": _UNBOUND.format(body=body)})
+    rc, text, findings = _validate(d)
+    assert rc == 1, text
+    assert _credential(findings) == [("credential_unjudged", "_routing_profiles.yaml", field,
+                                      "validate")]
+    assert "credential_not_value" in text
+    assert CANARY not in text
+
+
+def test_a_reference_at_the_same_place_is_still_judged_fine(tmp_path):
+    d = _tree(tmp_path, {"_routing_profiles.yaml": _UNBOUND.format(
+        body="      type: slack\n      api_url: {secret: {key: slack-url}}\n")})
+    rc, text, findings = _validate(d)
+    assert _credential(findings) == [], text
+
+
+def test_migrate_credentials_lists_a_credential_field_that_is_not_a_value(tmp_path):
+    d = _tree(tmp_path, {"_routing_profiles.yaml": _UNBOUND.format(
+        body=f"      type: slack\n      api_url: [https://hooks.slack.com/services/T/B/{CANARY}]\n")})
+    p = subprocess.run([sys.executable, str(_MIGRATE), "--config-dir", str(d), "--json"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert p.returncode == 1, p.stderr
+    doc = json.loads(p.stdout)
+    assert [(u["file"], u["reason"]) for u in doc["unjudged"]] == [
+        ("_routing_profiles.yaml", "credential_not_value")]
+    assert CANARY not in p.stdout + p.stderr
+
+
+# ── 比 Python 遞迴上限還深的巢狀，深掃時不得 RecursionError ─────────────────
+
+def test_the_deep_scan_walks_a_tree_deeper_than_the_recursion_limit():
+    from _grar_parse import _not_walked
+    depth = sys.getrecursionlimit() * 3
+    deep: object = "x"
+    for _ in range(depth):
+        deep = [deep]
+    hidden: object = {"receiver": {"type": "slack", "api_url": "u"}}
+    for _ in range(depth):
+        hidden = [hidden]
+    data = {"tenants": {"t-a": {"_metadata": {"x": deep}, "_routing": {"x": hidden}}}}
+    found = _not_walked(data, set())
+    assert found == [("tenants", "t-a", "_routing", "x", *([0] * depth), "receiver")]
+
+
+def test_a_deep_value_outside_routing_does_not_crash_the_generator(tmp_path):
+    depth = 3000
+    d = _tree(tmp_path, {"t-a.yaml": (
+        "tenants:\n  t-a:\n    cpu_usage_percent: '85'\n    _metadata:\n      x: "
+        + "[" * depth + "]" * depth + "\n")})
+    rc, text, _ = _validate(d)
+    assert "RecursionError" not in text
+    assert rc in (0, 1), text

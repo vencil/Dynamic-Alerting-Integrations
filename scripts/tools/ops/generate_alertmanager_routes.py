@@ -62,6 +62,7 @@ from _lib_io import (  # noqa: E402  (#1538 output-layer escaping, #1789)
 # #2766: the --findings-json temp-file write. Module form, because the bare
 # name is already a `_lib_python` re-export in the F401 block below.
 import _lib_io  # noqa: E402
+from _lib_validation import key_segment  # noqa: E402  (#1560 ⑤-b: keys into findings)
 from _lib_compat import read_shipped_da_tools_version  # noqa: E402  (#2766 VERSION)
 from _lib_python import (  # noqa: E402, F401
     write_text_secure,
@@ -1479,7 +1480,7 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> list[str]:
             kind=_KEY_VERDICT_KINDS[f.kind],
             blocks="validate" if f.blocks else "never",
             tenant=f.tenants[0] if len(f.tenants) == 1 else None,
-            file=f.file, field=f.key))
+            file=f.file, field=key_segment(f.key)))
     undecidable = _lib_key_verdict.undecidable_line(verdict)
     if undecidable is not None:
         stops = verdict.undecidable_blocks
@@ -1975,7 +1976,9 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # Load tenant configs (routing + dedup + schema warnings + enforced routing)
     # #1460: the tree carries the record of the files that did not parse, and
     # that record decides whether anything below may call itself a result.
-    tree = load_tenant_tree(args.config_dir, strict_policies=args.strict)
+    tree = load_tenant_tree(args.config_dir, strict_policies=args.strict,
+                            secrets=policy.secret_binding(args.mount_root),
+                            allowed_domains=allowed_domains)
     routing_configs = tree.routing_configs
     dedup_configs = tree.dedup_configs
     schema_warnings = tree.schema_warnings

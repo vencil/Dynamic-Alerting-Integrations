@@ -15,9 +15,7 @@
   的 receiver 的 mapping，與一個帶 userinfo 的 canary URL 字串。
 * 跑 `--validate --strict --findings-json`：stdout、stderr、findings 都不得出現
   canary。PATH 裡不放 amtool：amtool 的原文轉印是另一條通道（另開票）。
-* 每格還要證明那個位置真的被讀了（第 6 輪）：findings 不得為空、要有該鍵角色的
-  標記 kind（`_marker_kinds`），且不得出現情境帶不出的 kind（`_allowed_kinds`）。
-  沒有判到東西的 run 也沒有 canary 可漏，只驗「沒漏」會把它當成綠。
+* 每格還要證明那個位置真的被讀了：沒有判到東西的 run 也沒有 canary 可漏。
 """
 from __future__ import annotations
 
@@ -90,7 +88,13 @@ def _canary_values(tag: str) -> dict[str, object]:
     return {"receiver_mapping": {"receiver": {"type": "slack",
                                               "api_url": f"https://hooks.example/{canary}"}},
             "url_string": f"https://u:CANARYPW@hooks.example/{canary}",  # trufflehog:ignore
-            "key_name": 1}
+            "key_name": 1,
+            # A header NAME that is a credential URL: a finding's field and
+            # message are a path through the author's keys.
+            "header_name": {"type": "webhook", "url": "https://noc.example.com/a",
+                            "http_config": {"http_headers": {
+                                f"https://u:CANARYPW@hooks.example/{canary}": {  # trufflehog:ignore
+                                    "secrets": ["written-out"]}}}}}
 
 
 def _place(where: str, key: str, value: object) -> dict[str, dict]:
@@ -174,18 +178,19 @@ _CASES = [(where, key, kind) for where, keys in sorted(_PLACES.items()) for key 
 _KEY_CANARY = "https://u:CANARYPW@hooks.example/CANARY-key-name"  # trufflehog:ignore
 _KEY_PLACES = sorted(set(_PLACES) - {"tenant"})
 _CASES += [(where, _KEY_CANARY, "key_name") for where in _KEY_PLACES]
+_CASES += [(where, "receiver", "header_name") for where in _KEY_PLACES]
+# A tenant-level `_routing…` key is judged apart from a key inside a block.
+_CASES += [("tenant", "_routing" + _KEY_CANARY, "key_name")]
 
 
-#: Round 6, N-2: the finding that proves the run read the value at that
-#: place — a run that read nothing (or judged the wrong thing) has no canary
-#: to leak either. Keyed by the key's role, not by place; a case whose
-#: findings hold none of its marker kinds fails.
+#: The finding that proves the run read the value at that place — a run that
+#: read nothing has no canary to leak either. Keyed by the key's role.
 _TIMING = ("group_wait", "group_interval", "repeat_interval")
 _MATCHERS = ("alertname", "metric_group")
-#: the override entry was read (its receiver repeats the block's, or its
-#: matchers clash with another entry's).
-_OVERRIDE_READ = {"redundant_override_receiver", "duplicate_override_matcher",
-                  "conflicting_override_matcher"}
+#: The whole-tree refusals: the tree is refused before any receiver is
+#: judged, so they come alone, with the refusal's framing line.
+_REFUSING = {"routing_group_by_invalid", "routing_enforced_enabled_invalid",
+             "routing_profile_invalid"}
 
 
 def _marker_kinds(where: str, key: str, kind: str) -> set[str]:
@@ -193,6 +198,10 @@ def _marker_kinds(where: str, key: str, kind: str) -> set[str]:
         # Route entries refuse a key they do not know; every other place
         # ignores it, and says so.
         return {"invalid_route_entry"} if where.startswith("route_entry") else {"routing_key_ignored"}
+    if kind == "header_name":
+        # The receiver at "receiver" was walked: its plaintext header secret
+        # is judged (the header NAME is the canary).
+        return {"credential_plaintext"}
     if key in _TIMING:
         return {"timing_value_replaced"}
     if key == "group_by":
@@ -208,26 +217,46 @@ def _marker_kinds(where: str, key: str, kind: str) -> set[str]:
     if key == "match":
         return {"routing_enforced_match_invalid"} if where == "routing_enforced" else {"invalid_route_entry"}
     if key in _MATCHERS:
-        # A URL is a valid matcher string: only the entry having been read
-        # shows; a mapping is not a string.
-        return {"routing_value_not_string"} if kind == "receiver_mapping" else _OVERRIDE_READ
+        if kind == "receiver_mapping":
+            return {"routing_value_not_string"}  # a mapping is not a string
+        # A URL is a valid matcher string. What proves THIS key was read:
+        # two entries with the same value (the _dup place), or metric_group
+        # beside the entry's alertname (one matcher per entry).
+        if where.endswith("_dup"):
+            return {"duplicate_override_matcher"}
+        if key == "metric_group":
+            return {"conflicting_override_matcher"}
+        return set()  # nothing about a lone valid alertname is reported
     if key == "_routing_profile":
-        # ⚠️ A string naming no profile is a WARN the findings classify as
-        # `unclassified` (no kind of its own yet); a mapping is a type error.
-        return {"routing_profile_invalid"} if kind == "receiver_mapping" else {"unclassified"}
+        # A mapping is a type error; a string naming no profile is the
+        # unknown-profile WARN (round 7: its own kind, da-guard's spelling).
+        return {"routing_profile_invalid"} if kind == "receiver_mapping" else {"unknown_routing_profile"}
     raise KeyError((where, key, kind))
 
 
-def _allowed_kinds(where: str, key: str, kind: str) -> set[str]:
-    """The marker plus what the case's surroundings legitimately add."""
-    out = _marker_kinds(where, key, kind) | {"refusal_summary"}
-    if where.startswith("override_entry"):
-        out |= _OVERRIDE_READ
-    if kind == "receiver_mapping" or key in ("receiver", "overrides", "routes"):
+def _expected_kinds(where: str, key: str, kind: str) -> set[str]:
+    """Exactly the kinds the case causes, by what it writes: its marker, and
+    what its surroundings add."""
+    marker = _marker_kinds(where, key, kind)
+    if marker & _REFUSING:
+        return marker | {"refusal_summary"}
+    out = set(marker)
+    if kind == "key_name" and where == "tenant":
+        # A tenant key no reader reads is the shared key verdict's too.
+        out.add("key_unread")
+    override = where.startswith("override_entry")
+    if override and key != "receiver" and kind != "header_name":
+        # The entry's receiver is the block's own: said once per entry.
+        out.add("redundant_override_receiver")
+    if where.endswith("_dup") and where.startswith("override_entry"):
+        out.add("duplicate_override_matcher")  # two identical entries
+    if override and key == "metric_group" and not where.endswith("_dup"):
+        out.add("conflicting_override_matcher")  # beside the entry's alertname
+    if kind == "receiver_mapping" or (kind == "url_string" and key in ("receiver", "overrides", "routes")):
         # A receiver the walk does not reach (a mapping where a value goes,
-        # a receiver missing its fields, a list that is not one).
+        # a receiver that is a string, a list slot that is a string).
         out.add("credential_unjudged")
-    if kind == "receiver_mapping" and key == "match":
+    if kind == "receiver_mapping" and key == "match" and where.startswith("route_entry"):
         out.add("routing_value_not_string")
     return out
 
@@ -267,7 +296,9 @@ def test_no_routing_value_reaches_a_message(tmp_path, where, key, kind):
     # Round 6, N-2: the place was read — its marker finding is there, and
     # nothing else the case cannot cause.
     assert findings, "no finding: the value at this place was not judged"
-    assert kinds & _marker_kinds(where, key, kind), (sorted(kinds), _marker_kinds(where, key, kind))
-    assert kinds <= _allowed_kinds(where, key, kind), sorted(kinds - _allowed_kinds(where, key, kind))
+    marker = _marker_kinds(where, key, kind)
+    if marker:
+        assert kinds & marker, (sorted(kinds), marker)
+        assert kinds == _expected_kinds(where, key, kind), (sorted(kinds), sorted(_expected_kinds(where, key, kind)))
     text = p.stdout + p.stderr + out.read_text(encoding="utf-8")
     assert "CANARY" not in text, text

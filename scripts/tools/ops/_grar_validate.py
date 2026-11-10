@@ -1266,9 +1266,11 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
                      f"is not on this tenant's directory chain — a profile is "
                      f"visible only to tenants at its own level or below)"
                      if where else "")
-            warnings.append(unclassified(
+            warnings.append(Finding(
                 f"  WARN: {tenant}: _routing_profile references unknown "
-                f"profile {scalar_text(profile_name)}{extra}", blocks="never"))
+                f"profile {scalar_text(profile_name)}{extra}",
+                kind="unknown_routing_profile", blocks="never", tenant=tenant,
+                field="_routing_profile"))
     return warnings
 
 

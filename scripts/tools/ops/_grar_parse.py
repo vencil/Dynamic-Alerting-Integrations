@@ -28,7 +28,7 @@ from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_validation import scalar_text  # noqa: E402  (#1560 ⑤-b: values into messages)
 from _lib_validation import (  # noqa: E402  (#1560 ⑤-b: the one plaintext judgement)
     NEEDS_REFERENCE, PROXY_CREDENTIAL, URL_USERINFO,
-    plaintext_credential_findings, ref_path_text,
+    credential_shape_problems, plaintext_credential_findings, ref_path_text,
 )
 from _lib_python import RECEIVER_TYPES  # noqa: E402  (#1560 ⑤-b)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
@@ -52,6 +52,7 @@ from _lib_confd import (  # noqa: E402
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
     Finding,
+    SecretBinding,
     credential_refusal,
     domain_policy_levels,
     merge_routing_with_defaults,
@@ -1715,6 +1716,8 @@ def load_tenant_tree(
     *,
     strict_policies: bool = False,
     reader: "_lib_parse_cache.ConfdReader | None" = None,
+    secrets: SecretBinding | None = None,
+    allowed_domains: "list[str] | None" = None,
 ) -> TenantTree:
     """Load and parse every tenant file of *config_dir* into a ``TenantTree``.
 
@@ -1738,6 +1741,9 @@ def load_tenant_tree(
     not only as a stderr WARN line — a consumer whose verdict depends on the
     tree being complete must look at them. *reader*: as for
     ``_parse_config_files`` (the session's reader of *config_dir* when None).
+    *secrets* / *allowed_domains*: the binding the caller's render builds
+    receivers with, so the ``--strict`` judgement of ``_routing_enforced``
+    judges the receiver the render builds.
     """
     parsed = _parse_config_files(config_dir, reader)
 
@@ -1887,7 +1893,8 @@ def load_tenant_tree(
         # every tenant it recognises, routed or not (#2519).
         for ctx, idx, kind, value in enforced_group_by_problems(
                 parsed["enforced_routing"], enforced_route_tenants(
-                    routing_configs, parsed["dedup_configs"])):
+                    routing_configs, parsed["dedup_configs"]),
+                secrets=secrets, allowed_domains=allowed_domains):
             schema_warnings.append(Finding(
                 f"  {POLICY_ERROR_PREFIX} {ctx}: "
                 f"{group_by_problem_text(f'group_by[{idx}]', kind, value)}",
@@ -1973,6 +1980,9 @@ UNJUDGED_REASONS = {
                               + ", ".join(sorted(RECEIVER_TYPES))),
     "slot_not_list": "it is not a list",
     "item_not_mapping": "it is not a mapping",
+    "credential_not_value": ("a credential field holds a list or mapping that is not a "
+                             "Secret reference, or a container on the way to it has the "
+                             "wrong shape, so what it holds is not judged"),
     "not_walked": ("a receiver in a routing block at a place the receiver walk does "
                    "not read (a block that is not a mapping, a nested routes entry, "
                    "a key the generator does not read), so its credentials are not judged"),
@@ -2006,31 +2016,47 @@ def _not_walked(data: object, walked: "set[tuple]") -> list[tuple]:
     finding per receiver)."""
     out: list[tuple] = []
 
-    def visit(node: object, path: tuple, inside: bool, parent: object) -> None:
+    def frame(node: object, path: tuple, inside: bool, parent: object):
+        """One node's children to visit, with what they inherit; None for a
+        scalar."""
         if isinstance(node, dict):
-            items = list(node.items())
+            items = iter(list(node.items()))
         elif isinstance(node, list):
-            items = list(enumerate(node))
+            items = iter(list(enumerate(node)))
         else:
-            return
-        in_match = parent == "match" and isinstance(node, dict)
-        entry_list = isinstance(node, list) and parent in _ENTRY_SLOTS
-        for key, value in items:
-            here = path + (key,)
-            if here in walked:
-                continue  # a judged receiver: its subtree is the judgement's
-            within = inside or (isinstance(key, str) and key in ROUTING_BLOCK_KEYS)
-            by_key = key == "receiver" and value is not None and (
-                not in_match or isinstance(value, dict))
-            by_type = (key != "match" and not entry_list and isinstance(value, dict)
-                       and isinstance(value.get("type"), str)
-                       and value["type"] in RECEIVER_TYPES)
-            if within and (by_key or by_type):
-                out.append(here)
-                continue
-            visit(value, here, within, key)
+            return None
+        return (items, path, inside, parent == "match" and isinstance(node, dict),
+                isinstance(node, list) and parent in _ENTRY_SLOTS)
 
-    visit(data, (), False, None)
+    # An explicit stack: a file nested deeper than Python's recursion limit
+    # must not crash the run.
+    stack = [frame(data, (), False, None)]
+    while stack:
+        top = stack[-1]
+        if top is None:
+            stack.pop()
+            continue
+        items, path, inside, in_match, entry_list = top
+        nxt = next(items, None)
+        if nxt is None:
+            stack.pop()
+            continue
+        key, value = nxt
+        here = path + (key,)
+        if here in walked:
+            continue  # a judged receiver: its subtree is the judgement's
+        within = inside or (isinstance(key, str) and key in ROUTING_BLOCK_KEYS)
+        by_key = key == "receiver" and value is not None and (
+            not in_match or isinstance(value, dict))
+        by_type = (key != "match" and not entry_list and isinstance(value, dict)
+                   and isinstance(value.get("type"), str)
+                   and value["type"] in RECEIVER_TYPES)
+        if within and (by_key or by_type):
+            out.append(here)
+            continue
+        child = frame(value, here, within, key)
+        if child is not None:
+            stack.append(child)
     return out
 
 
@@ -2118,6 +2144,9 @@ def _receivers_of(fname: str, data: dict, entry: object,
                    else None)
             if r is not None and why is not None:
                 unjudged.append(Unjudged(fname, p, tenant, place, why, read, ok))
+            elif why is None:
+                unjudged.extend(Unjudged(fname, p + q, tenant, place, "credential_not_value",
+                                         read, ok) for q in credential_shape_problems(r))
 
     # _parse_platform_config (root: a `_` file) / _parse_nested_config
     # (below the root: the directory's defaults carrier).

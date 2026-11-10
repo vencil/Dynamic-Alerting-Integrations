@@ -739,12 +739,22 @@ def credential_ref_sites(rtype: str) -> tuple[CredentialRefSite, ...]:
 RefPath = tuple[Union[str, int], ...]
 
 
+#: The pattern steps of a ``CREDENTIAL_REF_SITES`` path: any key, any item.
+_PATTERN_STEPS = frozenset({"*", "[]"})
+
+
 def ref_path_text(path: RefPath) -> str:
     """``("http_config", "http_headers", "X", "secrets", 0)`` →
-    ``http_config.http_headers.X.secrets[0]``."""
+    ``http_config.http_headers.X.secrets[0]``. A key is the author's text
+    and may be a URL, so it is shown as ``key_segment`` shows it (#1560
+    ⑤-b)."""
     out = ""
     for part in path:
-        out += f"[{part}]" if isinstance(part, int) else (f".{part}" if out else str(part))
+        if isinstance(part, int) and not isinstance(part, bool):
+            out += f"[{part}]"
+            continue
+        seg = part if part in _PATTERN_STEPS else key_segment(part)
+        out += f".{seg}" if out else seg
     return out
 
 
@@ -931,6 +941,49 @@ def plaintext_credential_findings(receiver: Any, rtype: Optional[str] = None
                   and url_has_userinfo(value)):
                 out.append(PlaintextFinding(path, site, userinfo_category))
     return out
+
+
+def credential_shape_problems(receiver: Any, rtype: Optional[str] = None) -> list[RefPath]:
+    """#1560 ⑤-b: the places of *receiver* where a credential site that
+    ``plaintext_credential_findings`` judges holds a value of a shape it
+    cannot read (at the site, or on the way to it). Such a value is neither
+    a finding nor a reference, and a receiver no render reads gets no schema
+    check either, so the caller reports each place as unjudged."""
+    if rtype is None:
+        rtype = receiver.get("type") if isinstance(receiver, dict) else None
+    if not isinstance(receiver, dict) or not isinstance(rtype, str):
+        return []
+    judged = (PLAINTEXT_REFUSED, PLAINTEXT_UNLESS_USERINFO)
+    sites = ([s.path for s in CREDENTIAL_REF_SITES if s.rtype == rtype and s.plaintext in judged]
+             + [s.path for s in CREDENTIAL_PLAINTEXT_SITES
+                if s.rtype == rtype and s.policy in judged])
+    found: list[RefPath] = []
+
+    def walk(value: Any, pattern: tuple[str, ...], here: RefPath) -> None:
+        if value is None or value == "":
+            return
+        if not pattern:
+            if isinstance(value, (dict, list)) and not is_secret_ref(value):
+                found.append(here)
+            return
+        step, rest = pattern[0], pattern[1:]
+        if step == "[]":
+            if not isinstance(value, list):
+                found.append(here)
+                return
+            for i, item in enumerate(value):
+                walk(item, rest, here + (i,))
+            return
+        if not isinstance(value, dict):
+            found.append(here)
+            return
+        for k in ([k for k in value if isinstance(k, str)] if step == "*" else [step]):
+            if k in value:
+                walk(value[k], rest, here + (k,))
+
+    for site in sites:
+        walk(receiver, site, ())
+    return list(dict.fromkeys(found))
 
 
 def value_paths_to_mask(receiver: Any, rtype: Optional[str] = None) -> list[RefPath]:
