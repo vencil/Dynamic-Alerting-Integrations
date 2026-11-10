@@ -19,6 +19,20 @@ A name on the pull side with no push site is the violation. The reverse is
 NOT: a chart can be published without any document teaching it, and demanding
 docs for it would be this gate inventing a policy nobody agreed to.
 
+Second rule (#1269, owner decision 2026-11-07): every tracked chart under
+`helm/` is either pushed or listed in GIT_ONLY below with the reason it is not.
+A chart nobody decided about is exactly how federation-gateway ended up with a
+security advisory and no released version to name as patched. A GIT_ONLY entry
+for a chart that IS pushed, or for a chart that no longer exists, is a
+violation too — otherwise the table rots into a second, wrong answer.
+
+⚠️ "Pushed" here means a `helm push` call site exists, NOT that a version was
+ever published: the second needs the release tags, which a shallow CI clone
+does not carry. Charts whose push step exists but whose tag line has never
+carried it are listed in UNRELEASED (each must have a push site); an advisory
+treats them like GIT_ONLY until their first release, and removing the entry
+after it is a release-wrap step (github-release-playbook.md).
+
 Scanned surface: `git ls-files`, minus EXCLUDED_PREFIXES / EXCLUDED_FILES
 below — build output generated from sources that ARE scanned, test fixtures,
 and the changelogs, which record what was true then rather than instructing a
@@ -30,8 +44,9 @@ chart no tag has ever been cut for. A gate that skipped the file would have
 missed half its own ticket.
 
 Exit codes:
-  0 = every chart the repo tells customers to pull has a `helm push`
-  1 = at least one does not
+  0 = every chart the repo tells customers to pull has a `helm push`, and every
+      chart is pushed or declared GIT_ONLY
+  1 = a violation of either rule
   2 = the check could not be RUN (unreadable file, unparseable push site)
 """
 from __future__ import annotations
@@ -56,6 +71,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+import _lib_consumer_read  # noqa: E402
 from check_chart_ship_surface import (  # noqa: E402
     CallerError,
     discover_pushed_charts,
@@ -145,6 +161,92 @@ def taught_charts(repo_root: Path = REPO_ROOT) -> Dict[str, List[str]]:
     return taught
 
 
+#: Charts deliberately NOT published to a registry, and why. Installed from a
+#: checkout (`helm install ./helm/<chart>`); an advisory for one of them names
+#: the fix commit and the first platform tag that carries it, not a chart
+#: version a reader could pull (#1269).
+GIT_ONLY: Dict[str, str] = {
+    "chargeback-aggregator": "documented install is from a checkout; publishing not decided (#1269)",
+    "federation-gateway": "its default auditLog sidecar image (federation-audit-sidecar) is built "
+                          "from audit-sidecar/Dockerfile in the chart directory and never "
+                          "published, so the operator builds and pushes it first (#1269)",
+    "federation-proxy": "documented install is from a checkout; publishing not decided (#1269)",
+    "federation-reconciler": "documented install is from a checkout; its default da-tools image "
+                             "(tools/v2.9.0) predates the reconciler script until the next tools "
+                             "release (#1269)",
+    "mariadb-instance": "lab-only: deployed by scripts/setup.sh for the local demo, not a product",
+    "vector": "documented install is from a checkout; publishing not decided (#1269)",
+    "victorialogs": "documented install is from a checkout; publishing not decided (#1269)",
+}
+
+
+#: Charts with a `helm push` call site whose tag line has never shipped it
+#: (#1269 review: a push site is not a publication). Advisories treat these like
+#: GIT_ONLY until the first release; drop the entry at that release wrap.
+UNRELEASED: Dict[str, str] = {
+    "da-portal": "push step added by #1352 after the last portal/v* tag (portal/v2.9.0)",
+    "recipe-preview": "the recipe-preview/v* tag line has never been cut (#1352 case B)",
+}
+
+_CHART_YAML_RE = re.compile(r"^helm/[^/]+/Chart\.yaml$")
+
+
+def chart_names(repo_root: Path = REPO_ROOT) -> Dict[str, str]:
+    """Chart `name` (as helm would publish it) -> its directory under helm/.
+
+    Tracked files only (same surface as the pull rule): an untracked chart a
+    developer is still writing does not block an unrelated commit. Read as
+    helm reads Chart.yaml (sigs.k8s.io/yaml via da-crdecode --any-shape,
+    ADR-036 §12), so the name compared here is the one `helm package` uses.
+    """
+    rels = sorted(r for r in _tracked_files(repo_root) if _CHART_YAML_RE.match(r))
+    try:
+        docs = _lib_consumer_read.any_yaml_documents_of(repo_root / r for r in rels)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        raise CallerError(f"cannot read a Chart.yaml: {exc.detail()}") from exc
+    names: Dict[str, str] = {}
+    for rel in rels:
+        chart_yaml = repo_root / rel
+        found = docs[str(chart_yaml)]
+        meta = found[0] if found else None
+        name = meta.get("name") if isinstance(meta, dict) else None
+        if not isinstance(name, str) or not name:
+            raise CallerError(f"{chart_yaml}: no `name`")
+        where = chart_yaml.parent.relative_to(repo_root).as_posix()
+        if name in names:
+            raise CallerError(f"two charts are named {name!r}: {names[name]} and {where}")
+        names[name] = where
+    return names
+
+
+def distribution_violations(repo_root: Path = REPO_ROOT,
+                            git_only: Dict[str, str] | None = None,
+                            unreleased: Dict[str, str] | None = None) -> List[str]:
+    """Every chart is pushed XOR declared git-only; both tables name real charts."""
+    git_only = GIT_ONLY if git_only is None else git_only
+    unreleased = UNRELEASED if unreleased is None else unreleased
+    charts = chart_names(repo_root)
+    pushed: Set[str] = set(discover_pushed_charts(repo_root))
+    out: List[str] = []
+    for name in sorted(set(charts) - pushed - set(git_only)):
+        out.append(
+            f"{name} ({charts[name]}): no `helm push` publishes it and it is not in "
+            f"GIT_ONLY. Decide: publish it (package + push in release.yaml), or add it "
+            f"to GIT_ONLY in scripts/tools/lint/check_chart_pull_surface.py with the "
+            f"reason — an advisory for it then names a fix commit and platform tag, "
+            f"not a chart version (#1269).")
+    for name in sorted(set(git_only) & pushed):
+        out.append(f"{name}: listed in GIT_ONLY but a `helm push` publishes it — "
+                   f"remove the GIT_ONLY entry.")
+    for name in sorted(set(git_only) - set(charts)):
+        out.append(f"{name}: listed in GIT_ONLY but no helm/*/Chart.yaml is named "
+                   f"that — remove the stale entry.")
+    for name in sorted(set(unreleased) - pushed):
+        out.append(f"{name}: listed in UNRELEASED but no `helm push` publishes it — "
+                   f"it belongs in GIT_ONLY (or remove the stale entry).")
+    return out
+
+
 def check(repo_root: Path = REPO_ROOT) -> List[str]:
     """Return the list of violations. Empty list == pass."""
     taught = taught_charts(repo_root)
@@ -163,6 +265,7 @@ def check(repo_root: Path = REPO_ROOT) -> List[str]:
             f"to its release job, the way #1352 did for da-portal) or stop "
             f"teaching it."
         )
+    violations.extend(distribution_violations(repo_root))
     return violations
 
 
@@ -193,12 +296,15 @@ def main(argv: List[str] | None = None) -> int:
     if violations:
         # stderr, matching check_chart_ship_surface.py: a lint failure that
         # prints to stdout is invisible wherever a runner keeps only stderr.
-        print("❌ chart pull surface (#1352):", file=sys.stderr)
+        print("❌ chart pull surface (#1352 / #1269):", file=sys.stderr)
         for v in violations:
             print(f"   - {v}", file=sys.stderr)
         return EXIT_VIOLATION
 
     print(f"✓ every chart taught over OCI is pushed: {', '.join(pushed)}")
+    print(f"✓ every chart is pushed or declared git-only: {len(chart_names())} charts, "
+          f"{len(pushed)} with a push site ({len(UNRELEASED)} not yet released), "
+          f"{len(GIT_ONLY)} git-only")
     return EXIT_OK
 
 

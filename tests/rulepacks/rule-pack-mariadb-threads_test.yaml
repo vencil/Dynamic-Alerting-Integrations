@@ -86,7 +86,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: threads_running
+              metric_group: mysql_threads_running
               tenant: db-a
             exp_annotations:
               summary: "High running-thread saturation on db-a"
@@ -102,7 +102,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: threads_running
+              metric_group: mysql_threads_running
               tenant: db-b
             exp_annotations:
               summary: "High running-thread saturation on db-b"
@@ -129,7 +129,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: threads_running
+              metric_group: mysql_threads_running
               tenant: db-a
             exp_annotations:
               summary: "High running-thread saturation on db-a"
@@ -145,7 +145,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: threads_running
+              metric_group: mysql_threads_running
               tenant: db-b
             exp_annotations:
               summary: "High running-thread saturation on db-b"
@@ -161,7 +161,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: threads_running
+              metric_group: mysql_threads_running
               tenant: db-e
             exp_annotations:
               summary: "High running-thread saturation on db-e"
@@ -224,7 +224,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: critical
-              metric_group: threads_running
+              metric_group: mysql_threads_running
               tenant: db-a
             exp_annotations:
               summary: "Critical running-thread saturation on db-a"
@@ -240,7 +240,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: critical
-              metric_group: threads_running
+              metric_group: mysql_threads_running
               tenant: db-b
             exp_annotations:
               summary: "Critical running-thread saturation on db-b"

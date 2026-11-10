@@ -70,7 +70,7 @@ kubectl get pod -n monitoring | grep threshold-exporter
 
 > 本機 kind 開發要用 `kind load` 載入的本地 image，改帶 `-f environments/local/threshold-exporter.yaml`（pin `:dev` + `pullPolicy: Never`）。
 
-> 客戶自帶 GitOps（Argo CD / Flux）時，把 chart path 寫入 Application/Kustomization 即可 — 不需要 raw manifests。Chart 同時是 OCI artifact (`ghcr.io/vencil/dynamic-alerting`)，airgapped 環境可走 [migration-toolkit-installation.md](../migration-toolkit-installation.md) 的 Path C。
+> 客戶自帶 GitOps（Argo CD / Flux）時，把 chart path 寫入 Application/Kustomization 即可 — 不需要 raw manifests。有發佈到 registry 的 chart 是 `oci://ghcr.io/vencil/charts/threshold-exporter` 與 `oci://ghcr.io/vencil/charts/tenant-api`；其餘 chart 從 repo checkout 安裝。airgapped 環境可走 [migration-toolkit-installation.md](../migration-toolkit-installation.md) 的 Path C。
 
 ### 掛載 Rule Pack
 

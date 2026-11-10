@@ -177,7 +177,7 @@ export default function TenantManager() {
   const [modalType, setModalType] = useState(null);
   const [modalData, setModalData] = useState('');
   const [modalExcluded, setModalExcluded] = useState([]); // #2068: [{name, code}] left out of the YAML
-  // ADR-024 §S6b-2b: the live custom-alert editor opens for one tenant.
+  // ADR-024 §3: the live custom-alert editor opens for one tenant.
   const [customAlertsTenant, setCustomAlertsTenant] = useState(null);
   const [hoveredCard, setHoveredCard] = useState(null);
   const [activeGroupId, setActiveGroupId] = useState(null);

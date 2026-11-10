@@ -2127,7 +2127,7 @@ func validateBodyOnlyOver(tenantID, yamlContent string, carried []byte) []string
 	if len(errs) > 0 {
 		return errs
 	}
-	// ADR-024 §S5 recipe validation is per-tenant and reads only the body, so it
+	// ADR-024 §5 recipe validation is per-tenant and reads only the body, so it
 	// belongs on this side of the line. So does a threshold written as a
 	// non-finite number (#3140): the exporter's own predicate, which da-guard's
 	// value_not_served refuses the tree over.
@@ -2281,7 +2281,7 @@ func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent stri
 	// file a PATCH merges into); what is said about them depends on whether
 	// the caller may read them.
 	keyErrs, notices := DiscloseKeyValidation(tenantID, kv, names)
-	// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN `_custom_alerts`
+	// S5 shift-left preflight (ADR-024 §5): validate the tenant's OWN `_custom_alerts`
 	// recipes in-process (Go-native, no promtool/Python). Stateless per-tenant —
 	// cross-inheritance collisions + compiler template bugs stay the CI compiler's
 	// authority. Runs on the raw body (tcfg), not the merged config: the PUT body is

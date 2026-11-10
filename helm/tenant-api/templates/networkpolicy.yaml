@@ -75,7 +75,7 @@ spec:
           protocol: UDP
         - port: 53
           protocol: TCP
-    # Prometheus metric discovery (ADR-024 §S6) — the only egress this
+    # Prometheus metric discovery (ADR-024 §3) — the only egress this
     # feature strictly adds. Scoped to the Prometheus namespace.
     - to:
         - namespaceSelector:

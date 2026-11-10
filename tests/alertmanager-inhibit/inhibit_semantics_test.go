@@ -40,19 +40,19 @@ const (
 var (
 	tlCriticalConnections = lset{
 		"alertname": "MariaDBHighConnectionsCritical",
-		"severity":  "critical", "tenant": tenantX, "metric_group": "connections",
+		"severity":  "critical", "tenant": tenantX, "metric_group": "mysql_connections",
 	}
 	tlWarningConnections = lset{
 		"alertname": "MariaDBHighConnections",
-		"severity":  "warning", "tenant": tenantX, "metric_group": "connections",
+		"severity":  "warning", "tenant": tenantX, "metric_group": "mysql_connections",
 	}
 	tlWarningCPU = lset{
 		"alertname": "MariaDBHighThreadsRunning",
-		"severity":  "warning", "tenant": tenantX, "metric_group": "cpu",
+		"severity":  "warning", "tenant": tenantX, "metric_group": "mysql_threads_running",
 	}
 	tlWarningOtherTenant = lset{
 		"alertname": "MariaDBHighConnections",
-		"severity":  "warning", "tenant": tenantY, "metric_group": "connections",
+		"severity":  "warning", "tenant": tenantY, "metric_group": "mysql_connections",
 	}
 	// critical with NO metric_group — deliberately opted out of dedup.
 	tlCriticalNoGroup = lset{
@@ -156,11 +156,11 @@ func TestK8sPerTenantDedupSemantics(t *testing.T) {
 
 	critA := lset{
 		"alertname": "MariaDBHighConnectionsCritical",
-		"severity":  "critical", "tenant": tA, "metric_group": "connections",
+		"severity":  "critical", "tenant": tA, "metric_group": "mysql_connections",
 	}
 	warnA := lset{
 		"alertname": "MariaDBHighConnections",
-		"severity":  "warning", "tenant": tA, "metric_group": "connections",
+		"severity":  "warning", "tenant": tA, "metric_group": "mysql_connections",
 	}
 	critNoGroupA := lset{
 		"alertname": "PostgreSQLDown",
@@ -194,11 +194,11 @@ func TestK8sPerTenantDedupSemantics(t *testing.T) {
 		tB := tenants[1]
 		warnB := lset{
 			"alertname": "MariaDBHighConnections",
-			"severity":  "warning", "tenant": tB, "metric_group": "connections",
+			"severity":  "warning", "tenant": tB, "metric_group": "mysql_connections",
 		}
 		critB := lset{
 			"alertname": "MariaDBHighConnectionsCritical",
-			"severity":  "critical", "tenant": tB, "metric_group": "connections",
+			"severity":  "critical", "tenant": tB, "metric_group": "mysql_connections",
 		}
 
 		// BOTH directions. The generated rule's `equal:` is ["metric_group"]
@@ -250,7 +250,7 @@ func TestK8sTenantAgnosticInhibitSemantics(t *testing.T) {
 	}
 	platformWarningX := lset{
 		"alertname": "MariaDBHighConnections",
-		"severity":  "warning", "tenant": tenantX, "metric_group": "connections",
+		"severity":  "warning", "tenant": tenantX, "metric_group": "mysql_connections",
 	}
 	silentWarnSentinelX := lset{
 		"alertname": "TenantSilentWarning",
@@ -298,7 +298,7 @@ func TestK8sTenantAgnosticInhibitSemantics(t *testing.T) {
 			name: "silent_warning_is_scoped_to_tenant",
 			src:  silentWarnSentinelX, tgt: lset{
 				"alertname": "MariaDBHighConnections",
-				"severity":  "warning", "tenant": tenantY, "metric_group": "connections",
+				"severity":  "warning", "tenant": tenantY, "metric_group": "mysql_connections",
 			}, want: false,
 			why: "one tenant's silent mode must not silence another's",
 		},
