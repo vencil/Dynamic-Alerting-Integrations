@@ -647,6 +647,33 @@ class TestCLI:
         p = _run_cli(dirs["old"], dirs["new"])
         assert p.returncode == 2 and f"--{side}-dir {f}: not a directory" in p.stderr, p.stderr
 
+    def test_a_base_side_gone_after_it_was_judged_is_no_first_import(
+            self, tmp_path, monkeypatch, capsys):
+        """#3721: --old-dir removed after `_lib_input.selected` judged it
+        (there) was read as a first import by an `isdir` of config-diff's
+        own — rc 1, every tenant added, stderr empty. "Was it there" is read
+        (`_lib_input.absent`), and da-guard reading the directory that is
+        gone fails closed: rc 2, the side named, no report."""
+        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
+        real = cd._lib_input.selected
+
+        def racing(args, dest, **kw):
+            out = real(args, dest, **kw)
+            if dest == "old_dir":
+                shutil.rmtree(tmp_path / "old")
+            return out
+
+        monkeypatch.setattr(cd._lib_input, "selected", racing)
+        monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path / "old"),
+                                          "--new-dir", str(tmp_path / "new"), "--format", "json"])
+        with pytest.raises(SystemExit) as exc:
+            cd.main()
+        assert exc.value.code == 2
+        out = capsys.readouterr()
+        assert out.out == ""
+        assert f"--old-dir {tmp_path / 'old'}" in out.err and "base side" in out.err, out.err
+
     def test_new_dir_missing_is_named(self, tmp_path):
         """#3693: a PR side that is not there is the flag's own refusal
         (`dir_not_found`), no report — it was a report whose views were
