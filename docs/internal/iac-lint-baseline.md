@@ -41,7 +41,7 @@ lang: zh
 
 Critical → BLOCK 的最後一哩是 GitHub branch protection 的 required status checks：CI job 紅 → PR 無法 merge。改 branch protection 是 owner 的人工操作。
 
-⛔ **必要檢查的清單只寫在 [`.github/required-checks.yaml`](../../.github/required-checks.yaml)**，本節不再列舉。與 IaC SAST 相關的兩項是 `Lint`（含 L1 `iac-sast-check`、L3 `helm-values-secrets-check`）與 `Container SAST (Helm L2 + raw k8s L4)`（L2＋L4 kube-linter）。該檔與 workflow 的一致性由 `tests/ops/test_required_checks_ssot.py` 守，與 GitHub 實際設定的一致性由 `.github/workflows/required-checks-drift.yml` 守；新增或改名的順序寫在該檔檔頭。
+⛔ **必要檢查的清單只寫在 [`.github/required-checks.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/required-checks.yaml)**，本節不再列舉。與 IaC SAST 相關的兩項是 `Lint`（含 L1 `iac-sast-check`、L3 `helm-values-secrets-check`）與 `Container SAST (Helm L2 + raw k8s L4)`（L2＋L4 kube-linter）。該檔與 workflow 的一致性由 `tests/ops/test_required_checks_ssot.py` 守，與 GitHub 實際設定的一致性由 `.github/workflows/required-checks-drift.yml` 守；新增或改名的順序寫在該檔檔頭。
 
 ## Consolidated baseline（全 4 層總帳，TRK-315 — epic #448 closure）
 
@@ -59,7 +59,7 @@ epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 
 
 12 筆 baseline-High **全數**有 rationale + 退場/修補欄（見各層分節表），其中 L2 `tenant-api` 為架構事實（git workdir 需可寫；原本 L4 也有同一筆，#1594 刪除 raw manifest 後退場）；L1 7 筆為政策性 `--no-cache`/pip-self DL3018/DL3013（含 #908 vector projection-gate、issue 1444 da-tools 的 git）；L2 mariadb×2 + vector×2（root log-collector）為架構必需。**0 Critical** 由 branch-protection required checks（`Lint` + `Container SAST (Helm L2 + raw k8s L4)`）真擋 merge。
 
-> **Critical → BLOCK 已真正上鎖**（非裝飾）：`Lint` 與 `Container SAST (Helm L2 + raw k8s L4)` 是必要檢查，以 [`.github/required-checks.yaml`](../../.github/required-checks.yaml) 為準；與 GitHub 實際設定是否一致由 `required-checks-drift.yml` 每日比對。
+> **Critical → BLOCK 已真正上鎖**（非裝飾）：`Lint` 與 `Container SAST (Helm L2 + raw k8s L4)` 是必要檢查，以 [`.github/required-checks.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/required-checks.yaml) 為準；與 GitHub 實際設定是否一致由 `required-checks-drift.yml` 每日比對。
 
 ## Layer 1 — Dockerfile（TRK-311，hadolint + Vibe wrapper）
 
