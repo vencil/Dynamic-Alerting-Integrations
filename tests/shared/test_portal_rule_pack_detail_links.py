@@ -24,13 +24,34 @@ def test_every_listed_pack_links_to_its_rule_pack_file():
     assert "rule-packs/rule-pack-${selectedPack}.yaml" in JSX.read_text(encoding="utf-8")
 
 
-def test_the_alert_reference_it_links_exists():
+def _alerts(pack: str) -> set[str]:
+    text = (REPO / "rule-packs" / f"rule-pack-{pack}.yaml").read_text(encoding="utf-8")
+    return set(re.findall(r"^\s*-\s*alert:\s*(\S+)\s*$", text, re.M))
+
+
+def test_the_alert_reference_link_is_shown_exactly_for_the_packs_it_covers():
+    """The page hides the alert-reference link for NOT_IN_ALERT_REFERENCE;
+    every other pack must have its alerts in the generated reference, and
+    every excluded one must not (else the link is wrongly hidden)."""
+    packs = json.loads((REPO / "docs" / "assets" / "platform-data.json").read_text(encoding="utf-8"))["rulePacks"]
+    m = re.search(r"NOT_IN_ALERT_REFERENCE = \[([^\]]*)\]", JSX.read_text(encoding="utf-8"))
+    assert m, "NOT_IN_ALERT_REFERENCE not found in the page"
+    excluded = set(re.findall(r"'([^']+)'", m.group(1)))
     for name in ("ALERT-REFERENCE.md", "ALERT-REFERENCE.en.md"):
-        assert (REPO / "rule-packs" / name).is_file(), name
+        ref = (REPO / "rule-packs" / name).read_text(encoding="utf-8")
+        for pack in packs:
+            alerts = _alerts(pack)
+            if not alerts:
+                continue
+            listed = any(f"| {a} |" in ref for a in alerts)
+            assert listed is (pack not in excluded), (name, pack, listed)
 
 
 def test_the_page_carries_no_hand_copied_rules():
-    # The copy that drifted (#3681): `alert:`-shaped literals in the page.
+    # The copy that drifted (#3681): rule-shaped literals in the page, in any
+    # quoting.
     text = JSX.read_text(encoding="utf-8")
-    assert not re.search(r"name:\s*'tenant:", text)
-    assert not re.search(r"severity:\s*'(warning|critical)'", text)
+    q = "[\"'`]"
+    assert not re.search(rf"name:\s*{q}tenant:", text)
+    assert not re.search(rf"severity:\s*{q}", text)
+    assert not re.search(r"\b(expr|record|alert)\s*:\s*" + q, text)

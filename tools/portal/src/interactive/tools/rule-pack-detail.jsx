@@ -23,9 +23,14 @@ const PACK_KEYS = [
   ...Object.keys(RULE_PACK_DATA).filter(key => !PACK_ORDER.includes(key)),
 ];
 
+// Packs ALERT-REFERENCE does not cover: the platform pack's alerts are the
+// platform's own, not tenant-facing. Pinned to the generated reference by
+// tests/shared/test_portal_rule_pack_detail_links.py, both ways.
+const NOT_IN_ALERT_REFERENCE = ['platform'];
+
 function alertReferenceUrl() {
-  const lang = (document.documentElement.lang || '').toLowerCase();
-  return `${REPO_BASE}/rule-packs/ALERT-REFERENCE${lang.startsWith('zh') ? '' : '.en'}.md`;
+  // The portal's language is window.__DA_LANG (jsx-loader); <html lang> is fixed.
+  return `${REPO_BASE}/rule-packs/ALERT-REFERENCE${window.__DA_LANG === 'zh' ? '' : '.en'}.md`;
 }
 
 // Read pack from URL hash
@@ -103,10 +108,12 @@ export default function RulePackDetail() {
               </div>
             </div>
             <div className="mt-6 flex flex-wrap gap-3">
-              <a href={alertReferenceUrl()} target="_blank" rel="noopener noreferrer"
-                 className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700">
-                {t('告警參考（觸發條件與建議操作）', 'Alert reference (triggers and suggested actions)')}
-              </a>
+              {!NOT_IN_ALERT_REFERENCE.includes(selectedPack) && (
+                <a href={alertReferenceUrl()} target="_blank" rel="noopener noreferrer"
+                   className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700">
+                  {t('告警參考（觸發條件與建議操作）', 'Alert reference (triggers and suggested actions)')}
+                </a>
+              )}
               <a href={`${REPO_BASE}/rule-packs/rule-pack-${selectedPack}.yaml`} target="_blank" rel="noopener noreferrer"
                  className="px-4 py-2 rounded-lg text-sm font-medium bg-white text-gray-700 border border-gray-200 hover:border-blue-300">
                 {t('Rule Pack YAML（完整 PromQL）', 'Rule Pack YAML (full PromQL)')}
