@@ -2585,8 +2585,10 @@ def _da_tools_subcommands() -> dict[str, set[str]]:
             continue
         flags: set[str] = set()
         for n in ast.walk(ast.parse(hits[0].read_text(encoding="utf-8"))):
+            # #3693: `_lib_input.add_input(parser, "--old-dir", ...)` declares
+            # the flag too (its first argument is the parser, not a literal).
             if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-                    and n.func.attr == "add_argument"):
+                    and n.func.attr in ("add_argument", "add_input")):
                 flags.update(
                     a.value for a in n.args
                     if isinstance(a, ast.Constant) and isinstance(a.value, str)
