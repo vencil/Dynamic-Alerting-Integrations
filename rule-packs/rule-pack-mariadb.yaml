@@ -353,7 +353,7 @@ groups:
       # must always page"). Planned STOP SLAVE → Alertmanager Silence API
       # (same guidance as MariaDBClusterDown); a tenant's silent-critical
       # sentinel still suppresses notification.
-      # metric_group replication_lag (NOT liveness): joins the lag pair's
+      # metric_group mysql_replication_lag (NOT liveness): joins the lag pair's
       # severity-dedup family — during an IO-thread outage MariaDB can keep
       # reporting/growing seconds_behind (relay-log apply continues), so the
       # thread-down critical must inhibit the lag WARNING (same tenant, same
@@ -370,7 +370,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: replication_lag
+          metric_group: mysql_replication_lag
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB replica IO thread not running for tenant {{ $labels.tenant }}"
@@ -392,7 +392,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: replication_lag
+          metric_group: mysql_replication_lag
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB replica SQL thread not running for tenant {{ $labels.tenant }}"
@@ -440,7 +440,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: "replication_lag"
+          metric_group: "mysql_replication_lag"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High replication lag on {{ $labels.tenant }}"
@@ -467,7 +467,7 @@ groups:
         labels:
           severity: critical
           maintenance: mute
-          metric_group: "replication_lag"
+          metric_group: "mysql_replication_lag"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical replication lag on {{ $labels.tenant }}"
@@ -515,7 +515,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: "connections"
+          metric_group: "mysql_connections"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High connections on {{ $labels.tenant }}"
@@ -542,7 +542,7 @@ groups:
         labels:
           severity: critical
           maintenance: mute
-          metric_group: "connections"
+          metric_group: "mysql_connections"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical connections on {{ $labels.tenant }}"
@@ -591,7 +591,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: "threads_running"
+          metric_group: "mysql_threads_running"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High running-thread saturation on {{ $labels.tenant }}"
@@ -619,7 +619,7 @@ groups:
         labels:
           severity: critical
           maintenance: mute
-          metric_group: "threads_running"
+          metric_group: "mysql_threads_running"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical running-thread saturation on {{ $labels.tenant }}"

@@ -138,7 +138,7 @@ tenantApi:
   # TENANT_API_GIT_TIMEOUT. Emitted only when set, so a default upgrade is a no-op.
   gitTimeout: ""
 
-  # In-lock base fetch timeout (TRK-318 / ADR-023 §B). Empty → binary default (5s).
+  # In-lock base fetch timeout (TRK-318 / ADR-023 §2). Empty → binary default (5s).
   # Before each PR write, tenant-api runs `git fetch --prune origin <base>` INSIDE
   # the write lock to anchor the branch on the freshest origin/<base> — otherwise a
   # long-lived pod branches from a base that went stale after a remote merge and
@@ -149,7 +149,7 @@ tenantApi:
   # (Go duration, e.g. "5s"). Emitted only when set, so a default upgrade is a no-op.
   gitFetchTimeout: ""
 
-  # Write-plane load-shedding queue depth (TRK-320 / ADR-023 §C). Empty → binary
+  # Write-plane load-shedding queue depth (TRK-320 / ADR-023 §3). Empty → binary
   # default (5). The write plane is a single writer; this bounds how many writes
   # may QUEUE behind the one in-flight write before further writes are shed with a
   # 503 + Retry-After (instead of piling up unbounded goroutines blocked on the
@@ -638,7 +638,7 @@ networkPolicy:
     # Same namespace scoping (prometheusNamespace) as every entry here.
     prometheusOperator:
       app.kubernetes.io/name: prometheus
-  # Egress restriction (ADR-024 §S6). DEFAULT false = egress stays
+  # Egress restriction (ADR-024 §3). DEFAULT false = egress stays
   # UNrestricted (the policy is Ingress-only), which is the historical
   # posture and lets tenant-api reach Prometheus (metric discovery),
   # the K8s API (federation ConfigMap store), the git forge (PR mode),

@@ -455,7 +455,7 @@ func main() {
 		slog.Info("federation admission validator disabled — set --federation-prometheus-url to enable")
 	}
 
-	// v2.9.0 ADR-024 §S6 (#741): metric discovery catalog backing the
+	// v2.9.0 ADR-024 §3 (#741): metric discovery catalog backing the
 	// portal recipe-authoring UX. Shares the same Prometheus backend as
 	// the admission validator; nil (→ HTTP 503) when the URL is unset.
 	metricDiscoverer := fedpolicy.NewMetricDiscoverer(*federationPrometheusURL)
