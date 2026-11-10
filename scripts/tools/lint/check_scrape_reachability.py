@@ -327,6 +327,10 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
             # source label: the namespace, or a Service / pod label)
             "writes_instance": False,
             "writes_tenant": False,
+            # the `job` value after relabeling: job_name, or the literal the
+            # last `replace` onto `job` writes; None when it depends on a
+            # source label (e.g. the Service name)
+            "job_value": sc.get("job_name"),
             "name_rules": [],   # [(action, regex)] over __name__
             "label_rules": [],  # [(action, source_labels, regex)] other keep/drop
         }
@@ -376,6 +380,18 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
                 job["writes_instance"] = True
             if rc.get("action", "replace") == "replace" and target == "tenant":
                 job["writes_tenant"] = bool(src)
+            if rc.get("action", "replace") == "replace" and target == "job":
+                repl = rc.get("replacement", "$1")
+                job["job_value"] = None if (src or "$" in repl) else repl
+            if action == "labelmap":
+                # may write any label — `instance` included (a Service label
+                # named `instance`, as mariadb-instance's carries, would be
+                # copied onto it)
+                job["writes_instance"] = True
+            elif action == "labeldrop" and re.fullmatch(rc.get("regex", "(.*)"), "tenant"):
+                job["writes_tenant"] = False
+            elif action == "labelkeep" and not re.fullmatch(rc.get("regex", "(.*)"), "tenant"):
+                job["writes_tenant"] = False
             if (rc.get("action", "replace") == "replace"
                     and rc.get("target_label") == "job"):
                 job["job_from_service_name"] = (
@@ -723,10 +739,11 @@ def tenant_scrape_contract(jobs: list[dict], *, every_tenant_job: bool = False) 
         if not (j["writes_tenant"] if every_tenant_job else _tenant_exporter_face_exists([j])):
             continue
         name = j["job"]
-        if name != want:
+        if j["job_value"] != want:
+            shown = "set from a source label" if j["job_value"] is None else f"'{j['job_value']}'"
             errors.append(
-                f"TENANT-JOB-NAME: job '{name}' admits tenant exporters but is not "
-                f"named '{want}' — every tenant rule pack selects "
+                f"TENANT-JOB-NAME: job '{name}' admits tenant exporters but its `job` "
+                f"label is {shown}, not '{want}' — every tenant rule pack selects "
                 f'up{{job="{want}"}}, so its tenants page as absent. (#3720)')
         if len(j["sd_roles"]) != 1 or j["sd_role"] not in _PER_POD_ROLES:
             errors.append(
@@ -740,7 +757,8 @@ def tenant_scrape_contract(jobs: list[dict], *, every_tenant_job: bool = False) 
                 "scraped once per Service port. (#3680)")
         if j["writes_instance"]:
             errors.append(
-                f"TENANT-INSTANCE: job '{name}' writes `instance` — two targets "
+                f"TENANT-INSTANCE: job '{name}' writes `instance` (or may, by "
+                "`labelmap`) — two targets "
                 "with the same value merge into one series and a healthy one "
                 "masks the other. Leave it as Prometheus sets it. (#3680)")
         if not j["writes_tenant"]:

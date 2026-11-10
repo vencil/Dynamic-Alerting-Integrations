@@ -82,16 +82,33 @@ def test_the_operator_service_monitor_keeps_the_contract(doc):
         jobs = [r for r in rel if r.get("targetLabel") == "job"]
         # prometheus-operator names the job after the Service unless relabeled;
         # the last write wins.
-        assert jobs and jobs[-1].get("replacement") == JOB and not jobs[-1].get("sourceLabels"), (
-            doc, jobs)
+        last = jobs[-1] if jobs else {}
+        assert (last.get("replacement") == JOB and not last.get("sourceLabels")
+                and last.get("action", "replace") == "replace"
+                and last.get("regex", "(.*)") == "(.*)"), (doc, jobs)
         assert not any(r.get("targetLabel") == "instance" for r in rel), doc
+
+
+_EXTRA = {
+    "job relabeled to the Service name": (
+        "      - source_labels: [__meta_kubernetes_service_name]\n        target_label: job\n",
+        "TENANT-JOB-NAME"),
+    "instance overwritten": (
+        "      - source_labels: [__meta_kubernetes_namespace]\n        target_label: instance\n",
+        "TENANT-INSTANCE"),
+    "Service labels mapped (one may be named instance)": (
+        "      - action: labelmap\n        regex: __meta_kubernetes_service_label_(.+)\n",
+        "TENANT-INSTANCE"),
+    "tenant written, then dropped": (
+        "      - action: labeldrop\n        regex: tenant\n",
+        "TENANT-LABEL"),
+}
 
 
 @pytest.mark.parametrize("label,snippet,code", [
     ("another job name", 'job_name: "tenant-db-exporters"', "TENANT-JOB-NAME"),
     ("the service role", "role: service", "TENANT-PER-POD"),
-    ("instance overwritten", None, "TENANT-INSTANCE"),
-])
+] + [(label, None, code) for label, (_rc, code) in _EXTRA.items()])
 def test_the_contract_turns_red(label, snippet, code):
     # The acceptance case of #3720: the snippet the BYO doc taught before.
     text = (
@@ -114,6 +131,6 @@ def test_the_contract_turns_red(label, snippet, code):
     elif snippet:
         text = text.replace("role: endpointslice", snippet)
     else:
-        text += "      - source_labels: [__meta_kubernetes_namespace]\n        target_label: instance\n"
+        text += _EXTRA[label][0]
     errors = gate.tenant_scrape_contract(gate.parse_scrape_jobs(text))
     assert any(e.startswith(code) for e in errors), (label, errors)

@@ -130,6 +130,8 @@ scrape_configs:
         action: drop   # 丟棄沒有 tenant label 的 pod
 ```
 
+> 兩種模式都要 Service 帶 `prometheus.io/scrape: "true"` 與指向 pod port 的 `prometheus.io/port`，並需要 `endpointslices` 的 list／watch 權限與 Prometheus ≥ 2.41（見 [BYO Prometheus 整合](byo-prometheus-integration.md) 的前置條件）。
+
 ### 3.3 適用的 Exporter
 
 邊緣叢集只需部署對應的 exporter，不需要 threshold-exporter：

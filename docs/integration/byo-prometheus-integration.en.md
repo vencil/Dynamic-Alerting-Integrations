@@ -113,6 +113,8 @@ scrape_configs:
         target_label: pod
 ```
 
+> **Prerequisites (per-pod scrape)**: Prometheus ≥ 2.41 (`keepequal`), and its ServiceAccount needs list/watch on `endpointslices` in `discovery.k8s.io` (without it service discovery is empty and `TenantExporterJobAbsent` fires). A Service's `prometheus.io/port` must name the port **the pod listens on**; a Service without that annotation is not scraped. `instance` is `<pod IP>:<port>`: silences or dashboards written against `instance=<namespace>` must use `tenant` instead.
+
 **Option B — Use custom Label as tenant name** (For architectures where multiple tenants share a namespace)
 
 ```yaml

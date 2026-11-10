@@ -45,6 +45,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 from _lib_paths import require_dir  # noqa: E402  (#3276 / #3392)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_metric_sources import TENANT_EXPORTER_JOB  # noqa: E402  (#3720)
 from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
@@ -567,7 +568,12 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
 
         # 2. 檢查 Exporter (透過 Prometheus API)
         try:
-            up_results, up_err = query_prometheus(prom_url, f'mysql_up{{instance="{tenant}"}}')
+            # By `tenant`, not `instance`: since #3680 the tenant-exporters job
+            # keeps the real instance (<pod IP>:<port>), one series per pod —
+            # healthy when every pod is (`min`), and the job is the one name
+            # the rule packs select (#3720).
+            up_results, up_err = query_prometheus(
+                prom_url, f'min by(tenant) (mysql_up{{job="{TENANT_EXPORTER_JOB}",tenant="{tenant}"}})')
             if up_err:
                 errors.append(f"{PROMETHEUS_FAILURE} ({prom_url})")
             elif up_results:

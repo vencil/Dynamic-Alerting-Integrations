@@ -113,6 +113,8 @@ scrape_configs:
         target_label: pod
 ```
 
+> **前置條件（逐 pod scrape）**：Prometheus 需 ≥ 2.41（`keepequal`），其 ServiceAccount 需要 `discovery.k8s.io` 的 `endpointslices` list／watch 權限（缺了 service discovery 會是空的，`TenantExporterJobAbsent` 會響）。Service 的 `prometheus.io/port` 要寫 **pod 實際監聽的 port**；沒寫這個 annotation 的 Service 不會被抓。`instance` 是 `<pod IP>:<port>`，舊設定以 `instance=<namespace>` 寫的 silence 或 dashboard 要改用 `tenant`。
+
 **方案 B — 以自訂 Label 作為 tenant 名稱**（適用於多個 tenant 共用 namespace 的架構）
 
 ```yaml

@@ -126,6 +126,8 @@ scrape_configs:
         action: drop   # Drop pods without tenant label
 ```
 
+> Both patterns need the Service to carry `prometheus.io/scrape: "true"` and a `prometheus.io/port` naming the pod's port, plus list/watch on `endpointslices` and Prometheus ≥ 2.41 (see the prerequisites in [BYO Prometheus Integration](byo-prometheus-integration.en.md)).
+
 ### 3.3 Applicable Exporters
 
 Edge clusters only need to deploy the corresponding exporter; threshold-exporter is not needed:
