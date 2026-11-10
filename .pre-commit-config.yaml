@@ -1849,7 +1849,10 @@ repos:
 
       - id: chart-pull-surface
         name: "chart pull surface — a chart the docs teach `oci://` must have a matching `helm push` (#1352)"
-        entry: python3 -X utf8 scripts/tools/lint/check_chart_pull_surface.py
+        # Chart.yaml is read through da-crdecode (ADR-036 §12), so the hook
+        # needs one: with_da_crdecode.sh builds it from this checkout when
+        # $DA_CRDECODE_BINARY is unset.
+        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_chart_pull_surface.py
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
