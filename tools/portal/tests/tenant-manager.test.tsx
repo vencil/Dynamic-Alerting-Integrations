@@ -67,6 +67,16 @@ async function renderAndSettle() {
   return utils;
 }
 
+
+// A live GET /api/v1/tenants/search answer (held to the swagger spec), for
+// the tests that need write controls: they appear only over live data (#3306).
+const LIVE_SEARCH = apiFixture('SearchResponse', {
+  items: [{ id: 'prod-mariadb-01', environment: 'production' }],
+  total_matched: 1,
+  page_size: 500,
+  next_offset: null,
+});
+
 describe('TenantManager — last-mile activation', () => {
   it('renders the GroupSidebar (group feature is no longer dead)', async () => {
     await renderAndSettle();
@@ -225,6 +235,10 @@ describe('TenantManager — LD-7 IdentityStrip', () => {
             json: () => Promise.resolve(meBody),
           } as any);
         }
+        if (u.startsWith('/api/v1/tenants/search')) {
+          // #3306: write controls appear only over live data.
+          return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve(LIVE_SEARCH) } as any);
+        }
         return Promise.reject(new Error('offline test'));
       })
     );
@@ -342,6 +356,10 @@ describe('TenantManager — LD-6 P7 org badges / access scope / callout', () => 
             ok: true,
             json: () => Promise.resolve(meBody),
           } as any);
+        }
+        if (u.startsWith('/api/v1/tenants/search')) {
+          // #3306: write controls appear only over live data.
+          return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve(LIVE_SEARCH) } as any);
         }
         return Promise.reject(new Error('offline test'));
       })
@@ -661,14 +679,16 @@ describe('TenantManager — P7c /me access posture (#962 follow-up #6)', () => {
     expect(within(sidebar).queryByRole('button', { name: 'Create new group' })).toBeNull();
   });
 
-  it('demo mode (fetch rejects) → NO notice + write controls intact (no regression)', async () => {
+  it('demo mode (fetch rejects) → NO access notice, says it is demo data, read-only (#3306)', async () => {
     // File-level beforeEach already stubs every fetch to reject → demo mode.
     await renderAndSettle();
-    // No server said 403/401, so the notice must not appear…
+    // No server said 403/401, so the access notice must not appear…
     expect(screen.queryByTestId('access-forbidden-notice')).toBeNull();
-    // …and the demo default canWrite=true keeps the write affordances live.
+    // …the page says the tenants are demo data…
+    expect(await screen.findByTestId('offline-data-notice')).toHaveTextContent(/Demo data/);
+    // …and offers no write: nothing it wrote would reach anything.
     const sidebar = screen.getByRole('complementary', { name: 'Group management sidebar' });
-    expect(within(sidebar).getByRole('button', { name: 'Create new group' })).toBeInTheDocument();
+    expect(within(sidebar).queryByRole('button', { name: 'Create new group' })).toBeNull();
   });
 });
 
@@ -743,6 +763,10 @@ describe('TenantManager — group write errors follow the code\'s remedy (#3202)
         const u = String(url);
         if (u.includes('/api/v1/me')) {
           return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve(ME) } as any);
+        }
+        if (u.startsWith('/api/v1/tenants/search')) {
+          // #3306: write controls appear only over live data.
+          return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve(LIVE_SEARCH) } as any);
         }
         if (u.includes('/api/v1/groups/') && opts?.method === 'PUT') {
           return Promise.resolve({
