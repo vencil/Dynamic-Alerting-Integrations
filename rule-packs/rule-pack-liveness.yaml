@@ -57,8 +57,8 @@
 #
 # === 取代 / 覆蓋面 ===
 # 取代分散在 db-pack 的 4 條 per-db *ExporterAbsent (MariaDB/PostgreSQL/Kafka/
-# RabbitMQ)，這 4 條在本 release 以 deprecation shim 形式【保留】(防外部
-# Alertmanager matcher 靜默斷)，下一個 release 移除。同時把 liveness 覆蓋面
+# RabbitMQ) 與 ClickHouseDown，舊規則已移除、不留 shim (#3682：alertname 改名
+# 以 Removed 發布，見 changelog.d/README.md)。同時把 liveness 覆蓋面
 # 【擴張】到所有宣告 db_type 且有 up{job="tenant-exporters"} 的 DB
 # (Redis/MongoDB/Oracle/... 原本完全沒有 ExporterAbsent 規則)。
 #

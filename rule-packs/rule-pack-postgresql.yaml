@@ -103,26 +103,6 @@ groups:
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
-      # DEPRECATED (#869): superseded by TenantExporterAbsent in rule-pack-liveness.yaml.
-      # GLOBAL absent() → false-negative when one live tenant masks another's outage,
-      # and empty `tenant` label. Kept ONE release as a deprecation shim so external
-      # matchers on PostgreSQLExporterAbsent don't break. Removal: next release.
-      - alert: PostgreSQLExporterAbsent
-        expr: absent(pg_up{job="tenant-exporters"})
-        for: 30s
-        labels:
-          severity: critical
-          maintenance: page
-          tenant: "{{ $labels.tenant }}"
-        annotations:
-          summary: "postgres_exporter target missing"
-          summary_zh: "postgres_exporter 目標缺失"
-          description: "No pg_up metric found for 30s"
-          description_zh: "找不到 pg_up 指標，持續 30 秒"
-          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
-          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
-          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
-
       - alert: PostgreSQLHighConnections
         expr: |
           (
