@@ -6,13 +6,10 @@ on:
       - main
       - develop
     paths:
-      # TRK-242: portal source moved to tools/portal/src/. Watch the
-      # whole portal package (source + build config + manifest) so any
-      # change that affects bundle output triggers smoke. Also watch
-      # docs/interactive/index.html which is the runtime entry loader,
-      # plus what CI actually serves and executes: the committed dist
-      # bundles and the jsx-loader page itself (a dist-only rebuild
-      # used to merge without ever running smoke).
+      # Only the A-13 spec lint runs here now; the smoke run moved to
+      # ci.yml (#1428), whose `e2e` filter owns the paths that decide it.
+      # These paths are the ones that can change what the lint reads or
+      # how it runs.
       - 'tools/portal/**'
       - 'docs/interactive/index.html'
       - 'docs/assets/dist/**'
@@ -48,9 +45,9 @@ on:
       # edits it must still run it, or a broken edit lands unexecuted.
       - 'tests/lint/test_e2e_spec_lint_behaviour.py'
 
+# The smoke run's PR comment (the only write) moved to ci.yml with it (#1428).
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   # A-13: no `test.skip()` / `test.fixme()` in E2E specs, in any spelling —
@@ -62,24 +59,16 @@ jobs:
   # .github/workflows/ for `eslint` returned nothing, so the server side caught
   # none of it.
   #
-  # ⛔ A SEPARATE JOB, not a step inside "Smoke Tests (Chromium)". As a step it
-  # was measurably worse than nothing: GitHub stops a job at the first failing
-  # step, so one parked spec would have skipped the browser install, the portal
-  # server and the whole smoke run — and since this workflow is not a required
-  # check, that would trade "E2E ran and passed" for "E2E never ran" while
-  # still not blocking the merge. The report-upload and PR-comment steps carry
-  # `if: always()`, so they would have run and found no report, leaving the pull
-  # request with no visible signal at all.
+  # ⛔ A SEPARATE JOB from the smoke run, not a step inside it: GitHub stops a
+  # job at the first failing step, so one parked spec would have skipped the
+  # browser install, the portal server and the whole smoke run.
   #
-  # ⚠️ ADVISORY, not blocking. Neither this job nor "Smoke Tests (Chromium)" is
-  # among main's required status checks (measured 2026-08-14 against the
-  # branch-protection API: 19 contexts, neither name is one of them), so a red
-  # here does not stop a merge. Adding a name to branch protection is NOT the
-  # fix on its own: this workflow is suppressed wholesale by a top-level
-  # `paths:` filter, and GitHub treats a required check that reports no status
-  # as permanently pending — the trap validate.yaml's banner describes. The
-  # repo's shape for a blocking leg is a ci.yml job plus an `if: always()`
-  # aggregation gate (see "Portal Tests"). Tracked in #1428.
+  # The smoke run itself is no longer here (#1428). It is ci.yml's
+  # `smoke-tests-run`, behind the `Smoke Tests (Chromium)` aggregate gate
+  # that branch protection requires: this workflow's top-level `paths:`
+  # filter suppressed it wholesale on a PR touching no portal file, and a
+  # required check that reports no status sits permanently pending. This job
+  # stays ADVISORY (not a required check) and path-filtered.
   lint-specs:
     name: E2E Spec Lint (A-13)
     runs-on: ubuntu-24.04
@@ -91,8 +80,8 @@ jobs:
         with:
           fetch-depth: 1
           # No `lfs: true` here on purpose: the LFS payload is the visual
-          # regression baselines, which eslint never reads. Only the smoke job
-          # needs them.
+          # regression baselines, which eslint never reads. Only ci.yml's
+          # smoke-tests-run needs them.
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -131,149 +120,3 @@ jobs:
         run: |
           pip install pytest pyyaml -c requirements/ci-constraints.txt
           python -m pytest tests/lint/test_e2e_spec_lint_behaviour.py -q -rs
-
-  test:
-    name: Smoke Tests (Chromium)
-    runs-on: ubuntu-24.04
-    # TRK-233: 10-min cap restored. The TRK-232e investigation traced
-    # the workers=N failures to a stale TRK-231 build hack — `define:
-    # { React: 'globalThis.__bundledReact' }` paired with a side-
-    # effect entry import. The destructure pattern `const { useState }
-    # = React;` in 11 component files (rewritten to read the global)
-    # raced against the chunk that set the global, causing ~20 specs
-    # to fail under workers=N>1.
-    #
-    # Real fix in this commit: components use explicit ESM React
-    # imports (`import { useState } from 'react'`); the build-time
-    # alias is gone. Local benchmarks at workers=4 + ThreadingHTTP-
-    # Server: 192 / 192 pass in 1.5 min (vs ~12 min broken state /
-    # 5.2 min workers=1 / 3.5 min workers=2). 10-min cap is now
-    # generous (~6x headroom).
-    timeout-minutes: 10
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-          # LFS-tracked visual regression baselines under
-          # tests/e2e/*-snapshots/ must be materialized for Playwright
-          # toHaveScreenshot() to compare against. Without this, checkout
-          # leaves 130-byte pointer files on disk and Playwright sees the
-          # LFS metadata instead of the baseline PNG.
-          lfs: true
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: 'npm'
-          # Keyed on the LOCKFILE, not package.json. `npm ci` installs exactly
-          # what the lockfile pins, so a lockfile-only change (a security bump
-          # inside an existing range) must invalidate the cache — keyed on
-          # package.json it would not, and the job would keep restoring the
-          # pre-bump tree. Matches ci.yml's portal job, which already keys on
-          # tools/portal/package-lock.json.
-          cache-dependency-path: 'tests/e2e/package-lock.json'
-
-      - name: Install E2E dependencies
-        working-directory: tests/e2e
-        run: npm ci
-
-      # Cache Playwright browser binaries (~150 MB chromium download).
-      # `npx playwright install` is idempotent: re-running with cache hit
-      # is a fast no-op. Key includes the playwright version derived from
-      # tests/e2e/package-lock.json so cache invalidates on bump.
-      - name: Cache Playwright browsers
-        uses: actions/cache@v5
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('tests/e2e/package-lock.json') }}
-          restore-keys: |
-            playwright-${{ runner.os }}-
-
-      - name: Install Playwright browsers
-        working-directory: tests/e2e
-        run: npx playwright install chromium
-
-      - name: Start Portal server
-        working-directory: tests/e2e
-        run: |
-          npm run serve:portal &
-          SERVER_PID=$!
-          echo "Portal server started with PID: $SERVER_PID"
-
-          # Retry loop: wait up to 30 seconds for Portal readiness
-          RETRY_COUNT=0
-          MAX_RETRIES=30
-          RETRY_INTERVAL=1
-
-          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
-            echo "Checking Portal readiness (attempt $((RETRY_COUNT + 1))/$MAX_RETRIES)..."
-            if curl -sf http://localhost:8080/interactive/ > /dev/null 2>&1; then
-              echo "✓ Portal is ready (HTTP 200)"
-              exit 0
-            fi
-            RETRY_COUNT=$((RETRY_COUNT + 1))
-            if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
-              sleep $RETRY_INTERVAL
-            fi
-          done
-
-          echo "✗ Portal failed to start within 30 seconds"
-          echo "Final curl attempt for debug info:"
-          curl -v http://localhost:8080/interactive/ 2>&1 || true
-          exit 1
-        timeout-minutes: 2
-
-      - name: Run Playwright smoke tests
-        working-directory: tests/e2e
-        # TRK-233 perf settings:
-        #   --workers=4    parallelize across 4 playwright workers.
-        #                  ubuntu-latest runners have 4 vCPUs; the portal
-        #                  server is multi-threaded (serve_threaded.py)
-        #                  so concurrent JSX fetches don't bottleneck.
-        #                  Local benchmark: workers=1 = 5.2 min, workers=2
-        #                  = 3.5 min (1 flaky retry-pass), workers=4 =
-        #                  1.5 min (192 / 192 clean). 4 wins on both axes.
-        # ⛔ NO `--reporter` here (#1449): it would replace the config's list
-        #   and drop the parked-tests reporter that fails a skipped / fixme
-        #   test naming no issue. Under CI=true playwright.config.ts already
-        #   picks list (inline names) + html (artifact upload) + that one.
-        #   Pinned by tests/lint/test_e2e_spec_lint.py.
-        run: npm test -- --workers=4
-        env:
-          CI: 'true'
-          BASE_URL: 'http://localhost:8080/interactive/'
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: playwright-report
-          path: tests/e2e/playwright-report/
-          retention-days: 7
-
-      - name: Upload test videos (on failure)
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: test-videos
-          path: tests/e2e/test-results/
-          retention-days: 3
-
-      - name: Comment on PR with results
-        if: always() && github.event_name == 'pull_request'
-        uses: actions/github-script@v9
-        with:
-          script: |
-            const fs = require('fs');
-            const testReportPath = 'tests/e2e/playwright-report/index.html';
-            if (fs.existsSync(testReportPath)) {
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: '✅ Playwright smoke tests completed. [View detailed report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).'
-              });
-            }

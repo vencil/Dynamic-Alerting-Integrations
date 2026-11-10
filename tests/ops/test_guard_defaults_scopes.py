@@ -973,6 +973,71 @@ class TestRemovedTreesAreNamedNotGuarded:
         assert rc == 0, rows
         assert rows == ["target\tkept/conf.d\t.", "removed\tgone/conf.d"], rows
 
+    # ── #3694：巢狀樹只刪內層時，外層樹被改了，必須成為 target ──────────────
+    _INNER = "a/conf.d/b/conf.d/_defaults.yaml"
+
+    def test_removing_a_nested_tree_targets_the_surviving_outer_tree(
+            self, tmp_path, monkeypatch, capsys):
+        """內層的檔本來就算外層的（da-guard 走所有非隱藏子目錄），刪內層＝改外層。
+        #3664 之後這裡只剩 removed 列、外層沒被點名也沒被驗——留言轉綠。"""
+        (tmp_path / "a" / "conf.d").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._INNER], [self._INNER])
+        assert rc == 0, rows
+        assert rows == ["target\ta/conf.d\t.", "removed\ta/conf.d/b/conf.d"], rows
+
+    def test_the_outer_scope_is_the_deepest_surviving_directory(
+            self, tmp_path, monkeypatch, capsys):
+        """`a/conf.d/b` 還在 → scope 收窄到 `b`；不存在的目錄永遠不當 scope。"""
+        (tmp_path / "a" / "conf.d" / "b").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._INNER], [self._INNER])
+        assert rc == 0, rows
+        assert rows == ["target\ta/conf.d\tb", "removed\ta/conf.d/b/conf.d"], rows
+
+    def test_removing_both_trees_leaves_no_target(self, tmp_path, monkeypatch, capsys):
+        """外層也整棵刪掉 → 兩棵都 removed，沒有東西可驗，也就沒有 target。"""
+        outer = "a/conf.d/_defaults.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [outer, self._INNER],
+                             [outer, self._INNER])
+        assert rc == 0, rows
+        assert rows == ["removed\ta/conf.d", "removed\ta/conf.d/b/conf.d"], rows
+
+    def test_a_gone_middle_tree_is_skipped_for_the_nearest_surviving_one(
+            self, tmp_path, monkeypatch, capsys):
+        """三層：中層與內層都不在了、最外層還在 → 最外層是 target（最近的**存在**祖先）。
+
+        ⛔ 中層刻意**沒有**自己的變更檔（它被刪的只有非 `_` 開頭的檔，不在清單裡）。
+        中層若也有一列被刪的 `_defaults.yaml`，它自己會成為 removed 根、自己往上找到
+        最外層，於是「祖先必須存在」這一條拿掉也照樣綠（突變實測）。這裡唯一的 removed
+        根是內層，它往上第一個 conf.d 是不存在的中層——不跳過就會對不存在的目錄出 target。"""
+        (tmp_path / "x" / "conf.d").mkdir(parents=True)
+        inner = "x/conf.d/a/conf.d/b/conf.d/_defaults.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [inner], [inner])
+        assert rc == 0, rows
+        assert rows == ["target\tx/conf.d\t.",
+                        "removed\tx/conf.d/a/conf.d/b/conf.d"], rows
+
+    def test_two_removed_subtrees_widen_the_outer_scope_to_the_root(
+            self, tmp_path, monkeypatch, capsys):
+        """同一個外層底下兩個不同的仍存在目錄 → 照 resolve() 的規則放寬到根。"""
+        for d in ("b", "c"):
+            (tmp_path / "a" / "conf.d" / d).mkdir(parents=True)
+        other = "a/conf.d/c/conf.d/_defaults.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._INNER, other],
+                             [self._INNER, other])
+        assert rc == 0, rows
+        assert rows == ["target\ta/conf.d\t.", "removed\ta/conf.d/b/conf.d",
+                        "removed\ta/conf.d/c/conf.d"], rows
+
+    def test_an_outer_edit_and_an_inner_removal_merge_into_one_target(
+            self, tmp_path, monkeypatch, capsys):
+        """外層自己也有變更檔（另一個目錄）→ 合併成同一列、放寬到根，不出兩列。"""
+        (tmp_path / "a" / "conf.d" / "db").mkdir(parents=True)
+        edited = "a/conf.d/db/_defaults.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [edited, self._INNER],
+                             [self._INNER])
+        assert rc == 0, rows
+        assert rows == ["target\ta/conf.d\t.", "removed\ta/conf.d/b/conf.d"], rows
+
     def test_deleted_without_its_file_is_a_caller_error(self, monkeypatch, capsys):
         monkeypatch.setattr("sys.stdin", _Stdin(self._GONE + "\0"))
         assert mod.main(["--null", "-", "--deleted"]) == 2
