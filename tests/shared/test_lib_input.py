@@ -297,6 +297,50 @@ def test_missing_empty_is_only_nothing_there(tmp_path, make):
     assert exc.value.reason.startswith("dir_"), exc.value.reason
 
 
+def test_absent_reads_what_selected_judged(tmp_path):
+    """#3721: `absent` is the one answer to "was it there" — set by
+    `selected`, read after; never a second stat."""
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--d", select=_lib_input.DA_GUARD_LISTS,
+                         missing=_lib_input.ABSENT_EMPTY)
+    _lib_input.add_input(p, "--s", select=_lib_input.TopLevel("*.json"),
+                         default=str(tmp_path / "default"),
+                         absent_default=_lib_input.ABSENT_EMPTY)
+    args = p.parse_args(["--d", str(tmp_path / "gone")])
+    with pytest.raises(TypeError):
+        _lib_input.absent(args, "d")  # nothing judged yet: no answer to read
+    assert _lib_input.selected(args, "d", lang="en") == []
+    assert _lib_input.absent(args, "d") is True
+    assert _lib_input.selected(args, "s", lang="en") == []
+    assert _lib_input.absent(args, "s") is True
+    (tmp_path / "gone").mkdir()
+    (tmp_path / "default").mkdir()
+    args = p.parse_args(["--d", str(tmp_path / "gone")])
+    _lib_input.selected(args, "d", lang="en")
+    _lib_input.selected(args, "s", lang="en")
+    assert (_lib_input.absent(args, "d"), _lib_input.absent(args, "s")) == (False, False)
+    # read, not judged again: the directory going away later changes nothing
+    (tmp_path / "gone").rmdir()
+    assert _lib_input.absent(args, "d") is False
+    assert _lib_input.absent(argparse.Namespace(d=None), "d") is True
+    with pytest.raises(TypeError):
+        _lib_input.absent(argparse.Namespace(d="x"), "d")
+
+
+def test_absent_does_not_leak_through_the_shared_default(tmp_path):
+    """#3721: argparse hands every parse the same default object; what one
+    run judged must not answer for the next parse."""
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--s", select=_lib_input.TopLevel("*.json"),
+                         default=str(tmp_path / "default"),
+                         absent_default=_lib_input.ABSENT_EMPTY)
+    first = p.parse_args([])
+    _lib_input.selected(first, "s", lang="en")
+    assert _lib_input.absent(first, "s") is True
+    with pytest.raises(TypeError):
+        _lib_input.absent(p.parse_args([]), "s")  # a new parse: not judged yet
+
+
 def test_missing_is_declared_and_checked():
     _, action = _parser(missing=_lib_input.ABSENT_EMPTY)
     assert action.input_spec.missing == _lib_input.ABSENT_EMPTY
