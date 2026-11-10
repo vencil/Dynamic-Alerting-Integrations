@@ -231,6 +231,8 @@ export default function TenantManager() {
           // 401 (--api-route) — sign in, coming back here.
           setCanWrite(false);
           setAuthState('unauthenticated');
+          // false: a 401 right after signing in — stay and show the
+          // refusal banner instead of looping through the IdP.
           redirectToSignIn();
         }
         // Any other non-ok status: leave demo defaults untouched (fail-soft).
@@ -465,6 +467,9 @@ export default function TenantManager() {
   };
 
   const handleDeleteGroup = async (groupId) => {
+    // #3306: no delete over the offline or demo copy — the group shown may
+    // be a real one, and the DELETE would reach it.
+    if (!writable) return;
     if (!window.confirm(t('確定要刪除此群組？', 'Are you sure you want to delete this group?'))) return;
     const backup = { ...groups };
     // Optimistic local update
@@ -1088,12 +1093,12 @@ export default function TenantManager() {
               <div role="heading" aria-level="2" style={{ fontWeight: 'var(--da-font-weight-bold)', color: 'var(--da-color-accent)' }}>
                 {groups[activeGroupId].label}
               </div>
-              <button
+              {writable && <button
                 onClick={() => handleDeleteGroup(activeGroupId)}
                 style={{ ...styles.button, ...styles.buttonSecondary, color: 'var(--da-color-error-text)' }}
               >
                 {t('刪除群組', 'Delete Group')}
-              </button>
+              </button>}
             </div>
             <div style={{ marginTop: 'var(--da-space-2)', fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-accent)' }}>
               {groups[activeGroupId].members.length} {t('個成員', 'member(s)')}

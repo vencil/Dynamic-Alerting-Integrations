@@ -55,9 +55,11 @@ function useTenantData({ setApiNotification, t, q = '' }) {
         const apiData = await fetchTenantsFromAPI();
         if (apiData && apiData.unauthenticated) {
           // ADR-027 §5: signed out — sign in, never fall back to the
-          // offline or demo data (#3306). loading stays true: the page is
-          // about to leave.
-          redirectToSignIn();
+          // offline or demo data (#3306). loading stays true while the page
+          // leaves; when it does not (a 401 right after signing in, see
+          // redirectToSignIn) it shows no tenants, and the /api/v1/me
+          // refusal banner says why.
+          if (!redirectToSignIn()) setLoading(false);
           return;
         }
         if (apiData) {
@@ -257,6 +259,13 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       // groups). Only null (network error / no backend / non-array body)
       // falls through to the static path below.
       const apiGroups = await fetchGroupsFromAPI();
+      if (apiGroups && apiGroups.unauthenticated) {
+        // The session ended between the tenant search and this call: sign
+        // in, never fill in groups from the offline copy (#3306).
+        setGroups({});
+        redirectToSignIn();
+        return;
+      }
       if (apiGroups) {
         setGroups(apiGroups);
         return;
@@ -287,6 +296,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       } catch (_e) {
         return null; // network error / no backend
       }
+      if (resp && resp.status === 401) return { unauthenticated: true };
       if (!resp || !resp.ok) return null;
       let body;
       try {
