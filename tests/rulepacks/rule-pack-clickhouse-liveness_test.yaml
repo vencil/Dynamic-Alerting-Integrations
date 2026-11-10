@@ -4,8 +4,9 @@
 # ClickHouse serves /metrics itself (no separate exporter), so its target
 # being down IS the server being down, and TenantExporterAbsent
 # (rule-pack-liveness.yaml) is what pages for it. ClickHouseDown is gone
-# (#3682): the assertions on it below expect nothing, so a rule of that name
-# coming back pages twice for one outage and turns this red.
+# (#3682): the assertions on it below expect nothing, so the old shim coming
+# back (it would page twice for one outage) turns this red. A rule of that
+# name selecting another job would not fire here and stays green.
 #
 # Two tenants are down at once — a ClickHouse one and a PostgreSQL one — both
 # scraped by the shipped job tenant-exporters:
