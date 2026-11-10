@@ -229,7 +229,7 @@ da-tools validate-config --config-dir ./conf.d/
 
 **症狀**：直寫模式下寫某個租戶回 409 `TENANT_FILE_DIRTY`（批次 422、該筆 `code: TENANT_FILE_DIRTY`），重整重試仍一樣（[#1535](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1535)）。
 
-**原因**：tenant-api 掛載的 repo 裡，這個租戶檔與 HEAD 不一致——有人在 tenant-api 之外改了沒 commit、`git add` 了沒 commit、刪了、放了未追蹤的同名檔，或在 index 標了 `skip-worktree`／`assume-unchanged`；經 symlink 抵達的租戶檔，沿路的連結或 repo 內的目標被改也算。
+**原因**：tenant-api 掛載的 repo 裡，這個租戶檔與 HEAD 不一致——有人在 tenant-api 之外改了沒 commit、`git add` 了沒 commit、刪了、放了未追蹤的同名檔，或在 index 標了 `skip-worktree`／`assume-unchanged`；經 symlink 抵達的租戶檔，沿路的連結或 repo 內的目標被改也算。conf.d 根目錄名稱以 `_` 開頭的項目（根 `_defaults.yaml` 等根平台檔）有同樣的不一致也會擋（[#3685](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3685)）：先跑 `git status -- <conf.d>/_*` 找出是哪一個。
 
 **處置**：在該 repo 跑 `git status -- <租戶檔>`（標記用 `git ls-files -v -- <租戶檔>` 看），把修改 commit 或丟棄後重試：已追蹤檔用 `git restore --staged --worktree -- <租戶檔>`，未追蹤或被 `.gitignore` 忽略的同名檔直接刪除；新 add 的檔要保留就直接 commit，要捨棄就 `git rm --cached -- <租戶檔>` 後刪除工作樹的檔。細節見 [Tenant API 硬化 §3.10](api/tenant-api-hardening.md#310-租戶檔與-head-不一致時直寫拒收1535)。
 

@@ -65,8 +65,8 @@ const (
 	// TenantTreeScan: the conf.d walk that checks where the tenant is
 	// declared could not run.
 	TenantTreeScan Kind = "tenant_tree_scan"
-	// TenantFileDirty: the tenant file differs from the commit the write
-	// would land on (#1535 item 6).
+	// TenantFileDirty: the tenant file, or a `_` entry at the conf.d root,
+	// differs from the commit the write would land on (#1535 item 6, #3685).
 	TenantFileDirty Kind = "tenant_file_dirty"
 	// TenantFileNotRegular: the tenant's conf.d entry is a FIFO, socket or
 	// device (#2477).

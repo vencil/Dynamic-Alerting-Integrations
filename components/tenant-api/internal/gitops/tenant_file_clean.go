@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 )
@@ -32,10 +33,12 @@ import (
 // serving worktree (or the index) is not what the commit the write lands on
 // holds: modified, staged, deleted, untracked (gitignored included), marked skip-worktree or
 // assume-unchanged, or — for a tenant file reached through symlinks — a
-// link on the way or the in-repository target changed. Nothing is written;
+// link on the way or the in-repository target changed; or the same of an
+// entry at the conf.d root whose name starts with `_` (#3685,
+// rootPlatformCleanPaths). Nothing is written;
 // whoever made the change outside tenant-api commits or discards it first.
 // Its text names the path: for the server log only.
-var ErrTenantFileDirty = errors.New("the tenant file has uncommitted changes made outside tenant-api")
+var ErrTenantFileDirty = errors.New("the tenant file or a root platform file has uncommitted changes made outside tenant-api")
 
 // maxSymlinkHops is how many symlinks resolving a tenant file may follow —
 // the limit Linux applies to a path (MAXSYMLINKS, 40). Past it the read
@@ -80,6 +83,15 @@ func (w *Writer) checkTenantFileClean(filePath string) error {
 	if err != nil {
 		return fmt.Errorf("check the tenant file against HEAD: %w", err)
 	}
+	// #3685: the root platform files too — the write's key checks read
+	// them from this worktree (MergeParsedTenantWithRootDefaults →
+	// loadRootPlatform), while the shared key verdict judges the HEAD the
+	// commit lands on.
+	rootPaths, err := w.rootPlatformCleanPaths(top)
+	if err != nil {
+		return fmt.Errorf("check the root platform files against HEAD: %w", err)
+	}
+	paths = append(paths, rootPaths...)
 	if len(paths) == 0 {
 		return nil // nothing in this repository to compare (cleanCheckPaths)
 	}
@@ -242,4 +254,81 @@ func inside(root, p string) (string, bool) {
 		return "", false
 	}
 	return rel, true
+}
+
+// rootPlatformCleanPaths is the root platform files checkTenantFileClean
+// also asks git about (#3685), relative to the repository top level top:
+// every `_`-prefixed entry directly in the serving conf.d, in the worktree
+// OR in HEAD (one deleted from the worktree is a difference too), each
+// with the links on its way (cleanCheckPaths). It is a superset of what
+// loadRootPlatform reads — every `_` entry, not only the ones the walk
+// takes as platform files — so this list cannot drift from the reader's:
+// a `_` file it would read is in it whatever the reader's rule becomes.
+// The cost is that a dirty `_` file no reader of the write reads (say
+// `_rbac.yaml`) refuses the write too; the route generator's verdict reads
+// those, so refusing them is the same rule.
+func (w *Writer) rootPlatformCleanPaths(top string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	add := func(abs string) error {
+		_, paths, err := w.cleanCheckPaths(abs)
+		if err != nil {
+			return err
+		}
+		for _, p := range paths {
+			if !seen[p] {
+				seen[p] = true
+				out = append(out, p)
+			}
+		}
+		return nil
+	}
+	entries, err := os.ReadDir(w.configDir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, err
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "_") {
+			if err := add(filepath.Join(w.configDir, e.Name())); err != nil {
+				return nil, err
+			}
+		}
+	}
+	// HEAD's entries of the same directory: the conf.d path relative to
+	// the top level, as git names it.
+	confReal, err := filepath.EvalSymlinks(w.configDir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return out, nil
+		}
+		return nil, err
+	}
+	topReal, err := filepath.EvalSymlinks(top)
+	if err != nil {
+		return nil, err
+	}
+	rel, ok := inside(topReal, confReal)
+	if !ok {
+		return out, nil // conf.d outside this repository: nothing git can compare
+	}
+	spec := "."
+	if rel != "." {
+		spec = filepath.ToSlash(rel) + "/"
+	}
+	if !w.gitCheck("rev-parse", "--verify", "--quiet", "HEAD^{commit}") {
+		return out, nil // no commit yet: HEAD holds no file to differ from
+	}
+	listing, err := w.gitOutput(top, "ls-tree", "-z", "--name-only", "HEAD", "--", spec)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range strings.Split(string(listing), "\x00") {
+		if name == "" || !strings.HasPrefix(path.Base(name), "_") {
+			continue
+		}
+		if err := add(filepath.Join(top, filepath.FromSlash(name))); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }

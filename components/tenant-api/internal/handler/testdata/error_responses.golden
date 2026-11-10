@@ -14,7 +14,7 @@ msgBatchOpFailed = "the write failed; the server log has the details"
 msgWriteCancelled = "the write was cancelled or timed out before it was committed; nothing was written, so it is safe to retry"
 msgWriteOutcomeUnknown = "the write failed while it was being committed and the server cannot tell whether it was; it may have been committed — refresh to see whether it was before retrying"
 msgTenantDeclaredElsewhere = "tenant id is declared by another conf.d file (or by several); conf.d must declare each tenant exactly once"
-msgTenantFileDirty = "the tenant's config file has uncommitted changes made outside tenant-api; nothing was written — commit or discard them in the repository, then retry"
+msgTenantFileDirty = "the tenant's config file, or a root platform file (a `_` entry at the conf.d root) the write reads, has uncommitted changes made outside tenant-api; nothing was written — commit or discard them in the repository, then retry"
 msgTenantTreeScan = "cannot verify where the tenant is declared in conf.d; nothing was written"
 msgGitPushFailed = "pushing the change to the config repository failed; no PR/MR was opened — please retry"
 msgBatchConflict = "conflict: the repository changed outside tenant-api while the batch ran; nothing was written — refresh and retry"
@@ -1209,7 +1209,7 @@ uncounted
   <- gitops.ErrTenantGitManaged
 "batch failed, nothing was written: op ctx: the tenant is git-managed"
   <- wrapped(gitops.ErrTenantGitManaged)
-"batch failed, nothing was written: the tenant's config file has uncommitted changes made outside tenant-api; nothing was written — commit or discard them in the repository, then retry"
+"batch failed, nothing was written: the tenant's config file, or a root platform file (a `_` entry at the conf.d root) the write reads, has uncommitted changes made outside tenant-api; nothing was written — commit or discard them in the repository, then retry"
   <- gitops.ErrTenantFileDirty ≡ %w
 msgWriteCancelled
   <- ErrGitTimeout %w DeadlineExceeded, ErrNoChanges %w context.Canceled, context.Canceled ≡ %w, context.DeadlineExceeded ≡ %w, gitops.ErrGitTimeout ≡ %w
