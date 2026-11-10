@@ -93,6 +93,8 @@ func TestValidateTenant_VerdictMatchesWrite(t *testing.T) {
 			t.Parallel()
 			dir := initGitConfigDir(t)
 			testutil.WriteYAML(t, dir, "_defaults.yaml", defaults)
+			runGit(t, dir, "add", "--", "_defaults.yaml")
+			runGit(t, dir, "commit", "-q", "-m", "seed defaults") // #3685: a root file differing from HEAD refuses a direct write
 			for name, content := range c.files {
 				testutil.WriteYAML(t, dir, name, content)
 			}

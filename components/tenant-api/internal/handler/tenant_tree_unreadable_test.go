@@ -316,15 +316,18 @@ func TestTreeUnreadable_AsyncBatchStoresNoEntryNames(t *testing.T) {
 func TestTreeUnreadable_AsyncGroupBatchStoresNoEntryNames(t *testing.T) {
 	t.Parallel()
 	f := newTreeFixture(t)
-	setupGroupsFile(t, f.dir, "groups:\n  tu-team:\n    label: TU\n    members:\n      - tu-a\n")
+	// The state store lies outside conf.d, as wireStateStore requires (#2856): a
+	// `_groups.yaml` in conf.d is an uncommitted root file, which a direct write refuses (#3685).
+	stateDir := t.TempDir()
+	setupGroupsFile(t, stateDir, "groups:\n  tu-team:\n    label: TU\n    members:\n      - tu-a\n")
 	if err := os.Symlink("missing-target.yaml", filepath.Join(f.dir, "secret-other-team-file.yaml")); err != nil {
 		t.Skipf("symlink: %v", err)
 	}
 	tasks := async.NewManager(1)
 	defer tasks.Close()
 	f.d.Tasks = tasks
-	f.d.Groups = groups.NewDirManager(f.dir)
-	f.d.State = mustDirState(f.dir)
+	f.d.Groups = groups.NewDirManager(stateDir)
+	f.d.State = mustDirState(stateDir)
 	w := f.do(t, GroupBatch(f.d), rbac.PermRead, "platform", "POST", "/api/v1/groups/tu-team/batch?async=true", "tu-team",
 		`{"patch":{"_silent_mode":"critical"}}`)
 	if w.Code != http.StatusAccepted {
