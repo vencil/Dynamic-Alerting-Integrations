@@ -17,8 +17,7 @@ import (
 // can quote a path or what the tenants wrote).
 //
 // Intentionally NOT t.Parallel(): it swaps the process-global default slog
-// logger (as middleware_test.go and internal_error_redaction_test.go do)
-// and restores it.
+// logger and restores it.
 func TestGeneratorOpResult_LogsNoContainerMessage(t *testing.T) {
 	// A test canary, not a credential.
 	const canary = "CANARY-batch-log-5b"

@@ -785,12 +785,14 @@ func nonNilFindings(f []generator.Finding) []generator.Finding {
 // policy path, a mismatch naming the file judged otherwise — in a group
 // batch possibly a member the caller can no longer read) and the service's
 // (internal_error is a Python repr; a rejected verdict's or a 400's message
-// is its text as written). They go to the log only, with the original
-// reason (renderKind, generatorOpResult). A list of reasons whose
-// message is safe to show is a list that misses the next shape. The
+// is its text as written); neither the client nor the log gets them. A list
+// of reasons whose message is safe to show is a list that misses the next
+// shape. The
 // findings of a GENERATOR_FINDINGS refusal are the judgement itself and are
 // disclosed by disclosedFindings, not here.
-const generatorDetailInLog = " — the server log has the detail"
+//
+// No text sends the reader to the server log: it keeps the reason code
+// only (#1560 ⑤-b).
 
 // generatorRejectedText is the client text of GENERATOR_REJECTED and
 // GENERATOR_BUSY (#3202: the retryable reasons).
@@ -805,7 +807,7 @@ func generatorRejectedText(e *generator.RejectedError) string {
 	if generator.Retryable(e.Reason) {
 		head += " — retry"
 	}
-	return head + generatorDetailInLog
+	return head
 }
 
 // keyVerdictRejectedTexts are the client texts of a write the generator
@@ -818,9 +820,9 @@ var keyVerdictRejectedTexts = map[string]string{
 	generator.ReasonKeyVerdictDeadline: "the route generator passed this write, but its time ran out before it judged " +
 		"whether every key of it is read (key_verdict_deadline); nothing was written — retry",
 	generator.ReasonKeyVerdictMemory: "the route generator passed this write, but judging whether every key of it is " +
-		"read ran out of memory (key_verdict_memory); nothing was written" + generatorDetailInLog,
+		"read ran out of memory (key_verdict_memory); nothing was written",
 	generator.ReasonKeyVerdictError: "the route generator passed this write, but judging whether every key of it is " +
-		"read failed (key_verdict_error); nothing was written" + generatorDetailInLog,
+		"read failed (key_verdict_error); nothing was written",
 	generator.ReasonKeyVerdictUndecidable: "no root platform file (such as _defaults.yaml) was read, so whether the " +
 		"threshold keys of this write are read cannot be judged (key_verdict_undecidable); nothing was written — add " +
 		"the root platform file to conf.d",
@@ -834,7 +836,7 @@ func generatorUnavailableText(e *generator.UnavailableError) string {
 	if e.Code == generator.CodePolicyUnavailable {
 		what = "the deployment policy file the route generator judges with is unusable"
 	}
-	return what + " (reason: " + generator.ClientReason(e.Reason) + "), so content-changing writes are refused; nothing was written" + generatorDetailInLog
+	return what + " (reason: " + generator.ClientReason(e.Reason) + "), so content-changing writes are refused; nothing was written"
 }
 
 // generatorRejectsBatch reports whether err is a refusal by the generator

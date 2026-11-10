@@ -1,28 +1,21 @@
 package main
 
 // #1560 ⑤-b: what the route generator container sends never reaches the
-// platform log — the main guard, by behaviour. A fake generator answers
-// every write route that asks it (generatorRoutes, pinned to the router by
-// TestGeneratorRoutesCoverEveryWriteRoute) with a canary in every text
-// field it has: a verdict's message and stderr_tail; a finding's message,
-// field, policy, tenant and file; a key verdict's message, reason and its
-// findings' key, reason, file and tenants; a rejection's and a 503's
-// message, reason and error code. Each answer is sent through the real
-// router, as a caller who sees the whole tree and as one who may write a
-// single tenant, and the log of all of it must hold no canary.
+// platform log — the main guard, by behaviour. A fake generator puts a
+// canary in every field of its answers, structured-looking ones included
+// (they are the container's strings too); each answer is sent through the
+// real router, as a caller who sees the whole tree and as one who may write
+// a single tenant, and the log must hold no canary. Its route list is held
+// to the router, so a new route that asks the generator gets a row.
 //
-// The per-type checks (internal/generator and internal/gitops
-// TestLogValuer_*) are auxiliary: a type scan sees types, not what a call
-// site hands slog.
-//
-// Intentionally NOT t.Parallel() at the top: it swaps the process-global
-// default slog logger (the convention of handler/middleware_test.go) and
-// the /metrics generator source; its subtests run in parallel inside a
-// group that ends before both are restored.
+// Not t.Parallel() at the top: it swaps the process-global default slog
+// logger and the /metrics generator source; its subtests run in parallel
+// inside a group that ends before both are restored.
 
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +30,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vencil/tenant-api/internal/async"
+	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops/gitopstest"
 	"github.com/vencil/tenant-api/internal/groups"
@@ -49,8 +43,7 @@ import (
 )
 
 // generatorRoutes: every route that asks the generator container, method +
-// chi pattern → how. TestGeneratorRoutesCoverEveryWriteRoute holds it
-// against the router: every write route is here or in noGeneratorRoutes.
+// chi pattern → how; every write route is here or in noGeneratorRoutes.
 var generatorRoutes = map[string]string{
 	"PUT /api/v1/tenants/{id}/":              "a content-changing PUT, direct and PR mode (Writer.Write* → Gate.ValidateWrites)",
 	"PUT /api/v1/tenants/{id}/custom-alerts": "direct mode (WriteIfUnchanged); PR mode answers 501 before it",
@@ -364,14 +357,18 @@ func logMatrixAnswers() []matrixAnswer {
 			own["policy"] = canaryOf("finding-policy")
 			other := testutil.Finding("route", canaryOf("finding-tenant"), canaryOf("finding-file")+".yaml",
 				canaryOf("finding-message-other"))
-			v := testutil.FindingsVerdict(req, "/w/"+canaryOf("config-dir"), own, other)
+			odd := testutil.Finding(canaryOf("finding-kind"), "t-a", "t-a.yaml", "m")
+			odd["severity"] = canaryOf("finding-severity")
+			v := testutil.FindingsVerdict(req, "/w/"+canaryOf("config-dir"), own, other, odd)
 			v["stderr_tail"] = "WARN: " + canaryOf("stderr-tail") + "\n"
 			v["message"] = canaryOf("verdict-message")
 			return 200, v
 		}},
 		{name: "key verdict advice: withheld and truncated", passes: true,
 			answer: func(_ int, req testutil.FakeValidateRequest) (int, any) {
-				findings := append(otherKVFindings(), kvFinding("unread", "_"+canaryOf("kv-key-own"), "t-a.yaml",
+				odd := kvFinding(canaryOf("kv-kind"), "_k", "_defaults.yaml", []string{"t-zz"}, "r", false)
+				odd["severity"] = canaryOf("kv-severity")
+				findings := append(otherKVFindings(), odd, kvFinding("unread", "_"+canaryOf("kv-key-own"), "t-a.yaml",
 					[]string{"t-a"}, canaryOf("kv-reason-own"), false))
 				return 200, withKV(req, map[string]any{"status": "complete", "tenants": 2, "seconds": 0.1,
 					"message": canaryOf("kv-message"), "truncated": 3, "findings": findings})
@@ -385,6 +382,20 @@ func logMatrixAnswers() []matrixAnswer {
 		{name: "key verdict not completed, unknown reason", answer: func(_ int, req testutil.FakeValidateRequest) (int, any) {
 			return 200, withKV(req, map[string]any{"status": "not_completed", "reason": canaryOf("kv-reason"),
 				"message": canaryOf("kv-message"), "tenants": 0, "seconds": 0.0, "findings": []any{}, "truncated": 0})
+		}},
+		{name: "key verdict status outside the vocabulary", answer: func(_ int, req testutil.FakeValidateRequest) (int, any) {
+			return 200, withKV(req, map[string]any{"status": canaryOf("kv-status"), "reason": "memory",
+				"message": canaryOf("kv-message"), "tenants": 0, "seconds": 0.0, "findings": []any{}, "truncated": 0})
+		}},
+		{name: "judged another base commit", answer: func(_ int, req testutil.FakeValidateRequest) (int, any) {
+			v := testutil.PassVerdict(req, nil)
+			v["validated"].(map[string]any)["base_commit"] = canaryOf("base-commit")
+			return 200, v
+		}},
+		{name: "result outside the vocabulary", answer: func(_ int, req testutil.FakeValidateRequest) (int, any) {
+			v := testutil.PassVerdict(req, nil)
+			v["result"] = canaryOf("result")
+			return 200, v
 		}},
 		{name: "key verdict not completed, memory", answer: func(_ int, req testutil.FakeValidateRequest) (int, any) {
 			return 200, withKV(req, map[string]any{"status": "not_completed", "reason": "memory",
@@ -444,8 +455,7 @@ func TestGeneratorLogMatrix_NoGeneratorTextInTheLog(t *testing.T) {
 	defer slog.SetDefault(orig)
 	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	// The Writer refuses a host git config that names a driver (#3175; a
-	// git-lfs host has filter.lfs.*): the handler tests' TestMain setting,
-	// for this test only — this package has no TestMain.
+	// git-lfs host has filter.lfs.*).
 	restoreGitEnv := matrixGitEnv(t)
 	defer restoreGitEnv()
 
@@ -497,6 +507,23 @@ func TestGeneratorLogMatrix_NoGeneratorTextInTheLog(t *testing.T) {
 	// GET /metrics reads the container's status and /metrics at scrape time.
 	t.Run("metrics", func(t *testing.T) { logMatrixMetrics(t) })
 
+	// The generator's errors wrapped with %w, as a write path may hand them
+	// over: a wrapper's Error() carries the container's message.
+	t.Run("wrapped", func(t *testing.T) {
+		for _, e := range []error{
+			&generator.RejectedError{Reason: generator.ReasonMemory, Message: canaryOf("wrapped-rejected")},
+			&generator.UnavailableError{Code: generator.CodeValidatorUnavailable, Reason: generator.ReasonInternalError,
+				Message: canaryOf("wrapped-unavailable")},
+		} {
+			req := httptest.NewRequest("PUT", "/api/v1/tenants/t-a", nil)
+			w := httptest.NewRecorder()
+			if !handler.WriteKindError(w, req, fmt.Errorf("write: %w", e), "", errkind.GeneratorRejected,
+				errkind.GeneratorRejectedRetryable, errkind.ValidatorUnavailable, errkind.PolicyUnavailable) {
+				t.Fatalf("%T was not answered as the generator's", e)
+			}
+		}
+	})
+
 	out := logs.String()
 	if strings.Contains(out, canary) {
 		var lines []string
@@ -512,7 +539,9 @@ func TestGeneratorLogMatrix_NoGeneratorTextInTheLog(t *testing.T) {
 	for _, want := range []string{"generator: write refused with findings", "key verdict: findings withheld from the caller",
 		"generator: write refused, key verdict not completed", "write refused: the generator gave no verdict",
 		"write refused: the generator container cannot judge", "batch op refused: the generator gave no verdict",
-		"generator status not read"} {
+		"generator status not read",
+		// The container's "structured" strings, by their closed form.
+		`"problem":"base_commit_differs"`, `"status":"other"`, `"other=1"`} {
 		if !strings.Contains(out, want) {
 			t.Errorf("no %q line in the log", want)
 		}
@@ -579,6 +608,46 @@ func logMatrixMetrics(t *testing.T) {
 		code, body := f.send(t, "GET", "/metrics", "", "")
 		if code != http.StatusOK || !strings.Contains(body, "tenant_api_policy_available 0") {
 			t.Errorf("%s: /metrics = %d, want 200 with tenant_api_policy_available 0:\n%s", c.name, code, body)
+		}
+	}
+}
+
+// noGeneratorRequests: one request per noGeneratorRoutes entry, keyed by it.
+var noGeneratorRequests = map[string]struct{ method, path, body string }{
+	"PUT /api/v1/tenants/{id}/federation":                   {"PUT", "/api/v1/tenants/t-a/federation", `{"metrics":["up"]}`},
+	"POST /api/v1/tenants/{id}/diff":                        {"POST", "/api/v1/tenants/t-a/diff", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n"},
+	"PUT /api/v1/groups/{id}/":                              {"PUT", "/api/v1/groups/g-ok", `{"label":"OK2","members":["t-a","t-b"]}`},
+	"DELETE /api/v1/groups/{id}/":                           {"DELETE", "/api/v1/groups/g-one", ""},
+	"PUT /api/v1/views/{id}/":                               {"PUT", "/api/v1/views/v1", `{"label":"x","filters":{"a":"b"}}`},
+	"DELETE /api/v1/views/{id}/":                            {"DELETE", "/api/v1/views/v1", ""},
+	"POST /api/v1/federation/tokens/":                       {"POST", "/api/v1/federation/tokens", `{"tenant_id":"t-a"}`},
+	"DELETE /api/v1/federation/tokens/{id}":                 {"DELETE", "/api/v1/federation/tokens/x", ""},
+	"PUT /api/v1/federation/policy/":                        {"PUT", "/api/v1/federation/policy", `{"whitelist":[]}`},
+	"POST /api/v1/federation/accounts/backfill":             {"POST", "/api/v1/federation/accounts/backfill", ""},
+	"POST /api/v1/audit/tenants/{id}/access-report/dry-run": {"POST", "/api/v1/audit/tenants/t-a/access-report/dry-run", matrixRBAC},
+}
+
+// noGeneratorRoutes is a claim, so each entry is sent through the router
+// and the fake generator must stay unasked (whatever the route answers).
+// Not t.Parallel(): matrixGitEnv sets the process environment.
+func TestNoGeneratorRoutesNeverAsk(t *testing.T) {
+	restore := matrixGitEnv(t)
+	defer restore()
+	for key := range noGeneratorRoutes {
+		if _, ok := noGeneratorRequests[key]; !ok {
+			t.Errorf("noGeneratorRoutes entry %q has no request in noGeneratorRequests", key)
+		}
+	}
+	for key, c := range noGeneratorRequests {
+		if _, ok := noGeneratorRoutes[key]; !ok {
+			t.Errorf("noGeneratorRequests entry %q is not in noGeneratorRoutes", key)
+		}
+		for _, mode := range []handler.WriteMode{handler.WriteModeDirect, handler.WriteModePR} {
+			f := newMatrixFixture(t, mode)
+			code, _ := f.send(t, c.method, c.path, c.body, callerTree)
+			if n := len(f.fake.Requests()); n > 0 {
+				t.Errorf("%s (%s, mode %v → %d) asked the generator %d time(s)", key, c.path, mode, code, n)
+			}
 		}
 	}
 }

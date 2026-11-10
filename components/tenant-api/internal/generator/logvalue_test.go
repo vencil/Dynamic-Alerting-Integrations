@@ -49,7 +49,11 @@ func TestLogValuer_ErrorTypesLogNoMessage(t *testing.T) {
 			`"findings_by_kind":["credential_plaintext=1"]`},
 		"KeyVerdict": {&KeyVerdict{Status: "not_completed", Reason: "error", Message: logCanary},
 			`"reason":"error"`},
-		"Finding": {finding, `"kind":"credential_plaintext"`},
+		"FindingsError, a kind outside the catalog": {error(&FindingsError{Findings: []Finding{
+			{Kind: "k-" + logCanary}}, RC: 1}), `"findings_by_kind":["other=1"]`},
+		"Verdict, a result outside the vocabulary": {&Verdict{Result: "r-" + logCanary}, `"result":"other"`},
+		"KeyVerdict, a status outside the vocabulary": {&KeyVerdict{Status: "s-" + logCanary, Reason: "error"},
+			`"status":"other"`},
 	} {
 		out := logged(t, "error", tc.value)
 		if strings.Contains(out, "CANARY") {
@@ -65,7 +69,7 @@ func TestLogValuer_ErrorTypesLogNoMessage(t *testing.T) {
 // handed — an error interface holding *UnavailableError resolves — but not
 // through a wrapper: fmt.Errorf("…: %w", e) logs its Error() text, the
 // message included. So a call site logs the typed error errors.As found,
-// never err (handler/error_render.go, errors.go, tenant_validate_judge.go).
+// never err.
 func TestLogValuer_ResolvedOnTheTypedErrorOnly(t *testing.T) {
 	t.Parallel()
 	typed := &UnavailableError{Code: CodeValidatorUnavailable, Reason: ReasonInternal, Message: logCanary}
@@ -88,8 +92,8 @@ func TestLogValuer_ResolvedOnTheTypedErrorOnly(t *testing.T) {
 	}
 }
 
-// Auxiliary to the behaviour matrix (internal/handler/log_canary_matrix_test.go,
-// the main guard): every type declared here — exported or not — whose
+// Auxiliary to the behaviour matrix (the main guard): every type declared
+// here — exported or not — whose
 // method set implements error (a promoted Error(), a parenthesised
 // receiver included: go/types, not a name or syntax match) also implements
 // slog.LogValuer, so a new error type decides whether it carries the

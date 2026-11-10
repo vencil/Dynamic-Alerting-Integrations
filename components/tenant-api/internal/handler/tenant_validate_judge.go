@@ -79,8 +79,8 @@ func judgePreview(d *Deps, r *http.Request, tenantID string, res gitops.PutResol
 	case errors.As(err, &unav):
 		// #1560 ⑤-b: the typed error, never err (a wrapper logs its Error()
 		// text): its LogValue keeps the code and reason only.
-		slog.Warn("tenant dry-run: the generator container cannot judge", "tenant", tenantID,
-			"error", unav)
+		slog.Warn("tenant dry-run: the generator container cannot judge", "request_id", requestIDOf(r),
+			"tenant", tenantID, "error", unav)
 		return false, generator.ClientReason(unav.Reason), nil, nil
 	case errors.Is(err, gitops.ErrPreviewUnchanged):
 		return false, notJudgedUnchanged, nil, nil

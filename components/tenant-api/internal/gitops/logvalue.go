@@ -14,21 +14,18 @@ import (
 // file, tenant ids. Each logs itself by closed-vocabulary fields and counts.
 // ⚠️ slog resolves a LogValuer only on the value it is handed, never on the
 // elements of a slice or the fields of a struct it marshals: log the
-// verdict, never kv.Findings. What actually keeps this text out of the log
-// is the behaviour matrix (internal/handler/log_canary_matrix_test.go); the
-// type scan (logvalue_test.go) only makes a new error type decide.
+// verdict, never kv.Findings. What keeps this text out of the log is the
+// behaviour matrix; the type scan only makes a new error type decide.
+//
+// The status and a finding's kind are the generator's strings too, so each
+// is logged through a closed vocabulary, anything else as "other".
 
 // LogValue implements slog.LogValuer: status, reason, truncated and the
 // findings by kind — never a finding's key, reason, file or tenants.
 func (kv *KeyVerdict) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("status", kv.Status), slog.String("reason", keyVerdictLogReason(kv.Reason)),
+	return slog.GroupValue(slog.String("status", logStatus(kv.Status)),
+		slog.String("reason", keyVerdictLogReason(kv.Reason)),
 		slog.Int("truncated", kv.Truncated), slog.Any("findings_by_kind", keyFindingKinds(kv.Findings)))
-}
-
-// LogValue implements slog.LogValuer: severity, kind and blocks only.
-func (f KeyFinding) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("severity", f.Severity), slog.String("kind", f.Kind),
-		slog.Bool("blocks", f.Blocks))
 }
 
 // LogValue implements slog.LogValuer: how many tenants and lines — never
@@ -75,11 +72,27 @@ func keyVerdictLogReason(reason string) string {
 	return "unknown"
 }
 
-// keyFindingKinds is "kind=n" per finding kind, sorted.
+// logOther stands in the log for a value outside its closed vocabulary.
+const logOther = "other"
+
+// logStatus is a key verdict's status as the log keeps it.
+func logStatus(status string) string {
+	if status == KeyVerdictComplete || status == KeyVerdictNotCompleted {
+		return status
+	}
+	return logOther
+}
+
+// keyFindingKinds is "kind=n" per finding kind (a verdictKinds key, else
+// "other"), sorted.
 func keyFindingKinds(findings []KeyFinding) []string {
 	counts := map[string]int{}
 	for _, f := range findings {
-		counts[f.Kind]++
+		k := f.Kind
+		if _, ok := verdictKinds[k]; !ok {
+			k = logOther
+		}
+		counts[k]++
 	}
 	out := make([]string, 0, len(counts))
 	for k, n := range counts {

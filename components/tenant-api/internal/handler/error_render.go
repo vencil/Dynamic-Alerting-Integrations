@@ -178,14 +178,15 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 		errors.As(err, &rej)
 		// #1560 ⑤-b: the typed error, never err (a wrapper logs its Error()
 		// text): its LogValue keeps the code and reason only.
-		slog.Warn("write refused: the generator gave no verdict", "error", rej)
+		slog.Warn("write refused: the generator gave no verdict", "request_id", requestIDOf(r), "error", rej)
 		return generatorRejectedText(rej), map[string]any{"reason": generator.ClientReason(rej.Reason)}
 	case errkind.ValidatorUnavailable, errkind.PolicyUnavailable:
 		var unav *generator.UnavailableError
 		errors.As(err, &unav)
 		// #1560 ⑤-b: the typed error, never err (a wrapper logs its Error()
 		// text): its LogValue keeps the code and reason only.
-		slog.Error("write refused: the generator container cannot judge", "error", unav)
+		slog.Error("write refused: the generator container cannot judge", "request_id", requestIDOf(r),
+			"error", unav)
 		return generatorUnavailableText(unav), map[string]any{"reason": generator.ClientReason(unav.Reason)}
 
 	case errkind.TenantTreeUnreadable, errkind.TenantStoreFault:

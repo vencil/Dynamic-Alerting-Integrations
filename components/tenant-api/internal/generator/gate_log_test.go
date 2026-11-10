@@ -17,8 +17,7 @@ import (
 // boundary the 422 (disclosedFindings, by RBAC) is not.
 //
 // Intentionally NOT t.Parallel(): it swaps the process-global default slog
-// logger (the convention of handler/middleware_test.go and
-// internal_error_redaction_test.go) and restores it.
+// logger and restores it.
 func TestValidateWrites_FindingsLogNoGeneratorText(t *testing.T) {
 	// A test canary, not a credential.
 	const canary = "CANARY-gate-log-5b"

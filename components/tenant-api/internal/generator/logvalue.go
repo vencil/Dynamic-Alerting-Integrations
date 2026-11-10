@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"sort"
 	"strconv"
+
+	"github.com/vencil/tenant-api/internal/gitops"
 )
 
 // #1560 ⑤-b (owner decision: the log keeps structured fields only). The
@@ -17,10 +19,11 @@ import (
 //
 // ⚠️ slog resolves a LogValuer only on the value it is handed: an error
 // wrapped by fmt.Errorf("…: %w", e) is not one, and logs its Error() text.
-// A call site logs the typed error errors.As found, never a wrapper
-// (pinned by TestLogValuer_ResolvedOnTheTypedErrorOnly).
-// TestLogValuer_EveryExportedErrorType requires every exported error type of
-// this package to implement it.
+// A call site logs the typed error errors.As found, never a wrapper.
+//
+// A "structured" field is the container's text too — a status, a result, a
+// finding's kind are strings it chose — so each is logged through a closed
+// vocabulary, anything else as "other".
 
 // LogValue implements slog.LogValuer: the code and the reason code, never
 // Message.
@@ -43,7 +46,7 @@ func (e *FindingsError) LogValue() slog.Value {
 // LogValue implements slog.LogValuer: result, reason code, exit code and the
 // findings by kind — never message, stderr_tail or a finding's text.
 func (v *Verdict) LogValue() slog.Value {
-	attrs := []slog.Attr{slog.String("result", v.Result)}
+	attrs := []slog.Attr{slog.String("result", logResult(v.Result))}
 	if v.Reason != "" {
 		attrs = append(attrs, slog.String("reason", ClientReason(v.Reason)))
 	}
@@ -59,20 +62,34 @@ func (v *Verdict) LogValue() slog.Value {
 // LogValue implements slog.LogValuer: status, reason code, tenants, seconds
 // — never the service's Message.
 func (kv *KeyVerdict) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("status", kv.Status), slog.String("reason", keyVerdictLogReason(kv.Reason)),
+	return slog.GroupValue(slog.String("status", logKeyVerdictStatus(kv.Status)),
+		slog.String("reason", keyVerdictLogReason(kv.Reason)),
 		slog.Int("tenants", kv.Tenants), slog.Float64("seconds", kv.Seconds))
 }
 
-// LogValue implements slog.LogValuer: the kind only.
-func (f Finding) LogValue() slog.Value {
-	return slog.GroupValue(slog.String("kind", f.Kind))
+// logResult is a verdict's result as the log keeps it.
+func logResult(result string) string {
+	switch result {
+	case ResultPass, ResultFindings, ResultRejected:
+		return result
+	}
+	return otherValue
 }
 
-// kindCounts is "kind=n" per finding kind, sorted.
+// logKeyVerdictStatus is a key verdict's status as the log keeps it.
+func logKeyVerdictStatus(status string) string {
+	switch status {
+	case gitops.KeyVerdictComplete, gitops.KeyVerdictNotCompleted:
+		return status
+	}
+	return otherValue
+}
+
+// kindCounts is "kind=n" per finding kind (logKind), sorted.
 func kindCounts(findings []Finding) []string {
 	counts := map[string]int{}
 	for _, f := range findings {
-		counts[f.Kind]++
+		counts[logKind(f.Kind)]++
 	}
 	out := make([]string, 0, len(counts))
 	for k, n := range counts {

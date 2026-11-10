@@ -3,8 +3,12 @@ package gitops
 import (
 	"bytes"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -41,8 +45,9 @@ func TestLogValuer_GitopsTypesLogNoText(t *testing.T) {
 	t.Parallel()
 	inner := errors.New("inner " + gitopsLogCanary)
 	for name, v := range map[string]any{
-		"KeyVerdict":         &KeyVerdict{Status: "not_completed", Reason: "r " + gitopsLogCanary},
-		"KeyFinding":         KeyFinding{Kind: "unread", Key: gitopsLogCanary, Reason: gitopsLogCanary},
+		"KeyVerdict": &KeyVerdict{Status: "not_completed", Reason: "r " + gitopsLogCanary},
+		"KeyVerdict, a status and kind outside the vocabulary": &KeyVerdict{Status: "s-" + gitopsLogCanary,
+			Findings: []KeyFinding{{Kind: "k-" + gitopsLogCanary, Severity: gitopsLogCanary}}},
 		"KeyVerdictError":    error(&KeyVerdictError{ByTenant: map[string][]string{"db-a": {gitopsLogCanary}}}),
 		"BatchRejectedError": error(&BatchRejectedError{Outcomes: []BatchOpOutcome{{Err: inner}}}),
 		"normalizedRefusal":  error(&normalizedRefusal{err: inner}),
@@ -71,8 +76,7 @@ var gitopsErrorTypesWithoutGeneratorText = map[string]string{
 	"WriteOutcomeUnknownError": "the commit id and git's own error from the ref update",
 }
 
-// Auxiliary to the behaviour matrix (internal/handler/log_canary_matrix_test.go):
-// a new error type in this package — exported or not, an embedded Error()
+// Auxiliary to the behaviour matrix: a new error type in this package — exported or not, an embedded Error()
 // or a parenthesised receiver included (go/types method sets) — either
 // implements slog.LogValuer or is listed above with why it holds no
 // generator text.
@@ -92,5 +96,49 @@ func TestLogValuer_EveryErrorTypeDecides(t *testing.T) {
 	if len(missing) != 0 {
 		t.Errorf("error types that neither implement slog.LogValuer nor say why they hold no "+
 			"generator text: %v", missing)
+	}
+}
+
+// The key verdict kinds the log keeps (verdictKinds' keys, else "other")
+// are the shared verdict's own (pkg/keyverdict, the SSOT; #1560 ⑤-b round
+// 7): read from its source, not a third list. A const block that cannot be
+// found, or no kind read from it, fails — not read is not equal.
+func TestVerdictKinds_AreTheSharedVerdictsKinds(t *testing.T) {
+	t.Parallel()
+	const src = "../../../threshold-exporter/app/pkg/keyverdict/keyverdict.go"
+	f, err := parser.ParseFile(token.NewFileSet(), src, nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("read the shared verdict's kinds: %v", err)
+	}
+	var kinds []string
+	for _, d := range f.Decls {
+		g, ok := d.(*ast.GenDecl)
+		if !ok || g.Tok != token.CONST || g.Doc == nil || strings.TrimSpace(g.Doc.Text()) != "Finding kinds." {
+			continue
+		}
+		for _, spec := range g.Specs {
+			vs := spec.(*ast.ValueSpec)
+			for i, name := range vs.Names {
+				if !strings.HasPrefix(name.Name, "Kind") || i >= len(vs.Values) {
+					continue
+				}
+				if lit, ok := vs.Values[i].(*ast.BasicLit); ok && lit.Kind == token.STRING {
+					v, _ := strconv.Unquote(lit.Value)
+					kinds = append(kinds, v)
+				}
+			}
+		}
+	}
+	if len(kinds) == 0 {
+		t.Fatalf("no Kind constant under `// Finding kinds.` in %s", src)
+	}
+	var ours []string
+	for k := range verdictKinds {
+		ours = append(ours, k)
+	}
+	slices.Sort(kinds)
+	slices.Sort(ours)
+	if !slices.Equal(kinds, ours) {
+		t.Errorf("verdictKinds %v, the shared verdict's kinds %v: add a row (its text, and what the log keeps)", ours, kinds)
 	}
 }
