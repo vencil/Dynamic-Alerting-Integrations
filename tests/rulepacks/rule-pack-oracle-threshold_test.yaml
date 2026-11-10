@@ -61,8 +61,8 @@ tests:
             exp_annotations:
               summary: "Oracle active sessions critical on t-fire"
               summary_zh: "t-fire 上 Oracle 活動 session 數嚴重過高"
-              platform_summary: "[] t-fire: Oracle active sessions at critical level — the SESSIONS/PROCESSES limit is near and new logins will fail; find blocking sessions now"
-              platform_summary_zh: "[] t-fire：Oracle 活動 session 數達嚴重水位 — 接近 SESSIONS／PROCESSES 上限，新登入將失敗；請立即找出阻塞的 session"
+              platform_summary: "[] t-fire: Oracle active sessions at critical level — check headroom to SESSIONS/PROCESSES (new logins fail past it; OracleHighSessionUtilization measures it); find blocking sessions"
+              platform_summary_zh: "[] t-fire：Oracle 活動 session 數達嚴重水位 — 請確認距 SESSIONS／PROCESSES 上限的餘裕（超過後新登入會失敗，比例見 OracleHighSessionUtilization）；找出阻塞的 session"
               description: "300 active sessions (critical threshold exceeded)"
               description_zh: "300 個活動 session（超過嚴重閾值）"
               runbook_url: ""

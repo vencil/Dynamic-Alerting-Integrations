@@ -78,8 +78,8 @@ tests:
             exp_annotations:
               summary: "DB2 active connections critical on t-fire"
               summary_zh: "t-fire 上 DB2 連線數嚴重過高"
-              platform_summary: "[] t-fire: DB2 connections at critical level — MAXAPPLS is near and new connections will be refused; cap the offending pool now"
-              platform_summary_zh: "[] t-fire：DB2 連線數達嚴重水位 — 接近 MAXAPPLS，新連線將被拒；請立即限制造成問題的連線池"
+              platform_summary: "[] t-fire: DB2 connections at critical level — check headroom to MAXAPPLS (new connections are refused past it); cap the offending pool"
+              platform_summary_zh: "[] t-fire：DB2 連線數達嚴重水位 — 請確認距 MAXAPPLS 的餘裕（超過後新連線會被拒）；限制造成問題的連線池"
               description: "450 active connections (critical threshold exceeded)"
               description_zh: "450 個活動連線（超過嚴重閾值）"
               runbook_url: ""

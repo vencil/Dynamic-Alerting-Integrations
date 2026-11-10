@@ -49,8 +49,8 @@ tests:
             exp_annotations:
               summary: "Redis memory critical on t-fire"
               summary_zh: "t-fire 的 Redis 記憶體使用量達嚴重水位"
-              platform_summary: "[] t-fire: Redis memory at critical level — eviction or OOM is imminent; free memory or raise maxmemory now"
-              platform_summary_zh: "[] t-fire: Redis 記憶體達嚴重水位 — 即將開始驅逐或 OOM；請立即釋放記憶體或調高 maxmemory"
+              platform_summary: "[] t-fire: Redis memory at critical level — check headroom to maxmemory (eviction / OOM risk); free memory or raise maxmemory"
+              platform_summary_zh: "[] t-fire: Redis 記憶體達嚴重水位 — 請確認距 maxmemory 的餘裕（有驅逐／OOM 風險）；釋放記憶體或調高 maxmemory"
               description: "Memory usage: 6GiB (critical threshold exceeded)"
               description_zh: "記憶體使用量: 6GiB（超過嚴重閾值）"
               runbook_url: ""
@@ -98,8 +98,8 @@ tests:
             exp_annotations:
               summary: "Redis connection count critical on t-fire"
               summary_zh: "t-fire 的 Redis 連線數嚴重過高"
-              platform_summary: "[] t-fire: Redis connections at critical level — maxclients rejections are near; find the leaking client and cap its pool now"
-              platform_summary_zh: "[] t-fire: Redis 連線數達嚴重水位 — 即將達到 maxclients 而拒絕新連線；請立即找出洩漏連線的客戶端並限制其連線池"
+              platform_summary: "[] t-fire: Redis connections at critical level — check headroom to maxclients; find the leaking client and cap its pool"
+              platform_summary_zh: "[] t-fire: Redis 連線數達嚴重水位 — 請確認距 maxclients 的餘裕；找出洩漏連線的客戶端並限制其連線池"
               description: "350 connected clients (critical threshold exceeded)"
               description_zh: "350 個已連線的客戶端（超過嚴重閾值）"
               runbook_url: ""

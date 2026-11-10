@@ -69,8 +69,8 @@ tests:
             exp_annotations:
               summary: "Critical RabbitMQ connection count on t-fire"
               summary_zh: "t-fire 的 RabbitMQ 連線數嚴重過高"
-              platform_summary: "[] t-fire: critical connection count — file descriptor and memory limits are near; find the connection-churning client now"
-              platform_summary_zh: "[] t-fire: 連線數嚴重 — 接近 file descriptor 與記憶體上限；請立即找出不斷建立連線的客戶端"
+              platform_summary: "[] t-fire: critical connection count — check headroom to the file descriptor and memory limits; find the connection-churning client"
+              platform_summary_zh: "[] t-fire: 連線數嚴重 — 請確認距 file descriptor 與記憶體上限的餘裕；找出不斷建立連線的客戶端"
               description: "Active connections: 2000 (critical threshold exceeded)"
               description_zh: "活躍連線: 2000 (超過嚴重閾值)"
               runbook_url: ""

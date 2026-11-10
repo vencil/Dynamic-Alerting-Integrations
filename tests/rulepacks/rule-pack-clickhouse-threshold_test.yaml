@@ -61,8 +61,8 @@ tests:
             exp_annotations:
               summary: "ClickHouse active connections exceed critical threshold"
               summary_zh: "ClickHouse 活動連線超出嚴重閾值"
-              platform_summary: "[] t-fire: ClickHouse connections at critical level — max_connections is near and new clients will be refused; cap the offending client pool now"
-              platform_summary_zh: "[] t-fire：ClickHouse 連線數達嚴重水位 — 接近 max_connections，新客戶端將被拒；請立即限制造成問題的 client pool"
+              platform_summary: "[] t-fire: ClickHouse connections at critical level — check headroom to max_connections (new clients are refused past it); cap the offending client pool"
+              platform_summary_zh: "[] t-fire：ClickHouse 連線數達嚴重水位 — 請確認距 max_connections 的餘裕（超過後新客戶端會被拒）；限制造成問題的 client pool"
               description: "350 active connections (critical threshold exceeded)"
               description_zh: "350 個活動連線（超過嚴重閾值）"
               runbook_url: ""
