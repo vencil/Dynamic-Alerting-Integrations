@@ -51,6 +51,12 @@ func TestDirty_RootPlatformFileDiffersFromHEAD(t *testing.T) {
 		{"untracked root platform file", func(t *testing.T, dir string) {
 			rootWrite(t, dir, "_platform.yaml", "tenants:\n  "+winTenant+":\n    container_cpu: \"70\"\n")
 		}},
+		{"file under a root _ directory", func(t *testing.T, dir string) {
+			if err := os.MkdirAll(filepath.Join(dir, "_team"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			rootWrite(t, dir, "_team/_defaults.yaml", "defaults:\n  container_cpu: 70\n")
+		}},
 		{"staged root change", func(t *testing.T, dir string) {
 			rootWrite(t, dir, "_defaults.yaml", "defaults:\n  container_cpu: 82\n")
 			gitT(t, dir, "add", "--", "_defaults.yaml")
@@ -169,6 +175,13 @@ func TestHeadUnborn(t *testing.T) {
 	gitT(t, empty, "init", "-q", "-b", "main")
 	if u, err := newTestWriter(empty, empty).headUnborn(empty); err != nil || !u {
 		t.Fatalf("a repository with no commit: unborn=%v err=%v", u, err)
+	}
+	// A detached HEAD names a commit: never unborn, and asking is an error
+	// (symbolic-ref has no branch to name), so a failed listing stays a failure.
+	detached := winRepo(t)
+	gitT(t, detached, "checkout", "-q", "--detach")
+	if u, err := newTestWriter(detached, detached).headUnborn(detached); err == nil || u {
+		t.Fatalf("a detached HEAD: unborn=%v err=%v, want an error", u, err)
 	}
 }
 
