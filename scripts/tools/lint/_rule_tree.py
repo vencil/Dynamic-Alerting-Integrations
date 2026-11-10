@@ -88,8 +88,7 @@ _RULES_FILE_EXTS = (".yaml", ".yml")
 # The deploy-copy / source naming convention that ties the two trees together:
 # k8s/03-monitoring/configmap-rules-<pack>.yaml is GENERATED from
 # rule-packs/rule-pack-<pack>.yaml. Both names are the rule-source
-# declaration's (#3471: `RuleSource.member` / `file_name`);
-# `check_portal_rulepack_claims.py` reads the same pairing through it.
+# declaration's (#3471: `RuleSource.member` / `file_name`).
 # The rule-packs source tree, as the rule-source declaration names it.
 _RULE_PACKS_DIR = _lib_consumer_read.RULE_PACKS.directory + "/"
 _RULE_PACK_PREFIX = _lib_consumer_read.RULE_PACKS.prefix

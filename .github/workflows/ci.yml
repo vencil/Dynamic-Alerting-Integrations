@@ -783,15 +783,6 @@ jobs:
           # to every other job — nothing in CI builds AND renders the image —
           # so it belongs in this ungated Lint leg, not behind a path filter.
           pre-commit run portal-asset-shipping-check --all-files
-          # Same 6C shape, missed by that sweep: portal-rulepack-claims is
-          # named in NO workflow, and its live-dogfood twin
-          # (tests/lint/test_check_portal_rulepack_claims.py::
-          # test_repo_portal_claims_all_resolve) only runs under Python
-          # Tests — which a portal-only PR skips, since the `python` filter
-          # covers neither tools/portal/** nor docs/assets/**. So the guard
-          # against the portal advertising alerts we don't ship had ZERO CI
-          # enforcement for exactly the PR shape it exists to police.
-          pre-commit run portal-rulepack-claims --all-files
           # Same 6C shape, third sweep — these three are named in NO workflow
           # AND their pytest twins do not enforce them either, so they had
           # ZERO CI enforcement of any kind (local pre-commit only):

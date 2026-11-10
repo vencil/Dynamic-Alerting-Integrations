@@ -800,8 +800,7 @@ def _doc_group_bullets(path: Path) -> list[str]:
     Every step FAILS LOUD rather than returning a short list. A silently empty
     or partial parse would make every assertion below vacuous — a gate that
     reports success forever is worse than no gate, because it also buys the
-    reader's confidence (same discipline as
-    `check_portal_rulepack_claims.parse_portal_claims`).
+    reader's confidence.
     """
     lines = path.read_text(encoding="utf-8").splitlines()
     anchors = [i for i, ln in enumerate(lines)

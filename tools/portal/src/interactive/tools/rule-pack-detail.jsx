@@ -6,214 +6,27 @@ related: [rule-pack-matrix, rule-pack-selector, runbook-viewer]
 ---
 
 import React, { useState } from 'react';
+import { RULE_PACK_DATA, PACK_ORDER, CATEGORY_LABELS } from './_common/data/rule-packs.js';
 
 const t = window.__t || ((zh, en) => en);
 
-const RULE_PACKS = {
-  mariadb: {
-    label: 'MariaDB/MySQL',
-    category: 'Database',
-    description: 'Comprehensive MySQL/MariaDB monitoring: connections, replication, query performance, and resource utilization.',
-    exporter: 'mysqld_exporter',
-    recording: [
-      { name: 'tenant:mysql_connection_usage:ratio', expr: 'sum by(tenant) (mysql_global_status_threads_connected) / sum by(tenant) (mysql_global_variables_max_connections)', desc: 'Connections as a ratio of max_connections' },
-      { name: 'tenant:mysql_threads_connected:max', expr: 'max by(tenant) (mysql_global_status_threads_connected)', desc: 'Peak connected threads per tenant (backs the connection alerts)' },
-      { name: 'tenant:mysql_threads_running:avg1m', expr: 'max by(tenant) (avg_over_time(mysql_global_status_threads_running[1m]))', desc: 'Running-threads 1m-avg saturation (threads_running, NOT host CPU%)' },
-      { name: 'tenant:mysql_slow_queries:rate5m', expr: 'sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))', desc: 'Slow query rate (5m)' },
-      { name: 'tenant:mysql_replication_lag:max', expr: 'max by(tenant) (mysql_slave_status_seconds_behind_master - (mysql_slave_status_sql_delay or 0 * mysql_slave_status_seconds_behind_master))', desc: 'Replication lag in seconds with any deliberate sql_delay subtracted (backs both replication-lag alerts); the or-0 arm keeps older MariaDB builds that expose no sql_delay field from emptying the series' },
-    ],
-    alerts: [
-      { name: 'MariaDBHighConnections', severity: 'warning', expr: 'tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections', desc: 'Connections exceed warning threshold (for: 30s)', action: 'Check connection pooling, consider raising max_connections' },
-      { name: 'MariaDBHighConnectionsCritical', severity: 'critical', expr: 'tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections_critical', desc: 'Connections exceed critical threshold (for: 30s)', action: 'Immediate: kill idle connections, investigate connection leaks' },
-      { name: 'MariaDBHighThreadsRunning', severity: 'warning', expr: 'tenant:mysql_threads_running:avg1m > on(tenant) group_left tenant:alert_threshold:mysql_threads_running', desc: 'Running-threads saturation above threshold (threads_running, NOT host CPU%; for: 30s)', action: 'Investigate lock-wait pile-ups or heavy queries pinning threads; for host CPU see PodContainerHighCPU' },
-      { name: 'MariaDBHighSlowQueries', severity: 'warning', expr: 'tenant:mysql_slow_queries:rate5m > 1', desc: 'Slow-query rate above 1/s sustained (for: 5m)', action: 'Enable slow query log, analyze with pt-query-digest' },
-      { name: 'MariaDBSemiSyncReplicasGone', severity: 'critical', expr: 'max by(tenant) (mysql_global_variables_rpl_semi_sync_master_enabled == 1 and on(tenant, instance) mysql_global_status_rpl_semi_sync_master_clients == 0)', desc: 'Semi-sync replication is enabled but the primary has zero connected semi-sync replicas (for: 1m)', action: 'Check replica processes and network path to the primary; writes may be falling back to async' },
-      { name: 'MariaDBReplicaIOThreadDown', severity: 'critical', expr: 'max by(tenant) (mysql_slave_status_slave_io_running == 0 and on(tenant, instance) mysql_slave_status_master_server_id > 0)', desc: 'Replica IO thread stopped — the replica no longer receives events from the primary, so the DR/read copy goes stale. seconds_behind_master turns NULL/absent (or reads 0) in this state, so the lag alerts cannot see it. The master_server_id gate keeps non-replica instances silent (for: 1m; no maintenance-window exemption)', action: 'Check SHOW SLAVE STATUS Last_IO_Error — network, replication credentials, or purged primary binlog' },
-      { name: 'MariaDBReplicaSQLThreadDown', severity: 'critical', expr: 'max by(tenant) (mysql_slave_status_slave_sql_running == 0 and on(tenant, instance) mysql_slave_status_master_server_id > 0)', desc: 'Replica SQL thread stopped — events are still received (relay log grows) but no longer applied, usually a replication error (duplicate key / row not found). The replica diverges until it is resolved, and seconds_behind_master is NULL/absent so the lag alerts cannot see it (for: 1m; no maintenance-window exemption)', action: 'Check SHOW SLAVE STATUS Last_SQL_Error and resolve the conflicting statement before restarting the thread' },
-      { name: 'MariaDBReplicationLag', severity: 'warning', expr: 'tenant:mysql_replication_lag:max > on(tenant) group_left tenant:alert_threshold:mysql_replication_lag', desc: 'Replication lag above the warning threshold (for: 30s)', action: 'Check replica IO/apply health and primary write load' },
-      { name: 'MariaDBReplicationLagCritical', severity: 'critical', expr: 'tenant:mysql_replication_lag:max > on(tenant) group_left tenant:alert_threshold:mysql_replication_lag_critical', desc: 'Replication lag above the critical threshold — a failover now risks losing this much data (for: 30s)', action: 'Escalate: throttle primary write load or clear the replica apply bottleneck before failing over' },
-      { name: 'MariaDBSystemBottleneck', severity: 'critical', expr: '(tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections) and on(tenant) (tenant:mysql_threads_running:avg1m > on(tenant) group_left tenant:alert_threshold:mysql_threads_running)', desc: 'Composite: connections AND running-threads both over threshold (for: 60s)', action: 'Comprehensive health check needed — the instance is saturated on both axes' },
-    ]
-  },
-  postgresql: {
-    label: 'PostgreSQL',
-    category: 'Database',
-    description: 'PostgreSQL monitoring: connections, cache efficiency, query performance, disk usage, and replication health.',
-    exporter: 'postgres_exporter',
-    recording: [
-      { name: 'tenant:pg_connection_usage:ratio', expr: '100 * max by(tenant) (pg_stat_activity_count) / on(tenant) clamp_min(max by(tenant) (pg_settings_max_connections), 1)', desc: 'Active connections as a percentage of max_connections' },
-      { name: 'tenant:pg_replication_lag:max', expr: 'max by(tenant) (pg_replication_lag)', desc: 'Replication lag in seconds (backs both replication-lag alerts)' },
-      { name: 'tenant:pg_rollback_ratio:rate5m', expr: 'sum by(tenant) (rate(pg_stat_database_xact_rollback[5m])) / on(tenant) clamp_min(sum by(tenant) (rate(pg_stat_database_xact_commit[5m])) + sum by(tenant) (rate(pg_stat_database_xact_rollback[5m])), 1)', desc: 'Transaction rollback ratio (5m) — backs PostgreSQLHighRollbackRatio' },
-    ],
-    alerts: [
-      { name: 'PostgreSQLHighConnections', severity: 'warning', expr: 'tenant:pg_connection_usage:ratio > on(tenant) group_left tenant:alert_threshold:pg_connections', desc: 'Connection usage exceeds threshold (for: 30s)', action: 'Review connection pooling (PgBouncer), check for leaks' },
-      { name: 'PostgreSQLHighConnectionsCritical', severity: 'critical', expr: 'tenant:pg_connection_usage:ratio > on(tenant) group_left tenant:alert_threshold:pg_connections_critical', desc: 'Critical connection threshold (for: 30s)', action: 'Terminate idle connections, scale connection pool' },
-      { name: 'PostgreSQLHighReplicationLag', severity: 'warning', expr: 'tenant:pg_replication_lag:max > on(tenant) group_left tenant:alert_threshold:pg_replication_lag', desc: 'Replication lag above threshold (for: 30s)', action: 'Check WAL sender/receiver, network bandwidth' },
-    ]
-  },
-  redis: {
-    label: 'Redis',
-    category: 'Database',
-    description: 'Redis monitoring: memory usage, eviction rate, connected clients, and keyspace operations.',
-    exporter: 'redis_exporter',
-    recording: [
-      { name: 'tenant:redis_memory_used_bytes:max', expr: 'max by(tenant) (redis_memory_used_bytes)', desc: 'Peak memory used per tenant (backs RedisHighMemory)' },
-      { name: 'tenant:redis_evicted_keys:rate5m', expr: 'sum by(tenant) (rate(redis_evicted_keys_total[5m]))', desc: 'Key eviction rate (5m)' },
-    ],
-    alerts: [
-      { name: 'RedisHighMemory', severity: 'warning', expr: 'tenant:redis_memory_used_bytes:max > on(tenant) group_left tenant:alert_threshold:redis_memory_used_bytes', desc: 'Memory usage above threshold (for: 5m)', action: 'Review eviction policy, increase maxmemory' },
-      { name: 'RedisHighKeyEvictions', severity: 'warning', expr: 'tenant:redis_evicted_keys:rate5m > on(tenant) group_left tenant:alert_threshold:redis_evicted_keys_rate', desc: 'Key-eviction rate above threshold (for: 5m)', action: 'Increase memory or optimize key TTLs' },
-      { name: 'RedisHighConnections', severity: 'warning', expr: 'tenant:redis_connected_clients:max > on(tenant) group_left tenant:alert_threshold:redis_connected_clients', desc: 'Connected clients above threshold (for: 5m)', action: 'Check for connection leaks, use connection pooling' },
-    ]
-  },
-  kafka: {
-    label: 'Kafka',
-    category: 'Messaging',
-    description: 'Kafka monitoring: consumer lag, broker health, ISR shrink detection, and partition balance.',
-    exporter: 'kafka_exporter / JMX exporter',
-    recording: [
-      { name: 'tenant:kafka_consumer_lag:max', expr: 'max by(tenant) (kafka_consumergroup_lag_sum)', desc: 'Max consumer-group lag per tenant' },
-      { name: 'tenant:kafka_broker_count:max', expr: 'max by(tenant) (kafka_brokers)', desc: 'Active broker count (from kafka_brokers, not the JMX leader-count gauge)' },
-    ],
-    alerts: [
-      { name: 'KafkaHighConsumerLag', severity: 'warning', expr: 'tenant:kafka_consumer_lag:max > on(tenant) group_left tenant:alert_threshold:kafka_consumer_lag', desc: 'Consumer lag exceeds threshold (for: 30s)', action: 'Scale consumers, check for slow processing' },
-      { name: 'KafkaHighConsumerLagCritical', severity: 'critical', expr: 'tenant:kafka_consumer_lag:max > on(tenant) group_left tenant:alert_threshold:kafka_consumer_lag_critical', desc: 'Critical consumer lag (for: 30s)', action: 'Immediate attention: consumers may be down' },
-      { name: 'KafkaLowBrokerCount', severity: 'warning', expr: 'tenant:kafka_broker_count:max < on(tenant) group_left tenant:alert_threshold:kafka_broker_count', desc: 'Fewer active brokers than expected (for: 30s)', action: 'Check broker health, disk space, ZooKeeper' },
-      { name: 'KafkaUnderReplicatedPartitions', severity: 'warning', expr: 'tenant:kafka_under_replicated_partitions:max > on(tenant) group_left tenant:alert_threshold:kafka_under_replicated_partitions', desc: 'Under-replicated partitions above threshold (for: 30s; see KafkaUnderReplicatedPartitionsCritical for the critical tier)', action: 'Investigate broker logs, disk I/O' },
-    ]
-  },
-  mongodb: {
-    label: 'MongoDB',
-    category: 'Database',
-    description: 'MongoDB monitoring: connections, replication lag, opcounters, memory and WiredTiger cache.',
-    exporter: 'mongodb_exporter',
-    recording: [
-      { name: 'tenant:mongodb_connections_current:max', expr: 'max by(tenant) (mongodb_connections{state="current"})', desc: 'Current connections per tenant (backs MongoDBHighConnections)' },
-      { name: 'tenant:mongodb_replication_lag:max', expr: 'max by(tenant) (mongodb_mongod_replset_member_replication_lag)', desc: 'Replication lag in seconds' },
-    ],
-    alerts: [
-      { name: 'MongoDBHighConnections', severity: 'warning', expr: 'tenant:mongodb_connections_current:max > on(tenant) group_left tenant:alert_threshold:mongodb_connections_current', desc: 'Connections exceed threshold (for: 5m)', action: 'Check connection pooling and client configuration' },
-      { name: 'MongoDBReplicationLag', severity: 'warning', expr: 'tenant:mongodb_replication_lag:max > on(tenant) group_left tenant:alert_threshold:mongodb_replication_lag', desc: 'Replication lag above threshold (for: 2m)', action: 'Check secondary node health and network' },
-    ]
-  },
-  elasticsearch: {
-    label: 'Elasticsearch',
-    category: 'Database',
-    description: 'Elasticsearch monitoring: cluster health, JVM heap, indexing throughput, search latency.',
-    exporter: 'elasticsearch_exporter',
-    recording: [
-      { name: 'tenant:es_heap_usage_percent:max', expr: 'max by(tenant) (elasticsearch_jvm_memory_used_bytes{area="heap"} / elasticsearch_jvm_memory_max_bytes{area="heap"}) * 100', desc: 'JVM heap usage percentage' },
-    ],
-    alerts: [
-      { name: 'ElasticsearchHighHeapUsage', severity: 'warning', expr: 'tenant:es_heap_usage_percent:max > on(tenant) group_left tenant:alert_threshold:es_heap_usage_percent', desc: 'JVM heap above threshold (for: 5m)', action: 'Review heap size settings, check for memory leaks' },
-      { name: 'ElasticsearchClusterRed', severity: 'critical', expr: 'tenant:es_cluster_health:status == 2', desc: 'Cluster status is red (for: 30s)', action: 'Check unassigned shards, node availability' },
-      { name: 'ElasticsearchHighDiskUsage', severity: 'warning', expr: 'tenant:es_disk_usage_percent:max > on(tenant) group_left tenant:alert_threshold:es_disk_usage_percent', desc: 'Disk usage above threshold (for: 5m)', action: 'Delete old indices, add nodes, adjust ILM policy' },
-    ]
-  },
-  oracle: {
-    label: 'Oracle',
-    category: 'Database',
-    description: 'Oracle DB monitoring: tablespace usage, session count, wait events, ASM disk groups.',
-    exporter: 'oracledb_exporter',
-    recording: [
-      { name: 'tenant:oracle_sessions_active:max', expr: 'max by(tenant) (oracledb_sessions_active)', desc: 'Active session count per tenant' },
-      { name: 'tenant:oracle_tablespace_used_percent:max', expr: 'max by(tenant) (oracledb_tablespace_used_percent)', desc: 'Tablespace usage percentage' },
-    ],
-    alerts: [
-      { name: 'OracleHighActiveSessions', severity: 'warning', expr: 'tenant:oracle_sessions_active:max > on(tenant) group_left tenant:alert_threshold:oracle_sessions_active', desc: 'Active sessions exceed threshold (for: 5m)', action: 'Check for session leaks, review connection pooling' },
-      { name: 'OracleTablespaceAlmostFull', severity: 'warning', expr: 'tenant:oracle_tablespace_used_percent:max > on(tenant) group_left tenant:alert_threshold:oracle_tablespace_used_percent', desc: 'Tablespace nearing capacity (for: 5m)', action: 'Extend tablespace, purge old data' },
-    ]
-  },
-  db2: {
-    label: 'DB2',
-    category: 'Database',
-    description: 'IBM DB2 monitoring: bufferpool hit ratio, connections, tablespace status, log usage.',
-    exporter: 'db2_exporter',
-    recording: [
-      { name: 'tenant:db2_connections_active:max', expr: 'max by(tenant) (db2_connections_active)', desc: 'Active connection count per tenant' },
-      { name: 'tenant:db2_bufferpool_hit_ratio:min', expr: 'min by(tenant) (db2_bufferpool_hit_ratio)', desc: 'Worst bufferpool hit ratio per tenant' },
-    ],
-    alerts: [
-      { name: 'DB2HighConnections', severity: 'warning', expr: 'tenant:db2_connections_active:max > on(tenant) group_left tenant:alert_threshold:db2_connections_active', desc: 'Connections above threshold (for: 5m)', action: 'Review max_connections, check for connection leaks' },
-      { name: 'DB2LowBufferpoolHitRatio', severity: 'warning', expr: 'tenant:db2_bufferpool_hit_ratio:min < on(tenant) group_left tenant:alert_threshold:db2_bufferpool_hit_ratio', desc: 'Bufferpool hit ratio below threshold (for: 10m)', action: 'Increase bufferpool size, analyze access patterns' },
-    ]
-  },
-  clickhouse: {
-    label: 'ClickHouse',
-    category: 'Database',
-    description: 'ClickHouse monitoring: query performance, merge operations, memory usage, replication queue.',
-    exporter: 'built-in /metrics',
-    recording: [
-      { name: 'tenant:clickhouse_queries:rate5m', expr: 'sum by(tenant) (rate(ClickHouseProfileEvents_Query{tenant!=""}[5m]))', desc: 'Query rate (5m)' },
-      { name: 'tenant:clickhouse_memory_tracking:max', expr: 'max by(tenant) (ClickHouseMetrics_MemoryTracking{tenant!=""})', desc: 'Tracked memory in bytes per tenant' },
-    ],
-    alerts: [
-      { name: 'ClickHouseHighMemoryUsage', severity: 'warning', expr: 'tenant:clickhouse_memory_tracking:max > on(tenant) group_left tenant:alert_threshold:clickhouse_memory_tracking_bytes', desc: 'Memory usage above threshold (for: 5m)', action: 'Review max_memory_usage, optimize queries' },
-      { name: 'ClickHouseReplicationLag', severity: 'warning', expr: 'tenant:clickhouse_replication_queue:max > on(tenant) group_left tenant:alert_threshold:clickhouse_replication_queue', desc: 'Replication queue growing (for: 5m)', action: 'Check network between replicas, disk I/O' },
-    ]
-  },
-  rabbitmq: {
-    label: 'RabbitMQ',
-    category: 'Messaging',
-    description: 'RabbitMQ monitoring: queue depth, consumer count, message rates, node health.',
-    exporter: 'rabbitmq_exporter',
-    recording: [
-      { name: 'tenant:rabbitmq_queue_messages:max', expr: 'max by(tenant) (rabbitmq_queue_messages_ready)', desc: 'Deepest ready-message queue per tenant' },
-      { name: 'tenant:rabbitmq_consumers:max', expr: 'max by(tenant) (rabbitmq_queue_consumers)', desc: 'Consumer count per tenant' },
-    ],
-    alerts: [
-      { name: 'RabbitMQHighQueueDepth', severity: 'warning', expr: 'tenant:rabbitmq_queue_messages:max > on(tenant) group_left tenant:alert_threshold:rabbitmq_queue_messages', desc: 'Queue depth above threshold (for: 30s)', action: 'Scale consumers, check for processing bottlenecks' },
-      { name: 'RabbitMQLowConsumers', severity: 'warning', expr: 'tenant:rabbitmq_consumers:max < on(tenant) group_left tenant:alert_threshold:rabbitmq_consumers', desc: 'Consumer count below threshold (for: 30s)', action: 'Check consumer processes, restart if needed' },
-    ]
-  },
-  kubernetes: {
-    label: 'Kubernetes',
-    category: 'Infrastructure',
-    description: 'Kubernetes monitoring: pod restarts, CPU throttling, OOMKill detection, node resource pressure.',
-    exporter: 'kube-state-metrics + node_exporter',
-    recording: [
-      { name: 'tenant:container_cpu_throttle_percent:by_container', expr: 'label_replace((sum by(namespace, pod, container) (rate(container_cpu_cfs_throttled_periods_total{namespace=~"db-.+"}[5m])) / sum by(namespace, pod, container) (rate(container_cpu_cfs_periods_total{namespace=~"db-.+"}[5m])) * 100), "tenant", "$1", "namespace", "(.*)")', desc: 'CPU throttle percentage per container' },
-      { name: 'tenant:container_waiting_reason:count', expr: 'label_replace(count by(namespace, reason) (kube_pod_container_status_waiting_reason{namespace=~"db-.+"} > 0), "tenant", "$1", "namespace", "(.*)")', desc: 'Containers waiting per reason — backs ContainerCrashLoop / ContainerImagePullFailure' },
-      { name: 'tenant:container_oom_events_1h:by_container', expr: 'label_replace(sum by(namespace, pod, container) (max_over_time(container_oom_events_total{namespace=~"db-.+"}[1h]) - min_over_time(container_oom_events_total{namespace=~"db-.+"}[1h])), "tenant", "$1", "namespace", "(.*)")', desc: 'Rolling 1h OOM-kill count per container. Uses max_over_time - min_over_time, NOT increase(): a restart creates a NEW cgroup series, and increase() extrapolation error compounds across those short-lived series (2 real kills can read as 3.0).' },
-    ],
-    alerts: [
-      { name: 'ContainerCrashLoop', severity: 'critical', expr: '(tenant:container_waiting_reason:count{reason="CrashLoopBackOff"} * on(tenant) group_left user_state_filter{filter="container_crashloop"}) > 0', desc: 'Container stuck in CrashLoopBackOff (for: 30s)', action: 'Check pod logs, review resource limits' },
-      { name: 'PodContainerCPUThrottled', severity: 'warning', expr: 'tenant_version:pod_weakest_cpu_throttle_percent:vlabeled > tenant_version:alert_threshold:container_cpu_throttle{severity="warning"}', desc: 'Sustained CFS throttling on the weakest container (for: 15m; a critical tier ships as PodContainerCPUThrottledCritical)', action: 'Spread the burst / tune worker concurrency first; raise the CPU limit only if genuinely under-provisioned' },
-      { name: 'ContainerOOMKilled', severity: 'warning', expr: 'max by(tenant) (tenant:container_oom_events_1h:by_container) > 0', desc: 'Kernel OOM-killed a container in the last hour (for: 30s). Counted from cAdvisor container_oom_events_total — NOT kube-state-metrics: KSM only marks OOMKilled when the OOM killer picks the container PID 1, so a killed child process is invisible to the K8s API (the blind spot upstream kubernetes-mixin cites for shipping no OOM alert).', action: 'Compare the memory limit against the real working set — PodContainerHighMemory may look clean because a spike-and-die never lands in a 15s scrape' },
-      { name: 'ContainerOOMKilledCritical', severity: 'critical', expr: 'max by(tenant) (tenant:container_oom_events_1h:by_container) >= 3', desc: '3 or more OOM kills on one container within 1h — it is not converging on its memory limit (for: 30s)', action: 'Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too' },
-    ]
-  },
-  operational: {
-    label: 'Operational',
-    category: 'Platform',
-    description: 'Per-tenant operational state signals: config-change events plus the sentinel alerts that make silence-mode and severity-dedup visible. (Config-reload failures and cardinality limits are platform-scope — see the Platform Health pack.)',
-    exporter: 'threshold-exporter',
-    // This pack ships NO recording rules — its alerts read raw injected series
-    // (user_silent_mode / user_severity_dedup / da_config_event) directly.
-    recording: [],
-    alerts: [
-      { name: 'TenantConfigEvent', severity: 'warning', expr: 'da_config_event == 1', desc: 'A tenant config change was applied (for: 0s)', action: 'Informational — correlate with any alert-behavior change that follows' },
-      { name: 'TenantSilentWarning', severity: 'none', expr: 'user_silent_mode{target_severity="warning"} == 1', desc: 'Sentinel: tenant has silenced warning-severity alerts', action: 'Confirm the silence is intentional and time-boxed' },
-      { name: 'TenantSilentCritical', severity: 'none', expr: 'user_silent_mode{target_severity="critical"} == 1', desc: 'Sentinel: tenant has silenced critical-severity alerts', action: 'Confirm the silence is intentional — critical silence hides outages' },
-      { name: 'TenantSeverityDedupEnabled', severity: 'none', expr: 'user_severity_dedup{mode="enable"} == 1', desc: 'Sentinel: severity dedup is enabled for this tenant (warning suppressed while critical fires)', action: 'Informational — explains why a warning is absent alongside a critical' },
-    ]
-  },
-  platform: {
-    label: 'Platform Health',
-    category: 'Platform',
-    description: 'Platform self-monitoring: threshold-exporter health, Prometheus/Alertmanager status, rule evaluation errors.',
-    exporter: 'threshold-exporter + prometheus',
-    // This pack ships NO recording rules — the platform alerts evaluate raw
-    // platform metrics (up{job=...} / da_* / prometheus_*) directly.
-    recording: [],
-    alerts: [
-      { name: 'ThresholdExporterDown', severity: 'warning', expr: 'up{job="threshold-exporter"} == 0', desc: 'A threshold-exporter instance is down (for: 1m; total absence of the job ships separately as ThresholdExporterAbsent, critical)', action: 'Check deployment, pod status, readiness probes' },
-      { name: 'PrometheusRuleEvaluationFailing', severity: 'critical', expr: 'increase(prometheus_rule_evaluation_failures_total[10m]) > 0', desc: 'Rule evaluation failures detected (for: 15m)', action: 'Check Prometheus logs, fix PromQL syntax errors' },
-      { name: 'ConfigParseFailure', severity: 'warning', expr: 'increase(da_config_parse_failure_total{file_basename!="_defaults.yaml"}[1h]) > 5', desc: 'Repeated tenant-config parse failures (for: 5m)', action: 'Check config syntax, review YAML validation errors' },
-      { name: 'TenantMetricsOverLimit', severity: 'warning', expr: 'da_tenant_metrics_over_limit > 0', desc: 'A tenant is over its metric-cardinality limit (for: 5m)', action: 'Review tenant config, reduce metric dimensions' },
-    ]
-  },
-};
+// #3681: this page no longer carries a hand-copied list of recording rules and
+// alerts — that copy drifted (missing records, exprs without the maintenance
+// clause, wrong counts, four packs absent) and no gate could see it. Every
+// number here comes from the generated platform data (RULE_PACK_DATA); the
+// rules themselves are read where they are generated: ALERT-REFERENCE (every
+// alert, with its trigger and suggested action) and the pack's own YAML.
+const REPO_BASE = 'https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main';
+
+const PACK_KEYS = [
+  ...PACK_ORDER.filter(key => RULE_PACK_DATA[key]),
+  ...Object.keys(RULE_PACK_DATA).filter(key => !PACK_ORDER.includes(key)),
+];
+
+function alertReferenceUrl() {
+  const lang = (document.documentElement.lang || '').toLowerCase();
+  return `${REPO_BASE}/rule-packs/ALERT-REFERENCE${lang.startsWith('zh') ? '' : '.en'}.md`;
+}
 
 // Read pack from URL hash
 function getPackFromHash() {
@@ -223,142 +36,84 @@ function getPackFromHash() {
   } catch { return null; }
 }
 
-const SeverityBadge = ({ severity }) => {
-  const colors = {
-    warning: 'bg-amber-100 text-amber-800 border-amber-200',
-    critical: 'bg-red-100 text-red-800 border-red-200',
-  };
-  return (
-    <span className={`inline-block px-2 py-0.5 text-xs font-semibold rounded border ${colors[severity] || 'bg-gray-100 text-gray-700 border-gray-200'}`}>
-      {severity}
-    </span>
-  );
-};
+function categoryLabel(category) {
+  const label = CATEGORY_LABELS[category];
+  return label ? label() : category;
+}
 
 export default function RulePackDetail() {
   const initialPack = getPackFromHash();
-  const [selectedPack, setSelectedPack] = useState(initialPack && RULE_PACKS[initialPack] ? initialPack : 'mariadb');
-  const [expandedAlerts, setExpandedAlerts] = useState(new Set());
+  const [selectedPack, setSelectedPack] = useState(
+    initialPack && RULE_PACK_DATA[initialPack] ? initialPack : PACK_KEYS[0]);
 
-  const pack = RULE_PACKS[selectedPack];
-
-  const toggleAlert = (name) => {
-    setExpandedAlerts(prev => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name); else next.add(name);
-      return next;
-    });
-  };
+  const pack = RULE_PACK_DATA[selectedPack];
 
   const handlePackChange = (key) => {
     setSelectedPack(key);
-    setExpandedAlerts(new Set());
     window.history.replaceState(null, '', '#pack=' + key);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 p-8">
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100 p-8">
       <div className="max-w-5xl mx-auto">
         <div className="mb-8">
-          <h1 className="text-3xl font-bold text-slate-900 mb-2">{t('Rule Pack 詳情', 'Rule Pack Details')}</h1>
-          <p className="text-slate-600">{t('深入查看每個 Rule Pack 的規則與 PromQL 表達式', 'Explore recording rules, alert rules, and PromQL expressions for each pack')}</p>
+          <h1 className="text-3xl font-bold text-gray-900 mb-2">{t('Rule Pack 詳情', 'Rule Pack Details')}</h1>
+          <p className="text-gray-600">{t('每個 Rule Pack 的規模與規則來源；規則本身請看生成的告警參考與 Rule Pack YAML',
+            'Size and sources of each pack; the rules themselves are in the generated alert reference and the pack YAML')}</p>
         </div>
 
         <div className="flex gap-3 flex-wrap mb-8">
-          {Object.entries(RULE_PACKS).map(([key, p]) => (
+          {PACK_KEYS.map(key => (
             <button
               key={key}
               onClick={() => handlePackChange(key)}
+              aria-pressed={selectedPack === key}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                 selectedPack === key
                   ? 'bg-blue-600 text-white shadow-md'
-                  : 'bg-white text-slate-700 border border-slate-200 hover:border-blue-300'
+                  : 'bg-white text-gray-700 border border-gray-200 hover:border-blue-300'
               }`}
             >
-              {p.label}
+              {RULE_PACK_DATA[key].label || key}
             </button>
           ))}
         </div>
 
-        {/* Pack Header */}
-        <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 mb-6">
-          <div className="flex items-start justify-between flex-wrap gap-4">
-            <div>
-              <h2 className="text-2xl font-bold text-slate-900">{pack.label}</h2>
-              <p className="text-slate-600 mt-1">{pack.description}</p>
+        {pack && (
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
+            <div className="flex items-start justify-between flex-wrap gap-4">
+              <div>
+                <h2 className="text-2xl font-bold text-gray-900">{pack.label || selectedPack}</h2>
+                <div className="mt-2 text-xs text-gray-500">
+                  {t('分類', 'Category')}: <span className="font-medium">{categoryLabel(pack.category)}</span>
+                  {pack.exporter && (<>
+                    {' · '}{t('匯出器', 'Exporter')}: <code className="bg-gray-100 px-2 py-0.5 rounded">{pack.exporter}</code>
+                  </>)}
+                </div>
+              </div>
+              <div className="flex gap-4 text-center">
+                <div className="bg-blue-50 px-4 py-2 rounded-lg">
+                  <div className="text-xl font-bold text-blue-600">{pack.recordingRules ?? '—'}</div>
+                  <div className="text-xs text-gray-500">{t('記錄規則', 'Recording')}</div>
+                </div>
+                <div className="bg-red-50 px-4 py-2 rounded-lg">
+                  <div className="text-xl font-bold text-red-600">{pack.alertRules ?? '—'}</div>
+                  <div className="text-xs text-gray-500">{t('告警規則', 'Alerts')}</div>
+                </div>
+              </div>
             </div>
-            <div className="flex gap-4 text-center">
-              <div className="bg-blue-50 px-4 py-2 rounded-lg">
-                <div className="text-xl font-bold text-blue-600">{pack.recording.length}</div>
-                <div className="text-xs text-slate-500">{t('記錄規則', 'Recording')}</div>
-              </div>
-              <div className="bg-red-50 px-4 py-2 rounded-lg">
-                <div className="text-xl font-bold text-red-600">{pack.alerts.length}</div>
-                <div className="text-xs text-slate-500">{t('告警規則', 'Alerts')}</div>
-              </div>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <a href={alertReferenceUrl()} target="_blank" rel="noopener noreferrer"
+                 className="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white hover:bg-blue-700">
+                {t('告警參考（觸發條件與建議操作）', 'Alert reference (triggers and suggested actions)')}
+              </a>
+              <a href={`${REPO_BASE}/rule-packs/rule-pack-${selectedPack}.yaml`} target="_blank" rel="noopener noreferrer"
+                 className="px-4 py-2 rounded-lg text-sm font-medium bg-white text-gray-700 border border-gray-200 hover:border-blue-300">
+                {t('Rule Pack YAML（完整 PromQL）', 'Rule Pack YAML (full PromQL)')}
+              </a>
             </div>
           </div>
-          <div className="mt-3 text-xs text-slate-500">
-            {t('分類', 'Category')}: <span className="font-medium">{pack.category}</span>
-            {' · '}{t('匯出器', 'Exporter')}: <code className="bg-slate-100 px-2 py-0.5 rounded">{pack.exporter}</code>
-          </div>
-        </div>
-
-        {/* Recording Rules */}
-        <div className="mb-6">
-          <h3 className="text-lg font-semibold text-slate-900 mb-3">{t('記錄規則', 'Recording Rules')}</h3>
-          <div className="space-y-2">
-            {pack.recording.length === 0 ? (
-              <div className="bg-white rounded-lg border border-dashed border-gray-300 p-4 text-sm text-gray-500">
-                {t('此 Rule Pack 不含記錄規則 — 其告警直接讀取原始指標。',
-                   'This pack ships no recording rules — its alerts evaluate raw metrics directly.')}
-              </div>
-            ) : pack.recording.map(rule => (
-              <div key={rule.name} className="bg-white rounded-lg border border-slate-200 p-4">
-                <div className="font-mono text-sm font-semibold text-blue-700 mb-1">{rule.name}</div>
-                <div className="text-xs text-slate-600 mb-2">{rule.desc}</div>
-                <pre className="bg-slate-900 text-green-400 text-xs p-3 rounded overflow-x-auto font-mono">{rule.expr}</pre>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Alert Rules */}
-        <div>
-          <h3 className="text-lg font-semibold text-slate-900 mb-3">{t('告警規則', 'Alert Rules')}</h3>
-          <div className="space-y-2">
-            {pack.alerts.map(alert => (
-              <div
-                key={alert.name}
-                className="bg-white rounded-lg border border-slate-200 overflow-hidden"
-              >
-                <button
-                  onClick={() => toggleAlert(alert.name)}
-                  className="w-full text-left p-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <SeverityBadge severity={alert.severity} />
-                    <span className="font-mono text-sm font-semibold text-slate-900">{alert.name}</span>
-                  </div>
-                  <span className="text-slate-400 text-sm">{expandedAlerts.has(alert.name) ? '▲' : '▼'}</span>
-                </button>
-                {expandedAlerts.has(alert.name) && (
-                  <div className="px-4 pb-4 border-t border-slate-100 pt-3 space-y-3">
-                    <div className="text-sm text-slate-600">{alert.desc}</div>
-                    <div>
-                      <div className="text-xs font-semibold text-slate-500 mb-1">PromQL</div>
-                      <pre className="bg-slate-900 text-green-400 text-xs p-3 rounded overflow-x-auto font-mono">{alert.expr}</pre>
-                    </div>
-                    <div>
-                      <div className="text-xs font-semibold text-slate-500 mb-1">{t('建議操作', 'Suggested Action')}</div>
-                      <div className="text-sm text-slate-700 bg-blue-50 p-3 rounded">{alert.action}</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );
