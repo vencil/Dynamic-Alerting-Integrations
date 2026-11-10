@@ -40,6 +40,7 @@ guard 驗錯樹之後貼上綠色 sticky comment。
   unmanaged<TAB><path>
   excluded<TAB><path><TAB><原因>
   removed<TAB><config-dir>
+  nested<TAB><內層 conf.d><TAB><外層 conf.d>
 
 `removed`（#3644）＝這個 PR 把整棵樹刪掉了，沒有東西可驗。兩個條件**都**成立才給：
 
@@ -53,11 +54,24 @@ guard 驗錯樹之後貼上綠色 sticky comment。
 ⚠️ 沒給 `--deleted` ＝ 沒有刪除資訊 ＝ 永遠不給 `removed`，維持舊行為（紅燈）；
 失敗方向是「多驗一次而紅」，不是「少驗而綠」。
 
-巢狀（#3694）：被判 `removed` 的樹若位在一棵**仍存在**的 conf.d 樹底下
-（`a/conf.d/b/conf.d` 刪了、`a/conf.d` 還在），那棵外層樹也被這個 PR 改了——
-da-guard 會走進 `--config-dir` 底下所有非隱藏子目錄，內層的檔本來就算外層的。
-所以外層同時輸出一列 `target`（見 `surviving_ancestors()`），`removed` 列照樣點名
-被刪的那棵。外層也整棵刪掉時兩棵都是 `removed`、沒有 target。
+⛔ 巢狀 conf.d 不支援（#3694 後續）。`a/conf.d/b/conf.d/` 有兩種讀法：以內層為
+`--config-dir`，或以外層為根——exporter 的 walker 走進所有非隱藏子目錄、對名為
+`conf.d` 的目錄沒有特例，所以內層的檔也是外層的檔，而外層的 `_defaults` 會往下套。
+兩種部署得到的有效設定不同，從目錄名稱推不出哪一種才是真的根；選任一種驗，另一種
+就是「被改了卻沒被驗」的綠燈。因此一律判 `nested`（紅），請把佈局攤平：
+
+  nested<TAB><內層 conf.d><TAB><外層 conf.d>
+
+判定一律看 HEAD 的 checkout（有沒有兩層都存在），兩個來源：
+* 一個變更路徑往上**仍存在**的 conf.d 祖先有兩層以上；
+* 任一個 target 的根目錄底下，在 checkout 裡還有另一個（非隱藏的）`conf.d` 目錄
+  ——只改外層的檔也一樣，外層樹的有效設定就含著內層。
+「含著」照 exporter 的 walker 判：它不進 `.` 開頭的目錄、不跟隨目錄 symlink
+（#1972），所以藏在那兩種路徑後面的 conf.d 不算巢狀，各自是自己的根。
+
+例外是 PR 把內層整棵刪掉、外層還在：PR 之後已經不巢狀了，而外層樹被改了（內層的檔
+原本屬於它），所以外層列為 `target`，scope 取被刪子樹往上第一個仍存在的目錄；被刪
+的那棵若符合上面兩個條件，照樣輸出 `removed`。外層也整棵刪掉時兩棵都是 `removed`。
 
 用法
 ----
@@ -223,9 +237,9 @@ def resolve(paths: list[str], extra: dict[str, set[str]] | None = None,
             ) -> tuple[list[tuple[str, str]], list[str]]:
     """(targets, unmanaged)；targets 為 (config_dir, scope)，依 config_dir 排序。
 
-    `extra`：root → 額外要併進該根的目錄（repo 相對），來自
-    `surviving_ancestors()`（#3694）。與變更檔的目錄走同一條收窄／放寬規則：
-    同一個根底下合計只有一個目錄才收窄，否則整棵重驗。"""
+    `extra`：root → 額外要併進該根的目錄（repo 相對），來自 `place()`——
+    內層被整棵刪掉、外層還在的情形（#3694）。與變更檔的目錄走同一條收窄／放寬
+    規則：同一個根底下合計只有一個目錄才收窄，否則整棵重驗。"""
     by_root: dict[str, set[str]] = {
         root: set(dirs) for root, dirs in (extra or {}).items()}
     unmanaged: list[str] = []
@@ -289,45 +303,91 @@ def removed_roots(paths: list[str], deleted: set[str],
             if all(p in deleted for p in members) and not exists(root)}
 
 
-def surviving_ancestors(removed: set[str],
-                        exists=os.path.lexists) -> dict[str, set[str]]:
-    """For each removed root nested inside a conf.d tree that still exists
-    (#3694): that tree → the directories it must be validated over.
+def place(paths: list[str], deleted: set[str], exists=os.path.lexists,
+          ) -> tuple[list[str], dict[str, set[str]], set[tuple[str, str]]]:
+    """Split changed paths by what their conf.d ancestors look like AT HEAD.
 
-    `a/conf.d/b/conf.d` removed while `a/conf.d` remains: the inner tree's
-    files were part of the outer tree too (da-guard walks every non-hidden
-    subdirectory of `--config-dir`), so deleting the inner tree CHANGED the
-    outer one. Before #3664 the inner row was a `target` and da-guard's exit 2
-    turned the job red; #3664 made it `removed` and nothing named the outer
-    tree, so the comment went green about a tree that changed and was never
-    checked. This puts the outer tree back as a `target`.
-
-    * config-dir = the NEAREST conf.d ancestor that still exists. Ancestors
-      that are gone are skipped: everything beneath a missing directory is
-      missing too, so the nearest surviving one is the tree that changed.
-    * scope = the deepest directory on the way from the removed root up to
-      that ancestor that still exists (`a/conf.d/b` if it survives, else the
-      ancestor itself). Never a directory that does not exist — that would be
-      da-guard exit 2 about nothing.
-    * Several removed roots under one ancestor are merged by `resolve()`'s own
-      rule (more than one directory ⇒ the whole tree).
-
-    ⚠️ Only removed roots are walked. A root that is merely absent but was not
-    deleted is still a red `target` (see `removed_roots`), so it needs no
-    help. ⚠️ Not measured here: what a nested tree that is EDITED (not
-    removed) does to its outer tree — that was the behaviour before #3664 as
-    well and is outside #3694.
+    Returns (plain, extra, nested):
+    * `nested` — (inner, outer) for a path with two or more conf.d ancestors
+      that still exist: the layout this module refuses (module docstring).
+    * `extra` — outer root → scope dirs, for a DELETED path whose nearest
+      conf.d is gone while an outer one survives: the PR removed the inner
+      tree, the outer tree changed, and nothing is nested any more (#3694).
+      The scope is the deepest directory on the way up that still exists,
+      never one that does not (that would be da-guard exit 2 about nothing).
+    * `plain` — everything else, for `resolve()` / `removed_roots()` exactly
+      as before. ⛔ That includes a path whose nearest conf.d is missing but
+      which is NOT in `deleted`: a rewritten path must stay a red target on
+      its nearest root, never be re-homed onto a tree that happens to exist.
     """
-    found: dict[str, set[str]] = {}
-    for root in removed:
-        start = PurePosixPath(root)
-        ancestor = next((str(p) for p in start.parents
-                         if p.name == CONF_D and exists(str(p))), None)
-        if ancestor is None:
+    plain: list[str] = []
+    extra: dict[str, set[str]] = {}
+    nested: set[tuple[str, str]] = set()
+    for path in paths:
+        if not path:
             continue
-        scope = next(str(p) for p in start.parents
-                     if str(p) == ancestor or exists(str(p)))
-        found.setdefault(ancestor, set()).add(scope)
+        parents = PurePosixPath(path).parents
+        ancestors = [str(p) for p in parents if p.name == CONF_D]
+        alive = [a for a in ancestors if exists(a)]
+        pair = _nesting(alive)
+        if pair is not None:
+            nested.add(pair)
+            continue
+        if ancestors and alive and alive[0] != ancestors[0] and path in deleted:
+            outer = alive[0]
+            scope = next(str(p) for p in parents
+                         if str(p) == outer or exists(str(p)))
+            extra.setdefault(outer, set()).add(scope)
+            continue
+        plain.append(path)
+    return plain, extra, nested
+
+
+def walker_reaches(outer: str, inner: str, islink=os.path.islink) -> bool:
+    """Whether the exporter's walker, started at `outer`, enters `inner`.
+
+    It prunes `.`-prefixed directories (confdname.IsHidden) and does not
+    follow directory symlinks (tree_scan.go, #1972), so a conf.d behind either
+    is not part of the outer tree's effective config — not nesting."""
+    current = PurePosixPath(outer)
+    for part in PurePosixPath(inner).relative_to(outer).parts:
+        current = current / part
+        if part.startswith(".") or islink(str(current)):
+            return False
+    return True
+
+
+def _nesting(alive: list[str], reaches=walker_reaches) -> tuple[str, str] | None:
+    """(innermost, outermost) existing conf.d pair the walker joins, or None.
+    `alive` is nearest-first, as `place()` builds it."""
+    for i, inner in enumerate(alive):
+        for outer in reversed(alive[i + 1:]):
+            if reaches(outer, inner):
+                return inner, outer
+    return None
+
+
+def nested_under(roots, isdir=os.path.isdir, walk=os.walk,
+                 islink=os.path.islink) -> set[tuple[str, str]]:
+    """(inner, root) for every non-hidden `conf.d` directory found below a
+    target root in the checkout — a PR that edits only the outer tree still
+    ships a nested layout, and the outer tree's effective config contains the
+    inner one. Pruned the way the exporter's walker prunes: hidden directories
+    (confdname.IsHidden: a leading dot) and directory symlinks (not followed,
+    #1972). ⛔ These names come from the disk, not from the PR's path list, so
+    they have NOT passed the UNREPRESENTABLE check — main() runs it on them."""
+    found: set[tuple[str, str]] = set()
+    for root in roots:
+        if not isdir(root):
+            continue
+        for current, dirs, _files in walk(root):
+            # os.walk does not descend into a directory symlink but still
+            # LISTS it; the walker does not follow one either (#1972).
+            dirs[:] = sorted(d for d in dirs if not d.startswith(".")
+                             and not islink(os.path.join(current, d)))
+            for d in dirs:
+                if d == CONF_D:
+                    found.add((str(PurePosixPath(current) / d), root))
     return found
 
 
@@ -490,17 +550,39 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_UNREPRESENTABLE_PATH
 
     kept, excluded = partition(paths)
+    deleted = read_deleted(deleted_file) if deleted_file is not None else set()
+    # #3694 follow-up: nested layouts are refused, and an inner tree removed
+    # under a surviving outer one makes the outer one a target. `deleted` is
+    # empty without `--deleted`, so neither re-homing nor `removed` happens and
+    # the failure direction stays "validated again and red".
+    plain, extra, nested = place(kept, deleted)
     # ⛔ No `--deleted` ⇒ no deletion facts ⇒ nothing is `removed`: the tree
     # stays a target and da-guard's exit 2 keeps the job red. Never inferred
     # from the directory being absent alone (see removed_roots).
-    removed = (removed_roots(kept, read_deleted(deleted_file))
+    # Over ALL kept paths, not just `plain`: an inner tree re-homed onto its
+    # surviving outer tree is still named as removed. A nested path cannot land
+    # here — its nearest root exists, and `removed_roots` requires it gone.
+    removed = (removed_roots(kept, deleted)
                if deleted_file is not None else set())
-    # #3694: a removed tree nested in a surviving one changed that one — it
-    # becomes a target, alongside the `removed` row that names the deletion.
-    targets, unmanaged = resolve(kept, surviving_ancestors(removed))
+    targets, unmanaged = resolve(plain, extra)
+    targets = [(root, scope) for root, scope in targets if root not in removed]
+    nested |= nested_under(root for root, _scope in targets)
+    # ⛔ Same refusal as the input paths, for names that came off the disk: a
+    # TAB or newline in a directory that holds no `_` file is not in the diff,
+    # and emitting it would shift the consumer's fields (blind review).
+    bad = sorted(inner for inner, _outer in nested
+                 if UNREPRESENTABLE.intersection(inner))
+    if bad:
+        sys.stderr.write(
+            "guard_defaults_scopes: refusing to emit a `nested` row for a "
+            f"directory whose name contains a control character: {bad[0]!r}.\n"
+            "⛔ Rename the directory; do NOT strip the character.\n")
+        return EXIT_UNREPRESENTABLE_PATH
     lines = [f"target{FIELD_SEP}{config_dir}{FIELD_SEP}{scope}{ROW_SEP}"
-             for config_dir, scope in targets if config_dir not in removed]
+             for config_dir, scope in targets]
     lines += [f"removed{FIELD_SEP}{root}{ROW_SEP}" for root in sorted(removed)]
+    lines += [f"nested{FIELD_SEP}{inner}{FIELD_SEP}{outer}{ROW_SEP}"
+              for inner, outer in sorted(nested)]
     lines += [f"unmanaged{FIELD_SEP}{path}{ROW_SEP}" for path in unmanaged]
     lines += [f"excluded{FIELD_SEP}{path}{FIELD_SEP}{reason}{ROW_SEP}"
               for path, reason in excluded]
