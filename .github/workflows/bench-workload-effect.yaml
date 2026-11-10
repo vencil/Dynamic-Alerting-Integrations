@@ -642,7 +642,11 @@ jobs:
         env:
           PINNED_SHA: ${{ steps.ref.outputs.pinned_sha }}
         run: |
-          set -uo pipefail
+          # ⛔ `set +e` on purpose: GitHub runs `run:` under `bash -e`, so
+          # `log=$(go test …)` failing — the very case this probe exists to
+          # report — ended the step with exit 1 before the notice (measured on
+          # #3727's first self-test, run 42846211639). This step never fails.
+          set +e -uo pipefail
           MAIN_APP=components/threshold-exporter/app
           P_APP=.pinref/components/threshold-exporter/app
           # Same tree the overlay step builds: delete the reference's bench

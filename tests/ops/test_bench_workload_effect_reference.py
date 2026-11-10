@@ -76,7 +76,10 @@ def _run(tmp_path: Path, script: str, env: dict, gh: str | None = None,
         "SELF_TEST": "false", "INPUT_SHA": "",
         **env,
     }
-    proc = subprocess.run([BASH, "-c", script], cwd=work, env=full_env,
+    # ⛔ `-e`, as GitHub runs a `run:` without `shell:` (`bash -e {0}`). Plain
+    # `bash -c` hid a probe that died on a failing command substitution
+    # (#3727's first self-test, run 42846211639).
+    proc = subprocess.run([BASH, "-e", "-c", script], cwd=work, env=full_env,
                           capture_output=True, text=True, encoding="utf-8", timeout=60)
     outputs = {}
     if out.exists():
