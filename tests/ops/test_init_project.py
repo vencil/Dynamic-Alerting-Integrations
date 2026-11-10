@@ -4339,6 +4339,11 @@ class TestCustomerDeliveredImagePins:
         a perfectly concrete tag. Bumping to Helm 4 is allowed — but it has to
         be a deliberate edit here, taken together with the generated
         `helm upgrade` flags, which Helm 4 changed.
+
+        It now holds BOTH CI platforms: `HELM_VERSION` feeds this image and the
+        GitHub apply job's `azure/setup-helm` step, and
+        `test_github_helm_apply_installs_the_pinned_helm_before_using_it` makes
+        the GitHub side follow it.
         """
         _, ref = ip._GITLAB_APPLY_IMAGES['helm']
         tag = self._tag_of(ref)
