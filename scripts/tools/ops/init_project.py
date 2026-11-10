@@ -512,13 +512,11 @@ RULE_PACK_CATALOG = {
     },
     'kubernetes': {
         'label': 'Kubernetes',
-        # Not in the registry: the pack reads these as
-        # `container_*{severity="critical"}`, so the values live only here.
-        'critical_overrides': {
-            'container_cpu_critical': 95,
-            'container_cpu_throttle_critical': 50,
-            'container_memory_critical': 95,
-        },
+        'critical_seeds': (
+            'container_cpu_critical',
+            'container_cpu_throttle_critical',
+            'container_memory_critical',
+        ),
     },
     'operational': {
         'label': 'Operational (auto-enabled)',
