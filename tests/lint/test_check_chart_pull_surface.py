@@ -33,6 +33,10 @@ gate = importlib.util.module_from_spec(_spec)
 assert _spec.loader is not None
 _spec.loader.exec_module(gate)
 
+# chart_names reads Chart.yaml through da-crdecode (ADR-036 §12); check()
+# reaches it, so every test here needs the binary.
+pytestmark = pytest.mark.usefixtures("da_crdecode_env")
+
 _PUSH_LINE = (
     "          helm push .build/{name}-${{{{ steps.version.outputs.VERSION }}}}.tgz \\\n"
     "            oci://${{{{ env.REGISTRY }}}}/${{{{ env.IMAGE_OWNER }}}}/charts\n"
@@ -474,3 +478,28 @@ def test_the_live_tables_fail_closed_when_no_chart_is_read(tmp_path: Path, monke
     monkeypatch.setattr(gate, "GIT_ONLY", {"federation-gateway": "x"})
     repo = _make_repo(tmp_path)
     assert gate.distribution_violations(repo) != []
+
+
+def test_a_chart_yaml_helm_cannot_read_is_an_error(tmp_path: Path) -> None:
+    """Fail closed: an unparseable Chart.yaml stops the run instead of
+    dropping that chart from the distribution rule."""
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="shipped"),
+                      files={"helm/shipped/Chart.yaml": _chart("shipped"),
+                             "helm/broken/Chart.yaml": "name: [unclosed\n"})
+    with pytest.raises(gate.CallerError, match="cannot read a Chart.yaml"):
+        gate.chart_names(repo)
+
+
+def test_a_chart_yaml_without_a_name_is_an_error(tmp_path: Path) -> None:
+    repo = _make_repo(tmp_path, files={"helm/anon/Chart.yaml": "apiVersion: v2\n"})
+    with pytest.raises(gate.CallerError, match="no `name`"):
+        gate.chart_names(repo)
+
+
+def test_no_da_crdecode_is_an_error_not_a_skip(tmp_path: Path, monkeypatch) -> None:
+    """Without the reader the rule cannot run, and says so (exit 2 via
+    CallerError), rather than reading zero charts and passing."""
+    monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-binary"))
+    repo = _make_repo(tmp_path, files={"helm/shipped/Chart.yaml": _chart("shipped")})
+    with pytest.raises(gate.CallerError):
+        gate.chart_names(repo)

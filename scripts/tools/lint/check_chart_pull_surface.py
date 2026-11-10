@@ -71,6 +71,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+import _lib_consumer_read  # noqa: E402
 from check_chart_ship_surface import (  # noqa: E402
     CallerError,
     discover_pushed_charts,
@@ -194,15 +195,20 @@ def chart_names(repo_root: Path = REPO_ROOT) -> Dict[str, str]:
     """Chart `name` (as helm would publish it) -> its directory under helm/.
 
     Tracked files only (same surface as the pull rule): an untracked chart a
-    developer is still writing does not block an unrelated commit.
+    developer is still writing does not block an unrelated commit. Read as
+    helm reads Chart.yaml (sigs.k8s.io/yaml via da-crdecode --any-shape,
+    ADR-036 §12), so the name compared here is the one `helm package` uses.
     """
+    rels = sorted(r for r in _tracked_files(repo_root) if _CHART_YAML_RE.match(r))
+    try:
+        docs = _lib_consumer_read.any_yaml_documents_of(repo_root / r for r in rels)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        raise CallerError(f"cannot read a Chart.yaml: {exc.detail()}") from exc
     names: Dict[str, str] = {}
-    for rel in sorted(r for r in _tracked_files(repo_root) if _CHART_YAML_RE.match(r)):
+    for rel in rels:
         chart_yaml = repo_root / rel
-        try:
-            meta = yaml.safe_load(chart_yaml.read_text(encoding="utf-8")) or {}
-        except (OSError, yaml.YAMLError) as exc:
-            raise CallerError(f"cannot read {chart_yaml}: {exc}") from exc
+        found = docs[str(chart_yaml)]
+        meta = found[0] if found else None
         name = meta.get("name") if isinstance(meta, dict) else None
         if not isinstance(name, str) or not name:
             raise CallerError(f"{chart_yaml}: no `name`")
