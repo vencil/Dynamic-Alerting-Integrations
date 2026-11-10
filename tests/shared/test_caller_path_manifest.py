@@ -97,6 +97,29 @@ REASON_PREFIX = {"dir": "dir_", "file": "file_", "any": "path_"}
 #: silent) are all judged now: none is pending.
 PENDING: frozenset[tuple[str, str]] = frozenset()
 
+#: ⛔ #3693: the ceiling of a manifest ``dir`` line. A directory input is
+#: declared with ``_lib_input.add_input`` — G1 then runs it on a directory
+#: it cannot list, an empty one and one that is not there, from the
+#: declaration alone; a ``dir`` line is judged by ``_lib_paths`` (stat) only,
+#: and config-diff ``--old-dir`` read a directory it could not list as an
+#: empty base (rc 1, stderr empty) behind it. These are the ones not
+#: migrated yet (#3695): the set only shrinks — a new ``dir`` line is a
+#: fault, and a migrated one is dropped here.
+DIR_CEILING: frozenset[tuple[str, str]] = frozenset({
+    ("analyze-gaps", "--config-dir"), ("blind-spot", "--config-dir"),
+    ("config-history", "--config-dir"), ("deprecate", "--config-dir"),
+    ("diagnose", "--config-dir"), ("drift-detect", "--dirs"),
+    ("evaluate-policy", "--config-dir"), ("explain-keys", "--config-dir"),
+    ("explain-route", "--config-dir"), ("generate-routes", "--config-dir"),
+    ("generator-service", "--repo"), ("gitops-check local", "--dir"),
+    ("lint", "--rule-pack-dir"), ("maintenance-scheduler", "--config-dir"),
+    ("migrate-credentials", "--config-dir"), ("rule-pack-split", "--rule-packs-dir"),
+    ("silencer-drift-check", "--rule-pack-dir"), ("tenant-verify", "--conf-d"),
+    ("test-notification", "--config-dir"), ("threshold-govern", "--config-dir"),
+    ("threshold-recommend", "--config-dir"), ("validate-config", "--config-dir"),
+    ("validate-config", "--rule-packs"),
+})
+
 
 def _caller_paths():
     """test_caller_paths.py, for its OPS_SITES / DX_SITES tables."""
@@ -719,6 +742,16 @@ def test_a_reader_needs_its_pinning_test():
           "pinned_by": "tests/shared/test_caller_path_manifest.py::test_a_reader_needs_its_pinning_test"}
     assert _faults({"t": {"--d": "dir", "--n": ok}}) == []
     assert len(_faults({"t": {"--d": "dir", "--n": {"kind": "reader"}}})) == 1
+
+
+def test_a_manifest_dir_line_is_one_not_migrated_yet():
+    """#3693: a directory input is declared with add_input, never a new
+    manifest ``dir`` line; one that migrated leaves DIR_CEILING too."""
+    now = {k for k, d in _entries(load_manifest()).items() if d.get("kind") == "dir"}
+    assert sorted(now - DIR_CEILING) == [], (
+        "a new manifest `dir` line: declare the directory with _lib_input.add_input")
+    assert sorted(DIR_CEILING - now) == [], (
+        "no longer a manifest `dir` line: drop it from DIR_CEILING")
 
 
 def test_pending_is_a_ceiling_that_only_shrinks():

@@ -53,7 +53,7 @@ from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, write_text_secure  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, CallerError, die_caller_error, encode_json)
+    EXIT_CALLER_ERROR, die_caller_error, encode_json)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
@@ -135,16 +135,11 @@ def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
     ParseTreeError (no usable da-guard).
 
     ⛔ #3446: a *source_dir* da-guard cannot list (its root entry is role
-    `unlistable_dir`) raises CallerError (`dir_not_accessible`, rc 2): it was
-    a WARNING and a migration made from no source file, rc 0."""
+    `unlistable_dir`) raises CallerError (`dir_not_accessible`, rc 2,
+    `_lib_input.require_listed`): it was a WARNING and a migration made from
+    no source file, rc 0."""
     listing = _lib_parse_tree.list_tree(source_dir)
-    root = listing.entry(".")
-    if root is not None and root.unlistable_dir:
-        why = safe_label(root.problem[1]) if root.problem else root.role
-        raise CallerError(i18n_text(
-            f"--source-dir {safe_label(str(source_dir))}: 無法列出目錄內容（da-guard: {why}）",
-            f"--source-dir {safe_label(str(source_dir))}: cannot list the directory "
-            f"(da-guard: {why})"), "dir_not_accessible")
+    _lib_input.require_listed("--source-dir", source_dir, listing.entry("."), lang=_LANG)
     warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
     try:
         # Only for the hidden names da-guard's listing leaves out (#3446:

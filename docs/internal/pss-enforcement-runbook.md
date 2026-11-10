@@ -59,12 +59,13 @@ label。對客戶有意義的保證是「我們出貨的每個 pod 都能在 `re
 - **chart 提供、但跑不了 restricted 的設定**：在 `ci/` 放一個檔名以
   `pss-needs-privileged-` 開頭的值檔，以 privileged 判定，而且測試會要求它
   **確實**違反 restricted；哪天這個設定變得合規或被拿掉，閘門轉紅、檔案要刪。
-  目前只有一個：tenant-api 的 `confDir.type=hostPath`（文件寫明是 kind 開發
-  用），它連 baseline 都過不了，不能裝在 enforce restricted 的 namespace。
+  目前沒有。唯一的一個是 tenant-api 的 `confDir.type=hostPath`，連 baseline
+  都過不了，已移除（#1018）：節點上已有的 repo 改放進 PV，以
+  `confDir.pvc.existingClaim` 掛載。
 - **條件分支要被打開**：workload template 與 `.tpl` helper 裡每個 `if`／
   `with`／`range`（以及 `$x := …` 指派）讀到的 `.Values` 路徑，必須在某個
   受判定的值組裡是開的；寫在 `not` 後面的，還要有一組是關的。`fail`／
-  `required` 防呆的否定分支不算（它不渲染任何 pod）。例外值檔不算覆蓋。
+  `required` 防呆裡會走進 `fail` 的那一側不算（它不渲染任何 pod）：`if not .Values.x` 防呆仍要求 x 有一組是開的；`if .Values.x`（不帶 `not`）防呆對 x 不產生要求。例外值檔不算覆蓋。
 - **預設值渲染不出來**：只有列在 `defaultsDoNotRender` 的 chart 可以（目前
   tenant-api，`writeBack.mode` 刻意沒有預設），而且錯誤訊息要對得上；清單
   裡的 chart 若預設值又能渲染，測試要求把它移出清單。

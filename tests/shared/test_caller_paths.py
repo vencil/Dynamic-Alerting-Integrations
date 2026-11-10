@@ -1075,6 +1075,9 @@ def test_an_empty_path_is_refused_not_taken_for_cwd(tmp_path, script, argv, flag
 #   {NX}: that one is r without x — listable, nothing under it stats.)
 # * the flag left out, its default not there — `absent_default` empty: no
 #   caller error; refused: rc 2, the flag and the default named.
+# * the flag given, nothing at its value — `missing` empty (a diff's base
+#   side: a first import): no caller error; refused: rc 2, the flag and the
+#   path named, nothing written (#3693).
 # * the flag left out, its default there as a regular file — rc 2 whatever
 #   `absent_default` says: only "nothing there" is absent (#3548).
 #
@@ -1140,6 +1143,27 @@ def _declared_run(box, script, argv, case_dir_name, holder):
     return proc, scratch
 
 
+def _empty_said() -> "tuple[str, ...]":
+    """`_lib_input`'s one wording of "selected nothing" (`refuse_empty`), in
+    each language, as it sits between the label and what was wanted — read
+    off the lib, not spelled here."""
+    import _lib_input
+    out = []
+    for lang in ("en", "zh"):
+        said = str(_lib_input.refuse_empty("<L>", "<W>", lang=lang))
+        out.append(said.split("<L>: ", 1)[1].split("<W>", 1)[0])
+    return tuple(out)
+
+
+def _not_read_as_empty(rid, out):
+    """#3693: a directory it cannot list (or that is not there) is not
+    refused as one that selects nothing — on an `empty=EMPTY_REFUSED` input
+    that refusal is rc 2 and names the flag and the path too, so rc and name
+    alone would let "unlistable" read as "empty" again."""
+    for said in _empty_said():
+        assert said not in out, (rid, out[-3000:])
+
+
 def _written(scratch):
     return sorted(p.name for p in scratch.rglob("*") if p.name != "silences.json")
 
@@ -1179,6 +1203,7 @@ def test_a_declared_input_refuses_a_directory_it_cannot_list(box, declared_input
         proc, scratch = _declared_run(box, script, argv, f"ul{n}", str(unlisted))
         out = proc.stdout + proc.stderr
         assert proc.returncode == 2, (rid, out[-3000:])
+        _not_read_as_empty(rid, out)
         assert "Traceback" not in out, (rid, out[-3000:])
         assert (f"{flag} {unlisted}" in out
                 or f"{flag} {os.path.realpath(unlisted)}" in out), (rid, out[-3000:])
@@ -1209,6 +1234,29 @@ def test_a_declared_input_reads_its_absent_default_as_declared(box, declared_inp
     assert measured, "no declared input has a default: this test measured nothing"
 
 
+def test_a_declared_input_given_with_nothing_there_is_as_declared(box, declared_inputs):
+    """#3693: what a value the caller GAVE with nothing at it is, by the
+    declaration's ``missing`` — refused by default; config-diff's base
+    side reads it as a first import."""
+    import _lib_input
+    root = box[0]
+    for n, (rid, script, flag, spec, argv, reason) in enumerate(declared_inputs):
+        gone = root / f"g1-gone-{n}"
+        assert not gone.exists(), rid
+        proc, scratch = _declared_run(box, script, argv, f"gone{n}", str(gone))
+        out = proc.stdout + proc.stderr
+        assert "Traceback" not in out, (rid, out[-3000:])
+        if spec.missing == _lib_input.ABSENT_REFUSED:
+            assert proc.returncode == 2, (rid, out[-3000:])
+            _not_read_as_empty(rid, out)
+            assert f"{flag} {gone}" in out, (rid, out[-3000:])
+            if reason is not None:
+                assert proc.stdout == "", (rid, proc.stdout)  # #3558: no document
+            assert _written(scratch) == [], (rid, f"written: {_written(scratch)}")
+        else:
+            assert proc.returncode != 2, (rid, out[-3000:])
+
+
 def test_a_declared_default_that_is_there_but_no_directory_is_refused(box, declared_inputs):
     """#3548: a regular file at the default is not "nothing there" — read as
     an empty directory, state-reconcile overwrote its manifest with no
@@ -1237,22 +1285,26 @@ def test_a_declared_default_that_is_there_but_no_directory_is_refused(box, decla
 
 
 #: ⛔ What the owner judged for each declared input (#3462 comment 2026-11-02,
-#: #3446 comment 2026-11-02, #3548): (empty, absent_default). The rows above
+#: #3446 comment 2026-11-02, #3548, #3693 2026-11-07): (empty, absent_default,
+#: missing). The rows above
 #: prove each tool BEHAVES as its declaration says; this proves the
 #: declaration is the judged one — changing one is an edit here, reviewed,
 #: not a quiet keyword change on the parser. A new declared input needs its
 #: judgement here too.
 JUDGED_DECLARATIONS = {
-    "operator-generate --rule-packs-dir": ("refused", "refused"),
-    "operator-check --rule-packs-dir": ("refused", "empty"),
-    "runtime-audit --rule-packs-dir": ("refused", "refused"),
-    "migrate-to-operator --source-dir": ("refused", None),
-    "state-reconcile --state-dir": ("allowed", "empty"),
+    "operator-generate --rule-packs-dir": ("refused", "refused", "refused"),
+    "operator-check --rule-packs-dir": ("refused", "empty", "refused"),
+    "runtime-audit --rule-packs-dir": ("refused", "refused", "refused"),
+    "migrate-to-operator --source-dir": ("refused", None, "refused"),
+    "state-reconcile --state-dir": ("allowed", "empty", "refused"),
+    "config-diff --old-dir": ("allowed", None, "empty"),
+    "config-diff --new-dir": ("refused", None, "refused"),
+    "grafana-import --dashboard-dir": ("refused", None, "refused"),
 }
 
 
 def test_each_declared_input_is_as_judged(declared_inputs):
-    found = {rid: (spec.empty, spec.absent_default)
+    found = {rid: (spec.empty, spec.absent_default, spec.missing)
              for rid, _s, _f, spec, _a, _r in declared_inputs}
     assert found == JUDGED_DECLARATIONS
 
