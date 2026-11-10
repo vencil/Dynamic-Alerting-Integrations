@@ -349,6 +349,46 @@ class TestRenderWithMmdc:
         assert (state / "count").read_text().strip() == "3"
         assert len(v.not_checked) == 1 and v.errors == []
 
+    def test_a_hung_renderer_is_stopped_after_one_diagram(self, tmp_path, monkeypatch):
+        """#3649 review: a diagram that times out is followed by a canary;
+        when that fails too, nothing more is rendered — 4 diagrams cost one
+        canary, one diagram and one re-canary, not a timeout each."""
+        _mmdc(tmp_path, monkeypatch)
+        real_run = vm._lib_engine.run
+        calls = []
+
+        def run(located, sub, args, **kw):
+            calls.append(args)
+            if len(calls) == 1:
+                return real_run(located, sub, args, **kw)   # first canary renders
+            return vm._lib_engine.NoVerdict("mmdc did not finish within 30s (rc 124)")
+        monkeypatch.setattr(vm._lib_engine, "run", run)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD * 4)) is False
+        assert len(calls) == 3, calls
+        assert len(v.not_checked) == 1 and "; and " in v.not_checked[0], v.not_checked
+        assert v.errors == []
+
+    def test_a_one_off_launch_failure_is_not_a_finding(self, tmp_path, monkeypatch):
+        """#3649 review: the diagram exits 1 once (a transient Chromium launch
+        failure), the canary then renders, and the diagram renders on the
+        second attempt — no error. Only a diagram that fails twice around a
+        good canary is a finding."""
+        _mmdc(tmp_path, monkeypatch)
+        real_run = vm._lib_engine.run
+        calls = []
+
+        def run(located, sub, args, **kw):
+            calls.append(args)
+            if len(calls) == 2:   # canary ok, then this diagram's first render
+                return vm._lib_engine.Ran(False, subprocess.CompletedProcess(args, 1, "", "launch"))
+            return real_run(located, sub, args, **kw)
+        monkeypatch.setattr(vm._lib_engine, "run", run)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD)) is True
+        assert v.errors == [] and v.not_checked == []
+        assert len(calls) == 4   # canary, diagram, re-canary, diagram again
+
     def test_a_file_without_diagrams_needs_no_renderer(self, tmp_path, monkeypatch):
         """No diagram, nothing to render: not even mmdc's absence matters."""
         monkeypatch.setenv("PATH", str(tmp_path))

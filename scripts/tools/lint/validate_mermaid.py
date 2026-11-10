@@ -402,29 +402,58 @@ class MermaidValidator:
         where = f'{filepath}:{line_number}'
         result = self._mmdc_once(content, timeout=30)
         if isinstance(result, _lib_engine.NoVerdict):
-            self._not_checked(f'{where}: {result.message()}')
+            # A hung or crashed renderer: if the canary no longer renders
+            # either, stop — every later diagram would wait out its own
+            # timeout for the same answer (#3649 review).
+            self._no_verdict(where, result)
             return False
         if result.data:
             if self.verbose:
                 print(f"✓ mmdc render: {where}")
             return True
         # Exit 1: this diagram, or the renderer? Only the canary can say.
-        why = self._canary_renders()
-        if why is not None:
-            # The renderer stopped: report once and render nothing more —
-            # every later diagram would cost a render plus a canary each,
-            # up to their timeouts, for the same answer (#3611 review F2).
-            self._mmdc = False
-            self._not_checked(f'{where}: not rendered, and {why}')
+        if self._stop_if_renderer_dead(where):
             return False
+        # The renderer works now. A one-off launch failure on this diagram
+        # (exit 1, same as a parse error) would read as a finding, so the
+        # diagram must fail again with the renderer proven good in between
+        # before it is one (#3649 review).
+        again = self._mmdc_once(content, timeout=30)
+        if isinstance(again, _lib_engine.NoVerdict):
+            self._no_verdict(where, again)
+            return False
+        if again.data:
+            if self.verbose:
+                print(f"✓ mmdc render: {where} (second attempt)")
+            return True
         self.errors.append({
             'file': str(filepath),
             'line': line_number,
             'diagram_type': 'unknown',
             'status': 'error',
-            'message': f'mmdc render failed: {result.proc.stderr}',
+            'message': f'mmdc render failed: {again.proc.stderr}',
         })
         return False
+
+    def _no_verdict(self, where: str, result: "_lib_engine.NoVerdict") -> None:
+        """One not_checked line for this diagram; if the canary fails too,
+        the renderer is stopped and the line says so."""
+        why = self._canary_renders()
+        if why is not None:
+            self._mmdc = False
+            self._not_checked(f'{where}: {result.message()}; and {why}')
+        else:
+            self._not_checked(f'{where}: {result.message()}')
+
+    def _stop_if_renderer_dead(self, where: str) -> bool:
+        """Re-run the canary; if it fails, report once, stop rendering, and
+        return True (#3611 review F2)."""
+        why = self._canary_renders()
+        if why is None:
+            return False
+        self._mmdc = False
+        self._not_checked(f'{where}: not rendered, and {why}')
+        return True
 
     def _not_checked(self, why: str) -> None:
         """Record (and say on stderr) one thing that could not be checked."""
