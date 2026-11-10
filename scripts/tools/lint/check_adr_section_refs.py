@@ -43,7 +43,6 @@ reference is fixed by pointing it at the section that holds the decision now.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -54,7 +53,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ADR_DIR = Path("docs/adr")
@@ -234,17 +233,16 @@ def main() -> int:
     except (OSError, subprocess.SubprocessError) as e:
         print(f"check_adr_section_refs: cannot run: {e}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    status = EXIT_VIOLATION if findings and args.ci else EXIT_OK
     if args.json:
-        print(json.dumps([asdict(f) for f in findings], ensure_ascii=False, indent=2))
-    elif not findings:
+        return Report([asdict(f) for f in findings], status)  # run() encodes it
+    if not findings:
         print("OK every ADR section reference names a section that exists.")
     else:
         print(f"❌ {len(findings)} ADR section reference(s) name no section of the ADR (ADR-027 §9 item 8):")
         for f in findings:
             print(f"  {f.path}:{f.line}: ADR-{f.adr} {f.section} — {f.reason}")
-    if findings and args.ci:
-        return EXIT_VIOLATION
-    return EXIT_OK
+    return status
 
 
 if __name__ == "__main__":
