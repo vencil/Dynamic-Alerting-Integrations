@@ -374,7 +374,8 @@ func (g *Gate) findings(ctx context.Context, deadline time.Time, base string, fi
 		bv, err := g.client.Validate(ctx, base, nil, remaining)
 		switch {
 		case err != nil:
-			slog.Info("generator: base not judged for the pre-existing marks", "error", err)
+			slog.Info("generator: base not judged for the pre-existing marks", "request_id", middleware.GetReqID(ctx),
+				"error", err)
 		case bv.Result == ResultPass:
 			out.ComparedWithBase = true
 			mark(out.Findings, configDir, nil, "")

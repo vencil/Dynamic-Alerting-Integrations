@@ -963,7 +963,10 @@ def credential_shape_problems(receiver: Any, rtype: Optional[str] = None) -> lis
         if value is None or value == "":
             return
         if not pattern:
-            if isinstance(value, (dict, list)) and not is_secret_ref(value):
+            # A reference of the wrong shape is no reference: what it holds
+            # is not judged either (one shape rule: secret_ref_problem).
+            if isinstance(value, (dict, list)) and (
+                    not is_secret_ref(value) or secret_ref_problem(value) is not None):
                 found.append(here)
             return
         step, rest = pattern[0], pattern[1:]

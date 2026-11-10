@@ -586,3 +586,38 @@ def test_a_deep_value_outside_routing_does_not_crash_the_generator(tmp_path):
     rc, text, _ = _validate(d)
     assert "RecursionError" not in text
     assert rc in (0, 1), text
+
+
+_MALFORMED_REFS = [
+    "{secret: {key: k, value: '" + CANARY + "'}}",
+    "{secret: {key: 'https://u:" + CANARY + "@hooks.example.com/x'}}",
+    "{secret: {key: k}, value: 'https://hooks.example.com/" + CANARY + "'}",
+    "{secret: {}, plaintext: '" + CANARY + "'}",
+]
+_UNRENDERED = [
+    ("_routing_profiles.yaml",
+     "routing_profiles:\n  unbound:\n    receiver:\n      type: slack\n      api_url: {ref}\n",
+     "routing_profiles.unbound.receiver.api_url"),
+    ("_defaults.yaml",
+     _DEFAULTS + "_routing_defaults:\n  receiver:\n    type: slack\n    api_url: {ref}\n",
+     "_routing_defaults.receiver.api_url"),
+    ("t-a.yaml",
+     "_routing:\n  receiver:\n    type: slack\n    api_url: {ref}\n" + _tenant("t-a"),
+     "_routing.receiver.api_url"),
+]
+
+
+@pytest.mark.parametrize("ref", _MALFORMED_REFS)
+@pytest.mark.parametrize("fname,text,field", _UNRENDERED)
+def test_a_malformed_reference_where_nothing_renders_is_unjudged(tmp_path, ref, fname, text, field):
+    d = _tree(tmp_path, {fname: text.replace("{ref}", ref)})
+    rc, out, findings = _validate(d)
+    assert rc == 1, out
+    assert ("credential_unjudged", fname, field, "validate") in _credential(findings), findings
+    assert CANARY not in out
+    p = subprocess.run([sys.executable, str(_MIGRATE), "--config-dir", str(d), "--json"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert p.returncode == 1, p.stderr
+    assert (fname, "credential_not_value") in {(u["file"], u["reason"])
+                                               for u in json.loads(p.stdout)["unjudged"]}
+    assert CANARY not in p.stdout + p.stderr

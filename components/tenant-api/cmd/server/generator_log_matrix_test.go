@@ -333,6 +333,17 @@ func otherKVFindings() []map[string]any {
 	}
 }
 
+// baseNotJudged answers the write with findings and the judgement of the
+// base alone (no writes) with status and body.
+func baseNotJudged(status int, body map[string]any) func(int, testutil.FakeValidateRequest) (int, any) {
+	return func(_ int, req testutil.FakeValidateRequest) (int, any) {
+		if len(req.Writes) == 0 {
+			return status, body
+		}
+		return 200, testutil.FindingsVerdict(req, "/w", testutil.Finding("route", "t-a", "t-a.yaml", "m"))
+	}
+}
+
 // matrixAnswer is one answer of the fake, with what it must lead to.
 type matrixAnswer struct {
 	name   string
@@ -364,6 +375,13 @@ func logMatrixAnswers() []matrixAnswer {
 			v["message"] = canaryOf("verdict-message")
 			return 200, v
 		}},
+		{name: "findings, the base not judged: 503", answer: baseNotJudged(503, map[string]any{
+			"error": canaryOf("base-503-code"), "reason": canaryOf("base-503-reason"), "message": canaryOf("base-503-message")})},
+		{name: "findings, the base not judged: 400", answer: baseNotJudged(400, map[string]any{
+			"error": canaryOf("base-400-code"), "message": canaryOf("base-400-message")})},
+		{name: "findings, the base not judged: rejected", answer: baseNotJudged(200, map[string]any{
+			"result": "rejected", "reason": canaryOf("base-rejected-reason"), "message": canaryOf("base-rejected-message"),
+			"rc": nil, "findings": nil, "stderr_tail": canaryOf("base-rejected-stderr"), "validated": nil})},
 		{name: "key verdict advice: withheld and truncated", passes: true,
 			answer: func(_ int, req testutil.FakeValidateRequest) (int, any) {
 				odd := kvFinding(canaryOf("kv-kind"), "_k", "_defaults.yaml", []string{"t-zz"}, "r", false)
@@ -539,7 +557,7 @@ func TestGeneratorLogMatrix_NoGeneratorTextInTheLog(t *testing.T) {
 	for _, want := range []string{"generator: write refused with findings", "key verdict: findings withheld from the caller",
 		"generator: write refused, key verdict not completed", "write refused: the generator gave no verdict",
 		"write refused: the generator container cannot judge", "batch op refused: the generator gave no verdict",
-		"generator status not read",
+		"generator status not read", "generator: base not judged for the pre-existing marks",
 		// The container's "structured" strings, by their closed form.
 		`"problem":"base_commit_differs"`, `"status":"other"`, `"other=1"`} {
 		if !strings.Contains(out, want) {
