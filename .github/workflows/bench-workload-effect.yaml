@@ -722,6 +722,13 @@ jobs:
       # 更高，其 alert #390 已被接受；本 job 嚴格更低風險，所以接受它是前者的推論，不是
       # 一次新的讓步。
       #
+      # #2348 新增的「Probe the pinned nightly reference」被同一條規則點名（PR #3727，
+      # 1 筆 high，**待 owner 決定是否同樣標 won't fix**）。形狀相同：checkout 釘死參考後
+      # `go test -c` 編譯它；風險嚴格更低——那一步只在 `pull_request` 執行（step 的
+      # `if: github.event_name == 'pull_request'`，而 pull_request 情境沒有特權）。
+      # ⚠️ 實測：把條件從 `env.SELF_TEST` 改成直接判斷事件，警告仍在——這條規則不採信
+      # step 層的事件條件，所以不要再為了它改寫條件。
+      #
       # ⛔ RE-EXAMINE IF：本 job 取得 `contents: read` 以外的權限／開始使用任何 cache
       # action／其產物開始被任何對外流程消費／參考版本指向本 repo 以外的地方。
       #
