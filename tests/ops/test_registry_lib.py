@@ -199,6 +199,20 @@ def test_an_authored_mistake_breaks_the_fixed_point(label, mutate, expect):
     assert any(expect in p for p in problems), (label, problems)
 
 
+@pytest.mark.parametrize("label,mutate", [
+    ("a key entry that is not a mapping",
+     lambda d: d["keys"].__setitem__("beta_lag", "oops")),
+    ("a pack that is null", lambda d: d["packs"].__setitem__("beta", None)),
+])
+def test_a_misshapen_entry_is_reported_not_raised(label, mutate):
+    """Hand-authored: a shape error is a contract problem reported next to
+    the schema errors, never an exception that crashes the gate."""
+    doc = _fixed_point_doc()
+    mutate(doc)
+    problems = lib.fixed_point_problems(doc)
+    assert any(p.startswith("not a valid contract") for p in problems), (label, problems)
+
+
 def test_committed_registry_doc_refuses_a_broken_file(tmp_path):
     doc = _fixed_point_doc()
     doc["keys"]["alpha_conn_critical"].pop("critical_of")

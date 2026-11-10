@@ -350,7 +350,7 @@ _RULE_PACKS_MODULE_HEADER = (
     "display/exporter/default_on/rule_pack_file and the `defaults` /\n"
     "`optional_overrides` tiers. Edit the registry, then run\n"
     "  python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
-    "`--check` (pre-commit, CI) fails while this file is stale.\n"
+    "`--ci` (pre-commit, CI) fails while this file is stale.\n"
     '"""\n'
 )
 
@@ -393,8 +393,11 @@ def fixed_point_problems(doc: dict) -> list[str]:
             strict_metric_class=True,
             deprecated_aliases=dict(doc.get("deprecated_aliases") or {}),
         )
-    except (ValueError, KeyError) as exc:
-        return [f"not a valid contract: {exc}"]
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        # The file is hand-authored: an entry that is not a mapping (or a
+        # `packs.<p>: null`) is a contract error to report next to the schema
+        # errors, not a crash that hides them.
+        return [f"not a valid contract: {type(exc).__name__}: {exc}"]
     return diff_docs(doc, fresh)
 
 
@@ -470,6 +473,7 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     touched = write_planned(planned)
     if check_rule_packs_module(doc) is not None:
         _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_text_secure)
+        touched.append(RULE_PACKS_MODULE_PATH)
     return {"path": src, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
 

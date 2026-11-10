@@ -4,7 +4,7 @@ The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its
 display/exporter/default_on/rule_pack_file and the `defaults` /
 `optional_overrides` tiers. Edit the registry, then run
   python3 scripts/tools/lint/check_threshold_registry.py --regen
-`--check` (pre-commit, CI) fails while this file is stale.
+`--ci` (pre-commit, CI) fails while this file is stale.
 """
 
 THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',

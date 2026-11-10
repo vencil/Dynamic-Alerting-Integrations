@@ -1310,6 +1310,14 @@ def test_threshold_registry_regen_refused_writes_not_even_the_registry(
     assert _bytes(tmp_path / "repo") == before
 
 
+def test_threshold_registry_regen_reports_the_module_it_wrote(tmp_path, monkeypatch):
+    """The module is a generated surface the operator must commit, so a
+    regen that rewrote it names it among the touched paths."""
+    lib, _dev, _seed = _regen_setup(tmp_path, monkeypatch)
+    _summary, touched = lib.regen()
+    assert str(tmp_path / "repo" / "ops" / "_rule_packs_generated.py") in touched, touched
+
+
 def test_threshold_registry_regen_writes_the_surfaces_not_the_registry(tmp_path, monkeypatch):
     """The same run without the refusal writes both surfaces and the module
     back to the committed bytes — so the row above is not passing on a run
