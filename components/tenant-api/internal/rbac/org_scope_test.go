@@ -1,6 +1,6 @@
 package rbac
 
-// ADR-027 / LD-6 P4 — the org-scope authorization axis, both planes, under
+// ADR-027 §7 — the org-scope authorization axis, both planes, under
 // ADR-027 §7 (every axis enforced; no shadow mode).
 //
 // List plane (ScopeAllowed): the org axis is folded into the SAME per-rule
@@ -312,7 +312,7 @@ func TestMetadataAllowed_EqualsScopeAllowedNilOrgs(t *testing.T) {
 	}
 }
 
-// ── write plane (ADR-027 / LD-6 P4b) ─────────────────────────────────────────
+// ── write plane (ADR-027 §7) ─────────────────────────────────────────
 
 // orgWriteCfg is the minimal write-plane fixture: one org-scoped rule granting
 // write (⊇ read) on a tenant prefix. Admin is deliberately NOT granted so the

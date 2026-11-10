@@ -88,9 +88,13 @@ func newDeadEntryFinding(tenant, key string, sv ScheduledValue) (ValueFinding, b
 // tenant's map serves (normalized: of two spellings of one dimensional key,
 // the one normalizeKeys keeps). A key no reader reads is the shared key
 // verdict's unread, and a losing spelling is spelling_duplicate; neither
-// serves its schedule, so neither has a dead entry to report (#3502).
+// serves its schedule, so neither has a dead entry to report (#3502). Nor
+// does a dimensional key the resolver takes no row from: dimensionalRowRead,
+// the resolver's own entry test, on the root `dimensions:` dims — a label it
+// does not declare (#3684). That test only narrows the platform-key rule
+// above; it does not widen it to every row the resolver serves.
 func deadEntriesJudged(key, canonKey string, sv ScheduledValue, normalized map[string]ScheduledValue,
-	canonDefaults map[string]float64, canonOptional map[string]struct{}) bool {
+	canonDefaults map[string]float64, canonOptional map[string]struct{}, dims map[string][]string) bool {
 	if len(sv.Overrides) == 0 {
 		return false
 	}
@@ -101,6 +105,9 @@ func deadEntriesJudged(key, canonKey string, sv ScheduledValue, normalized map[s
 	_, valued := canonDefaults[base]
 	_, declared := canonOptional[base]
 	if !valued && !declared {
+		return false
+	}
+	if strings.Contains(canonKey, "{") && !dimensionalRowRead(canonKey, dims) {
 		return false
 	}
 	if c, dim := canonicalDimensionalKey(key); dim {

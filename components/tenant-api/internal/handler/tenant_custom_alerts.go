@@ -118,7 +118,7 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// ADR-027 / LD-6 P4b: org-scope-aware write gate — authorization
+		// ADR-027 §7: org-scope-aware write gate — authorization
 		// comes BEFORE feature availability (the PR-mode 501 below), so an
 		// unauthorized caller cannot probe the server's write-mode.
 		if !RequireOrgWrite(w, r, d, tenantID, rbac.PermWrite) {

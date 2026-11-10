@@ -9,7 +9,7 @@ import (
 
 // MeResponse is the response body for GET /api/v1/me
 // v2.5.0: Added AccessibleEnvironments and AccessibleDomains for UI filtering hints.
-// ADR-027 / LD-6 P2: Added Claims (named verified claims off the request principal).
+// ADR-027 §7: Added Claims (named verified claims off the request principal).
 type MeResponse struct {
 	Email                  string              `json:"email"`
 	User                   string              `json:"user"`
@@ -19,13 +19,13 @@ type MeResponse struct {
 	AccessibleDomains      []string            `json:"accessible_domains,omitempty"`      // nil = all
 	Permissions            map[string][]string `json:"permissions"`
 	// Claims are the named verified claims carried by the request principal
-	// (ADR-027 / LD-6 P2; injected per the oauth2-proxy config). omitempty:
+	// (ADR-027 §7; injected per the oauth2-proxy config). omitempty:
 	// with no claim axes declared (nil map) the key is absent, keeping the
 	// zero-config response body byte-identical to pre-P2. Go serialises map
 	// keys sorted, so the rendering is deterministic.
 	Claims map[string]string `json:"claims,omitempty"`
 	// OrgClaimKeys are the org-scope claim keys of the rules THIS caller
-	// matches (ADR-027 / LD-6 P7) — a caller-relative fact ("which of my
+	// matches (ADR-027 §7) — a caller-relative fact ("which of my
 	// claims act as an org axis for me"), NOT "does the platform run an org
 	// axis". Intersected with the principal's present claims by construction:
 	// the redacted reverse report strips claim keys as customer-recognizable
@@ -52,7 +52,7 @@ type MeResponse struct {
 // @Router      /api/v1/me [get]
 func Me(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// ADR-027 / LD-6 P2: principal-first. The VerifiedPrincipal the RBAC
+		// ADR-027 §7: principal-first. The VerifiedPrincipal the RBAC
 		// middleware attached is the identity SSOT (email / groups / claims);
 		// the legacy context accessors remain only as a fallback for requests
 		// that never passed through Middleware (handler-direct tests or a
@@ -106,7 +106,7 @@ func Me(d *Deps) http.HandlerFunc {
 		}
 
 		// Collect all accessible tenants and build permissions map off the
-		// rules the principal matches (ADR-027 / LD-6 P3): rbac.RulesMatching
+		// rules the principal matches (ADR-027 §7): rbac.RulesMatching
 		// runs the SAME ruleMatches predicate authz uses, so /me lists
 		// match-block rule hits (key = rule name) exactly like legacy
 		// name-matched rules, and no rule-matching semantics live outside the

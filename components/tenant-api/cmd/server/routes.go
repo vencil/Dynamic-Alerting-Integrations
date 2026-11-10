@@ -1,6 +1,6 @@
 package main
 
-// Router construction (ADR-027 / LD-6 P4b §5b).
+// Router construction (ADR-027 §7).
 //
 // Extracted verbatim from main() — wire.go::wirePRBackend precedent: main()
 // shows the wiring shape (flag-parse → managers → middleware config →
@@ -326,7 +326,7 @@ func buildRouter(rd routerDeps) *chi.Mux {
 				Put("/", federation.PutFederationPolicy(deps))
 		})
 
-		// Reverse access-report audit endpoint (ADR-027 / LD-6 P6). /audit is
+		// Reverse access-report audit endpoint (ADR-027 §7). /audit is
 		// a deliberate NEW top-level segment — NOT under /tenants/{id} — so it
 		// does not inherit the read-by-id org middleware (an org-scoped reader
 		// must never unlock the platform-wide access map). Route middleware

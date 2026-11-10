@@ -558,26 +558,43 @@ func WriteValidationErrors(w http.ResponseWriter, r *http.Request, violations []
 //     the tenant outside the caller's scope.
 //
 // Labels is the label check judged on the base (ADR-027 §7): the write
-// changes the tenant's environment/domain labels there and the caller is not
-// a platform administrator.
+// changes the tenant's environment/domain labels there — or LabelsUnknown,
+// the labels its file there holds cannot be read — and the caller is not a
+// platform administrator.
 //
 // Put marks a single-tenant PUT; otherwise Op is the batch op's index in the
 // request (for /groups/{id}/batch, the member's index in the expansion).
+//
+// Direct marks the same verdict taken in direct mode, under the writer lock
+// on the serving tree (tree_judge.go): its text is the gate's outside the
+// lock, word for word, so a caller cannot tell which of the two refused it —
+// only that the write is not its to make.
 type freshBaseScopeError struct {
 	TenantID string
 	Op       int
 	Put      bool
 	PreState bool
-	// Labels: the write changes the tenant's environment/domain labels on
-	// the base and the caller is not a platform administrator (ADR-027 §7,
-	// label_guard.go).
-	Labels bool
+	// Labels: see above (label_guard.go).
+	Labels        bool
+	LabelsUnknown bool
+	Direct        bool
 }
 
 // ErrorKind is errkind.FreshBaseScope.
 func (e *freshBaseScopeError) ErrorKind() errkind.Kind { return errkind.FreshBaseScope }
 
 func (e *freshBaseScopeError) Error() string {
+	if e.Direct {
+		switch {
+		case e.Labels:
+			return labelChangeDeniedText(e.TenantID, !e.LabelsUnknown)
+		case e.PreState && e.Put:
+			return orgWriteDeniedText(e.TenantID)
+		case e.PreState:
+			return batchOpWriteDeniedText(e.TenantID)
+		}
+		return proposedScopeDeniedText(e.TenantID, e.Put)
+	}
 	subject := fmt.Sprintf("operations[%d] (tenant %s)", e.Op, e.TenantID)
 	nothing := "Nothing in this batch was written and no PR/MR was opened"
 	if e.Put {
@@ -585,8 +602,12 @@ func (e *freshBaseScopeError) Error() string {
 		nothing = "Nothing was written and no PR/MR was opened"
 	}
 	if e.Labels {
-		return fmt.Sprintf("%s. On the latest base branch %s changes them. %s.",
-			labelChangeDeniedText(e.TenantID), subject, nothing)
+		verb := "changes them"
+		if e.LabelsUnknown {
+			verb = "writes over them"
+		}
+		return fmt.Sprintf("%s. On the latest base branch %s %s. %s.",
+			labelChangeDeniedText(e.TenantID, !e.LabelsUnknown), subject, verb, nothing)
 	}
 	if e.PreState {
 		// As generic as RequireOrgWrite's refusal: the tenant's state on the

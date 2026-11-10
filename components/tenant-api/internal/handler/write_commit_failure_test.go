@@ -127,7 +127,8 @@ func TestBatch_CommitFailureIsInternalError(t *testing.T) {
 	wantInternalWriteFailure(t, w.Code, w.Body.Bytes(), dir)
 
 	run := writeBatchOps(context.Background(), d.Writer,
-		[]BatchOperation{{TenantID: "t-a", Patch: map[string]string{"_silent_mode": "warning"}}}, "alice@example.com", true)
+		ungatedBatchOps([]BatchOperation{{TenantID: "t-a", Patch: map[string]string{"_silent_mode": "warning"}}}), treeJudge{},
+		"alice@example.com", true)
 	if run.Err == nil {
 		t.Fatal("the batch committed: the fault did not fire")
 	}

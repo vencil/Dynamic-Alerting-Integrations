@@ -49,7 +49,7 @@ RUN rm -rf /usr/share/nginx/html/*
 
 # ── Nginx config ──────────────────────────────────────────────
 # Main config is self-carried: the stock one loads no dynamic modules, and the
-# relay-token injector (ADR-027 D2-B O1) needs ngx_http_js_module (njs — kept
+# relay-token injector (ADR-027 §5) needs ngx_http_js_module (njs — kept
 # by the hardening apk-del above). In Helm deployments the configmap volume
 # hides the image's /etc/nginx/conf.d, so relay_token.js also ships in that
 # configmap (dual-copy pinned by tests/helm/test_portal_relay_token_guard.py).

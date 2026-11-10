@@ -74,7 +74,7 @@ if DEV_BYPASS and os.environ.get("KUBERNETES_SERVICE_HOST"):
 
 _IDENTITY_HEADERS = ("X-Forwarded-Email", "X-Forwarded-Groups")
 
-# ADR-027 / LD-6 P4c: org-scope claim header(s) to forward to tenant-api's
+# ADR-027 §7: org-scope claim header(s) to forward to tenant-api's
 # /access probe. tenant-api's read-by-id gate now org-scopes access on a verified
 # claim (e.g. X-Auth-Request-Org) that rides a header SEPARATE from
 # X-Forwarded-Groups; if the PEP forwards only email+groups, a would-fire preview
@@ -213,7 +213,7 @@ def authorize_tenant(headers, tenant):
 
     200 → allow; 401/403/any-other/unreachable/timeout → DENY (fail-closed).
     Only the two gateway-injected identity headers, plus any configured org-scope
-    claim headers (_CLAIM_HEADERS, ADR-027 / LD-6 P4c), are forwarded — never
+    claim headers (_CLAIM_HEADERS, ADR-027 §7), are forwarded — never
     arbitrary client headers (confused-deputy guard; reserved names like
     Authorization/Cookie are stripped from _CLAIM_HEADERS at parse time). The
     machine-identity Bearer (audience-bound SA token) is attached ALONGSIDE the
@@ -222,7 +222,7 @@ def authorize_tenant(headers, tenant):
     the result.
     """
     fwd = {h: headers[h] for h in _IDENTITY_HEADERS if headers.get(h)}
-    # ADR-027 / LD-6 P4c: forward the org-scope claim header(s) so tenant-api's
+    # ADR-027 §7: forward the org-scope claim header(s) so tenant-api's
     # read-by-id gate can org-scope the /access decision. Only present, named
     # headers (confused-deputy guard). Absent header → not forwarded (no-op),
     # which under shadow mode is byte-identical to pre-P4c.

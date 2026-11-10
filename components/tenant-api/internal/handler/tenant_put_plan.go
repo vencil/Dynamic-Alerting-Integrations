@@ -86,12 +86,10 @@ type putPlan struct {
 	r *http.Request
 	// masked: /diff only, the caller may not write {id} (see the file
 	// comment).
-	masked            bool
+	masked bool
+	// gatePre, gatePost: what the write scope gates judged, passed down to
+	// the verdict under the writer lock (tree_judge.go).
 	gatePre, gatePost writeGate
-	// labelsBefore: the tenant's environment/domain labels on the serving
-	// tree as the label check read them (label_guard.go) — PR mode's
-	// fallback on a base whose file's labels cannot be read.
-	labelsBefore scopePair
 }
 
 // readPutBody reads the request body as one endpoint receives it, writing a
@@ -110,7 +108,7 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 	}
 	p := &putPlan{tenantID: tenantID}
 
-	// ADR-027 / LD-6 P4b: org-scope-aware write gate, BEFORE the body is
+	// ADR-027 §7: org-scope-aware write gate, BEFORE the body is
 	// read, so a denied caller triggers no side effect and learns nothing
 	// from policy-violation details. Judged once (a second OrgAllowed would
 	// count a second scope denial).
@@ -151,9 +149,9 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 		// ADR-027 §7: the environment/domain labels decide the scope gates
 		// above, so only a platform administrator changes them
 		// (label_guard.go). After the scope gates: a caller they refuse
-		// learns nothing more here.
-		p.labelsBefore = servingLabelsBefore(d.ConfigDir, tenantID)
-		if !requireLabelsUnchangedAt(verdict, r, d, tenantID, p.labelsBefore, p.gatePost.pair) {
+		// learns nothing more here. An early refusal only: the verdict that
+		// counts is taken under the writer lock (tree_judge.go).
+		if !requireLabelsUnchangedAt(verdict, r, d, tenantID, scopeLabelsOnTree(d.ConfigDir, tenantID), p.gatePost.pair) {
 			return nil, false
 		}
 	}
@@ -172,9 +170,23 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 
 // preview runs step 2 on the serving tree, without a lock
 // (gitops.PreviewPut): what PUT would write, or its refusal — errs the
-// validation set PUT wraps in ErrValidation, err any earlier refusal.
+// validation set PUT wraps in ErrValidation, err any earlier refusal. It
+// runs the direct-mode PUT's verdict under the lock too (tree_judge.go), so
+// the preview is refused where and as the write would be — except for a
+// masked /diff, whose caller may not write the tenant and is shown the
+// change, not judged on it.
 func (p *putPlan) preview(d *Deps) (gitops.PutResolution, []string, error) {
-	return previewWriter(d).PreviewPut(p.r.Context(), p.tenantID, p.body)
+	var check gitops.TreeCheck
+	if !p.masked {
+		check = p.directTreeCheck(d)
+	}
+	return previewWriter(d).PreviewPut(p.r.Context(), p.tenantID, p.body, check)
+}
+
+// directTreeCheck is the verdict a direct-mode PUT takes under the writer
+// lock on the serving tree (tree_judge.go), for this plan's caller.
+func (p *putPlan) directTreeCheck(d *Deps) gitops.TreeCheck {
+	return directTreeJudge(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(p.r)).putTreeCheck(p.tenantID, p.body, p.gatePre, p.gatePost)
 }
 
 // previewWriter is d.Writer, or for handler-test literals that set only
@@ -202,7 +214,7 @@ func writePutDirectError(rw http.ResponseWriter, r *http.Request, d *Deps, tenan
 	// fallback. A PreconditionError carries the refresh advice under
 	// "message" (preconditionMessage).
 	_, fault = writeErr(rw, r, d, err, errCtx{
-		accept:              kindsDirectWrite.with(errkind.AmbiguousTenantFile),
+		accept:              kindsDirectWrite.with(errkind.AmbiguousTenantFile, errkind.FreshBaseScope),
 		fallback:            fallbackWrite,
 		tenantID:            tenantID,
 		preconditionMessage: true,
