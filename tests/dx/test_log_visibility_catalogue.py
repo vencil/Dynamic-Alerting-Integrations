@@ -1,7 +1,7 @@
 """test_log_visibility_catalogue.py — ADR-021 #609 PR-5 2-tier visibility catalogue drift-guard.
 
 The 2-tier log visibility catalogue (docs/internal/log-visibility-2tier-catalogue.md)
-is a CONTROL-PLANE curation document, not a runtime filter (ADR-021 §治理邊界): the
+is a CONTROL-PLANE curation document, not a runtime filter (ADR-021 §MVP 範圍與可見度治理): the
 hard cross-tenant isolation lives in the data plane (VictoriaLogs AccountID partition +
 Vector ingest-time allowlist sanitization). The catalogue's job is to be a human-readable,
 reviewable view of what the data plane ACTUALLY exposes to a tenant — so its ONE failure
@@ -212,7 +212,7 @@ def test_stream_fields_match_enforced(catalogue_text: str, stream_fields: list[s
 
 def test_catalogue_declares_control_plane_not_runtime_filter(catalogue_text: str) -> None:
     """Guard the load-bearing framing: the catalogue must state it is control-plane
-    curation, NOT a query-path/runtime filter (ADR-021 §治理邊界). A future edit that
+    curation, NOT a query-path/runtime filter (ADR-021 §MVP 範圍與可見度治理). A future edit that
     quietly reframes it as an enforcement layer (and tempts a runtime-filter impl) is a
     design regression."""
     assert "不在 query path 硬擋" in catalogue_text or "不是 runtime filter" in catalogue_text, (

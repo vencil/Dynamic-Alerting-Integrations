@@ -3555,7 +3555,7 @@ const docTemplate = `{
                     ]
                 },
                 "custom_alerts": {
-                    "description": "CustomAlerts is the tenant's ` + "`" + `_custom_alerts` + "`" + ` recipes as structured\nJSON (ADR-024 §S6b-2). The portal recipe modal reads this directly so\nthe client never parses YAML — the backend owns the round-trip on both\nread and write. Empty slice when the tenant has none.",
+                    "description": "CustomAlerts is the tenant's ` + "`" + `_custom_alerts` + "`" + ` recipes as structured\nJSON (ADR-024 §3). The portal recipe modal reads this directly so\nthe client never parses YAML — the backend owns the round-trip on both\nread and write. Empty slice when the tenant has none.",
                     "type": "array",
                     "items": {
                         "type": "object",
@@ -3606,7 +3606,7 @@ const docTemplate = `{
                     }
                 },
                 "source_hash": {
-                    "description": "SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it\nback as ` + "`" + `base_hash` + "`" + ` on PUT .../custom-alerts for optimistic-\nconcurrency (ADR-024 §S6b-2): the write 409s if the file changed\nunderneath them.",
+                    "description": "SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it\nback as ` + "`" + `base_hash` + "`" + ` on PUT .../custom-alerts for optimistic-\nconcurrency (ADR-024 §3): the write 409s if the file changed\nunderneath them.",
                     "type": "string"
                 },
                 "validation_notices": {

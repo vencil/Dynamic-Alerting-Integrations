@@ -4,7 +4,7 @@ Pinned contracts
 ----------------
 1. **strategy**: a chart template without `strategy.type: Recreate` is flagged
    (replicaCount=1 alone does NOT satisfy the invariant — phantom-writer window,
-   ADR-023 §A).
+   ADR-023 §1).
 2. **helm values**: replicaCount != 1 is flagged.
 3. **template guard**: the layer-1 `fail` guard must be present in the chart
    template; removing it (not just the value) is caught.
