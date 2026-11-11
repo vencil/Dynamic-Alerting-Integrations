@@ -107,12 +107,52 @@ class ChildJob:
 
 # ── git ──────────────────────────────────────────────────────────────────
 
+_LOCAL_ENV_VARS: dict = {}
+
+
+def git_env(git: str) -> dict:
+    """The environment every git this service runs gets: the inherited one,
+    less what would point git at another repository than --repo.
+
+    ⛔ Which variables those are is git's own answer, `git rev-parse
+    --local-env-vars` (GIT_DIR, GIT_WORK_TREE, GIT_COMMON_DIR,
+    GIT_OBJECT_DIRECTORY, GIT_INDEX_FILE, …), asked of the configured git
+    once — never a list kept here (#3739). An inherited GIT_DIR (a git hook
+    sets one) made `git -C <--repo>` read that repository instead: a --repo
+    that is no repository at all served the other one's tree.
+
+    Kept from that list: the ``GIT_CONFIG*`` carriers (``GIT_CONFIG``,
+    ``GIT_CONFIG_PARAMETERS``, ``GIT_CONFIG_COUNT`` and its
+    ``GIT_CONFIG_KEY_n`` / ``VALUE_n``). They carry configuration, not where
+    the repository is, and they are how ``safe.directory`` reaches a git
+    that runs non-root with no writable HOME (the da-tools image: a
+    read-only mount owned by another uid is "dubious ownership" without it).
+
+    A git that cannot answer is refused (`GitReadError`; a git that cannot
+    run, its OSError — the caller names --git) — never an empty list kept,
+    which would pass every variable on, and never cached.
+
+    --config-subdir is a path, not a pathspec: ':(glob)…' and friends are
+    read as the literal name they spell (#3392)."""
+    if git not in _LOCAL_ENV_VARS:
+        # A git that cannot run raises its OSError (the caller names --git).
+        # No cwd of its own: a relative --git is resolved where the service
+        # started, as every other run of it is.
+        proc = subprocess.run([git, "rev-parse", "--local-env-vars"], capture_output=True,
+                              check=False, timeout=60)
+        names = proc.stdout.decode("ascii", "replace").split()
+        if proc.returncode != 0 or "GIT_DIR" not in names:
+            raise GitReadError(f"`rev-parse --local-env-vars` did not list the repository "
+                               f"variables (exit {proc.returncode})")
+        _LOCAL_ENV_VARS[git] = frozenset(n for n in names if not n.startswith("GIT_CONFIG"))
+    env = {k: v for k, v in os.environ.items() if k not in _LOCAL_ENV_VARS[git]}
+    env.update(GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0", GIT_LITERAL_PATHSPECS="1")
+    return env
+
+
 def run_git(git: str, repo: str, *args: str, stdin=None) -> bytes:
     """*git* ``-C`` *repo* *args*: its stdout, or `GitReadError`."""
-    # --config-subdir is a path, not a pathspec: ':(glob)…' and friends are
-    # read as the literal name they spell (#3392).
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0",
-               GIT_LITERAL_PATHSPECS="1")
+    env = git_env(git)
     # The judgement deadline ends this (killpg on the whole group) long
     # before the timeout; the timeout only bounds a git that outlives it.
     proc = subprocess.run([git, "-C", repo, *args], stdin=stdin,

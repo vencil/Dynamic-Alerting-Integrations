@@ -116,7 +116,8 @@ class Service:
     def __init__(self, tmp: Path, repo: Path, *, bin_dir: Path,
                  args: tuple[str, ...] = (), prelude: str = "",
                  env: Optional[dict] = None, socket_path: Optional[Path] = None,
-                 subdir: str = "conf.d", wait: bool = True) -> None:
+                 subdir: str = "conf.d", wait: bool = True,
+                 cwd: Optional[Path] = None) -> None:
         self.tmp = tmp
         tmp.mkdir(parents=True, exist_ok=True)
         self.sock_dir = short_dir()
@@ -145,7 +146,7 @@ class Service:
              *(() if any(a.startswith("--max-judgement-seconds") for a in args)
                else ("--max-judgement-seconds", str(LONG_JUDGEMENT_SECONDS))),
              *args],
-            env=run_env, stdout=subprocess.DEVNULL,
+            env=run_env, stdout=subprocess.DEVNULL, cwd=cwd,
             stderr=open(self.log, "wb"))  # noqa: SIM115 — closed with the process
         if wait:
             self.wait_ready()

@@ -86,5 +86,23 @@
   "patternProperties": {
     "^_state_": {},
     "^_routing": {}
+  },
+  "definitions": {
+    "rootPlatformProfiles": {
+      "title": "The `profiles:` block of a ROOT platform file, as its readers read it",
+      "$comment": "#3647: bound by no property of this schema — check_confd_schema.py (and validate-config's json_schema / yaml_quoting rows through it) applies it to every `_` file at the conf.d root the exporter reads (da-guard parse-tree's root_platform_file: `_profiles.yaml`, a root `_defaults*` …), because that is where the exporter and the custom-alert compiler take a profile from. Below the root no plane reads the block, so the `profiles` property above stays loose for the nested `_defaults*` documents this schema also binds (the precedent of `tenants`, #1576/#2743). A profile's `_custom_alerts` is the tenant's own definition by REFERENCE — never a copy — so the same recipe entry is judged, quoting included, wherever it is written.",
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "additionalProperties": {
+            "properties": {
+              "_custom_alerts": {
+                "$ref": "tenant-config.schema.json#/definitions/customAlertList"
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }

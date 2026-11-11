@@ -77,6 +77,9 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import (  # noqa: E402  (#2164, #2509)
     find_misread_scalars, find_yaml11_bool_words)
 from _lib_io import misread_scalar_nodes  # noqa: E402  (#2695)
+from _lib_io import (  # noqa: E402  (#3647: one selection, one set of names)
+    CONFD_PLATFORM_SCHEMA, CONFD_ROUTING_PROFILES_SCHEMA, CONFD_TENANT_SCHEMA,
+    ROOT_PROFILES_DEFINITION, ROUTING_PROFILES_FILE_NAMES, confd_quoting_schemas)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the conf.d reader)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
@@ -99,7 +102,7 @@ _DEFAULT_PROFILES_SCHEMA = os.path.normpath(
 
 # The file names the route generator reads routing profiles from
 # (`_grar_parse._parse_platform_config`), matched the same way: exact.
-ROUTING_PROFILES_NAMES = ("_routing_profiles.yaml", "_routing_profiles.yml")
+ROUTING_PROFILES_NAMES = ROUTING_PROFILES_FILE_NAMES
 
 
 def _unreadable_line(rel: str, kind: str, message: str) -> str:
@@ -117,9 +120,9 @@ class _CallerError(Exception):
 # `_routing_enforced` by `$ref` into tenant-config.schema.json, so validating
 # it needs the sibling document. These are the names the `$ref`s are written
 # with — also the keys `find_misread_scalars` looks them up by.
-TENANT_SCHEMA_NAME = "tenant-config.schema.json"
-PLATFORM_SCHEMA_NAME = "platform-defaults.schema.json"
-PROFILES_SCHEMA_NAME = "routing-profiles.schema.json"
+TENANT_SCHEMA_NAME = CONFD_TENANT_SCHEMA
+PLATFORM_SCHEMA_NAME = CONFD_PLATFORM_SCHEMA
+PROFILES_SCHEMA_NAME = CONFD_ROUTING_PROFILES_SCHEMA
 
 
 def schema_registry(*schemas: dict):
@@ -197,6 +200,23 @@ def checked_schema_registry(schema: dict, platform_schema: dict,
     return registry
 
 
+def require_root_profiles_definition(platform_schema: dict) -> None:
+    """Raise `UnresolvableSchemaRef` (a caller error, rc 2) when
+    *platform_schema* has no `definitions.rootPlatformProfiles` — the
+    definition a root platform file's `profiles:` block is judged by
+    (#3647). A platform schema older than this lint (`--platform-schema`)
+    is named here, before the walk, never a KeyError in the middle of it.
+    Only the callers that walk conf.d (this lint's `main`, validate-config's
+    `json_schema` row) ask: the registry check itself serves other callers."""
+    if not isinstance((platform_schema.get("definitions") or {}).get(
+            ROOT_PROFILES_DEFINITION), dict):
+        raise UnresolvableSchemaRef(
+            f"the platform schema has no `definitions.{ROOT_PROFILES_DEFINITION}` "
+            f"(a root platform file's `profiles:` block is judged by it, #3647): "
+            f"it is older than this lint — use docs/schemas/{PLATFORM_SCHEMA_NAME} "
+            f"from the same checkout")
+
+
 def default_registry():
     """`schema_registry` over the repo's own tenant schema — for a caller
     (`check_threshold_reachability`, `check_md_yaml_drift`) that holds only
@@ -263,6 +283,30 @@ def platform_tenants_violations(rel: str, block: object, tenant_schema: dict,
     the root no plane reads the block (#1576)."""
     try:
         validator.validate({"tenants": block}, tenant_schema)
+    except validator.ValidationError as exc:
+        loc = "/".join(str(p) for p in exc.absolute_path)
+        return [f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}"]
+    return []
+
+
+def platform_profiles_violations(rel: str, block: object, platform_schema: dict,
+                                 validator, registry) -> list[str]:
+    """The violation in a ROOT platform file's `profiles:` block (#3647), as
+    `<rel>: … @ /profiles/<name>/_custom_alerts/…`.
+
+    ⛔ A profile's `_custom_alerts` is the list a tenant on that profile is
+    served (the exporter and the custom-alert compiler take it from the
+    profile when the tenant's own entry has none), so it is judged by the
+    tenant schema's `customAlertList` — through the `$ref` in
+    `rootPlatformProfiles`, never a copy. Before this the whole of
+    `_profiles.yaml` was skipped, and a value the same schema refuses in a
+    tenant file (`quantile: 95e-2`) passed here.
+
+    Only the root: below it no plane reads a `profiles:` block, the
+    precedent of `platform_tenants_violations` (#1576)."""
+    wrapper = {"$ref": f"{platform_schema['$id']}#/definitions/{ROOT_PROFILES_DEFINITION}"}
+    try:
+        validator.validate({"profiles": block}, wrapper, registry=registry)
     except validator.ValidationError as exc:
         loc = "/".join(str(p) for p in exc.absolute_path)
         return [f"ERROR: {rel}: {_explain(exc, validator)} @ /{loc}"]
@@ -438,8 +482,8 @@ def validate_dir(config_dir: str, schema: dict, validator,
     list such a file is still skipped.
 
     `tenants_checked`, when given, collects the skipped meta-files whose
-    `tenants:` block WAS checked (#2743: a root platform file such as
-    `_profiles.yaml`) — each is in the skipped list for its own shape and
+    `tenants:` (#2743) or `profiles:` (#3647) block WAS checked (a root
+    platform file such as `_profiles.yaml`) — each is in the skipped list for its own shape and
     in `checked_count` for that block, so a caller can say both.
 
     `warnings`, when given, collects the `WARN:` lines (#2509: a YAML 1.1
@@ -529,11 +573,11 @@ def validate_dir(config_dir: str, schema: dict, validator,
             file_schema, file_schema_name = platform_schema, PLATFORM_SCHEMA_NAME
         else:
             file_schema, file_schema_name = schema, TENANT_SCHEMA_NAME
-        # The tenant schema's only top-level key is `tenants`: walking a
-        # platform file with it reads that block and nothing else twice.
-        quoting = [] if file_schema is None else [(file_schema, file_schema_name)]
-        if holds_tenants:
-            quoting.append((schema, TENANT_SCHEMA_NAME))
+        # The selection `validate-config`'s yaml_quoting row makes too — one
+        # function (`_lib_io.confd_quoting_schemas`). The tenant schema's only
+        # top-level key is `tenants`, `rootPlatformProfiles`' only `profiles`:
+        # walking a root platform file with them reads those blocks alone.
+        quoting = confd_quoting_schemas(entry, schemas)
         as_quoted = (quoting_reported_for is not None
                      and rel in quoting_reported_for)
         try:
@@ -584,13 +628,22 @@ def validate_dir(config_dir: str, schema: dict, validator,
         # An empty / comment-only / null document is `{}` in parse-tree. For
         # `_defaults*` and `_routing_profiles` that is a placeholder (nothing
         # read from it), as before; a tenant file is judged by the schema.
+        block_checked = False
         if holds_tenants and isinstance(doc, dict) and "tenants" in doc:
             violations.extend(platform_tenants_violations(
                 rel, doc["tenants"], schema, validator))
-            if file_schema is None:
-                checked += 1
-                if tenants_checked is not None:
-                    tenants_checked.append(rel)
+            block_checked = True
+        if (holds_tenants and platform_schema is not None
+                and isinstance(doc, dict) and "profiles" in doc):
+            violations.extend(platform_profiles_violations(
+                rel, doc["profiles"], platform_schema, validator,
+                registry if registry is not None
+                else schema_registry(schema, platform_schema)))
+            block_checked = True
+        if block_checked and file_schema is None:
+            checked += 1
+            if tenants_checked is not None:
+                tenants_checked.append(rel)
         if file_schema is None:
             continue
         if doc == {} and (is_defaults or is_profiles):
@@ -714,6 +767,7 @@ def main() -> int:
     # into them.
     try:
         checked_schema_registry(schema, platform_schema, profiles_schema)
+        require_root_profiles_definition(platform_schema)
     except UnresolvableSchemaRef as exc:
         # The unresolved $ref can sit in the platform OR the routing-profiles
         # schema (#2245); the exception names which, so the prefix stays
@@ -773,10 +827,11 @@ def main() -> int:
               f"platform-defaults or routing-profiles schema (own shape/validator): "
               f"{safe_label(', '.join(skipped))}")
     if tenants_checked_all:
-        # #2743: skipped for their own shape, yet their `tenants:` block
-        # (root platform files) was checked and is in the count below.
+        # #2743 / #3647: skipped for their own shape, yet their `tenants:` /
+        # `profiles:` block (root platform files) was checked and is in the
+        # count below.
         print(f"  of which {len(tenants_checked_all)} root platform file(s) had their "
-              f"`tenants:` block checked against tenant-config.schema.json: "
+              f"`tenants:` / `profiles:` block checked against tenant-config.schema.json: "
               f"{safe_label(', '.join(tenants_checked_all))}")
     if not_read_all:
         print(f"skipped {len(not_read_all)} file(s) no reader reads (da-guard parse-tree's "

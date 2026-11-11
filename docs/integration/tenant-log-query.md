@@ -107,15 +107,11 @@ tenantProjections:
 ## 3. 取得 logs token（租戶端）
 
 federation token 由 **tenant-api** 簽發，對目標租戶具 **admin** 權限者才能簽（資料域外持出，
-門檻高於一般 config write）。**查 log 要用 `capability=logs` 的 token**：
+門檻高於一般 config write）。**查 log 要用 `capability=logs` 的 token**，在 portal 簽發
+（[ADR-027 §4](../adr/027-tenant-api-caller-identity.md)；tenant-api 沒有可以直接用 curl 打的入口）：
+Tenant Manager 勾選你的租戶 → **Federation tokens** → 類型選 **`logs`** → **簽發**。
 
-```sh
-curl -X POST "$TENANT_API/api/v1/federation/tokens" \
-  -H "Content-Type: application/json" \
-  -d '{"tenant_id": "<你的 tenant>", "capability": "logs", "description": "log-query"}'
-```
-
-回傳含簽好的 JWT 與其 `token_id`。logs token 與 metrics token 的關鍵差別：
+畫面顯示簽好的 JWT，**只顯示這一次**，當下複製保存。logs token 與 metrics token 的關鍵差別：
 
 | | metrics token（拉 metrics）| **logs token（查 log，本指南）** |
 |---|---|---|
@@ -128,7 +124,7 @@ curl -X POST "$TENANT_API/api/v1/federation/tokens" \
 > gateway 的 `jwt_authn` **原生**強制——拿 **metrics token（`aud=tenant-federation`）打 log
 > endpoint 會直接 `403`**（audience 不符，連 Lua 都進不到），反之亦然。這是最小權限：一把 token 不能跨平面重放。
 
-token 的 TTL / 列出 / 撤銷 / 自動換發、每租戶 16 把上限等，與 metrics token **完全相同**——
+token 的 TTL / 列出 / 撤銷 / 換發（目前只能手動）、每租戶 16 把上限等，與 metrics token **完全相同**——
 見 [Tenant Federation 指南 §3](tenant-federation.md)（同一套 token 機制，只是 `capability` 與
 `aud` 不同）。
 
