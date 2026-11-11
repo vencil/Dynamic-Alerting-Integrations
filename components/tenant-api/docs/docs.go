@@ -2242,7 +2242,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "reason": {
-                    "description": "Why the route generator gave no verdict (unknown for a reason tenant-api does not know). Codes that carry it: GENERATOR_BUSY, GENERATOR_REJECTED, POLICY_UNAVAILABLE, PREVIEW_BUSY, PREVIEW_UNAVAILABLE, VALIDATOR_UNAVAILABLE.",
+                    "description": "Why the route generator or the recipe-preview service gave no verdict (unknown for a reason tenant-api does not know). Codes that carry it: GENERATOR_BUSY, GENERATOR_REJECTED, POLICY_UNAVAILABLE, PREVIEW_BUSY, PREVIEW_UNAVAILABLE, VALIDATOR_UNAVAILABLE.",
                     "type": "string"
                 },
                 "request_id": {
@@ -3543,7 +3543,9 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "alertname": {
-                    "type": "string"
+                    "description": "Alertname is null for a recipe the preview does not support.",
+                    "type": "string",
+                    "x-nullable": true
                 },
                 "states": {
                     "type": "array",

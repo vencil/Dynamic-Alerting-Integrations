@@ -29,10 +29,10 @@ type RecipePreviewer interface {
 // not the timeout middleware's 504.
 const previewAnswerMargin = time.Second
 
-// previewMaxBody is the recipe-preview container's request limit
-// (PREVIEW_MAX_BODY_BYTES default, 64 KiB). tenant-api's body carries a
-// little less than the container's (no tenant, no deadline_ms).
-const previewMaxBody = 64 * 1024
+// previewMaxBody bounds what the handler reads: the recipe-preview container's
+// request limit. The body as forwarded adds tenant and deadline_ms, so the
+// client checks that size again before sending (recipepreview.TooLargeError).
+const previewMaxBody = recipepreview.MaxRequestBytes
 
 // RecipePreviewRequest is the body of POST /api/v1/tenants/{id}/recipe-preview.
 // The tenant is the path's: the one the caller was authorized to read.
@@ -55,7 +55,8 @@ type RecipePreviewState struct {
 // RecipePreviewResponse is the would-fire verdict, as the recipe-preview
 // container writes it (passed through unchanged).
 type RecipePreviewResponse struct {
-	Alertname *string              `json:"alertname"`
+	// Alertname is null for a recipe the preview does not support.
+	Alertname *string              `json:"alertname" extensions:"x-nullable"`
 	Supported bool                 `json:"supported"`
 	States    []RecipePreviewState `json:"states"`
 	Warnings  []string             `json:"warnings"`
@@ -119,6 +120,11 @@ func PreviewRecipe(d *Deps) http.HandlerFunc {
 			WriteJSONError(w, r, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
+		// One JSON object and nothing after it.
+		if _, err := dec.Token(); !errors.Is(err, io.EOF) {
+			WriteJSONError(w, r, http.StatusBadRequest, "the body must be one JSON object, with nothing after it")
+			return
+		}
 		if !nonEmptyObject(in.Recipe) {
 			WriteJSONError(w, r, http.StatusBadRequest, "`recipe` (a non-empty object) is required")
 			return
@@ -138,6 +144,12 @@ func PreviewRecipe(d *Deps) http.HandlerFunc {
 			Recipe: in.Recipe, Tenant: id, Scenario: in.Scenario,
 		})
 		if err != nil {
+			var tooLarge *recipepreview.TooLargeError
+			if errors.As(err, &tooLarge) {
+				WriteJSONErrorWithCode(w, r, http.StatusRequestEntityTooLarge, errcode.PayloadTooLarge,
+					fmt.Sprintf("a recipe preview request is at most %d bytes as forwarded (with tenant and deadline)", tooLarge.Limit))
+				return
+			}
 			var unav *recipepreview.UnavailableError
 			if errors.As(err, &unav) {
 				slog.Error("recipe preview unavailable", "tenant", id, "reason", unav.Reason, "error", unav.Detail)

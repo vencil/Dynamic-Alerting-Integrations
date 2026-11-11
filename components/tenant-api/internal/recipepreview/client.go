@@ -77,7 +77,21 @@ func (e *RateLimitedError) Error() string { return "recipe preview: " + e.Messag
 // ErrorKind: errkind.PreviewRateLimited.
 func (e *RateLimitedError) ErrorKind() errkind.Kind { return errkind.PreviewRateLimited }
 
-// RejectedError: the service refuses the request itself (400 / 413); resending
+// MaxRequestBytes is the recipe-preview container's request limit
+// (PREVIEW_MAX_BODY_BYTES default). It counts the body as sent, which carries
+// tenant and deadline_ms on top of what tenant-api's caller wrote.
+const MaxRequestBytes = 64 * 1024
+
+// TooLargeError: the request as forwarded is over MaxRequestBytes (checked
+// before sending), or the service answered 413. The caller's body is too big;
+// tenant-api answers 413 for it.
+type TooLargeError struct{ Limit int }
+
+func (e *TooLargeError) Error() string {
+	return fmt.Sprintf("recipe preview request is over %d bytes", e.Limit)
+}
+
+// RejectedError: the service refuses the request itself (400); resending
 // it unchanged does not help. Message is the service's own text, which names
 // the field at fault and never the caller's data.
 type RejectedError struct {
@@ -157,6 +171,9 @@ func (c *Client) Preview(ctx context.Context, req Request) (json.RawMessage, err
 	if err != nil {
 		return nil, &UnavailableError{Reason: ReasonInternalError, Detail: "encode the request: " + err.Error()}
 	}
+	if len(body) > MaxRequestBytes {
+		return nil, &TooLargeError{Limit: MaxRequestBytes}
+	}
 	hreq, err := http.NewRequestWithContext(ctx, http.MethodPost, "http://recipe-preview/v1/preview", bytes.NewReader(body))
 	if err != nil {
 		return nil, &UnavailableError{Reason: ReasonInternalError, Detail: err.Error()}
@@ -185,7 +202,8 @@ func decode(status int, raw []byte) (json.RawMessage, error) {
 	switch status {
 	case http.StatusOK:
 		var obj map[string]json.RawMessage
-		if err := json.Unmarshal(raw, &obj); err != nil {
+		// A JSON null decodes into a nil map without error: not a verdict.
+		if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
 			return nil, &UnavailableError{Reason: ReasonBadResponse, Detail: "the verdict is not a JSON object"}
 		}
 		return json.RawMessage(raw), nil
@@ -199,7 +217,9 @@ func decode(status int, raw []byte) (json.RawMessage, error) {
 	case http.StatusTooManyRequests:
 		_ = json.Unmarshal(raw, &se)
 		return nil, &RateLimitedError{Message: nonEmpty(se.Error, "rate limit exceeded for this tenant")}
-	case http.StatusBadRequest, http.StatusRequestEntityTooLarge:
+	case http.StatusRequestEntityTooLarge:
+		return nil, &TooLargeError{Limit: MaxRequestBytes}
+	case http.StatusBadRequest:
 		_ = json.Unmarshal(raw, &se)
 		return nil, &RejectedError{Status: status, Message: nonEmpty(se.Error, http.StatusText(status))}
 	case http.StatusInternalServerError:

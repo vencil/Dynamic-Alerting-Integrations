@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -119,8 +120,12 @@ func TestPreview_MapsTheServiceAnswers(t *testing.T) {
 			return errors.As(err, &e) && e.Message == "`recipe` (object) is required"
 		}},
 		{"too large", 413, `{"error":"request body too large"}`, func(err error) bool {
-			var e *RejectedError
-			return errors.As(err, &e)
+			var e *TooLargeError
+			return errors.As(err, &e) && e.Limit == MaxRequestBytes
+		}},
+		{"verdict null", 200, `null`, func(err error) bool {
+			var e *UnavailableError
+			return errors.As(err, &e) && e.Reason == ReasonBadResponse
 		}},
 		{"internal", 500, `{"error":"internal error"}`, func(err error) bool {
 			var e *UnavailableError
@@ -145,6 +150,25 @@ func TestPreview_MapsTheServiceAnswers(t *testing.T) {
 				t.Fatalf("err = %#v", err)
 			}
 		})
+	}
+}
+
+// The body as sent carries tenant and deadline_ms on top of the caller's:
+// a request under the limit before forwarding can be over it after, and is
+// refused here rather than sent for the service to answer 413.
+func TestPreview_RefusesARequestOverTheLimitAsSent(t *testing.T) {
+	asked := false
+	sock := serve(t, func(w http.ResponseWriter, r *http.Request) { asked = true })
+	big := Request{
+		Recipe: json.RawMessage(`{"recipe":"threshold","name":"` + strings.Repeat("x", MaxRequestBytes-64) + `"}`),
+		Tenant: "db-a",
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	_, err := NewClient(sock).Preview(ctx, big)
+	var e *TooLargeError
+	if !errors.As(err, &e) || asked {
+		t.Fatalf("err = %v, asked = %v", err, asked)
 	}
 }
 

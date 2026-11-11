@@ -155,6 +155,8 @@ func TestPreviewRecipe_ValidatesTheBody(t *testing.T) {
 		"empty recipe":     `{"recipe":{}}`,
 		"scenario not obj": `{"recipe":{"recipe":"threshold"},"scenario":5}`,
 		"unknown field":    `{"recipe":{"recipe":"threshold"},"deadline_ms":99999999}`,
+		"second value":     `{"recipe":{"recipe":"threshold"}} {"recipe":{}}`,
+		"trailing text":    `{"recipe":{"recipe":"threshold"}}x`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			fp := &fakePreviewer{verdict: json.RawMessage(previewVerdict)}
@@ -185,6 +187,7 @@ func TestPreviewRecipe_MapsTheContainerOutcomes(t *testing.T) {
 		{"rejected", &recipepreview.RejectedError{Status: 400, Message: "`scenario` must be an object"}, 400, errcode.BadRequest, "", ""},
 		{"unreachable", &recipepreview.UnavailableError{Reason: recipepreview.ReasonUnreachable, Detail: "dial unix /run/x: no such file"}, 503, errcode.PreviewUnavailable, "unreachable", "5"},
 		{"internal", &recipepreview.UnavailableError{Reason: recipepreview.ReasonInternalError, Detail: "500"}, 503, errcode.PreviewUnavailable, "internal_error", "5"},
+		{"too large as forwarded", &recipepreview.TooLargeError{Limit: recipepreview.MaxRequestBytes}, 413, errcode.PayloadTooLarge, "", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
