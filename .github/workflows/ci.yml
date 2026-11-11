@@ -449,6 +449,8 @@ jobs:
               # (go test, TestKnown_MatchesSchema) are pinned in their own legs.
               - "docs/schemas/tenant-config.schema.json"
               - "rule-packs/threshold-registry.yaml"
+              # rule-packs.test.ts holds every metricClass to this schema's enum.
+              - "docs/schemas/threshold-registry.schema.json"
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               # The glossary's default cardinality cap is checked against

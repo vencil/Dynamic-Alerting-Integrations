@@ -1129,8 +1129,8 @@ def _regen_setup(tmp_path, monkeypatch, dev_text=None, seed_text=None):
         p.parent.mkdir(parents=True)
         p.write_text(text if text is not None else
                      (REPO / rel).read_text(encoding="utf-8"), encoding="utf-8")
-    # The registry too, made stale (a comment line): a `--regen` that wrote it
-    # would change its bytes.
+    # The registry too, with a comment line added: since D-A PR-3 it is the
+    # authored source, so a `--regen` must leave those bytes alone.
     registry = root / "rule-packs" / "threshold-registry.yaml"
     registry.parent.mkdir(parents=True)
     registry.write_text((REPO / "rule-packs" / "threshold-registry.yaml").read_text(
@@ -1139,6 +1139,11 @@ def _regen_setup(tmp_path, monkeypatch, dev_text=None, seed_text=None):
     monkeypatch.setattr(lib, "_REPO_ROOT", str(root))
     monkeypatch.setattr(lib, "DEV_DEFAULTS_PATH", str(dev))
     monkeypatch.setattr(lib, "TRY_LOCAL_DEFAULTS_PATH", str(seed))
+    # …and the generated RULE_PACKS module, so no regen here writes the repo.
+    module = root / "ops" / "_rule_packs_generated.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# stale\n", encoding="utf-8")
+    monkeypatch.setattr(lib, "RULE_PACKS_MODULE_PATH", str(module))
     real = lib.surface_specs
     monkeypatch.setattr(lib, "surface_specs",
                         lambda doc: [s for s in real(doc) if s.get("confd")])
@@ -1361,9 +1366,9 @@ def test_threshold_registry_regen_judges_the_value_by_yaml_v3(tmp_path, monkeypa
 
 def test_threshold_registry_regen_refused_writes_not_even_the_registry(
         tmp_path, monkeypatch, capsys):
-    """A refused conf.d surface: rc 2 and every file — the registry and both
-    `_defaults.yaml` — keeps its bytes (the registry used to be written
-    before the surfaces were judged)."""
+    """A refused conf.d surface: rc 2 and every file — the registry, both
+    `_defaults.yaml` and the RULE_PACKS module — keeps its bytes (the
+    module is written last, after every surface was judged)."""
     monkeypatch.syspath_prepend(str(TOOLS / "lint"))
     import check_threshold_registry as gate
     _lib, _dev, _seed = _regen_setup(
@@ -1375,17 +1380,27 @@ def test_threshold_registry_regen_refused_writes_not_even_the_registry(
     assert _bytes(tmp_path / "repo") == before
 
 
-def test_threshold_registry_regen_writes_the_registry_and_surfaces(tmp_path, monkeypatch):
-    """The same run without the refusal writes all three back to the
-    committed bytes — so the row above is not passing on a run that writes
-    nothing anyway."""
+def test_threshold_registry_regen_reports_the_module_it_wrote(tmp_path, monkeypatch):
+    """The module is a generated surface the operator must commit, so a
+    regen that rewrote it names it among the touched paths."""
+    lib, _dev, _seed = _regen_setup(tmp_path, monkeypatch)
+    _summary, touched = lib.regen()
+    assert str(tmp_path / "repo" / "ops" / "_rule_packs_generated.py") in touched, touched
+
+
+def test_threshold_registry_regen_writes_the_surfaces_not_the_registry(tmp_path, monkeypatch):
+    """The same run without the refusal writes both surfaces and the module
+    back to the committed bytes — so the row above is not passing on a run
+    that writes nothing anyway — and leaves the authored registry as it is."""
     monkeypatch.syspath_prepend(str(TOOLS / "lint"))
     import check_threshold_registry as gate
     _lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
                                    _stale(_SEED_REL, *_SEED_STALE))
     assert gate.main(["--regen"]) == 0
     registry = tmp_path / "repo" / "rule-packs" / "threshold-registry.yaml"
-    assert registry.read_bytes() == (REPO / "rule-packs" / "threshold-registry.yaml").read_bytes()
+    assert registry.read_bytes() == (REPO / "rule-packs" / "threshold-registry.yaml").read_bytes() + b"# stale\n"
+    module = tmp_path / "repo" / "ops" / "_rule_packs_generated.py"
+    assert module.read_bytes() == (REPO / "scripts" / "tools" / "ops" / "_rule_packs_generated.py").read_bytes()
     assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
     assert seed.read_bytes() == (REPO / _SEED_REL).read_bytes()
 

@@ -1,10 +1,13 @@
 """Tests for scripts/tools/ops/_registry_lib.py (TRK-339 WS1a / #1200).
 
-The lib is the single mechanical bridge between scaffold_tenant.RULE_PACKS and
-the standalone threshold registry (D2). Pins:
+Since D-A PR-3 the registry file is the hand-authored SoT and
+scaffold_tenant.RULE_PACKS's threshold half is generated from it. Pins:
   - extraction structure (packs / keys / tiers / derived critical_of)
   - loud failure on identity collisions (never silently shadow a contract key)
-  - load + schema-validate roundtrip on the real committed registry
+  - load + schema-validate on the real committed registry
+  - the registry is a fixed point of project -> extract, and an authored file
+    that breaks an extraction rule is not
+  - the generated RULE_PACKS module is fresh, and a stale one is caught
   - the semantic diff catches every field-level divergence, both directions
   - query helpers
 """
@@ -86,31 +89,11 @@ def test_critical_of_derived_only_when_base_exists_in_pack():
     assert "critical_of" not in doc["keys"]["alpha_orphan_critical"]
 
 
-# ── metric_class: inheritance / backfill / strict completeness ────────────
+# ── metric_class: inheritance / strict completeness ───────────────────────
 
 def test_critical_inherits_base_metric_class():
     doc = lib.build_registry_doc(SYNTH_PACKS)
     assert doc["keys"]["alpha_conn_critical"]["metric_class"] == "saturation"
-
-
-def test_backfill_classifies_unclassified_key():
-    packs = copy.deepcopy(SYNTH_PACKS)
-    del packs["beta"]["defaults"]["beta_lag"]["metric_class"]
-    doc = lib.build_registry_doc(
-        packs, metric_class_backfill={"beta_lag": "latency"})
-    assert doc["keys"]["beta_lag"]["metric_class"] == "latency"
-
-
-def test_backfill_shadowing_scaffold_class_fails_loud():
-    with pytest.raises(ValueError, match="shadows scaffold-authored"):
-        lib.build_registry_doc(
-            SYNTH_PACKS, metric_class_backfill={"beta_lag": "latency"})
-
-
-def test_backfill_unknown_key_fails_loud():
-    with pytest.raises(ValueError, match="not found in RULE_PACKS"):
-        lib.build_registry_doc(
-            SYNTH_PACKS, metric_class_backfill={"ghost": "latency"})
 
 
 def test_strict_unclassified_key_fails_loud():
@@ -120,14 +103,13 @@ def test_strict_unclassified_key_fails_loud():
         lib.build_registry_doc(packs, strict_metric_class=True)
 
 
-def test_real_extraction_every_key_classified_and_enum_bounded():
-    """65/65 keys carry a metric_class from the schema taxonomy; the curated
-    saturation set stays exactly the 22 scaffold-authored bases (+ inherited
-    _critical) — the backfill adds NO new saturation (behavior-preserving)."""
+def test_real_registry_every_key_classified():
+    """Every key carries a metric_class; the curated saturation set stays
+    exactly the 22 bases (+ their _critical) it was before PR-3 folded the
+    old backfill table into the file — the fold added NO new saturation."""
     doc = lib.build_registry_doc()
     classes = {k: e["metric_class"] for k, e in doc["keys"].items()}
     assert len(classes) == len(doc["keys"])  # no key unclassified
-    assert "saturation" not in set(lib.METRIC_CLASS_BACKFILL.values())
     saturation_bases = {
         k for k, e in doc["keys"].items()
         if e["metric_class"] == "saturation" and "critical_of" not in e
@@ -160,19 +142,138 @@ def test_committed_registry_loads_and_validates():
     assert len(doc["keys"]) >= 60
 
 
-def test_committed_registry_equals_scaffold():
-    """The transition-period invariant itself (also enforced by the gate)."""
-    assert lib.diff_vs_scaffold(lib.load_registry()) == []
+def test_committed_registry_is_a_fixed_point():
+    """The invariant the gate enforces: project -> extract reproduces it."""
+    assert lib.fixed_point_problems(lib.load_registry()) == []
 
 
-def test_write_registry_roundtrip(tmp_path):
-    out = tmp_path / "registry.yaml"
-    summary = lib.write_registry(str(out), SYNTH_PACKS)
-    assert summary == {"path": str(out), "packs": 2, "keys": 4}
-    doc = lib.load_registry(str(out))
-    assert lib.diff_docs(doc, lib.build_registry_doc(SYNTH_PACKS)) == []
-    # the written file validates against the committed schema
+def test_synthetic_doc_is_a_fixed_point():
+    doc = lib.build_registry_doc(
+        SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn"}),
+        strict_metric_class=True)
+    assert lib.fixed_point_problems(doc) == []
     assert lib.validate_registry(doc) == []
+
+
+def _fixed_point_doc():
+    return lib.build_registry_doc(
+        SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn"}),
+        deprecated_aliases={"alpha_conns": "alpha_conn"},
+        strict_metric_class=True)
+
+
+@pytest.mark.parametrize("label,mutate,expect", [
+    # each one is an authored-file mistake the extraction used to make
+    # impossible by construction; the fixed point must still refuse it
+    ("critical_of on a key with no base",
+     lambda d: d["keys"]["alpha_orphan_critical"].__setitem__("critical_of", "alpha_orphan"),
+     "alpha_orphan_critical"),
+    ("critical_of dropped where it derives",
+     lambda d: d["keys"]["alpha_conn_critical"].pop("critical_of"),
+     "alpha_conn_critical"),
+    ("critical_of pointing at the wrong base",
+     lambda d: d["keys"]["alpha_conn_critical"].__setitem__("critical_of", "beta_lag"),
+     "alpha_conn_critical"),
+    ("chart_default on an optional_overrides key",
+     lambda d: d["keys"]["alpha_conn_critical"].__setitem__("chart_default", True),
+     "chart-shippable"),
+    ("key under a pack the registry does not list",
+     lambda d: d["keys"]["beta_lag"].__setitem__("pack", "gamma"),
+     "not a valid contract"),
+    ("alias onto no key",
+     lambda d: d["deprecated_aliases"].__setitem__("old_x", "ghost"),
+     "no threshold"),
+    ("alias whose old spelling is still live",
+     lambda d: d["deprecated_aliases"].__setitem__("beta_lag", "alpha_conn"),
+     "ACTIVE"),
+    ("key with no metric_class",
+     lambda d: d["keys"]["beta_lag"].pop("metric_class"),
+     "unclassified"),
+])
+def test_an_authored_mistake_breaks_the_fixed_point(label, mutate, expect):
+    doc = _fixed_point_doc()
+    assert lib.fixed_point_problems(doc) == [], "baseline must hold"
+    mutate(doc)
+    problems = lib.fixed_point_problems(doc)
+    assert problems, label
+    assert any(expect in p for p in problems), (label, problems)
+
+
+@pytest.mark.parametrize("label,mutate", [
+    ("a key entry that is not a mapping",
+     lambda d: d["keys"].__setitem__("beta_lag", "oops")),
+    ("a pack that is null", lambda d: d["packs"].__setitem__("beta", None)),
+])
+def test_a_misshapen_entry_is_reported_not_raised(label, mutate):
+    """Hand-authored: a shape error is a contract problem reported next to
+    the schema errors, never an exception that crashes the gate."""
+    doc = _fixed_point_doc()
+    mutate(doc)
+    problems = lib.fixed_point_problems(doc)
+    assert any(p.startswith("not a valid contract") for p in problems), (label, problems)
+
+
+def test_committed_registry_doc_refuses_a_broken_file(tmp_path):
+    doc = _fixed_point_doc()
+    doc["keys"]["alpha_conn_critical"].pop("critical_of")
+    path = tmp_path / "registry.yaml"
+    path.write_text(lib.yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    with pytest.raises(ValueError, match="alpha_conn_critical"):
+        lib.committed_registry_doc(str(path))
+
+
+def test_a_key_written_twice_is_refused_not_last_wins(tmp_path):
+    # Hand-authored now: a duplicated mapping key must not silently keep the
+    # second entry (the extraction's two-packs check never sees it).
+    text = lib.yaml.safe_dump(_fixed_point_doc(), sort_keys=False)
+    dup = text.replace("keys:\n", "keys:\n  beta_lag:\n    pack: alpha\n", 1)
+    assert dup != text
+    path = tmp_path / "registry.yaml"
+    path.write_text(dup, encoding="utf-8")
+    with pytest.raises(Exception, match="duplicate key"):
+        lib.load_registry(str(path))
+
+
+# ── the generated RULE_PACKS module ───────────────────────────────────────
+
+def test_packaged_doc_is_the_registry_minus_what_rule_packs_does_not_carry():
+    committed = lib.load_registry()
+    packaged = lib.packaged_registry_doc()
+    expected = {k: {f: v for f, v in e.items() if f != "chart_default"}
+                for k, e in committed["keys"].items()}
+    assert packaged["keys"] == expected
+    assert packaged["packs"] == committed["packs"]
+    assert "deprecated_aliases" not in packaged
+
+
+def test_a_critical_classed_apart_from_its_base_is_refused():
+    doc = _fixed_point_doc()
+    doc["keys"]["alpha_conn_critical"]["metric_class"] = "latency"
+    problems = lib.fixed_point_problems(doc)
+    assert any("critical tier carries its base" in p for p in problems), problems
+
+
+def test_committed_module_is_fresh():
+    assert lib.check_rule_packs_module(lib.load_registry()) is None
+
+
+def test_a_stale_module_is_caught(tmp_path):
+    doc = lib.load_registry()
+    path = tmp_path / "_rule_packs_generated.py"
+    path.write_text(lib.render_rule_packs_module(doc), encoding="utf-8")
+    assert lib.check_rule_packs_module(doc, str(path)) is None
+    key = next(iter(doc["keys"]))
+    doc["keys"][key]["value"] = doc["keys"][key]["value"] + 1
+    assert "not what the registry generates" in lib.check_rule_packs_module(doc, str(path))
+
+
+def test_module_projects_back_to_the_registry():
+    """The generated module IS the projection: executing it and extracting
+    again gives the committed registry."""
+    doc = lib.load_registry()
+    ns: dict = {}
+    exec(compile(lib.render_rule_packs_module(doc), "<module>", "exec"), ns)
+    assert ns["THRESHOLD_PACKS"] == lib.project_rule_packs(doc)
 
 
 # ── schema validation catches shape violations ────────────────────────────
@@ -221,7 +322,7 @@ def test_diff_missing_and_extra_key_are_reported():
         "pack": "beta", "tier": "defaults", "value": 1, "unit": "x", "desc": "y"}
     diffs = lib.diff_docs(committed, lib.build_registry_doc(SYNTH_PACKS))
     assert any("beta_lag" in d and "missing from registry" in d for d in diffs)
-    assert any("ghost_key" in d and "missing from scaffold" in d for d in diffs)
+    assert any("ghost_key" in d and "not derived" in d for d in diffs)
 
 
 def test_diff_pack_metadata_change_is_reported():
@@ -268,19 +369,17 @@ def test_chart_default_non_defaults_tier_fails_loud():
 
 
 def test_chart_default_unknown_key_fails_loud():
-    with pytest.raises(ValueError, match="not found in RULE_PACKS"):
+    with pytest.raises(ValueError, match="not found in the packs"):
         lib.build_registry_doc(
             SYNTH_PACKS, chart_default_keys=frozenset({"ghost"}))
 
 
-def test_real_extraction_chart_default_set_matches_table():
-    """The real doc carries chart_default on exactly CHART_DEFAULT_KEYS —
-    the behavior-preserving 6-key pre-rewire set plus the owner-decided
-    pg_connections / pg_replication_lag promotion (#1200 Q3=C / D4 folding,
-    2026-07-25)."""
+def test_real_registry_chart_default_set():
+    """The real doc carries chart_default on the behavior-preserving 6-key
+    pre-rewire set plus the owner-decided pg_connections /
+    pg_replication_lag promotion (#1200 Q3=C / D4 folding, 2026-07-25)."""
     doc = lib.build_registry_doc()
     tagged = {k for k, e in doc["keys"].items() if e.get("chart_default")}
-    assert tagged == set(lib.CHART_DEFAULT_KEYS)
     # Pin the DECISION, not just the mechanism: the owner-approved pg
     # promotion (#1232) must not silently vanish via a table edit that
     # keeps the count intact (CodeRabbit review of #1232).
