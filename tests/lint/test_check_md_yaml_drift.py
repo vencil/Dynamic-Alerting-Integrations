@@ -28,10 +28,11 @@ EXIT_CALLER_ERROR = 2
 
 
 def _mkrepo(tmp_path: Path, name: str, body: str) -> Path:
-    """A minimal repo root: docs/<name> plus the two real schemas."""
+    """A minimal repo root: docs/<name> plus the real conf.d schemas."""
     (tmp_path / "docs" / "schemas").mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs" / name).write_text(body, encoding="utf-8")
-    for schema in ("tenant-config.schema.json", "platform-defaults.schema.json"):
+    for schema in ("tenant-config.schema.json", "platform-defaults.schema.json",
+                   "routing-profiles.schema.json"):
         src = REPO / "docs" / "schemas" / schema
         (tmp_path / "docs" / "schemas" / schema).write_text(
             src.read_text(encoding="utf-8"), encoding="utf-8")
@@ -76,7 +77,7 @@ def test_tenant_fragment_is_wrapped_and_validated(tmp_path: Path) -> None:
 
 def test_valid_tenant_fragment_passes(tmp_path: Path) -> None:
     body = ("```yaml\n_routing:\n  receiver:\n    type: slack\n"
-            "    api_url: https://hooks.slack.com/services/x\n```\n")
+            "    api_url: {secret: {key: slack-api-url}}\n```\n")
     r = _run(_mkrepo(tmp_path, "ok.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
 
@@ -283,7 +284,7 @@ def test_enforced_routing_keeps_its_own_extra_fields(tmp_path: Path) -> None:
         "  enabled: true\n"
         "  receiver:\n"
         "    type: slack\n"
-        "    api_url: https://hooks.slack.com/services/x\n"
+        "    api_url: {secret: {shared: noc, key: api-url}}\n"
         "  match:\n"
         "    - 'severity=\"critical\"'\n"
         "```\n"
@@ -329,6 +330,71 @@ def test_expect_invalid_holds_a_counter_example_to_being_invalid(tmp_path: Path)
     r = _run(tmp_path)
     assert r.returncode == EXIT_VIOLATION, r.stdout
     assert "[SCHEMA] docs/ce.md:2 (expect-invalid)" in r.stdout, r.stdout
+
+
+_SECRET_VALUE = "https://hooks.slack.com/services/T0/B0/s3cr3t"
+
+
+def _slack(api_url: str, attrs: str = " {.confd}") -> str:
+    return (f"```yaml{attrs}\ntenants:\n  t1:\n    _routing:\n      receiver:\n"
+            f"        type: slack\n        api_url: {api_url}\n```\n")
+
+
+@pytest.mark.parametrize("attrs", [" {.confd}", ""], ids=["declared", "undeclared"])
+def test_plaintext_credential_fails_without_its_value(tmp_path: Path, attrs: str) -> None:
+    r = _run(_mkrepo(tmp_path, "c.md", _slack(_SECRET_VALUE, attrs)))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/c.md:2 (credential_plaintext)" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+
+
+def test_secret_reference_passes(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "c.md", _slack("{secret: {key: slack-api-url}}")))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
+def test_unjudged_credential_place_fails(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "c.md", _slack("[a, b]")))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/c.md:2 (credential_unjudged)" in r.stdout, r.stdout
+
+
+def test_expect_invalid_counts_a_plaintext_credential(tmp_path: Path) -> None:
+    attrs = " {.confd .expect-invalid}"
+    r = _run(_mkrepo(tmp_path, "c.md", _slack(_SECRET_VALUE, attrs)))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "docs/c.md:2 — 1 violation(s) on purpose" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+    (tmp_path / "docs" / "c.md").write_text(
+        _slack("{secret: {key: slack-api-url}}", attrs), encoding="utf-8")
+    r = _run(tmp_path)
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "[SCHEMA] docs/c.md:2 (expect-invalid)" in r.stdout, r.stdout
+
+
+def _profiles(api_url: str) -> str:
+    return ("```yaml\n# _routing_profiles.yaml\nrouting_profiles:\n  team-a:\n"
+            f"    receiver:\n      type: slack\n      api_url: {api_url}\n```\n")
+
+
+def test_routing_profiles_plaintext_credential_fails(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "rp.md", _profiles(_SECRET_VALUE)))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/rp.md:2 (credential_plaintext)" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+
+
+def test_routing_profiles_beside_another_key_is_still_judged(tmp_path: Path) -> None:
+    body = _profiles(_SECRET_VALUE).replace("\n```\n", "\nversion: 1\n```\n")
+    r = _run(_mkrepo(tmp_path, "rp.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/rp.md:2 (credential_plaintext)" in r.stdout, r.stdout
+
+
+def test_routing_profiles_reference_passes_its_schema(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "rp.md", _profiles("{secret: {key: slack-api-url}}")))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "routing-profiles         1" in r.stdout, r.stdout
 
 
 def test_retired_marker_is_an_error_naming_the_attribute(tmp_path: Path) -> None:

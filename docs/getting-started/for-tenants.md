@@ -98,7 +98,7 @@ tenants:
     _routing:
       receiver:
         type: "slack"
-        api_url: "https://hooks.slack.com/services/T/B/xxx"
+        api_url: {secret: {key: slack-api-url}}
         channel: "#my-team-alerts"
       group_wait: "30s"
       repeat_interval: "4h"

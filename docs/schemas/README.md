@@ -198,7 +198,7 @@ tenants:
     _routing:
       receiver:
         type: "slack"
-        api_url: "https://hooks.slack.com/services/T/B/xxx"
+        api_url: {secret: {key: slack-api-url}}
         channel: "#alerts"
       group_wait: "30s"
       group_interval: "5m"
@@ -207,7 +207,7 @@ tenants:
         - alertname: "HighConnections"
           receiver:
             type: "pagerduty"
-            routing_key: "xxxxx/xxxxx/xxxxx"
+            routing_key: {secret: {key: pagerduty-routing-key}}
 ```
 
 receiver 的憑證欄位（webhook 的 `url`／`http_config`、Rocket.Chat 的 `url`、email 的 `auth_password`／`headers`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`）在 schema 上帶擴充關鍵字 `"x-credential": true`；這類欄位名必須都在 tenant-api 的遮罩名單內（[§3.7](../api/tenant-api-hardening.md)，由 `tests/ops/test_lib_redact.py` 守）；唯一例外是 `tls_config.key`：`key` 也是參照自己的座標，不進名單，由名單上的容器 `tls_config` 整包遮掉（測試驗證每個引用處都是名單上的容器）。頂層 7 個（webhook／Rocket.Chat 的 `url`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`、email 的 `auth_password`），以及 webhook `http_config` 底下的 `basic_auth.password`、`authorization.credentials`、`bearer_token`、`tls_config.key`、`oauth2.client_secret`、`oauth2.client_certificate_key`、`oauth2.tls_config.key` 與 `http_headers.<名稱>.secrets` 的項目，以 `anyOf: [<值>, secretRef]` 接受 `definitions.secretRef`（Kubernetes Secret 參照，[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）：`{secret: {key}}` 是租戶自己的 Secret（名稱由租戶 id 推導為 `da-<tenant>`，不收 `name`），`{secret: {shared, key}}` 是部署端 policy `shared_secrets` 列出的共用 Secret；產生器 render 成 Alertmanager 的 `*_file`（header 項目移進 `files`）並檢查綁定（[BYO 整合指南 §5](../integration/byo-alertmanager-integration.md)）。這些位置就是 `_lib_validation.CREDENTIAL_REF_SITES` 這張表，`tests/shared/test_secret_ref_schema.py` 釘住 schema 與它一致。email `headers` 與 `http_config` 的其他欄位沒有對應的 `*_file`，任何一層都不接：`headers` 只收字串，`http_config` 其餘葉欄位有型別、放不進 mapping，唯一自由形式的 `oauth2.claims` 帶 `definitions.secretRefFree`（任何一層都不得出現 `secret` 鍵的值是 mapping 的 mapping；`secret` 的值是字串時是一般的鍵），`http_headers` 拒收名為 `secret` 的 header（它的值是 mapping，形狀與參照相同）；產生器另在 render 之後掃整個輸出，殘留的參照一律擋下（`secret_ref_unsupported_field`）。receiver 不收檔案型欄位（[#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)）：`definitions.fileReferenceKey` 是一條規則（鍵名以 `_file`、`_ref` 結尾，或為 `files`），`definitions.fileReferenceFree` 把它套在 `definitions.receiver` 的每一層，`http_config` 各定義也不再列出 Alertmanager 的 `*_file`／`*_ref`／`files` 鍵；這類欄位會讓 Alertmanager 讀取它自己容器內的檔案。路由產生器以同一條規則（`_lib_validation.is_file_reference_key`）整棵樹拒收，兩邊由 `tests/shared/test_receiver_file_reference_rule.py` 釘在一起。

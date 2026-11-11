@@ -273,7 +273,7 @@ routing_profiles:
   team-dba-global:
     receiver:
       type: pagerduty
-      service_key: "dba-key-123"
+      service_key: {secret: {key: pagerduty-service-key}}
     group_by: [alertname, tenant, severity]
     repeat_interval: 1h
 

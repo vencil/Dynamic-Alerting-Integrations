@@ -183,7 +183,7 @@ _routing_enforced:
   enabled: true                 # ⚠️ omitted = false; the whole block is silently ignored
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/xxx"
+    api_url: {secret: {shared: noc-slack, key: api-url}}  # shared Secret: the alias is listed in the deployment policy's shared_secrets
     channel: "#noc-alerts"
   # ⚠️ match MUST be a list of matcher strings. Omitting it yields a route with
   #    NO matchers, and with the hardcoded continue: true that double-sends every
@@ -205,7 +205,7 @@ NOC receives notifications using `platform_summary` annotation, focused on capac
 _routing_defaults:
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/{{tenant}}-alerts"
+    api_url: {secret: {key: slack-api-url}}
     channel: "#{{tenant}}-team"
   group_wait: "30s"
   repeat_interval: "4h"
@@ -250,13 +250,13 @@ routing_profiles:
   team-sre-apac:
     receiver:
       type: slack
-      api_url: "https://hooks.slack.com/sre-apac"
+      api_url: {secret: {key: slack-api-url}}
     group_wait: 30s
     repeat_interval: 4h
   team-dba-global:
     receiver:
       type: pagerduty
-      service_key: "dba-key-123"
+      service_key: {secret: {key: pagerduty-service-key}}
     repeat_interval: 1h
 ```
 

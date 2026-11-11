@@ -47,7 +47,8 @@ rustdoc's `invalid_codeblock_attributes`:
   kind, is an error. Only parse-tree names a kind; the other consumers'
   readings give a reason without one, so they take no `.expect-refused`.
 * `.expect-invalid` (with `.confd`): a counter-example that reads but is
-  wrong on purpose (rustdoc's `compile_fail`). The schema check must find at
+  wrong on purpose (rustdoc's `compile_fail`). The schema check (with the
+  route generator's credential judgement) must find at
   least one violation in EVERY unit of the fence, and reports none of them; a
   unit with none is an error (a correct file shown beside the counter-example
   goes in a fence of its own). A block that only shows a reading, and meets
@@ -177,18 +178,25 @@ TENANT_CONFIG_MARKERS = frozenset({
 })
 
 
+def _is_routing_profiles(data: Any) -> bool:
+    """A `_routing_profiles.yaml`: a `routing_profiles:` key at the top. The
+    route generator reads that key whatever else the file holds."""
+    return isinstance(data, dict) and "routing_profiles" in data
+
+
 def is_confd_example(data: Any) -> bool:
     """Is this reading a Vibe config example (platform file or tenant snippet)?
 
     A platform key at the top (`defaults:` / `state_filters:` / …), a bare
     top-level `tenants:`, a tenant marker at the top, or a tenant marker one
-    level down (a tenant body with `tenants:` omitted in the snippet). Asked
+    level down (a tenant body with `tenants:` omitted in the snippet), or a
+    `_routing_profiles.yaml` (`_is_routing_profiles`). Asked
     only of an undeclared unit parse-tree read; a declared `.confd` unit is
     conf.d whatever its keys are.
     """
     if not isinstance(data, dict):
         return False
-    if "tenants" in data:
+    if "tenants" in data or _is_routing_profiles(data):
         return True
     for key in data:
         if key in TENANT_CONFIG_MARKERS or key in PLATFORM_KEYS:
@@ -201,7 +209,8 @@ def is_confd_example(data: Any) -> bool:
 
 def confd_kind(data: Any) -> "str | None":
     """Which contract a conf.d reading is governed by: ``platform`` (a
-    platform key at the top: platform-defaults.schema.json), ``tenant-file``
+    platform key at the top: platform-defaults.schema.json),
+    ``routing-profiles`` (`_is_routing_profiles`), ``tenant-file``
     (`tenants:` at the top), ``fragment`` (a bare tenant body, judged as one
     tenant's). None for a reading that is not a mapping."""
     if not isinstance(data, dict):
@@ -209,6 +218,8 @@ def confd_kind(data: Any) -> "str | None":
     keys = set(data)
     if keys & PLATFORM_KEYS:
         return "platform"
+    if _is_routing_profiles(data):
+        return "routing-profiles"
     if "tenants" in keys:
         return "tenant-file"
     return "fragment"
