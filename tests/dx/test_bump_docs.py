@@ -3677,12 +3677,13 @@ class TestDatoolsPinCapability:
                   if r["file"] != "__glob__"
                   and (r["file"].startswith("k8s/")
                        or r["file"].startswith("helm/"))]
+        assert rules, "no da-tools pin-rewriting rule found — the selector broke"
         assert len(rules) > len(inside), (
             "every da-tools pin rewrite now lands inside the image-pin gate's "
             "scan surface — this check has no gap left to cover")
-        assert inside, (
-            "no pin rule targets k8s/ or helm/ any more; the image-pin gate "
-            "and this check may now be looking at disjoint trees")
+        # `inside` may be empty: the last k8s/ pin target (a CronJob under
+        # k8s/03-monitoring/) was removed in #3639. Disjoint surfaces are
+        # fine — this check exists for the targets the gate cannot see.
 
     def test_head_tree_is_clean(self):
         """The release path is green today — so a future red means a real drift."""

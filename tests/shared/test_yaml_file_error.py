@@ -20,7 +20,7 @@ byte in the relevant input, ``rc / traceback / file named``):
     onboard_platform                  1  yes  (path only because the phase banner prints argv)
     check_routing_profiles            1  yes  no
     policy_opa_bridge / blind_spot_discovery / notification_tester /
-    maintenance_scheduler / threshold_recommend   1  yes  no
+    threshold_recommend               1  yes  no
     validate_config                   1  no   yes  (reads the tree itself first; unchanged)
 
 Two decisions, both pinned here:
@@ -365,9 +365,6 @@ _ROWS = [
     ("notification_tester --dry-run", OPS / "notification_tester.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--dry-run"], None, "alpha.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--dry-run"], EXIT_OK),
-    ("maintenance_scheduler --dry-run", OPS / "maintenance_scheduler.py",
-     lambda f: ["--config-dir", str(f["confd_bad"]), "--dry-run"], None, "alpha.yaml",
-     lambda f: ["--config-dir", str(f["confd_ok"]), "--dry-run"], EXIT_OK),
     ("threshold_recommend", OPS / "threshold_recommend.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--prometheus", _PROM], None, "alpha.yaml",
      lambda f: ["--config-dir", str(f["confd_ok"]), "--prometheus", _PROM], EXIT_OK),
@@ -396,8 +393,6 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # #2115 0-B: policy_engine's tenants and policy_opa_bridge's whole tree too
 # (policy_engine's own `_policies` read of `_defaults.yaml` stays Python's).
 # #2116: threshold_recommend reads served-values (then effective) too.
-# #2751: maintenance_scheduler reads effective, and served-values for the
-# parse reason when effective refuses a file.
 # ADR-036 step 4 (#2906): rows whose conf.d read is `da-guard parse-tree`'s.
 _PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
                     "gen_tenant_mapping mapping", "gen_tenant_mapping tenant",
@@ -410,7 +405,7 @@ _PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
 _CONSUMER_READ_ROWS = {"onboard --alertmanager-config"}
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant", "config_diff",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
-                       "threshold_recommend", "maintenance_scheduler --dry-run"}
+                       "threshold_recommend"}
 assert _SERVED_VALUES_ROWS <= set(_ROW_IDS), _SERVED_VALUES_ROWS - set(_ROW_IDS)
 # Rows whose tool reads `_routing` through the route generator's own reader
 # (#2752, #2115 ruling (c)): the file is named and the rc is 2, but the words
@@ -422,7 +417,7 @@ assert _ROUTE_GENERATOR_ROWS <= set(_ROW_IDS), _ROUTE_GENERATOR_ROWS - set(_ROW_
 # parse-tree's kind (`invalid_utf8`).
 _REFUSED_ROWS = {"blind_spot_discovery", "policy_engine tenant", "policy_opa_bridge --dry-run",
                  "policy_opa_bridge _defaults", "threshold_recommend",
-                 "maintenance_scheduler --dry-run", "notification_tester --dry-run"}
+                 "notification_tester --dry-run"}
 assert _REFUSED_ROWS <= set(_ROW_IDS), _REFUSED_ROWS - set(_ROW_IDS)
 #: #3445: a file input declared with `_lib_input.add_input(decode=...)` is read
 #: by `_lib_input.document`: one line naming the flag and the path, the
@@ -756,8 +751,6 @@ def test_scan_sees_the_known_population():
         "policy_engine.py", "policy_opa_bridge.py",
         "blind_spot_discovery.py",
         "threshold_recommend.py",
-        # maintenance_scheduler.py left in #2751: it reads the tree through
-        # `da-guard effective`, no `_lib_python` load site remains.
         # config_diff.py left with ADR-037: it compares what da-guard and the
         # route generator render; its row above pins the refusal.
     }

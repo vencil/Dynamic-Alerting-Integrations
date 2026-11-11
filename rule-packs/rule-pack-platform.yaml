@@ -190,15 +190,15 @@ groups:
       #     new Job gets its start_time the moment it is created but its
       #     condition only after the backoff, so every new run briefly broke
       #     the equality, emptied the vector, and RESET the `for: 15m`
-      #     timer. maintenance-scheduler runs every 5 MINUTES, so the timer
-      #     could never accumulate — the rule was structurally incapable of
-      #     firing for it, which is the very defect class it exists to
-      #     catch. Pinned by the `newer-run-in-flight-...` promtool case.
+      #     timer. A CronJob that runs every few MINUTES (the platform
+      #     shipped one) never let the timer accumulate — the rule was
+      #     structurally incapable of firing for it, which is the very
+      #     defect class it exists to catch. Pinned by the `newer-run-in-flight-...` promtool case.
       #   - "LAST run failed", not "any retained failed Job". Upstream
       #     kubernetes-mixin's KubeJobFailed (`kube_job_failed > 0`) keeps
       #     firing on a retained failure until a human deletes the Job
       #     ("Removing failed job after investigation should clear this
-      #     alert"). maintenance-scheduler runs every 5 MINUTES, so that
+      #     alert"). For a CronJob that runs every few MINUTES that
       #     semantic turns one blip into a permanently-lit alert with no
       #     notifier to act on it. Comparing the latest FAILED start against
       #     the latest start of ANY outcome makes a recovery self-resolve.
@@ -281,8 +281,8 @@ groups:
             success to measure staleness against — this fires the first
             time a run fails, including for a CronJob that has never
             succeeded even once.
-            NOT urgent: platform CronJobs (maintenance-scheduler, every 5
-            minutes) carry no 3am action. Triage in business hours.
+            NOT urgent: a platform CronJob carries no 3am action. Triage
+            in business hours.
             Check: (a) `kubectl get jobs -n {{ $labels.namespace }}` and the
             failing pod's logs; (b) whether the CronJob's pinned image
             actually contains the program it invokes — that failure mode is

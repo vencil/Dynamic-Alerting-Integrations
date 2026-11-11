@@ -597,9 +597,10 @@ def check_writable_mount_has_user(doc_files: List[Path],
 # --- pinned invocations, for dx/bump_docs.py (#1534) ------------------------
 #
 # `bump_docs --tools X.Y.Z` mechanically repoints every documented
-# `ghcr.io/vencil/da-tools:vX.Y.Z` pin. Only the `k8s/03-monitoring/cronjob-*`
-# targets land inside the scan surface of check_image_pin_capability.py
-# (`k8s/**` + `helm/*`); the rest rewrite pins in prose that NOTHING checks for
+# `ghcr.io/vencil/da-tools:vX.Y.Z` pin. None of those targets lands inside the
+# scan surface of check_image_pin_capability.py (`k8s/**` + `helm/*`; the last
+# one that did, a k8s/03-monitoring CronJob, was removed in #3639); they
+# rewrite pins in prose that NOTHING checks for
 # capability — so a doc could keep teaching `docker run ...:vNEW <subcommand>`
 # for a subcommand the new image does not dispatch, and every gate stays green.
 # These helpers give bump_docs the missing oracle. List the split with:

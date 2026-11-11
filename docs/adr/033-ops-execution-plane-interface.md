@@ -79,7 +79,7 @@ updated_at: 2026-11-02
 
 ### R1 傳輸層本來就不通
 
-`k8s/03-monitoring/network-policies.yaml` 的 `allow-alertmanager-ingress` 只放行 monitoring namespace 內兩種 pod 到 9093：`app: prometheus` 與 `component: maintenance-scheduler`。協同產品的任務 pod 兩個條件都不符。
+`k8s/03-monitoring/network-policies.yaml` 的 `allow-alertmanager-ingress` 只放行 monitoring namespace 內兩種 pod 到 9093：`app: prometheus` 與 `component: maintenance-scheduler`。協同產品的任務 pod 兩個條件都不符。（[#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 之後後者隨該 CronJob 移除，只剩 `app: prometheus`；結論不變。）
 
 ⚠️ 而且這條 NetworkPolicy 上就掛著**同一種失敗曾經真的發生過**的紀錄（#1203：`maintenance-scheduler` 這一側原本沒開，「every silence call was dropped here … silent-and-self-concealing」）。同樣的形狀會再發生一次，而且一樣不會有人發現。
 
@@ -95,7 +95,7 @@ updated_at: 2026-11-02
 
 ### R4 它對「決策 2」有未宣告的硬依賴，而那個依賴會反向放大傷害
 
-Alertmanager silence 必須帶 `tenant` matcher（既有 builder 在 `scripts/tools/ops/maintenance_scheduler.py`）。呼叫端結構性知道的是 **namespace + MariaDB CR 名**，不是 DAI 的 tenant id；要換算只能靠決策 2 那張**會漂移**的宣告式對照表。
+Alertmanager silence 必須帶 `tenant` matcher（決策當時的 builder 在 `scripts/tools/ops/maintenance_scheduler.py`，已於 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 移除）。呼叫端結構性知道的是 **namespace + MariaDB CR 名**，不是 DAI 的 tenant id；要換算只能靠決策 2 那張**會漂移**的宣告式對照表。
 
 於是漂移的後果在這裡**不是**良性降級，而是**對錯的租戶開靜音**——把別人家的 critical 藏起來。草稿列的五條護欄沒有任何一條檢查 tenant 是否正確。
 
@@ -103,7 +103,7 @@ Alertmanager silence 必須帶 `tenant` matcher（既有 builder 在 `scripts/to
 
 ### 順帶更正草稿的兩處錯誤
 
-- 草稿寫「⛔ 對整個 tenant 開一張 silence ＝ 手刻 curl 的失敗模式本身」。但**產品自己出貨的 `maintenance_scheduler` 開的就是租戶級 silence**（matcher `{tenant, alert_source="", maintenance="mute"}`，擋該租戶所有可在維護期間靜音的告警）。這條「護欄」與既有行為直接矛盾，草稿沒處理。
+- 草稿寫「⛔ 對整個 tenant 開一張 silence ＝ 手刻 curl 的失敗模式本身」。但**產品當時出貨的 `maintenance_scheduler`（已於 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 移除）開的就是租戶級 silence**（matcher `{tenant, alert_source="", maintenance="mute"}`，擋該租戶所有可在維護期間靜音的告警）。這條「護欄」與既有行為直接矛盾，草稿沒處理。
 - 草稿在替代方案表寫「走 `PUT /api/v1/tenants/{id}` 要過 GitOps commit ＋ owner 核可」。**預設模式是 direct commit-on-write（[ADR-009](009-tenant-manager-crud-api.md)），沒有 PR、沒有核可**；要 PR 核可是 PR write-back 模式才有。這個 reject 理由本身是錯的。
 
 ## 決策
@@ -151,7 +151,7 @@ DAI 的租戶是 conf.d 裡一個刻意不透明的 id（dev-rules #2 要求 ten
 
    ⇒ 初版把三者一律稱為「註解」。實際上走註解的只有 `MariaDBReplicaIOThreadDown`；兩個 `*ClusterDown` 走的是 **`description`**——值班人**會**看到的那一種。兩者不可互換。`SQLThreadDown` 沒有這段文字，`MongoDBClusterDown` 則是初版盤點漏掉的。
 
-   **機器面確實走不通**：(a) `allow-alertmanager-ingress` 只放行 `app: prometheus` 與 `component: maintenance-scheduler` 兩種 pod 到 9093；(b) `maintenance_scheduler.py` 的 CLI 只有 `--config-dir` / `--alertmanager` / `--pushgateway` / `--dry-run` / `--json-output`，`extend_silence()` 是內部函式、唯一呼叫點在同檔排程迴圈，**沒有 ad-hoc 入口**；(c) 要建那個入口的 [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870) §4 已 closed as `not_planned`。**⛔ 但這三點就是 R1 的內容**，不是一個獨立於 R1 的缺陷。
+   **機器面確實走不通**（決策當時；scheduler 與其 NetworkPolicy 已於 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 移除）：(a) `allow-alertmanager-ingress` 只放行 `app: prometheus` 與 `component: maintenance-scheduler` 兩種 pod 到 9093；(b) `maintenance_scheduler.py` 的 CLI 只有 `--config-dir` / `--alertmanager` / `--pushgateway` / `--dry-run` / `--json-output`，`extend_silence()` 是內部函式、唯一呼叫點在同檔排程迴圈，**沒有 ad-hoc 入口**；(c) 要建那個入口的 [#870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/870) §4 已 closed as `not_planned`。**⛔ 但這三點就是 R1 的內容**，不是一個獨立於 R1 的缺陷。
 
    ⛔ **人面走得通，初版把 (a)(b)(c) 誤讀成「沒有人走得到」。** (a) 約束的是 **pod 網路 ingress**；(b)(c) 談的是**機器呼叫端**。拿著 kubectl 的值班人用本 repo 已記載的三條路都到得了，其中第一條完全不受 (a) 約束——pod 內 loopback 不經過 pod 網路：
 

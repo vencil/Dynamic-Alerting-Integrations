@@ -1651,7 +1651,6 @@ CONFIGMAP_RULES = RuleSource(
         "configmap-grafana-da-overview.yaml",
         "configmap-grafana.yaml",
         "configmap-prometheus.yaml",
-        "cronjob-maintenance-scheduler.yaml",
         "deployment-alertmanager.yaml",
         "deployment-grafana.yaml",
         "deployment-kube-state-metrics.yaml",

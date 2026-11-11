@@ -41,9 +41,9 @@ never codified, so it rotted.  This file is that gate; its harness shape
 
 SCOPE — WHAT THIS GATE ASSERTS
 ------------------------------
-* All 40 in-scope tools: 36 spell the flag ``--json``, 4 spell it
+* All 39 in-scope tools: 36 spell the flag ``--json``, 3 spell it
   ``--json-output`` (``blind_spot_discovery`` / ``config_diff`` /
-  ``cutover_tenant`` / ``maintenance_scheduler``).  Same contract, both spellings.
+  ``cutover_tenant``).  Same contract, both spellings.
   ``test_recipe_table_covers_every_json_tool`` fails if a new tool grows a JSON
   flag without getting a recipe here, so the scope cannot silently rot.
 * ``scripts/tools/validate_all.py`` (the top level, walked since #1772) gets two
@@ -107,12 +107,12 @@ The HTTP stub is an *out-of-process server* rather than the in-process
 ``monkeypatch(_lib_prometheus.http_get_json)`` seam used by
 ``tests/ops/test_check_alert.py``.  Reason: only 18 of the tools go through
 ``http_get_json``; the rest reach the network via ``urllib.urlopen`` or
-``requests`` directly (``maintenance_scheduler``, ``notification_tester``,
+``requests`` directly (``notification_tester``,
 ``policy_opa_bridge``, and partially ``byo_check`` / ``federation_check`` /
 ``shadow_verify`` / ``discover_instance_mappings``).  One
 real socket covers every one of them uniformly, and subprocess execution gives us
 the *actual, complete* stdout byte stream — which is the thing under test — with
-no import-time module-namespace crosstalk between 40 tools.
+no import-time module-namespace crosstalk between 39 tools.
 
 SCOPE — WHAT THIS GATE DOES *NOT* ASSERT (honest boundaries)
 ------------------------------------------------------------
@@ -1174,16 +1174,6 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--dashboard", str(DASHBOARD_JSON), "--dry-run", "--verify", "--json"],
       needs_kubectl=True),
 
-    # ── maintenance_scheduler  (--json-output spelling; confirmed violator) ─
-    R("maintenance_scheduler", "dry-run",
-      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--alertmanager", s,
-                    "--dry-run", "--json-output"]),
-    R("maintenance_scheduler", "report-only",
-      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json-output"]),
-    R("maintenance_scheduler", "apply-silences",
-      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--alertmanager", s,
-                    "--pushgateway", s, "--json-output"]),
-
     # ── migrate_to_operator  (⚠ known multi-mode trap) ─────────────────────
     R("migrate_to_operator", "dry-run",
       lambda t, s: ["--source-dir", str(K8S_MONITORING),
@@ -1516,7 +1506,7 @@ def test_validate_config_optional_keys_are_all_produced_somewhere():
 def test_recipe_table_covers_every_json_tool():
     """A tool that grows a --json flag must gain a recipe, or this gate rots.
 
-    (36 tools spell it `--json`, 4 spell it `--json-output`; all 40 are in scope.)
+    (36 tools spell it `--json`, 3 spell it `--json-output`; all 39 are in scope.)
     """
     covered = {r.tool for r in RECIPES}
     uncovered = sorted(set(JSON_TOOLS) - covered)
@@ -1526,8 +1516,8 @@ def test_recipe_table_covers_every_json_tool():
         f"no recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 40, (
-        f"expected 40 JSON-flag tools (36 --json + 4 --json-output), "
+    assert len(JSON_TOOLS) == 39, (
+        f"expected 39 JSON-flag tools (36 --json + 3 --json-output), "
         f"found {len(JSON_TOOLS)}: {sorted(JSON_TOOLS)}"
     )
 

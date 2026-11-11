@@ -128,7 +128,7 @@
   // read the tenants through da-guard, built from this checkout's Go source into
   // the gitignored .build/ (`make validate-config` rebuilds it on each run; this
   // one makes a broken Go toolchain fail at create time, by name).
-  "postCreateCommand": "pip3 install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -fsSLo ./kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 && echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  ./kind' | sha256sum -c - && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh && bash .devcontainer/install-vector.sh && bash .devcontainer/install-trivy.sh && make da-guard-build",
+  "postCreateCommand": "pip3 install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -fsSLo ./kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 && echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  ./kind' | sha256sum -c - && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh && bash .devcontainer/install-vector.sh && bash .devcontainer/install-trivy.sh && make da-guard-build",
 
   "customizations": {
     "vscode": {

@@ -1332,6 +1332,18 @@ func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool,
 		if r.kind != stateValueOn || !r.hasExpires {
 			continue
 		}
+		// #3639: expires does not limit the recurring windows — say so, on
+		// every scrape like the other value WARNs, once it has passed, so a
+		// "maintenance until X" is not read as over while the
+		// maintenance_expired event says it is. Gated on the sink, NOT on
+		// warn: warn only dedupes the parse WARNs ResolveStateFiltersAt
+		// already printed, and it never prints this one — gated on warn, it
+		// would be silent exactly when a declared maintenance filter makes
+		// the windows matter.
+		if logf != nil && now.After(r.expires) && len(r.windows) > 0 {
+			logf("WARN: _state_maintenance for tenant=%s: expires %s has passed, but its %d recurring window(s) still switch maintenance on — expires does not limit them; remove recurring to end them",
+				tenant, r.expiresText, len(r.windows))
+		}
 
 		result = append(result, ResolvedMaintenanceExpiry{
 			Tenant:  tenant,
