@@ -402,7 +402,7 @@ class TestWriteOutputs:
             snippet = "# relabel\nrelabel_configs: []"
             write_outputs(tmpdir, "db-c", defaults, tenant, "report",
                           relabel_snippet=snippet)
-            relabel_path = os.path.join(tmpdir, "relabel_configs-db-c.yaml")
+            relabel_path = os.path.join(tmpdir, "relabel_configs-db-c.txt")
             assert os.path.isfile(relabel_path)
 
     def test_yaml_content_valid(self):
@@ -677,8 +677,48 @@ class TestRunNonInteractive:
                 namespaces="ns1,ns2",
             )
             run_non_interactive(args)
-            relabel_file = os.path.join(d, "relabel_configs-db-x.yaml")
+            relabel_file = os.path.join(d, "relabel_configs-db-x.txt")
             assert os.path.exists(relabel_file)
+
+    def test_namespaces_leave_no_unread_top_level_key(self):
+        """#3671: the N:1 relabel snippet sits beside the conf.d files; as a
+        `.yaml` it was a tenant file whose `relabel_configs:` no reader reads,
+        which the shared key verdict blocks the whole tree on."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces="ns1,ns2",
+            )
+            run_non_interactive(args)
+            binary = os.environ.get("DA_GUARD_BINARY", "da-guard")
+            out = subprocess.run([binary, "key-verdict", "--config-dir", d],
+                                 capture_output=True, text=True, encoding="utf-8", timeout=60)
+            assert out.returncode == 0, out.stderr
+            verdict = json.loads(out.stdout)
+            reasons = [f.get("reason") for f in verdict.get("findings", [])]
+            assert "tenant_file_top_level" not in reasons, verdict["findings"]
+            assert not verdict.get("blocks"), verdict
+
+    def test_a_config_named_extra_is_refused(self, monkeypatch):
+        """The guard: a file written beside the batch that a conf.d reader
+        would scan is refused before anything is written (#3671)."""
+        import scaffold_tenant as st
+        monkeypatch.setattr(st, "relabel_snippet_name", lambda t: f"relabel_configs-{t}.yaml")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "conf.d")
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=out,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces="ns1,ns2",
+            )
+            with pytest.raises(SystemExit) as exc:
+                run_non_interactive(args)
+            assert exc.value.code == EXIT_CALLER_ERROR
+            assert not os.path.exists(out)
 
     def test_invalid_db_exits(self):
         with tempfile.TemporaryDirectory() as d:
@@ -815,7 +855,7 @@ class TestRunNonInteractive:
                 mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
-            relabel_file = os.path.join(d, "relabel_configs-db-x.yaml")
+            relabel_file = os.path.join(d, "relabel_configs-db-x.txt")
             assert os.path.exists(relabel_file)
 
     def test_topology_n1_without_namespaces_warns(self, capsys):
@@ -848,7 +888,7 @@ class TestRunNonInteractive:
             )
             run_non_interactive(args)
             assert not os.path.exists(os.path.join(d, "_instance_mapping.yaml"))
-            assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.yaml"))
+            assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.txt"))
 
     @_skipif_unix_modes
     def test_mapping_file_permissions(self):

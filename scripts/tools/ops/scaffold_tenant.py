@@ -934,7 +934,7 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
     ]
 
     if namespaces:
-        lines.append(f"  - {output_dir}/relabel_configs-{tenant_name}.yaml (Prometheus relabel snippet)")
+        lines.append(f"  - {output_dir}/{relabel_snippet_name(tenant_name)} (Prometheus relabel snippet)")
 
     lines.extend([
         "",
@@ -990,7 +990,7 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
             "",
             "```bash",
             "# Add to your Prometheus scrape_configs[] section:",
-            f"cat {output_dir}/relabel_configs-{tenant_name}.yaml",
+            f"cat {output_dir}/{relabel_snippet_name(tenant_name)}",
             "```",
             "",
             "Then apply to scrape_configs in your Prometheus configuration.",
@@ -1187,14 +1187,40 @@ def _plan_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
     # Every other file, in the order it is written (after the conf.d batch).
     writes = []
     # relabel_configs (N:1 topology) — a Prometheus snippet, not a conf.d file.
+    # Named so no conf.d reader takes it for one (#3671: a `.yaml` here was a
+    # tenant file whose top-level `relabel_configs:` no reader reads).
     if relabel_snippet:
-        writes.append((str(out / f"relabel_configs-{tenant_name}.yaml"), relabel_snippet))
+        writes.append((str(out / relabel_snippet_name(tenant_name)), relabel_snippet))
     writes.append((str(out / "scaffold-report.txt"), report))
     return confd, writes
 
 
+def relabel_snippet_name(tenant_name: str) -> str:
+    """The N:1 topology's Prometheus relabel snippet, written beside the
+    conf.d files: a name no conf.d reader scans (not a config extension)."""
+    return f"relabel_configs-{tenant_name}.txt"
+
+
+def _refuse_config_named_extras(writes: list) -> None:
+    """Every file written beside the conf.d batch must be one no conf.d
+    reader reads — da-guard's own name verdict (`config_extension`), the
+    rule the exporter's walk applies — or it lands in the tree as a tenant
+    file outside the batch's judgement (#3671). Nothing is written."""
+    import _lib_parse_tree
+    names = [Path(p).name for p, _ in writes]
+    try:
+        verdict = _lib_parse_tree.classify_names(names)
+    except _lib_parse_tree.ParseTreeError as exc:
+        _die(f"cannot judge the output names through `da-guard parse-tree`: {exc}; nothing was written")
+    read = sorted(n for n, e in verdict.items() if e.config_extension)
+    if read:
+        _die(f"{', '.join(read)} would be read as conf.d config but is not written through "
+             "`da-guard write` (#3671) — nothing was written")
+
+
 def _perform_writes(out: Path, confd: list, writes: list) -> None:
     """The conf.d batch (all or nothing), then every other file."""
+    _refuse_config_named_extras(writes)
     _write_confd_files(out, confd)
     for f in confd:
         print(f"  📄 {out / f.rel}")
