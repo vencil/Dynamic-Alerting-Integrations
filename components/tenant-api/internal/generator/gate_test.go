@@ -34,6 +34,28 @@ func fastGate(t *testing.T, fake *testutil.FakeGenerator, policyPath string) *Ga
 	return g
 }
 
+// The "too little time left" cases: the fake answers when windowLeft of the
+// request's time is left — under windowJudge, so the gate does not ask again —
+// and the call itself still has windowLeft of slack before the deadline.
+const (
+	windowJudge = time.Second
+	windowLeft  = windowJudge / 2
+	windowCtx   = 2 * time.Second
+)
+
+func windowGate(t *testing.T, fake *testutil.FakeGenerator) *Gate {
+	t.Helper()
+	g := fastGate(t, fake, "")
+	g.minJudge = windowJudge
+	return g
+}
+
+func answerLeaving(req testutil.FakeValidateRequest) {
+	if d := time.Duration(req.DeadlineMS)*time.Millisecond - windowLeft; d > 0 {
+		time.Sleep(d)
+	}
+}
+
 func ctxFor(t *testing.T, d time.Duration) context.Context {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), d)
@@ -129,13 +151,12 @@ func TestValidateWrites_NoTimeToJudgeAgain(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
 	fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
-		time.Sleep(300 * time.Millisecond)
+		answerLeaving(req)
 		v := testutil.PassVerdict(req, nil)
 		v["validated"].(map[string]any)["base_commit"] = strings.Repeat("cd", 20)
 		return 200, v
 	})
-	g := fastGate(t, fake, "")
-	err := errOf(g.ValidateWrites(ctxFor(t, 450*time.Millisecond), testBase, testFiles()))
+	err := errOf(windowGate(t, fake).ValidateWrites(ctxFor(t, windowCtx), testBase, testFiles()))
 	var rej *RejectedError
 	if !errors.As(err, &rej) || rej.Reason != ReasonNoTime {
 		t.Fatalf("err = %v, want no_time", err)
@@ -258,10 +279,10 @@ func TestValidateWrites_FindingsNotCompared(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
 	fake.SetValidate(func(n int, req testutil.FakeValidateRequest) (int, any) {
-		time.Sleep(300 * time.Millisecond)
+		answerLeaving(req)
 		return 200, testutil.FindingsVerdict(req, "/w", testutil.Finding("x", "db-a", "", "m"))
 	})
-	err := errOf(fastGate(t, fake, "").ValidateWrites(ctxFor(t, 450*time.Millisecond), testBase, testFiles()))
+	err := errOf(windowGate(t, fake).ValidateWrites(ctxFor(t, windowCtx), testBase, testFiles()))
 	var fe *FindingsError
 	if !errors.As(err, &fe) || fe.ComparedWithBase || fe.Findings[0].PreExisting != nil || !fe.Findings[0].Related {
 		t.Fatalf("err = %v (%+v)", err, fe)
