@@ -128,7 +128,11 @@ def test_a_tenant_files_top_level_is_not_a_platform_file(tmp_path):
         f.write("_routing_defualts: {}\n")
     (root / "team" / "_defaults.yml").write_text("_routing_enforce: {}\n", encoding="utf-8")
     err = _gen(root, "--validate").stderr
-    assert "_routing_defualts" not in err and "_routing_enforce" not in err
+    assert "_routing_enforce" not in err
+    # Not as a platform key the route generator does not read; the reader
+    # that names it is the shared key verdict (#3671).
+    assert "'_routing_defualts' is not a key the route generator reads" not in err
+    assert "t1.yaml: error: unread `_routing_defualts` (tenant_file_top_level)" in err, err
 
 
 @pytest.mark.usefixtures("da_guard_env")
