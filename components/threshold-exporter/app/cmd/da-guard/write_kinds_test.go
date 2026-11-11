@@ -286,13 +286,15 @@ func TestWrite_AFootCommentEndsTheFile(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
+			// A platform file: a tenant file holds `tenants` alone (#3671),
+			// and these shapes need a top-level block and sequence.
 			root := writeTree(t, map[string]string{})
-			in := `{"files":[{"path":"t.yaml","head_comment":"head","foot_comment":"declared:\n\n  cpu: 80","create":` + tc.create + `}]}`
+			in := `{"files":[{"path":"_t.yaml","head_comment":"head","foot_comment":"declared:\n\n  cpu: 80","create":` + tc.create + `}]}`
 			code, res := runBatch(t, writeCmd, in, "--config-dir", root)
 			if code != exitOK || res.Status != writeStatusWritten {
 				t.Fatalf("exit %d %v (%v)", code, statuses(res), res.Message)
 			}
-			if got := snapshot(t, root)["t.yaml"]; got != tc.want {
+			if got := snapshot(t, root)["_t.yaml"]; got != tc.want {
 				t.Fatalf("written\n%s\nwant\n%s", got, tc.want)
 			}
 		})

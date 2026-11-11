@@ -201,14 +201,14 @@ class TestNamespaceMapping:
         """--namespaces with single namespace produces relabel file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, "test-ns", "mariadb", namespaces="ns-prod")
-            relabel_path = os.path.join(tmpdir, "relabel_configs-test-ns.yaml")
+            relabel_path = os.path.join(tmpdir, "relabel_configs-test-ns.txt")
             assert os.path.isfile(relabel_path)
 
     def test_scaffold_with_namespaces_multiple(self, monkeypatch):
         """--namespaces with multiple namespaces produces relabel file."""
         with tempfile.TemporaryDirectory() as tmpdir:
             run_scaffold(monkeypatch, tmpdir, "test-ns", "mariadb", namespaces="ns1,ns2,ns3")
-            relabel_path = os.path.join(tmpdir, "relabel_configs-test-ns.yaml")
+            relabel_path = os.path.join(tmpdir, "relabel_configs-test-ns.txt")
             assert os.path.isfile(relabel_path)
             with open(relabel_path, encoding="utf-8") as f:
                 content = f.read()

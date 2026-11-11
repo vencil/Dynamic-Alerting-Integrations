@@ -110,7 +110,7 @@ tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/
 da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 ```
 
-輸出：`_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt`（+ `relabel_configs-<tenant>.yaml` 當 `--namespaces` 指定時）。完整 flag、`--routing-receiver`、`--catalog`、`--from-onboard <hints>` pipeline：[`cli-reference.md#scaffold`](cli-reference.md#scaffold)。
+輸出：`_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt`（+ `relabel_configs-<tenant>.txt` 當 `--namespaces` 指定時）。完整 flag、`--routing-receiver`、`--catalog`、`--from-onboard <hints>` pipeline：[`cli-reference.md#scaffold`](cli-reference.md#scaffold)。
 
 注入 ConfigMap 的三種方式（Helm / kubectl / GitOps）：[threshold-exporter README — K8s 部署](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。
 

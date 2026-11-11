@@ -515,17 +515,18 @@ def test_a_foot_comment_ends_the_file_and_a_seq_item_carries_its_comments(tmp_pa
         ("optional_overrides", ce.seq_value([
             {"str": "a"}, ({"str": "b"}, ce.comments(head="⚠ counterexample", line="x")),
             ({"str": "c"}, None)])),
-        ("tenants", ce.map_value([("t-a", ce.map_value([]))])),
     ])
     assert content["map"][0][1] == {"seq": [{"str": "a"}, [{"str": "b"}, {"head": "⚠ counterexample", "line": "x"}],
                                             {"str": "c"}]}
-    entry = ce.create_entry("t-a.yaml", content, foot_comment="declared:\n\n  cpu: 80")
+    # `optional_overrides` where a reader reads it: the root defaults carrier
+    # (#3671: at a tenant file's top level it is no reader's, and refused).
+    entry = ce.create_entry("_defaults.yaml", content, foot_comment="declared:\n\n  cpu: 80")
     assert entry["foot_comment"] == "declared:\n\n  cpu: 80" and "head_comment" not in entry
-    doc = ce.emit(root, "t-a.yaml", content, head_comment="h", foot_comment="declared:\n\n  cpu: 80")
+    doc = ce.emit(root, "_defaults.yaml", content, head_comment="h", foot_comment="declared:\n\n  cpu: 80")
     assert doc["status"] == ce.WRITTEN
-    assert (root / "t-a.yaml").read_text(encoding="utf-8") == (
+    assert (root / "_defaults.yaml").read_text(encoding="utf-8") == (
         "# h\n\noptional_overrides:\n  - \"a\"\n  # ⚠ counterexample\n  - \"b\" # x\n  - \"c\"\n"
-        "tenants:\n  t-a: {}\n\n# declared:\n#\n#   cpu: 80\n")
+        "\n# declared:\n#\n#   cpu: 80\n")
 
 
 def test_a_bad_foot_or_seq_item_comment_writes_nothing(tmp_path):

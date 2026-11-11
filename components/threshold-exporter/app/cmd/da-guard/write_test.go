@@ -394,7 +394,9 @@ func TestEmit_KeepsTheCallersOrder(t *testing.T) {
 			["recipe",{"str":"threshold"}],["metric",{"str":"qd"}],["op",{"str":">"}],["window",{"str":"5m"}],
 			["threshold",{"str":"80"}]]}]}]]}]]}],
 		["defaults",{"map":[]}]]}}`
-	code, res := runW(t, writeCmd, in, "--config-dir", root, "--path", "team/t9.yaml")
+	// A platform file: a tenant file holds `tenants` alone (#3671), and the
+	// order kept here needs a second top-level key.
+	code, res := runW(t, writeCmd, in, "--config-dir", root, "--path", "team/_t9.yaml")
 	if code != exitOK || res.Status != writeStatusWritten {
 		t.Fatalf("exit %d %+v %v", code, res, res.Message)
 	}
@@ -402,10 +404,10 @@ func TestEmit_KeepsTheCallersOrder(t *testing.T) {
 	want := "tenants:\n  t9:\n    zeta: \"1\"\n    alpha: \"yes\"\n    mid: 10\n    _custom_alerts:\n" +
 		"      - name: \"x\"\n        expr: |\n          up\n          == 0\n        recipe: \"threshold\"\n" +
 		"        metric: \"qd\"\n        op: \">\"\n        window: \"5m\"\n        threshold: \"80\"\ndefaults: {}\n"
-	if len(got) != 1 || got["team/t9.yaml"] != want {
+	if len(got) != 1 || got["team/_t9.yaml"] != want {
 		t.Fatalf("got %v\nwant\n%s", got, want)
 	}
-	if fi, err := os.Stat(filepath.Join(root, "team", "t9.yaml")); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(filepath.Join(root, "team", "_t9.yaml")); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v %v", fi.Mode(), err)
 	}
 }
