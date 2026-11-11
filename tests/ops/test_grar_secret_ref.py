@@ -4,9 +4,12 @@ owner 裁決（2026-11-04）：參照不寫 Secret 名稱。
 
 * `{secret: {key}}` 是所屬租戶自己的 Secret，名稱固定 `da-<tenant>`；
 * `{secret: {shared, key}}` 的別名必須列在部署端 policy 的 `shared_secrets`，
-  且該條目的 `fields` 要列出這個欄位；
-* `auth_password` 不能用共用 Secret；用自己的也要 policy 有 `allowed_domains` 且
-  smarthost 通過（密碼會送到租戶自己填的 smarthost）。
+  且該條目的 `fields` 要列出這個欄位的完整路徑（⑤-b：`api_url`、
+  `http_config.basic_auth.password`）；
+* `auth_password` 與 `http_config` 各列：租戶擁有的 receiver 不能用共用 Secret；用自己的
+  也要 policy 有 `allowed_domains` 且目的地通過（密碼會送到租戶自己填的 smarthost）。
+  沒有所屬租戶的 `_routing_enforced` 反過來只能用共用 Secret，同樣受 allowlist、
+  `follow_redirects: false`、不設 proxy 約束（⑤-b，2-c 推廣）。
 
 ConfigMap 路徑 render 成 `<field>_file: <root>/<secret>/<key>`、拿掉原欄位。檢查對每個
 租戶「有效的」receiver 判（`_routing_defaults`／`overrides`／`routes`／`_routing_enforced`
@@ -277,8 +280,16 @@ def test_policy_reads_shared_secrets(tmp_path):
     ("shared_secrets:\n  corp: {secret: Corp_Secret, fields: [url]}\n", "Secret name"),
     ("shared_secrets:\n  corp: {secret: corp, fields: url}\n", "non-empty list"),
     ("shared_secrets:\n  corp: {secret: corp, fields: []}\n", "non-empty list"),
-    ("shared_secrets:\n  corp: {secret: corp, fields: [auth_password]}\n",
-     "auth_password never takes a shared Secret"),
+    # #1560 ⑤-b: a field is a full row path; the top-level `http_config`
+    # (which opened eight rows at once) names none, and the message names
+    # the paths it may have meant.
+    ("shared_secrets:\n  corp: {secret: corp, fields: [http_config]}\n",
+     r"a field is a full path now; under \['http_config'\] the paths are .*"
+     r"http_config\.basic_auth\.password"),
+    ("shared_secrets:\n  corp: {secret: corp, fields: [basic_auth.password]}\n",
+     "may use a shared Secret"),
+    ("shared_secrets:\n  corp: {secret: corp, fields: ['http_config.http_headers.X-Token.secrets']}\n",
+     "may use a shared Secret"),
     ("shared_secrets:\n  corp: {secret: corp, fields: [channel]}\n", "may use a shared Secret"),
 ])
 def test_unusable_shared_secrets_make_the_policy_unusable(tmp_path, body, needle):
@@ -1094,3 +1105,132 @@ def test_a_malformed_token_url_does_not_stop_the_other_tenants():
     assert [r["name"] for r in receivers] == ["tenant-t-b"]
     assert ("secret_ref_destination_unconfined", "t-a") in {
         (w.kind, w.tenant) for w in warnings if isinstance(w, SkippedEntryWarning)}
+
+
+# ── ⑤-b：policy `fields` 是完整路徑；沒有所屬租戶的 enforced 可用共用 Secret（2-c 推廣）──
+
+from _lib_validation import shared_secret_field_texts, site_path_text  # noqa: E402
+
+
+def test_shared_secret_fields_are_the_table_paths():
+    """可填的值由 CREDENTIAL_REF_SITES 推導，一列一個寫法；萬用步照字面寫。"""
+    assert {site_path_text(s.path) for s in CREDENTIAL_REF_SITES} == shared_secret_field_texts()
+    assert site_path_text(("http_config", "http_headers", "*", "secrets", "[]")) \
+        == "http_config.http_headers.*.secrets[]"
+    assert {"api_url", "url", "auth_password", "http_config.basic_auth.password",
+            "http_config.oauth2.tls_config.key", "http_config.tls_config.key",
+            "http_config.http_headers.*.secrets[]"} <= shared_secret_field_texts()
+    assert "http_config" not in shared_secret_field_texts()
+
+
+def test_policy_reads_full_field_paths(tmp_path):
+    doc = load_policy_document(_policy(tmp_path, (
+        "shared_secrets:\n"
+        "  corp-smtp: {secret: corp-smtp, fields: [auth_password]}\n"
+        "  corp-hook: {secret: corp-hook, fields: [http_config.basic_auth.password,\n"
+        "              'http_config.http_headers.*.secrets[]']}\n")))
+    assert doc.shared_secrets["corp-smtp"] == SharedSecret("corp-smtp", frozenset({"auth_password"}))
+    assert doc.shared_secrets["corp-hook"].fields == frozenset(
+        {"http_config.basic_auth.password", "http_config.http_headers.*.secrets[]"})
+
+
+_HOOK_SHARED = {"secret": {"shared": "corp-hook", "key": "pw"}}
+_SMTP_SHARED = {"secret": {"shared": "corp-smtp", "key": "pw"}}
+
+
+def _bind(**fields) -> SecretBinding:
+    return SecretBinding(DEFAULT_MOUNT_ROOT, MappingProxyType({
+        alias: SharedSecret(alias, frozenset(f)) for alias, f in fields.items()}))
+
+
+_PW_BINDING = _bind(**{"corp-hook": {"http_config.basic_auth.password"},
+                       "corp-smtp": {"auth_password"}})
+
+
+def _platform(receiver, **kwargs):
+    """build_receiver_config on the receiver no tenant owns."""
+    kwargs.setdefault("allowed_domains", _ALLOWED)
+    kwargs.setdefault("secrets", _PW_BINDING)
+    return build_receiver_config(receiver, "platform-enforced", owner_tenant=None,
+                                 field="_routing_enforced.receiver", **kwargs)
+
+
+def test_platform_enforced_takes_a_shared_secret_on_auth_password():
+    cfg, warnings = _platform({**SMTP, "auth_password": _SMTP_SHARED})
+    assert warnings == []
+    assert _entry(cfg)["auth_password_file"] == f"{DEFAULT_MOUNT_ROOT}/corp-smtp/pw"
+
+
+def test_platform_enforced_takes_a_shared_secret_on_the_listed_http_config_path():
+    cfg, warnings = _platform(_ref_at(_PW, _HOOK_SHARED))
+    assert warnings == []
+    assert _at(_entry(cfg), ("http_config", "basic_auth"))["password_file"] \
+        == f"{DEFAULT_MOUNT_ROOT}/corp-hook/pw"
+
+
+@pytest.mark.parametrize("path", [("http_config", "authorization", "credentials"),
+                                  ("http_config", "bearer_token")])
+def test_a_listed_path_does_not_open_its_siblings(path):
+    """`fields: [http_config.basic_auth.password]` 只開那一列（舊寫法比 path[0]，一開 8 列）。"""
+    cfg, warnings = _platform(_ref_at(path, _HOOK_SHARED))
+    assert cfg is None
+    assert [w.kind for w in warnings] == ["secret_ref_shared_field_not_allowed"]
+    assert "http_config.basic_auth.password" in warnings[0]
+
+
+def test_a_top_level_name_in_fields_opens_no_http_config_row():
+    """舊寫法比對 `path[0]`：`fields: [http_config]` 一次開 8 列。現在比完整路徑，
+    即使繞過 policy 讀取端直接給這個集合，也不開任何一列。"""
+    binding = _bind(**{"corp-hook": {"http_config"}})
+    for site in _NESTED:
+        cfg, warnings = _platform(_ref_at(site.path, _HOOK_SHARED), secrets=binding)
+        assert cfg is None, site.path
+        assert "secret_ref_shared_field_not_allowed" in [w.kind for w in warnings], site.path
+
+
+@pytest.mark.parametrize("receiver,kwargs,kind", [
+    # allowed_domains 仍要非空並放行目的地
+    ({**SMTP, "auth_password": _SMTP_SHARED}, {"allowed_domains": None},
+     "secret_ref_destination_unconfined"),
+    ({**SMTP, "smarthost": "smtp.attacker.example:587", "auth_password": _SMTP_SHARED}, {},
+     "secret_ref_destination_unconfined"),
+    (_ref_at(_PW, _HOOK_SHARED, ), {"allowed_domains": ["*.other.example"]},
+     "secret_ref_destination_unconfined"),
+    # follow_redirects 仍要寫成 false
+    (_ref_at(_PW, _HOOK_SHARED, follow_redirects=True), {}, "secret_ref_follow_redirects"),
+    # 不得設 proxy
+    (_ref_at(_PW, _HOOK_SHARED, proxy_url="http://proxy.example.com:3128"), {},
+     "secret_ref_proxy_url"),
+    # 別名沒列這個欄位
+    ({**SMTP, "auth_password": _HOOK_SHARED}, {}, "secret_ref_shared_field_not_allowed"),
+])
+def test_platform_enforced_shared_secret_keeps_every_other_rule(receiver, kwargs, kind):
+    cfg, warnings = _platform(receiver, **kwargs)
+    assert cfg is None
+    assert kind in [w.kind for w in warnings], warnings
+
+
+@pytest.mark.parametrize("receiver", [{**SMTP, "auth_password": _SMTP_SHARED},
+                                      _ref_at(_PW, _HOOK_SHARED)])
+def test_a_tenant_owned_receiver_still_never_takes_a_shared_secret_there(receiver):
+    cfg, warnings = build_receiver_config(receiver, "t-a", tenant_id="t-a", owner_tenant="t-a",
+                                          secrets=_PW_BINDING, allowed_domains=_ALLOWED)
+    assert cfg is None and [w.kind for w in warnings] == ["secret_ref_shared_confined"]
+
+
+def test_the_tenant_placeholder_enforced_receiver_takes_only_its_own_secret():
+    """`{{tenant}}` 版的 enforced 歸各租戶：受限列上的共用 Secret 照舊拒。"""
+    configs = {"t-a": _routing(_slack(OWN))}
+    templated = {"receiver": {**SMTP, "to": ["noc+{{tenant}}@example.com"],
+                              "auth_password": _SMTP_SHARED}}
+    _r, receivers, warnings = gar.generate_routes(
+        configs, enforced_routing=templated, tenants=["t-a"], secrets=_PW_BINDING,
+        allowed_domains=_ALLOWED)
+    assert "platform-enforced-t-a" not in [r["name"] for r in receivers]
+    assert "secret_ref_shared_confined" in [getattr(w, "kind", None) for w in warnings]
+    plain = {"receiver": {**SMTP, "auth_password": _SMTP_SHARED}}
+    _r, receivers, warnings = gar.generate_routes(
+        configs, enforced_routing=plain, tenants=["t-a"], secrets=_PW_BINDING,
+        allowed_domains=_ALLOWED)
+    noc = next(r for r in receivers if r["name"] == "platform-enforced")
+    assert noc["email_configs"][0]["auth_password_file"].endswith("/corp-smtp/pw")

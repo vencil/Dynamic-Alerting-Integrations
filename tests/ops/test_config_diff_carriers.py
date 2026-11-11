@@ -114,7 +114,8 @@ CASES = [
      lambda d: _append(d / "_defaults.yaml", ENFORCED),
      lambda d: _sub(d / "_defaults.yaml", "  repeat_interval: 4h\n", "  repeat_interval: 5h\n")),
     ("routing_profiles.receiver", "routing_profiles", {ROUTES}, None,
-     lambda d: _sub(d / FINANCE, 'service_key: "finance-tier1-key"', 'service_key: "finance-tier1-k2"')),
+     lambda d: _sub(d / FINANCE, "service_key: {secret: {key: pagerduty-service-key}}",
+                    "service_key: {secret: {key: pagerduty-service-key-2}}")),
     ("routing_profiles.group_by", "routing_profiles", {ROUTES}, None,
      lambda d: _sub(d / FINANCE, "    group_by: [tenant, alertname, severity]\n    group_wait: 30s\n"
                     "    group_interval: 5m\n    repeat_interval: 1h",

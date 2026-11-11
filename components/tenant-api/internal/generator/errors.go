@@ -163,8 +163,8 @@ var UnavailableReasons = []string{
 // ClientReason is the reason a client is shown: reason itself when it is
 // one tenant-api knows (RejectionReasons, UnavailableReasons), else
 // ReasonUnknown. The service's reason is passed through to tenant-api as
-// it came, so a newer or a broken service can put anything there; the
-// original goes to the log with the error.
+// it came, so a newer or a broken service can put anything there; the log
+// gets this closed form too (LogValue, #1560 ⑤-b), never the original.
 func ClientReason(reason string) string {
 	for _, list := range [][]string{RejectionReasons, UnavailableReasons} {
 		for _, r := range list {

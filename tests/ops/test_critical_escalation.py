@@ -379,11 +379,13 @@ class TestLeaks:
             "['pagerduty'] does, so they never reach one"]
 
 
+# Written to a tenant file the CLI judges: its service_key is a reference
+# (#1560 ⑤-b refuses one written out under --validate).
 _PART_TENANT = {"t-part": {"_routing": {
     "receiver": _HOOK,
     "group_by": ["tenant", "alertname", "severity"],
     "routes": [{"match": {"severity": "critical", "alertname": "Z"},
-                "receiver": _PD}]}}}
+                "receiver": {**_PD, "service_key": {"secret": {"key": "pd"}}}}]}}}
 _PART_WARN = (
     "  WARN: domain_policy 'finance', tenant 't-part': severity=critical "
     "alerts that no sub-route catches go to the main receiver (type "

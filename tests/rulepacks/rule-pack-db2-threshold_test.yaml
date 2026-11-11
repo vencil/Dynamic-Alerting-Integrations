@@ -36,3 +36,101 @@ tests:
         exp_samples:
           - labels: 'tenant:alert_threshold:db2_lock_wait_time{tenant="t1"}'
             value: 1
+
+  # #3658 critical tier: db2_connections_active_critical. t-fire sits above the critical
+  # threshold (400); t-quiet sits between warning (200) and critical,
+  # so only the warning twin DB2HighConnections would page it — DB2HighConnectionsCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "db2_connections_active{tenant=\"t-fire\"}"
+        values: "450x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"db2\", metric=\"connections_active\", severity=\"warning\"}"
+        values: "200x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"db2\", metric=\"connections_active\", severity=\"critical\"}"
+        values: "400x60"
+      - series: "db2_connections_active{tenant=\"t-quiet\"}"
+        values: "300x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"db2\", metric=\"connections_active\", severity=\"warning\"}"
+        values: "200x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"db2\", metric=\"connections_active\", severity=\"critical\"}"
+        values: "400x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:db2_connections_active_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:db2_connections_active_critical{tenant=\"t-fire\"}"
+            value: 400
+          - labels: "tenant:alert_threshold:db2_connections_active_critical{tenant=\"t-quiet\"}"
+            value: 400
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: DB2HighConnectionsCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DB2HighConnectionsCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "db2_connections_active"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "DB2 active connections critical on t-fire"
+              summary_zh: "t-fire 上 DB2 連線數嚴重過高"
+              platform_summary: "[] t-fire: DB2 connections at critical level — check headroom to MAXAPPLS (new connections are refused past it); cap the offending pool"
+              platform_summary_zh: "[] t-fire：DB2 連線數達嚴重水位 — 請確認距 MAXAPPLS 的餘裕（超過後新連線會被拒）；限制造成問題的連線池"
+              description: "450 active connections (critical threshold exceeded)"
+              description_zh: "450 個活動連線（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: db2_lock_wait_time_critical. t-fire sits above the critical
+  # threshold (20); t-quiet sits between warning (10) and critical,
+  # so only the warning twin DB2HighLockWaitTime would page it — DB2HighLockWaitTimeCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "db2_lock_wait_time_seconds_total{tenant=\"t-fire\"}"
+        values: "0+450x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"db2\", metric=\"lock_wait_time\", severity=\"warning\"}"
+        values: "10x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"db2\", metric=\"lock_wait_time\", severity=\"critical\"}"
+        values: "20x60"
+      - series: "db2_lock_wait_time_seconds_total{tenant=\"t-quiet\"}"
+        values: "0+225x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"db2\", metric=\"lock_wait_time\", severity=\"warning\"}"
+        values: "10x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"db2\", metric=\"lock_wait_time\", severity=\"critical\"}"
+        values: "20x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:db2_lock_wait_time_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:db2_lock_wait_time_critical{tenant=\"t-fire\"}"
+            value: 20
+          - labels: "tenant:alert_threshold:db2_lock_wait_time_critical{tenant=\"t-quiet\"}"
+            value: 20
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: DB2HighLockWaitTimeCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: DB2HighLockWaitTimeCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "db2_lock_wait_time"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "DB2 lock wait time critical on t-fire"
+              summary_zh: "t-fire 上 DB2 鎖等待時間嚴重過高"
+              platform_summary: "[] t-fire: DB2 lock waits at critical level — transactions are queueing behind locks; find the lock-holding application and end it now"
+              platform_summary_zh: "[] t-fire：DB2 鎖等待達嚴重水位 — 交易正排隊等鎖；請立即找出持有鎖的應用程式並結束它"
+              description: "30.0s of lock wait accrued per second (critical threshold exceeded)"
+              description_zh: "每秒累積 30.0 秒的鎖等待（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""

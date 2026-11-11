@@ -30,6 +30,11 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:clickhouse_active_connections:max
+  clickhouse_active_connections_critical:
+    pack: rule-pack-clickhouse.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:clickhouse_active_connections:max
   clickhouse_max_part_count:
     pack: rule-pack-clickhouse.yaml
     scope: tenant
@@ -61,12 +66,22 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:db2_connections_active:max
+  db2_connections_active_critical:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:db2_connections_active:max
   db2_deadlock_rate:
     pack: rule-pack-db2.yaml
     scope: tenant
     direction: '>'
     observed_series: tenant:db2_deadlocks:rate5m
   db2_lock_wait_time:
+    pack: rule-pack-db2.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:db2_lock_wait_time:rate5m
+  db2_lock_wait_time_critical:
     pack: rule-pack-db2.yaml
     scope: tenant
     direction: '>'
@@ -86,7 +101,17 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:es_disk_usage_percent:max
+  es_disk_usage_percent_critical:
+    pack: rule-pack-elasticsearch.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:es_disk_usage_percent:max
   es_heap_usage_percent:
+    pack: rule-pack-elasticsearch.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:es_heap_usage_percent:max
+  es_heap_usage_percent_critical:
     pack: rule-pack-elasticsearch.yaml
     scope: tenant
     direction: '>'
@@ -96,7 +121,17 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:es_pending_tasks:max
+  es_pending_tasks_critical:
+    pack: rule-pack-elasticsearch.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:es_pending_tasks:max
   es_search_latency_ms:
+    pack: rule-pack-elasticsearch.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:es_search_latency_ms:avg
+  es_search_latency_ms_critical:
     pack: rule-pack-elasticsearch.yaml
     scope: tenant
     direction: '>'
@@ -182,12 +217,22 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:mongodb_connections_current:max
+  mongodb_connections_current_critical:
+    pack: rule-pack-mongodb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mongodb_connections_current:max
   mongodb_opcounters_rate:
     pack: rule-pack-mongodb.yaml
     scope: tenant
     direction: '>'
     observed_series: tenant:mongodb_opcounters:rate5m
   mongodb_replication_lag:
+    pack: rule-pack-mongodb.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:mongodb_replication_lag:max
+  mongodb_replication_lag_critical:
     pack: rule-pack-mongodb.yaml
     scope: tenant
     direction: '>'
@@ -269,7 +314,17 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:oracle_sessions_active:max
+  oracle_sessions_active_critical:
+    pack: rule-pack-oracle.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:oracle_sessions_active:max
   oracle_tablespace_used_percent:
+    pack: rule-pack-oracle.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:oracle_tablespace_used_percent:max
+  oracle_tablespace_used_percent_critical:
     pack: rule-pack-oracle.yaml
     scope: tenant
     direction: '>'
@@ -300,6 +355,11 @@ keys:
     direction: '>'
     observed_series: tenant:pg_replication_lag:max
   rabbitmq_connections:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:rabbitmq_connections:max
+  rabbitmq_connections_critical:
     pack: rule-pack-rabbitmq.yaml
     scope: tenant
     direction: '>'
@@ -336,7 +396,17 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:rabbitmq_unacked_messages:max
+  rabbitmq_unacked_messages_critical:
+    pack: rule-pack-rabbitmq.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:rabbitmq_unacked_messages:max
   redis_connected_clients:
+    pack: rule-pack-redis.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:redis_connected_clients:max
+  redis_connected_clients_critical:
     pack: rule-pack-redis.yaml
     scope: tenant
     direction: '>'
@@ -351,7 +421,17 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:redis_memory_used_bytes:max
+  redis_memory_used_bytes_critical:
+    pack: rule-pack-redis.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:redis_memory_used_bytes:max
   redis_replication_lag:
+    pack: rule-pack-redis.yaml
+    scope: tenant
+    direction: '>'
+    observed_series: tenant:redis_replication_lag:max
+  redis_replication_lag_critical:
     pack: rule-pack-redis.yaml
     scope: tenant
     direction: '>'

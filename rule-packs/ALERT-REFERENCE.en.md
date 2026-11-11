@@ -23,6 +23,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 |---|---|---|---|---|---|
 | ClickHouseHighQueryRate | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse query rate elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:clickhouse_queries:rate5m |
 | ClickHouseHighConnections | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse connections exceeded  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:clickhouse_active_connections:max |
+| ClickHouseHighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: ClickHouse connections at critical level  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:clickhouse_active_connections:max |
 | ClickHouseHighPartCount | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse partition merge pressure  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:clickhouse_max_part_count:max |
 | ClickHouseReplicationLag | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse replication queue high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:clickhouse_replication_queue:max |
 | ClickHouseHighMemoryUsage | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse memory usage high  | Check resource consumption and optimize configuration; consider increasing memory or enabling compression | tenant:clickhouse_memory_tracking:max |
@@ -36,11 +37,13 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 |---|---|---|---|---|---|
 | DB2DatabaseDown | critical | fires | db2_up=0 for 15s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | db2_up |
 | DB2HighConnections | warning | muted | [tier] {{ $labels.tenant }}: DB2 connection usage high  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:db2_connections_active:max |
+| DB2HighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: DB2 connections at critical level  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:db2_connections_active:max |
 | DB2LowBufferpoolHitRatio | warning | muted | [tier] {{ $labels.tenant }}: DB2 bufferpool hit ratio low  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_bufferpool_hit_ratio:min |
 | DB2HighLogUsage | warning | muted | [tier] {{ $labels.tenant }}: DB2 transaction log usage high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_log_usage_percent:max |
 | DB2HighDeadlockRate | warning | muted | [tier] {{ $labels.tenant }}: DB2 deadlock rate elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_deadlocks:rate5m |
 | DB2TablespaceAlmostFull | warning | muted | [tier] {{ $labels.tenant }}: DB2 tablespace nearing capacity  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_tablespace_used_percent:max |
 | DB2HighLockWaitTime | warning | muted | [tier] {{ $labels.tenant }}: DB2 lock wait time high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_lock_wait_time:rate5m |
+| DB2HighLockWaitTimeCritical | critical | muted | [tier] {{ $labels.tenant }}: DB2 lock waits at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_lock_wait_time:rate5m |
 | DB2HighSortOverflow | warning | muted | [tier] {{ $labels.tenant }}: DB2 sort overflow ratio high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:db2_sort_overflow_ratio:avg |
 
 ---
@@ -52,10 +55,14 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | ElasticsearchClusterRed | critical | fires | Cluster health is RED  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_cluster_health:status |
 | ElasticsearchClusterYellow | warning | muted | [tier] {{ $labels.tenant }}: ES cluster YELLOW  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_cluster_health:status |
 | ElasticsearchHighHeapUsage | warning | muted | [tier] {{ $labels.tenant }}: ES heap usage high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_heap_usage_percent:max |
+| ElasticsearchHighHeapUsageCritical | critical | muted | [tier] {{ $labels.tenant }}: ES heap at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_heap_usage_percent:max |
 | ElasticsearchHighDiskUsage | warning | muted | [tier] {{ $labels.tenant }}: ES disk usage high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_disk_usage_percent:max |
+| ElasticsearchHighDiskUsageCritical | critical | muted | [tier] {{ $labels.tenant }}: ES disk at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_disk_usage_percent:max |
 | ElasticsearchHighSearchLatency | warning | muted | [tier] {{ $labels.tenant }}: ES search latency elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_search_latency_ms:avg |
+| ElasticsearchHighSearchLatencyCritical | critical | muted | [tier] {{ $labels.tenant }}: ES search latency at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_search_latency_ms:avg |
 | ElasticsearchUnassignedShards | warning | muted | [tier] {{ $labels.tenant }}: ES unassigned shards  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_unassigned_shards:count |
 | ElasticsearchPendingTasks | warning | muted | [tier] {{ $labels.tenant }}: ES pending cluster tasks  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_pending_tasks:max |
+| ElasticsearchPendingTasksCritical | critical | muted | [tier] {{ $labels.tenant }}: ES master task backlog at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:es_pending_tasks:max |
 
 ---
 
@@ -149,7 +156,9 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | MongoDBClusterDown | critical | fires | No mongod reports up=1 for tenant {{ $labels.tenant }}  | Immediately check server status and network connectivity; review system logs | mongodb_up |
 | MongoDBNoPrimary | critical | fires | Replica-set members are reachable but none is PRIMARY for tenant {{ $labels.tenant }}  | Check alert metrics and review related logs; contact platform team for assistance if needed | mongodb_mongod_replset_member_state |
 | MongoDBHighConnections | warning | muted | [tier] {{ $labels.tenant }}: MongoDB connection threshold breached  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:mongodb_connections_current:max |
+| MongoDBHighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: MongoDB connections at critical level  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:mongodb_connections_current:max |
 | MongoDBReplicationLag | warning | muted | [tier] {{ $labels.tenant }}: MongoDB replication lag  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_replication_lag:max |
+| MongoDBReplicationLagCritical | critical | muted | [tier] {{ $labels.tenant }}: MongoDB secondary far behind primary  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_replication_lag:max |
 | MongoDBHighOperations | warning | muted | [tier] {{ $labels.tenant }}: MongoDB operation rate elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_opcounters:rate5m |
 | MongoDBHighPageFaults | warning | muted | [tier] {{ $labels.tenant }}: MongoDB page fault rate high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_page_faults:rate5m |
 | MongoDBConnectionSaturation | warning | muted | [tier] {{ $labels.tenant }}: MongoDB connection pool near saturation  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mongodb_connection_usage:ratio |
@@ -186,7 +195,9 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 |---|---|---|---|---|---|
 | OracleDatabaseDown | critical | fires | oracledb_up=0 for 15s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | oracledb_up |
 | OracleHighActiveSessions | warning | muted | [tier] {{ $labels.tenant }}: Oracle active sessions elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_sessions_active:max |
+| OracleHighActiveSessionsCritical | critical | muted | [tier] {{ $labels.tenant }}: Oracle active sessions at critical level  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_sessions_active:max |
 | OracleTablespaceAlmostFull | warning | muted | [tier] {{ $labels.tenant }}: Oracle tablespace nearing capacity  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_tablespace_used_percent:max |
+| OracleTablespaceAlmostFullCritical | critical | muted | [tier] {{ $labels.tenant }}: Oracle tablespace almost out of space  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_tablespace_used_percent:max |
 | OracleHighWaitTime | warning | muted | [tier] {{ $labels.tenant }}: Oracle wait time elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_wait_time:rate5m |
 | OracleHighProcessCount | warning | muted | [tier] {{ $labels.tenant }}: Oracle process count high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_process_count:max |
 | OracleHighPGAUsage | warning | muted | [tier] {{ $labels.tenant }}: Oracle PGA usage high  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:oracle_pga_allocated_bytes:max |
@@ -218,8 +229,10 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | RabbitMQHighMemory | warning | muted | [tier] {{ $labels.tenant }}: RabbitMQ memory usage high  | Check resource consumption and optimize configuration; consider increasing memory or enabling compression | tenant:rabbitmq_node_mem_percent:ratio |
 | RabbitMQHighMemoryCritical | critical | muted | [tier] {{ $labels.tenant }}: critical RabbitMQ memory  | Check resource consumption and optimize configuration; consider increasing memory or enabling compression | tenant:rabbitmq_node_mem_percent:ratio |
 | RabbitMQHighConnections | warning | muted | [tier] {{ $labels.tenant }}: RabbitMQ connection count high  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:rabbitmq_connections:max |
+| RabbitMQHighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: critical connection count  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:rabbitmq_connections:max |
 | RabbitMQLowConsumers | warning | muted | [tier] {{ $labels.tenant }}: RabbitMQ consumer count low  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_consumers:max |
 | RabbitMQHighUnackedMessages | warning | muted | [tier] {{ $labels.tenant }}: unacked messages piling up  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_unacked_messages:max |
+| RabbitMQHighUnackedMessagesCritical | critical | muted | [tier] {{ $labels.tenant }}: critical unacked backlog  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_unacked_messages:max |
 
 ---
 
@@ -229,9 +242,12 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 |---|---|---|---|---|---|
 | RedisDown | critical | fires |  | Immediately check server status and network connectivity; review system logs | redis_up |
 | RedisHighMemory | warning | muted | [tier] {{ $labels.tenant }}: Redis memory threshold breached  | Check resource consumption and optimize configuration; consider increasing memory or enabling compression | tenant:redis_memory_used_bytes:max |
+| RedisHighMemoryCritical | critical | muted | [tier] {{ $labels.tenant }}: Redis memory at critical level  | Check resource consumption and optimize configuration; consider increasing memory or enabling compression | tenant:redis_memory_used_bytes:max |
 | RedisHighConnections | warning | muted | [tier] {{ $labels.tenant }}: Redis connection count high  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:redis_connected_clients:max |
+| RedisHighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: Redis connections at critical level  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:redis_connected_clients:max |
 | RedisHighKeyEvictions | warning | muted | [tier] {{ $labels.tenant }}: key eviction rate elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:redis_evicted_keys:rate5m |
 | RedisReplicationLag | warning | muted | [tier] {{ $labels.tenant }}: Redis replication lag  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:redis_replication_lag:max |
+| RedisReplicationLagCritical | critical | muted | [tier] {{ $labels.tenant }}: Redis replica far behind  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:redis_replication_lag:max |
 | RedisLowHitRatio | warning | muted | [tier] {{ $labels.tenant }}: low cache hit ratio  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:redis_keyspace_hit_ratio:avg |
 
 ---

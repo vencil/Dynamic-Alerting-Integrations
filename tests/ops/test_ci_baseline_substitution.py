@@ -1126,7 +1126,7 @@ def test_da_guard_flags_an_unrecognised_scope_kind_instead_of_dropping_it(
         "GITHUB_OUTPUT": str(out.as_posix()),
     })
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert "exit=0" not in out.read_text(encoding="utf-8"), (
+    assert "exit=0" not in out.read_text(encoding="utf-8").splitlines(), (
         "an unrecognised scope kind left the verdict at 0, so the row vanished "
         "and the job stayed green")
 
@@ -1153,12 +1153,71 @@ def test_da_guard_names_a_removed_tree_without_failing_the_verdict(
         "GITHUB_OUTPUT": str(out.as_posix()),
     })
     assert proc.returncode == 0, f"{proc.stdout}\n{proc.stderr}"
-    assert "exit=0" in out.read_text(encoding="utf-8"), (
+    assert "exit=0" in out.read_text(encoding="utf-8").splitlines(), (
         f"a removed tree moved the verdict:\n{proc.stdout}\n{proc.stderr}")
     report = (runner_temp / "guard-report.md").read_text(encoding="utf-8")
     assert "### `gone/conf.d` — NOT CHECKED: this PR removes the whole tree" in report, report
     assert "`tree-a`" in report, (
         f"the whole-tree smoke did not run after a removed-only TSV:\n{report}")
+
+
+@needs_bash
+def test_da_guard_refuses_a_nested_tree(tmp_path) -> None:
+    """#3694 follow-up: a `nested` row turns the verdict red (exit 2) with its
+    own heading and the way out, and is never handed to da-guard. Dropping the
+    `nested)` branch still reds through the catch-all, so the heading is what
+    pins the branch; dispatching the row as a target would run da-guard on
+    `a/conf.d/b/conf.d`, which the fixture caller-errors on."""
+    runner_temp, targets = _guard_fixture(
+        tmp_path, "nested\ta/conf.d/b/conf.d\ta/conf.d\n")
+    step = _step(GUARD_DEFAULTS, _S_RUN_DA_GUARD)
+    script = _render(step.script, {
+        "runner.temp": str(runner_temp.as_posix()),
+        "steps.detect.outputs.conf_d": "tree-a",
+    })
+    out = tmp_path / "gh-output"
+    proc = _run(step, script, tmp_path, {
+        "RUNNER_TEMP": str(runner_temp.as_posix()),
+        "TARGETS": str(targets.as_posix()),
+        "CONF_D": "tree-a",
+        "GITHUB_OUTPUT": str(out.as_posix()),
+    })
+    # ⛔ Whole lines, not a substring: `generator_exit=2` (the route generator
+    # is absent in this fixture) contains "exit=2" and kept this assertion
+    # green with the `nested)` branch's WORST=2 deleted (mutation, measured).
+    assert "exit=2" in out.read_text(encoding="utf-8").splitlines(), (
+        f"a nested layout did not turn the verdict red:\n{proc.stdout}\n{proc.stderr}")
+    report = (runner_temp / "guard-report.md").read_text(encoding="utf-8")
+    assert "### `a/conf.d/b/conf.d` — NOT CHECKED: nested inside `a/conf.d`" in report, report
+    assert "請把佈局攤平" in report, report
+
+
+@needs_bash
+def test_a_nested_row_never_lowers_a_higher_verdict(tmp_path) -> None:
+    """The `nested)` branch raises WORST to 2, never lowers it: rows are target
+    first, so a tree whose da-guard run exited 3 must still read exit=3 after
+    the nested row (blind review: plain `WORST=2` turned 3 into 2)."""
+    runner_temp, targets = _guard_fixture(
+        tmp_path, "target\ttree-a\t.\nnested\ttree-a/x/conf.d\ttree-a\n")
+    (runner_temp / "da-guard").write_text(
+        "#!/usr/bin/env bash\nout=\"\"\n"
+        "while [ $# -gt 0 ]; do case \"$1\" in --output) out=\"$2\";; esac; shift; done\n"
+        "printf 'ERROR: cannot decode\\n' > \"$out\"; exit 3\n",
+        encoding="utf-8", newline="\n")
+    step = _step(GUARD_DEFAULTS, _S_RUN_DA_GUARD)
+    script = _render(step.script, {
+        "runner.temp": str(runner_temp.as_posix()),
+        "steps.detect.outputs.conf_d": "tree-a",
+    })
+    out = tmp_path / "gh-output"
+    proc = _run(step, script, tmp_path, {
+        "RUNNER_TEMP": str(runner_temp.as_posix()),
+        "TARGETS": str(targets.as_posix()),
+        "CONF_D": "tree-a",
+        "GITHUB_OUTPUT": str(out.as_posix()),
+    })
+    lines = out.read_text(encoding="utf-8").splitlines()
+    assert "exit=3" in lines, f"{lines}\n{proc.stdout}\n{proc.stderr}"
 
 
 @needs_bash

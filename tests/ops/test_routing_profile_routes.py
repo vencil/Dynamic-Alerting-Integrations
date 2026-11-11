@@ -107,8 +107,11 @@ class TestRoutesRenderAsChildren:
              "receiver": f"tenant-{_T}-route-0", "repeat_interval": "15m"},
         ]
         by_name = {r["name"]: r for r in receivers}
+        # #1560 ⑤-b: the shipped profile holds a reference, rendered as the
+        # binding tenant's own Secret.
         assert by_name[f"tenant-{_T}-route-0"]["pagerduty_configs"] == [
-            {"service_key": "sre-apac-critical-key"}]
+            {"service_key_file":
+             f"/etc/alertmanager/secrets/da-{_T}/pagerduty-critical-service-key"}]
 
     def test_undeclared_timing_and_group_by_are_left_to_the_parent(self):
         routes, _, _ = generate_routes(_cfg(
