@@ -175,16 +175,17 @@ def _fmt_value(v):
     return str(int(v)) if v.is_integer() and abs(v) < 2 ** 53 else repr(v)
 
 
-def judge(recipe, tenant, confd, timeout=_TIMEOUT):
+def judge(recipe, tenant, confd, deadline=None):
     """Write *recipe* as *tenant*'s only `_custom_alerts` entry into the empty
     directory *confd*, and read the exporter's verdict on it. Returns a
     `Judged`, or a reason string when the exporter does not serve it.
     Raises what `tv.load_served_tree` / `tv.load_custom_alert_pack` raise
-    (each da-guard run bounded by *timeout* seconds), and OSError."""
+    (each da-guard run bounded by the time left before *deadline*,
+    recomputed when it starts), and OSError."""
     text = yaml.safe_dump({"tenants": {tenant: {"_custom_alerts": [recipe]}}},
                           sort_keys=False, allow_unicode=True)
     (Path(confd) / _TENANT_FILE).write_text(text, encoding="utf-8", newline="\n")
-    served = tv.load_served_tree(confd, timeout=timeout).tenants.get(tenant)
+    served = tv.load_served_tree(confd, timeout=_timeout_left(deadline)).tenants.get(tenant)
     if served is None:
         return f"the exporter serves no tenant {tenant!r} from the recipe"
     if served.custom_alerts is None:
@@ -202,7 +203,7 @@ def judge(recipe, tenant, confd, timeout=_TIMEOUT):
     if entry.status != "served" or len(rows) != 1:
         return f"the exporter serves {len(rows)} row(s) for the recipe ({entry.status})"
     row = rows[0]
-    pack = cc.build_pack(confd, timeout=timeout)
+    pack = cc.build_pack(confd, timeout=_timeout_left(deadline))
     alertname = f"Custom_{row['labels']['recipe_id']}"
     rule = next((r for g in pack.groups for r in g.get("rules", [])
                  if r.get("alert") == alertname
@@ -382,7 +383,7 @@ def preview_recipe(recipe, tenant, scenario, deadline=None):
         confd = work / "conf.d"
         confd.mkdir()
         try:
-            judged = judge(recipe, tenant, confd, timeout=_timeout_left(deadline))
+            judged = judge(recipe, tenant, confd, deadline=deadline)
         except tv.DaGuardNotFoundError as exc:
             return _err(f"da-guard not available — cannot judge the recipe: {exc}")
         except tv.DaGuardError as exc:

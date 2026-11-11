@@ -387,15 +387,41 @@ class TestDeadline:
     def test_preview_hands_the_deadline_to_the_judgement(self, monkeypatch):
         seen = {}
 
-        def fake_judge(recipe, tenant, confd, timeout=None):
-            seen["timeout"] = timeout
+        def fake_judge(recipe, tenant, confd, deadline=None):
+            seen["deadline"] = deadline
             return "stop here"
 
         monkeypatch.setattr(rp, "judge", fake_judge)
-        monkeypatch.setattr(rp.time, "monotonic", lambda: 100.0)
         out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500}, deadline=103.0)
-        assert seen["timeout"] == pytest.approx(3.0)
+        assert seen["deadline"] == 103.0
         assert out["states"][0]["state"] == "error"
+
+    def test_each_da_guard_run_gets_the_time_left_when_it_starts(self, monkeypatch, tmp_path):
+        # The served-tree read takes 25s of a 29s budget: the pack build that
+        # follows must get the ~4s left, not the 29s there were at first.
+        from types import SimpleNamespace as NS
+        now = {"t": 100.0}
+        timeouts = []
+        row = {"severity": "warning", "value": 1000, "metric": "m",
+               "labels": {"recipe_id": "x", "mode": None}}
+        tenant = NS(custom_alerts=[NS(status="served", reason=None)], custom_alerts_error=None,
+                    values={"_custom_alerts": [row]})
+
+        def served(confd, timeout):
+            timeouts.append(timeout)
+            now["t"] += 25.0
+            return NS(tenants={"shop-a": tenant})
+
+        def pack(confd, timeout):
+            timeouts.append(timeout)
+            raise OSError("stop after the second run")
+
+        monkeypatch.setattr(rp.time, "monotonic", lambda: now["t"])
+        monkeypatch.setattr(rp.tv, "load_served_tree", served)
+        monkeypatch.setattr(rp.cc, "build_pack", pack)
+        with pytest.raises(OSError):
+            rp.judge(_THRESHOLD, "shop-a", tmp_path, deadline=129.0)
+        assert timeouts == [pytest.approx(29.0), pytest.approx(4.0)]
 
     def test_promtool_runs_are_bounded_by_the_deadline(self, monkeypatch):
         timeouts = []

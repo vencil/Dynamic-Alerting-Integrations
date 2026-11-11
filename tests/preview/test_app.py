@@ -301,6 +301,31 @@ class TestSocket:
             app.make_server(str(p))
         assert p.read_text(encoding="utf-8") == "x"
 
+    def test_a_live_socket_is_not_taken_over(self, server):
+        _, path = server
+        with pytest.raises(RuntimeError, match="served by another process"):
+            app.make_server(path)
+        assert _request(path, "GET", "/v1/status")[0] == 200   # still the first one
+
+    def test_a_stale_socket_is_replaced(self, tmp_path):
+        path = str(tmp_path / "stale.sock")
+        s = socket.socket(socket.AF_UNIX)
+        s.bind(path)
+        s.close()                       # bound, nobody accepting: stale
+        srv = app.make_server(path)
+        srv.server_close()
+        assert not os.path.exists(path)
+
+    def test_closing_does_not_remove_a_socket_it_did_not_create(self, tmp_path):
+        path = str(tmp_path / "p.sock")
+        first = app.make_server(path)
+        os.unlink(path)                 # an operator, or another instance, rebinds the path
+        second = app.make_server(path)
+        first.server_close()
+        assert os.path.exists(path)
+        second.server_close()
+        assert not os.path.exists(path)
+
     def test_500_is_fail_safe_and_logs_only_tenant_path(self, server, monkeypatch, capfd):
         _, path = server
 

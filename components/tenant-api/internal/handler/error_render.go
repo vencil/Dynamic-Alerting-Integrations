@@ -205,9 +205,9 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 		errors.As(err, &e)
 		return e.Message, nil
 	case errkind.PreviewUnavailable:
+		// Logged by PreviewRecipe, which knows the tenant.
 		var e *recipepreview.UnavailableError
 		errors.As(err, &e)
-		slog.Error("recipe preview unavailable", "tenant", ec.tenantID, "reason", e.Reason, "error", e.Detail)
 		return "the recipe preview is unavailable; retry shortly", map[string]any{"reason": e.Reason}
 
 	case errkind.TenantTreeUnreadable, errkind.TenantStoreFault:

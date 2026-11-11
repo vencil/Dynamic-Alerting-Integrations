@@ -12,7 +12,7 @@ package handler
 // route-independent: this file pins the middleware decision with a sentinel
 // (was the request let through?) across the caller × labeling matrix,
 // plus two real-handler e2e groundings — GetTenant (the primary IDOR) and
-// CheckTenantAccess (the recipe-preview PEP contract, #657). The route-manifest
+// PreviewRecipe (the read gate before the recipe-preview container, ADR-027 §5). The route-manifest
 // test (cmd/server/routes_test.go) pins that each of the 7 routes actually uses
 // this middleware.
 //

@@ -216,6 +216,18 @@ func TestPreviewRecipe_MapsTheContainerOutcomes(t *testing.T) {
 	}
 }
 
+func TestPreviewRecipe_TooLargeIs413BeforeAsking(t *testing.T) {
+	t.Parallel()
+	fp := &fakePreviewer{verdict: json.RawMessage(previewVerdict)}
+	big := `{"recipe":{"recipe":"threshold","name":"` + strings.Repeat("x", previewMaxBody) + `"}}`
+	w := httptest.NewRecorder()
+	previewRouter(newRBACManager(t, previewAdmins), &Deps{RecipePreview: fp}).
+		ServeHTTP(w, previewRequest("db-a", big, true))
+	if w.Code != http.StatusRequestEntityTooLarge || fp.called != 0 {
+		t.Fatalf("status = %d (called %d), want 413 unasked; body: %s", w.Code, fp.called, w.Body.String())
+	}
+}
+
 func TestPreviewRecipe_NotConfigured(t *testing.T) {
 	t.Parallel()
 	w := httptest.NewRecorder()

@@ -12,8 +12,9 @@ What is checked: the first argument of every ``fetch(`` call in
 ``tools/portal/src`` (tests excluded). It is accepted when it is
 
   * a string or template literal whose static start is ``/api/``, or a
-    relative data file next to the page (no leading ``/``, no scheme — e.g.
-    ``'platform-data.json'``);
+    relative data file next to the page (a whole ``.json`` / ``.yaml`` file
+    name, no ``/`` — e.g. ``'platform-data.json'``); dot segments
+    (``/api/../x``) are refused, since the browser normalises them away;
   * an identifier that names, in the same file, a ``const``/``let``/``var``
     whose every assignment is such a literal (also as the leading
     ``${NAME}`` of a template); or
@@ -81,11 +82,17 @@ def _literal_ok(expr: str) -> bool | None:
     quote, rest = m.groups()
     static = rest.split("${", 1)[0] if quote == "`" else rest
     static = static.split(quote, 1)[0]
+    # A browser normalises dot segments: /api/../preview is /preview.
+    if re.search(r"(^|/)\.\.?(/|$)", static):
+        return False
     if static.startswith("/api/"):
         return True
     if static.startswith("/") or re.match(r"^[a-z][a-z0-9+.-]*:", static, re.I):
         return False
-    return bool(static)  # a relative data file next to the page
+    # A relative data file next to the page, read with GET: a whole literal
+    # naming a .json / .yaml file, nothing built after it.
+    whole = quote != "`" or "${" not in rest.split(quote, 1)[0]
+    return whole and bool(re.fullmatch(r"[\w.-]+\.(json|ya?ml)", static))
 
 
 def _assignments(text: str, name: str) -> list[str]:
@@ -179,6 +186,12 @@ def test_every_portal_fetch_is_under_api() -> None:
     ("function get(url) { return fetch(url); }", False),
     ("fetch(makeUrl())", False),
     ("x.fetch('/preview')", True),  # not the global fetch
+    ("fetch('preview', {method: 'POST'})", False),
+    ("fetch('../preview')", False),
+    ("fetch('/api/../preview')", False),
+    ("fetch('/api/v1/./me')", False),
+    ("fetch(`data-${x}.json`)", False),
+    ("fetch('template-data.json')", True),
 ])
 def test_the_check_itself(src: str, ok: bool) -> None:
     n, bad = violations(src)

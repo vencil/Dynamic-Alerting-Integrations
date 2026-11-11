@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/errkind"
 	"github.com/vencil/tenant-api/internal/recipepreview"
 )
@@ -24,6 +28,11 @@ type RecipePreviewer interface {
 // deadline, so the handler still answers with the container's outcome and
 // not the timeout middleware's 504.
 const previewAnswerMargin = time.Second
+
+// previewMaxBody is the recipe-preview container's request limit
+// (PREVIEW_MAX_BODY_BYTES default, 64 KiB). tenant-api's body carries a
+// little less than the container's (no tenant, no deadline_ms).
+const previewMaxBody = 64 * 1024
 
 // RecipePreviewRequest is the body of POST /api/v1/tenants/{id}/recipe-preview.
 // The tenant is the path's: the one the caller was authorized to read.
@@ -70,6 +79,7 @@ type RecipePreviewResponse struct {
 // @Failure     400  {object} ErrorResponse
 // @Failure     401  {object} ErrorResponse
 // @Failure     403  {object} ErrorResponse
+// @Failure     413  {object} ErrorResponse
 // @Failure     429  {object} ErrorResponse
 // @Failure     503  {object} ErrorResponse
 // @Router      /api/v1/tenants/{id}/recipe-preview [post]
@@ -87,9 +97,16 @@ func PreviewRecipe(d *Deps) http.HandlerFunc {
 				"recipe preview is not configured on this deployment")
 			return
 		}
-		raw, err := io.ReadAll(io.LimitReader(r.Body, d.MaxBody()))
+		raw, err := io.ReadAll(io.LimitReader(r.Body, previewMaxBody+1))
 		if err != nil {
 			WriteJSONError(w, r, http.StatusBadRequest, "failed to read request body: "+err.Error())
+			return
+		}
+		// The container's own limit (PREVIEW_MAX_BODY_BYTES), answered here
+		// as a 413 rather than relayed as its 400.
+		if len(raw) > previewMaxBody {
+			WriteJSONErrorWithCode(w, r, http.StatusRequestEntityTooLarge, errcode.PayloadTooLarge,
+				fmt.Sprintf("a recipe preview request is at most %d bytes", previewMaxBody))
 			return
 		}
 		var in struct {
@@ -121,6 +138,10 @@ func PreviewRecipe(d *Deps) http.HandlerFunc {
 			Recipe: in.Recipe, Tenant: id, Scenario: in.Scenario,
 		})
 		if err != nil {
+			var unav *recipepreview.UnavailableError
+			if errors.As(err, &unav) {
+				slog.Error("recipe preview unavailable", "tenant", id, "reason", unav.Reason, "error", unav.Detail)
+			}
 			if !WriteKindError(w, r, err, "recipe preview: ",
 				errkind.PreviewBusy, errkind.PreviewRateLimited, errkind.PreviewRejected, errkind.PreviewUnavailable) {
 				WriteJSONError(w, r, http.StatusInternalServerError, "recipe preview failed")

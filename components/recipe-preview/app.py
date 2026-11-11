@@ -283,6 +283,9 @@ class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
             super().__init__(path, _Handler)
         finally:
             os.umask(old)
+        # The socket this server created, so closing never removes another
+        # server's socket bound at the same path later.
+        self._inode = os.lstat(path).st_ino
 
     def verify_request(self, request, client_address):
         # The trust boundary: only a process running as this uid (tenant-api)
@@ -295,14 +298,28 @@ class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     def server_close(self):
         super().server_close()
         try:
-            os.unlink(self.server_address)
+            if os.lstat(self.server_address).st_ino == self._inode:
+                os.unlink(self.server_address)
         except OSError:
             pass
 
 
+def _socket_answers(path):
+    probe = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    probe.settimeout(1)
+    try:
+        probe.connect(path)
+        return True
+    except OSError:
+        return False
+    finally:
+        probe.close()
+
+
 def make_server(path):
-    """A server bound to the Unix socket *path*. A stale socket there is
-    replaced; anything else at the path is refused, never removed."""
+    """A server bound to the Unix socket *path*. A stale socket there (nobody
+    accepts on it) is replaced; a live one — another instance sharing the
+    volume — and anything that is not a socket are refused, never removed."""
     try:
         st = os.lstat(path)
     except FileNotFoundError:
@@ -310,6 +327,8 @@ def make_server(path):
     if st is not None:
         if not stat.S_ISSOCK(st.st_mode):
             raise RuntimeError(f"PREVIEW_SOCKET {path!r} exists and is not a socket; refusing to replace it")
+        if _socket_answers(path):
+            raise RuntimeError(f"PREVIEW_SOCKET {path!r} is served by another process; refusing to take it over")
         os.unlink(path)
     return _Server(path)
 
