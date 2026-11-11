@@ -93,12 +93,18 @@ global:
 
 ```yaml
 scrape_configs:
-  - job_name: "tenant-exporters"
+  - job_name: "tenant-exporters"   # ⛔ 名稱固定：租戶 rule pack 選 up{job="tenant-exporters"}
     kubernetes_sd_configs:
-      - role: endpoints
+      - role: endpointslice
         namespaces:
           names: ["db-a"]
     relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
       - source_labels: [__meta_kubernetes_namespace]
         target_label: tenant
 ```
@@ -109,14 +115,22 @@ scrape_configs:
 scrape_configs:
   - job_name: "tenant-exporters"
     kubernetes_sd_configs:
-      - role: pod
+      - role: endpointslice           # target 是 Service 後的每個 pod，帶得到 pod label
     relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
       - source_labels: [__meta_kubernetes_pod_label_tenant]
         target_label: tenant
       - source_labels: [tenant]
         regex: ""
         action: drop   # 丟棄沒有 tenant label 的 pod
 ```
+
+> 兩種模式都要 Service 帶 `prometheus.io/scrape: "true"` 與指向 pod port 的 `prometheus.io/port`，並需要 `endpointslices` 的 list／watch 權限與 Prometheus ≥ 2.41（見 [BYO Prometheus 整合](byo-prometheus-integration.md) 的前置條件）。
 
 ### 3.3 適用的 Exporter
 

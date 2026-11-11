@@ -419,6 +419,20 @@ class TestCheck:
 
     @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
+    def test_exporter_is_read_by_tenant_not_instance(self, mock_qp, mock_pod):
+        """#3720 / #3680: instance is <pod IP>:<port> now; a query by
+        `instance="<tenant>"` answers nothing and reports every healthy
+        tenant DOWN."""
+        mock_pod.return_value = "Running"
+        mock_qp.side_effect = [_MARIADB, ([{"value": [1700000000, "1"]}], None),
+                               ([], None), ([], None)]
+        diagnose.check("db-a", "http://prom:9090")
+        query = mock_qp.call_args_list[1].args[1]
+        assert 'tenant="db-a"' in query and 'job="tenant-exporters"' in query, query
+        assert "instance=" not in query, query
+
+    @mock.patch("diagnose.pod_phase")
+    @mock.patch("diagnose.query_prometheus")
     def test_check_writes_nothing_to_stdout(
         self, mock_qp, mock_pod, capsys,
     ):

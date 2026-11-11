@@ -84,7 +84,7 @@ prometheus:
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: tenant-db-exporters
+  name: tenant-exporters
   namespace: monitoring
   labels:
     release: kube-prometheus-stack
@@ -103,6 +103,10 @@ spec:
         # ★ 核心：將 namespace 注入為 tenant 標籤
         - sourceLabels: [__meta_kubernetes_namespace]
           targetLabel: tenant
+        # ⛔ job 必須是 tenant-exporters：每個租戶 rule pack 都選 up{job="tenant-exporters"}。
+        # 沒有這條，prometheus-operator 會用 Service 名稱當 job，健康的租戶也會被當成缺席而 page。
+        - targetLabel: job
+          replacement: tenant-exporters
 ```
 
 ### 1b. 為 threshold-exporter 建立 ServiceMonitor
@@ -234,8 +238,6 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 | 告警 | 為什麼 Operator 模式沒有它的來源 |
 |---|---|
 | `PrometheusConfigReloadFailed` | 選 `job="prometheus"`：那是本 repo raw 設定的 Prometheus 自 scrape job，kube-prometheus-stack 以自己的 Service 名稱命名該 job（它自帶的 `PrometheusBadConfig` 涵蓋同一件事） |
-| `TenantExporterJobAbsent` | 讀 `up{job="tenant-exporters"}`：那個 job 只存在於 raw 設定；Operator 模式下租戶 exporter 由你自己的 ServiceMonitor 抓，job 名稱由它決定。照樣輸出會永遠 firing |
-| `MassExporterOutage` | 同上（`up{job="tenant-exporters"}`） |
 <!-- operator-excluded-rules:end -->
 
 `tests/ops/test_operator_generate_rule_copies.py` 比對上表與推導結果，兩邊不一致就紅。
