@@ -43,7 +43,8 @@
         "mysql_replication_lag": {
           "value": 30,
           "unit": "seconds",
-          "desc": "Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)"
+          "desc": "Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)",
+          "metricClass": "replication"
         }
       },
       "metrics": [
@@ -83,7 +84,8 @@
         "pg_replication_lag": {
           "value": 30,
           "unit": "seconds",
-          "desc": "Replication lag warning"
+          "desc": "Replication lag warning",
+          "metricClass": "replication"
         }
       },
       "metrics": [
@@ -127,12 +129,14 @@
         "redis_evicted_keys_rate": {
           "value": 100,
           "unit": "keys/s",
-          "desc": "Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"
+          "desc": "Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias",
+          "metricClass": "efficiency"
         },
         "redis_replication_lag": {
           "value": 30,
           "unit": "seconds",
-          "desc": "Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231 owner call); #1196 C identity fix, no alias"
+          "desc": "Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231 owner call); #1196 C identity fix, no alias",
+          "metricClass": "replication"
         }
       },
       "metrics": [
@@ -169,12 +173,14 @@
         "mongodb_replication_lag": {
           "value": 10,
           "unit": "seconds",
-          "desc": "Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds (alert demands mongodb_replication_lag) — unwired dead key, no alias"
+          "desc": "Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds (alert demands mongodb_replication_lag) — unwired dead key, no alias",
+          "metricClass": "replication"
         },
         "mongodb_opcounters_rate": {
           "value": 10000,
           "unit": "ops/s",
-          "desc": "Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"
+          "desc": "Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias",
+          "metricClass": "throughput"
         }
       },
       "metrics": [
@@ -211,17 +217,20 @@
         "es_disk_usage_percent": {
           "value": 85,
           "unit": "%",
-          "desc": "Disk USAGE % warning (used = 1 - available/size, recording rule tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2 tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying 15 into a used-% rule would fire permanently"
+          "desc": "Disk USAGE % warning (used = 1 - available/size, recording rule tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2 tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying 15 into a used-% rule would fire permanently",
+          "metricClass": "capacity"
         },
         "es_pending_tasks": {
           "value": 50,
           "unit": "count",
-          "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold"
+          "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold",
+          "metricClass": "state"
         },
         "es_search_latency_ms": {
           "value": 1000,
           "unit": "ms",
-          "desc": "Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 = Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) — the only community rule semantically identical to ours; full derivation + calibration caveat in the pack header (#1196 D)"
+          "desc": "Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 = Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) — the only community rule semantically identical to ours; full derivation + calibration caveat in the pack header (#1196 D)",
+          "metricClass": "latency"
         }
       },
       "metrics": [
@@ -265,7 +274,8 @@
         "oracle_tablespace_used_percent": {
           "value": 85,
           "unit": "%",
-          "desc": "Tablespace usage warning"
+          "desc": "Tablespace usage warning",
+          "metricClass": "capacity"
         }
       },
       "metrics": [
@@ -308,12 +318,14 @@
         "db2_bufferpool_hit_ratio": {
           "value": 0.95,
           "unit": "ratio",
-          "desc": "Bufferpool hit ratio warning"
+          "desc": "Bufferpool hit ratio warning",
+          "metricClass": "efficiency"
         },
         "db2_lock_wait_time": {
           "value": 10,
           "unit": "s/s",
           "desc": "Lock wait accumulation rate warning (rate over 5m, summed across the tenant's instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)",
+          "metricClass": "latency",
           "valueCounterexample": {
             "issue": 1176,
             "direction": "over_fire",
@@ -350,7 +362,8 @@
         "clickhouse_queries_rate": {
           "value": 500,
           "unit": "qps",
-          "desc": "Query rate warning (5m)"
+          "desc": "Query rate warning (5m)",
+          "metricClass": "throughput"
         },
         "clickhouse_active_connections": {
           "value": 200,
@@ -393,22 +406,26 @@
         "kafka_under_replicated_partitions": {
           "value": 0,
           "unit": "count",
-          "desc": "Under-replicated partitions (should be 0)"
+          "desc": "Under-replicated partitions (should be 0)",
+          "metricClass": "replication"
         },
         "kafka_broker_count": {
           "value": 3,
           "unit": "count",
-          "desc": "Minimum broker count warning"
+          "desc": "Minimum broker count warning",
+          "metricClass": "state"
         },
         "kafka_active_controllers": {
           "value": 1,
           "unit": "count",
-          "desc": "Minimum active controllers (should be 1)"
+          "desc": "Minimum active controllers (should be 1)",
+          "metricClass": "state"
         },
         "kafka_request_rate": {
           "value": 10000,
           "unit": "msg/s",
-          "desc": "Message rate warning (5m)"
+          "desc": "Message rate warning (5m)",
+          "metricClass": "throughput"
         }
       },
       "metrics": [
@@ -459,7 +476,8 @@
         "rabbitmq_consumers": {
           "value": 5,
           "unit": "count",
-          "desc": "Minimum consumer count warning"
+          "desc": "Minimum consumer count warning",
+          "metricClass": "state"
         },
         "rabbitmq_unacked_messages": {
           "value": 10000,
@@ -497,7 +515,8 @@
         "jvm_gc_pause": {
           "value": 0.5,
           "unit": "seconds/5m",
-          "desc": "GC pause duration rate warning"
+          "desc": "GC pause duration rate warning",
+          "metricClass": "latency"
         },
         "jvm_memory": {
           "value": 80,
@@ -546,7 +565,8 @@
         "nginx_request_rate": {
           "value": 5000,
           "unit": "req/s",
-          "desc": "Request rate warning"
+          "desc": "Request rate warning",
+          "metricClass": "throughput"
         },
         "nginx_waiting": {
           "value": 200,
