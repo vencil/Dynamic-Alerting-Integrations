@@ -21,14 +21,16 @@
 #      two run as one uid and share the socket; without it every write the
 #      portal makes answers 503.
 #   4. da-portal :8081/ — Tenant Manager UI served (HTTP 200).
-#   5. recipe-preview :8082 — GET /healthz → 200 with promtool present, then
-#      two POST /preview for one threshold recipe on a tenant from check 3: a
-#      value above the threshold must come back `firing`, one below it
-#      `inactive`. #2873's missing modules fail app.py at import, so that
-#      container never listens and /healthz alone answers 000 (#2909). The
-#      two POSTs cover what /healthz cannot: a compiler or promtool that is
-#      present but returns a 500 or an `error` verdict. Two verdicts, not
-#      one, so a service that answers `firing` to everything cannot pass.
+#   5. Would-fire preview through oauth2-proxy and tenant-api (ADR-027 §5:
+#      the recipe-preview container has no port, only a socket shared with
+#      tenant-api): two POST /api/v1/tenants/<id>/recipe-preview for one
+#      threshold recipe on a tenant from check 3 — a value above the
+#      threshold must come back `firing`, one below it `inactive`. That
+#      covers a container that never started (#2873's missing modules fail
+#      app.py at import: tenant-api answers 503 PREVIEW_UNAVAILABLE), a
+#      missing promtool (no states), and a compiler that returns an `error`
+#      verdict. Two verdicts, not one, so a service that answers `firing` to
+#      everything cannot pass.
 #
 # Requires: curl, jq. Honors port overrides from a sibling .env.
 set -euo pipefail
@@ -46,7 +48,6 @@ PROM_PORT="${EXPOSE_PROM_PORT:-9090}"
 API_PORT="${EXPOSE_API_PORT:-8080}"
 PROBE_PORT="${EXPOSE_API_PROBE_PORT:-8083}"
 PORTAL_PORT="${EXPOSE_PORTAL_PORT:-8081}"
-PREVIEW_PORT="${EXPOSE_PREVIEW_PORT:-8082}"
 # Headroom: the mariadb pack's recording rules run at interval:15s, then the
 # alert is for:30s — plus scrape/eval slack and slow CI runners.
 ALERT_TIMEOUT="${SMOKE_ALERT_TIMEOUT:-120}"
@@ -129,7 +130,7 @@ code="$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST}:${PORTAL_PORT}/")
 [ "$code" = "200" ] || fail "portal / returned HTTP ${code} (want 200)"
 echo "[smoke] OK: portal 200"
 
-# 5. recipe-preview: liveness, then two real verdicts through the compiler.
+# 5. recipe preview: two real verdicts through tenant-api and the compiler.
 # http_split <curl args…> → sets $code and $body. Runs in THIS shell
 # (not a $(...) subshell) so a fail() after it exits the script, not a subshell.
 http_split() {
@@ -138,29 +139,22 @@ http_split() {
   code="${resp##*$'\n'}"
   body="${resp%$'\n'*}"
 }
-http_split "http://${HOST}:${PREVIEW_PORT}/healthz"
-[ "$code" = "200" ] || fail "recipe-preview /healthz returned HTTP ${code} (want 200)"
-promtool="$(printf '%s' "$body" | jq -r '.promtool // "absent"' 2>/dev/null || echo absent)"
-[ "$promtool" != "absent" ] || fail "recipe-preview /healthz reports no promtool (body: ${body})"
-echo "[smoke] OK: recipe-preview /healthz 200 (promtool: ${promtool})"
-
 # The tenant comes from check 3's list, so this stays tenant-agnostic.
 tenant="$(printf '%s' "$tenants" | jq -r '.[0].id // empty')"
 [ -n "$tenant" ] || fail "no tenant id in /api/v1/tenants to preview against"
 for pair in 1500:firing 1:inactive; do
   value="${pair%%:*}"
   want="${pair#*:}"
-  req="$(jq -cn --arg t "$tenant" --argjson v "$value" '{
-    tenant: $t,
+  req="$(jq -cn --argjson v "$value" '{
     recipe: {recipe: "threshold", metric: "smoke_queue_depth", op: ">",
              window: "5m", for: "1m", threshold: "1000:warning", name: "smoke"},
     scenario: {value: $v}}')"
   http_split -X POST -H 'Content-Type: application/json' --data "$req" \
-    "http://${HOST}:${PREVIEW_PORT}/preview"
-  [ "$code" = "200" ] || fail "recipe-preview POST /preview (value ${value}) returned HTTP ${code} (want 200; body: ${body})"
+    "http://${HOST}:${API_PORT}/api/v1/tenants/${tenant}/recipe-preview"
+  [ "$code" = "200" ] || fail "POST /api/v1/tenants/${tenant}/recipe-preview (value ${value}) returned HTTP ${code} (want 200; body: ${body})"
   state="$(printf '%s' "$body" | jq -r '.states[0].state // "none"' 2>/dev/null || echo unparsable)"
-  [ "$state" = "$want" ] || fail "recipe-preview POST /preview (value ${value}, threshold 1000) gave '${state}' (want ${want}; body: ${body})"
+  [ "$state" = "$want" ] || fail "recipe preview (value ${value}, threshold 1000) gave '${state}' (want ${want}; body: ${body})"
 done
-echo "[smoke] OK: recipe-preview /preview verdicts firing / inactive"
+echo "[smoke] OK: recipe preview verdicts firing / inactive"
 
 echo "[smoke] ALL CHECKS PASSED"

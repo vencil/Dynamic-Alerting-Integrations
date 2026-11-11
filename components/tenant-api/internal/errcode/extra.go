@@ -124,6 +124,8 @@ var codeExtra = map[Code][]string{
 	GeneratorBusy:           {"reason"},
 	ValidatorUnavailable:    {"reason"},
 	PolicyUnavailable:       {"reason"},
+	PreviewBusy:             {"reason"},
+	PreviewUnavailable:      {"reason"},
 	BatchCommitted:          {"committed", "commit"},
 }
 

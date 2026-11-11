@@ -1,0 +1,2 @@
+var r="da-portal.sign-in-attempt";function o(t){let e="/"+t.pathname.replace(/^\/+/,"");return"/oauth2/start?rd="+encodeURIComponent(e+t.search+t.hash)}function a(t){try{let e=Number(t.sessionStorage.getItem(r));return Number.isFinite(e)?e:0}catch{return 0}}function s(t,e){try{t.sessionStorage.setItem(r,String(e))}catch{}}function i(t=window,e=Date.now()){let n=a(t);return n&&e-n>=0&&e-n<6e4?!1:(s(t,e),t.location.assign(o(t.location)),!0)}export{i as a};
+//# sourceMappingURL=chunk-4NOLJ366.js.map

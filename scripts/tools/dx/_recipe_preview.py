@@ -30,6 +30,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 import sys
 import tempfile
 from pathlib import Path
@@ -102,6 +103,31 @@ _PROMTOOL = shutil.which("promtool")
 
 _TIMEOUT = 60
 
+
+def _timeout_left(deadline):
+    """The timeout for one da-guard / promtool run: `_TIMEOUT`, cut to the
+    time left before *deadline* (an absolute `time.monotonic()` value; None =
+    no caller deadline). Never 0 or negative: subprocess reads a non-positive
+    timeout as already expired only on some paths, so a deadline already gone
+    gives a tiny positive one and the run fails fast."""
+    if deadline is None:
+        return _TIMEOUT
+    return min(_TIMEOUT, max(0.01, deadline - time.monotonic()))
+
+
+def _promtool(args, work, deadline):
+    """One promtool run in *work*, bounded by *deadline*. encoding is
+    explicit: promtool echoes the rule's own annotations, which are UTF-8.
+    Left to the locale codec, a non-UTF-8 host (cp950) raises inside
+    subprocess's reader thread, the output arrives EMPTY, and a firing verdict
+    silently degrades to `error`."""
+    return _run([_PROMTOOL, *args], cwd=work, capture_output=True, text=True,
+                timeout=_timeout_left(deadline), encoding="utf-8", errors="replace")
+
+
+#: The subprocess seam promtool runs go through (tests replace it).
+_run = subprocess.run
+
 # The one-tenant conf.d the recipe is judged in: a fixed file name, so the
 # tenant id (the caller's) never becomes a path.
 _TENANT_FILE = "tenant.yaml"
@@ -149,16 +175,16 @@ def _fmt_value(v):
     return str(int(v)) if v.is_integer() and abs(v) < 2 ** 53 else repr(v)
 
 
-def judge(recipe, tenant, confd):
+def judge(recipe, tenant, confd, timeout=_TIMEOUT):
     """Write *recipe* as *tenant*'s only `_custom_alerts` entry into the empty
     directory *confd*, and read the exporter's verdict on it. Returns a
     `Judged`, or a reason string when the exporter does not serve it.
     Raises what `tv.load_served_tree` / `tv.load_custom_alert_pack` raise
-    (each da-guard run bounded by `_TIMEOUT`), and OSError."""
+    (each da-guard run bounded by *timeout* seconds), and OSError."""
     text = yaml.safe_dump({"tenants": {tenant: {"_custom_alerts": [recipe]}}},
                           sort_keys=False, allow_unicode=True)
     (Path(confd) / _TENANT_FILE).write_text(text, encoding="utf-8", newline="\n")
-    served = tv.load_served_tree(confd, timeout=_TIMEOUT).tenants.get(tenant)
+    served = tv.load_served_tree(confd, timeout=timeout).tenants.get(tenant)
     if served is None:
         return f"the exporter serves no tenant {tenant!r} from the recipe"
     if served.custom_alerts is None:
@@ -176,7 +202,7 @@ def judge(recipe, tenant, confd):
     if entry.status != "served" or len(rows) != 1:
         return f"the exporter serves {len(rows)} row(s) for the recipe ({entry.status})"
     row = rows[0]
-    pack = cc.build_pack(confd, timeout=_TIMEOUT)
+    pack = cc.build_pack(confd, timeout=timeout)
     alertname = f"Custom_{row['labels']['recipe_id']}"
     rule = next((r for g in pack.groups for r in g.get("rules", [])
                  if r.get("alert") == alertname
@@ -306,8 +332,10 @@ def classify_promtool_result(returncode, output):
     return "error"
 
 
-def preview_recipe(recipe, tenant, scenario):
-    """Would-fire preview for ONE recipe. Returns the §4 contract dict:
+def preview_recipe(recipe, tenant, scenario, deadline=None):
+    """Would-fire preview for ONE recipe. *deadline* (an absolute
+    `time.monotonic()` value, or None) bounds every da-guard / promtool run.
+    Returns the §4 contract dict:
     {alertname, supported, states:[{severity, mode, state, reason}], warnings}.
 
     state ∈ firing | inactive | error. Per-type gating: unsupported recipe
@@ -354,7 +382,7 @@ def preview_recipe(recipe, tenant, scenario):
         confd = work / "conf.d"
         confd.mkdir()
         try:
-            judged = judge(recipe, tenant, confd)
+            judged = judge(recipe, tenant, confd, timeout=_timeout_left(deadline))
         except tv.DaGuardNotFoundError as exc:
             return _err(f"da-guard not available — cannot judge the recipe: {exc}")
         except tv.DaGuardError as exc:
@@ -410,29 +438,16 @@ def preview_recipe(recipe, tenant, scenario):
         # so the {state:error} contract holds even then. ──
         try:
             pack_path.write_text(cc._render(judged.pack.groups), encoding="utf-8", newline="\n")
-            # encoding is explicit: promtool echoes the rule's own annotations,
-            # which are UTF-8. Left to the locale codec, a non-UTF-8 host (cp950)
-            # raises inside subprocess's reader thread, the output arrives EMPTY,
-            # and a firing verdict silently degrades to `error` — the markers
-            # classify_promtool_result looks for are simply not there to find.
-            chk = subprocess.run(
-                [_PROMTOOL, "check", "rules", pack_path.name],
-                cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
-                encoding="utf-8", errors="replace",
-            )
+            chk = _promtool(["check", "rules", pack_path.name], work, deadline)
             if chk.returncode != 0:
                 return _err(f"compiled rule failed promtool check: "
                             f"{(chk.stderr or chk.stdout).strip()[:300]}",
                             alertname=alertname)
             test_doc = build_preview_test(recipe, tenant, value, judged)
             (work / "preview_test.yaml").write_text(test_doc, encoding="utf-8", newline="\n")
-            res = subprocess.run(
-                [_PROMTOOL, "test", "rules", "preview_test.yaml"],
-                cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
-                encoding="utf-8", errors="replace",
-            )
-        except subprocess.TimeoutExpired:
-            return _err(f"promtool timed out (>{_TIMEOUT}s)", alertname=alertname)
+            res = _promtool(["test", "rules", "preview_test.yaml"], work, deadline)
+        except subprocess.TimeoutExpired as exc:
+            return _err(f"promtool timed out (>{exc.timeout:g}s)", alertname=alertname)
         except OSError as exc:
             return _err(f"promtool eval failed: {exc}", alertname=alertname)
 

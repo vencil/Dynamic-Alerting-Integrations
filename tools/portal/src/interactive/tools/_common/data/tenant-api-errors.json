@@ -13,6 +13,7 @@
         "bad_request",
         "invalid_tenant_id",
         "merge_failed",
+        "preview_rejected",
         "reserved_tenant_id",
         "tenant_git_managed_unnamed",
         "validation"
@@ -404,6 +405,55 @@
       ]
     },
     {
+      "code": "PREVIEW_BUSY",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        429
+      ],
+      "retry_after_s": 5,
+      "kinds": [
+        "preview_busy"
+      ],
+      "extra": [
+        {
+          "name": "reason",
+          "type": "string"
+        }
+      ]
+    },
+    {
+      "code": "PREVIEW_NOT_CONFIGURED",
+      "remedy": "operator",
+      "retryable": "never",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": null,
+      "kinds": [
+        "preview_not_configured"
+      ],
+      "extra": []
+    },
+    {
+      "code": "PREVIEW_UNAVAILABLE",
+      "remedy": "retry_after",
+      "retryable": "always",
+      "statuses": [
+        503
+      ],
+      "retry_after_s": 5,
+      "kinds": [
+        "preview_unavailable"
+      ],
+      "extra": [
+        {
+          "name": "reason",
+          "type": "string"
+        }
+      ]
+    },
+    {
       "code": "RATE_LIMITED",
       "remedy": "retry_after",
       "retryable": "always",
@@ -412,7 +462,8 @@
       ],
       "retry_after_s": 60,
       "kinds": [
-        "federation_mint_rate_limited"
+        "federation_mint_rate_limited",
+        "preview_rate_limited"
       ],
       "extra": []
     },

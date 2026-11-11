@@ -15,6 +15,7 @@ import (
 	"github.com/vencil/tenant-api/internal/generator"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/recipepreview"
 )
 
 // errFallback is what writeErr answers an error none of its entry's kinds
@@ -188,6 +189,26 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 		errors.As(err, &unav)
 		slog.Error("write refused: the generator container cannot judge", "code", unav.Code, "reason", unav.Reason, "error", err)
 		return generatorUnavailableText(unav), map[string]any{"reason": generator.ClientReason(unav.Reason)}
+
+	case errkind.PreviewBusy:
+		var e *recipepreview.BusyError
+		errors.As(err, &e)
+		return "the recipe preview gave no verdict this time; retry shortly", map[string]any{"reason": e.Reason}
+	case errkind.PreviewRateLimited:
+		var e *recipepreview.RateLimitedError
+		errors.As(err, &e)
+		return e.Message, nil
+	case errkind.PreviewRejected:
+		// The container's own text names the field at fault, never the
+		// caller's data.
+		var e *recipepreview.RejectedError
+		errors.As(err, &e)
+		return e.Message, nil
+	case errkind.PreviewUnavailable:
+		var e *recipepreview.UnavailableError
+		errors.As(err, &e)
+		slog.Error("recipe preview unavailable", "tenant", ec.tenantID, "reason", e.Reason, "error", e.Detail)
+		return "the recipe preview is unavailable; retry shortly", map[string]any{"reason": e.Reason}
 
 	case errkind.TenantTreeUnreadable, errkind.TenantStoreFault:
 		var te *gitops.TreeUnreadableError

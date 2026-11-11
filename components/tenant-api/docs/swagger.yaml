@@ -45,6 +45,9 @@ definitions:
     - REQUEST_TIMEOUT
     - TOKEN_LIMIT_REACHED
     - FEDERATION_NOT_CONFIGURED
+    - PREVIEW_BUSY
+    - PREVIEW_UNAVAILABLE
+    - PREVIEW_NOT_CONFIGURED
     type: string
     x-enum-varnames:
     - InvalidBody
@@ -91,6 +94,9 @@ definitions:
     - RequestTimeout
     - TokenLimitReached
     - FederationNotConfigured
+    - PreviewBusy
+    - PreviewUnavailable
+    - PreviewNotConfigured
   ErrorResponse:
     properties:
       action:
@@ -165,7 +171,7 @@ definitions:
       reason:
         description: 'Why the route generator gave no verdict (unknown for a reason
           tenant-api does not know). Codes that carry it: GENERATOR_BUSY, GENERATOR_REJECTED,
-          POLICY_UNAVAILABLE, VALIDATOR_UNAVAILABLE.'
+          POLICY_UNAVAILABLE, PREVIEW_BUSY, PREVIEW_UNAVAILABLE, VALIDATOR_UNAVAILABLE.'
         type: string
       request_id:
         type: string
@@ -628,18 +634,6 @@ definitions:
       source:
         type: string
       value:
-        type: string
-    type: object
-  internal_handler.AccessResponse:
-    properties:
-      allow:
-        description: Allow is always true in a 200 response (see the type doc).
-        type: boolean
-      permission:
-        description: Permission is the permission level that was checked.
-        type: string
-      tenant:
-        description: Tenant echoes the authorized tenant ID.
         type: string
     type: object
   internal_handler.BatchOperation:
@@ -1232,6 +1226,43 @@ definitions:
     required:
     - filters
     - label
+    type: object
+  internal_handler.RecipePreviewRequest:
+    properties:
+      recipe:
+        description: Recipe is one ADR-024 recipe, as the portal's recipe form writes
+          it.
+        type: object
+      scenario:
+        description: 'Scenario is the synthetic input, e.g. {"value": 1500}.'
+        type: object
+    type: object
+  internal_handler.RecipePreviewResponse:
+    properties:
+      alertname:
+        type: string
+      states:
+        items:
+          $ref: '#/definitions/internal_handler.RecipePreviewState'
+        type: array
+      supported:
+        type: boolean
+      warnings:
+        items:
+          type: string
+        type: array
+    type: object
+  internal_handler.RecipePreviewState:
+    properties:
+      mode:
+        type: string
+      reason:
+        type: string
+      severity:
+        type: string
+      state:
+        description: State is firing, inactive or error.
+        type: string
     type: object
   internal_handler.SearchResponse:
     properties:
@@ -2749,42 +2780,6 @@ paths:
       summary: Update tenant config
       tags:
       - tenants
-  /api/v1/tenants/{id}/access:
-    get:
-      description: |-
-        Lightweight authorization probe that reuses the tenant read
-        RBAC decision: returns 200 {allow:true} when the caller has
-        read permission on {id}, or 403 otherwise. Purpose-built for
-        sibling services (e.g. the recipe-preview service, #657) so
-        they never re-implement RBAC or over-fetch the tenant config.
-      parameters:
-      - description: Tenant ID
-        in: path
-        name: id
-        required: true
-        type: string
-      produces:
-      - application/json
-      responses:
-        "200":
-          description: OK
-          schema:
-            $ref: '#/definitions/internal_handler.AccessResponse'
-        "400":
-          description: Bad Request
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        "401":
-          description: Unauthorized
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-        "403":
-          description: Forbidden
-          schema:
-            $ref: '#/definitions/ErrorResponse'
-      summary: Check whether the caller may read a tenant (RBAC probe)
-      tags:
-      - tenants
   /api/v1/tenants/{id}/custom-alerts:
     put:
       consumes:
@@ -3253,6 +3248,57 @@ paths:
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Discover a tenant's metric names
+      tags:
+      - tenants
+  /api/v1/tenants/{id}/recipe-preview:
+    post:
+      consumes:
+      - application/json
+      description: Answers whether one ADR-024 recipe would fire for a scenario value,
+        through the platform's own compiler and promtool, in the recipe-preview container
+        of tenant-api's pod. Needs read permission on the tenant. 429 PREVIEW_BUSY
+        (reason busy, deadline or no_time) and 503 PREVIEW_UNAVAILABLE carry Retry-After;
+        503 PREVIEW_NOT_CONFIGURED means the deployment has no recipe-preview container.
+      parameters:
+      - description: Tenant ID
+        in: path
+        name: id
+        required: true
+        type: string
+      - description: Recipe and scenario
+        in: body
+        name: body
+        required: true
+        schema:
+          $ref: '#/definitions/internal_handler.RecipePreviewRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/internal_handler.RecipePreviewResponse'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "403":
+          description: Forbidden
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "429":
+          description: Too Many Requests
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/ErrorResponse'
+      summary: Would-fire preview of one recipe for a tenant
       tags:
       - tenants
   /api/v1/tenants/{id}/validate:

@@ -136,7 +136,7 @@ bash try-local/chaos.sh <tamper|stale|drift|failopen|heal>
 
 ## 關於身分（dev-only auth bypass）
 
-try-local 與 production 同一個拓樸（[ADR-027](../docs/adr/027-tenant-api-caller-identity.md) §3）：API 只在 tenant-api 的 Unix socket 上，前面是 oauth2-proxy，兩者讀同一份結構化設定檔（`oauth2-proxy/oauth2-proxy.yaml`，與 Helm chart render 的是同一種檔）。差別只在登入：這裡的 oauth2-proxy 對所有請求免登入（`--trusted-ip` 涵蓋所有來源位址），所以沒有 session、不注入身分 header（client 自己帶的同名 header 照樣被清掉），由 tenant-api 的 `--dev-bypass-auth`（**僅限本機**）在 socket 上注入一個 dev 身分物件（`dev@local` / `demo-admins`），瀏覽器才打得開 Tenant Manager。portal 與 recipe-preview 都經這個 oauth2-proxy 呼叫 API。
+try-local 與 production 同一個拓樸（[ADR-027](../docs/adr/027-tenant-api-caller-identity.md) §3）：API 只在 tenant-api 的 Unix socket 上，前面是 oauth2-proxy，兩者讀同一份結構化設定檔（`oauth2-proxy/oauth2-proxy.yaml`，與 Helm chart render 的是同一種檔）。差別只在登入：這裡的 oauth2-proxy 對所有請求免登入（`--trusted-ip` 涵蓋所有來源位址），所以沒有 session、不注入身分 header（client 自己帶的同名 header 照樣被清掉），由 tenant-api 的 `--dev-bypass-auth`（**僅限本機**）在 socket 上注入一個 dev 身分物件（`dev@local` / `demo-admins`），瀏覽器才打得開 Tenant Manager。portal 經這個 oauth2-proxy 呼叫 API；recipe-preview 沒有網路埠，只在與 tenant-api 共用 volume 的 Unix socket 上服務，由 tenant-api 授權後才問它（ADR-027 §5）。
 
 tenant-api 自己的 port（`EXPOSE_API_PROBE_PORT`，預設 8083）只有 `/health`、`/ready`、`/metrics`；打 API 會 404，帶身分 header 會 400。
 
@@ -148,7 +148,7 @@ tenant-api 自己的 port（`EXPOSE_API_PROBE_PORT`，預設 8083）只有 `/hea
 
 所有 port 只綁 `127.0.0.1`（本機限定）—— dev-bypass 會為無 header 的請求注入 **admin** 身分，故刻意不對 LAN 開放（避免同網段他人取得寫入/commit 權）。要從別台裝置連，請自行改 compose 的 port binding。
 
-預設用 3000 / 8080 / 8081 / 8082 / 8083 / 9090 / 9091 / 9093。若被占用，編輯 `.env`（從 `.env.example` 複製來的）改任一 `EXPOSE_*_PORT` 後重啟：
+預設用 3000 / 8080 / 8081 / 8083 / 9090 / 9091 / 9093。若被占用，編輯 `.env`（從 `.env.example` 複製來的）改任一 `EXPOSE_*_PORT` 後重啟：
 
 ```bash
 make clean-local && docker compose up -d

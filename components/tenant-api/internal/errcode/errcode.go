@@ -310,6 +310,23 @@ const (
 	// that has not configured it. No retry finds it configured, so no
 	// Retry-After (#3202: was UPSTREAM_ERROR).
 	FederationNotConfigured Code = "FEDERATION_NOT_CONFIGURED"
+	// PreviewBusy marks the 429 of POST /tenants/{id}/recipe-preview when the
+	// recipe-preview container gave no verdict this time (ADR-027 §5): every
+	// evaluation slot stayed taken (reason busy), the request's deadline
+	// passed while waiting or evaluating (deadline), or too little of it was
+	// left to ask (no_time). Retry-After.
+	PreviewBusy Code = "PREVIEW_BUSY"
+	// PreviewUnavailable marks the 503 of POST /tenants/{id}/recipe-preview
+	// when the recipe-preview container gave no usable answer: nobody on its
+	// socket (reason unreachable), an answer tenant-api cannot read
+	// (bad_response) or its own 500 (internal_error). Retry-After; the detail
+	// is in the server log only.
+	PreviewUnavailable Code = "PREVIEW_UNAVAILABLE"
+	// PreviewNotConfigured marks the 503 of POST /tenants/{id}/recipe-preview
+	// on a deployment without the recipe-preview container
+	// (--recipe-preview-socket unset). No retry finds it configured, so no
+	// Retry-After.
+	PreviewNotConfigured Code = "PREVIEW_NOT_CONFIGURED"
 )
 
 // Remedy is what a client can do about an error: the one meaning a code
@@ -418,6 +435,9 @@ var codeTable = []codeRow{
 	{RequestTimeout, RemedyRefresh},
 	{TokenLimitReached, RemedyExisting},
 	{FederationNotConfigured, RemedyOperator},
+	{PreviewBusy, RemedyRetryAfter},
+	{PreviewUnavailable, RemedyRetryAfter},
+	{PreviewNotConfigured, RemedyOperator},
 }
 
 // Specs lists the code table, one row per code, in declaration order, each

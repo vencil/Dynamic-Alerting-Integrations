@@ -111,7 +111,7 @@ func TestKindTable_CoversEveryKindOnce(t *testing.T) {
 	// The kinds no error is: an entry's fallback, or the entry itself
 	// (a batch op's permission gate), picks them.
 	for _, k := range []errkind.Kind{errkind.BadRequest, errkind.Internal, errkind.ForgeCreateFailed, errkind.Forbidden,
-		errkind.FederationNotConfigured, errkind.RouteNotFound, errkind.MethodNotAllowed, errkind.RequestTimeout} {
+		errkind.FederationNotConfigured, errkind.PreviewNotConfigured, errkind.RouteNotFound, errkind.MethodNotAllowed, errkind.RequestTimeout} {
 		if ruled[k] {
 			t.Errorf("fallback kind %q has a kindRules row", k)
 		}

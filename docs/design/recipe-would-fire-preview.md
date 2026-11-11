@@ -60,10 +60,10 @@ parent: architecture-and-design.md
 
 ## 4. API 契約
 
-預覽服務只暴露一個 API 端點（portal 經 nginx 轉發）：
+portal 呼叫的是 tenant-api 的端點（[ADR-027 §5](../adr/027-tenant-api-caller-identity.md)）；租戶在路徑上：
 
 ```http
-POST /preview
+POST /api/v1/tenants/{id}/recipe-preview
 ```
 
 **Request**
@@ -71,10 +71,11 @@ POST /preview
 ```json
 {
   "recipe":   { "...": "ADR-024 recipe 物件（同 portal 表單產出）" },
-  "tenant":   "shop-a",
   "scenario": { "value": 1500 }
 }
 ```
+
+tenant-api 授權後，經 pod 內 Unix socket 把 `{recipe, tenant, scenario, deadline_ms}` 交給預覽服務（`POST /v1/preview`；`deadline_ms` 是這次請求剩下的時間）。
 
 - 首版的 `scenario` 是單一測試值（threshold 類不需要時間序列）。
 - 契約欄位向前相容：**未來**支援時間相依型時，`scenario` 可擴成「期間／趨勢」描述，甚至**逐維度的陣列**（例如每顆 PVC 一個值 `[{pvc, value}, …]`，用來示範「大碟掩蓋小碟」這類多副本場景）——這些都是後話，首版不做。
@@ -98,7 +99,7 @@ POST /preview
 
 ### 4.1 認證與租戶隔離
 
-預覽服務**沿用 portal 的認證**：try-local 走 dev-bypass（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) 四層防線），正式環境經 oauth2-proxy（與 tenant-api 同樣式）。服務**必須驗證 request 的 `tenant` 屬於登入者可存取的租戶**，否則回 403——否則「評自己的 recipe」會退化成跨租戶的查詢面。`recipe` / `scenario` 是使用者輸入：服務要先做格式驗證（或捕捉編譯器拋出的設定錯誤），**驗過才編譯**（見 5.2）：body 型別不對（`recipe`／`scenario` 不是 object、缺 `tenant`）回 400；內容缺欄位或編譯失敗回 `state: error`。
+授權在 tenant-api：路由的讀取權限檢查（對路徑上的租戶，含組織範圍）通過才問預覽服務，否則回 403——否則「評自己的 recipe」會退化成跨租戶的查詢面。預覽服務在 tenant-api 的 pod 裡、只在共用 volume 的 Unix socket 上服務（只回應同 uid 的程序），**不讀任何身分、不再自己查授權**（[ADR-027 §5](../adr/027-tenant-api-caller-identity.md)）。try-local 走同一拓撲，身分由 tenant-api 的 dev-bypass 注入（[ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)）。`recipe` / `scenario` 是使用者輸入：服務要先做格式驗證（或捕捉編譯器拋出的設定錯誤），**驗過才編譯**（見 5.2）：body 型別不對（`recipe`／`scenario` 不是 object）回 400；內容缺欄位或編譯失敗回 `state: error`。
 
 ## 5. 後端如何算出狀態
 

@@ -370,3 +370,49 @@ class TestWouldFire:
         assert out["states"][0]["state"] == "firing"
         assert out["states"][0]["severity"] == "critical"
         assert out["alertname"] == "Custom_absence__app_heartbeat_total__absent__w10m__for1m"
+
+
+# ── the caller's deadline bounds every run (ADR-027 §5: recipe-preview answers
+# tenant-api, whose request has a deadline shorter than a worst-case eval) ──
+class TestDeadline:
+    def test_timeout_left_is_capped_by_the_fixed_timeout_and_the_deadline(self, monkeypatch):
+        monkeypatch.setattr(rp.time, "monotonic", lambda: 100.0)
+        assert rp._timeout_left(None) == rp._TIMEOUT
+        assert rp._timeout_left(100.0 + rp._TIMEOUT * 10) == rp._TIMEOUT
+        assert rp._timeout_left(107.5) == pytest.approx(7.5)
+        # a deadline already gone still gives a positive (tiny) timeout, so a
+        # run fails fast instead of subprocess reading 0 as "no timeout"
+        assert 0 < rp._timeout_left(90.0) <= 0.01
+
+    def test_preview_hands_the_deadline_to_the_judgement(self, monkeypatch):
+        seen = {}
+
+        def fake_judge(recipe, tenant, confd, timeout=None):
+            seen["timeout"] = timeout
+            return "stop here"
+
+        monkeypatch.setattr(rp, "judge", fake_judge)
+        monkeypatch.setattr(rp.time, "monotonic", lambda: 100.0)
+        out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500}, deadline=103.0)
+        assert seen["timeout"] == pytest.approx(3.0)
+        assert out["states"][0]["state"] == "error"
+
+    def test_promtool_runs_are_bounded_by_the_deadline(self, monkeypatch):
+        timeouts = []
+
+        class _Done:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        def fake_run(cmd, **kw):
+            timeouts.append(kw.get("timeout"))
+            return _Done()
+
+        if rp._PROMTOOL is None:
+            monkeypatch.setattr(rp, "_PROMTOOL", "/usr/bin/promtool")
+        monkeypatch.setattr(rp, "_run", fake_run)
+        clock = iter([100.0] * 50)
+        monkeypatch.setattr(rp.time, "monotonic", lambda: next(clock))
+        rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500}, deadline=104.0)
+        assert timeouts and all(t == pytest.approx(4.0) for t in timeouts), timeouts

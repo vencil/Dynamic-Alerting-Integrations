@@ -23,6 +23,7 @@ import (
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/recipepreview"
 	"github.com/vencil/tenant-api/internal/statestore"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -719,6 +720,14 @@ func kindSample(k errkind.Kind) error {
 		return &generator.UnavailableError{Code: generator.CodeValidatorUnavailable, Reason: generator.ReasonUnreachable}
 	case errkind.PolicyUnavailable:
 		return &generator.UnavailableError{Code: generator.CodePolicyUnavailable, Reason: generator.ReasonPolicyUnusable}
+	case errkind.PreviewBusy:
+		return &recipepreview.BusyError{Reason: recipepreview.ReasonBusy}
+	case errkind.PreviewRateLimited:
+		return &recipepreview.RateLimitedError{Message: "rate limit exceeded for this tenant"}
+	case errkind.PreviewRejected:
+		return &recipepreview.RejectedError{Status: 400, Message: "`scenario` must be an object"}
+	case errkind.PreviewUnavailable:
+		return &recipepreview.UnavailableError{Reason: recipepreview.ReasonUnreachable, Detail: "dial"}
 	case errkind.TenantTreeUnreadable:
 		return &gitops.TreeUnreadableError{Entries: goldenTreeEntries}
 	case errkind.TenantStoreFault:
