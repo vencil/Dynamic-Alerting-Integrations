@@ -136,8 +136,10 @@ def git_env(git: str) -> dict:
     read as the literal name they spell (#3392)."""
     if git not in _LOCAL_ENV_VARS:
         # A git that cannot run raises its OSError (the caller names --git).
+        # No cwd of its own: a relative --git is resolved where the service
+        # started, as every other run of it is.
         proc = subprocess.run([git, "rev-parse", "--local-env-vars"], capture_output=True,
-                              check=False, timeout=60, cwd="/")
+                              check=False, timeout=60)
         names = proc.stdout.decode("ascii", "replace").split()
         if proc.returncode != 0 or "GIT_DIR" not in names:
             raise GitReadError(f"`rev-parse --local-env-vars` did not list the repository "

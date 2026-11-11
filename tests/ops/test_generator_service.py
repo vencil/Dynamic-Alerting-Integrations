@@ -1621,3 +1621,17 @@ def test_a_git_that_cannot_list_its_variables_is_refused(tmp_path, monkeypatch):
     with pytest.raises(_gsvc_child.GitReadError):
         _gsvc_child.git_env(str(fake))
     assert str(fake) not in _gsvc_child._LOCAL_ENV_VARS
+
+
+def test_a_relative_git_is_resolved_where_the_service_starts(tmp_path, monkeypatch):
+    """#3739 review: `git rev-parse --local-env-vars` ran with ``cwd="/"``, so
+    a relative --git (``bin/git``) was looked up from ``/`` — a git that is
+    there reported as missing."""
+    import _gsvc_child
+    rel = "gsvc-test-tools/the-git"  # nothing at /gsvc-test-tools: from "/" it is missing
+    assert not os.path.exists("/" + rel)
+    (tmp_path / "gsvc-test-tools").mkdir()
+    (tmp_path / rel).symlink_to(h.GIT)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delitem(_gsvc_child._LOCAL_ENV_VARS, rel, raising=False)
+    assert "GIT_DIR" not in _gsvc_child.git_env(rel)
