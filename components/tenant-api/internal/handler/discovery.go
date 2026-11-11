@@ -1,7 +1,7 @@
 package handler
 
 // ============================================================
-// GET /api/v1/tenants/{id}/metrics — v2.9.0 (ADR-024 §S6, #741)
+// GET /api/v1/tenants/{id}/metrics — v2.9.0 (ADR-024 §3, #741)
 // ============================================================
 //
 // Metric discovery catalog: lists the metric NAMES that have at least
@@ -10,7 +10,7 @@ package handler
 // UX so a tenant can pick a metric to write a custom-alert recipe
 // against without knowing PromQL.
 //
-// Stateless proxy (ADR-024 §S6 "Dumb Pipes, Smart Endpoints"): every
+// Stateless proxy (ADR-024 §3 "Dumb Pipes, Smart Endpoints"): every
 // call re-queries Prometheus; no catalog state is held. Cross-tenant
 // isolation is two-layered — route middleware enforces the caller's
 // RBAC read permission on {id}, and the discoverer force-builds a
@@ -22,7 +22,7 @@ package handler
 // sliding-window limiter (TA_RATE_LIMIT_PER_MIN, default 100/min → 429),
 // and every backend call is triple-bounded (timeout + io.LimitReader +
 // `limit=`). A dedicated, stricter per-endpoint limit is deferred-with-
-// trigger (ADR-024 §S6 Reef 1) — add it only if discovery-specific abuse
+// trigger (ADR-024 §3 Reef 1) — add it only if discovery-specific abuse
 // is observed; building a second limiter subsystem now would be
 // redundant against the abuse vector the global limiter already bounds.
 
@@ -45,7 +45,7 @@ const msgDiscoveryUpstream = "metric discovery upstream error; the server log ha
 // injection boundary: a value that matches this pattern contains no
 // regex metacharacter and no quote, so embedding it into the
 // `__name__=~"^<q>.*"` selector cannot break out of the literal or
-// alter the match semantics (ADR-024 §S6 security decision).
+// alter the match semantics (ADR-024 §3 security decision).
 var metricNameQueryPattern = regexp.MustCompile(`^[a-zA-Z0-9_:]*$`)
 
 // maxQueryPrefixLen caps the ?q= prefix. Real metric names are well

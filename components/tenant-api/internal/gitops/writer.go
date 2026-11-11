@@ -90,8 +90,9 @@ var ErrForgeDegraded = errors.New("forge degradation: base fetch timed out — w
 // handler's 409 TENANT_CONFIG_NOT_LOADABLE text, so the two never disagree.
 const MsgPlatformWriteRepair = "replacing it through the API (a whole-file PUT /api/v1/tenants/{id}) " +
 	"requires write permission on all tenants (an RBAC rule with tenants: [\"*\"] and no org-scope, " +
-	"environments or domains); without it, ask a caller who has that permission to replace it, " +
-	"or repair the file in git"
+	"environments or domains) — and, when its environment/domain labels cannot be read either, a platform " +
+	"administrator (such a rule granting admin; ADR-027 §7); without that, ask a caller who has it to " +
+	"replace it, or repair the file in git"
 
 // MsgUnparseableBaseNeedsPlatformWrite is the validation text for a
 // whole-file write over a current tenant file the end-of-life guard cannot
@@ -778,7 +779,18 @@ func (w *Writer) gitOutputEnv(dir string, env []string, args ...string) ([]byte,
 // nil — handlers surface them in the 200 response so the author sees the
 // migration signal on the very write that succeeded with an old spelling.
 func (w *Writer) Write(ctx context.Context, tenantID, authorEmail, yamlContent string) (notices []string, err error) {
-	return w.write(ctx, tenantID, authorEmail, yamlContent, "")
+	return w.write(ctx, tenantID, authorEmail, yamlContent, "", nil)
+}
+
+// WriteChecked is Write plus check (TreeCheck), run under the writer lock on
+// the serving tree after the tenant's file is resolved there — and, when
+// baseHash is not "", after the WriteIfUnchanged precondition on it — before
+// the body is validated and written. PUT passes its authoritative scope and
+// label verdict here (ADR-027 §7): its gates outside the lock read a tree an
+// earlier queued write may still change. A nil check and an empty baseHash
+// is Write.
+func (w *Writer) WriteChecked(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string, check TreeCheck) (notices []string, err error) {
+	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash, check)
 }
 
 // WriteIfUnchanged is Write with an optimistic-concurrency precondition:
@@ -804,14 +816,15 @@ func (w *Writer) WriteIfUnchanged(ctx context.Context, tenantID, authorEmail, ya
 	if baseHash == "" {
 		return nil, &PreconditionError{TenantID: tenantID, Expected: "", Current: ""}
 	}
-	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash)
+	return w.write(ctx, tenantID, authorEmail, yamlContent, baseHash, nil)
 }
 
-// write is the shared body of Write / WriteIfUnchanged. baseHash is empty
-// for an unconditional write. The body replaces the tenant's file whole: the
+// write is the shared body of Write / WriteIfUnchanged / WriteChecked.
+// baseHash is empty for an unconditional write; check, when not nil, is the
+// caller's TreeCheck on the serving tree. The body replaces the tenant's file whole: the
 // file is the tenant's alone (#3064; a git-managed one is refused in
 // resolvePut).
-func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string) (notices []string, err error) {
+func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, baseHash string, check TreeCheck) (notices []string, err error) {
 	// Step 0: reserved-id backstop (defense-in-depth; see guardTenantID).
 	if err := guardTenantID(tenantID); err != nil {
 		return nil, err
@@ -894,10 +907,21 @@ func (w *Writer) write(ctx context.Context, tenantID, authorEmail, yamlContent, 
 		}
 		return nil
 	}
+	// The caller's TreeCheck, after the precondition: a caller whose base
+	// is stale hears ErrPrecondition first, as it would without a check.
+	afterResolve := precondition
+	if check != nil {
+		afterResolve = func(filePath string) error {
+			if err := precondition(filePath); err != nil {
+				return err
+			}
+			return check(w.configDir)
+		}
+	}
 	// #1535 item 6: checkTenantFileClean runs on the resolved file before
 	// resolvePut reads it — the git-managed verdict, the precondition and
 	// validate's baseline are all taken on that file.
-	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, w.checkTenantFileClean, precondition)
+	res, errs, err := w.resolvePut(ctx, w.configDir, tenantID, yamlContent, w.scanTree, w.checkTenantFileClean, afterResolve)
 	if err != nil {
 		return nil, err
 	}
@@ -2103,7 +2127,7 @@ func validateBodyOnlyOver(tenantID, yamlContent string, carried []byte) []string
 	if len(errs) > 0 {
 		return errs
 	}
-	// ADR-024 §S5 recipe validation is per-tenant and reads only the body, so it
+	// ADR-024 §5 recipe validation is per-tenant and reads only the body, so it
 	// belongs on this side of the line. So does a threshold written as a
 	// non-finite number (#3140): the exporter's own predicate, which da-guard's
 	// value_not_served refuses the tree over.
@@ -2257,7 +2281,7 @@ func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent stri
 	// file a PATCH merges into); what is said about them depends on whether
 	// the caller may read them.
 	keyErrs, notices := DiscloseKeyValidation(tenantID, kv, names)
-	// S5 shift-left preflight (ADR-024 §S5): validate the tenant's OWN `_custom_alerts`
+	// S5 shift-left preflight (ADR-024 §5): validate the tenant's OWN `_custom_alerts`
 	// recipes in-process (Go-native, no promtool/Python). Stateless per-tenant —
 	// cross-inheritance collisions + compiler template bugs stay the CI compiler's
 	// authority. Runs on the raw body (tcfg), not the merged config: the PUT body is

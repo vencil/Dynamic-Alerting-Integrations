@@ -1,5 +1,5 @@
 {{- /*
-  Relay-token sanity guard (ADR-027 D2-B O1). The relay token rides the
+  Relay-token sanity guard (legacy; removed by ADR-027 §5). The relay token rides the
   /api/v1 reverse proxy to tenant-api; on a static-only (Tier 1) portal —
   no auth proxy, no tenant-api upstream — it is meaningless AND the njs
   wiring is actively harmful (old images die at startup on js_import).
@@ -7,7 +7,7 @@
   fail-closed guards).
 */ -}}
 {{- if and .Values.portal.relayToken.enabled (or (not .Values.oauth2Proxy.enabled) (not .Values.portal.tenantApiUrl)) }}
-{{- fail "portal.relayToken.enabled=true requires oauth2Proxy.enabled=true AND a non-empty portal.tenantApiUrl: the relay token rides the /api/v1 proxy to tenant-api (ADR-027 D2-B O1); a static-only (Tier 1) portal has no such proxy." }}
+{{- fail "portal.relayToken.enabled=true requires oauth2Proxy.enabled=true AND a non-empty portal.tenantApiUrl: the relay token rides the /api/v1 proxy to tenant-api (legacy; removed by ADR-027 §5); a static-only (Tier 1) portal has no such proxy." }}
 {{- end -}}
 apiVersion: v1
 kind: ConfigMap
@@ -22,7 +22,7 @@ data:
   # Security headers, health endpoint, Babel transpilation support
   default.conf: |
     {{- if .Values.portal.relayToken.enabled }}
-    # ── Relay-token injector (ADR-027 D2-B O1) ─────────────────────────────────
+    # ── Relay-token injector (legacy; removed by ADR-027 §5) ─────────────────────────────────
     # js_set evaluates per request — always-fresh projected token, no reload.
     # Needs the njs-enabled portal image (see values.yaml relayToken PREREQUISITE).
     js_import relay from conf.d/relay_token.js;
@@ -105,7 +105,7 @@ data:
         proxy_set_header X-Forwarded-User   $http_x_forwarded_user;
         proxy_set_header X-Forwarded-Groups $http_x_forwarded_groups;
         {{- if .Values.portal.relayToken.enabled }}
-        # Machine-identity relay token (ADR-027 D2-B O1): the pod's audience-
+        # Machine-identity relay token (legacy; removed by ADR-027 §5): the pod's audience-
         # bound SA token — NOT the client's own Authorization — is what reaches
         # the header-trusting 8080 (empty token value → header dropped, fail-soft).
         proxy_set_header Authorization $relay_auth;

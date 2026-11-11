@@ -13,19 +13,19 @@
 #   3. components/threshold-exporter/config/conf.d/_defaults.yaml defaults 段
 #   4. 上述兩個 runtime 面的 optional_overrides: 宣告 key 清單（#1310；
 #      是 list 不是 map——平台認得該 key 但不主張其值）
-# 新鮮度由 check_threshold_registry.py --check 面強制（stale＝硬錯）。
+# 新鮮度由 check_threshold_registry.py --ci 面強制（stale＝硬錯）。
 #
-# ⚠️ 過渡期殘留：scaffold_tenant.RULE_PACKS 仍是 config 生成路徑的運作副本，
-# 本檔由它機械萃取（scripts/tools/ops/_registry_lib.py build_registry_doc()，
-# 外加 registry-scope 附掛表 CHART_DEFAULT_KEYS）。兩者的語意等價由 pre-commit
-# gate check_threshold_registry.py 強制（防雙 SoT 漂移）。
-# 改閾值請改 scaffold_tenant.RULE_PACKS，再跑：
+# ✅ D-A PR-3 起本檔是手寫的唯一來源：閾值、chart_default、metric_class 與
+# deprecated_aliases 都直接寫在這裡。scaffold_tenant.RULE_PACKS 的閾值部分改由
+# 本檔生成（scripts/tools/ops/_rule_packs_generated.py），scaffold 只保留
+# state_filters 與 dimensional_example。改閾值請改本檔，再跑：
 #   python3 scripts/tools/lint/check_threshold_registry.py --regen
-# （會同時重產本檔＋所有生成面。）PR-3 起 scaffold RULE_PACKS 降為生成物/
-# runtime 載入，附掛表併回本檔。
+# （重產所有生成面與 RULE_PACKS 生成模組；本檔不會被改寫）。
+# critical_of 是推導欄位：key 以 _critical 結尾且同 pack 有 base key 時才寫，
+# 寫錯或漏寫會被 --ci 的自身一致性檢查擋下。
 #
 # 範圍：threshold 身分（defaults / optional_overrides 兩層＋chart_default）。
-# state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；
+# state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。
 # 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。
 #
 # deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。

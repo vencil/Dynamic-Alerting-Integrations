@@ -1,5 +1,5 @@
 /**
- * Wizard → parser drift tripwire, JS end (ADR-027 / LD-6 P7d).
+ * Wizard → parser drift tripwire, JS end (ADR-027 §7).
  *
  * The RBAC Setup Wizard's `rbacGenerateYaml` emits an `_rbac.yaml` that the
  * tenant-api strict parser must accept — the pre-P7d output drifted so far it

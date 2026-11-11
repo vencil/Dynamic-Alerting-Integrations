@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// ADR-027 D2-B §2.4 probe carve-out. The kubelet cannot present a Bearer or
+// ADR-027 §2 probe carve-out. The kubelet cannot present a Bearer or
 // oauth2-proxy header, and it probes the TCP plane. The /health, /ready and
 // /metrics handlers therefore MUST answer an unauthenticated request without an
 // auth rejection (200/503, never 401/403). They are registered OUTSIDE the rbac

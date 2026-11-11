@@ -294,7 +294,7 @@ func TestCustomAlert_OverflowDeterministic(t *testing.T) {
 
 // TestValidateTenantCustomAlerts covers the S5 shift-left preflight: per-recipe
 // spec validity (reused from resolveOneCustomAlert) + within-tenant uniqueness +
-// own-recipe cap. (ADR-024 §S5.)
+// own-recipe cap. (ADR-024 §5.)
 func TestValidateTenantCustomAlerts(t *testing.T) {
 	v := func(listYAML string, cap int) []string {
 		cfg := customAlertsConfig(t, "shop-a", listYAML)
@@ -409,7 +409,7 @@ func findFixture(t *testing.T, name string) string {
 // TestValidationContract_GoldenVectors pins the Go preflight/exporter validation
 // decision to the validation vectors (custom_alert_validation_vectors.json):
 // the accept / reject verdict tenant-api's preflight, the exporter and the
-// compiler all take from resolveOneCustomAlert. (ADR-024 §S5.)
+// compiler all take from resolveOneCustomAlert. (ADR-024 §5.)
 func TestValidationContract_GoldenVectors(t *testing.T) {
 	raw, err := os.ReadFile(findFixture(t, "custom_alert_validation_vectors.json"))
 	if err != nil {

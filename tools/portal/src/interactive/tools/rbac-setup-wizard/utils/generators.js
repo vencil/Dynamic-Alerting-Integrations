@@ -10,7 +10,7 @@ purpose: |
   MatchBlock) and docs/schemas/rbac.schema.json: a top-level `groups:` list of
   rules, each with `name` / `tenants` / `permissions` (a LIST) / flat
   `environments` / `domains`, plus the optional claims-aware `match:` block and
-  the `org-scope:` axis (ADR-027 / LD-6 P3/P4). The pre-P7d output (a top-level
+  the `org-scope:` axis (ADR-027 §7). The pre-P7d output (a top-level
   `_rbac:` MAP with a `description:` key, a singular `permission:` scalar and a
   nested `filters:` block) was rejected wholesale by that parser — this
   generator is the drift fix (P7d).

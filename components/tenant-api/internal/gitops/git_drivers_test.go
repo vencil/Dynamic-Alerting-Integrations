@@ -241,7 +241,7 @@ func TestWrites_RefusedWhenDriverAddedAfterStartup(t *testing.T) {
 			return err
 		},
 		"PreviewPut": func(t *testing.T, w *Writer) error {
-			_, _, err := w.PreviewPut(context.Background(), "t1", silentBody("t1", "critical"))
+			_, _, err := w.PreviewPut(context.Background(), "t1", silentBody("t1", "critical"), nil)
 			return err
 		},
 		"TreeOnBase": func(t *testing.T, w *Writer) error { return w.TreeOnBase() },
@@ -305,7 +305,7 @@ func TestGitCommands_RunNoFSMonitor(t *testing.T) {
 	}
 
 	w := newTestWriter(repo, repo)
-	if _, _, err := w.PreviewPut(context.Background(), "t1", silentBody("t1", "critical")); err != nil {
+	if _, _, err := w.PreviewPut(context.Background(), "t1", silentBody("t1", "critical"), nil); err != nil {
 		t.Fatalf("PreviewPut: %v", err)
 	}
 	if _, err := w.Write(context.Background(), "t1", "op@example.com", silentBody("t1", "critical")); err != nil {
@@ -361,7 +361,7 @@ func TestDiffPreview_RunsNoExternalDiff(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			res, errs, err := w.PreviewPut(context.Background(), "t1", silentBody("t1", "critical"))
+			res, errs, err := w.PreviewPut(context.Background(), "t1", silentBody("t1", "critical"), nil)
 			if err != nil || len(errs) > 0 {
 				t.Fatalf("PreviewPut: %v %v", err, errs)
 			}

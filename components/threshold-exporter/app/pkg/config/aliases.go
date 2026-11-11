@@ -13,11 +13,11 @@ package config
 // migrate without a gap.
 //
 // SSOT note: the alias SSOT is the registry's deprecated_aliases section
-// (rule-packs/threshold-registry.yaml, authored in
-// scripts/tools/ops/_registry_lib.py DEPRECATED_KEY_ALIASES). This table is a
+// (rule-packs/threshold-registry.yaml, authored there directly since
+// D-A PR-3). This table is a
 // runtime mirror, PINNED to that section by aliases_registry_test.go — a
-// drifted mirror fails CI. To open/close an alias window: edit the authored
-// table, regen the registry, then update this mirror to match. It is the
+// drifted mirror fails CI. To open/close an alias window: edit the registry's
+// deprecated_aliases section, then update this mirror to match. It is the
 // only one: Python asks this package's rule through `da-guard key-spellings`
 // and keeps no copy of the table or the rule (#3556).
 //

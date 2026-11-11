@@ -140,6 +140,7 @@ lang: zh
 | `check_account_registry_monotonic.py` | guard _account_registry.yaml's |
 | `check_ad_hoc_git_scripts.py` | Ad-hoc Windows shell script guard (L1 pre-commit hook). |
 | `check_admin_config_schema.py` | validate tenant-api admin meta-config YAML against JSON Schemas. |
+| `check_adr_section_refs.py` | an ADR section reference must name a section that exists. |
 | `check_bat_ascii_purity.py` | - L1 guard for pitfall #45 (CJK-in-.bat). |
 | `check_bilingual_annotations.py` | check_bilingual_annotations.py |
 | `check_bilingual_content.py` | 雙語內容一致性 lint |
@@ -223,7 +224,7 @@ lang: zh
 | `check_subprocess_timeout.py` | flag subprocess calls without explicit timeout. |
 | `check_threshold_observed_map.py` | Drift-guard for the threshold observed-map (#719). |
 | `check_threshold_reachability.py` | Threshold-key reachability gate — every alert-consumed threshold key must be producible by the platform-defaults path (TRK-337 / #1189). |
-| `check_threshold_registry.py` | Threshold-registry gate — schema + scaffold equivalence + generated-surface freshness + header-prose membership (TRK-339 WS1a / #1200). |
+| `check_threshold_registry.py` | Threshold-registry gate — schema + self-consistency + generated-surface freshness + header-prose membership (TRK-339 WS1a / #1200). |
 | `check_threshold_unit_sanity.py` | Threshold unit-sanity gate — the value-range validation #992 promised and nobody built. |
 | `check_tool_registry_jsx_parity.py` | every tool-registry.yaml entry must have a backing .jsx file (and vice versa). |
 | `check_trk_index_coverage.py` | 被引用的 TRK 必須出現在 planning SSOT 的索引裡。 |
@@ -287,6 +288,7 @@ lang: zh
 - `scripts/tools/ops/_observed_map_lib.py`：Shared SoT extractor for the threshold observed-map (#719).
 - `scripts/tools/ops/_registry_lib.py`：threshold-registry SoT loader / validator / query lib (TRK-339 WS1a / #1200).
 - `scripts/tools/ops/_render_diff.py`：Render both sides of a config change and compare what they render to (ADR-037).
+- `scripts/tools/ops/_rule_packs_generated.py`：GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.
 - `scripts/tools/ops/_threshold_alerts.py`：Which alerts read a threshold key — looked up in the rule packs, not guessed.
 - `scripts/tools/dx/_recipe_preview.py`：recipe would-fire preview core (#657 P2).
 - `scripts/tools/dx/_waveform_lib.py`：fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫）

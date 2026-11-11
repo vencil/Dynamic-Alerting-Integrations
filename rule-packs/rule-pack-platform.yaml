@@ -86,7 +86,7 @@ groups:
             alertname="Watchdog" (ADR-025).
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
 
-      # --- Watchdog egress health (ADR-025 §4 / #838) ---
+      # --- Watchdog egress health (ADR-025 §D1 / #838) ---
       # Internal complement to the EXTERNAL dead-man's-switch. If Alertmanager
       # is alive and evaluating but its webhook notifications are FAILING, the
       # Watchdog heartbeat is not actually leaving the cluster (bad/empty
@@ -1650,7 +1650,7 @@ groups:
       # separates "was this ever detected" from "is it still true right now",
       # and only the first question is meaningful for tamper evidence.
       #
-      # ⚠️ What the latch does NOT buy (ADR-028 §誠實邊界, say it plainly):
+      # ⚠️ What the latch does NOT buy (ADR-028 §D3, say it plainly):
       # it makes a detection that HAPPENED reach a human. It does not make
       # the detection happen. The reconciler samples every 300s while the
       # smallest viable un-revoke is far shorter, so an attack reverted inside

@@ -39,7 +39,7 @@ func Health(w http.ResponseWriter, r *http.Request) {
 // only when the directory is readable, so K8s drains traffic away
 // from a pod whose tenant data the app cannot serve.
 //
-// ADR-027 D2-B §2.5: when the human-plane Unix socket is enabled
+// ADR-027 §2: when the human-plane Unix socket is enabled
 // (d.HumanSocketPath != ""), Ready ALSO self-dials GET /health over that socket.
 // The kubelet only probes the TCP plane, so without this a dead human listener
 // would be a SILENT outage (browsers via oauth2-proxy → UDS get nothing while

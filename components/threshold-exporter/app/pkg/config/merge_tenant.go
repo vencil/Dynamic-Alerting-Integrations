@@ -215,12 +215,7 @@ func (m *TenantMerge) ValidateTenantKeysByTenant() KeyValidationByTenant {
 // ownLayerKeys is the key checks on tenant tid's own layer (m.own[tid]),
 // both ValidateTenantKeys and ValidateTenantKeysByTenant take.
 func (m *TenantMerge) ownLayerKeys(tid string) KeyValidation {
-	layer := ThresholdConfig{
-		Defaults:          m.Defaults,
-		OptionalOverrides: m.OptionalOverrides,
-		Profiles:          m.Profiles,
-		Tenants:           map[string]map[string]ScheduledValue{tid: m.own[tid]},
-	}
+	layer := m.tenantLayer(tid, m.own[tid])
 	return layer.validateOverrideKeys()
 }
 
@@ -229,12 +224,7 @@ func (m *TenantMerge) ownLayerKeys(tid string) KeyValidation {
 func (m *TenantMerge) platformLayerNotices(tid string) []string {
 	var out []string
 	for _, sup := range m.platform[tid] {
-		layer := ThresholdConfig{
-			Defaults:          m.Defaults,
-			OptionalOverrides: m.OptionalOverrides,
-			Profiles:          m.Profiles,
-			Tenants:           map[string]map[string]ScheduledValue{tid: sup.keys},
-		}
+		layer := m.tenantLayer(tid, sup.keys)
 		// Whether any reader reads a key is the shared key verdict's: it
 		// reports a platform file's keys itself (ADR-038 decision 6).
 		pv := layer.validateOverrideKeys()
@@ -323,12 +313,7 @@ func (m *TenantMerge) profileLayerNoticesFor(tid string, canonDeclared map[strin
 	for _, f := range m.profileFileOrder {
 		var msgs []string
 		if keys := byFile[f]; len(keys) > 0 {
-			pl := ThresholdConfig{
-				Defaults:          m.Defaults,
-				OptionalOverrides: m.OptionalOverrides,
-				Profiles:          m.Profiles,
-				Tenants:           map[string]map[string]ScheduledValue{tid: keys},
-			}
+			pl := m.tenantLayer(tid, keys)
 			// As platformLayerNotices: unread keys are the key verdict's.
 			pv := pl.validateOverrideKeys()
 			msgs = append(append(msgs, pv.Errors...), pv.Notices...)

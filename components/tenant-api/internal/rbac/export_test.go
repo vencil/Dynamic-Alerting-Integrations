@@ -1,7 +1,7 @@
 package rbac
 
 // Legacy groups-slice evaluation signatures — TEST-ONLY since the
-// principal-based evaluation core landed (ADR-027 / LD-6 P3).
+// principal-based evaluation core landed (ADR-027 §7).
 //
 // Why this file exists: Allowed / MetadataAllowed / AccessibleEnvironmentsFor /
 // AccessibleDomainsFor replaced these four as the only production API. Moving

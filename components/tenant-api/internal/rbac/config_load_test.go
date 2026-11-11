@@ -1,6 +1,6 @@
 package rbac
 
-// Initial-load semantics of the rbac config (ADR-027 / LD-6 P3):
+// Initial-load semantics of the rbac config (ADR-027 §7):
 //
 //  1. validateConfig, every branch (match block + tenant-pattern allowlist).
 //  2. Strict YAML parsing (KnownFields): a `mach:` typo, an unknown

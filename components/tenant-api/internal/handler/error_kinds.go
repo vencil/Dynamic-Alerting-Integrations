@@ -387,7 +387,8 @@ func isWriteOutcomeUnknown(err error) bool {
 
 // The kind sets the entries are built from.
 var (
-	// kindsFreshBase: a PR-mode write's refusal on the fresh base (#2857).
+	// kindsFreshBase: a write's refusal under the writer lock, on the tree it
+	// lands on (#2857; direct mode too, ADR-027 §7 — tree_judge.go).
 	kindsFreshBase = kindsOf(errkind.FreshBaseScope, errkind.FreshBaseOrgs)
 	// kindsGenerator: the generator container's three refusals (#2903).
 	kindsGenerator = kindsOf(errkind.GeneratorFindings, errkind.GeneratorRejectedRetryable,

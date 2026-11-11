@@ -1659,7 +1659,7 @@ da-tools migrate-to-operator [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名；頂層不讀的項目（以 `.` 開頭的隱藏檔或目錄、懸空 symlink、FIFO 等）也由一行 `WARNING:` 逐一點名並附原因。這個目錄不是 conf.d，不套用 conf.d 的拒絕；每個檔由讀者判定它是什麼（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：先以 kubectl 的 manifest 讀法（`da-crdecode`）讀，其中 ConfigMap 的 data 值若是 rule file 就遷移；已經是 PrometheusRule 的物件不轉換、不算錯誤（結束碼不受影響），stderr 以一行 `NOTE:` 與 checklist 的「已是 PrometheusRule CRD（不需遷移）」段點名（`--json` 的 `already_crd`）；`kind: List`（`kubectl get cm -o yaml` 的輸出）照 kubectl 展開成它的 items 逐一讀，item 必須是帶 `apiVersion` 與 `kind` 的物件、不能再是 List；被拒收時，若以任意 YAML 讀法（`da-crdecode --any-shape`）讀出的是「單一 mapping、宣告 `groups`」的純 rule file，就當 rule file 遷移；兩種讀法都讀不了的檔（例如 annotation 值是 `.inf`）交給 Prometheus 的 rule loader（`da-read prometheus-rules`）判，讀得出 `groups` 就當 rule file；其餘的檔（YAML 壞掉、頂層是 list 或純量、沒有 `kind` 的 document、kubectl 不會套用的 List item）一律讓整次執行以結束碼 `2` 停下、一個檔都不寫，stderr 逐檔點名並附讀者的理由（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)））。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被讀到、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。rule file 被 Prometheus 的 rule loader 拒收，或找不到 `da-crdecode`／`da-read` 時，同樣在寫任何檔之前以結束碼 `2` 停下，stderr 附原因（`--json` 時 stdout 為空）。⚠️ 先前這些情況只印 WARNING（或記進 `issues`／`errors`）並照常寫出其餘 CRD、結束碼 0。不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，分析與寫檔之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前列進 `issues` 後照樣寫出 checklist 與 CRD、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。存在卻無法列出內容（da-guard 的走訪把根目錄標為 `unlistable_dir`，例如權限 `0311`）⇒ exit `2`（`--json` 時 stdout 為空；⚠️ 先前只印一行 `WARNING:`、以 0 個來源檔產出遷移、rc 0，[#3446](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3446)）。頂層沒有任何 da-guard 列為 config 檔的檔（空目錄、只有 `notes.txt`、檔案都在子目錄裡）⇒ exit `2`、什麼都不寫（⚠️ **行為變更**，先前以 0 個來源檔產出 checklist 與 CRD、rc 0，[#3462](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3462)） | （必填） |
+| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名；頂層不讀的項目（以 `.` 開頭的隱藏檔或目錄、懸空 symlink、FIFO 等）也由一行 `WARNING:` 逐一點名並附原因。這個目錄不是 conf.d，不套用 conf.d 的拒絕；每個檔由讀者判定它是什麼（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：先以 kubectl 的 manifest 讀法（`da-crdecode`）讀，其中 ConfigMap 的 data 值若是 rule file 就遷移；已經是 PrometheusRule 的物件不轉換、不算錯誤（結束碼不受影響），stderr 以一行 `NOTE:` 與 checklist 的「已是 PrometheusRule CRD（不需遷移）」段點名（`--json` 的 `already_crd`）；`kind: List`（`kubectl get cm -o yaml` 的輸出）照 kubectl 展開成它的 items 逐一讀，item 必須是帶 `apiVersion` 與 `kind` 的物件、不能再是 List；被拒收時，若以任意 YAML 讀法（`da-crdecode --any-shape`）讀出的是「單一 mapping、宣告 `groups`」的純 rule file，就當 rule file 遷移；兩種讀法都讀不了的檔（例如 annotation 值是 `.inf`）交給 Prometheus 的 rule loader（`da-read prometheus-rules`）判，讀得出 `groups` 就當 rule file；其餘的檔（YAML 壞掉、頂層是 list 或純量、沒有 `kind` 的 document、kubectl 不會套用的 List item）一律讓整次執行以結束碼 `2` 停下、一個檔都不寫，stderr 逐檔點名並附讀者的理由（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)））。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被讀到、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。rule file 被 Prometheus 的 rule loader 拒收，或找不到 `da-crdecode`／`da-read` 時，同樣在寫任何檔之前以結束碼 `2` 停下，stderr 附原因（`--json` 時 stdout 為空）。⚠️ 先前這些情況只印 WARNING（或記進 `issues`／`errors`）並照常寫出其餘 CRD、結束碼 0。不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，分析與寫檔之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前列進 `issues` 後照樣寫出 checklist 與 CRD、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。存在卻無法列出內容（da-guard 的走訪把根目錄標為 `unlistable_dir`，例如權限 `0311`）⇒ exit `2`（`--json` 時 stdout 為空；⚠️ 先前只印一行 `WARNING:`、以 0 個來源檔產出遷移、rc 0，[#3446](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3446)）。判定時存在、讀取前才被刪掉 ⇒ exit `2`、什麼都不寫（先前記進 `issues`、照樣寫出 checklist、rc 0，[#3721](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3721)）。頂層沒有任何 da-guard 列為 config 檔的檔（空目錄、只有 `notes.txt`、檔案都在子目錄裡）⇒ exit `2`、什麼都不寫（⚠️ **行為變更**，先前以 0 個來源檔產出 checklist 與 CRD、rc 0，[#3462](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3462)） | （必填） |
 | `--config-dir <DIR>` | ⛔ 不再使用：本工具不讀 conf.d。給了就結束碼 2（見上方） | — |
 | `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
@@ -2316,6 +2316,7 @@ da-tools migrate <input_file> [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `-o, --output-dir <DIR>` | 輸出目錄 | `./migration_output/` |
+| `--tenant <ID>` | 租戶 id（ADR-035）：租戶檔的檔名與 `tenants:` 底下的 key。標準模式必填，`--dry-run`、`--triage` 不需要 | — |
 | `--dry-run` | 僅顯示報告，不產生檔案 | false |
 | `--triage` | Triage 模式：只產出 CSV 分桶報告 | false |
 | `--interactive` | 遇到不確定時詢問使用者 | false |
@@ -2328,13 +2329,13 @@ da-tools migrate <input_file> [options]
 
 **標準模式**：
 
-- `migration_output/tenant-config.yaml` — 提取出的 threshold
+- `migration_output/conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）
 - `migration_output/platform-recording-rules.yaml` — Recording rules
 - `migration_output/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
 - `migration_output/migration-report.txt` — 詳細遷移報告
 - `migration_output/triage-report.csv` — 需人工審閱的規則清單
 - `migration_output/prefix-mapping.yaml` — Metric 前綴對應表
-- `migration_output/defaults-snippet.yaml` — 要合併進 `_defaults.yaml` 的 `defaults:` 片段。threshold-exporter 只發射宣告過的 key，沒合併時 `tenant-config.yaml` 的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔） <!-- image-caveat: v2.9.0 -->
+- `migration_output/conf.d/_defaults.yaml` — 要合併進 conf.d 根 `_defaults.yaml` 的 `defaults:` 區塊（合併，不要整份覆蓋；先前叫 `defaults-snippet.yaml`）。threshold-exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔） <!-- image-caveat: v2.9.0 -->
 
 **Triage 模式**：
 
@@ -2345,7 +2346,7 @@ da-tools migrate <input_file> [options]
 ```bash
 da-tools migrate ./my-rules.yml --dry-run
 da-tools migrate ./my-rules.yml --triage
-da-tools migrate ./my-rules.yml -o migration_output/
+da-tools migrate ./my-rules.yml --tenant db-a -o migration_output/
 ```
 
 **結束碼**
@@ -2354,7 +2355,7 @@ da-tools migrate ./my-rules.yml -o migration_output/
 |------|------|
 | `0` | 成功 |
 | `1` | 只有未捕捉例外（traceback）會回 1。輸入檔不存在或 YAML 語法錯是 2，但空檔、頂層不是 mapping、不是 UTF-8 目前會 traceback 回 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：參數錯誤、輸入檔讀不到或不是合法 YAML，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；`tenant-config.yaml` 與 `defaults-snippet.yaml` 在寫出任何其他檔之前一批交給 `da-guard write`（文字由 Go 產生、整棵樹判一次；已存在的檔整份取代），兩個檔同進退：其中一個被拒（例如目標是 symlink）就一個檔都不寫，逐檔點名被拒的檔與原因（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；要寫進註解的 alert 名、severity、註記、key 或值含註解寫不了的字元（控制字元、U+2028 等）時點名該欄位、什麼都不寫；寫到一半停下時點名已寫入與可能已寫入、不會還原的檔；標準模式找不到可用的 da-guard 也是 2（`--dry-run`、`--triage` 不需要） |
+| `2` | 呼叫端錯誤：參數錯誤、輸入檔讀不到或不是合法 YAML，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；標準模式沒給 `--tenant` 或它不是合法的租戶 id 時什麼都不寫；`conf.d/` 已有這兩個檔以外的檔（例如另一次 `--tenant` 留下的租戶檔）時什麼都不寫；`conf.d/<tenant>.yaml` 與 `conf.d/_defaults.yaml` 在寫出任何其他檔之前一批交給 `da-guard write`（文字由 Go 產生、整棵樹判一次；已存在的檔整份取代），兩個檔同進退：其中一個被拒（例如目標是 symlink）就一個檔都不寫，逐檔點名被拒的檔與原因（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；要寫進註解的 alert 名、severity、註記、key 或值含註解寫不了的字元（控制字元、U+2028 等）時點名該欄位、什麼都不寫；`da-guard write` 寫到一半停下時點名已寫入與可能已寫入、不會還原的 conf.d 檔；conf.d 批次寫成之後，rule pack、報表、CSV、prefix mapping 才逐一寫在 `-o`，其中一個寫不進去時只點名那個檔、結束碼 2——已寫入的 `conf.d/<tenant>.yaml` 與 `conf.d/_defaults.yaml` 保留、不還原，訊息也不列出它們；標準模式找不到可用的 da-guard 也是 2（`--dry-run`、`--triage` 不需要） |
 
 ---
 
@@ -2766,7 +2767,7 @@ da-tools config-diff --old-dir <path> --new-dir <path> [options]
 
 | 參數 | 說明 |
 |------|------|
-| `--old-dir <PATH>` | 舊配置目錄（base）。路徑上什麼都沒有、或沒有設定檔時視為第一次匯入，所有租戶都算新增。其他不能用的情況都是結束碼 `2`、stderr 一行點名旗標與路徑：一般檔案；symlink 迴圈（`ls` 看得到那個項目，先前與不存在逐字相同、被當成第一次匯入、結束碼 1，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；懸空 symlink、一般檔案底下的路徑、目錄 stat 得到但列不出內容（例如 0311）——這三種先前都被當成第一次匯入、結束碼 1（[#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)） |
+| `--old-dir <PATH>` | 舊配置目錄（base）。路徑上什麼都沒有、或沒有設定檔時視為第一次匯入，所有租戶都算新增。其他不能用的情況都是結束碼 `2`、stderr 一行點名旗標與路徑：一般檔案；symlink 迴圈（`ls` 看得到那個項目，先前與不存在逐字相同、被當成第一次匯入、結束碼 1，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；懸空 symlink、一般檔案底下的路徑、目錄 stat 得到但列不出內容（例如 0311）——這三種先前都被當成第一次匯入、結束碼 1（[#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)）；判定時存在、讀取前才被刪掉的目錄也是結束碼 `2`（先前被當成第一次匯入，[#3721](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3721)） |
 | `--new-dir <PATH>` | 新配置目錄（PR）。不存在、列不出內容、或沒有任何設定檔時是結束碼 `2`，stderr 一行點名旗標與路徑、不輸出報告（先前列不出內容與沒有設定檔都報成 `has no config file`，[#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)） |
 
 **選項**

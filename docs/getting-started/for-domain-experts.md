@@ -112,7 +112,7 @@ tenants:
 - 省略不寫的 key 會套用 `_defaults.yaml` 的 `defaults:` 值。⚠️ 列在 `optional_overrides:` 的 key 沒有平台預設值，省略就是沒有值、不產生 series。
 - 排程式閾值的時間窗一律是 UTC 的 `HH:MM-HH:MM`，可以跨午夜，多個窗口時第一個符合的生效。
 - 維度閾值（例如 `"redis_connected_clients{instance='redis-orders:6379'}": "500:critical"`）與完整語法見 [threshold-exporter 配置參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考) §4.4。
-- 每個 Rule Pack 的檔頭列出它讀取的閾值 key 與建議起點。`defaults:` 的內容由 threshold registry 生成；改平台預設值要改 `scaffold_tenant.py` 的 `RULE_PACKS`，再跑 `check_threshold_registry.py --regen`。
+- 每個 Rule Pack 的檔頭列出它讀取的閾值 key 與建議起點。`defaults:` 的內容由 threshold registry 生成；改平台預設值要改 `rule-packs/threshold-registry.yaml`，再跑 `check_threshold_registry.py --regen`。
 
 > 💡 **互動工具** — 想瀏覽所有 Rule Pack 的 recording/alert rule？用 [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-detail.jsx)。比較各 Rule Pack 的指標覆蓋？用 [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx)。從 p50/p90/p99 推算建議閾值？用 [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx)。
 
@@ -135,7 +135,7 @@ python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 1. **正規化 recording rule**：在 `<db>-normalization` group 加一條 `tenant:<指標>:<函式>`。
 2. **閾值正規化 recording rule**：在 `<db>-threshold-normalization` group 加 `tenant:alert_threshold:<key>`，selector 用拆開後的 `component` 與 `metric`（見上方第二部分）。要有 critical 等級就再加一條 `severity="critical"` 的 `<key>_critical`。
 3. **alert rule**：照第三部分的形狀寫，保留 `unless … maintenance` 與 `tenant_metadata_info` 兩段。
-4. **宣告閾值 key**：在 `scripts/tools/ops/scaffold_tenant.py` 的 `RULE_PACKS` 把 key 放進 `defaults`（平台出貨預設值）或 `optional_overrides`（只宣告、由租戶自己設值），然後重生：
+4. **宣告閾值 key**：在 `rule-packs/threshold-registry.yaml` 的 `keys:` 加一筆，`tier` 寫 `defaults`（平台出貨預設值）或 `optional_overrides`（只宣告、由租戶自己設值）；新的 pack 也要在同檔 `packs:` 登記。然後重生（`scaffold_tenant.RULE_PACKS` 與各處生成段跟著更新）：
 
 ```bash
 python3 scripts/tools/lint/check_threshold_registry.py --regen
@@ -152,7 +152,7 @@ python3 scripts/tools/lint/check_threshold_registry.py --ci
 
 ### 建立新的 Rule Pack（新資料庫類型）
 
-照 [Rule Packs](../rule-packs/README.md)「自訂 Rule Pack」一節的三部分模板，新增 `rule-packs/rule-pack-<db>.yaml`。每個 Rule Pack 有自己的 ConfigMap（`k8s/03-monitoring/configmap-rules-<db>.yaml`），透過 Projected Volume 掛進 Prometheus；閾值 key 一樣要在 `RULE_PACKS` 宣告。設計考量（為什麼每個 pack 獨立、為什麼全部預載）見 [Rule Pack 設計](../design/rule-packs.md) §3。
+照 [Rule Packs](../rule-packs/README.md)「自訂 Rule Pack」一節的三部分模板，新增 `rule-packs/rule-pack-<db>.yaml`。每個 Rule Pack 有自己的 ConfigMap（`k8s/03-monitoring/configmap-rules-<db>.yaml`），透過 Projected Volume 掛進 Prometheus；閾值 key 一樣要在 threshold registry 宣告。設計考量（為什麼每個 pack 獨立、為什麼全部預載）見 [Rule Pack 設計](../design/rule-packs.md) §3。
 
 向 Platform Team 提交 pull request，他們會審查並整合到平台中。
 
@@ -183,7 +183,7 @@ python3 scripts/tools/ops/onboard_platform.py \
 
 # 2. 轉換規則（AST + Triage + Prefix + Dictionary）
 python3 scripts/tools/ops/migrate_rule.py rules/alert.yml \
-  -o migration_output/
+  --tenant db-a -o migration_output/
 
 # 3. 驗證遷移（Shadow Monitoring：比對新舊 recording rule 的數值）
 # ⚠️ 生產環境請使用 HTTPS
@@ -193,7 +193,7 @@ python3 scripts/tools/ops/validate_migration.py \
 ```
 
 - **步驟 1**：`--rule-files` 吃檔或目錄（可多個，目錄遞迴取 `*.yaml`／`*.yml`），不展開 glob（v2.9.0 映像仍把值當成一個 glob、只收一個值，給目錄什麼檔都選不到（WARN、結束碼 1）；用那個映像時給加引號的 glob（`'rules/*.yaml'`）或單一檔 <!-- image-caveat: v2.9.0 -->）。只給規則檔時，輸出是規則分析；`onboard-hints.json` 只有在另外給 `--alertmanager-config`、而且從中找到租戶時才會寫出。
-- **步驟 2**：輸出不是 Rule Pack 檔，是一組平台規則加租戶配置：`platform-recording-rules.yaml`、`platform-alert-rules.yaml`、`tenant-config.yaml`、`defaults-snippet.yaml`、`prefix-mapping.yaml`，以及 `migration-report.txt`、`triage-report.csv` 兩份報告。`--prefix` 是閾值 key 與 recording rule 名稱的前綴（預設 `custom_`），不是租戶前綴，也不會改來源指標名；指定單一租戶、直接產出 Rule Pack 檔，這兩件事工具尚未實作。⚠️ 先把 `defaults-snippet.yaml` 合併進 `_defaults.yaml` 的 `defaults:` 區塊：exporter 只發射宣告過的 key，沒合併時 `tenant-config.yaml` 的值不會生效。有 warning 配對的 critical 層不能放 defaults，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡。⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 `component`／`metric`、recording rule 讀的是加了前綴的指標名、沒有 `defaults-snippet.yaml`）；用那個版本時，套用前請照上方「第二部分」人工核對。 <!-- image-caveat: v2.9.0 -->
+- **步驟 2**：輸出不是 Rule Pack 檔，是一組平台規則加租戶配置：`platform-recording-rules.yaml`、`platform-alert-rules.yaml`、`conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下，租戶 id 由 `--tenant` 給）、`conf.d/_defaults.yaml`、`prefix-mapping.yaml`，以及 `migration-report.txt`、`triage-report.csv` 兩份報告。`--prefix` 是閾值 key 與 recording rule 名稱的前綴（預設 `custom_`），不是租戶前綴，也不會改來源指標名；直接產出 Rule Pack 檔，工具尚未實作。⚠️ 先把 `conf.d/_defaults.yaml` 的 `defaults:` 區塊合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋）：exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。有 warning 配對的 critical 層不能放 defaults，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡。⚠️ v2.9.0 映像的 migrate 還沒有這些修正（閾值 selector 對不上 exporter 發射的 `component`／`metric`、recording rule 讀的是加了前綴的指標名、沒有 `defaults-snippet.yaml`）；用那個版本時，套用前請照上方「第二部分」人工核對。 <!-- image-caveat: v2.9.0 -->
 - **步驟 3**：比對的是同一個 Prometheus 上的新舊兩組查詢，`--mapping` 讀步驟 2 產出的 `prefix-mapping.yaml`；單組比對用 `--old '<舊查詢>' --new '<新查詢>'`。兩個 Prometheus 之間互相比對、指定比對的時間範圍，這兩件事工具尚未實作；要持續觀察用 `--watch --interval <秒> --rounds <輪>`，加 `--auto-detect-convergence` 會在數值收斂時自動停止。完整流程見 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)。
 
 ### 回測閾值變更
@@ -332,7 +332,7 @@ A: 支援，但它是租戶配置的功能，不寫在 Rule Pack 裡。在租戶
 A: 使用 shadow monitoring。新規則與舊規則並行，用 `validate_migration.py` 比對兩邊 recording rule 的數值，收斂之後再切換（見 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)）。
 
 **Q: 如何在多個資料庫間共享閾值邏輯？**
-A: 兩種做法。只是要讓多個 tenant 共用同一組閾值值，用 profile：在 `_profiles.yaml` 的 `profiles:` 下定義，例如 `mysql-standard: {mysql_connections: "90"}`，再在各租戶寫 `_profile: mysql-standard`；租戶自己寫的 key 優先於 profile（`mysql-standard` 是範例名稱，平台沒有內建這個 profile）。若要共用的是 PromQL 本身，就得另寫一個 Rule Pack，步驟與上方「建立新的 Rule Pack」相同：它要有自己的 ConfigMap、加進 Prometheus 的 Projected Volume（Prometheus 只載入掛進 `/etc/prometheus/rules/` 的檔），閾值 key 也要在 `RULE_PACKS` 宣告。
+A: 兩種做法。只是要讓多個 tenant 共用同一組閾值值，用 profile：在 `_profiles.yaml` 的 `profiles:` 下定義，例如 `mysql-standard: {mysql_connections: "90"}`，再在各租戶寫 `_profile: mysql-standard`；租戶自己寫的 key 優先於 profile（`mysql-standard` 是範例名稱，平台沒有內建這個 profile）。若要共用的是 PromQL 本身，就得另寫一個 Rule Pack，步驟與上方「建立新的 Rule Pack」相同：它要有自己的 ConfigMap、加進 Prometheus 的 Projected Volume（Prometheus 只載入掛進 `/etc/prometheus/rules/` 的檔），閾值 key 也要在 threshold registry 宣告。
 
 > 💡 **互動工具** — 查看所有合法 YAML key 和型別？用 [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/schema-explorer.jsx)。測試 PromQL 表達式對應的 Recording Rule？用 [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx)。遷移既有規則？用 [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/migration-simulator.jsx)。查看平台術語？用 [Glossary](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/glossary.jsx)。在瀏覽器中觀看平台如何處理多租戶配置？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) 展示完整流程。所有工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)。企業內網環境可用 `da-portal` Docker image 自建：`docker run -p 8080:80 ghcr.io/vencil/da-portal`（[部署說明](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)）。
 

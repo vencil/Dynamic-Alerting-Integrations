@@ -15,7 +15,7 @@ import (
 
 // TRK-318 — the in-lock base fetch that anchors each PR write on the freshest
 // origin/<base>, closing the stale-local-base window a long-lived pod opens
-// after a remote merge (ADR-023 §B).
+// after a remote merge (ADR-023 §2).
 
 // TestFetchTimeoutFromEnv covers TA_GIT_FETCH_TIMEOUT parsing + the clamp that
 // keeps a fat-fingered 0/negative/garbage value from disabling the fail-loud
@@ -45,7 +45,7 @@ func TestFetchTimeoutFromEnv(t *testing.T) {
 
 // TestFetchTimeoutIndependentFromGitTimeout proves the two knobs are wired
 // separately on a fresh Writer: a custom git timeout must NOT bleed into the
-// fetch timeout, and vice versa (ADR-023 §B: TA_GIT_FETCH_TIMEOUT is
+// fetch timeout, and vice versa (ADR-023 §2: TA_GIT_FETCH_TIMEOUT is
 // deliberately independent of TENANT_API_GIT_TIMEOUT).
 func TestFetchTimeoutIndependentFromGitTimeout(t *testing.T) {
 	t.Setenv("TENANT_API_GIT_TIMEOUT", "90s")

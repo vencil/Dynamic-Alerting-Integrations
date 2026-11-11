@@ -1,7 +1,7 @@
 package handler
 
 // ============================================================
-// PUT /api/v1/tenants/{id}/custom-alerts — v2.9.0 (ADR-024 §S6b-2, #741)
+// PUT /api/v1/tenants/{id}/custom-alerts — v2.9.0 (ADR-024 §3, #741)
 // ============================================================
 //
 // Server-side, comment-preserving write of a tenant's `_custom_alerts`
@@ -15,7 +15,7 @@ package handler
 // overlay and the portal has no YAML serializer, so the client would
 // have to reconstruct + re-serialise the whole tenant doc (the blocker).
 // Here the client sends only a JSON array; the server owns the robust
-// YAML round-trip. See ADR-024 §S6b-2.
+// YAML round-trip. See ADR-024 §3.
 
 import (
 	"encoding/json"
@@ -102,7 +102,7 @@ type PutCustomAlertsResponse struct {
 // @Failure     400   {object} ErrorResponse
 // @Failure     403   {object} ErrorResponse
 // @Failure     404   {object} ErrorResponse "Not found: no tenant file, or the tenant file is a symlink that cannot be resolved (dangling, looping — a self-loop included — or through a non-directory): it has no content to merge recipes into, so there is no tenant here (a whole-file PUT /api/v1/tenants/{id} replaces such a link)"
-// @Failure     409   {object} ErrorResponse "Conflict: the tenant is git-managed (TENANT_GIT_MANAGED, #3064), base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY (#1535, direct mode) when the tenant's conf.d file in tenant-api's copy differs from the commit the write lands on (modified, staged, deleted, untracked or marked skip-worktree / assume-unchanged outside tenant-api, or a link or the target on a symlinked tenant file's way inside the repository changed; a target outside the repository, in a nested repository or a submodule is not judged): fixed text, no path; nothing written; commit or discard the change in the repository, then retry"
+// @Failure     409   {object} ErrorResponse "Conflict: the tenant is git-managed (TENANT_GIT_MANAGED, #3064), base_hash drift (CONFLICT), the tenant file cannot be loaded or is not a regular file (TENANT_CONFIG_NOT_LOADABLE), the tenant is declared by another conf.d file (TENANT_DECLARED_ELSEWHERE), or code TENANT_TREE_UNREADABLE when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other than the file this write replaces (#2939, ADR-036 §4: the tree after the write is judged; repair it in git; nothing written; unreadable_count always, the entries' names and reasons in the text and in unreadable only for a caller with write permission on all tenants). The tenant's own file being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY (#1535, direct mode) when the tenant's conf.d file, or an entry at the conf.d root whose name starts with _ (#3685: the root platform files the write's key checks read), in tenant-api's copy differs from the commit the write lands on (modified, staged, deleted, untracked or marked skip-worktree / assume-unchanged outside tenant-api, or a link or the target on a symlinked tenant file's way inside the repository changed; a target outside the repository, in a nested repository or a submodule is not judged): fixed text, no path; nothing written; commit or discard the change in the repository, then retry"
 // @Failure     413   {object} ErrorResponse
 // @Failure     422   {object} ErrorResponse "Refused by the route generator container (#2903, ADR-036 §4): code GENERATOR_FINDINGS — the conf.d tree with this write applied does not pass `generate-routes --validate --strict`; findings[] lists the generator's findings, the ones naming this write's file or tenant first (related: true), pre_existing set when findings_compared_with_base is true (the tree before the write was judged too); a finding unrelated to this write is shown only to a caller with write permission on all tenants (others get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason key_verdict_memory / key_verdict_error / key_verdict_undecidable (no root platform file: threshold keys cannot be judged) / key_verdict_platform_file (the shared key verdict did not complete, ADR-038 decision 5) / memory / incomplete / too_large (the files the write produces are too large to judge in one request) / invalid_request: the generator gave no verdict; or normalized: git attributes (.gitattributes eol, text or a filter) would commit other bytes than the ones the generator judged. Nothing written"
 // @Failure     429   {object} ErrorResponse "Too many requests: code GENERATOR_BUSY (#2903, #3202) — the route generator container gave no verdict this time, retry (Retry-After): reason busy, deadline, git_read, mismatch (what it judged is still not what would be written after one re-judgement) or no_time (too little of the request's time left to judge); or key_verdict_no_time / key_verdict_deadline: the generator passed the write but its shared key verdict ran out of time (ADR-038 decision 5). Nothing written. Also code RATE_LIMITED (per-caller rate limit)"
@@ -118,14 +118,14 @@ func PutTenantCustomAlerts(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// ADR-027 / LD-6 P4b: org-scope-aware write gate — authorization
+		// ADR-027 §7: org-scope-aware write gate — authorization
 		// comes BEFORE feature availability (the PR-mode 501 below), so an
 		// unauthorized caller cannot probe the server's write-mode.
 		if !RequireOrgWrite(w, r, d, tenantID, rbac.PermWrite) {
 			return
 		}
 
-		// MVP scope (ADR-024 §S6b-2): the in-UI write targets DIRECT
+		// MVP scope (ADR-024 §3): the in-UI write targets DIRECT
 		// write-back mode. In PR/MR mode the recipe author uses the
 		// standalone recipe-builder + their normal PR flow (S6b-1).
 		if d.WriteMode.IsPRMode() {

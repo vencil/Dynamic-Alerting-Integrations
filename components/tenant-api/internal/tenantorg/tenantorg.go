@@ -1,5 +1,5 @@
 // Package tenantorg maps tenants to the organizations they belong to
-// (ADR-027 / LD-6 P4). It backs the org-scope authorization axis: an
+// (ADR-027 §7). It backs the org-scope authorization axis: an
 // org-scoped RBAC rule grants a tenant to a caller only when the caller's
 // verified org claim is one of the tenant's organizations.
 //
