@@ -240,6 +240,12 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if self.path.split("?", 1)[0] != "/v1/preview":
+            # Read the body first (within the cap): a reply sent and the
+            # connection closed while the client is still writing its body
+            # fails that write with EPIPE, so the client never sees the 404.
+            err, length = parse_content_length(self.headers.get("Content-Length"))
+            if err is None and length:
+                self.rfile.read(length)
             self._send(404, {"error": "not found"})
             return
         # validate Content-Length (reject non-numeric, negative, and oversized)

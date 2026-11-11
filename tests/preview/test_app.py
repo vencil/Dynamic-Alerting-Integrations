@@ -287,6 +287,27 @@ class TestSocket:
         assert _request(path, "GET", "/healthz")[0] == 404
         assert _request(path, "POST", "/preview", _body())[0] == 404
 
+    def test_an_unknown_post_path_reads_the_body_before_answering(self, server):
+        """CI (#3749): http.client writes the headers and the body separately.
+        A handler that answered 404 and closed after the headers made the
+        client's body write fail with EPIPE. It must read the body first: with
+        only the headers sent, no answer may come yet."""
+        _, path = server
+        body = json.dumps(_body()).encode()
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as s:
+            s.connect(path)
+            s.sendall(b"POST /preview HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\n"
+                      b"Content-Length: %d\r\n\r\n" % len(body))
+            s.settimeout(0.5)
+            with pytest.raises(socket.timeout):
+                s.recv(1)  # answered before the body was read
+            s.settimeout(5)
+            s.sendall(body)
+            reply = b""
+            while chunk := s.recv(4096):
+                reply += chunk
+        assert reply.startswith(b"HTTP/1.0 404") or reply.startswith(b"HTTP/1.1 404"), reply[:40]
+
     def test_a_peer_with_another_uid_is_closed_unanswered(self, server, monkeypatch):
         srv, path = server
         monkeypatch.setattr(app, "peer_uid", lambda sock: os.getuid() + 1)
