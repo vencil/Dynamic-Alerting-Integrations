@@ -1103,7 +1103,8 @@ class Service:
             proc = subprocess.run(
                 [self.s.git, "-C", self.s.repo, "rev-parse", "--verify",
                  "--quiet", f"{ref}^{{commit}}"],
-                capture_output=True, check=False, timeout=60)
+                capture_output=True, check=False, timeout=60,
+                env=_gsvc_child.git_env(self.s.git))
             commit = proc.stdout.decode("ascii", "replace").strip()
             ok = proc.returncode == 0 and bool(commit)
         except (OSError, subprocess.SubprocessError) as exc:
@@ -1206,17 +1207,40 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _object_format(git: str, repo: str) -> str:
+    """--repo's object format, judging --repo on the way (#3739): git is the
+    reader of --repo, so git judges it, and the refusal names the flag.
+
+    * not a repository: git's own reason, after ``--repo <path>:`` — it was
+      git's bare ``fatal: not a git repository … .git``, naming neither;
+    * a directory INSIDE a repository (``--show-prefix`` not empty): refused —
+      ``git -C`` walks up to the enclosing repository, so a subdirectory was
+      served as that repository with --config-subdir read from its root (an
+      empty conf.d, every write judged against nothing);
+    * a bare repository or a linked worktree (``.git`` a ``gitdir:`` file):
+      the root, served."""
+    shown_repo = safe_label(repo) if repo else "''"
+    shown_git = safe_label(git) if git else "''"  # '' is SUPPLIED, as _lib_paths shows it
     try:
-        proc = subprocess.run([git, "-C", repo, "rev-parse", "--show-object-format"],
-                              capture_output=True, check=False, timeout=60)
+        env = _gsvc_child.git_env(git)  # the first run of --git (#3739: its own answer)
+        proc = subprocess.run([git, "-C", repo, "rev-parse", "--show-object-format",
+                               "--show-prefix"],
+                              capture_output=True, check=False, timeout=60, env=env)
     except OSError as exc:
         # #3415: the first run of --git — name the flag, not a bare errno.
-        shown = safe_label(git) if git else "''"  # '' is SUPPLIED, as _lib_paths shows it
-        raise RuntimeError(f"--git {shown}: {exc.strerror}") from exc
-    fmt = proc.stdout.decode("utf-8", "replace").strip()
-    if proc.returncode != 0 or fmt not in ("sha1", "sha256"):
-        raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip()
-                           or f"unknown object format {fmt!r}")
+        raise RuntimeError(f"--git {shown_git}: {exc.strerror}") from exc
+    except _gsvc_child.GitReadError as exc:
+        raise RuntimeError(f"--git {shown_git}: {exc}") from exc
+    if proc.returncode != 0:
+        why = " ".join(proc.stderr.decode("utf-8", "replace").split()) or f"git exited {proc.returncode}"
+        raise RuntimeError(f"--repo {shown_repo}: {safe_label(why)}")
+    fmt, _, prefix = proc.stdout.decode("utf-8", "replace").partition("\n")
+    fmt, prefix = fmt.strip(), prefix.strip()
+    if prefix:
+        raise RuntimeError(f"--repo {shown_repo}: a directory inside a repository "
+                           f"({safe_label(prefix)} below its root), not the root of one: "
+                           f"give the repository's root")
+    if fmt not in ("sha1", "sha256"):
+        raise RuntimeError(f"--repo {shown_repo}: unknown object format {safe_label(fmt)!r}")
     return fmt
 
 
@@ -1258,7 +1282,8 @@ def _check_config_subdir(git: str, repo: str, sub: str, shown: str) -> None:
     a misspelt one — and a service that refused it could never take that
     first write. So does a ``HEAD`` that is no commit yet."""
     proc = subprocess.run([git, "-C", repo, "rev-parse", "--verify", "--quiet",
-                           "HEAD^{commit}"], capture_output=True, check=False, timeout=60)
+                           "HEAD^{commit}"], capture_output=True, check=False, timeout=60,
+                          env=_gsvc_child.git_env(git))
     head = proc.stdout.decode("ascii", "replace").strip()
     if proc.returncode != 0 or not head:
         print(f"generator-service: --repo {safe_label(repo)} has no HEAD commit; "

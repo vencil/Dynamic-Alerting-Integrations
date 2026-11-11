@@ -2111,7 +2111,7 @@ da-tools generator-service --socket <path> --repo <git repo> --config-subdir con
 | 參數 | 用途 |
 |------|------|
 | `--socket <path>` | 監聽的 Unix socket（建立時權限 0600；對端程序的 uid 必須與服務相同，否則不回應直接關閉；威脅模型見 `generator_service.py` 模組說明）。路徑上若是舊的 socket 檔就換掉；是其他種類的檔則拒絕啟動（exit 2） |
-| `--repo <dir>` | git repo（唯讀掛載即可）。檔案一律從 git 物件取（`git ls-tree` 加 `git cat-file`），不讀工作目錄、不用 `git archive` |
+| `--repo <dir>` | git repo 的根目錄（唯讀掛載即可；bare repo、`.git` 是 `gitdir:` 檔的 worktree 都可以）。檔案一律從 git 物件取（`git ls-tree` 加 `git cat-file`），不讀工作目錄、不用 `git archive`。不是 repo、或是 repo 裡的子目錄 ⇒ 不啟動，結束碼 `2`，stderr 點名 `--repo <path>`（先前子目錄會被當成外層 repo、以空的 conf.d 照常服務；非 repo 時只有 git 原文）。本服務執行的 git 一律去掉 `git rev-parse --local-env-vars` 列出的環境變數（`GIT_DIR`、`GIT_WORK_TREE` 等；只帶設定的 `GIT_CONFIG*` 保留，例如以 `GIT_CONFIG_COUNT` 設 `safe.directory`），先前繼承的 `GIT_DIR` 會蓋過 `--repo`（[#3739](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3739)） |
 | `--config-subdir <path>` | conf.d 在 repo 內的相對路徑（`.` 為 repo 根；絕對路徑或含 `..` 時拒絕啟動，exit 2）。啟動時以每次判定讀樹的同一個 `git ls-tree` 讀 `HEAD`：這個路徑在 `HEAD` 的樹裡存在、但不是目錄（一個檔、symlink、submodule）時拒絕啟動，exit 2（[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)；先前照常啟動，每次判定讀到空的 conf.d，連重複租戶都回 `pass`）。樹裡完全沒有這個路徑時 stderr 說明、照常啟動：git 不保存空目錄，最後一個租戶移除後的 conf.d 與還沒建立的 conf.d 讀起來相同，而第一筆寫入仍要由本服務判定。`HEAD` 還不是 commit（沒有任何提交的 repo）時無從判定，stderr 說明後照常啟動 |
 | `--work-dir <dir>` | 暫存目錄，放每次判定實體化的樹；判定結束（含被終止）後刪除 |
 | `--policy <FILE>` | 部署端 policy 檔（`allowed_domains`、`min_generator_version`），每次判定都重讀 |
