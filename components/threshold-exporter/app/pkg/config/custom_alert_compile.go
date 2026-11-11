@@ -467,8 +467,8 @@ const maintenanceTail = "unless on(tenant)\n(user_state_filter{filter=\"maintena
 
 // The `maintenance` label every tenant alert carries (#3309): `mute` when the
 // rule holds maintenanceTail (here: every compiled alert, through its :core
-// record), `page` when it does not. The recurring-maintenance silences match
-// maintenance="mute", so a recurring window mutes exactly what a one-shot
+// record), `page` when it does not. A recurring window (#3639) switches the
+// same user_state_filter on, so it mutes exactly what a one-shot
 // _state_maintenance does. scripts/tools/dx/generate_rulepack_derived.py
 // checks the pairing for this pack and writes it for the hand-written ones.
 const (

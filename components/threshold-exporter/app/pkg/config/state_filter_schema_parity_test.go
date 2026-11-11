@@ -11,6 +11,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"sort"
 	"testing"
@@ -210,7 +211,7 @@ func TestMaintenanceSchemaMatchesReader(t *testing.T) {
 	}
 	alone := map[string]string{
 		"target": "target: enable\n", "enabled": "enabled: true\n",
-		"expires": "expires: \"2099-01-01T00:00:00Z\"\n", "recurring": "recurring:\n- cron: \"0 2 * * *\"\n  duration: 1h\n",
+		"expires": "expires: \"2099-01-01T00:00:00Z\"\n", "recurring": "recurring:\n- weekdays: [sun]\n  window: \"02:00-03:00\"\n",
 	}
 	for _, f := range says {
 		if got := r(alone[f]); got.kind == stateValueProblem {
@@ -227,9 +228,10 @@ func TestMaintenanceSchemaMatchesReader(t *testing.T) {
 	if got := r("reason: x\n"); got.kind != stateValueProblem {
 		t.Error("reason alone is read, but the schema's anyOf refuses it")
 	}
-	// No switch: on exactly when expires is given; recurring alone is off.
+	// No switch: expires turns it on; recurring alone only inside its window
+	// (now is a Thursday noon; the window is Sunday 02:00-03:00, #3639).
 	if !r(alone["expires"]).onAt(now) || r(alone["recurring"]).onAt(now) {
-		t.Error("no switch: expires must turn it on and recurring alone must not")
+		t.Error("no switch: expires must turn it on and a closed recurring window must not")
 	}
 
 	// not: the pairs that disagree — each is a problem to the reader; the
@@ -268,5 +270,128 @@ func TestMaintenanceSchemaMatchesReader(t *testing.T) {
 	}
 	if pairs != 1+len(disabledWords(t)) {
 		t.Errorf("not covers %d target words, want every one", pairs)
+	}
+}
+
+// recurringSchedule is the reader's recurring entry (#3639): the same fields,
+// the same weekday spellings, no other field, no repeated or missing weekday,
+// and a window in the threshold time-window syntax (the same $ref). The
+// reader must never accept what the schema refuses — the write gate would
+// let through a file a schema check of it fails — so every window spelling
+// the reader takes must match the schema's pattern. (The reader is stricter
+// in one place the pattern cannot say: start must differ from end.)
+func TestRecurringScheduleSchemaMatchesReader(t *testing.T) {
+	t.Parallel()
+	raw, path := tenantSchemaRaw(t)
+	var schema struct {
+		Definitions struct {
+			Recurring struct {
+				AdditionalProperties *bool                      `json:"additionalProperties"`
+				Required             []string                   `json:"required"`
+				Properties           map[string]json.RawMessage `json:"properties"`
+			} `json:"recurringSchedule"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatalf("%s: %v", path, err)
+	}
+	rec := schema.Definitions.Recurring
+	if rec.AdditionalProperties == nil || *rec.AdditionalProperties {
+		t.Error("recurringSchedule must refuse unknown fields (additionalProperties: false), as the reader does")
+	}
+	var fields []string
+	for f := range rec.Properties {
+		fields = append(fields, f)
+	}
+	sort.Strings(fields)
+	if !slices.Equal(fields, recurringFields) {
+		t.Errorf("recurringSchedule fields = %q, want the reader's %q", fields, recurringFields)
+	}
+	req := slices.Clone(rec.Required)
+	sort.Strings(req)
+	if !slices.Equal(req, []string{"weekdays", "window"}) {
+		t.Errorf("recurringSchedule required = %q, want [weekdays window]", req)
+	}
+	var weekdays struct {
+		Items struct {
+			Enum []string `json:"enum"`
+		} `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Properties["weekdays"], &weekdays); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(weekdays.Items.Enum, weekdayNames[:]) {
+		t.Errorf("weekdays enum = %q, want the reader's %q", weekdays.Items.Enum, weekdayNames)
+	}
+	var window struct {
+		Ref string `json:"$ref"`
+	}
+	if err := json.Unmarshal(rec.Properties["window"], &window); err != nil {
+		t.Fatal(err)
+	}
+	if window.Ref != "#/definitions/timeWindowOverride/properties/window" {
+		t.Errorf("window = %q, want the threshold time-window's own definition", window.Ref)
+	}
+
+	var days struct {
+		MinItems    *int  `json:"minItems"`
+		UniqueItems *bool `json:"uniqueItems"`
+	}
+	if err := json.Unmarshal(rec.Properties["weekdays"], &days); err != nil {
+		t.Fatal(err)
+	}
+	if days.MinItems == nil || *days.MinItems != 1 || days.UniqueItems == nil || !*days.UniqueItems {
+		t.Errorf("weekdays minItems / uniqueItems = %v / %v, want 1 / true", days.MinItems, days.UniqueItems)
+	}
+	entry := func(weekdays, win string) []any {
+		return []any{map[string]any{"weekdays": []any{weekdays}, "window": win}}
+	}
+	if _, p := recurringWindowsOf([]any{map[string]any{"weekdays": []any{"sun", "sun"}, "window": "02:00-06:00"}}); p == "" {
+		t.Error("a repeated weekday is read, but the schema's uniqueItems refuses it")
+	}
+	if _, p := recurringWindowsOf([]any{map[string]any{"weekdays": []any{}, "window": "02:00-06:00"}}); p == "" {
+		t.Error("no weekdays is read, but the schema's minItems refuses it")
+	}
+
+	var whole struct {
+		Definitions struct {
+			TWO struct {
+				Properties struct {
+					Window struct {
+						Pattern string `json:"pattern"`
+					} `json:"window"`
+				} `json:"properties"`
+			} `json:"timeWindowOverride"`
+		} `json:"definitions"`
+	}
+	if err := json.Unmarshal(raw, &whole); err != nil {
+		t.Fatal(err)
+	}
+	pat := whole.Definitions.TWO.Properties.Window.Pattern
+	re, err := regexp.Compile(pat)
+	if pat == "" || err != nil {
+		t.Fatalf("timeWindowOverride window pattern %q: %v", pat, err)
+	}
+	// Every hour and minute, both spellings parseHHMM takes, plus the shapes
+	// it is lenient about.
+	samples := []string{" 02:00 - 06:00 ", "+2:00-06:00", "02:00-6:00", "02:00 -06:00", "02:00-06:00 ",
+		"24:00-01:00", "23:60-01:00", "02:00-02:00", "02:00", "0200-0600", "２:00-06:00"}
+	for h := 0; h < 24; h++ {
+		for _, m := range []int{0, 7, 59} {
+			samples = append(samples, fmt.Sprintf("%02d:%02d-12:30", h, m), fmt.Sprintf("%d:%d-12:30", h, m))
+		}
+	}
+	accepted := 0
+	for _, w := range samples {
+		_, p := recurringWindowsOf(entry("sun", w))
+		if p == "" {
+			accepted++
+			if !re.MatchString(w) {
+				t.Errorf("window %q is read, but the schema's pattern refuses it", w)
+			}
+		}
+	}
+	if accepted < 24*3-1 { // 12:30-12:30 is start == end
+		t.Errorf("only %d canonical windows read — the sample set is not exercising the reader", accepted)
 	}
 }

@@ -12,8 +12,9 @@ decision is written. Everything that follows from it is written here:
   * ``page`` -> no maintenance clause anywhere in the alert or the recording rules
     it reads: the alert fires in a maintenance window.
 
-The recurring-maintenance silences (maintenance_scheduler.py) match the same label
-(``maintenance="mute"``), so a one-shot and a recurring window mute the same alerts.
+A recurring window (``_state_maintenance.recurring``) is evaluated by the exporter
+itself and turns the same tenant state on (#3639), so a one-shot and a recurring
+window mute the same alerts — through this clause, not Alertmanager silences.
 
 Recording rules in the hand-written packs never carry the clause: it lives at the
 alert, where the label is. (The compiled custom-alert pack,

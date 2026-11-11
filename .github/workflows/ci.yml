@@ -527,13 +527,13 @@ jobs:
               - "scripts/tools/_lib_godispatch.py"
               - "scripts/tools/ops/guard_dispatch.py"
             # schema: the am-inhibit leg pins the tenant schema's http_config
-            # key sets to the structs Alertmanager decodes into (#2984), and the
-            # tenant-api leg pins its top-level key set (#3504), so a
-            # schema-only PR must run them. Its own filter for the reason `docs`
+            # key sets to the structs Alertmanager decodes into (#2984), so a
+            # schema-only PR must run it. Its own filter for the reason `docs`
             # is: adding the path to `go` would wake all five Go legs
             # (tenant-api's schemathesis included), while the only other Go
-            # leg that reads the schema (threshold-exporter) already wakes on
-            # `docs`.
+            # leg that reads the schema (threshold-exporter, which also pins
+            # the tenant file's top-level key set, #3504 / #3671) already
+            # wakes on `docs`.
             schema:
               - "docs/schemas/tenant-config.schema.json"
 
@@ -1745,7 +1745,7 @@ jobs:
         # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
+        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's
@@ -2131,7 +2131,7 @@ jobs:
         # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
+        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's
@@ -2430,11 +2430,12 @@ jobs:
   go-tests-tenant-api:
     name: Go Tests — tenant-api
     runs-on: ubuntu-24.04
-    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). Also on
-    # `schema`: internal/confd holds the tenant file's top-level key set equal
-    # to tenant-config.schema.json's (#3504), so a schema-only PR must run it.
+    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). No test of
+    # this leg reads tenant-config.schema.json: the tenant file's top-level key
+    # set it once pinned there is the exporter's (config.TenantFileTopLevelKey,
+    # #3671), pinned by the threshold-exporter leg.
     needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.schema_changed == 'true'
+    if: needs.detect-changes.outputs.go_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests,
     # swag drift check and schemathesis all run against the local checkout.
     permissions:

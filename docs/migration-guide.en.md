@@ -110,7 +110,7 @@ For brand-new tenants, the interactive generator completes setup in 30 seconds:
 da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 ```
 
-Outputs: `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (+ `relabel_configs-<tenant>.yaml` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
+Outputs: `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (+ `relabel_configs-<tenant>.txt` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
 
 The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-exporter README — K8s Deployment](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
 

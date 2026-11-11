@@ -42,28 +42,18 @@ data:
     \    expr: \"max by(tenant) (\\n  user_threshold{component=\\\"clickhouse\\\"\
     , metric=\\\"memory_tracking_bytes\\\", severity=\\\"warning\\\"}\\n)\\n\"\n"
   clickhouse-alert.yml: "groups:\n- name: clickhouse-alerts\n  rules:\n  - alert:\
-    \ ClickHouseDown\n    expr: 'up{job=\"tenant-exporters\"} == 0\n\n      and on(tenant)\
-    \ tenant_expected_exporter{db_type=\"clickhouse\"}\n\n      '\n    for: 2m\n \
-    \   labels:\n      maintenance: page\n      severity: critical\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      owner: '{{ with query (printf\
+    \ ClickHouseHighQueryRate\n    expr: \"(\\n  tenant:clickhouse_queries:rate5m\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:clickhouse_queries_rate\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
+    \ $value | printf \"%.1f\" }} queries/sec exceeds threshold'\n      description_zh:\
+    \ '{{ $value | printf \"%.1f\" }} 次查詢/秒超出閾值'\n      owner: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
-    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: ClickHouse\
-    \ instance is DOWN\n      summary_zh: ClickHouse 實例已關閉\n      tier: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: ClickHouseHighQueryRate\n\
-    \    expr: \"(\\n  tenant:clickhouse_queries:rate5m\\n  > on(tenant) group_left\\\
-    n  tenant:alert_threshold:clickhouse_queries_rate\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
-    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: '{{ $value | printf \"%.1f\" }} queries/sec exceeds threshold'\n\
-    \      description_zh: '{{ $value | printf \"%.1f\" }} 次查詢/秒超出閾值'\n      owner:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: ClickHouse query rate elevated — workload review'\n      platform_summary_zh:\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}:\
+    \ ClickHouse query rate elevated — workload review'\n      platform_summary_zh:\
     \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
     \ }}：ClickHouse 查詢率升高 — 工作負載審查'\n      runbook_url: '{{ with query (printf `topk(1,\

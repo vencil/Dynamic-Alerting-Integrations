@@ -56,7 +56,7 @@ var (
 	}
 	// critical with NO metric_group — deliberately opted out of dedup.
 	tlCriticalNoGroup = lset{
-		"alertname": "MariaDBExporterAbsent",
+		"alertname": "TenantExporterAbsent",
 		"severity":  "critical", "tenant": tenantX,
 	}
 	// warning with NO metric_group — the alert #1132 was silently eating.

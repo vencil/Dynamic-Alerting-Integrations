@@ -21,7 +21,6 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
-| ClickHouseDown | critical | 照常觸發 |  | 立即檢查伺服器狀態、網路連線；查看系統日誌 | up |
 | ClickHouseHighQueryRate | warning | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse query rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:clickhouse_queries:rate5m |
 | ClickHouseHighConnections | warning | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse connections exceeded  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:clickhouse_active_connections:max |
 | ClickHouseHighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: ClickHouse connections at critical level  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:clickhouse_active_connections:max |
@@ -85,7 +84,6 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
-| KafkaExporterAbsent | critical | 照常觸發 | No kafka_brokers metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | kafka_brokers |
 | KafkaHighConsumerLag | warning | 靜音 | [tier] {{ $labels.tenant }}: consumer lag elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_consumer_lag:max |
 | KafkaHighConsumerLagCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical consumer lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_consumer_lag:max |
 | KafkaUnderReplicatedPartitions | warning | 靜音 | [tier] {{ $labels.tenant }}: under-replicated partitions  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:max |
@@ -139,7 +137,6 @@ lang: zh
 | MariaDBReplicaSQLThreadDown | critical | 照常觸發 | Replica SQL thread is stopped (Slave_SQL_Running=No) for tenant {{ $labels.tenant }}  | 立即檢查伺服器狀態、網路連線；查看系統日誌 | mysql_slave_status_slave_sql_running |
 | MariaDBReplicationLag | warning | 靜音 | [tier] {{ $labels.tenant }}: replication lag threshold breached  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_replication_lag:max |
 | MariaDBReplicationLagCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: CRITICAL replication lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_replication_lag:max |
-| MariaDBExporterAbsent | critical | 照常觸發 | No mysql_up metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | mysql_up |
 | MariaDBHighConnections | warning | 靜音 | [tier] {{ $labels.tenant }}: connection threshold breached  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_threads_connected:max |
 | MariaDBHighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_threads_connected:max |
 | MariaDBHighThreadsRunning | warning | 靜音 | [tier] {{ $labels.tenant }}: running-thread saturation (threads_running, NOT host CPU%) breached  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_threads_running:avg1m |
@@ -213,7 +210,6 @@ lang: zh
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
 | PostgreSQLDown | critical | 照常觸發 | pg_up=0 for 15s on {{ $labels.instance }} | 立即檢查伺服器狀態、網路連線；查看系統日誌 | pg_up |
-| PostgreSQLExporterAbsent | critical | 照常觸發 | No pg_up metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | pg_up |
 | PostgreSQLHighConnections | warning | 靜音 | [tier] {{ $labels.tenant }}: connection usage high  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:pg_connection_usage:ratio |
 | PostgreSQLHighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:pg_connection_usage:ratio |
 | PostgreSQLHighReplicationLag | warning | 靜音 | [tier] {{ $labels.tenant }}: replication lag elevated  | 檢查複寫狀態、網路連線；檢查複寫隊列堆積情況 | tenant:pg_replication_lag:max |
@@ -228,7 +224,6 @@ lang: zh
 
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
-| RabbitMQExporterAbsent | critical | 照常觸發 | No rabbitmq_identity_info metric found for 30s | 確認相關元件已啟動、配置正確；檢查元件日誌 | rabbitmq_identity_info |
 | RabbitMQHighQueueDepth | warning | 靜音 | [tier] {{ $labels.tenant }}: queue depth threshold exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:rabbitmq_queue_messages:max |
 | RabbitMQHighQueueDepthCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical queue depth  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:rabbitmq_queue_messages:max |
 | RabbitMQHighMemory | warning | 靜音 | [tier] {{ $labels.tenant }}: RabbitMQ memory usage high  | 檢查資源消耗、優化配置；考慮增加記憶體或啟用壓縮 | tenant:rabbitmq_node_mem_percent:ratio |

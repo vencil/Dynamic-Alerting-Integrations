@@ -21,7 +21,6 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
-| ClickHouseDown | critical | fires |  | Immediately check server status and network connectivity; review system logs | up |
 | ClickHouseHighQueryRate | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse query rate elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:clickhouse_queries:rate5m |
 | ClickHouseHighConnections | warning | muted | [tier] {{ $labels.tenant }}: ClickHouse connections exceeded  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:clickhouse_active_connections:max |
 | ClickHouseHighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: ClickHouse connections at critical level  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:clickhouse_active_connections:max |
@@ -85,7 +84,6 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
-| KafkaExporterAbsent | critical | fires | No kafka_brokers metric found for 30s | Verify component is running and configured correctly; check component logs | kafka_brokers |
 | KafkaHighConsumerLag | warning | muted | [tier] {{ $labels.tenant }}: consumer lag elevated  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_consumer_lag:max |
 | KafkaHighConsumerLagCritical | critical | muted | [tier] {{ $labels.tenant }}: critical consumer lag  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_consumer_lag:max |
 | KafkaUnderReplicatedPartitions | warning | muted | [tier] {{ $labels.tenant }}: under-replicated partitions  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:kafka_under_replicated_partitions:max |
@@ -139,7 +137,6 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | MariaDBReplicaSQLThreadDown | critical | fires | Replica SQL thread is stopped (Slave_SQL_Running=No) for tenant {{ $labels.tenant }}  | Immediately check server status and network connectivity; review system logs | mysql_slave_status_slave_sql_running |
 | MariaDBReplicationLag | warning | muted | [tier] {{ $labels.tenant }}: replication lag threshold breached  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mysql_replication_lag:max |
 | MariaDBReplicationLagCritical | critical | muted | [tier] {{ $labels.tenant }}: CRITICAL replication lag  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mysql_replication_lag:max |
-| MariaDBExporterAbsent | critical | fires | No mysql_up metric found for 30s | Verify component is running and configured correctly; check component logs | mysql_up |
 | MariaDBHighConnections | warning | muted | [tier] {{ $labels.tenant }}: connection threshold breached  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:mysql_threads_connected:max |
 | MariaDBHighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: critical connection saturation  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:mysql_threads_connected:max |
 | MariaDBHighThreadsRunning | warning | muted | [tier] {{ $labels.tenant }}: running-thread saturation (threads_running, NOT host CPU%) breached  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:mysql_threads_running:avg1m |
@@ -213,7 +210,6 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
 | PostgreSQLDown | critical | fires | pg_up=0 for 15s on {{ $labels.instance }} | Immediately check server status and network connectivity; review system logs | pg_up |
-| PostgreSQLExporterAbsent | critical | fires | No pg_up metric found for 30s | Verify component is running and configured correctly; check component logs | pg_up |
 | PostgreSQLHighConnections | warning | muted | [tier] {{ $labels.tenant }}: connection usage high  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:pg_connection_usage:ratio |
 | PostgreSQLHighConnectionsCritical | critical | muted | [tier] {{ $labels.tenant }}: critical connection saturation  | Check connection pool configuration and potential leaks; consider increasing max connections | tenant:pg_connection_usage:ratio |
 | PostgreSQLHighReplicationLag | warning | muted | [tier] {{ $labels.tenant }}: replication lag elevated  | Check replication status and network connectivity; inspect queue buildup | tenant:pg_replication_lag:max |
@@ -228,7 +224,6 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
-| RabbitMQExporterAbsent | critical | fires | No rabbitmq_identity_info metric found for 30s | Verify component is running and configured correctly; check component logs | rabbitmq_identity_info |
 | RabbitMQHighQueueDepth | warning | muted | [tier] {{ $labels.tenant }}: queue depth threshold exceeded  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_queue_messages:max |
 | RabbitMQHighQueueDepthCritical | critical | muted | [tier] {{ $labels.tenant }}: critical queue depth  | Check alert metrics and review related logs; contact platform team for assistance if needed | tenant:rabbitmq_queue_messages:max |
 | RabbitMQHighMemory | warning | muted | [tier] {{ $labels.tenant }}: RabbitMQ memory usage high  | Check resource consumption and optimize configuration; consider increasing memory or enabling compression | tenant:rabbitmq_node_mem_percent:ratio |

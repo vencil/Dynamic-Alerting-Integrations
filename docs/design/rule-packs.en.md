@@ -21,23 +21,23 @@ parent: architecture-and-design.en.md
 <!-- RULE_PACK_INVENTORY_START -->
 | Rule Pack | ConfigMap Name | Recording Rules | Alert Rules |
 |-----------|----------------|-----------------|-------------|
-| MariaDB/MySQL | `prometheus-rules-mariadb` | 12 | 18 |
-| PostgreSQL | `prometheus-rules-postgresql` | 8 | 9 |
+| MariaDB/MySQL | `prometheus-rules-mariadb` | 12 | 17 |
+| PostgreSQL | `prometheus-rules-postgresql` | 8 | 8 |
 | Redis | `prometheus-rules-redis` | 12 | 9 |
 | MongoDB | `prometheus-rules-mongodb` | 10 | 10 |
 | Elasticsearch | `prometheus-rules-elasticsearch` | 14 | 11 |
 | Oracle | `prometheus-rules-oracle` | 13 | 9 |
 | DB2 | `prometheus-rules-db2` | 15 | 10 |
-| ClickHouse | `prometheus-rules-clickhouse` | 12 | 8 |
-| Kafka | `prometheus-rules-kafka` | 13 | 9 |
-| RabbitMQ | `prometheus-rules-rabbitmq` | 14 | 10 |
+| ClickHouse | `prometheus-rules-clickhouse` | 12 | 7 |
+| Kafka | `prometheus-rules-kafka` | 13 | 8 |
+| RabbitMQ | `prometheus-rules-rabbitmq` | 14 | 9 |
 | JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 6 |
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 1 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **Total** | | **171** | **189** (= **360** rules) |
+| **Total** | | **171** | **184** (= **355** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)

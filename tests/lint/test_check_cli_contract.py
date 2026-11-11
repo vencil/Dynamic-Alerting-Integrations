@@ -1808,7 +1808,7 @@ class TestRealRepo:
             "docker run --rm \\\n"
             "  -v $(pwd)/conf.d:/etc/config:ro \\\n"
             "  ghcr.io/vencil/da-tools:v2.9.0 \\\n"
-            "  maintenance-scheduler --config-dir /etc/config --timezone Asia/Taipei\n"
+            "  blind-spot --config-dir /etc/config --timezone Asia/Taipei\n"
             "```\n"
             "Shadow 期無 noise（`da-tools shadow-verify --window=14d`）\n", encoding="utf-8")
         ref = tmp_path / "ref.md"
@@ -1822,7 +1822,7 @@ class TestRealRepo:
         assert {(f.verdict, f.command, f.token) for f in r.findings
                 if f.verdict != "V7"} == {
             ("V1", "batch-diagnose", "--check-shadow-removal"),
-            ("V1", "maintenance-scheduler", "--timezone"),
+            ("V1", "blind-spot", "--timezone"),
             ("V1", "shadow-verify", "--window"),
             ("V2", "migrate", "--output"),
             ("V3", "lint", "--strict")}

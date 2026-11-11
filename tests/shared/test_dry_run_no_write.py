@@ -500,8 +500,7 @@ def _stale_tool_registry_outputs(tmp: Path) -> list[str]:
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Stub server — reuses the --json gate's handler (Prometheus / Alertmanager
-# personalities); only cutover_tenant / maintenance_scheduler /
-# threshold_recommend touch it.
+# personalities); only cutover_tenant / threshold_recommend touch it.
 # ═══════════════════════════════════════════════════════════════════════════
 @pytest.fixture(scope="session")
 def stub_url():
@@ -612,10 +611,6 @@ RECIPES: list[Recipe] = [
     R("grafana_import",
       lambda t, s: ["--dashboard", _copy_into(t, DASHBOARD_JSON, "dashboard.json"),
                     "--dry-run", "--json"]),
-
-    R("maintenance_scheduler",
-      lambda t, s: ["--config-dir", _copy_into(t, SEED_CONF_D, "conf.d"),
-                    "--alertmanager", s, "--dry-run", "--json-output"]),
 
     R("migrate_to_operator",
       lambda t, s: ["--source-dir", _copy_into(t, K8S_MONITORING, "monitoring"),
@@ -753,7 +748,7 @@ def test_recipe_table_covers_every_dry_run_tool():
 # dx 再少一支：inject_related_docs 在 #1984 退役。
 # dx 再少一支：analyze_bench_history 的 --trend-watch（唯一用 --dry-run 的路徑）
 # 隨舊的 ns/op 趨勢監測退役。
-EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 18, "dx": 12}
+EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 17, "dx": 12}
 
 
 def test_dry_run_tool_count_per_dir_is_pinned():

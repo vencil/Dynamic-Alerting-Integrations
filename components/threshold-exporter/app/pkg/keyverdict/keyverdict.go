@@ -38,6 +38,10 @@
 // that bind the profile — it replaces the finding the tenants' keys would
 // give (#3042).
 //
+// A tenant file's top-level key other than `tenants`
+// (config.TenantFileTopLevelKey) is no tenant's key and no reader reads it:
+// ONE error on that file, naming no tenant (#3671).
+//
 // Input.Tenants, given, is the subset the readings were computed for (a
 // write's tenants, ADR-038 §5): only those tenants are judged; a profile's
 // finding is judged over them only.
@@ -126,6 +130,11 @@ const (
 	ReasonNotReadInProfile = "not_read_in_profile"
 	// ReasonProfileUnbound: KindProfileNotJudged's reason.
 	ReasonProfileUnbound = "profile_unbound"
+	// ReasonTenantFileTopLevel (#3671): a top-level key of a tenant file
+	// other than config.TenantFileTopLevelKey's — the exporter takes a
+	// tenant's keys from `tenants.<id>` alone, and no other reader reads a
+	// tenant file.
+	ReasonTenantFileTopLevel = "tenant_file_top_level"
 )
 
 // Disable effects (served-values' keys[].disable).
@@ -210,6 +219,10 @@ type Input struct {
 	// Effective hold are judged; a profile's names the tenants among them
 	// that bind it.
 	Values []config.LayerValueProblem
+	// TenantFiles (#3671): tenant file (scan key) → its top-level keys as
+	// the file spells them (parse-tree's content), for the tenant files the
+	// caller judges. nil: none judged.
+	TenantFiles map[string][]string
 	// Whole: Served and Effective hold every tenant of the tree (no
 	// `--tenant` subset, no file the load dropped, no tenant set aside) —
 	// only then is a profile no tenant binds known to be one
@@ -254,7 +267,8 @@ type Finding struct {
 	Kind     string  `json:"kind"`
 	Key      string  `json:"key"`
 	File     *string `json:"file"`
-	// Tenants: sorted; [] for a profile no tenant binds.
+	// Tenants: sorted; [] for a profile no tenant binds and for a tenant
+	// file's top-level key, which is no tenant's.
 	Tenants []string `json:"tenants"`
 	Reason  *string  `json:"reason"`
 	// Base: a disable_cascade's base, whose `disable` switches the key off;
@@ -380,6 +394,7 @@ func Judge(in Input) Tree {
 	}
 	findings := findingsOf(keys, rootDefaults)
 	findings = append(findings, valueFindings(in.Values, tenants, in.Effective, in.Undecidable)...)
+	findings = append(findings, tenantFileFindings(in.TenantFiles)...)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
 		if in.Whole {
@@ -683,6 +698,25 @@ func valueFindings(values []config.LayerValueProblem, tenants map[string]bool,
 			continue
 		}
 		out = append(out, f)
+	}
+	return out
+}
+
+// tenantFileFindings is one unread error per top-level key of a tenant file
+// that config.TenantFileTopLevelKey does not admit, on that file (#3671). It
+// names no tenant: the key is in no tenant's config, so no tenant's verdict
+// row carries it — and a tenant entry the same file writes under the same
+// name is the tenant's own key, judged on its own.
+func tenantFileFindings(files map[string][]string) []Finding {
+	var out []Finding
+	for _, file := range sortedKeys(files) {
+		for _, key := range files[file] {
+			if config.TenantFileTopLevelKey(key) {
+				continue
+			}
+			out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: key, File: optional(file),
+				Tenants: []string{}, Reason: optional(ReasonTenantFileTopLevel)})
+		}
 	}
 	return out
 }

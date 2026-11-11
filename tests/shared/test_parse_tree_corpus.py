@@ -721,6 +721,16 @@ def test_generate_routes_reads_files_only_pyyaml_refuses() -> None:
         assert r["generator"] == "rejected", r["name"]
         assert r["file"] not in ("_defaults.yaml", "tenant-x.yaml"), r["name"]
         code, out = _generate_routes_strict({r["file"]: _encode(r["doc"], r.get("encoding"))})
-        assert code == 0, (f"{r['name']}: generate-routes --validate --strict refuses a file "
-                           f"only PyYAML refuses (rc {code}) — the generator does not read "
-                           f"what parse-tree reads:\n{out}")
+        # #3671: most rows spell their case as a top-level key of a tenant
+        # file (`x:`, `a:`), which the shared key verdict names as no
+        # reader's. That refusal is itself a read of the file — the verdict
+        # took its top-level keys from parse-tree — so it is the only one a
+        # row may carry; any other error is a read the generator failed.
+        errors = [ln.strip() for ln in out.splitlines() if ln.strip().startswith("ERROR:")]
+        only_stray_keys = bool(errors) and all(
+            e.startswith(f"ERROR: key verdict: {r['file']}: error: unread `")
+            and e.endswith("(tenant_file_top_level) — no tenant") for e in errors)
+        assert code == 0 or (code == 1 and only_stray_keys), (
+            f"{r['name']}: generate-routes --validate --strict refuses a file "
+            f"only PyYAML refuses (rc {code}) — the generator does not read "
+            f"what parse-tree reads:\n{out}")

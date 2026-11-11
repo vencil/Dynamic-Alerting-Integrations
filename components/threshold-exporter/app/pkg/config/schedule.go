@@ -160,11 +160,15 @@ func (sv ScheduledValue) DeadEntries() []DeadEntry {
 		if !ws[i].ok || live[i+1] {
 			continue
 		}
-		out = append(out, DeadEntry{Entry: "overrides[" + strconv.Itoa(i) + "]", Window: o.Window, Value: o.Value,
+		out = append(out, DeadEntry{Entry: overrideEntry(i), Window: o.Window, Value: o.Value,
 			Reason: DeadEntryWindowCovered})
 	}
 	return out
 }
+
+// overrideEntry names the i-th override of a schedule, as DeadEntry.Entry
+// and the write gate's messages do: "overrides[i]".
+func overrideEntry(i int) string { return "overrides[" + strconv.Itoa(i) + "]" }
 
 // DeadEntriesReading is des as one string — entry, window, value and reason
 // of each, in order — what makes two dead-entry findings the same one for a
@@ -177,7 +181,9 @@ func DeadEntriesReading(des []DeadEntry) string {
 		if i > 0 {
 			b.WriteString("\x00")
 		}
-		fmt.Fprintf(&b, "%s\x01%s\x01%s\x01%s", d.Entry, d.Window, d.Value, d.Reason)
+		// Each field quoted: a window or value can hold any byte, so a
+		// bare separator would let two different entries read alike.
+		fmt.Fprintf(&b, "%q\x01%q\x01%q\x01%q", d.Entry, d.Window, d.Value, d.Reason)
 	}
 	return b.String()
 }

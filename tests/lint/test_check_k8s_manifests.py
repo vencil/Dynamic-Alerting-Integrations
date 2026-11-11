@@ -9,7 +9,7 @@ Pinned contracts (engine integration is covered by the CI "Container SAST L4
    registered HIGH => baseline-WARN; unregistered HIGH => BLOCK; LOW => INFO.
 3. **De-dup**: two findings sharing (path, check) collapse to one entry.
 4. **EXEMPTIONS**: the registry is empty. Its last entry (the raw tenant-api
-   Deployment) went with that manifest in #1594; the maintenance-scheduler
+   Deployment) went with that manifest in #1594; a since-removed (#3639)
    CronJob's 2 were cleared earlier by a hardened securityContext (TRK-314
    follow-up). The routing of a registered HIGH is still pinned, against a
    synthetic entry.
@@ -34,7 +34,7 @@ import check_k8s_manifests as k8s  # noqa: E402
 
 # The kube-linter report the repo is expected to produce: empty. The last two
 # findings (one workload, two containers) were the raw tenant-api Deployment,
-# removed in #1594; the maintenance-scheduler CronJob's two were eliminated
+# removed in #1594; a since-removed (#3639) CronJob's two were eliminated
 # earlier by a hardened securityContext (TRK-314 follow-up).
 _REAL_REPORTS: list = []
 
@@ -91,13 +91,6 @@ class TestExemptions:
     def test_unregistered_not_exempt(self, synthetic_exemption):
         assert k8s.is_exempt(_EXEMPT_PATH, "run-as-non-root") is False
         assert k8s.is_exempt("k8s/new-thing.yaml", "no-read-only-root-fs") is False
-
-    def test_maintenance_scheduler_no_longer_exempt(self):
-        # Cleared by a hardened securityContext (TRK-314 follow-up); the keys
-        # were removed so a regression re-introducing the finding now BLOCKS.
-        sched = "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml"
-        assert k8s.is_exempt(sched, "run-as-non-root") is False
-        assert k8s.is_exempt(sched, "no-read-only-root-fs") is False
 
     def test_critical_never_in_registry(self):
         for (_, check) in k8s.EXEMPTIONS:
@@ -364,7 +357,7 @@ class TestPssLabelRule:
 class TestDiscovery:
     def test_finds_known_manifests(self):
         rels = {p.relative_to(k8s.REPO_ROOT).as_posix() for p in k8s.find_manifest_files()}
-        assert "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml" in rels
+        assert "k8s/03-monitoring/deployment-alertmanager.yaml" in rels
         assert "k8s/03-monitoring/secret-grafana.yaml" in rels
         # nested dir (crd/) is reached by rglob
         assert any(r.startswith("k8s/crd/") for r in rels)

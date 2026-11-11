@@ -245,7 +245,7 @@ fi
 # Same package set the CI test lane installs (.github/workflows/ci.yml), plus
 # the mkdocs trio that `make lint-docs-mkdocs` and the mkdocs-strict pre-push
 # hook need.
-CI_PKGS="croniter pytest pytest-cov pytest-timeout pytest-xdist promql-parser \
+CI_PKGS="pytest pytest-cov pytest-timeout pytest-xdist promql-parser \
 hypothesis pathspec jsonschema check-jsonschema pre-commit markdown"
 DOCS_PKGS="mkdocs-material mkdocs-static-i18n pymdown-extensions"
 
@@ -276,7 +276,7 @@ pip install --quiet $CI_PKGS $DOCS_PKGS -c requirements/ci-constraints.txt || {
 # ended in "ready" — the exact "claim decoupled from evidence" shape this repo
 # keeps getting burned by.
 missing=""
-for mod in yaml croniter pytest promql_parser hypothesis pathspec jsonschema mkdocs; do
+for mod in yaml pytest promql_parser hypothesis pathspec jsonschema mkdocs; do
   python3 -c "import $mod" 2>/dev/null || missing="$missing $mod"
 done
 command -v pre-commit >/dev/null 2>&1 || missing="$missing pre-commit(cli)"

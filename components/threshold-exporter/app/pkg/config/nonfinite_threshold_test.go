@@ -282,6 +282,10 @@ func TestThresholdReadAlike(t *testing.T) {
 		// isThresholdExpired is fail-open on an expires that does not parse:
 		// such a value never lapses, as one with no expires.
 		{"k", ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "soon"}}, ScheduledValue{Default: "abc"}},
+		// #3683: an entry that serves no minute (a window that does not
+		// parse) is not part of the reading; the entry itself is the write
+		// gate's window_invalid finding (TestRatchet_InvalidWindowAsWritten).
+		{"k", w("abc", "bogus", "1"), ScheduledValue{Default: "abc"}},
 	}
 	for _, c := range alike {
 		if !thresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
@@ -303,9 +307,6 @@ func TestThresholdReadAlike(t *testing.T) {
 		// #3508 control: overlapping windows reordered — the first one wins
 		// 01:30-02:00, so another value is served there.
 		{"k", w2("abc", "01:00-02:00", "1", "01:30-03:00", "2"), w2("abc", "01:30-03:00", "2", "01:00-02:00", "1")},
-		// A window that does not parse matches no minute, but the value
-		// under it is still one the write adds.
-		{"k", w("abc", "bogus", "1"), ScheduledValue{Default: "abc"}},
 	}
 	for _, c := range differ {
 		if thresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
