@@ -826,8 +826,8 @@ class TestConfdThroughDaGuardWrite:
 
 def test_migrated_alerts_carry_the_maintenance_label_and_canonical_tail():
     """#3309: a migrated alert always holds the maintenance clause, so it must say
-    `maintenance: mute` — the recurring-maintenance silences select on that
-    label — and spell the clause as the rule-pack generator does."""
+    `maintenance: mute` — the label that says the alert is muted during
+    maintenance — and spell the clause as the rule-pack generator does."""
     import importlib.util
     from pathlib import Path
     import migrate_rule

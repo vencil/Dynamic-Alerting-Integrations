@@ -103,17 +103,6 @@ _CUSTOM_VALUE = {
     "tenant-a.yaml": "tenants:\n  tenant-a:\n    custom_mysql_x: {VALUE}\n",
 }
 
-#: A recurring maintenance window's `reason` — printed on the ACTIVE line
-#: (`True` for a boolean). The window is "0 0 1 1 *" + 400d, so it is open on
-#: any day of any year and starts at the same instant in every run (the line
-#: prints it); only two runs straddling a New Year could see different starts.
-_MAINT_REASON = {
-    "_defaults.yaml": _DEFAULTS,
-    "tenant-a.yaml": ('tenants:\n  tenant-a:\n    mysql_connections: "70"\n'
-                      "    _state_maintenance:\n      recurring:\n"
-                      '        - cron: "0 0 1 1 *"\n          duration: "400d"\n'
-                      "          reason: {VALUE}\n"),
-}
 #: A tenant key with no default — threshold_recommend reports its
 #: `current_value` as-is (`"yes"` / `true`). ⛔ Not a key the defaults carry:
 #: da-guard logs a timestamped WARN for a non-numeric value of a defaulted
@@ -166,9 +155,6 @@ _PROBES: dict[str, tuple[str, list[str], dict[str, str], tuple[str, ...], str]] 
     "ops/offboard_tenant.py": (
         "ops/offboard_tenant.py", ["yes", "--config-dir", "{d}"], _OFFBOARD_REF, (), ""),
     # ── already on da-guard (effective / served-values), probed in F1 (#2906) ──
-    "ops/maintenance_scheduler.py": (
-        "ops/maintenance_scheduler.py", ["--config-dir", "{d}", "--json-output"],
-        _MAINT_REASON, (), ""),
     "ops/threshold_recommend.py": (
         "ops/threshold_recommend.py", ["--config-dir", "{d}", "--dry-run", "--json"],
         _TENANT_KEY, (), ""),

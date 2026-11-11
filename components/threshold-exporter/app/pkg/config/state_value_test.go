@@ -2,7 +2,7 @@ package config
 
 // state_value_test.go (#3620) — the one reading of a `_state_<filter>`
 // value (stateValueOf), every row of its rules, and the readers that use it:
-// resolveStateFiltersAt, resolveMaintenanceExpiriesAt, MaintenanceRecurringOf.
+// resolveStateFiltersAt, resolveMaintenanceExpiriesAt, and the recurring windows (#3639).
 
 import (
 	"fmt"
@@ -20,10 +20,14 @@ const (
 )
 
 // The rules, row by row: what each value reads as, whether it turns the
-// filter on at stateValueNow, and whether the scheduler gets its windows.
+// filter on at stateValueNow (Friday 12:00 UTC), and how many recurring
+// windows it carries.
 func TestStateValueOf_Rules(t *testing.T) {
 	t.Parallel()
-	rec := "recurring:\n- cron: \"0 2 * * 0\"\n  duration: 4h\n  reason: backup\n"
+	// A Sunday window: closed at stateValueNow.
+	rec := "recurring:\n- weekdays: [sun]\n  window: \"02:00-06:00\"\n  reason: backup\n"
+	// A Friday window around noon: open at stateValueNow.
+	open := "recurring:\n- weekdays: [fri]\n  window: \"11:00-13:00\"\n"
 	cases := []struct {
 		name, filter, val string
 		kind              stateValueKind
@@ -102,7 +106,10 @@ func TestStateValueOf_Rules(t *testing.T) {
 		{"expires past + recurring", "maintenance", "expires: \"" + svPast + "\"\n" + rec, stateValueOn, false, 1, ""},
 		{"expires unparseable + recurring", "maintenance", "expires: soon\n" + rec, stateValueInvalidExpires, false, 0, ""},
 		{"reason only", "maintenance", "reason: planned\n", stateValueProblem, false, 0, "says nothing"},
-		{"empty recurring", "maintenance", "recurring: []\n", stateValueProblem, false, 0, "says nothing"},
+		{"empty recurring", "maintenance", "recurring: []\n", stateValueProblem, false, 0, "at least one"},
+		{"empty recurring beside a switch", "maintenance", "target: enable\nrecurring: []\n", stateValueProblem, false, 0, "at least one"},
+		{"duplicate weekday", "maintenance", "recurring:\n- weekdays: [sun, sun]\n  window: \"02:00-06:00\"\n", stateValueProblem, false, 0, "more than once"},
+		{"one-digit hour window", "maintenance", "recurring:\n- weekdays: [sun]\n  window: \"2:00-6:00\"\n", stateValueProblem, false, 0, "HH:MM-HH:MM"},
 		{"reason that says expires:", "maintenance", "reason: \"expires: 2099-01-01T00:00:00Z\"\n",
 			stateValueProblem, false, 0, "says nothing"},
 		{"reason that says expires:, with a switch", "maintenance",
@@ -110,7 +117,28 @@ func TestStateValueOf_Rules(t *testing.T) {
 
 		// Shapes.
 		{"unknown field", "maintenance", "targt: disable\n", stateValueProblem, false, 0, "unknown field(s) targt"},
-		{"recurring entry not a mapping", "maintenance", "recurring: [x]\n", stateValueProblem, false, 0, "does not parse"},
+		{"recurring entry not a mapping", "maintenance", "recurring: [x]\n", stateValueProblem, false, 0, "must be a mapping"},
+
+		// #3639: the exporter evaluates the windows itself.
+		{"recurring only, in its window", "maintenance", open, stateValueRecurringOnly, true, 1, ""},
+		{"expires past, in a window", "maintenance", "expires: \"" + svPast + "\"\n" + open, stateValueOn, true, 1, ""},
+		{"switch off, in a window", "maintenance", "enabled: false\n" + open, stateValueOff, false, 0, ""},
+		{"window crossing midnight, started Thursday", "maintenance",
+			"recurring:\n- weekdays: [thu]\n  window: \"22:00-13:00\"\n", stateValueRecurringOnly, true, 1, ""},
+		{"window crossing midnight, started Friday", "maintenance",
+			"recurring:\n- weekdays: [fri]\n  window: \"22:00-13:00\"\n", stateValueRecurringOnly, false, 1, ""},
+		{"misspelt field (fail-closed, not every day)", "maintenance",
+			"recurring:\n- weekday: [fri]\n  window: \"11:00-13:00\"\n", stateValueProblem, false, 0, "unknown field(s) weekday"},
+		{"no weekdays", "maintenance", "recurring:\n- window: \"11:00-13:00\"\n", stateValueProblem, false, 0, "needs weekdays"},
+		{"unknown weekday", "maintenance", "recurring:\n- weekdays: [friday]\n  window: \"11:00-13:00\"\n",
+			stateValueProblem, false, 0, "weekday friday is not one of"},
+		{"window not HH:MM-HH:MM", "maintenance", "recurring:\n- weekdays: [fri]\n  window: 4h\n",
+			stateValueProblem, false, 0, "is not a UTC"},
+		{"empty window", "maintenance", "recurring:\n- weekdays: [fri]\n  window: \"11:00-11:00\"\n",
+			stateValueProblem, false, 0, "is not a UTC"},
+		{"the old cron form", "maintenance", "recurring:\n- cron: \"0 2 * * 0\"\n  duration: 4h\n",
+			stateValueProblem, false, 0, "unknown field(s) cron, duration"},
+		{"recurring not a list", "maintenance", "recurring: weekly\n", stateValueProblem, false, 0, "must be a list"},
 		{"non-string keys", "maintenance", "1: x\n", stateValueProblem, false, 0, "takes only the fields"},
 	}
 	for _, c := range cases {
@@ -122,7 +150,7 @@ func TestStateValueOf_Rules(t *testing.T) {
 		if got := r.onAt(stateValueNow); got != c.on {
 			t.Errorf("%s: onAt = %v, want %v", c.name, got, c.on)
 		}
-		if got := len(MaintenanceRecurringOfFilter(c.filter, c.val)); got != c.recurring {
+		if got := len(r.windows); got != c.recurring {
 			t.Errorf("%s: recurring windows = %d, want %d", c.name, got, c.recurring)
 		}
 		if c.problemHas != "" && !strings.Contains(r.problem, c.problemHas) {
@@ -140,25 +168,30 @@ func TestStateValueOf_Rules(t *testing.T) {
 	}
 }
 
-// MaintenanceRecurringOfFilter is MaintenanceRecurringOf's rule for any
-// filter: only _state_maintenance has windows.
-func MaintenanceRecurringOfFilter(filter, val string) []RecurringSchedule {
-	if filter != maintenanceFilterName {
-		return nil
-	}
-	return MaintenanceRecurringOf(ScheduledValue{Default: val})
-}
-
-func TestMaintenanceRecurringOf_Windows(t *testing.T) {
+// A window that crosses midnight belongs to the weekday it starts on, and
+// each minute of the week is in or out by [start, end) in UTC.
+func TestMaintenanceWindow_Contains(t *testing.T) {
 	t.Parallel()
-	got := MaintenanceRecurringOf(ScheduledValue{Default: "recurring:\n- cron: \"0 2 * * 0\"\n  duration: 4h\n  reason: backup\n- cron: \"0 3 * * *\"\n" +
-		// Not a YAML string: left empty (the scheduler skips it with a
-		// WARN), not "3600" — which it would read as minutes.
-		"- cron: \"0 4 * * *\"\n  duration: 3600\n- duration: \"30\"\n  cron: 5\n"})
-	want := []RecurringSchedule{{Cron: "0 2 * * 0", Duration: "4h", Reason: "backup"}, {Cron: "0 3 * * *"},
-		{Cron: "0 4 * * *"}, {Duration: "30"}}
-	if !slices.Equal(got, want) {
-		t.Errorf("MaintenanceRecurringOf = %+v, want %+v", got, want)
+	ws, problem := recurringWindowsOf([]any{map[string]any{"weekdays": []any{"sun"}, "window": "22:00-02:00"}})
+	if problem != "" || len(ws) != 1 {
+		t.Fatalf("windows %v, problem %q", ws, problem)
+	}
+	w := ws[0]
+	sun := time.Date(2026, 11, 8, 0, 0, 0, 0, time.UTC) // a Sunday
+	for _, c := range []struct {
+		at   time.Time
+		want bool
+	}{
+		{sun.Add(21*time.Hour + 59*time.Minute), false},
+		{sun.Add(22 * time.Hour), true},
+		{sun.Add(25*time.Hour + 59*time.Minute), true},                      // Monday 01:59
+		{sun.Add(26 * time.Hour), false},                                    // Monday 02:00: end is open
+		{sun.Add(1 * time.Hour), false},                                     // Sunday 01:00 belongs to Saturday's window
+		{sun.Add(22 * time.Hour).In(time.FixedZone("UTC+8", 8*3600)), true}, // the zone of now does not matter
+	} {
+		if got := w.contains(c.at); got != c.want {
+			t.Errorf("contains(%s) = %v, want %v", c.at, got, c.want)
+		}
 	}
 }
 
@@ -184,7 +217,7 @@ func TestResolveStateFilters_The3620Counterexamples(t *testing.T) {
 		"t2": "yes",
 		"t3": "true",
 		"t4": "enabled: false\nexpires: \"" + svFuture + "\"\n",
-		"t5": "recurring:\n- cron: \"0 2 * * 0\"\n  duration: 4h\n",
+		"t5": "recurring:\n- weekdays: [sun]\n  window: \"02:00-06:00\"\n",
 		"t6": "garbage",
 		"ok": "enable",
 		"tb": "target: enable\nexpires: \"" + svFuture + "\"\n",
@@ -288,6 +321,19 @@ func TestKeyValidation_StateFilterValues(t *testing.T) {
 		{"_state_maintenance", "\n      target: enable\n      enabled: false"},
 		{"_state_maintenance", "\n      reason: planned"},
 		{"_state_maintenance", "\n      expires: \"2026-07-01\""},
+		// #3639: the retired cron form, with or without a switch, is refused
+		// at the gate — not only unread by the exporter.
+		{"_state_maintenance", "\n      recurring:\n        - cron: \"0 2 * * 0\"\n          duration: 4h"},
+		{"_state_maintenance", "\n      target: enable\n      recurring:\n        - cron: \"0 2 * * 0\"\n          duration: 4h"},
+		{"_state_maintenance", "\n      target: disable\n      recurring:\n        - cron: \"0 2 * * 0\"\n          duration: 4h"},
+		{"_state_maintenance", "\n      recurring:\n        - weekdays: [Sun]\n          window: \"02:00-06:00\""},
+		// What the schema refuses, the gate refuses (uniqueItems, minItems,
+		// the window pattern).
+		{"_state_maintenance", "\n      recurring:\n        - weekdays: [sun, sun]\n          window: \"02:00-06:00\""},
+		{"_state_maintenance", "\n      target: enable\n      recurring: []"},
+		{"_state_maintenance", "\n      recurring:\n        - weekdays: [sun]\n          window: \"2:00-6:00\""},
+		{"_state_maintenance", "\n      recurring:\n        - weekdays: [sun]\n          window: \" 02:00 - 06:00 \""},
+		{"_state_maintenance", "\n      recurring:\n        - weekdays: [sun]\n          window: \"+2:00-06:00\""},
 		{"_state_crashloop", "\"true\""},
 		{"_state_crashloop", "\n      target: enable"},
 	}
@@ -303,8 +349,8 @@ func TestKeyValidation_StateFilterValues(t *testing.T) {
 		{"_state_maintenance", "enable"},
 		{"_state_maintenance", "disable"},
 		{"_state_maintenance", "\n      target: disable"},
-		{"_state_maintenance", "\n      enabled: false\n      recurring:\n        - cron: \"0 2 * * 0\"\n          duration: 4h"},
-		{"_state_maintenance", "\n      recurring:\n        - cron: \"0 2 * * 0\"\n          duration: 4h"},
+		{"_state_maintenance", "\n      enabled: false\n      recurring:\n        - weekdays: [sun]\n          window: \"02:00-06:00\""},
+		{"_state_maintenance", "\n      recurring:\n        - weekdays: [sun]\n          window: \"02:00-06:00\""},
 		{"_state_maintenance", "\n      expires: \"2020-01-01T00:00:00Z\""},
 		{"_state_crashloop", "off"},
 		{"_state_crashloop", "ENABLE"},
@@ -347,5 +393,31 @@ func TestKeyValidation_StateFilterValues(t *testing.T) {
 	self := gateDecode(t, head+"    _state_maintenance: {target: disable, enabled: true}\n").ValidateTenantKeysByTenant().SelfRatchet()
 	if v := self.Tenants["t1"]; len(v.Errors) != 0 || countWith(v.Notices, "_state_maintenance") != 1 {
 		t.Errorf("SelfRatchet = %+v", v)
+	}
+}
+
+// #3639: a passed expires does not end the recurring windows, and the
+// exporter says so; a future one, or no windows, is not warned about.
+func TestMaintenanceExpiries_WarnWhenExpiredButRecurring(t *testing.T) {
+	t.Parallel()
+	win := "recurring:\n- weekdays: [sun]\n  window: \"02:00-06:00\"\n"
+	c := ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
+		"past-rec": {"_state_maintenance": {Default: "expires: \"" + svPast + "\"\n" + win}},
+		"past":     {"_state_maintenance": {Default: "expires: \"" + svPast + "\"\n"}},
+		"future":   {"_state_maintenance": {Default: "expires: \"" + svFuture + "\"\n" + win}},
+	}}
+	// Both collector paths: the maintenance filter declared (what ships —
+	// the only config where the windows switch anything on, and where the
+	// parse WARNs are deduped away from this reader) and not declared.
+	for _, declared := range []bool{true, false} {
+		c := c
+		if declared {
+			c.StateFilters = map[string]StateFilter{"maintenance": {Severity: "info"}}
+		}
+		var warns []string
+		c.ResolveMaintenanceExpiriesAfterStateFiltersAtLogf(stateValueNow, func(f string, a ...any) { warns = append(warns, fmt.Sprintf(f, a...)) })
+		if len(warns) != 1 || !strings.Contains(warns[0], "tenant=past-rec") || !strings.Contains(warns[0], "1 recurring window(s)") {
+			t.Errorf("declared=%v: warns = %q, want one for past-rec", declared, warns)
+		}
 	}
 }

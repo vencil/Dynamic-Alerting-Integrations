@@ -316,8 +316,7 @@ def _build_tools_rules():
     # derived from the VERSION file this same rule set bumps. Without this rule
     # the release bump moves the generator and leaves the matrix behind, and
     # the nightly matrix-drift guard goes red on the release PR.
-    for f in [".github/workflows/nightly-image-scan.yaml",
-              "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml"]:
+    for f in [".github/workflows/nightly-image-scan.yaml"]:
         rules.append({
             "file": f,
             "desc": f"da-tools image tag in {f}",
@@ -2567,9 +2566,10 @@ def _check_datools_pin_capability(new_ver: str) -> int:
 
     Direction (1) of #1534: check AT THE MOMENT the pin is rewritten. Of the
     rules in `_build_tools_rules()` that repoint
-    `ghcr.io/vencil/da-tools:vX.Y.Z`, only the `k8s/03-monitoring/cronjob-*`
-    ones are inside the scan surface of check_image_pin_capability.py — the
-    rest move pins through prose that no capability gate reads. The premise is
+    `ghcr.io/vencil/da-tools:vX.Y.Z`, none is inside the scan surface of
+    check_image_pin_capability.py any more (the last, a
+    `k8s/03-monitoring/cronjob-*` manifest, was removed in #3639) — they move
+    pins through prose that no capability gate reads. The premise is
     asserted by
     tests/dx/test_bump_docs.py::TestDatoolsPinCapability::test_the_gap_this_check_closes_still_exists,
     which fails if that stops being true.

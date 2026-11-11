@@ -450,6 +450,8 @@ tenants:
 
 Since v0.12.0, thresholds support time-window scheduling, allowing automatic threshold switching across different time periods. Typical use cases: relaxed thresholds during nighttime maintenance windows, tightened thresholds during peak hours.
 
+> **Timezone:** every time window (`window`), including a recurring maintenance `window`, is in **UTC**. Convert local times to UTC when configuring: UTC+8 06:00-14:00 is written `"22:00-06:00"` here.
+
 **Configuration syntax:**
 ```yaml
 tenants:
@@ -483,7 +485,7 @@ v1.2.0 introduced **Silent Mode**, which together with the existing Maintenance 
 | Normal | Normal operation | ✅ | ✅ | ✅ | — |
 | Silent | Muted | ✅ | ✅ | ❌ | Alertmanager |
 | Maintenance (`maintenance: mute` alerts) | True maintenance | ❌ | ❌ | ❌ | Prometheus (PromQL) |
-| Maintenance `recurring:` window (`maintenance: mute` alerts) | Recurring maintenance | ✅ | ✅ | ❌ | Alertmanager silence |
+| Inside a maintenance `recurring:` window (`maintenance: mute` alerts) | Recurring maintenance | ❌ | ❌ | ❌ | Prometheus (PromQL) |
 
 `maintenance: page` alerts follow the Normal row during maintenance (for the scope see the Maintenance Mode paragraph below).
 
@@ -510,7 +512,7 @@ stateDiagram-v2
 
 **Design principle:** Prometheus controls "what should trigger an alert," Alertmanager controls "whether to send notification."
 
-- **Maintenance Mode** (existing): every tenant alert carries the label `maintenance: mute` or `maintenance: page`, the one place the "mute it during maintenance?" decision is written ([#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)). For a `mute` alert `generate_rulepack_derived.py` writes `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` at the end of its expr, so during maintenance it does not fire, leaves no TSDB record and sends no notification; a `page` alert keeps firing. The per-alert list is the *In maintenance* column of the [alert reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.en.md), generated from the label. As a rule, platform sentinels, exporter-absent alerts ([ADR-026](../adr/026-node-maintenance-liveness-suppression.md)), cluster-survival alerts (`*ClusterDown`, `*NoPrimary` and the like) and single-instance critical down alerts with no cluster-level signal (`PostgreSQLDown`, `RedisDown` and the like) are `page`. A `recurring:` maintenance window takes a different path: inside the window `maintenance-scheduler` creates an Alertmanager silence for the tenant (matchers `tenant`, `alert_source=""` and `maintenance="mute"`), which blocks the notifications of the same `mute` alerts; the alerts still fire and stay in the TSDB.
+- **Maintenance Mode** (existing): every tenant alert carries the label `maintenance: mute` or `maintenance: page`, the one place the "mute it during maintenance?" decision is written ([#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)). For a `mute` alert `generate_rulepack_derived.py` writes `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)` at the end of its expr, so during maintenance it does not fire, leaves no TSDB record and sends no notification; a `page` alert keeps firing. The per-alert list is the *In maintenance* column of the [alert reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.en.md), generated from the label. As a rule, platform sentinels, exporter-absent alerts ([ADR-026](../adr/026-node-maintenance-liveness-suppression.md)), cluster-survival alerts (`*ClusterDown`, `*NoPrimary` and the like) and single-instance critical down alerts with no cluster-level signal (`PostgreSQLDown`, `RedisDown` and the like) are `page`. A `recurring:` maintenance window takes the same path ([#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)): the threshold-exporter evaluates it on every scrape and serves `user_state_filter{filter="maintenance"} 1` inside it, so the same `mute` alerts do not fire there and leave no TSDB record; no Alertmanager silence is involved. It is written as `weekdays` (`sun`…`sat`) plus a UTC `window: "HH:MM-HH:MM"`; a window that crosses midnight belongs to the day it starts on. The old `cron` + `duration` form is refused (the whole value is not read and maintenance is not on).
 - **Silent Mode** : Alert fires normally in Prometheus (TSDB records `ALERTS`), but Alertmanager intercepts notifications via `inhibit_rules`.
 
 **Silent Mode Data Flow**
@@ -540,6 +542,12 @@ tenants:
     _silent_mode: "all"        # Mute both warning and critical notifications
   db-c:
     _state_maintenance: "enable"  # True maintenance: maintenance: mute alerts do not fire
+  db-e:
+    _state_maintenance:           # Recurring: the same, inside Sun 02:00-06:00 UTC
+      recurring:
+        - weekdays: [sun]
+          window: "02:00-06:00"
+          reason: weekly patching
   db-d: {}                        # Normal — default behavior
 ```
 
@@ -560,18 +568,18 @@ tenants:
       reason: "Scheduled maintenance window"
 ```
 
-**How a `_state_<filter>` value is read** ([#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620); the exporter, tenant-api's write gate and `maintenance-scheduler` share one reading):
+**How a `_state_<filter>` value is read** ([#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620); the exporter and tenant-api's write gate share one reading):
 
 | Written | Result |
 |---|---|
 | `enable` (any case) | on |
 | `disable` (or `disabled` / `off` / a quoted `"false"`) | off |
 | any other scalar (`"yes"`, `"true"`, `"1"`, an empty string, garbage) | **not on**, with a WARN naming tenant, key and value; tenant-api refuses it |
-| object whose switch says off (`target: disable` or `enabled: false`) | off — with or without `expires`; `recurring:` creates no silence either |
-| object whose switch says on (`target: enable` or `enabled: true`) | on, until `expires` when given |
-| object with no switch and an `expires` | on until `expires` |
-| object with no switch and only `recurring:` | the state filter is **not on**; only `maintenance-scheduler` creates a silence in each window |
-| object whose `target` and `enabled` disagree, whose `target` is none of the words above, whose `enabled` is not a YAML boolean, with an unknown field, or that says nothing (only `reason`) | **not on**, with a WARN; tenant-api refuses it |
+| object whose switch says off (`target: disable` or `enabled: false`) | off — with or without `expires`; not on inside `recurring:` windows either |
+| object whose switch says on (`target: enable` or `enabled: true`) | on, until `expires` when given; also on inside `recurring:` windows (`expires` does not limit them) |
+| object with no switch and an `expires` | on until `expires`; also on inside `recurring:` windows |
+| object with no switch and only `recurring:` | on inside each window only (UTC; [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)) |
+| object whose `target` and `enabled` disagree, whose `target` is none of the words above, whose `enabled` is not a YAML boolean, with an unknown field (one in a `recurring` entry included — the old `cron` / `duration`, an unknown weekday, a `window` that does not parse), or that says nothing (only `reason`) | **not on**, with a WARN; tenant-api refuses it |
 
 Only `_state_maintenance` takes an object; any other `_state_<filter>` written as one is not on. A tenant that does not write the key still gets the filter's `default_state`; a value written but not read does **not** fall back to `default_state` — it is not on: noisier rather than alerts silently suppressed. A value the file already holds that a write leaves unchanged is only a NOTICE at tenant-api.
 

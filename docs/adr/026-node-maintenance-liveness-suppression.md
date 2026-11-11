@@ -73,7 +73,7 @@ updated_at: 2026-06-19
 
 2. **客戶面 drain 噪音交給 HA-aware 語意分級（[#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875)），不是維護抑制。** instance 級存活降 warning、可被維護 opt-out；叢集存活改用 quorum 信號定 critical、不可 opt-out（drain 期間只要叢集選不出 primary 就必須叫醒）。單實例（非 HA）的期待值用一行說明管理即可，不建正式的 Service Tier 系統。
 
-3. **重用既有機制、零新常駐元件。** silence / inhibit（[ADR-003](003-sentinel-alert-pattern.md)）+ `_state_maintenance` opt-out + 既有的 `maintenance_scheduler`。不引入 controller / operator，延續 [ADR-008](008-operator-native-integration-path.md) 的取消決策。
+3. **重用既有機制、零新常駐元件。** silence / inhibit（[ADR-003](003-sentinel-alert-pattern.md)）+ `_state_maintenance` opt-out + 既有的 `maintenance_scheduler`（後於 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 移除：週期維護窗改由 exporter 自己判斷，不再建 silence）。不引入 controller / operator，延續 [ADR-008](008-operator-native-integration-path.md) 的取消決策。
 
 ## 探索的副產品：一個真的 liveness 缺陷（[#869](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/869)）
 

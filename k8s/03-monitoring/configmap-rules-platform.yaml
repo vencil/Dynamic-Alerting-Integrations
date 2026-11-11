@@ -73,12 +73,12 @@ data:
     \ }} ended in a Failed\n\n        condition. Unlike a staleness alert — which\
     \ needs a PREVIOUS\n\n        success to measure staleness against — this fires\
     \ the first\n\n        time a run fails, including for a CronJob that has never\n\
-    \n        succeeded even once.\n\n        NOT urgent: platform CronJobs (maintenance-scheduler,\
-    \ every 5\n\n        minutes) carry no 3am action. Triage in business hours.\n\
-    \n        Check: (a) `kubectl get jobs -n {{ $labels.namespace }}` and the\n\n\
-    \        failing pod''s logs; (b) whether the CronJob''s pinned image\n\n    \
-    \    actually contains the program it invokes — that failure mode is\n\n     \
-    \   what motivated this alert and is now also gated at CI time by\n\n        scripts/tools/lint/check_image_pin_capability.py;\
+    \n        succeeded even once.\n\n        NOT urgent: a platform CronJob carries\
+    \ no 3am action. Triage\n\n        in business hours.\n\n        Check: (a) `kubectl\
+    \ get jobs -n {{ $labels.namespace }}` and the\n\n        failing pod''s logs;\
+    \ (b) whether the CronJob''s pinned image\n\n        actually contains the program\
+    \ it invokes — that failure mode is\n\n        what motivated this alert and is\
+    \ now also gated at CI time by\n\n        scripts/tools/lint/check_image_pin_capability.py;\
     \ (c) whether a\n\n        dependency the Job talks to (Alertmanager, Prometheus)\
     \ is\n\n        reachable from this namespace.\n\n        Self-resolving: a subsequent\
     \ successful run clears this without\n\n        anyone deleting the failed Job.\

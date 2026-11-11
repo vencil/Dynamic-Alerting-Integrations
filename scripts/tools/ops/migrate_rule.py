@@ -679,8 +679,8 @@ def _build_alert_rule(rule, alert_name, parsed, record_name,
         labels['source'] = 'legacy'
         labels['migration_status'] = 'shadow'
     # #3309: the expr above always holds the maintenance clause, so the rule is
-    # `mute`; the recurring-maintenance silences match this label, and without
-    # it a migrated rule would page through a recurring window.
+    # `mute` — the label declares that the expr holds the clause, which a
+    # one-shot and a recurring (#3639) maintenance window both act through.
     labels['maintenance'] = 'mute'
     if labels:
         alert_rule['labels'] = labels

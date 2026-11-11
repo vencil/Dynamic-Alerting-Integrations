@@ -4,9 +4,8 @@ package config
 //
 // ⛔ ONE READER. resolveStateFiltersAt (user_state_filter rows),
 // resolveMaintenanceExpiriesAt (da_config_event{event="maintenance_expired"}),
-// the write gate's value check (registry `prefixes._state_.value.check`) and
-// da-guard's maintenance_recurring (what maintenance-scheduler creates
-// silences from) all classify a value here. Before #3620 each reader made its
+// and the write gate's value check (registry `prefixes._state_.value.check`)
+// all classify a value here. Before #3620 each reader made its
 // own guess — any value that was not a disable word switched the filter on,
 // so `{target: disable}`, "yes" and garbage all muted alerts.
 //
@@ -20,10 +19,16 @@ package config
 //   - The switch is `target` (enable or a disable word) and/or `enabled` (a
 //     YAML boolean). A target that is neither, a non-boolean `enabled`, or a
 //     target and enabled that disagree, is a problem.
-//   - Switch off → off, whatever else the mapping says.
+//   - Switch off → off, whatever the other fields' values say — once the
+//     mapping reads: an unknown field, a wrong shape, or a recurring entry
+//     the reader does not read is a problem even beside a switch that says
+//     off (still not on; the exporter WARNs and the write gate refuses).
 //   - Switch on → on, until `expires` when given (RFC3339; past → off).
-//   - No switch: `expires` → on until it; only `recurring` → not on here (the
-//     maintenance-scheduler silences the windows); neither → a problem.
+//   - No switch: `expires` → on until it; only `recurring` → on inside a
+//     window (#3639); neither → a problem.
+//   - `recurring` (maintenance_window.go): weekly UTC windows, on inside
+//     any of them whatever the switch's expires says; an entry the reader
+//     does not read makes the whole value a problem.
 //   - An `expires` that is not RFC3339 is #2000's fail-closed case: not on,
 //     and the setting as a whole (recurring included) is ignored.
 //
@@ -48,8 +53,7 @@ const (
 	// on — until expires, when it has one (stateValueReading.onAt).
 	stateValueOn
 	// stateValueRecurringOnly: a mapping with recurring windows and neither
-	// a switch nor expires — the filter is not on; the scheduler silences
-	// the windows.
+	// a switch nor expires — the filter is on inside a window (#3639).
 	stateValueRecurringOnly
 	// stateValueInvalidExpires: #2000 — an expires that is not RFC3339; the
 	// whole setting is ignored.
@@ -73,9 +77,10 @@ type stateValueReading struct {
 	expires     time.Time
 	expiresText string
 	reason      string
-	// recurring: the windows the maintenance-scheduler acts on; nil unless
-	// the value is on or recurring-only.
-	recurring []RecurringSchedule
+	// windows: the recurring maintenance windows (#3639), which turn the
+	// filter on while now is inside one; nil unless the value is on or
+	// recurring-only. Not time-boxed by expires.
+	windows []maintenanceWindow
 	// problem: why the value is not read (kind stateValueProblem), or the
 	// parse error of an invalid expires — tenant-free.
 	problem string
@@ -166,6 +171,10 @@ func structuredStateValueOf(filterName, raw string, m map[string]any) stateValue
 		return stateValueReading{kind: stateValueInvalidExpires, structured: true,
 			problem: "expires is written but empty"}
 	}
+	windows, problem := recurringWindowsOf(m["recurring"])
+	if problem != "" {
+		return bad("%s", problem)
+	}
 	var parsed maintenanceModeStructured
 	if err := yaml.Unmarshal([]byte(raw), &parsed); err != nil {
 		return bad("the structured form does not parse: %v", err)
@@ -205,9 +214,9 @@ func structuredStateValueOf(filterName, raw string, m map[string]any) stateValue
 		}
 		r.hasExpires, r.expires, r.expiresText = true, t, parsed.Expires
 	}
-	r.recurring = recurringAsWritten(parsed.Recurring, m["recurring"])
+	r.windows = windows
 	if !hasSwitch && !r.hasExpires {
-		if len(parsed.Recurring) == 0 {
+		if len(windows) == 0 {
 			return bad("it has no switch (target / enabled), no expires and no recurring windows, so it says nothing")
 		}
 		r.kind = stateValueRecurringOnly
@@ -215,33 +224,22 @@ func structuredStateValueOf(filterName, raw string, m map[string]any) stateValue
 	return r
 }
 
-// recurringAsWritten is typed, with a cron or duration the file does not
-// write as a YAML string left empty: the typed decode turns `duration: 3600`
-// into "3600", which the scheduler would read as minutes. An empty field is
-// one the scheduler skips with a WARN, as it did before the windows came
-// from here.
-func recurringAsWritten(typed []RecurringSchedule, generic any) []RecurringSchedule {
-	entries, _ := generic.([]any)
-	if len(typed) == 0 || len(entries) != len(typed) {
-		return typed
-	}
-	out := make([]RecurringSchedule, len(typed))
-	for i, r := range typed {
-		e, _ := entries[i].(map[string]any)
-		if _, ok := e["cron"].(string); !ok {
-			r.Cron = ""
-		}
-		if _, ok := e["duration"].(string); !ok {
-			r.Duration = ""
-		}
-		out[i] = r
-	}
-	return out
-}
-
-// onAt reports whether r turns its filter on at now.
+// onAt reports whether r turns its filter on at now: an on value until its
+// expires, and — on or recurring-only — inside any recurring window, which
+// expires does not limit (#3639).
 func (r stateValueReading) onAt(now time.Time) bool {
-	return r.kind == stateValueOn && (!r.hasExpires || !now.After(r.expires))
+	if r.kind == stateValueOn && (!r.hasExpires || !now.After(r.expires)) {
+		return true
+	}
+	if r.kind != stateValueOn && r.kind != stateValueRecurringOnly {
+		return false
+	}
+	for _, w := range r.windows {
+		if w.contains(now) {
+			return true
+		}
+	}
+	return false
 }
 
 // warn is the reader's WARN line for r ("" when there is none).
@@ -282,8 +280,8 @@ func (r stateValueReading) canonical() string {
 			fmt.Fprintf(&b, "|expires=%s", r.expires.UTC().Format(time.RFC3339Nano))
 		}
 		fmt.Fprintf(&b, "|reason=%q", r.reason)
-		for _, s := range r.recurring {
-			fmt.Fprintf(&b, "|recurring=%q,%q,%q", s.Cron, s.Duration, s.Reason)
+		for _, w := range r.windows {
+			fmt.Fprintf(&b, "|recurring=%v,%q,%q", w.days, w.text, w.reason)
 		}
 	}
 	return b.String()
@@ -337,38 +335,4 @@ func stateFilterValueReading(key string, sv ScheduledValue) any {
 		return r.canonical() + "|raw=" + strings.TrimSpace(sv.Default)
 	}
 	return r.canonical()
-}
-
-// MaintenanceRecurringOfValue is MaintenanceRecurringOf for a value as a
-// generic decode holds it (an effective_config entry: a scalar or a
-// mapping); nil is no key — no windows.
-func MaintenanceRecurringOfValue(v any) []RecurringSchedule {
-	if v == nil {
-		return nil
-	}
-	out, err := yaml.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	var sv ScheduledValue
-	if err := yaml.Unmarshal(out, &sv); err != nil {
-		return nil
-	}
-	return MaintenanceRecurringOf(sv)
-}
-
-// MaintenanceRecurringOf is the recurring maintenance windows the
-// maintenance-scheduler creates silences for, from a tenant's
-// `_state_maintenance` value: the windows of a value that is on (whether or
-// not its expires has passed — the windows are not time-boxed by it) or
-// recurring-only; none for a value switched off, one with an invalid
-// expires, or one the reader does not read (#3620). da-guard serves it as
-// a tenant's maintenance_recurring, so the scheduler applies the reader's
-// switch instead of re-deriving it.
-func MaintenanceRecurringOf(sv ScheduledValue) []RecurringSchedule {
-	r := stateValueOf(maintenanceFilterName, sv)
-	if r.kind != stateValueOn && r.kind != stateValueRecurringOnly {
-		return nil
-	}
-	return r.recurring
 }

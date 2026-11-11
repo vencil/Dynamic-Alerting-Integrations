@@ -260,9 +260,16 @@ da-tools patch-config db-product-01 _silent_mode disable
 
 ⚠️ `expires` 必須是完整的 RFC3339 時戳（含 `T` 與時區，如 `2099-12-31T23:59:59Z`，建議加引號）。exporter 解析不了時會印 WARN（每次 scrape 都會出現）並**忽略這筆設定**——不會靜音，告警照常通知（[#2000](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2000)）；寫完務必用上方第 2 步的 `diagnose` 確認真的進入 silent。常見的解析失敗：只寫日期且加了引號（`"2099-12-31"`）、日期與時間以空白分隔（`2099-12-31 23:59:59+00:00`）。`expires` 已在過去 ⇒ 寫入後立即視為過期、不靜音，並發出 `da_config_event{event="silence_expired"}` 事件。`target:` 冒號後要留空白；JSON 寫法（`{"target": …}`）不會被認得。
 
-```bash
-# 排程式維護窗口（CronJob 自動建立 Alertmanager silence）
-da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
+週期維護窗口寫在租戶設定裡，由 threshold-exporter 自己判斷：窗內 `maintenance: mute` 的告警不觸發，不經 Alertmanager silence（[#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)）。時間一律 UTC，跨午夜的窗口算在開始那天；舊的 `cron` + `duration` 寫法不再接受（整個值不被讀、維護不開啟）。
+
+```yaml
+tenants:
+  db-product-01:
+    _state_maintenance:
+      recurring:
+        - weekdays: [sun]          # sun mon tue wed thu fri sat
+          window: "02:00-06:00"    # UTC
+          reason: weekly patching
 ```
 
 ## 階段 3：特殊操作
