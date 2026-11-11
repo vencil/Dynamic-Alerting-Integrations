@@ -1,0 +1,156 @@
+# promtool unit test — #3658 critical tiers (redis).
+# Each block proves the `_critical` threshold record reads the
+# severity="critical" row and that the critical twin fires only above it.
+# Run: promtool test rules tests/rulepacks/rule-pack-redis-threshold_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-redis.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # #3658 critical tier: redis_memory_used_bytes_critical. t-fire sits above the critical
+  # threshold (5.36871e+09); t-quiet sits between warning (4.29497e+09) and critical,
+  # so only the warning twin RedisHighMemory would page it — RedisHighMemoryCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "redis_memory_used_bytes{tenant=\"t-fire\"}"
+        values: "6442450944x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"redis\", metric=\"memory_used_bytes\", severity=\"warning\"}"
+        values: "4294967296x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"redis\", metric=\"memory_used_bytes\", severity=\"critical\"}"
+        values: "5368709120x60"
+      - series: "redis_memory_used_bytes{tenant=\"t-quiet\"}"
+        values: "4831838208x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"redis\", metric=\"memory_used_bytes\", severity=\"warning\"}"
+        values: "4294967296x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"redis\", metric=\"memory_used_bytes\", severity=\"critical\"}"
+        values: "5368709120x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:redis_memory_used_bytes_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:redis_memory_used_bytes_critical{tenant=\"t-fire\"}"
+            value: 5368709120
+          - labels: "tenant:alert_threshold:redis_memory_used_bytes_critical{tenant=\"t-quiet\"}"
+            value: 5368709120
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: RedisHighMemoryCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RedisHighMemoryCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "redis_memory_used_bytes"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Redis memory critical on t-fire"
+              summary_zh: "t-fire 的 Redis 記憶體使用量達嚴重水位"
+              platform_summary: "[] t-fire: Redis memory at critical level — check headroom to maxmemory (eviction / OOM risk); free memory or raise maxmemory"
+              platform_summary_zh: "[] t-fire: Redis 記憶體達嚴重水位 — 請確認距 maxmemory 的餘裕（有驅逐／OOM 風險）；釋放記憶體或調高 maxmemory"
+              description: "Memory usage: 6GiB (critical threshold exceeded)"
+              description_zh: "記憶體使用量: 6GiB（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: redis_connected_clients_critical. t-fire sits above the critical
+  # threshold (300); t-quiet sits between warning (200) and critical,
+  # so only the warning twin RedisHighConnections would page it — RedisHighConnectionsCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "redis_connected_clients{tenant=\"t-fire\"}"
+        values: "350x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"redis\", metric=\"connected_clients\", severity=\"warning\"}"
+        values: "200x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"redis\", metric=\"connected_clients\", severity=\"critical\"}"
+        values: "300x60"
+      - series: "redis_connected_clients{tenant=\"t-quiet\"}"
+        values: "250x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"redis\", metric=\"connected_clients\", severity=\"warning\"}"
+        values: "200x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"redis\", metric=\"connected_clients\", severity=\"critical\"}"
+        values: "300x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:redis_connected_clients_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:redis_connected_clients_critical{tenant=\"t-fire\"}"
+            value: 300
+          - labels: "tenant:alert_threshold:redis_connected_clients_critical{tenant=\"t-quiet\"}"
+            value: 300
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: RedisHighConnectionsCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RedisHighConnectionsCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "redis_connected_clients"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Redis connection count critical on t-fire"
+              summary_zh: "t-fire 的 Redis 連線數嚴重過高"
+              platform_summary: "[] t-fire: Redis connections at critical level — check headroom to maxclients; find the leaking client and cap its pool"
+              platform_summary_zh: "[] t-fire: Redis 連線數達嚴重水位 — 請確認距 maxclients 的餘裕；找出洩漏連線的客戶端並限制其連線池"
+              description: "350 connected clients (critical threshold exceeded)"
+              description_zh: "350 個已連線的客戶端（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: redis_replication_lag_critical. t-fire sits above the critical
+  # threshold (50); t-quiet sits between warning (30) and critical,
+  # so only the warning twin RedisReplicationLag would page it — RedisReplicationLagCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "redis_connected_slave_lag_seconds{tenant=\"t-fire\"}"
+        values: "60x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"redis\", metric=\"replication_lag\", severity=\"warning\"}"
+        values: "30x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"redis\", metric=\"replication_lag\", severity=\"critical\"}"
+        values: "50x60"
+      - series: "redis_connected_slave_lag_seconds{tenant=\"t-quiet\"}"
+        values: "40x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"redis\", metric=\"replication_lag\", severity=\"warning\"}"
+        values: "30x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"redis\", metric=\"replication_lag\", severity=\"critical\"}"
+        values: "50x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:redis_replication_lag_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:redis_replication_lag_critical{tenant=\"t-fire\"}"
+            value: 50
+          - labels: "tenant:alert_threshold:redis_replication_lag_critical{tenant=\"t-quiet\"}"
+            value: 50
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: RedisReplicationLagCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RedisReplicationLagCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "redis_replication_lag"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Redis replication lag critical on t-fire"
+              summary_zh: "t-fire 的 Redis 複製延遲嚴重"
+              platform_summary: "[] t-fire: Redis replica far behind — reads from it are stale and a failover now loses writes; check the replication link and backlog now"
+              platform_summary_zh: "[] t-fire: Redis 副本嚴重落後 — 從副本讀到的資料過舊，此時故障轉移會遺失寫入；請立即檢查複製連線與 backlog"
+              description: "Replication lag: 60.0s (critical threshold exceeded)"
+              description_zh: "複製延遲: 60.0s（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""

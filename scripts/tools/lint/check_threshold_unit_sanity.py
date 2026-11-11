@@ -96,6 +96,7 @@ UNIT_DIMENSION: dict[str, str] = {
     "% of max_connections": "percent",
     "ratio": "ratio",
     "0=green,1=yellow,2=red": "enum",
+    "bytes": "bytes",
     "bytes (4GB)": "bytes",
     "bytes (8GB)": "bytes",
     "count": "count",
