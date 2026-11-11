@@ -1344,6 +1344,10 @@ def render_unarmed_lines(doc: dict, indent: int) -> list[str]:
             segs = _wrap_comment(body, width - 2)
             lines.append(f"{ind}#   {segs[0]}")
             lines.extend(f"{ind}#     {seg}" for seg in segs[1:])
+            # Same discipline as every other face that hands a value over
+            # (test_counterexample_coverage): a key with a measured
+            # counter-example carries it here too.
+            lines.extend(_counterexample_lines(entry, f"{ind}#     "))
     return lines
 
 
