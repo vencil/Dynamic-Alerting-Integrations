@@ -595,7 +595,12 @@ def main():
 
         labels = None
         if args.labels:
-            labels = [l.strip() for l in args.labels.split(",")]
+            # #3751: the rule of --dirs, whose items it pairs with: an empty
+            # item refused, an item not stripped.
+            labels = args.labels.split(",")
+            if "" in labels:
+                parser.error(f"argument --labels: an empty item in {args.labels!r} "
+                             "(','-separated labels)")
             if len(labels) != len(dirs):
                 print("ERROR: --labels count must match --dirs count",
                       file=sys.stderr)

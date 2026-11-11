@@ -215,6 +215,11 @@ def active() -> Optional[ParseCache]:
     return _ACTIVE
 
 
+#: realpath of a tree a declared input names → ``(flag, lang)`` (#3751): set
+#: by `declared_trees`, read by every `ConfdReader` of that tree.
+_DECLARED: "dict[str, tuple[str, str]]" = {}
+
+
 class ConfdReader:
     """One conf.d tree, read through ``da-guard parse-tree``, by path.
 
@@ -240,7 +245,10 @@ class ConfdReader:
         #: ``(flag, lang)`` when this tree is a declared input (`declared_trees`,
         #: #3751): a root da-guard cannot list is refused naming the FLAG
         #: (`_lib_input.require_listed`) before any other verdict on the tree.
-        self.declared: "Optional[tuple[str, str]]" = None
+        #: Every reader of that tree in the process carries it (`_DECLARED`),
+        #: not only the one that judged it — a tool whose library opens a
+        #: reader of its own (tenant-verify's scanner) names the flag too.
+        self.declared: "Optional[tuple[str, str]]" = _DECLARED.get(os.path.realpath(root))
 
     def _judge_root(self, entries: "Iterable[_lib_parse_tree.Entry]") -> None:
         if self.declared is not None:
@@ -723,16 +731,22 @@ def declared_trees(args: Any, dest: str, *, lang: str, binary: Optional[str] = N
     root da-guard cannot list is `dir_not_accessible` naming the flag
     (`_lib_input.require_listed`) — never the path alone, never read as a
     tree with no config file; then that listing's config files, judged by
-    the declaration's ``empty`` (`_lib_input.require_selection`). A tool's
-    later reads of a tree — the served-values family's included
-    (`require_servable`) — take this same reading, never a second judgement
-    of it. Raises `_lib_exitcodes.CallerError` (rc 2) and ParseTreeError
-    (no usable da-guard)."""
+    the declaration's ``empty`` (`_lib_input.require_selection`).
+
+    After it: the served-values family takes this reading of the tree
+    (`require_servable`: no second parse-tree), and any other parse-tree
+    reader of it in the process carries the flag (`_DECLARED`). ⚠️ A
+    da-guard subcommand that walks the tree itself (`effective`,
+    `key-verdict`) walks it once more: a tree changed in between is refused
+    there in da-guard's words — rc 2, fail closed, the flag not named.
+    Raises `_lib_exitcodes.CallerError` (rc 2) and ParseTreeError (no
+    usable da-guard)."""
     spec = _lib_input.spec_of(args, dest)
     if spec.select != _lib_input.DA_GUARD_LISTS:
         raise TypeError(f"{dest}: declared_trees reads a select=DA_GUARD_LISTS input")
     roots = _lib_input.selected(args, dest, lang=lang)
     for root in roots:
+        _DECLARED[os.path.realpath(root)] = (spec.flag, lang)
         reader = reader_for(root)
         reader.declared = (spec.flag, lang)
         with _lib_parse_tree.use_da_guard(binary, timeout):

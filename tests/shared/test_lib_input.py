@@ -698,3 +698,35 @@ def test_a_list_is_a_da_guard_listed_input_with_no_default(kw):
     with pytest.raises(ValueError):
         _lib_input.add_input(argparse.ArgumentParser(), "--dirs",
                              **{"select": _lib_input.DA_GUARD_LISTS, "separator": ",", **kw})
+
+
+# ── #3751: a declared conf.d, judged once (`_lib_parse_cache.declared_trees`) ─
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_every_reader_of_a_declared_tree_names_the_flag(tmp_path):
+    """A library that opens a reader of its own (tenant-verify's scanner)
+    still names the flag for that tree — not the path alone."""
+    import _lib_parse_cache
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    (conf / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--c", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED)
+    assert _lib_parse_cache.declared_trees(p.parse_args(["--c", str(conf)]), "c",
+                                           lang="en") == [conf]
+    assert _lib_parse_cache.ConfdReader(f"{conf}/./").declared == ("--c", "en")
+    assert _lib_parse_cache.ConfdReader(tmp_path).declared is None
+
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_a_declared_tree_with_no_config_file_is_refused_by_its_declaration(tmp_path):
+    import _lib_parse_cache
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--c", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED)
+    with pytest.raises(CallerError) as e:
+        _lib_parse_cache.declared_trees(p.parse_args(["--c", str(tmp_path)]), "c", lang="en")
+    assert e.value.reason == "input_empty"
+    assert str(e.value).startswith(f"--c {tmp_path}: selects nothing")

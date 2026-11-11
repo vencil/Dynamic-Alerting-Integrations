@@ -102,6 +102,11 @@ def test_a_declared_input_directory_is_listed_only_by_lib_input(declared, tmp_pa
         sentinel = case / "sentinel"
         sentinel.mkdir()
         (sentinel / "a.json").write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+        if da_guard_lists:
+            # A file da-guard lists as a config file: an `empty=EMPTY_REFUSED`
+            # tree would end at its judgement, and nothing after it would be
+            # audited (#3751 review).
+            (sentinel / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
         subst = {**_subst(case), "{D}": str(sentinel)}
         args = []
         for a in argv:

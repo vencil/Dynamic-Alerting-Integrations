@@ -337,26 +337,39 @@ def cmd_diff(config_dir, id_a, id_b):
 
 def _judge_history(config_dir):
     """The one judgement of a read-only subcommand (``log`` / ``show`` /
-    ``diff``, #3751): they read the snapshot history, never ``--config-dir``
-    itself — so a conf.d deleted since its last snapshot still shows its
-    history (a recovery path). Refused only when neither is there: the
-    history (``<parent>/.da-history``) not there and ``--config-dir`` no
-    usable directory — both named; it printed "no snapshots yet", rc 0, and
-    created ``.da-history`` beside any path it was given. A history there
-    but no directory is refused, named. Raises CallerError."""
+    ``diff``, #3751): they read the snapshot history beside --config-dir
+    (``<parent>/.da-history``), never --config-dir itself — so a conf.d
+    deleted since its last snapshot still shows its history (a recovery
+    path). Raises CallerError for:
+
+    * ``''`` (#3406: never the current directory) and a --config-dir that
+      is there but no usable directory;
+    * a history that is there but no usable directory (a dangling link
+      included — never read as "no history");
+    * neither there: both named — it printed "no snapshots yet", rc 0, and
+      created ``.da-history`` beside any path it was given.
+
+    ⚠️ The history belongs to the parent, not to the name: a --config-dir
+    that is not there (a typo of a sibling) reads the history beside it.
+    That is said on stderr, both named, never in silence."""
+    conf = classify_path(config_dir, "dir", lang=_LANG, flag="--config-dir")
+    if conf is not None and (config_dir == "" or not conf.missing):
+        raise CallerError(conf.message, conf.reason)
     hdir = _history_path(config_dir)
     hist = classify_path(str(hdir), "dir", lang=_LANG)
-    if hist is None:
-        return
-    if not hist.missing:
+    if hist is not None and (not hist.missing or os.path.lexists(hdir)):
         raise CallerError(_t(f"--config-dir {config_dir}: 快照歷史 {hist.message}",
                              f"--config-dir {config_dir}: snapshot history {hist.message}"),
-                          hist.reason)
-    conf = classify_path(config_dir, "dir", lang=_LANG, flag="--config-dir")
-    if conf is not None:
+                          hist.reason if not hist.missing else "dir_not_accessible")
+    if conf is None:
+        return
+    if hist is not None:
         raise CallerError(_t(f"{conf.message}，且 {hdir} 沒有快照歷史",
                              f"{conf.message}, and no snapshot history at {hdir}"),
                           conf.reason)
+    print(_t(f"警告：{conf.message}；讀取它旁邊的快照歷史 {hdir}",
+             f"WARN: {conf.message}; reading the snapshot history beside it, {hdir}"),
+          file=sys.stderr)
 
 
 @exit_on_output_write_error

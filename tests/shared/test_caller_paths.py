@@ -1181,7 +1181,13 @@ def test_a_declared_input_answers_an_empty_directory_as_declared(box, declared_i
     import _lib_input
     root = box[0]
     for n, (rid, script, flag, spec, argv, reason) in enumerate(declared_inputs):
-        empty = root / f"g1-empty-{n}"
+        # Under a parent the run may write: a tool that writes beside its
+        # input (config-history's .da-history) is measured, not stopped by
+        # the box's root-owned top level (#3751).
+        beside = root / f"g1-empty-{n}"
+        beside.mkdir()
+        beside.chmod(0o777)
+        empty = beside / "in"
         empty.mkdir()
         empty.chmod(0o755)
         proc, scratch = _declared_run(box, script, argv, f"e{n}", str(empty))

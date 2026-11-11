@@ -37,6 +37,7 @@ import pytest
 
 import config_history as ch  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 
 # ── 1. _sha256 ──────────────────────────────────────────────────────
@@ -364,6 +365,41 @@ class TestConfigDirJudgedOnce:
         assert log.returncode == 0, log.stderr
         assert '#  1' in log.stdout
         assert _cli('--config-dir', str(conf), 'show', '1').returncode == 0
+
+    def test_a_missing_config_dir_beside_a_history_is_said(self, tmp_path):
+        """The history belongs to the parent: a typo of a sibling reads its
+        history — never in silence (#3751 review)."""
+        conf = tmp_path / 'conf.d'
+        conf.mkdir()
+        (conf / 'db-a.yaml').write_text('tenants:\n  db-a: {}\n', encoding='utf-8')
+        assert _cli('--config-dir', str(conf), 'snapshot').returncode == 0
+        proc = _cli('--config-dir', str(tmp_path / 'conf.dd'), 'log')
+        assert proc.returncode == 0, proc.stderr
+        assert (f"WARN: --config-dir {tmp_path / 'conf.dd'}: " in proc.stderr
+                and str(tmp_path / '.da-history') in proc.stderr), proc.stderr
+
+    def test_an_empty_config_dir_is_never_the_current_directory(self, tmp_path):
+        """#3406: `''` read `./.da-history` at rc 0."""
+        (tmp_path / '.da-history').mkdir()
+        proc = subprocess.run([sys.executable, os.path.abspath(_SCRIPT), '--config-dir', '',
+                               'log'], capture_output=True, text=True, encoding='utf-8',
+                              timeout=120, cwd=tmp_path, env={**os.environ, 'DA_LANG': 'en'})
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stdout
+        assert proc.stdout == ''
+
+    def test_a_config_dir_that_is_a_file_is_refused_for_a_read(self, tmp_path):
+        (tmp_path / '.da-history').mkdir()
+        (tmp_path / 'conf.d').write_text('x', encoding='utf-8')
+        proc = _cli('--config-dir', str(tmp_path / 'conf.d'), 'log')
+        assert proc.returncode == EXIT_CALLER_ERROR
+        assert f"--config-dir {tmp_path / 'conf.d'}: not a directory" in proc.stderr
+
+    def test_a_dangling_history_link_is_refused_not_read_as_none(self, tmp_path):
+        (tmp_path / 'conf.d').mkdir()
+        symlink_or_skip(str(tmp_path / 'nowhere'), str(tmp_path / '.da-history'))
+        proc = _cli('--config-dir', str(tmp_path / 'conf.d'), 'log')
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stdout
+        assert 'snapshot history' in proc.stderr
 
     def test_a_history_that_is_no_directory_is_refused(self, tmp_path):
         (tmp_path / 'conf.d').mkdir()

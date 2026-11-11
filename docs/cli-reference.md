@@ -1130,7 +1130,7 @@ da-tools drift-detect --dirs <DIR1>,<DIR2>[,<DIR3>...] [--labels <L1>,<L2>,...] 
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
 | `--dirs <LIST>` | 以逗號分隔的配置目錄（至少 2 個）。每一項各自判定；空項（`a,,b`、結尾的 `,`）以 `2` 拒絕，項目前後的空白不去掉、算路徑的一部分（與 URL 清單旗標同一條規則；⚠️ Breaking，[#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)：先前空項被略過、空白被去掉） | — |
-| `--labels <LIST>` | 對應每個目錄的標籤 | `dir-1,dir-2,...` |
+| `--labels <LIST>` | 對應每個目錄的標籤，與 `--dirs` 依位置配對、同一條清單規則（空項以 `2` 拒絕、空白不去掉，[#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)） | `dir-1,dir-2,...` |
 | `--ignore-prefix <PREFIX>` | 視為預期漂移的檔案前綴 | `_cluster_,_local_` |
 | `--json` | JSON 輸出 | — |
 | `--markdown` | Markdown 報告輸出 | — |
@@ -1221,7 +1221,7 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 
 配置快照與歷史追蹤——在 `.da-history/` 中記錄 conf.d/ 的每次變更，提供 git-independent 的輕量級版本控制。
 
-`snapshot` 記錄的是 conf.d 頂層的設定檔，清單取自 da-guard 對這棵樹的索引（exporter 的走訪）；子目錄裡的設定檔不進快照，stderr 會點名。因此 `snapshot` 需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`；conf.d 上有 da-guard 驗證會點名的路徑時，`snapshot` 在寫入任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。`log`／`show`／`diff` 只讀 `.da-history/`，不建立它，也不讀 `--config-dir` 本身：conf.d 被刪掉之後仍讀得到它的快照歷史。`.da-history/` 與 `--config-dir` 都不存在時以 `2` 拒絕、兩者一起點名（⚠️ Breaking，[#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)：先前印「尚無快照記錄」、結束碼 `0`，並在給的路徑旁建立 `.da-history/`）。`snapshot` 給的 `--config-dir` 不存在、不是目錄或 da-guard 列不出內容時，在寫入任何東西之前以 `2` 拒絕並點名 `--config-dir`；空目錄照樣建立快照（每個檔都算移除）。
+`snapshot` 記錄的是 conf.d 頂層的設定檔，清單取自 da-guard 對這棵樹的索引（exporter 的走訪）；子目錄裡的設定檔不進快照，stderr 會點名。因此 `snapshot` 需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`；conf.d 上有 da-guard 驗證會點名的路徑時，`snapshot` 在寫入任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。`log`／`show`／`diff` 只讀 `.da-history/`，不建立它，也不讀 `--config-dir` 本身：conf.d 被刪掉之後仍讀得到它的快照歷史。`.da-history/` 與 `--config-dir` 都不存在時以 `2` 拒絕、兩者一起點名（⚠️ Breaking，[#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)：先前印「尚無快照記錄」、結束碼 `0`，並在給的路徑旁建立 `.da-history/`）；`--config-dir` 為 `''`、存在但不是目錄，或 `.da-history/` 存在但不是可用的目錄（含斷掉的符號連結）也以 `2` 拒絕。⚠️ 快照歷史屬於上層目錄、不屬於 `--config-dir` 這個名字：給一個不存在的 `--config-dir`（例如打錯的兄弟目錄名）會讀到旁邊的歷史，stderr 以一行 `WARN:` 點名兩者。`snapshot` 給的 `--config-dir` 不存在、不是目錄或 da-guard 列不出內容時，在寫入任何東西之前以 `2` 拒絕並點名 `--config-dir`；空目錄照樣建立快照（每個檔都算移除）。
 
 ```bash
 da-tools config-history --config-dir <PATH> <action>

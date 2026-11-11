@@ -525,6 +525,18 @@ class TestCLI:
         assert e.value.code == 2
         assert f"an empty item in {value!r}" in capsys.readouterr().err
 
+    def test_labels_follow_the_rule_of_dirs(self, two_dirs, capsys, cli_argv):
+        """#3751 review：`--labels` 與 `--dirs` 依位置配對，同一條規則。"""
+        dir_a, dir_b = two_dirs
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A,")
+        with pytest.raises(SystemExit) as e:
+            dd.main()
+        assert e.value.code == 2
+        assert "argument --labels: an empty item in 'A,'" in capsys.readouterr().err
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A, B", "--json")
+        doc = dd.main().document
+        assert doc["pairs"][0]["target"] == " B", doc
+
     def test_an_item_is_not_stripped(self, two_dirs, cli_argv):
         """#3751：`a, b` 的空白是路徑的一部分，不被去掉成另一個目錄。"""
         dir_a, dir_b = two_dirs
