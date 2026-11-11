@@ -214,6 +214,16 @@ CHART_SERVICEMONITOR_JOBS: dict[str, frozenset] = {
     FEDERATION_RECONCILER_CHART: frozenset({"federation-reconciler"}),
 }
 
+#: The scrape job every tenant rule pack selects (`up{job="tenant-exporters"}`),
+#: and the one name for it (#3720). The repo's raw config is that job
+#: (k8s/03-monitoring/configmap-prometheus.yaml); the BYO, Operator and
+#: Federation docs teach customers the same job — the Operator ServiceMonitor
+#: sets it with a `job` relabeling, because without one prometheus-operator
+#: names the job after the Service. Both are pinned to
+#: check_scrape_reachability.tenant_scrape_contract by the scrape gate and
+#: tests/k8s/test_tenant_scrape_contract.py.
+TENANT_EXPORTER_JOB = "tenant-exporters"
+
 #: Series Prometheus itself manufactures (no exporter, no /metrics line):
 #: `up` per scrape target, `ALERTS` per alert. `up` carries the target's job,
 #: so its source is whatever job its selector names.
@@ -251,8 +261,10 @@ def _job_matchers(metric: str, expr: str) -> list[tuple[str, str] | None]:
 
 
 def operator_jobs() -> frozenset:
-    """Every `job` value a platform chart's ServiceMonitor produces."""
-    return frozenset().union(*CHART_SERVICEMONITOR_JOBS.values())
+    """Every `job` value an Operator install's ServiceMonitors produce: each
+    platform chart's, plus the tenant exporters' that the Operator doc teaches
+    (its `job` relabeling to TENANT_EXPORTER_JOB, #3720)."""
+    return frozenset().union(*CHART_SERVICEMONITOR_JOBS.values(), {TENANT_EXPORTER_JOB})
 
 
 def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = None) -> list[str]:
@@ -263,8 +275,8 @@ def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = Non
     portable ([] = portable), so a rule built on a recording rule inherits it.
 
     ⚠️ Of the labels a selector matches, only `job` is modelled. Other labels
-    that exist in one mode only are not: the raw tenant-exporters job's
-    `tenant` relabel, or a `namespace="monitoring"` pin on an object this
+    that exist in one mode only are not: the tenant exporters' `tenant`
+    relabel (the docs teach it, nothing here checks it), or a `namespace="monitoring"` pin on an object this
     repo's raw manifests put there (CronJobLastRunFailed,
     ConfigReloader*) — such a rule counts as portable
     because its series exist, though it may watch nothing under the Operator.

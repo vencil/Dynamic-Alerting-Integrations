@@ -78,7 +78,9 @@ def _packs() -> "list[Path]":
 #: 取的話，推導壞掉（例如把 kube-state-metrics 從 OPERATOR_STACK_SOURCES 拿掉、
 #: 一口氣去掉十幾條）時期望值會跟著變，這支測試就對它盲了。
 _EXPECTED_EXCLUDED = {
-    "platform": ["PrometheusConfigReloadFailed", "TenantExporterJobAbsent", "MassExporterOutage"],
+    # TenantExporterJobAbsent / MassExporterOutage came back in #3720: the
+    # Operator doc's ServiceMonitor names the job tenant-exporters.
+    "platform": ["PrometheusConfigReloadFailed"],
 }
 _DOCS = [REPO / "docs" / "integration" / "operator-prometheus-integration.md",
          REPO / "docs" / "integration" / "operator-prometheus-integration.en.md"]
@@ -127,7 +129,9 @@ def test_the_docs_table_lists_exactly_the_derived_rules(doc):
 @pytest.mark.parametrize("expr,portable", [
     ('vector(1)', True),
     ('up{job="threshold-exporter"} == 0', True),
-    ('up{job="tenant-exporters"} == 0', False),
+    # the documented tenant-exporter ServiceMonitor produces this job (#3720)
+    ('up{job="tenant-exporters"} == 0', True),
+    ('up{job="tenant-db-exporters"} == 0', False),
     ('absent(up)', False),
     ('tenant_api_policy_available{job="tenant-api"} == 0', True),
     ('tenant_api_policy_available{job="other"} == 0', False),
@@ -142,7 +146,7 @@ def test_the_docs_table_lists_exactly_the_derived_rules(doc):
     # the compact form reads the same metric (#1595 D1b)
     ('mysql_up==0', False),
     ('mysql_up!=1', False),
-    ('up{job="tenant-exporters"}==0', False),
+    ('up{job="tenant-exporters"}==0', True),
     # a label VALUE spelling `up` is not a reference to it
     ('kube_pod_info{pod="up"}', True),
 ])
@@ -152,7 +156,7 @@ def test_operator_unportable(expr, portable):
 
 def test_a_rule_on_an_unportable_recording_rule_is_unportable():
     groups = [{"name": "g", "rules": [
-        {"record": "x:y", "expr": 'sum(up{job="tenant-exporters"})'},
+        {"record": "x:y", "expr": 'sum(up{job="no-such-job"})'},
         {"alert": "A", "expr": "x:y > 0"},
         {"alert": "B", "expr": "vector(1)"}]}]
     kept, dropped = ms.operator_split(groups)
