@@ -295,6 +295,30 @@ keys:
     arming: pending_validation
     arming_reason: "Same 30s anchor as the shipped mysql/pg replication_lag default, not yet validated for Redis"
     arming_reason_zh: "與已出貨的 mysql／pg replication_lag 同為 30 秒，尚未對 Redis 驗證"
+  redis_connected_clients_critical:
+    pack: redis
+    tier: optional_overrides
+    value: 300
+    unit: count
+    desc: Connected clients critical
+    metric_class: saturation
+    critical_of: redis_connected_clients
+  redis_memory_used_bytes_critical:
+    pack: redis
+    tier: optional_overrides
+    value: 5368709120
+    unit: bytes
+    desc: Memory usage critical
+    metric_class: saturation
+    critical_of: redis_memory_used_bytes
+  redis_replication_lag_critical:
+    pack: redis
+    tier: optional_overrides
+    value: 50
+    unit: seconds
+    desc: Replica lag critical
+    metric_class: replication
+    critical_of: redis_replication_lag
   mongodb_connections_current:
     pack: mongodb
     tier: defaults
@@ -328,6 +352,22 @@ keys:
     arming: site_specific
     arming_reason: "Operation volume is workload, not a fault; any number is specific to the deployment"
     arming_reason_zh: "操作量是工作負載而非故障，任何數字都只適用於特定部署"
+  mongodb_connections_current_critical:
+    pack: mongodb
+    tier: optional_overrides
+    value: 450
+    unit: count
+    desc: Current connections critical
+    metric_class: saturation
+    critical_of: mongodb_connections_current
+  mongodb_replication_lag_critical:
+    pack: mongodb
+    tier: optional_overrides
+    value: 30
+    unit: seconds
+    desc: Replication lag critical
+    metric_class: replication
+    critical_of: mongodb_replication_lag
   es_heap_usage_percent:
     pack: elasticsearch
     tier: defaults
@@ -377,6 +417,38 @@ keys:
     arming: site_specific
     arming_reason: "Acceptable search latency is a service-level choice of the deployment"
     arming_reason_zh: "可接受的搜尋延遲是各部署的服務等級選擇"
+  es_disk_usage_percent_critical:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 90
+    unit: '%'
+    desc: Disk usage critical
+    metric_class: capacity
+    critical_of: es_disk_usage_percent
+  es_heap_usage_percent_critical:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 90
+    unit: '%'
+    desc: JVM heap usage critical
+    metric_class: saturation
+    critical_of: es_heap_usage_percent
+  es_pending_tasks_critical:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 150
+    unit: count
+    desc: Pending cluster tasks critical
+    metric_class: state
+    critical_of: es_pending_tasks
+  es_search_latency_ms_critical:
+    pack: elasticsearch
+    tier: optional_overrides
+    value: 2000
+    unit: ms
+    desc: Avg search latency critical
+    metric_class: latency
+    critical_of: es_search_latency_ms
   oracle_sessions_active:
     pack: oracle
     tier: defaults
@@ -442,6 +514,22 @@ keys:
       direction: over_fire
       observed: a planned stats-gather reaches 22 GB PGA
       observed_zh: 計畫性 stats-gather 會用到 22 GB PGA
+  oracle_sessions_active_critical:
+    pack: oracle
+    tier: optional_overrides
+    value: 280
+    unit: count
+    desc: Active sessions critical
+    metric_class: saturation
+    critical_of: oracle_sessions_active
+  oracle_tablespace_used_percent_critical:
+    pack: oracle
+    tier: optional_overrides
+    value: 95
+    unit: '%'
+    desc: Tablespace usage critical
+    metric_class: capacity
+    critical_of: oracle_tablespace_used_percent
   db2_connections_active:
     pack: db2
     tier: defaults
@@ -520,6 +608,22 @@ keys:
     arming: pending_validation
     arming_reason: "A share of the tablespace carries across deployments, but 85 has not been validated"
     arming_reason_zh: "佔 tablespace 的百分比可跨部署，但 85 尚未驗證"
+  db2_connections_active_critical:
+    pack: db2
+    tier: optional_overrides
+    value: 400
+    unit: count
+    desc: Active connections critical
+    metric_class: saturation
+    critical_of: db2_connections_active
+  db2_lock_wait_time_critical:
+    pack: db2
+    tier: optional_overrides
+    value: 20
+    unit: s/s
+    desc: Lock wait accumulation rate critical
+    metric_class: latency
+    critical_of: db2_lock_wait_time
   clickhouse_queries_rate:
     pack: clickhouse
     tier: defaults
@@ -570,6 +674,14 @@ keys:
     arming: ratio_pending
     arming_reason: "Absolute bytes do not carry across deployments; the portable form is a share of the server memory limit, whose export is still to be confirmed in #1320"
     arming_reason_zh: "絕對位元組跨部署沒有意義；可攜的形式是佔伺服器記憶體上限的比例，該上限能否取得待 #1320 確認"
+  clickhouse_active_connections_critical:
+    pack: clickhouse
+    tier: optional_overrides
+    value: 300
+    unit: count
+    desc: Active TCP connections critical
+    metric_class: saturation
+    critical_of: clickhouse_active_connections
   kafka_consumer_lag:
     pack: kafka
     tier: defaults
@@ -710,6 +822,22 @@ keys:
     desc: Node memory critical
     metric_class: saturation
     critical_of: rabbitmq_node_mem_percent
+  rabbitmq_connections_critical:
+    pack: rabbitmq
+    tier: optional_overrides
+    value: 1500
+    unit: count
+    desc: Connection count critical
+    metric_class: saturation
+    critical_of: rabbitmq_connections
+  rabbitmq_unacked_messages_critical:
+    pack: rabbitmq
+    tier: optional_overrides
+    value: 50000
+    unit: messages
+    desc: Unacknowledged messages critical
+    metric_class: saturation
+    critical_of: rabbitmq_unacked_messages
   jvm_gc_pause:
     pack: jvm
     tier: defaults

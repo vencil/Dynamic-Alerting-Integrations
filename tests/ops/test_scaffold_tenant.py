@@ -1766,15 +1766,19 @@ class TestPromptDefaultsSplitByKeyClass:
         return seen, res["tenants"]["db-c"]
 
     def test_flat_optional_key_empty_input_writes_nothing(self):
-        """oracle：2 個 defaults 全部按 Enter 保留，3 個平鍵一個都不落地。"""
+        """oracle：2 個 defaults 全部按 Enter 保留，3 個平鍵一個都不落地；
+        2 個 `_critical`（#3658）照 `_critical` 那一類的規矩，Enter 採用平台值。"""
         res = _gen_tenant_interactive("db-c", ["oracle"], [
             "", "",              # defaults: sessions_active / tablespace
             "", "", "",          # 平鍵 ×3 —— 留空即跳過
+            "", "",              # _critical ×2 —— Enter 仍採用平台值
             *self._NEUTRAL_TAIL,
         ])
         assert res == {"tenants": {"db-c": {
             "oracle_sessions_active": "200",
             "oracle_tablespace_used_percent": "85",
+            "oracle_sessions_active_critical": "280",
+            "oracle_tablespace_used_percent_critical": "95",
         }}}
 
     def test_flat_optional_key_typed_value_is_still_honoured(self):
@@ -1782,6 +1786,7 @@ class TestPromptDefaultsSplitByKeyClass:
         res = _gen_tenant_interactive("db-c", ["oracle"], [
             "", "",
             "60", "", "8589934592",   # wait_time_rate 填 / process_count 跳過 / pga 填
+            "", "",                   # _critical ×2 —— Enter 採用平台值
             *self._NEUTRAL_TAIL,
         ])
         assert res == {"tenants": {"db-c": {
@@ -1789,6 +1794,8 @@ class TestPromptDefaultsSplitByKeyClass:
             "oracle_tablespace_used_percent": "85",
             "oracle_wait_time_rate": "60",
             "oracle_pga_allocated_bytes": "8589934592",
+            "oracle_sessions_active_critical": "280",
+            "oracle_tablespace_used_percent_critical": "95",
         }}}
 
     def test_critical_optional_key_keeps_its_enter_default(self):
@@ -1812,6 +1819,8 @@ class TestPromptDefaultsSplitByKeyClass:
             "pg_connections", "pg_replication_lag",
             "pg_connections_critical", "pg_replication_lag_critical",
             "oracle_sessions_active", "oracle_tablespace_used_percent",
+            "oracle_sessions_active_critical",
+            "oracle_tablespace_used_percent_critical",
         }, overrides
         for key in ("oracle_wait_time_rate", "oracle_process_count",
                     "oracle_pga_allocated_bytes"):
@@ -1827,7 +1836,10 @@ class TestPromptDefaultsSplitByKeyClass:
         assert "(300 count)" not in flat[0], (
             "still rendered in the Enter-default shape: " + flat[0])
 
-        valued = [p for p in prompts if "oracle_sessions_active" in p]
+        # Exact key, not substring: `oracle_sessions_active_critical` (#3658)
+        # contains this name and has its own prompt.
+        valued = [p for p in prompts
+                  if p.strip().startswith("oracle_sessions_active [")]
         assert len(valued) == 1, prompts
         assert "(200 count)" in valued[0], (
             "the defaults tier prompt is a UX contract and must not change: "

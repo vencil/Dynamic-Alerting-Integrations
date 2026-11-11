@@ -639,11 +639,12 @@ jobs:
               # is wrong — while naming an EMPTY path. The required fields come
               # from that helper's own output contract
               # (`target<TAB>dir<TAB>scope`, `unmanaged<TAB>path`,
-              # `excluded<TAB>path<TAB>reason`, `removed<TAB>dir`).
+              # `excluded<TAB>path<TAB>reason`, `removed<TAB>dir`,
+              # `nested<TAB>inner<TAB>outer`).
               bad_row=0
               if [ -z "$kind" ] || [ -z "$a" ]; then
                 bad_row=1
-              elif { [ "$kind" = "target" ] || [ "$kind" = "excluded" ]; } && [ -z "$b" ]; then
+              elif { [ "$kind" = "target" ] || [ "$kind" = "excluded" ] || [ "$kind" = "nested" ]; } && [ -z "$b" ]; then
                 bad_row=1
               fi
               if [ "$bad_row" -eq 1 ]; then
@@ -687,6 +688,18 @@ jobs:
                            echo "這個 PR 刪除了整棵樹（其下變動的 \`_\` 開頭檔全是刪除，且根目錄在 HEAD 已不存在），沒有剩下的設定可驗。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::notice::${a} is removed by this PR — nothing left to validate" ;;
+                # #3694 follow-up: a conf.d inside a conf.d. Which one is the
+                # deployed --config-dir decides the effective config and cannot
+                # be read off the tree, so validating either one would be green
+                # about the other. Refused, red, with the way out.
+                nested)    echo "### \`$a\` — NOT CHECKED: nested inside \`$b\`" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "\`conf.d\` 底下還有 \`conf.d\`：以內層或外層當 \`--config-dir\` 會得到不同的有效設定（walker 會走進子目錄、外層的 \`_defaults\` 會往下套），從目錄結構判斷不出哪一個才是部署的根，所以這個佈局不能被判為通過。請把佈局攤平：內層改名（不叫 \`conf.d\`），或搬出外層樹。" >> "$REPORT"
+                           echo >> "$REPORT"
+                           echo "::error::${a} is a conf.d nested inside ${b} — unsupported layout, flatten it (not validated)"
+                           # max, not assignment: a target row before this one
+                           # may already have raised WORST to 3.
+                           if [ "$WORST" -lt 2 ]; then WORST=2; fi ;;
                 # The whole point of guard_defaults_scopes.py is that a file
                 # it cannot place is reported rather than dropped. A `case`
                 # with no catch-all would drop a third kind on the floor and
@@ -698,7 +711,7 @@ jobs:
                 # In the isolated case this section IS the whole comment.
                 *)         echo "### \`${a}\` — NOT CHECKED (unrecognised scope kind \`${kind}\`)" >> "$REPORT"
                            echo >> "$REPORT"
-                           echo "此列的 kind 是 \`${kind}\`，而本 workflow 只認得 \`target\`、\`unmanaged\`、\`excluded\` 與 \`removed\`。這棵樹**沒有被驗證**；請對齊 \`guard_defaults_scopes.py\` 與本檔的 kind 詞彙表後重跑。" >> "$REPORT"
+                           echo "此列的 kind 是 \`${kind}\`，而本 workflow 只認得 \`target\`、\`unmanaged\`、\`excluded\`、\`removed\` 與 \`nested\`。這棵樹**沒有被驗證**；請對齊 \`guard_defaults_scopes.py\` 與本檔的 kind 詞彙表後重跑。" >> "$REPORT"
                            echo >> "$REPORT"
                            echo "::error::unrecognised scope kind '${kind}' for ${a} — guard_defaults_scopes.py and this workflow disagree"
                            WORST=2 ;;

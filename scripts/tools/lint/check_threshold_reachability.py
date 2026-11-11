@@ -228,14 +228,14 @@ KNOWN_UNWIRED: dict[str, str] = {
 # ⚠️ "chart-armed" here means A TENANT CAN ARM IT, not "it fires out of the
 # box". A `_critical` key counts as reachable when its BASE is supplied (the
 # `resolveCriticalRows` path) — but `resolveCriticalRows` iterates TENANT
-# OVERRIDES, so no `_critical` key is ever platform-supplied. Today 0 of the 16
-# demanded `_critical` keys sit in the chart set and structurally none can.
+# OVERRIDES, so no `_critical` key is ever platform-supplied: none of the
+# demanded `_critical` keys sits in the chart set, and structurally none can.
 def _not_chart_armed() -> frozenset[str]:
     """The keys the registry says the chart does NOT ship (D-A A1).
 
     Derived from each key's `arming` (and a `_critical`'s base) by
     `_registry_lib.not_chart_armed_keys` — this used to be a hand-kept
-    frozenset of 45 names here, a second copy of a decision the registry
+    frozenset of 61 names here, a second copy of a decision the registry
     now states with a reason. The gate still READS the shipped values.yaml
     (`_chart_supply`) and compares, so a generator that stopped honouring
     `arming` would still turn it red.

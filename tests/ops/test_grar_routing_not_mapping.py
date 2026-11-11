@@ -82,7 +82,10 @@ class TestTenantRoutingNotMapping:
 
     def test_a_string_gets_no_boolean_hint(self, tmp_path):
         out = _gar(_tree(tmp_path, "slack"), "--output-alertmanager", "--dry-run").stderr
-        assert "got string 'slack'" in out and "quoted string ('off')" not in out, out
+        # #1560 ⑤-b (round 3): the shape, never the text — a string where a
+        # routing block belongs may be a pasted webhook URL.
+        assert "got a non-empty string" in out and "slack" not in out.split("got ", 1)[1].split("\n", 1)[0]
+        assert "quoted string ('off')" not in out, out
 
     @pytest.mark.parametrize("value", ["disable", "'off'", "off", "' DISABLED '", "'false'",
                                        "Disabled"])
@@ -131,7 +134,7 @@ class TestRoutingDefaultsNotMapping:
         p.write_text(p.read_text(encoding="utf-8") if p.exists() else "", encoding="utf-8")
         with p.open("a", encoding="utf-8") as f:
             f.write("_routing_defaults: false\n")
-        line = f"WARN: _routing_defaults in {where} must be a mapping, got boolean False"
+        line = f"WARN: _routing_defaults in {where} must be a mapping, got boolean —"
         dry = _gar(d, "--output-alertmanager", "--dry-run")
         assert dry.returncode == 0 and line in dry.stderr and "skipping" in dry.stderr, dry.stderr
         assert _gar(d, "--validate").returncode == 1

@@ -302,6 +302,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: db2_connections_active
               tenant: db-a
             exp_annotations:
               summary: "DB2 high active connections on db-a"
@@ -317,6 +318,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: db2_connections_active
               tenant: db-b
             exp_annotations:
               summary: "DB2 high active connections on db-b"
@@ -491,6 +493,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: db2_lock_wait_time
               tenant: db-a
             exp_annotations:
               summary: "DB2 high lock wait time on db-a"
@@ -505,6 +508,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: db2_lock_wait_time
               tenant: db-b
             exp_annotations:
               summary: "DB2 high lock wait time on db-b"

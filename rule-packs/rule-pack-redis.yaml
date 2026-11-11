@@ -20,6 +20,22 @@
 #       replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231
 #       owner call); #1196 C identity fix, no alias
 #       未啟用（待驗證）：與已出貨的 mysql／pg replication_lag 同為 30 秒，尚未對 Redis 驗證
+#
+# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
+# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
+# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
+# 它讀的是 defaults[base]，base 沒有值就整列丟棄
+# （components/threshold-exporter/app/pkg/config/resolve.go）。
+# 而下列每個 key 的 base 都**未**標 [chart-default]
+# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
+# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
+# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
+# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
+# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
+# 一格裝飾（#1311）。
+#   redis_connected_clients_critical: 300   # count — Connected clients critical
+#   redis_memory_used_bytes_critical: 5368709120   # bytes — Memory usage critical
+#   redis_replication_lag_critical: 50   # seconds — Replica lag critical
 # <<< GENERATED:threshold-registry:pack-redis
 #
 # Tenant config 範例 (conf.d/redis-prod.yaml):
@@ -71,14 +87,23 @@ groups:
       - record: tenant:alert_threshold:redis_memory_used_bytes
         expr: max by(tenant) (user_threshold{component="redis", metric="memory_used_bytes", severity="warning"})
 
+      - record: tenant:alert_threshold:redis_memory_used_bytes_critical
+        expr: max by(tenant) (user_threshold{component="redis", metric="memory_used_bytes", severity="critical"})
+
       - record: tenant:alert_threshold:redis_connected_clients
         expr: max by(tenant) (user_threshold{component="redis", metric="connected_clients", severity="warning"})
+
+      - record: tenant:alert_threshold:redis_connected_clients_critical
+        expr: max by(tenant) (user_threshold{component="redis", metric="connected_clients", severity="critical"})
 
       - record: tenant:alert_threshold:redis_evicted_keys_rate
         expr: max by(tenant) (user_threshold{component="redis", metric="evicted_keys_rate", severity="warning"})
 
       - record: tenant:alert_threshold:redis_replication_lag
         expr: max by(tenant) (user_threshold{component="redis", metric="replication_lag", severity="warning"})
+
+      - record: tenant:alert_threshold:redis_replication_lag_critical
+        expr: max by(tenant) (user_threshold{component="redis", metric="replication_lag", severity="critical"})
 
   # -------------------------------------------------------
   # Alert Rules: Redis
@@ -112,6 +137,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
+          metric_group: "redis_memory_used_bytes"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis high memory usage on {{ $labels.tenant }}"
@@ -120,6 +146,33 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 記憶體閾值超過 — 請評估 maxmemory 政策"
           description: "Memory usage: {{ $value | humanize1024 }}B"
           description_zh: "記憶體使用量: {{ $value | humanize1024 }}B"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # Critical tier (opt-in via redis_memory_used_bytes_critical)
+      - alert: RedisHighMemoryCritical
+        expr: |
+          (
+            tenant:redis_memory_used_bytes:max
+            > on(tenant) group_left
+            tenant:alert_threshold:redis_memory_used_bytes_critical
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+          maintenance: mute
+          metric_group: "redis_memory_used_bytes"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Redis memory critical on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Redis 記憶體使用量達嚴重水位"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis memory at critical level — check headroom to maxmemory (eviction / OOM risk); free memory or raise maxmemory"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 記憶體達嚴重水位 — 請確認距 maxmemory 的餘裕（有驅逐／OOM 風險）；釋放記憶體或調高 maxmemory"
+          description: "Memory usage: {{ $value | humanize1024 }}B (critical threshold exceeded)"
+          description_zh: "記憶體使用量: {{ $value | humanize1024 }}B（超過嚴重閾值）"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
@@ -137,6 +190,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
+          metric_group: "redis_connected_clients"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis high connection count on {{ $labels.tenant }}"
@@ -145,6 +199,33 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 連線數過高 — 請檢查客戶端連線池"
           description: "{{ $value }} connected clients"
           description_zh: "{{ $value }} 個已連線的客戶端"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # Critical tier (opt-in via redis_connected_clients_critical)
+      - alert: RedisHighConnectionsCritical
+        expr: |
+          (
+            tenant:redis_connected_clients:max
+            > on(tenant) group_left
+            tenant:alert_threshold:redis_connected_clients_critical
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+          maintenance: mute
+          metric_group: "redis_connected_clients"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Redis connection count critical on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Redis 連線數嚴重過高"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis connections at critical level — check headroom to maxclients; find the leaking client and cap its pool"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 連線數達嚴重水位 — 請確認距 maxclients 的餘裕；找出洩漏連線的客戶端並限制其連線池"
+          description: "{{ $value }} connected clients (critical threshold exceeded)"
+          description_zh: "{{ $value }} 個已連線的客戶端（超過嚴重閾值）"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
@@ -187,6 +268,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
+          metric_group: "redis_replication_lag"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Redis replication lag on {{ $labels.tenant }}"
@@ -195,6 +277,33 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 複製延遲 — 請檢查副本狀態"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s"
           description_zh: "複製延遲: {{ $value | printf \"%.1f\" }}s"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # Critical tier (opt-in via redis_replication_lag_critical)
+      - alert: RedisReplicationLagCritical
+        expr: |
+          (
+            tenant:redis_replication_lag:max
+            > on(tenant) group_left
+            tenant:alert_threshold:redis_replication_lag_critical
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 2m
+        labels:
+          severity: critical
+          maintenance: mute
+          metric_group: "redis_replication_lag"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Redis replication lag critical on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 的 Redis 複製延遲嚴重"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis replica far behind — reads from it are stale and a failover now loses writes; check the replication link and backlog now"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 副本嚴重落後 — 從副本讀到的資料過舊，此時故障轉移會遺失寫入；請立即檢查複製連線與 backlog"
+          description: "Replication lag: {{ $value | printf \"%.1f\" }}s (critical threshold exceeded)"
+          description_zh: "複製延遲: {{ $value | printf \"%.1f\" }}s（超過嚴重閾值）"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"

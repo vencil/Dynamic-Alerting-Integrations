@@ -17,23 +17,23 @@ lang: zh
 
 | Rule Pack | File | Recording Rules | Alert Rules | Total |
 |-----------|------|-----------------|-------------|-------|
-| Clickhouse | rule-pack-clickhouse.yaml | 11 | 6 | 17 |
-| DB2 | rule-pack-db2.yaml | 13 | 8 | 21 |
-| Elasticsearch | rule-pack-elasticsearch.yaml | 10 | 7 | 17 |
+| Clickhouse | rule-pack-clickhouse.yaml | 12 | 7 | 19 |
+| DB2 | rule-pack-db2.yaml | 15 | 10 | 25 |
+| Elasticsearch | rule-pack-elasticsearch.yaml | 14 | 11 | 25 |
 | JVM | rule-pack-jvm.yaml | 9 | 7 | 16 |
 | Kafka | rule-pack-kafka.yaml | 13 | 8 | 21 |
 | Kubernetes | rule-pack-kubernetes.yaml | 30 | 14 | 44 |
 | Liveness | rule-pack-liveness.yaml | 0 | 1 | 1 |
 | Mariadb | rule-pack-mariadb.yaml | 12 | 17 | 29 |
-| Mongodb | rule-pack-mongodb.yaml | 8 | 8 | 16 |
+| Mongodb | rule-pack-mongodb.yaml | 10 | 10 | 20 |
 | Nginx | rule-pack-nginx.yaml | 9 | 6 | 15 |
 | Operational | rule-pack-operational.yaml | 0 | 4 | 4 |
-| Oracle | rule-pack-oracle.yaml | 11 | 7 | 18 |
+| Oracle | rule-pack-oracle.yaml | 13 | 9 | 22 |
 | Platform | rule-pack-platform.yaml | 0 | 54 | 54 |
 | Postgresql | rule-pack-postgresql.yaml | 8 | 8 | 16 |
-| Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 7 | 19 |
-| Redis | rule-pack-redis.yaml | 9 | 6 | 15 |
-| **TOTAL** | | **155** | **168** | **323** |
+| Rabbitmq | rule-pack-rabbitmq.yaml | 14 | 9 | 23 |
+| Redis | rule-pack-redis.yaml | 12 | 9 | 21 |
+| **TOTAL** | | **171** | **184** | **355** |
 
 ## 架構說明
 

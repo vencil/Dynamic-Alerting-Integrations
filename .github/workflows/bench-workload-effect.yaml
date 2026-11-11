@@ -114,6 +114,16 @@ on:
         description: "Extra test files to overlay besides *bench_test.go (space-separated, relative to app/). The default is the measured dependency closure. Empty = bench files only, which yields a HYBRID tree - the closure probe will say so."
         required: false
         default: 'config_test.go config_debounce_test.go config_metrics_test.go watchloop_test.go'
+      # #2348: the diagnostic reference is decoupled from the nightly one.
+      # Empty = the pinned nightly reference (.github/bench-reference.yaml), the
+      # only choice under which (W/R)x(M/W) can be checked against the nightly
+      # M/R. A SHA = any commit that main contains, e.g. the commit just before
+      # a step you are bisecting. Validated below: 40-hex, and an ancestor of
+      # main per the compare API — never a ref from outside this repo.
+      reference_sha:
+        description: "Reference commit (40-hex SHA that main contains). Empty = the pinned nightly reference from .github/bench-reference.yaml. Any other SHA: the summary says the nightly M/R cross-check does not apply."
+        required: false
+        default: ''
       measure_implementation:
         description: "Also measure M/W (an ESTIMATE of the implementation effect; preconditions are documented at the top of this file). Off = W/R only, halving time and cost."
         type: boolean
@@ -128,9 +138,17 @@ on:
   # 所以掛一個只匹配「這支 workflow 自己」的 pull_request 觸發，讓引入它、
   # 以及日後任何修改它的 PR 都自測一次。`bench-gate-pr.yaml` 用的是同一個
   # pattern（它的 paths 也列了自己，見 benchmark-playbook.md）。
+  # #2348: the self-test builds again (reference = main's tip under the PR), so a PR that edits
+  # one of the two scripts the measurement steps run starts it too —
+  # test_workflow_paths_cover_every_script_their_jobs_run holds this list.
   pull_request:
+    # Only PRs into main: the self-test's reference is the merge commit's first
+    # parent, which is then main's tip (see "Resolve the reference version").
+    branches: [main]
     paths:
       - '.github/workflows/bench-workload-effect.yaml'
+      - 'scripts/tools/ops/bench_interleave.sh'
+      - 'scripts/tools/dx/pair_bench_ratio.py'
 
 # 只讀。本 job 不開票、不留言、不寫 label —— 見上面的「不是判定器」。
 # fork PR 的 self-test 拿到的也是唯讀 token，而本 job 只讀，所以不需要降級路徑。
@@ -281,22 +299,75 @@ jobs:
             echo "::warning::預估 ${est} 分鐘，已超過預算 ${BUDGET_MIN} 的一半（選中 ${sel} 支）。確認這是你要的範圍。"
           fi
 
-      # 與 bench-record.yaml 同一份 pin、同一組 shape check。⛔ 但這裡讀不到
-      # 就直接 exit 1（夜跑是走 output 降級）—— 理由見檔頭的失敗策略。
-      - name: Read the pinned reference version
+      # Which reference R is (#2348). Three sources, decided here once:
+      #   * dispatch, `reference_sha` empty → the pinned nightly reference
+      #     (`.github/bench-reference.yaml`, same pin and shape check as
+      #     bench-record.yaml); ⛔ unreadable ⇒ exit 1 (header: failure policy);
+      #   * dispatch, `reference_sha` set → that commit, only if it is 40-hex AND
+      #     main contains it (compare API: main is `ahead` of it or `identical`);
+      #   * pull_request self-test → the FIRST PARENT of the checked-out merge
+      #     commit, i.e. main's tip that this PR was merged onto. W is that merge
+      #     commit's test code, so R and W then differ by this PR's own changes
+      #     only. ⛔ Not the merge base: a PR branched before a merge that changed
+      #     benchmark code together with product API would overlay today's
+      #     benchmarks onto an older tree and go red for a reason unrelated to
+      #     the PR (blind review; 2026-10-15's main already took 11 errors). Not
+      #     the pinned reference either: it has not compiled under the overlay
+      #     since 2026-09-23 (#2348). The pin is still probed below, as a notice.
+      # ⛔ Every value reaches the script through env, never `${{ }}` in `run:`.
+      - name: Resolve the reference version
         id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_SHA: ${{ github.event.inputs.reference_sha }}
         run: |
           set -euo pipefail
-          tag=$(sed -n 's/^tag:[[:space:]]*//p' .github/bench-reference.yaml | head -n1)
-          sha=$(sed -n 's/^sha:[[:space:]]*//p' .github/bench-reference.yaml | head -n1)
-          if ! printf '%s' "$tag" | grep -qE '^exporter/v[0-9]+\.[0-9]+\.[0-9]+$' \
-             || ! printf '%s' "$sha" | grep -qE '^[0-9a-f]{40}$'; then
-            echo "::error::.github/bench-reference.yaml has no usable tag+sha pair (tag='${tag}' sha='${sha}')"
+          pin_tag=$(sed -n 's/^tag:[[:space:]]*//p' .github/bench-reference.yaml | head -n1)
+          pin_sha=$(sed -n 's/^sha:[[:space:]]*//p' .github/bench-reference.yaml | head -n1)
+          if ! printf '%s' "$pin_tag" | grep -qE '^exporter/v[0-9]+\.[0-9]+\.[0-9]+$' \
+             || ! printf '%s' "$pin_sha" | grep -qE '^[0-9a-f]{40}$'; then
+            echo "::error::.github/bench-reference.yaml has no usable tag+sha pair (tag='${pin_tag}' sha='${pin_sha}')"
+            exit 1
+          fi
+          echo "pinned_sha=$pin_sha" >> "$GITHUB_OUTPUT"
+          if [ "${SELF_TEST}" = "true" ]; then
+            # The commit object names its parents even in a depth-1 clone. A
+            # pull_request checkout is the merge commit: exactly two parents.
+            parents=$(git cat-file -p HEAD | sed -n 's/^parent //p')
+            if [ "$(printf '%s\n' "$parents" | grep -c .)" -ne 2 ]; then
+              echo "::error::the self-test expects the pull_request merge commit (two parents); HEAD has: ${parents:-none}"
+              exit 1
+            fi
+            sha=$(printf '%s\n' "$parents" | head -n1)
+            tag="main tip under this PR (self-test)"; kind=self-test
+          elif [ -z "${INPUT_SHA}" ] || [ "${INPUT_SHA}" = "$pin_sha" ]; then
+            # The pinned SHA typed in by hand IS the pinned reference (blind
+            # review: it used to get the "not the nightly reference" banner).
+            sha=$pin_sha; tag=$pin_tag; kind=pinned
+          else
+            # ⛔ `[[ =~ ]]`, not `grep -qE '^…$'`: grep matches per LINE, so a
+            # value with a trailing newline passed (measured by the test below).
+            if ! [[ "$INPUT_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::reference_sha must be a full 40-hex commit SHA, got '${INPUT_SHA}'"
+              exit 1
+            fi
+            # main contains it ⇔ main is ahead of it (or it is main's tip).
+            status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${INPUT_SHA}...main" --jq '.status') || status=unreadable
+            case "$status" in
+              ahead|identical) ;;
+              *) echo "::error::reference_sha ${INPUT_SHA} is not a commit main contains (compare status: ${status}) — refusing to build or run it"
+                 exit 1 ;;
+            esac
+            sha=$INPUT_SHA; tag="dispatch input"; kind=input
+          fi
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::could not resolve a reference commit (got '${sha}')"
             exit 1
           fi
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "reference version: $tag ($sha)"
+          echo "kind=$kind" >> "$GITHUB_OUTPUT"
+          echo "reference version: $tag ($sha) [$kind]"
 
       - name: Checkout reference version (R)
         uses: actions/checkout@v6
@@ -430,6 +501,9 @@ jobs:
       #    分流依據是**編譯器自己點名的檔案**，不是我們猜的相依；`-gcflags=-e` 關掉
       #    10 個錯就截斷的預設，否則被截掉的那幾行可能正是 helper 檔的錯。
       - name: Verify the overlay tree builds
+        env:
+          REF_KIND: ${{ steps.ref.outputs.kind }}
+          REF_SHA: ${{ steps.ref.outputs.sha }}
         run: |
           set -euo pipefail
           mkdir -p .build
@@ -444,7 +518,7 @@ jobs:
             files=$( sed -n 's|^\(\./\)\{0,1\}\([^: ]*\.go\):[0-9][0-9]*:[0-9][0-9]*:.*|\2|p' "$log" | sort -u )
             bench_files=$( printf '%s\n' "$files" | grep -E '(^|/)[^/]*bench_test\.go$' || true )
             if [ -n "$bench_files" ]; then
-              echo "::error::the overlay tree does not build ($pkg): compile errors in derived bench file(s): $(printf '%s\n' "$bench_files" | tr '\n' ' '). These are always overlaid (derived_glob '*bench_test.go'), so narrowing overlay_helpers cannot fix this — main's benchmark code has outgrown the pinned reference's API, and W/R is unavailable until the reference is moved. Moving it is an absorption event (.github/bench-reference.yaml header, ADR-032 open question 1); see benchmark-playbook.md, section on workload-definition effect."
+              echo "::error::the overlay tree does not build ($pkg): compile errors in derived bench file(s): $(printf '%s\n' "$bench_files" | tr '\n' ' '). These are always overlaid (derived_glob '*bench_test.go'), so narrowing overlay_helpers cannot fix this — main's benchmark code uses API this reference (${REF_KIND}: ${REF_SHA}) does not have. Dispatch again with a newer reference_sha (any commit main contains, e.g. the one just before the step you are decomposing). If the benchmark changed together with that API in one PR, the two effects cannot be separated across it at all (#2348); see benchmark-playbook.md, section on workload-definition effect."
             elif [ -n "$files" ]; then
               echo "::error::the overlay tree does not build ($pkg): compile errors only in helper/non-bench file(s): $(printf '%s\n' "$files" | tr '\n' ' '). Narrow overlay_helpers, or this triage needs the reference moved."
             else
@@ -550,6 +624,67 @@ jobs:
           echo "closed=${closed}" >> "$GITHUB_OUTPUT"
           cat .build/closure-report.md
 
+      # Self-test only: does the overlay still build on the PINNED nightly
+      # reference? A notice, never a failure (#2348). The self-test itself runs
+      # on main's tip under the PR and stays green whenever the workflow works; without
+      # this line that green would read as "the default dispatch works too",
+      # and today it does not.
+      # ⛔ The event itself, not `env.SELF_TEST`: same meaning (SELF_TEST is
+      # defined as this test), but CodeQL's cache-poisoning query does not
+      # evaluate env, so it read these two steps as reachable from the
+      # privileged workflow_dispatch context and raised a high alert (#3727).
+      # They are not: they run only on pull_request, which has no privilege.
+      - name: Checkout the pinned nightly reference (self-test probe)
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.ref.outputs.pinned_sha }}
+          path: .pinref
+          persist-credentials: false
+
+      - name: Probe the pinned nightly reference (self-test, notice only)
+        if: github.event_name == 'pull_request'
+        env:
+          PINNED_SHA: ${{ steps.ref.outputs.pinned_sha }}
+        run: |
+          # ⛔ `set +e` on purpose: GitHub runs `run:` under `bash -e`, so
+          # `log=$(go test …)` failing — the very case this probe exists to
+          # report — ended the step with exit 1 before the notice (measured on
+          # #3727's first self-test, run 42846211639). This step never fails.
+          set +e -uo pipefail
+          MAIN_APP=components/threshold-exporter/app
+          P_APP=.pinref/components/threshold-exporter/app
+          # Same tree the overlay step builds: delete the reference's bench
+          # files first, so a benchmark main deleted or renamed cannot linger.
+          ( cd "$P_APP" && find . -name '*bench_test.go' -type f -delete )
+          while read -r rel; do
+            mkdir -p "$P_APP/$(dirname "$rel")"
+            cp "$MAIN_APP/$rel" "$P_APP/$rel"
+          done < .build/overlay-files.txt
+          # Three outcomes, decided by go's exit code first (blind review: a
+          # failure with no file:line — a network timeout, `go.mod needs
+          # update` — used to count 0 errors and read as "builds").
+          state=builds; errors=0
+          for pkg in "." "./pkg/config"; do
+            log=$( (cd "$P_APP" && go test -c -gcflags=-e -o /dev/null "$pkg") 2>&1 )
+            rc=$?
+            [ "$rc" -eq 0 ] && continue
+            n=$(printf '%s\n' "$log" | grep -cE '^[^: ]+\.go:[0-9]+:[0-9]+:')
+            if [ "$n" -gt 0 ]; then
+              state=broken; errors=$((errors + n))
+            elif [ "$state" != broken ]; then
+              state=unknown
+            fi
+          done
+          case "$state" in
+            builds)  msg="the overlay also builds on the pinned nightly reference ${PINNED_SHA}: a default dispatch would work" ;;
+            broken)  msg="the overlay does NOT build on the pinned nightly reference ${PINNED_SHA} (${errors} compile error lines): a default dispatch fails at the build check; pass reference_sha (#2348)" ;;
+            *)       msg="could not probe the pinned nightly reference ${PINNED_SHA}: go failed without naming a file (not a compile verdict) — whether a default dispatch works is UNKNOWN" ;;
+          esac
+          echo "::notice::${msg}"
+          printf '\n> ℹ️ self-test probe: %s\n' "$msg" >> "$GITHUB_STEP_SUMMARY"
+          exit 0
+
       # ⚠️ ACCEPTED SECURITY FINDING —— CodeQL `actions/cache-poisoning/poisonable-step`
       # （PR #1467 的 alert #392–#395，4 筆 high），在 GitHub UI 標為 `won't fix`。
       # 記在這裡，是因為**只活在下拉選單裡的 dismissal，對下一個讀這個檔的人是隱形的**
@@ -566,8 +701,14 @@ jobs:
       # 它就是存在。
       #
       # WHAT IS MITIGATED.
-      #   - 參考版本釘的是**不可變的 commit SHA**（tag 可被重新指向；見
-      #     `.github/bench-reference.yaml`），改它需要一個 PR。
+      #   - 參考版本一律是**不可變的 commit SHA**（tag 可被重新指向；見
+      #     `.github/bench-reference.yaml`），而且一律是 **main 已經包含的 commit**
+      #     ——也就是每一個都經過 PR 合入（#2348 起有三個來源）：釘死的夜跑參考
+      #     （改它需要一個 PR）；dispatch 的 `reference_sha`（40 碼 hex，且 compare
+      #     API 回 main `ahead`／`identical`，否則 exit 1，不 checkout）；PR self-test
+      #     的 merge commit 的第一個 parent（self-test 只對目標為 main 的 PR 觸發，
+      #     所以那是 main 的 tip；而 pull_request 情境本來就沒有特權）。fork 的 commit
+      #     不在 main 的歷史裡，過不了 compare 那一關。
       #   - `permissions: contents: read`，且兩次 checkout 都 `persist-credentials: false`
       #     ⇒ 工作區裡沒有可用的 token。
       #   - 本 job **完全不碰共享 cache**：`cache: false`，且全檔只用到 `actions/checkout`
@@ -580,6 +721,13 @@ jobs:
       # 是**同一個形狀再加上 release 資產路徑**（它的產物會變成公開 Release 資產），風險
       # 更高，其 alert #390 已被接受；本 job 嚴格更低風險，所以接受它是前者的推論，不是
       # 一次新的讓步。
+      #
+      # #2348 新增的「Probe the pinned nightly reference」被同一條規則點名（PR #3727，
+      # alert #489，1 筆 high；owner 2026-11-11 決定比照 #392–#395 標 `won't fix`）。形狀相同：checkout 釘死參考後
+      # `go test -c` 編譯它；風險嚴格更低——那一步只在 `pull_request` 執行（step 的
+      # `if: github.event_name == 'pull_request'`，而 pull_request 情境沒有特權）。
+      # ⚠️ 實測：把條件從 `env.SELF_TEST` 改成直接判斷事件，警告仍在——這條規則不採信
+      # step 層的事件條件，所以不要再為了它改寫條件。
       #
       # ⛔ RE-EXAMINE IF：本 job 取得 `contents: read` 以外的權限／開始使用任何 cache
       # action／其產物開始被任何對外流程消費／參考版本指向本 repo 以外的地方。
@@ -662,6 +810,7 @@ jobs:
         env:
           REF_TAG: ${{ steps.ref.outputs.tag }}
           REF_SHA: ${{ steps.ref.outputs.sha }}
+          REF_KIND: ${{ steps.ref.outputs.kind }}
         run: |
           set -uo pipefail
           {
@@ -679,12 +828,24 @@ jobs:
             fi
             echo "參考版本 \`${REF_TAG}\` (\`${REF_SHA}\`) ｜ bench filter \`${BENCH_RE}\`"
             echo
+            # #2348: only the pinned nightly reference makes the M/R line below
+            # comparable with bench-paired.json. Say so, every time it is not.
+            if [ "${REF_KIND:-}" != "pinned" ]; then
+              echo "> ⚠️ **參考版本不是夜跑的釘死參考**（來源：\`${REF_KIND:-未解析}\`）。下面的 \`M / R\`"
+              echo "> 量的是 main 相對**這個** commit，**不能**拿去對夜跑的 \`bench-paired.json\`；"
+              echo "> 下面「讀數字之前」的兩道對照因此只剩 canary 那一道。"
+              echo
+            fi
             echo '```text'
             echo 'R = 參考實作 + 參考測試碼      W = 參考實作 + main 測試碼      M = main 實作 + main 測試碼'
             echo
             echo 'W / R  = 工作定義效應的估計（兩側同一份實作）'
             echo 'M / W  = 實作效應的估計（兩側同一份測試碼）'
-            echo 'M / R  = 夜跑發布的混淆值 = (W/R) x (M/W)   ← 拿去對當夜 bench-paired.json'
+            if [ "${REF_KIND:-}" = "pinned" ]; then
+              echo 'M / R  = 夜跑發布的混淆值 = (W/R) x (M/W)   ← 拿去對當夜 bench-paired.json'
+            else
+              echo 'M / R  = (W/R) x (M/W)，相對本次參考 commit   ← 不是夜跑的 M/R，不能對 bench-paired.json'
+            fi
             echo '```'
             echo
             echo "⛔ **這兩個是估計，不是已證明的因果分解。** \`W/R\` 要讀成純工作定義效應，前提是"
@@ -730,10 +891,15 @@ jobs:
             echo "1. **對照測試（canary）**。\`bench_interleave.sh\` 把**同一個** canary 執行檔跑進兩側，"
             echo "   所以 \`BenchmarkControlCanaryCPU\` / \`ControlCanarySleep\` 的真值恆為 1.000。"
             echo "   上面兩份 JSON 裡它們若不接近 0%，這次執行本身就是髒的，下面不用看了。"
+            if [ "${REF_KIND:-}" = "pinned" ]; then
             echo "2. **(W/R) × (M/W) 應該對得上當夜 \`bench-paired.json\` 的 M/R**。對不上就是前提有問題。"
             echo "   ⚠️ 但要扣掉一個合法差異：夜跑的 M 是**那一夜的 main HEAD**，本 job 的 M 是**現在的 main**。"
             echo "   main 在這中間動過的話，兩者本來就不該完全相等 —— 比對時要挑一個 main 沒動多少的時間點，"
             echo "   或直接拿本 job 的 M/R 去比，而不是硬要對上舊的一夜。"
+            else
+            echo "2. ⛔ **本次沒有這道對照**：參考版本不是夜跑的釘死參考，夜跑沒有可對帳的數字。"
+            echo "   能用的對照只剩第 1 點的 canary——把這次結果的可信度照此打折。"
+            fi
             echo
             echo "⛔ 這是診斷，不是判定：本 job 不開票、不關票、不改夜跑。"
           } >> "$GITHUB_STEP_SUMMARY"

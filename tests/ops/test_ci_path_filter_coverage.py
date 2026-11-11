@@ -3857,22 +3857,14 @@ WORKFLOW_PATHS_PENDING: dict[tuple[str, str], str] = {}
 # `test_workflow_paths_not_triggered_is_still_justified` turns red when the
 # claim stops holding, `..._is_still_needed` when the pair becomes covered
 # (the entry would then excuse a regression of the same pair). Both red.
-# ⚠️ bench-workload-effect's own PR self-test is known-red before the
-# overlay build until the reference version moves (#2348,
-# benchmark-playbook.md), so triggering it would buy a red check, not a run
-# of these scripts. Revisit these two entries when #2348 lands.
+# (bench-workload-effect.yaml's two entries left in #2348: its self-test now
+# uses the merge commit's first parent (main's tip) as the reference, builds,
+# and runs both scripts,
+# so they are in its `on.pull_request.paths` instead.)
 # ⚠️ bench-gate-pr.yaml documents a future FLIP that drops its pull_request
 # block; the "workflow" entries naming it then turn red, correctly.
 WORKFLOW_PATHS_NOT_TRIGGERED: dict[tuple[str, str],
                                   tuple[str, str, str | None, str]] = {
-    ("bench-workload-effect.yaml", "scripts/tools/ops/bench_interleave.sh"): (
-        "workflow", "bench-gate-pr.yaml", "scripts/tools/ops/bench_gate_compare.sh",
-        "its PR self-test cannot reach the script before #2348; "
-        "bench-gate-pr.yaml runs it on PRs"),
-    ("bench-workload-effect.yaml", "scripts/tools/dx/pair_bench_ratio.py"): (
-        "pytest", "tests/dx/test_pair_bench_ratio.py", None,
-        "its PR self-test cannot reach the script before #2348; no PR "
-        "workflow runs it, its unit tests do"),
     ("bench-workload-record.yaml", "scripts/tools/ops/bench_gate_compare.sh"): (
         "workflow", "bench-gate-pr.yaml", None,
         "its PR gate is test-file shaped (bench inputs) and a full "

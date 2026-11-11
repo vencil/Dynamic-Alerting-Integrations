@@ -381,11 +381,26 @@ _routing:
   allowed_domains: ["*.example.com"]
   shared_secrets:
     corp-alerting: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
+    corp-smtp: {secret: corp-smtp, fields: [auth_password]}
+    corp-hook: {secret: corp-hook, fields: [http_config.basic_auth.password]}
   ```
 
-  `secret` is the real Secret name and may not start with `da-` (it would collide with a tenant's derived name); `fields` lists only fields whose content is the destination itself, never `auth_password`. With no policy file, or no `shared_secrets` in it, there is no shared exception at all. A receiver that uses any shared Secret may not set `http_config.proxy_url`: the tenant chose that proxy, and it would see the request to the shared destination (`secret_ref_proxy_url`). A malformed `shared_secrets` (not a mapping, an alias that is not a DNS-1123 label, an entry that is not `{secret, fields}`, a name starting with `da-`, a field that takes no Secret) makes the whole policy unusable: exit code `2`.
-- **A credential sent to a destination the tenant writes** (the rows above whose "sent to" is not the field itself: `auth_password` and the `http_config` fields). The tenant writes where it goes, so:
-  - the tenant's own Secret only; a shared Secret is always refused (`secret_ref_shared_confined`);
+  `secret` is the real Secret name and may not start with `da-` (it would collide with a tenant's derived name). `fields` lists **full field paths**; the values it takes are the paths of the rows of the table above (`_lib_validation.CREDENTIAL_REF_SITES`): a top-level field as it is (`api_url`, `url`, `auth_password`), one under `http_config` as its full path (`http_config.basic_auth.password`, `http_config.oauth2.client_secret`). The header row is `http_config.http_headers.*.secrets[]`: `*` stands for any header name and `[]` for any item of `secrets`, written literally — never a real header name or index; listing it lets the alias stand in the `secrets` of any header. ⚠️ BREAKING ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560) ⑤-b): only the top-level field name used to be compared, so one `http_config` opened eight rows at once; `http_config` is now no row's path, and the policy is unusable (exit code `2`), with a message naming the paths under it. With no policy file, or no `shared_secrets` in it, there is no shared exception at all. A receiver that uses any shared Secret may not set `http_config.proxy_url`: the tenant chose that proxy, and it would see the request to the shared destination (`secret_ref_proxy_url`). A malformed `shared_secrets` (not a mapping, an alias that is not a DNS-1123 label, an entry that is not `{secret, fields}`, a name starting with `da-`, a `fields` value that is not a path of the table) makes the whole policy unusable: exit code `2`.
+- **A credential sent to a destination the receiver writes** (the rows above whose "sent to" is not the field itself: `auth_password` and the `http_config` fields). Whoever writes the receiver writes where it goes, so:
+  - a receiver a tenant owns (a tenant's `_routing`, `_routing_defaults`, a routing profile, a `_routing_enforced` with `{{tenant}}`) takes the tenant's own Secret only; a shared Secret is refused (`secret_ref_shared_confined`): the tenant could otherwise point the platform's credential at a host of its choosing. **The `_routing_enforced` no tenant owns** (no `{{tenant}}`, read only from a `_`-prefixed file at the conf.d root, which tenant-api cannot write) takes only a shared Secret instead, whose alias lists the field's path under `fields`, and the three rules below still hold: the destination passes `allowed_domains`, `follow_redirects: false`, no `proxy_url` (what may not be set is a proxy the config itself names, `proxy_url`; `proxy_from_environment: true` is allowed: it reads the Alertmanager pod's `HTTPS_PROXY` and related environment variables, which the platform deployer sets, and upstream refuses it together with `proxy_url` or `no_proxy`). For example, a platform-wide SMTP password:
+
+    ```yaml
+    # conf.d/_routing_enforced.yaml (root)
+    _routing_enforced:
+      enabled: true
+      receiver:
+        type: email
+        to: [noc@example.com]
+        smarthost: smtp.example.com:587
+        from: alertmanager@example.com
+        auth_password: {secret: {shared: corp-smtp, key: password}}
+    ```
+
   - the policy must have a non-empty `allowed_domains` that admits every destination's host (both `oauth2.token_url` and `url` for the oauth2 fields; a URL destination must start with `http://` or `https://`, while `smarthost` stays `host:port`); a destination that is missing, or is itself a reference (no host to read), is refused (`secret_ref_destination_unconfined`);
   - the `proxy_url` that request goes through (`http_config.proxy_url` for the webhook request, `http_config.oauth2.proxy_url` for the token request; both for the oauth2 fields) may not be set (`secret_ref_proxy_url`): `allowed_domains` does not confine the proxy, which sees an `http://` request whole, and can intercept an `https://` one when the same receiver sets `tls_config.ca` or `insecure_skip_verify`;
   - every `http_config` credential but the TLS client key (`tls_config.key`) needs `http_config.follow_redirects: false` (`secret_ref_follow_redirects`): Alertmanager follows redirects by default; on a redirect to a subdomain of the `url` host it sends `Authorization` again (basic_auth, authorization, bearer_token, the oauth2 access token), and a custom header goes on to whatever host the redirect names, so either can reach a host `allowed_domains` did not admit. A TLS client key is never sent. The oauth2 fields need it because the access token they yield is sent again on the webhook request's redirects; `follow_redirects` governs only the webhook request, and the token request to `token_url` goes through a separate client that it does not affect.
@@ -397,6 +412,32 @@ The generator writes the reference as the file field in the table above, with th
 
 **Which Secrets to mount**: add `--secret-mounts-out <file>` to `generate-routes --output-configmap` (or `--output-alertmanager`) and it writes, as JSON, the Secrets the emitted config actually reads (`mounts[].name` with their `keys`, sorted by name; names and keys only, no values); mount by that list ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)). The list is walked from the emitted config itself — every `*_file`, every `http_headers` `files` list and the top-level `templates` (a template glob in the Secret-name segment names no Secret and goes to `other_files`; one in the key segment lists the name without a key) — so the base's own (e.g. `watchdog-heartbeat`) are in it; paths outside `<root>` are listed as `other_files`, for you to provide some other way. `--apply` writes no list: run `--output-configmap --secret-mounts-out` once on the same conf.d and source to get it. Format and rules: [cli-reference §generate-routes](../cli-reference.en.md#generate-routes); on the Prometheus Operator path `operator-check --secret-mounts` also compares it with `spec.secrets` ([Operator integration](operator-alertmanager-integration.en.md)).
 
+### Credentials are not taken written out (BREAKING)
+
+From [#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560) ⑤-b the generator refuses a credential value written out. There is one judgement (`_lib_validation.plaintext_credential_findings`), on **the value each file writes**, not on the merged result, so a routing profile no tenant binds, a `_routing_defaults` a tenant overrides and a place no plane reads are judged too:
+
+| Place | A value written out |
+|---|---|
+| Every row of the table above but webhook `url` | Refused; only a reference is taken |
+| webhook `url` | Taken; refused when it carries userinfo (`user:pass@`, or just `user@`): move the credential to `http_config` `basic_auth` / `authorization` as a reference |
+| `http_config.proxy_connect_header`, `http_config.oauth2.proxy_connect_header` | Refused when present, whatever the value |
+| `http_config.proxy_url`, `http_config.oauth2.proxy_url` | Refused when it carries userinfo |
+| email `headers`, `http_headers.<name>.values`, `oauth2.endpoint_params`, `oauth2.claims` | Taken (masked by the readers as before) |
+
+A proxy credential has no reference form (Alertmanager's `proxy_connect_header` has no file form, and Go turns `proxy_url` userinfo into a `Proxy-Authorization` header). When the proxy needs authentication, the platform gives the Alertmanager pod `HTTPS_PROXY` from a Secret (e.g. `env: [{name: HTTPS_PROXY, valueFrom: {secretKeyRef: {name: egress-proxy, key: url}}}]`) and the tenant's receiver writes only `http_config.proxy_from_environment: true`.
+
+Each one is a generator finding (kind `credential_plaintext`); the line names the file, the place and the category (`needs_reference`, `userinfo`, `proxy_credential`), never the value. A receiver the judgement cannot read is refused too (kind `credential_unjudged`): a `type` that is no receiver type (`Slack`, empty, missing, not a string), a receiver that is not a mapping, an `overrides` / `routes` that is not a list or an item of one that is not a mapping, and any receiver-shaped value (the value of a `receiver` key, or a mapping whose `type` is a receiver type) inside a routing block (`_routing`, `_routing_defaults`, `_routing_enforced`, `routing_profiles`) at a place the walk does not read (a block written as a list, nested `routes`, a key the generator does not read; reason `not_walked`). A file that cannot be read already makes the generator refuse the whole tree. In a tenant's own `_routing` the render reports these shapes too (`unknown_receiver_type`, `invalid_override_entry`, …), so one place may get two lines: two beat none (a `_routing` another file overrides is never rendered). A `_routing` at a file's top level, which no plane reads, is judged too.
+
+- `generate-routes --validate` exits `1`; `validate-config`'s routes row FAILs. The render-only modes (`--output-configmap`, …) print the `ERROR (credential)` lines without changing the exit code, so CI must run `--validate`.
+- tenant-api, through the generator container, answers 422 `GENERATOR_FINDINGS`. Whether it refuses depends on **the file written**: a credential written out in a file this write changes refuses it (one already in that file, untouched by the write, included); one in another file is a NOTICE and does not refuse this write — the whole-tree CI refuses it (the same split as the key verdict's, [ADR-038](../adr/038-unread-keys-judged-by-readers.en.md) decisions 5 and 6).
+
+**Migration**
+
+1. Run `da-tools migrate-credentials --config-dir conf.d` (add `--manifests-out <a directory outside the repository> --write` to apply it): the credentials in tenants' own `_routing` become `{secret: {key: …}}`, with one `da-<tenant>` Secret per tenant. The ones in platform places (`_routing_defaults`, profiles, the platform-wide `_routing_enforced`) are listed for a person: rewrite them as references as above.
+2. Every value on the rotation list has been in git: rotate it per [secret-leak-remediation-sop](../internal/secret-leak-remediation-sop.md).
+3. Rewrite the policy's `shared_secrets.<alias>.fields` as full field paths (above).
+4. Move proxy authentication to Alertmanager's `HTTPS_PROXY`; the receiver writes `proxy_from_environment: true`.
+
 ### Message Templates (Go Template)
 
 Slack, Teams, and Email `title` / `text` / `html` fields support Alertmanager Go template syntax. Slack example:
@@ -405,7 +446,7 @@ Slack, Teams, and Email `title` / `text` / `html` fields support Alertmanager Go
 _routing:
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/..."
+    api_url: {secret: {key: slack-url}}
     channel: "#db-alerts"
     title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
     text: >-
@@ -474,7 +515,7 @@ tenants:
     _routing:
       receiver:
         type: "slack"
-        api_url: "https://hooks.slack.com/services/../default"
+        api_url: {secret: {key: slack-default}}
         channel: "#db-alerts"
 
       # Routing overrides for specific alerts
@@ -482,7 +523,7 @@ tenants:
         - alertname: "MariaDBHighConnections"
           receiver:
             type: "pagerduty"
-            service_key: "urgency-key-123"
+            service_key: {secret: {key: pagerduty-urgent}}
 
         - metric_group: "replication"
           receiver:
@@ -545,7 +586,7 @@ _routing_enforced:
   enabled: true
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/x"
+    api_url: {secret: {shared: noc-slack, key: url}}   # shared Secret: the policy shared_secrets alias noc-slack lists api_url
     channel: "#alerts-{{tenant}}"    # → #alerts-db-a, #alerts-db-b, ...
 ```
 

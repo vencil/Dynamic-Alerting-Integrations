@@ -27,3 +27,101 @@ tests:
         exp_samples:
           - labels: 'tenant:alert_threshold:rabbitmq_queue_messages_critical{tenant="t1"}'
             value: 50000
+
+  # #3658 critical tier: rabbitmq_connections_critical. t-fire sits above the critical
+  # threshold (1500); t-quiet sits between warning (1000) and critical,
+  # so only the warning twin RabbitMQHighConnections would page it — RabbitMQHighConnectionsCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "rabbitmq_connections{tenant=\"t-fire\"}"
+        values: "2000x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"rabbitmq\", metric=\"connections\", severity=\"warning\"}"
+        values: "1000x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"rabbitmq\", metric=\"connections\", severity=\"critical\"}"
+        values: "1500x60"
+      - series: "rabbitmq_connections{tenant=\"t-quiet\"}"
+        values: "1200x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"rabbitmq\", metric=\"connections\", severity=\"warning\"}"
+        values: "1000x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"rabbitmq\", metric=\"connections\", severity=\"critical\"}"
+        values: "1500x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:rabbitmq_connections_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:rabbitmq_connections_critical{tenant=\"t-fire\"}"
+            value: 1500
+          - labels: "tenant:alert_threshold:rabbitmq_connections_critical{tenant=\"t-quiet\"}"
+            value: 1500
+    alert_rule_test:
+      - eval_time: 15s
+        alertname: RabbitMQHighConnectionsCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RabbitMQHighConnectionsCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "rabbitmq_connections"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Critical RabbitMQ connection count on t-fire"
+              summary_zh: "t-fire 的 RabbitMQ 連線數嚴重過高"
+              platform_summary: "[] t-fire: critical connection count — check headroom to the file descriptor and memory limits; find the connection-churning client"
+              platform_summary_zh: "[] t-fire: 連線數嚴重 — 請確認距 file descriptor 與記憶體上限的餘裕；找出不斷建立連線的客戶端"
+              description: "Active connections: 2000 (critical threshold exceeded)"
+              description_zh: "活躍連線: 2000 (超過嚴重閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: rabbitmq_unacked_messages_critical. t-fire sits above the critical
+  # threshold (50000); t-quiet sits between warning (10000) and critical,
+  # so only the warning twin RabbitMQHighUnackedMessages would page it — RabbitMQHighUnackedMessagesCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "rabbitmq_queue_messages_unacked{tenant=\"t-fire\"}"
+        values: "60000x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"rabbitmq\", metric=\"unacked_messages\", severity=\"warning\"}"
+        values: "10000x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"rabbitmq\", metric=\"unacked_messages\", severity=\"critical\"}"
+        values: "50000x60"
+      - series: "rabbitmq_queue_messages_unacked{tenant=\"t-quiet\"}"
+        values: "20000x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"rabbitmq\", metric=\"unacked_messages\", severity=\"warning\"}"
+        values: "10000x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"rabbitmq\", metric=\"unacked_messages\", severity=\"critical\"}"
+        values: "50000x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:rabbitmq_unacked_messages_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:rabbitmq_unacked_messages_critical{tenant=\"t-fire\"}"
+            value: 50000
+          - labels: "tenant:alert_threshold:rabbitmq_unacked_messages_critical{tenant=\"t-quiet\"}"
+            value: 50000
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: RabbitMQHighUnackedMessagesCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: RabbitMQHighUnackedMessagesCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "rabbitmq_unacked_messages"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Critical unacknowledged messages on t-fire"
+              summary_zh: "t-fire 的 RabbitMQ 未確認訊息嚴重堆積"
+              platform_summary: "[] t-fire: critical unacked backlog — consumers hold deliveries without acking and node memory keeps growing; restart or scale consumers now"
+              platform_summary_zh: "[] t-fire: 未確認訊息嚴重堆積 — 消費者持有訊息未確認，節點記憶體持續增加；請立即重啟或擴展消費者"
+              description: "60000 messages awaiting acknowledgment (critical threshold exceeded)"
+              description_zh: "60000 個訊息等待確認 (超過嚴重閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""

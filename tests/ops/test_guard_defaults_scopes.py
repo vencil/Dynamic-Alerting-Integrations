@@ -22,6 +22,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 import yaml
 
+from _platform_fs import symlink_or_skip
 from _tree import repo_files
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -1037,6 +1038,89 @@ class TestRemovedTreesAreNamedNotGuarded:
                              [self._INNER])
         assert rc == 0, rows
         assert rows == ["target\ta/conf.d\t.", "removed\ta/conf.d/b/conf.d"], rows
+
+    # ── #3694 後續：巢狀 conf.d 一律拒絕（判定看 HEAD 的 checkout）────────────
+    def test_editing_a_nested_inner_tree_is_refused(self, tmp_path, monkeypatch, capsys):
+        """兩層都還在：以哪一層當 --config-dir 決定有效設定，推不出來 ⇒ nested（紅）。
+        先前只輸出內層 target，外層（walker 會走進內層）被改了卻沒被驗。"""
+        (tmp_path / "a" / "conf.d" / "b" / "conf.d").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._INNER], [])
+        assert rc == 0, rows
+        assert rows == ["nested\ta/conf.d/b/conf.d\ta/conf.d"], rows
+
+    def test_editing_only_the_outer_tree_still_names_the_nesting(
+            self, tmp_path, monkeypatch, capsys):
+        """只改外層的檔：外層照驗，但它的有效設定含著內層 ⇒ 另出一列 nested。"""
+        (tmp_path / "a" / "conf.d" / "b" / "conf.d").mkdir(parents=True)
+        outer = "a/conf.d/_defaults.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [outer], [])
+        assert rc == 0, rows
+        assert rows == ["target\ta/conf.d\t.",
+                        "nested\ta/conf.d/b/conf.d\ta/conf.d"], rows
+
+    def test_a_hidden_conf_d_below_a_root_is_not_nesting(
+            self, tmp_path, monkeypatch, capsys):
+        """walker 跳過 `.` 開頭的目錄，這裡同樣跳過——那裡的 conf.d 不會被載入。"""
+        (tmp_path / "a" / "conf.d" / ".git" / "conf.d").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys,
+                             ["a/conf.d/_defaults.yaml"], [])
+        assert rc == 0, rows
+        assert rows == ["target\ta/conf.d\t."], rows
+
+    def test_a_missing_inner_root_that_was_not_deleted_stays_its_own_red_target(
+            self, tmp_path, monkeypatch, capsys):
+        """內層不存在但不在刪除清單（路徑被改寫）⇒ 維持內層 target（da-guard exit 2）。
+        ⛔ 不可改掛到碰巧存在的外層樹上：那會把紅燈洗成驗了另一棵樹的綠燈。"""
+        (tmp_path / "a" / "conf.d").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._INNER], [])
+        assert rc == 0, rows
+        assert rows == ["target\ta/conf.d/b/conf.d\t."], rows
+
+    def test_nesting_is_refused_without_deletion_facts_too(
+            self, tmp_path, monkeypatch, capsys):
+        (tmp_path / "a" / "conf.d" / "b" / "conf.d").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [self._INNER], None)
+        assert rc == 0, rows
+        assert rows == ["nested\ta/conf.d/b/conf.d\ta/conf.d"], rows
+
+    def test_a_conf_d_the_walker_never_enters_is_not_nesting(
+            self, tmp_path, monkeypatch, capsys):
+        """walker 不進 `.` 開頭的目錄：改到隱藏目錄底下的 conf.d 時，它只是自己的根。
+        同一佈局不論改哪個檔，判決都要一致（盲審：曾因改的檔不同而一邊 nested 一邊不是）。"""
+        (tmp_path / "a" / "conf.d" / ".h" / "conf.d").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys,
+                             ["a/conf.d/.h/conf.d/_defaults.yaml"], [])
+        assert rc == 0, rows
+        assert rows == ["target\ta/conf.d/.h/conf.d\t."], rows
+
+    def test_a_symlinked_conf_d_below_a_root_is_not_nesting(
+            self, tmp_path, monkeypatch, capsys):
+        """walker 不跟隨目錄 symlink（#1972），那裡的 conf.d 不屬於外層的有效設定。"""
+        (tmp_path / "x" / "conf.d").mkdir(parents=True)
+        (tmp_path / "b" / "conf.d").mkdir(parents=True)
+        symlink_or_skip("../../x/conf.d", tmp_path / "b" / "conf.d" / "conf.d",
+                        target_is_directory=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, ["b/conf.d/_defaults.yaml"], [])
+        assert rc == 0, rows
+        assert rows == ["target\tb/conf.d\t."], rows
+
+    def test_a_nested_name_off_the_disk_is_refused_when_unrepresentable(
+            self, tmp_path, monkeypatch, capsys):
+        """nested 的名稱來自磁碟、沒經過輸入端的拒絕；TAB 會讓消費端錯欄 ⇒ 一樣拒絕。"""
+        (tmp_path / "a" / "conf.d" / "we\tird" / "conf.d").mkdir(parents=True)
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, ["a/conf.d/_defaults.yaml"], [])
+        assert rc == mod.EXIT_UNREPRESENTABLE_PATH, rows
+        assert rows == [], rows
+
+    def test_removing_a_hidden_inner_tree_does_not_target_the_outer_one(
+            self, tmp_path, monkeypatch, capsys):
+        """walker 不進 `.h`，那棵內層從來不屬於外層的有效設定 ⇒ 刪它不改外層，
+        只點名 removed（CodeRabbit on #3722：先前會把外層列為 target）。"""
+        (tmp_path / "a" / "conf.d").mkdir(parents=True)
+        hidden = "a/conf.d/.h/conf.d/_defaults.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [hidden], [hidden])
+        assert rc == 0, rows
+        assert rows == ["removed\ta/conf.d/.h/conf.d"], rows
 
     def test_deleted_without_its_file_is_a_caller_error(self, monkeypatch, capsys):
         monkeypatch.setattr("sys.stdin", _Stdin(self._GONE + "\0"))

@@ -399,7 +399,7 @@ def test_real_not_chart_armed_comes_from_the_registry():
     lib = gate._registry_lib
     expected = gate._not_chart_armed()
     assert expected == lib.not_chart_armed_keys(lib.load_registry())
-    assert len(expected) == 45
+    assert len(expected) == 61
     assert not hasattr(gate, "NOT_CHART_ARMED")
 
 

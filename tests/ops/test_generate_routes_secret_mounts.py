@@ -552,3 +552,26 @@ def test_http_config_references_are_listed_after_rendering(tmp_path):
         {"name": "da-t-c", "keys": ["bearer"]},
     ]
     assert doc["other_files"] == []
+
+
+# ── strict 預判與 render 用同一份綁定：判的是 render 建出來的那個 receiver ──
+
+def test_strict_judges_the_enforced_group_by_with_the_renders_binding(tmp_path):
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text(
+        "defaults:\n  cpu_usage_percent: 80\n"
+        "_routing_enforced:\n  enabled: true\n  receiver:\n    type: slack\n"
+        "    api_url: {secret: {shared: corp-slack, key: url}}\n"
+        "  group_by: [alertname, 8]\n", encoding="utf-8")
+    (d / "t-a.yaml").write_text("tenants:\n  t-a:\n    cpu_usage_percent: '85'\n",
+                                encoding="utf-8")
+    out = tmp_path / "out.yaml"
+    strict = _run(tmp_path, d, "--strict", "--output-alertmanager", "-o", str(out))
+    assert strict.returncode == 1, strict.stderr
+    assert "ERROR: _routing_enforced: group_by[1]" in strict.stderr
+    assert not out.exists()
+    plain = _run(tmp_path, d, "--output-alertmanager", "-o", str(out))
+    assert plain.returncode == 0, plain.stderr
+    assert "WARN: _routing_enforced: group_by[1]" in plain.stderr
+    assert "corp-alerting" in out.read_text(encoding="utf-8")

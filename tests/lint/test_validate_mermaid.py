@@ -247,55 +247,181 @@ class TestConstants:
 # ---------------------------------------------------------------------------
 
 
+#: A stand-in mmdc keeping mermaid-cli 12.2.0's measured contract: a diagram
+#: it renders → exit 0 and a non-empty image at -o; a diagram it cannot parse
+#: → exit 1; a renderer that cannot start → exit 1 for EVERY diagram, the
+#: known-good one included. "Renderer broken" is switched on by a file
+#: (BROKEN_AFTER: the number of renders that still work), so a test can kill
+#: the renderer part-way through a run.
+_STAND_IN_MMDC = """#!/bin/sh
+in=""; out=""
+while [ $# -gt 0 ]; do
+  case "$1" in -i) in="$2"; shift;; -o) out="$2"; shift;; esac; shift
+done
+state="$(dirname "$0")/state"
+n=$(cat "$state/count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$state/count"
+if [ -f "$state/broken_after" ] && [ $n -gt $(cat "$state/broken_after") ]; then
+  echo 'Error: Browser was not found at the configured executablePath' >&2; exit 1
+fi
+if grep -q '((((' "$in"; then echo 'Error: Parse error on line 3' >&2; exit 1; fi
+printf 'PNG' > "$out"
+"""
+
+
+def _mmdc(tmp_path, monkeypatch, broken_after=None):
+    bin_dir = tmp_path / "bin"
+    (bin_dir / "state").mkdir(parents=True)
+    exe = bin_dir / "mmdc"
+    exe.write_text(_STAND_IN_MMDC, encoding="utf-8", newline="\n")
+    exe.chmod(0o755)
+    if broken_after is not None:
+        (bin_dir / "state" / "broken_after").write_text(str(broken_after), encoding="utf-8")
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}/usr/bin{os.pathsep}/bin")
+    return bin_dir / "state"
+
+
+_GOOD = "```mermaid\ngraph TD\n    A-->B\n```\n"
+_BAD = "```mermaid\nflowchart LR\n  A-->\n  ((((\n```\n"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX shell stand-in for mmdc")
 class TestRenderWithMmdc:
-    """MermaidValidator.render_with_mmdc() tests."""
+    """MermaidValidator.render_with_mmdc(), through the real subprocess path."""
 
-    def test_mmdc_not_found(self, tmp_path, monkeypatch):
-        """If mmdc is not found, returns True (skips)."""
-        def mock_run(cmd, **kwargs):
-            raise FileNotFoundError("mmdc not found")
-        monkeypatch.setattr(subprocess, "run", mock_run)
-
+    def _md(self, tmp_path, body):
         md = tmp_path / "test.md"
-        md.write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
-                      encoding="utf-8")
+        md.write_text(body, encoding="utf-8")
+        return md
+
+    def test_no_mmdc_is_not_checked_not_a_pass(self, tmp_path, monkeypatch):
+        """#3608: --render asked for and no renderer — it used to return True
+        (a silent skip, rc 0). It is no verdict (rc 2), reported once."""
+        monkeypatch.setenv("PATH", str(tmp_path))
         v = vm.MermaidValidator()
-        result = v.render_with_mmdc(md)
-        assert result is True
+        md = self._md(tmp_path, _GOOD)
+        assert v.render_with_mmdc(md) is False
+        assert v.render_with_mmdc(md) is False
+        assert len(v.not_checked) == 1 and "mmdc is not available" in v.not_checked[0]
+        assert v.errors == []
 
-    def test_mmdc_timeout(self, tmp_path, monkeypatch):
-        """If mmdc version check times out, returns True (skips)."""
-        def mock_run(cmd, **kwargs):
-            raise subprocess.TimeoutExpired(cmd, 5)
-        monkeypatch.setattr(subprocess, "run", mock_run)
-
-        md = tmp_path / "test.md"
-        md.write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
-                      encoding="utf-8")
+    def test_a_renderer_that_cannot_start_is_not_checked_not_a_diagram_error(
+            self, tmp_path, monkeypatch):
+        """#3608 comment: mmdc present, Chrome not — exit 1 on every diagram.
+        The canary fails first, so nothing is judged (it used to be rc 1)."""
+        _mmdc(tmp_path, monkeypatch, broken_after=0)
         v = vm.MermaidValidator()
-        result = v.render_with_mmdc(md)
-        assert result is True
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD)) is False
+        assert v.errors == []
+        assert len(v.not_checked) == 1 and "known-good diagram" in v.not_checked[0]
 
+    def test_a_good_diagram_renders(self, tmp_path, monkeypatch):
+        state = _mmdc(tmp_path, monkeypatch)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD)) is True
+        assert v.errors == [] and v.not_checked == []
+        assert (state / "count").read_text().strip() == "2"   # canary + diagram
+
+    def test_a_bad_diagram_is_a_finding_while_the_canary_still_renders(
+            self, tmp_path, monkeypatch):
+        _mmdc(tmp_path, monkeypatch)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _BAD)) is False
+        assert v.not_checked == []
+        assert len(v.errors) == 1 and "Parse error" in v.errors[0]["message"]
+
+    def test_a_renderer_that_dies_part_way_is_not_checked(self, tmp_path, monkeypatch):
+        """The canary renders (call 1), then the renderer stops: the diagram's
+        exit 1 is followed by a failing canary, so it is not judged."""
+        _mmdc(tmp_path, monkeypatch, broken_after=1)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD)) is False
+        assert v.errors == []
+        assert len(v.not_checked) == 1 and "known-good diagram" in v.not_checked[0]
+
+    def test_a_dead_renderer_is_reported_once_and_rendering_stops(
+            self, tmp_path, monkeypatch):
+        """After the canary fails once, no further diagram is rendered: 4
+        diagrams with the renderer dying after the first canary cost the
+        canary, one diagram and one re-canary — not a render + canary each."""
+        state = _mmdc(tmp_path, monkeypatch, broken_after=1)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD * 4)) is False
+        assert (state / "count").read_text().strip() == "3"
+        assert len(v.not_checked) == 1 and v.errors == []
+
+    def test_a_hung_renderer_is_stopped_after_one_diagram(self, tmp_path, monkeypatch):
+        """#3649 review: a diagram that times out is followed by a canary;
+        when that fails too, nothing more is rendered — 4 diagrams cost one
+        canary, one diagram and one re-canary, not a timeout each."""
+        _mmdc(tmp_path, monkeypatch)
+        real_run = vm._lib_engine.run
+        calls = []
+
+        def run(located, sub, args, **kw):
+            calls.append(args)
+            if len(calls) == 1:
+                return real_run(located, sub, args, **kw)   # first canary renders
+            return vm._lib_engine.NoVerdict("mmdc did not finish within 30s (rc 124)")
+        monkeypatch.setattr(vm._lib_engine, "run", run)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD * 4)) is False
+        assert len(calls) == 3, calls
+        assert len(v.not_checked) == 1 and "; and " in v.not_checked[0], v.not_checked
+        assert v.errors == []
+
+    def test_a_one_off_launch_failure_is_not_a_finding(self, tmp_path, monkeypatch):
+        """#3649 review: the diagram exits 1 once (a transient Chromium launch
+        failure), the canary then renders, and the diagram renders on the
+        second attempt — no error. Only a diagram that fails twice around a
+        good canary is a finding."""
+        _mmdc(tmp_path, monkeypatch)
+        real_run = vm._lib_engine.run
+        calls = []
+
+        def run(located, sub, args, **kw):
+            calls.append(args)
+            if len(calls) == 2:   # canary ok, then this diagram's first render
+                return vm._lib_engine.Ran(False, subprocess.CompletedProcess(args, 1, "", "launch"))
+            return real_run(located, sub, args, **kw)
+        monkeypatch.setattr(vm._lib_engine, "run", run)
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD)) is True
+        assert v.errors == [] and v.not_checked == []
+        assert len(calls) == 4   # canary, diagram, re-canary, diagram again
+
+    def test_a_file_without_diagrams_needs_no_renderer(self, tmp_path, monkeypatch):
+        """No diagram, nothing to render: not even mmdc's absence matters."""
+        monkeypatch.setenv("PATH", str(tmp_path))
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, "# no diagrams here\n")) is True
+        assert v.not_checked == []
+
+    def test_exit_0_without_an_image_is_not_checked(self, tmp_path, monkeypatch):
+        state = _mmdc(tmp_path, monkeypatch)
+        exe = state.parent / "mmdc"
+        exe.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD)) is False
+        assert v.errors == []
+        assert "no image" in v.not_checked[0]
 
     def test_a_render_timeout_is_not_checked_not_a_diagram_error(
             self, tmp_path, monkeypatch):
         """mmdc running out of time says nothing about the diagram (#3577)."""
+        _mmdc(tmp_path, monkeypatch)
+        real_run = vm._lib_engine.run
         calls = []
 
-        def mock_run(cmd, **kwargs):
-            calls.append(cmd)
-            if "--version" in cmd:
-                return subprocess.CompletedProcess(cmd, 0, "", "")
-            raise subprocess.TimeoutExpired(cmd, 10)
-        monkeypatch.setattr(subprocess, "run", mock_run)
-
-        md = tmp_path / "test.md"
-        md.write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
-                      encoding="utf-8")
+        def run(located, sub, args, **kw):
+            calls.append(args)
+            if len(calls) == 1:
+                return real_run(located, sub, args, **kw)   # the canary
+            return vm._lib_engine.NoVerdict("mmdc did not finish within 30s (rc 124)")
+        monkeypatch.setattr(vm._lib_engine, "run", run)
         v = vm.MermaidValidator()
-        assert v.render_with_mmdc(md) is False
+        assert v.render_with_mmdc(self._md(tmp_path, _GOOD)) is False
         assert v.errors == []
-        assert len(v.not_checked) == 1 and "timeout" in v.not_checked[0]
+        assert len(v.not_checked) == 1 and "did not finish" in v.not_checked[0]
 
 
 class TestPrintSummary:

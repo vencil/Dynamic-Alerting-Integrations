@@ -134,7 +134,9 @@ CASES = [
                           "const cfg = {\n  // skipA11y: TD-040 third-party widget\n  skipA11y: true,\n};\n")),
     Case("threshold-observed-map-drift-check",
          lambda r: _replace_once(r, "scripts/tools/ops/metric_observed_map.yaml",
-                                 "observed_series: tenant:clickhouse_active_connections:max",
+                                 # unique anchor: since #3658 the active_connections series
+                                 # is shared by its `_critical` entry too
+                                 "observed_series: tenant:clickhouse_queries:rate5m",
                                  "observed_series: tenant:zzprobe_nonexistent:max"),
          _unchanged),
     Case("html-doc-links-check",

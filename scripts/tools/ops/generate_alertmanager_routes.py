@@ -62,6 +62,7 @@ from _lib_io import (  # noqa: E402  (#1538 output-layer escaping, #1789)
 # #2766: the --findings-json temp-file write. Module form, because the bare
 # name is already a `_lib_python` re-export in the F401 block below.
 import _lib_io  # noqa: E402
+from _lib_validation import key_segment  # noqa: E402  (#1560 ⑤-b: keys into findings)
 from _lib_compat import read_shipped_da_tools_version  # noqa: E402  (#2766 VERSION)
 from _lib_python import (  # noqa: E402, F401
     write_text_secure,
@@ -109,6 +110,7 @@ from _grar_parse import (  # noqa: E402, F401
     _parse_tenant_overrides,
     load_tenant_tree,
     print_reader_warnings,  # #2906: for the tools that do not print the stream
+    credential_findings,  # #1560 ⑤-b: credentials written out (validate-config's routes row)
 )
 
 # Used here, not re-exported: which #2326 routing-tree findings refuse the
@@ -1125,7 +1127,11 @@ def _build_parser() -> argparse.ArgumentParser:
                              "surface as WARN (an "
                              "unquoted override value is rendered via str() "
                              "instead; a bad group_by entry is dropped). CI runs "
-                             "--strict.")
+                             "--strict. NOT included: a credential written out "
+                             "(credential_plaintext / credential_unjudged, #1560) — "
+                             "only --validate (or validate-config) refuses it; the "
+                             "output modes and --apply print it and go on, with "
+                             "--strict too, so gate CI / BYO on --validate.")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--apply", action="store_true",
                             help="Apply: render from the cluster ConfigMap's "
@@ -1352,7 +1358,8 @@ def _exit_code_of(exc: SystemExit) -> int:
     return 1  # a message: Python prints it and exits 1
 
 
-def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
+def main(argv: list[str] | None = None, *, key_verdict: bool = True,
+         credential_scope: "frozenset[str] | None" = None) -> None:
     """CLI entry point: Generate Alertmanager route + receiver + inhibit config from tenant YAML.
 
     *argv* defaults to ``sys.argv[1:]``; the generator container (#2901)
@@ -1360,7 +1367,10 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
     ``--validate`` also reports the shared key verdict (ADR-038 §5). The
     container passes False: it judges the keys itself, after the generator
     passes the write (``_gsvc_child.key_verdict``), so running it here too
-    would judge every write twice."""
+    would judge every write twice. *credential_scope* (#1560 ⑤-b): the
+    files a credential written out refuses the run for (``credential_findings``'
+    *scope*); the container passes the files the write changes, so tenant-api
+    refuses a write by the files it writes. None: every file (every CLI run)."""
     parser = _build_parser()
     # #2766: every finding the run prints, in the order it was determined.
     # --findings-json writes it on EVERY exit — a refusal, a verdict, a caller
@@ -1392,7 +1402,8 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
         # A judge (#3206): it refuses a tree Go names paths on as its own
         # finding, so the reader's fail-closed exit stands aside.
         with receipts, _lib_parse_cache.session(), _lib_parse_cache.judging():
-            _run(args, findings, key_verdict=key_verdict, mount_lists=mount_lists)
+            _run(args, findings, key_verdict=key_verdict, mount_lists=mount_lists,
+                 credential_scope=credential_scope)
         for path, doc in mount_lists:
             _write_mount_list(path, doc)
         code = EXIT_OK
@@ -1469,7 +1480,7 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> list[str]:
             kind=_KEY_VERDICT_KINDS[f.kind],
             blocks="validate" if f.blocks else "never",
             tenant=f.tenants[0] if len(f.tenants) == 1 else None,
-            file=f.file, field=f.key))
+            file=f.file, field=key_segment(f.key)))
     undecidable = _lib_key_verdict.undecidable_line(verdict)
     if undecidable is not None:
         stops = verdict.undecidable_blocks
@@ -1827,9 +1838,11 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _run(args: argparse.Namespace, findings: list[str], *,
          key_verdict: bool = True,
-         mount_lists: list[tuple[str, dict]] | None = None) -> None:
+         mount_lists: list[tuple[str, dict]] | None = None,
+         credential_scope: "frozenset[str] | None" = None) -> None:
     """``main`` after argument parsing; appends each finding to *findings*
-    (#2766) as soon as the run has determined it. *key_verdict*: ``main``'s.
+    (#2766) as soon as the run has determined it. *key_verdict*,
+    *credential_scope*: ``main``'s.
     *mount_lists* (#1560): receives ``(path, document)`` for
     ``--secret-mounts-out``, which ``main`` writes once the run is done."""
 
@@ -1963,7 +1976,9 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # Load tenant configs (routing + dedup + schema warnings + enforced routing)
     # #1460: the tree carries the record of the files that did not parse, and
     # that record decides whether anything below may call itself a result.
-    tree = load_tenant_tree(args.config_dir, strict_policies=args.strict)
+    tree = load_tenant_tree(args.config_dir, strict_policies=args.strict,
+                            secrets=policy.secret_binding(args.mount_root),
+                            allowed_domains=allowed_domains)
     routing_configs = tree.routing_configs
     dedup_configs = tree.dedup_configs
     schema_warnings = tree.schema_warnings
@@ -1977,6 +1992,13 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     _refuse_invalid_tenant_ids(tree, findings)
     _refuse_field_type_errors(tree, findings)
     findings.extend(schema_warnings)
+    # #1560 ⑤-b: a credential a file writes out is judged on that file's own
+    # value, before any layer is merged — after the refusals (a refused tree
+    # is judged by nothing else), before any early exit (a tree with nothing
+    # to render, an unbound routing profile, is judged too). Blocking under
+    # --validate (blocking_generation_errors) and printed in every mode.
+    credential_lines = credential_findings(tree, scope=credential_scope)
+    findings.extend(credential_lines)
     # ADR-038 §5: after the refusals (a refused tree is judged by nothing
     # else), before the exits below that end the run short of
     # `_validate_mode` ("No tenants found", "No valid routes …"): a tree with
@@ -1993,9 +2015,10 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         # tenant (an unreadable `_routing`; an invalid tenant id is refused
         # above, ADR-035 D3): those lines are blocking here as everywhere else — `--validate` and
         # `--strict` fail on them, render mode prints them and exits 0.
-        for w in schema_warnings:
+        for w in schema_warnings + credential_lines:
             print(safe_label(w), file=sys.stderr)
-        errors = ((blocking_generation_errors(schema_warnings) if args.validate else [])
+        errors = ((blocking_generation_errors(schema_warnings + credential_lines)
+                   if args.validate else [])
                   + (_policy_errors(schema_warnings) if args.strict else [])
                   + key_blocks)
         if errors:
@@ -2027,7 +2050,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
 
     # Collect all warnings
-    all_warnings = schema_warnings + route_warnings + dedup_warnings
+    all_warnings = schema_warnings + credential_lines + route_warnings + dedup_warnings
     findings.extend(route_warnings + dedup_warnings)
     for w in all_warnings:
         # #1538: escape here, not in `all_warnings` — the same list is handed

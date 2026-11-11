@@ -25,9 +25,13 @@ data:
     - name: mongodb-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
     \ tenant:alert_threshold:mongodb_connections_current\n    expr: max by(tenant)\
     \ (user_threshold{component=\"mongodb\", metric=\"connections_current\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:mongodb_replication_lag\n    expr:\
-    \ max by(tenant) (user_threshold{component=\"mongodb\", metric=\"replication_lag\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:mongodb_opcounters_rate\n\
+    warning\"})\n  - record: tenant:alert_threshold:mongodb_connections_current_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"mongodb\", metric=\"connections_current\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:mongodb_replication_lag\n\
+    \    expr: max by(tenant) (user_threshold{component=\"mongodb\", metric=\"replication_lag\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:mongodb_replication_lag_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"mongodb\", metric=\"replication_lag\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:mongodb_opcounters_rate\n\
     \    expr: max by(tenant) (user_threshold{component=\"mongodb\", metric=\"opcounters_rate\"\
     , severity=\"warning\"})\n"
   mongodb-alert.yml: "groups:\n- name: mongodb-alerts\n  rules:\n  - alert: MongoDBDown\n\
@@ -85,10 +89,10 @@ data:
     \  - alert: MongoDBHighConnections\n    expr: \"(\\n  tenant:mongodb_connections_current:max\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:mongodb_connections_current\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
-    \ $value }} current connections'\n      description_zh: '{{ $value }} 個目前連線'\n\
-    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: mongodb_connections_current\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value }} current connections'\n      description_zh:\
+    \ '{{ $value }} 個目前連線'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
@@ -101,26 +105,70 @@ data:
     \ MongoDB high connection count on {{ $labels.tenant }}\n      summary_zh: '{{\
     \ $labels.tenant }} 的 MongoDB 連線數過高'\n      tier: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}'\n  - alert: MongoDBReplicationLag\n    expr: \"(\\n  tenant:mongodb_replication_lag:max\\\
-    n  > on(tenant) group_left\\n  tenant:alert_threshold:mongodb_replication_lag\\\
-    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 2m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Replication\
-    \ lag: {{ $value | printf \"%.1f\" }}s behind primary'\n      description_zh:\
-    \ '複製延遲: 落後 Primary {{ $value | printf \"%.1f\" }}s'\n      owner: '{{ with query\
+    \ }}{{ end }}{{ end }}'\n  - alert: MongoDBHighConnectionsCritical\n    expr:\
+    \ \"(\\n  tenant:mongodb_connections_current:max\\n  > on(tenant) group_left\\\
+    n  tenant:alert_threshold:mongodb_connections_current_critical\\n)\\nunless on(tenant)\\\
+    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
+    \      maintenance: mute\n      metric_group: mongodb_connections_current\n  \
+    \    severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value }} current connections (critical threshold exceeded)'\n\
+    \      description_zh: '{{ $value }} 個目前連線（超過嚴重閾值）'\n      owner: '{{ with query\
     \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
     \ index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
     \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: MongoDB replication lag — check replica health'\n      platform_summary_zh:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: MongoDB 複製延遲 — 請檢查副本狀態'\n      runbook_url: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
-    \ }}{{ end }}{{ end }}'\n      summary: MongoDB replication lag on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 複製延遲'\n      tier: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MongoDBHighOperations\n\
+    \ }}: MongoDB connections at critical level — new connections may be refused;\
+    \ cap the offending client pool now'\n      platform_summary_zh: '[{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB\
+    \ 連線數達嚴重水位 — 新連線可能被拒；請立即限制造成問題的客戶端連線池'\n      runbook_url: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: MongoDB connection\
+    \ count critical on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 MongoDB 連線數嚴重過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: MongoDBReplicationLag\n    expr: \"(\\n  tenant:mongodb_replication_lag:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:mongodb_replication_lag\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 2m\n    labels:\n      maintenance: mute\n      metric_group: mongodb_replication_lag\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Replication lag: {{ $value | printf \"%.1f\" }}s behind primary'\n\
+    \      description_zh: '複製延遲: 落後 Primary {{ $value | printf \"%.1f\" }}s'\n  \
+    \    owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: MongoDB replication lag — check replica health'\n    \
+    \  platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: MongoDB 複製延遲 — 請檢查副本狀態'\n      runbook_url: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: MongoDB\
+    \ replication lag on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 MongoDB 複製延遲'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: MongoDBReplicationLagCritical\n    expr: \"(\\n  tenant:mongodb_replication_lag:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:mongodb_replication_lag_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 2m\n    labels:\n      maintenance: mute\n      metric_group: mongodb_replication_lag\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Replication lag: {{ $value | printf \"%.1f\" }}s behind primary\
+    \ (critical threshold exceeded)'\n      description_zh: '複製延遲: 落後 Primary {{ $value\
+    \ | printf \"%.1f\" }}s（超過嚴重閾值）'\n      owner: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB secondary far behind primary\
+    \ — an election now rolls back writes; check the oplog window and secondary load\
+    \ now'\n      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: MongoDB secondary 嚴重落後 primary — 此時發生選舉會回滾寫入；請立即檢查 oplog\
+    \ 時間窗與 secondary 負載'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: MongoDB replication lag critical on {{ $labels.tenant }}\n\
+    \      summary_zh: '{{ $labels.tenant }} 的 MongoDB 複製延遲嚴重'\n      tier: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MongoDBHighOperations\n\
     \    expr: \"(\\n  tenant:mongodb_opcounters:rate5m\\n  > on(tenant) group_left\\\
     n  tenant:alert_threshold:mongodb_opcounters_rate\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\

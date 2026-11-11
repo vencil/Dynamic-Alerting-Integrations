@@ -19,3 +19,101 @@ tests:
         exp_samples:
           - labels: 'tenant:alert_threshold:mongodb_connections_current{tenant="t1"}'
             value: 500
+
+  # #3658 critical tier: mongodb_connections_current_critical. t-fire sits above the critical
+  # threshold (450); t-quiet sits between warning (300) and critical,
+  # so only the warning twin MongoDBHighConnections would page it — MongoDBHighConnectionsCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "mongodb_connections{tenant=\"t-fire\", state=\"current\"}"
+        values: "500x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"mongodb\", metric=\"connections_current\", severity=\"warning\"}"
+        values: "300x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"mongodb\", metric=\"connections_current\", severity=\"critical\"}"
+        values: "450x60"
+      - series: "mongodb_connections{tenant=\"t-quiet\", state=\"current\"}"
+        values: "400x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"mongodb\", metric=\"connections_current\", severity=\"warning\"}"
+        values: "300x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"mongodb\", metric=\"connections_current\", severity=\"critical\"}"
+        values: "450x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:mongodb_connections_current_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:mongodb_connections_current_critical{tenant=\"t-fire\"}"
+            value: 450
+          - labels: "tenant:alert_threshold:mongodb_connections_current_critical{tenant=\"t-quiet\"}"
+            value: 450
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: MongoDBHighConnectionsCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: MongoDBHighConnectionsCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "mongodb_connections_current"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "MongoDB connection count critical on t-fire"
+              summary_zh: "t-fire 的 MongoDB 連線數嚴重過高"
+              platform_summary: "[] t-fire: MongoDB connections at critical level — new connections may be refused; cap the offending client pool now"
+              platform_summary_zh: "[] t-fire: MongoDB 連線數達嚴重水位 — 新連線可能被拒；請立即限制造成問題的客戶端連線池"
+              description: "500 current connections (critical threshold exceeded)"
+              description_zh: "500 個目前連線（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: mongodb_replication_lag_critical. t-fire sits above the critical
+  # threshold (30); t-quiet sits between warning (10) and critical,
+  # so only the warning twin MongoDBReplicationLag would page it — MongoDBReplicationLagCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "mongodb_mongod_replset_member_replication_lag{tenant=\"t-fire\"}"
+        values: "45x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"mongodb\", metric=\"replication_lag\", severity=\"warning\"}"
+        values: "10x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"mongodb\", metric=\"replication_lag\", severity=\"critical\"}"
+        values: "30x60"
+      - series: "mongodb_mongod_replset_member_replication_lag{tenant=\"t-quiet\"}"
+        values: "20x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"mongodb\", metric=\"replication_lag\", severity=\"warning\"}"
+        values: "10x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"mongodb\", metric=\"replication_lag\", severity=\"critical\"}"
+        values: "30x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:mongodb_replication_lag_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:mongodb_replication_lag_critical{tenant=\"t-fire\"}"
+            value: 30
+          - labels: "tenant:alert_threshold:mongodb_replication_lag_critical{tenant=\"t-quiet\"}"
+            value: 30
+    alert_rule_test:
+      - eval_time: 60s
+        alertname: MongoDBReplicationLagCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: MongoDBReplicationLagCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "mongodb_replication_lag"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "MongoDB replication lag critical on t-fire"
+              summary_zh: "t-fire 的 MongoDB 複製延遲嚴重"
+              platform_summary: "[] t-fire: MongoDB secondary far behind primary — an election now rolls back writes; check the oplog window and secondary load now"
+              platform_summary_zh: "[] t-fire: MongoDB secondary 嚴重落後 primary — 此時發生選舉會回滾寫入；請立即檢查 oplog 時間窗與 secondary 負載"
+              description: "Replication lag: 45.0s behind primary (critical threshold exceeded)"
+              description_zh: "複製延遲: 落後 Primary 45.0s（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
