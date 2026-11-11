@@ -187,6 +187,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_account_registry_monotonic.py": _R_LINT,
     "check_ad_hoc_git_scripts.py": _R_LINT,
     "check_admin_config_schema.py": _R_LINT,
+    "check_adr_section_refs.py": _R_LINT,
     "check_bat_ascii_purity.py": _R_LINT,
     "check_bilingual_annotations.py": _R_LINT,
     "check_bilingual_content.py": _R_LINT,
@@ -551,8 +552,13 @@ def test_allowlists_shrink_only_count_pin():
     # pin 151: lowered from 152 when write_baseline_marker.py was deleted
     # together with the absolute-ns/op trend watchdog it fed (ADR-032 §6
     # withdrawn). The ratchet follows the corpus down as well as up.
-    assert len(ENGLISH_ONLY) <= 151, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=151). Adding an "
+    # pin 152: bumped from 151 for check_adr_section_refs.py (ADR-027 §9
+    # item 8), the gate that an `ADR-NNN §<section>` reference names a
+    # section that exists. Same class as the `_R_LINT` siblings: a pre-commit
+    # gate, never invoked by a customer; its output is path:line plus the
+    # section it could not find.
+    assert len(ENGLISH_ONLY) <= 152, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=152). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

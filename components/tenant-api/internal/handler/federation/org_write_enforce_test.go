@@ -1,6 +1,6 @@
 package federation
 
-// ADR-027 / LD-6 P4b §5c — enforce-mode 403 harness for the federation
+// ADR-027 §7 — enforce-mode 403 harness for the federation
 // write-plane org-scope gates (sites #6-#9), plus the platform-wide write bar
 // (#3160: an org-scoped "*" admin is refused at the platform-wide writes). Mirrors internal/handler/org_write_enforce_test.go: an
 // org-scoped rule loaded through the PRODUCTION rbac.NewManager path (claim

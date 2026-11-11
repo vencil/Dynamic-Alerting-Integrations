@@ -142,7 +142,7 @@ func CreateFederationToken(d *handler.Deps) http.HandlerFunc {
 
 		// Federation token issuance is data egress — require admin on
 		// the target tenant (ADR-020 Wave-0 decision 5). Org-scope-aware
-		// (ADR-027 / LD-6 P4b): an org-scoped rule only grants admin on
+		// (ADR-027 §7): an org-scoped rule only grants admin on
 		// a tenant inside the caller's org.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), req.TenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {
 			handler.WriteJSONErrorWithCode(w, r, http.StatusForbidden, errcode.Forbidden,
@@ -219,7 +219,7 @@ func ListFederationTokens(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		// Org-scope-aware (ADR-027 / LD-6 P4b) even though this is a GET:
+		// Org-scope-aware (ADR-027 §7) even though this is a GET:
 		// token records are an enumeration oracle for federation activity,
 		// so the list gate matches the issue/revoke gates.
 		if !handler.OrgAllowed(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r), tenantID, rbac.PermAdmin, handler.WriteScopeMeta(d.ConfigDir)) {
@@ -280,7 +280,7 @@ func DeleteFederationToken(d *handler.Deps) http.HandlerFunc {
 			return
 		}
 
-		// Org-scope-aware (ADR-027 / LD-6 P4b) — same bar as issuance.
+		// Org-scope-aware (ADR-027 §7) — same bar as issuance.
 		// #3123: refused exactly like a missing token. The route only checks
 		// read on some tenant (#2520), so nearly any caller reaches this point; a 403
 		// naming rec.TenantID resolved any token id to its tenant, and even a

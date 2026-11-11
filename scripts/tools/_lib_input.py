@@ -20,6 +20,16 @@ when a refusal is raised, as in `_lib_paths`.
   ``dir_not_found`` / ``dir_not_accessible`` (``_lib_paths.classify_path``,
   and a directory that stats but cannot be listed), ``input_empty`` (the
   declaration says an empty selection is refused).
+* ``absent(args, dest)`` (#3721) — whether ``selected`` found nothing at
+  the flag's path (a default under ``absent_default=ABSENT_EMPTY``, a given
+  value under ``missing=ABSENT_EMPTY``). ⛔ The one answer to "was it
+  there": a tool never stats a declared input itself — a second look can
+  disagree with the first (config-diff's ``isdir`` read a base side removed
+  after it was judged as a first import, rc 1, stderr empty), and the reader
+  that opens it later fails closed on what is gone. ⚠️ Not mechanised yet:
+  #3724 (a fault-injection gate — the input made to vanish at each look a
+  tool takes at it itself; a stat-based gate ran into early refusals and
+  shared readers, #3721).
 * ``require_listed(flag, path, root, *, lang)`` (#3693) — a directory
   da-guard lists (``DA_GUARD_LISTS``) whose root entry it reports
   ``unlistable_dir`` is ``dir_not_accessible``: ⛔ the one wording of it,
@@ -278,11 +288,15 @@ class _Value(str):
 
     spec: InputSpec
     given: bool
+    absent: Optional[bool]
+    """What ``selected`` found (#3721): True when nothing was at the path and
+    the declaration read it as selecting nothing; None until it judged."""
 
     def __new__(cls, value: str, spec: InputSpec, given: bool) -> "_Value":
         self = super().__new__(cls, value)
         self.spec = spec
         self.given = given
+        self.absent = None
         return self
 
 
@@ -481,12 +495,20 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
     spec = value.spec
     if spec.select is None:
         raise TypeError(f"{dest} is a file input (decode=): read it with document()")
+    if not value.given:
+        # argparse hands every parse the SAME default object (`action.default`):
+        # judge a copy of it, so what one run found (`absent`) is never read
+        # by the next parse of the same parser (#3721).
+        value = _Value(str(value), spec, False)
+        setattr(args, dest, value)
     problem = classify_path(value, "dir", lang=lang, flag=spec.flag)
     if problem is not None:
         nothing = (spec.missing if value.given else spec.absent_default) == ABSENT_EMPTY
         if not (nothing and _nothing_at(value)):
             raise _caller_error(problem.message, problem.reason)
+        value.absent = True
         return []
+    value.absent = False
     if spec.select == DA_GUARD_LISTS:
         return [Path(value)]
     try:
@@ -500,6 +522,21 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
     if not chosen and spec.empty == EMPTY_REFUSED:
         raise refuse_empty(_label(value, spec.flag), spec.select.wanted, lang=lang)
     return chosen
+
+
+def absent(args: argparse.Namespace, dest: str) -> bool:
+    """Whether ``selected`` found nothing at the path of the flag declared at
+    *dest* (#3721) — read, never judged again (see the module docstring). A
+    flag with no value (no default, not given) is absent. Raises TypeError
+    before ``selected`` judged it: there is no answer yet to read."""
+    value = getattr(args, dest)
+    if value is None:
+        return True
+    if not isinstance(value, _Value):
+        raise TypeError(f"{dest} was not declared with _lib_input.add_input")
+    if value.absent is None:
+        raise TypeError(f"{dest}: absent() reads what selected() judged — call selected() first")
+    return value.absent
 
 
 def read_bytes(path: "str | os.PathLike[str]", *, flag: Optional[str], lang: str) -> bytes:

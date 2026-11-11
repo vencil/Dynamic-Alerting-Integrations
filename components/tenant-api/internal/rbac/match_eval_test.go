@@ -1,7 +1,7 @@
 package rbac
 
 // Evaluation semantics of the rbac core: the pure matchers (tenantMatches /
-// permCovers), the claims-aware match block (ADR-027 / LD-6 P3), the Allowed
+// permCovers), the claims-aware match block (ADR-027 §7), the Allowed
 // truth table, and the nil-principal (anonymous) contract.
 //
 // This file pins the HIGH-risk surface of the P3 change (the rbac gate is

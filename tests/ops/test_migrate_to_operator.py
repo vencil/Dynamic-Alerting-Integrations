@@ -146,10 +146,40 @@ class TestParseConfigMapRules:
         assert name == "invalid.yaml" and "yaml:" in why, exc_info.value.files
         assert "invalid.yaml: " in str(exc_info.value)
 
+    @pytest.mark.usefixtures("da_guard_env")
     def test_parse_configmap_rules_directory_not_found(self):
-        """FileNotFoundError when directory does not exist."""
-        with pytest.raises(FileNotFoundError):
+        """#3721: a directory that is not there is da-guard's refusal (the
+        listing it is read from), not an `is_dir` of this module's own —
+        that second look turned a directory removed after it was judged
+        into an `issues` WARNING and a migration from no file, rc 0."""
+        from _lib_parse_tree import ParseTreeError
+        with pytest.raises(ParseTreeError):
             mto.parse_configmap_rules(Path("/nonexistent/path"))
+
+    @pytest.mark.usefixtures("da_guard_env", "da_read_env")
+    def test_a_source_dir_gone_after_it_was_judged_writes_nothing(
+            self, temp_configmap_dir, tmp_path, monkeypatch, capsys):
+        """#3721: --source-dir removed after `_lib_input` judged and selected
+        it was a WARNING ("Source directory error"), a checklist and no CRD,
+        rc 0. Now the reading that finds it gone stops the run: rc 2,
+        nothing written."""
+        import shutil
+        out = tmp_path / "out"
+        real = mto._lib_input.require_selection
+
+        def racing(*a, **kw):
+            chosen = real(*a, **kw)
+            shutil.rmtree(temp_configmap_dir)
+            return chosen
+
+        monkeypatch.setattr(mto._lib_input, "require_selection", racing)
+        monkeypatch.setattr(sys, "argv", ["mto", "--source-dir", str(temp_configmap_dir),
+                                          "--output-dir", str(out)])
+        with pytest.raises(SystemExit) as exc:
+            mto.main()
+        assert exc.value.code == 2
+        assert not out.exists() or not any(out.iterdir()), sorted(out.iterdir())
+        assert "Source directory error" not in capsys.readouterr().err
 
 
 # ────────────────────────────────────────────────────────────────────────────

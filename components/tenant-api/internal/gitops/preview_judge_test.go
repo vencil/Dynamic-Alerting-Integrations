@@ -33,7 +33,7 @@ func (v *ctxValidator) ValidateWrites(ctx context.Context, base string, files []
 
 func previewOf(t *testing.T, w *Writer, tenant, body string) PutResolution {
 	t.Helper()
-	res, errs, err := w.PreviewPut(context.Background(), tenant, body)
+	res, errs, err := w.PreviewPut(context.Background(), tenant, body, nil)
 	if err != nil || len(errs) > 0 {
 		t.Fatalf("preview: errs %q err %v", errs, err)
 	}

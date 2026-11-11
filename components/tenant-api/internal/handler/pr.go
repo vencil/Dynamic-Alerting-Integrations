@@ -57,7 +57,7 @@ func ListPRs(d *Deps) http.HandlerFunc {
 
 		var prs []platform.PRInfo
 		if tenantFilter != "" {
-			// Tenant-specific query: respect RBAC + org scope (ADR-027 / LD-6
+			// Tenant-specific query: respect RBAC + org scope (ADR-027 §7
 			// P4c). If caller can't read the tenant, return empty (don't 403 —
 			// that would leak existence). If they can, surface the PR (or empty
 			// if there isn't one). OrgAllowedRead records on axis="org".

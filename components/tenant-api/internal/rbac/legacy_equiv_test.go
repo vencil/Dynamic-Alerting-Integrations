@@ -1,6 +1,6 @@
 package rbac
 
-// Equivalence pin for the principal-based evaluation core (ADR-027 / LD-6 P3).
+// Equivalence pin for the principal-based evaluation core (ADR-027 §7).
 //
 // The refactor moved the four legacy groups-slice entry points into
 // export_test.go as one-line delegates onto the new principal-based core

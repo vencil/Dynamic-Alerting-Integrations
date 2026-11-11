@@ -54,7 +54,7 @@ const (
 // v2.5.0: Added Environments and Domains for metadata-based filtering.
 // These fields are optional — omitting them is equivalent to wildcard (all).
 //
-// ADR-027 / LD-6 P3: Added the optional Match block. Without it (the legacy
+// ADR-027 §7: Added the optional Match block. Without it (the legacy
 // shape) a rule applies iff Name equals one of the caller's IdP groups —
 // byte-identical to the pre-P3 behavior, evaluated on the SAME code path
 // (ruleMatches degenerates to the group-name test, not a separate branch).
@@ -68,7 +68,7 @@ type GroupRule struct {
 	Environments []string     `yaml:"environments,omitempty" json:"environments,omitempty"` // ["production", "staging"] — empty = all
 	Domains      []string     `yaml:"domains,omitempty" json:"domains,omitempty"`           // ["finance", "ecommerce"] — empty = all
 
-	// OrgScope opts this rule into the org-scope axis (ADR-027 / LD-6 P4).
+	// OrgScope opts this rule into the org-scope axis (ADR-027 §7).
 	// Empty (the default) = the rule places no org restriction and behaves
 	// byte-identically to pre-P4. When set, its value is the claim KEY (e.g.
 	// "org-code") whose caller value must be one of the target tenant's orgs
@@ -79,7 +79,7 @@ type GroupRule struct {
 	OrgScope string `yaml:"org-scope,omitempty" json:"org-scope,omitempty"`
 }
 
-// MatchBlock is the claims-aware rule matcher (ADR-027 / LD-6 P3).
+// MatchBlock is the claims-aware rule matcher (ADR-027 §7).
 //
 // Semantics: AND across condition kinds, OR within a condition's list —
 //   - Groups (if non-empty): at least ONE entry must be among the caller's
@@ -128,7 +128,7 @@ type Manager struct {
 	// SetScopeAuditor. Shared across scope axes (P1 metadata; P4 org).
 	scopeAudit ScopeAuditRecorder
 
-	// claimHeaders (ADR-027 / LD-6 P2) declares which trusted-hop header
+	// claimHeaders (ADR-027 §7) declares which trusted-hop header
 	// loads which named claim (claim name → headerName), read from
 	// the oauth2-proxy config (--oauth2-proxy-config, proxyconfig.Load). Middleware hands it to
 	// HeaderResolver so the resolved principal carries the named claims.
@@ -140,7 +140,7 @@ type Manager struct {
 	// longer a post-construction setter.
 	claimHeaders map[string]string
 
-	// orgResolver (ADR-027 / LD-6 P4c) resolves a tenant ID to its organization
+	// orgResolver (ADR-027 §7) resolves a tenant ID to its organization
 	// list for the read-by-id middleware gate. rbac must NOT import tenantorg
 	// (import direction: handler → rbac), so the resolver is injected as a func
 	// value wired from tenantorg.OrgsForTenant in main.go — the same DI shape as
@@ -153,12 +153,12 @@ type Manager struct {
 }
 
 // SetScopeAuditor installs the denied-by-scope metric sink for scope filters
-// (ADR-027 / LD-6 P1). Called once at startup. Passing nil leaves recording
+// (ADR-027 §7). Called once at startup. Passing nil leaves recording
 // disabled (the filter still behaves correctly).
 func (m *Manager) SetScopeAuditor(a ScopeAuditRecorder) { m.scopeAudit = a }
 
 // SetOrgResolver installs the tenant→organization-list resolver used by the
-// read-by-id middleware gate (ADR-027 / LD-6 P4c). Called once at startup from
+// read-by-id middleware gate (ADR-027 §7). Called once at startup from
 // main, wired from tenantorg.OrgsForTenant. Passing nil leaves the read gate
 // org-blind (tenants resolve as unlabeled). Kept a func-value setter — rather
 // than importing tenantorg — so rbac stays free of the handler/tenantorg import
@@ -174,7 +174,7 @@ func (m *Manager) SetOrgResolver(fn func(tenantID string) []string) { m.orgResol
 // It is a constructor argument — not a setter — because the declared claim
 // keys participate in config validation: the parse closure below captures
 // them, so BOTH the initial load and every hot-reload reject a config whose
-// match.claims references an undeclared key (ADR-027 / LD-6 P3 fail-loud).
+// match.claims references an undeclared key (ADR-027 §7 fail-loud).
 //
 // Unlike the other config managers (groups / views / policy), an
 // initial-load failure here is FATAL for the caller — the rbac
@@ -300,7 +300,7 @@ func detectNullMatchBlocks(data []byte) error {
 }
 
 // validateConfig enforces the fail-closed config guarantees of the match:
-// block (ADR-027 / LD-6 P3). It runs inside the parse path, so BOTH the
+// block (ADR-027 §7). It runs inside the parse path, so BOTH the
 // initial load and every hot-reload pass through it: an invalid config is
 // rejected at load time (initial load → NewManager error → main fatal;
 // hot-reload → configwatcher keeps the last-good snapshot and logs a WARN).
@@ -324,7 +324,7 @@ func validateConfig(cfg *RBACConfig, declaredClaimKeys map[string]string) error 
 }
 
 // validateRule enforces the per-rule fail-closed guarantees of validateConfig
-// for a single rule (ADR-027 / LD-6 P3/P4). It returns nil when THIS rule
+// for a single rule (ADR-027 §7). It returns nil when THIS rule
 // passes every guard — tenant patterns, org-scope declaration, and (when
 // present) the match block — and a fail-loud error otherwise. The guards and
 // their messages are byte-identical to the inline loop body they were
@@ -347,7 +347,7 @@ func validateRule(rule *GroupRule, declaredClaimKeys map[string]string) error {
 			return fmt.Errorf("rbac: rule %q: invalid tenant pattern %q (allowed: \"*\", a \"prefix-*\" with a single trailing \"*\", or an exact tenant id — no empty, embedded or repeated \"*\")", rule.Name, pat)
 		}
 	}
-	// Org-scope opt-in (ADR-027 / LD-6 P4): the claim key an org-scoped rule
+	// Org-scope opt-in (ADR-027 §7): the claim key an org-scoped rule
 	// keys off MUST be declared in the oauth2-proxy config, exactly like a
 	// match.claims key. Checked for EVERY rule — independently of the match
 	// block — because a rule can be legacy name-matched AND org-scoped. An
@@ -386,7 +386,7 @@ func validateRule(rule *GroupRule, declaredClaimKeys map[string]string) error {
 	return nil
 }
 
-// ── Principal-based evaluation core (ADR-027 / LD-6 P3) ──────────────────
+// ── Principal-based evaluation core (ADR-027 §7) ──────────────────
 //
 // Allowed / MetadataAllowed / AccessibleEnvironmentsFor / AccessibleDomainsFor
 // are the ONLY production authorization entry points. They take the request's
@@ -437,7 +437,7 @@ func subjectFor(p *VerifiedPrincipal) matchSubject {
 // methods previously inlined (the legacy model is the degenerate case of the
 // same path, not a separate branch).
 //
-// With a match: block (ADR-027 / LD-6 P3) the rule's Name is a pure label;
+// With a match: block (ADR-027 §7) the rule's Name is a pure label;
 // conditions AND across kinds, OR within a list:
 //   - match.groups non-empty → at least one entry must be in the caller's
 //     group set;
@@ -491,7 +491,7 @@ func (s matchSubject) ruleMatches(rule *GroupRule) bool {
 
 // ruleGrants reports whether a single rule's permission list covers the wanted
 // permission (admin ⊇ write ⊇ read). Extracted from Allowed's inner loop
-// (ADR-027 / LD-6 P4b) so every per-rule evaluation path shares the ONE
+// (ADR-027 §7) so every per-rule evaluation path shares the ONE
 // permission predicate — permission-coverage semantics must never be
 // re-implemented at a call site.
 func ruleGrants(rule *GroupRule, want Permission) bool {

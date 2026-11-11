@@ -212,7 +212,9 @@ func rawYAMLFor(r *http.Request, d *Deps, tenantID string, data []byte) (raw str
 // @Description repaired; a whole-file PUT can replace it. When the end-of-life check cannot decode the current file's
 // @Description tenants: block, that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting
 // @Description write and no org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused
-// @Description with 400, file unchanged — fix it in git then; when allowed, its end-of-life recipe usage counts as none, so
+// @Description with 400, file unchanged — fix it in git then. When the file's environment/domain labels cannot be read
+// @Description either (it does not parse, or its _metadata does not decode), only a platform administrator (such a rule
+// @Description granting admin) may replace it, others get 403 (ADR-027 §7); when allowed, its end-of-life recipe usage counts as none, so
 // @Description a body with an end-of-life recipe is refused. A file that exists but cannot be read at all (permissions, I/O,
 // @Description a directory) refuses the write.
 // @Description A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by

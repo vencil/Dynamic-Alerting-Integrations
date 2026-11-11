@@ -36,7 +36,7 @@ type VerifiedPrincipal struct {
 	// (--oauth2-proxy-config → HeaderResolver.ClaimHeaders). nil means no
 	// claim axis was declared — or none of the declared headers carried a
 	// value. Their trust level is the same as Groups: this principal's
-	// Assurance (the same trusted hop injected both). P2 (ADR-027 / LD-6)
+	// Assurance (the same trusted hop injected both). P2 (ADR-027 §7)
 	// only CARRIES them — nothing consumes Claims for authz until P3's match
 	// evaluation.
 	Claims map[string]string

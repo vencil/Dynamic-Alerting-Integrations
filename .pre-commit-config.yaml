@@ -186,6 +186,17 @@ repos:
         pass_filenames: false
         files: '^helm/.*\.ya?ml$|^k8s/.*\.ya?ml$|^scripts/tools/lint/check_dev_bypass_manifest\.py$'
 
+      # --- ADR-027 §9 item 8: an ADR section reference names a section that exists ---
+      # `ADR-NNN §<section>` anywhere in the tracked tree must match a heading
+      # of that ADR (number, code or name); `ADR-027` followed by a section
+      # code of the withdrawn 2026-07 draft fails. Repo-wide (~0.6s): any file
+      # can gain a stale reference, and any ADR edit can orphan one elsewhere.
+      - id: adr-section-refs
+        name: "ADR-027 §9 item 8: ADR section references name existing sections"
+        entry: python3 -X utf8 scripts/tools/lint/check_adr_section_refs.py --ci
+        language: python
+        pass_filenames: false
+
       # --- ADR-034 mechanical enforcement: no hand-rolled env-to-bool parsers ---
       # ADR-034 forbids a legal value from doubling as the fallback for an
       # unrecognized one WHEN that value decides whether a check runs. Its

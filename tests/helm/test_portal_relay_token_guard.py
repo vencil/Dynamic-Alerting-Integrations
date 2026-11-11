@@ -1,4 +1,4 @@
-"""test_portal_relay_token_guard.py — ADR-027 D2-B O1 da-portal relay token (image + Helm)
+"""test_portal_relay_token_guard.py — ADR-027 §5 da-portal relay token (image + Helm)
 
 da-portal becomes the third verified relay in tenant-api's machine-identity
 audit (#962, GHSA-3g2h-rf85-5rrv L7 root-cause series): with

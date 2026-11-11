@@ -1694,15 +1694,23 @@ func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
 		Tenants:  make(map[string]KeyValidation, len(c.Tenants)),
 	}
 	for tid, keys := range c.Tenants {
-		one := ThresholdConfig{
-			Defaults:          c.Defaults,
-			OptionalOverrides: c.OptionalOverrides,
-			Profiles:          c.Profiles,
-			Tenants:           map[string]map[string]ScheduledValue{tid: keys},
-		}
+		one := c.tenantLayer(tid, keys)
 		out.Tenants[tid] = one.validateOverrideKeys()
 	}
 	return out
+}
+
+// tenantLayer is c with keys as tenant tid's whole map and no other tenant:
+// the one-tenant copy a key check judges a layer on (ValidateTenantKeysByTenant,
+// TenantMerge's own, platform and profile layers). Every root field —
+// `defaults:`, `optional_overrides:`, `dimensions:`, profiles — comes along
+// by copying c whole, so a check reading one of them reads the tree's value,
+// not an empty one: a copy that named its fields dropped `dimensions:` and
+// judged a dimensional row no one serves (#3684).
+func (c *ThresholdConfig) tenantLayer(tid string, keys map[string]ScheduledValue) ThresholdConfig {
+	layer := *c
+	layer.Tenants = map[string]map[string]ScheduledValue{tid: keys}
+	return layer
 }
 
 // validateOverrideKeys is ValidateTenantKeys without the defaults-side
@@ -1879,7 +1887,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// day is refused where it is written; one already on disk, left
 			// as it is, is a notice (Ratchet, by the dead entries as
 			// written).
-			if deadEntriesJudged(key, canonKey, sv, normalized, canonDefaults, canonOptional) {
+			if deadEntriesJudged(key, canonKey, sv, normalized, canonDefaults, canonOptional, c.Dimensions) {
 				if f, ok := newDeadEntryFinding(tenant, canonKey, sv); ok {
 					v.Errors = append(v.Errors, f.Message)
 					v.Values = append(v.Values, f)

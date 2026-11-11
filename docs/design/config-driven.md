@@ -911,7 +911,7 @@ tenant-api 直接 import `"github.com/vencil/threshold-exporter/pkg/config"`，�
 
 **Portal 優雅降級：**
 
-da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 API 健康時，啟用完整 CRUD 操作；當不可用時（oauth2-proxy 故障、API server 重啟），自動改讀部署時產生的 `platform-data.json`，讀不到再用內建示範資料，不需手動切換。⚠️ 這兩種都不是即時資料，頁面也不標示目前用的是哪一種；`platform-data.json` 的租戶欄位不完整時，清單裡還會混入示範租戶（[#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)）。
+portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。API 回 401（未登入或 session 過期）時，頁面導去 oauth2-proxy 登入、登入後回到原頁，不改顯示其他資料（[ADR-027](../adr/027-tenant-api-caller-identity.md) §5）。API 健康時啟用完整 CRUD；不可用時（API server 重啟、沒有部署 tenant-api 的靜態站）改讀部署時產生的 `platform-data.json`，讀不到再用內建示範資料。這兩種都不是即時資料：頁面以橫幅標示目前是離線資料或示範資料，此時不提供任何寫入；離線資料照原樣顯示，不混入示範租戶或群組（[#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)）。
 
 > 完整決策脈絡與替代方案分析見 [ADR-009: Tenant Manager CRUD API](../adr/009-tenant-manager-crud-api.md)。
 

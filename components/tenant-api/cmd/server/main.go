@@ -417,7 +417,7 @@ func main() {
 	// is judged by the route generator container on every write; tenant-api
 	// no longer reads it.
 
-	// ADR-027 / LD-6 P4: tenant→organization mapping (_tenant_orgs.yaml) backing
+	// ADR-027 §7: tenant→organization mapping (_tenant_orgs.yaml) backing
 	// the org-scope authorization axis. Admin-only (no write API) and strict-
 	// parsed: a malformed org-boundary file is FATAL (an unparseable file is not
 	// safe to serve, like _rbac.yaml), but a missing/empty file is the benign
@@ -431,7 +431,7 @@ func main() {
 		log.Fatalf("FATAL: tenantorg init: %v", err)
 	}
 
-	// ADR-027 / LD-6 P4c: wire the tenant→orgs resolver into the RBAC manager so
+	// ADR-027 §7: wire the tenant→orgs resolver into the RBAC manager so
 	// the read-by-id middleware gate can evaluate the org axis (rbac does not
 	// import tenantorg — the resolver is a func value, mirroring SetScopeAuditor).
 	rbacMgr.SetOrgResolver(func(tid string) []string {
