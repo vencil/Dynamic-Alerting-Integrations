@@ -127,6 +127,10 @@ describe('images offline fallback — drift gate vs platform-data.json', () => {
     //     them, so they are named in the notes as the validated versions
     //   - oauth2-proxy → pinned by the charts by tag + digest; a tag-only
     //     override is the #1302 split-pin, so it must appear NOWHERE
+    //   - da-portal → since ADR-027 §5 the logged-in portal is a container
+    //     of the tenant-api pod, its image pinned by that chart's
+    //     `portal.image` (rewritten with each release); the wizard emits no
+    //     da-portal release and must not override that pin: NOWHERE
     const { PLATFORM_IMAGES } = await import(MOD);
     const { deployGenerateHelmReleases } = await import(
       '../src/interactive/tools/deployment-wizard/utils/generators.js'
@@ -141,10 +145,10 @@ describe('images offline fallback — drift gate vs platform-data.json', () => {
     const yamlOf = (chart: string) => releases.find((r: { chart: string }) => r.chart === chart).yaml as string;
     const notesText = notes.map((n: { body: string }) => n.body).join('\n');
     const CHART_OF: Record<string, string> = {
-      thresholdExporter: 'threshold-exporter', daPortal: 'da-portal', tenantApi: 'tenant-api',
+      thresholdExporter: 'threshold-exporter', tenantApi: 'tenant-api',
     };
     const IN_NOTES = ['prometheus', 'alertmanager', 'configReloader'];
-    const NOWHERE = ['oauth2Proxy'];
+    const NOWHERE = ['oauth2Proxy', 'daPortal'];
     // Every key must be routed somewhere: a new image key has to be placed deliberately.
     expect(Object.keys(PLATFORM_IMAGES).sort()).toEqual(
       [...Object.keys(CHART_OF), ...IN_NOTES, ...NOWHERE].sort(),
@@ -165,8 +169,10 @@ describe('images offline fallback — drift gate vs platform-data.json', () => {
       expect(notesText, `${key} missing from notes`).toContain((PLATFORM_IMAGES as Record<string, string>)[key]);
     }
     const allYaml = releases.map((r: { yaml: string }) => r.yaml).join('\n');
-    const oauthRepo = PLATFORM_IMAGES.oauth2Proxy.slice(0, PLATFORM_IMAGES.oauth2Proxy.lastIndexOf(':'));
-    expect(allYaml).not.toContain(oauthRepo);
+    for (const key of NOWHERE) {
+      const ref = (PLATFORM_IMAGES as Record<string, string>)[key];
+      expect(allYaml, `${key} must not be emitted`).not.toContain(ref.slice(0, ref.lastIndexOf(':')));
+    }
   });
 
   it('never re-emits the refs this PR removed', async () => {
