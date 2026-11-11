@@ -38,21 +38,11 @@ updated_at: 2026-05-19
 
 ### 1. 撤銷該租戶的 federation token
 
-列出該租戶當前的 token：
+由對該租戶有 admin 權限者在 portal 操作（tenant-api 的 API 只接受經登入進來的請求，[ADR-027 §4](../adr/027-tenant-api-caller-identity.md)）：Tenant Manager 勾選該租戶 → **Federation tokens**，對清單裡的每一個 token 按 **撤銷** → **確認撤銷**。
 
-```sh
-curl -s "$TENANT_API/api/v1/federation/tokens?tenant_id=<tenant>"
-```
+撤銷把 token id 寫進 `tenant-federation-store` ConfigMap 的 revoked set —— gateway 會在最終一致的延遲後拒絕它（見下方 §最終一致性）。
 
-對回傳的每一個 `token_id` 撤銷：
-
-```sh
-curl -X DELETE "$TENANT_API/api/v1/federation/tokens/<token_id>"
-```
-
-`DELETE` 把 token id 寫進 `tenant-federation-store` ConfigMap 的 revoked set —— gateway 會在最終一致的延遲後拒絕它（見下方 §最終一致性）。
-
-> 若該租戶**沒有**任何有效 token（`tokens` 回空陣列），本步驟跳過 —— 但仍要做步驟 2。
+> 若對話框顯示該租戶**沒有**未過期的 token，本步驟跳過 —— 但仍要做步驟 2。
 
 ### 2. 移除 federation subset 紀錄
 

@@ -17,6 +17,7 @@ dependencies: [
   "tenant-manager/utils/operational-mode.js",
   "tenant-manager/components/TenantCard.jsx",
   "tenant-manager/components/CustomAlertsModal.jsx",
+  "tenant-manager/components/FederationTokensModal.jsx",
   "tenant-manager/components/IdentityStrip.jsx",
   "tenant-manager/components/AccessScopePanel.jsx",
   "_common/hooks/useDebouncedValue.js",
@@ -47,6 +48,7 @@ import { OverflowBanner } from './tenant-manager/components/OverflowBanner.jsx';
 import { ConfigDerivationBanner } from './tenant-manager/components/ConfigDerivationBanner.jsx';
 import { TenantCard, configErrorReason } from './tenant-manager/components/TenantCard.jsx';
 import { CustomAlertsModal } from './tenant-manager/components/CustomAlertsModal.jsx';
+import { FederationTokensModal } from './tenant-manager/components/FederationTokensModal.jsx';
 import { IdentityStrip } from './tenant-manager/components/IdentityStrip.jsx';
 import { AccessScopePanel } from './tenant-manager/components/AccessScopePanel.jsx';
 import { SavedViewsPanel } from './tenant-manager/components/SavedViewsPanel.jsx';
@@ -180,6 +182,8 @@ export default function TenantManager() {
   const [modalExcluded, setModalExcluded] = useState([]); // #2068: [{name, code}] left out of the YAML
   // ADR-024 §3: the live custom-alert editor opens for one tenant.
   const [customAlertsTenant, setCustomAlertsTenant] = useState(null);
+  // ADR-027 §4 (#1040 S6): federation tokens of one tenant, live API only.
+  const [federationTenant, setFederationTenant] = useState(null);
   const [hoveredCard, setHoveredCard] = useState(null);
   const [activeGroupId, setActiveGroupId] = useState(null);
   // Auth state
@@ -972,6 +976,11 @@ export default function TenantManager() {
                   {t('自訂告警', 'Custom Alerts')}
                 </button>
               )}
+              {selected.size === 1 && authUser && dataSource === 'api' && (
+                <button onClick={() => setFederationTenant(Array.from(selected)[0])} style={styles.button} data-testid="open-federation-tokens">
+                  {t('Federation token', 'Federation tokens')}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1112,6 +1121,13 @@ export default function TenantManager() {
         <CustomAlertsModal
           tenantId={customAlertsTenant}
           onClose={() => setCustomAlertsTenant(null)}
+        />
+      )}
+
+      {federationTenant && authUser && (
+        <FederationTokensModal
+          tenantId={federationTenant}
+          onClose={() => setFederationTenant(null)}
         />
       )}
 

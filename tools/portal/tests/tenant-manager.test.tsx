@@ -806,3 +806,55 @@ describe('TenantManager — group write errors follow the code\'s remedy (#3202)
     expect(await screen.findByText(/updated by someone else/)).toBeInTheDocument();
   });
 });
+
+/**
+ * ADR-027 §4 (#1040 S6): federation tokens are reached from the batch bar,
+ * for exactly one selected tenant, over live data with a signed-in user —
+ * never over demo data, where there is no tenant to issue for.
+ */
+describe('TenantManager — federation tokens entry point', () => {
+  const ME = {
+    email: 'alice@example.com',
+    user: 'alice',
+    groups: ['production-dba'],
+    accessible_tenants: ['prod-mariadb-01'],
+    accessible_domains: ['finance'],
+    permissions: { 'production-dba': ['read', 'write', 'admin'] },
+  };
+
+  function stubLive() {
+    apiFixture('MeResponse', ME);
+    const fetchMock = vi.fn((url: string) => {
+      const u = String(url);
+      if (u.includes('/api/v1/me')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(ME) } as any);
+      }
+      if (u.startsWith('/api/v1/tenants/search')) {
+        return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve(LIVE_SEARCH) } as any);
+      }
+      if (u.startsWith('/api/v1/federation/tokens')) {
+        return Promise.resolve({ ok: true, status: 200, headers: new Headers(), json: () => Promise.resolve([]) } as any);
+      }
+      return Promise.reject(new Error('offline test'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    return fetchMock;
+  }
+
+  it('live data, one tenant selected → the button opens the dialog for that tenant', async () => {
+    const fetchMock = stubLive();
+    await renderAndSettle();
+    fireEvent.click(await screen.findByRole('checkbox', { name: 'Select prod-mariadb-01' }));
+    fireEvent.click(await screen.findByTestId('open-federation-tokens'));
+    await screen.findByTestId('federation-tokens-modal');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/federation/tokens?tenant_id=prod-mariadb-01'));
+  });
+
+  it('demo data → no button, even with one tenant selected', async () => {
+    await renderAndSettle();
+    const [first] = screen.getAllByRole('checkbox', { name: /^Select / });
+    fireEvent.click(first);
+    await screen.findByRole('button', { name: 'Custom Alerts' });
+    expect(screen.queryByTestId('open-federation-tokens')).toBeNull();
+  });
+});
