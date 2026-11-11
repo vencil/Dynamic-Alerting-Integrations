@@ -280,7 +280,9 @@ def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
 @pytest.mark.parametrize("state", [
     "last-run-failed", "no-pre-commit-on-PATH", "e2e-deps-gone", "helm-off-pin",
     "golangci-lint-off-pin", "hadolint-off-pin", "hadolint-absent",
-    "kube-linter-off-pin", "pint-off-pin", "promtool-absent"])
+    "kube-linter-off-pin", "pint-off-pin", "promtool-absent",
+    # One suffix away from the pin: an exact match, not a prefix or substring.
+    "kube-linter-near-pin", "pint-near-pin", "promtool-near-pin"])
 def test_a_no_op_needs_every_condition(tmp_path, state):
     """The no-op path is taken only after a RESULT=ok run, with pre-commit on
     PATH, the e2e deps still in place and helm / golangci-lint / hadolint at
@@ -300,9 +302,13 @@ def test_a_no_op_needs_every_condition(tmp_path, state):
                        golangci="2.5.0" if state == "golangci-lint-off-pin" else _GOLANGCI,
                        hadolint={"hadolint-off-pin": "v2.10.0",
                                  "hadolint-absent": None}.get(state, _HADOLINT),
-                       kube_linter="v0.6.0" if state == "kube-linter-off-pin" else _KUBE_LINTER,
-                       pint="0.70.0" if state == "pint-off-pin" else _PINT,
-                       promtool=None if state == "promtool-absent" else _PROMTOOL)
+                       kube_linter={"kube-linter-off-pin": "v0.6.0",
+                                    "kube-linter-near-pin": _KUBE_LINTER + "0"}.get(
+                                        state, _KUBE_LINTER),
+                       pint={"pint-off-pin": "0.70.0",
+                             "pint-near-pin": _PINT + "1"}.get(state, _PINT),
+                       promtool={"promtool-absent": None,
+                                 "promtool-near-pin": _PROMTOOL + "0"}.get(state, _PROMTOOL))
 
     assert "already bootstrapped" not in r.stdout
     assert calls["pip"]
