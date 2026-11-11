@@ -1635,3 +1635,20 @@ def test_a_relative_git_is_resolved_where_the_service_starts(tmp_path, monkeypat
     monkeypatch.chdir(tmp_path)
     monkeypatch.delitem(_gsvc_child._LOCAL_ENV_VARS, rel, raising=False)
     assert "GIT_DIR" not in _gsvc_child.git_env(rel)
+
+
+def test_a_relative_git_reaches_every_judgement(tmp_path, world):
+    """#3739 review: each judgement runs git from its own job directory, so a
+    relative --git (`gsvc-tools/the-git`) given where the service started was
+    not there for any judgement. It is made absolute at start, like --repo;
+    the verdict is the one a plain `git` gives."""
+    rel = "gsvc-tools/the-git"
+    (tmp_path / "gsvc-tools").mkdir()
+    (tmp_path / rel).symlink_to(h.GIT)
+    fx = FIXTURES[0]
+    _base, write = _split(fx)
+    writes = [{"path": write, "content_b64": h.b64(cases.FIXTURES[fx][write])}]
+    plain = _verdict(world["svc"].validate(world["commits"][fx], writes)[1])
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--git", rel), cwd=tmp_path) as svc:
+        assert _verdict(svc.validate(world["commits"][fx], writes)[1]) == plain

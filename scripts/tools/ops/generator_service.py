@@ -1417,6 +1417,11 @@ def main(argv: Optional[list[str]] = None) -> int:
         value = getattr(settings, name)
         if value is not None:
             setattr(settings, name, os.path.abspath(value))
+    # #3739 review: a --git with a path (`tools/git`) is made absolute too —
+    # each judgement runs it from its own job directory, where a relative
+    # one is not there. A bare name (`git`) stays a PATH lookup.
+    if settings.git and os.path.dirname(settings.git):
+        settings.git = os.path.abspath(settings.git)
     try:
         settings.config_subdir = _normalize_config_subdir(settings.config_subdir)
     except RuntimeError as exc:
