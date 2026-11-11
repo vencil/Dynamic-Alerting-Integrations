@@ -76,8 +76,9 @@ KUBE_LINTER_VERSION = "v0.7.4"
 # SHA-256 of the release asset `kube-linter-linux.tar.gz` at KUBE_LINTER_VERSION.
 # The release publishes a cosign .sig but no sha256 file, so this was pinned
 # on first use (TOFU). This line is the SSOT: ci.yml's `KL_SHA256` must equal
-# it (tests/shared/test_toolchain_pin_parity.py), and .claude/hooks/
-# session-start.sh reads it at run time to install kube-linter (#3611).
+# it (tests/shared/test_toolchain_pin_parity.py), and
+# .claude/hooks/session-start.sh reads it at run time to install kube-linter
+# (#3611).
 KUBE_LINTER_SHA256 = "1d050a5d03e3347cc1cf5b1513f646709c65d129f7aa6c2b1a6388ffb2694671"
 # Supply-chain: pin Docker fallback images by digest (multi-arch index of the tag) so a
 # re-pushed/tampered tag can't swap the image. On version bump, re-resolve each with:
