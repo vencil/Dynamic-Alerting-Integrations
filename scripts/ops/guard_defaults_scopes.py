@@ -333,7 +333,14 @@ def place(paths: list[str], deleted: set[str], exists=os.path.lexists,
         if pair is not None:
             nested.add(pair)
             continue
-        if ancestors and alive and alive[0] != ancestors[0] and path in deleted:
+        # Only when the removed tree sat where the outer tree's walker would
+        # have read it. A `.`-prefixed directory on the way was never part of
+        # the outer tree (CodeRabbit on #3722), so its deletion changes nothing
+        # there. Judged from the PATH alone: HEAD's symlink state says nothing
+        # about the deleted tree (a PR can replace the directory by a link).
+        if (ancestors and alive and alive[0] != ancestors[0] and path in deleted
+                and not any(part.startswith(".") for part in
+                            PurePosixPath(ancestors[0]).relative_to(alive[0]).parts)):
             outer = alive[0]
             scope = next(str(p) for p in parents
                          if str(p) == outer or exists(str(p)))

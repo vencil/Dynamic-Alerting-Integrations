@@ -1112,6 +1112,16 @@ class TestRemovedTreesAreNamedNotGuarded:
         assert rc == mod.EXIT_UNREPRESENTABLE_PATH, rows
         assert rows == [], rows
 
+    def test_removing_a_hidden_inner_tree_does_not_target_the_outer_one(
+            self, tmp_path, monkeypatch, capsys):
+        """walker 不進 `.h`，那棵內層從來不屬於外層的有效設定 ⇒ 刪它不改外層，
+        只點名 removed（CodeRabbit on #3722：先前會把外層列為 target）。"""
+        (tmp_path / "a" / "conf.d").mkdir(parents=True)
+        hidden = "a/conf.d/.h/conf.d/_defaults.yaml"
+        rc, rows = self._run(tmp_path, monkeypatch, capsys, [hidden], [hidden])
+        assert rc == 0, rows
+        assert rows == ["removed\ta/conf.d/.h/conf.d"], rows
+
     def test_deleted_without_its_file_is_a_caller_error(self, monkeypatch, capsys):
         monkeypatch.setattr("sys.stdin", _Stdin(self._GONE + "\0"))
         assert mod.main(["--null", "-", "--deleted"]) == 2
