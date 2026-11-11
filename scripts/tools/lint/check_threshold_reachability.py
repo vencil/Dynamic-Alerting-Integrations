@@ -3088,7 +3088,7 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
         "under `defaults:` (it only backfills the bare base), and its keys come from "
         "the parsed rule's metric name, which cannot carry `{labels}` — the "
         "dimensional variant is only ever printed as a comment in "
-        "tenant-config.yaml; pinned by "
+        "the tenant file (conf.d/<tenant>.yaml); pinned by "
         "tests/ops/test_migrate_threshold_wiring.py",
     "scripts/tools/ops/policy_opa_bridge.py":
         "READS `_defaults.yaml` (`load_defaults`); the census hit is the dict "

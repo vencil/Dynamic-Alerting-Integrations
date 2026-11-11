@@ -2316,6 +2316,7 @@ da-tools migrate <input_file> [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `-o, --output-dir <DIR>` | 輸出目錄 | `./migration_output/` |
+| `--tenant <ID>` | 租戶 id（ADR-035）：租戶檔的檔名與 `tenants:` 底下的 key。標準模式必填，`--dry-run`、`--triage` 不需要 | — |
 | `--dry-run` | 僅顯示報告，不產生檔案 | false |
 | `--triage` | Triage 模式：只產出 CSV 分桶報告 | false |
 | `--interactive` | 遇到不確定時詢問使用者 | false |
@@ -2328,13 +2329,13 @@ da-tools migrate <input_file> [options]
 
 **標準模式**：
 
-- `migration_output/tenant-config.yaml` — 提取出的 threshold
+- `migration_output/conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）
 - `migration_output/platform-recording-rules.yaml` — Recording rules
 - `migration_output/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
 - `migration_output/migration-report.txt` — 詳細遷移報告
 - `migration_output/triage-report.csv` — 需人工審閱的規則清單
 - `migration_output/prefix-mapping.yaml` — Metric 前綴對應表
-- `migration_output/defaults-snippet.yaml` — 要合併進 `_defaults.yaml` 的 `defaults:` 片段。threshold-exporter 只發射宣告過的 key，沒合併時 `tenant-config.yaml` 的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔） <!-- image-caveat: v2.9.0 -->
+- `migration_output/conf.d/_defaults.yaml` — 要合併進 conf.d 根 `_defaults.yaml` 的 `defaults:` 區塊（合併，不要整份覆蓋；先前叫 `defaults-snippet.yaml`）。threshold-exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔） <!-- image-caveat: v2.9.0 -->
 
 **Triage 模式**：
 
@@ -2345,7 +2346,7 @@ da-tools migrate <input_file> [options]
 ```bash
 da-tools migrate ./my-rules.yml --dry-run
 da-tools migrate ./my-rules.yml --triage
-da-tools migrate ./my-rules.yml -o migration_output/
+da-tools migrate ./my-rules.yml --tenant db-a -o migration_output/
 ```
 
 **結束碼**
@@ -2354,7 +2355,7 @@ da-tools migrate ./my-rules.yml -o migration_output/
 |------|------|
 | `0` | 成功 |
 | `1` | 只有未捕捉例外（traceback）會回 1。輸入檔不存在或 YAML 語法錯是 2，但空檔、頂層不是 mapping、不是 UTF-8 目前會 traceback 回 1 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：參數錯誤、輸入檔讀不到或不是合法 YAML，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；`tenant-config.yaml` 與 `defaults-snippet.yaml` 在寫出任何其他檔之前一批交給 `da-guard write`（文字由 Go 產生、整棵樹判一次；已存在的檔整份取代），兩個檔同進退：其中一個被拒（例如目標是 symlink）就一個檔都不寫，逐檔點名被拒的檔與原因（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；要寫進註解的 alert 名、severity、註記、key 或值含註解寫不了的字元（控制字元、U+2028 等）時點名該欄位、什麼都不寫；寫到一半停下時點名已寫入與可能已寫入、不會還原的檔；標準模式找不到可用的 da-guard 也是 2（`--dry-run`、`--triage` 不需要） |
+| `2` | 呼叫端錯誤：參數錯誤、輸入檔讀不到或不是合法 YAML，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；標準模式沒給 `--tenant` 或它不是合法的租戶 id 時什麼都不寫；`conf.d/` 已有這兩個檔以外的檔（例如另一次 `--tenant` 留下的租戶檔）時什麼都不寫；`conf.d/<tenant>.yaml` 與 `conf.d/_defaults.yaml` 在寫出任何其他檔之前一批交給 `da-guard write`（文字由 Go 產生、整棵樹判一次；已存在的檔整份取代），兩個檔同進退：其中一個被拒（例如目標是 symlink）就一個檔都不寫，逐檔點名被拒的檔與原因（[ADR-036](adr/036-single-parser-effective-config.md) §2，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）；要寫進註解的 alert 名、severity、註記、key 或值含註解寫不了的字元（控制字元、U+2028 等）時點名該欄位、什麼都不寫；`da-guard write` 寫到一半停下時點名已寫入與可能已寫入、不會還原的 conf.d 檔；conf.d 批次寫成之後，rule pack、報表、CSV、prefix mapping 才逐一寫在 `-o`，其中一個寫不進去時只點名那個檔、結束碼 2——已寫入的 `conf.d/<tenant>.yaml` 與 `conf.d/_defaults.yaml` 保留、不還原，訊息也不列出它們；標準模式找不到可用的 da-guard 也是 2（`--dry-run`、`--triage` 不需要） |
 
 ---
 
