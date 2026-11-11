@@ -77,6 +77,13 @@ HELM_VERSION=4.3.0
 HELM_SHA256=86584a54def73570558f66f5111cc53dfed56689637ae32c1201205d494f54fb
 GOLANGCI_LINT_VERSION=2.12.2
 GOLANGCI_LINT_SHA256=8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae3943893a553
+# node: the SSOT is the dev container's node feature `version`, a MAJOR only
+# (docs/internal/toolchain-versions.md). An exact release is pinned here so the
+# download can be verified; its major must equal the dev container's, which
+# tests/shared/test_toolchain_pin_parity.py asserts (#3611). SHA-256 of
+# node-v<NODE_VERSION>-linux-x64.tar.xz from nodejs.org's SHASUMS256.txt.
+NODE_VERSION=24.22.2
+NODE_SHA256=48cc0e21e048790e54c0cf5749c2725005313d652651c40b7a21feb9697aaf75
 # hadolint is NOT pinned here: its version and checksum are read below, at run
 # time, from the lint wrapper that owns them —
 # scripts/tools/lint/check_iac_vibe_rules.py
@@ -115,6 +122,12 @@ note() { printf '%s\n' "$1" >> "$MARKER"; }
 # Set, VIBE_SESSION_START_BIN moves where the pinned binaries go. Only the
 # tests set it.
 TOOL_BIN="${VIBE_SESSION_START_BIN:-/usr/local/bin}"
+# node is a tree, not one binary: it is unpacked into NODE_HOME and node / npm
+# / npx are linked into NODE_LINK_BIN. ⛔ Not $TOOL_BIN: the base image's
+# /opt/node22/bin comes before /usr/local/bin on PATH and would shadow it;
+# $HOME/.local/bin comes before both (measured, #3611). Only the tests move them.
+NODE_HOME="${VIBE_SESSION_START_NODE_HOME:-/opt}/node-v$NODE_VERSION"
+NODE_LINK_BIN="${VIBE_SESSION_START_NODE_LINK_BIN:-$HOME/.local/bin}"
 
 # at_pin <tool> <version>: does the <tool> that PATH resolves report <version>?
 # ⛔ PATH's copy, not $TOOL_BIN's: the tests call whichever comes first, so an
@@ -136,6 +149,9 @@ at_pin() {
     # Reads "Haskell Dockerfile Linter X.Y.Z"; the pin carries a leading "v".
     hadolint) out="$(hadolint --version 2>/dev/null)" || return 1
           case "$out" in *" ${2#v}") return 0 ;; esac ;;
+    # Prints "v24.22.2".
+    node) out="$(node --version 2>/dev/null)" || return 1
+          [ "$out" = "v$2" ] && return 0 ;;
     # Prints the bare version ("0.7.4"); the pin carries a leading "v".
     kube-linter) out="$(kube-linter version 2>/dev/null)" || return 1
           [ "$out" = "${2#v}" ] && return 0 ;;
@@ -209,6 +225,44 @@ install_pinned() {
   [ -z "$why" ]
 }
 
+# link_node: node, npm and npx from NODE_HOME into NODE_LINK_BIN.
+link_node() {
+  local t
+  mkdir -p "$NODE_LINK_BIN" || return 1
+  for t in node npm npx; do
+    ln -sfn "$NODE_HOME/bin/$t" "$NODE_LINK_BIN/$t" || return 1
+  done
+}
+
+# install_node: the pinned node release, verified, unpacked whole into
+# NODE_HOME (npm needs its lib/ tree) and linked; then PATH must resolve it.
+# On failure returns 1 with the reason in $why.
+install_node() {
+  local tmp
+  why=""
+  if at_pin node "$NODE_VERSION"; then return 0; fi
+  case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64) ;;
+    *) why="no pinned checksum for $(uname -s)-$(uname -m)"; return 1 ;;
+  esac
+  tmp="$(mktemp -d)" || { why="mktemp"; return 1; }
+  if ! curl -fsSL --retry 3 --connect-timeout 20 --max-time 300 -o "$tmp/pkg" \
+       "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz"; then
+    why="download"
+  elif ! printf '%s  %s\n' "$NODE_SHA256" "$tmp/pkg" | sha256sum -c - >/dev/null 2>&1; then
+    why="sha256 mismatch"
+  elif ! { rm -rf "$NODE_HOME" && mkdir -p "$NODE_HOME" \
+           && tar -xJf "$tmp/pkg" -C "$NODE_HOME" --strip-components=1; }; then
+    why="unpack"
+  elif ! link_node; then
+    why="link into $NODE_LINK_BIN"
+  elif ! at_pin node "$NODE_VERSION"; then
+    why="PATH resolves $(command -v node || echo nothing), not v$NODE_VERSION"
+  fi
+  rm -rf "$tmp"
+  [ -z "$why" ]
+}
+
 # --- Pre-push guards, first and on every run --------------------------------
 # ⛔ Every run, the no-op below included (#2761): a .git/hooks/pre-push being
 # there says nothing about what it is (pre-commit's template, a hook someone
@@ -245,7 +299,7 @@ if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER
   && at_pin helm "$HELM_VERSION" && at_pin golangci-lint "$GOLANGCI_LINT_VERSION" \
   && at_pin hadolint "$HADOLINT_VERSION" \
   && at_pin kube-linter "$KUBE_LINTER_VERSION" && at_pin pint "$PINT_VERSION" \
-  && at_pin promtool "$PROMTOOL_VERSION" \
+  && at_pin promtool "$PROMTOOL_VERSION" && at_pin node "$NODE_VERSION" \
   && pre-commit install; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing else to do"
@@ -366,6 +420,19 @@ else
   note "tags=FAILED"
 fi
 
+# --- 4b. node at its pin (#3611) --------------------------------------------
+# Before the e2e `npm ci` below, so that runs on the pinned node and its npm.
+# A failure here does not stop the steps around it, but it is in RESULT.
+toolchain_failed=""
+say "installing node v$NODE_VERSION (sha256-pinned; major from the dev container)"
+if install_node; then
+  note "node=v$NODE_VERSION"
+else
+  say "  ⛔ node v$NODE_VERSION not installed: $why"
+  note "node=FAILED ($why)"
+  toolchain_failed="node: $why"
+fi
+
 # --- 5. E2E lint dependencies ----------------------------------------------
 # ⛔ `npm ci`, not `npm install`. CI uses `npm ci` everywhere, and `npm install`
 # silently REWRITES the tracked package-lock.json when it is out of sync with
@@ -385,7 +452,6 @@ fi
 # --- 6. helm + golangci-lint at their pins (#2955) --------------------------
 # A failure here does not stop the steps around it, but it is in RESULT: a
 # remote session without helm turns the helm-gated tests red (tests/_helm_gate.py).
-toolchain_failed=""
 say "installing helm v$HELM_VERSION, golangci-lint v$GOLANGCI_LINT_VERSION, hadolint ${HADOLINT_VERSION:-(pin unreadable)}, kube-linter ${KUBE_LINTER_VERSION:-(pin unreadable)}, pint ${PINT_VERSION:-(pin unreadable)} and promtool ${PROMTOOL_VERSION:-(pin unreadable)} (sha256-pinned)"
 if install_pinned helm "$HELM_VERSION" \
      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
@@ -394,7 +460,7 @@ if install_pinned helm "$HELM_VERSION" \
 else
   say "  ⛔ helm v$HELM_VERSION not installed: $why"
   note "helm=FAILED ($why)"
-  toolchain_failed="helm: $why"
+  toolchain_failed="${toolchain_failed:+$toolchain_failed; }helm: $why"
 fi
 if install_pinned golangci-lint "$GOLANGCI_LINT_VERSION" \
      "https://github.com/golangci/golangci-lint/releases/download/v${GOLANGCI_LINT_VERSION}/golangci-lint-${GOLANGCI_LINT_VERSION}-linux-amd64.tar.gz" \

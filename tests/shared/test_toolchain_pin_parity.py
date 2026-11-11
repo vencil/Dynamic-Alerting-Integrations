@@ -362,6 +362,22 @@ def test_session_start_installs_the_dev_container_version(pin: str, feature: str
         f"checks {pin}_SHA256 — the pin this test binds is not what gets installed.")
 
 
+def test_session_start_node_major_is_the_dev_container_major() -> None:
+    """session-start pins an exact node release so the download can be
+    verified (#3611); the SSOT is still the dev container's MAJOR, and this is
+    what keeps the two from splitting."""
+    src = _SESSION_START.read_text(encoding="utf-8")
+    ver = _one(r"^NODE_VERSION=(\d+\.\d+\.\d+)\s*$", src, "session-start.sh NODE_VERSION")
+    _one(r"^NODE_SHA256=([0-9a-f]{64})\s*$", src, "session-start.sh NODE_SHA256")
+    dc = str(_feature("node")["version"])
+    assert ver.split(".")[0] == dc, (
+        f"session-start.sh NODE_VERSION={ver} but the dev container's node is {dc}. "
+        f"Pin a {dc}.x release and its SHA-256 from nodejs.org's SHASUMS256.txt.")
+    assert "v${NODE_VERSION}" in src and '"$NODE_SHA256"' in src, (
+        "session-start.sh no longer builds its node download from NODE_VERSION and "
+        "checks NODE_SHA256 — the pin this test binds is not what gets installed.")
+
+
 # ── CI binary vs lint-wrapper Docker fallback ──────────────────────────────
 
 
