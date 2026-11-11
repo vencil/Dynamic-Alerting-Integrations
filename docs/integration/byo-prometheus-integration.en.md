@@ -84,10 +84,12 @@ In your existing `scrape_configs` (specifically the jobs scraping database expor
 
 ```yaml
 scrape_configs:
-  - job_name: "tenant-db-exporters"
+  # ⛔ The job must be named tenant-exporters: every tenant rule pack selects
+  # up{job="tenant-exporters"}, so under any other name healthy tenants page as absent.
+  - job_name: "tenant-exporters"
     scrape_interval: 10s
     kubernetes_sd_configs:
-      - role: service
+      - role: endpointslice              # one target per pod, so a dead one reads up 0
     relabel_configs:
       # Keep only Services with the scrape annotation
       - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
@@ -97,16 +99,21 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_namespace]
         action: keep
         regex: "db-.+"                    # ← Adjust to your tenant namespace naming pattern
+      # Keep each pod's target on the annotated port only (the annotation must name the port the pod listens on)
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
       # ⭐ Core: Inject namespace name as tenant label
       - source_labels: [__meta_kubernetes_namespace]
         target_label: tenant
-      # Use the port specified in the Service annotation
-      - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
-        action: replace
-        target_label: __address__
-        regex: ([^:]+)(?::\d+)?;(\d+)
-        replacement: $1:$2
+      # Which Service and pod a series came from; leave instance as Prometheus sets it (<pod IP>:<port>)
+      - source_labels: [__meta_kubernetes_service_name]
+        target_label: service
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
 ```
+
+> **Prerequisites (per-pod scrape)**: Prometheus ≥ 2.41 (`keepequal`), and its ServiceAccount needs list/watch on `endpointslices` in `discovery.k8s.io` (without it service discovery is empty and `TenantExporterJobAbsent` fires). A Service's `prometheus.io/port` must name the port **the pod listens on**; a Service without that annotation is not scraped. `instance` is `<pod IP>:<port>`: silences or dashboards written against `instance=<namespace>` must use `tenant` instead.
 
 **Option B — Use custom Label as tenant name** (For architectures where multiple tenants share a namespace)
 

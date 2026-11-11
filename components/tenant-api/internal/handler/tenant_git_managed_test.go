@@ -140,9 +140,12 @@ func TestGetTenant_APIManagedFile(t *testing.T) {
 // gmGroupBatch sends a group batch over In as the member caller.
 func gmGroupBatch(t *testing.T, f *orgEnfFixture) *httptest.ResponseRecorder {
 	t.Helper()
-	setupGroupsFile(t, f.configDir, "groups:\n  g1:\n    label: G1\n    members:\n      - "+orgEnfTenantIn+"\n")
+	// The state store lies outside conf.d, as wireStateStore requires (#2856): a
+	// `_groups.yaml` in conf.d is an uncommitted root file, which a direct write refuses (#3685).
+	stateDir := t.TempDir()
+	setupGroupsFile(t, stateDir, "groups:\n  g1:\n    label: G1\n    members:\n      - "+orgEnfTenantIn+"\n")
 	d := f.deps()
-	d.Groups = groups.NewDirManager(f.configDir)
+	d.Groups = groups.NewDirManager(stateDir)
 	req := newRequestWithChiParam("POST", "/api/v1/groups/g1/batch", "id", "g1",
 		bytes.NewBufferString(`{"patch":{"_silent_mode":"warning"}}`))
 	w := httptest.NewRecorder()

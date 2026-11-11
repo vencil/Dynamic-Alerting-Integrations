@@ -1,6 +1,6 @@
 package handler
 
-// GET /api/v1/audit/tenants/{id}/access-report handler tests (ADR-027 / LD-6
+// GET /api/v1/audit/tenants/{id}/access-report handler tests (ADR-027 §7
 // P6, spec §5.4/§5.5):
 //
 //   - opt-in gate double assertion: the DEFAULT response must carry NEITHER

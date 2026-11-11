@@ -1,6 +1,6 @@
 package handler
 
-// ADR-027 / LD-6 P4b §5c — 403 harness for the write-plane
+// ADR-027 §7 — 403 harness for the write-plane
 // org-scope gates in the handler package (sites #1-#5, #10, #11; the
 // federation sites #6-#9 live in federation/org_write_enforce_test.go).
 //

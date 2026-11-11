@@ -14,7 +14,7 @@ description: 全 component 週期性深度安全稽核 — Recon→平行 Hunt(V
 
 ## 何時觸發 / 跳過
 
-- **觸發**:新信任邊界 GA 前(ADR-027 L7 identity、federation、machine identity);security incident 後的 sweep;季度深稽核。
+- **觸發**:新信任邊界 GA 前(ADR-027 §1 identity、federation、machine identity);security incident 後的 sweep;季度深稽核。
 - **跳過**:per-PR(→ `/security-review`)、單檔 debug(→ `engineering:debug`)、doc/test-only 變更。
 - ⚠️ **不進 CI**、不 per-PR:單次成本高(見下),是刻意觸發的 backlog sweep(defer-with-trigger)。
 

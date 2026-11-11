@@ -174,7 +174,7 @@ func (w *Writer) leavePRBranch() error {
 // remote merge — so a later PR branched from it silently rolls back a shared
 // file (_defaults.yaml, a platform file) that another change already merged. Fetching here, inside the lock and immediately before
 // branching, closes that window atomically (B1, not the TOCTOU-prone lock-outside
-// B2 — ADR-023 §B).
+// B2 — ADR-023 §2).
 //
 // WHY return a ref instead of `reset --hard origin/<base>`: a hard reset would
 // move the LOCAL base ref and revert the working tree. Before #2856 the

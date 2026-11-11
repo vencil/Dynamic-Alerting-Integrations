@@ -23,7 +23,7 @@ WHAT THIS CHECKS (the two halves of the runtime invariant):
   2. `strategy.type: Recreate` is present — replicaCount=1 ALONE is not enough:
      the default RollingUpdate surges a second Ready pod during a rollout, a
      phantom-writer window where two pods each hold their own write lock
-     (ADR-023 §A). The Helm template must pin it.
+     (ADR-023 §1). The Helm template must pin it.
   3. The Helm template still carries the layer-1 `fail` guard (so removing the
      guard, not just bumping the value, is also caught).
   4. No autoscaler manifest (native HPA or KEDA ScaledObject/ScaledJob) is

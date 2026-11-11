@@ -1078,7 +1078,7 @@ definitions:
           type: string
         description: |-
           Claims are the named verified claims carried by the request principal
-          (ADR-027 / LD-6 P2; injected per the oauth2-proxy config). omitempty:
+          (ADR-027 §7; injected per the oauth2-proxy config). omitempty:
           with no claim axes declared (nil map) the key is absent, keeping the
           zero-config response body byte-identical to pre-P2. Go serialises map
           keys sorted, so the rendering is deterministic.
@@ -1092,7 +1092,7 @@ definitions:
       org_claim_keys:
         description: |-
           OrgClaimKeys are the org-scope claim keys of the rules THIS caller
-          matches (ADR-027 / LD-6 P7) — a caller-relative fact ("which of my
+          matches (ADR-027 §7) — a caller-relative fact ("which of my
           claims act as an org axis for me"), NOT "does the platform run an org
           axis". Intersected with the principal's present claims by construction:
           the redacted reverse report strips claim keys as customer-recognizable
@@ -1282,7 +1282,7 @@ definitions:
       custom_alerts:
         description: |-
           CustomAlerts is the tenant's `_custom_alerts` recipes as structured
-          JSON (ADR-024 §S6b-2). The portal recipe modal reads this directly so
+          JSON (ADR-024 §3). The portal recipe modal reads this directly so
           the client never parses YAML — the backend owns the round-trip on both
           read and write. Empty slice when the tenant has none.
         items:
@@ -1370,7 +1370,7 @@ definitions:
         description: |-
           SourceHash is SHA-256[:16] of the raw tenant file. Clients echo it
           back as `base_hash` on PUT .../custom-alerts for optimistic-
-          concurrency (ADR-024 §S6b-2): the write 409s if the file changed
+          concurrency (ADR-024 §3): the write 409s if the file changed
           underneath them.
         type: string
       validation_notices:
@@ -1613,7 +1613,7 @@ definitions:
         description: |-
           Code is TENANT_GIT_MANAGED when the verdict is PUT's refusal of a
           git-managed tenant (#3064), or TENANT_FILE_DIRTY when it is PUT's
-          refusal of a tenant file that differs from HEAD in this server's
+          refusal of a tenant file (or a `_` entry at the conf.d root, #3685) that differs from HEAD in this server's
           repository (#1535, direct mode); warnings carries the text. A client
           can tell "change this tenant in git" / "commit or discard the change
           in the repository" from a body to fix. Absent otherwise.
@@ -2292,8 +2292,9 @@ paths:
         "403":
           description: 'PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api''s
             own forge token lacks write scope to open the PR/MR — an operator must
-            fix the token. (A member refused by the write scope, on the local copy
-            or on the latest base branch, rejects the batch with a 422 instead.)'
+            fix the token. (A member refused by the write scope or the label gate,
+            on the local copy or under the writer lock on the tree the batch lands
+            on, rejects the batch with a 422 instead.)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "404":
@@ -2314,19 +2315,20 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "422":
           description: 'Batch rejected (status rejected): at least one member was
-            refused — by the checks on this server''s copy, or (PR write-back mode)
-            on the latest base branch — so nothing was written and no PR/MR was opened.
-            results lists the members the caller may read: status error (message,
-            code) for the refused ones, not_applied for the rest; the messages name
-            no member index. Codes TENANT_TREE_UNREADABLE and TENANT_CONFIG_NOT_LOADABLE
-            as on POST /api/v1/tenants/batch (#2939). Also when the route generator
-            container refuses the batch as a whole (#2903, ADR-036 §4: the tree with
-            the whole batch applied is judged once): every result is status error
-            with code GENERATOR_FINDINGS (its message names the findings about that
-            result''s tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld
-            carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED
-            (key_verdict_memory, key_verdict_error, key_verdict_undecidable (no root
-            platform file: threshold keys cannot be judged), key_verdict_platform_file
+            refused — by the checks on this server''s copy, or by the same checks
+            judged again under the writer lock on the tree the batch lands on (direct
+            mode: the serving tree; PR write-back mode: the latest base branch) —
+            so nothing was written and no PR/MR was opened. results lists the members
+            the caller may read: status error (message, code) for the refused ones,
+            not_applied for the rest; the messages name no member index. Codes TENANT_TREE_UNREADABLE
+            and TENANT_CONFIG_NOT_LOADABLE as on POST /api/v1/tenants/batch (#2939).
+            Also when the route generator container refuses the batch as a whole (#2903,
+            ADR-036 §4: the tree with the whole batch applied is judged once): every
+            result is status error with code GENERATOR_FINDINGS (its message names
+            the findings about that result''s tenant) and findings[] / findings_compared_with_base
+            / unrelated_findings_withheld carry the findings as for PUT /tenants/{id};
+            or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_undecidable
+            (no root platform file: threshold keys cannot be judged), key_verdict_platform_file
             (the shared key verdict did not complete, ADR-038 decision 5), memory,
             incomplete, too_large: the files the batch produces are too large to judge
             in one request — split the batch, invalid_request, normalized: git attributes
@@ -2503,7 +2505,9 @@ paths:
         repaired; a whole-file PUT can replace it. When the end-of-life check cannot decode the current file's
         tenants: block, that PUT requires write permission on all tenants (an RBAC rule with tenants: ["*"] granting
         write and no org-scope, environments or domains; a prefix pattern does not count) and is otherwise refused
-        with 400, file unchanged — fix it in git then; when allowed, its end-of-life recipe usage counts as none, so
+        with 400, file unchanged — fix it in git then. When the file's environment/domain labels cannot be read
+        either (it does not parse, or its _metadata does not decode), only a platform administrator (such a rule
+        granting admin) may replace it, others get 403 (ADR-027 §7); when allowed, its end-of-life recipe usage counts as none, so
         a body with an end-of-life recipe is refused. A file that exists but cannot be read at all (permissions, I/O,
         a directory) refuses the write.
         A caller who may read the tenant but not write it gets raw_yaml with every receiver credential replaced by
@@ -2611,17 +2615,28 @@ paths:
             or an anchor, alias, merge key or tagged key at the top level or directly
             under tenants: (nothing written). Also 400 when the current tenant file''s
             tenants: block cannot be decoded for the end-of-life check and the caller
-            lacks write permission on all tenants (#2405; nothing written)'
+            lacks write permission on all tenants (#2405; nothing written; when the
+            file''s environment/domain labels cannot be read either, the refusal is
+            the 403 below, ADR-027 §7)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
-          description: 'Forbidden: insufficient permissions. In PR write-back mode
-            the write scope is judged again on the latest base branch, which this
-            server''s local copy may lag: a refusal there is the same 403 with tenant_id,
-            and no PR/MR or branch is left. Code FORBIDDEN for the caller''s permission;
-            in PR write-back mode, code FORGE_FORBIDDEN (#3202) when the forge refuses
-            tenant-api''s own configured token the write scope to open the PR/MR —
-            an operator must fix the token'
+          description: 'Forbidden: insufficient permissions. Only a platform administrator
+            (an admin rule on all tenants, the * pattern, with no org-scope, environments
+            or domains) may change the tenant''s environment or domain label (_metadata,
+            directly or through _profile), or replace a tenant file whose labels cannot
+            be read (ADR-027 §7). The write scope and this label gate are judged again
+            under the writer lock on the tree the write lands on — the serving tree
+            in direct mode, where a write queued ahead may have changed the file;
+            the latest base branch, which this server''s local copy may lag, in PR
+            write-back mode: a refusal there is the same 403 — in direct mode with
+            the gate''s own text and no other field, in PR write-back mode with tenant_id
+            — and nothing is written (no PR/MR or branch is left). A non-administrator''s
+            whole-file write over a tenant file whose labels cannot be read is refused
+            here too. Code FORBIDDEN for the caller''s permission; in PR write-back
+            mode, code FORGE_FORBIDDEN (#3202) when the forge refuses tenant-api''s
+            own configured token the write scope to open the PR/MR — an operator must
+            fix the token'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
@@ -2646,13 +2661,15 @@ paths:
             for every caller: it is never replaced. A tenant file that is itself an
             unresolvable symlink (dangling, looping, or with a non-directory in its
             path) does not count: the write replaces it; or code TENANT_FILE_DIRTY
-            (#1535, direct mode) when the tenant''s conf.d file in tenant-api''s copy
-            differs from the commit the write lands on (modified, staged, deleted,
-            untracked or marked skip-worktree / assume-unchanged outside tenant-api,
-            or a link or the target on a symlinked tenant file''s way inside the repository
-            changed; a target outside the repository, in a nested repository or a
-            submodule is not judged): fixed text, no path; nothing written; commit
-            or discard the change in the repository, then retry'
+            (#1535, direct mode) when the tenant''s conf.d file, or an entry at the
+            conf.d root whose name starts with _ (#3685: the root platform files the
+            write''s key checks read), in tenant-api''s copy differs from the commit
+            the write lands on (modified, staged, deleted, untracked or marked skip-worktree
+            / assume-unchanged outside tenant-api, or a link or the target on a symlinked
+            tenant file''s way inside the repository changed; a target outside the
+            repository, in a nested repository or a submodule is not judged): fixed
+            text, no path; nothing written; commit or discard the change in the repository,
+            then retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2844,13 +2861,15 @@ paths:
             tenants). The tenant''s own file being unreadable in any other way (a
             failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE (config_error unreadable
             or not_regular_file) for every caller: it is never replaced; or code TENANT_FILE_DIRTY
-            (#1535, direct mode) when the tenant''s conf.d file in tenant-api''s copy
-            differs from the commit the write lands on (modified, staged, deleted,
-            untracked or marked skip-worktree / assume-unchanged outside tenant-api,
-            or a link or the target on a symlinked tenant file''s way inside the repository
-            changed; a target outside the repository, in a nested repository or a
-            submodule is not judged): fixed text, no path; nothing written; commit
-            or discard the change in the repository, then retry'
+            (#1535, direct mode) when the tenant''s conf.d file, or an entry at the
+            conf.d root whose name starts with _ (#3685: the root platform files the
+            write''s key checks read), in tenant-api''s copy differs from the commit
+            the write lands on (modified, staged, deleted, untracked or marked skip-worktree
+            / assume-unchanged outside tenant-api, or a link or the target on a symlinked
+            tenant file''s way inside the repository changed; a target outside the
+            repository, in a nested repository or a submodule is not judged): fixed
+            text, no path; nothing written; commit or discard the change in the repository,
+            then retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -2987,13 +3006,15 @@ paths:
             being unreadable in any other way (a failed read, a FIFO) is TENANT_CONFIG_NOT_LOADABLE
             (config_error unreadable or not_regular_file) for every caller: it is
             never replaced; or code TENANT_FILE_DIRTY (#1535, direct mode) when the
-            tenant''s conf.d file in tenant-api''s copy differs from the commit the
-            write lands on (modified, staged, deleted, untracked or marked skip-worktree
-            / assume-unchanged outside tenant-api, or a link or the target on a symlinked
-            tenant file''s way inside the repository changed; a target outside the
-            repository, in a nested repository or a submodule is not judged): fixed
-            text, no path; nothing written; commit or discard the change in the repository,
-            then retry'
+            tenant''s conf.d file, or an entry at the conf.d root whose name starts
+            with _ (#3685: the root platform files the write''s key checks read),
+            in tenant-api''s copy differs from the commit the write lands on (modified,
+            staged, deleted, untracked or marked skip-worktree / assume-unchanged
+            outside tenant-api, or a link or the target on a symlinked tenant file''s
+            way inside the repository changed; a target outside the repository, in
+            a nested repository or a submodule is not judged): fixed text, no path;
+            nothing written; commit or discard the change in the repository, then
+            retry'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "413":
@@ -3247,7 +3268,7 @@ paths:
         The body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file
         holds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare
         tenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false
-        with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file differing from HEAD
+        with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file, or an entry at the conf.d root whose name starts with _ (#3685), differing from HEAD
         in this server's copy (#1535: valid: false with PUT's 409 TENANT_FILE_DIRTY text and code: TENANT_FILE_DIRTY), a tenant another conf.d file also
         declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
         listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
@@ -3339,8 +3360,9 @@ paths:
         "403":
           description: 'PR write-back mode, code FORGE_FORBIDDEN (#3202): tenant-api''s
             own forge token lacks write scope to open the PR/MR — an operator must
-            fix the token. (An operation refused by the write scope, on the local
-            copy or on the latest base branch, rejects the batch with a 422 instead.)'
+            fix the token. (An operation refused by the write scope or the label gate,
+            on the local copy or under the writer lock on the tree the batch lands
+            on, rejects the batch with a 422 instead.)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "409":
@@ -3357,35 +3379,37 @@ paths:
             $ref: '#/definitions/ErrorResponse'
         "422":
           description: 'Batch rejected (status rejected): at least one operation was
-            refused — by the checks on this server''s copy, or (PR write-back mode)
-            on the latest base branch the PR/MR would be cut from — so nothing was
-            written and no PR/MR was opened. results lists every operation in request
-            order: status error (message, code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE,
-            TENANT_FILE_DIRTY (direct mode, #1535: the operation''s tenant file differs
-            from HEAD in tenant-api''s copy), TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE,
-            CONFIG_DECODE_ERROR, BAD_REQUEST (the operation fails validation, e.g.
-            a _silent_mode value the exporter ignores, #3227), INTERNAL_ERROR) for
-            the refused ones, not_applied for the rest. TENANT_TREE_UNREADABLE (#2939):
-            the tree after the batch holds an unresolvable symlink (dangling, looping,
-            or with a non-directory in its path) that no operation replaces; every
-            operation not refused for another reason carries it; an operation whose
-            own tenant file cannot be read (and is not an unresolvable symlink (dangling,
-            looping, or with a non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE,
-            and the message names the entries only for a caller with write permission
-            on all tenants (otherwise their number); an async task''s stored results
-            never name them. Also when the route generator container refuses the batch
-            as a whole (#2903, ADR-036 §4: the tree with the whole batch applied is
-            judged once): every result is status error with code GENERATOR_FINDINGS
-            (its message names the findings about that result''s tenant) and findings[]
-            / findings_compared_with_base / unrelated_findings_withheld carry the
-            findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (key_verdict_memory,
-            key_verdict_error, key_verdict_undecidable (no root platform file: threshold
-            keys cannot be judged), key_verdict_platform_file (the shared key verdict
-            did not complete, ADR-038 decision 5), memory, incomplete, too_large:
-            the files the batch produces are too large to judge in one request — split
-            the batch, invalid_request, normalized: git attributes would commit other
-            bytes than the ones judged). An async batch''s task carries the same per-op
-            results.'
+            refused — by the checks on this server''s copy, or by the same checks
+            judged again under the writer lock on the tree the batch lands on (direct
+            mode: the serving tree; PR write-back mode: the latest base branch the
+            PR/MR would be cut from) — so nothing was written and no PR/MR was opened.
+            results lists every operation in request order: status error (message,
+            code: e.g. FORBIDDEN, TENANT_DECLARED_ELSEWHERE, TENANT_FILE_DIRTY (direct
+            mode, #1535: the operation''s tenant file, or an entry at the conf.d root
+            whose name starts with _ (#3685), differs from HEAD in tenant-api''s copy),
+            TENANT_CONFIG_NOT_LOADABLE, TENANT_TREE_UNREADABLE, CONFIG_DECODE_ERROR,
+            BAD_REQUEST (the operation fails validation, e.g. a _silent_mode value
+            the exporter ignores, #3227), INTERNAL_ERROR) for the refused ones, not_applied
+            for the rest. TENANT_TREE_UNREADABLE (#2939): the tree after the batch
+            holds an unresolvable symlink (dangling, looping, or with a non-directory
+            in its path) that no operation replaces; every operation not refused for
+            another reason carries it; an operation whose own tenant file cannot be
+            read (and is not an unresolvable symlink (dangling, looping, or with a
+            non-directory in its path)) is TENANT_CONFIG_NOT_LOADABLE, and the message
+            names the entries only for a caller with write permission on all tenants
+            (otherwise their number); an async task''s stored results never name them.
+            Also when the route generator container refuses the batch as a whole (#2903,
+            ADR-036 §4: the tree with the whole batch applied is judged once): every
+            result is status error with code GENERATOR_FINDINGS (its message names
+            the findings about that result''s tenant) and findings[] / findings_compared_with_base
+            / unrelated_findings_withheld carry the findings as for PUT /tenants/{id};
+            or code GENERATOR_REJECTED (key_verdict_memory, key_verdict_error, key_verdict_undecidable
+            (no root platform file: threshold keys cannot be judged), key_verdict_platform_file
+            (the shared key verdict did not complete, ADR-038 decision 5), memory,
+            incomplete, too_large: the files the batch produces are too large to judge
+            in one request — split the batch, invalid_request, normalized: git attributes
+            would commit other bytes than the ones judged). An async batch''s task
+            carries the same per-op results.'
           schema:
             $ref: '#/definitions/internal_handler.BatchResponse'
         "429":

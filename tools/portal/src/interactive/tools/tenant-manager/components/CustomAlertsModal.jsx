@@ -7,7 +7,7 @@ import { ERROR_CODES, classifyApiError, apiErrorMessage } from '../../_common/ap
 /* ── i18n ──────────────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
 
-/* ── CustomAlertsModal (ADR-024 §S6b-2b, #741) ────────────────────────
+/* ── CustomAlertsModal (ADR-024 §3, #741) ────────────────────────
  *
  * The live editor for a tenant's `_custom_alerts`: lists existing recipes,
  * mounts <RecipeBuilder> to add/edit, and commits the whole array via

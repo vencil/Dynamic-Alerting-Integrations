@@ -3,8 +3,8 @@ package config
 // aliases_registry_test.go — pins deprecatedKeyAliases to the threshold
 // registry's deprecated_aliases section (#1231 commit 2).
 //
-// SSOT wiring: rule-packs/threshold-registry.yaml (generated from
-// _registry_lib.DEPRECATED_KEY_ALIASES) is the alias SSOT; this package's
+// SSOT wiring: rule-packs/threshold-registry.yaml (hand-authored since
+// D-A PR-3) is the alias SSOT; this package's
 // deprecatedKeyAliases table is a runtime mirror. This test asserts the two
 // are EQUAL — both directions — so a rename landing in the registry without
 // the Go mirror (or an alias window closed in the registry but left open
@@ -77,14 +77,14 @@ func TestDeprecatedKeyAliasesPinnedToRegistry(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("deprecatedKeyAliases (Go mirror) != registry deprecated_aliases (SSOT)\n"+
 			"  Go mirror: %v\n  registry : %v\n"+
-			"fix: edit _registry_lib.DEPRECATED_KEY_ALIASES + regen the registry, then update aliases.go to match",
+			"fix: edit deprecated_aliases in rule-packs/threshold-registry.yaml, then update aliases.go to match",
 			got, want)
 	}
 }
 
 // TestDeprecatedAliasTargetsAreRegistryKeys asserts every alias target is an
 // active registry key and every retired spelling is NOT — the same fail-loud
-// contract build_registry_doc enforces at generation time, re-checked here so
+// contract the registry's fixed-point check (check_threshold_registry.py) enforces, re-checked here so
 // a hand-edited registry cannot smuggle a dangling alias past the Go mirror.
 func TestDeprecatedAliasTargetsAreRegistryKeys(t *testing.T) {
 	doc := loadRegistryDoc(t)

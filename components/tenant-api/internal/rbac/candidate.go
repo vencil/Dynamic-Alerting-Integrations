@@ -1,6 +1,6 @@
 package rbac
 
-// Candidate-config seams for the P7 what-if dry-run (ADR-027 / LD-6 P7).
+// Candidate-config seams for the P7 what-if dry-run (ADR-027 §7).
 // A candidate is an operator-supplied _rbac.yaml that must be evaluated with
 // EXACTLY the live pipeline — same strict parse, same validation, same
 // ReverseAccessReport semantics — without ever being installed. Both seams

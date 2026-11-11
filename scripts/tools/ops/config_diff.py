@@ -216,18 +216,24 @@ class _Token(NamedTuple):
     text: str
 
 
-def _read_tree(conf_d, timeout, flag):
+def _read_tree(conf_d, timeout, flag, absent=False):
     """parse-tree's document for `conf_d` (given as `flag`); an empty one
-    for a side with no config (a first import: no directory, or no entry
-    whose role is `config`). Raises `_lib_parse_tree.ParseTreeError`, and
+    for a side with no config (a first import: `absent` — nothing was at the
+    path when `_lib_input.selected` judged it — or no entry whose role is
+    `config`). Raises `_lib_parse_tree.ParseTreeError`, and
     `CallerError` (`dir_not_accessible`, `_lib_input.require_listed`) for a
     directory whose root da-guard cannot list — ⛔ #3693: that was read as
     holding no config file, a base side as a first import (rc 1, every
     tenant added, stderr empty) and a PR side as one with no config file.
 
     #3206: "is there any config" is asked of this same document's entries,
-    not of a listing run before it — one walk, one snapshot."""
-    if not os.path.isdir(conf_d):
+    not of a listing run before it — one walk, one snapshot.
+
+    ⛔ #3721: "is it there" is read (`absent`), never asked again here. An
+    `os.path.isdir` of its own read a base side removed after it was judged
+    as a first import — rc 1, every tenant added, stderr empty; da-guard
+    reading a directory that is gone fails closed (ParseTreeError)."""
+    if absent:
         return _EMPTY_TREE
     doc = _lib_parse_tree.run(conf_d, None, timeout)
     root = next((e for e in _lib_parse_tree.entries_of(doc) if e.path == "."), None)
@@ -375,16 +381,17 @@ def _classify(rel, key, change, stem, doc, changed_views, view_status):
                         "render (partial coverage): it may matter elsewhere", views)
 
 
-def _platform_view(old_dir, new_dir, timeout):
+def _platform_view(old_dir, new_dir, timeout, *, old_absent=False):
     """(ViewResult, old_doc, new_doc) for the platform settings. A PR side
     parse-tree cannot read, or a tool failure on either side, is no result
-    (ADR-037 decision 4)."""
+    (ADR-037 decision 4). `old_absent`: `_lib_input.absent` of the base side
+    (#3721) — a library caller with no parser reads both sides."""
     try:
         new_doc = _read_tree(new_dir, timeout, "--new-dir")
     except _lib_parse_tree.ParseTreeError as e:
         return rd.ViewResult("not_computed", f"PR side: {e}"), None, None
     try:
-        old_doc = _read_tree(old_dir, timeout, "--old-dir")
+        old_doc = _read_tree(old_dir, timeout, "--old-dir", old_absent)
     except _lib_parse_tree.ParseTreeError as e:
         return rd.ViewResult("not_computed", f"base side: {e}"), None, None
     return rd.ViewResult("computed", ""), old_doc, new_doc
@@ -1731,7 +1738,8 @@ def _run(args):
     # #3206: ONE parse-tree document per side for the whole run — the platform
     # settings read it, and whether a side has any config file is asked of
     # its entries, not of a second listing.
-    platform = _platform_view(args.old_dir, args.new_dir, rd.DEFAULT_TIMEOUT)
+    platform = _platform_view(args.old_dir, args.new_dir, rd.DEFAULT_TIMEOUT,
+                              old_absent=_lib_input.absent(args, "old_dir"))
     view, old_doc, new_doc = platform
     if old_doc is None:
         # #3206 N-4: no document for a side is no answer for the run — never a

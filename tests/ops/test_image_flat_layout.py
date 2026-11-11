@@ -595,6 +595,23 @@ def test_generate_observed_map_refuses_when_no_pack_is_reachable(
     assert map_path.read_bytes() == original, "the committed map was rewritten"
 
 
+def test_backtest_reads_the_registry_under_the_image_layout(staged_image_dir):
+    """D-A PR-3: `da-tools backtest`'s served side reads the registry's tiers
+    and dimensions. The image carries the generated RULE_PACKS module, not
+    the YAML, so it must read the module (review of D-A PR-3: it opened the
+    YAML and raised RepoTreeNotFoundError)."""
+    probe = (
+        "import json, backtest_threshold as b\n"
+        "tiers, defaults = b._registry_tiers()\n"
+        "print(json.dumps({'tiers': len(tiers), 'defaults': len(defaults),"
+        " 'dims': len(b._registry_dimensions())}))\n"
+    )
+    proc = _run_flat(staged_image_dir, "-c", probe)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+    out = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert out["tiers"] > 0 and out["defaults"] > 0 and out["dims"] > 0, out
+
+
 def test_registry_repo_functions_fail_loudly_under_the_image_layout(
     staged_image_dir,
 ):
@@ -610,7 +627,7 @@ def test_registry_repo_functions_fail_loudly_under_the_image_layout(
         "out = {'root': L._REPO_ROOT,"
         " 'predicate': L.is_shipped_optional_key('x')}\n"
         "for name, call in [('load', lambda: L.load_registry()),\n"
-        "                   ('write', lambda: L.write_registry()),\n"
+        "                   ('regen', lambda: L.regen()),\n"
         "                   ('surfaces', lambda: L.surface_specs({}))]:\n"
         "    try:\n"
         "        call()\n"
@@ -624,5 +641,5 @@ def test_registry_repo_functions_fail_loudly_under_the_image_layout(
     out = json.loads(proc.stdout.strip().splitlines()[-1])
     assert out["root"] is None
     assert out["predicate"] is True
-    for name in ("load", "write", "surfaces"):
+    for name in ("load", "regen", "surfaces"):
         assert out[name] and "repo-only" in out[name], (name, out)

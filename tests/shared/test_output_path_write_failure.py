@@ -737,7 +737,7 @@ ROWS: list[Row] = [
       reach="non-interactive flags only",
       shapes=("parent_is_file", "target_is_file")),
     R("ops/migrate_rule.py", "-o/--output-dir", "dir",
-      lambda c, out: [_legacy_rules(c.tmp), "-o", str(out)],
+      lambda c, out: [_legacy_rules(c.tmp), "--tenant", "t1", "-o", str(out)],
       reach="tmp legacy Prometheus rules file",
       shapes=("parent_is_file", "target_is_file")),
     R("ops/migrate_to_operator.py", "--output-dir", "dir",

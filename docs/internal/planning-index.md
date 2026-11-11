@@ -122,7 +122,7 @@ SSOT 永遠在 source（各 backlog / yaml / code），index 是 grep + render �
 
 ## 關聯
 
-- [ADR-019 §Layer 2 — Discovery-based Index Generator](../adr/019-planning-ssot.md#三層設計) — 本工具的 design rationale
+- [ADR-019 §三層設計（Layer 2 — Discovery-based Index Generator）](../adr/019-planning-ssot.md#三層設計) — 本工具的 design rationale
 - [`planning-id-mapping.md`](planning-id-mapping.md) — legacy ID → TRK 對映表
 - [`dev-rules.md` §P1](dev-rules.md) — commit trailer 規範
 - [issue #379](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/379) — Planning SSOT system implementation epic（本工具為 chunk 2a）

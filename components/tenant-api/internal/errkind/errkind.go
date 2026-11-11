@@ -22,8 +22,9 @@ type Kind string
 // The kinds of failure. Each is answered by exactly one row of the handler's
 // kindTable; the comments say what the kind is, not how it is answered.
 const (
-	// FreshBaseScope: a PR-mode write the metadata write scope refuses on the
-	// fresh base it would land on (#2857).
+	// FreshBaseScope: a write the write scope or the label gate refuses under
+	// the writer lock, on the tree it would land on — a PR-mode write's fresh
+	// base (#2857), a direct-mode write's serving tree (ADR-027 §7).
 	FreshBaseScope Kind = "fresh_base_scope"
 	// FreshBaseOrgs: the fresh base's _tenant_orgs.yaml cannot be read, so a
 	// PR-mode write's organization scope cannot be judged (#2857).
@@ -65,8 +66,8 @@ const (
 	// TenantTreeScan: the conf.d walk that checks where the tenant is
 	// declared could not run.
 	TenantTreeScan Kind = "tenant_tree_scan"
-	// TenantFileDirty: the tenant file differs from the commit the write
-	// would land on (#1535 item 6).
+	// TenantFileDirty: the tenant file, or a `_` entry at the conf.d root,
+	// differs from the commit the write would land on (#1535 item 6, #3685).
 	TenantFileDirty Kind = "tenant_file_dirty"
 	// TenantFileNotRegular: the tenant's conf.d entry is a FIFO, socket or
 	// device (#2477).

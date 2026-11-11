@@ -447,7 +447,7 @@ func TestErrConflict_IsError(t *testing.T) {
 	}
 }
 
-// --- S5 shift-left preflight (ADR-024 §S5): custom-alert recipe validation ---
+// --- S5 shift-left preflight (ADR-024 §5): custom-alert recipe validation ---
 
 func TestValidate_CustomAlerts_ValidRecipe(t *testing.T) {
 	t.Parallel()
