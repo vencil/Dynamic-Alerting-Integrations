@@ -1525,3 +1525,128 @@ def test_the_service_log_never_carries_the_generators_text(tmp_path):
     log = svc.log.read_text(encoding="utf-8", errors="replace")
     assert "listening on" in log, log
     assert canary not in log, log
+
+
+# ── #3739: --repo is judged by its reader, git, and the refusal names it ─────
+
+def test_a_repo_subdirectory_refuses_to_start(tmp_path, world):
+    """#3739: `git -C` walks up to the enclosing repository, so a directory
+    inside one was served as that repository with --config-subdir read from
+    its root — an empty conf.d, every write judged against nothing."""
+    sub = world["repo"] / "not-the-root"
+    sub.mkdir(exist_ok=True)
+    svc = h.Service(tmp_path / "s", sub, bin_dir=world["bin"], wait=False)
+    assert svc.proc.wait(60) == 2
+    log = svc.log.read_text(encoding="utf-8")
+    assert f"--repo {sub}: a directory inside a repository" in log, log
+    svc.stop()
+
+
+def test_an_inherited_git_dir_does_not_replace_repo(tmp_path, world):
+    """#3739: a GIT_DIR in the environment (a git hook sets one) made `git -C
+    <--repo>` read that repository: a --repo that is no repository served
+    the other one. The variables are git's own list (`git rev-parse
+    --local-env-vars`), dropped from every git this service runs."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    svc = h.Service(tmp_path / "s", plain, bin_dir=world["bin"], wait=False,
+                    env={"GIT_DIR": str(world["repo"] / ".git")})
+    assert svc.proc.wait(60) == 2
+    log = svc.log.read_text(encoding="utf-8")
+    assert f"--repo {plain}: " in log and "not a git repository" in log, log
+    svc.stop()
+
+
+def test_a_repo_that_is_no_repository_is_named(tmp_path, world):
+    """#3739: git's own `fatal: not a git repository … .git` named neither
+    the flag nor the path."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    svc = h.Service(tmp_path / "s", plain, bin_dir=world["bin"], wait=False)
+    assert svc.proc.wait(60) == 2
+    log = svc.log.read_text(encoding="utf-8")
+    assert f"ERROR: --repo {plain}: fatal: not a git repository" in log, log
+    svc.stop()
+
+
+def test_a_bare_repository_is_a_root(tmp_path, world):
+    """#3739: a bare repository has no work tree and an empty
+    `--show-prefix`: it is a root, served."""
+    bare = tmp_path / "bare.git"
+    clean = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    subprocess.run([h.GIT, "clone", "-q", "--bare", str(world["repo"]), str(bare)],
+                   check=True, capture_output=True, timeout=120, env=clean)
+    with h.Service(tmp_path / "s", bare, bin_dir=world["bin"]) as svc:
+        assert svc.proc.poll() is None
+
+
+def test_an_inherited_git_dir_does_not_reach_a_judgement(tmp_path, world):
+    """#3739: every git this service runs gets `git_env` — the judgement's
+    tree reads too, not only the start-up checks. With GIT_DIR pointing at
+    another repository, the judgement still reads --repo: the same verdict
+    as the service without it (that repository holds none of these
+    commits)."""
+    other = h.init_repo(tmp_path / "other")
+    h.commit_tree(other, {"x.yaml": "tenants: {}\n"})
+    fx = FIXTURES[0]
+    _base, write = _split(fx)
+    writes = [{"path": write, "content_b64": h.b64(cases.FIXTURES[fx][write])}]
+    plain = _verdict(world["svc"].validate(world["commits"][fx], writes)[1])
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   env={"GIT_DIR": str(other / ".git")}) as svc:
+        assert _verdict(svc.validate(world["commits"][fx], writes)[1]) == plain
+
+
+def test_safe_directory_by_environment_still_reaches_git(monkeypatch):
+    """#3739: the ``GIT_CONFIG*`` carriers are kept — they hold configuration,
+    not where the repository is, and are how ``safe.directory`` reaches a
+    git that runs non-root with no writable HOME (the da-tools image)."""
+    import _gsvc_child
+    monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
+    monkeypatch.setenv("GIT_CONFIG_KEY_0", "safe.directory")
+    monkeypatch.setenv("GIT_CONFIG_VALUE_0", "*")
+    monkeypatch.setenv("GIT_DIR", "/nonexistent")
+    env = _gsvc_child.git_env(h.GIT)
+    assert (env.get("GIT_CONFIG_COUNT"), env.get("GIT_CONFIG_KEY_0")) == ("1", "safe.directory")
+    assert "GIT_DIR" not in env
+
+
+def test_a_git_that_cannot_list_its_variables_is_refused(tmp_path, monkeypatch):
+    """#3739: no list from git is no list — refused naming --git, never an
+    empty one kept (every variable passed on) and never cached."""
+    import _gsvc_child
+    fake = tmp_path / "git"
+    fake.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(_gsvc_child.GitReadError):
+        _gsvc_child.git_env(str(fake))
+    assert str(fake) not in _gsvc_child._LOCAL_ENV_VARS
+
+
+def test_a_relative_git_is_resolved_where_the_service_starts(tmp_path, monkeypatch):
+    """#3739 review: `git rev-parse --local-env-vars` ran with ``cwd="/"``, so
+    a relative --git (``bin/git``) was looked up from ``/`` — a git that is
+    there reported as missing."""
+    import _gsvc_child
+    rel = "gsvc-test-tools/the-git"  # nothing at /gsvc-test-tools: from "/" it is missing
+    assert not os.path.exists("/" + rel)
+    h.stub(tmp_path / "gsvc-test-tools", "the-git", f'#!/bin/sh\nexec "{h.GIT}" "$@"\n')
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.delitem(_gsvc_child._LOCAL_ENV_VARS, rel, raising=False)
+    assert "GIT_DIR" not in _gsvc_child.git_env(rel)
+
+
+def test_a_relative_git_reaches_every_judgement(tmp_path, world):
+    """#3739 review: each judgement runs git from its own job directory, so a
+    relative --git (`gsvc-tools/the-git`) given where the service started was
+    not there for any judgement. It is made absolute at start, like --repo;
+    the verdict is the one a plain `git` gives."""
+    rel = "gsvc-tools/the-git"
+    h.stub(tmp_path / "gsvc-tools", "the-git", f'#!/bin/sh\nexec "{h.GIT}" "$@"\n')
+    fx = FIXTURES[0]
+    _base, write = _split(fx)
+    writes = [{"path": write, "content_b64": h.b64(cases.FIXTURES[fx][write])}]
+    plain = _verdict(world["svc"].validate(world["commits"][fx], writes)[1])
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--git", rel), cwd=tmp_path) as svc:
+        assert _verdict(svc.validate(world["commits"][fx], writes)[1]) == plain
