@@ -1,11 +1,12 @@
-package confd
+package config
 
-// #3504: the top-level keys a tenant file may hold are the tenant-config
-// schema's, the schema that check_confd_schema holds every tenant file to
-// (additionalProperties false). TenantFileManagement reads them from
-// tenantFileTopLevelKeys; this holds the two equal, so a key added to one
-// and not the other turns this red instead of making the API and the schema
-// gate disagree about what a tenant file is.
+// #3504 / #3671: the top-level keys a tenant file may hold are the
+// tenant-config schema's, the schema that check_confd_schema holds every
+// tenant file to (additionalProperties false). tenant-api's
+// TenantFileManagement and the shared key verdict read them from
+// tenantFileTopLevelKeys; this holds the two equal, so a key added to one and
+// not the other turns this red instead of making the API, the verdict and the
+// schema gate disagree about what a tenant file is.
 
 import (
 	"encoding/json"
@@ -18,8 +19,8 @@ import (
 
 func TestTenantFileTopLevelKeys_MatchTheSchema(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join("..", "..", "..", "..", "docs", "schemas", "tenant-config.schema.json")
-	raw, err := os.ReadFile(path)
+	path := filepath.Join(findRepoRootForRegistry(t), "docs", "schemas", "tenant-config.schema.json")
+	raw, err := os.ReadFile(path) // #nosec G304 -- repo schema
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
 	}
@@ -57,5 +58,10 @@ func TestTenantFileTopLevelKeys_MatchTheSchema(t *testing.T) {
 	sort.Strings(fromCode)
 	if !reflect.DeepEqual(fromSchema, fromCode) {
 		t.Errorf("tenant-config schema top-level properties %v, tenantFileTopLevelKeys %v", fromSchema, fromCode)
+	}
+	for _, k := range fromSchema {
+		if !TenantFileTopLevelKey(k) {
+			t.Errorf("TenantFileTopLevelKey(%q) = false, the schema admits it", k)
+		}
 	}
 }

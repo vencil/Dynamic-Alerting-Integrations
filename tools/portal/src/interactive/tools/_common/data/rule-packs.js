@@ -54,10 +54,11 @@ purpose: |
   platform supplies", and for these keys there is no such thing — omitting one
   is silence, not a fallback.
 
-  Per-default optional field `metricClass` ('saturation') mirrors
-  scaffold_tenant.py RULE_PACKS `metric_class` (via platform-data
-  `metricClass`) — consumers use it to show the saturation `_critical`
-  educational hint (display-only, never blocks validation).
+  Per-default field `metricClass` mirrors the threshold registry's
+  `metric_class` (via scaffold_tenant.py RULE_PACKS and platform-data
+  `metricClass`; one of the registry schema's classes) — consumers read only
+  'saturation', to show the saturation `_critical` educational hint
+  (display-only, never blocks validation).
 
   Closure deps: none. Pure data + one helper.
 

@@ -254,7 +254,14 @@ def _config_diff(root):
     return sorted(config_diff._changed_tenants(report)) + report["uncovered_files"]
 
 
-# cell id -> (defining file, relative to scripts/tools; adapter)
+def _migrate_rule_other_confd_files(root):
+    # #3671: migrate_rule refuses an output conf.d holding a config file
+    # other than the two it writes (another --tenant's tenant file is another
+    # tenant). A hidden file there is read by no reader: no tenant, no refusal.
+    import migrate_rule
+    return migrate_rule.other_confd_files(root, {"_defaults.yaml"})
+
+
 def _da_assembler_foreign_paths(root):
     # #3671: a CR owns the directory of its name; the config files there it
     # did not render are another author's. The tree's root stands for that
@@ -265,6 +272,7 @@ def _da_assembler_foreign_paths(root):
     return da_assembler._foreign_paths(root.parent, cr)
 
 
+# cell id -> (defining file, relative to scripts/tools; adapter)
 CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "tree_tenants": ("_lib_confd.py", _tree_tenants),
     "declared_tenants": ("_lib_parse_cache.py", _declared_tenants),
@@ -290,6 +298,7 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     # (check_confd_schema) and hidden names at all (check_retire_drift).
     "check_confd_schema": ("lint/check_confd_schema.py", _check_confd_schema),
     "check_retire_drift": ("lint/check_retire_drift.py", _check_retire_drift),
+    "migrate_rule_other_confd_files": ("ops/migrate_rule.py", _migrate_rule_other_confd_files),
     "da_assembler_foreign_paths": ("ops/da_assembler.py", _da_assembler_foreign_paths),
 }
 

@@ -188,7 +188,7 @@ class TestVerdicts:
         assert _run(ci, dev) == 0
 
     def test_missing_package_exits_one(self, tmp_path):
-        ci, dev = _write_pair(tmp_path, "pyyaml croniter", "pyyaml")
+        ci, dev = _write_pair(tmp_path, "pyyaml hypothesis", "pyyaml")
         assert _run(ci, dev) == 1
 
     def test_name_normalization_prevents_false_drift(self, tmp_path):
@@ -205,12 +205,12 @@ class TestVerdicts:
         assert _run(ci, tmp_path / "missing.json") == 2
 
     def test_json_output_shape_on_drift(self, tmp_path, capsys):
-        ci, dev = _write_pair(tmp_path, "pyyaml croniter", "pyyaml")
+        ci, dev = _write_pair(tmp_path, "pyyaml hypothesis", "pyyaml")
         rc = _run(ci, dev, "--json")
         payload = json.loads(capsys.readouterr().out)
         assert rc == 1
         assert payload["status"] == "drift"
-        assert payload["missing"] == ["croniter"]
+        assert payload["missing"] == ["hypothesis"]
 
     def test_json_output_on_caller_error(self, tmp_path, capsys):
         """#3617: under --json a caller error leaves stdout empty, the cause
@@ -245,9 +245,9 @@ class TestLiveRepo:
         """
         real = REPO_ROOT / ".devcontainer" / "devcontainer.json"
         text = real.read_text(encoding="utf-8")
-        assert " croniter " in text, "fixture assumption broke: croniter not declared"
+        assert " hypothesis " in text, "fixture assumption broke: hypothesis not declared"
         mutant = tmp_path / "devcontainer.json"
-        mutant.write_text(text.replace(" croniter ", " ", 1), encoding="utf-8")
+        mutant.write_text(text.replace(" hypothesis ", " ", 1), encoding="utf-8")
 
         rc = mod.main([
             "--devcontainer", str(mutant),

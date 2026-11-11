@@ -72,8 +72,12 @@ func TestThresholdValueRatchet(t *testing.T) {
 		{name: "windows that do not overlap, reordered",
 			base: doc(sec("t1", "k:\n      default: \"abc\"\n      overrides:\n        - {window: \"01:00-02:00\", value: \"1\"}\n        - {window: \"03:00-04:00\", value: \"2\"}")),
 			body: doc(sec("t1", "k:\n      default: \"abc\"\n      overrides:\n        - {window: \"03:00-04:00\", value: \"2\"}\n        - {window: \"01:00-02:00\", value: \"1\"}")), wantNote: 1},
+		// #3683: a value under a window that never applies is not part of
+		// the reading; the entry is the window_invalid finding's
+		// (pkg/config TestRatchet_InvalidWindowAsWritten), so the unchanged
+		// default here stays a notice.
 		{name: "new refused value under a window that never applies", base: doc(sec("t1", `k: "abc"`)),
-			body: doc(sec("t1", "k:\n      default: \"abc\"\n      overrides:\n        - {window: \"bogus\", value: \"xyz\"}")), wantErrs: 1},
+			body: doc(sec("t1", "k:\n      default: \"abc\"\n      overrides:\n        - {window: \"bogus\", value: \"xyz\"}")), wantNote: 1},
 		{name: "only reason added", base: doc(sec("t1", "k:\n      default: \"abc\"\n      expires: \"2030-01-01T00:00:00Z\"")),
 			body: doc(sec("t1", "k:\n      default: \"abc\"\n      expires: \"2030-01-01T00:00:00Z\"\n      reason: migration")), wantNote: 1},
 		{name: "no base file", base: "", body: doc(sec("t1", `k: "abc"`)), wantErrs: 1},

@@ -1129,8 +1129,8 @@ def _regen_setup(tmp_path, monkeypatch, dev_text=None, seed_text=None):
         p.parent.mkdir(parents=True)
         p.write_text(text if text is not None else
                      (REPO / rel).read_text(encoding="utf-8"), encoding="utf-8")
-    # The registry too, made stale (a comment line): a `--regen` that wrote it
-    # would change its bytes.
+    # The registry too, with a comment line added: since D-A PR-3 it is the
+    # authored source, so a `--regen` must leave those bytes alone.
     registry = root / "rule-packs" / "threshold-registry.yaml"
     registry.parent.mkdir(parents=True)
     registry.write_text((REPO / "rule-packs" / "threshold-registry.yaml").read_text(
@@ -1139,6 +1139,11 @@ def _regen_setup(tmp_path, monkeypatch, dev_text=None, seed_text=None):
     monkeypatch.setattr(lib, "_REPO_ROOT", str(root))
     monkeypatch.setattr(lib, "DEV_DEFAULTS_PATH", str(dev))
     monkeypatch.setattr(lib, "TRY_LOCAL_DEFAULTS_PATH", str(seed))
+    # …and the generated RULE_PACKS module, so no regen here writes the repo.
+    module = root / "ops" / "_rule_packs_generated.py"
+    module.parent.mkdir(parents=True)
+    module.write_text("# stale\n", encoding="utf-8")
+    monkeypatch.setattr(lib, "RULE_PACKS_MODULE_PATH", str(module))
     real = lib.surface_specs
     monkeypatch.setattr(lib, "surface_specs",
                         lambda doc: [s for s in real(doc) if s.get("confd")])
@@ -1361,9 +1366,9 @@ def test_threshold_registry_regen_judges_the_value_by_yaml_v3(tmp_path, monkeypa
 
 def test_threshold_registry_regen_refused_writes_not_even_the_registry(
         tmp_path, monkeypatch, capsys):
-    """A refused conf.d surface: rc 2 and every file — the registry and both
-    `_defaults.yaml` — keeps its bytes (the registry used to be written
-    before the surfaces were judged)."""
+    """A refused conf.d surface: rc 2 and every file — the registry, both
+    `_defaults.yaml` and the RULE_PACKS module — keeps its bytes (the
+    module is written last, after every surface was judged)."""
     monkeypatch.syspath_prepend(str(TOOLS / "lint"))
     import check_threshold_registry as gate
     _lib, _dev, _seed = _regen_setup(
@@ -1375,17 +1380,27 @@ def test_threshold_registry_regen_refused_writes_not_even_the_registry(
     assert _bytes(tmp_path / "repo") == before
 
 
-def test_threshold_registry_regen_writes_the_registry_and_surfaces(tmp_path, monkeypatch):
-    """The same run without the refusal writes all three back to the
-    committed bytes — so the row above is not passing on a run that writes
-    nothing anyway."""
+def test_threshold_registry_regen_reports_the_module_it_wrote(tmp_path, monkeypatch):
+    """The module is a generated surface the operator must commit, so a
+    regen that rewrote it names it among the touched paths."""
+    lib, _dev, _seed = _regen_setup(tmp_path, monkeypatch)
+    _summary, touched = lib.regen()
+    assert str(tmp_path / "repo" / "ops" / "_rule_packs_generated.py") in touched, touched
+
+
+def test_threshold_registry_regen_writes_the_surfaces_not_the_registry(tmp_path, monkeypatch):
+    """The same run without the refusal writes both surfaces and the module
+    back to the committed bytes — so the row above is not passing on a run
+    that writes nothing anyway — and leaves the authored registry as it is."""
     monkeypatch.syspath_prepend(str(TOOLS / "lint"))
     import check_threshold_registry as gate
     _lib, dev, seed = _regen_setup(tmp_path, monkeypatch, _stale(_DEV_REL, *_DEV_STALE),
                                    _stale(_SEED_REL, *_SEED_STALE))
     assert gate.main(["--regen"]) == 0
     registry = tmp_path / "repo" / "rule-packs" / "threshold-registry.yaml"
-    assert registry.read_bytes() == (REPO / "rule-packs" / "threshold-registry.yaml").read_bytes()
+    assert registry.read_bytes() == (REPO / "rule-packs" / "threshold-registry.yaml").read_bytes() + b"# stale\n"
+    module = tmp_path / "repo" / "ops" / "_rule_packs_generated.py"
+    assert module.read_bytes() == (REPO / "scripts" / "tools" / "ops" / "_rule_packs_generated.py").read_bytes()
     assert dev.read_bytes() == (REPO / _DEV_REL).read_bytes()
     assert seed.read_bytes() == (REPO / _SEED_REL).read_bytes()
 
@@ -1566,7 +1581,8 @@ def test_onboard_platform_leaves_a_non_number_out_of_defaults(tmp_path):
     assert key == "defaults" and [k for k, _v in defaults["map"]] == ["c_d"], entry
 
 
-# ── migrate_rule（tenant-config.yaml、defaults-snippet.yaml；#3206 10c 起由 da-guard write 寫）──
+# ── migrate_rule（<tenant>.yaml、_defaults.yaml；#3206 10c 起由 da-guard write 寫；#3671 起
+#    是一棵 conf.d 的兩個檔）──
 
 def _mr(tmp_path, threshold, env=None, *extra):
     rules = tmp_path / "rules.yml"
@@ -1574,16 +1590,77 @@ def _mr(tmp_path, threshold, env=None, *extra):
                      f"    expr: app_queue_depth > {threshold}\n"
                      "    labels: {severity: warning}\n", encoding="utf-8")
     out = tmp_path / "out"
-    return _run("ops/migrate_rule.py", str(rules), *extra, "-o", str(out), env=env), out
+    return _run("ops/migrate_rule.py", str(rules), "--tenant", "t1", *extra, "-o", str(out),
+                env=env), out
 
 
 def test_migrate_rule_writes_what_reads_back(tmp_path):
     r, out = _mr(tmp_path, "1e3")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert 'custom_app_queue_depth: "1e3"' in (out / "tenant-config.yaml").read_text(
+    assert 'custom_app_queue_depth: "1e3"' in (out / "conf.d" / "t1.yaml").read_text(
         encoding="utf-8")
-    assert "custom_app_queue_depth: 1000" in (out / "defaults-snippet.yaml").read_text(
+    assert "custom_app_queue_depth: 1000" in (out / "conf.d" / "_defaults.yaml").read_text(
         encoding="utf-8")
+
+
+def test_migrate_rule_output_is_a_conf_d_the_exporter_serves(tmp_path):
+    # #3671: the two files are a conf.d — the root `_defaults.yaml` declares
+    # the key, the tenant file writes it under `tenants.<tenant>` — so the
+    # exporter serves the migrated threshold as it is, with no hand edit.
+    # Before, `tenant-config.yaml` held the key at its top level: no reader
+    # read it, and the tree served the tenant nothing.
+    r, out = _mr(tmp_path, "80")
+    assert r.returncode == 0, r.stdout + r.stderr
+    sv = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir",
+                         str(out / "conf.d")], capture_output=True, text=True, encoding="utf-8",
+                        timeout=120, check=False)
+    assert sv.returncode == 0, sv.stdout + sv.stderr
+    assert json.loads(sv.stdout)["tenants"]["t1"]["values"]["custom_app_queue_depth"] == 80
+    assert sorted(p.name for p in (out / "conf.d").iterdir()) == ["_defaults.yaml", "t1.yaml"]
+
+
+@pytest.mark.parametrize("tenant", ["platform-alert-rules", "prefix-mapping", "platform-recording-rules"])
+def test_migrate_rule_a_tenant_named_like_another_output_keeps_its_file(tmp_path, tenant):
+    # Review of #3671: these are valid tenant ids, and with every output in
+    # -o the rule pack / mapping written after the batch replaced the tenant
+    # file (rc 0, thresholds gone). The conf.d files live in -o/conf.d.
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
+                     "    expr: app_queue_depth > 80\n", encoding="utf-8")
+    out = tmp_path / "out"
+    r = _run("ops/migrate_rule.py", str(rules), "--tenant", tenant, "-o", str(out))
+    assert r.returncode == 0, r.stdout + r.stderr
+    text = (out / "conf.d" / f"{tenant}.yaml").read_text(encoding="utf-8")
+    assert f"tenants:\n  {tenant}:\n" in text and "custom_app_queue_depth" in text, text
+
+
+def test_migrate_rule_refuses_a_conf_d_holding_another_tenant(tmp_path):
+    # Review of #3671: a rerun with another --tenant left the first tenant's
+    # file beside the new one — two tenants in the tree. Refused, nothing
+    # written; the same -o and --tenant reruns as before.
+    r, out = _mr(tmp_path, "80")
+    assert r.returncode == 0, r.stdout + r.stderr
+    before = _bytes(out)
+    r = _run("ops/migrate_rule.py", str(tmp_path / "rules.yml"), "--tenant", "t2", "-o", str(out))
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "t1.yaml, which this run does not write" in r.stderr, r.stderr
+    assert _bytes(out) == before
+    r, out = _mr(tmp_path, "90")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_migrate_rule_needs_a_valid_tenant_to_write(tmp_path):
+    # #3671: the tenant id names the file and is its `tenants:` key. Absent
+    # (a write mode) or not one (ADR-035): rc 2, nothing written.
+    rules = tmp_path / "rules.yml"
+    rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
+                     "    expr: app_queue_depth > 80\n", encoding="utf-8")
+    for extra, words in (((), "--tenant is required"), (("--tenant", "Bad_ID"), "not a valid tenant id")):
+        out = tmp_path / ("out" + str(len(extra)))
+        r = _run("ops/migrate_rule.py", str(rules), *extra, "-o", str(out))
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert words in r.stderr, r.stderr
+        assert not out.exists(), sorted(_bytes(out))
 
 
 def test_migrate_rule_quotes_a_key_holding_a_hash(tmp_path):
@@ -1592,25 +1669,26 @@ def test_migrate_rule_quotes_a_key_holding_a_hash(tmp_path):
     # double-quoted, read back as itself.
     r, out = _mr(tmp_path, "80", None, "--prefix", "team #")
     assert r.returncode == 0, r.stdout + r.stderr
-    assert '"team #app_queue_depth": "80"' in (out / "tenant-config.yaml").read_text(
+    assert '"team #app_queue_depth": "80"' in (out / "conf.d" / "t1.yaml").read_text(
         encoding="utf-8")
 
 
 def test_migrate_rule_one_refused_file_writes_neither(tmp_path):
-    # The two conf.d files are one batch: `defaults-snippet.yaml` (once
-    # written last) refused as a symlink ⇒ `tenant-config.yaml` is not
+    # The two conf.d files are one batch: `_defaults.yaml` (once
+    # written last) refused as a symlink ⇒ `t1.yaml` is not
     # written either, nor any rule pack or report.
     from _platform_fs import symlink_or_skip
     (tmp_path / "elsewhere.yaml").write_text("defaults: {}\n", encoding="utf-8")
     out = tmp_path / "out"
-    out.mkdir()
-    symlink_or_skip(str(tmp_path / "elsewhere.yaml"), out / "defaults-snippet.yaml")
+    (out / "conf.d").mkdir(parents=True)
+    symlink_or_skip(str(tmp_path / "elsewhere.yaml"), out / "conf.d" / "_defaults.yaml")
     before = _bytes(out)
     r, out = _mr(tmp_path, "80")
     assert r.returncode == 2, r.stdout + r.stderr
-    assert "defaults-snippet.yaml: symlink" in r.stderr and "nothing was written" in r.stderr, \
+    assert "_defaults.yaml: symlink" in r.stderr and "nothing was written" in r.stderr, \
         r.stderr
-    assert sorted(p.name for p in out.iterdir()) == ["defaults-snippet.yaml"]
+    assert sorted(p.relative_to(out).as_posix() for p in out.rglob("*")) == \
+        ["conf.d", "conf.d/_defaults.yaml"]
     assert _bytes(out) == before
 
 
@@ -1619,9 +1697,9 @@ def test_migrate_rule_rerun_replaces_both_files(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
     r, out = _mr(tmp_path, "90")
     assert r.returncode == 0, r.stdout + r.stderr
-    tc = (out / "tenant-config.yaml").read_text(encoding="utf-8")
+    tc = (out / "conf.d" / "t1.yaml").read_text(encoding="utf-8")
     assert 'custom_app_queue_depth: "90"' in tc and '"80"' not in tc, tc
-    assert "custom_app_queue_depth: 90\n" in (out / "defaults-snippet.yaml").read_text(
+    assert "custom_app_queue_depth: 90\n" in (out / "conf.d" / "_defaults.yaml").read_text(
         encoding="utf-8")
 
 
@@ -1631,7 +1709,7 @@ def test_migrate_rule_writes_a_default_past_18_digits_as_a_float(tmp_path):
     r, out = _mr(tmp_path, "1e20")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "custom_app_queue_depth: 100000000000000000000.0\n" in (
-        out / "defaults-snippet.yaml").read_text(encoding="utf-8")
+        out / "conf.d" / "_defaults.yaml").read_text(encoding="utf-8")
 
 
 def test_migrate_rule_without_da_guard_is_exit_2(tmp_path):
@@ -1649,7 +1727,7 @@ def test_a_failed_batch_leaves_no_output_directory(tmp_path):
     rules.write_text("groups:\n- name: g\n  rules:\n  - alert: Deep\n"
                      "    expr: app_queue_depth > 80\n", encoding="utf-8")
     nested = tmp_path / "new" / "deeper" / "out"
-    r = _run("ops/migrate_rule.py", str(rules), "-o", str(nested),
+    r = _run("ops/migrate_rule.py", str(rules), "--tenant", "t1", "-o", str(nested),
              env=_no_da_guard(tmp_path))
     assert r.returncode == 2, r.stdout + r.stderr
     assert not (tmp_path / "new").exists()

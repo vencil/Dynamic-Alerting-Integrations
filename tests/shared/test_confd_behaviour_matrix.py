@@ -286,8 +286,6 @@ TOOLS: dict[str, Tool] = {
                                              "--config-dir", "{conf}", "--ci")),
     "analyze_rule_pack_gaps": Tool((_PY, _T + "ops/analyze_rule_pack_gaps.py", "--config-dir", "{conf}")),
     "explain_route": Tool((_PY, _T + "ops/explain_route.py", "--config-dir", "{conf}")),
-    "maintenance_scheduler": Tool((_PY, _T + "ops/maintenance_scheduler.py", "--config-dir", "{conf}",
-                                   "--dry-run")),
     "notification_tester": Tool((_PY, _T + "ops/notification_tester.py", "--config-dir", "{conf}",
                                  "--dry-run")),
     "policy_engine": Tool((_PY, _T + "ops/policy_engine.py", "--config-dir", "{conf}", "--ci")),
@@ -303,8 +301,8 @@ TOOLS: dict[str, Tool] = {
                              "--tenant", "newt", "--db", "mariadb", "-o", "{conf}")),
     "onboard_platform": Tool((_PY, _T + "ops/onboard_platform.py", "--rule-files",
                               "{cell}/rules.yaml", "-o", "{conf}"), prep=_alert_rules),
-    "migrate_rule": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml", "-o", "{conf}"),
-                         prep=_alert_rules),
+    "migrate_rule": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml",
+                          "--tenant", "newt", "-o", "{conf}"), prep=_alert_rules),
     # Every other write mode of those writers: each writes into the tree
     # without a conf.d file to confirm, or a different one.
     "migrate_rule --triage": Tool((_PY, _T + "ops/migrate_rule.py", "{cell}/rules.yaml",

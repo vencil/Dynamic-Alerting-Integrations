@@ -72,13 +72,13 @@ echo ""
 # Test Group 2: 檔案化輸出
 # ============================================================
 echo "[Test Group 2] 檔案化輸出"
-FILE_OUTPUT=$(python3 "$TOOL" "$INPUT" -o "$OUTPUT_DIR" 2>&1)
+FILE_OUTPUT=$(python3 "$TOOL" "$INPUT" --tenant t1 -o "$OUTPUT_DIR" 2>&1)
 
 assert_contains "STDOUT 顯示成功計數" "成功解析.*3.*條" "$FILE_OUTPUT"
 assert_contains "STDOUT 顯示需人工處理" "需人工處理" "$FILE_OUTPUT"
 assert_contains "STDOUT 顯示輸出路徑" "檔案已輸出" "$FILE_OUTPUT"
 
-assert_file_exists "tenant-config.yaml 已產生" "$OUTPUT_DIR/tenant-config.yaml"
+assert_file_exists "t1.yaml 已產生" "$OUTPUT_DIR/conf.d/t1.yaml"
 assert_file_exists "platform-recording-rules.yaml 已產生" "$OUTPUT_DIR/platform-recording-rules.yaml"
 assert_file_exists "platform-alert-rules.yaml 已產生" "$OUTPUT_DIR/platform-alert-rules.yaml"
 assert_file_exists "migration-report.txt 已產生" "$OUTPUT_DIR/migration-report.txt"
@@ -90,7 +90,7 @@ echo ""
 # ============================================================
 echo "[Test Group 3] 檔案內容驗證"
 
-TENANT_CONTENT=$(cat "$OUTPUT_DIR/tenant-config.yaml")
+TENANT_CONTENT=$(cat "$OUTPUT_DIR/conf.d/t1.yaml")
 RECORDING_CONTENT=$(cat "$OUTPUT_DIR/platform-recording-rules.yaml")
 ALERT_CONTENT=$(cat "$OUTPUT_DIR/platform-alert-rules.yaml")
 REPORT_CONTENT=$(cat "$OUTPUT_DIR/migration-report.txt")

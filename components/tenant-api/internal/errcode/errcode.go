@@ -222,8 +222,10 @@ const (
 	// gitops.ErrTenantFileDirty): modified, staged, deleted, untracked or
 	// marked skip-worktree / assume-unchanged outside tenant-api, or — for a
 	// tenant file reached through symlinks — a link on the way or the target
-	// inside the repository changed. Every verdict a write takes (base hash,
-	// merge, no-op) is on that file, so a write over it would judge or commit
+	// inside the repository changed — or an entry at the conf.d root whose
+	// name starts with `_` does (#3685: the root platform files the write's
+	// key checks read). Every verdict a write takes (base hash, merge,
+	// no-op, key checks) is on those files, so a write over it would judge or commit
 	// bytes no commit holds. Fixed text, no path. Nothing written; commit or
 	// discard the change in the server's repository, then retry. Also
 	// carried per op on a direct-mode batch.

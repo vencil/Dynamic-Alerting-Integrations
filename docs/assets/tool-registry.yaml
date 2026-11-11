@@ -108,11 +108,10 @@ tools:
   icon: rules
   tags:
   - rules
-  - PromQL
   - reference
   desc:
-    en: Recording & alert rules
-    zh: Recording 與 Alert 規則
+    en: Rule pack sizes, linked to the alert reference
+    zh: Rule Pack 規模，連到告警參考
   related:
   - rule-pack-matrix
   - rule-pack-selector

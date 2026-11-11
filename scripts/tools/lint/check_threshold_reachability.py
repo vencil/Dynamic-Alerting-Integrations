@@ -3088,7 +3088,7 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
         "under `defaults:` (it only backfills the bare base), and its keys come from "
         "the parsed rule's metric name, which cannot carry `{labels}` — the "
         "dimensional variant is only ever printed as a comment in "
-        "tenant-config.yaml; pinned by "
+        "the tenant file (conf.d/<tenant>.yaml); pinned by "
         "tests/ops/test_migrate_threshold_wiring.py",
     "scripts/tools/ops/policy_opa_bridge.py":
         "READS `_defaults.yaml` (`load_defaults`); the census hit is the dict "
@@ -3102,6 +3102,11 @@ _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
         "one `da-guard served-values` run (`_written_tree`, #3140 `--tenant`), so "
         "no conf.d it writes is shipped or read again; the one key a caller "
         "names is declared under `optional_overrides:`, never under `defaults:`",
+    "scripts/tools/ops/_rule_packs_generated.py":
+        "PROJECTS rule-packs/threshold-registry.yaml (written only by "
+        "`check_threshold_registry.py --regen`, byte-checked by that gate) "
+        "into the threshold half of scaffold_tenant.RULE_PACKS; its `defaults` "
+        "tier is READS-only data for the scaffold face above, which probes it",
     "scripts/tools/ops/config_diff.py":
         "READS `_` files (through `da-guard parse-tree`) and writes no conf.d; "
         "the census hit is RENDERED_CARRIERS, the table mapping the top-level "
@@ -3353,7 +3358,7 @@ def run_check(
             "declared list of: " + "; ".join(missing) + " — so a TENANT cannot "
             "set it either (ValidateTenantKeys refuses an undeclared key) and "
             "that alert is structurally unable to fire. Ship the key on every "
-            "declared face (edit scaffold_tenant.RULE_PACKS, then "
+            "declared face (edit rule-packs/threshold-registry.yaml, then "
             "check_threshold_registry.py --regen), or land a real fix and drop "
             "it from KNOWN_UNWIRED. (#1310 / TRK-337)"
         )

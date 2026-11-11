@@ -45,6 +45,15 @@ _RECONCILER_KEY = ("helm/federation-reconciler",
 _GENERATOR_KEY = ("helm/tenant-api", "generator-service", "v2.9.0")
 _KNOWN_KEYS = (_RECONCILER_KEY, _GENERATOR_KEY)
 
+# A workload the pinned image CAN run — the positive control. The repo's last
+# capable live pin (a CronJob running `maintenance_scheduler.py`) went with
+# that CronJob in #3639, so the control is synthetic: the same script against
+# `tools/v2.9.0`, an immutable tag whose tree does contain it
+# (test_v290_lacks_both_entry_points asserts that ground truth).
+_CAPABLE = gate.Workload("k8s/90-synthetic/cronjob.yaml",
+                         "k8s/90-synthetic/cronjob.yaml (container c)",
+                         "v2.9.0", "script", "maintenance_scheduler.py")
+
 
 @pytest.fixture(scope="module")
 def live():
@@ -95,15 +104,17 @@ class TestLiveRepoIsClean:
         assert orphaned == []
         assert len(exempted) == len(_KNOWN_KEYS)
 
-    def test_a_capable_workload_exists(self, live):
-        """At least one da-tools workload passes on its own merits.
+    def test_a_capable_workload_passes(self, live):
+        """A da-tools workload the image can run passes on its own merits.
 
         Positive control: without it, "0 violations" could equally mean the
-        capability lookup always returns success.
+        capability lookup always returns success — and the incapable live
+        pins failing (test_only_the_registered_two_are_incapable) is the
+        negative half of the same lookup.
         """
-        workloads, _ = live
-        capable = [w for w in workloads if gate.evaluate(w) is None]
-        assert capable, "no da-tools workload passes — capability lookup is suspect"
+        assert gate.evaluate(_CAPABLE) is None, (
+            "a workload tools/v2.9.0 can run was reported incapable — "
+            "capability lookup is suspect")
 
     def test_every_exemption_key_matches_a_real_workload(self, live):
         """A registry entry that matches nothing is dead weight (and hides drift)."""
@@ -176,9 +187,10 @@ class TestExemptionIsTagScoped:
 def test_stale_exemption_is_reported(live):
     """An entry the pinned image now SATISFIES must be flagged for deletion."""
     workloads, _ = live
-    capable = next(w for w in workloads if gate.evaluate(w) is None)
+    capable = _CAPABLE
+    assert gate.evaluate(capable) is None
     violations, _, stale, _ = gate.run_check(
-        workloads, {**gate.EXEMPTIONS, capable.key: "bogus — EXIT: never"})
+        workloads + [capable], {**gate.EXEMPTIONS, capable.key: "bogus — EXIT: never"})
     assert violations == []
     assert len(stale) == 1
     assert capable.source in stale[0]

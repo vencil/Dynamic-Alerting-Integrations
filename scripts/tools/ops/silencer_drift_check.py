@@ -90,13 +90,11 @@ Known limitations (out of MVP scope, document for follow-up):
       audit by group, not literal value, for templated alerts.
       ⚠️ Measured 2026-08-27 by loading `rule-packs/` through this
       tool's own `load_alerts()`: all 122 alerts carry a `tenant:`
-      label and all 122 are templated (0 literal). Every silence
-      `maintenance_scheduler.py` creates carries a literal
-      `tenant=<id>` matcher. So this platform's own scheduler-created
-      silences ALL land in this false-positive case — they report
-      `matched_rules: 0` and are classified orphan. Do not wire `--ci`
-      over a live silence dump until that is resolved; the gate would
-      fail on every scheduled maintenance window.
+      label and all 122 are templated (0 literal). A silence with a
+      literal `tenant=<id>` matcher (the shape operators write for one
+      tenant) lands in this false-positive case — it reports
+      `matched_rules: 0` and is classified orphan. Do not wire `--ci`
+      over a live silence dump until that is resolved.
       (Counting method matters here: a `grep` for the double-quoted
       form misses `rule-pack-custom-alerts.yaml`'s single-quoted
       `tenant: '{{ ... }}'` lines — and that pack, tenant self-service

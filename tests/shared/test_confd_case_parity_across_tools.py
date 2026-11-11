@@ -718,7 +718,6 @@ KNOWN_INSENSITIVE: set[str] = {
     "config_history.py",
     "da_assembler.py",
     "generate_tenant_mapping_rules.py",
-    "maintenance_scheduler.py",
     "tenant_verify.py",
     "threshold_govern.py",
 }

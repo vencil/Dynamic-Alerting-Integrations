@@ -35,7 +35,6 @@ uncovered:
   - JVMThreadPoolExhaustion
   - JVMThreadPoolExhaustionCritical
   rule-pack-kafka.yaml:
-  - KafkaExporterAbsent
   - KafkaHighConsumerLag
   - KafkaHighConsumerLagCritical
   - KafkaHighRequestRate
@@ -48,7 +47,6 @@ uncovered:
   - ContainerCrashLoop
   - ContainerImagePullFailure
   rule-pack-mariadb.yaml:
-  - MariaDBExporterAbsent
   - MariaDBHighAbortedConnections
   - MariaDBHighConnections
   - MariaDBHighConnectionsCritical
@@ -81,7 +79,6 @@ uncovered:
   - ThresholdExporterDown
   - ThresholdExporterTooFewReplicas
   rule-pack-postgresql.yaml:
-  - PostgreSQLExporterAbsent
   - PostgreSQLHighConnections
   - PostgreSQLHighConnectionsCritical
   - PostgreSQLHighDeadlocks
@@ -89,7 +86,6 @@ uncovered:
   - PostgreSQLHighReplicationLagCritical
   - PostgreSQLHighRollbackRatio
   rule-pack-rabbitmq.yaml:
-  - RabbitMQExporterAbsent
   - RabbitMQHighConnections
   - RabbitMQHighMemory
   - RabbitMQHighMemoryCritical

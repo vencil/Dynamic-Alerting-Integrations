@@ -20,7 +20,7 @@ ENV PATH="/opt/venv/bin:$PATH"
 # (tests/shared/test_toolchain_pin_parity.py::test_image_pip_pins_are_the_ci_constraints).
 # Literal, not `-c`: this build context is components/da-tools/app, which the CI
 # and Makefile image builds stub without build.sh, so requirements/ is not in it.
-RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.10.0 croniter==6.2.4 && \
+RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.10.0 && \
     python -m pip uninstall -y pip
 
 # ── Runtime Stage ──────────────────────────────────────────────────

@@ -12,9 +12,8 @@ PUSHGATEWAY_URL="${PUSHGATEWAY_URL:-http://pushgateway:9091}"
 SEED_TENANT="${SEED_TENANT:-db-demo}"
 THREADS_CONNECTED="${THREADS_CONNECTED:-200}"
 
-# Push to job=tenant-exporters so absent(mysql_up{job="tenant-exporters"}) is
-# satisfied (MariaDBExporterAbsent stays quiet); prometheus honor_labels keeps
-# the tenant + job labels intact.
+# Push to job=tenant-exporters (the job the tenant rule packs select);
+# prometheus honor_labels keeps the tenant + job labels intact.
 #   mysql_up=1                                → suppresses MariaDBDown
 #   mysql_global_status_uptime=86400          → suppresses MariaDBRecentRestart
 #   mysql_global_status_threads_connected=200 → 200 > critical(120) → HEADLINE

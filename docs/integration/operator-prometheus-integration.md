@@ -84,7 +84,7 @@ prometheus:
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: tenant-db-exporters
+  name: tenant-exporters
   namespace: monitoring
   labels:
     release: kube-prometheus-stack
@@ -103,6 +103,10 @@ spec:
         # ★ 核心：將 namespace 注入為 tenant 標籤
         - sourceLabels: [__meta_kubernetes_namespace]
           targetLabel: tenant
+        # ⛔ job 必須是 tenant-exporters：每個租戶 rule pack 都選 up{job="tenant-exporters"}。
+        # 沒有這條，prometheus-operator 會用 Service 名稱當 job，健康的租戶也會被當成缺席而 page。
+        - targetLabel: job
+          replacement: tenant-exporters
 ```
 
 ### 1b. 為 threshold-exporter 建立 ServiceMonitor
@@ -234,8 +238,6 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 | 告警 | 為什麼 Operator 模式沒有它的來源 |
 |---|---|
 | `PrometheusConfigReloadFailed` | 選 `job="prometheus"`：那是本 repo raw 設定的 Prometheus 自 scrape job，kube-prometheus-stack 以自己的 Service 名稱命名該 job（它自帶的 `PrometheusBadConfig` 涵蓋同一件事） |
-| `TenantExporterJobAbsent` | 讀 `up{job="tenant-exporters"}`：那個 job 只存在於 raw 設定；Operator 模式下租戶 exporter 由你自己的 ServiceMonitor 抓，job 名稱由它決定。照樣輸出會永遠 firing |
-| `MassExporterOutage` | 同上（`up{job="tenant-exporters"}`） |
 <!-- operator-excluded-rules:end -->
 
 `tests/ops/test_operator_generate_rule_copies.py` 比對上表與推導結果，兩邊不一致就紅。
@@ -244,7 +246,7 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 
 ⚠️ **部署了 federation 卻沒開 ServiceMonitor，會收到兩條 critical。** `FederationRevocationReconcileStale`（指標不存在的那一半）與 `FederationAuditPipelineSilent` 以 kube-state-metrics 判斷元件是否部署（reconciler 的 Deployment、gateway 帶 `audit-metrics` 容器的 pod），不看 `up`——scrape 目標遺失正是它們要抓的狀況。所以 federation 有部署、但 `serviceMonitor.enabled` 還是預設的 `false` 時，這兩條會響：撤銷竄改偵測與稽核管線確實沒人在看。這是正確的訊號；把那兩個 chart 的 `serviceMonitor.enabled` 打開即可。沒部署 federation 的叢集不會收到。
 
-⚠️ **仍然選 `namespace="monitoring"` 的幾條**（`CronJobLastRunFailed`、`ConfigReloaderHighRestarts`、`ConfigReloaderNotStarting`）看的是本 repo `k8s/03-monitoring/` 的 raw manifest（`maintenance-scheduler` CronJob、Prometheus／Alertmanager 的 `config-reloader` sidecar），那些 manifest 寫死在 `monitoring`。Operator 模式下它們照樣輸出（kube-state-metrics 有這些 series），但只看名為 `monitoring` 的 namespace：kube-prometheus-stack 裝在那裡時，它自己 Prometheus 的 `config-reloader` sidecar 也會被看到。平台 chart 的工作負載（`TenantApiSingleWriterBreach`、`ThresholdExporterHighRestarts`）不再釘 namespace，裝在哪都看得到。
+⚠️ **仍然選 `namespace="monitoring"` 的幾條**（`CronJobLastRunFailed`、`ConfigReloaderHighRestarts`、`ConfigReloaderNotStarting`）看的是本 repo `k8s/03-monitoring/` 的 raw manifest（Prometheus／Alertmanager 的 `config-reloader` sidecar；`CronJobLastRunFailed` 看你放進 `monitoring` 的 CronJob，本 repo 目前沒出貨任何一支），那些 manifest 寫死在 `monitoring`。Operator 模式下它們照樣輸出（kube-state-metrics 有這些 series），但只看名為 `monitoring` 的 namespace：kube-prometheus-stack 裝在那裡時，它自己 Prometheus 的 `config-reloader` sidecar 也會被看到。平台 chart 的工作負載（`TenantApiSingleWriterBreach`、`ThresholdExporterHighRestarts`）不再釘 namespace，裝在哪都看得到。
 
 ---
 

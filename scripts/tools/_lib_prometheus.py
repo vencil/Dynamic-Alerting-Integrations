@@ -24,9 +24,8 @@ from _lib_exitcodes import CallerError
 #: HTTP (``http.client.HTTPException`` — ``BadStatusLine``, ``IncompleteRead``,
 #: ``LineTooLong`` and ``InvalidURL``, none an ``OSError``), or a URL urllib
 #: refuses (``ValueError``). ⚠️ ``ValueError`` also catches a body that is not
-#: JSON / not UTF-8 where the caller decodes inside the same ``try`` (as
-#: `maintenance_scheduler.get_existing_silences` does): there it means "no
-#: usable answer", which is what such a caller wants. The one list
+#: JSON / not UTF-8 where the caller decodes inside the same ``try``: there
+#: it means "no usable answer", which is what such a caller wants. The one list
 #: (#3477): a caller that treats a failed request as "no answer" catches this,
 #: not its own enumeration (#3519 moves the helpers below onto it).
 TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (

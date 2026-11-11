@@ -94,7 +94,8 @@ const msgTenantDeclaredElsewhere = "tenant id is declared by another conf.d file
 // msgTenantFileDirty is the FIXED client-facing text for
 // gitops.ErrTenantFileDirty: the error's own text names the path and git's
 // status line, which only the server log may see.
-const msgTenantFileDirty = "the tenant's config file has uncommitted changes made outside tenant-api; " +
+const msgTenantFileDirty = "the tenant's config file, or a root platform file (a `_` entry at the conf.d root) the write reads, " +
+	"has uncommitted changes made outside tenant-api; " +
 	"nothing was written — commit or discard them in the repository, then retry"
 
 // msgTenantTreeScan is the fixed client-facing text for gitops.ErrTenantTreeScan

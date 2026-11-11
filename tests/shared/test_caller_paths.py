@@ -152,8 +152,6 @@ OPS_SITES = [
      ["--dashboard", "{F}", "--dry-run", "--json"], "--dashboard", None),
     ("assemble-config-dir --sources", "assemble_config_dir.py",
      ["--sources", "{D}", "--check", "--json"], "--sources", "dir_not_accessible"),
-    ("maintenance-scheduler --config-dir", "maintenance_scheduler.py",
-     ["--config-dir", "{D}", "--dry-run", "--json-output"], "--config-dir", "dir_not_accessible"),
     ("threshold-recommend --config-dir", "threshold_recommend.py",
      ["--config-dir", "{D}", "--dry-run", "--json"], "--config-dir", "dir_not_accessible"),
     ("explain-keys --config-dir", "explain_keys.py", ["--config-dir", "{D}", "--json"],

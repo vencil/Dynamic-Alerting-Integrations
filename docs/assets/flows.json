@@ -132,8 +132,8 @@
           "component": "../interactive/tools/rule-pack-detail.jsx",
           "title": { "en": "Browse Rules", "zh": "瀏覽規則" },
           "hint": {
-            "en": "Explore recording and alert rules across all 15 Rule Packs — see PromQL, severity, and thresholds.",
-            "zh": "探索 15 個 Rule Pack 的 recording 和 alert 規則 — 查看 PromQL、嚴重度和閾值。"
+            "en": "See each Rule Pack's size and category, then open its generated alert reference or YAML.",
+            "zh": "查看每個 Rule Pack 的規模與分類，再開啟生成的告警參考或 YAML。"
           }
         },
         {

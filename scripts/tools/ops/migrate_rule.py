@@ -2,26 +2,29 @@
 """migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。
 
 自動將傳統的 PromQL (寫死數值) 轉換為本專案的「動態多租戶」三件套：
-1. Tenant ConfigMap YAML    → migration_output/tenant-config.yaml
+1. 租戶檔                  → migration_output/conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
 2. 平台 Recording Rule      → migration_output/platform-recording-rules.yaml
 3. 平台動態 Alert Rule      → migration_output/platform-alert-rules.yaml
 4. 遷移報告                 → migration_output/migration-report.txt
 5. Triage CSV               → migration_output/triage-report.csv
 6. Prefix Mapping           → migration_output/prefix-mapping.yaml
-7. Defaults 片段            → migration_output/defaults-snippet.yaml
+7. 根 defaults              → migration_output/conf.d/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
+
+1 與 7 寫在 `-o` 底下自己的 `conf.d/`（#3671）：那是一棵只有這兩個檔的 conf.d，
+可以整棵驗；2–6 不是 conf.d 檔，留在 `-o`，名稱也就不會與租戶檔相撞。
 
 1 與 7 是 conf.d 內容，由 Go 寫（ADR-036 §2，#3206）：兩個檔的資料（帶型別的值、
 註解）一次交給 `da-guard write`，文字由 Go 產生、整棵樹判一次，兩個檔同進退；
 被拒、或沒有可用的 da-guard（$DA_GUARD_BINARY / PATH），結束碼 2、一個檔都不寫。
 
 用法:
-  python3 migrate_rule.py <legacy_rules.yml>                    # 預設檔案輸出
-  python3 migrate_rule.py <legacy_rules.yml> --dry-run          # 僅顯示報告，不產生檔案
-  python3 migrate_rule.py <legacy_rules.yml> --interactive      # 遇到不確定時詢問使用者
-  python3 migrate_rule.py <legacy_rules.yml> -o /custom/path    # 自訂輸出目錄
-  python3 migrate_rule.py <legacy_rules.yml> --triage           # Triage 模式: 只產出 CSV 分桶報告
-  python3 migrate_rule.py <legacy_rules.yml> --no-prefix        # 停用 custom_ 前綴 (不建議)
-  python3 migrate_rule.py <legacy_rules.yml> --no-ast           # 強制使用舊版 regex 引擎
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a                    # 預設檔案輸出
+  python3 migrate_rule.py <legacy_rules.yml> --dry-run                        # 僅顯示報告，不產生檔案
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --interactive      # 遇到不確定時詢問使用者
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a -o /custom/path    # 自訂輸出目錄
+  python3 migrate_rule.py <legacy_rules.yml> --triage                         # Triage 模式: 只產出 CSV 分桶報告
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --no-prefix        # 停用 custom_ 前綴 (不建議)
+  python3 migrate_rule.py <legacy_rules.yml> --tenant db-a --no-ast           # 強制使用舊版 regex 引擎
 
 v4 升級 (AST Engine — Phase 11):
   - promql-parser (Rust/PyO3) 取代 regex 進行 metric name 辨識
@@ -62,6 +65,7 @@ import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 # traceback at rc=1 (which reads as "your rules have a violation").
 _OUTPUT_FLAG = "-o/--output-dir"
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 
 # ---------------------------------------------------------------------------
 # AST Engine: promql-parser (optional — graceful degradation)
@@ -675,8 +679,8 @@ def _build_alert_rule(rule, alert_name, parsed, record_name,
         labels['source'] = 'legacy'
         labels['migration_status'] = 'shadow'
     # #3309: the expr above always holds the maintenance clause, so the rule is
-    # `mute`; the recurring-maintenance silences match this label, and without
-    # it a migrated rule would page through a recurring window.
+    # `mute` — the label declares that the expr holds the clause, which a
+    # one-shot and a recurring (#3639) maintenance window both act through.
     labels['maintenance'] = 'mute'
     if labels:
         alert_rule['labels'] = labels
@@ -874,7 +878,7 @@ def _emitting(results):
 def route_unpaired_critical_to_base(results):
     """只有 critical、沒有同指標 warning 的規則，改讀 base 閾值列（in-place）。
 
-    原本那條規則對所有實例生效。遷移後 warning 層靠 defaults-snippet 對所有
+    原本那條規則對所有實例生效。遷移後 warning 層靠根 `_defaults.yaml` 對所有
     租戶生效，critical 層卻不能放進 defaults（exporter 只在租戶自己設了
     `<base>_critical` 時才發射 critical 列）。所以只有 critical 的規則若照常
     讀 `<key>_critical`，遷移後沒有任何租戶會響（issue 1818）。改讀 base 那
@@ -905,7 +909,7 @@ def route_unpaired_critical_to_base(results):
             ar["expr"] = ar["expr"].replace(old_thr, new_thr)
         r.notes.append(
             f"只有 critical、沒有 warning 的規則：閾值寫在 {base}（base 列），"
-            f"告警仍標 severity=critical。這樣 defaults-snippet 才能對所有租戶生效；"
+            f"告警仍標 severity=critical。這樣根 _defaults.yaml 才能對所有租戶生效；"
             f"critical 層（{key}）無法放進 defaults。")
         routed += 1
     return routed
@@ -915,7 +919,7 @@ def detect_threshold_conflicts(results):
     """同一個閾值 key 被多條規則以不同值設定時，回傳 {key: [(alert, value), ...]}。
 
     遷移後同一個 key 只能有一個值，讀它的告警都會用這個值。先前是後寫的
-    規則悄悄勝出，tenant-config 還寫出重複的 YAML key（issue 1818）。現在一律
+    規則悄悄勝出，租戶檔還寫出重複的 YAML key（issue 1818）。現在一律
     取第一條規則的值，衝突逐條點名。
     """
     seen = {}
@@ -1063,15 +1067,30 @@ def _dedup_recording_rules(results):
     return deduplicated_rules
 
 
-TENANT_CONFIG = "tenant-config.yaml"
-DEFAULTS_SNIPPET = "defaults-snippet.yaml"
+#: The conf.d this tool writes, under `-o` (#3671): a tree of its own, so
+#: its two files are judged as a conf.d root holds them and the other
+#: outputs (rule packs, reports) — no conf.d files — never share a name with
+#: the tenant file.
+CONFD_DIR = "conf.d"
+
+#: The root defaults file of that conf.d: what declares the keys the tenant
+#: file writes — scaffold_tenant writes the same pair.
+DEFAULTS_FILE = "_defaults.yaml"
 
 
-def tenant_config_entry(results):
-    """tenant-config.yaml 交給 `da-guard write` 新建的那一項（純函式，無 IO；
-    ADR-036 §2：文字由 Go 產生，#3206 步驟 10c）。
+def tenant_file(tenant):
+    """The tenant file of *tenant* under `-o` (#3671): ``<tenant>.yaml``,
+    scaffold_tenant's name."""
+    return f"{tenant}.yaml"
 
-    每個 key 取第一條規則的值、一律是字串（Go 寫成雙引號）。註解是內容：
+
+def tenant_config_entry(results, tenant):
+    """*tenant* 的租戶檔（`tenant_file`）交給 `da-guard write` 新建的那一項
+    （純函式，無 IO；ADR-036 §2：文字由 Go 產生，#3206 步驟 10c）。
+
+    #3671：key 寫在 `tenants.<tenant>` 底下——租戶檔頂層 `tenants` 以外的
+    key 沒有讀取端讀（共用判決報 unread），寫入時 `da-guard write` 就以共用
+    判決判這兩個檔。每個 key 取第一條規則的值、一律是字串（Go 寫成雙引號）。註解是內容：
     檔頭（含範例與閾值衝突）是 `head_comment`；每條規則的 `--- From:` 標頭、
     📖 註記、被略過的重複 key、維度標籤替代語法，依原順序掛在下一個寫出的 key
     上方（`head`），落在最後一個 key 之後的寫成 `foot_comment`。檔案已存在時
@@ -1091,17 +1110,12 @@ def tenant_config_entry(results):
 
     head = [
         "============================================================",
-        "Tenant Config — 複製到 conf.d/<tenant>.yaml",
+        f"租戶 {tenant} — 合併進 conf.d 的租戶檔（tenants.{tenant}）",
         "============================================================",
-        "⚠️ 先把 defaults-snippet.yaml 合併進 _defaults.yaml：沒宣告的 key",
-        "   exporter 不會發射。warning 層的值與 defaults 相同，只有要和預設值",
-        "   不同的租戶才需要寫；<key>_critical 則是要 critical 的租戶都要寫。",
-        "請將以下內容縮排並貼入您專屬的 tenant 設定中，例如：",
-        "tenants:",
-        "  my-tenant-name:",
+        f"⚠️ 先把同目錄的 {DEFAULTS_FILE} 合併進 conf.d 根的 _defaults.yaml：沒宣告",
+        "   的 key exporter 不會發射。warning 層的值與 defaults 相同，只有要和預設",
+        "   值不同的租戶才需要寫；<key>_critical 則是要 critical 的租戶都要寫。",
     ]
-    head += [f'    {field("key", k)}: "{field(f"the value of {k}", v)}"'
-             for k, v in tenant_configs.items()]
     for k, entries in conflicts.items():
         listed = ", ".join(f"{a}={v}" for a, v in entries)
         head.append(f"⚠️ 閾值衝突：{k} 被多條規則設定（{listed}），"
@@ -1131,14 +1145,16 @@ def tenant_config_entry(results):
                             if pending else None))
             pending = []
         if r.dim_hints:
-            pending.append("維度標籤替代語法:")
+            pending.append(f"維度標籤替代語法（寫在 tenants.{tenant} 底下）:")
             for hint in r.dim_hints:
                 label_pairs = ', '.join(f'{lk}="{lv}"' for lk, lv in hint["labels"].items())
                 dim_key = f'{list(r.tenant_config.keys())[0].split("_critical")[0]}{{{label_pairs}}}'
                 pending.append(field(f"a dimension hint of {r.alert_name!r}",
                                            f'"{dim_key}": "{list(r.tenant_config.values())[0]}"'))
+    content = _lib_confedit.map_value([("tenants", _lib_confedit.map_value(
+        [(tenant, _lib_confedit.map_value(entries))]))])
     return _lib_confedit.create_entry(
-        TENANT_CONFIG, _lib_confedit.map_value(entries),
+        tenant_file(tenant), content,
         head_comment="\n".join(head),
         foot_comment="\n".join(pending) if pending else None, replace=True)
 
@@ -1152,10 +1168,10 @@ def _go_texts(entries):
         return [r["content"] for r in _lib_confedit.write_all(tmp, entries, dry_run=True)]
 
 
-def render_tenant_config(results):
-    """tenant-config.yaml 的內容字串：`tenant_config_entry` 經 `da-guard write
+def render_tenant_config(results, tenant):
+    """*tenant* 的租戶檔的內容字串：`tenant_config_entry` 經 `da-guard write
     --dry-run` 產生的文字（Go 的，需要可用的 da-guard）。"""
-    return _go_texts([tenant_config_entry(results)])[0]
+    return _go_texts([tenant_config_entry(results, tenant)])[0]
 
 
 def _defaults_value(raw):
@@ -1165,8 +1181,8 @@ def _defaults_value(raw):
 
 
 def defaults_snippet_entry(results):
-    """defaults-snippet.yaml 交給 `da-guard write` 新建的那一項（純函式，無
-    IO）。
+    """根 `_defaults.yaml`（`DEFAULTS_FILE`）交給 `da-guard write` 新建的那一項
+    （純函式，無 IO）。
 
     threshold-exporter 只發射 `_defaults.yaml` 宣告過的 key：租戶檔裡沒宣告
     的 key 沒有任何一列送出（validate-config 的 `unread_keys` 列報 `unread …
@@ -1186,15 +1202,16 @@ def defaults_snippet_entry(results):
     defaults = defaults_snippet_doc(results)["defaults"]
     head = "\n".join([
         "============================================================",
-        "Defaults 片段 — 合併進 conf.d/_defaults.yaml 的 defaults: 區塊",
+        "根 defaults — 合併進 conf.d 根 _defaults.yaml 的 defaults: 區塊",
+        "⚠️ 合併，不要整份覆蓋：你的 _defaults.yaml 還有其他 key。",
         "============================================================",
         "threshold-exporter 只發射 _defaults.yaml 宣告過的 key。沒宣告時，",
-        "tenant-config.yaml 的值不發射任何 user_threshold（validate-config 的",
+        "租戶檔的值不發射任何 user_threshold（validate-config 的",
         "unread_keys 列報 `unread … (no_row)`），上面的告警規則永遠不會響。",
         "",
         "值取自原規則的閾值：宣告後 warning 層對所有租戶生效，與原本那條全域",
         "規則相同。有 warning 配對的 critical 層不能用 defaults 宣告：要 critical",
-        "的租戶，各自把 tenant-config.yaml 裡的 <key>_critical 寫進自己的檔案。",
+        "的租戶，各自把租戶檔裡的 <key>_critical 寫進自己的檔案。",
         "只有 critical 的舊規則已改讀 base 列，它的值就在這裡，對所有租戶生效。",
         "⚠️ 值必須是數字：寫 \"disable\" 之類的字串，exporter 會丟掉整個",
         "   defaults 區塊。要讓某個租戶不響，在該租戶的檔案寫 \"disable\"。",
@@ -1205,20 +1222,20 @@ def defaults_snippet_entry(results):
                    for k, v in defaults.items()]
     except ValueError as exc:
         # A threshold with no finite value (`1e999`): named, nothing written.
-        raise ValueError(f"{DEFAULTS_SNIPPET}: {exc}") from None
+        raise ValueError(f"{DEFAULTS_FILE}: {exc}") from None
     content = _lib_confedit.map_value([("defaults", _lib_confedit.map_value(numbers))])
-    return _lib_confedit.create_entry(DEFAULTS_SNIPPET, content, head_comment=head,
+    return _lib_confedit.create_entry(DEFAULTS_FILE, content, head_comment=head,
                                       replace=True)
 
 
 def render_defaults_snippet(results):
-    """defaults-snippet.yaml 的內容字串：`defaults_snippet_entry` 經 `da-guard
+    """根 `_defaults.yaml` 的內容字串：`defaults_snippet_entry` 經 `da-guard
     write --dry-run` 產生的文字（Go 的，需要可用的 da-guard）。"""
     return _go_texts([defaults_snippet_entry(results)])[0]
 
 
 def defaults_snippet_doc(results):
-    """defaults-snippet.yaml 寫出的內容 (純函式，無 IO)：``{"defaults": {...}}``，
+    """根 `_defaults.yaml` 寫出的內容 (純函式，無 IO)：``{"defaults": {...}}``，
     `render_defaults_snippet` 寫的就是這份，寫入前以 parse-tree 讀回比對
     （ADR-036 §2）。取值規則見 `render_defaults_snippet`。"""
     defaults = {}
@@ -1230,7 +1247,7 @@ def defaults_snippet_doc(results):
             if k.endswith("_critical"):
                 critical_bases.setdefault(k[:-len("_critical")], _defaults_value(v))
             else:
-                # 與 tenant-config 相同：第一條規則的值勝出（衝突另行點名）
+                # 與租戶檔相同：第一條規則的值勝出（衝突另行點名）
                 defaults.setdefault(k, _defaults_value(v))
     for base, v in critical_bases.items():
         defaults.setdefault(base, v)
@@ -1449,27 +1466,56 @@ def _require_output_tree(output_dir):
         sys.exit(EXIT_CALLER_ERROR)
 
 
-def write_outputs(results, output_dir, prefix="custom_", dictionary=None):
+def other_confd_files(conf_dir, mine):
+    """The config files of the conf.d at *conf_dir* other than *mine* (the
+    paths this run writes), as relative paths in walk order; [] when it is not
+    there (#3671). The tree as the exporter's walk sees it (da-guard's
+    list-only walk): a hidden or non-config name is read by no reader, so it
+    adds no tenant and is not listed."""
+    conf_dir = Path(conf_dir)
+    if not conf_dir.is_dir():
+        return []
+    import _lib_parse_tree  # noqa: PLC0415
+    return [e.path for e in _lib_parse_tree.list_tree(conf_dir).config_files()
+            if e.path not in mine]
+
+
+def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, tenant):
     """將遷移結果寫入分離的 YAML 檔案 (含合法 YAML 結構)。
 
     序列化邏輯已抽成 render_* 純函式；本函式僅負責路徑組裝與落盤 (thin writer)。
 
+    *tenant*（ADR-035 的租戶 id；不合法就 rc 2、什麼都不寫）是租戶檔的名稱
+    與 `tenants:` 底下的 key（#3671）。
+
     ADR-036 §2（#3206 步驟 10c）：寫 conf.d 的只有 Go。兩個 conf.d 內容檔
-    （tenant-config.yaml、defaults-snippet.yaml）一次交給同一次 `da-guard write`
-    （已存在就整份取代，-o 當 conf.d 根）：整棵樹判一次，兩個檔同進退——一個被拒
-    就一個都不寫、結束碼 2，其他檔也不寫。之前先讓既有的 -o 過共用的 conf.d 拒絕
-    （`_require_output_tree`）。rule pack、報表、CSV、prefix mapping 不是 conf.d
-    檔，在批次之後由本工具照舊寫。
+    （`<tenant>.yaml`、`_defaults.yaml`）一次交給同一次 `da-guard write`，寫進
+    `-o/conf.d`（`CONFD_DIR`，#3671；已存在就整份取代）：那棵樹判一次，兩個檔
+    同進退——一個被拒就一個都不寫、結束碼 2，其他檔也不寫。之前先讓既有的
+    `-o`（含 `conf.d/`）過共用的 conf.d 拒絕（`_require_output_tree`），且 `conf.d/` 不得有這兩個
+    檔以外的檔（另一次 `--tenant` 留下的租戶檔會成為多出來的租戶）。rule pack、
+    報表、CSV、prefix mapping 不是 conf.d 檔，在批次之後由本工具照舊寫在 `-o`。
     """
-    _require_output_tree(output_dir)
+    if not is_valid_tenant_id(tenant):
+        print(f"ERROR: --tenant {tenant!r} is not a valid tenant id ({tenant_id_rule()[1]}) "
+              "— nothing was written", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    conf_dir = Path(output_dir) / CONFD_DIR
+    _require_output_tree(output_dir)  # the whole -o, `conf.d/` included
     try:
-        entries = [tenant_config_entry(results), defaults_snippet_entry(results)]
+        entries = [tenant_config_entry(results, tenant), defaults_snippet_entry(results)]
     except ValueError as exc:
         print(f"ERROR: {exc} — nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+    other = other_confd_files(conf_dir, {e["path"] for e in entries})
+    if other:
+        print(f"ERROR: {conf_dir} holds {', '.join(other)}, which this run does not write "
+              f"(another --tenant's file is another tenant in the tree, #3671); remove "
+              f"it or use another -o — nothing was written", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     _lib_confedit.write_all_or_exit(
-        output_dir, entries, tool="migrate_rule",
-        make_root=lambda: ensure_dir_or_die(output_dir, flag=_OUTPUT_FLAG))
+        conf_dir, entries, tool="migrate_rule",
+        make_root=lambda: ensure_dir_or_die(conf_dir, flag=_OUTPUT_FLAG))
 
     # --- platform-recording-rules.yaml (合法 YAML, 含 groups/rules 結構) ---
     recording_rules_path = str(Path(output_dir) / "platform-recording-rules.yaml")
@@ -1581,6 +1627,9 @@ def main():
     parser.add_argument("input_file", help="傳統 Prometheus alert rules YAML 檔案")
     parser.add_argument("-o", "--output-dir", default="migration_output",
                         help="輸出目錄 (預設: migration_output)")
+    parser.add_argument("--tenant",
+                        help="租戶 id：寫出 <tenant>.yaml（tenants.<tenant> 底下）。"
+                             "產生檔案時必填；--triage、--dry-run 不需要")
     parser.add_argument("--dry-run", action="store_true",
                         help="僅顯示報告，不產生檔案")
     parser.add_argument("--interactive", action="store_true",
@@ -1652,7 +1701,7 @@ def main():
     n_routed = route_unpaired_critical_to_base(results)
     if n_routed:
         print(f"[↪] {n_routed} 條只有 critical 的規則改讀 base 閾值列，"
-              "defaults-snippet 才能對所有租戶生效")
+              "根 _defaults.yaml 才能對所有租戶生效")
     for k, entries in detect_threshold_conflicts(results).items():
         listed = ", ".join(f"{a}={v}" for a, v in entries)
         print(f"⚠️  閾值衝突：{k} 被多條規則設不同值（{listed}），採用第一條的 {entries[0][1]}")
@@ -1670,8 +1719,13 @@ def main():
     elif args.dry_run:
         print_dry_run(results)
     else:
+        if not args.tenant:
+            print("ERROR: --tenant is required to write the tenant file "
+                  "(<tenant>.yaml, its keys under tenants.<tenant>; #3671) "
+                  "— nothing was written", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         n_perfect, n_complex, n_unparseable, n_golden = write_outputs(
-            results, args.output_dir, prefix, dictionary
+            results, args.output_dir, prefix, dictionary, tenant=args.tenant
         )
         convertible = n_perfect + n_complex - n_golden
         print(f"[✓] 成功轉換 {convertible} 條規則 "
@@ -1680,9 +1734,9 @@ def main():
             print(f"[📖] {n_golden} 條建議改用黃金標準 (詳見報告)")
         if n_unparseable:
             print(f"[!] {n_unparseable} 條需人工處理 (LLM Prompt 已寫入報告)")
-        print(f"📁 檔案已輸出至 {args.output_dir}/")
-        print("⚠️  先把 defaults-snippet.yaml 合併進 conf.d/_defaults.yaml 的 "
-              "defaults: 區塊；沒宣告的 key，threshold-exporter 不會發射閾值。")
+        print(f"📁 檔案已輸出至 {args.output_dir}/（conf.d 檔在 {args.output_dir}/{CONFD_DIR}/）")
+        print(f"⚠️  先把 {DEFAULTS_FILE} 的 defaults: 區塊合併進 conf.d 根的 _defaults.yaml"
+              "（合併，不要整份覆蓋）；沒宣告的 key，threshold-exporter 不會發射閾值。")
         if prefix:
             print(f"🏷️  前綴: {prefix} (Prefix Mapping 已輸出)")
 

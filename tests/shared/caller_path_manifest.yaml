@@ -191,13 +191,10 @@ commands:
     "--exclude": not_path
     "--rule-pack-dir": dir
     paths: any
-  maintenance-scheduler:
-    "--alertmanager": url
-    "--config-dir": dir
-    "--pushgateway": url
   migrate:
     "--output-dir": output
     "--prefix": not_path
+    "--tenant": not_path
     input_file: {kind: reader, by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_migrate_rule_outputs.py::test_missing_input_file_exits_caller_error"}
   migrate-credentials:
     "--config-dir": dir

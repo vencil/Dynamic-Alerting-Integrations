@@ -488,13 +488,20 @@ def test_f3_routing_defaults_in_a_nested_non_carrier_file(tmp_path):
 
 def test_f3_a_nested_tenant_file_is_not_this_finding(tmp_path):
     """Control: a TENANT file never carries `_routing_defaults`, at the root
-    either — a stderr WARN there as here, not the moved-file finding."""
+    either — not the moved-file finding. Since #3671 the shared key verdict
+    names the stray top-level key itself (tenant_file_top_level), which
+    blocks --validate."""
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _DECL + _EMAIL_RD,
         "team/t-team.yaml": _tenant("t-team") + "_routing_defaults:\n  repeat_interval: 1h\n",
     })
     res = _gar("--config-dir", str(d), "--validate")
-    assert res.returncode == EXIT_OK, res.stderr
+    assert "is not read" not in res.stderr, res.stderr
+    tree = load_tenant_tree(str(d))
+    assert not [p for p in tree.routing_tree_problems if p[0] == "routing_in_unread_location"]
+    assert res.returncode == EXIT_VIOLATION, res.stderr
+    assert ("team/t-team.yaml: error: unread `_routing_defaults` (tenant_file_top_level)"
+            in res.stderr), res.stderr
 
 
 @pytest.mark.parametrize("policy_file", ["_domain_policy.yaml", "team/_domain_policy.yaml"])

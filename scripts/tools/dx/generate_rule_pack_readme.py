@@ -166,7 +166,11 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("")
     lines.append("- **成本**: 沒有對應 metric 的 recording rule 會回傳空結果集，CPU 額外開銷 < 0.1%，evaluation 時間幾乎無增長。")
     lines.append("- **簡化**: 新增 exporter 後只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。")
-    lines.append("- **安全**: 唯一的風險是 `absent()` — 目前只有 mariadb (已部署) 使用 `absent(mysql_up)`，其他 pack 都不含 `absent()`。")
+    # #3682: no per-pack enumeration here — a hand-written list of which packs
+    # use absent() went stale the moment a pack changed (it still named
+    # mariadb after its absent() rule was removed), and this generator does
+    # not read the platform pack that lives only under k8s/.
+    lines.append("- **安全**: 唯一的風險是 `absent()`：它在 metric 不存在時就觸發，所以只適合監看一定會被 scrape 的目標（例如 platform pack 監看 threshold-exporter 自己）。租戶 exporter 的存活不用 `absent()`，改由 `TenantExporterAbsent` 逐租戶判斷，只納管在 `_metadata` 宣告 `db_type` 的租戶。")
     lines.append("")
     lines.append("### 動態卸載 (optional: true)")
     lines.append("")

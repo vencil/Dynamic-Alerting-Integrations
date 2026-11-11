@@ -84,7 +84,7 @@ Inject the `tenant` label into your existing database exporters (MySQL, PostgreS
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: tenant-db-exporters
+  name: tenant-exporters
   namespace: monitoring
   labels:
     release: kube-prometheus-stack
@@ -103,6 +103,10 @@ spec:
         # ★ Core: inject namespace as tenant label
         - sourceLabels: [__meta_kubernetes_namespace]
           targetLabel: tenant
+        # ⛔ job must be tenant-exporters: every tenant rule pack selects up{job="tenant-exporters"}.
+        # Without this, prometheus-operator names the job after the Service and healthy tenants page as absent.
+        - targetLabel: job
+          replacement: tenant-exporters
 ```
 
 ### 1b. Create ServiceMonitor for threshold-exporter
@@ -234,8 +238,6 @@ Each ServiceMonitor selects the Service carrying `dynamic-alerting.io/scrape: pl
 | Alert | Why operator mode has no source for it |
 |---|---|
 | `PrometheusConfigReloadFailed` | Selects `job="prometheus"`: this repo's raw Prometheus self-scrape job; kube-prometheus-stack names that job after its own Service (its own `PrometheusBadConfig` covers the same failure) |
-| `TenantExporterJobAbsent` | Reads `up{job="tenant-exporters"}`: that job exists only in the raw config; under the Operator your own ServiceMonitors scrape tenant exporters and name the job. Emitted anyway it would fire forever |
-| `MassExporterOutage` | Same (`up{job="tenant-exporters"}`) |
 <!-- operator-excluded-rules:end -->
 
 `tests/ops/test_operator_generate_rule_copies.py` compares this table with the derivation and goes red when they disagree.
@@ -244,7 +246,7 @@ Each ServiceMonitor selects the Service carrying `dynamic-alerting.io/scrape: pl
 
 ⚠️ **Federation deployed without its ServiceMonitors means two critical alerts.** `FederationRevocationReconcileStale` (its metric-absent arm) and `FederationAuditPipelineSilent` decide whether the component is deployed from kube-state-metrics (the reconciler Deployment; a gateway pod with the `audit-metrics` container), not from `up` — a lost scrape target is exactly what they must catch. So with federation deployed but `serviceMonitor.enabled` still at its default `false`, both fire: revocation tamper-evidence and the audit pipeline really are unmonitored. That is the correct signal; turn on `serviceMonitor.enabled` in those two charts. A cluster without federation gets neither.
 
-⚠️ **The few that still select `namespace="monitoring"`** (`CronJobLastRunFailed`, `ConfigReloaderHighRestarts`, `ConfigReloaderNotStarting`) watch this repo's raw manifests under `k8s/03-monitoring/` (the `maintenance-scheduler` CronJob, the Prometheus / Alertmanager `config-reloader` sidecars), which are hard-wired to `monitoring`. They are emitted under the Operator too (kube-state-metrics has the series) but only see the namespace named `monitoring`: with kube-prometheus-stack installed there, its own Prometheus's `config-reloader` sidecar is watched as well. The platform charts' workloads (`TenantApiSingleWriterBreach`, `ThresholdExporterHighRestarts`) no longer pin a namespace and are watched wherever they are installed.
+⚠️ **The few that still select `namespace="monitoring"`** (`CronJobLastRunFailed`, `ConfigReloaderHighRestarts`, `ConfigReloaderNotStarting`) watch this repo's raw manifests under `k8s/03-monitoring/` (the Prometheus / Alertmanager `config-reloader` sidecars; `CronJobLastRunFailed` watches whatever CronJob you put in `monitoring` — this repo ships none today), which are hard-wired to `monitoring`. They are emitted under the Operator too (kube-state-metrics has the series) but only see the namespace named `monitoring`: with kube-prometheus-stack installed there, its own Prometheus's `config-reloader` sidecar is watched as well. The platform charts' workloads (`TenantApiSingleWriterBreach`, `ThresholdExporterHighRestarts`) no longer pin a namespace and are watched wherever they are installed.
 
 ---
 

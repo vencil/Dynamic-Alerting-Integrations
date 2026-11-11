@@ -7,11 +7,9 @@ read it directly, no Python import), JSON-Schema validatable (confd-schema
 family gate). ``rule-packs/threshold-registry.yaml`` is that registry;
 ``docs/schemas/threshold-registry.schema.json`` is its shape contract.
 
-TRANSITION STATE (WS1a step 2 — the PR-2 rewire): the registry content is
-still MECHANICALLY EXTRACTED from ``scaffold_tenant.RULE_PACKS`` via
-``build_registry_doc()`` (never hand-copied), but the registry is now a REAL
-SoT: previously hand-copied surfaces are GENERATED from it inside delimited
-blocks (everything outside the delimiters stays hand-written):
+GENERATED SURFACES: previously hand-copied surfaces are generated from the
+registry inside delimited blocks (everything outside the delimiters stays
+hand-written):
 
   1. rule-pack header threshold sections (the "對應的 threshold-exporter
      defaults" block of every threshold pack, defaults tier + up to three
@@ -26,23 +24,22 @@ blocks (everything outside the delimiters stays hand-written):
      but asserts no value for. A LIST, not a mapping: see
      ``render_optional_overrides_lines``.
 
-``scaffold_tenant.RULE_PACKS`` remains the operative contract for config
-GENERATION until PR-3 flips the direction (scaffold becomes a generated
-artifact / runtime loader of the registry — D2 migration shape, 31 import
-sites keep their API surface). During the transition the two copies MUST stay
-semantically equal AND every generated surface must stay fresh — both
+Since D-A PR-3 the registry FILE is authored by hand and is the only place a
+threshold is written. ``scaffold_tenant.RULE_PACKS``'s threshold half is a
+GENERATED module (``_rule_packs_generated.py``, ``render_rule_packs_module``)
+— generated rather than read at runtime because the da-tools image ships a
+flat tool layout with no repo tree to find the YAML in. The extraction
+(``build_registry_doc``) survives as the registry's self-consistency check:
+``fixed_point_problems`` projects the registry back to the RULE_PACKS shape,
+extracts it again and requires the same document, so every rule the
+extraction enforces (``critical_of`` exactly where it derives,
+``chart_default`` only on the defaults tier, a ``metric_class`` on every key,
+aliases onto live keys only) holds for the authored file too. All of it is
 enforced by ``scripts/tools/lint/check_threshold_registry.py`` (schema +
-equivalence + surface-freshness + header-prose key membership), wired as a
-pre-commit gate. On drift the fix is: edit ``scaffold_tenant.RULE_PACKS``
-(still operative), then run ``check_threshold_registry.py --regen`` to refresh
-the registry AND all generated surfaces in one shot.
-
-REGISTRY-SCOPE ENRICHMENT TABLES (authored HERE during the transition):
-``CHART_DEFAULT_KEYS`` (which defaults-tier keys the Helm chart ships enabled)
-is a registry-scope fact that scaffold's operative role never consumes, so it
-is authored in this lib and merged during extraction rather than widening the
-scaffold contract right before PR-3 demotes it. PR-3 folds it into the
-authored registry file.
+fixed point + surface freshness + header-prose key membership), wired as a
+pre-commit gate. The fix on a red gate: edit the registry, then run
+``check_threshold_registry.py --regen`` to refresh every generated surface,
+the RULE_PACKS module included, in one shot.
 
 SCOPE (WS1a): threshold identity — ``defaults`` + ``optional_overrides`` tiers
 ({pack, tier, value, unit, desc, metric_class, chart_default, critical
@@ -117,180 +114,35 @@ CRITICAL_SUFFIX = "_critical"
 TIERS = ("defaults", "optional_overrides")
 
 # ---------------------------------------------------------------------------
-# chart_default — the "the Helm chart ships this key enabled" set (#1200 WS1a
-# PR-2). The initial 6-key set was BEHAVIOR-PRESERVING by construction:
-# exactly the key set the hand-written helm/threshold-exporter/values.yaml
-# thresholdConfig.defaults carried before the rewire. Flipping more keys on
-# is a deliberate owner decision, NOT a mechanical edit — see the D4
-# shadow/would-fire policy in epic #1200.
-# Owner-decided promotions so far:
-#   - pg_connections / pg_replication_lag (postgresql pack) — D4
-#     definite-imminent 折衷落地（#1200 Q3=C；Gemini #1222 review 同向建議；
-#     owner 2026-07-25 核可）。the dev template historically carried these
-#     but the chart never did; their _critical variants stay opt-in
-#     (mysql_replication_lag precedent).
-# Only defaults-tier keys are eligible (build_registry_doc fails loudly
-# otherwise): optional_overrides keys are dormant by definition.
+# Since D-A PR-3 the registry FILE is the authored source of everything this
+# module used to merge in from side tables: `chart_default`, every key's
+# `metric_class` (the old METRIC_CLASS_BACKFILL) and the `deprecated_aliases`
+# section (the old DEPRECATED_KEY_ALIASES). Edit rule-packs/threshold-registry.yaml
+# and run `check_threshold_registry.py --regen`.
+#
+# deprecated_aliases is still the alias SSOT. Its one runtime mirror, Go's
+# components/threshold-exporter/app/pkg/config/aliases.go, is PINNED to the
+# registry's section by pkg/config/aliases_registry_test.go. ⛔ No Python
+# reader applies the table to a key: the rule that does is Go's alone, asked
+# through `da-guard key-spellings` (#3556); tests/shared/test_alias_rule_lives_in_go.py
+# keeps a reader of it from coming back. `DEPRECATED_KEY_ALIASES` below is
+# the registry section, read on access (the da-tools image carries no repo
+# tree, so it must not be read at import).
 # ---------------------------------------------------------------------------
-CHART_DEFAULT_KEYS: frozenset[str] = frozenset({
-    # Scenario B: container resource thresholds (kubernetes pack)
-    "container_cpu",
-    "container_cpu_throttle",
-    "container_memory",
-    # Scenario A: MySQL thresholds (mariadb pack)
-    "mysql_connections",
-    "mysql_threads_running",
-    "mysql_replication_lag",
-    # PostgreSQL warning tier (postgresql pack) — owner-decided promotion,
-    # #1200 Q3=C / D4 folding, 2026-07-25.
-    "pg_connections",
-    "pg_replication_lag",
-})
 
-# ---------------------------------------------------------------------------
-# deprecated_aliases — retired threshold-key spellings still honored during
-# their 2-release transition window (#1231). REGISTRY-SCOPE fact, same
-# rationale as CHART_DEFAULT_KEYS: scaffold's operative config-generation role
-# never consumes aliases, so the table is authored here and merged into the
-# registry document rather than widening the scaffold contract before PR-3.
-#
-# This table is the alias SSOT. Its one runtime mirror, Go's
-# components/threshold-exporter/app/pkg/config/aliases.go
-# (deprecatedKeyAliases), is PINNED to the registry's deprecated_aliases
-# section by pkg/config/aliases_registry_test.go, so a drifted mirror fails
-# CI. ⛔ No Python reader applies this table to a key: the rule that does
-# (exact, `_critical`, `{...}`, both) is Go's alone, asked through `da-guard
-# key-spellings` (#3556); tests/shared/test_alias_rule_lives_in_go.py keeps a
-# copy of the table or a reader of it from coming back.
-#
-# Contract (fail-loud in build_registry_doc): the OLD spelling must NOT be an
-# active registry key (it is retired), the target MUST be an active key, and
-# old != new. When a window closes, delete the entry here, regen, and drop the
-# Go mirror's entry (its pin test forces it to follow).
-# ---------------------------------------------------------------------------
-DEPRECATED_KEY_ALIASES: dict[str, str] = {
-    # #944 / #1231: the metric has always measured mysql threads_running
-    # saturation, never host CPU% — the poisoned name is retired (2-release
-    # alias window from v2.10.0).
-    "mysql_cpu": "mysql_threads_running",
-}
 
-# ---------------------------------------------------------------------------
-# metric_class backfill — semantic classification of every threshold key
-# (#1200 WS1a PR-2; schema now REQUIRES metric_class on every registry key).
-#
-# Taxonomy (definitions live in threshold-registry.schema.json):
-#   saturation  — bounded-resource usage/backlog + paired symptom metric.
-#                 ⚠️ CURATED, PRODUCT-FACING set: it drives scaffold's
-#                 saturation_default_keys() educational _critical annotation
-#                 and the portal metricClass hints, so the 22 scaffold-authored
-#                 labels are NOT re-curated here — this table deliberately
-#                 assigns NO new 'saturation' (behavior-preserving; upgrade
-#                 candidates flagged for owner review in the PR report).
-#   capacity    — fill level of a bounded space/allocation (disk, tablespace,
-#                 log, parts, memory budget) without the paired-symptom
-#                 curation; capacity-planning signal.
-#   throughput  — work-rate volume (qps / ops/s / req/s / msg/s).
-#   latency     — time-to-complete or stall accumulation (GC pause, wait-time).
-#   replication — replica sync health (lag seconds, under-replication, queue).
-#   state       — discrete expected-value / topology invariant (cluster color,
-#                 broker count, active controllers, consumers present).
-#   efficiency  — cache/buffer effectiveness & waste (hit/miss ratio, evictions).
-#   errors      — undesirable-event rate (deadlocks).
-#
-# Authoring rules (fail-loud in build_registry_doc):
-#   - only keys NOT already classified in scaffold may appear here;
-#   - ``_critical`` derivatives are never listed — they inherit the base class;
-#   - after backfill + inheritance every key must be classified (strict path).
-# PR-3 folds this table into the authored registry file.
-# ---------------------------------------------------------------------------
-METRIC_CLASS_BACKFILL: dict[str, str] = {
-    # replication
-    "pg_replication_lag": "replication",
-    "mysql_replication_lag": "replication",
-    "mongodb_replication_lag": "replication",  # renamed from mongodb_repl_lag_seconds (#1196 C)
-    "redis_replication_lag": "replication",  # #1196 C repair line, new supply key
-    "kafka_under_replicated_partitions": "replication",
-    "clickhouse_replication_queue": "replication",
-    # capacity
-    "es_disk_usage_percent": "capacity",  # renamed from es_filesystem_free_percent (#1196 C, semantic flip free→used; still a disk fill level)
-    "oracle_tablespace_used_percent": "capacity",
-    "oracle_process_count": "capacity",
-    "oracle_pga_allocated_bytes": "capacity",
-    "db2_log_usage_percent": "capacity",
-    "db2_tablespace_used_percent": "capacity",
-    "clickhouse_max_part_count": "capacity",
-    "clickhouse_memory_tracking_bytes": "capacity",
-    # throughput
-    "clickhouse_queries_rate": "throughput",
-    "kafka_request_rate": "throughput",
-    "nginx_request_rate": "throughput",
-    "mongodb_opcounters_rate": "throughput",  # renamed from mongodb_opcounters_total (#1196 B)
-    # latency
-    "jvm_gc_pause": "latency",
-    "oracle_wait_time_rate": "latency",
-    "db2_lock_wait_time": "latency",  # #1196 D repair line: stall accumulation rate, same shape as oracle_wait_time_rate
-    "es_search_latency_ms": "latency",  # #1196 D repair line: time-to-complete (avg per-query)
-    # state
-    "kafka_broker_count": "state",
-    "kafka_active_controllers": "state",
-    "rabbitmq_consumers": "state",
-    # NOTE (#1196 D): es_pending_tasks is classed 'state' (master cluster-state
-    # task queue health, the coordination-health family es_cluster_health sat
-    # in) rather than 'saturation' — this table deliberately assigns no new
-    # saturation (see header), and schema marks saturation membership a
-    # deliberate product decision. Flagged as a saturation-upgrade candidate
-    # for owner review in the #1231 PR report.
-    "es_pending_tasks": "state",
-    # efficiency
-    "db2_bufferpool_hit_ratio": "efficiency",
-    "redis_evicted_keys_rate": "efficiency",  # renamed from redis_evicted_keys_total (#1196 B)
-    # errors
-    "db2_deadlock_rate": "errors",
-}
+def __getattr__(name: str):
+    """`DEPRECATED_KEY_ALIASES`: the committed registry's alias section."""
+    if name == "DEPRECATED_KEY_ALIASES":
+        return dict(load_registry().get("deprecated_aliases") or {})
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 # Canonical per-key field order for the emitted registry document.
 _FIELD_ORDER = (
     "pack", "tier", "value", "unit", "desc", "metric_class", "chart_default",
     "critical_of", "value_counterexample", "dimensions",
 )
-
-_REGISTRY_HEADER = (
-    "# threshold-registry.yaml — threshold 契約 SoT（TRK-339 WS1a / #1200 D2）\n"
-    "#\n"
-    "# 地位：epic #1200 D2（2026-07-23 LOCKED）拍板 threshold 契約收斂到本檔——\n"
-    "# 語言中立（helm/docs/portal 直讀）、schema 可驗證\n"
-    "# （docs/schemas/threshold-registry.schema.json）。\n"
-    "#\n"
-    "# ✅ PR-2（rewire）後本檔已是真 SoT：原手抄面改為由本檔生成（定界符內），\n"
-    "# 定界符外手寫 prose 照舊——\n"
-    "#   1. rule-pack header 閾值段（defaults tier + optional_overrides 警語段，\n"
-    "#      依「在出貨清單裡 / 不在但 base 已出貨 / 兩者皆無」分三小段各配一份警語）\n"
-    "#   2. helm/threshold-exporter/values.yaml thresholdConfig.defaults\n"
-    "#      （chart_default 集）\n"
-    "#   3. components/threshold-exporter/config/conf.d/_defaults.yaml defaults 段\n"
-    "#   4. 上述兩個 runtime 面的 optional_overrides: 宣告 key 清單（#1310；\n"
-    "#      是 list 不是 map——平台認得該 key 但不主張其值）\n"
-    "# 新鮮度由 check_threshold_registry.py --check 面強制（stale＝硬錯）。\n"
-    "#\n"
-    "# ⚠️ 過渡期殘留：scaffold_tenant.RULE_PACKS 仍是 config 生成路徑的運作副本，\n"
-    "# 本檔由它機械萃取（scripts/tools/ops/_registry_lib.py build_registry_doc()，\n"
-    "# 外加 registry-scope 附掛表 CHART_DEFAULT_KEYS）。兩者的語意等價由 pre-commit\n"
-    "# gate check_threshold_registry.py 強制（防雙 SoT 漂移）。\n"
-    "# 改閾值請改 scaffold_tenant.RULE_PACKS，再跑：\n"
-    "#   python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
-    "# （會同時重產本檔＋所有生成面。）PR-3 起 scaffold RULE_PACKS 降為生成物/\n"
-    "# runtime 載入，附掛表併回本檔。\n"
-    "#\n"
-    "# 範圍：threshold 身分（defaults / optional_overrides 兩層＋chart_default）。\n"
-    "# state_filters 與 dimensional_example 仍歸 scaffold（非閾值身分）。萃取為全量；\n"
-    "# 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。\n"
-    "#\n"
-    "# deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。\n"
-    "# 本區段是 alias SSOT——唯一的 runtime 鏡像 Go（pkg/config/aliases.go）由 pin 測試\n"
-    "# 釘住本區段（鏡像漂移＝CI 紅）；Python 不留副本，經 da-guard key-spellings 問（#3556）。\n"
-)
-
 
 def _load_scaffold():
     """Lazy import of scaffold_tenant (same directory)."""
@@ -308,36 +160,30 @@ def build_registry_doc(
     rule_packs: Optional[dict] = None,
     *,
     chart_default_keys: Optional[frozenset[str]] = None,
-    metric_class_backfill: Optional[dict[str, str]] = None,
     strict_metric_class: Optional[bool] = None,
     deprecated_aliases: Optional[dict[str, str]] = None,
 ) -> dict:
-    """Mechanically extract the registry document from RULE_PACKS.
+    """The registry document of *rule_packs* — or, with none, the committed one.
 
+    With ``rule_packs`` (packs shaped like scaffold's RULE_PACKS): extract.
     Per pack: {display, exporter, default_on, rule_pack_file}.
     Per key : {pack, tier, value, unit, desc[, metric_class][, chart_default]
     [, critical_of]}. ``critical_of`` is derived (never authored): key ends
     with ``_critical`` AND its base key exists in the same pack -> the base
-    key name. ``chart_default: true`` is merged from the registry-scope
-    enrichment table (CHART_DEFAULT_KEYS — see module docstring); emitted
-    sparsely (present only when true, like metric_class).
+    key name. ``chart_default: true`` is set on ``chart_default_keys``;
+    ``metric_class`` passes through and a ``_critical`` key without one
+    inherits its base key's class; with
+    ``strict_metric_class`` a key left unclassified is a hard error.
 
-    ``metric_class`` is REQUIRED on every registry key (schema-enforced):
-    scaffold-authored classes pass through; unclassified keys are backfilled
-    from ``METRIC_CLASS_BACKFILL``; ``_critical`` derivatives inherit the base
-    key's class. On the real extraction path any key left unclassified after
-    that is a hard error (``strict_metric_class``) — a new threshold key
-    cannot land without a deliberate classification.
-
-    Enrichment defaults are applied only on the REAL extraction path
-    (``rule_packs is None``); synthetic packs stay pure unless the caller
-    injects a table — hermetic tests depend on that.
+    Without ``rule_packs``: the committed rule-packs/threshold-registry.yaml,
+    which since D-A PR-3 IS the source (`committed_registry_doc`). It must be
+    a fixed point of `project_rule_packs` -> extract, so every rule above
+    still binds the authored file.
 
     Fails loudly on identity collisions (same key in two tiers of one pack, or
     in two packs) — a collision would silently shadow a contract entry — on a
-    chart_default table entry that is unknown or not defaults-tier (a typo'd
-    table would silently un-ship a chart key), and on a backfill entry that is
-    unknown or shadows a scaffold-authored class.
+    chart_default key that is unknown or not defaults-tier (it would silently
+    un-ship a chart key).
 
     ``deprecated_aliases`` (#1231) rides along as a top-level registry section
     (old spelling -> canonical key). Fail-loud contract: the old spelling must
@@ -345,22 +191,14 @@ def build_registry_doc(
     (an alias onto nothing would silently accept configs that resolve to no
     threshold), and old != new.
     """
-    if chart_default_keys is None:
-        chart_default_keys = (
-            CHART_DEFAULT_KEYS if rule_packs is None else frozenset()
-        )
-    if metric_class_backfill is None:
-        metric_class_backfill = (
-            METRIC_CLASS_BACKFILL if rule_packs is None else {}
-        )
-    if strict_metric_class is None:
-        strict_metric_class = rule_packs is None
-    if deprecated_aliases is None:
-        deprecated_aliases = (
-            DEPRECATED_KEY_ALIASES if rule_packs is None else {}
-        )
     if rule_packs is None:
-        rule_packs = _load_scaffold().RULE_PACKS
+        # The real registry: since D-A PR-3 the committed file IS the source,
+        # so the "real extraction" is that file, checked to be a fixed point
+        # of project -> extract (see `fixed_point_problems`).
+        return committed_registry_doc()
+    chart_default_keys = chart_default_keys or frozenset()
+    strict_metric_class = bool(strict_metric_class)
+    deprecated_aliases = deprecated_aliases or {}
 
     packs: dict[str, Any] = {}
     keys: dict[str, Any] = {}
@@ -426,32 +264,29 @@ def build_registry_doc(
     missing_chart = set(chart_default_keys) - set(keys)
     if missing_chart:
         raise ValueError(
-            "CHART_DEFAULT_KEYS entries not found in RULE_PACKS: "
+            "chart_default keys not found in the packs: "
             f"{sorted(missing_chart)} — a typo here would silently un-ship a "
             "chart key"
         )
 
-    # metric_class: backfill (never shadow scaffold) -> _critical inheritance
-    # -> strict completeness.
-    unknown_backfill = set(metric_class_backfill) - set(keys)
-    if unknown_backfill:
-        raise ValueError(
-            "METRIC_CLASS_BACKFILL entries not found in RULE_PACKS: "
-            f"{sorted(unknown_backfill)} — a typo here would leave the real "
-            "key unclassified"
-        )
-    for key, cls in metric_class_backfill.items():
-        if "metric_class" in keys[key]:
-            raise ValueError(
-                f"METRIC_CLASS_BACKFILL shadows scaffold-authored class for "
-                f"{key!r} — remove it from the table (scaffold wins)"
-            )
-        keys[key]["metric_class"] = cls
+    # metric_class: _critical inheritance -> strict completeness.
     for key, entry in keys.items():
-        if "metric_class" not in entry and "critical_of" in entry:
-            base = keys.get(entry["critical_of"], {})
-            if "metric_class" in base:
-                entry["metric_class"] = base["metric_class"]
+        if "critical_of" not in entry:
+            continue
+        base = keys.get(entry["critical_of"], {})
+        if "metric_class" not in base:
+            continue
+        if "metric_class" not in entry:
+            entry["metric_class"] = base["metric_class"]
+        elif entry["metric_class"] != base["metric_class"]:
+            # A critical tier is the same metric as its base, one severity
+            # up; a different class would e.g. hide a saturation base's
+            # `_critical` from the educational hint (or invent one).
+            raise ValueError(
+                f"{key!r} is classed {entry['metric_class']!r} but its base "
+                f"{entry['critical_of']!r} is {base['metric_class']!r} — a "
+                "critical tier carries its base's metric_class"
+            )
     if strict_metric_class:
         unclassified = sorted(
             k for k, e in keys.items() if "metric_class" not in e
@@ -459,7 +294,7 @@ def build_registry_doc(
         if unclassified:
             raise ValueError(
                 f"unclassified threshold keys {unclassified} — author "
-                "metric_class in scaffold RULE_PACKS or METRIC_CLASS_BACKFILL "
+                "metric_class in rule-packs/threshold-registry.yaml "
                 "(schema requires it on every key)"
             )
 
@@ -492,63 +327,154 @@ def build_registry_doc(
     return doc
 
 
-def write_registry(
-    path: Optional[str] = None, rule_packs: Optional[dict] = None
-) -> dict:
-    """Regenerate the registry from RULE_PACKS and write it to ``path``.
+# ---------------------------------------------------------------------------
+# The registry as source (D-A PR-3): project -> RULE_PACKS shape, fixed point,
+# and the generated Python module scaffold_tenant reads
+# ---------------------------------------------------------------------------
 
-    Returns a summary dict {path, packs, keys}. Uses write_text_secure (the
-    repo SAST convention chmod for write-mode files, tests/shared/test_sast.py).
-    """
-    if yaml is None:
-        raise RuntimeError("pyyaml required")
+#: Per-pack fields of scaffold's RULE_PACKS that come from the registry.
+_PACK_FIELDS = ("display", "exporter", "default_on", "rule_pack_file")
+#: Per-key fields of scaffold's RULE_PACKS that come from the registry.
+_KEY_FIELDS = ("value", "unit", "desc", "metric_class", "dimensions",
+               "value_counterexample")
+
+#: The generated module: a sibling of this file, so it ships in the da-tools
+#: image beside scaffold_tenant (which has no repo tree to read the YAML from).
+RULE_PACKS_MODULE_PATH = os.path.join(_THIS_DIR, "_rule_packs_generated.py")
+RULE_PACKS_MODULE_ID = "rule-packs-module"
+
+_RULE_PACKS_MODULE_HEADER = (
+    '"""GENERATED from rule-packs/threshold-registry.yaml — DO NOT EDIT.\n'
+    "\n"
+    "The threshold half of scaffold_tenant.RULE_PACKS (D-A PR-3): per pack its\n"
+    "display/exporter/default_on/rule_pack_file and the `defaults` /\n"
+    "`optional_overrides` tiers. Edit the registry, then run\n"
+    "  python3 scripts/tools/lint/check_threshold_registry.py --regen\n"
+    "`--ci` (pre-commit, CI) fails while this file is stale.\n"
+    '"""\n'
+)
+
+
+def project_rule_packs(doc: dict) -> dict:
+    """The threshold part of RULE_PACKS, as the registry *doc* states it.
+
+    Per pack: the `_PACK_FIELDS`, then the tiers in key order; per key the
+    `_KEY_FIELDS` it carries. Derived fields (`critical_of`) and the
+    registry-only `chart_default` are not part of RULE_PACKS."""
+    packs: dict[str, dict] = {}
+    for name, meta in (doc.get("packs") or {}).items():
+        packs[name] = {f: meta[f] for f in _PACK_FIELDS if f in meta}
+    for key, entry in registry_keys(doc).items():
+        info: dict[str, Any] = {}
+        for f in _KEY_FIELDS:
+            if f not in entry:
+                continue
+            v = entry[f]
+            info[f] = list(v) if isinstance(v, list) else (
+                dict(v) if isinstance(v, dict) else v)
+        packs[entry["pack"]].setdefault(entry["tier"], {})[key] = info
+    return packs
+
+
+def fixed_point_problems(doc: dict) -> list[str]:
+    """What keeps *doc* from being a fixed point of project -> extract.
+
+    Extracting `project_rule_packs(doc)` again — with its own chart_default
+    set, aliases and classes, strict classification — must
+    reproduce *doc*. That is how the authored file is held to every rule
+    `build_registry_doc` enforces: collisions, `critical_of` exactly where it
+    derives, `chart_default` only on defaults-tier keys, a class on every
+    key, aliases onto live keys. Empty == holds."""
+    try:
+        fresh = build_registry_doc(
+            project_rule_packs(doc),
+            chart_default_keys=frozenset(
+                k for k, e in registry_keys(doc).items() if e.get("chart_default")),
+            strict_metric_class=True,
+            deprecated_aliases=dict(doc.get("deprecated_aliases") or {}),
+        )
+    except (ValueError, KeyError, TypeError, AttributeError) as exc:
+        # The file is hand-authored: an entry that is not a mapping (or a
+        # `packs.<p>: null`) is a contract error to report next to the schema
+        # errors, not a crash that hides them.
+        return [f"not a valid contract: {type(exc).__name__}: {exc}"]
+    return diff_docs(doc, fresh)
+
+
+def committed_registry_doc(path: Optional[str] = None) -> dict:
+    """The committed registry, refused (ValueError) unless it is a fixed point."""
+    doc = load_registry(path)
+    problems = fixed_point_problems(doc)
+    if problems:
+        raise ValueError(
+            "rule-packs/threshold-registry.yaml breaks its own contract: "
+            + "; ".join(problems))
+    return doc
+
+
+def render_rule_packs_module(doc: dict) -> str:
+    """The exact text of the generated module for *doc*."""
+    import pprint
+
+    body = pprint.pformat(project_rule_packs(doc), indent=1, width=100,
+                          sort_dicts=False)
+    return _RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
+
+
+def packaged_registry_doc() -> dict:
+    """The registry as the generated RULE_PACKS module carries it.
+
+    For a reader that runs where no repo tree is (the da-tools image ships
+    the module, not the YAML): every key's pack, tier, value, unit, desc,
+    metric_class, dimensions and derived `critical_of` — but NOT
+    `chart_default` or `deprecated_aliases`, which RULE_PACKS does not
+    carry. In a checkout it equals the committed registry minus those two
+    (pinned by tests/ops/test_registry_lib.py)."""
+    import runpy  # noqa: PLC0415  (a data module: no import-system entry needed)
+    packs = runpy.run_path(RULE_PACKS_MODULE_PATH)["THRESHOLD_PACKS"]
+    return build_registry_doc(packs, strict_metric_class=True)
+
+
+def check_rule_packs_module(doc: dict, path: Optional[str] = None) -> Optional[str]:
+    """None when the generated module is fresh, else what is wrong with it."""
+    p = path or RULE_PACKS_MODULE_PATH
+    if not os.path.isfile(p):
+        return f"{p} (surface {RULE_PACKS_MODULE_ID!r}) does not exist"
+    with open(p, encoding="utf-8") as fh:
+        if fh.read() != render_rule_packs_module(doc):
+            return (f"{p} (surface {RULE_PACKS_MODULE_ID!r}) is not what the "
+                    "registry generates")
+    return None
+
+
+def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
+    """``--regen``: every generated surface from the committed registry.
+
+    The registry itself is authored (D-A PR-3) and never written. It is
+    refused unless it is a fixed point (`committed_registry_doc`); then the
+    surfaces are planned and every conf.d surface is judged by a ``da-guard
+    write`` dry run of the batches that will write it (`plan_surfaces`) —
+    all before anything is written. Only then are the changed surfaces
+    written (the conf.d ones first, through ``da-guard write``) and the
+    generated RULE_PACKS module last; a refusal (ConfdWriteRefused,
+    ValueError, `_lib_parse_tree.ParseTreeError`) leaves every file as it
+    was; a write that stops part-way is SurfaceWriteStopped
+    (ConfdWriteStopped for a conf.d batch), naming the files already
+    written, and nothing after it is written.
+    Returns ({path, packs, keys}, the touched surface paths)."""
     sys.path.insert(0, _THIS_DIR)
     sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
     from _lib_python import write_text_secure  # noqa: E402
 
-    out = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
-    doc, text = render_registry(rule_packs)
-    write_text_secure(out, text)
-    return {"path": out, "packs": len(doc["packs"]), "keys": len(doc["keys"])}
-
-
-def render_registry(rule_packs: Optional[dict] = None) -> tuple[dict, str]:
-    """(doc, text): the registry extracted from RULE_PACKS and the exact
-    text ``write_registry`` writes for it. Writes nothing."""
-    if yaml is None:
-        raise RuntimeError("pyyaml required")
-    doc = build_registry_doc(rule_packs)
-    body = yaml.safe_dump(
-        doc, sort_keys=False, allow_unicode=True, default_flow_style=False
-    )
-    return doc, _REGISTRY_HEADER + body
-
-
-def regen(path: Optional[str] = None, rule_packs: Optional[dict] = None
-          ) -> tuple[dict, list[str]]:
-    """``--regen``: the registry AND every generated surface, all or none.
-
-    The registry text is rendered, the surfaces are planned from the
-    registry as that text reads back (what a later ``load_registry`` sees),
-    and every conf.d surface is judged by a ``da-guard write`` dry run of
-    the batches that will write it (`plan_surfaces`) — all before anything
-    is written. Only then are the changed surfaces written (the conf.d ones
-    first, through ``da-guard write``) and the registry last; a refusal
-    (ConfdWriteRefused, ValueError, `_lib_parse_tree.ParseTreeError`)
-    leaves every file as it was; a write that stops part-way is
-    SurfaceWriteStopped (ConfdWriteStopped for a conf.d batch), naming the
-    files already written, and nothing after it is written.
-    Returns (``write_registry``'s summary, the touched surface paths)."""
-    sys.path.insert(0, _THIS_DIR)
-    sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
-    from _lib_python import write_text_secure  # noqa: E402
-
-    out = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
-    doc, text = render_registry(rule_packs)
-    planned = plan_surfaces(yaml.safe_load(text) or {})
+    src = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
+    doc = committed_registry_doc(src)
+    planned = plan_surfaces(doc)
+    module_text = render_rule_packs_module(doc)
     touched = write_planned(planned)
-    _write_or_stop(out, text, touched, write_text_secure)
-    return {"path": out, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
+    if check_rule_packs_module(doc) is not None:
+        _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_text_secure)
+        touched.append(RULE_PACKS_MODULE_PATH)
+    return {"path": src, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
 
 # ---------------------------------------------------------------------------
@@ -560,8 +486,12 @@ def load_registry(path: Optional[str] = None) -> dict:
     if yaml is None:
         raise RuntimeError("pyyaml required")
     p = path or _repo_path_or_raise(REGISTRY_PATH, "the threshold registry")
+    # Strict: since D-A PR-3 the file is authored by hand, and a key written
+    # twice (`pg_connections:` under two packs) would otherwise keep the last
+    # one silently — the extraction's two-packs collision check never sees it.
+    from _lib_io import strict_safe_load  # noqa: PLC0415  (scripts/tools, on the path above)
     with open(p, encoding="utf-8") as fh:
-        return yaml.safe_load(fh) or {}
+        return strict_safe_load(fh) or {}
 
 
 def validate_registry(
@@ -618,11 +548,11 @@ def default_value(doc: dict, key: str):
 
 
 # ---------------------------------------------------------------------------
-# Transition-period equivalence (anti dual-SoT drift)
+# Field-by-field diff of two registry documents
 # ---------------------------------------------------------------------------
 
 def diff_docs(committed: dict, fresh: dict) -> list[str]:
-    """Semantic diff of a committed registry vs a fresh scaffold extraction.
+    """Semantic diff of a committed registry vs its fresh re-derivation.
 
     Returns one message per divergence (empty == semantically equal). Messages
     are per-field so the gate output is directly actionable.
@@ -632,29 +562,29 @@ def diff_docs(committed: dict, fresh: dict) -> list[str]:
     c_packs = committed.get("packs", {}) or {}
     f_packs = fresh.get("packs", {}) or {}
     for name in sorted(set(f_packs) - set(c_packs)):
-        diffs.append(f"pack {name!r}: in scaffold RULE_PACKS but missing from registry")
+        diffs.append(f"pack {name!r}: derived but missing from registry")
     for name in sorted(set(c_packs) - set(f_packs)):
-        diffs.append(f"pack {name!r}: in registry but missing from scaffold RULE_PACKS")
+        diffs.append(f"pack {name!r}: in registry but not derived")
     for name in sorted(set(c_packs) & set(f_packs)):
         for field in sorted(set(c_packs[name]) | set(f_packs[name])):
             cv, fv = c_packs[name].get(field), f_packs[name].get(field)
             if cv != fv:
                 diffs.append(
-                    f"pack {name!r}.{field}: registry={cv!r} vs scaffold={fv!r}"
+                    f"pack {name!r}.{field}: registry={cv!r} vs derived={fv!r}"
                 )
 
     c_keys = committed.get("keys", {}) or {}
     f_keys = fresh.get("keys", {}) or {}
     for key in sorted(set(f_keys) - set(c_keys)):
-        diffs.append(f"key {key!r}: in scaffold RULE_PACKS but missing from registry")
+        diffs.append(f"key {key!r}: derived but missing from registry")
     for key in sorted(set(c_keys) - set(f_keys)):
-        diffs.append(f"key {key!r}: in registry but missing from scaffold RULE_PACKS")
+        diffs.append(f"key {key!r}: in registry but not derived")
     for key in sorted(set(c_keys) & set(f_keys)):
         for field in sorted(set(c_keys[key]) | set(f_keys[key])):
             cv, fv = c_keys[key].get(field), f_keys[key].get(field)
             if cv != fv:
                 diffs.append(
-                    f"key {key!r}.{field}: registry={cv!r} vs scaffold={fv!r}"
+                    f"key {key!r}.{field}: registry={cv!r} vs derived={fv!r}"
                 )
 
     # deprecated_aliases (#1231) — same anti-dual-SoT treatment as keys: any
@@ -664,17 +594,17 @@ def diff_docs(committed: dict, fresh: dict) -> list[str]:
     f_alias = fresh.get("deprecated_aliases", {}) or {}
     for old in sorted(set(f_alias) - set(c_alias)):
         diffs.append(
-            f"deprecated_alias {old!r}: in authored table but missing from registry"
+            f"deprecated_alias {old!r}: derived but missing from registry"
         )
     for old in sorted(set(c_alias) - set(f_alias)):
         diffs.append(
-            f"deprecated_alias {old!r}: in registry but missing from authored table"
+            f"deprecated_alias {old!r}: in registry but not derived"
         )
     for old in sorted(set(c_alias) & set(f_alias)):
         if c_alias[old] != f_alias[old]:
             diffs.append(
                 f"deprecated_alias {old!r}: registry={c_alias[old]!r} vs "
-                f"authored={f_alias[old]!r}"
+                f"derived={f_alias[old]!r}"
             )
 
     if committed.get("version") != fresh.get("version"):
@@ -683,11 +613,6 @@ def diff_docs(committed: dict, fresh: dict) -> list[str]:
             f"expected={fresh.get('version')!r}"
         )
     return diffs
-
-
-def diff_vs_scaffold(doc: dict, rule_packs: Optional[dict] = None) -> list[str]:
-    """Diff a loaded registry doc against a fresh RULE_PACKS extraction."""
-    return diff_docs(doc, build_registry_doc(rule_packs))
 
 
 # ---------------------------------------------------------------------------

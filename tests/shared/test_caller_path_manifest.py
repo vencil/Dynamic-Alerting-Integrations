@@ -112,7 +112,7 @@ DIR_CEILING: frozenset[tuple[str, str]] = frozenset({
     ("evaluate-policy", "--config-dir"), ("explain-keys", "--config-dir"),
     ("explain-route", "--config-dir"), ("generate-routes", "--config-dir"),
     ("generator-service", "--repo"), ("gitops-check local", "--dir"),
-    ("lint", "--rule-pack-dir"), ("maintenance-scheduler", "--config-dir"),
+    ("lint", "--rule-pack-dir"),
     ("migrate-credentials", "--config-dir"), ("rule-pack-split", "--rule-packs-dir"),
     ("silencer-drift-check", "--rule-pack-dir"), ("tenant-verify", "--conf-d"),
     ("test-notification", "--config-dir"), ("threshold-govern", "--config-dir"),

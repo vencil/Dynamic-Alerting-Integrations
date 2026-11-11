@@ -286,6 +286,7 @@ func TestWrite_TenantOnlyMetricBody_Commits(t *testing.T) {
 	t.Parallel()
 	dir := pilotDefaultsDir(t)
 	initGitRepo(t, dir)
+	commitRoot(t, dir) // #3685: a root file differing from HEAD refuses a direct write
 
 	w := newTestWriter(dir, dir)
 	body := "tenants:\n  db-a:\n    container_cpu: \"70\"\n"
