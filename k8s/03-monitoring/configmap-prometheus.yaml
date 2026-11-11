@@ -47,12 +47,23 @@ data:
       # -------------------------------------------------------
 
       # Tenant DB exporters (db-a, db-b, db-c, ...)
-      # Discovers services in db-* namespaces.
-      # 'tenant' label is derived from the namespace.
+      # Discovers annotated Services in db-* namespaces; 'tenant' is the
+      # namespace. ⛔ This job is the SCRAPE CONTRACT the tenant rule packs
+      # select on (#3720): `job="tenant-exporters"`, `tenant` from the
+      # namespace, `instance` left as Prometheus sets it (<pod IP>:<port>).
+      # The BYO / Operator / Federation docs teach customers this same job;
+      # tests/k8s/test_tenant_scrape_contract.py pins every documented
+      # snippet to it, and _lib_metric_sources.TENANT_EXPORTER_JOB is the name.
+      # Every POD behind a Service is a target (#3680, as platform-components
+      # below, #3483): `role: service` scraped the Service VIP, so two
+      # Services in one namespace (both had instance=<namespace>) or two pods
+      # behind one Service interleaved into ONE `up` series, and a dead
+      # target was masked by a healthy one for minutes. The scrape gate
+      # (check_scrape_reachability.py, TENANT-PER-POD) keeps it that way.
       - job_name: "tenant-exporters"
         scrape_interval: 10s
         kubernetes_sd_configs:
-          - role: service
+          - role: endpointslice
         relabel_configs:
           # Only keep services with prometheus.io/scrape annotation
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
@@ -70,12 +81,12 @@ data:
           - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
             action: drop
             regex: "platform"
-          # Use the annotated port
-          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
-            action: replace
-            target_label: __address__
-            regex: ([^:]+)(?::\d+)?;(\d+)
-            replacement: $1:$2
+          # One target per pod: keep the one on the annotated port, so the
+          # annotation must name the port the POD listens on (as for
+          # platform-components below).
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+            action: keepequal
+            target_label: __meta_kubernetes_endpointslice_port
           # Use annotated metrics path
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
             action: replace
@@ -84,9 +95,11 @@ data:
           # Set tenant label from namespace
           - source_labels: [__meta_kubernetes_namespace]
             target_label: tenant
-          # Set instance label from namespace (backward compat)
-          - source_labels: [__meta_kubernetes_namespace]
-            target_label: instance
+          # Which Service and pod a series came from (instance is <pod IP>:<port>).
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: service
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
           # Add env label
           - target_label: env
             replacement: "test"

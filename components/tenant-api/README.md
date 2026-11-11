@@ -344,11 +344,11 @@ groups:
 
 ⛔ **環境與 domain 標記只有平台管理員能變更**(ADR-027 §7):標記決定哪些規則的 `environments` / `domains` 涵蓋這個租戶,所以不論上述 scope 軸判定如何,一筆寫入若會**變更**租戶的 environment 或 domain(新增、修改、刪除都算;值不變不算;比的是上面同一套 metadata 讀法讀出的值,所以經 `_profile` 改到也算,建立一個帶標記的新租戶也算),而呼叫者不是平台管理員(一條 `tenants: ["*"]`、授予 `admin`,且不帶 `org-scope`、`environments`、`domains` 的規則;帶任一範圍限制的 `"*"` admin 都不算——標記決定其他規則涵蓋哪些租戶,只限部分環境的 admin 若能改,就能把租戶交給目的環境的每條規則),就拒絕:`PUT /tenants/{id}`(以及共用同一判定序列的 `/diff`、`/validate`)回 403 `FORBIDDEN`;`POST /tenants/batch` 與 `POST /groups/{id}/batch` 是該筆結果 `code: FORBIDDEN`、整批 422 不寫入。PR 模式同樣在寫入鎖內以最新 origin base 上的租戶檔再判一次是否變更(base 上讀不出標記時沿用本機樹判過的值),不通過時不開 PR、不留分支。
 
-org 軸(租戶→組織,`_tenant_orgs.yaml`;ADR-027 / LD-6 P4)獨立於 metadata 軸,作用於 org-scoped 規則的**三個**判定面——list 可見性(P4a)、per-tenant 寫入 / admin 授權(含 federation token 簽發,P4b)、與 read-by-id 單租戶讀取(P4c)。沒掛 org 的租戶在 org-scoped 規則下不可見、不可寫;被擋下的決定計入 `{axis="org"}`(read/visibility 面:list + read-by-id/collection)與 `{axis="org_write"}`(寫入面)。⚠️ 標記租戶前須確認 org claim 確實送達 tenant-api,否則該租戶對 org-scoped 規則立即不可見。
+org 軸(租戶→組織,`_tenant_orgs.yaml`;ADR-027 §7)獨立於 metadata 軸,作用於 org-scoped 規則的**三個**判定面——list 可見性(P4a)、per-tenant 寫入 / admin 授權(含 federation token 簽發,P4b)、與 read-by-id 單租戶讀取(P4c)。沒掛 org 的租戶在 org-scoped 規則下不可見、不可寫;被擋下的決定計入 `{axis="org"}`(read/visibility 面:list + read-by-id/collection)與 `{axis="org_write"}`(寫入面)。⚠️ 標記租戶前須確認 org claim 確實送達 tenant-api,否則該租戶對 org-scoped 規則立即不可見。
 
 ### RBAC match 規則(claims-aware)
 
-`_rbac.yaml` 規則可加選配的 `match:` 區塊(ADR-027 / LD-6 P3)。**沒有 `match:` 的規則行為完全不變**——`name` 即比對的 IdP group(同一條求值路徑的退化情形,非新分支);有 `match:` 時 `name` 變成純標籤 / 稽核識別:
+`_rbac.yaml` 規則可加選配的 `match:` 區塊(ADR-027 §7)。**沒有 `match:` 的規則行為完全不變**——`name` 即比對的 IdP group(同一條求值路徑的退化情形,非新分支);有 `match:` 時 `name` 變成純標籤 / 稽核識別:
 
 ```yaml
 groups:

@@ -206,7 +206,7 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 	}
 	now, err := keyVerdictOf(root, keyVerdictOpts{scan: config.ScanOptions{Overlays: overlays,
 		OverlayMakesDirs: mkdirs, SkipDuplicated: true}, rootPlatform: hasRootPlatformFile(afterDoc),
-		profiles: rootProfilesOf(afterDoc)}, at)
+		profiles: rootProfilesOf(afterDoc), tenantFiles: tenantFileKeysOf(afterDoc)}, at)
 	if err != nil {
 		return nil, err
 	}

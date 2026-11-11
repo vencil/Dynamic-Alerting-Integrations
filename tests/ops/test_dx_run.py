@@ -351,7 +351,7 @@ class TestDepDoctor:
         pkgs = mod._declared_packages()
         assert pkgs, "should parse the repo's real devcontainer.json"
         # Spot-check the ones whose absence silently skipped 28 tests (#1254).
-        assert {"croniter", "promql-parser", "pytest", "pyyaml"} <= pkgs
+        assert {"hypothesis", "promql-parser", "pytest", "pyyaml"} <= pkgs
 
     def test_probe_exits_nonzero_and_names_missing_packages(self):
         """The in-container probe must FAIL loudly on an absent package."""
@@ -383,7 +383,7 @@ class TestDepDoctor:
     def test_missing_packages_block_the_run_with_rc4(self, capsys):
         """A stale container must NOT be allowed to produce a green result."""
         mod = _load()
-        missing_line = "MISSING=croniter,pyyaml"
+        missing_line = "MISSING=hypothesis,pyyaml"
 
         def fake(cmd, *a, **kw):
             out = MagicMock()
@@ -401,7 +401,7 @@ class TestDepDoctor:
             rc = mod._run_dep_doctor("c", "/ws")
         assert rc == 2  # #3577: was 4
         err = capsys.readouterr().err
-        assert "croniter,pyyaml" in err
+        assert "hypothesis,pyyaml" in err
         assert "rebuild" in err.lower()
 
     def test_stamp_short_circuits_second_run(self):

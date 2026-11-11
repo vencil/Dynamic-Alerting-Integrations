@@ -33,7 +33,6 @@ def _build_help_text(lang):
     backtest          根據歷史資料回測閾值變更
     cutover           一鍵影子監控轉換 (§7.1 所有步驟)
     blind-spot        掃描叢集目標並查找未監控實例
-    maintenance-scheduler  評估週期性維護並建立 AM 靜默規則
     alert-quality     警報品質評估 (震盪/閒置/延遲分析)
     alert-correlate   告警關聯分析 (時間窗口聚類 + 根因推斷)
 
@@ -124,7 +123,6 @@ Commands (Prometheus API — portable):
     backtest          Backtest threshold changes against historical data
     cutover           One-command Shadow Monitoring cutover (§7.1 all steps)
     blind-spot        Scan cluster targets and find unmonitored instances
-    maintenance-scheduler  Evaluate recurring maintenance and create AM silences
     alert-quality     Alert quality scoring (noise/stale/latency)
     alert-correlate   Alert correlation analysis (time-window clustering + root cause)
 
@@ -339,7 +337,6 @@ COMMAND_MAP = {
     "backtest": "backtest_threshold.py",
     "cutover": "cutover_tenant.py",
     "blind-spot": "blind_spot_discovery.py",
-    "maintenance-scheduler": "maintenance_scheduler.py",
     "alert-quality": "alert_quality.py",
     "alert-correlate": "alert_correlate.py",
     # Group B: Prometheus + file system (config generation)

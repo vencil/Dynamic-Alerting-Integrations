@@ -861,6 +861,8 @@ func TestValidateAndWrite_AgreeOnTenantOnlyMetricBody(t *testing.T) {
 	configDir := initGitConfigDir(t)
 	testutil.WriteYAML(t, configDir, "_defaults.yaml",
 		"defaults:\n  container_cpu: 80\n  mysql_connections: 80\n")
+	runGit(t, configDir, "add", "--", "_defaults.yaml")
+	runGit(t, configDir, "commit", "-q", "-m", "seed defaults") // #3685: a root file differing from HEAD refuses a direct write
 
 	// Tenant-only body, plain metric keys (no defaults block).
 	const body = "tenants:\n  db-a:\n    container_cpu: \"70\"\n    mysql_connections: \"60\"\n"

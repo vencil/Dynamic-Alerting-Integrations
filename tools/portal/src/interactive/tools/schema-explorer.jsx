@@ -105,13 +105,14 @@ const SCHEMA = [
     rulePack: 'all',
     children: [
       { key: 'target', type: '"enable" | "disable" | "disabled" | "off" | "false"', desc: t('開關：enable 開、disable（或 disabled／off／false）關；與 enabled 擇一，兩者矛盾時整個值讀不懂、不開', 'Switch: enable turns it on, disable (or disabled / off / false) off; use it or enabled — if they disagree the whole value is not read and maintenance stays off'), rulePack: 'all', example: '"enable"' },
-      { key: 'enabled', type: 'boolean', desc: t('開關（布林）：true 開、false 關。沒寫開關時有 expires 就開到到期；只有 recurring 時不開維護模式，只在窗口內建 silence；開關說關時也不建 silence', 'Switch (boolean): true on, false off. With no switch, expires turns it on until it lapses; recurring alone does not turn maintenance on, it only silences the windows; a switch that says off creates no silences either'), rulePack: 'all', example: 'true' },
+      { key: 'enabled', type: 'boolean', desc: t('開關（布林）：true 開、false 關。沒寫開關時有 expires 就開到到期；recurring 的每個窗口內也開（exporter 自己判斷）；開關說關時窗口內也不開', 'Switch (boolean): true on, false off. With no switch, expires turns it on until it lapses; inside each recurring window it is on too (the exporter evaluates the windows); a switch that says off keeps the windows off as well'), rulePack: 'all', example: 'true' },
       { key: 'expires', type: 'string (date-time, RFC3339)', desc: t('自動失效時間（UTC，例如 now + 7 天）；無法解析時整個設定被忽略', 'Auto-expiry timestamp (UTC, e.g. now + 7 days); an unparseable value makes the whole setting ignored'), rulePack: 'all' },
       { key: 'reason', type: 'string', desc: t('原因', 'Reason'), rulePack: 'all', example: '"Planned DB migration"' },
-      { key: 'recurring', type: 'array', desc: t('週期性維護排程', 'Recurring maintenance schedules'), rulePack: 'all',
+      { key: 'recurring', type: 'array', desc: t('每週維護窗口：窗口內規則不觸發（UTC；舊的 cron + duration 寫法不再接受）', 'Weekly maintenance windows: rules do not fire inside them (UTC; the old cron + duration form is no longer accepted)'), rulePack: 'all',
         children: [
-          { key: '[].cron', type: 'string', desc: t('Cron 表達式（必填）', 'Cron expression (required)'), rulePack: 'all', example: '"0 2 * * 0"' },
-          { key: '[].duration', type: 'string', desc: t('持續時間（必填）', 'Duration (required)'), rulePack: 'all', example: '"2h"' },
+          { key: '[].weekdays', type: 'array', desc: t('開窗的星期（UTC，必填）：sun mon tue wed thu fri sat', 'Weekdays the window opens on (UTC, required): sun mon tue wed thu fri sat'), rulePack: 'all', example: '["sun"]' },
+          { key: '[].window', type: 'string', desc: t('UTC HH:MM-HH:MM（必填）；跨午夜的窗口算在開始那天', 'UTC HH:MM-HH:MM (required); a window that crosses midnight belongs to the day it starts on'), rulePack: 'all', example: '"02:00-06:00"' },
+          { key: '[].reason', type: 'string', desc: t('原因（選填）', 'Reason (optional)'), rulePack: 'all', example: '"Weekly patching"' },
         ],
       },
     ],

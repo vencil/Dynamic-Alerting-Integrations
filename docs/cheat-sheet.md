@@ -23,7 +23,6 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `validate` | Shadow Monitoring 驗證工具：比對新舊 Recording Rule 數值，偵測自動... | --watch, --interval <SEC>, --rounds <N> | `da-tools validate --help` |
 | `cutover` | Shadow Monitoring 一鍵切換：停止舊規則、啟用新規則、驗證健康 | --tenant <NAME>, --readiness-json <FILE>, --dry-run | `da-tools cutover --help` |
 | `blind-spot` | 掃描 Prometheus 叢集的活躍 targets，與 tenant 配置交叉比對，找出盲區（有... | --config-dir <PATH>, --exclude-jobs <LIST>, --json-output | `da-tools blind-spot --help` |
-| `maintenance-scheduler` | 評估排程式維護窗口，自動建立 Alertmanager silence | --config-dir <PATH>, --alertmanager <URL>, --dry-run | `da-tools maintenance-scheduler --help` |
 | `backtest` | 執行 PR 中 threshold 變更的歷史回測 | --lookback <DURATION>, --output <FILE> | `da-tools backtest --help` |
 | `shadow-verify` | Shadow Monitoring 就緒度與收斂性三階段驗證 | --mapping <FILE>, --report-csv <FILE>, --readiness-json <FILE> | `da-tools shadow-verify --help` |
 | `byo-check` | 自動化 BYO Prometheus & Alertmanager 整合驗證（取代手動 curl +... | --prometheus <URL>, --alertmanager <URL>, --json | `da-tools byo-check --help` |
@@ -79,7 +78,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
   - `baseline` — 觀測指標，產出閾值建議
   - `validate` — Shadow Monitoring 雙軌比對
   - `cutover` — 一鍵切換（遷移最後一步）
-  - 其他：`blind-spot`、`maintenance-scheduler`、`backtest`
+  - 其他：`blind-spot`、`backtest`
   - `alert-quality` — 警報品質評估（noise, stale, latency）
   - `alert-correlate` — 告警關聯分析（時間窗口聚類 + 根因推斷）
   - `cardinality-forecast` — Per-tenant 基數趨勢預測

@@ -1,6 +1,6 @@
 package handler
 
-// Tests for the /ready human-plane socket self-dial (ADR-027 D2-B §2.5).
+// Tests for the /ready human-plane socket self-dial (ADR-027 §2).
 // The kubelet only probes the TCP plane, so this self-dial is the ONLY
 // mechanism that turns a dead human UDS listener into a visible NotReady
 // instead of a silent outage — which makes the dial itself the thing

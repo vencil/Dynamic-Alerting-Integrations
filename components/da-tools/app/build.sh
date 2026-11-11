@@ -28,7 +28,6 @@
 #       ├── deprecate_rule.py
 #       ├── cutover_tenant.py
 #       ├── blind_spot_discovery.py
-#       ├── maintenance_scheduler.py
 #       ├── lint_custom_rules.py
 #       ├── config_diff.py
 #       ├── generate_alertmanager_routes.py
@@ -73,7 +72,6 @@ TOOL_FILES=(
     ops/backtest_threshold.py
     ops/cutover_tenant.py
     ops/blind_spot_discovery.py
-    ops/maintenance_scheduler.py
     # #924 / ADR-028 — revocation-reconciler daemon (runs as a Deployment via
     # direct invoke; exempt from COMMAND_MAP, see _lint_helpers.BUILD_EXEMPT).
     ops/_federation_revocation_reconciler.py
@@ -105,6 +103,10 @@ TOOL_FILES=(
     # threshold key reaches; shared by config_diff and patch_config --diff.
     ops/_threshold_alerts.py
     ops/scaffold_tenant.py
+    # D-A PR-3 — the threshold half of scaffold_tenant.RULE_PACKS, generated
+    # from rule-packs/threshold-registry.yaml (the image has no repo tree to
+    # read the YAML from); top-level import of scaffold_tenant.py.
+    ops/_rule_packs_generated.py
     # #1310 — threshold-registry loader lib; top-level import of
     # scaffold_tenant.py (is_shipped_optional_key decides which
     # optional_overrides keys the interactive prompt may pre-fill). Stdlib-only

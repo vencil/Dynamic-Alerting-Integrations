@@ -38,7 +38,7 @@ const (
 	// GitManagedNotTenantDocument: not YAML, or its root or its `tenants`
 	// is not a mapping, or `tenants` is a top-level key twice, or the root
 	// has a key other than `tenants` (#3504: no reader takes a tenant's keys
-	// from anywhere but `tenants.<id>`; tenantFileTopLevelKeys).
+	// from anywhere but `tenants.<id>`; cfg.TenantFileTopLevelKey).
 	GitManagedNotTenantDocument = "not_tenant_document"
 	// GitManagedSeveralDocuments: a YAML document with content after the
 	// first (the exporter reads the first alone).
@@ -63,7 +63,7 @@ const (
 //   - one YAML document: any document after the first is empty (no node, or
 //     a null one — a trailing `---`, a comment), as the exporter reads the
 //     first document alone;
-//   - its root a mapping whose keys are tenantFileTopLevelKeys alone
+//   - its root a mapping whose keys are cfg.TenantFileTopLevelKey's alone
 //     (`tenants`), untagged scalars, plain or quoted (no tag — `!!str`
 //     included —, not `<<`, not a block scalar), carrying no anchor, with no
 //     value that is an alias or carries an anchor;
@@ -136,12 +136,6 @@ func strayTopLevelVerdict(verdict string, stray bool) string {
 	return verdict
 }
 
-// tenantFileTopLevelKeys is every top-level key a tenant file may hold: the
-// properties of docs/schemas/tenant-config.schema.json, which sets
-// additionalProperties false. TestTenantFileTopLevelKeys_MatchTheSchema holds
-// the two equal.
-var tenantFileTopLevelKeys = map[string]bool{"tenants": true}
-
 // walkDeclaredIDs walks data's YAML nodes: the ids its `tenants:` keys
 // decode to (repeats kept), or the git-managed reason its shape alone gives
 // (TenantFileManagement's rules other than the id check and the top-level key
@@ -187,7 +181,7 @@ func walkDeclaredIDs(data []byte) (ids []string, reason string, stray bool) {
 		if !ok || indirect(v) {
 			return nil, GitManagedYAMLIndirection, false
 		}
-		if !tenantFileTopLevelKeys[name] {
+		if !cfg.TenantFileTopLevelKey(name) {
 			// #3504: the tenant-config schema allows no top-level key but
 			// `tenants`, and no reader takes a tenant's keys from one. Noted,
 			// not returned: a more specific reason the rest of the walk or

@@ -1,6 +1,6 @@
 package handler
 
-// ADR-027 / LD-6 P2 — /api/v1/me claims exposure + principal-first drift fix.
+// ADR-027 §7 — /api/v1/me claims exposure + principal-first drift fix.
 //
 //	(a) claim-configured chain → response carries the claims;
 //	(b) no claims → the JSON body must not contain a "claims" key at all
@@ -105,7 +105,7 @@ func TestMe_NoClaims_BodyOmitsClaimsKey(t *testing.T) {
 	}
 }
 
-// ── /me org_claim_keys (ADR-027 / LD-6 P7) ──────────────────────────────────
+// ── /me org_claim_keys (ADR-027 §7) ──────────────────────────────────
 //
 // The field is caller-relative AND intersected with the caller's present
 // claims: a matched org-scoped rule only surfaces its claim key when the

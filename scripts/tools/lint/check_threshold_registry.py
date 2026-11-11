@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Threshold-registry gate — schema + scaffold equivalence + generated-surface freshness + header-prose membership (TRK-339 WS1a / #1200).
+"""Threshold-registry gate — schema + self-consistency + generated-surface freshness + header-prose membership (TRK-339 WS1a / #1200).
 
 WHY: epic #1200 D2 (LOCKED) makes ``rule-packs/threshold-registry.yaml`` the
 standalone SoT for the threshold contract (language-neutral,
@@ -8,23 +8,26 @@ a REAL SoT: previously hand-copied surfaces (rule-pack header threshold
 sections, helm values ``thresholdConfig.defaults``, the dev template
 ``conf.d/_defaults.yaml`` defaults section, and — since #1310 — the
 ``optional_overrides:`` declared-key LIST on both runtime surfaces) are now
-GENERATED from it inside delimited blocks. ``scaffold_tenant.RULE_PACKS`` remains the operative copy
-for the config-generation path until PR-3 demotes it, so the transition still
-needs the anti-dual-SoT gate. Two live copies of a contract is exactly the
-disease #1189 diagnosed (18 dead keys from four hand-copied surfaces
-drifting), so every copy relationship is gated:
+GENERATED from it inside delimited blocks. Since D-A PR-3 the registry is
+authored by hand and ``scaffold_tenant.RULE_PACKS`` is generated from it too
+(``scripts/tools/ops/_rule_packs_generated.py``, merged with scaffold's own
+state filters and dimensional examples), so no second copy of a threshold is
+written anywhere. Two live copies of a contract is exactly the disease #1189
+diagnosed (18 dead keys from four hand-copied surfaces drifting):
 
   1. SCHEMA (the "pre-generation hard gate"): the registry must validate
      against ``docs/schemas/threshold-registry.schema.json`` BEFORE anything
      consumes it — required keys, value:number, unit/desc:string, tier enum.
      A malformed entry fails at author/CI time, never downstream.
-  2. EQUIVALENCE (anti dual-SoT drift, exit-lock shaped): the registry must be
-     SEMANTICALLY EQUAL to a fresh mechanical extraction of RULE_PACKS (plus
-     the registry-scope enrichment tables in _registry_lib). ANY divergence in
-     EITHER direction is a hard error — no grandfather list, the registry is
-     born equal. On drift: edit scaffold_tenant.RULE_PACKS, then ``--regen``.
-  3. SURFACE FRESHNESS: each generated block in every surface must be
-     byte-equal to a fresh render from the committed registry. STALE (or
+  2. SELF-CONSISTENCY: the registry must be a fixed point of projecting it to
+     the RULE_PACKS shape and extracting it again (``_registry_lib.
+     fixed_point_problems``) — so the authored file still obeys every rule
+     the extraction enforces: ``critical_of`` exactly where it derives,
+     ``chart_default`` only on defaults-tier keys, a ``metric_class`` on every
+     key, no key in two tiers or two packs, aliases onto live keys only.
+  3. SURFACE FRESHNESS: each generated block in every surface, and the
+     generated RULE_PACKS module as a whole, must be byte-equal to a fresh
+     render from the committed registry. STALE (or
      missing/duplicated delimiters) is a hard error; ``--regen`` re-splices
      every surface in one shot.
   4. HEADER-PROSE MEMBERSHIP (design F6): hand-written pack-header prose may
@@ -40,12 +43,12 @@ seed ``_defaults.yaml``), so it follows ADR-036 §2: only Go writes conf.d.
 Each changed one is a ``replace`` (its whole spliced text) in one ``da-guard
 write`` batch per conf.d root (``_registry_lib.plan_surfaces``); every batch
 is first asked as a dry run, before anything is written, and a refusal is
-named file by file. On a refusal nothing is written — neither the registry
-nor any surface — and the run exits 2, as it does when a conf.d file would
+named file by file. On a refusal nothing is written — no surface and not the
+RULE_PACKS module (the registry itself is never written) — and the run exits 2, as it does when a conf.d file would
 change and there is no usable da-guard. A generated block whose
 enclosing key is not the carrier its surface names (read back by
 parse-tree) is refused the same way. A write that stops part-way — a
-conf.d batch, a helm values / rule pack file, the registry — names the file
+conf.d batch, a helm values / rule pack file, the RULE_PACKS module — names the file
 that failed and the files already written (not rolled back), exit 2. The
 check mode reads
 every surface as bytes (a text compare of the generated blocks) and runs no
@@ -79,10 +82,9 @@ from _lib_parse_tree import ParseTreeError as _ParseTreeError  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3471: which files are rule packs)
 
 _REGEN_HINT = (
-    "fix: edit scaffold_tenant.RULE_PACKS (the operative copy until PR-3) "
-    "and/or the _registry_lib enrichment tables, then run `python3 "
-    "scripts/tools/lint/check_threshold_registry.py --regen` to refresh the "
-    "registry AND every generated surface."
+    "fix: edit rule-packs/threshold-registry.yaml (the SoT since D-A PR-3), "
+    "then run `python3 scripts/tools/lint/check_threshold_registry.py "
+    "--regen` to refresh every generated surface and the RULE_PACKS module."
 )
 
 
@@ -146,12 +148,13 @@ def run_check(
     for msg in registry_lib.validate_registry(doc, schema_path):
         errors.append(msg)
 
-    # 2. transition-period equivalence (both directions, no grandfather).
-    for msg in registry_lib.diff_vs_scaffold(doc, rule_packs):
-        errors.append(f"drift: {msg}")
+    # 2. self-consistency: a fixed point of project -> extract (D-A PR-3).
+    for msg in registry_lib.fixed_point_problems(doc):
+        errors.append(f"inconsistent: {msg}")
 
-    # Surfaces + membership render FROM the doc; a schema-invalid or drifted
-    # doc already failed above, but keep going so one run reports everything.
+    # Surfaces + membership render FROM the doc; a schema-invalid or
+    # inconsistent doc already failed above, but keep going so one run
+    # reports everything.
 
     # 3. generated-surface freshness (helm values + dev template — `defaults`
     #    mapping AND `optional_overrides` list on each — plus 13 pack headers).
@@ -169,6 +172,12 @@ def run_check(
         msg = registry_lib.check_surface(text, spec)
         if msg:
             errors.append(f"stale-surface: {msg}")
+
+    # 3b. the generated RULE_PACKS module (scaffold_tenant's threshold half).
+    module_path = (surface_paths or {}).get(registry_lib.RULE_PACKS_MODULE_ID)
+    msg = registry_lib.check_rule_packs_module(doc, module_path)
+    if msg:
+        errors.append(f"stale-surface: {msg}")
 
     # 4. header-prose key membership (F6).
     if prose_files is None:
@@ -202,26 +211,27 @@ def main(argv: list[str] | None = None) -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=i18n_text(
-            "threshold registry gate：schema 驗證 + 與 scaffold RULE_PACKS 的"
-            "過渡期等價斷言 + 生成面新鮮度 + header 手寫 prose key membership"
+            "threshold registry gate：schema 驗證 + 自身一致性 + 生成面（含 "
+            "RULE_PACKS 生成模組）新鮮度 + header 手寫 prose key membership"
             "（TRK-339 WS1a / #1200）",
-            "Threshold-registry gate: schema validation + transition-period "
-            "equivalence with scaffold RULE_PACKS + generated-surface "
-            "freshness + header-prose key membership (TRK-339 WS1a / #1200)"))
+            "Threshold-registry gate: schema validation + self-consistency + "
+            "generated-surface freshness (the RULE_PACKS module included) + "
+            "header-prose key membership (TRK-339 WS1a / #1200)"))
     parser.add_argument(
         "--ci", action="store_true",
-        help=i18n_text("schema violation／雙 SoT 漂移／生成面 stale／prose 引用"
-                       "不存在 key 即 exit 1",
-                       "exit 1 on schema violation, dual-SoT drift, a stale "
-                       "generated surface, or a prose membership breach"))
+        help=i18n_text("schema violation／registry 自身不一致／生成面 stale／"
+                       "prose 引用不存在 key 即 exit 1",
+                       "exit 1 on schema violation, an inconsistent registry, a "
+                       "stale generated surface, or a prose membership breach"))
     parser.add_argument(
         "--regen", action="store_true",
         help=i18n_text(
-            "從 scaffold_tenant.RULE_PACKS 重新機械萃取並覆寫 registry，"
-            "並重產所有生成面（helm values / dev 範本各含 defaults 與 "
-            "optional_overrides 兩段 / pack headers）",
-            "re-extract the registry from scaffold_tenant.RULE_PACKS AND "
-            "re-splice every generated surface"))
+            "從 registry 重產所有生成面（helm values / dev 範本各含 defaults 與 "
+            "optional_overrides 兩段 / pack headers / RULE_PACKS 生成模組）；"
+            "registry 本身是手寫 SoT，不會被寫入",
+            "re-generate every surface from the registry (helm values / dev "
+            "templates / pack headers / the RULE_PACKS module); the registry "
+            "itself is authored and never written"))
     args = parser.parse_args(argv)
 
     if args.regen:
@@ -242,7 +252,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: regen failed: {exc}", file=sys.stderr)
             return EXIT_CALLER_ERROR
         print(
-            f"regenerated {summary['path']} — {summary['packs']} packs, "
+            f"regenerated from {summary['path']} — {summary['packs']} packs, "
             f"{summary['keys']} keys; surfaces touched: {len(touched)}.",
             file=sys.stderr)
         for p in touched:
@@ -272,8 +282,8 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_VIOLATION if args.ci else EXIT_OK
 
     print(
-        "✅ threshold registry OK — schema valid, semantically equal to "
-        "scaffold RULE_PACKS, all generated surfaces fresh, header prose "
+        "✅ threshold registry OK — schema valid, self-consistent, all "
+        "generated surfaces (RULE_PACKS module included) fresh, header prose "
         "membership clean.",
         file=sys.stderr)
     return EXIT_OK

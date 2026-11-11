@@ -1,7 +1,7 @@
 package handler
 
 // POST /api/v1/audit/tenants/{id}/access-report/dry-run handler tests
-// (ADR-027 / LD-6 P7):
+// (ADR-027 §7):
 //
 //   - LOCKED bar parity: the 403 is constant across ids AND byte-identical
 //     to the GET endpoint's (shared constant — the dry-run must not become a

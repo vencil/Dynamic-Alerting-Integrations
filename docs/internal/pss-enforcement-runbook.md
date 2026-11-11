@@ -108,7 +108,6 @@ issue、修掉或 carve，**不要**急著開豁免。
 排程」完整跑過一輪：
 
 - 8 天下限原本來自週跑的 `threshold-govern` CronJob；它已依 [ADR-027](../adr/027-tenant-api-caller-identity.md) §4 移除，下限沿用，涵蓋週期性 deploy 與手動作業
-- `maintenance-scheduler` CronJob：`*/5 * * * *`（頭一小時就覆蓋）
 - 至少一次正常 deploy / rollout（CI 出版節奏即可）
 
 **觀察點**：

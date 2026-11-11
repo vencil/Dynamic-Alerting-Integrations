@@ -1,18 +1,17 @@
 # ============================================================
-# ClickHouse liveness (#3618, owner decision B′).
+# ClickHouse liveness (#3618, owner decision B′; shim removed in #3682).
 #
 # ClickHouse serves /metrics itself (no separate exporter), so its target
 # being down IS the server being down, and TenantExporterAbsent
-# (rule-pack-liveness.yaml) is what pages for it. ClickHouseDown is a
-# one-release deprecation shim; before #3618 it read up{job="clickhouse"},
-# a job the shipped scrape config does not have, so it never fired.
+# (rule-pack-liveness.yaml) is what pages for it. ClickHouseDown is gone
+# (#3682): the assertions on it below expect nothing, so the old shim coming
+# back (it would page twice for one outage) turns this red. A rule of that
+# name selecting another job would not fire here and stays green.
 #
 # Two tenants are down at once — a ClickHouse one and a PostgreSQL one — both
 # scraped by the shipped job tenant-exporters:
-#   1m30s  nothing yet (the shim keeps its for: 2m).
-#   2m30s  ClickHouseDown (for: 2m) fires for the ClickHouse tenant ONLY;
-#          TenantExporterAbsent (for: 3m) not yet.
-#   3m30s  TenantExporterAbsent fires for BOTH tenants; the shim still fires.
+#   2m30s  nothing yet (TenantExporterAbsent's for: 3m).
+#   3m30s  TenantExporterAbsent fires for BOTH tenants; nothing else.
 # Tenant ids are fixture-local placeholders.
 # ============================================================
 rule_files:
@@ -33,24 +32,9 @@ tests:
       - series: 'tenant_expected_exporter{tenant="t-pg", db_type="postgresql"}'
         values: '1x10'
     alert_rule_test:
-      - eval_time: 1m30s
-        alertname: ClickHouseDown
-        exp_alerts: []
       - eval_time: 2m30s
         alertname: ClickHouseDown
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              maintenance: page
-              job: tenant-exporters
-              instance: t-ch
-              tenant: t-ch
-            exp_annotations:
-              summary: "ClickHouse instance is DOWN"
-              summary_zh: "ClickHouse 實例已關閉"
-              runbook_url: ""
-              owner: ""
-              tier: ""
+        exp_alerts: []
       - eval_time: 2m30s
         alertname: TenantExporterAbsent
         exp_alerts: []
@@ -85,16 +69,4 @@ tests:
               tier: ""
       - eval_time: 3m30s
         alertname: ClickHouseDown
-        exp_alerts:
-          - exp_labels:
-              severity: critical
-              maintenance: page
-              job: tenant-exporters
-              instance: t-ch
-              tenant: t-ch
-            exp_annotations:
-              summary: "ClickHouse instance is DOWN"
-              summary_zh: "ClickHouse 實例已關閉"
-              runbook_url: ""
-              owner: ""
-              tier: ""
+        exp_alerts: []

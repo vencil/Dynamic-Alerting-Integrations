@@ -614,17 +614,19 @@ Recommended to run `validate-config` before `generate-routes --apply` to ensure 
 
 ## 10. Scheduled Maintenance Windows (Advanced)
 
-If tenant configuration includes `_state_maintenance.recurring[]` (cron + duration), `maintenance_scheduler.py` can automatically create Alertmanager silences via CronJob. This tool calls the Alertmanager `/api/v2/silences` API, so BYO environments must ensure:
+The weekly maintenance windows a tenant writes in `_state_maintenance.recurring[]` are evaluated by the threshold-exporter itself on every scrape ([#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)): inside a window it turns the maintenance state on, exactly as a one-shot `_state_maintenance` does, so rules labelled `maintenance: mute` **do not fire at all**. Nothing goes through Alertmanager — no silence is created, a BYO environment needs no connection to the Alertmanager API for this, and no CronJob has to be deployed.
 
-- The CronJob Pod can reach the Alertmanager API endpoint (default `http://alertmanager:9093`)
-- Alertmanager has API v2 enabled (enabled by default, no additional configuration needed)
-
-```bash
-# Invoked periodically by CronJob
-da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
+```yaml
+_state_maintenance:
+  recurring:
+    - weekdays: [sun]          # sun mon tue wed thu fri sat
+      window: "02:00-06:00"    # UTC HH:MM-HH:MM
+      reason: weekly patching
 ```
 
-The tool has built-in idempotency checks (no duplicate silence creation) and auto-extension (if existing silence expires before window ends, automatically extends). See [Shadow Monitoring SOP §8](../shadow-monitoring-sop.en.md) for maintenance window operation details.
+- Times are always **UTC**; a window that crosses midnight (e.g. `"22:00-02:00"`) belongs to the **day it starts on**.
+- `expires` does not limit recurring windows; a switch that says off (`enabled: false` / `target: disable`) keeps the windows off too.
+- ⚠️ The old form `- cron: "0 2 * * 0"` + `duration: 4h` is **refused**: the whole `_state_maintenance` value is not read and maintenance is **not on** (the exporter logs a WARN). Rewrite it as `weekdays` + `window`. The former `maintenance-scheduler` subcommand and its CronJob are removed.
 
 ---
 
@@ -703,7 +705,7 @@ Platform alerts **bypass most of the platform's own noise reduction**, because t
 
 - **Severity dedup does not apply**: the shipped dedup `inhibit_rules` require `metric_group=~".+"` and `tenant="<name>"` on both sides, while **zero** platform alerts carry `metric_group` (and apart from those 3, none carry a `tenant` either). The immunity comes from the **former**: since not one platform alert has a `metric_group`, even the 3 that do carry a tenant are never deduped. Concretely: `ThresholdExporterDown` (warning) and `ThresholdExporterAbsent` (critical) will **both** notify during a full outage instead of collapsing into one.
 - **Silent mode does not apply (for a different reason than the line above)**: the `TenantSilentWarning` / `TenantSilentCritical` inhibit targets are `severity=<...>` + `tenant=~".+"` — which the 3 tenant-bearing platform warnings **did** satisfy, so a tenant flipping `_silent_mode` once could mute the platform's own failure alerts. This release adds `alert_source=""` to those two `target_matchers` (meaning: only alerts that carry **no** platform marker), so platform alerts are now immune. ⚠️ Do not conflate the two reasons: **dedup is immune because `metric_group` was never there**, **silent mode is immune because this release added an exclusion**.
-  The same hole has a **second face**, fixed in this release too: the Alertmanager silences `maintenance-scheduler` creates from a tenant's `_state_maintenance.recurring` carried only a `tenant="<name>"` matcher, so a tenant maintenance window muted those same 3 platform alerts. They now carry `alert_source=""` as well (`scripts/tools/ops/maintenance_scheduler.py`, both write paths sharing one builder). ⚠️ Read the two faces together: **inhibit and silence are different mechanisms** — fixing only one just changes the hole's shape. Pre-existing single-matcher silences are unaffected: the idempotency lookup keys on `(tenant, comment)` and scans for the `tenant` matcher by name rather than comparing the whole set.
+  The same hole used to have a **second face**: recurring maintenance windows became Alertmanager silences carrying only a `tenant="<name>"` matcher, so a tenant maintenance window muted those same 3 platform alerts. Since [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) the exporter evaluates recurring windows and no silence is created, and the platform rule pack carries no maintenance clause, so a tenant's maintenance state (one-shot or recurring) cannot reach platform alerts. ⚠️ Keep it in mind for silences you open by hand: **inhibit and silence are different mechanisms** — a silence with only a `tenant` matcher still covers those 3; add `alert_source=""`.
 - **`absent()`-shaped alerts fire continuously when a component is not deployed**: `ThresholdExporterAbsent`, `TenantExporterJobAbsent`, `FederationRevocationReconcileStale` and `FederationAuditPipelineSilent` — **four** of them — are "shout when the thing is gone" by design (the last two are federation-side, so they are necessarily lit when federation is not enabled), so in a demo or partial deployment they stay lit. Confirm those components are actually deployed before wiring the channel, or day one is steady noise.
   > `MassExporterOutage` is **not** in that list: its expr ends with `unless on() absent(up{job="tenant-exporters"})`, deliberately suppressing itself when the whole job is gone and leaving that scenario to `TenantExporterJobAbsent` alone. It is precisely a "stays quiet when the component is not deployed" rule.
 - **⛔ The one you are guaranteed to get on day one: `AlertmanagerWebhookNotificationsFailing`**: the shipped `secret-watchdog-heartbeat.yaml` is a placeholder (`REPLACE_WITH_EXTERNAL_DEAD_MANS_SWITCH_URL`), and the Watchdog route's `repeat_interval` is 3m ⇒ Alertmanager attempts a webhook that must fail every 3 minutes ⇒ that rule (`increase(...[10m]) > 0`, `for: 15m`) is **permanently firing in any environment that has not configured an external DMS**. This is not "possible" noise; it is the first alert you will get, within 15 minutes of wiring the channel. Complete [Self-Liveness step ①](alerting-plane-self-liveness.en.md) and populate the Secret first.

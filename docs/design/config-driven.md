@@ -429,7 +429,7 @@ tenants:
 
 v0.12.0 起，閾值支援時間窗口排程，允許在不同時段自動切換不同閾值。典型場景：夜間維護窗口放寬閾值、尖峰時段收緊閾值。
 
-> **時區注意事項：** 所有時間窗口 (`window`) 與 recurring maintenance 的 cron 表達式均使用 **UTC 時區**。配置時請將本地時間轉換為 UTC。例如 UTC+8 的 06:00-14:00 在此應寫為 `"22:00-06:00"`。
+> **時區注意事項：** 所有時間窗口 (`window`)，包括 recurring maintenance 的 `window`，均使用 **UTC 時區**。配置時請將本地時間轉換為 UTC。例如 UTC+8 的 06:00-14:00 在此應寫為 `"22:00-06:00"`。
 
 **配置語法：**
 ```yaml
@@ -448,9 +448,9 @@ tenants:
 
 - **`ScheduledValue` 自訂 YAML 型別**：支援雙格式解析——純量字串（向後相容）和結構化 `{default, overrides[{window, value}]}`
 - **`ResolveAt(now time.Time)`**：根據當前 UTC 時間解析應使用的閾值，確保確定性與可測試性
-- **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）；時段是左閉右開 `[start, end)`，結束那一分鐘不算（`01:00-09:00` 涵蓋 01:00–08:59），與 Alertmanager `time_intervals` 的 `end_time` 相同，所以寫不出涵蓋整天的時段——`00:00-23:59` 在 23:59 那一分鐘不生效，整天都要的值寫在 `default:`（[#3368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3368)）；起訖相同（如 `05:00-05:00`）不涵蓋任何一分鐘，與格式不符、缺 `window:` 一樣視為不合法：exporter 印 WARN、該時段不生效，載入時以 `da_config_values_not_served{reason="window_invalid"}` 與一行 WARN 點名，da-guard 以 `value_not_served` error 擋下（[#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)）
+- **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）；時段是左閉右開 `[start, end)`，結束那一分鐘不算（`01:00-09:00` 涵蓋 01:00–08:59），與 Alertmanager `time_intervals` 的 `end_time` 相同，所以寫不出涵蓋整天的時段——`00:00-23:59` 在 23:59 那一分鐘不生效，整天都要的值寫在 `default:`（[#3368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3368)）；起訖相同（如 `05:00-05:00`）不涵蓋任何一分鐘，與格式不符、缺 `window:` 一樣視為不合法：exporter 印 WARN、該時段不生效，載入時以 `da_config_values_not_served{reason="window_invalid"}` 與一行 WARN 點名，da-guard 以 `value_not_served` error 擋下（[#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)）；tenant-api 寫入關卡拒收新寫或改過的不合法 window（`PUT` 400；batch 的 patch 只寫字串值，寫不出 window），檔裡原封不動的（條目位置、window、值都沒變）只回 NOTICE，與死條目同一種 ratchet（[#3683](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3683)）。⚠️ 破壞性變更：值合法、只有 window 不合法的寫入以前回 200
 - **測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
-- **永遠不生效的條目**（[#3502](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3502)）：同一分鐘由**第一個**涵蓋它的 window 決定，所以被寫在前面的 window 完全遮住的 window（例如 `22:00-06:00` 之後的 `01:00-03:00`），以及被 window 合起來蓋滿整天的 `default`，一天中沒有任何一分鐘會送出。exporter 以條目為單位回報：`da-guard effective`／`served-values`／`key-verdict` 都帶 `dead_entries`，共用判決報 `dead_entry`（error），掛在寫下它的檔（含 profile）；tenant-api 與 `da-guard write` 拒收新寫或改過的死條目，原封不動留在檔裡的只回 NOTICE。部分重疊（例如 `22:00-06:00` 之後的 `05:00-08:00`，06:00 起生效）合法。判定與送值共用同一個「哪個條目送出這一分鐘」的函式，不會分歧
+- **永遠不生效的條目**（[#3502](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3502)）：同一分鐘由**第一個**涵蓋它的 window 決定，所以被寫在前面的 window 完全遮住的 window（例如 `22:00-06:00` 之後的 `01:00-03:00`），以及被 window 合起來蓋滿整天的 `default`，一天中沒有任何一分鐘會送出。exporter 以條目為單位回報：`da-guard effective`／`served-values`／`key-verdict` 都帶 `dead_entries`，共用判決報 `dead_entry`（error），掛在寫下它的檔（含 profile）；tenant-api 與 `da-guard write` 拒收新寫或改過的死條目，原封不動留在檔裡的只回 NOTICE。部分重疊（例如 `22:00-06:00` 之後的 `05:00-08:00`，06:00 起生效）合法。死條目與不合法 window 裡的值不另判「exporter 讀不了的閾值」：每個條目只報一次，報的是讓它送不出的那個缺陷（[#3683](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3683)；非有限數例外，照 #3140 一律擋）。判定與送值共用同一個「哪個條目送出這一分鐘」的函式，不會分歧
 - **只有閾值能排程**（[#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)）：保留鍵（`_silent_mode`、`_severity_dedup`、`_state_<filter>`、`_profile`、`_routing_profile` 等，`_metadata`／`_routing` 這類整個 mapping 原樣保留的鍵除外）不支援 `overrides:` 時間窗，也不支援 `{default: …, expires: …}` 這種排程形式的 `expires:`／`reason:`——它們的讀取端只讀 `default`。這種寫法：exporter 只用 `default`（送出結果與只寫 `default` 完全相同），載入時印一行 WARN 點名檔案、租戶與 key；`da-guard served-values` 與 `/effective` 也只看到 `default`，時段不再被當成切點；tenant-api 的寫入拒收（400），檔案裡原本就有、這次寫入沒改動的（`default`、每個時段與 expires 都相同）只回 NOTICE；JSON schema 與路由產生器（`_routing_profile` 寫成 mapping 時整棵樹拒收，finding kind `routing_profile_invalid`）也拒收。子目錄 `_defaults.yaml` 寫保留鍵，不論是不是這種形式，exporter 都不往下傳給租戶（[#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341)；da-guard 何時報 `subtree_default_reserved_key`、`/effective` 與 `not_served` 怎麼呈現，見 [ADR-017 決策 4 的表](../adr/017-defaults-yaml-inheritance-dual-hash.md)）。一次性的結束時間請用 `_silent_mode`／`_state_maintenance` 的結構化物件（`{target: …, expires: …}`），週期性的維護窗請用 `_state_maintenance` 的 `recurring:`。
 
 ### 2.7 三態運營模式 (Operational Modes)
@@ -464,7 +464,7 @@ v1.2.0 新增 **Silent Mode**，與既有的 Maintenance Mode 形成三態運營
 | Normal | 正常運行 | ✅ | ✅ | ✅ | — |
 | Silent | 靜音 | ✅ | ✅ | ❌ | Alertmanager |
 | Maintenance（`maintenance: mute` 的告警） | 真正維護 | ❌ | ❌ | ❌ | Prometheus (PromQL) |
-| Maintenance 的 `recurring:` 窗（`maintenance: mute` 的告警） | 週期維護 | ✅ | ✅ | ❌ | Alertmanager silence |
+| Maintenance 的 `recurring:` 窗內（`maintenance: mute` 的告警） | 週期維護 | ❌ | ❌ | ❌ | Prometheus (PromQL) |
 
 `maintenance: page` 的告警在維護期間照 Normal 那一列（範圍見下方 Maintenance Mode 一段）。
 
@@ -491,7 +491,7 @@ stateDiagram-v2
 
 **設計原則**：Prometheus 管「什麼該 alert」，Alertmanager 管「要不要通知」。
 
-- **Maintenance Mode**（既有）：每條租戶告警都帶 label `maintenance: mute` 或 `maintenance: page`，這是「維護期間要不要擋」唯一寫下決定的地方（[#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)）。`mute` 的告警由 `generate_rulepack_derived.py` 在 expr 尾端寫入 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`，維護期間不觸發，TSDB 無紀錄，無通知；`page` 的告警維護期間照常觸發。逐條清單見 [告警參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.md) 的「維護期間」欄（由 label 生成）。原則上平台哨兵、exporter 缺席類（[ADR-026](../adr/026-node-maintenance-liveness-suppression.md)）、叢集存活類（`*ClusterDown`、`*NoPrimary` 等）與沒有叢集級訊號的單實例 critical 停機類（`PostgreSQLDown`、`RedisDown` 等）是 `page`。`recurring:` 週期維護窗走另一條路：`maintenance-scheduler` 在窗內對該租戶建 Alertmanager silence（matcher 是 `tenant`、`alert_source=""` 與 `maintenance="mute"`），擋的是同一組 `mute` 告警的通知，告警本身照常觸發、TSDB 有紀錄。
+- **Maintenance Mode**（既有）：每條租戶告警都帶 label `maintenance: mute` 或 `maintenance: page`，這是「維護期間要不要擋」唯一寫下決定的地方（[#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)）。`mute` 的告警由 `generate_rulepack_derived.py` 在 expr 尾端寫入 `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`，維護期間不觸發，TSDB 無紀錄，無通知；`page` 的告警維護期間照常觸發。逐條清單見 [告警參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.md) 的「維護期間」欄（由 label 生成）。原則上平台哨兵、exporter 缺席類（[ADR-026](../adr/026-node-maintenance-liveness-suppression.md)）、叢集存活類（`*ClusterDown`、`*NoPrimary` 等）與沒有叢集級訊號的單實例 critical 停機類（`PostgreSQLDown`、`RedisDown` 等）是 `page`。`recurring:` 週期維護窗走同一條路（[#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)）：threshold-exporter 每次 scrape 自己判斷，窗內輸出 `user_state_filter{filter="maintenance"} 1`，同一組 `mute` 告警在窗內不觸發、TSDB 無紀錄，不經 Alertmanager silence。寫法是 `weekdays`（`sun`…`sat`）加 UTC 的 `window: "HH:MM-HH:MM"`，跨午夜的窗口算在開始那天；舊的 `cron` + `duration` 寫法不再接受（整個值不被讀、維護不開啟）。
 - **Silent Mode**：Alert 在 Prometheus 正常觸發（TSDB 有 `ALERTS` 紀錄），但 Alertmanager 透過 `inhibit_rules` 攔截通知。
 
 **Silent Mode 資料流**
@@ -521,6 +521,12 @@ tenants:
     _silent_mode: "all"        # 靜音 warning + critical 通知
   db-c:
     _state_maintenance: "enable"  # 真正維護：maintenance: mute 的告警不觸發
+  db-e:
+    _state_maintenance:           # 週期維護：每週日 02:00-06:00 UTC 窗內同上
+      recurring:
+        - weekdays: [sun]
+          window: "02:00-06:00"
+          reason: weekly patching
   db-d: {}                        # Normal — 預設行為
 ```
 
@@ -541,18 +547,18 @@ tenants:
       reason: "Scheduled maintenance window"
 ```
 
-**`_state_<filter>` 的值怎麼讀**（[#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620)；exporter、tenant-api 寫入閘門、`maintenance-scheduler` 共用同一個讀法）：
+**`_state_<filter>` 的值怎麼讀**（[#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620)；exporter 與 tenant-api 寫入閘門共用同一個讀法）：
 
 | 寫法 | 結果 |
 |---|---|
 | `enable`（不分大小寫） | 開啟 |
 | `disable`（或 `disabled`／`off`／加引號的 `"false"`） | 關閉 |
 | 其他純量（`"yes"`、`"true"`、`"1"`、空字串、亂打的字） | **不開啟**，印 WARN 點名租戶、key 與值；tenant-api 拒收 |
-| 物件，開關說關（`target: disable` 或 `enabled: false`） | 關閉——不論有沒有 `expires`；`recurring:` 也不建 silence |
-| 物件，開關說開（`target: enable` 或 `enabled: true`） | 開啟，有 `expires` 就到期為止 |
-| 物件，沒寫開關、有 `expires` | 開啟到 `expires` 為止 |
-| 物件，沒寫開關、只有 `recurring:` | state filter **不開啟**；只由 `maintenance-scheduler` 在每個窗內建 silence |
-| 物件，`target` 與 `enabled` 互相矛盾、`target` 不是上面的字、`enabled` 不是 YAML 布林、有未知欄位，或什麼都沒說（只有 `reason`） | **不開啟**，印 WARN；tenant-api 拒收 |
+| 物件，開關說關（`target: disable` 或 `enabled: false`） | 關閉——不論有沒有 `expires`；`recurring:` 的窗內也不開 |
+| 物件，開關說開（`target: enable` 或 `enabled: true`） | 開啟，有 `expires` 就到期為止；`recurring:` 的窗內也開（`expires` 不限制週期窗） |
+| 物件，沒寫開關、有 `expires` | 開啟到 `expires` 為止；`recurring:` 的窗內也開 |
+| 物件，沒寫開關、只有 `recurring:` | 只在每個窗內開啟（UTC；[#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)） |
+| 物件，`target` 與 `enabled` 互相矛盾、`target` 不是上面的字、`enabled` 不是 YAML 布林、有未知欄位（`recurring` 條目裡的也算，例如舊的 `cron`／`duration`、不認得的星期、解析不了的 `window`），或什麼都沒說（只有 `reason`） | **不開啟**，印 WARN；tenant-api 拒收 |
 
 只有 `_state_maintenance` 接受物件；其他 `_state_<filter>` 寫成物件一律不開啟。沒寫這個 key 時照舊依 `state_filters` 的 `default_state`；寫了但讀不懂的值**不會**退回 `default_state`，而是不開啟——寧可多吵，不可靜默壓掉告警。檔案裡原本就有、這次寫入沒改動的值，tenant-api 只回 NOTICE。
 
@@ -905,7 +911,7 @@ tenant-api 直接 import `"github.com/vencil/threshold-exporter/pkg/config"`，�
 
 **Portal 優雅降級：**
 
-da-portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。當 API 健康時，啟用完整 CRUD 操作；當不可用時（oauth2-proxy 故障、API server 重啟），自動改讀部署時產生的 `platform-data.json`，讀不到再用內建示範資料，不需手動切換。⚠️ 這兩種都不是即時資料，頁面也不標示目前用的是哪一種；`platform-data.json` 的租戶欄位不完整時，清單裡還會混入示範租戶（[#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)）。
+portal 的 tenant-manager.jsx 在載入時探測 tenant-api 可用性。API 回 401（未登入或 session 過期）時，頁面導去 oauth2-proxy 登入、登入後回到原頁，不改顯示其他資料（[ADR-027](../adr/027-tenant-api-caller-identity.md) §5）。API 健康時啟用完整 CRUD；不可用時（API server 重啟、沒有部署 tenant-api 的靜態站）改讀部署時產生的 `platform-data.json`，讀不到再用內建示範資料。這兩種都不是即時資料：頁面以橫幅標示目前是離線資料或示範資料，此時不提供任何寫入；離線資料照原樣顯示，不混入示範租戶或群組（[#3306](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3306)）。
 
 > 完整決策脈絡與替代方案分析見 [ADR-009: Tenant Manager CRUD API](../adr/009-tenant-manager-crud-api.md)。
 

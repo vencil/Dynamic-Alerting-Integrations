@@ -1600,8 +1600,8 @@ RULE_PACKS = RuleSource(
 #: kube-prometheus-stack install can run — the pack minus every rule reading a
 #: metric whose source such an install lacks, which
 #: ``_lib_metric_sources.operator_split`` derives from the scrape gate's
-#: family table (e.g. a ``job="tenant-exporters"`` selector: that job exists
-#: only in this repo's raw scrape config).
+#: family table (e.g. a ``job="prometheus"`` selector: kube-prometheus-stack
+#: names its own Prometheus job after its Service).
 PLATFORM_PACKS: "frozenset[str]" = frozenset({"platform"})
 
 
@@ -1651,7 +1651,6 @@ CONFIGMAP_RULES = RuleSource(
         "configmap-grafana-da-overview.yaml",
         "configmap-grafana.yaml",
         "configmap-prometheus.yaml",
-        "cronjob-maintenance-scheduler.yaml",
         "deployment-alertmanager.yaml",
         "deployment-grafana.yaml",
         "deployment-kube-state-metrics.yaml",

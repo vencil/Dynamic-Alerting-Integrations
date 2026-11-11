@@ -89,18 +89,19 @@ type maintenanceModeStructured struct {
 	Enabled   *bool               `yaml:"enabled"`
 	Expires   string              `yaml:"expires"` // RFC3339
 	Reason    string              `yaml:"reason"`
-	Recurring []RecurringSchedule `yaml:"recurring"` // v1.11.0: periodic maintenance windows
+	Recurring []RecurringSchedule `yaml:"recurring"` // #3639: weekly windows the exporter evaluates
 }
 
-// RecurringSchedule defines a periodic maintenance window (v1.11.0).
-// Used by da-tools maintenance-scheduler CronJob to create Alertmanager silences.
-// The Go exporter does not act on it; it hands the windows to the CronJob
-// (`da-guard effective`'s maintenance_recurring, MaintenanceRecurringOf),
-// which evaluates the cron expressions at runtime.
+// RecurringSchedule is one recurring maintenance window (#3639): the
+// weekdays it opens on and a UTC "HH:MM-HH:MM" window — the threshold
+// time-window dialect. The exporter evaluates it on every scrape and turns
+// the maintenance filter on inside it (maintenance_window.go, which reads
+// the generic decode and refuses unknown fields; this typed form only
+// carries the shape).
 type RecurringSchedule struct {
-	Cron     string `yaml:"cron"`     // Standard 5-field cron expression
-	Duration string `yaml:"duration"` // Go-style duration (e.g., "4h", "30m")
-	Reason   string `yaml:"reason"`   // Human-readable reason (optional)
+	Weekdays []string `yaml:"weekdays"` // sun, mon, tue, wed, thu, fri, sat
+	Window   string   `yaml:"window"`   // UTC "HH:MM-HH:MM"; may cross midnight
+	Reason   string   `yaml:"reason"`   // Human-readable reason (optional)
 }
 
 // TenantMetadata holds optional metadata labels for a tenant.

@@ -109,7 +109,7 @@ func TestJudgePreview_ACallerThatWentAway(t *testing.T) {
 	cancel()
 	req := newRequestWithChiParam("POST", "/api/v1/tenants/t-a/validate", "id", "t-a",
 		bytes.NewBufferString(tAPut)).WithContext(ctx)
-	res, errs, err := previewWriter(f.deps).PreviewPut(context.Background(), "t-a", tAPut)
+	res, errs, err := previewWriter(f.deps).PreviewPut(context.Background(), "t-a", tAPut, nil)
 	if err != nil || len(errs) > 0 {
 		t.Fatalf("preview: %v %q", err, errs)
 	}

@@ -127,8 +127,6 @@ ALLOWED = {
         (1, "the observed-map, the repo's own threshold data read only by Python tools"),
     ('scripts/tools/ops/_registry_lib.py', 'load_registry'):
         (1, "rule-packs/threshold-registry.yaml, the repo's own registry read only by Python tools"),
-    ('scripts/tools/ops/_registry_lib.py', 'regen'):
-        (1, "rule-packs/threshold-registry.yaml, the repo's own registry read only by Python tools"),
     ('scripts/tools/ops/analyze_rule_pack_gaps.py', 'load_metric_dictionary'):
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/ops/generate_tenant_mapping_rules.py', 'load_metrics_from_dictionary'):

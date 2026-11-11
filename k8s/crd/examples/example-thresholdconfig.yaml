@@ -4,7 +4,7 @@
 #   kubectl apply -f k8s/crd/examples/example-thresholdconfig.yaml
 #
 # The da-assembler-controller watches this and renders it to:
-#   config-dir/db-a.yaml
+#   config-dir/db-a/db-a.yaml   (spec.defaults, when set: config-dir/db-a/_defaults.yaml)
 #
 apiVersion: dynamicalerting.io/v1alpha1
 kind: ThresholdConfig

@@ -132,6 +132,7 @@ func TestWrite_DeprecatedKeyBody_CommitsWithNotices(t *testing.T) {
 	t.Parallel()
 	dir := newNameDefaultsDir(t)
 	initGitRepo(t, dir)
+	commitRoot(t, dir) // #3685: a root file differing from HEAD refuses a direct write
 	w := newTestWriter(dir, dir)
 
 	body := "tenants:\n  db-a:\n    mysql_cpu: \"70\"\n"
@@ -151,6 +152,7 @@ func TestWrite_DeprecatedKeyBody_CommitsWithNotices(t *testing.T) {
 func TestWriteMerged_DeprecatedKeyPatch_ReturnsNotices(t *testing.T) {
 	dir := newNameDefaultsDir(t)
 	initGitRepo(t, dir)
+	commitRoot(t, dir) // #3685: a root file differing from HEAD refuses a direct write
 	w := newTestWriter(dir, dir)
 
 	body := "tenants:\n  db-a:\n    mysql_cpu: \"70\"\n"

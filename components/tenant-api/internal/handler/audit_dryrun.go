@@ -1,6 +1,6 @@
 package handler
 
-// What-if dry-run endpoint (ADR-027 / LD-6 P7):
+// What-if dry-run endpoint (ADR-027 §7):
 //
 //	POST /api/v1/audit/tenants/{id}/access-report/dry-run
 //

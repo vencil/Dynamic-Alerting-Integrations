@@ -98,7 +98,7 @@ Domain Experts define composite alerting scenarios with clear business semantics
 
 - **Enable**: As long as all metrics the scenario depends on have valid thresholds (Custom or Default), the scenario is active.
 - **Disable a single metric**: Set that metric to `"disable"`. The corresponding recording rule produces no value, making the `>` comparison false and the scenario inactive.
-- **Global maintenance mode**: Set `state_filters.maintenance` to `"true"`. The `unless ... user_state_filter{filter="maintenance"}` clause in the scenario expression takes effect, silencing all alerts. The alert must also carry the `maintenance: mute` label: a `recurring:` maintenance window's silence matches only alerts with that label, so a custom rule without it notifies through a recurring window ([#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)).
+- **Global maintenance mode**: Set `state_filters.maintenance` to `"true"`. The `unless ... user_state_filter{filter="maintenance"}` clause in the scenario expression takes effect, silencing all alerts. A `recurring:` window takes effect through the same clause inside the window ([#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)). The alert must carry the `maintenance: mute` label, which declares that it holds the clause ([#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)).
 
 > **Design rationale**: PromQL has no native on/off switch. This mechanism leverages the propagation effect of "missing threshold → recording rule produces no value → condition is false" to achieve implicit enable/disable, avoiding an extra config key per scenario.
 

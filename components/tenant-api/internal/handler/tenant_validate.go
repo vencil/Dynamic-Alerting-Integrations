@@ -25,7 +25,7 @@ type ValidateResponse struct {
 	Notices  []string `json:"notices,omitempty"`
 	// Code is TENANT_GIT_MANAGED when the verdict is PUT's refusal of a
 	// git-managed tenant (#3064), or TENANT_FILE_DIRTY when it is PUT's
-	// refusal of a tenant file that differs from HEAD in this server's
+	// refusal of a tenant file (or a `_` entry at the conf.d root, #3685) that differs from HEAD in this server's
 	// repository (#1535, direct mode); warnings carries the text. A client
 	// can tell "change this tenant in git" / "commit or discard the change
 	// in the repository" from a body to fix. Absent otherwise.
@@ -68,7 +68,7 @@ type ValidateResponse struct {
 // @Description The body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file
 // @Description holds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare
 // @Description tenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false
-// @Description with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file differing from HEAD
+// @Description with PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file, or an entry at the conf.d root whose name starts with _ (#3685), differing from HEAD
 // @Description in this server's copy (#1535: valid: false with PUT's 409 TENANT_FILE_DIRTY text and code: TENANT_FILE_DIRTY), a tenant another conf.d file also
 // @Description declares, validation. A refusal is valid: false with the text PUT refuses with (a validation error
 // @Description listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
@@ -198,6 +198,12 @@ func dryRunRefusalMessage(err error, treeVisible bool) string {
 	var gm *gitops.GitManagedError
 	if errors.As(err, &gm) {
 		return gm.Error()
+	}
+	// ADR-027 §7: the verdict PUT takes under the writer lock
+	// (tree_judge.go) — its own text, the gate's outside the lock.
+	var scope *freshBaseScopeError
+	if errors.As(err, &scope) {
+		return scope.Error()
 	}
 	switch {
 	case errors.Is(err, gitops.ErrValidation):

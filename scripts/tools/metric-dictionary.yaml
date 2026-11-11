@@ -410,9 +410,9 @@ rabbitmq_queue_messages_unacked:
 
 rabbitmq_identity_info:
   maps_to: null
-  golden_rule: RabbitMQExporterAbsent
-  rule_pack: rabbitmq
-  note: "Exporter identity — absent() 偵測 exporter 離線"
+  golden_rule: TenantExporterAbsent
+  rule_pack: liveness
+  note: "Exporter identity — exporter 離線改由 TenantExporterAbsent 逐租戶偵測（#3682 移除 RabbitMQExporterAbsent）。它看的是 up{job=\"tenant-exporters\"}：target 還在 up 但 identity 指標消失時不觸發，舊的 absent(rabbitmq_identity_info) 會"
 
 rabbitmq_queue_messages_published_total:
   maps_to: null

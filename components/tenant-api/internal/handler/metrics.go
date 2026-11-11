@@ -41,7 +41,7 @@ var devBypassActive atomic.Bool
 // once at startup from main when the flag is parsed.
 func SetDevBypassActive(on bool) { devBypassActive.Store(on) }
 
-// humanSocketConfigured records whether --human-socket is set (ADR-027 D2-B),
+// humanSocketConfigured records whether --human-socket is set (ADR-027 §2),
 // and humanSocketUp holds the latest readiness self-dial result (1=up, 0=down).
 // When the socket is NOT configured the gauge is omitted from /metrics entirely
 // (rather than reported as a misleading 0), so an alert on it only fires for
@@ -58,7 +58,7 @@ func SetHumanSocketConfigured(on bool) { humanSocketConfigured.Store(on) }
 // SetHumanSocketUp records the latest human-socket readiness self-dial outcome
 // (Ready calls this each probe when the socket is configured). Surfaced at
 // /metrics as tenant_api_human_socket_up so a dead human plane is alertable
-// independently of the pod's TCP readiness (defense-in-depth for ADR-027 §2.5).
+// independently of the pod's TCP readiness (defense-in-depth for ADR-027 §2).
 func SetHumanSocketUp(up bool) { humanSocketUp.Store(up) }
 
 // MetricsMiddleware is a chi middleware that increments request/error counters.
@@ -185,7 +185,7 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_dev_auth_bypass_active gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_dev_auth_bypass_active %d\n", devBypass)
 
-	// ADR-027 D2-B §2.5: human-plane Unix socket liveness. Emitted ONLY when
+	// ADR-027 §2: human-plane Unix socket liveness. Emitted ONLY when
 	// --human-socket is configured (else the human plane doesn't exist and a 0
 	// would be a false alarm). Updated by the Ready self-dial each probe: 1=the
 	// UDS answered GET /health, 0=it did not. Alert on 0 (or absence-while-
@@ -195,7 +195,7 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 		if humanSocketUp.Load() {
 			up = 1
 		}
-		_, _ = fmt.Fprintf(w, "# HELP tenant_api_human_socket_up 1 if the human-plane Unix socket answered the readiness self-dial (ADR-027 D2-B; only present when --human-socket is set).\n")
+		_, _ = fmt.Fprintf(w, "# HELP tenant_api_human_socket_up 1 if the human-plane Unix socket answered the readiness self-dial (ADR-027 §2; only present when --human-socket is set).\n")
 		_, _ = fmt.Fprintf(w, "# TYPE tenant_api_human_socket_up gauge\n")
 		_, _ = fmt.Fprintf(w, "tenant_api_human_socket_up %d\n", up)
 	}

@@ -1,6 +1,6 @@
 /**
  * Interaction coverage for the RBAC wizard's "Identity Conditions" step
- * (StepIdentity, ADR-027 / LD-6 P7d).
+ * (StepIdentity, ADR-027 §7).
  *
  * The generator unit tests (rbac-setup-wizard-generators.test.ts) + the Go
  * tripwire cover rbacGenerateYaml/rbacValidate — the PURE functions. They do

@@ -94,7 +94,7 @@ docker run --rm \
 | **Onboard** | Platform | 建立新 tenant、bootstrap CI/CD | `init`、`scaffold`、`migrate`、`grafana-import` |
 | **Validate** | Platform（custom rules 含 Domain） | Commit / PR 前驗 schema、routing、cardinality、policy | `validate-config`、`guard`、`evaluate-policy`、`opa-evaluate`、`lint`、`analyze-gaps`、`config-diff`、`drift-detect` |
 | **Cutover** | Platform | Shadow Monitoring → 正式切換 | `validate`、`shadow-verify`、`backtest`、`cutover` |
-| **Operate** | Platform（自己租戶含 Tenant） | 日常健康檢查、噪音治理、容量預測 | `diagnose`、`batch-diagnose`、`check-alert`、`alert-quality`、`alert-correlate`、`cardinality-forecast`、`maintenance-scheduler` |
+| **Operate** | Platform（自己租戶含 Tenant） | 日常健康檢查、噪音治理、容量預測 | `diagnose`、`batch-diagnose`、`check-alert`、`alert-quality`、`alert-correlate`、`cardinality-forecast` |
 | **Tune** | Domain（含 Tenant） | 觀測 baseline、推薦閾值、改 ConfigMap | `baseline`、`threshold-recommend`、`patch-config`、`explain-route`、`explain-keys` |
 | **GitOps** | Platform | 產生合併後的 Alertmanager 設定、批次 PR、快照比對 | `generate-routes`、`generator-service`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify`、`state-reconcile` |
 | **Migrate** | Platform | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`runtime-audit`、`rule-pack-split`、`rule-pack-diff`、`silencer-drift-check` |
@@ -151,7 +151,6 @@ docker run --rm \
 | `alert-quality` | 警報品質評估（噪音 / 陳腐 / 延遲） | `--prometheus <url>`（不帶 `--tenant` 即全部租戶） |
 | `alert-correlate` | 告警關聯分析（時間窗聚類 + 根因推斷） | `--prometheus <url>` 或 `--input <file>` |
 | `cardinality-forecast` | 基數線性回歸預測 + 觸頂天數 | `--prometheus <url>`（不帶 `--tenant` 即全部租戶） |
-| `maintenance-scheduler` | 評估排程式維護窗、自動建 Alertmanager silence | `--config-dir <dir>` |
 
 ### 4.6 Tune
 

@@ -61,8 +61,8 @@ lang: zh
 
 | 角色 | 動作 | 工具/機制 | Gate（已存在） | Disp | Reuse/Gap |
 |---|---|---|---|---|---|
-| PE | cluster/node 維護 | `maintenance_scheduler` CronJob · `silencer_drift_check` | silence `endsAt` dead-man's-switch · drift（advisory） | 🟡 | **窄 GAP（ADR-026）**：平台 liveness 類的 maintenance-aware 抑制；cordon-aware 為 defer |
-| TA | tenant 維護窗 | `_state_maintenance`（PromQL opt-out via `user_state_filter`）+ recurring → `maintenance_scheduler` | `unless on(tenant)` 抑制 | 🟡 | reuse |
+| PE | cluster/node 維護 | `silencer_drift_check` | silence drift（advisory） | 🟡 | **窄 GAP（ADR-026）**：平台 liveness 類的 maintenance-aware 抑制；cordon-aware 為 defer |
+| TA | tenant 維護窗 | `_state_maintenance`（PromQL opt-out via `user_state_filter`；`recurring` 週窗由 exporter 自己判斷，#3639） | `unless on(tenant)` 抑制 | 🟡 | reuse |
 | SRE | 事故反應 | `blind_spot_discovery` · `alert_correlate` | — | 🟡 | **GAP：無事故 runbook codify、無 degraded-state workflow** |
 | SEC | 確保抑制有界/可稽核 | `silencer_drift_check`（**advisory only**） | （無 hard gate） | 🔴 | **GAP：silencing 無 hard gate / 無 audit trail** |
 
@@ -98,6 +98,6 @@ lang: zh
 ## Paved-road reframe（別建 mega lifecycle operator）
 
 - **bootstrap / BYO** = ArgoCD ApplicationSet golden-path（reuse 既有 charts + `operator_generate` + `onboard_platform`，明定 opinion + escape hatch）。
-- **day2-drift** = 小 reconcile 擴充（延 `maintenance_scheduler` CronJob，level-triggered，非 watch-mode）。
+- **day2-drift** = 小 reconcile 擴充（level-triggered 的 CronJob，非 watch-mode；原本設想延用的維護排程 CronJob 已隨 #3639 移除）。
 - **CRD-as-API（≠ CRD-as-controller）** 只在有 kubectl-native 客戶才做（Gate 2）。
 - Operator 維持 deferred（[ADR-008](../adr/008-operator-native-integration-path.md)）。

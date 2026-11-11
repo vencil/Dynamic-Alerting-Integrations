@@ -610,17 +610,19 @@ da-tools validate-config --config-dir conf.d/ --policy .github/custom-rule-polic
 
 ## 10. 排程式維護窗口（進階）
 
-若租戶配置了 `_state_maintenance.recurring[]`（cron + duration），可透過 `maintenance_scheduler.py` 以 CronJob 方式自動建立 Alertmanager silence。此工具呼叫 Alertmanager `/api/v2/silences` API，因此 BYO 環境需確保：
+租戶在 `_state_maintenance.recurring[]` 寫的每週維護窗口，由 threshold-exporter 自己在每次 scrape 時判斷（[#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)）：窗口內與一次性的 `_state_maintenance` 一樣開啟維護狀態，帶 `maintenance: mute` 的規則**根本不觸發**。整條路徑不經過 Alertmanager——不建 silence，BYO 環境不需要為它開 Alertmanager API 的連線，也不需要部署任何 CronJob。
 
-- CronJob 所在 Pod 可連線至 Alertmanager API endpoint（預設 `http://alertmanager:9093`）
-- Alertmanager 已啟用 API v2（預設開啟，無需額外設定）
-
-```bash
-# 由 CronJob 定期呼叫
-da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertmanager:9093
+```yaml
+_state_maintenance:
+  recurring:
+    - weekdays: [sun]          # sun mon tue wed thu fri sat
+      window: "02:00-06:00"    # UTC HH:MM-HH:MM
+      reason: weekly patching
 ```
 
-工具內建冪等檢查（不重複建立相同 silence）與自動延展（既有 silence 到期早於視窗結束時自動 extend）。詳見 [Shadow Monitoring SOP §8](../shadow-monitoring-sop.md) 中的維護窗口操作說明。
+- 時間一律 **UTC**；跨午夜的窗口（例如 `"22:00-02:00"`）算在**開始那天**。
+- `expires` 不限制週期窗；開關說關（`enabled: false`／`target: disable`）時窗口內也不開。
+- ⚠️ 舊寫法 `- cron: "0 2 * * 0"` + `duration: 4h` **不再接受**：整個 `_state_maintenance` 不被讀、維護**不開啟**（exporter 記一行 WARN）。請改寫成 `weekdays` + `window`。原本的 `maintenance-scheduler` 子命令與它的 CronJob 已移除。
 
 ---
 
@@ -699,7 +701,7 @@ _routing_enforced:
 
 - **Severity dedup 不生效**：出貨的 dedup `inhibit_rules` 兩側都要求 `metric_group=~".+"` 且 `tenant="<name>"`，而平台告警**零條有 `metric_group`**（除那 3 條外連 `tenant` 也沒有）。免疫的成因是**前者**——`metric_group` 一條都沒有，所以連帶 tenant 的那 3 條也不會被 dedup 掉。實例：`ThresholdExporterDown`（warning）與 `ThresholdExporterAbsent`（critical）在全滅時會**雙發**，不會像租戶告警那樣被壓成一則。
 - **Silent mode 不生效（成因與上一條不同）**：`TenantSilentWarning` / `TenantSilentCritical` 的 inhibit target 是 `severity=<...>` + `tenant=~".+"`——上面那 3 條帶 tenant 的平台 warning **原本落在 target 內**，租戶只要開一次 `_silent_mode` 就能把平台自己的故障告警消音。本版已在這兩條 inhibit 的 `target_matchers` 加上 `alert_source=""`（語意：只針對**沒有**平台標記的租戶告警），平台告警因此免疫。⚠️ 兩條的免疫來源不同，別混記：**dedup 是「本來就沒有 `metric_group`」**，**silent mode 是「本版加了排除條件」**。
-  同一個缺口有**第二個面**，本版一併修掉：`maintenance-scheduler` 依租戶的 `_state_maintenance.recurring` 建立的 Alertmanager silence，matcher 原本只有 `tenant="<name>"`，租戶開維護窗口一樣會把那 3 條平台告警靜音。現已同樣帶上 `alert_source=""`（`scripts/tools/ops/maintenance_scheduler.py`，兩個寫入點共用同一個 builder）。⚠️ 兩個面必須一起看：**inhibit 與 silence 是不同機制**，只修一個，洞只是換個形狀。舊有的單 matcher silence 不受影響——冪等查找是以 `(tenant, comment)` 為鍵、按名掃 `tenant` matcher，不比對整組。
+  同一個缺口曾有**第二個面**：週期維護窗以前會變成只帶 `tenant="<name>"` matcher 的 Alertmanager silence，租戶開維護窗口一樣會把那 3 條平台告警靜音。自 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 起週期窗由 exporter 判斷、不再建 silence，而平台 rule pack 不帶維護子句，所以租戶的維護狀態（一次性或週期）碰不到平台告警。⚠️ 自己手開租戶級 silence 時仍要記得：**inhibit 與 silence 是不同機制**，只帶 `tenant` matcher 的 silence 一樣會蓋到那 3 條，要加 `alert_source=""`。
 - **`absent()` 型告警在元件未部署時常態 firing**：`ThresholdExporterAbsent`、`TenantExporterJobAbsent`、`FederationRevocationReconcileStale`、`FederationAuditPipelineSilent` **四條**是設計上的「東西不見了就叫」（最後兩條屬聯邦面，未啟用聯邦時必然亮燈），在 demo / 部分部署的環境會持續亮燈。接上通道前先確認這些元件都真的部署了，否則第一天就會收到穩定噪音。
   > `MassExporterOutage` **不在此列**：它的 expr 尾端是 `unless on() absent(up{job="tenant-exporters"})`，整個 job 不存在時**刻意抑制自己**，把「exporter 面整片消失」這個情境單獨留給 `TenantExporterJobAbsent` 承接。它恰恰是「元件未部署時**不**叫」的那一類。
 - **⛔ 第一天必然收到的一則：`AlertmanagerWebhookNotificationsFailing`**：出貨的 `secret-watchdog-heartbeat.yaml` 是 placeholder（`REPLACE_WITH_EXTERNAL_DEAD_MANS_SWITCH_URL`），而 Watchdog route 的 `repeat_interval` 是 3m ⇒ Alertmanager 每 3 分鐘送出一次必失敗的 webhook ⇒ 該規則（`increase(...[10m]) > 0`、`for: 15m`）在**未設定外部 DMS 的環境會永久 firing**。這不是「可能」的噪音，是接上通道後 15 分鐘內**一定**會拿到的第一則。先做完[自我存活性指南①](alerting-plane-self-liveness.md)填好 Secret，再接通道。

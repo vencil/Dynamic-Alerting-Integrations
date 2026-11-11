@@ -146,7 +146,7 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 
 **Baseline 截至 2026-05-24**：scope **42 manifest**，**0 Critical** ✅ / 1 baseline-High（中央豁免;原始 2 findings，tenant-api 的 2 個 container 同 `(path, check)` 去重為 1）/ 0 INFO。
 
-> **變更（TRK-314 follow-up，PR #600 後續）**：maintenance-scheduler CronJob 原列 2 筆 FIX CANDIDATE（`run-as-non-root` / `no-read-only-root-fs`），已加固 securityContext 解除（pod `runAsNonRoot:true`/`runAsUser:65534`/`seccompProfile:RuntimeDefault` + container `readOnlyRootFilesystem:true`/`allowPrivilegeEscalation:false`/`capabilities.drop:[ALL]` + `/tmp` emptyDir + `PYTHONDONTWRITEBYTECODE=1`）。已 runtime-test：用發行 image 在 `--read-only --tmpfs /tmp --user 65534` 下跑 maintenance-scheduler，report-only 模式 exit 0、HTTP 路徑僅見連線錯誤（無 EROFS）。EXEMPTIONS 兩筆 key 已移除。
+> **變更（TRK-314 follow-up，PR #600 後續）**：maintenance-scheduler CronJob 原列 2 筆 FIX CANDIDATE（`run-as-non-root` / `no-read-only-root-fs`），已加固 securityContext 解除（pod `runAsNonRoot:true`/`runAsUser:65534`/`seccompProfile:RuntimeDefault` + container `readOnlyRootFilesystem:true`/`allowPrivilegeEscalation:false`/`capabilities.drop:[ALL]` + `/tmp` emptyDir + `PYTHONDONTWRITEBYTECODE=1`）。已 runtime-test：用發行 image 在 `--read-only --tmpfs /tmp --user 65534` 下跑 maintenance-scheduler，report-only 模式 exit 0、HTTP 路徑僅見連線錯誤（無 EROFS）。EXEMPTIONS 兩筆 key 已移除。（該 CronJob 之後隨 [#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639) 整個移除：週期維護窗改由 exporter 判斷。）
 
 > **變更（#1594）**：唯一一筆 baseline-High（tenant-api raw Deployment 的 `no-read-only-root-fs`）隨 raw tenant-api manifest 目錄一起刪除而退場——`helm/tenant-api` 成為 tenant-api 唯一部署來源，同一架構事實改由 L2 #3 列管。`EXEMPTIONS` 現為空：raw manifest 再出現任何 High 一律 BLOCK，要豁免須重新登記。scope 計數（42）是 2026-05-24 的量測，未隨本次重量。
 

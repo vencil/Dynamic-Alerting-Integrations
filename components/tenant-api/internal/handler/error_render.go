@@ -146,6 +146,11 @@ func renderKind(k errkind.Kind, r *http.Request, d *Deps, err error, ec errCtx) 
 	case errkind.FreshBaseScope:
 		var e *freshBaseScopeError
 		errors.As(err, &e)
+		if e.Direct {
+			// The envelope of the gate outside the lock, word for word
+			// (freshBaseScopeError.Direct).
+			return e.Error(), nil
+		}
 		extra := map[string]any{"tenant_id": e.TenantID}
 		if !e.Put {
 			extra["operation"] = e.Op

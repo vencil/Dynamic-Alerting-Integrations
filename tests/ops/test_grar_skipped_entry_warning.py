@@ -337,8 +337,6 @@ def test_mark_keeps_text_and_is_lost_on_reformat(mods):
 # stream (they are printed by tools that do not call the predicate). Each
 # entry must still match a literal, so a stale exemption fails too.
 NOT_A_GENERATION_STREAM = {
-    ("maintenance_scheduler.py", "WARN: {}: recurring entry missing "
-     "cron/duration, skipping"): "printed to stderr by the scheduler",
     ("scaffold_tenant.py", "WARN: unknown type '{}', skipping routing"):
         "interactive prompt output of the scaffolder",
 }

@@ -23,7 +23,6 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `validate` | Shadow Monitoring validation: compare old/new Recording Rule values | --watch, --interval <SEC>, --rounds <N> | `da-tools validate --help` |
 | `cutover` | Shadow Monitoring one-click switchover: stop old rules, enable new, verify health | --tenant <NAME>, --readiness-json <FILE>, --dry-run | `da-tools cutover --help` |
 | `blind-spot` | Scan Prometheus active targets, cross-check with tenant config for blind spots | --config-dir <PATH>, --exclude-jobs <LIST>, --json-output | `da-tools blind-spot --help` |
-| `maintenance-scheduler` | Evaluate scheduled maintenance windows (`_state_maintenance`) | --config-dir <PATH>, --alertmanager <URL>, --dry-run | `da-tools maintenance-scheduler --help` |
 | `backtest` | Historical backtest for PR threshold changes | --lookback <DURATION>, --output <FILE> | `da-tools backtest --help` |
 | `shadow-verify` | Shadow Monitoring readiness & convergence 3-phase verification | --mapping <FILE>, --report-csv <FILE>, --readiness-json <FILE> | `da-tools shadow-verify --help` |
 | `byo-check` | Automated BYO Prometheus & Alertmanager integration verification | --prometheus <URL>, --alertmanager <URL>, --json | `da-tools byo-check --help` |
@@ -79,7 +78,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `baseline` — Observe metrics, generate threshold suggestions
   - `validate` — Shadow Monitoring comparison
   - `cutover` — One-click switchover (final migration step)
-  - Others: `blind-spot`, `maintenance-scheduler`, `backtest`
+  - Others: `blind-spot`, `backtest`
   - `alert-quality` — Alert quality scoring (noise, stale, latency)
   - `alert-correlate` — Alert correlation analysis (time-window clustering + root cause)
   - `cardinality-forecast` — Per-tenant cardinality trend prediction

@@ -42,7 +42,6 @@ ROOT_FNS = [
     ("check_ha_threshold_aggregation", "lint"),
     ("check_ksm_version_allowlist", "lint"),
     ("check_leftouterjoin_enrichment", "lint"),
-    ("check_portal_rulepack_claims", "lint"),
     ("check_retire_drift", "lint"),
     ("check_unpinned_deps", "lint"),
     ("check_workflow_git_push_permissions", "lint"),

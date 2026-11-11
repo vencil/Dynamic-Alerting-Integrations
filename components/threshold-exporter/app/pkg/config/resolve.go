@@ -1332,6 +1332,18 @@ func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool,
 		if r.kind != stateValueOn || !r.hasExpires {
 			continue
 		}
+		// #3639: expires does not limit the recurring windows — say so, on
+		// every scrape like the other value WARNs, once it has passed, so a
+		// "maintenance until X" is not read as over while the
+		// maintenance_expired event says it is. Gated on the sink, NOT on
+		// warn: warn only dedupes the parse WARNs ResolveStateFiltersAt
+		// already printed, and it never prints this one — gated on warn, it
+		// would be silent exactly when a declared maintenance filter makes
+		// the windows matter.
+		if logf != nil && now.After(r.expires) && len(r.windows) > 0 {
+			logf("WARN: _state_maintenance for tenant=%s: expires %s has passed, but its %d recurring window(s) still switch maintenance on — expires does not limit them; remove recurring to end them",
+				tenant, r.expiresText, len(r.windows))
+		}
 
 		result = append(result, ResolvedMaintenanceExpiry{
 			Tenant:  tenant,
@@ -1682,15 +1694,23 @@ func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
 		Tenants:  make(map[string]KeyValidation, len(c.Tenants)),
 	}
 	for tid, keys := range c.Tenants {
-		one := ThresholdConfig{
-			Defaults:          c.Defaults,
-			OptionalOverrides: c.OptionalOverrides,
-			Profiles:          c.Profiles,
-			Tenants:           map[string]map[string]ScheduledValue{tid: keys},
-		}
+		one := c.tenantLayer(tid, keys)
 		out.Tenants[tid] = one.validateOverrideKeys()
 	}
 	return out
+}
+
+// tenantLayer is c with keys as tenant tid's whole map and no other tenant:
+// the one-tenant copy a key check judges a layer on (ValidateTenantKeysByTenant,
+// TenantMerge's own, platform and profile layers). Every root field —
+// `defaults:`, `optional_overrides:`, `dimensions:`, profiles — comes along
+// by copying c whole, so a check reading one of them reads the tree's value,
+// not an empty one: a copy that named its fields dropped `dimensions:` and
+// judged a dimensional row no one serves (#3684).
+func (c *ThresholdConfig) tenantLayer(tid string, keys map[string]ScheduledValue) ThresholdConfig {
+	layer := *c
+	layer.Tenants = map[string]map[string]ScheduledValue{tid: keys}
+	return layer
 }
 
 // validateOverrideKeys is ValidateTenantKeys without the defaults-side
@@ -1867,8 +1887,16 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// day is refused where it is written; one already on disk, left
 			// as it is, is a notice (Ratchet, by the dead entries as
 			// written).
-			if deadEntriesJudged(key, canonKey, sv, normalized, canonDefaults, canonOptional) {
+			if deadEntriesJudged(key, canonKey, sv, normalized, canonDefaults, canonOptional, c.Dimensions) {
 				if f, ok := newDeadEntryFinding(tenant, canonKey, sv); ok {
+					v.Errors = append(v.Errors, f.Message)
+					v.Values = append(v.Values, f)
+				}
+				// #3683: a `window:` the exporter cannot read
+				// (window_invalid) applies at no minute either; refused
+				// where it is written, ratcheted as a dead entry. Its
+				// value is not judged as a threshold (thresholdRefusalIn).
+				if f, ok := newInvalidWindowFinding(tenant, canonKey, sv); ok {
 					v.Errors = append(v.Errors, f.Message)
 					v.Values = append(v.Values, f)
 				}

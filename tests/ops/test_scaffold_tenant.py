@@ -402,7 +402,7 @@ class TestWriteOutputs:
             snippet = "# relabel\nrelabel_configs: []"
             write_outputs(tmpdir, "db-c", defaults, tenant, "report",
                           relabel_snippet=snippet)
-            relabel_path = os.path.join(tmpdir, "relabel_configs-db-c.yaml")
+            relabel_path = os.path.join(tmpdir, "relabel_configs-db-c.txt")
             assert os.path.isfile(relabel_path)
 
     def test_yaml_content_valid(self):
@@ -677,8 +677,51 @@ class TestRunNonInteractive:
                 namespaces="ns1,ns2",
             )
             run_non_interactive(args)
-            relabel_file = os.path.join(d, "relabel_configs-db-x.yaml")
+            relabel_file = os.path.join(d, "relabel_configs-db-x.txt")
             assert os.path.exists(relabel_file)
+
+    def test_namespaces_leave_no_unread_top_level_key(self):
+        """#3671: the N:1 relabel snippet sits beside the conf.d files; as a
+        `.yaml` it was a tenant file whose `relabel_configs:` no reader reads,
+        which the shared key verdict blocks the whole tree on."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as d:
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=d,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces="ns1,ns2",
+            )
+            run_non_interactive(args)
+            binary = os.environ.get("DA_GUARD_BINARY", "da-guard")
+            out = subprocess.run([binary, "key-verdict", "--config-dir", d],
+                                 capture_output=True, text=True, encoding="utf-8", timeout=60)
+            assert out.returncode == 0, out.stderr
+            verdict = json.loads(out.stdout)
+            reasons = [f.get("reason") for f in verdict.get("findings", [])]
+            assert "tenant_file_top_level" not in reasons, verdict["findings"]
+            assert not verdict.get("blocks"), verdict
+
+    def test_a_config_named_extra_is_refused(self, monkeypatch):
+        """The guard: a file written beside the batch that a conf.d reader
+        would scan is refused before anything is written (#3671)."""
+        # Patch the namespace run_non_interactive resolves names in: another
+        # test may have re-imported scaffold_tenant, and `sys.modules` would
+        # then hold a different module object than the one bound here.
+        monkeypatch.setitem(run_non_interactive.__globals__, "relabel_snippet_name",
+                            lambda t: f"relabel_configs-{t}.yaml")
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "conf.d")
+            args = argparse.Namespace(
+                tenant="db-x", db="mariadb", output_dir=out,
+                profile=None, silent_mode=None,
+                severity_dedup="enable", routing_receiver=None,
+                namespaces="ns1,ns2",
+            )
+            with pytest.raises(SystemExit) as exc:
+                run_non_interactive(args)
+            assert exc.value.code == EXIT_CALLER_ERROR
+            assert not os.path.exists(out)
 
     def test_invalid_db_exits(self):
         with tempfile.TemporaryDirectory() as d:
@@ -815,7 +858,7 @@ class TestRunNonInteractive:
                 mapping_instance=None, mapping_filter=None,
             )
             run_non_interactive(args)
-            relabel_file = os.path.join(d, "relabel_configs-db-x.yaml")
+            relabel_file = os.path.join(d, "relabel_configs-db-x.txt")
             assert os.path.exists(relabel_file)
 
     def test_topology_n1_without_namespaces_warns(self, capsys):
@@ -848,7 +891,7 @@ class TestRunNonInteractive:
             )
             run_non_interactive(args)
             assert not os.path.exists(os.path.join(d, "_instance_mapping.yaml"))
-            assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.yaml"))
+            assert not os.path.exists(os.path.join(d, "relabel_configs-db-x.txt"))
 
     @_skipif_unix_modes
     def test_mapping_file_permissions(self):
@@ -1208,22 +1251,29 @@ class TestSaturationRulePacksIntegrity:
     """RULE_PACKS metric_class 完整性。"""
 
     def test_metric_class_value_domain(self):
-        """metric_class 值域僅 {"saturation"}。"""
-        values = {
-            info["metric_class"]
-            for pack in RULE_PACKS.values()
-            for section in ("defaults", "optional_overrides")
-            for info in pack.get(section, {}).values()
-            if "metric_class" in info
-        }
-        assert values == {"saturation"}
+        """D-A PR-3 起 RULE_PACKS 由 registry 生成，每個鍵都帶 metric_class，
+        值域即 registry schema 的 enum。消費端（saturation 教育段、portal）
+        只認 defaults tier 的 "saturation"，所以多出的類別不改變任何輸出。"""
+        schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                   "docs", "schemas", "threshold-registry.schema.json")
+        with open(schema_path, encoding="utf-8") as fh:
+            schema = json.load(fh)
+        (key_schema,) = schema["properties"]["keys"]["patternProperties"].values()
+        enum = set(key_schema["properties"]["metric_class"]["enum"])
+        for name, pack in RULE_PACKS.items():
+            for section in ("defaults", "optional_overrides"):
+                for key, info in pack.get(section, {}).items():
+                    assert info.get("metric_class") in enum, f"{name}.{section}.{key}"
 
-    def test_metric_class_only_in_defaults(self):
-        """metric_class 只出現在 defaults，不出現在 optional_overrides。"""
+    def test_saturation_outside_defaults_is_only_a_critical_variant(self):
+        """optional_overrides 裡的 saturation 只能是 saturation base 的
+        `_critical`（繼承而來）——不會長出新的 defaults 外飽和鍵。"""
+        bases = saturation_default_keys()
         for name, pack in RULE_PACKS.items():
             for key, info in pack.get("optional_overrides", {}).items():
-                assert "metric_class" not in info, \
-                    f"{name}.optional_overrides.{key} 不應有 metric_class"
+                if info.get("metric_class") == "saturation":
+                    assert key.endswith("_critical") and key[:-len("_critical")] in bases, \
+                        f"{name}.optional_overrides.{key}"
 
     def test_saturation_set_matches_expected(self):
         """被標 set == 預期常數（真 N=22）。"""

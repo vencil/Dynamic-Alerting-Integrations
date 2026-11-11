@@ -84,8 +84,9 @@ const SIBLING_OF: Record<string, string[]> = { _routing: ['receiver'], _state_ma
 
 const NEEDS_SIBLING: Record<string, string> = {
   '_silent_mode.reason': 'target',
-  '_state_maintenance.recurring.[].cron': 'duration',
-  '_state_maintenance.recurring.[].duration': 'cron',
+  '_state_maintenance.recurring.[].weekdays': 'window',
+  '_state_maintenance.recurring.[].window': 'weekdays',
+  '_state_maintenance.recurring.[].reason': 'weekdays',
 };
 
 describe('insert produces tenants.<id>.<parent>.<child> accepted by the schema', () => {
