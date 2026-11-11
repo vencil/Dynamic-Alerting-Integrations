@@ -1420,3 +1420,33 @@ def test_a_history_holding_nan_is_refused_not_written_back(tmp_path):
     assert '[0].file_count: nan is not a JSON number' in second.stderr
     assert history.read_bytes() == before
     assert sorted(p.name for p in history.parent.iterdir()) == ['history.json', 'snap-1']
+
+
+class TestReviewFollowUps:
+    """#3751 CodeRabbit review."""
+
+    def test_a_dangling_config_dir_link_is_not_a_deleted_conf_d(self, tmp_path):
+        (tmp_path / '.da-history').mkdir()
+        symlink_or_skip(str(tmp_path / 'nowhere'), str(tmp_path / 'conf.d'))
+        proc = _cli('--config-dir', str(tmp_path / 'conf.d'), 'log')
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stdout
+        assert 'WARN' not in proc.stderr
+
+    def test_a_file_gone_after_the_judgement_is_named_not_a_traceback(self, tmp_path, monkeypatch):
+        """The run's reader keeps the listing it judged; a file removed since
+        is refused through the one read of a selected file."""
+        import argparse
+        conf = tmp_path / 'conf.d'
+        conf.mkdir()
+        (conf / 'db-a.yaml').write_text('tenants:\n  db-a: {}\n', encoding='utf-8')
+        p = argparse.ArgumentParser()
+        ch._lib_input.add_input(p, '--config-dir', select=ch._lib_input.DA_GUARD_LISTS)
+        with ch._lib_parse_cache.session():
+            [root] = ch._lib_parse_cache.declared_trees(
+                p.parse_args(['--config-dir', str(conf)]), 'config_dir', lang='en')
+            (conf / 'db-a.yaml').unlink()
+            with pytest.raises(ch.CallerError) as e:
+                ch._scan_config_dir(str(root))
+        assert e.value.reason == 'file_unreadable'
+        assert f"--config-dir {conf / 'db-a.yaml'}" in str(e.value)
+        assert not (tmp_path / '.da-history').exists()

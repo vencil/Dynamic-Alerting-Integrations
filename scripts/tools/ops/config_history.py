@@ -34,6 +34,7 @@ from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 from _lib_io import exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107)
+from _lib_label import safe_label  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_input  # noqa: E402  (#3751)
 
@@ -72,7 +73,9 @@ def _scan_config_dir(config_dir):
     listing = reader.listing()
     warn_nested(config_path, tool="config_history", listing=listing)
     for f in [config_path / e.path for e in listing.config_files() if e.depth == 0]:
-        content = f.read_text(encoding='utf-8')
+        # #3751: a file gone since the listing is refused, named — never a
+        # traceback (`_lib_input.read_bytes`, the one read of a selected file).
+        content = _lib_input.read_bytes(f, flag="--config-dir", lang=_LANG).decode('utf-8')
         h = _sha256(content)
         files.append({
             'name': f.name,
@@ -353,22 +356,27 @@ def _judge_history(config_dir):
     that is not there (a typo of a sibling) reads the history beside it.
     That is said on stderr, both named, never in silence."""
     conf = classify_path(config_dir, "dir", lang=_LANG, flag="--config-dir")
-    if conf is not None and (config_dir == "" or not conf.missing):
-        raise CallerError(conf.message, conf.reason)
+    # A dangling link is "missing" to stat, yet something is there: never read
+    # as a conf.d deleted since its snapshot (#3751 review).
+    if conf is not None and (config_dir == "" or not conf.missing
+                             or os.path.lexists(config_dir)):
+        raise CallerError(conf.message, conf.reason if not conf.missing
+                          else "dir_not_accessible")
     hdir = _history_path(config_dir)
+    shown_conf, shown_hdir = safe_label(config_dir), safe_label(str(hdir))
     hist = classify_path(str(hdir), "dir", lang=_LANG)
     if hist is not None and (not hist.missing or os.path.lexists(hdir)):
-        raise CallerError(_t(f"--config-dir {config_dir}: 快照歷史 {hist.message}",
-                             f"--config-dir {config_dir}: snapshot history {hist.message}"),
+        raise CallerError(_t(f"--config-dir {shown_conf}: 快照歷史 {hist.message}",
+                             f"--config-dir {shown_conf}: snapshot history {hist.message}"),
                           hist.reason if not hist.missing else "dir_not_accessible")
     if conf is None:
         return
     if hist is not None:
-        raise CallerError(_t(f"{conf.message}，且 {hdir} 沒有快照歷史",
-                             f"{conf.message}, and no snapshot history at {hdir}"),
+        raise CallerError(_t(f"{conf.message}，且 {shown_hdir} 沒有快照歷史",
+                             f"{conf.message}, and no snapshot history at {shown_hdir}"),
                           conf.reason)
-    print(_t(f"警告：{conf.message}；讀取它旁邊的快照歷史 {hdir}",
-             f"WARN: {conf.message}; reading the snapshot history beside it, {hdir}"),
+    print(_t(f"警告：{conf.message}；讀取它旁邊的快照歷史 {shown_hdir}",
+             f"WARN: {conf.message}; reading the snapshot history beside it, {shown_hdir}"),
           file=sys.stderr)
 
 

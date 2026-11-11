@@ -594,7 +594,7 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
 
         labels = None
-        if args.labels:
+        if args.labels is not None:  # #3751: `--labels ''` is an empty item, not none given
             # #3751: the rule of --dirs, whose items it pairs with: an empty
             # item refused, an item not stripped.
             labels = args.labels.split(",")

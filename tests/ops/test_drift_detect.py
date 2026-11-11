@@ -533,6 +533,10 @@ class TestCLI:
             dd.main()
         assert e.value.code == 2
         assert "argument --labels: an empty item in 'A,'" in capsys.readouterr().err
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "")
+        with pytest.raises(SystemExit) as e:
+            dd.main()
+        assert e.value.code == 2, "`--labels ''` is an empty item, not none given"
         cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A, B", "--json")
         doc = dd.main().document
         assert doc["pairs"][0]["target"] == " B", doc

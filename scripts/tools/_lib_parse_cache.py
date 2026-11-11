@@ -288,8 +288,9 @@ class ConfdReader:
             if _ACTIVE is None:
                 self._listing = _lib_parse_tree.listing_of(self.tree(), self.root)
             else:
-                self._listing = _lib_parse_tree.list_tree(self.root, self.binary, self.timeout)
-                self._judge_root(self._listing.entries)
+                listing = _lib_parse_tree.list_tree(self.root, self.binary, self.timeout)
+                self._judge_root(listing.entries)  # before it is kept: never skipped later
+                self._listing = listing
         return self._listing
 
     def entry(self, path: "str | os.PathLike[str]") -> "Optional[_lib_parse_tree.Entry]":
