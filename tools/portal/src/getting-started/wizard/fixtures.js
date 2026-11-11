@@ -43,8 +43,9 @@ const PACK_COUNT = (__PD.packOrder || []).length || 16;
 //
 // This is deliberately NOT derived from window.__PLATFORM_DATA. The difference
 // is exactly the `platform` pack: ALERT-REFERENCE.md documents the 15 packs a
-// tenant can select (135 rows, operational and liveness included) while
-// totals.alertRules (189) additionally counts platform's 54 internal alerts.
+// tenant can select (operational and liveness included) while totals.alertRules
+// additionally counts platform's internal alerts. The value below is pinned to
+// the row count by count-literals-drift.test.ts; do not restate it in prose.
 //
 // NOTE this is an UNCONDITIONAL constant, not an offline fallback — it renders
 // for every user on every path, so a stale value is wrong in production. It sat

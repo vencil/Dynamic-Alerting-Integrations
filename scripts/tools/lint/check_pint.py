@@ -111,9 +111,9 @@ _PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint",
 # enough to trip it (≥9 rules, e.g. retiring a whole rule-pack) SHOULD require a
 # conscious edit here — #1204 D-del was one: 11 orphan recording rules deleted,
 # CI's pint step then logged entries=367, so the pair below moved to 367 / 359. #3658
-# added 16 critical tiers (a record + an alert each) and CI logged entries=403, so the
-# pair moved up to 403 / 395 — growth, not deletion, but past 42 of slack the floor
-# no longer sees the platform pack drop out. Re-measure on every PINT_VERSION bump: a pint that stops
+# added critical tiers (a record + an alert each); growth, not deletion, but once the
+# slack exceeds the platform pack's share the floor no longer sees that pack drop out,
+# so the pair below was re-measured from CI's pint step. Re-measure on every PINT_VERSION bump: a pint that stops
 # parsing a file is only visible as this count dropping.
 _MIN_PINT_ENTRIES = 395
 

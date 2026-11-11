@@ -138,11 +138,9 @@ describe('convertRules — emitted keys stay inside the contract', () => {
     expect(out.unconverted).toHaveLength(0);
   });
 
-  // #3658 gave both Redis keys a critical tier, so every METRIC_MAP value is now
-  // critical-capable and no mapped key reaches the "no critical tier" Manual Review
-  // branch. That branch re-engages only through CRITICAL_CAPABLE, whose membership
-  // the registry-mirror test above pins — a future mapping without a `_critical`
-  // key cannot be added without landing there.
+  // Which METRIC_MAP values lack a critical tier is the registry's call, not this
+  // file's: the registry-mirror test above keeps CRITICAL_CAPABLE equal to it, and
+  // convertRules sends a critical rule on any key outside that set to Manual Review.
   it('critical severity on a Redis key converts to its _critical key (#3658)', () => {
     const out = convertRules(
       rule('CritRedis', 'redis_connected_clients > 5000', 'critical'));

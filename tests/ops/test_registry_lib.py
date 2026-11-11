@@ -513,8 +513,8 @@ def test_optional_override_list_is_a_yaml_string_array():
 
 def test_real_registry_optional_list_is_the_nine_flat_keys():
     """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 44 the
-    tier holds. 35 of those 44 are `_critical` (#3658 added 16); listing them
-    would make 80% of the shipped list decoration."""
+    tier holds (both asserted below). Most of the tier is `_critical` keys;
+    listing them would make the shipped list mostly decoration."""
     doc = lib.build_registry_doc()
     tier = {k for k, e in doc["keys"].items()
             if e.get("tier") == "optional_overrides"}
