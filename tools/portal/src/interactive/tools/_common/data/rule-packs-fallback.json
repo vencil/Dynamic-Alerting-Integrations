@@ -25,7 +25,7 @@
       "exporter": "mysqld_exporter",
       "configMap": "prometheus-rules-mariadb",
       "recordingRules": 12,
-      "alertRules": 18,
+      "alertRules": 17,
       "required": false,
       "defaults": {
         "mysql_connections": {
@@ -72,7 +72,7 @@
       "exporter": "postgres_exporter",
       "configMap": "prometheus-rules-postgresql",
       "recordingRules": 8,
-      "alertRules": 9,
+      "alertRules": 8,
       "required": false,
       "defaults": {
         "pg_connections": {
@@ -356,7 +356,7 @@
       "exporter": "built-in /metrics",
       "configMap": "prometheus-rules-clickhouse",
       "recordingRules": 11,
-      "alertRules": 7,
+      "alertRules": 6,
       "required": false,
       "defaults": {
         "clickhouse_queries_rate": {
@@ -394,7 +394,7 @@
       "exporter": "kafka_exporter",
       "configMap": "prometheus-rules-kafka",
       "recordingRules": 13,
-      "alertRules": 9,
+      "alertRules": 8,
       "required": false,
       "defaults": {
         "kafka_consumer_lag": {
@@ -452,7 +452,7 @@
       "exporter": "rabbitmq_exporter",
       "configMap": "prometheus-rules-rabbitmq",
       "recordingRules": 12,
-      "alertRules": 8,
+      "alertRules": 7,
       "required": false,
       "defaults": {
         "rabbitmq_queue_messages": {

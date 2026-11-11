@@ -443,7 +443,6 @@ class TestKafkaRabbitMQAlertCompleteness:
         data = _load_yaml(os.path.join(RULE_PACKS_DIR, "rule-pack-kafka.yaml"))
         alerts = self._get_alert_names(data["groups"])
         expected = [
-            "KafkaExporterAbsent",
             "KafkaHighConsumerLag", "KafkaHighConsumerLagCritical",
             "KafkaUnderReplicatedPartitions", "KafkaUnderReplicatedPartitionsCritical",
             "KafkaNoActiveController",
@@ -480,7 +479,6 @@ class TestKafkaRabbitMQAlertCompleteness:
         data = _load_yaml(os.path.join(RULE_PACKS_DIR, "rule-pack-rabbitmq.yaml"))
         alerts = self._get_alert_names(data["groups"])
         expected = [
-            "RabbitMQExporterAbsent",
             "RabbitMQHighQueueDepth", "RabbitMQHighQueueDepthCritical",
             "RabbitMQHighMemory", "RabbitMQHighMemoryCritical",
             "RabbitMQHighConnections",
