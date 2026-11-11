@@ -817,7 +817,9 @@ When multiple tenants share the same on-call team and notification policy, the `
 # _routing_profiles.yaml
 routing_profiles:
   team-sre-apac:
-    receiver: slack-sre-apac
+    receiver:
+      type: slack
+      api_url: {secret: {key: slack-api-url}}
     group_by: [tenant, alertname, severity]
     group_wait: 30s
     repeat_interval: 4h

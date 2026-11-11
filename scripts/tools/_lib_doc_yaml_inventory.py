@@ -178,18 +178,25 @@ TENANT_CONFIG_MARKERS = frozenset({
 })
 
 
+def _is_routing_profiles(data: Any) -> bool:
+    """A `_routing_profiles.yaml`: `routing_profiles:`, a mapping, and nothing else."""
+    return (isinstance(data, dict) and list(data) == ["routing_profiles"]
+            and isinstance(data["routing_profiles"], dict))
+
+
 def is_confd_example(data: Any) -> bool:
     """Is this reading a Vibe config example (platform file or tenant snippet)?
 
     A platform key at the top (`defaults:` / `state_filters:` / …), a bare
     top-level `tenants:`, a tenant marker at the top, or a tenant marker one
-    level down (a tenant body with `tenants:` omitted in the snippet). Asked
+    level down (a tenant body with `tenants:` omitted in the snippet), or a
+    `_routing_profiles.yaml` (`_is_routing_profiles`). Asked
     only of an undeclared unit parse-tree read; a declared `.confd` unit is
     conf.d whatever its keys are.
     """
     if not isinstance(data, dict):
         return False
-    if "tenants" in data:
+    if "tenants" in data or _is_routing_profiles(data):
         return True
     for key in data:
         if key in TENANT_CONFIG_MARKERS or key in PLATFORM_KEYS:
@@ -202,7 +209,8 @@ def is_confd_example(data: Any) -> bool:
 
 def confd_kind(data: Any) -> "str | None":
     """Which contract a conf.d reading is governed by: ``platform`` (a
-    platform key at the top: platform-defaults.schema.json), ``tenant-file``
+    platform key at the top: platform-defaults.schema.json),
+    ``routing-profiles`` (`_is_routing_profiles`), ``tenant-file``
     (`tenants:` at the top), ``fragment`` (a bare tenant body, judged as one
     tenant's). None for a reading that is not a mapping."""
     if not isinstance(data, dict):
@@ -210,6 +218,8 @@ def confd_kind(data: Any) -> "str | None":
     keys = set(data)
     if keys & PLATFORM_KEYS:
         return "platform"
+    if _is_routing_profiles(data):
+        return "routing-profiles"
     if "tenants" in keys:
         return "tenant-file"
     return "fragment"

@@ -28,10 +28,11 @@ EXIT_CALLER_ERROR = 2
 
 
 def _mkrepo(tmp_path: Path, name: str, body: str) -> Path:
-    """A minimal repo root: docs/<name> plus the two real schemas."""
+    """A minimal repo root: docs/<name> plus the real conf.d schemas."""
     (tmp_path / "docs" / "schemas").mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs" / name).write_text(body, encoding="utf-8")
-    for schema in ("tenant-config.schema.json", "platform-defaults.schema.json"):
+    for schema in ("tenant-config.schema.json", "platform-defaults.schema.json",
+                   "routing-profiles.schema.json"):
         src = REPO / "docs" / "schemas" / schema
         (tmp_path / "docs" / "schemas" / schema).write_text(
             src.read_text(encoding="utf-8"), encoding="utf-8")
@@ -369,6 +370,24 @@ def test_expect_invalid_counts_a_plaintext_credential(tmp_path: Path) -> None:
     r = _run(tmp_path)
     assert r.returncode == EXIT_VIOLATION, r.stdout
     assert "[SCHEMA] docs/c.md:2 (expect-invalid)" in r.stdout, r.stdout
+
+
+def _profiles(api_url: str) -> str:
+    return ("```yaml\n# _routing_profiles.yaml\nrouting_profiles:\n  team-a:\n"
+            f"    receiver:\n      type: slack\n      api_url: {api_url}\n```\n")
+
+
+def test_routing_profiles_plaintext_credential_fails(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "rp.md", _profiles(_SECRET_VALUE)))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/rp.md:2 (credential_plaintext)" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+
+
+def test_routing_profiles_reference_passes_its_schema(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "rp.md", _profiles("{secret: {key: slack-api-url}}")))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "routing-profiles         1" in r.stdout, r.stdout
 
 
 def test_retired_marker_is_an_error_naming_the_attribute(tmp_path: Path) -> None:

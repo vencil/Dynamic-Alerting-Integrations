@@ -1138,7 +1138,7 @@ repos:
         # check_confd_schema.py is imported for its registry builder (#2232),
         # _grar_parse for the generator's credential judgement (#1560);
         # the readers of the examples are Go's, so their source is an input too.
-        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch|validation)\.py|scripts/tools/ops/(guard_dispatch|_grar_parse)\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
+        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults|routing-profiles)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch|validation)\.py|scripts/tools/ops/(guard_dispatch|_grar_parse)\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       # Third sibling of the two above, and separate for the same reason: it

@@ -43,6 +43,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 import _lib_parse_tree  # noqa: E402
 import _lib_consumer_read  # noqa: E402
 import _lib_doc_yaml_inventory as inventory  # noqa: E402  (#3416: the one inventory)
+import check_confd_schema  # noqa: E402  (the conf.d file kinds and their schemas)
 sys.path.append(os.path.join(_THIS_DIR, "..", "ops"))
 from _grar_parse import credential_facts  # noqa: E402  (#1560: the generator's judgement)
 
@@ -97,14 +98,16 @@ class MdYamlDriftChecker:
         self.verbose = verbose
         self.schema: Dict = {}
         self.platform_schema: Dict = {}
+        self.profiles_schema: Dict = {}
         self._inventory = None
         self._load_schema()
 
     def _load_schema(self):
         """Load both schemas: tenant-config and platform-defaults."""
         base = self.repo_root / "docs" / "schemas"
-        for attr, name in (("schema", "tenant-config.schema.json"),
-                           ("platform_schema", "platform-defaults.schema.json")):
+        for attr, name in (("schema", check_confd_schema.TENANT_SCHEMA_NAME),
+                           ("platform_schema", check_confd_schema.PLATFORM_SCHEMA_NAME),
+                           ("profiles_schema", check_confd_schema.PROFILES_SCHEMA_NAME)):
             path = base / name
             if not path.exists():
                 continue
@@ -146,6 +149,8 @@ class MdYamlDriftChecker:
         kind = inventory.confd_kind(data)
         if kind == "platform":
             return self.platform_schema, data, kind
+        if kind == "routing-profiles":
+            return self.profiles_schema, data, kind
         if kind == "tenant-file":
             return self.schema, data, kind
         # A bare tenant body (`_routing:` etc. with no wrapper). Wrap it in a
@@ -400,8 +405,9 @@ class MdYamlDriftChecker:
                   "Install it (pip install jsonschema) or invoke --check fences.",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
-        if not self.schema or not self.platform_schema:
-            print("ERROR: could not load docs/schemas/{tenant-config,platform-defaults}"
+        if not self.schema or not self.platform_schema or not self.profiles_schema:
+            print("ERROR: could not load docs/schemas/{tenant-config,platform-defaults,"
+                  "routing-profiles}"
                   ".schema.json — refusing to report a clean run against no contract.",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -415,10 +421,9 @@ class MdYamlDriftChecker:
         # proves every cross-file `$ref` resolves before any block is judged
         # (unresolved used to be a traceback at rc 1, or silence when no block
         # reached the `$ref`).
-        import check_confd_schema
         try:
             registry = check_confd_schema.checked_schema_registry(
-                self.schema, self.platform_schema)
+                self.schema, self.platform_schema, self.profiles_schema)
         except check_confd_schema.UnresolvableSchemaRef as e:
             print(f"ERROR: docs/schemas: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -426,8 +431,11 @@ class MdYamlDriftChecker:
         inv, rc = self._inventory_or_exit()
         if inv is None:
             return rc
+        # The file name each kind of conf.d unit is judged as.
+        file_of = {"platform": "_defaults.yaml",
+                   "routing-profiles": check_confd_schema.ROUTING_PROFILES_NAMES[0]}
         try:
-            entries = _lib_parse_tree.classify_names(["_defaults.yaml", "tenant.yaml"])
+            entries = _lib_parse_tree.classify_names([*file_of.values(), "tenant.yaml"])
         except _lib_parse_tree.ParseTreeError as e:
             print(f"ERROR: `da-guard parse-tree` did not answer: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -474,9 +482,8 @@ class MdYamlDriftChecker:
             # #1560: what the route generator refuses (a credential written
             # out, or a place it cannot judge). Kind and category only, never
             # the value.
-            facts = credential_facts(
-                unit.where, doc,
-                entries["_defaults.yaml" if kind == "platform" else "tenant.yaml"])
+            fname = file_of.get(kind, "tenant.yaml")
+            facts = credential_facts(fname, doc, entries[fname])
             for fact_kind, detail in dict.fromkeys((f.kind, f.detail) for f in facts):
                 if unit.expect_invalid:
                     expected[(unit.path, unit.line)].append(

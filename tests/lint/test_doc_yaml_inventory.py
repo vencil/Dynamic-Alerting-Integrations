@@ -271,7 +271,8 @@ def test_each_expect_invalid_unit_must_be_invalid(tmp_path):
     ok = "# c/t.yaml\ntenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
     root = _docs(tmp_path, "```yaml {.confd .expect-invalid}\n" + b1 + b2 + ok + "```\n")
     (tmp_path / "docs" / "schemas").mkdir()
-    for name in ("tenant-config.schema.json", "platform-defaults.schema.json"):
+    for name in ("tenant-config.schema.json", "platform-defaults.schema.json",
+                 "routing-profiles.schema.json"):
         shutil.copy(REPO / "docs" / "schemas" / name, tmp_path / "docs" / "schemas" / name)
     r = subprocess.run(  # noqa: S603
         [sys.executable, "-X", "utf8", str(DRIFT), "--ci", "--repo-root", str(root)],
