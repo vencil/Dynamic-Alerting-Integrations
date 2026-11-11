@@ -412,7 +412,7 @@ def test_write_outputs_ast_path():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         counts = migrate_rule.write_outputs(
-            [result], tmpdir, prefix="custom_", dictionary={}
+            [result], tmpdir, prefix="custom_", dictionary={}, tenant="t1"
         )
         assert len(counts) == 4
 
@@ -548,13 +548,14 @@ def test_write_outputs_basic():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         counts = migrate_rule.write_outputs(
-            [result], tmpdir, prefix="custom_", dictionary={}
+            [result], tmpdir, prefix="custom_", dictionary={}, tenant="t1"
         )
         assert len(counts) == 4  # (perfect, complex, unparseable, golden)
 
         # Verify files exist
         expected_files = [
-            "tenant-config.yaml",
+            "conf.d/t1.yaml",
+            "conf.d/_defaults.yaml",
             "platform-recording-rules.yaml",
             "platform-alert-rules.yaml",
             "migration-report.txt",
@@ -749,7 +750,7 @@ def test_suppress_write_outputs_with_suppression():
 
     with tempfile.TemporaryDirectory() as tmpdir:
         migrate_rule.write_outputs(results, tmpdir, prefix="custom_",
-                                    dictionary={})
+                                    dictionary={}, tenant="t1")
         alert_path = os.path.join(tmpdir, "platform-alert-rules.yaml")
         with open(alert_path, 'r', encoding='utf-8') as f:
             content = f.read()

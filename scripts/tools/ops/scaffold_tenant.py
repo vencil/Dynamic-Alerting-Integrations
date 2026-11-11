@@ -196,264 +196,54 @@ def _h(key: str) -> str:
 # ============================================================
 # Rule Pack catalog — metric keys, defaults, descriptions
 # ============================================================
+from _rule_packs_generated import THRESHOLD_PACKS as _THRESHOLD_PACKS  # noqa: E402
+
+# Scaffold-only per-pack data: what is not threshold identity (state-filter
+# definitions, a dimensional example for the generated tenant YAML). The
+# threshold half lives in rule-packs/threshold-registry.yaml, the SoT since
+# D-A PR-3, and reaches this module generated (`_rule_packs_generated`).
+_SCAFFOLD_PACK_EXTRAS = {'kubernetes': {'state_filters': {'container_crashloop': {'reasons': ['CrashLoopBackOff'],
+                                                          'severity': 'critical',
+                                                          'desc': 'Detect CrashLoopBackOff '
+                                                                  'containers'},
+                                  'container_imagepull': {'reasons': ['ImagePullBackOff',
+                                                                      'InvalidImageName'],
+                                                          'severity': 'warning',
+                                                          'desc': 'Detect ImagePullBackOff '
+                                                                  'containers'},
+                                  'maintenance': {'reasons': [],
+                                                  'severity': 'info',
+                                                  'default_state': 'disable',
+                                                  'desc': 'Maintenance mode (suppresses all '
+                                                          'alerts)'}}},
+ 'postgresql': {'dimensional_example': {'pg_connections{datname="orders"}': '70'}},
+ 'redis': {'dimensional_example': {'redis_connected_clients{instance="redis-orders:6379"}': '500',
+                                   'redis_evicted_keys_rate{instance="redis-cache:6379"}': '500'}},
+ 'mongodb': {'dimensional_example': {'mongodb_replication_lag{rs="rs-orders"}': '30'}},
+ 'elasticsearch': {'dimensional_example': {'es_search_latency_ms{index="logs-prod"}': '2000'}},
+ 'oracle': {'dimensional_example': {'oracle_tablespace_used_percent{tablespace_name=~"USERS|DATA.*"}': '90',
+                                    'oracle_tablespace_used_percent{tablespace_name="SYSTEM"}': '95:critical'}},
+ 'db2': {'dimensional_example': {'db2_bufferpool_hit_ratio{bufferpool_name=~"IBMDEFAULT.*|BP_USER.*"}': '0.90',
+                                 'db2_tablespace_used_percent{tablespace_name=~"USERSPACE.*"}': '80'}},
+ 'clickhouse': {'dimensional_example': {'clickhouse_max_part_count{database=~"prod_.*"}': '200'}},
+ 'kafka': {'dimensional_example': {'kafka_consumer_lag{group="order-processing"}': '5000',
+                                   'kafka_consumer_lag{group="analytics"}': '50000'}},
+ 'rabbitmq': {'dimensional_example': {'rabbitmq_queue_messages{queue="payment-events"}': '50000',
+                                      'rabbitmq_queue_messages{queue="bulk-processing"}': '500000'}}}
+
+# RULE_PACKS: the registry's threshold half (display / exporter / default_on /
+# rule_pack_file / defaults / optional_overrides) plus the extras above. Same
+# shape and API as the hand-written dict it replaces; edit thresholds in the
+# registry, never here.
 RULE_PACKS = {
-    "kubernetes": {
-        "display": "Kubernetes (cAdvisor + KSM)",
-        "exporter": "cAdvisor + kube-state-metrics",
-        "default_on": True,
-        "rule_pack_file": "rule-packs/rule-pack-kubernetes.yaml",
-        "defaults": {
-            "container_cpu": {"value": 80, "unit": "%", "desc": "Container CPU % of limit (weakest link)", "metric_class": "saturation", "dimensions": ["version"]},
-            "container_cpu_throttle": {"value": 25, "unit": "%", "desc": "Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier opt-in via container_cpu_throttle_critical, declared in optional_overrides; #944)", "metric_class": "saturation"},
-            "container_memory": {"value": 85, "unit": "%", "desc": "Container memory % of limit (weakest link)", "metric_class": "saturation", "dimensions": ["version"]},
-        },
-        "optional_overrides": {
-            "container_cpu_critical": {"value": 95, "unit": "%", "desc": "Container CPU critical"},
-            "container_cpu_throttle_critical": {"value": 50, "unit": "%", "desc": "CFS throttle critical"},
-            "container_memory_critical": {"value": 95, "unit": "%", "desc": "Container memory critical"},
-        },
-        "state_filters": {
-            "container_crashloop": {
-                "reasons": ["CrashLoopBackOff"],
-                "severity": "critical",
-                "desc": "Detect CrashLoopBackOff containers",
-            },
-            "container_imagepull": {
-                "reasons": ["ImagePullBackOff", "InvalidImageName"],
-                "severity": "warning",
-                "desc": "Detect ImagePullBackOff containers",
-            },
-            "maintenance": {
-                "reasons": [],
-                "severity": "info",
-                "default_state": "disable",
-                "desc": "Maintenance mode (suppresses all alerts)",
-            },
-        },
-    },
-    "postgresql": {
-        "display": "PostgreSQL (postgres_exporter)",
-        "exporter": "prometheus-community/postgres_exporter",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-postgresql.yaml",
-        "defaults": {
-            "pg_connections": {"value": 80, "unit": "% of max_connections", "desc": "Connection usage % warning", "metric_class": "saturation"},
-            "pg_replication_lag": {"value": 30, "unit": "seconds", "desc": "Replication lag warning"},
-        },
-        "optional_overrides": {
-            "pg_connections_critical": {"value": 90, "unit": "% of max_connections", "desc": "Critical tier connections"},
-            "pg_replication_lag_critical": {"value": 60, "unit": "seconds", "desc": "Critical tier replication lag"},
-        },
-        "dimensional_example": {
-            "pg_connections{datname=\"orders\"}": "70",
-        },
-    },
-    "mariadb": {
-        "display": "MariaDB / MySQL (mysqld_exporter)",
-        "exporter": "prom/mysqld-exporter or Percona",
-        "default_on": True,
-        "rule_pack_file": "rule-packs/rule-pack-mariadb.yaml",
-        "defaults": {
-            "mysql_connections": {"value": 80, "unit": "count", "desc": "Max threads_connected warning", "metric_class": "saturation"},
-            "mysql_threads_running": {"value": 30, "unit": "threads", "desc": "threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 = PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the #944 keep — 2-release alias window, old spelling still resolves)", "metric_class": "saturation"},
-            "mysql_replication_lag": {"value": 30, "unit": "seconds", "desc": "Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 = APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)"},
-        },
-        "optional_overrides": {
-            "mysql_connections_critical": {"value": 120, "unit": "count", "desc": "Critical tier (Scenario D)"},
-            "mysql_threads_running_critical": {"value": 50, "unit": "threads", "desc": "Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter 'overloaded' (#944); renamed from mysql_cpu_critical (#1231, 2-release alias window)"},
-            "mysql_replication_lag_critical": {"value": 120, "unit": "seconds", "desc": "Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below PMM family 600s — sustained minutes-level lag is a failover data-loss window (#1200 WS5-P0-a)"},
-        },
-    },
-    "redis": {
-        "display": "Redis (oliver006/redis_exporter)",
-        "exporter": "oliver006/redis_exporter",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-redis.yaml",
-        "defaults": {
-            "redis_memory_used_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "Memory usage warning", "metric_class": "saturation"},
-            "redis_connected_clients": {"value": 200, "unit": "count", "desc": "Connected clients warning", "metric_class": "saturation"},
-            "redis_evicted_keys_rate": {"value": 100, "unit": "keys/s", "desc": "Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"},
-            "redis_replication_lag": {"value": 30, "unit": "seconds", "desc": "Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231 owner call); #1196 C identity fix, no alias"},
-        },
-        "dimensional_example": {
-            "redis_connected_clients{instance=\"redis-orders:6379\"}": "500",
-            "redis_evicted_keys_rate{instance=\"redis-cache:6379\"}": "500",
-        },
-    },
-    "mongodb": {
-        "display": "MongoDB (percona/mongodb_exporter)",
-        "exporter": "percona/mongodb_exporter",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-mongodb.yaml",
-        "defaults": {
-            "mongodb_connections_current": {"value": 300, "unit": "count", "desc": "Current connections warning", "metric_class": "saturation"},
-            "mongodb_replication_lag": {"value": 10, "unit": "seconds", "desc": "Replication lag warning; #1196 C identity fix: renamed from mongodb_repl_lag_seconds (alert demands mongodb_replication_lag) — unwired dead key, no alias"},
-            "mongodb_opcounters_rate": {"value": 10000, "unit": "ops/s", "desc": "Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"},
-        },
-        "dimensional_example": {
-            "mongodb_replication_lag{rs=\"rs-orders\"}": "30",
-        },
-    },
-    "elasticsearch": {
-        "display": "Elasticsearch (elasticsearch_exporter)",
-        "exporter": "justwatchcom/elasticsearch_exporter",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-elasticsearch.yaml",
-        "defaults": {
-            "es_heap_usage_percent": {"value": 85, "unit": "%", "desc": "JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent (alert demands es_heap_usage_percent) — unwired dead key, no alias", "metric_class": "saturation"},
-            "es_disk_usage_percent": {"value": 85, "unit": "%", "desc": "Disk USAGE % warning (used = 1 - available/size, recording rule tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2 tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying 15 into a used-% rule would fire permanently"},
-            "es_pending_tasks": {"value": 50, "unit": "count", "desc": "Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold"},
-            "es_search_latency_ms": {"value": 1000, "unit": "ms", "desc": "Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 = Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) — the only community rule semantically identical to ours; full derivation + calibration caveat in the pack header (#1196 D)"},
-        },
-        "dimensional_example": {
-            "es_search_latency_ms{index=\"logs-prod\"}": "2000",
-        },
-    },
-    "oracle": {
-        "display": "Oracle Database (oracledb_exporter)",
-        "exporter": "iamseth/oracledb_exporter",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-oracle.yaml",
-        "defaults": {
-            "oracle_sessions_active": {"value": 200, "unit": "count", "desc": "Active sessions warning", "metric_class": "saturation",
-                                       "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a healthy diurnal peak reaches 240 active sessions", "observed_zh": "健康的日夜週期尖峰會到 240 個 active session"}},
-            "oracle_tablespace_used_percent": {"value": 85, "unit": "%", "desc": "Tablespace usage warning"},
-        },
-        "optional_overrides": {
-            "oracle_wait_time_rate": {"value": 50, "unit": "s/s", "desc": "Wait time rate (5m)"},
-            "oracle_process_count": {"value": 300, "unit": "count", "desc": "Active processes warning",
-                                     "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a routine backup batch reaches 560 processes", "observed_zh": "例行備份批次會到 560 個 process"}},
-            "oracle_pga_allocated_bytes": {"value": 4294967296, "unit": "bytes (4GB)", "desc": "PGA allocation warning",
-                                           "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a planned stats-gather reaches 22 GB PGA", "observed_zh": "計畫性 stats-gather 會用到 22 GB PGA"}},
-        },
-        "dimensional_example": {
-            "oracle_tablespace_used_percent{tablespace_name=~\"USERS|DATA.*\"}": "90",
-            "oracle_tablespace_used_percent{tablespace_name=\"SYSTEM\"}": "95:critical",
-        },
-    },
-    "db2": {
-        "display": "IBM DB2 (ibm_db2_exporter)",
-        "exporter": "ibm_db2_exporter (community)",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-db2.yaml",
-        "defaults": {
-            "db2_connections_active": {"value": 200, "unit": "count", "desc": "Active connections warning", "metric_class": "saturation",
-                                       "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a peak-hour workload reaches 360 connections", "observed_zh": "尖峰時段的工作負載會到 360 個連線"}},
-            "db2_bufferpool_hit_ratio": {"value": 0.95, "unit": "ratio", "desc": "Bufferpool hit ratio warning"},
-            "db2_lock_wait_time": {"value": 10, "unit": "s/s", "desc": "Lock wait accumulation rate warning (rate over 5m, summed across the tenant's instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)",
-                                   # ⛔ That derivation is sound and still stands, but it only weighed the
-                                   # POSITIVE fault libraries (25/60). The BENIGN library reaches 18 —
-                                   # above the shipped 10 — which is precisely the case prose reasoning
-                                   # cannot be trusted to notice and a per-key field can.
-                                   "value_counterexample": {"issue": 1176, "direction": "over_fire", "observed": "a benign batch lock-wait transient holds 18 s/s for 7 min (negative-db2.yaml)", "observed_zh": "良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml）"}},
-        },
-        "optional_overrides": {
-            "db2_log_usage_percent": {"value": 70, "unit": "%", "desc": "Transaction log usage warning"},
-            "db2_deadlock_rate": {"value": 5, "unit": "count/s", "desc": "Deadlock rate (5m)",
-                                  "value_counterexample": {"issue": 1176, "direction": "under_fire", "observed": "a real ~90/min deadlock storm stays under 5/s (=300/min) and is missed", "observed_zh": "真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到"}},
-            "db2_tablespace_used_percent": {"value": 85, "unit": "%", "desc": "Tablespace usage warning"},
-        },
-        "dimensional_example": {
-            "db2_bufferpool_hit_ratio{bufferpool_name=~\"IBMDEFAULT.*|BP_USER.*\"}": "0.90",
-            "db2_tablespace_used_percent{tablespace_name=~\"USERSPACE.*\"}": "80",
-        },
-    },
-    "clickhouse": {
-        "display": "ClickHouse (built-in /metrics)",
-        "exporter": "ClickHouse built-in Prometheus endpoint",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-clickhouse.yaml",
-        "defaults": {
-            "clickhouse_queries_rate": {"value": 500, "unit": "qps", "desc": "Query rate warning (5m)"},
-            "clickhouse_active_connections": {"value": 200, "unit": "count", "desc": "Active TCP connections warning", "metric_class": "saturation"},
-        },
-        "optional_overrides": {
-            "clickhouse_max_part_count": {"value": 300, "unit": "count", "desc": "Max part count per partition"},
-            "clickhouse_replication_queue": {"value": 50, "unit": "count", "desc": "Replication queue size"},
-            "clickhouse_memory_tracking_bytes": {"value": 8589934592, "unit": "bytes (8GB)", "desc": "Memory tracking warning"},
-        },
-        "dimensional_example": {
-            "clickhouse_max_part_count{database=~\"prod_.*\"}": "200",
-        },
-    },
-    "kafka": {
-        "display": "Apache Kafka (danielqsj/kafka-exporter)",
-        "exporter": "danielqsj/kafka-exporter",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-kafka.yaml",
-        "defaults": {
-            "kafka_consumer_lag": {"value": 1000, "unit": "messages", "desc": "Consumer lag warning", "metric_class": "saturation"},
-            "kafka_under_replicated_partitions": {"value": 0, "unit": "count", "desc": "Under-replicated partitions (should be 0)"},
-            "kafka_broker_count": {"value": 3, "unit": "count", "desc": "Minimum broker count warning"},
-            "kafka_active_controllers": {"value": 1, "unit": "count", "desc": "Minimum active controllers (should be 1)"},
-            "kafka_request_rate": {"value": 10000, "unit": "msg/s", "desc": "Message rate warning (5m)"},
-        },
-        "optional_overrides": {
-            "kafka_consumer_lag_critical": {"value": 10000, "unit": "messages", "desc": "Consumer lag critical"},
-            "kafka_under_replicated_partitions_critical": {"value": 1, "unit": "count", "desc": "Under-replicated critical"},
-            "kafka_request_rate_critical": {"value": 50000, "unit": "msg/s", "desc": "Message rate critical"},
-        },
-        "dimensional_example": {
-            "kafka_consumer_lag{group=\"order-processing\"}": "5000",
-            "kafka_consumer_lag{group=\"analytics\"}": "50000",
-        },
-    },
-    "rabbitmq": {
-        "display": "RabbitMQ (kbudde/rabbitmq_exporter)",
-        "exporter": "kbudde/rabbitmq_exporter or built-in Prometheus plugin",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-rabbitmq.yaml",
-        "defaults": {
-            "rabbitmq_queue_messages": {"value": 100000, "unit": "messages", "desc": "Queue depth warning", "metric_class": "saturation"},
-            "rabbitmq_node_mem_percent": {"value": 80, "unit": "%", "desc": "Node memory usage warning", "metric_class": "saturation"},
-            "rabbitmq_connections": {"value": 1000, "unit": "count", "desc": "Connection count warning", "metric_class": "saturation"},
-            "rabbitmq_consumers": {"value": 5, "unit": "count", "desc": "Minimum consumer count warning"},
-            "rabbitmq_unacked_messages": {"value": 10000, "unit": "messages", "desc": "Unacknowledged messages warning", "metric_class": "saturation"},
-        },
-        "optional_overrides": {
-            "rabbitmq_queue_messages_critical": {"value": 500000, "unit": "messages", "desc": "Queue depth critical"},
-            "rabbitmq_node_mem_percent_critical": {"value": 95, "unit": "%", "desc": "Node memory critical"},
-        },
-        "dimensional_example": {
-            "rabbitmq_queue_messages{queue=\"payment-events\"}": "50000",
-            "rabbitmq_queue_messages{queue=\"bulk-processing\"}": "500000",
-        },
-    },
-    # v1.12.0: JVM Rule Pack
-    "jvm": {
-        "display": "JVM (jmx_exporter / Micrometer)",
-        "exporter": "prometheus/jmx_exporter or Spring Boot Actuator",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-jvm.yaml",
-        "defaults": {
-            "jvm_gc_pause": {"value": 0.5, "unit": "seconds/5m", "desc": "GC pause duration rate warning"},
-            "jvm_memory": {"value": 80, "unit": "%", "desc": "Heap memory usage warning", "metric_class": "saturation"},
-            "jvm_threads": {"value": 500, "unit": "count", "desc": "Active thread count warning", "metric_class": "saturation"},
-        },
-        "optional_overrides": {
-            "jvm_gc_pause_critical": {"value": 1.0, "unit": "seconds/5m", "desc": "GC pause critical"},
-            "jvm_memory_critical": {"value": 95, "unit": "%", "desc": "Heap memory critical"},
-            "jvm_threads_critical": {"value": 800, "unit": "count", "desc": "Thread count critical"},
-        },
-    },
-    # v1.12.0: Nginx Rule Pack
-    "nginx": {
-        "display": "Nginx (nginx-prometheus-exporter)",
-        "exporter": "nginxinc/nginx-prometheus-exporter",
-        "default_on": False,
-        "rule_pack_file": "rule-packs/rule-pack-nginx.yaml",
-        "defaults": {
-            "nginx_connections": {"value": 1000, "unit": "count", "desc": "Active connections warning", "metric_class": "saturation"},
-            "nginx_request_rate": {"value": 5000, "unit": "req/s", "desc": "Request rate warning"},
-            "nginx_waiting": {"value": 200, "unit": "count", "desc": "Waiting connections (backlog) warning", "metric_class": "saturation"},
-        },
-        "optional_overrides": {
-            "nginx_connections_critical": {"value": 2000, "unit": "count", "desc": "Active connections critical"},
-            "nginx_request_rate_critical": {"value": 10000, "unit": "req/s", "desc": "Request rate critical"},
-            "nginx_waiting_critical": {"value": 500, "unit": "count", "desc": "Waiting connections critical"},
-        },
-    },
+    _name: {**_pack, **_SCAFFOLD_PACK_EXTRAS.get(_name, {})}
+    for _name, _pack in _THRESHOLD_PACKS.items()
 }
+_unknown_extras = set(_SCAFFOLD_PACK_EXTRAS) - set(RULE_PACKS)
+if _unknown_extras:  # an extras entry for a pack the registry does not have
+    raise ImportError(
+        f"_SCAFFOLD_PACK_EXTRAS names packs not in the threshold registry: "
+        f"{sorted(_unknown_extras)}")
 
 # 飽和類指標（metric_class == "saturation"）的 _critical 教育註解——純顯示、
 # 不擋不驗。判準：有界資源用量 / backlog（容量行動）＋存在配對症狀指標。
@@ -934,7 +724,7 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
     ]
 
     if namespaces:
-        lines.append(f"  - {output_dir}/relabel_configs-{tenant_name}.yaml (Prometheus relabel snippet)")
+        lines.append(f"  - {output_dir}/{relabel_snippet_name(tenant_name)} (Prometheus relabel snippet)")
 
     lines.extend([
         "",
@@ -990,7 +780,7 @@ def generate_report(tenant_name: str, selected_dbs: list[str], output_dir: str, 
             "",
             "```bash",
             "# Add to your Prometheus scrape_configs[] section:",
-            f"cat {output_dir}/relabel_configs-{tenant_name}.yaml",
+            f"cat {output_dir}/{relabel_snippet_name(tenant_name)}",
             "```",
             "",
             "Then apply to scrape_configs in your Prometheus configuration.",
@@ -1187,14 +977,40 @@ def _plan_outputs(output_dir: str, tenant_name: str, defaults_data: dict, tenant
     # Every other file, in the order it is written (after the conf.d batch).
     writes = []
     # relabel_configs (N:1 topology) — a Prometheus snippet, not a conf.d file.
+    # Named so no conf.d reader takes it for one (#3671: a `.yaml` here was a
+    # tenant file whose top-level `relabel_configs:` no reader reads).
     if relabel_snippet:
-        writes.append((str(out / f"relabel_configs-{tenant_name}.yaml"), relabel_snippet))
+        writes.append((str(out / relabel_snippet_name(tenant_name)), relabel_snippet))
     writes.append((str(out / "scaffold-report.txt"), report))
     return confd, writes
 
 
+def relabel_snippet_name(tenant_name: str) -> str:
+    """The N:1 topology's Prometheus relabel snippet, written beside the
+    conf.d files: a name no conf.d reader scans (not a config extension)."""
+    return f"relabel_configs-{tenant_name}.txt"
+
+
+def _refuse_config_named_extras(writes: list) -> None:
+    """Every file written beside the conf.d batch must be one no conf.d
+    reader reads — da-guard's own name verdict (`config_extension`), the
+    rule the exporter's walk applies — or it lands in the tree as a tenant
+    file outside the batch's judgement (#3671). Nothing is written."""
+    import _lib_parse_tree
+    names = [Path(p).name for p, _ in writes]
+    try:
+        verdict = _lib_parse_tree.classify_names(names)
+    except _lib_parse_tree.ParseTreeError as exc:
+        _die(f"cannot judge the output names through `da-guard parse-tree`: {exc}; nothing was written")
+    read = sorted(n for n, e in verdict.items() if e.config_extension)
+    if read:
+        _die(f"{', '.join(read)} would be read as conf.d config but is not written through "
+             "`da-guard write` (#3671) — nothing was written")
+
+
 def _perform_writes(out: Path, confd: list, writes: list) -> None:
     """The conf.d batch (all or nothing), then every other file."""
+    _refuse_config_named_extras(writes)
     _write_confd_files(out, confd)
     for f in confd:
         print(f"  📄 {out / f.rel}")

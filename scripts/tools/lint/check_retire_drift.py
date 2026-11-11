@@ -41,7 +41,7 @@ subtree is excluded even though the exporter would load it.
 
 "K8s target declaration" SoT
 ----------------------------
-Prometheus discovers tenant-exporters via service-role SD (configmap-prometheus.yaml)
+Prometheus discovers tenant-exporters via endpointslice-role SD (configmap-prometheus.yaml)
 keyed on the db-* namespace — there is NO central target list to diff. We proxy the
 runtime target set with the repo's IaC DECLARATIONS that deploy it:
   - helm/values-<tenant>.yaml      (primary: declares the exporter deployment)

@@ -261,18 +261,20 @@ class TestAssemble:
         src = Path(config_dir) / "src"
         out = Path(config_dir) / "out"
         src.mkdir()
-        _write_file(src / "a.yaml")
+        # A tenant file the exporter reads (#3671: a top-level `a:` is no
+        # reader's, and da-guard write refuses it).
+        _write_file(src / "a.yaml", "tenants:\n  ta:\n    container_cpu: \"1\"\n")
         file_map = {"a.yaml": src / "a.yaml"}
         count = assemble(file_map, out)
         assert count == 1
         assert (out / "a.yaml").exists()
-        assert (out / "a.yaml").read_text(encoding="utf-8") == "a: 1"
+        assert (out / "a.yaml").read_text(encoding="utf-8") == "tenants:\n  ta:\n    container_cpu: \"1\"\n"
 
     def test_dry_run_does_not_write(self, config_dir):
         """dry-run 模式不寫入檔案。"""
         src = Path(config_dir) / "src"
         src.mkdir()
-        _write_file(src / "a.yaml")
+        _write_file(src / "a.yaml", "tenants:\n  ta:\n    container_cpu: \"1\"\n")
         out = Path(config_dir) / "nonexistent-output"
         file_map = {"a.yaml": src / "a.yaml"}
         count = assemble(file_map, out, dry_run=True)

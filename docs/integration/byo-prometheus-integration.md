@@ -84,10 +84,12 @@ tenant:alert_threshold:mysql_connections
 
 ```yaml
 scrape_configs:
-  - job_name: "tenant-db-exporters"
+  # ⛔ job 名稱必須是 tenant-exporters：每個租戶 rule pack 都選 up{job="tenant-exporters"}，
+  # 取別的名字，健康的租戶也會被 TenantExporterAbsent 當成缺席而 page。
+  - job_name: "tenant-exporters"
     scrape_interval: 10s
     kubernetes_sd_configs:
-      - role: service
+      - role: endpointslice              # 每個 pod 一個 target，停掉的那個才會讀到 up 0
     relabel_configs:
       # 只保留帶有 scrape 標記的 Service
       - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
@@ -97,16 +99,21 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_namespace]
         action: keep
         regex: "db-.+"                    # ← 調整為你的 tenant namespace 命名模式
+      # 每個 pod 只留 annotation 指定的那個 port（annotation 要寫 pod 實際監聽的 port）
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
       # ★ 核心：將 namespace 名稱注入為 tenant 標籤
       - source_labels: [__meta_kubernetes_namespace]
         target_label: tenant
-      # 使用 Service annotation 指定的 port
-      - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
-        action: replace
-        target_label: __address__
-        regex: ([^:]+)(?::\d+)?;(\d+)
-        replacement: $1:$2
+      # 標出來自哪個 Service、哪個 pod；instance 維持 Prometheus 給的 <pod IP>:<port>，不要覆寫
+      - source_labels: [__meta_kubernetes_service_name]
+        target_label: service
+      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: pod
 ```
+
+> **前置條件（逐 pod scrape）**：Prometheus 需 ≥ 2.41（`keepequal`），其 ServiceAccount 需要 `discovery.k8s.io` 的 `endpointslices` list／watch 權限（缺了 service discovery 會是空的，`TenantExporterJobAbsent` 會響）。Service 的 `prometheus.io/port` 要寫 **pod 實際監聽的 port**；沒寫這個 annotation 的 Service 不會被抓。`instance` 是 `<pod IP>:<port>`，舊設定以 `instance=<namespace>` 寫的 silence 或 dashboard 要改用 `tenant`。
 
 **方案 B — 以自訂 Label 作為 tenant 名稱**（適用於多個 tenant 共用 namespace 的架構）
 
@@ -217,17 +224,17 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{compone
 <!-- BYO_RULEPACK_TABLE_START -->
 | ConfigMap 名稱 | 內容 | 規則數 |
 |----------------|------|--------|
-| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 12R + 18A |
+| `prometheus-rules-mariadb` | `mariadb-recording.yml`, `mariadb-alert.yml` | 12R + 17A |
 | `prometheus-rules-kubernetes` | `kubernetes-recording.yml`, `kubernetes-alert.yml` | 30R + 14A |
 | `prometheus-rules-redis` | `redis-recording.yml`, `redis-alert.yml` | 9R + 6A |
 | `prometheus-rules-mongodb` | `mongodb-recording.yml`, `mongodb-alert.yml` | 8R + 8A |
 | `prometheus-rules-elasticsearch` | `elasticsearch-recording.yml`, `elasticsearch-alert.yml` | 10R + 7A |
 | `prometheus-rules-oracle` | `oracle-recording.yml`, `oracle-alert.yml` | 11R + 7A |
 | `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 13R + 8A |
-| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 11R + 7A |
-| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 8R + 9A |
-| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 13R + 9A |
-| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 12R + 8A |
+| `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 11R + 6A |
+| `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 8R + 8A |
+| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 13R + 8A |
+| `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 12R + 7A |
 | `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |
 | `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 6A |
 | `prometheus-rules-platform` | `platform-alert.yml` | 0R + 54A |

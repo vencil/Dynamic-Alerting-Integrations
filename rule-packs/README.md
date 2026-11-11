@@ -17,23 +17,23 @@ lang: zh
 
 | Rule Pack | File | Recording Rules | Alert Rules | Total |
 |-----------|------|-----------------|-------------|-------|
-| Clickhouse | rule-pack-clickhouse.yaml | 11 | 7 | 18 |
+| Clickhouse | rule-pack-clickhouse.yaml | 11 | 6 | 17 |
 | DB2 | rule-pack-db2.yaml | 13 | 8 | 21 |
 | Elasticsearch | rule-pack-elasticsearch.yaml | 10 | 7 | 17 |
 | JVM | rule-pack-jvm.yaml | 9 | 7 | 16 |
-| Kafka | rule-pack-kafka.yaml | 13 | 9 | 22 |
+| Kafka | rule-pack-kafka.yaml | 13 | 8 | 21 |
 | Kubernetes | rule-pack-kubernetes.yaml | 30 | 14 | 44 |
 | Liveness | rule-pack-liveness.yaml | 0 | 1 | 1 |
-| Mariadb | rule-pack-mariadb.yaml | 12 | 18 | 30 |
+| Mariadb | rule-pack-mariadb.yaml | 12 | 17 | 29 |
 | Mongodb | rule-pack-mongodb.yaml | 8 | 8 | 16 |
 | Nginx | rule-pack-nginx.yaml | 9 | 6 | 15 |
 | Operational | rule-pack-operational.yaml | 0 | 4 | 4 |
 | Oracle | rule-pack-oracle.yaml | 11 | 7 | 18 |
 | Platform | rule-pack-platform.yaml | 0 | 54 | 54 |
-| Postgresql | rule-pack-postgresql.yaml | 8 | 9 | 17 |
-| Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 8 | 20 |
+| Postgresql | rule-pack-postgresql.yaml | 8 | 8 | 16 |
+| Rabbitmq | rule-pack-rabbitmq.yaml | 12 | 7 | 19 |
 | Redis | rule-pack-redis.yaml | 9 | 6 | 15 |
-| **TOTAL** | | **155** | **173** | **328** |
+| **TOTAL** | | **155** | **168** | **323** |
 
 ## 架構說明
 
@@ -47,7 +47,7 @@ lang: zh
 
 - **成本**: 沒有對應 metric 的 recording rule 會回傳空結果集，CPU 額外開銷 < 0.1%，evaluation 時間幾乎無增長。
 - **簡化**: 新增 exporter 後只需配置 `_defaults.yaml` + tenant YAML，不需修改 Prometheus 設定。
-- **安全**: 唯一的風險是 `absent()` — 目前只有 mariadb (已部署) 使用 `absent(mysql_up)`，其他 pack 都不含 `absent()`。
+- **安全**: 唯一的風險是 `absent()`：它在 metric 不存在時就觸發，所以只適合監看一定會被 scrape 的目標（例如 platform pack 監看 threshold-exporter 自己）。租戶 exporter 的存活不用 `absent()`，改由 `TenantExporterAbsent` 逐租戶判斷，只納管在 `_metadata` 宣告 `db_type` 的租戶。
 
 ### 動態卸載 (optional: true)
 

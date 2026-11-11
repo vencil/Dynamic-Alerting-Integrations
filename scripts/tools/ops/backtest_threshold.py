@@ -628,11 +628,11 @@ def _not_read(raw):
 
 @functools.lru_cache(maxsize=1)
 def _registry_tiers():
-    """`{key: tier}` of the threshold registry, extracted in memory from
-    scaffold_tenant.RULE_PACKS (no repo file needed, so the da-tools image
-    has it too), with each `defaults`-tier key's shipped platform default:
+    """`{key: tier}` of the threshold registry, read from the generated
+    RULE_PACKS module (no repo file needed, so the da-tools image has it
+    too), with each `defaults`-tier key's shipped platform default:
     `({key: tier}, {key: default})`."""
-    keys = registry_lib.registry_keys(registry_lib.build_registry_doc())
+    keys = registry_lib.registry_keys(registry_lib.packaged_registry_doc())
     return ({k: e.get("tier") for k, e in keys.items()},
             {k: e.get("value") for k, e in keys.items() if e.get("tier") == "defaults"})
 
@@ -641,7 +641,7 @@ def _registry_tiers():
 def _registry_dimensions():
     """The shipped `dimensions:` (#3475): `{base: [labels]}` from the
     threshold registry, as `_registry_tiers` reads it."""
-    return dict(registry_lib.dimension_entries(registry_lib.build_registry_doc()))
+    return dict(registry_lib.dimension_entries(registry_lib.packaged_registry_doc()))
 
 
 # A label name of a dimensional key's selector and its operator (`db`, `=`

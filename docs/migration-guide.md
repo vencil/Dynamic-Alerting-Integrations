@@ -110,7 +110,7 @@ tar xzf da-guard.tar.gz && sudo install -m 0755 da-guard-linux-amd64 /usr/local/
 da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 ```
 
-輸出：`_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt`（+ `relabel_configs-<tenant>.yaml` 當 `--namespaces` 指定時）。完整 flag、`--routing-receiver`、`--catalog`、`--from-onboard <hints>` pipeline：[`cli-reference.md#scaffold`](cli-reference.md#scaffold)。
+輸出：`_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt`（+ `relabel_configs-<tenant>.txt` 當 `--namespaces` 指定時）。完整 flag、`--routing-receiver`、`--catalog`、`--from-onboard <hints>` pipeline：[`cli-reference.md#scaffold`](cli-reference.md#scaffold)。
 
 注入 ConfigMap 的三種方式（Helm / kubectl / GitOps）：[threshold-exporter README — K8s 部署](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署)。
 
@@ -120,14 +120,14 @@ da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /d
 
 ```bash
 da-tools migrate /data/legacy-rules.yml --dry-run            # 預覽
-da-tools migrate /data/legacy-rules.yml -o /data/output      # 正式轉換
+da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/output  # 正式轉換
 da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # 大型租戶分桶
 ```
 
 工具自動處理：
 
 - **三種輸入情境**：`✅ 完美解析` / `⚠️ 複雜表達式 (含警告方塊)` / `🚨 無法解析 (產出 LLM Prompt)`
-- **三件套輸出**：`tenant-config.yaml` + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`，另附 `defaults-snippet.yaml`：要先合併進 `_defaults.yaml`，exporter 才會發射這些閾值
+- **三件套輸出**：`conf.d/<tenant>.yaml`（閾值寫在 `tenants.<tenant>` 底下）+ `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`，另附 `conf.d/_defaults.yaml`：它的 `defaults:` 區塊要先合併進 conf.d 根的 `_defaults.yaml`（合併，不要整份覆蓋），exporter 才會發射這些閾值
 - **Auto-Suppression**：同 metric 的 warning + critical 自動配對，兩條告警帶相同的 `metric_group` label，由 Alertmanager inhibit 壓制 warning 通知（租戶可設 `_severity_dedup: "disable"` 取消）
 - **聚合模式智能猜測**：6 條啟發規則自動猜 `sum` / `max`，帶 ASCII 警告方塊提示確認
 
@@ -347,7 +347,7 @@ kubectl logs -n monitoring -l app=threshold-exporter --tail=20
 da-tools migrate /data/legacy-rules.yml --triage -o /data/triage_output/
 
 # Phase B: 部署 shadow 規則 + 持續比對（可包成 K8s Job 跑 1-2 週）
-da-tools migrate /data/legacy-rules.yml -o /data/migration_output/
+da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/migration_output/
 da-tools validate --mapping /data/prefix-mapping.yaml \
                   --tolerance 0.001 --watch --interval 60 --rounds 1440 \
                   --auto-detect-convergence --stability-window 5

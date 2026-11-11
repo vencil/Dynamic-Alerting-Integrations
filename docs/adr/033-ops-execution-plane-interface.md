@@ -55,7 +55,6 @@ updated_at: 2026-11-02
 | **`MariaDBSemiSyncReplicasGone`** | **critical** | 1m | ❌ | **殺掉唯一的 semi-sync replica** |
 | **`MariaDBReplicaIOThreadDown`** | **critical** | 1m | ❌ | **`STOP SLAVE` / 重新指向** |
 | **`MariaDBReplicaSQLThreadDown`** | **critical** | 1m | ❌ | 同上 |
-| `MariaDBExporterAbsent`（標 DEPRECATED 但仍在 pack 內） | critical | 30s | ❌ | pod 消失 |
 | `TenantExporterAbsent`（`rule-pack-liveness.yaml`） | critical | 3m | ❌ | 該租戶**全部** exporter 缺席逾 3 分鐘 |
 
 所以「殺掉一個 replica pod 不會 page」**只在沒有啟用 semi-sync 時成立**。`MariaDBSemiSyncReplicasGone` 的 expr 是「semi-sync master enabled 且 connected clients == 0」——單一 semi-sync replica 的拓撲下，殺掉它就是 1 分鐘後一個不可 opt-out 的 critical。

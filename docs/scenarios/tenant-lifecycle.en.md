@@ -94,7 +94,7 @@ cp scaffold_output/db-product-01.yaml conf.d/
 # Output (scaffold_output/):
 # - db-product-01.yaml (tenant config framework)
 # - _defaults.yaml (platform defaults template; do not overwrite the one in conf.d)
-# - relabel_configs-db-product-01.yaml (Prometheus relabel snippet for multi-namespace mapping)
+# - relabel_configs-db-product-01.txt (Prometheus relabel snippet for multi-namespace mapping)
 # - scaffold-report.txt (planning document)
 ```
 

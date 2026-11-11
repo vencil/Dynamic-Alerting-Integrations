@@ -449,6 +449,8 @@ jobs:
               # (go test, TestKnown_MatchesSchema) are pinned in their own legs.
               - "docs/schemas/tenant-config.schema.json"
               - "rule-packs/threshold-registry.yaml"
+              # rule-packs.test.ts holds every metricClass to this schema's enum.
+              - "docs/schemas/threshold-registry.schema.json"
               - "rule-packs/ALERT-REFERENCE.md"
               - "components/tenant-api/internal/rbac/testdata/wizard/**"
               # The glossary's default cardinality cap is checked against
@@ -525,13 +527,13 @@ jobs:
               - "scripts/tools/_lib_godispatch.py"
               - "scripts/tools/ops/guard_dispatch.py"
             # schema: the am-inhibit leg pins the tenant schema's http_config
-            # key sets to the structs Alertmanager decodes into (#2984), and the
-            # tenant-api leg pins its top-level key set (#3504), so a
-            # schema-only PR must run them. Its own filter for the reason `docs`
+            # key sets to the structs Alertmanager decodes into (#2984), so a
+            # schema-only PR must run it. Its own filter for the reason `docs`
             # is: adding the path to `go` would wake all five Go legs
             # (tenant-api's schemathesis included), while the only other Go
-            # leg that reads the schema (threshold-exporter) already wakes on
-            # `docs`.
+            # leg that reads the schema (threshold-exporter, which also pins
+            # the tenant file's top-level key set, #3504 / #3671) already
+            # wakes on `docs`.
             schema:
               - "docs/schemas/tenant-config.schema.json"
 
@@ -784,15 +786,6 @@ jobs:
           # to every other job — nothing in CI builds AND renders the image —
           # so it belongs in this ungated Lint leg, not behind a path filter.
           pre-commit run portal-asset-shipping-check --all-files
-          # Same 6C shape, missed by that sweep: portal-rulepack-claims is
-          # named in NO workflow, and its live-dogfood twin
-          # (tests/lint/test_check_portal_rulepack_claims.py::
-          # test_repo_portal_claims_all_resolve) only runs under Python
-          # Tests — which a portal-only PR skips, since the `python` filter
-          # covers neither tools/portal/** nor docs/assets/**. So the guard
-          # against the portal advertising alerts we don't ship had ZERO CI
-          # enforcement for exactly the PR shape it exists to police.
-          pre-commit run portal-rulepack-claims --all-files
           # Same 6C shape, third sweep — these three are named in NO workflow
           # AND their pytest twins do not enforce them either, so they had
           # ZERO CI enforcement of any kind (local pre-commit only):
@@ -2437,11 +2430,12 @@ jobs:
   go-tests-tenant-api:
     name: Go Tests — tenant-api
     runs-on: ubuntu-24.04
-    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). Also on
-    # `schema`: internal/confd holds the tenant file's top-level key set equal
-    # to tenant-config.schema.json's (#3504), so a schema-only PR must run it.
+    # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note). No test of
+    # this leg reads tenant-config.schema.json: the tenant file's top-level key
+    # set it once pinned there is the exporter's (config.TenantFileTopLevelKey,
+    # #3671), pinned by the threshold-exporter leg.
     needs: detect-changes
-    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.schema_changed == 'true'
+    if: needs.detect-changes.outputs.go_changed == 'true'
     # Least-privilege token (CodeQL: workflow-missing-permissions). Tests,
     # swag drift check and schemathesis all run against the local checkout.
     permissions:

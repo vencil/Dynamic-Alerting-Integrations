@@ -261,3 +261,5 @@ tests/ops/test_operator_generate_v2.py
 # (`smoke-tests-run` + the `Smoke Tests (Chromium)` aggregate gate);
 # playwright.yml keeps only the A-13 spec lint — 12196 → ~5300 bytes.
 .github/workflows/playwright.yml
+# #3681: hand-copied rule data removed; the page now reads generated pack data
+tools/portal/src/interactive/tools/rule-pack-detail.jsx

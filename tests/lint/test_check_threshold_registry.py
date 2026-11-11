@@ -1,11 +1,12 @@
 """Tests for scripts/tools/lint/check_threshold_registry.py (TRK-339 WS1a / #1200).
 
-The gate holds the transition-period invariant: the standalone registry (D2
-SoT-to-be) must validate against its JSON Schema AND stay semantically equal to
-the still-operative scaffold_tenant.RULE_PACKS. Pins:
-  - the live repo is green (registry committed, schema-valid, drift-free)
+Since D-A PR-3 the registry is the hand-authored SoT and every other copy of
+a threshold — scaffold_tenant.RULE_PACKS's threshold half included — is
+generated from it. Pins:
+  - the live repo is green (schema-valid, a fixed point, every surface fresh)
   - a schema violation fails --ci
-  - dual-SoT drift (either direction) fails --ci
+  - an authored mistake the extraction forbids fails --ci ("inconsistent:")
+  - a registry edit without --regen leaves the RULE_PACKS module stale
   - missing/unparseable registry file is a violation with a --regen hint
   - the CLI exit-code contract (report-only without --ci)
 """
@@ -27,7 +28,7 @@ lib = gate.registry_lib
 # ── the live repo ─────────────────────────────────────────────────────────
 
 def test_real_repo_is_green():
-    """Committed registry: schema-valid AND semantically equal to scaffold."""
+    """Committed registry: schema-valid, a fixed point, every surface fresh."""
     result = gate.run_check()
     assert result["errors"] == [], result["errors"]
 
@@ -66,38 +67,50 @@ def test_missing_metric_class_is_a_schema_error(tmp_path):
                for e in result["errors"]), result
 
 
-def test_value_drift_is_an_error(tmp_path):
+def _module_stale(result):
+    return any(e.startswith("stale-surface:") and "rule-packs-module" in e
+               for e in result["errors"])
+
+
+def test_value_edit_without_regen_leaves_the_module_stale(tmp_path):
+    """The registry is authored now, so a changed value is not drift — but
+    RULE_PACKS (what scaffold generates configs from) must follow it."""
     def bump_value(doc):
         key = next(iter(doc["keys"]))
         doc["keys"][key]["value"] = doc["keys"][key]["value"] + 1
     path = _write_registry_variant(tmp_path, bump_value)
     result = gate.run_check(registry_path=path)
-    assert any(e.startswith("drift:") and "value" in e
-               for e in result["errors"]), result
+    assert _module_stale(result), result
+    assert not any(e.startswith("inconsistent:") for e in result["errors"]), result
 
 
-def test_registry_only_key_is_an_error(tmp_path):
-    """Direction 2: a key hand-added to the registry (not in scaffold) fails —
-    during the transition scaffold is operative, so a registry-only key would
-    be a silent no-op contract entry."""
-    def add_ghost(doc):
+def test_added_key_without_regen_leaves_the_module_stale(tmp_path):
+    def add_key(doc):
         doc["keys"]["ghost_metric"] = {
             "pack": "mariadb", "tier": "defaults", "value": 1,
-            "unit": "count", "desc": "ghost"}
-    path = _write_registry_variant(tmp_path, add_ghost)
-    result = gate.run_check(registry_path=path)
-    assert any("ghost_metric" in e and "missing from scaffold" in e
-               for e in result["errors"]), result
+            "unit": "count", "desc": "ghost", "metric_class": "state"}
+    path = _write_registry_variant(tmp_path, add_key)
+    assert _module_stale(gate.run_check(registry_path=path))
 
 
-def test_scaffold_only_key_is_an_error(tmp_path):
-    """Direction 1: a scaffold key missing from the registry fails."""
+def test_dropped_key_without_regen_leaves_the_module_stale(tmp_path):
     def drop_one(doc):
         key = next(iter(doc["keys"]))
         del doc["keys"][key]
     path = _write_registry_variant(tmp_path, drop_one)
+    assert _module_stale(gate.run_check(registry_path=path))
+
+
+def test_a_wrong_critical_of_is_inconsistent(tmp_path):
+    """The fixed point, through the gate: critical_of is derived, so an
+    authored one that disagrees is refused before anything is generated."""
+    def wrong(doc):
+        key = next(k for k, e in doc["keys"].items() if "critical_of" in e)
+        doc["keys"][key].pop("critical_of")
+    path = _write_registry_variant(tmp_path, wrong)
     result = gate.run_check(registry_path=path)
-    assert any("missing from registry" in e for e in result["errors"]), result
+    assert any(e.startswith("inconsistent:") and "critical_of" in e
+               for e in result["errors"]), result
 
 
 def test_missing_registry_file_is_a_violation(tmp_path):
@@ -328,23 +341,17 @@ def test_alias_targets_are_active_keys_and_old_spellings_are_retired():
         assert old not in doc["keys"], old
 
 
-def test_alias_drift_is_an_error(tmp_path):
-    """Registry deprecated_aliases diverging from the authored table (either
-    direction) is a drift violation."""
-    def drop_alias(doc):
-        doc.pop("deprecated_aliases", None)
-    path = _write_registry_variant(tmp_path, drop_alias)
-    result = gate.run_check(registry_path=path)
-    assert any(e.startswith("drift:") and "deprecated_alias" in e
-               for e in result["errors"]), result
-
+def test_an_alias_onto_no_key_is_inconsistent(tmp_path):
+    """An alias must target a live key. Removing or retargeting an alias onto
+    a live key is a legitimate authored edit here; Go's aliases.go follows it
+    or pkg/config/aliases_registry_test.go goes red."""
     def retarget_alias(doc):
         aliases = doc.get("deprecated_aliases") or {}
         old = next(iter(aliases))
-        aliases[old] = "pg_connections"
+        aliases[old] = "no_such_key"
     path = _write_registry_variant(tmp_path, retarget_alias)
     result = gate.run_check(registry_path=path)
-    assert any(e.startswith("drift:") and "deprecated_alias" in e
+    assert any(e.startswith("inconsistent:") and "no threshold" in e
                for e in result["errors"]), result
 
 

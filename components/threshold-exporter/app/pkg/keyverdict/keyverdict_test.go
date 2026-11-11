@@ -308,3 +308,49 @@ func TestJudge_DisableCascadeOnlyForTheTenantsOwnKey(t *testing.T) {
 		}
 	}
 }
+
+// #3671: a tenant file's top-level key other than `tenants` is no tenant's
+// key and no reader reads it — one unread error on that file, naming no
+// tenant, that blocks; `tenants` itself is no finding.
+func TestJudge_ATenantFilesStrayTopLevelKeyIsOneErrorOnTheFile(t *testing.T) {
+	t.Parallel()
+	tree := Judge(Input{
+		TenantFiles: map[string][]string{"a.yaml": {"defaults", "tenants"}, "b.yaml": {"tenants"},
+			"c.yaml": {"mysql_connections"}},
+	})
+	var got []string
+	for _, f := range tree.Findings {
+		got = append(got, strings.Join([]string{f.Severity, f.Kind, f.Key, deref(f.File), deref(f.Reason),
+			boolStr(f.Blocks)}, " ")+" "+strings.Join(f.Tenants, ","))
+		if f.Tenants == nil {
+			t.Errorf("%s: tenants is nil, want [] (the document writes [])", f.Key)
+		}
+	}
+	want := []string{
+		"error unread defaults a.yaml tenant_file_top_level true ",
+		"error unread mysql_connections c.yaml tenant_file_top_level true ",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("findings %q, want %q", got, want)
+	}
+	if !tree.Blocks {
+		t.Fatal("tree.Blocks false")
+	}
+	var blocks []string
+	for _, b := range Blocks(tree) {
+		blocks = append(blocks, b.File+" "+b.Key+" "+b.Tenant)
+	}
+	if !reflect.DeepEqual(blocks, []string{"a.yaml defaults ", "c.yaml mysql_connections "}) {
+		t.Fatalf("blocks %q", blocks)
+	}
+	// A write that leaves the key where it was makes nothing new; one that
+	// adds it to another file does.
+	all := func(string) bool { return true }
+	if nb := NewBlocks(tree, tree, all); len(nb) != 0 {
+		t.Fatalf("an unchanged tree has new blocks %+v", nb)
+	}
+	before := Judge(Input{TenantFiles: map[string][]string{"a.yaml": {"defaults", "tenants"}}})
+	if nb := NewBlocks(before, tree, all); len(nb) != 1 || nb[0].File != "c.yaml" {
+		t.Fatalf("new blocks %+v, want c.yaml's alone", nb)
+	}
+}

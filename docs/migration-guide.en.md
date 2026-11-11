@@ -110,7 +110,7 @@ For brand-new tenants, the interactive generator completes setup in 30 seconds:
 da-tools scaffold --tenant redis-prod --db redis,mariadb --non-interactive -o /data
 ```
 
-Outputs: `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (+ `relabel_configs-<tenant>.yaml` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
+Outputs: `_defaults.yaml` + `<tenant>.yaml` + `scaffold-report.txt` (+ `relabel_configs-<tenant>.txt` when `--namespaces` is specified). Full flag set, `--routing-receiver`, `--catalog`, `--from-onboard <hints>` pipeline: [`cli-reference.md#scaffold`](cli-reference.md#scaffold).
 
 The three ConfigMap injection paths (Helm / kubectl / GitOps): [threshold-exporter README — K8s Deployment](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署).
 
@@ -120,14 +120,14 @@ Teams with legacy Prometheus alert rules use the auto-conversion tool (v4 — du
 
 ```bash
 da-tools migrate /data/legacy-rules.yml --dry-run            # Preview
-da-tools migrate /data/legacy-rules.yml -o /data/output      # Production conversion
+da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/output  # Production conversion
 da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # Large-tenant bucketing
 ```
 
 The tool automatically handles:
 
 - **Three input scenarios**: `✅ clean parse` / `⚠️ complex expression (with warning box)` / `🚨 unparseable (emits LLM Prompt)`
-- **Three-piece output**: `tenant-config.yaml` + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`, plus `defaults-snippet.yaml`, which must be merged into `_defaults.yaml` before the exporter emits these thresholds
+- **Three-piece output**: `conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`) + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`, plus `conf.d/_defaults.yaml`, whose `defaults:` block must be merged into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file) before the exporter emits these thresholds
 - **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched; both alerts carry the same `metric_group` label, and Alertmanager inhibit suppresses the warning notification (a tenant can set `_severity_dedup: "disable"` to opt out)
 - **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
 
@@ -347,7 +347,7 @@ Large tenants with 1000+ rules adopt a three-phase strategy: **Phase A Triage An
 da-tools migrate /data/legacy-rules.yml --triage -o /data/triage_output/
 
 # Phase B: deploy shadow rules + continuous comparison (often wrapped as a K8s Job running 1-2 weeks)
-da-tools migrate /data/legacy-rules.yml -o /data/migration_output/
+da-tools migrate /data/legacy-rules.yml --tenant db-a -o /data/migration_output/
 da-tools validate --mapping /data/prefix-mapping.yaml \
                   --tolerance 0.001 --watch --interval 60 --rounds 1440 \
                   --auto-detect-convergence --stability-window 5

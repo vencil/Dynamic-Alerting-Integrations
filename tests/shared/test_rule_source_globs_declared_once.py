@@ -436,8 +436,9 @@ def shell_hits(text: str, rel: str) -> "list[tuple[str, int, str]]":
 
 #: (path, token regex, why) — each must still match a hit (a stale entry is red).
 ALLOWED: "tuple[tuple[str, str, str], ...]" = (
-    ("scripts/tools/ops/scaffold_tenant.py", r"rule-packs/rule-pack-[a-z0-9]+\.yaml",
-     "the scaffold catalogue names each pack's own source file, one per pack"),
+    ("scripts/tools/ops/_rule_packs_generated.py", r"rule-packs/rule-pack-[a-z0-9]+\.yaml",
+     "the scaffold catalogue (generated from the threshold registry's "
+     "packs.<p>.rule_pack_file) names each pack's own source file, one per pack"),
     ("scripts/tools/lint/check_build_completeness.py", r"(rule-pack-[a-z0-9]+|configmap-rules-platform)\.yaml",
      "REQUIRED_DATA_FILES: the named files the da-tools image must carry"),
     ("scripts/tools/dx/_recipe_preview.py", r"rule-pack-custom-alerts\.yaml",

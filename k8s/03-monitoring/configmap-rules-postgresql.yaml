@@ -43,17 +43,6 @@ data:
     \ instance {{ $labels.instance }} is DOWN\n      summary_zh: PostgreSQL 實例 {{\
     \ $labels.instance }} 已關閉\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: PostgreSQLExporterAbsent\n    expr: absent(pg_up{job=\"tenant-exporters\"\
-    })\n    for: 30s\n    labels:\n      maintenance: page\n      severity: critical\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: No\
-    \ pg_up metric found for 30s\n      description_zh: 找不到 pg_up 指標，持續 30 秒\n   \
-    \   owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ postgres_exporter target missing\n      summary_zh: postgres_exporter 目標缺失\n\
-    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     \  - alert: PostgreSQLHighConnections\n    expr: \"(\\n  tenant:pg_connection_usage:ratio\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:pg_connections\\n)\\nunless\
     \ on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n   \

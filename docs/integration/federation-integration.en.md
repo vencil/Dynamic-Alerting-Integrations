@@ -89,12 +89,18 @@ Edge Prometheus is responsible for adding the `tenant` label to DB exporter metr
 
 ```yaml
 scrape_configs:
-  - job_name: "tenant-exporters"
+  - job_name: "tenant-exporters"   # ⛔ Fixed name: tenant rule packs select up{job="tenant-exporters"}
     kubernetes_sd_configs:
-      - role: endpoints
+      - role: endpointslice
         namespaces:
           names: ["db-a"]
     relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
       - source_labels: [__meta_kubernetes_namespace]
         target_label: tenant
 ```
@@ -105,14 +111,22 @@ scrape_configs:
 scrape_configs:
   - job_name: "tenant-exporters"
     kubernetes_sd_configs:
-      - role: pod
+      - role: endpointslice           # each pod behind the Service is a target, with its pod labels
     relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
       - source_labels: [__meta_kubernetes_pod_label_tenant]
         target_label: tenant
       - source_labels: [tenant]
         regex: ""
         action: drop   # Drop pods without tenant label
 ```
+
+> Both patterns need the Service to carry `prometheus.io/scrape: "true"` and a `prometheus.io/port` naming the pod's port, plus list/watch on `endpointslices` and Prometheus ≥ 2.41 (see the prerequisites in [BYO Prometheus Integration](byo-prometheus-integration.en.md)).
 
 ### 3.3 Applicable Exporters
 

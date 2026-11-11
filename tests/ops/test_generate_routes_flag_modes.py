@@ -83,8 +83,10 @@ def routeless_dir(tmp_path_factory):
     main() would exit 0 at "No tenants found" before any mode handler runs.
     A check inside a handler is invisible on this tree."""
     d = tmp_path_factory.mktemp("conf.d-routeless")
-    (d / "alpha.yaml").write_text(
-        "thresholds:\n  mysql_connections:\n    warning: 100\n", encoding="utf-8")
+    # Thresholds declared in the root defaults, no tenant (#3671: a tenant
+    # file's top-level `thresholds:` is no reader's, so it refuses the tree).
+    (d / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_connections: 100\n", encoding="utf-8")
     return d
 
 
