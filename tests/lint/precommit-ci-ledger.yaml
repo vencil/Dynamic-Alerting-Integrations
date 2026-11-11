@@ -153,13 +153,6 @@ hooks:
     pytest:
     - tests/lint/test_check_makefile_targets.py
     - tests/ops/test_makefile_phony.py
-- id: jsx-babel-check
-  category: a
-  evidence:
-    workflow: .github/workflows/ci.yml
-    job: lint
-    note: 'Lint runs jsx-babel-check-strict-linecount by name: same script, same files:, a
-      superset of the flags.'
 - id: playwright-lint
   category: a
   evidence:

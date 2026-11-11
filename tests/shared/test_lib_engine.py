@@ -187,3 +187,44 @@ def test_an_unregistered_subcommand_is_a_programming_error():
 
 def test_proofs_name_registered_engines_only():
     assert {engine for engine, _ in E.PROOFS} <= set(E.ENGINES)
+
+
+# ── node / mmdc proofs (#3611 PR 2) ─────────────────────────────────────────
+
+def _cp(rc, out="", err="", args=("x",)):
+    return subprocess.CompletedProcess(list(args), rc, out, err)
+
+
+def test_babel_parse_needs_one_result_per_input():
+    proof = E.PROOFS[("node", "babel-parse")]
+    two = '[{"path":"a","ok":true},{"path":"b","ok":false}]'
+    assert len(proof(_cp(0, two), {"paths": ["b", "a"]})) == 2
+    doubled = '[{"path":"a","ok":true},{"path":"a","ok":true}]'
+    for rc, out, paths in [(0, two, ["a", "b", "c"]), (1, two, ["a", "b"]),
+                           (0, "[]", ["a"]), (0, '[{"path":"a"}]', ["a"]),
+                           (0, "nope", ["a"]), (0, doubled, ["a", "b"])]:
+        with pytest.raises(E.NoProof):
+            proof(_cp(rc, out), {"paths": paths})
+
+
+def test_cli_playground_needs_a_non_empty_catalog():
+    proof = E.PROOFS[("node", "cli-playground")]
+    row = '[{"key":"k","kind":"bare","cmd":"da-tools x"}]'
+    assert proof(_cp(0, row), {}) == [{"key": "k", "kind": "bare", "cmd": "da-tools x"}]
+    for rc, out in [(0, "[]"), (3, row), (0, '[{"key":"k"}]')]:
+        with pytest.raises(E.NoProof):
+            proof(_cp(rc, out), {})
+
+
+def test_mmdc_render_exit_1_is_undecided_not_a_verdict(tmp_path):
+    """Exit 1 comes back as False for the caller's canary to decide — it is
+    neither a NoVerdict nor a pass."""
+    proof = E.PROOFS[("mmdc", "render")]
+    png = tmp_path / "o.png"
+    assert proof(_cp(1), {"output": str(png)}) is False
+    with pytest.raises(E.NoProof, match="no image"):
+        proof(_cp(0), {"output": str(png)})
+    png.write_bytes(b"PNG")
+    assert proof(_cp(0), {"output": str(png)}) is True
+    with pytest.raises(E.NoProof):
+        proof(_cp(2), {"output": str(png)})

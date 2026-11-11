@@ -37,10 +37,18 @@ Severity split (added in docs/harness-hardening):
     pre-commit stays on default so commits are not blocked by pre-existing
     drift; CI runs --strict to surface everything.
 
+The Babel pass runs in node, located and judged through ``_lib_engine``
+(#3611, owner 2026-11-06): no node, an ``@babel/standalone`` that cannot be
+installed, a node run that fails or does not return one result per JSX file
+is no verdict — exit 2 with or without ``--ci``, never a green run that
+skipped the parse. To skip the hook, use pre-commit's own ``SKIP=<id>``.
+
 Exit codes:
-    0 = all files pass
+    0 = all files pass (findings without --ci are printed, exit 0)
     1 = Babel parse failure / hard-cap line-count (always fatal under --ci),
         OR static / soft-cap warnings under --strict
+    2 = no verdict: node missing, @babel/standalone not installable, or the
+        node pass did not run over every file
 """
 from __future__ import annotations
 
@@ -61,6 +69,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+import _lib_engine  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -326,20 +335,47 @@ def _transform_jsx(source: str) -> str:
     return source
 
 
+BABEL_VERSION = "7.26.4"
+
+
+def _babel_installed(babel_dir: Path) -> bool:
+    """The pinned @babel/standalone is there: its package.json names that
+    version. A directory alone is not enough — an install cut off part-way
+    leaves one behind, which then never gets reinstalled (#3611 review F5)."""
+    try:
+        meta = json.loads((babel_dir / "package.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(meta, dict) and meta.get("version") == BABEL_VERSION
+
+
 def _ensure_babel(node_modules: Path) -> bool:
-    """Install @babel/standalone if not already present."""
+    """Install the pinned @babel/standalone unless it is already installed."""
     babel_dir = node_modules / "@babel" / "standalone"
-    if babel_dir.exists():
+    if _babel_installed(babel_dir):
         return True
     try:
         subprocess.run(
-            ["npm", "install", "--prefix", str(node_modules.parent), "@babel/standalone@7.26.4"],
+            ["npm", "install", "--prefix", str(node_modules.parent),
+             f"@babel/standalone@{BABEL_VERSION}"],
             capture_output=True,
             timeout=60,
         )
-        return babel_dir.exists()
     except (OSError, subprocess.SubprocessError):
         return False
+    return _babel_installed(babel_dir)
+
+
+def _no_verdict(why: str, static_failures, hard_failures) -> int:
+    """The Babel parse did not run: exit 2. What the node-free passes found
+    is still printed — it is real, only the run as a whole has no verdict
+    (the contract's 2 ahead of 1; #3611 review F3)."""
+    for f in hard_failures:
+        print(f"  {f['path']}: {f['error']}")
+    if static_failures:
+        print(f"  ({len(static_failures)} static pattern warning(s) also found)")
+    print(f"ERROR: {why}", file=sys.stderr)
+    return EXIT_CALLER_ERROR
 
 
 def main() -> int:
@@ -363,21 +399,6 @@ def main() -> int:
         help="Also fail on soft-cap line-count warnings (1500 < N ≤ 2500)",
     )
     args = parser.parse_args()
-
-    # Check Node.js
-    try:
-        subprocess.run(["node", "--version"], capture_output=True, timeout=10, check=True)
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        print("⚠ Node.js not found — skipping JSX Babel lint")
-        return 0
-
-    # Ensure @babel/standalone is installed
-    babel_prefix = Path(tempfile.gettempdir()) / "da-babel-lint"
-    babel_prefix.mkdir(exist_ok=True)
-    node_modules = babel_prefix / "node_modules"
-    if not _ensure_babel(node_modules):
-        print("⚠ Could not install @babel/standalone — skipping")
-        return 0
 
     # Collect JSX files
     files = []
@@ -409,37 +430,33 @@ def main() -> int:
         print("✓ No JSX files found")
         return 0
 
+    # The Babel pass needs node: required with or without --ci (#3611 Q1).
+    node = _lib_engine.locate("node")
+    if isinstance(node, _lib_engine.NoVerdict):
+        return _no_verdict(f"{node.reason}; the JSX Babel parse did not run",
+                           static_failures, linecount_hard_failures)
+
+    # Ensure @babel/standalone is installed
+    babel_prefix = Path(tempfile.gettempdir()) / "da-babel-lint"
+    babel_prefix.mkdir(exist_ok=True)
+    node_modules = babel_prefix / "node_modules"
+    if not _ensure_babel(node_modules):
+        return _no_verdict("could not install @babel/standalone (npm); the JSX "
+                           "Babel parse did not run",
+                           static_failures, linecount_hard_failures)
+
     # Pass 2: Babel parse via Node.js
     env = os.environ.copy()
     env["NODE_PATH"] = str(node_modules)
-    result = subprocess.run(
-        ["node", "-e", NODE_SCRIPT],
-        input=json.dumps(files),
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-        timeout=30,
-        env=env,
-    )
-
-    babel_failures = []
-    if result.returncode != 0:
-        print(f"⚠ Node.js error: {result.stderr[:200]}")
-        # The Babel pass could not run (subprocess crash, not a JSX defect).
-        # Under --ci that's a caller/environment error — failing green here
-        # would let real parse errors slip through silently.
-        if args.ci:
-            return EXIT_CALLER_ERROR
-        return 0
-    else:
-        try:
-            results = json.loads(result.stdout)
-            babel_failures = [r for r in results if not r["ok"]]
-        except json.JSONDecodeError:
-            print("⚠ Could not parse Node.js output")
-            # Unparseable output → the check did not produce a verdict.
-            if args.ci:
-                return EXIT_CALLER_ERROR
-            return 0
+    # A node run that crashed, printed no results, or returned fewer results
+    # than files is the parse not having run — no verdict, with or without
+    # --ci (it used to be exit 0 without --ci).
+    result = _lib_engine.run(node, "babel-parse", ["-e", NODE_SCRIPT],
+                             stdin_text=json.dumps(files), env=env, timeout=30,
+                             expect={"paths": [f["path"] for f in files]})
+    if isinstance(result, _lib_engine.NoVerdict):
+        return _no_verdict(result.message(), static_failures, linecount_hard_failures)
+    babel_failures = [r for r in result.data if not r["ok"]]
 
     # Combine results
     all_failures = (
