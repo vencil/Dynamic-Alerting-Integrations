@@ -17,8 +17,8 @@
 # 左手邊 tenant_expected_exporter{tenant,db_type}=1 由 threshold-exporter 對
 # 【每個宣告 db_type 的租戶】emit 一條 (collector.go collectTenantExpectedExporter,
 # #869)。右手邊用 `up == 1`【值感知】，不是裸 `unless up`：
-#   - service-role SD (configmap-prometheus.yaml:55) 下，pod 死但 Service 還在
-#     → up=0【在場】(target present, value 0)，裸 `unless up` 會被這條 up=0
+#   - pod 死但 target 還在（endpointslice SD 下 readiness 失敗的 pod 仍留在
+#     slice，#3680）→ up=0【在場】(target present, value 0)，裸 `unless up` 會被這條 up=0
 #     series 騙過、誤判「在場」而漏報；`up == 1` 只承認真正健康的 target →
 #     up=0 不被當作存活 → 正確 fire。
 #   - Service 物件被刪 (退租) → up series 缺席 → 兩種寫法都 fire。

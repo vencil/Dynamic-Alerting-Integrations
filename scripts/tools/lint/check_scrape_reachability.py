@@ -323,6 +323,14 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
             # port is the annotated scrape port (#3483: an endpoints-role job
             # otherwise scrapes each pod once per Service port)
             "port_select": False,
+            # #3720: relabel steps writing `instance` / `tenant` (from a
+            # source label: the namespace, or a Service / pod label)
+            "writes_instance": False,
+            "writes_tenant": False,
+            # the `job` value after relabeling: job_name, or the literal the
+            # last `replace` onto `job` writes; None when it depends on a
+            # source label (e.g. the Service name)
+            "job_value": sc.get("job_name"),
             "name_rules": [],   # [(action, regex)] over __name__
             "label_rules": [],  # [(action, source_labels, regex)] other keep/drop
         }
@@ -368,6 +376,22 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
                     port_labels.add(target)
                 else:
                     port_labels.discard(target)
+            if rc.get("action", "replace") == "replace" and target == "instance":
+                job["writes_instance"] = True
+            if rc.get("action", "replace") == "replace" and target == "tenant":
+                job["writes_tenant"] = bool(src)
+            if rc.get("action", "replace") == "replace" and target == "job":
+                repl = rc.get("replacement", "$1")
+                job["job_value"] = None if (src or "$" in repl) else repl
+            if action == "labelmap":
+                # may write any label — `instance` included (a Service label
+                # named `instance`, as mariadb-instance's carries, would be
+                # copied onto it)
+                job["writes_instance"] = True
+            elif action == "labeldrop" and re.fullmatch(rc.get("regex", "(.*)"), "tenant"):
+                job["writes_tenant"] = False
+            elif action == "labelkeep" and not re.fullmatch(rc.get("regex", "(.*)"), "tenant"):
+                job["writes_tenant"] = False
             if (rc.get("action", "replace") == "replace"
                     and rc.get("target_label") == "job"):
                 job["job_from_service_name"] = (
@@ -688,6 +712,62 @@ def _platform_per_pod(jobs: list[dict]) -> list[str]:
     return errors
 
 
+def tenant_scrape_contract(jobs: list[dict], *, every_tenant_job: bool = False) -> list[str]:
+    """Errors for a job admitting the tenant-exporter face that breaks the
+    scrape contract the tenant rule packs select on (#3720 / #3680).
+
+    The packs read `up{job="<TENANT_EXPORTER_JOB>"}` per `tenant`, and
+    TenantExporterAbsent keeps a tenant quiet while ANY of its targets reads
+    up 1. So a job admitting tenant exporters must: be named that job (a
+    customer job named otherwise makes the anti-join's right side empty, and
+    every healthy tenant pages, #3720); write `tenant` from a source label
+    (the namespace, or a Service / pod label where tenants share one);
+    reach every pod once (one per-pod role plus the annotated-port
+    `keepequal`, as #3483 for platform jobs); and leave `instance` as
+    Prometheus sets it — writing it (the old `instance = namespace`) merges
+    two targets into one series and a healthy one masks the other (#3680).
+
+    Shared by this gate (the repo's raw config: the jobs admitting the
+    tenant-exporter face) and tests/k8s/test_tenant_scrape_contract.py
+    (`every_tenant_job`: each documented customer job that writes `tenant`,
+    whatever namespaces it names), so the docs cannot teach a contract the
+    lab does not keep.
+    """
+    errors = []
+    want = _lib_metric_sources.TENANT_EXPORTER_JOB
+    for j in jobs:
+        if not (j["writes_tenant"] if every_tenant_job else _tenant_exporter_face_exists([j])):
+            continue
+        name = j["job"]
+        if j["job_value"] != want:
+            shown = "set from a source label" if j["job_value"] is None else f"'{j['job_value']}'"
+            errors.append(
+                f"TENANT-JOB-NAME: job '{name}' admits tenant exporters but its `job` "
+                f"label is {shown}, not '{want}' — every tenant rule pack selects "
+                f'up{{job="{want}"}}, so its tenants page as absent. (#3720)')
+        if len(j["sd_roles"]) != 1 or j["sd_role"] not in _PER_POD_ROLES:
+            errors.append(
+                f"TENANT-PER-POD: job '{name}' admits tenant exporters with "
+                f"{j['sd_roles']} — use exactly one `role: endpointslice`, so each "
+                "pod is a target and a dead one reads up 0. (#3680)")
+        elif not j["port_select"]:
+            errors.append(
+                f"TENANT-PER-POD: job '{name}' has no `keepequal` of "
+                f"[{SCRAPE_PORT_META}] against the endpoint port — every pod is "
+                "scraped once per Service port. (#3680)")
+        if j["writes_instance"]:
+            errors.append(
+                f"TENANT-INSTANCE: job '{name}' writes `instance` (or may, by "
+                "`labelmap`) — two targets "
+                "with the same value merge into one series and a healthy one "
+                "masks the other. Leave it as Prometheus sets it. (#3680)")
+        if not j["writes_tenant"]:
+            errors.append(
+                f"TENANT-LABEL: job '{name}' writes no `tenant` label from a source "
+                "label — every tenant pack joins `on(tenant)`. (#3720)")
+    return errors
+
+
 def _tenant_exporter_face_exists(jobs: list[dict]) -> bool:
     """A job that would admit an annotated Service in a tenant (db-*) namespace.
 
@@ -871,7 +951,7 @@ def run_check(
         counts[cls] += 1
 
     errors: list[str] = (_platform_double_scrape(jobs) + _platform_job_label(jobs)
-                         + _platform_per_pod(jobs))
+                         + _platform_per_pod(jobs) + tenant_scrape_contract(jobs))
     infos: list[str] = []
 
     for m, (cls, reason) in classes.items():
