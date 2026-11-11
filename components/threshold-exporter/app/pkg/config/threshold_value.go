@@ -186,7 +186,16 @@ func (r thresholdRefusal) notice(tenant string) string {
 // problem that is not the one to fix. Asked only for a refused value: the
 // entries the resolvers read cost nothing more.
 func thresholdRefusalIn(defaults map[string]float64, key string, sv ScheduledValue) (thresholdRefusal, bool) {
-	if r, ok := thresholdValueRefusal(defaults, key, sv.Default); ok && !entryDead(sv, "default") {
+	// The dead entries are read once, and only once a value is refused.
+	var des []DeadEntry
+	read := false
+	dead := func(entry string) bool {
+		if !read {
+			des, read = sv.DeadEntries(), true
+		}
+		return entryIn(des, entry)
+	}
+	if r, ok := thresholdValueRefusal(defaults, key, sv.Default); ok && !dead("default") {
 		return r, true
 	}
 	for i, o := range sv.Overrides {
@@ -197,7 +206,7 @@ func thresholdRefusalIn(defaults map[string]float64, key string, sv ScheduledVal
 		if _, _, valid := parseTimeWindow(o.Window, nil); !valid {
 			continue
 		}
-		if entryDead(sv, overrideEntry(i)) {
+		if dead(overrideEntry(i)) {
 			continue
 		}
 		return r, true
@@ -210,12 +219,13 @@ func thresholdRefusalIn(defaults map[string]float64, key string, sv ScheduledVal
 // window's whose `window:` parses and that some minute is not shadowed from
 // (DeadEntries) — the entries thresholdRefusalIn judges.
 func servedEntryValues(sv ScheduledValue) []string {
+	des := sv.DeadEntries()
 	out := make([]string, 0, 1+len(sv.Overrides))
-	if !entryDead(sv, "default") {
+	if !entryIn(des, "default") {
 		out = append(out, sv.Default)
 	}
 	for i, o := range sv.Overrides {
-		if _, _, ok := parseTimeWindow(o.Window, nil); !ok || entryDead(sv, overrideEntry(i)) {
+		if _, _, ok := parseTimeWindow(o.Window, nil); !ok || entryIn(des, overrideEntry(i)) {
 			continue
 		}
 		out = append(out, o.Value)
@@ -223,10 +233,10 @@ func servedEntryValues(sv ScheduledValue) []string {
 	return out
 }
 
-// entryDead reports whether entry ("default" or overrideEntry(i)) of sv is
-// one of its DeadEntries.
-func entryDead(sv ScheduledValue, entry string) bool {
-	for _, d := range sv.DeadEntries() {
+// entryIn reports whether entry ("default" or overrideEntry(i)) is one of
+// des (a schedule's DeadEntries, read once by the caller).
+func entryIn(des []DeadEntry, entry string) bool {
+	for _, d := range des {
 		if d.Entry == entry {
 			return true
 		}
