@@ -40,6 +40,10 @@ type ValueFinding struct {
 	// key's schedule with entries /metrics never serves. nil for any other
 	// kind.
 	dead []DeadEntry
+	// invalid is the #3683 kind's entries (newInvalidWindowFinding): a
+	// threshold key's schedule with a `window:` parseTimeWindow refuses.
+	// nil for any other kind.
+	invalid []invalidWindow
 }
 
 // newThresholdFinding is the finding for sv, the value of threshold key key
@@ -81,8 +85,88 @@ func newDeadEntryFinding(tenant, key string, sv ScheduledValue) (ValueFinding, b
 	}, true
 }
 
+// invalidWindow is one override of a schedule whose `window:` the exporter
+// cannot read (parseTimeWindow refuses it; the not_served verdict
+// window_invalid): it applies at no minute, so its value is never served.
+type invalidWindow struct {
+	entry, window, value string
+}
+
+// invalidWindowsOf is every override of sv whose `window:` parseTimeWindow
+// refuses, in the order written; nil when there is none.
+func invalidWindowsOf(sv ScheduledValue) []invalidWindow {
+	var out []invalidWindow
+	for i, o := range sv.Overrides {
+		if _, _, ok := parseTimeWindow(o.Window, nil); !ok {
+			out = append(out, invalidWindow{entry: overrideEntry(i), window: o.Window, value: o.Value})
+		}
+	}
+	return out
+}
+
+// invalidWindowsReading is ws as one string — entry, window and value of
+// each, in order — what makes two window_invalid findings the same one for
+// the ratchet: as written, so a write that changes the window or the value
+// of such an entry, or adds another one, is a new finding (as
+// DeadEntriesReading is for a dead entry).
+func invalidWindowsReading(ws []invalidWindow) string {
+	var b strings.Builder
+	for i, w := range ws {
+		if i > 0 {
+			b.WriteString("\x00")
+		}
+		// Each field quoted: a window or value can hold any byte, so a
+		// bare separator would let two different entries read alike.
+		fmt.Fprintf(&b, "%q\x01%q\x01%q", w.entry, w.window, w.value)
+	}
+	return b.String()
+}
+
+// invalidWindowsText is ws in words, for a message.
+func invalidWindowsText(ws []invalidWindow) string {
+	parts := make([]string, len(ws))
+	for i, w := range ws {
+		parts[i] = fmt.Sprintf("%s `%s` → %q", w.entry, w.window, w.value)
+	}
+	return strings.Join(parts, "; ")
+}
+
+// invalidWindowProblem is a window_invalid finding's tenant-free reason.
+const invalidWindowProblem = "with a `window:` that is not a UTC HH:MM-HH:MM with start different from end, " +
+	"so that entry never applies"
+
+// newInvalidWindowFinding is the finding for sv, the value of threshold key
+// key (canonical spelling), when a `window:` of its schedule is one
+// parseTimeWindow refuses (#3683) — the not_served verdict window_invalid,
+// refused where it is written as a dead entry is.
+func newInvalidWindowFinding(tenant, key string, sv ScheduledValue) (ValueFinding, bool) {
+	ws := invalidWindowsOf(sv)
+	if len(ws) == 0 {
+		return ValueFinding{}, false
+	}
+	return ValueFinding{
+		Tenant:  tenant,
+		Key:     key,
+		Value:   sv,
+		Problem: invalidWindowProblem,
+		Message: fmt.Sprintf("WARN: tenant=%s: %s writes a schedule %s: %s. Write each window as a UTC "+
+			"HH:MM-HH:MM whose start differs from its end, or remove %s",
+			tenant, key, invalidWindowProblem, invalidWindowsText(ws), invalidWindowWhat(ws)),
+		invalid: ws,
+	}, true
+}
+
+// invalidWindowWhat names what to remove: "that entry" for one, "those
+// entries" for more.
+func invalidWindowWhat(ws []invalidWindow) string {
+	if len(ws) == 1 {
+		return "that entry"
+	}
+	return "those entries"
+}
+
 // deadEntriesJudged reports whether the write gate judges the dead entries
-// of sv, written under key (canonKey once #1231-canonicalized): only a value
+// — and, #3683, the windows it cannot read (newInvalidWindowFinding) — of sv, written under key (canonKey once #1231-canonicalized): only a value
 // /metrics may serve — a key whose platform key (PlatformKeyFor) the root
 // `defaults:` values or `optional_overrides:` declares, in the spelling the
 // tenant's map serves (normalized: of two spellings of one dimensional key,
@@ -191,6 +275,12 @@ func (f ValueFinding) unchanged(prev ScheduledValue) bool {
 		// is not "unchanged".
 		return DeadEntriesReading(prev.DeadEntries()) == DeadEntriesReading(f.dead)
 	}
+	if f.invalid != nil {
+		// #3683: as a dead entry — the entries as written, value included:
+		// the value under such a window is not judged as a threshold
+		// (thresholdRefusalIn), so a write that changes it is new.
+		return invalidWindowsReading(invalidWindowsOf(prev)) == invalidWindowsReading(f.invalid)
+	}
 	return readAlike(f.Key, prev, f.Value)
 }
 
@@ -204,6 +294,12 @@ func (f ValueFinding) notice() string {
 			"It is already in the tenant file, so it does not block a write that leaves it exactly as it is; "+
 			"remove %s the next time %s is changed",
 			f.Tenant, f.Key, f.Problem, DeadEntriesText(f.dead), deadEntryWhat(f.dead), f.Key)
+	}
+	if f.invalid != nil {
+		return fmt.Sprintf("NOTICE: tenant=%s: %s writes a schedule %s: %s. "+
+			"It is already in the tenant file, so it does not block a write that leaves it exactly as it is; "+
+			"fix or remove %s the next time %s is changed",
+			f.Tenant, f.Key, f.Problem, invalidWindowsText(f.invalid), invalidWindowWhat(f.invalid), f.Key)
 	}
 	if f.schedule {
 		return fmt.Sprintf("NOTICE: tenant=%s: %s writes %s (%s) — only its default %q is read, the rest is ignored. "+

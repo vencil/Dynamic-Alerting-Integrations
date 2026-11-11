@@ -1892,6 +1892,14 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 					v.Errors = append(v.Errors, f.Message)
 					v.Values = append(v.Values, f)
 				}
+				// #3683: a `window:` the exporter cannot read
+				// (window_invalid) applies at no minute either; refused
+				// where it is written, ratcheted as a dead entry. Its
+				// value is not judged as a threshold (thresholdRefusalIn).
+				if f, ok := newInvalidWindowFinding(tenant, canonKey, sv); ok {
+					v.Errors = append(v.Errors, f.Message)
+					v.Values = append(v.Values, f)
+				}
 			}
 
 			// ADR-024 OQ-6: a dimensional key's `version` label is a value
