@@ -91,6 +91,8 @@ const CRITICAL_CAPABLE = new Set([
   'mysql_connections',
   'mysql_replication_lag',
   'pg_connections',
+  'redis_memory_used_bytes',
+  'redis_connected_clients',
   'kafka_consumer_lag',
 ]);
 

@@ -345,7 +345,9 @@ class TestLookupAndPolicies:
         m = L.load_observed_map()
         assert L.lookup(m, "mysql_connections") == (L.LookupKind.COMPARED, m["mysql_connections"])
         assert L.lookup(m, "container_cpu") == (L.LookupKind.KNOWN_DEFERRED, None)
-        assert L.lookup(m, "mongodb_connections_current_critical") == (L.LookupKind.NO_ALERT, None)
+        # #3658 shipped the mongodb critical tiers; the throughput keys it left
+        # out are still a `_critical` no shipped alert compares.
+        assert L.lookup(m, "mongodb_opcounters_rate_critical") == (L.LookupKind.NO_ALERT, None)
 
     def test_lookup_reasons(self):
         assert L.lookup_reason(L.LookupKind.COMPARED, "k") is None

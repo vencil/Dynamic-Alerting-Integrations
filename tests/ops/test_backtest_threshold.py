@@ -1039,13 +1039,14 @@ class TestAlertComparison:
         assert bt.alert_comparison(change) == ("tenant:mysql_threads_connected:max", "above", None)
 
     def test_mongodb_critical_row_has_no_alert(self, monkeypatch):
-        """mongodb 的門檻 recording rule 只正規化 severity="warning"：覆寫成
-        `N:critical` 的時段沒有 alert 在比，不借 base 的。"""
+        """`mongodb_opcounters_rate` 刻意沒有 critical 層（#3658 不補吞吐量鍵），
+        門檻 recording rule 只正規化 severity="warning"：覆寫成 `N:critical` 的
+        時段沒有 alert 在比，不借 base 的。"""
         monkeypatch.setattr(bt, "query_range", _boom)
-        change = self._served("mongodb_connections_current",
-                              ("mongodb_connections_current", "critical", False))
+        change = self._served("mongodb_opcounters_rate",
+                              ("mongodb_opcounters_rate", "critical", False))
         reason = bt.not_backtestable(change)
-        assert reason.startswith("mongodb_connections_current_critical: no shipped alert")
+        assert reason.startswith("mongodb_opcounters_rate_critical: no shipped alert")
         assert bt.backtest_change("http://prom", change, 86400)["status"] == "not_backtested"
 
     def test_legacy_twin_row_is_not_read(self):
@@ -1387,12 +1388,13 @@ class TestWrittenValues:
         assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
 
     def test_critical_value_with_no_critical_alert(self, monkeypatch, capsys, cli_argv):
-        """mongodb 的門檻只正規化 warning：`N:critical` 沒有 alert 在比。"""
+        """`mongodb_opcounters_rate` 的門檻只正規化 warning（#3658 刻意不補）：
+        `N:critical` 沒有 alert 在比。"""
         _, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                      "mongodb_connections_current", "70:critical", "80:critical")
+                                      "mongodb_opcounters_rate", "70:critical", "80:critical")
         assert asked == []
         assert [(r["metric"], r["old_value"], r["new_value"]) for r in rows] == [
-            ("mongodb_connections_current_critical", "70", "80")]
+            ("mongodb_opcounters_rate_critical", "70", "80")]
         assert rows[0]["backtest"].startswith("skipped: no shipped alert compares")
 
     @pytest.mark.parametrize("old,new,why", [
@@ -2258,7 +2260,7 @@ class TestServedSeriesGrouping:
 
 class TestNoAlertSideIsNoThreshold:
     """#3111 (e)：告警 key 不在 observed-map、也不是 KNOWN_DEFERRED ⇒ 沒有出廠告警
-    比它。mongodb 沒有 `_critical` 告警，所以 `70` → `70:critical` 是 warning 告警
+    比它。`mongodb_opcounters_rate` 沒有 `_critical` 告警（#3658 刻意不補），所以 `70` → `70:critical` 是 warning 告警
     失去門檻（靜默 MEDIUM），critical 那一列沒有告警比、不回測——不再整筆 UNKNOWN。"""
 
     _VALS = [60, 80, 90, 100]
@@ -2281,19 +2283,19 @@ class TestNoAlertSideIsNoThreshold:
     def test_moving_to_a_severity_no_alert_compares_is_silenced(
             self, monkeypatch, capsys, cli_argv):
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                       "mongodb_connections_current", "70", "70:critical")
-        assert asked == ['tenant:mongodb_connections_current:max{tenant="t-x"}']
+                                       "mongodb_opcounters_rate", "70", "70:critical")
+        assert asked == ['tenant:mongodb_opcounters:rate5m{tenant="t-x"}']
         assert [(r["metric"], r["status"], r["risk"]) for r in rows] == [
-            ("mongodb_connections_current", "analyzed", "MEDIUM"),
-            ("mongodb_connections_current_critical", "not_backtested", "UNKNOWN")]
+            ("mongodb_opcounters_rate", "analyzed", "MEDIUM"),
+            ("mongodb_opcounters_rate_critical", "not_backtested", "UNKNOWN")]
         assert rows[0]["message"] == "Metric disabled — all alerts silenced"
         assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 0)
         assert rc == 0
 
     def test_the_reverse_is_newly_enabled(self, monkeypatch, capsys, cli_argv):
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                       "mongodb_connections_current", "70:critical", "70")
-        assert asked == ['tenant:mongodb_connections_current:max{tenant="t-x"}']
+                                       "mongodb_opcounters_rate", "70:critical", "70")
+        assert asked == ['tenant:mongodb_opcounters:rate5m{tenant="t-x"}']
         row = rows[0]
         assert row["status"] == "analyzed" and row["new_breach_count"] == 3
         assert row["message"].startswith("Metric newly enabled")

@@ -261,6 +261,9 @@ def test_skipped_entry_document(tmp_path):
         ("routing_group_by_invalid", "alpha", "group_by[1]"),
         ("timing_value_replaced", "alpha", "group_wait"),
         ("unknown_receiver_type", "beta", "receiver.type"),
+        # #1560 ⑤-b (blind review F2): the credential judgement reports the
+        # same receiver from its file too — two lines rather than none.
+        ("credential_unjudged", "beta", "tenants.beta._routing.receiver"),
     }
     # #3016: the shared verdict's error blocks under --validate like the rest.
     assert all(r["blocks"] == "validate" for r in doc["findings"] if r["kind"] != "unclassified")

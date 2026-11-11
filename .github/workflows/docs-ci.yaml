@@ -509,10 +509,8 @@ jobs:
           echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
 
       - name: Run drift checks (versions, tool-map, doc-map, rule-pack-stats, rule-pack-readme, cli-defaults, cli-contract, frontmatter-versions)
-        env:
-          # cli_contract evaluates the CLI Playground catalog with node (#1379).
-          # Here a missing node must be a hard error, not a quiet "NOT scored".
-          CLI_CONTRACT_REQUIRE_NODE: "1"
+        # cli_contract evaluates the CLI Playground catalog with node (#1379);
+        # a missing node is a hard error (rc 2) everywhere since #3611.
         run: |
           python scripts/tools/validate_all.py \
             --only versions,tool_map,doc_map,rule_pack_stats,byo_rulepack_table,rule_packs,changelog,changelog_format,glossary,includes,repo_name,alerts,cli_default_drift,cli_contract,frontmatter_versions \

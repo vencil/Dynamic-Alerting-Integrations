@@ -39,6 +39,7 @@ from typing import Any, Iterable, NamedTuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import _lib_confd  # noqa: E402
+from _lib_validation import shown_key  # noqa: E402  (#1560 ⑤-b: keys into messages)
 import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
@@ -315,7 +316,7 @@ def finding_line(f: Finding, limit: int) -> str:
     why = f" ({f.reason})" if f.reason else ""
     if f.base:
         # #3046: name the base whose `disable` switches the key off.
-        why = f" (switched off with its base `{f.base}`)"
+        why = f" (switched off with its base `{shown_key(f.base)}`)"
     if f.dead_entries:
         # #3502: name each entry that never serves.
         why = " (never served: " + "; ".join(
@@ -323,7 +324,8 @@ def finding_line(f: Finding, limit: int) -> str:
             for d in f.dead_entries) + ")"
     # A profile key no tenant binds names none (#3042).
     who = f"tenant(s) {who}" if who else "no tenant"
-    return f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why} — {who}"
+    # #1560 ⑤-b: a key is the author's text and may be a URL.
+    return f"{f.file or '?'}: {f.severity}: {f.kind} `{shown_key(f.key)}`{why} — {who}"
 
 
 def undecidable_line(verdict: TreeVerdict) -> str | None:

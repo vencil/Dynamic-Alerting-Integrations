@@ -41,14 +41,14 @@ _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 _T = "demo-apac"
 
 _MAIN = ("      receiver:\n        type: pagerduty\n"
-         "        service_key: main-key\n")
+         "        service_key: {secret: {key: main-key}}\n")  # #1560 ⑤-b
 
 
 def _route(value: str) -> str:
     return (_MAIN + "      routes:\n      - match:\n"
             f"          team: {value}\n"
             "        receiver:\n          type: slack\n"
-            "          api_url: https://hooks.slack.com/services/T/B/x\n")
+            "          api_url: {secret: {key: slack-url}}\n")
 
 
 def _override(line: str) -> str:

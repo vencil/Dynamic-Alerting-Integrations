@@ -289,7 +289,7 @@ gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integr
 - **`go test -list` 自己失敗（樹編不過、或 regex 語法非法）會被單獨報成「建置或 regex 語法問題」並附原文**，不會被收斂成「選不到 benchmark」。⛔ 這是自審時實測補的：初版把兩者都變成 `sel=0`，於是一個編不過的樹會把人送去改 regex，而真正的問題在別處——fail-closed 沒錯，但**診斷指向錯的地方**。
 - ⛔ **目前真正在發揮作用的是「第一分鐘印出預估 + warning」**：實測最多 41 支 ⇒ 預估上限 84 分 < 預算 100 分，所以那條硬擋**現在打不到**，它是給 benchmark 數量成長之後用的後備。（寫出來是因為「宣稱有一道擋著、實際上打不到」比沒有那道更糟。）
 
-⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) `(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
+⛔ **讀數字之前先做兩個對照**：(1) `bench_interleave.sh` 把**同一個** canary 執行檔跑進兩側，所以 `BenchmarkControlCanary*` 的真值恆為 1.000——不接近 0% 就是這次執行本身髒了；(2) **只在參考是夜跑的釘死參考時**：`(W/R) × (M/W)` 應該對得上當夜 `bench-paired.json` 的比值（其他參考下沒有這道對照，只剩 canary；見下方「參考版本與夜跑解耦」）（要扣掉「夜跑的 M 是那一夜的 HEAD、本 job 的 M 是現在」這個合法差異）。**一個沒有對照的量測不是量測。**
 
 ⚠️ **overlay 的已知弱點與它的守衛。** `*bench_test.go` 由 `find` **推導**（新增／改名／刪除自動跟上），但 helper 檔是一份**列舉**（`overlay_helpers` 輸入），而列舉錯了的失效模式本來是**靜默的**：漏掉的 helper 會綁到參考版本的版本，`W` 就變成混血樹而畫面上看不出來。
 
@@ -302,11 +302,18 @@ gh workflow run bench-workload-effect.yaml --repo vencil/Dynamic-Alerting-Integr
 
 `overlay_helpers` 的預設值是**實測迭代出的閉包**（2026-08-18，`3fd96b51`..main）：4 支 `*bench_test.go` ＋ `config_test.go` / `config_debounce_test.go` / `config_metrics_test.go` / `watchloop_test.go`，共 8 個檔，第 4 輪達到不動點。起點是 `config_bench_test.go` 用到 `config_test.go` 的 `SV` / `SVScheduled`（fixture 值建構子，影響 8 支夜跑 bench，而它**不是** `*bench_test.go`，所以夜跑的 drift 清單看不到它）。⚠️ 範圍不能無限外推：覆蓋兩個 package 的**全部** `*_test.go` 會因 `ExpiryMeta` / `canonicalKeyFor` / `ValidateTenantKeys().Errors` 等參考版本沒有的產品 API 而編譯失敗——所以「全都蓋、絕不遺漏」這個安全方向**不可用**。
 
-⛔ **已知狀態：參考版本 `exporter/v2.9.0` 上 W/R 目前不可用，直到下次換參考版本（[#2348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2348)）。** main 的 `config_bench_test.go` 自 [#1935](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1935) 起引用 `scanDirTree` / `tenantExistenceFor` / 新簽名的 `mergePartialConfigs` 等參考版本沒有的產品 API，overlay 樹因此編不過。`*bench_test.go` 由 `derived_glob` 推導、**永遠**會被疊上去，所以**縮小 `overlay_helpers` 修不了這種失敗**——唯一的出路是換參考版本，而那是一次吸收事件（`bench-reference.yaml` 檔頭、ADR-032 §待決 1：不得關閉未結案的效能票）。在那之前：
+⛔ **參考版本與夜跑解耦（[#2348](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2348)）。** 這支 workflow 是診斷工具，不寫任何跨次狀態，所以它的參考版本不必等「吸收事件」：
 
-- 改到 `bench-workload-effect.yaml` 的 PR，其 self-test（`Workload-definition effect (W/R)`，**非** required check）會紅在「Verify the overlay tree builds」。這是預期狀態，不是那支 PR 造成的。
-- 該步驟依**編譯器點名的檔案**分流錯誤訊息：錯誤落在任一 `*bench_test.go` ⇒ 訊息明講「縮小 helper 無效、需換參考版本」；只落在 helper／其他檔 ⇒ 才提示縮小 `overlay_helpers`。編譯帶 `-gcflags=-e`，避免 10 個錯就截斷而漏掉後面 helper 檔的錯。
-- 夜跑 `bench-record.yaml` 的 `M/R` 不做 overlay，兩側各編自己的樹，所以不受這個編譯錯誤影響（2026-09-28 的排程夜跑 [run 36402090814](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/runs/36402090814) 為 `success`；參考樹 `3fd96b51` 單獨 `go test -c` 本機 rc 0）。
+- **`reference_sha` 留空（或填入釘死的那個 SHA）**：用夜跑釘死的參考（`.github/bench-reference.yaml`）。只有這個選擇下，`(W/R)×(M/W)` 才能拿去對當夜的 `bench-paired.json`；其他參考下 summary 會把那道對照拿掉，只剩 canary。
+- **`reference_sha` 填一個 SHA**：必須是 40 碼 hex、而且是 main 已包含的 commit（compare API 回 `ahead`／`identical`），否則 exit 1、不 checkout。summary 會標明「不是夜跑參考」，`M/R` 那一行不能拿去對夜跑。拆一個階梯時，通常填階梯前一個 commit。
+- **PR self-test**（只對目標為 main 的 PR）：參考是 checkout 出來的 merge commit 的第一個 parent，也就是這支 PR 合上去的那個 main tip，所以 R 與 W 的測試碼只差這支 PR 自己的改動。⛔ 不用 merge base：分岔得早的 PR 會把今天的 benchmark 疊到舊樹上而紅，與 PR 無關。另外對釘死的參考跑一次同樣的編譯探測，結果只以 notice 呈現（能編／不能編／go 失敗但沒點名檔案＝無法判定），不讓 job 失敗——否則自測的綠會被讀成「預設的 dispatch 也能用」。
+
+為什麼不等下一個 exporter tag：overlay 能編過的前提是 main 的 benchmark 碼沒用到參考版本沒有的 API，而這個前提幾週內就會失效。2026-11-10 實測（main 的 `*bench_test.go` 加 4 支 helper 疊上去 `go test -c -gcflags=-e`）：疊到 `exporter/v2.9.0`（`3fd96b51`）47 個錯、疊到 2026-10-15 的 main 11 個、疊到 2026-11-07 的 main 0 個；而 exporter 線上一個 tag 是 2026-06 打的。
+
+⚠️ **拆不開的情形**：2026-09-28 起改到 benchmark 閉包的 11 支 PR 裡有 10 支同時改了產品碼——benchmark 是跟著 API 重構一起改的。跨過這種 PR，任何參考版本都編不過，工作定義效應與實作效應**本質上拆不開**；這時改用逐 PR 的量測：只改 benchmark 的 PR 由 `bench-workload-record.yaml` 當下量 W/R（下一節），其餘由 `bench-gate-pr.yaml` 量那支 PR 的合併效應，並把它記為「耦合、無法分解」。
+
+- 編不過時，錯誤訊息依**編譯器點名的檔案**分流：落在任一 `*bench_test.go` ⇒ 縮小 helper 無效，換一個較新的 `reference_sha`；只落在 helper／其他檔 ⇒ 才提示縮小 `overlay_helpers`。編譯帶 `-gcflags=-e`，避免 10 個錯就截斷而漏掉後面 helper 檔的錯。
+- 夜跑 `bench-record.yaml` 的 `M/R` 不做 overlay，兩側各編自己的樹，不受這個編譯問題影響；夜跑參考的政策（換它是吸收事件、不得關閉未結案的效能票）不變。
 
 residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summary**：首次 self-test 實測 44 個檔、其中真正被 overlay 過的檔引用到的只有 1 個（精確度 2.3%，比它要修的 `workload_drift` 清單 1/20 還差）。summary 印的是封閉性判定，因為那才是「residue 重不重要」的答案。
 

@@ -14,7 +14,7 @@ Config-driven multi-tenant alerting platform built on Prometheus `group_left` ve
 > **Managing 100 tenants: from 5,000 hand-written rules → 237 fixed rules.**
 > Tenants write YAML only — no PromQL, and even author their own alerts via parameterized recipes (v2.9.0 **Custom Alerts**). New-tenant **setup** in minutes (for rule-pack-covered metrics), changes in seconds; migrating an existing complex estate (custom exporters / topology metrics) depends on the metric shape — see the [Migration Guide](docs/migration-guide.en.md).
 
-![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-168-red) ![Bilingual](https://img.shields.io/badge/bilingual-101%20pairs-blue)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-184-red) ![Bilingual](https://img.shields.io/badge/bilingual-101%20pairs-blue)
 
 ---
 
@@ -215,7 +215,7 @@ O(M) complexity (`group_left` vector matching) · each Rule Pack deployed indepe
 
 ### Tenant Management
 
-Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Four-layer routing merge: `_routing_defaults` → profile → tenant → enforced ([ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md)) · Scheduled thresholds & maintenance windows · Schema Validation (dual Go + Python) · Cardinality Guard (per-tenant 500 limit) · Receiver credentials in a Kubernetes Secret (`secretRef`: the name derives from the tenant id as `da-<tenant>`, shared Secrets are listed by the deployment policy's `shared_secrets`; [BYO integration guide §5](docs/integration/byo-alertmanager-integration.en.md#credentials-in-a-secret-secretref))
+Tri-state mode (Normal / Silent / Maintenance with `expires` auto-expiry) · Four-layer routing merge: `_routing_defaults` → profile → tenant → enforced ([ADR-007](docs/adr/007-cross-domain-routing-profiles.en.md)) · Scheduled thresholds & maintenance windows · Schema Validation (dual Go + Python) · Cardinality Guard (per-tenant 500 limit) · Receiver credentials in a Kubernetes Secret (`secretRef`: the name derives from the tenant id as `da-<tenant>`, shared Secrets are listed by the deployment policy's `shared_secrets`; when a credential written out is refused: [cli-reference](docs/cli-reference.en.md#generate-routes); [BYO integration guide §5](docs/integration/byo-alertmanager-integration.en.md#credentials-in-a-secret-secretref))
 
 ### Tenant Self-Service & Multi-Cluster
 

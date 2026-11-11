@@ -184,7 +184,7 @@ def test_entries_floor_survives_pints_ansi_coloured_output():
     proof = mod._lib_engine.PROOFS[("pint", "lint")]
 
     def _entries(stderr):
-        return proof(subprocess.CompletedProcess(["pint"], 0, "", stderr))[0]
+        return proof(subprocess.CompletedProcess(["pint"], 0, "", stderr), {})[0]
 
     assert _entries(real_log_line) == 393, (
         "the entries= probe must survive pint's ANSI colouring — otherwise the "

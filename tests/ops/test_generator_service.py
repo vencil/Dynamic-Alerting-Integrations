@@ -56,6 +56,17 @@ def _split(fixture: str) -> tuple[dict, str]:
     return files, last
 
 
+def _credential_scoped(rec: dict, write: str) -> dict:
+    """*rec* (a CLI finding) as the container reports it when the write
+    changes *write* only: a credential finding in another file becomes the
+    NOTICE ``_grar_parse.credential_findings`` gives outside its scope."""
+    if not rec["kind"].startswith("credential_") or rec["file"] == write:
+        return rec
+    message = (rec["message"].replace("ERROR (credential):", "NOTICE (credential):", 1)
+               + " (not refused here: this write does not change that file)")
+    return dict(rec, blocks="never", severity="note", message=message)
+
+
 @pytest.fixture(scope="module")
 def world(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gsvc")
@@ -125,6 +136,10 @@ def test_verdict_equals_the_cli_on_the_written_tree(world, tmp_path, fixture):
     # judges the keys itself, in `key_verdict`. So the generator's verdict
     # is the CLI's without it: when only `key_*` findings block (#3016),
     # the generator alone passes.
+    # #1560 ⑤-b: the container judges credentials written out only in the
+    # files the write changes (`credential_scope`); in another file the
+    # CLI's ERROR is the container's NOTICE, which blocks nothing.
+    cli = dict(cli, findings=[_credential_scoped(r, write) for r in cli["findings"]])
     blocking = [r for r in cli["findings"] if r["blocks"] in ("always", "validate", "strict")]
     if blocking and all(r["kind"].startswith("key_") for r in blocking):
         rc, cli = 0, dict(cli, exit_code=0)
@@ -1480,6 +1495,36 @@ def test_a_config_subdir_outside_the_repository_refuses_to_start(tmp_path, world
     assert svc.proc.wait(60) == 2
     assert "--config-subdir" in svc.log.read_text(encoding="utf-8")
     svc.stop()
+
+
+# ── #1560 ⑤-b: the container's own log never carries the generator's text ──
+
+def test_the_service_log_never_carries_the_generators_text(tmp_path):
+    """The judgement process writes the generator's stdout / stderr to files in
+    its job directory (fd 1 / 2 re-opened there before anything is judged);
+    only a tail goes back, in the reply. The service's own stderr — the
+    container log — must hold none of it: a finding quotes what tenants
+    wrote. The canary rides a written value the generator prints (a refused
+    group_wait) — a test canary, not a credential."""
+    canary = "CANARY-gsvc-log-5b"
+    repo = h.init_repo(tmp_path / "repo")
+    commit = h.commit_tree(repo, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: 70\n"})
+    body = ("tenants:\n  t-a:\n    mysql_connections: 70\n    _routing:\n"
+            "      receiver:\n        type: webhook\n        url: https://hooks.example.com/a\n"
+            f"      group_wait: x-{canary}\n")
+    bin_dir = tmp_path / "bin"
+    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
+    with h.Service(tmp_path / "svc", repo, bin_dir=bin_dir) as svc:
+        status, doc = svc.validate(commit, [{"path": "t-a.yaml", "content_b64": h.b64(body)}])
+        assert status == 200 and doc["result"] == "findings", doc
+        # Positive control: the generator did print it (to its own files,
+        # whose tail is in the reply).
+        assert canary in doc["stderr_tail"], doc["stderr_tail"]
+    log = svc.log.read_text(encoding="utf-8", errors="replace")
+    assert "listening on" in log, log
+    assert canary not in log, log
 
 
 # ── #3739: --repo is judged by its reader, git, and the refusal names it ─────
