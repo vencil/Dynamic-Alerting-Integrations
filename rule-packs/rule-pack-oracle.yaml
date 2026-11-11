@@ -23,6 +23,21 @@
 #       ⚠ 參考庫實測反例（#1176）：例行備份批次會到 560 個 process —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
 #   oracle_pga_allocated_bytes: 4294967296   # bytes (4GB) — PGA allocation warning
 #       ⚠ 參考庫實測反例（#1176）：計畫性 stats-gather 會用到 22 GB PGA —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+#
+# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
+# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
+# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
+# 它讀的是 defaults[base]，base 沒有值就整列丟棄
+# （components/threshold-exporter/app/pkg/config/resolve.go）。
+# 而下列每個 key 的 base 都**未**標 [chart-default]
+# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
+# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
+# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
+# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
+# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
+# 一格裝飾（#1311）。
+#   oracle_sessions_active_critical: 280   # count — Active sessions critical
+#   oracle_tablespace_used_percent_critical: 95   # % — Tablespace usage critical
 # <<< GENERATED:threshold-registry:pack-oracle
 #
 # ⚠️ 上列是「Day 0 起始 floor 範例」，不是通用安全值 —— 忙碌 / 大型庫的正常
@@ -95,8 +110,14 @@ groups:
       - record: tenant:alert_threshold:oracle_sessions_active
         expr: max by(tenant) (user_threshold{component="oracle", metric="sessions_active", severity="warning"})
 
+      - record: tenant:alert_threshold:oracle_sessions_active_critical
+        expr: max by(tenant) (user_threshold{component="oracle", metric="sessions_active", severity="critical"})
+
       - record: tenant:alert_threshold:oracle_tablespace_used_percent
         expr: max by(tenant) (user_threshold{component="oracle", metric="tablespace_used_percent", severity="warning"})
+
+      - record: tenant:alert_threshold:oracle_tablespace_used_percent_critical
+        expr: max by(tenant) (user_threshold{component="oracle", metric="tablespace_used_percent", severity="critical"})
 
       - record: tenant:alert_threshold:oracle_wait_time_rate
         expr: max by(tenant) (user_threshold{component="oracle", metric="wait_time_rate", severity="warning"})
@@ -141,6 +162,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
+          metric_group: "oracle_sessions_active"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle high active sessions on {{ $labels.tenant }}"
@@ -149,6 +171,33 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle 活動 session 數升高 — connection pool 審查"
           description: "{{ $value | printf \"%.0f\" }} active sessions"
           description_zh: "{{ $value | printf \"%.0f\" }} 個活動 session"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # Critical tier (opt-in via oracle_sessions_active_critical)
+      - alert: OracleHighActiveSessionsCritical
+        expr: |
+          (
+            tenant:oracle_sessions_active:max
+            > on(tenant) group_left
+            tenant:alert_threshold:oracle_sessions_active_critical
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+          maintenance: mute
+          metric_group: "oracle_sessions_active"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Oracle active sessions critical on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上 Oracle 活動 session 數嚴重過高"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Oracle active sessions at critical level — check headroom to SESSIONS/PROCESSES (new logins fail past it; OracleHighSessionUtilization measures it); find blocking sessions"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle 活動 session 數達嚴重水位 — 請確認距 SESSIONS／PROCESSES 上限的餘裕（超過後新登入會失敗，比例見 OracleHighSessionUtilization）；找出阻塞的 session"
+          description: "{{ $value | printf \"%.0f\" }} active sessions (critical threshold exceeded)"
+          description_zh: "{{ $value | printf \"%.0f\" }} 個活動 session（超過嚴重閾值）"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
@@ -166,6 +215,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
+          metric_group: "oracle_tablespace_used_percent"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Oracle tablespace nearing capacity on {{ $labels.tenant }}"
@@ -174,6 +224,33 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle tablespace 即將滿容 — 儲存審查"
           description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
           description_zh: "Tablespace 使用率：{{ $value | printf \"%.1f\" }}%"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # Critical tier (opt-in via oracle_tablespace_used_percent_critical)
+      - alert: OracleTablespaceAlmostFullCritical
+        expr: |
+          (
+            tenant:oracle_tablespace_used_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:oracle_tablespace_used_percent_critical
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+          maintenance: mute
+          metric_group: "oracle_tablespace_used_percent"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "Oracle tablespace critically full on {{ $labels.tenant }}"
+          summary_zh: "{{ $labels.tenant }} 上 Oracle tablespace 嚴重接近滿容"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Oracle tablespace almost out of space — inserts will fail with ORA-01653; add a datafile or enable autoextend now"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：Oracle tablespace 空間即將用盡 — 寫入將以 ORA-01653 失敗；請立即新增 datafile 或啟用 autoextend"
+          description: "Tablespace usage: {{ $value | printf \"%.1f\" }}% (critical threshold exceeded)"
+          description_zh: "Tablespace 使用率：{{ $value | printf \"%.1f\" }}%（超過嚴重閾值）"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"

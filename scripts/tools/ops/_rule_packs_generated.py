@@ -161,7 +161,21 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                           '30s is unambiguous trouble '
                                                           '(noise-averse pick, #1231 owner call); '
                                                           '#1196 C identity fix, no alias',
-                                                  'metric_class': 'replication'}}},
+                                                  'metric_class': 'replication'}},
+           'optional_overrides': {'redis_connected_clients_critical': {'value': 300,
+                                                                       'unit': 'count',
+                                                                       'desc': 'Connected clients '
+                                                                               'critical',
+                                                                       'metric_class': 'saturation'},
+                                  'redis_memory_used_bytes_critical': {'value': 5368709120,
+                                                                       'unit': 'bytes',
+                                                                       'desc': 'Memory usage '
+                                                                               'critical',
+                                                                       'metric_class': 'saturation'},
+                                  'redis_replication_lag_critical': {'value': 50,
+                                                                     'unit': 'seconds',
+                                                                     'desc': 'Replica lag critical',
+                                                                     'metric_class': 'replication'}}},
  'mongodb': {'display': 'MongoDB (percona/mongodb_exporter)',
              'exporter': 'percona/mongodb_exporter',
              'default_on': False,
@@ -186,7 +200,18 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                               'demands _rate) + moved '
                                                               'optional_overrides→defaults — '
                                                               'unwired dead key, no alias',
-                                                      'metric_class': 'throughput'}}},
+                                                      'metric_class': 'throughput'}},
+             'optional_overrides': {'mongodb_connections_current_critical': {'value': 450,
+                                                                             'unit': 'count',
+                                                                             'desc': 'Current '
+                                                                                     'connections '
+                                                                                     'critical',
+                                                                             'metric_class': 'saturation'},
+                                    'mongodb_replication_lag_critical': {'value': 30,
+                                                                         'unit': 'seconds',
+                                                                         'desc': 'Replication lag '
+                                                                                 'critical',
+                                                                         'metric_class': 'replication'}}},
  'elasticsearch': {'display': 'Elasticsearch (elasticsearch_exporter)',
                    'exporter': 'justwatchcom/elasticsearch_exporter',
                    'default_on': False,
@@ -237,7 +262,29 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                  'ours; full derivation + '
                                                                  'calibration caveat in the pack '
                                                                  'header (#1196 D)',
-                                                         'metric_class': 'latency'}}},
+                                                         'metric_class': 'latency'}},
+                   'optional_overrides': {'es_disk_usage_percent_critical': {'value': 90,
+                                                                             'unit': '%',
+                                                                             'desc': 'Disk usage '
+                                                                                     'critical',
+                                                                             'metric_class': 'capacity'},
+                                          'es_heap_usage_percent_critical': {'value': 90,
+                                                                             'unit': '%',
+                                                                             'desc': 'JVM heap '
+                                                                                     'usage '
+                                                                                     'critical',
+                                                                             'metric_class': 'saturation'},
+                                          'es_pending_tasks_critical': {'value': 150,
+                                                                        'unit': 'count',
+                                                                        'desc': 'Pending cluster '
+                                                                                'tasks critical',
+                                                                        'metric_class': 'state'},
+                                          'es_search_latency_ms_critical': {'value': 2000,
+                                                                            'unit': 'ms',
+                                                                            'desc': 'Avg search '
+                                                                                    'latency '
+                                                                                    'critical',
+                                                                            'metric_class': 'latency'}}},
  'oracle': {'display': 'Oracle Database (oracledb_exporter)',
             'exporter': 'iamseth/oracledb_exporter',
             'default_on': False,
@@ -303,7 +350,18 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                                                           '會用到 '
                                                                                                           '22 '
                                                                                                           'GB '
-                                                                                                          'PGA'}}}},
+                                                                                                          'PGA'}},
+                                   'oracle_sessions_active_critical': {'value': 280,
+                                                                       'unit': 'count',
+                                                                       'desc': 'Active sessions '
+                                                                               'critical',
+                                                                       'metric_class': 'saturation'},
+                                   'oracle_tablespace_used_percent_critical': {'value': 95,
+                                                                               'unit': '%',
+                                                                               'desc': 'Tablespace '
+                                                                                       'usage '
+                                                                                       'critical',
+                                                                               'metric_class': 'capacity'}}},
  'db2': {'display': 'IBM DB2 (ibm_db2_exporter)',
          'exporter': 'ibm_db2_exporter (community)',
          'default_on': False,
@@ -377,7 +435,17 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                 'db2_tablespace_used_percent': {'value': 85,
                                                                 'unit': '%',
                                                                 'desc': 'Tablespace usage warning',
-                                                                'metric_class': 'capacity'}}},
+                                                                'metric_class': 'capacity'},
+                                'db2_connections_active_critical': {'value': 400,
+                                                                    'unit': 'count',
+                                                                    'desc': 'Active connections '
+                                                                            'critical',
+                                                                    'metric_class': 'saturation'},
+                                'db2_lock_wait_time_critical': {'value': 20,
+                                                                'unit': 's/s',
+                                                                'desc': 'Lock wait accumulation '
+                                                                        'rate critical',
+                                                                'metric_class': 'latency'}}},
  'clickhouse': {'display': 'ClickHouse (built-in /metrics)',
                 'exporter': 'ClickHouse built-in Prometheus endpoint',
                 'default_on': False,
@@ -406,7 +474,14 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                             'desc': 'Memory '
                                                                                     'tracking '
                                                                                     'warning',
-                                                                            'metric_class': 'capacity'}}},
+                                                                            'metric_class': 'capacity'},
+                                       'clickhouse_active_connections_critical': {'value': 300,
+                                                                                  'unit': 'count',
+                                                                                  'desc': 'Active '
+                                                                                          'TCP '
+                                                                                          'connections '
+                                                                                          'critical',
+                                                                                  'metric_class': 'saturation'}}},
  'kafka': {'display': 'Apache Kafka (danielqsj/kafka-exporter)',
            'exporter': 'danielqsj/kafka-exporter',
            'default_on': False,
@@ -478,6 +553,17 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                      'rabbitmq_node_mem_percent_critical': {'value': 95,
                                                                             'unit': '%',
                                                                             'desc': 'Node memory '
+                                                                                    'critical',
+                                                                            'metric_class': 'saturation'},
+                                     'rabbitmq_connections_critical': {'value': 1500,
+                                                                       'unit': 'count',
+                                                                       'desc': 'Connection count '
+                                                                               'critical',
+                                                                       'metric_class': 'saturation'},
+                                     'rabbitmq_unacked_messages_critical': {'value': 50000,
+                                                                            'unit': 'messages',
+                                                                            'desc': 'Unacknowledged '
+                                                                                    'messages '
                                                                                     'critical',
                                                                             'metric_class': 'saturation'}}},
  'jvm': {'display': 'JVM (jmx_exporter / Micrometer)',

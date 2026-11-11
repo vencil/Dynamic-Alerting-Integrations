@@ -25,7 +25,9 @@ data:
     \n      / (sum by(tenant) (rate(db2_total_sorts[5m])) > 0)\n\n      '\n- name:\
     \ db2-threshold-normalization\n  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:db2_connections_active\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"connections_active\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_bufferpool_hit_ratio\n\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_connections_active_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"connections_active\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:db2_bufferpool_hit_ratio\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"bufferpool_hit_ratio\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_log_usage_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"log_usage_percent\"\
@@ -35,7 +37,9 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"tablespace_used_percent\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_lock_wait_time\n\
     \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"lock_wait_time\"\
-    , severity=\"warning\"})\n"
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:db2_lock_wait_time_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"db2\", metric=\"lock_wait_time\"\
+    , severity=\"critical\"})\n"
   db2-alert.yml: "groups:\n- name: db2-alerts\n  rules:\n  - alert: DB2DatabaseDown\n\
     \    expr: db2_up == 0\n    for: 15s\n    labels:\n      maintenance: page\n \
     \     severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
@@ -51,24 +55,46 @@ data:
     \  - alert: DB2HighConnections\n    expr: \"(\\n  tenant:db2_connections_active:max\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:db2_connections_active\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
-    \ $value | printf \"%.0f\" }} active connections'\n      description_zh: '{{ $value\
-    \ | printf \"%.0f\" }} 個活動連線'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: DB2 connection usage high — pool sizing review'\n    \
-    \  platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}：DB2 連線使用率過高 — pool 大小調整審查'\n      runbook_url: '{{ with\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: db2_connections_active\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value | printf \"%.0f\" }} active connections'\n    \
+    \  description_zh: '{{ $value | printf \"%.0f\" }} 個活動連線'\n      owner: '{{ with\
     \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ DB2 high active connections on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 上 DB2 連線數過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: DB2LowBufferpoolHitRatio\n    expr: \"(\\n  tenant:db2_bufferpool_hit_ratio:min\\\
-    n  < on(tenant) group_left\\n  tenant:alert_threshold:db2_bufferpool_hit_ratio\\\
+    \ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: DB2 connection usage high — pool sizing review'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：DB2 連線使用率過高 — pool 大小調整審查'\n      runbook_url: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
+    \ }}{{ end }}{{ end }}'\n      summary: DB2 high active connections on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 上 DB2 連線數過高'\n      tier: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: DB2HighConnectionsCritical\n\
+    \    expr: \"(\\n  tenant:db2_connections_active:max\\n  > on(tenant) group_left\\\
+    n  tenant:alert_threshold:db2_connections_active_critical\\n)\\nunless on(tenant)\\\
+    n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n\
+    \      maintenance: mute\n      metric_group: db2_connections_active\n      severity:\
+    \ critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
+    \ '{{ $value | printf \"%.0f\" }} active connections (critical threshold exceeded)'\n\
+    \      description_zh: '{{ $value | printf \"%.0f\" }} 個活動連線（超過嚴重閾值）'\n      owner:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: DB2 connections at critical level — check headroom to MAXAPPLS (new connections\
+    \ are refused past it); cap the offending pool'\n      platform_summary_zh: '[{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}：DB2 連線數達嚴重水位 — 請確認距 MAXAPPLS 的餘裕（超過後新連線會被拒）；限制造成問題的連線池'\n      runbook_url:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ DB2 active connections critical on {{ $labels.tenant }}\n      summary_zh: '{{\
+    \ $labels.tenant }} 上 DB2 連線數嚴重過高'\n      tier: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}'\n  - alert: DB2LowBufferpoolHitRatio\n    expr: \"(\\\
+    n  tenant:db2_bufferpool_hit_ratio:min\\n  < on(tenant) group_left\\n  tenant:alert_threshold:db2_bufferpool_hit_ratio\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
     n\"\n    for: 10m\n    labels:\n      maintenance: mute\n      severity: warning\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Hit\
@@ -148,15 +174,15 @@ data:
     \    expr: \"(\\n  tenant:db2_lock_wait_time:rate5m\\n  > on(tenant) group_left\\\
     n  tenant:alert_threshold:db2_lock_wait_time\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
-    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: '{{ $value | printf \"%.1f\" }}s of lock wait accrued per\
-    \ second'\n      description_zh: 每秒累積 {{ $value | printf \"%.1f\" }} 秒的鎖等待\n \
-    \     owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: DB2 lock wait time high — lock contention review'\n  \
-    \    platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \      metric_group: db2_lock_wait_time\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: '{{ $value | printf\
+    \ \"%.1f\" }}s of lock wait accrued per second'\n      description_zh: 每秒累積 {{\
+    \ $value | printf \"%.1f\" }} 秒的鎖等待\n      owner: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 lock wait time high — lock contention\
+    \ review'\n      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
     \ {{ $labels.tenant }}：DB2 鎖等待時間過高 — 鎖爭用審查'\n      runbook_url: '{{ with query\
     \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
@@ -164,13 +190,35 @@ data:
     \ high lock wait time on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 上 DB2 鎖等待時間過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: DB2HighSortOverflow\n    expr: 'tenant:db2_sort_overflow_ratio:avg\
-    \ > 0.05\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"\
-    } == 1)\n\n      '\n    for: 10m\n    labels:\n      maintenance: mute\n     \
-    \ severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: 'Sort overflow ratio: {{ $value | printf \"%.2f\" }} — consider\
-    \ increasing SORTHEAP'\n      description_zh: Sort overflow 比率：{{ $value | printf\
-    \ \"%.2f\" }} — 考慮增加 SORTHEAP\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \  - alert: DB2HighLockWaitTimeCritical\n    expr: \"(\\n  tenant:db2_lock_wait_time:rate5m\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:db2_lock_wait_time_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: db2_lock_wait_time\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value | printf \"%.1f\" }}s of lock wait accrued per\
+    \ second (critical threshold exceeded)'\n      description_zh: 每秒累積 {{ $value\
+    \ | printf \"%.1f\" }} 秒的鎖等待（超過嚴重閾值）\n      owner: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 lock waits at critical level\
+    \ — transactions are queueing behind locks; find the lock-holding application\
+    \ and end it now'\n      platform_summary_zh: '[{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 鎖等待達嚴重水位 — 交易正排隊等鎖；請立即找出持有鎖的應用程式並結束它'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: DB2 lock wait time critical on {{ $labels.tenant }}\n  \
+    \    summary_zh: '{{ $labels.tenant }} 上 DB2 鎖等待時間嚴重過高'\n      tier: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: DB2HighSortOverflow\n\
+    \    expr: 'tenant:db2_sort_overflow_ratio:avg > 0.05\n\n      unless on(tenant)\n\
+    \n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for:\
+    \ 10m\n    labels:\n      maintenance: mute\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Sort overflow\
+    \ ratio: {{ $value | printf \"%.2f\" }} — consider increasing SORTHEAP'\n    \
+    \  description_zh: Sort overflow 比率：{{ $value | printf \"%.2f\" }} — 考慮增加 SORTHEAP\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\

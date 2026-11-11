@@ -24,6 +24,20 @@
 #   clickhouse_max_part_count: 300   # count — Max part count per partition
 #   clickhouse_replication_queue: 50   # count — Replication queue size
 #   clickhouse_memory_tracking_bytes: 8589934592   # bytes (8GB) — Memory tracking warning
+#
+# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
+# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
+# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
+# 它讀的是 defaults[base]，base 沒有值就整列丟棄
+# （components/threshold-exporter/app/pkg/config/resolve.go）。
+# 而下列每個 key 的 base 都**未**標 [chart-default]
+# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
+# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
+# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
+# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
+# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
+# 一格裝飾（#1311）。
+#   clickhouse_active_connections_critical: 300   # count — Active TCP connections critical
 # <<< GENERATED:threshold-registry:pack-clickhouse
 #
 # Tenant config 範例 (conf.d/clickhouse-prod.yaml):
@@ -100,6 +114,12 @@ groups:
             user_threshold{component="clickhouse", metric="active_connections", severity="warning"}
           )
 
+      - record: tenant:alert_threshold:clickhouse_active_connections_critical
+        expr: |
+          max by(tenant) (
+            user_threshold{component="clickhouse", metric="active_connections", severity="critical"}
+          )
+
       - record: tenant:alert_threshold:clickhouse_max_part_count
         expr: |
           max by(tenant) (
@@ -163,6 +183,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
+          metric_group: "clickhouse_active_connections"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "ClickHouse active connections exceed threshold"
@@ -171,6 +192,33 @@ groups:
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：ClickHouse 連線已超出 — client pool 審查"
           description: "{{ $value | printf \"%.0f\" }} active connections"
           description_zh: "{{ $value | printf \"%.0f\" }} 個活動連線"
+
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
+      # Critical tier (opt-in via clickhouse_active_connections_critical)
+      - alert: ClickHouseHighConnectionsCritical
+        expr: |
+          (
+            tenant:clickhouse_active_connections:max
+            > on(tenant) group_left
+            tenant:alert_threshold:clickhouse_active_connections_critical
+          )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+        for: 5m
+        labels:
+          severity: critical
+          maintenance: mute
+          metric_group: "clickhouse_active_connections"
+          tenant: "{{ $labels.tenant }}"
+        annotations:
+          summary: "ClickHouse active connections exceed critical threshold"
+          summary_zh: "ClickHouse 活動連線超出嚴重閾值"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: ClickHouse connections at critical level — check headroom to max_connections (new clients are refused past it); cap the offending client pool"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：ClickHouse 連線數達嚴重水位 — 請確認距 max_connections 的餘裕（超過後新客戶端會被拒）；限制造成問題的 client pool"
+          description: "{{ $value | printf \"%.0f\" }} active connections (critical threshold exceeded)"
+          description_zh: "{{ $value | printf \"%.0f\" }} 個活動連線（超過嚴重閾值）"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"

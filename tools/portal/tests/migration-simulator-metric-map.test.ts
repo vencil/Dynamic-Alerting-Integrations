@@ -138,13 +138,15 @@ describe('convertRules — emitted keys stay inside the contract', () => {
     expect(out.unconverted).toHaveLength(0);
   });
 
-  it('critical severity on a key WITHOUT a critical tier flows to Manual Review', () => {
+  // Which METRIC_MAP values lack a critical tier is the registry's call, not this
+  // file's: the registry-mirror test above keeps CRITICAL_CAPABLE equal to it, and
+  // convertRules sends a critical rule on any key outside that set to Manual Review.
+  it('critical severity on a Redis key converts to its _critical key (#3658)', () => {
     const out = convertRules(
       rule('CritRedis', 'redis_connected_clients > 5000', 'critical'));
-    expect(out.results).toHaveLength(0);
-    expect(out.thresholdCount).toBe(0);
-    expect(out.unconverted).toHaveLength(1);
-    expect(out.unconverted[0].reason).toContain('no critical tier');
+    expect(out.unconverted).toHaveLength(0);
+    expect(out.results).toHaveLength(1);
+    expect(out.results[0].mappedKey).toBe('redis_connected_clients_critical');
   });
 
   it('uppercase CRITICAL still routes through the critical path (no case bypass)', () => {
@@ -154,12 +156,12 @@ describe('convertRules — emitted keys stay inside the contract', () => {
     expect(out.results[0].mappedKey).toBe('mysql_connections_critical');
   });
 
-  it('quoted "critical" on a non-capable key still hits the guard (no quoting bypass)', () => {
+  it('quoted "critical" still routes through the critical path (no quoting bypass)', () => {
     const out = convertRules(
       rule('CritRedisQuoted', 'redis_memory_used_bytes > 4000000000', '"critical"'));
-    expect(out.results).toHaveLength(0);
-    expect(out.unconverted).toHaveLength(1);
-    expect(out.unconverted[0].reason).toContain('no critical tier');
+    expect(out.unconverted).toHaveLength(0);
+    expect(out.results).toHaveLength(1);
+    expect(out.results[0].mappedKey).toBe('redis_memory_used_bytes_critical');
   });
 
   it('an unmapped metric flows to Manual Review, not to an invented key', () => {

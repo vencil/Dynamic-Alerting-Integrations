@@ -86,6 +86,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "_parse_tenant_overrides",
         "load_tenant_tree",
         "print_reader_warnings",  # #2906, for notification_tester (gar.*)
+        "credential_findings",  # #1560 ⑤-b, for validate-config's routes row (gen.*)
     ),
     "_grar_routes": (
         "SlotVerdict",  # #3076, for notification_tester (gar.*)

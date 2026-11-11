@@ -950,7 +950,10 @@ def check_routes(
         sys.stderr = old_stderr
 
     captured_output = captured.getvalue().strip()
-    all_issues = list(route_warnings) + list(dedup_warnings)
+    # #1560 ⑤-b: credentials written out, judged in each file (the same
+    # function generate-routes --validate calls); blocking by type.
+    all_issues = (gen.credential_findings(tree)
+                  + list(route_warnings) + list(dedup_warnings))
     if captured_output:
         all_issues.extend(captured_output.split("\n"))
 
@@ -2014,14 +2017,15 @@ def _root_defaults_value_detail(rel: str, key: str | None, raw: str,
         # scalar or list, a bad `<<` merge, a non-scalar key) has one remedy.
         return (f"{rel}: threshold-exporter cannot decode this file's "
                 f"`defaults:` as a mapping of metric names to numbers and "
-                f"drops ALL of it — every platform threshold. Write the root "
+                f"drops ALL of it — the whole file, every platform threshold "
+                f"included. Write the root "
                 f"`defaults:` as `metric_name: <number>` lines.")
     shown = {"<mapping>": "a mapping", "<list>": "a list"}.get(
         raw, f"`{raw}`, which is not a number")
     return (f"{rel}: `defaults.{key}` is {shown} — the "
             f"root `defaults:` holds numbers only, so threshold-exporter "
-            f"cannot decode this file's `defaults:` block and drops ALL of "
-            f"it: every platform threshold, not just this key. Write a plain, "
+            f"cannot decode this file and drops ALL of it: the whole file, "
+            f"every platform threshold included, not just this key. Write a plain, "
             f"unquoted number.")
 
 
@@ -2311,8 +2315,8 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
     Three rules, one row:
 
     * #1414 — a mapping or a list as a value fails the exporter's decode
-      and it drops the root file's whole ``defaults:`` — every platform
-      threshold, while the load is reported as successful; a null / empty
+      and it drops the whole root file — every platform threshold and
+      every other setting in it, while the load is reported as successful; a null / empty
       value is reported as having no value (#2518; before it, a 0
       threshold) — what it changes depends on the rest of the tree and is
       not judged here. Both FAIL. The structure is ``_root_defaults_verdicts``
@@ -2347,7 +2351,7 @@ def check_root_defaults(config_dir: str) -> dict[str, object]:
 
     * threshold-exporter decodes the root ``defaults:`` as
       ``map[string]float64``. A mapping there fails that decode and the whole
-      block is dropped — every platform threshold, with the load still
+      file is dropped — every platform threshold, with the load still
       reported as successful (see ``_root_defaults_routing_detail``).
     * the route generator reads platform routing only from top-level
       ``_routing_defaults`` and never looks inside ``defaults:``.

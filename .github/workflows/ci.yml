@@ -576,6 +576,14 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: 'Set up Node.js (node-backed lint engines, #3611)'
+        # lint_jsx_babel and check_cli_contract need node and exit 2 without
+        # it (#3611 Q1). Pinned to the devcontainer major, as every other
+        # setup-node here, instead of the runner image's floating node.
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
       - name: Cache pip packages
         uses: actions/cache@v5
         with:
@@ -831,11 +839,9 @@ jobs:
           pre-commit run admin-config-schema-check --all-files
           pre-commit run bilingual-content-check --all-files
           pre-commit run bilingual-annotations-check --all-files
-          # Manual-stage line-count regression gate from PR #TBD —
-          # locks in PR-2d (#153 Phase 1+2+3 / S#69-S#72) line-count
-          # progress. Codebase has 0 soft-cap warnings as of S#72;
-          # this hook keeps it that way going forward.
-          pre-commit run jsx-babel-check-strict-linecount --all-files
+          # JSX Babel parse + line-count gate (one hook since #3611 B2):
+          # locks in PR-2d (#153) line-count progress — 0 soft-cap warnings.
+          pre-commit run jsx-babel-check --all-files
           # Container SAST Layer 1 (#448 / TRK-311): hadolint + Vibe wrapper
           # over all Dockerfiles. BLOCK findings fail the Lint job; WARN/INFO
           # are recorded in docs/internal/iac-lint-baseline.md. hadolint binary

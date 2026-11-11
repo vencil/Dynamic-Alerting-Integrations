@@ -2745,6 +2745,15 @@ class TestRootDefaultsValues:
         (d / "tenant-x.yaml").write_text(cls._TENANT, encoding="utf-8")
         return d
 
+    def test_a_defaults_block_that_is_no_mapping_names_the_whole_file(self, tmp_path):
+        """#2824: the decode fails, so the exporter drops the whole file,
+        not only its `defaults:` block."""
+        d = self._tree(tmp_path, "defaults:\n  - 30\n")
+        r = vc.check_root_defaults(str(d))
+        assert r["status"] == vc.FAIL, r
+        assert len(r["details"]) == 1, r
+        assert "drops ALL of it — the whole file" in r["details"][0], r
+
     @pytest.mark.parametrize("value, shown", [
         ("\n    default: 30", "a mapping"),
         ("\n    - 30", "a list"),
@@ -2758,8 +2767,10 @@ class TestRootDefaultsValues:
         assert len(r["details"]) == 1, r
         detail = r["details"][0]
         assert f"`defaults.mysql_connections` is {shown}" in detail, detail
-        # The consequence is the whole block, not the one key.
+        # The consequence is the whole file (the decode fails, #2824), not
+        # the one key and not only the `defaults:` block.
         assert "drops ALL of it" in detail, detail
+        assert "the whole file" in detail, detail
 
     @pytest.mark.parametrize("value", ["", " ~", " null"])
     def test_an_empty_value_fails_as_having_no_value(self, tmp_path, value):

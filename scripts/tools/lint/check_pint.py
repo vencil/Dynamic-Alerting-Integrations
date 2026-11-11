@@ -69,6 +69,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # NB: the ghcr docker tag has NO `v` prefix (0.86.0); the GitHub *release* tag
 # used by the binary curl in CI DOES (v0.86.0).
 PINT_VERSION = "0.86.0"
+# SHA-256 of the release asset `pint-<PINT_VERSION>-linux-amd64.tar.gz`
+# (upstream checksums.txt). This line is the SSOT: ci.yml's `PINT_SHA256` must
+# equal it (tests/shared/test_toolchain_pin_parity.py), and
+# .claude/hooks/session-start.sh reads it at run time to install pint (#3611).
+PINT_SHA256 = "6166233a8d6d726d56345cb863f749a20f398cc9ffc01cd5c36410a76afa73bc"
 # Supply-chain: pin the Docker fallback by digest (multi-arch index of :0.86.0) so a
 # re-pushed/tampered tag can't swap the image. On version bump, re-resolve with:
 #   docker buildx imagetools inspect ghcr.io/cloudflare/pint:<ver>   (take the top-level Digest)
@@ -110,9 +115,12 @@ _PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint",
 # 368 leaves 8 entries of slack for small legitimate deletions. A deletion large
 # enough to trip it (≥9 rules, e.g. retiring a whole rule-pack) SHOULD require a
 # conscious edit here — #1204 D-del was one: 11 orphan recording rules deleted,
-# CI's pint step then logged entries=367, so the pair below moved to 367 / 359. Re-measure on every PINT_VERSION bump: a pint that stops
+# CI's pint step then logged entries=367, so the pair below moved to 367 / 359. #3658
+# added critical tiers (a record + an alert each); growth, not deletion, but once the
+# slack exceeds the platform pack's share the floor no longer sees that pack drop out,
+# so the pair below was re-measured from CI's pint step. Re-measure on every PINT_VERSION bump: a pint that stops
 # parsing a file is only visible as this count dropping.
-_MIN_PINT_ENTRIES = 359
+_MIN_PINT_ENTRIES = 395
 
 # The platform pack's share of the count, and the total measured at the same time.
 # Both are needed: the pair is what keeps the floor's DETECTION WINDOW open as the
@@ -125,7 +133,7 @@ _MIN_PINT_ENTRIES = 359
 # file's own convention is to read such values back out rather than repeat them, and
 # the lockstep test does exactly that for this constant.
 _PLATFORM_PACK_ENTRIES = 42
-_PINT_ENTRIES_AT_MEASURE = 367
+_PINT_ENTRIES_AT_MEASURE = 403
 
 
 def main() -> int:

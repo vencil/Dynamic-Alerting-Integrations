@@ -170,11 +170,11 @@ CASES = [
      lambda d: _sub(d / "examples/_platform.yaml", 'container_memory: "60"', 'container_memory: "61"'), True),
     ("nested-profiles-file-yml.routing_profiles", "examples/_routing_profiles.yml", "routing_profiles",
      lambda d: (d / "examples/_routing_profiles.yaml").rename(d / "examples/_routing_profiles.yml"),
-     lambda d: _sub(d / "examples/_routing_profiles.yml", 'service_key: "finance-tier1-key"',
-                    'service_key: "finance-tier1-k2"'), True),
+     lambda d: _sub(d / "examples/_routing_profiles.yml", 'service_key: {secret: {key: pagerduty-service-key}}',
+                    'service_key: {secret: {key: pagerduty-service-key-2}}'), True),
     ("nested-profiles-file.routing_profiles", "examples/_routing_profiles.yaml", "routing_profiles", None,
-     lambda d: _sub(d / "examples/_routing_profiles.yaml", 'service_key: "finance-tier1-key"',
-                    'service_key: "finance-tier1-k2"'), True),
+     lambda d: _sub(d / "examples/_routing_profiles.yaml", 'service_key: {secret: {key: pagerduty-service-key}}',
+                    'service_key: {secret: {key: pagerduty-service-key-2}}'), True),
 ]
 
 

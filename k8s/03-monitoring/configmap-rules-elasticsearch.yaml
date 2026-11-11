@@ -30,13 +30,21 @@ data:
     - name: elasticsearch-threshold-normalization\n  interval: 15s\n  rules:\n  -\
     \ record: tenant:alert_threshold:es_heap_usage_percent\n    expr: max by(tenant)\
     \ (user_threshold{component=\"es\", metric=\"heap_usage_percent\", severity=\"\
-    warning\"})\n  - record: tenant:alert_threshold:es_disk_usage_percent\n    expr:\
-    \ max by(tenant) (user_threshold{component=\"es\", metric=\"disk_usage_percent\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:es_search_latency_ms\n\
+    warning\"})\n  - record: tenant:alert_threshold:es_heap_usage_percent_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"es\", metric=\"heap_usage_percent\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:es_disk_usage_percent\n\
+    \    expr: max by(tenant) (user_threshold{component=\"es\", metric=\"disk_usage_percent\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:es_disk_usage_percent_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"es\", metric=\"disk_usage_percent\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:es_search_latency_ms\n\
     \    expr: max by(tenant) (user_threshold{component=\"es\", metric=\"search_latency_ms\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:es_pending_tasks\n\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:es_search_latency_ms_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"es\", metric=\"search_latency_ms\"\
+    , severity=\"critical\"})\n  - record: tenant:alert_threshold:es_pending_tasks\n\
     \    expr: max by(tenant) (user_threshold{component=\"es\", metric=\"pending_tasks\"\
-    , severity=\"warning\"})\n"
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:es_pending_tasks_critical\n\
+    \    expr: max by(tenant) (user_threshold{component=\"es\", metric=\"pending_tasks\"\
+    , severity=\"critical\"})\n"
   elasticsearch-alert.yml: "groups:\n- name: elasticsearch-alerts\n  rules:\n  - alert:\
     \ ElasticsearchClusterRed\n    expr: 'tenant:es_cluster_health:status == 2\n\n\
     \      '\n    for: 30s\n    labels:\n      maintenance: page\n      severity:\
@@ -71,26 +79,49 @@ data:
     \ }}{{ end }}{{ end }}'\n  - alert: ElasticsearchHighHeapUsage\n    expr: \"(\\\
     n  tenant:es_heap_usage_percent:max\\n  > on(tenant) group_left\\n  tenant:alert_threshold:es_heap_usage_percent\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'JVM\
-    \ heap: {{ $value | printf \"%.1f\" }}%'\n      description_zh: 'JVM heap: {{\
-    \ $value | printf \"%.1f\" }}%'\n      owner: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
-    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: es_heap_usage_percent\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'JVM heap: {{ $value | printf \"%.1f\" }}%'\n      description_zh:\
+    \ 'JVM heap: {{ $value | printf \"%.1f\" }}%'\n      owner: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}:\
+    \ ES heap usage high — JVM sizing review'\n      platform_summary_zh: '[{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}:\
+    \ Elasticsearch heap 使用率過高 — 請檢查 JVM 大小'\n      runbook_url: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: Elasticsearch\
+    \ high heap usage on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Elasticsearch JVM heap 使用率過高'\n      tier: '{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: ES heap usage high — JVM sizing\
-    \ review'\n      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ }}{{ end }}{{ end }}'\n  - alert: ElasticsearchHighHeapUsageCritical\n    expr:\
+    \ \"(\\n  tenant:es_heap_usage_percent:max\\n  > on(tenant) group_left\\n  tenant:alert_threshold:es_heap_usage_percent_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: es_heap_usage_percent\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'JVM heap: {{ $value | printf \"%.1f\" }}% (critical threshold\
+    \ exceeded)'\n      description_zh: 'JVM heap: {{ $value | printf \"%.1f\" }}%（超過嚴重閾值）'\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: Elasticsearch heap 使用率過高 — 請檢查 JVM 大小'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Elasticsearch high heap usage on {{ $labels.tenant }}\n      summary_zh: '{{\
-    \ $labels.tenant }} 的 Elasticsearch JVM heap 使用率過高'\n      tier: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: ElasticsearchHighDiskUsage\n\
-    \    expr: \"(\\n  tenant:es_disk_usage_percent:max\\n  > on(tenant) group_left\\\
-    n  tenant:alert_threshold:es_disk_usage_percent\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 5m\n    labels:\n      maintenance: mute\n\
+    \ {{ $labels.tenant }}: ES heap at critical level — circuit breakers trip and\
+    \ long GC pauses follow; shed heavy queries and aggregations now'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: Elasticsearch heap 達嚴重水位 — circuit breaker 將觸發並出現長時間 GC 停頓；請立即卸除重查詢與聚合'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Elasticsearch heap usage critical on {{ $labels.tenant }}\n\
+    \      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch JVM heap 使用率嚴重過高'\n \
+    \     tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: ElasticsearchHighDiskUsage\n    expr: \"(\\n  tenant:es_disk_usage_percent:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:es_disk_usage_percent\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: es_disk_usage_percent\n\
     \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: 'Disk usage: {{ $value | printf \"%.1f\" }}%'\n      description_zh:\
     \ '磁碟使用率: {{ $value | printf \"%.1f\" }}%'\n      owner: '{{ with query (printf\
@@ -107,26 +138,70 @@ data:
     \ high disk usage on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 的 Elasticsearch 磁碟使用率過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: ElasticsearchHighDiskUsageCritical\n    expr: \"(\\n  tenant:es_disk_usage_percent:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:es_disk_usage_percent_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: es_disk_usage_percent\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Disk usage: {{ $value | printf \"%.1f\" }}% (critical threshold\
+    \ exceeded)'\n      description_zh: '磁碟使用率: {{ $value | printf \"%.1f\" }}%（超過嚴重閾值）'\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: ES disk at critical level — near the high and flood-stage\
+    \ watermarks shards stop allocating and indices go read-only; free space or add\
+    \ nodes now'\n      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: Elasticsearch 磁碟達嚴重水位 — 接近 high 與 flood-stage watermark\
+    \ 時分片停止配置、索引轉為唯讀；請立即清出空間或擴充節點'\n      runbook_url: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
+    \ }}{{ end }}{{ end }}'\n      summary: Elasticsearch disk usage critical on {{\
+    \ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 磁碟使用率嚴重過高'\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     \  - alert: ElasticsearchHighSearchLatency\n    expr: \"(\\n  tenant:es_search_latency_ms:avg\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:es_search_latency_ms\\n)\\\
     nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\
-    \n    for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Average\
-    \ search latency: {{ $value | printf \"%.0f\" }}ms'\n      description_zh: '平均搜尋延遲:\
-    \ {{ $value | printf \"%.0f\" }}ms'\n      owner: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
-    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: ES search latency elevated — query/index\
-    \ optimization review'\n      platform_summary_zh: '[{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: Elasticsearch 搜尋延遲提升 — 請最佳化查詢和索引'\n\
-    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: Elasticsearch high search latency on {{ $labels.tenant }}\n\
-    \      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 搜尋延遲過高'\n      tier:\
+    \n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: es_search_latency_ms\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Average search latency: {{ $value | printf \"%.0f\" }}ms'\n\
+    \      description_zh: '平均搜尋延遲: {{ $value | printf \"%.0f\" }}ms'\n      owner:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: ElasticsearchUnassignedShards\n\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: ES search latency elevated — query/index optimization review'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: Elasticsearch 搜尋延遲提升 — 請最佳化查詢和索引'\n      runbook_url: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: Elasticsearch\
+    \ high search latency on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Elasticsearch 搜尋延遲過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: ElasticsearchHighSearchLatencyCritical\n    expr: \"(\\n  tenant:es_search_latency_ms:avg\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:es_search_latency_ms_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: es_search_latency_ms\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Average search latency: {{ $value | printf \"%.0f\" }}ms\
+    \ (critical threshold exceeded)'\n      description_zh: '平均搜尋延遲: {{ $value | printf\
+    \ \"%.0f\" }}ms（超過嚴重閾值）'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: ES search latency at critical level — user-facing timeouts\
+    \ are likely; find and throttle the slow queries (slow log) now'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: Elasticsearch 搜尋延遲達嚴重水位 — 使用者端很可能逾時；請立即從 slow log 找出並限制慢查詢'\n      runbook_url:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ Elasticsearch search latency critical on {{ $labels.tenant }}\n      summary_zh:\
+    \ '{{ $labels.tenant }} 的 Elasticsearch 搜尋延遲嚴重過高'\n      tier: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: ElasticsearchUnassignedShards\n\
     \    expr: 'tenant:es_unassigned_shards:count > 0\n\n      unless on(tenant)\n\
     \n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for:\
     \ 10m\n    labels:\n      maintenance: mute\n      severity: warning\n      tenant:\
@@ -148,20 +223,42 @@ data:
     \  - alert: ElasticsearchPendingTasks\n    expr: \"(\\n  tenant:es_pending_tasks:max\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:es_pending_tasks\\n)\\nunless\
     \ on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\n   \
-    \ for: 5m\n    labels:\n      maintenance: mute\n      severity: warning\n   \
-    \   tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{ $value\
-    \ }} pending tasks — cluster may be overloaded'\n      description_zh: '{{ $value\
-    \ }} 個待處理工作 — 叢集可能負載過高'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: ES pending cluster tasks — cluster overload review'\n\
-    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: Elasticsearch 待處理叢集工作 — 請檢查叢集負載'\n      runbook_url: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Elasticsearch pending cluster tasks on {{ $labels.tenant }}\n      summary_zh:\
-    \ '{{ $labels.tenant }} 的 Elasticsearch 有待處理的叢集工作'\n      tier: '{{ with query\
+    \ for: 5m\n    labels:\n      maintenance: mute\n      metric_group: es_pending_tasks\n\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value }} pending tasks — cluster may be overloaded'\n\
+    \      description_zh: '{{ $value }} 個待處理工作 — 叢集可能負載過高'\n      owner: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: ES pending cluster tasks — cluster overload review'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: Elasticsearch 待處理叢集工作 — 請檢查叢集負載'\n      runbook_url: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: Elasticsearch\
+    \ pending cluster tasks on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Elasticsearch 有待處理的叢集工作'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: ElasticsearchPendingTasksCritical\n    expr: \"(\\n  tenant:es_pending_tasks:max\\\
+    n  > on(tenant) group_left\\n  tenant:alert_threshold:es_pending_tasks_critical\\\
+    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: es_pending_tasks\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: '{{ $value }} pending tasks (critical threshold exceeded)'\n\
+    \      description_zh: '{{ $value }} 個待處理工作（超過嚴重閾值）'\n      owner: '{{ with query\
     \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
+    \ index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: ES master task backlog at critical level — mapping, settings and shard changes\
+    \ stall; stop bulk index or mapping churn and check master load now'\n      platform_summary_zh:\
+    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
+    \ }}: Elasticsearch master 工作嚴重堆積 — mapping、設定與分片變更將停滯；請立即停止大量建立索引或 mapping 變動並檢查\
+    \ master 負載'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Elasticsearch pending cluster tasks critical on {{ $labels.tenant\
+    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Elasticsearch 待處理叢集工作嚴重堆積'\n \
+    \     tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"

@@ -418,7 +418,7 @@ def _confd_with_policy(tmp: Path, forbidden_receiver: str) -> str:
         "_routing_defaults:\n"
         "  group_by: [tenant, alertname]\n  group_wait: 30s\n"
         "  repeat_interval: 4h\n"
-        "  receiver:\n    type: slack\n    api_url: https://hooks.example/a\n"))
+        "  receiver:\n    type: slack\n    api_url: {secret: {key: slack-url}}\n"))
     _write(d / "tenant-one.yaml",
            'tenants:\n  tenant-one:\n    mysql_connections: "90"\n')
     _write(d / "_domain_policy.yaml", (

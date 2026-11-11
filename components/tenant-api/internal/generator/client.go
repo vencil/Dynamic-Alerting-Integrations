@@ -121,8 +121,8 @@ type Verdict struct {
 // KeyVerdict is a pass's `key_verdict`: status complete or not_completed
 // (with reason and message), findings when complete, truncated the
 // findings not sent. Message is the service's own text, never shown to a
-// caller (it can carry a platform path or a program's stderr): it is
-// logged.
+// caller nor logged (it can carry a platform path or a program's stderr;
+// #1560 ⑤-b: the log keeps KeyVerdict.LogValue's fields only).
 type KeyVerdict struct {
 	Status    string       `json:"status"`
 	Reason    string       `json:"reason"`

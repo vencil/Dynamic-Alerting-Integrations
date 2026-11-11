@@ -222,6 +222,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: clickhouse_active_connections
               tenant: t1
             exp_annotations:
               summary: "ClickHouse active connections exceed threshold"
