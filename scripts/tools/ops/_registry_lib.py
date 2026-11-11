@@ -125,7 +125,7 @@ CRITICAL_SUFFIX = "_critical"
 # removes.
 # ---------------------------------------------------------------------------
 ARMING_DEFAULT = "default"
-#: Every arming state. Order is the order the generated surfaces list them in.
+#: Every arming state (membership checks and error messages).
 ARMING_STATES = (ARMING_DEFAULT, "ratio_pending", "site_specific",
                  "pending_validation")
 #: The authored fields that make up one key's arming.
@@ -424,14 +424,6 @@ def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
 def is_chart_armed(entry: dict) -> bool:
     """Whether the chart ships this registry key's value (``arming: default``)."""
     return entry.get("arming") == ARMING_DEFAULT
-
-
-def effective_arming(doc: dict, key: str) -> Optional[str]:
-    """The arming state of *key*: its own, or its base's for a ``_critical``."""
-    keys = registry_keys(doc)
-    entry = keys.get(key) or {}
-    base = entry.get("critical_of")
-    return (keys.get(base) or {}).get("arming") if base else entry.get("arming")
 
 
 def not_chart_armed_keys(doc: dict) -> frozenset[str]:

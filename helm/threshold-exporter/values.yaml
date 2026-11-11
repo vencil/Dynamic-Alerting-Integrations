@@ -166,7 +166,8 @@ thresholdConfig:
     # ── rabbitmq ──
     #   rabbitmq_queue_messages（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
     #   rabbitmq_node_mem_percent（待驗證）：佔節點記憶體的百分比可跨部署，但 80 尚未經 shadow 報表驗證
-    #   rabbitmq_connections（依部署而定）：絕對連線數取決於客戶端數量，節點沒有匯出可當分母的連線上限
+    #   rabbitmq_connections（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available
+    #     是候選分母，但它由檔案描述符推得，由 #1320 決定
     #   rabbitmq_consumers（依部署而定）：預期的 consumer 數是各部署的拓撲
     #   rabbitmq_unacked_messages（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
     # ── jvm ──

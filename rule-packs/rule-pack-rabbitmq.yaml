@@ -13,7 +13,7 @@
 #   rabbitmq_node_mem_percent: 80   # % — Node memory usage warning
 #       未啟用（待驗證）：佔節點記憶體的百分比可跨部署，但 80 尚未經 shadow 報表驗證
 #   rabbitmq_connections: 1000   # count — Connection count warning
-#       未啟用（依部署而定）：絕對連線數取決於客戶端數量，節點沒有匯出可當分母的連線上限
+#       未啟用（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available 是候選分母，但它由檔案描述符推得，由 #1320 決定
 #   rabbitmq_consumers: 5   # count — Minimum consumer count warning
 #       未啟用（依部署而定）：預期的 consumer 數是各部署的拓撲
 #   rabbitmq_unacked_messages: 10000   # messages — Unacknowledged messages warning

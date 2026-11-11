@@ -671,9 +671,9 @@ keys:
     unit: count
     desc: Connection count warning
     metric_class: saturation
-    arming: site_specific
-    arming_reason: "An absolute connection count depends on the client fleet; the node exports no connection limit to divide by"
-    arming_reason_zh: "絕對連線數取決於客戶端數量，節點沒有匯出可當分母的連線上限"
+    arming: ratio_pending
+    arming_reason: "An absolute connection count does not carry across deployments; the exporter's sockets_used/sockets_available is a candidate denominator, but it is file-descriptor derived, so #1320 decides"
+    arming_reason_zh: "絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available 是候選分母，但它由檔案描述符推得，由 #1320 決定"
   rabbitmq_consumers:
     pack: rabbitmq
     tier: defaults

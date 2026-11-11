@@ -3494,8 +3494,9 @@ def run_check(
             "operator who only ran `helm install` gets an alert that cannot fire. "
             "Set its `arming` in rule-packs/threshold-registry.yaml — `default` "
             "ships it in the chart, any other state records why it is left to "
-            "the operator — then run check_threshold_registry.py --regen. "
-            "(TRK-337, D-A A1)"
+            "the operator — and run check_threshold_registry.py --regen (if it "
+            "already says `default`, the regen alone is the fix: values.yaml is "
+            "stale). (TRK-337, D-A A1)"
         )
 
     for k in sorted(not_armed & not_chart_armed):
