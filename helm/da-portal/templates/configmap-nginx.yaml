@@ -30,8 +30,8 @@ data:
       # ── Health Endpoint ────────────────────────────────────────────────────
       location = /healthz {
         access_log off;
+        default_type text/plain;
         return 200 "OK\n";
-        add_header Content-Type text/plain;
       }
 
       # ── Simulate preview: explicitly NOT provided (#2125) ─────────────────
@@ -48,24 +48,37 @@ data:
       }
 
       # ── Static Files (Interactive Tools, JSX, platform-data.json, etc.) ────
+      # The image's entry page is interactive/index.html (components/da-portal
+      # Dockerfile); there is no index.html at the document root.
+      # No add_header in any location below: one there would drop every
+      # server-level security header above for that response. Caching is set
+      # with `expires` alone.
       location / {
         root /usr/share/nginx/html;
-        index index.html;
+        index interactive/index.html;
+        {{- if .Values.customData.enabled }}
 
-        # Cache control for static assets
-        # Set long TTL for versioned/hashed assets, short for index.html
+        # Custom data (customData): a file in the customData volume replaces
+        # the image's file of the same name under /assets/ (platform-data.json,
+        # flows.json, ...) — the tools read /assets/<file>, never /custom/.
+        # First among the regex locations, so it wins over the ones below.
+        location ~ ^/assets/([^/]+\.(json|ya?ml))$ {
+          expires 1h;
+          try_files /custom/$1 $uri =404;
+        }
+        {{- end }}
+
+        # Long TTL for hashed assets, short for pages and data.
         location ~* \.(js|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot)$ {
           expires 7d;
-          add_header Cache-Control "public, immutable";
         }
 
         location ~* \.(html|json)$ {
           expires 1h;
-          add_header Cache-Control "public, must-revalidate";
         }
 
         # Fallback to index.html for SPA routing
-        try_files $uri $uri/ /index.html;
+        try_files $uri $uri/ /interactive/index.html;
       }
 
       # ── Deny access to sensitive files ──────────────────────────────────────

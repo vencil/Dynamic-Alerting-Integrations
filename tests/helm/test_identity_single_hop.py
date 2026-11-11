@@ -29,6 +29,7 @@ import pytest
 import yaml
 from _helm_gate import helm_required
 from _render_baseline import baseline_args
+from _tree import repo_files
 
 _REPO = Path(__file__).resolve().parents[2]
 _HAS_HELM = shutil.which("helm") is not None
@@ -38,6 +39,12 @@ _CHARTS = sorted(p.parent for p in (_REPO / "helm").glob("*/Chart.yaml"))
 _WORKLOAD_KINDS = {"Deployment", "StatefulSet", "DaemonSet", "ReplicaSet", "Job", "CronJob", "Pod"}
 _OAUTH2_PROXY_IMAGE = "oauth2-proxy/oauth2-proxy"
 _OWNER_CHART = "tenant-api"
+#: Charts whose default render refuses on purpose, with the refusal expected:
+#: they need a value to install at all, so their ci/ sets are the only view.
+#: Any other default-render failure fails the fixture.
+_REFUSES_DEFAULTS = {
+    "victorialogs": "needs auth.consumers[].existingSecret",
+}
 #: One more tenant-api render: an OIDC provider with an extra claim header, so
 #: the configured-header list below is shown to come from the config file
 #: (a name no fixed list carries).
@@ -76,17 +83,20 @@ def _render(chart: Path, values: Path | None, *sets: str) -> subprocess.Complete
 def renders() -> dict[str, list[dict]]:
     """`<chart>[:<ci value set>]` → rendered documents.
 
-    Every ci/ value set must render. A default render may fail only when the
-    chart needs a value to install at all (victorialogs refuses until its
-    consumers' Secrets are named); then its ci/ sets are the only view, and
-    there must be at least one.
+    Every ci/ value set must render. A default render may fail only for a
+    chart in _REFUSES_DEFAULTS, and only with the refusal named there; then
+    its ci/ sets are the only view, and there must be at least one.
     """
     _helm_or_skip()
     out: dict[str, list[dict]] = {}
     for chart in _CHARTS:
         name = chart.name
         res = _render(chart, None)
-        if res.returncode == 0:
+        if name in _REFUSES_DEFAULTS:
+            assert res.returncode != 0, f"{name}: default render now succeeds; drop it from _REFUSES_DEFAULTS"
+            assert _REFUSES_DEFAULTS[name] in res.stderr, f"{name}: unexpected refusal: {res.stderr}"
+        else:
+            assert res.returncode == 0, f"{name} (defaults): {res.stderr}"
             out[name] = [d for d in yaml.safe_load_all(res.stdout) if d]
         sets = sorted((chart / "ci").glob("*.yaml"))
         for values in sets:
@@ -115,9 +125,15 @@ def _containers(doc: dict) -> list[dict]:
     return [c for s in _pod_specs(doc) for c in s.get("initContainers", []) + s["containers"]]
 
 
+def _repo_yaml(*prefixes: str) -> list[Path]:
+    """Tracked .yaml files under the given repo-relative directories."""
+    return [p for p in repo_files(".yaml")
+            if p.relative_to(_REPO).as_posix().startswith(prefixes)]
+
+
 def _k8s_manifests() -> list[tuple[Path, dict]]:
     docs = []
-    for p in sorted((_REPO / "k8s").rglob("*.yaml")):
+    for p in sorted(_repo_yaml("k8s/")):
         for d in yaml.safe_load_all(p.read_text(encoding="utf-8")):
             if isinstance(d, dict):
                 docs.append((p, d))
@@ -200,7 +216,7 @@ def test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header
 def test_no_raw_manifest_or_rule_pack_names_an_identity_header(
         renders: dict[str, list[dict]]) -> None:
     pat = _pattern(_identity_headers(renders))
-    files = sorted((_REPO / "k8s").rglob("*.yaml")) + sorted((_REPO / "rule-packs").rglob("*.yaml"))
+    files = sorted(_repo_yaml("k8s/", "rule-packs/"))
     assert len(files) > 10, files
     hits = [f"{p.relative_to(_REPO)}: {m.group(0)}" for p in files
             if (m := pat.search(p.read_text(encoding="utf-8")))]

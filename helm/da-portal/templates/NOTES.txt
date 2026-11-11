@@ -9,7 +9,7 @@ its oauth2-proxy (ADR-027 §5). This chart forwards nothing to tenant-api.
 
 {{- if .Values.networkPolicy.enabled }}
 
-NetworkPolicy: ingress from {{ join ", " .Values.networkPolicy.allowedNamespaces }}; no egress.
+NetworkPolicy: ingress from {{ join ", " .Values.networkPolicy.allowedNamespaces }}; this policy allows no egress (another policy selecting the pod can still allow some).
   It only works if your CNI enforces NetworkPolicy (Calico / Cilium / Antrea);
   Flannel and some managed "simple" CNIs accept it and ignore it.
 {{- end }}

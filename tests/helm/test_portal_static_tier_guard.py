@@ -141,3 +141,81 @@ def test_values_yaml_carries_no_removed_key() -> None:
     assert sorted(values["networkPolicy"]) == ["allowedNamespaces", "enabled"]
     # The tier overlays are gone: there is one profile.
     assert sorted(p.name for p in _CHART.glob("values*")) == ["values.schema.json", "values.yaml"]
+
+
+# ── What the rendered server actually serves (CodeRabbit on #3744) ──────────
+#
+# Checked once against a real nginx serving a copy of the image's tree: before
+# these fixes `/` answered 404/403 (no index.html at the document root), a
+# customData platform-data.json was never served (mounted at /custom, read
+# from /assets), and every static response lost the security headers (an
+# add_header in a nested location drops the server-level ones).
+
+_DOCKERFILE = _REPO / "components" / "da-portal" / "Dockerfile"
+_DOCROOT = "/usr/share/nginx/html"
+
+
+def _image_has(path: str) -> bool:
+    """True when the da-portal image ships <docroot><path>: a Dockerfile COPY
+    whose destination covers it, from a source that exists in the repo."""
+    want = _DOCROOT + path
+    for m in re.finditer(r"^COPY\s+(?:--\S+\s+)*(\S+)\s+(\S+)\s*$",
+                         _DOCKERFILE.read_text(encoding="utf-8"), re.M):
+        src, dst = m.groups()
+        if dst.endswith("/") and want.startswith(dst):
+            if (_REPO / src / want[len(dst):]).is_file():
+                return True
+        elif want == dst and (_REPO / src).is_file():
+            return True
+    return False
+
+
+def _location_root_block(code: str) -> str:
+    start = re.search(r"location\s+/\s*\{", code)
+    assert start, "no `location /` block"
+    depth, i = 1, start.end()
+    while depth:
+        depth += {"{": 1, "}": -1}.get(code[i], 0)
+        i += 1
+    return code[start.end():i - 1]
+
+
+@pytest.mark.parametrize("values_file", VALUE_SETS)
+def test_the_entry_page_and_spa_fallback_are_files_the_image_ships(values_file: str | None) -> None:
+    _helm_or_skip()
+    code = _code(_nginx_conf(_render(values_file)))
+    block = _location_root_block(code)
+    index = re.search(r"^\s*index\s+(\S+);", block, re.M)
+    fallback = re.search(r"^\s*try_files\s+\$uri\s+\$uri/\s+(\S+);", block, re.M)
+    assert index and fallback, block
+    assert _image_has("/" + index.group(1)), f"index {index.group(1)} is not in the image"
+    assert _image_has(fallback.group(1)), f"SPA fallback {fallback.group(1)} is not in the image"
+
+
+@pytest.mark.parametrize("values_file", VALUE_SETS)
+def test_no_location_drops_the_security_headers(values_file: str | None) -> None:
+    """An add_header inside a location replaces every server-level add_header
+    for that response, so all of them live at server level."""
+    _helm_or_skip()
+    code = _code(_nginx_conf(_render(values_file)))
+    depth, bad = 0, []
+    for n, line in enumerate(code.splitlines(), 1):
+        if depth >= 2 and re.match(r"\s*add_header\b", line):
+            bad.append(f"line {n}: {line.strip()}")
+        depth += line.count("{") - line.count("}")
+    assert re.search(r"^\s*add_header\s+X-Content-Type-Options", code, re.M), "no security headers at all"
+    assert not bad, "add_header inside a location:\n" + "\n".join(bad)
+
+
+def test_custom_data_replaces_the_files_the_tools_read() -> None:
+    _helm_or_skip()
+    block = _location_root_block(_code(_nginx_conf(_render("ci/pss-custom-data-emptydir-values.yaml"))))
+    regexes = re.findall(r"location\s+~\*?\s+(\S+)\s*\{([^}]*)\}", block)
+    assert regexes, block
+    first, body = regexes[0]
+    # First among the regex locations, or an earlier one (\.json$) answers
+    # /assets/platform-data.json from the image instead.
+    assert first.startswith("^/assets/"), f"custom-data override is not first: {first}"
+    assert re.search(r"try_files\s+/custom/\$1\s+\$uri\s+=404;", body), body
+    assert re.fullmatch(first, "/assets/platform-data.json") or re.match(first, "/assets/platform-data.json")
+    assert not re.search(r"/custom/", _code(_nginx_conf(_render(None)))), "override without customData"

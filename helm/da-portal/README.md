@@ -14,14 +14,16 @@ saved views, recipe preview, federation tokens) show their offline state.
 tenant-api pod, behind tenant-api's oauth2-proxy, which routes `/api/` to
 tenant-api and everything else to the portal container
 ([ADR-027 §5](../../docs/adr/027-tenant-api-caller-identity.md)). Install
-[`helm/tenant-api`](../tenant-api/) for that. One deployment has one
-oauth2-proxy, one Ingress and one session cookie.
+[`helm/tenant-api`](../tenant-api/) for that, with its `ingress.enabled=true`
+and `oauth2Proxy.enabled=true`: its Ingress is the only way in. That
+deployment then has one oauth2-proxy, one Ingress and one session cookie.
 
 ```
 Service (port 80) ──► nginx (listenPort 80)
                         ├─ /healthz                     → 200
                         ├─ /api/v1/tenants/simulate     → 501 (not provided)
-                        └─ /                            → static files
+                        ├─ /assets/<file> (customData)  → the customData file, else the image's
+                        └─ /                            → static files; entry page interactive/index.html
 ```
 
 ## Installation
@@ -51,7 +53,9 @@ this release with the removed keys dropped — or uninstall it.
 
 ### Custom Data (platform-data.json, flows.json, etc.)
 
-Mount custom data from a ConfigMap:
+Files in a ConfigMap replace the image's files of the same name under
+`/assets/` (`platform-data.json`, `flows.json`, any `.json` / `.yaml`); a name
+the ConfigMap does not carry is still served from the image. Mount it with:
 
 ```bash
 # Create ConfigMap with custom files
@@ -81,7 +85,7 @@ helm install da-portal helm/da-portal -n monitoring \
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | portal.listenPort | int | 80 | nginx listening port |
-| customData.enabled | bool | false | Mount custom data at `/usr/share/nginx/html/custom` |
+| customData.enabled | bool | false | Serve the volume's `.json` / `.yaml` files in place of the image's `/assets/<same name>` |
 | customData.type | string | `configMap` | `configMap` or `emptyDir` |
 | customData.configMapName | string | `da-portal-custom` | ConfigMap to mount when `type: configMap` |
 
@@ -107,7 +111,7 @@ helm install da-portal helm/da-portal -n monitoring \
 |-----|------|---------|-------------|
 | podSecurityContext.runAsUser | int | 65534 | Pod run-as UID (nobody) |
 | podSecurityContext.runAsGroup | int | 65534 | Pod run-as GID |
-| networkPolicy.enabled | bool | true | Ingress only from `allowedNamespaces`; no egress at all |
+| networkPolicy.enabled | bool | true | Ingress only from `allowedNamespaces`; this policy allows no egress |
 | networkPolicy.allowedNamespaces | list | `[monitoring, ingress-nginx]` | Namespaces allowed to reach the portal (at least one); do not add tenant namespaces |
 
 ## Health Checks
@@ -131,9 +135,10 @@ live tenants.
 
 1. **No credentials**: the chart holds no secret and no ServiceAccount token
    (`automountServiceAccountToken: false`).
-2. **NetworkPolicy**: ingress is limited to `networkPolicy.allowedNamespaces`
-   and egress is denied. It only takes effect on a CNI that enforces
-   NetworkPolicy (Calico / Cilium / Antrea).
+2. **NetworkPolicy**: ingress is limited to `networkPolicy.allowedNamespaces`,
+   and this policy allows no egress. NetworkPolicies add up: another policy
+   selecting the same pod can still allow egress. It only takes effect on a
+   CNI that enforces NetworkPolicy (Calico / Cilium / Antrea).
 3. **Pod Security Context**: runs as non-root (UID 65534) with a read-only
    root filesystem. Do not override unless necessary.
 
