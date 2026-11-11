@@ -850,11 +850,35 @@ describe('TenantManager — federation tokens entry point', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/federation/tokens?tenant_id=prod-mariadb-01'));
   });
 
+  it('signed in but demo data (search unreachable) → no per-tenant button', async () => {
+    apiFixture('MeResponse', ME);
+    vi.stubGlobal('fetch', vi.fn((url: string) => {
+      if (String(url).includes('/api/v1/me')) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(ME) } as any);
+      }
+      return Promise.reject(new Error('offline test'));
+    }));
+    await renderAndSettle();
+    await screen.findByTestId('open-federation-tokens-by-id'); // authUser is set
+    const [first] = screen.getAllByRole('checkbox', { name: /^Select / });
+    fireEvent.click(first);
+    await screen.findByRole('button', { name: 'Custom Alerts' });
+    expect(screen.queryByTestId('open-federation-tokens')).toBeNull();
+  });
+
+  it('signed in → "by tenant ID" opens the dialog asking for an id', async () => {
+    stubLive();
+    await renderAndSettle();
+    fireEvent.click(await screen.findByTestId('open-federation-tokens-by-id'));
+    await screen.findByTestId('fed-tenant-id');
+  });
+
   it('demo data → no button, even with one tenant selected', async () => {
     await renderAndSettle();
     const [first] = screen.getAllByRole('checkbox', { name: /^Select / });
     fireEvent.click(first);
     await screen.findByRole('button', { name: 'Custom Alerts' });
     expect(screen.queryByTestId('open-federation-tokens')).toBeNull();
+    expect(screen.queryByTestId('open-federation-tokens-by-id')).toBeNull();
   });
 });

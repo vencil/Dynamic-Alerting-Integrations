@@ -28,7 +28,7 @@ updated_at: 2026-05-19
 ## 前提
 
 - 你要 offboard 的租戶 id（以下記為 `<tenant>`）。
-- tenant-api 的存取權：撤銷 token 走已認證的 `DELETE /api/v1/federation/tokens/{id}`（操作者經 oauth2-proxy 的互動式登入即可 —— 不需要任何帶外憑證）。
+- portal 的登入與對該租戶的 admin 權限：撤銷 token 在 portal 的 Tenant Manager 操作（經 oauth2-proxy 的互動式登入即可 —— 不需要任何帶外憑證）。
 - conf.d repo 的寫入權（offboarding 的 git PR）。
 - 對 tenant-api namespace 裡 `tenant-api-state` ConfigMap 的 `patch` 權限（步驟 2；tenant-api 沒有刪除 subset 的 API）。
 
@@ -39,6 +39,8 @@ updated_at: 2026-05-19
 ### 1. 撤銷該租戶的 federation token
 
 由對該租戶有 admin 權限者在 portal 操作（tenant-api 的 API 只接受經登入進來的請求，[ADR-027 §4](../adr/027-tenant-api-caller-identity.md)）：Tenant Manager 勾選該租戶 → **Federation tokens**，對清單裡的每一個 token 按 **撤銷** → **確認撤銷**。
+
+租戶**已經**從 conf.d 移除（例如 `tenant_api_federation_orphaned_tokens` 告訴你有殘留）時，Tenant Manager 沒有它的卡片可勾：不勾任何租戶，按 **Federation tokens（依租戶 ID）**，輸入租戶 ID 後同樣列出、撤銷。權限一樣看 `_rbac.yaml`——授予 admin 的規則要能套到這個 ID（例如 `tenants: ["*"]`）。
 
 撤銷把 token id 寫進 `tenant-federation-store` ConfigMap 的 revoked set —— gateway 會在最終一致的延遲後拒絕它（見下方 §最終一致性）。
 
@@ -73,14 +75,14 @@ git rm <上一步列出的每個路徑>
 
 ### 4. 驗證
 
-- `GET /api/v1/federation/tokens?tenant_id=<tenant>` 回空陣列。
+- portal 的 **Federation tokens（依租戶 ID）** 輸入 `<tenant>`，顯示沒有未過期的 token。
 - `tenant-api-state` ConfigMap 已沒有 `_federation.<tenant>.yaml` 這個 key。
 - `conf.d/` 與 `conf.d/_federation/` 底下都已沒有主檔名為 `<tenant>` 的 `.yaml`／`.yml` 檔（任何副檔名大小寫）。
 - 等過最終一致性窗口後（見下），舊 token 打 gateway 應回 `403`。
 
 ## Federation 撤銷的最終一致性（合規用語）
 
-撤銷**不是即時生效**。`DELETE` 把 token id 寫進 ConfigMap 的 revoked set 後，gateway 端的生效路徑是：
+撤銷**不是即時生效**。撤銷（portal 送出的 `DELETE`）把 token id 寫進 ConfigMap 的 revoked set 後，gateway 端的生效路徑是：
 
 1. kubelet 把 ConfigMap 的更新同步進 gateway pod 的 projected volume —— 最長約 1 分鐘。
 2. gateway 的 Lua filter 以時間閘（預設 30s）重讀 `revoked.txt`。
@@ -122,5 +124,5 @@ tenant-api 內建一個**被動偵測器**：週期性掃描，若發現 federat
 ## 反面 —— 不要這樣做
 
 - **不要**用 `git push --force` 或繞過 PR review 來「快速」offboard —— offboarding 是低頻操作，沒有快的需求，走正常 PR。
-- **不要**直接 `kubectl edit` 那個 `tenant-federation-store` ConfigMap 去手動刪 record —— 它有 schema（`revoked.txt` 格式），手改容易寫壞；一律走 `DELETE` API。
+- **不要**直接 `kubectl edit` 那個 `tenant-federation-store` ConfigMap 去手動刪 record —— 它有 schema（`revoked.txt` 格式），手改容易寫壞；一律在 portal 撤銷（它送的是 `DELETE` API）。
 - **不要**刪平台 whitelist `_federation_policy.yaml` 裡的東西 —— 那不屬單一租戶 offboarding。

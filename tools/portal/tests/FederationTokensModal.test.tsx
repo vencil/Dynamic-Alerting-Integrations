@@ -124,17 +124,52 @@ describe('FederationTokensModal — issue', () => {
     expect(a.issue).not.toHaveBeenCalled();
   });
 
-  it('a refused issue shows its remedy and no token', async () => {
+  it('a refused logs issue (no account registry) shows its remedy and no token', async () => {
     open(api({
       issue: vi.fn(() => Promise.resolve(fail(503, apiFixture('ErrorResponse', {
         error: 'logs federation is not configured on this server', code: 'FEDERATION_NOT_CONFIGURED',
       })))),
     }));
     await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-capability-logs'));
     fireEvent.click(screen.getByTestId('fed-issue'));
     await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
     expect(screen.getByTestId('fed-error').textContent).toContain('logs federation is not configured');
     expect(screen.queryByTestId('fed-new-token')).toBeNull();
+  });
+
+  it('409 TOKEN_LIMIT_REACHED: says an existing token stands in the way', async () => {
+    open(api({
+      issue: vi.fn(() => Promise.resolve(fail(409, apiFixture('ErrorResponse', {
+        error: 'tenant tenant-x already has 16 active federation tokens', code: 'TOKEN_LIMIT_REACHED',
+      })))),
+    }));
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
+    expect(screen.getByTestId('fed-error').getAttribute('data-remedy')).toBe('existing');
+  });
+
+  it('429 RATE_LIMITED: says how long to wait, from Retry-After', async () => {
+    open(api({
+      issue: vi.fn(() => Promise.resolve({
+        ...fail(429, apiFixture('ErrorResponse', { error: 'issuance rate limit', code: 'RATE_LIMITED' })),
+        retryAfter: '17',
+      })),
+    }));
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
+    expect(screen.getByTestId('fed-error').getAttribute('data-remedy')).toBe('retry_after');
+    expect(screen.getByTestId('fed-error').textContent).toContain('17');
+  });
+
+  it('256 characters count as characters, not UTF-16 units (Go counts runes)', async () => {
+    const { a } = open();
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.change(screen.getByTestId('fed-description'), { target: { value: '😀'.repeat(256) } });
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(a.issue).toHaveBeenCalled());
   });
 
   it('cannot be sent twice while the first is in flight', async () => {
@@ -171,5 +206,70 @@ describe('FederationTokensModal — revoke', () => {
     fireEvent.click(within(row).getByTestId('fed-revoke-confirm'));
     await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
     expect(screen.queryByTestId('fed-revoked')).toBeNull();
+  });
+});
+
+describe('FederationTokensModal — the one-time token is never dropped silently', () => {
+  async function issueOne(a = api(), signIn = vi.fn(() => true)) {
+    const onClose = vi.fn();
+    render(<FederationTokensModal tenantId="tenant-x" onClose={onClose} api={a} signIn={signIn} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(screen.getByTestId('fed-new-token')).toBeInTheDocument());
+    return { onClose, signIn, a };
+  }
+
+  it('Close asks first while the token is shown; "close anyway" closes', async () => {
+    const { onClose } = await issueOne();
+    fireEvent.click(screen.getByTestId('fed-close'));
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('fed-close-anyway'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('Esc asks first too', async () => {
+    const { onClose } = await issueOne();
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() => expect(screen.getByTestId('fed-close-confirm')).toBeInTheDocument());
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('after "I have saved it", Close closes at once and Issue is enabled again', async () => {
+    const { onClose } = await issueOne();
+    expect((screen.getByTestId('fed-issue') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByTestId('fed-token-saved'));
+    expect(screen.queryByTestId('fed-new-token')).toBeNull();
+    expect((screen.getByTestId('fed-issue') as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(screen.getByTestId('fed-close'));
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it('a 401 while the token is shown does not leave for sign-in', async () => {
+    const a = api({ revoke: vi.fn(() => Promise.resolve(fail(401, { error: 'unauthorized' }))) });
+    const { signIn } = await issueOne(a);
+    const row = screen.getAllByTestId('fed-row')[0];
+    fireEvent.click(within(row).getByTestId('fed-revoke'));
+    fireEvent.click(within(row).getByTestId('fed-revoke-confirm'));
+    await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
+    expect(signIn).not.toHaveBeenCalled();
+    expect(screen.getByTestId('fed-new-token').textContent).toContain('eyJ.signed.jwt');
+  });
+});
+
+describe('FederationTokensModal — other states', () => {
+  it('a list 401 right after signing in shows the refusal, not "Loading…" forever', async () => {
+    open(api({ list: vi.fn(() => Promise.resolve(fail(401, { error: 'unauthorized' }))) }), vi.fn(() => false));
+    await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
+    expect(screen.queryByText('Loading…')).toBeNull();
+  });
+
+  it('without a tenant id it asks for one (a removed tenant has no card), then lists it', async () => {
+    const a = api();
+    render(<FederationTokensModal tenantId="" onClose={() => {}} api={a} signIn={vi.fn(() => true)} />);
+    expect(a.list).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByTestId('fed-tenant-id'), { target: { value: ' gone-tenant ' } });
+    fireEvent.click(screen.getByTestId('fed-tenant-open'));
+    await waitFor(() => expect(a.list).toHaveBeenCalledWith('gone-tenant'));
+    await waitFor(() => expect(screen.getAllByTestId('fed-row')).toHaveLength(1));
   });
 });

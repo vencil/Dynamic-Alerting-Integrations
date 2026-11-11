@@ -182,7 +182,9 @@ export default function TenantManager() {
   const [modalExcluded, setModalExcluded] = useState([]); // #2068: [{name, code}] left out of the YAML
   // ADR-024 §3: the live custom-alert editor opens for one tenant.
   const [customAlertsTenant, setCustomAlertsTenant] = useState(null);
-  // ADR-027 §4 (#1040 S6): federation tokens of one tenant, live API only.
+  // ADR-027 §4 (#1040 S6): federation tokens of one tenant. null = closed;
+  // '' = open, asking for a tenant id (a tenant already removed from conf.d
+  // has no card to select — the offboarding runbook's orphan case).
   const [federationTenant, setFederationTenant] = useState(null);
   const [hoveredCard, setHoveredCard] = useState(null);
   const [activeGroupId, setActiveGroupId] = useState(null);
@@ -991,6 +993,11 @@ export default function TenantManager() {
               <button onClick={selectAll} style={styles.button}>
                 {t('全選過濾的租戶', 'Select All Filtered')}
               </button>
+              {authUser && (
+                <button onClick={() => setFederationTenant('')} style={styles.button} data-testid="open-federation-tokens-by-id">
+                  {t('Federation token（依租戶 ID）', 'Federation tokens by tenant ID')}
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -1124,7 +1131,7 @@ export default function TenantManager() {
         />
       )}
 
-      {federationTenant && authUser && (
+      {federationTenant !== null && authUser && (
         <FederationTokensModal
           tenantId={federationTenant}
           onClose={() => setFederationTenant(null)}

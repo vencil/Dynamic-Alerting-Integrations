@@ -25,11 +25,18 @@ const t = window.__t || ((zh, en) => en);
  * two identical on purpose (#3123), and so does this page.
  *
  * The signed token is in the POST answer only and cannot be read back:
- * it is shown once, with a copy button, until the dialog closes.
+ * it is shown once, with a copy button, and nothing drops it silently —
+ * closing the dialog (button, Esc, backdrop) asks first, a 401 while it is
+ * on screen does not leave for sign-in, and no second token is issued over
+ * it until the user says it is saved ("I have saved it").
+ *
+ * Without a tenantId the dialog first asks for one: the offboarding
+ * runbook revokes the tokens of a tenant already removed from conf.d
+ * (tenant_api_federation_orphaned_tokens), which has no card to select.
  * ─────────────────────────────────────────────────────────────────── */
 
 const ENDPOINT = '/api/v1/federation/tokens';
-const DESCRIPTION_MAX = 256;
+const DESCRIPTION_MAX = 256; // characters (Go validate max counts runes)
 
 function answer(resp) {
   return resp.json().catch(() => null).then((data) => ({
@@ -68,12 +75,14 @@ const noteStyle = { fontSize: 'var(--da-font-size-sm-md)', color: 'var(--da-colo
 const errorStyle = { color: 'var(--da-color-error-text)', fontSize: 'var(--da-font-size-sm-md)', margin: 'var(--da-space-2) 0' };
 
 function FederationTokensModal(props) {
-  const { tenantId, onClose, api = defaultApi, signIn = redirectToSignIn } = props || {};
-  const modalRef = useModalFocusTrap(true, () => onClose());
+  const { tenantId: givenTenant, onClose, api = defaultApi, signIn = redirectToSignIn } = props || {};
+  const [tenantId, setTenantId] = useState(givenTenant || '');
+  const [tenantDraft, setTenantDraft] = useState('');
   const { copy, copied } = useCopyToClipboard();
 
-  // loading | list | unavailable | refused
-  const [phase, setPhase] = useState('loading');
+  // ask | loading | list | unavailable | refused
+  const [phase, setPhase] = useState(givenTenant ? 'loading' : 'ask');
+  const [confirmClose, setConfirmClose] = useState(false);
   const [records, setRecords] = useState([]);
   const [error, setError] = useState(null);
   const [capability, setCapability] = useState('metrics');
@@ -83,16 +92,42 @@ function FederationTokensModal(props) {
   const [confirming, setConfirming] = useState(null);
   const busy = useRef(false);
   const [busyView, setBusyView] = useState(false);
+  // The one-time token on screen, for the callbacks below (state is stale there).
+  const tokenShown = useRef(false);
+  useEffect(() => { tokenShown.current = Boolean(newToken); }, [newToken]);
 
+  const requestClose = () => {
+    if (tokenShown.current) {
+      setConfirmClose(true);
+      return;
+    }
+    onClose();
+  };
+  const requestCloseRef = useRef(requestClose);
+  requestCloseRef.current = requestClose;
+  const modalRef = useModalFocusTrap(true, () => requestCloseRef.current());
+
+  // true when the answer was a 401 (handled here). Returns before leaving
+  // for sign-in while a one-time token is on screen: leaving would lose it.
   const handleUnauthorized = useCallback((res) => {
     if (res.status !== 401) return false;
+    if (tokenShown.current) {
+      setError({
+        remedy: 'permission',
+        text: t('登入已過期。先複製上面的 token，再重新整理頁面登入。',
+          'Your session has expired. Copy the token above first, then reload the page to sign in.'),
+      });
+      return true;
+    }
     if (!signIn()) {
       setError({ remedy: 'permission', text: t('登入後仍被拒絕。', 'Still refused after signing in.') });
+      return 'refused';
     }
     return true;
   }, [signIn]);
 
   const load = useCallback(async () => {
+    if (!tenantId) return;
     let res;
     try {
       res = await api.list(tenantId);
@@ -101,7 +136,11 @@ function FederationTokensModal(props) {
       setPhase('refused');
       return;
     }
-    if (handleUnauthorized(res)) return;
+    const unauthorized = handleUnauthorized(res);
+    if (unauthorized) {
+      if (unauthorized === 'refused') setPhase('refused');
+      return;
+    }
     if (res.status === 404) {
       setPhase('unavailable');
       return;
@@ -137,7 +176,8 @@ function FederationTokensModal(props) {
   const issue = () => run(async () => {
     setError(null);
     setRevoked(null);
-    if (description.length > DESCRIPTION_MAX) {
+    if (newToken) return; // the shown token must be acknowledged first
+    if ([...description].length > DESCRIPTION_MAX) {
       setError({ remedy: 'fix_request', text: t(`說明最多 ${DESCRIPTION_MAX} 個字元。`, `The description is at most ${DESCRIPTION_MAX} characters.`) });
       return;
     }
@@ -191,7 +231,7 @@ function FederationTokensModal(props) {
   return (
     <div
       style={styles.modal}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget) requestClose(); }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="federation-tokens-title"
@@ -199,12 +239,38 @@ function FederationTokensModal(props) {
     >
       <div ref={modalRef} style={styles.modalContent} tabIndex={-1}>
         <div id="federation-tokens-title" style={styles.modalTitle}>
-          {t('Federation token', 'Federation tokens')} — <span style={monoStyle}>{tenantId}</span>
+          {t('Federation token', 'Federation tokens')}{tenantId ? <> — <span style={monoStyle}>{tenantId}</span></> : null}
         </div>
         <p style={noteStyle}>
           {t('租戶以 federation token 拉取自己的指標（metrics）或 log（logs）。簽發、列出、撤銷都需要這個租戶的 admin 權限。',
             'A tenant pulls its own metrics or logs with a federation token. Issuing, listing and revoking need admin on this tenant.')}
         </p>
+
+        {phase === 'ask' && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const id = tenantDraft.trim();
+              if (!id) return;
+              setTenantId(id);
+              setPhase('loading');
+            }}
+          >
+            <label htmlFor="fed-tenant-id" style={styles.formLabel}>{t('租戶 ID', 'Tenant ID')}</label>
+            <input
+              id="fed-tenant-id"
+              style={styles.inputField}
+              value={tenantDraft}
+              onChange={(e) => setTenantDraft(e.target.value)}
+              data-testid="fed-tenant-id"
+            />
+            <p style={noteStyle}>
+              {t('已從 conf.d 移除的租戶也可以在這裡撤銷它留下的 token（需要對它的 admin 權限）。',
+                'A tenant already removed from conf.d can be opened here too, to revoke the tokens it left behind (needs admin on it).')}
+            </p>
+            <button type="submit" style={styles.button} data-testid="fed-tenant-open">{t('開啟', 'Open')}</button>
+          </form>
+        )}
 
         {phase === 'loading' && <p style={noteStyle}>{t('載入中…', 'Loading…')}</p>}
 
@@ -226,9 +292,34 @@ function FederationTokensModal(props) {
                 'This is the only time the token is shown; it cannot be read back after you close this dialog. Copy it now.')}
             </p>
             <pre style={{ ...styles.codeBlock, ...monoStyle, whiteSpace: 'pre-wrap' }}>{newToken.token}</pre>
-            <button style={styles.button} onClick={() => copy(newToken.token)}>
-              {copied ? t('已複製', 'Copied') : t('複製 token', 'Copy token')}
-            </button>
+            <div style={styles.buttonGroup}>
+              <button style={styles.button} onClick={() => copy(newToken.token)}>
+                {copied ? t('已複製', 'Copied') : t('複製 token', 'Copy token')}
+              </button>
+              <button
+                style={{ ...styles.button, ...styles.buttonSecondary }}
+                onClick={() => { setNewToken(null); setConfirmClose(false); }}
+                data-testid="fed-token-saved"
+              >
+                {t('我已保存', 'I have saved it')}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {confirmClose && newToken && (
+          <div role="alert" data-testid="fed-close-confirm">
+            <p style={errorStyle}>
+              {t('token 還在畫面上，關閉後就無法再取得。仍要關閉？', 'The token is still on screen and cannot be read back after closing. Close anyway?')}
+            </p>
+            <div style={styles.buttonGroup}>
+              <button style={{ ...styles.button, ...styles.buttonDanger }} onClick={onClose} data-testid="fed-close-anyway">
+                {t('仍要關閉', 'Close anyway')}
+              </button>
+              <button style={{ ...styles.button, ...styles.buttonSecondary }} onClick={() => setConfirmClose(false)}>
+                {t('返回', 'Back')}
+              </button>
+            </div>
           </div>
         )}
 
@@ -331,7 +422,7 @@ function FederationTokensModal(props) {
               <button
                 style={{ ...styles.button, marginTop: 'var(--da-space-2)' }}
                 onClick={issue}
-                disabled={busyView}
+                disabled={busyView || Boolean(newToken)}
                 data-testid="fed-issue"
               >
                 {t('簽發', 'Issue')}
@@ -341,7 +432,7 @@ function FederationTokensModal(props) {
         )}
 
         <div style={{ ...styles.buttonGroup, marginTop: 'var(--da-space-4)', justifyContent: 'flex-end' }}>
-          <button style={{ ...styles.button, ...styles.buttonSecondary }} onClick={onClose}>
+          <button style={{ ...styles.button, ...styles.buttonSecondary }} onClick={requestClose} data-testid="fed-close">
             {t('關閉', 'Close')}
           </button>
         </div>
