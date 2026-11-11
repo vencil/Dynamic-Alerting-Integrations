@@ -83,6 +83,11 @@ GOLANGCI_LINT_SHA256=8df580d2670fed8fa984aac0507099af8df275e665215f5c7a2ae394389
 # (`HADOLINT_VERSION` / `HADOLINT_SHA256`) — so there is no copy here to drift
 # (#3627).
 HADOLINT_PIN_SRC=scripts/tools/lint/check_iac_vibe_rules.py
+# kube-linter, pint and promtool the same way (#3611): each pin is read from
+# the file that owns it, and none is written here.
+KUBE_LINTER_PIN_SRC=scripts/tools/lint/check_iac_helm.py
+PINT_PIN_SRC=scripts/tools/lint/check_pint.py
+PROMTOOL_PIN_SRC=.devcontainer/install-promtool.sh
 
 # Local machines already have a configured environment; only the ephemeral
 # remote containers need this.
@@ -131,6 +136,15 @@ at_pin() {
     # Reads "Haskell Dockerfile Linter X.Y.Z"; the pin carries a leading "v".
     hadolint) out="$(hadolint --version 2>/dev/null)" || return 1
           case "$out" in *" ${2#v}") return 0 ;; esac ;;
+    # Prints the bare version ("0.7.4"); the pin carries a leading "v".
+    kube-linter) out="$(kube-linter version 2>/dev/null)" || return 1
+          [ "$out" = "${2#v}" ] && return 0 ;;
+    # Prints "0.86.0 (revision: ...)".
+    pint) out="$(pint version 2>/dev/null)" || return 1
+          case "$out" in "$2" | "$2 "*) return 0 ;; esac ;;
+    # First line "promtool, version 3.15.1 (branch: ...".
+    promtool) out="$(promtool --version 2>&1)" || return 1
+          case "$out" in "promtool, version $2 "*) return 0 ;; esac ;;
   esac
   return 1
 }
@@ -148,6 +162,24 @@ HADOLINT_SHA256="$(py_pin HADOLINT_SHA256 "$HADOLINT_PIN_SRC")"
 # match neither shape, so a duplicate is never resolved by picking one.
 [[ "$HADOLINT_VERSION" =~ ^v[0-9]+(\.[0-9]+)*$ ]] || HADOLINT_VERSION=""
 [[ "$HADOLINT_SHA256" =~ ^[0-9a-f]{64}$ ]] || HADOLINT_SHA256=""
+
+# sh_pin <NAME> <file>: the value of every top-level line `NAME=value` in a
+# shell script (install-promtool.sh), one per line.
+sh_pin() {
+  sed -n -E "s/^$1=([^[:space:]#\"']+)[[:space:]]*\$/\\1/p" "$2" 2>/dev/null || true
+}
+KUBE_LINTER_VERSION="$(py_pin KUBE_LINTER_VERSION "$KUBE_LINTER_PIN_SRC")"
+KUBE_LINTER_SHA256="$(py_pin KUBE_LINTER_SHA256 "$KUBE_LINTER_PIN_SRC")"
+PINT_VERSION="$(py_pin PINT_VERSION "$PINT_PIN_SRC")"
+PINT_SHA256="$(py_pin PINT_SHA256 "$PINT_PIN_SRC")"
+PROMTOOL_VERSION="$(sh_pin PROM_VERSION "$PROMTOOL_PIN_SRC")"
+PROMTOOL_SHA256="$(sh_pin PROM_SHA256 "$PROMTOOL_PIN_SRC")"
+[[ "$KUBE_LINTER_VERSION" =~ ^v[0-9]+(\.[0-9]+)*$ ]] || KUBE_LINTER_VERSION=""
+[[ "$KUBE_LINTER_SHA256" =~ ^[0-9a-f]{64}$ ]] || KUBE_LINTER_SHA256=""
+[[ "$PINT_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]] || PINT_VERSION=""
+[[ "$PINT_SHA256" =~ ^[0-9a-f]{64}$ ]] || PINT_SHA256=""
+[[ "$PROMTOOL_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]] || PROMTOOL_VERSION=""
+[[ "$PROMTOOL_SHA256" =~ ^[0-9a-f]{64}$ ]] || PROMTOOL_SHA256=""
 
 # install_pinned <tool> <version> <url> <sha256> [<path inside the tarball>]
 # Without the fifth argument the download is the binary itself.
@@ -212,6 +244,8 @@ if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; } \
   && at_pin helm "$HELM_VERSION" && at_pin golangci-lint "$GOLANGCI_LINT_VERSION" \
   && at_pin hadolint "$HADOLINT_VERSION" \
+  && at_pin kube-linter "$KUBE_LINTER_VERSION" && at_pin pint "$PINT_VERSION" \
+  && at_pin promtool "$PROMTOOL_VERSION" \
   && pre-commit install; then
   note "re-run at $(date -u +%Y-%m-%dT%H:%M:%SZ): already bootstrapped, no-op"
   say "already bootstrapped (marker: $MARKER) — nothing else to do"
@@ -352,7 +386,7 @@ fi
 # A failure here does not stop the steps around it, but it is in RESULT: a
 # remote session without helm turns the helm-gated tests red (tests/_helm_gate.py).
 toolchain_failed=""
-say "installing helm v$HELM_VERSION, golangci-lint v$GOLANGCI_LINT_VERSION and hadolint ${HADOLINT_VERSION:-(pin unreadable)} (sha256-pinned)"
+say "installing helm v$HELM_VERSION, golangci-lint v$GOLANGCI_LINT_VERSION, hadolint ${HADOLINT_VERSION:-(pin unreadable)}, kube-linter ${KUBE_LINTER_VERSION:-(pin unreadable)}, pint ${PINT_VERSION:-(pin unreadable)} and promtool ${PROMTOOL_VERSION:-(pin unreadable)} (sha256-pinned)"
 if install_pinned helm "$HELM_VERSION" \
      "https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz" \
      "$HELM_SHA256" linux-amd64/helm; then
@@ -371,22 +405,33 @@ else
   note "golangci-lint=FAILED ($why)"
   toolchain_failed="${toolchain_failed:+$toolchain_failed; }golangci-lint: $why"
 fi
-# --- 6b. hadolint at the lint wrapper's pin (#3627) --------------------------
-# The release asset is the bare binary, not a tarball.
-if [ -z "$HADOLINT_VERSION" ] || [ -z "$HADOLINT_SHA256" ]; then
-  why="pin unreadable from $HADOLINT_PIN_SRC"
-  say "  ⛔ hadolint not installed: $why"
-  note "hadolint=FAILED ($why)"
-  toolchain_failed="${toolchain_failed:+$toolchain_failed; }hadolint: $why"
-elif install_pinned hadolint "$HADOLINT_VERSION" \
-     "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
-     "$HADOLINT_SHA256"; then
-  note "hadolint=$HADOLINT_VERSION"
-else
-  say "  ⛔ hadolint $HADOLINT_VERSION not installed: $why"
-  note "hadolint=FAILED ($why)"
-  toolchain_failed="${toolchain_failed:+$toolchain_failed; }hadolint: $why"
-fi
+# --- 6b. binaries whose pin lives in the file that owns it -------------------
+# hadolint (#3627), kube-linter, pint and promtool (#3611): version and
+# checksum are read above from their SSOT, never written in this script.
+# install_owned_pin <tool> <version> <sha256> <pin source> <url> [<path in tarball>]
+install_owned_pin() {
+  if [ -z "$2" ] || [ -z "$3" ]; then
+    why="pin unreadable from $4"
+  elif install_pinned "$1" "$2" "$5" "$3" "${6:-}"; then
+    note "$1=$2"
+    return 0
+  fi
+  say "  ⛔ $1 ${2:-} not installed: $why"
+  note "$1=FAILED ($why)"
+  toolchain_failed="${toolchain_failed:+$toolchain_failed; }$1: $why"
+}
+# The hadolint release asset is the bare binary, not a tarball.
+install_owned_pin hadolint "$HADOLINT_VERSION" "$HADOLINT_SHA256" "$HADOLINT_PIN_SRC" \
+  "https://github.com/hadolint/hadolint/releases/download/${HADOLINT_VERSION}/hadolint-Linux-x86_64"
+install_owned_pin kube-linter "$KUBE_LINTER_VERSION" "$KUBE_LINTER_SHA256" "$KUBE_LINTER_PIN_SRC" \
+  "https://github.com/stackrox/kube-linter/releases/download/${KUBE_LINTER_VERSION}/kube-linter-linux.tar.gz" \
+  kube-linter
+install_owned_pin pint "$PINT_VERSION" "$PINT_SHA256" "$PINT_PIN_SRC" \
+  "https://github.com/cloudflare/pint/releases/download/v${PINT_VERSION}/pint-${PINT_VERSION}-linux-amd64.tar.gz" \
+  pint-linux-amd64
+install_owned_pin promtool "$PROMTOOL_VERSION" "$PROMTOOL_SHA256" "$PROMTOOL_PIN_SRC" \
+  "https://github.com/prometheus/prometheus/releases/download/v${PROMTOOL_VERSION}/prometheus-${PROMTOOL_VERSION}.linux-amd64.tar.gz" \
+  "prometheus-${PROMTOOL_VERSION}.linux-amd64/promtool"
 
 # --- 7. Pre-build pre-commit's hook environments ---------------------------
 # Optional but high-value: the first `pre-commit run` otherwise spends minutes

@@ -56,6 +56,16 @@ def _py_pin(name: str, text: str = _HADOLINT_SRC_TEXT) -> str:
 
 _HADOLINT = _py_pin("HADOLINT_VERSION")
 
+# kube-linter, pint and promtool: pins read from the files that own them (#3611).
+_OWNED_PIN_SRCS = ("scripts/tools/lint/check_iac_helm.py", "scripts/tools/lint/check_pint.py",
+                   ".devcontainer/install-promtool.sh")
+_KUBE_LINTER = _py_pin("KUBE_LINTER_VERSION",
+                       (_REPO_ROOT / _OWNED_PIN_SRCS[0]).read_text(encoding="utf-8"))
+_PINT = _py_pin("PINT_VERSION", (_REPO_ROOT / _OWNED_PIN_SRCS[1]).read_text(encoding="utf-8"))
+_PROMTOOL = re.findall(r"^PROM_VERSION=(\S+)$",
+                       (_REPO_ROOT / _OWNED_PIN_SRCS[2]).read_text(encoding="utf-8"),
+                       re.MULTILINE)[0]
+
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="cloud-only script (bash)")
 
 
@@ -80,8 +90,9 @@ def _repo(root: Path) -> Path:
     (repo / ".claude" / "hooks").mkdir(parents=True)
     shutil.copy2(_REPO_ROOT / ".claude" / "hooks" / "session-start.sh",
                  repo / ".claude" / "hooks" / "session-start.sh")
-    (repo / _HADOLINT_SRC).parent.mkdir(parents=True)
-    shutil.copy2(_REPO_ROOT / _HADOLINT_SRC, repo / _HADOLINT_SRC)
+    for src in (_HADOLINT_SRC, *_OWNED_PIN_SRCS):
+        (repo / src).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(_REPO_ROOT / src, repo / src)
     (repo / "requirements").mkdir()
     (repo / "requirements" / "ci-constraints.txt").write_text("", encoding="utf-8")
     (repo / ".pre-commit-config.yaml").write_text("repos: []\n", encoding="utf-8")
@@ -99,7 +110,9 @@ _INSTALL_SAID = "stand-in pre-commit install ran"
 def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc: int = 0,
          pre_commit: bool = True, real_pre_commit: bool = False,
          helm: str = _HELM, golangci: str = _GOLANGCI, hadolint: str | None = _HADOLINT,
-         curl: str = "fail", tool_bin_on_path: bool = False):
+         curl: "str | bytes" = "fail", tool_bin_on_path: bool = False,
+         kube_linter: str | None = _KUBE_LINTER, pint: str | None = _PINT,
+         promtool: str | None = _PROMTOOL):
     """Run the script; return (completed, marker text, {tool: [argument lines]}).
     `pre_commit=False` leaves no pre-commit anywhere on PATH; `real_pre_commit`
     puts the installed one there (still recorded). The stand-in's `install`
@@ -126,20 +139,29 @@ def _run(root: Path, repo: Path, marker_text: str | None, pre_commit_install_rc:
         stub.chmod(0o755)
     reports = {"helm": f"v{helm}+gstub",
                "golangci-lint": f"golangci-lint has version {golangci} built with stub"}
-    if hadolint is not None:
-        reports["hadolint"] = f"Haskell Dockerfile Linter {hadolint.removeprefix('v')}"
+    owned = {"hadolint": (hadolint, lambda v: f"Haskell Dockerfile Linter {v.removeprefix('v')}"),
+             "kube-linter": (kube_linter, lambda v: v.removeprefix("v")),
+             "pint": (pint, lambda v: f"{v} (revision: stub)"),
+             "promtool": (promtool, lambda v: f"promtool, version {v} (branch: stub)")}
+    for tool, (version, line) in owned.items():
+        if version is not None:
+            reports[tool] = line(version)
     for tool, line in reports.items():
         stub = bindir / tool
         stub.write_text(f'#!/bin/sh\necho "{line}"\n', encoding="utf-8")
         stub.chmod(0o755)
-    if hadolint is None:
-        # A stand-in that cannot run, not an absent file: a real hadolint later
-        # on PATH (the runner's own) would otherwise answer at the pin.
-        stub = bindir / "hadolint"
-        stub.write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
-        stub.chmod(0o755)
+    for tool, (version, _line) in owned.items():
+        if version is None:
+            # A stand-in that cannot run, not an absent file: a real binary
+            # later on PATH (the runner's own) would otherwise answer at the pin.
+            stub = bindir / tool
+            stub.write_text("#!/bin/sh\nexit 127\n", encoding="utf-8")
+            stub.chmod(0o755)
     served = root / "curl.serves"
-    served.write_text("garbage\n" if curl == "garbage" else curl, encoding="utf-8")
+    if isinstance(curl, bytes):
+        served.write_bytes(curl)
+    else:
+        served.write_text("garbage\n" if curl == "garbage" else curl, encoding="utf-8")
     body = ('exit 22\n' if curl == "fail" else
             f'while [ $# -gt 0 ]; do [ "$1" = -o ] && cat "{served}" > "$2"; shift; done\n')
     stub = bindir / "curl"
@@ -257,7 +279,8 @@ def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
 
 @pytest.mark.parametrize("state", [
     "last-run-failed", "no-pre-commit-on-PATH", "e2e-deps-gone", "helm-off-pin",
-    "golangci-lint-off-pin", "hadolint-off-pin", "hadolint-absent"])
+    "golangci-lint-off-pin", "hadolint-off-pin", "hadolint-absent",
+    "kube-linter-off-pin", "pint-off-pin", "promtool-absent"])
 def test_a_no_op_needs_every_condition(tmp_path, state):
     """The no-op path is taken only after a RESULT=ok run, with pre-commit on
     PATH, the e2e deps still in place and helm / golangci-lint / hadolint at
@@ -276,7 +299,10 @@ def test_a_no_op_needs_every_condition(tmp_path, state):
                        helm="3.0.0" if state == "helm-off-pin" else _HELM,
                        golangci="2.5.0" if state == "golangci-lint-off-pin" else _GOLANGCI,
                        hadolint={"hadolint-off-pin": "v2.10.0",
-                                 "hadolint-absent": None}.get(state, _HADOLINT))
+                                 "hadolint-absent": None}.get(state, _HADOLINT),
+                       kube_linter="v0.6.0" if state == "kube-linter-off-pin" else _KUBE_LINTER,
+                       pint="0.70.0" if state == "pint-off-pin" else _PINT,
+                       promtool=None if state == "promtool-absent" else _PROMTOOL)
 
     assert "already bootstrapped" not in r.stdout
     assert calls["pip"]
@@ -399,6 +425,9 @@ def test_tools_already_at_their_pins_are_not_downloaded(tmp_path):
     assert f"helm={_HELM}" in marker.splitlines()
     assert f"golangci-lint={_GOLANGCI}" in marker.splitlines()
     assert f"hadolint={_HADOLINT}" in marker.splitlines()
+    for tool, version in (("kube-linter", _KUBE_LINTER), ("pint", _PINT),
+                          ("promtool", _PROMTOOL)):
+        assert f"{tool}={version}" in marker.splitlines(), marker
     results = _result(marker)
     assert len(results) == 1 and "helm" not in results[0] \
         and "golangci-lint" not in results[0] and "hadolint" not in results[0], \
@@ -522,3 +551,116 @@ def test_an_unreadable_hadolint_pin_fails_without_downloading(tmp_path, damage):
     assert f"hadolint=FAILED ({why})" in marker.splitlines(), marker
     assert _result(marker)[0].endswith(f"hadolint: {why})"), marker
     assert _hadolint_downloads(calls["curl"]) == [], calls["curl"]
+
+
+# ── kube-linter, pint, promtool (#3611) ─────────────────────────────────────
+# Same contract as hadolint: the pin is read at run time from the file that
+# owns it, installed from its release tarball at that checksum, and a failure
+# is RESULT=failed with the reason.
+
+#: tool → (_run keyword, pin source, VERSION name, SHA name, URL fragment for
+#: the version, path of the binary inside the release tarball)
+_OWNED = {
+    "kube-linter": ("kube_linter", _OWNED_PIN_SRCS[0], "KUBE_LINTER_VERSION",
+                    "KUBE_LINTER_SHA256", lambda v: f"/download/{v}/kube-linter-linux.tar.gz",
+                    lambda v: "kube-linter"),
+    "pint": ("pint", _OWNED_PIN_SRCS[1], "PINT_VERSION", "PINT_SHA256",
+             lambda v: f"/download/v{v}/pint-{v}-linux-amd64.tar.gz",
+             lambda v: "pint-linux-amd64"),
+    "promtool": ("promtool", _OWNED_PIN_SRCS[2], "PROM_VERSION", "PROM_SHA256",
+                 lambda v: f"/download/v{v}/prometheus-{v}.linux-amd64.tar.gz",
+                 lambda v: f"prometheus-{v}.linux-amd64/promtool"),
+}
+_OWNED_PIN = {"kube-linter": _KUBE_LINTER, "pint": _PINT, "promtool": _PROMTOOL}
+_OWNED_REPORT = {"kube-linter": lambda v: v.removeprefix("v"),
+                 "pint": lambda v: f"{v} (revision: stub)",
+                 "promtool": lambda v: f"promtool, version {v} (branch: stub)"}
+
+
+def _set_owned_pin(repo: Path, tool: str, name: str, value: str) -> None:
+    """Rewrite one pin line in the repo copy of the tool's SSOT file."""
+    f = repo / _OWNED[tool][1]
+    text = f.read_text(encoding="utf-8")
+    if f.suffix == ".py":
+        text, n = re.subn(rf'^{name}\s*=\s*"[^"]+"\s*$', f'{name} = "{value}"', text,
+                          flags=re.MULTILINE)
+    else:
+        text, n = re.subn(rf"^{name}=\S+$", f"{name}={value}", text, flags=re.MULTILINE)
+    assert n == 1, (tool, name)
+    f.write_text(text, encoding="utf-8")
+
+
+@pytest.mark.parametrize("tool", sorted(_OWNED))
+@pytest.mark.parametrize("curl,why", [("fail", "download"), ("garbage", "sha256 mismatch")])
+def test_an_owned_pin_tool_that_cannot_be_installed_fails_the_run(tmp_path, tool, curl, why):
+    repo = _repo(tmp_path)
+    kw, *_ , url, _inner = _OWNED[tool]
+
+    r, marker, calls = _run(tmp_path, repo, None, curl=curl, **{kw: None})
+
+    assert r.returncode == 1, r.stdout + r.stderr
+    results = _result(marker)
+    assert len(results) == 1 and results[0].endswith(f"{tool}: {why})"), marker
+    assert f"{tool}=FAILED ({why})" in marker.splitlines()
+    assert any(url(_OWNED_PIN[tool]) in c for c in calls["curl"]), calls["curl"]
+    assert not (tmp_path / "tool-bin" / tool).exists()
+
+
+@pytest.mark.parametrize("tool", sorted(_OWNED))
+def test_an_owned_pin_is_read_from_its_ssot_at_run_time(tmp_path, tool):
+    """Bump the version in the file that owns it and the script asks for the
+    new release; a copy in the script would still fetch the old one."""
+    repo = _repo(tmp_path)
+    kw, _src, vname, *_rest = _OWNED[tool]
+    url = _OWNED[tool][4]
+    bumped = "v9.8.7" if tool == "kube-linter" else "9.8.7"
+    _set_owned_pin(repo, tool, vname, bumped)
+
+    r, marker, calls = _run(tmp_path, repo, None)  # stand-in reports the real pin
+
+    assert any(url(bumped) in c for c in calls["curl"]), calls["curl"]
+    assert f"{tool}=FAILED (download)" in marker.splitlines(), marker
+
+
+@pytest.mark.parametrize("tool", sorted(_OWNED))
+def test_an_owned_pin_tool_is_unpacked_from_its_release_tarball(tmp_path, tool):
+    """The binary is taken from its path inside the release tarball, and what
+    lands in the install dir is that member, verified by the pinned checksum."""
+    import io
+    import tarfile
+    repo = _repo(tmp_path)
+    kw, _src, _vname, sha_name, _url, inner = _OWNED[tool]
+    version = _OWNED_PIN[tool]
+    binary = f'#!/bin/sh\necho "{_OWNED_REPORT[tool](version)}"\n'.encode()
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+        info = tarfile.TarInfo(inner(version))
+        info.size, info.mode = len(binary), 0o755
+        tf.addfile(info, io.BytesIO(binary))
+    tarball = buf.getvalue()
+    _set_owned_pin(repo, tool, sha_name, hashlib.sha256(tarball).hexdigest())
+
+    r, marker, calls = _run(tmp_path, repo, None, curl=tarball, tool_bin_on_path=True,
+                            **{kw: None})
+
+    installed = tmp_path / "tool-bin" / tool
+    assert installed.read_bytes() == binary, r.stdout + r.stderr
+    assert os.access(installed, os.X_OK)
+    assert f"{tool}={version}" in marker.splitlines(), marker
+    assert all(tool not in line for line in _result(marker)), marker
+
+
+@pytest.mark.parametrize("tool", sorted(_OWNED))
+@pytest.mark.parametrize("damage", ["not-a-version", "not-a-sha"])
+def test_an_unreadable_owned_pin_fails_without_downloading(tmp_path, tool, damage):
+    repo = _repo(tmp_path)
+    kw, _src, vname, sha_name, url, _inner = _OWNED[tool]
+    if damage == "not-a-version":
+        _set_owned_pin(repo, tool, vname, "latest")
+    else:
+        _set_owned_pin(repo, tool, sha_name, "deadbeef")
+
+    r, marker, calls = _run(tmp_path, repo, None, **{kw: None})
+
+    assert f"{tool}=FAILED (pin unreadable from {_OWNED[tool][1]})" in marker.splitlines(), marker
+    assert not any(url(_OWNED_PIN[tool]) in c for c in calls["curl"]), calls["curl"]

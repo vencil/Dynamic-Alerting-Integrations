@@ -464,6 +464,14 @@ jobs:
         with:
           python-version-file: .python-version
 
+      - name: 'Set up Node.js (node-backed lint engines, #3611)'
+        # check_cli_contract evaluates the CLI Playground with node and exits 2
+        # without it (#3611 Q1). Pinned to the devcontainer major, as every
+        # other setup-node here, instead of the runner image's floating node.
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
       - name: Install Python dependencies
         run: |
           # cli_default_drift below loads every da-tools subcommand to capture

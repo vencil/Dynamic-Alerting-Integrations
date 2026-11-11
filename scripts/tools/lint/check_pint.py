@@ -69,6 +69,11 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # NB: the ghcr docker tag has NO `v` prefix (0.86.0); the GitHub *release* tag
 # used by the binary curl in CI DOES (v0.86.0).
 PINT_VERSION = "0.86.0"
+# SHA-256 of the release asset `pint-<PINT_VERSION>-linux-amd64.tar.gz`
+# (upstream checksums.txt). This line is the SSOT: ci.yml's `PINT_SHA256` must
+# equal it (tests/shared/test_toolchain_pin_parity.py), and .claude/hooks/
+# session-start.sh reads it at run time to install pint (#3611).
+PINT_SHA256 = "6166233a8d6d726d56345cb863f749a20f398cc9ffc01cd5c36410a76afa73bc"
 # Supply-chain: pin the Docker fallback by digest (multi-arch index of :0.86.0) so a
 # re-pushed/tampered tag can't swap the image. On version bump, re-resolve with:
 #   docker buildx imagetools inspect ghcr.io/cloudflare/pint:<ver>   (take the top-level Digest)
