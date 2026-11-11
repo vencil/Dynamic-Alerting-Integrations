@@ -705,8 +705,11 @@ class TestRunNonInteractive:
     def test_a_config_named_extra_is_refused(self, monkeypatch):
         """The guard: a file written beside the batch that a conf.d reader
         would scan is refused before anything is written (#3671)."""
-        import scaffold_tenant as st
-        monkeypatch.setattr(st, "relabel_snippet_name", lambda t: f"relabel_configs-{t}.yaml")
+        # Patch the namespace run_non_interactive resolves names in: another
+        # test may have re-imported scaffold_tenant, and `sys.modules` would
+        # then hold a different module object than the one bound here.
+        monkeypatch.setitem(run_non_interactive.__globals__, "relabel_snippet_name",
+                            lambda t: f"relabel_configs-{t}.yaml")
         with tempfile.TemporaryDirectory() as d:
             out = os.path.join(d, "conf.d")
             args = argparse.Namespace(
