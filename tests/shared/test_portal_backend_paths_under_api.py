@@ -195,11 +195,22 @@ def _pieces(expr: str) -> list[tuple[bool, str]] | None:
     return out
 
 
+def _depth(before: str) -> int:
+    """How many complete path segments lie below /api/ in *before* (the
+    static text so far). Only segments closed by a '/' count: an encoded
+    value written right after them may itself be a whole segment."""
+    path = before[:before.rfind("/") + 1]
+    segs = [x for x in path.split("/") if x and x != "."]
+    return len(segs) - 1 if segs[:1] == ["api"] else -1
+
+
 def _dynamic_ok(text: str, piece: str, before: str) -> str | None:
-    """None when a dynamic piece of a path cannot move it out of /api/:
-    it comes after the query ('?'), is wrapped in encodeURIComponent, or is
-    a name whose every assignment is a plain literal with no dot segment."""
-    if "?" in before or re.fullmatch(r"encodeURIComponent\(.*\)", piece, re.S):
+    """None when a dynamic piece of a path cannot move it out of /api/: it
+    comes after the query ('?'), or is a name whose every assignment is a
+    plain literal with no dot segment. (encodeURIComponent is handled by
+    the caller: it keeps the value one segment, but that segment may be
+    '..'.)"""
+    if "?" in before:
         return None
     if _IDENT.match(piece):
         values = _assignments(text, piece)
@@ -299,12 +310,16 @@ def _check(text: str, expr: str, at: int, depth: int = 0) -> str | None:
         return f"{expr[:60]!r} has a dot segment (the browser resolves it)"
     pieces = _pieces(expr) if expr[:1] in "'\"`" else None
     lead = re.match(r"^`\$\{\s*([A-Za-z_$][\w$]*)\s*\}", expr)
+    seed = ""
     if lead:
         # `${BASE}/…`: the path's start is BASE's.
         why = _check(text, lead.group(1), at, depth)
         if why:
             return why
         pieces = pieces[2:] if pieces else pieces  # '' and the BASE piece
+        # Depth below /api/ counts from BASE's shallowest value.
+        lits = [re.fullmatch(r"(['\"])([^'\"]*)\1", v) for v in _assignments(text, lead.group(1))]
+        seed = min((m.group(2) for m in lits if m), key=_depth, default="")
     else:
         ok = _literal_ok(expr)
         if ok is None:
@@ -313,10 +328,19 @@ def _check(text: str, expr: str, at: int, depth: int = 0) -> str | None:
             return f"{expr[:60]!r} is not under /api/"
     if pieces is not None:
         # Every dynamic piece after the start must keep the path where it is.
-        before = ""
+        # An encoded value is one segment, which may be '..': each one may
+        # climb one level, so the static depth below /api/ must exceed the
+        # number of encoded segments written so far.
+        before, climbs = seed, 0
         for static, piece in pieces:
             if static:
                 before += piece
+            elif "?" in before:
+                continue
+            elif re.fullmatch(r"encodeURIComponent\(.*\)", piece, re.S):
+                if _depth(before) - climbs < 1:
+                    return f"{piece[:40]!r} may be '..' and climb out of /api/"
+                climbs += 1
             elif why := _dynamic_ok(text, piece, before):
                 return why
         return None
@@ -406,6 +430,13 @@ def test_every_portal_fetch_is_under_api() -> None:
     ("fetch(`/api/v1/tenants/${encodeURIComponent(id)}/views`)", True),
     ("fetch(`/api/v1/${what}`)", False),
     ("const qs = q ? `?q=${encodeURIComponent(q)}` : '';\nfetch(`/api/v1/m${qs}`)", True),
+    # An encoded value is one segment and may be '..': it can climb one level.
+    ("fetch('/api/' + encodeURIComponent(id) + '/preview')", False),
+    ("fetch(`/api/${encodeURIComponent(id)}`)", False),
+    ("fetch(`/api/v1/${encodeURIComponent(a)}/${encodeURIComponent(b)}`)", False),
+    ("fetch(`/api/v1/tenants/${encodeURIComponent(id)}/views/${encodeURIComponent(v)}`)", True),
+    ("const E = '/api/v1/views';\nfetch(`${E}/${encodeURIComponent(id)}`)", True),
+    ("const E = '/api';\nfetch(`${E}/${encodeURIComponent(id)}`)", False),
     ("const qs = q ? '/../preview' : '';\nfetch(`/api/v1/m${qs}`)", False),
     # ... and a wrapper parameter shadowing an outer constant of the same name
     ("const url = '/api/v1/me';\nfunction apiCall(url) { return fetch(url); }\napiCall('/preview');", False),
