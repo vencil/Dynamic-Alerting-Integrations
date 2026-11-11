@@ -301,6 +301,13 @@ describe('FederationTokensModal — CodeRabbit review (#3740)', () => {
     await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
     expect(signIn).not.toHaveBeenCalled();
     expect(screen.getByTestId('fed-new-token').textContent).toContain('eyJ.signed.jwt');
+    // still copyable: the copy button writes the issued token to the clipboard
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    fireEvent.click(screen.getByTestId('fed-copy-token'));
+    await waitFor(() => expect(writeText).toHaveBeenCalledTimes(1));
+    expect(String(writeText.mock.calls[0][0])).toContain('eyJ.signed.jwt');
+    expect(signIn).not.toHaveBeenCalled();
   });
 
   it('holds sign-in for the whole page while the token is shown, and lets go after', async () => {

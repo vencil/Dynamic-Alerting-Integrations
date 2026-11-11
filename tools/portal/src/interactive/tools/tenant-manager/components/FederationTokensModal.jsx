@@ -313,7 +313,7 @@ function FederationTokensModal(props) {
             </p>
             <pre style={{ ...styles.codeBlock, ...monoStyle, whiteSpace: 'pre-wrap' }}>{newToken.token}</pre>
             <div style={styles.buttonGroup}>
-              <button style={styles.button} onClick={() => copy(newToken.token)}>
+              <button data-testid="fed-copy-token" style={styles.button} onClick={() => copy(newToken.token)}>
                 {copied ? t('已複製', 'Copied') : t('複製 token', 'Copy token')}
               </button>
               <button
