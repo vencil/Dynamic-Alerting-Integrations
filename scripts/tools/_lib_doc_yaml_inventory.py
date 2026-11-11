@@ -179,9 +179,9 @@ TENANT_CONFIG_MARKERS = frozenset({
 
 
 def _is_routing_profiles(data: Any) -> bool:
-    """A `_routing_profiles.yaml`: `routing_profiles:`, a mapping, and nothing else."""
-    return (isinstance(data, dict) and list(data) == ["routing_profiles"]
-            and isinstance(data["routing_profiles"], dict))
+    """A `_routing_profiles.yaml`: a `routing_profiles:` key at the top. The
+    route generator reads that key whatever else the file holds."""
+    return isinstance(data, dict) and "routing_profiles" in data
 
 
 def is_confd_example(data: Any) -> bool:

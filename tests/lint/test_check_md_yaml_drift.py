@@ -384,6 +384,13 @@ def test_routing_profiles_plaintext_credential_fails(tmp_path: Path) -> None:
     assert "s3cr3t" not in r.stdout + r.stderr
 
 
+def test_routing_profiles_beside_another_key_is_still_judged(tmp_path: Path) -> None:
+    body = _profiles(_SECRET_VALUE).replace("\n```\n", "\nversion: 1\n```\n")
+    r = _run(_mkrepo(tmp_path, "rp.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/rp.md:2 (credential_plaintext)" in r.stdout, r.stdout
+
+
 def test_routing_profiles_reference_passes_its_schema(tmp_path: Path) -> None:
     r = _run(_mkrepo(tmp_path, "rp.md", _profiles("{secret: {key: slack-api-url}}")))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
