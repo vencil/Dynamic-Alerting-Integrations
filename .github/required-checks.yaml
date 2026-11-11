@@ -1,0 +1,119 @@
+# main 的必要檢查（branch protection 的 required status checks）——唯一的來源。
+#
+# 為什麼要有這個檔：必要檢查本來只存在 GitHub 設定裡，repo 內只有散落在各
+# workflow 註解裡的「X 是／不是必要檢查（某日量測）」。設定一改，那些句子就過期，
+# 而且沒有任何東西會發現。#3696 就是這個形狀：`Smoke Tests (Chromium)` 被設成必要，
+# 回報它的 workflow 卻有 `on.pull_request.paths`，於是沒碰 portal 的 PR 全部卡在
+# blocked（enforce_admins 開著，誰都合不進去），而那支 workflow 的註解還寫著「不是
+# required」。
+#
+# 誰守它：
+#   * tests/ops/test_required_checks_ssot.py（每支 PR，靜態）——每個名稱都必須由
+#     一個「一定會回報」的 job 回報：唯一同名、所在 workflow 有不帶 paths 的
+#     pull_request 觸發；`kind: gate` 是 aggregate gate（if: always()），
+#     `kind: job` 沒有 needs／if／matrix。advisory 與 required 不得重疊。
+#   * tests/ops/test_ci_aggregate_gate_contract.py 的 REQUIRED_CHECK_NAMES 由
+#     這裡 `kind: gate` 的項目推導，不再手抄。
+#   * .github/workflows/required-checks-drift.yml（每日排程＋改到本檔的 PR）——拿
+#     GitHub 的實際設定比對本檔；不一致就紅，排程失敗開票。它本身是 advisory：
+#     owner 一改設定，所有開著的 PR 不能因此同時轉紅。
+#
+# 改法（順序有意義）：
+#   新增：先在這裡加一筆 `pending: true` 並讓 job 合進 main、回報過一次，owner 再到
+#         設定加上它，最後把 `pending` 拿掉。先改設定的話，所有 PR 都會卡在等一個
+#         還沒人回報的檢查。
+#   移除：owner 先從設定拿掉，再刪這裡那一筆。
+#   ⛔ 改名＝移除＋新增，不是一筆編輯。
+#
+# app_id 15368 = GitHub Actions。設定裡每一筆都綁這個 app：別的 GitHub App 回報同名
+# check 不能滿足它。
+
+app_id: 15368
+# `everyone`：管理員也受必要檢查約束（branch protection 的 enforce_admins）。
+# ⚠️ 只放對帳 workflow 讀得到、比對得了的欄位。`strict`（PR 須與 main 同步）
+# 在 `GET /branches/main` 的回應裡是 null，讀不到就不寫在這裡——寫了也沒人守。
+enforcement_level: everyone
+
+required:
+  # ── 由 aggregate gate 回報：底下的實跑 job 可依 path 跳過，gate 一律回報 ──
+  - {name: Python Tests, kind: gate}
+  - {name: Go Tests, kind: gate}
+  - {name: Portal Tests, kind: gate}
+  - {name: Smoke Tests (Chromium), kind: gate}
+  - {name: Go Lint, kind: gate}
+  - {name: Validate Tenant Config & Routes, kind: gate}
+  - {name: Version Consistency, kind: gate}
+  - {name: Validate Mermaid Diagrams, kind: gate}
+  - {name: Check Documentation Front Matter, kind: gate}
+  - {name: Check Documentation Coverage, kind: gate}
+  - {name: MkDocs Build Verification, kind: gate}
+  - {name: Documentation Line Count Monitor, kind: gate}
+  - {name: Drift Detection (validate_all.py), kind: gate}
+  # ── 由每支 PR 都會跑、不會被跳過的 job 直接回報 ──
+  - {name: Lint, kind: job}
+  - {name: Lint Rule Packs, kind: job}
+  - {name: Lint Documentation, kind: job}
+  - {name: Container SAST (Helm L2 + raw k8s L4), kind: job}
+  - {name: Check Documentation Links, kind: job}
+  - {name: HEAD Blob Hygiene, kind: job}
+  - {name: commitlint, kind: job}
+
+# 刻意「紅了也不擋 merge」的檢查，附理由。這些理由以前寫在各 workflow 的註解裡，
+# 以「某日量測：不是 required」的形式存在，設定一變就過期；搬到這裡之後，測試保證
+# 它們不在 required 裡。要把其中一個升為必要，先刪掉這裡那一筆。
+advisory:
+  - name: Defaults Impact Guard
+    reason: >-
+      只在 `_` 開頭的平台檔變動時觸發（on.pull_request.paths），結構上不能是必要檢查：
+      沒碰平台檔的 PR 永遠拿不到它。它保護的是 PR 留言給審查者看的內容。
+  - name: Workload-definition effect (W/R)
+    reason: >-
+      bench 診斷工具的 self-test；結果是估計值、不做判定（ADR-032 揭露、不介入）。
+  - name: Python SAST (bandit -ll -ii)
+    reason: >-
+      workflow 層的 on.pull_request.paths 讓範圍外的 PR 根本不啟動它，設成必要會讓
+      那些 PR 永遠等不到回報。改成每支 PR 都跑之後，還要先補 fail-closed 的
+      aggregate gate，否則跳過即綠（兩步的順序見 security-audit.yaml 檔頭）。
+  - name: TRK index covers issue/PR titles
+    reason: >-
+      規劃索引的覆蓋檢查；漏列是文件債，不是會壞掉產品的變更。
+  - name: Config Diff Advisory (rendered)
+    reason: >-
+      顯示 conf.d 變更前後的有效設定差異供審查參考；升為必要的退出條件見
+      config-diff-advisory.yml 檔頭。
+  - name: resolve chart/manifest image refs
+    reason: >-
+      每支動到 chart／manifest 的 PR 都要多打兩次 registry；紅燈是訊號，在無關的 PR
+      上可以讀過就走。噪音開始有代價時再重新評估（見 image-ref-resolve.yaml 檔頭）。
+  - name: Scan for secrets (trufflehog → SARIF)
+    reason: >-
+      #1363、#1365 都在它紅著時合入；真正擋 secret 的是 pre-commit 的 L1 掃描與夜跑，
+      見 secret-scan.yml 檔頭。
+  - name: VM Anchor Gate
+    reason: >-
+      檔頭建議升為必要（一般 PR 一律秒過，改 pin 的 PR 才真跑）；owner 尚未啟用。
+      升級時把這一筆搬到 required 並標 `pending: true`。
+  - name: E2E Spec Lint (A-13)
+    reason: >-
+      playwright.yml 帶 workflow 層的 paths 過濾，結構上不能是必要檢查；A-13 的必要
+      執行點是 pre-commit hook（#1428）。
+  - name: I-4 Runbook Smoke Test
+    reason: >-
+      只在文件路徑變動時跑（會下載 amtool／promtool／yq）；沒有 aggregate gate 擁有
+      它的名稱（tests/ops/test_ci_aggregate_gate_contract.py 的 UNWATCHED 帳本）。
+  - name: Python Coverage
+    reason: >-
+      owner 決定（2026-09-19，PR #1910）：覆蓋率腿只回報與上傳，不擋 merge；放進必要
+      檢查會讓 tracer 的成本壓在必要腿的關鍵路徑上。
+  - name: Bench + Compare (single-runner interleaved + canary)
+    reason: >-
+      Phase 2 起只提供資訊：退化會留言並貼 `perf-regression` label，job 除了基礎
+      設施錯誤一律 exit 0（見 bench-gate-pr.yaml 的 Governance 段）。
+  - name: Validate Self-Review-Pass-2 trailer
+    reason: >-
+      soft-fail 推行期：job 帶 continue-on-error，狀態會顯示但不擋 merge，等採用率
+      穩定後再關掉（#454）。
+  - name: Check required checks match branch protection
+    reason: >-
+      本檔與 GitHub 實際設定的對帳。owner 改設定的那一刻所有開著的 PR 都會紅，不能
+      讓它擋 merge；排程失敗會開票。

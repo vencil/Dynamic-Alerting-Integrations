@@ -1,0 +1,104 @@
+name: Required checks drift
+
+# Compares .github/required-checks.yaml — the one source for main's required
+# status checks — with GitHub's live branch protection (#3696). The static half
+# (every listed name is reported by a job that always reports) is
+# tests/ops/test_required_checks_ssot.py, on every PR; this is the half that
+# needs the live settings.
+#
+# ⛔ ADVISORY on purpose, and listed so under `advisory:` in that file: the
+# moment the owner edits the settings, every open PR would turn red at once if
+# this blocked merges. It runs daily and on PRs that touch the file or this
+# check; a scheduled failure opens (or comments on) one tracking issue.
+#
+# Reads `GET /repos/{owner}/{repo}/branches/main`, which needs only read
+# access — `/branches/main/protection` needs admin, which `github.token` never
+# has. An answer without `protection.required_status_checks` is exit 2
+# ("cannot compare"), never "nothing is required".
+
+on:
+  schedule:
+    # Daily; off the hour to avoid the top-of-hour queue.
+    - cron: '37 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/required-checks.yaml'
+      - '.github/workflows/required-checks-drift.yml'
+      - 'scripts/ops/required_checks_drift.py'
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    name: Check required checks match branch protection
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # Only the scheduled run writes, and only to open or comment on the
+      # tracking issue below.
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install PyYAML
+        run: pip install pyyaml -c requirements/ci-constraints.txt
+
+      - name: Compare the file with branch protection
+        id: compare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          if ! gh api "repos/${GITHUB_REPOSITORY}/branches/main" > "$RUNNER_TEMP/branch.json"; then
+            echo "::error::could not read repos/${GITHUB_REPOSITORY}/branches/main — nothing was compared"
+            echo "rc=2" >> "$GITHUB_OUTPUT"
+            exit 2
+          fi
+          # stderr too: an rc-2 reason is printed there, and the summary and the
+          # issue must say WHY nothing could be compared.
+          python3 -X utf8 scripts/ops/required_checks_drift.py "$RUNNER_TEMP/branch.json" \
+            > "$RUNNER_TEMP/drift.txt" 2>&1
+          rc=$?
+          cat "$RUNNER_TEMP/drift.txt"
+          {
+            echo "### Required checks vs branch protection (rc=${rc})"
+            echo
+            sed 's/^/- /' "$RUNNER_TEMP/drift.txt"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "rc=${rc}" >> "$GITHUB_OUTPUT"
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::.github/required-checks.yaml and branch protection disagree (rc=${rc}) — see the summary"
+          fi
+          exit "$rc"
+
+      - name: Open or update the tracking issue (scheduled runs only)
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="[ci] required checks drift: .github/required-checks.yaml ≠ branch protection"
+          body="$(printf 'The daily comparison failed: %s\n\n' "$RUN_URL"; cat "$RUNNER_TEMP/drift.txt" 2>/dev/null || true)"
+          # GitHub's search drops punctuation and matches loosely, so the hit
+          # list is narrowed to an EXACT title before reusing an issue.
+          existing=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+                       --search "required checks drift in:title" --json number,title \
+            | python3 -c 'import json,sys; t=sys.argv[1]; print(next((str(i["number"]) for i in json.load(sys.stdin) if i["title"] == t), ""))' "$title")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$GITHUB_REPOSITORY" --body "$body"
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$title" --body "$body"
+          fi

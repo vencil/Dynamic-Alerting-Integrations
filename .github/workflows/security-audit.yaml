@@ -13,8 +13,8 @@ name: Security Audit (Python SAST)
 # one — see dev-rules.md §5 Suppression.
 # Scope: scripts/tools/** + components/da-tools/** (other Python dirs
 # excluded via .bandit). Floor `-ll -ii` = MEDIUM severity × confidence.
-# ⚠️ This job is NOT a required status check, and it CANNOT be listed as one
-# as written: the `paths:` filters below mean the workflow does not run at all
+# ⚠️ This job is NOT a required status check (`advisory:` in
+# .github/required-checks.yaml), and it CANNOT be listed as one as written: the `paths:` filters below mean the workflow does not run at all
 # on a PR that touches nothing in scope, so a required context would never be
 # reported and such PRs would hang on "Expected — Waiting for status".
 # Making it required needs the workflow to run on every PR first. The pattern

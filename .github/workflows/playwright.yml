@@ -68,7 +68,8 @@ jobs:
   # that branch protection requires: this workflow's top-level `paths:`
   # filter suppressed it wholesale on a PR touching no portal file, and a
   # required check that reports no status sits permanently pending. This job
-  # stays ADVISORY (not a required check) and path-filtered.
+  # stays advisory (`advisory:` in .github/required-checks.yaml, which says
+  # why) and path-filtered.
   lint-specs:
     name: E2E Spec Lint (A-13)
     runs-on: ubuntu-24.04

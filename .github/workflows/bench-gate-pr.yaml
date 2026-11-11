@@ -48,7 +48,8 @@ name: Bench Gate (PR-time, Tier 1)
 #     ~8-10 min — see the Run step and the timeout-minutes budget note.)
 #
 # Governance (Phase 2 — INFORMATIONAL):
-#   - The gate no longer blocks merge. A real regression posts a PR comment and
+#   - The gate no longer blocks merge (`advisory:` in .github/required-checks.yaml).
+#     A real regression posts a PR comment and
 #     applies the `perf-regression` label; an INCONCLUSIVE run posts a re-run
 #     note. The job exits 0 in all cases (infra errors aside).
 #   - Because nothing is blocked, the old `override: bench-regress-ok` label and
@@ -109,7 +110,8 @@ name: Bench Gate (PR-time, Tier 1)
 on:
   pull_request:
     # No `labeled` trigger: Phase 2 made the gate INFORMATIONAL (a regression
-    # posts a comment + `perf-regression` label, never blocks merge), so the
+    # posts a comment + `perf-regression` label, never blocks merge — see
+    # .github/required-checks.yaml), so the
     # `override: bench-regress-ok` label + its `labeled`-event honoring are gone.
     types: [opened, synchronize, reopened]
     paths:
@@ -329,7 +331,8 @@ jobs:
         run: bash scripts/tools/ops/bench_render_summary.sh
 
       # INFORMATIONAL report (Phase 2) — comment + `perf-regression` label,
-      # never blocks merge; fork-PR read-only tokens degrade to a warning.
+      # never blocks merge (.github/required-checks.yaml, `advisory:`); fork-PR
+      # read-only tokens degrade to a warning.
       # Full policy commentary in the shared script.
       - name: Report regression (informational — comment + label, never blocks)
         if: always()

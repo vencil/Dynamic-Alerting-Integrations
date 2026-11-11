@@ -34,7 +34,8 @@ jobs:
     # row on every Renovate PR. The gate still runs for ALL human-authored PRs.
     if: ${{ !startsWith(github.head_ref, 'renovate/') }}
     # Soft-fail rollout: status appears but doesn't block merge until adoption
-    # plateaus. Track #454 follow-up to flip off.
+    # plateaus (`advisory:` in .github/required-checks.yaml). Track #454
+    # follow-up to flip off.
     continue-on-error: true
     steps:
       - name: Checkout
