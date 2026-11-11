@@ -1,7 +1,8 @@
 """`da-tools migrate-credentials`（#1560 ⑤-a）與它讀 receiver 的走訪器。
 
-工具只報告：把租戶明文寫的憑證改寫成 Secret 參照（計畫／`--write`）、寫出每個租戶的
-Secret（`--manifests-out`，0600）、列出待輪替清單。⛔ 憑證值只能進清單檔：每個情境都
+工具把租戶明文寫的憑證改寫成 Secret 參照（計畫／`--write`）、寫出每個租戶的
+Secret（`--manifests-out`，0600）、列出待輪替清單；產生器以同一判定拒收明文（⑤-b）。
+⛔ 憑證值只能進清單檔：每個情境都
 放一個 canary 值，斷言它不在 stdout／stderr／JSON 報告裡。
 """
 from __future__ import annotations

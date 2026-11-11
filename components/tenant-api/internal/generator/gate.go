@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/vencil/tenant-api/internal/gitops"
 )
 
@@ -120,21 +121,26 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 		case ResultRejected:
 			return nil, g.reject(ctx, v.Reason, v.Message)
 		case ResultFindings:
-			if v.StderrTail != "" {
-				slog.Info("generator: write refused with findings", "base", base, "files", len(files), "stderr_tail", v.StderrTail)
-			}
+			// #1560 ⑤-b: only structured fields reach the platform log —
+			// never stderr_tail, a finding's message or its field, which
+			// quote what the tenants wrote. The caller sees the findings
+			// in the 422 (disclosedFindings, by RBAC); the CLI on its tree.
+			slog.Info("generator: write refused with findings", "request_id", middleware.GetReqID(ctx),
+				"base", base, "files", len(files), "verdict", v)
 			return nil, g.findings(ctx, deadline, base, files, v)
 		}
-		problem := mismatch(v.Validated, base, files, policy)
-		if problem == "" {
+		code, problem := mismatch(v.Validated, base, files, policy)
+		if code == "" {
 			// Only this pass's key verdict: an earlier pass judged other
 			// content.
 			if err := g.refuseUnjudged(ctx, v.KeyVerdict, base, len(files)); err != nil {
 				return nil, err
 			}
-			return keyVerdict(v.KeyVerdict, base, len(files)), nil
+			return keyVerdict(v.KeyVerdict), nil
 		}
-		slog.Warn("generator: the judged content is not what would be written", "attempt", attempt, "problem", problem)
+		// #1560 ⑤-b: the code, never the text.
+		slog.Warn("generator: the judged content is not what would be written", "request_id", middleware.GetReqID(ctx),
+			"attempt", attempt, "problem", code)
 		if attempt >= 2 {
 			return nil, g.reject(ctx, ReasonMismatch, "the generator judged other content than tenant-api would write, twice: "+problem+"; retry")
 		}
@@ -147,7 +153,8 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 // older than that decision: the container is unavailable (ADR-036 §3). A
 // verdict that did not complete refuses this write (keyVerdictReasons):
 // retryable when time ran out, otherwise not. The service's message is
-// logged, not passed on: it can carry a platform path or a program's
+// neither passed on nor logged (#1560 ⑤-b: the log keeps structured fields
+// only — KeyVerdict.LogValue); it can carry a platform path or a program's
 // stderr.
 func (g *Gate) refuseUnjudged(ctx context.Context, kv *KeyVerdict, base string, files int) error {
 	if kv == nil {
@@ -167,13 +174,23 @@ func (g *Gate) refuseUnjudged(ctx context.Context, kv *KeyVerdict, base string, 
 		}
 		return nil
 	}
-	slog.Info("generator: write refused, key verdict not completed", "base", base, "files", files,
-		"reason", kv.Reason, "message", kv.Message, "tenants", kv.Tenants, "seconds", kv.Seconds)
+	slog.Info("generator: write refused, key verdict not completed", "request_id", middleware.GetReqID(ctx),
+		"base", base, "files", files, "key_verdict", kv)
 	r, ok := keyVerdictReasons[kv.Reason]
 	if !ok {
 		r = keyVerdictReasons["error"]
 	}
 	return g.reject(ctx, r.reason, r.message)
+}
+
+// keyVerdictLogReason is *reason* as the log may keep it (#1560 ⑤-b): a
+// reason keyVerdictReasons knows, else "unknown" — a closed vocabulary,
+// never the service's free text.
+func keyVerdictLogReason(reason string) string {
+	if _, ok := keyVerdictReasons[reason]; ok {
+		return reason
+	}
+	return ReasonUnknown
 }
 
 // keyVerdictReasons maps the generator's reason for a key verdict that did
@@ -188,26 +205,17 @@ var keyVerdictReasons = map[string]struct{ reason, message string }{
 	// write: time, for the caller — a retry may complete.
 	"preempted": {ReasonKeyVerdictDeadline, "the key verdict yielded to another write; retry"},
 	"memory":    {ReasonKeyVerdictMemory, "the key verdict ran out of memory"},
-	"error":     {ReasonKeyVerdictError, "the key verdict failed (the cause is in the logs)"},
+	"error":     {ReasonKeyVerdictError, "the key verdict failed"},
 	"undecidable": {ReasonKeyVerdictUndecidable, "no root platform file was read, so the write's " +
 		"threshold keys cannot be judged: the conf.d tree needs a root platform file such as _defaults.yaml"},
 	"platform_file": {ReasonKeyVerdictPlatformFile, "the write changes a platform file, whose keys " +
 		"only a whole-tree verdict judges"},
 }
 
-// keyVerdict is a pass's key verdict for the Writer (ADR-038 decision 5):
-// kv as gitops has it, or a not_completed one with reason not_reported when
-// the service sent none — "not judged" is said, never left to look like
-// "nothing found". The service's message is logged, not passed on.
-func keyVerdict(kv *KeyVerdict, base string, files int) *gitops.KeyVerdict {
-	if kv == nil {
-		return &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: gitops.KeyVerdictNotReported}
-	}
-	if kv.Status != gitops.KeyVerdictComplete {
-		slog.Info("generator: key verdict not completed", "base", base, "files", files,
-			"reason", kv.Reason, "message", kv.Message, "tenants", kv.Tenants, "seconds", kv.Seconds)
-		return &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: kv.Reason}
-	}
+// keyVerdict is a pass's complete key verdict as gitops has it (ADR-038
+// decision 5): refuseUnjudged has refused every other. The service's
+// message is not passed on.
+func keyVerdict(kv *KeyVerdict) *gitops.KeyVerdict {
 	out := &gitops.KeyVerdict{Status: gitops.KeyVerdictComplete, Truncated: kv.Truncated,
 		Findings: make([]gitops.KeyFinding, len(kv.Findings))}
 	for i, f := range kv.Findings {
@@ -279,17 +287,19 @@ func (g *Gate) policyHash() (*string, error) {
 	return &h, nil
 }
 
-// mismatch is "" when v names exactly base, files and policy, else what
-// differs.
-func mismatch(v *Validated, base string, files []gitops.ProposedFile, policy *string) string {
+// mismatch is ("", "") when v names exactly base, files and policy, else
+// what differs: a code (mismatch* below, what the log keeps) and a text for
+// the refusal's message.
+func mismatch(v *Validated, base string, files []gitops.ProposedFile, policy *string) (code, text string) {
 	if v == nil {
-		return "the answer names nothing it judged"
+		return mismatchNothingNamed, "the answer names nothing it judged"
 	}
 	if v.BaseCommit != base {
-		return fmt.Sprintf("base commit %s, not %s", v.BaseCommit, base)
+		// The service's base_commit is its text: never repeated (#1560 ⑤-b).
+		return mismatchBaseCommit, "the base commit judged is not " + base
 	}
 	if len(v.Files) != len(files) {
-		return fmt.Sprintf("%d file(s) judged, %d to write", len(v.Files), len(files))
+		return mismatchFileCount, fmt.Sprintf("%d file(s) judged, %d to write", len(v.Files), len(files))
 	}
 	judged := make(map[string]ValidatedFile, len(v.Files))
 	for _, f := range v.Files {
@@ -298,24 +308,34 @@ func mismatch(v *Validated, base string, files []gitops.ProposedFile, policy *st
 	for _, f := range files {
 		j, ok := judged[f.Path]
 		if !ok {
-			return fmt.Sprintf("%s was not judged", f.Path)
+			return mismatchFileNotJudged, fmt.Sprintf("%s was not judged", f.Path)
 		}
 		sum := sha256.Sum256(f.Content)
 		if j.Deleted || j.SHA256 != hex.EncodeToString(sum[:]) {
-			return fmt.Sprintf("%s was judged with other content", f.Path)
+			return mismatchFileContent, fmt.Sprintf("%s was judged with other content", f.Path)
 		}
 	}
 	switch {
 	case policy == nil && v.PolicySHA256 == nil:
 	case policy == nil:
-		return "the generator judged with a deployment policy file, tenant-api has none (--deploy-policy)"
+		return mismatchPolicy, "the generator judged with a deployment policy file, tenant-api has none (--deploy-policy)"
 	case v.PolicySHA256 == nil:
-		return "the generator judged without a deployment policy file, tenant-api has one (--deploy-policy)"
+		return mismatchPolicy, "the generator judged without a deployment policy file, tenant-api has one (--deploy-policy)"
 	case *policy != *v.PolicySHA256:
-		return "the generator judged with another deployment policy file than tenant-api reads"
+		return mismatchPolicy, "the generator judged with another deployment policy file than tenant-api reads"
 	}
-	return ""
+	return "", ""
 }
+
+// The codes of mismatch: a closed vocabulary, what the log keeps.
+const (
+	mismatchNothingNamed  = "nothing_named"
+	mismatchBaseCommit    = "base_commit_differs"
+	mismatchFileCount     = "file_count_differs"
+	mismatchFileNotJudged = "file_not_judged"
+	mismatchFileContent   = "file_content_differs"
+	mismatchPolicy        = "policy_differs"
+)
 
 // findings builds the *FindingsError of a `findings` verdict: the findings
 // that name a file or a tenant of this write are marked related and put
@@ -354,7 +374,8 @@ func (g *Gate) findings(ctx context.Context, deadline time.Time, base string, fi
 		bv, err := g.client.Validate(ctx, base, nil, remaining)
 		switch {
 		case err != nil:
-			slog.Info("generator: base not judged for the pre-existing marks", "error", err)
+			slog.Info("generator: base not judged for the pre-existing marks", "request_id", middleware.GetReqID(ctx),
+				"error", err)
 		case bv.Result == ResultPass:
 			out.ComparedWithBase = true
 			mark(out.Findings, configDir, nil, "")

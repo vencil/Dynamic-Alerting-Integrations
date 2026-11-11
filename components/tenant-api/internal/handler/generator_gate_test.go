@@ -289,10 +289,10 @@ func TestGeneratorGate_RefusalStatuses(t *testing.T) {
 		}, 429, string(errcode.GeneratorBusy), "mismatch", true, ""},
 		{"validator unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "amtool_missing", "message": "amtool is not on PATH"}
-		}, 503, string(errcode.ValidatorUnavailable), "amtool_missing", true, "server log"},
+		}, 503, string(errcode.ValidatorUnavailable), "amtool_missing", true, "cannot judge writes"},
 		{"policy unavailable", func(int, testutil.FakeValidateRequest) (int, any) {
 			return 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": "--policy: bad"}
-		}, 503, generator.CodePolicyUnavailable, "policy_unusable", true, "server log"},
+		}, 503, generator.CodePolicyUnavailable, "policy_unusable", true, "is unusable"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()

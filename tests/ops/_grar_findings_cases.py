@@ -77,7 +77,9 @@ FIXTURES: dict[str, dict[str, str]] = {
             "beta",
             "      receiver:\n"
             "        type: pagerduty\n"
-            "        service_key: abc123\n",
+            # #1560 ⑤-b: a reference, no value written out (doubled
+            # braces: _tenant formats the receiver text).
+            "        service_key: {{secret: {{key: abc123}}}}\n",
             "      group_by: [tenant, severity]\n"
             "      repeat_interval: 30m\n"
             "      routes:\n"

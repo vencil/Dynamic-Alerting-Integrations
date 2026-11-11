@@ -623,8 +623,9 @@ class TestValidateConfigStrictCLI:
         _wy(d, "_defaults.yaml", {
             "defaults": {"cpu": 80},
             "_routing_defaults": {
+                # #1560 ⑤-b: a reference, not a URL written out.
                 "receiver": {"type": "slack",
-                             "api_url": "https://hooks.slack.com/services/T/B/X"},
+                             "api_url": {"secret": {"key": "slack-url"}}},
                 "group_by": ["tenant", "alertname"],
                 "group_wait": "30s",
                 "repeat_interval": "30m",
@@ -1136,7 +1137,7 @@ class TestTheSuccessLineIsTheThingThisPRTalksAbout:
                 "group_wait": "30s",
                 "repeat_interval": "4h",
                 "receiver": {"type": "slack",
-                             "api_url": "https://hooks.example/a"}}})
+                             "api_url": {"secret": {"key": "slack-url"}}}}})
         _wy(d, "tenant-x.yaml", {"tenants": {"tenant-x": {
             "mysql_threads_running": 90}}})
 

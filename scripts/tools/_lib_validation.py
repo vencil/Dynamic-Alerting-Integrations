@@ -351,19 +351,22 @@ def validate_and_clamp(
         seconds = am_duration_seconds(value if isinstance(value, str) else str(value))
 
     if seconds is None:
-        warnings.append(f"  WARN: {tenant}: invalid {param} '{value}' "
+        # #1560 ⑤-b: a value goes into a message through shown_value only.
+        warnings.append(f"  WARN: {tenant}: invalid {param} {shown_value(value)} "
                         f"({INVALID_DURATION_HINT}), using platform default "
-                        f"{PLATFORM_DEFAULTS.get(param, value)}")
+                        f"{shown_value(PLATFORM_DEFAULTS.get(param, value))}")
         return PLATFORM_DEFAULTS.get(param, value), warnings
 
     if seconds < min_sec:
         clamped = format_duration(min_sec)
-        warnings.append(f"  WARN: {tenant}: {param} '{value}' below minimum ({desc}), clamped to {clamped}")
+        warnings.append(f"  WARN: {tenant}: {param} {shown_value(value)} below minimum ({desc}), "
+                        f"clamped to {clamped}")
         return clamped, warnings
 
     if seconds > max_sec:
         clamped = format_duration(max_sec)
-        warnings.append(f"  WARN: {tenant}: {param} '{value}' above maximum ({desc}), clamped to {clamped}")
+        warnings.append(f"  WARN: {tenant}: {param} {shown_value(value)} above maximum ({desc}), "
+                        f"clamped to {clamped}")
         return clamped, warnings
 
     return value, warnings
@@ -573,14 +576,14 @@ def secret_ref_problem(value: Any) -> Optional[str]:
     this and jsonschema the same cases.
     """
     if not isinstance(value, dict) or set(value) != {"secret"}:
-        keys = sorted(str(k) for k in value) if isinstance(value, dict) else []
+        keys = (sorted(shown_key(k) for k in value) if isinstance(value, dict) else [])
         has = f": it has {keys}" if keys else ""
         return f"is not a Secret reference ({SECRET_REF_SHAPES}){has}"
     inner = value["secret"]
     if not isinstance(inner, dict):
         return (f"is not a Secret reference ({SECRET_REF_SHAPES}): 'secret' is "
-                f"{_type_name(inner)}")
-    unknown = sorted(str(k) for k in inner if k not in ("key", "shared"))
+                f"{_type_name(inner, shown=MASKED_VALUE)}")
+    unknown = sorted(shown_key(k) for k in inner if k not in ("key", "shared"))
     if unknown:
         hint = (" — a reference never names its Secret: the tenant's own is "
                 "da-<tenant>, a shared one is an alias the deployment policy's "
@@ -602,13 +605,15 @@ def secret_ref_problem(value: Any) -> Optional[str]:
                     f"{max_len}; not '.' and not starting with '..')"
                     if name == "key" else
                     f"a shared Secret alias (a DNS-1123 label, at most {max_len})")
-            return f"has 'secret.{name}' {_type_name(item)}, which is not {what}"
+            return (f"has 'secret.{name}' {_type_name(item, shown=MASKED_VALUE)}, "
+                    f"which is not {what}")
     return None
 
 
 #: #1560 plaintext policy of a credential site (``CredentialRefSite.plaintext``,
-#: ``CredentialPlaintextSite.policy``). ⑤-a only REPORTS against it
-#: (``da-tools migrate-credentials``); nothing refuses a value by it yet.
+#: ``CredentialPlaintextSite.policy``). The route generator refuses by it
+#: (``_grar_parse.credential_findings``, #1560 ⑤-b) and
+#: ``da-tools migrate-credentials`` rewrites by it.
 PLAINTEXT_REFUSED = "refused"
 PLAINTEXT_UNLESS_USERINFO = "unless_userinfo"
 PLAINTEXT_ALLOWED = "allowed"
@@ -734,12 +739,22 @@ def credential_ref_sites(rtype: str) -> tuple[CredentialRefSite, ...]:
 RefPath = tuple[Union[str, int], ...]
 
 
+#: The pattern steps of a ``CREDENTIAL_REF_SITES`` path: any key, any item.
+_PATTERN_STEPS = frozenset({"*", "[]"})
+
+
 def ref_path_text(path: RefPath) -> str:
     """``("http_config", "http_headers", "X", "secrets", 0)`` →
-    ``http_config.http_headers.X.secrets[0]``."""
+    ``http_config.http_headers.X.secrets[0]``. A key is the author's text
+    and may be a URL, so it is shown as ``key_segment`` shows it (#1560
+    ⑤-b)."""
     out = ""
     for part in path:
-        out += f"[{part}]" if isinstance(part, int) else (f".{part}" if out else str(part))
+        if isinstance(part, int) and not isinstance(part, bool):
+            out += f"[{part}]"
+            continue
+        seg = part if part in _PATTERN_STEPS else key_segment(part)
+        out += f".{seg}" if out else seg
     return out
 
 
@@ -885,9 +900,10 @@ def _written_out(value: Any) -> bool:
 
 def plaintext_credential_findings(receiver: Any, rtype: Optional[str] = None
                                   ) -> list[PlaintextFinding]:
-    """#1560 ⑤-a: every credential *receiver* writes out where the owner's
-    policy refuses it — THE one judgement; ``da-tools migrate-credentials``
-    reports by it today, and the route generator is to refuse by it next.
+    """#1560: every credential *receiver* writes out where the owner's
+    policy refuses it — THE one judgement: the route generator refuses by it
+    (``_grar_parse.credential_findings``, ⑤-b) and ``da-tools
+    migrate-credentials`` rewrites by it (⑤-a).
 
     *receiver* is the receiver as one file writes it (before any routing
     layer is merged), *rtype* its type (default: its own ``type``). Per row
@@ -927,6 +943,52 @@ def plaintext_credential_findings(receiver: Any, rtype: Optional[str] = None
     return out
 
 
+def credential_shape_problems(receiver: Any, rtype: Optional[str] = None) -> list[RefPath]:
+    """#1560 ⑤-b: the places of *receiver* where a credential site that
+    ``plaintext_credential_findings`` judges holds a value of a shape it
+    cannot read (at the site, or on the way to it). Such a value is neither
+    a finding nor a reference, and a receiver no render reads gets no schema
+    check either, so the caller reports each place as unjudged."""
+    if rtype is None:
+        rtype = receiver.get("type") if isinstance(receiver, dict) else None
+    if not isinstance(receiver, dict) or not isinstance(rtype, str):
+        return []
+    judged = (PLAINTEXT_REFUSED, PLAINTEXT_UNLESS_USERINFO)
+    sites = ([s.path for s in CREDENTIAL_REF_SITES if s.rtype == rtype and s.plaintext in judged]
+             + [s.path for s in CREDENTIAL_PLAINTEXT_SITES
+                if s.rtype == rtype and s.policy in judged])
+    found: list[RefPath] = []
+
+    def walk(value: Any, pattern: tuple[str, ...], here: RefPath) -> None:
+        if value is None or value == "":
+            return
+        if not pattern:
+            # A reference of the wrong shape is no reference: what it holds
+            # is not judged either (one shape rule: secret_ref_problem).
+            if isinstance(value, (dict, list)) and (
+                    not is_secret_ref(value) or secret_ref_problem(value) is not None):
+                found.append(here)
+            return
+        step, rest = pattern[0], pattern[1:]
+        if step == "[]":
+            if not isinstance(value, list):
+                found.append(here)
+                return
+            for i, item in enumerate(value):
+                walk(item, rest, here + (i,))
+            return
+        if not isinstance(value, dict):
+            found.append(here)
+            return
+        for k in ([k for k in value if isinstance(k, str)] if step == "*" else [step]):
+            if k in value:
+                walk(value[k], rest, here + (k,))
+
+    for site in sites:
+        walk(receiver, site, ())
+    return list(dict.fromkeys(found))
+
+
 def value_paths_to_mask(receiver: Any, rtype: Optional[str] = None) -> list[RefPath]:
     """The concrete path of every written-out scalar *receiver* holds on or
     below a credential site of either table (reference or not, allowed or
@@ -956,6 +1018,30 @@ def value_paths_to_mask(receiver: Any, rtype: Optional[str] = None) -> list[RefP
         for path, value in _walk_present(receiver, site, ()):
             scalars(value, path)
     return list(dict.fromkeys(found))
+
+
+def site_path_text(path: tuple[str, ...]) -> str:
+    """A ``CREDENTIAL_REF_SITES`` row's path as the policy's
+    ``shared_secrets.<alias>.fields`` spells it (#1560 ⑤-b): the keys joined
+    with ``.``, a ``"*"`` step (any key of a mapping) written ``*``, a
+    ``"[]"`` step (any item of a list) written ``[]`` after the step before
+    it — ``("http_config", "http_headers", "*", "secrets", "[]")`` →
+    ``http_config.http_headers.*.secrets[]``. One spelling per row: the text
+    names the row, never a concrete header name or index."""
+    out = ""
+    for step in path:
+        out += "[]" if step == "[]" else (f".{step}" if out else step)
+    return out
+
+
+def shared_secret_field_texts() -> frozenset[str]:
+    """Every value a ``shared_secrets.<alias>.fields`` list may hold: the
+    ``site_path_text`` of each ``CREDENTIAL_REF_SITES`` row (#1560 ⑤-b). A
+    row whose credential goes to a destination the receiver names
+    (``destinations``) is listable, but the generator takes a shared
+    Secret there only on the receiver no tenant owns (the platform-wide
+    ``_routing_enforced``)."""
+    return frozenset(site_path_text(s.path) for s in CREDENTIAL_REF_SITES)
 
 
 def receiver_secret_ref_fields(rtype: str) -> list[str]:
@@ -989,7 +1075,7 @@ def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Option
                     return f"field '{field}' {problem}"
             elif isinstance(value, (dict, list)):
                 return (f"field '{field}' must be a string or a Secret reference "
-                        f"({SECRET_REF_SHAPES}), got {_type_name(value)}")
+                        f"({SECRET_REF_SHAPES}), got {receiver_type_name(rtype, (field,), value)}")
         elif is_secret_ref(value) and prop.get("type") == "string":
             takes = ", ".join(receiver_secret_ref_fields(rtype)) or "none"
             return (f"field '{field}' does not take a Secret reference (the "
@@ -1179,12 +1265,127 @@ def receiver_bool_problems(rtype: str, receiver: Any) -> list[tuple[str, Any]]:
     return out
 
 
-def _type_name(value: Any) -> str:
-    """YAML-ish name of a decoded value's type, for messages."""
+#: What a message shows in place of a receiver value that may be a
+#: credential (``receiver_value_repr``).
+MASKED_VALUE = "<masked>"
+
+
+def _step_matches(part: Any, step: str) -> bool:
+    if step == "*":
+        return isinstance(part, str)
+    if step == "[]":
+        return isinstance(part, int)
+    return part == step
+
+
+def is_credential_path(rtype: Any, path: tuple) -> bool:
+    """#1560 ⑤-b: whether a value at receiver-relative *path* (keys and list
+    indices) is on, below or above a credential place of receiver type
+    *rtype* — a row of ``CREDENTIAL_REF_SITES`` or of
+    ``CREDENTIAL_PLAINTEXT_SITES``, the ones that allow a written value
+    included. Above: a value written where a mapping holding a credential
+    is expected (``http_config: "user:pass"``) may be that credential. A
+    type that is no receiver type has no table to read: every path is."""
+    rows = ([s.path for s in CREDENTIAL_REF_SITES if s.rtype == rtype]
+            + [s.path for s in CREDENTIAL_PLAINTEXT_SITES if s.rtype == rtype])
+    if not isinstance(rtype, str) or not rows:
+        return True
+    return any(all(_step_matches(p, st) for p, st in zip(path, site)) for site in rows)
+
+
+#: A string ``shown_value`` prints as it is (owner decision, #1560 ⑤-b
+#: round 4): at most 64 characters of ``[A-Za-z0-9_.-]`` — a label, a
+#: tenant or profile name, a duration (``1h30m``). Stricter than the
+#: decision's example on purpose: no ``/`` (a webhook path without its
+#: scheme, ``hooks.slack.com/services/T/B/X``, is a credential), no ``:``
+#: (``user:pass``), no ``=`` / ``+`` (base64 tokens), so no ``@`` / ``://``.
+_NAME_LIKE_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
+_NO_RTYPE = object()
+
+
+def shown_value(value: Any, *, rtype: Any = _NO_RTYPE, path: tuple = (),
+                bare: bool = False) -> str:
+    """⛔ THE one exit of a config value into a message (#1560 ⑤-b, owner
+    decision round 4). Messages reach stderr, ``--findings-json`` and
+    tenant-api's log; the dynamic canary matrix
+    (tests/ops/test_routing_value_canary_matrix.py) is what guards it.
+
+    * a receiver value (*rtype* given) on, below or above a credential place
+      (``is_credential_path``): ``MASKED_VALUE``;
+    * a list or mapping: its type and length, never its content;
+    * a string: its repr when it is name-like (``_NAME_LIKE_RE``), else
+      ``a string of N chars``;
+    * a number, boolean, null, date: its repr.
+
+    *bare*: a name-like string without the quotes (a label, a receiver type
+    inside a message that quotes it itself)."""
+    if rtype is not _NO_RTYPE and is_credential_path(rtype, path):
+        return MASKED_VALUE
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return f"a list of {len(value)} item(s)"
+    if isinstance(value, dict):
+        return f"a mapping of {len(value)} key(s)"
+    if isinstance(value, str):
+        if value == "" or _NAME_LIKE_RE.fullmatch(value):  # "" holds nothing
+            return value if bare else repr(value)
+        return f"a string of {len(value)} chars"
+    return repr(value)
+
+
+def shown_key(key: Any) -> str:
+    """A key the config author wrote (a mapping key: a routing key, a policy
+    or profile name, a header name) as a message names it:
+    ``shown_value(key, bare=True)`` — keys are content too (#1560 ⑤-b
+    round 5)."""
+    return shown_value(key, bare=True)
+
+
+#: What a structured path (``Finding.field`` / ``policy``) holds in place of
+#: a key that is not name-like.
+KEY_PLACEHOLDER = "<key>"
+
+
+def key_segment(key: Any) -> str:
+    """One segment of a structured path (``Finding.field``, ``policy``) that
+    the config author wrote: the key when it is name-like
+    (``_NAME_LIKE_RE``), else ``KEY_PLACEHOLDER`` — a path never carries a
+    URL a key may be (#1560 ⑤-b round 5)."""
+    return key if isinstance(key, str) and _NAME_LIKE_RE.fullmatch(key) else KEY_PLACEHOLDER
+
+
+def receiver_value_repr(rtype: Any, path: tuple, value: Any) -> str:
+    """``shown_value`` of a receiver's value at *path*."""
+    return shown_value(value, rtype=rtype, path=path)
+
+
+def scalar_text(value: Any) -> str:
+    """``shown_value`` of a config value that is not a receiver's."""
+    return shown_value(value)
+
+
+def value_text(value: Any) -> str:
+    """``<type> <shown_value>`` of a number, boolean or name-like string
+    (``int 8``, ``str 'x'``); just ``shown_value`` otherwise."""
+    shown = shown_value(value)
+    if isinstance(value, (list, tuple, set, frozenset, dict)) or shown.startswith("a string of"):
+        return shown
+    return f"{type(value).__name__} {shown}"
+
+
+def receiver_type_name(rtype: Any, path: tuple, value: Any) -> str:
+    """``_type_name`` of a receiver value at *path*, its text through
+    ``receiver_value_repr``."""
+    return _type_name(value, shown=receiver_value_repr(rtype, path, value))
+
+
+def _type_name(value: Any, *, shown: str) -> str:
+    """YAML-ish name of a decoded value's type, for messages. A string shows
+    *shown*, never its own text: a receiver value goes through
+    ``receiver_type_name``, a Secret reference's parts are always masked."""
     if value is None:
         return "null"
     if isinstance(value, str):
-        return f"string {value!r}"
+        return f"string {shown}"
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, (int, float)):
@@ -1196,7 +1397,7 @@ def _type_name(value: Any) -> str:
     return type(value).__name__
 
 
-def _http_config_problem(value: Any) -> Optional[str]:
+def _http_config_problem(value: Any, rtype: str = "webhook") -> Optional[str]:
     """First problem of an ``http_config`` value, or ``None`` (#2295).
 
     Alertmanager's own rule (prometheus/common HTTPClientConfig / ProxyConfig
@@ -1223,7 +1424,8 @@ def _http_config_problem(value: Any) -> Optional[str]:
     if value is None:
         return None
     if not isinstance(value, dict):
-        return f"field 'http_config' must be a mapping, got {_type_name(value)}"
+        return (f"field 'http_config' must be a mapping, got "
+                f"{receiver_type_name(rtype, ('http_config',), value)}")
     set_keys = []
     for key in HTTP_CONFIG_AUTH_FIELDS:
         item = value.get(key)
@@ -1232,7 +1434,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
         if key in HTTP_CONFIG_AUTH_MAPPINGS:
             if not isinstance(item, dict):
                 return (f"field 'http_config.{key}' must be a mapping, "
-                        f"got {_type_name(item)}")
+                        f"got {receiver_type_name(rtype, ('http_config', key), item)}")
             set_keys.append(key)
         elif is_secret_ref(item):
             # #1560: bearer_token as a Secret reference renders as
@@ -1241,7 +1443,7 @@ def _http_config_problem(value: Any) -> Optional[str]:
             set_keys.append(key)
         elif not isinstance(item, str):
             return (f"field 'http_config.{key}' must be a string, "
-                    f"got {_type_name(item)}")
+                    f"got {receiver_type_name(rtype, ('http_config', key), item)}")
         elif item != "":
             set_keys.append(key)
     if len(set_keys) > 1:
@@ -1250,23 +1452,26 @@ def _http_config_problem(value: Any) -> Optional[str]:
     proxy = value.get("proxy_url")
     proxy_key = proxy is not None
     if proxy is not None and not isinstance(proxy, str):
-        return f"field 'http_config.proxy_url' must be a string, got {_type_name(proxy)}"
+        return ("field 'http_config.proxy_url' must be a string, got "
+                f"{receiver_type_name(rtype, ('http_config', 'proxy_url'), proxy)}")
     proxy_text = proxy is not None and proxy != ""
     from_env = False
     if "proxy_from_environment" in value:
         pfe = value["proxy_from_environment"]
         if not is_bool_or_unset(pfe):
             return (f"field 'http_config.proxy_from_environment' must be true or "
-                    f"false, got {_type_name(pfe)}")
+                    f"false, got "
+                    f"{receiver_type_name(rtype, ('http_config', 'proxy_from_environment'), pfe)}")
         from_env = pfe is True
     no_proxy_value = value.get("no_proxy")
     if no_proxy_value is not None and not isinstance(no_proxy_value, str):
-        return f"field 'http_config.no_proxy' must be a string, got {_type_name(no_proxy_value)}"
+        return ("field 'http_config.no_proxy' must be a string, got "
+                f"{receiver_type_name(rtype, ('http_config', 'no_proxy'), no_proxy_value)}")
     no_proxy = no_proxy_value is not None and no_proxy_value != ""
     header = value.get("proxy_connect_header")
     if header is not None and not isinstance(header, dict):
         return (f"field 'http_config.proxy_connect_header' must be a mapping, "
-                f"got {_type_name(header)}")
+                f"got {receiver_type_name(rtype, ('http_config', 'proxy_connect_header'), header)}")
     if header and not from_env and not proxy_text:
         return "http_config: proxy_connect_header needs a non-empty proxy_url or proxy_from_environment: true"
     if from_env and proxy_text:
@@ -1333,13 +1538,13 @@ def file_reference_paths(value: Any, path: str = "", *,
     out: list[str] = []
     if isinstance(value, dict):
         for key, item in value.items():
-            name = key if isinstance(key, str) else repr(key)
+            name = key_segment(key)
             here = f"{path}.{name}" if path else name
             if not isinstance(key, str) or is_file_reference_key(key):
                 out.append(here)
             elif key in label_maps and isinstance(item, dict):
                 for label, v in item.items():
-                    lname = label if isinstance(label, str) else repr(label)
+                    lname = key_segment(label)
                     out.extend(file_reference_paths(v, f"{here}.{lname}", label_maps=label_maps,
                                                     receiver_keys=receiver_keys))
             elif key in receiver_keys:
@@ -1411,10 +1616,10 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
     for field in receiver_bool_fields(rtype):
         if field in receiver and not is_bool_or_unset(receiver[field]):
             return (f"field '{field}' must be true or false, "
-                    f"got {_type_name(receiver[field])}")
+                    f"got {receiver_type_name(rtype, (field,), receiver[field])}")
     for field, prop in fields.items():
         if prop.get("ref") == _HTTP_CONFIG_REF and field in receiver:
-            problem = _http_config_problem(receiver[field])
+            problem = _http_config_problem(receiver[field], rtype)
             if problem:
                 return problem
     return None
@@ -1459,11 +1664,13 @@ def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) 
             return f"requires '{field}'"
         for i, item in enumerate(value):
             if not isinstance(item, str) or item == "":
-                return f"field '{field}' item {i} must be a non-empty string, got {item!r}"
+                return (f"field '{field}' item {i} must be a non-empty string, got "
+                        f"{receiver_value_repr(rtype, (field, i), item)}")
         return None
     pattern = prop.get("pattern")
     if pattern and re.fullmatch(pattern, value) is None:
-        return (f"field '{field}' value {value!r} is not in the format "
+        return (f"field '{field}' value {receiver_value_repr(rtype, (field,), value)} "
+                "is not in the format "
                 "tenant-config.schema.json requires")
     return None
 

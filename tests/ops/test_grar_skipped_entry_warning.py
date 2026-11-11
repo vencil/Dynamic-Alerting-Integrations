@@ -115,7 +115,7 @@ CASES = [
      None, "'match' must be a list"),
     ("parse:routing-defaults-not-mapping",
      {"_defaults.yaml": "_routing_defaults: [1]\n", **_with_receiver("")},
-     None, "must be a mapping, got list"),
+     None, "must be a mapping, got a list"),
     ("parse:nested-unread-carrier",
      {"team/_extra.yaml": "_routing_defaults:\n  group_wait: 30s\n",
       "team/t1.yaml": _TENANT_HEAD + _RECEIVER},
