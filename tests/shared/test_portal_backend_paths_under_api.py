@@ -84,7 +84,7 @@ def _literal_ok(expr: str) -> bool | None:
     static = rest.split("${", 1)[0] if quote == "`" else rest
     static = static.split(quote, 1)[0]
     # A browser normalises dot segments: /api/../preview is /preview.
-    if re.search(r"(^|/)\.\.?(/|$)", static):
+    if _DOT_SEGMENT.search(static):
         return False
     if static.startswith("/api/"):
         return True
@@ -103,7 +103,9 @@ def _assignments(text: str, name: str) -> list[str]:
             for m in pat.finditer(text)]
 
 
-_DOT_SEGMENT = re.compile(r"(^|/)\.\.?(/|$)")
+# A dot segment as the browser's URL parser sees it: '.' or '..', each dot
+# also written percent-encoded ('%2e', any case).
+_DOT_SEGMENT = re.compile(r"(^|/)(?:\.|%2e){1,2}(/|$|[?#])", re.I)
 
 
 def _static_text(expr: str) -> str:
@@ -430,6 +432,9 @@ def test_every_portal_fetch_is_under_api() -> None:
     ("fetch(`/api/v1/tenants/${encodeURIComponent(id)}/views`)", True),
     ("fetch(`/api/v1/${what}`)", False),
     ("const qs = q ? `?q=${encodeURIComponent(q)}` : '';\nfetch(`/api/v1/m${qs}`)", True),
+    ("fetch('/api/%2e%2e/preview')", False),
+    ("fetch('/api/%2E./preview')", False),
+    ("fetch('/api/v1/x%2ey')", True),
     # An encoded value is one segment and may be '..': it can climb one level.
     ("fetch('/api/' + encodeURIComponent(id) + '/preview')", False),
     ("fetch(`/api/${encodeURIComponent(id)}`)", False),
