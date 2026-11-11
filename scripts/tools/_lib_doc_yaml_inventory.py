@@ -47,7 +47,8 @@ rustdoc's `invalid_codeblock_attributes`:
   kind, is an error. Only parse-tree names a kind; the other consumers'
   readings give a reason without one, so they take no `.expect-refused`.
 * `.expect-invalid` (with `.confd`): a counter-example that reads but is
-  wrong on purpose (rustdoc's `compile_fail`). The schema check must find at
+  wrong on purpose (rustdoc's `compile_fail`). The schema check (with the
+  route generator's credential judgement) must find at
   least one violation in EVERY unit of the fence, and reports none of them; a
   unit with none is an error (a correct file shown beside the counter-example
   goes in a fence of its own). A block that only shows a reading, and meets

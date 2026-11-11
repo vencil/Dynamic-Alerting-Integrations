@@ -184,7 +184,7 @@ _routing_enforced:
   enabled: true                 # ⚠️ 省略＝false，整段被靜默忽略
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/xxx"
+    api_url: {secret: {shared: noc-slack, key: api-url}}  # 共用 Secret：別名須列在部署 policy 的 shared_secrets
     channel: "#noc-alerts"
   # ⚠️ match 必須是「matcher 字串的 list」。省略它會產生一條沒有任何 matcher
   #    的 route，加上固定帶的 continue: true ＝ 所有租戶的所有告警都被雙送到
@@ -205,7 +205,7 @@ NOC 收到的通知使用 `platform_summary` annotation，內容聚焦容量規�
 _routing_defaults:
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/{{tenant}}-alerts"
+    api_url: {secret: {key: slack-api-url}}
     channel: "#{{tenant}}-team"
   group_wait: "30s"
   repeat_interval: "4h"
@@ -250,13 +250,13 @@ routing_profiles:
   team-sre-apac:
     receiver:
       type: slack
-      api_url: "https://hooks.slack.com/sre-apac"
+      api_url: {secret: {key: slack-api-url}}
     group_wait: 30s
     repeat_interval: 4h
   team-dba-global:
     receiver:
       type: pagerduty
-      service_key: "dba-key-123"
+      service_key: {secret: {key: pagerduty-service-key}}
     repeat_interval: 1h
 ```
 

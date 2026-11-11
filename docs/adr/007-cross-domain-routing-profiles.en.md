@@ -43,7 +43,7 @@ routing_profiles:
   team-sre-apac:
     receiver:
       type: slack
-      api_url: "https://hooks.slack.com/services/T00/B00/sre-apac"
+      api_url: {secret: {key: slack-api-url}}
     group_by: [tenant, alertname, severity]
     group_wait: 30s
     group_interval: 5m
@@ -52,7 +52,7 @@ routing_profiles:
       - match: { severity: critical }
         receiver:
           type: pagerduty
-          service_key: "sre-apac-critical-key"
+          service_key: {secret: {key: pagerduty-service-key}}
         repeat_interval: 15m
 
   team-dba-global:

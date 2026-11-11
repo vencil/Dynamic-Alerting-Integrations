@@ -65,7 +65,7 @@ _routing_enforced:
   enabled: true
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/x"
+    api_url: {secret: {shared: noc-slack, key: api-url}}  # shared Secret: the alias is listed in the deployment policy's shared_secrets
     channel: "#noc-alerts"
     # Platform perspective: reference platform_summary
     title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
@@ -91,7 +91,7 @@ tenants:
     _routing:
       receiver:
         type: "slack"
-        api_url: "https://hooks.slack.com/services/T/B/y"
+        api_url: {secret: {key: slack-api-url}}
         channel: "#db-a-alerts"
         title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
         text: >-
@@ -110,7 +110,7 @@ _routing_enforced:
   enabled: true
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/x"
+    api_url: {secret: {key: slack-api-url}}
     channel: "#noc-{{tenant}}"
     title: '{{ .Status | toUpper }}: {{ .CommonLabels.alertname }}'
 ```

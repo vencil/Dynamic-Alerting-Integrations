@@ -43,6 +43,8 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 import _lib_parse_tree  # noqa: E402
 import _lib_consumer_read  # noqa: E402
 import _lib_doc_yaml_inventory as inventory  # noqa: E402  (#3416: the one inventory)
+sys.path.append(os.path.join(_THIS_DIR, "..", "ops"))
+from _grar_parse import credential_facts  # noqa: E402  (#1560: the generator's judgement)
 
 try:
     import jsonschema
@@ -384,6 +386,9 @@ class MdYamlDriftChecker:
 
         A unit is a conf.d example when it is declared `{.confd}` or, undeclared,
         when parse-tree's reading has the shape of one (`inventory.is_confd_example`).
+        Each unit is also judged as the route generator judges a file's
+        credentials (`_grar_parse.credential_facts`, #1560): a credential
+        written out, or a place it cannot judge, is a violation.
         Every unit of a `{.confd .expect-invalid}` fence must yield at least
         one violation, and none of its violations is reported; a unit that
         yields none is the violation (#3416 review: judged per fence, one wrong
@@ -421,6 +426,11 @@ class MdYamlDriftChecker:
         inv, rc = self._inventory_or_exit()
         if inv is None:
             return rc
+        try:
+            entries = _lib_parse_tree.classify_names(["_defaults.yaml", "tenant.yaml"])
+        except _lib_parse_tree.ParseTreeError as e:
+            print(f"ERROR: `da-guard parse-tree` did not answer: {e}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
         # an `.expect-invalid` unit → the violations found in it (on purpose)
         expected: Dict[Tuple[str, int], List[str]] = {}
         first_line: Dict[Tuple[str, int], str] = {}
@@ -461,6 +471,19 @@ class MdYamlDriftChecker:
                 except jsonschema.SchemaError as e:
                     print(f"ERROR: schema itself is invalid: {e}", file=sys.stderr)
                     return EXIT_CALLER_ERROR
+            # #1560: what the route generator refuses (a credential written
+            # out, or a place it cannot judge). Kind and category only, never
+            # the value.
+            facts = credential_facts(
+                unit.where, doc,
+                entries["_defaults.yaml" if kind == "platform" else "tenant.yaml"])
+            for fact_kind, detail in dict.fromkeys((f.kind, f.detail) for f in facts):
+                if unit.expect_invalid:
+                    expected[(unit.path, unit.line)].append(
+                        f"{unit.where} ({fact_kind}): {detail}")
+                    continue
+                issues.append({"file": unit.path, "line": unit.line, "kind": fact_kind,
+                               "error": detail})
             if self.verbose:
                 print(f"  OK   {unit.where} ({kind})")
         for (path, line), found in sorted(expected.items()):
@@ -468,7 +491,8 @@ class MdYamlDriftChecker:
                 issues.append({
                     "file": path, "line": line, "kind": "expect-invalid",
                     "error": (f"the fence is declared {{.confd .expect-invalid}}, but this "
-                              f"unit ({first_line[(path, line)]!r}) meets its schema: every "
+                              f"unit ({first_line[(path, line)]!r}) meets its schema and "
+                              "writes no credential out: every "
                               "unit of such a fence must be wrong. A correct file shown "
                               "beside the counter-example goes in a fence of its own; a "
                               "block that only shows a reading is "
@@ -503,7 +527,8 @@ class MdYamlDriftChecker:
         print("Fix the example, or the schema if the contract genuinely changed.")
         print("Note which contract the block was judged against — a `_defaults.yaml`")
         print("is governed by platform-defaults.schema.json, a tenant snippet by")
-        print("tenant-config.schema.json. A counter-example wrong on purpose is")
+        print("tenant-config.schema.json. A credential is written as a Secret")
+        print("reference ({secret: {key: <key>}}). A counter-example wrong on purpose is")
         print("declared ```yaml {.confd .expect-invalid}.")
         return EXIT_VIOLATION
 

@@ -260,7 +260,7 @@ tenants:
     _routing:
       receiver:
         type: slack
-        api_url: "https://hooks.slack.com/services/T000/B000/XXXX"
+        api_url: {secret: {key: slack-api-url}}
         channel: "#da-pilot"
       group_wait: 30s
       group_interval: 5m
