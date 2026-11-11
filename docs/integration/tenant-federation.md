@@ -103,7 +103,7 @@ token：
 
 token TTL 4h、**無 sliding refresh** —— 持續性的拉取要在過期前換一把新的，否則每 4h 斷一次。
 
-⚠️ **目前沒有自動換發的方式。** 定期自動簽發的程式是「機器呼叫端」，tenant-api 目前不接受機器身分；在出現第一個需要它、且能實際執行的機器呼叫端之前，不提供非瀏覽器的簽發方式（[ADR-027 §4](../adr/027-tenant-api-caller-identity.md)）。所以現在的換發是在 portal 重新簽發一把、更新你的 Prometheus / Grafana 設定後 reload（Prometheus `kill -HUP` 或 `/-/reload`）。需要長時間無人值守的拉取，請平台把 TTL 調長，並告訴平台你需要自動換發——這正是 ADR-027 §4 等待的觸發條件。
+⚠️ **目前沒有自動換發的方式。** 定期自動簽發的程式是「機器呼叫端」，tenant-api 目前不接受機器身分；在出現第一個需要它、且能實際執行的機器呼叫端之前，不提供非瀏覽器的簽發方式（[ADR-027 §4](../adr/027-tenant-api-caller-identity.md)）。所以現在的換發是在 portal 重新簽發一把、更新你的 Prometheus / Grafana 設定後 reload：Prometheus 送 `SIGHUP`（`kill -HUP <pid>`），或在啟用 `--web.enable-lifecycle` 時以 `POST /-/reload`（預設不開放）。設定 reload 之前，拉取仍用舊 token。需要長時間無人值守的拉取，請平台把 TTL 調長，並告訴平台你需要自動換發——這正是 ADR-027 §4 等待的觸發條件。
 
 注意每租戶同時最多 **16 把**有效 token —— 換發時把上一把撤銷掉、或讓它自然過期（4h），別讓舊 token 累積撞 16 上限（簽發會被拒，回 `409`）。
 

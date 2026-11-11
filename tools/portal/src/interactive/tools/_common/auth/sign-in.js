@@ -46,12 +46,40 @@ function writeAttempt(win, now) {
   }
 }
 
+// Holds on leaving for sign-in: while one is held, redirectToSignIn() stays
+// on the page. A dialog showing something that cannot be read back (a
+// one-time federation token) holds one, so a 401 from ANY request on the
+// page — not only its own — cannot navigate away and lose it.
+let holds = 0;
+
+/**
+ * Hold leaving for sign-in until the returned release() is called (once;
+ * further calls do nothing).
+ */
+export function holdSignIn() {
+  holds += 1;
+  let released = false;
+  return () => {
+    if (!released) {
+      released = true;
+      holds -= 1;
+    }
+  };
+}
+
+/** Whether a hold is in place (holdSignIn). */
+export function signInHeld() {
+  return holds > 0;
+}
+
 /**
  * Send the browser to sign in, returning to the current page. Returns false,
  * without leaving, when this tab already left for sign-in within
- * SIGN_IN_RETRY_WINDOW_MS: the caller then shows the refusal.
+ * SIGN_IN_RETRY_WINDOW_MS, or while a hold is in place (holdSignIn): the
+ * caller then shows the refusal.
  */
 export function redirectToSignIn(win = window, now = Date.now()) {
+  if (holds > 0) return false;
   const last = readAttempt(win);
   if (last && now - last >= 0 && now - last < SIGN_IN_RETRY_WINDOW_MS) {
     return false;

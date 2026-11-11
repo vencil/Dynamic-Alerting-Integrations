@@ -3,7 +3,7 @@ import { styles } from '../styles.js';
 import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 import { useModalFocusTrap } from '../../_common/hooks/useModalFocusTrap.js';
 import { classifyApiError, apiErrorMessage } from '../../_common/api/classify-error.js';
-import { redirectToSignIn } from '../../_common/auth/sign-in.js';
+import { redirectToSignIn, holdSignIn } from '../../_common/auth/sign-in.js';
 
 /* ── i18n ──────────────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -92,11 +92,28 @@ function FederationTokensModal(props) {
   const [confirming, setConfirming] = useState(null);
   const busy = useRef(false);
   const [busyView, setBusyView] = useState(false);
-  // The one-time token on screen, for the callbacks below (state is stale there).
+  // The one-time token on screen, for the callbacks below (state is stale
+  // there). Set and cleared synchronously with the token (showToken /
+  // dropToken), never a render later, and with it a hold on leaving for
+  // sign-in: a 401 from any request on the page cannot navigate away.
   const tokenShown = useRef(false);
-  useEffect(() => { tokenShown.current = Boolean(newToken); }, [newToken]);
+  const releaseHold = useRef(null);
+  const showToken = (tok) => {
+    tokenShown.current = true;
+    if (!releaseHold.current) releaseHold.current = holdSignIn();
+    setNewToken(tok);
+  };
+  const dropToken = () => {
+    tokenShown.current = false;
+    if (releaseHold.current) { releaseHold.current(); releaseHold.current = null; }
+    setNewToken(null);
+  };
+  useEffect(() => () => { if (releaseHold.current) releaseHold.current(); }, []);
+  // An issue request in flight: its answer may be the one-time token.
+  const issuing = useRef(false);
 
   const requestClose = () => {
+    if (issuing.current) return; // the token the request may return has nowhere to go
     if (tokenShown.current) {
       setConfirmClose(true);
       return;
@@ -182,11 +199,14 @@ function FederationTokensModal(props) {
       return;
     }
     let res;
+    issuing.current = true;
     try {
       res = await api.issue({ tenant_id: tenantId, description, capability });
     } catch (_e) {
       setError(NETWORK_ERROR());
       return;
+    } finally {
+      issuing.current = false;
     }
     if (handleUnauthorized(res)) return;
     if (!res.ok || !res.data || typeof res.data.token !== 'string') {
@@ -195,7 +215,7 @@ function FederationTokensModal(props) {
         : failureMessage(res));
       return;
     }
-    setNewToken({ token: res.data.token, record: res.data.record || {} });
+    showToken({ token: res.data.token, record: res.data.record || {} });
     setDescription('');
     await load();
   });
@@ -298,7 +318,7 @@ function FederationTokensModal(props) {
               </button>
               <button
                 style={{ ...styles.button, ...styles.buttonSecondary }}
-                onClick={() => { setNewToken(null); setConfirmClose(false); }}
+                onClick={() => { dropToken(); setConfirmClose(false); }}
                 data-testid="fed-token-saved"
               >
                 {t('我已保存', 'I have saved it')}

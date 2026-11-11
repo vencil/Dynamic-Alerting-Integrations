@@ -8,6 +8,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { apiFixture } from './helpers/api-fixture';
 import { FederationTokensModal } from '../src/interactive/tools/tenant-manager/components/FederationTokensModal.jsx';
+import { signInHeld } from '../src/interactive/tools/_common/auth/sign-in.js';
 
 type Answer = { ok: boolean; status: number; data: any; retryAfter?: string | null };
 
@@ -271,5 +272,50 @@ describe('FederationTokensModal — other states', () => {
     fireEvent.click(screen.getByTestId('fed-tenant-open'));
     await waitFor(() => expect(a.list).toHaveBeenCalledWith('gone-tenant'));
     await waitFor(() => expect(screen.getAllByTestId('fed-row')).toHaveLength(1));
+  });
+});
+
+describe('FederationTokensModal — CodeRabbit review (#3740)', () => {
+  it('Close is ignored while the issue request is in flight; the token then shows', async () => {
+    let resolve: (v: Answer) => void = () => {};
+    const issue = vi.fn(() => new Promise<Answer>((r) => { resolve = r; }));
+    const onClose = vi.fn();
+    render(<FederationTokensModal tenantId="tenant-x" onClose={onClose} api={api({ issue })} signIn={vi.fn(() => true)} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    fireEvent.click(screen.getByTestId('fed-close'));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    resolve(ok(apiFixture('CreateFederationTokenResponse', { token: 'tok-late', record: record() }), 201));
+    await waitFor(() => expect(screen.getByTestId('fed-new-token').textContent).toContain('tok-late'));
+  });
+
+  it('a 401 on the reload right after issuing keeps the token and does not sign in', async () => {
+    let calls = 0;
+    const list = vi.fn(() => Promise.resolve(++calls === 1 ? ok([record()]) : fail(401, { error: 'unauthorized' })));
+    const signIn = vi.fn(() => true);
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} api={api({ list })} signIn={signIn} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
+    expect(signIn).not.toHaveBeenCalled();
+    expect(screen.getByTestId('fed-new-token').textContent).toContain('eyJ.signed.jwt');
+  });
+
+  it('holds sign-in for the whole page while the token is shown, and lets go after', async () => {
+    const { unmount } = render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} api={api()} signIn={vi.fn(() => true)} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    expect(signInHeld()).toBe(false);
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(screen.getByTestId('fed-new-token')).toBeInTheDocument());
+    expect(signInHeld()).toBe(true);
+    fireEvent.click(screen.getByTestId('fed-token-saved'));
+    expect(signInHeld()).toBe(false);
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(screen.getByTestId('fed-new-token')).toBeInTheDocument());
+    expect(signInHeld()).toBe(true);
+    unmount();
+    expect(signInHeld()).toBe(false);
   });
 });
