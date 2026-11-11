@@ -1217,7 +1217,9 @@ def _object_format(git: str, repo: str) -> str:
       served as that repository with --config-subdir read from its root (an
       empty conf.d, every write judged against nothing);
     * a bare repository or a linked worktree (``.git`` a ``gitdir:`` file):
-      the root, served."""
+      the root, served. A directory inside a bare repository (``objects/``)
+      has an empty prefix too and is served: it resolves to that same
+      repository, whose ``HEAD:<config-subdir>`` is the same conf.d."""
     shown_repo = safe_label(repo) if repo else "''"
     shown_git = safe_label(git) if git else "''"  # '' is SUPPLIED, as _lib_paths shows it
     try:
