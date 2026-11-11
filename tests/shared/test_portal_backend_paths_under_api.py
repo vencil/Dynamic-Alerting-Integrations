@@ -98,10 +98,9 @@ def _literal_ok(expr: str) -> bool | None:
 
 def _assignments(text: str, name: str) -> list[str]:
     pat = re.compile(rf"(?:\b(?:const|let|var)\s+{re.escape(name)}\s*=|(?<![\w.]){re.escape(name)}\s*=(?!=))")
-    out = []
-    for m in pat.finditer(text):
-        out.append(_first_arg(text, m.end()).rstrip(";").strip())
-    return out
+    # The value runs to the end of its statement (a top-level ';' or newline).
+    return [text[m.end():_body_end(text, m.end())].strip().rstrip(";").strip()
+            for m in pat.finditer(text)]
 
 
 _DOT_SEGMENT = re.compile(r"(^|/)\.\.?(/|$)")
@@ -139,6 +138,87 @@ def _static_text(expr: str) -> str:
     # \0 marks a boundary an expression may fill; a segment is checked on
     # the text as written, so join pieces without it.
     return "".join(out).replace("\0", "")
+
+
+def _pieces(expr: str) -> list[tuple[bool, str]] | None:
+    """*expr* as (is_static, text) pieces in order: string literals and
+    template text are static, template ${...} parts and '+' operands that
+    are not literals are dynamic. None when expr is not a string, a
+    template or a '+' concatenation of them."""
+    ops, depth, quote, start, i = [], 0, None, 0, 0
+    while i < len(expr):
+        c = expr[i]
+        if quote:
+            if c == "\\":
+                i += 2
+                continue
+            if c == quote:
+                quote = None
+            elif quote == "`" and expr.startswith("${", i):
+                j, d = i + 2, 1
+                while j < len(expr) and d:
+                    d += {"{": 1, "}": -1}.get(expr[j], 0)
+                    j += 1
+                i = j
+                continue
+        elif c in "'\"`":
+            quote = c
+        elif c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+        elif c == "+" and depth == 0:
+            ops.append(expr[start:i].strip())
+            start = i + 1
+        i += 1
+    ops.append(expr[start:].strip())
+    out: list[tuple[bool, str]] = []
+    for op in ops:
+        m = re.fullmatch(r"(['\"])(.*)\1", op, re.S)
+        if m:
+            out.append((True, m.group(2)))
+        elif op.startswith("`") and op.endswith("`"):
+            body, k = op[1:-1], 0
+            for t in re.finditer(r"\$\{", body):
+                if t.start() < k:
+                    continue
+                out.append((True, body[k:t.start()]))
+                j, d = t.end(), 1
+                while j < len(body) and d:
+                    d += {"{": 1, "}": -1}.get(body[j], 0)
+                    j += 1
+                out.append((False, body[t.end():j - 1].strip()))
+                k = j
+            out.append((True, body[k:]))
+        else:
+            out.append((False, op))
+    return out
+
+
+def _dynamic_ok(text: str, piece: str, before: str) -> str | None:
+    """None when a dynamic piece of a path cannot move it out of /api/:
+    it comes after the query ('?'), is wrapped in encodeURIComponent, or is
+    a name whose every assignment is a plain literal with no dot segment."""
+    if "?" in before or re.fullmatch(r"encodeURIComponent\(.*\)", piece, re.S):
+        return None
+    if _IDENT.match(piece):
+        values = _assignments(text, piece)
+        if values and all(_suffix_safe(v, before) for v in values):
+            return None
+    return f"cannot tell where {piece[:40]!r} puts the path"
+
+
+def _suffix_safe(value: str, before: str) -> bool:
+    """A value appended to a path is safe when it is a plain literal with no
+    dot segment, starts a query ('?…', including a template), or is a
+    `cond ? a : b` whose branches are each safe."""
+    tern = re.fullmatch(r"[^?:'\"`]+\?\s*(.+?)\s*:\s*(.+)", value, re.S)
+    if tern:
+        return _suffix_safe(tern.group(1), before) and _suffix_safe(tern.group(2), before)
+    lit = re.fullmatch(r"(['\"])([^'\"]*)\1", value)
+    if lit:
+        return lit.group(2).startswith("?") or not _DOT_SEGMENT.search(before + lit.group(2))
+    return value.startswith("`?")
 
 
 _HEADS = (
@@ -217,13 +297,29 @@ def _check(text: str, expr: str, at: int, depth: int = 0) -> str | None:
         return f"{expr[:60]!r} is passed through too many calls to read"
     if _DOT_SEGMENT.search(_static_text(expr)):
         return f"{expr[:60]!r} has a dot segment (the browser resolves it)"
+    pieces = _pieces(expr) if expr[:1] in "'\"`" else None
     lead = re.match(r"^`\$\{\s*([A-Za-z_$][\w$]*)\s*\}", expr)
     if lead:
         # `${BASE}/…`: the path's start is BASE's.
-        return _check(text, lead.group(1), at, depth)
-    ok = _literal_ok(expr)
-    if ok is not None:
-        return None if ok else f"{expr[:60]!r} is not under /api/"
+        why = _check(text, lead.group(1), at, depth)
+        if why:
+            return why
+        pieces = pieces[2:] if pieces else pieces  # '' and the BASE piece
+    else:
+        ok = _literal_ok(expr)
+        if ok is None:
+            pieces = None
+        elif not ok:
+            return f"{expr[:60]!r} is not under /api/"
+    if pieces is not None:
+        # Every dynamic piece after the start must keep the path where it is.
+        before = ""
+        for static, piece in pieces:
+            if static:
+                before += piece
+            elif why := _dynamic_ok(text, piece, before):
+                return why
+        return None
     if _IDENT.match(expr):
         # A parameter of the enclosing function shadows any outer binding of
         # the same name: resolve it from the call sites, or not at all.
@@ -238,8 +334,9 @@ def _check(text: str, expr: str, at: int, depth: int = 0) -> str | None:
             return None if not bad else f"{expr} is passed {bad[0][0][:60]!r}: {bad[0][1]}"
         values = _assignments(text, expr)
         if values:
-            bad = [v for v in values if _literal_ok(v) is not True]
-            return None if not bad else f"{expr} = {bad[0][:60]!r} is not a literal under /api/"
+            # Each assigned value gets the whole check, suffixes included.
+            bad = [(v, why) for v in values if (why := _check(text, v, at, depth + 1))]
+            return None if not bad else f"{expr} = {bad[0][0][:60]!r}: {bad[0][1]}"
         return f"cannot resolve {expr!r} in this file"
     return f"cannot read {expr[:60]!r} as a path"
 
@@ -274,7 +371,8 @@ def test_every_portal_fetch_is_under_api() -> None:
 
 @pytest.mark.parametrize("src,ok", [
     ("fetch('/api/v1/me')", True),
-    ("fetch(`/api/v1/tenants/${id}/recipe-preview`, {method: 'POST'})", True),
+    ("fetch(`/api/v1/tenants/${encodeURIComponent(id)}/recipe-preview`, {method: 'POST'})", True),
+    ("fetch(`/api/v1/tenants/${id}/recipe-preview`, {method: 'POST'})", False),  # unencoded segment
     ("fetch('platform-data.json')", True),
     ("fetch('/preview', {method: 'POST'})", False),
     ("fetch(`/preview?x=${y}`)", False),
@@ -300,6 +398,15 @@ def test_every_portal_fetch_is_under_api() -> None:
     ("fetch('/api/' + '../preview')", False),
     ("const E = '/api/v1/views';\nfetch(`${E}/../../../preview`)", False),
     ("fetch('/api/v1/tenants/' + encodeURIComponent(id) + '/views')", True),
+    ("const E = '/api/' + '../preview';\nfetch(E)", False),
+    ("const suffix = '../preview';\nfetch('/api/' + suffix)", False),
+    ("const suffix = 'views';\nfetch('/api/v1/' + suffix)", True),
+    ("fetch('/api/v1/' + somethingUnknown)", False),
+    ("fetch('/api/v1/search?' + params.toString())", True),
+    ("fetch(`/api/v1/tenants/${encodeURIComponent(id)}/views`)", True),
+    ("fetch(`/api/v1/${what}`)", False),
+    ("const qs = q ? `?q=${encodeURIComponent(q)}` : '';\nfetch(`/api/v1/m${qs}`)", True),
+    ("const qs = q ? '/../preview' : '';\nfetch(`/api/v1/m${qs}`)", False),
     # ... and a wrapper parameter shadowing an outer constant of the same name
     ("const url = '/api/v1/me';\nfunction apiCall(url) { return fetch(url); }\napiCall('/preview');", False),
     ("const url = '/api/v1/me';\nfunction apiCall(url) { return fetch(url); }\napiCall('/api/v1/x');", True),
