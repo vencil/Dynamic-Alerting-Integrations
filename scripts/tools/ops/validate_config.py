@@ -586,12 +586,14 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
 # ============================================================
 # Check 1b: Quoting of string fields (#2164)
 # ============================================================
-_TENANT_SCHEMA = "tenant-config.schema.json"
-_PLATFORM_SCHEMA = "platform-defaults.schema.json"
+# The names are `_lib_io`'s: the one quoting selection
+# (`confd_quoting_schemas`, #3647) looks the schemas up by them.
 # #2245 / #2232 item 3: `_routing_profiles.yaml` — each profile `$ref`s the
 # tenant `routing` definition, so the quoting check reaches profiles too.
-_PROFILES_SCHEMA = "routing-profiles.schema.json"
-_PROFILES_NAMES = ("_routing_profiles.yaml", "_routing_profiles.yml")
+from _lib_io import (  # noqa: E402
+    CONFD_PLATFORM_SCHEMA as _PLATFORM_SCHEMA,
+    CONFD_ROUTING_PROFILES_SCHEMA as _PROFILES_SCHEMA,
+    CONFD_TENANT_SCHEMA as _TENANT_SCHEMA)
 
 
 def _find_schema(name: str) -> Path | None:
@@ -609,46 +611,28 @@ def _find_schema(name: str) -> Path | None:
     return candidate if candidate.is_file() else None
 
 
-def _quoting_scope(config_dir: str) -> list[tuple[Path, str, tuple[str, ...]]]:
-    """(file, label, schema names) for every file `yaml_quoting` reads.
+def _quoting_scope(config_dir: str, schemas: "dict[str, object]"
+                   ) -> list[tuple[Path, str, list[tuple[dict, str]]]]:
+    """(file, label, [(schema, schema name), …]) for every file `yaml_quoting`
+    reads, *schemas* being basename → parsed schema.
 
     #2695: `json_schema` leaves the misread scalars of exactly these files
-    to `yaml_quoting` — so the set is computed in ONE place. Were the two
-    rows to pick files differently, a value would be reported twice, or
-    (worse) read as quoted by `json_schema` in a file `yaml_quoting` never
-    read, so nobody reports it.
+    to `yaml_quoting`. Which schemas a file is walked with is
+    `_lib_io.confd_quoting_schemas` — the function `check_confd_schema`
+    calls too (#3647): were the two rows to pick differently, a value would
+    be reported twice, or read as quoted by `json_schema` where
+    `yaml_quoting` never walked, so nobody reports it. A file parse-tree
+    lists as `not_read` is read by no reader and by no row here.
     """
-    # #2906 review: parse-tree's verdict on which files are read — a file it
-    # lists as `not_read` (the `_defaults` spelling a directory does not
-    # select) is read by no reader, so no row reads it either; the `schema`
-    # row names it (`unselected_defaults_carrier`).
-    # #3206: the files are the entries of the run's tree-mode document (Go's
-    # `role`; the list `check_confd_schema.validate_dir` iterates too), and
-    # the schema a name selects is da-guard's (`defaults_document`, class).
-    #
-    # #2743 (#2509 review F3 before it): a ROOT platform file's `tenants:`
-    # block — any root `_` file the exporter reads, Go's verdict
-    # (`root_platform_file`) — is held to the tenant schema too, whose only
-    # top-level key is `tenants`; another `_` file has no schema of its own
-    # here and is read for that block alone. A nested one is not (no plane
-    # reads its block, #1576).
+    from _lib_io import confd_quoting_schemas
     reader = _lib_parse_cache.reader_for(config_dir)
-    out: list[tuple[Path, str, tuple[str, ...]]] = []
+    out: list[tuple[Path, str, list[tuple[dict, str]]]] = []
     for e in reader.listing().config_files():
         if e.not_read is not None:
             continue
-        if e.defaults_document:
-            names: tuple[str, ...] = (_PLATFORM_SCHEMA,)
-        elif e.name in _PROFILES_NAMES:
-            names = (_PROFILES_SCHEMA,)
-        elif e.reserved:
-            names = ()
-        else:
-            names = (_TENANT_SCHEMA,)
-        if e.root_platform_file:
-            names += (_TENANT_SCHEMA,)
-        if names:
-            out.append((Path(config_dir) / e.path, e.path, names))
+        pairs = confd_quoting_schemas(e, schemas)
+        if pairs:
+            out.append((Path(config_dir) / e.path, e.path, pairs))
     return out
 
 
@@ -675,7 +659,9 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     (`decode_error`), which `yaml_syntax` reports. A root `_defaults*` file's
     `tenants:` block is held to the tenant schema too (#2509 review F3), a
     nested one is not (the exporter does not read it); so is that of every
-    other root platform file the exporter reads (#2743, `_quoting_scope`).
+    other root platform file the exporter reads (#2743), and each profile's
+    `_custom_alerts` in such a file's `profiles:` block (#3647) — the one
+    selection, `_quoting_scope` over `_lib_io.confd_quoting_schemas`.
     """
     from _lib_io import find_misread_scalars, find_yaml11_bool_words
     schemas: dict[str, object] = {}
@@ -692,16 +678,26 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     errors: list[str] = []
     warnings: list[str] = []
     checked = 0
-    for fpath, label, names in _quoting_scope(config_dir):
+    try:
+        scope = _quoting_scope(config_dir, schemas)
+    except KeyError:
+        # #3647: a platform schema without `definitions.rootPlatformProfiles`
+        # (one older than this tool) cannot judge a root `profiles:` block.
+        return _make_result(
+            "yaml_quoting", FAIL,
+            [f"{_PLATFORM_SCHEMA} has no `definitions.rootPlatformProfiles` "
+             f"— it is older than this tool; the quoting check cannot run"],
+            caller_error=True)
+    for fpath, label, pairs in scope:
         try:
             root = reader.node(fpath)
         except FileUnreadable:
             continue
         checked += 1
-        for name_ in names:
-            for hit in find_misread_scalars(root, schemas[name_], schemas, name_):
+        for schema_, name_ in pairs:
+            for hit in find_misread_scalars(root, schema_, schemas, name_):
                 errors.append(f"{label}: {hit.message()}")
-            for word in find_yaml11_bool_words(root, schemas[name_], schemas, name_):
+            for word in find_yaml11_bool_words(root, schema_, schemas, name_):
                 warnings.append(f"WARN: {label}: {word.message()}")
     # #2509 blind review 5: each line carries its own remedy; the row's hint
     # only points back at them (a per-kind hint contradicted the lines).
@@ -775,11 +771,12 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
     profiles = schemas[_PROFILES_SCHEMA]
     try:
         ccs.checked_schema_registry(tenant, platform, profiles)
+        ccs.require_root_profiles_definition(platform)
         not_read: list[str] = []
         checked, violations, skipped = ccs.validate_dir(
             config_dir, tenant, jsonschema, platform, profiles,
             quoting_reported_for=frozenset(
-                label for _p, label, _s in _quoting_scope(config_dir)),
+                label for _p, label, _s in _quoting_scope(config_dir, schemas)),
             not_read=not_read)
     except ccs.UnresolvableSchemaRef as exc:
         return _make_result("json_schema", FAIL, [str(exc)],
