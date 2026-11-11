@@ -39,7 +39,7 @@ from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
-from _lib_paths import classify_path, raise_path_problems, require_dir  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -138,14 +138,18 @@ def _file_sha256(path: Path) -> str:
 
 def compute_dir_manifest(dir_path: str, label: str = "") -> FileManifest:
     """Build a SHA-256 manifest for the top-level config files of a
-    directory, as da-guard lists them (the exporter's walk)."""
+    directory, as da-guard lists them (the exporter's walk).
+
+    ⛔ #3751: "is it there" is never asked again here — `main` judged
+    ``--dirs`` once (`_lib_parse_cache.declared_trees`). An ``is_dir`` of its
+    own read a directory gone since as one holding no file: every file of
+    the other side reported as drift. da-guard's listing of a directory
+    that is gone fails closed (ParseTreeError, rc 2)."""
     p = Path(dir_path)
     manifest = FileManifest(
         label=label or p.name,
         path=str(p.resolve()),
     )
-    if not p.is_dir():
-        return manifest
 
     # Flat: top-level files only; `warn_nested` names the files below the
     # root this manifest leaves out. #3206: which files there are is
@@ -509,9 +513,11 @@ def build_parser() -> argparse.ArgumentParser:
         description=h["description"],
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--dirs", required=True,
-        help=h["dirs"],
+    # #3751: each item is a directory judged on its own; an empty item is
+    # refused, an item is not stripped (the rule of every list flag).
+    _lib_input.add_input(
+        parser, "--dirs", select=_lib_input.DA_GUARD_LISTS, separator=",",
+        required=True, help=h["dirs"],
     )
     parser.add_argument(
         "--mode", default="configmap", choices=["configmap", "operator"],
@@ -553,7 +559,9 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    dirs = [d.strip() for d in args.dirs.split(",") if d.strip()]
+    # #3751: judged once — each directory, a root da-guard cannot list —
+    # naming --dirs; nothing below asks again.
+    dirs = [str(d) for d in _lib_parse_cache.declared_trees(args, "dirs", lang="en")]
     ignore_prefixes = tuple(
         p.strip() for p in args.ignore_prefix.split(",") if p.strip()
     )
@@ -566,7 +574,6 @@ def main():
             sys.exit(EXIT_CALLER_ERROR)
 
         local_dir = dirs[0]
-        require_dir(local_dir, lang="en", flag="--dirs")  # #3276
 
         crd_manifest = compute_crd_manifest(
             namespace=args.namespace,
@@ -593,9 +600,6 @@ def main():
                 print("ERROR: --labels count must match --dirs count",
                       file=sys.stderr)
                 sys.exit(EXIT_CALLER_ERROR)
-
-        # Check directories exist (#3276: the shared caller-path judgement)
-        raise_path_problems([classify_path(d, "dir", lang="en", flag="--dirs") for d in dirs])
 
         reports = analyze_drift(dirs, labels=labels,
                                 ignore_prefixes=ignore_prefixes)

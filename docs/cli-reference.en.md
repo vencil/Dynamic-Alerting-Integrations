@@ -1133,7 +1133,7 @@ da-tools drift-detect --dirs <DIR1>,<DIR2>[,<DIR3>...] [--labels <L1>,<L2>,...] 
 
 | Argument | Description | Default |
 |----------|-------------|---------|
-| `--dirs <LIST>` | Comma-separated config directories (at least 2) | — |
+| `--dirs <LIST>` | Comma-separated config directories (at least 2). Each item is judged on its own; an empty item (`a,,b`, a trailing `,`) is refused with `2`, and a space around an item is not stripped — it is part of the path (the rule of the URL list flags; ⚠️ Breaking, [#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751): an empty item used to be skipped and spaces stripped) | — |
 | `--labels <LIST>` | Labels for each directory | `dir-1,dir-2,...` |
 | `--ignore-prefix <PREFIX>` | File prefixes treated as expected drift | `_cluster_,_local_` |
 | `--json` | JSON output | — |
@@ -1163,7 +1163,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|-------------|
 | `0` | No unexpected drift |
 | `1` | CI mode: unexpected drift detected |
-| `2` | Caller error: any `--dirs` directory missing, a directory holding a path da-guard validation names, no usable da-guard, fewer than 2 directories in configmap mode, not exactly 1 directory in operator mode, `--labels` count not matching `--dirs`; in operator mode `kubectl` not on PATH, timed out (30s), exited non-zero or returned non-JSON; arguments argparse rejects |
+| `2` | Caller error: an empty `--dirs` item, any `--dirs` directory missing or one da-guard cannot list (`--dirs` and the directory named), a directory holding a path da-guard validation names, no usable da-guard, fewer than 2 directories in configmap mode, not exactly 1 directory in operator mode, `--labels` count not matching `--dirs`; in operator mode `kubectl` not on PATH, timed out (30s), exited non-zero or returned non-JSON; arguments argparse rejects |
 
 ---
 
@@ -1225,7 +1225,7 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 
 Config snapshot & history tracking — records each change to conf.d/ in `.da-history/`, providing git-independent lightweight version control.
 
-`snapshot` records the conf.d's top-level config files, listed from da-guard's index of the tree (the exporter's walk); config files in subdirectories do not enter the snapshot, and stderr names them. So `snapshot` requires da-guard (`$DA_GUARD_BINARY`, then `$PATH`; the da-tools image ships one); without it the exit code is `2`. When the conf.d holds a path da-guard validation names, `snapshot` refuses with `2` before it writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)). `log` / `show` / `diff` read `.da-history/` only.
+`snapshot` records the conf.d's top-level config files, listed from da-guard's index of the tree (the exporter's walk); config files in subdirectories do not enter the snapshot, and stderr names them. So `snapshot` requires da-guard (`$DA_GUARD_BINARY`, then `$PATH`; the da-tools image ships one); without it the exit code is `2`. When the conf.d holds a path da-guard validation names, `snapshot` refuses with `2` before it writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)). `log` / `show` / `diff` read `.da-history/` only — they do not create it, and do not read `--config-dir` itself: the snapshot history of a conf.d deleted since is still read. When neither `.da-history/` nor `--config-dir` is there, they refuse with `2`, both named (⚠️ Breaking, [#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751): it printed "No snapshots yet", exit code `0`, and created `.da-history/` beside the path given). A `snapshot` `--config-dir` that does not exist, is not a directory or that da-guard cannot list is refused with `2` before anything is written, `--config-dir` named; an empty directory is still snapshotted (every file removed).
 
 ```bash
 da-tools config-history --config-dir <PATH> <action>
@@ -3267,7 +3267,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 |---|---|---|
 | `<tenant-id>` | — | Required unless `--all` is given |
 | `--all` | false | Verify every tenant under conf.d/ |
-| `--conf-d <PATH>` | `conf.d` | Path to the conf.d/ directory. `''` (an unset shell variable, say) ⇒ exit 2, no longer the current directory ([#3406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3406)) |
+| `--conf-d <PATH>` | `conf.d` | Path to the conf.d/ directory. `''` (an unset shell variable, say) ⇒ exit 2, no longer the current directory ([#3406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3406)). No file da-guard lists as a config file (an empty directory), or a directory da-guard cannot list ⇒ exit 2, `--conf-d` named ([#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751); it relayed da-guard's `no .yaml files found`, the flag unnamed) |
 | `--expect-merged-hash <H>` | empty | Compare actual `merged_hash` against this value; exits 1 on mismatch |
 | `--json` | false | Emit JSON (for piping to jq diff) |
 
@@ -3574,7 +3574,7 @@ da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [
 |------|------|
 | 0 | Done; with `--assert`, the result matches |
 | 1 | `--assert`: the result differs from the expected document |
-| 2 | Caller error (`--config-dir` missing, no da-guard or da-guard failed, unreadable `--assert` file, unknown `--tenant`), or no root platform file was read so the threshold keys are `undecidable`. `undecidable` is a partial answer: with `--json` the result is still printed; any other caller error leaves stdout empty, the cause on stderr only (⚠️ Breaking, [#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617): it carried `status: "caller_error"` and a `reason`) |
+| 2 | Caller error (`--config-dir` missing, one da-guard cannot list or holding no config file (`--config-dir` named, [#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)), no da-guard or da-guard failed, unreadable `--assert` file, unknown `--tenant`), or no root platform file was read so the threshold keys are `undecidable`. `undecidable` is a partial answer: with `--json` the result is still printed; any other caller error leaves stdout empty, the cause on stderr only (⚠️ Breaking, [#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617): it carried `status: "caller_error"` and a `reason`) |
 
 ```bash
 da-tools explain-keys --config-dir conf.d/ --tenant db-a

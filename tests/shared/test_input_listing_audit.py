@@ -80,7 +80,7 @@ def _run_audited(script: str, argv: list[str], sentinel: Path, tmp: Path,
     env = dict(os.environ, DA_INPUT_AUDIT_LOG=str(log), DA_INPUT_AUDIT_SENTINEL=str(sentinel),
                DA_LANG="en",
                PYTHONPATH=os.pathsep.join([str(AUDIT_DIR), os.environ.get("PYTHONPATH", "")]))
-    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / "ops" / script),
+    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / script),
                            *argv], cwd=tmp, env=env, capture_output=True, text=True,
                           encoding="utf-8", timeout=300, check=False, stdin=subprocess.DEVNULL)
     if not log.exists():

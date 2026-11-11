@@ -73,6 +73,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, Mapping, Optional
 
+import _lib_input
 import _lib_parse_tree
 from _lib_parse_tree import FileUnreadable, ParseTreeError, Tree  # noqa: F401 (re-exported)
 
@@ -236,6 +237,16 @@ class ConfdReader:
         #: The cache key a `read` will look up → the batch file-mode line
         #: `prefetch` got for it; taken (popped) by that read, never reused.
         self._stash: "dict[tuple[str, str], bytes]" = {}
+        #: ``(flag, lang)`` when this tree is a declared input (`declared_trees`,
+        #: #3751): a root da-guard cannot list is refused naming the FLAG
+        #: (`_lib_input.require_listed`) before any other verdict on the tree.
+        self.declared: "Optional[tuple[str, str]]" = None
+
+    def _judge_root(self, entries: "Iterable[_lib_parse_tree.Entry]") -> None:
+        if self.declared is not None:
+            flag, lang = self.declared
+            root = next((e for e in entries if e.path == "."), None)
+            _lib_input.require_listed(flag, self.root, root, lang=lang)
 
     def tree(self) -> Tree:
         """The tree-mode document (run on first use). Raises ParseTreeError.
@@ -252,6 +263,7 @@ class ConfdReader:
         first write."""
         if self._tree is None:
             self._tree = _lib_parse_tree.load(self.root, self.binary, self.timeout)
+        self._judge_root(self._tree.entries)
         if refuses():
             _lib_parse_tree.refuse_unservable(self._tree.entries, self.root)
             _SERVABLE.add(os.path.realpath(self.root))
@@ -269,6 +281,7 @@ class ConfdReader:
                 self._listing = _lib_parse_tree.listing_of(self.tree(), self.root)
             else:
                 self._listing = _lib_parse_tree.list_tree(self.root, self.binary, self.timeout)
+                self._judge_root(self._listing.entries)
         return self._listing
 
     def entry(self, path: "str | os.PathLike[str]") -> "Optional[_lib_parse_tree.Entry]":
@@ -686,6 +699,48 @@ def reader_for(root: "str | os.PathLike[str]") -> ConfdReader:
     if reader is None:
         reader = _SESSION[key] = ConfdReader(root)
     return reader
+
+
+# ── a conf.d the caller gave as a declared input (#3751) ─────────────────
+
+#: What a conf.d selection looks for, as the refusal of one that selects
+#: nothing names it (`_lib_input.refuse_empty`).
+CONFIG_FILES_WANTED = {"en": "a file da-guard lists as a config file",
+                       "zh": "da-guard 列為 config 檔的檔案"}
+
+
+def declared_trees(args: Any, dest: str, *, lang: str, binary: Optional[str] = None,
+                   timeout: Optional[float] = None) -> "list[Path]":
+    """The conf.d trees the flag declared at *dest* names
+    (``_lib_input.add_input``, ``select=DA_GUARD_LISTS``), judged ONCE for
+    the run: one, the items of a ``separator`` list, or none when the
+    declaration reads nothing there as selecting nothing (``absent``).
+
+    ⛔ The one judgement of a declared conf.d (#3751), in this order:
+    `_lib_input.selected` (the path — every item of a list — not there, not
+    a directory, a parent it cannot enter: the flag named); then each
+    tree's reader for the run (`reader_for`, *binary* / *timeout*), whose
+    root da-guard cannot list is `dir_not_accessible` naming the flag
+    (`_lib_input.require_listed`) — never the path alone, never read as a
+    tree with no config file; then that listing's config files, judged by
+    the declaration's ``empty`` (`_lib_input.require_selection`). A tool's
+    later reads of a tree — the served-values family's included
+    (`require_servable`) — take this same reading, never a second judgement
+    of it. Raises `_lib_exitcodes.CallerError` (rc 2) and ParseTreeError
+    (no usable da-guard)."""
+    spec = _lib_input.spec_of(args, dest)
+    if spec.select != _lib_input.DA_GUARD_LISTS:
+        raise TypeError(f"{dest}: declared_trees reads a select=DA_GUARD_LISTS input")
+    roots = _lib_input.selected(args, dest, lang=lang)
+    for root in roots:
+        reader = reader_for(root)
+        reader.declared = (spec.flag, lang)
+        with _lib_parse_tree.use_da_guard(binary, timeout):
+            listing = reader.listing()
+        _lib_input.require_selection(args, dest, listing.config_files(),
+                                     wanted=CONFIG_FILES_WANTED[lang], lang=lang,
+                                     item=root if spec.separator is not None else None)
+    return roots
 
 
 # ── parse-tree's file selection, for the read-only tools (#2906 E1) ─────

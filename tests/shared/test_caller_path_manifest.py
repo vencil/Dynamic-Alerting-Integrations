@@ -107,14 +107,14 @@ PENDING: frozenset[tuple[str, str]] = frozenset()
 #: fault, and a migrated one is dropped here.
 DIR_CEILING: frozenset[tuple[str, str]] = frozenset({
     ("analyze-gaps", "--config-dir"), ("blind-spot", "--config-dir"),
-    ("config-history", "--config-dir"), ("deprecate", "--config-dir"),
-    ("diagnose", "--config-dir"), ("drift-detect", "--dirs"),
-    ("evaluate-policy", "--config-dir"), ("explain-keys", "--config-dir"),
+    ("deprecate", "--config-dir"),
+    ("diagnose", "--config-dir"),
+    ("evaluate-policy", "--config-dir"),
     ("explain-route", "--config-dir"), ("generate-routes", "--config-dir"),
     ("gitops-check local", "--dir"),
     ("lint", "--rule-pack-dir"),
     ("migrate-credentials", "--config-dir"), ("rule-pack-split", "--rule-packs-dir"),
-    ("silencer-drift-check", "--rule-pack-dir"), ("tenant-verify", "--conf-d"),
+    ("silencer-drift-check", "--rule-pack-dir"),
     ("test-notification", "--config-dir"), ("threshold-govern", "--config-dir"),
     ("threshold-recommend", "--config-dir"), ("validate-config", "--config-dir"),
     ("validate-config", "--rule-packs"),

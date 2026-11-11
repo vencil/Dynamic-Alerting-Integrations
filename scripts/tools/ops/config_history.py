@@ -29,12 +29,13 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, encode_json  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError, encode_json  # noqa: E402
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 from _lib_io import exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3751)
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
 # `_detect_lang` only checked the zh prefix per variable, so DA_LANG=en fell
@@ -55,20 +56,19 @@ def _sha256(content):
 
 
 def _scan_config_dir(config_dir):
-    """Scan config directory, return sorted list of (filename, content, hash)."""
+    """Scan config directory, return sorted list of (filename, content, hash).
+
+    ⛔ #3751: *config_dir* is the one `main` judged
+    (`_lib_parse_cache.declared_trees`), read through the run's reader of
+    it — never judged again here; a directory gone since fails closed
+    (ParseTreeError)."""
     files = []
     config_path = Path(config_dir)
-    config_dir_problem = classify_path(config_dir, "dir", lang=_LANG, flag="--config-dir")  # #3276
-    if config_dir_problem is not None:
-        print(_t(f"錯誤：目錄無法使用 {config_dir_problem.message}",
-                 f"Error: {config_dir_problem.message}"), file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
     # Flat by design (the snapshot keys files by name); `warn_nested` names
     # what that leaves out. #3206: which files there are is da-guard's
     # listing, the run's one index of the tree — a tree Go names paths on
     # ends the run there, every such path named, exit 2.
-    reader = _lib_parse_cache.ConfdReader(config_path)
+    reader = _lib_parse_cache.reader_for(config_path)
     listing = reader.listing()
     warn_nested(config_path, tool="config_history", listing=listing)
     for f in [config_path / e.path for e in listing.config_files() if e.depth == 0]:
@@ -83,23 +83,31 @@ def _scan_config_dir(config_dir):
     return files
 
 
+def _history_path(config_dir):
+    """Where the history of *config_dir* is (``<parent>/.da-history``),
+    created or not."""
+    return Path(config_dir).parent / '.da-history'
+
+
 def _history_dir(config_dir):
-    """Get or create history directory.
+    """Get or create history directory — for a write (``snapshot``) only:
+    a read never creates it (#3751).
 
     #1789: this tool has no output flag — every path it writes is DERIVED
     from ``--config-dir`` (``<parent>/.da-history``), so that is the flag the
     operator has to fix and the one the message names.
     """
-    hdir = Path(config_dir).parent / '.da-history'
+    hdir = _history_path(config_dir)
     with output_write(hdir, flag="--config-dir", action="create directory"):
         hdir.mkdir(exist_ok=True)
     return hdir
 
 
 def _load_history(config_dir):
-    """Load existing history entries."""
-    hdir = _history_dir(config_dir)
-    history_file = hdir / 'history.json'
+    """Load existing history entries ([] when there is none). Creates
+    nothing (#3751: a read-only subcommand made ``.da-history`` beside any
+    path it was given)."""
+    history_file = _history_path(config_dir) / 'history.json'
     if history_file.exists():
         # ⚠️ NOT GUARDED (#1789), on purpose: this is a READ, and the ticket's
         # axis is the WRITE direction — "the output path the operator named is
@@ -278,7 +286,7 @@ def cmd_diff(config_dir, id_a, id_b):
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    hdir = _history_dir(config_dir)
+    hdir = _history_path(config_dir)
     snap_a = hdir / f"snap-{id_a}"
     snap_b = hdir / f"snap-{id_b}"
 
@@ -327,15 +335,42 @@ def cmd_diff(config_dir, id_a, id_b):
         print(_t('  ⊘ 無差異', '  ⊘ No differences'))
 
 
+def _judge_history(config_dir):
+    """The one judgement of a read-only subcommand (``log`` / ``show`` /
+    ``diff``, #3751): they read the snapshot history, never ``--config-dir``
+    itself — so a conf.d deleted since its last snapshot still shows its
+    history (a recovery path). Refused only when neither is there: the
+    history (``<parent>/.da-history``) not there and ``--config-dir`` no
+    usable directory — both named; it printed "no snapshots yet", rc 0, and
+    created ``.da-history`` beside any path it was given. A history there
+    but no directory is refused, named. Raises CallerError."""
+    hdir = _history_path(config_dir)
+    hist = classify_path(str(hdir), "dir", lang=_LANG)
+    if hist is None:
+        return
+    if not hist.missing:
+        raise CallerError(_t(f"--config-dir {config_dir}: 快照歷史 {hist.message}",
+                             f"--config-dir {config_dir}: snapshot history {hist.message}"),
+                          hist.reason)
+    conf = classify_path(config_dir, "dir", lang=_LANG, flag="--config-dir")
+    if conf is not None:
+        raise CallerError(_t(f"{conf.message}，且 {hdir} 沒有快照歷史",
+                             f"{conf.message}, and no snapshot history at {hdir}"),
+                          conf.reason)
+
+
 @exit_on_output_write_error
 @_lib_parse_cache.exit_on_parse_tree_error  # #3206: the listing is da-guard's — rc 2, named
+@_lib_parse_cache.session()  # #3751: the reader `declared_trees` judged is the one read
 def main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=_t('Config Snapshot & History — 配置快照與歷史追蹤',
                        'Config Snapshot & History — track configuration changes over time'))
-    parser.add_argument('--config-dir', required=True,
-                        help=_t('conf.d 目錄路徑', 'Path to conf.d directory'))
+    # #3751: read by `snapshot` alone (declared: judged there, once); the
+    # read-only subcommands read the history beside it (`_judge_history`).
+    _lib_input.add_input(parser, '--config-dir', select=_lib_input.DA_GUARD_LISTS,
+                         required=True, help=_t('conf.d 目錄路徑', 'Path to conf.d directory'))
     sub = parser.add_subparsers(dest='action')
 
     # snapshot
@@ -368,14 +403,24 @@ def main():
         parser.print_help()
         sys.exit(EXIT_CALLER_ERROR)
 
+    try:
+        if args.action == 'snapshot':
+            [config_dir] = _lib_parse_cache.declared_trees(args, 'config_dir', lang=_LANG)
+        else:
+            config_dir = args.config_dir
+            _judge_history(config_dir)
+    except CallerError as e:
+        print(_t(f"錯誤：目錄無法使用 {e}", f"Error: {e}"), file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+
     if args.action == 'snapshot':
-        cmd_snapshot(args.config_dir, args.message)
+        cmd_snapshot(config_dir, args.message)
     elif args.action == 'log':
-        cmd_log(args.config_dir, args.limit)
+        cmd_log(config_dir, args.limit)
     elif args.action == 'show':
-        cmd_show(args.config_dir, args.id)
+        cmd_show(config_dir, args.id)
     elif args.action == 'diff':
-        cmd_diff(args.config_dir, args.id_a, args.id_b)
+        cmd_diff(config_dir, args.id_a, args.id_b)
 
 
 if __name__ == "__main__":

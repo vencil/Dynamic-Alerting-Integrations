@@ -620,10 +620,10 @@ def _crash_wrapper(tmp_path, argv):
     wrapper.write_text(
         "import runpy, sys\n"
         f"sys.path.insert(0, {str(tools)!r})\n"
-        "import _lib_paths\n"
+        "import _lib_parse_cache\n"
         "def _boom(*a, **k):\n"
         "    raise RuntimeError('injected crash')\n"
-        "_lib_paths.require_dir = _boom\n"
+        "_lib_parse_cache.declared_trees = _boom\n"
         f"sys.argv = [{str(TOOL_PATH)!r}, *{list(argv)!r}]\n"
         f"runpy.run_path({str(TOOL_PATH)!r}, run_name='__main__')\n",
         encoding="utf-8")

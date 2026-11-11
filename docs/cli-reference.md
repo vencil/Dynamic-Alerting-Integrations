@@ -1129,7 +1129,7 @@ da-tools drift-detect --dirs <DIR1>,<DIR2>[,<DIR3>...] [--labels <L1>,<L2>,...] 
 
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
-| `--dirs <LIST>` | 以逗號分隔的配置目錄（至少 2 個） | — |
+| `--dirs <LIST>` | 以逗號分隔的配置目錄（至少 2 個）。每一項各自判定；空項（`a,,b`、結尾的 `,`）以 `2` 拒絕，項目前後的空白不去掉、算路徑的一部分（與 URL 清單旗標同一條規則；⚠️ Breaking，[#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)：先前空項被略過、空白被去掉） | — |
 | `--labels <LIST>` | 對應每個目錄的標籤 | `dir-1,dir-2,...` |
 | `--ignore-prefix <PREFIX>` | 視為預期漂移的檔案前綴 | `_cluster_,_local_` |
 | `--json` | JSON 輸出 | — |
@@ -1159,7 +1159,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|------|
 | `0` | 無非預期漂移 |
 | `1` | CI 模式：偵測到非預期漂移 |
-| `2` | 呼叫端錯誤：`--dirs` 任一目錄不存在、目錄上有 da-guard 驗證會點名的路徑、沒有可用的 da-guard、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、逾時（30s）、非零結束或輸出不是 JSON；argparse 拒絕的參數 |
+| `2` | 呼叫端錯誤：`--dirs` 有空項、任一目錄不存在或 da-guard 列不出內容（點名 `--dirs` 與該目錄）、目錄上有 da-guard 驗證會點名的路徑、沒有可用的 da-guard、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、逾時（30s）、非零結束或輸出不是 JSON；argparse 拒絕的參數 |
 
 ---
 
@@ -1221,7 +1221,7 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 
 配置快照與歷史追蹤——在 `.da-history/` 中記錄 conf.d/ 的每次變更，提供 git-independent 的輕量級版本控制。
 
-`snapshot` 記錄的是 conf.d 頂層的設定檔，清單取自 da-guard 對這棵樹的索引（exporter 的走訪）；子目錄裡的設定檔不進快照，stderr 會點名。因此 `snapshot` 需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`；conf.d 上有 da-guard 驗證會點名的路徑時，`snapshot` 在寫入任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。`log`／`show`／`diff` 只讀 `.da-history/`。
+`snapshot` 記錄的是 conf.d 頂層的設定檔，清單取自 da-guard 對這棵樹的索引（exporter 的走訪）；子目錄裡的設定檔不進快照，stderr 會點名。因此 `snapshot` 需要 da-guard（`$DA_GUARD_BINARY` → `$PATH`；da-tools 映像已內建），找不到結束碼 `2`；conf.d 上有 da-guard 驗證會點名的路徑時，`snapshot` 在寫入任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。`log`／`show`／`diff` 只讀 `.da-history/`，不建立它，也不讀 `--config-dir` 本身：conf.d 被刪掉之後仍讀得到它的快照歷史。`.da-history/` 與 `--config-dir` 都不存在時以 `2` 拒絕、兩者一起點名（⚠️ Breaking，[#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)：先前印「尚無快照記錄」、結束碼 `0`，並在給的路徑旁建立 `.da-history/`）。`snapshot` 給的 `--config-dir` 不存在、不是目錄或 da-guard 列不出內容時，在寫入任何東西之前以 `2` 拒絕並點名 `--config-dir`；空目錄照樣建立快照（每個檔都算移除）。
 
 ```bash
 da-tools config-history --config-dir <PATH> <action>
@@ -3250,7 +3250,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 |---|---|---|
 | `<tenant-id>` | — | 必填，除非用 `--all` |
 | `--all` | false | 對 conf.d/ 內所有 tenant 各印一次 |
-| `--conf-d <PATH>` | `conf.d` | conf.d/ 目錄路徑。給 `''`（例如未設定的 shell 變數）⇒ exit 2，不再當成目前目錄（[#3406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3406)） |
+| `--conf-d <PATH>` | `conf.d` | conf.d/ 目錄路徑。給 `''`（例如未設定的 shell 變數）⇒ exit 2，不再當成目前目錄（[#3406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3406)）。沒有任何 da-guard 列為設定檔的檔案（空目錄）或 da-guard 列不出內容 ⇒ exit 2，點名 `--conf-d`（[#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)；先前轉印 da-guard 的 `no .yaml files found`，不點名旗標） |
 | `--expect-merged-hash <H>` | 空 | 與實際比對；不一致時 exit 1 |
 | `--json` | false | JSON 輸出（給 pipe 給 jq diff 用） |
 
@@ -3557,7 +3557,7 @@ da-tools explain-keys --config-dir <dir> [--tenant <name>...] [--at <RFC3339>] [
 |------|------|
 | 0 | 完成；`--assert` 時結果與預期相符 |
 | 1 | `--assert` 的結果與預期不同 |
-| 2 | caller error（`--config-dir` 不存在、找不到 da-guard 或 da-guard 失敗、`--assert` 檔讀不了、`--tenant` 不存在），或沒讀到任何根平台檔、閾值鍵無從判斷（`undecidable`）。`undecidable` 是部分答案：`--json` 時結果照樣輸出；其餘 caller error 時 stdout 為空、原因只在 stderr（⚠️ Breaking，[#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617)：先前帶 `status: "caller_error"` 與 `reason`） |
+| 2 | caller error（`--config-dir` 不存在、da-guard 列不出內容或沒有任何設定檔（點名 `--config-dir`，[#3751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3751)）、找不到 da-guard 或 da-guard 失敗、`--assert` 檔讀不了、`--tenant` 不存在），或沒讀到任何根平台檔、閾值鍵無從判斷（`undecidable`）。`undecidable` 是部分答案：`--json` 時結果照樣輸出；其餘 caller error 時 stdout 為空、原因只在 stderr（⚠️ Breaking，[#3617](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3617)：先前帶 `status: "caller_error"` 與 `reason`） |
 
 ```bash
 da-tools explain-keys --config-dir conf.d/ --tenant db-a

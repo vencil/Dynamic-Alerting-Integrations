@@ -305,26 +305,72 @@ class TestScanConfigDir:
             assert result[0]['name'] == 'config.yaml'
 
 
-# ── 5. _scan_config_dir missing dir ─────────────────────────────────
+# ── 5. --config-dir judged once (#3751) ─────────────────────────────
 
-class TestScanConfigDirMissing:
-    """_scan_config_dir() 缺失目錄測試。"""
+_SCRIPT = os.path.join(os.path.dirname(__file__), '..', '..',
+                       'scripts', 'tools', 'ops', 'config_history.py')
 
-    def test_missing_directory_exits(self):
-        """目錄不存在應呼叫 sys.exit(EXIT_CALLER_ERROR)。"""
-        with pytest.raises(SystemExit) as exc_info:
-            ch._scan_config_dir('/nonexistent/path')
-        assert exc_info.value.code == EXIT_CALLER_ERROR
 
-    def test_missing_directory_stderr_message(self):
-        """應輸出錯誤訊息到 stderr。"""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            missing_path = os.path.join(tmpdir, 'missing')
-            with patch('sys.stderr', new=StringIO()) as fake_stderr:
-                with pytest.raises(SystemExit):
-                    ch._scan_config_dir(missing_path)
-                output = fake_stderr.getvalue()
-                assert 'Error' in output or '錯誤' in output
+def _cli(*argv, lang='en'):
+    return subprocess.run([sys.executable, _SCRIPT, *argv], capture_output=True, text=True,
+                          encoding='utf-8', timeout=120, env={**os.environ, 'DA_LANG': lang})
+
+
+class TestConfigDirJudgedOnce:
+    """#3751: `snapshot` judges --config-dir (declared: `declared_trees`);
+    the read-only subcommands read the history beside it."""
+
+    def test_scan_never_judges_again(self, tmp_path):
+        """A directory gone since it was judged fails closed in da-guard's
+        listing — never an empty snapshot (every file "removed")."""
+        with pytest.raises(ch._lib_parse_cache.ParseTreeError):
+            ch._scan_config_dir(str(tmp_path / 'gone'))
+
+    def test_snapshot_of_a_missing_dir_writes_nothing(self, tmp_path):
+        proc = _cli('--config-dir', str(tmp_path / 'missing'), 'snapshot')
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stderr
+        assert f"Error: --config-dir {tmp_path / 'missing'}: " in proc.stderr
+        assert list(tmp_path.iterdir()) == []
+
+    @pytest.mark.parametrize('action', [['log'], ['show', '1'], ['diff', '1', '2']])
+    def test_a_read_creates_no_history(self, tmp_path, action):
+        """A read made `.da-history` beside any path it was given."""
+        conf = tmp_path / 'conf.d'
+        conf.mkdir()
+        _cli('--config-dir', str(conf), *action)
+        assert not (tmp_path / '.da-history').exists()
+
+    @pytest.mark.parametrize('lang, said', [
+        ('en', 'and no snapshot history at'), ('zh', '沒有快照歷史')])
+    def test_a_read_with_neither_is_refused_naming_both(self, tmp_path, lang, said):
+        """It printed "no snapshots yet", rc 0, for a --config-dir typed wrong."""
+        proc = _cli('--config-dir', str(tmp_path / 'typo'), 'log', lang=lang)
+        assert proc.returncode == EXIT_CALLER_ERROR, proc.stdout
+        assert f"--config-dir {tmp_path / 'typo'}: " in proc.stderr
+        assert said in proc.stderr and str(tmp_path / '.da-history') in proc.stderr
+        assert proc.stdout == ''
+        assert list(tmp_path.iterdir()) == []
+
+    def test_the_history_of_a_deleted_conf_d_is_still_read(self, tmp_path):
+        """The recovery path: conf.d deleted after its snapshot, `log` and
+        `show` read the history."""
+        conf = tmp_path / 'conf.d'
+        conf.mkdir()
+        (conf / 'db-a.yaml').write_text('tenants:\n  db-a: {}\n', encoding='utf-8')
+        assert _cli('--config-dir', str(conf), 'snapshot').returncode == 0
+        (conf / 'db-a.yaml').unlink()
+        conf.rmdir()
+        log = _cli('--config-dir', str(conf), 'log')
+        assert log.returncode == 0, log.stderr
+        assert '#  1' in log.stdout
+        assert _cli('--config-dir', str(conf), 'show', '1').returncode == 0
+
+    def test_a_history_that_is_no_directory_is_refused(self, tmp_path):
+        (tmp_path / 'conf.d').mkdir()
+        (tmp_path / '.da-history').write_text('x', encoding='utf-8')
+        proc = _cli('--config-dir', str(tmp_path / 'conf.d'), 'log')
+        assert proc.returncode == EXIT_CALLER_ERROR
+        assert 'snapshot history' in proc.stderr and 'not a directory' in proc.stderr
 
 
 # ── 6. _history_dir ──────────────────────────────────────────────────

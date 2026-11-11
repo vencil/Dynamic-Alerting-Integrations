@@ -44,7 +44,7 @@ SPEAKS_ZH = {"ops/deprecate_rule.py", "ops/validate_migration.py", "dx/inject_wa
 
 #: OPS_SITES rows whose tool follows `DA_LANG` for its refusal line: run
 #: again under `DA_LANG=zh`, the detail is Chinese too.
-BILINGUAL = {"gitops-check", "policy-engine --config-dir", "policy-engine --policy",
+BILINGUAL = {"gitops-check", "config-history --config-dir", "policy-engine --config-dir", "policy-engine --policy",
              "threshold-govern --config-dir", "notification-tester --config-dir",
              "threshold-recommend --config-dir", "runtime-audit --rule-packs-dir",
              "runtime-audit --runtime-json", "alert-correlate --input",
@@ -72,6 +72,10 @@ def _one_language(out: str, script: str, lang: str = "en") -> None:
 OPS_SITES = [
     ("gitops-check", "gitops_check.py", ["local", "--dir", "{D}", "--json"], "--dir",
      "dir_not_accessible"),
+    # #3751: `snapshot` alone reads --config-dir (and judges it first, before
+    # .da-history is made); the read-only subcommands read the history.
+    ("config-history --config-dir", "config_history.py", ["--config-dir", "{D}", "snapshot"],
+     "--config-dir", None),
     ("validate-config --config-dir", "validate_config.py", ["--config-dir", "{D}", "--json"],
      "--config-dir", None),
     ("validate-config --rule-packs", "validate_config.py",
@@ -317,7 +321,9 @@ def box():
         (locked / "f.yaml").write_text("a: 1\n", encoding="utf-8")
         nx = root / "nx"
         nx.mkdir()
-        for src, dst in ((REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d", "conf.d"),
+        # Not named conf.d (#3751): that is a declared default (tenant-verify
+        # --conf-d), which the absent-default rows need to be NOT there.
+        for src, dst in ((REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d", "confd-flat"),
                          (REPO / "components" / "threshold-exporter" / "config" / "conf.d"
                           / "examples", "mapped")):
             shutil.copytree(src, root / dst)
@@ -330,7 +336,7 @@ def box():
         (root / "tests" / "rulepacks").mkdir(parents=True)
         shutil.copy2(REPO / "tests" / "rulepacks" / "vm_harness.py",
                      root / "tests" / "rulepacks" / "vm_harness.py")
-        for top in ("locked", "conf.d", "mapped", "silences.json", "wf", "tests", "rp"):
+        for top in ("locked", "confd-flat", "mapped", "silences.json", "wf", "tests", "rp"):
             for p in [root / top, *(root / top).rglob("*")]:
                 p.chmod(0o755 if p.is_dir() else 0o644)
         # 000, not 0700: the owner is root, but a non-root CI runs the table
@@ -342,7 +348,7 @@ def box():
         assert probe.returncode != 0, ("the uid can enter the locked parent: every row "
                                        "below would be vacuous")
         yield root, run, {"{D}": str(locked / "x"), "{F}": str(locked / "f.yaml"),
-                          "{CONF}": str(root / "conf.d"), "{MAP}": str(root / "mapped"),
+                          "{CONF}": str(root / "confd-flat"), "{MAP}": str(root / "mapped"),
                           "{WF}": str(root / "wf"), "{BOX}": str(root), "{NX}": str(nx),
                           "{RP}": str(root / "rp")}
 
@@ -639,8 +645,8 @@ def test_the_chinese_wording(tree, kind, name, detail):
     ("en", "Error: --config-dir {p}: " + os.strerror(errno.ENOENT)),
 ])
 def test_config_history_says_it_in_its_own_language(tmp_path, lang, line):
-    """config-history is no OPS_SITES row (a locked parent never reaches its
-    check); a missing --config-dir does, in both of its languages."""
+    """config-history's own wording of a refused --config-dir (its OPS_SITES
+    row checks the name and the detail), in both of its languages."""
     p = tmp_path / "nope"
     proc = subprocess.run([sys.executable,
                            str(REPO / "scripts" / "tools" / "ops" / "config_history.py"),
@@ -702,10 +708,10 @@ _DETAIL_3415 = {
 }
 
 
-def _run_ops(script, args):
+def _run_ops(script, args, under="ops"):
     env = {k: v for k, v in os.environ.items() if k != "DA_LANG"}
     env["DA_LANG"] = "en"
-    return subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / "ops" / script), *args],
+    return subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / under / script), *args],
                           capture_output=True, text=True, encoding="utf-8", timeout=120,
                           env=env, stdin=subprocess.DEVNULL)
 
@@ -1084,11 +1090,13 @@ def test_an_empty_path_is_refused_not_taken_for_cwd(tmp_path, script, argv, flag
 
 def _declared_inputs(documents: bool = False
                      ) -> "list[tuple[str, str, str, object, list[str], object]]":
-    """(id, script under ops/, flag, InputSpec, its OPS_SITES argv, that
-    row's reason) for every argument a da-tools parser declares with
+    """(id, script under scripts/tools/, flag, InputSpec, its row's argv,
+    that row's reason) for every argument a da-tools parser declares with
     `_lib_input.add_input`, read off the parsers by G1's walk: the
     directories (``select=``), or with *documents* the files whose content
-    is read (``decode=``, #3445) — each with the row that hands it {D} / {F}."""
+    is read (``decode=``, #3445) — each with the row that hands it {D} / {F}:
+    an OPS_SITES row, or a DX_SITES row for a tool under dx/ (#3751; no
+    ``--json`` reason, None)."""
     spec = importlib.util.spec_from_file_location(
         "_g1_manifest", pathlib.Path(__file__).with_name("test_caller_path_manifest.py"))
     g1 = importlib.util.module_from_spec(spec)
@@ -1103,9 +1111,11 @@ def _declared_inputs(documents: bool = False
         script = found[(command, flag)]
         rows = [(argv, reason) for _id, s, argv, _f, reason in OPS_SITES
                 if f"ops/{s}" == script and g1._locked_argument(argv) == (flag, holder)]
-        assert rows, (f"{command} {flag}: declared with add_input, no OPS_SITES row hands it "
-                      f"{{{holder}}} (test_caller_path_manifest names this too)")
-        out.append((f"{command} {flag}", script.split("/", 1)[1], flag, input_spec, *rows[0]))
+        rows += [(argv, None) for _id, s, argv, _named, _rc in DX_SITES
+                 if s == script and g1._locked_argument(argv) == (flag, holder)]
+        assert rows, (f"{command} {flag}: declared with add_input, no OPS_SITES / DX_SITES row "
+                      f"hands it {{{holder}}} (test_caller_path_manifest names this too)")
+        out.append((f"{command} {flag}", script, flag, input_spec, *rows[0]))
     return out
 
 
@@ -1117,8 +1127,9 @@ def declared_inputs():
 
 
 def _declared_run(box, script, argv, case_dir_name, holder):
-    """Run *script* with *argv* ({D} → *holder*), {BOX} a fresh directory the
-    unprivileged uid can write (the row's outputs land there); returns the
+    """Run *script* (under scripts/tools/) with *argv* ({D} → *holder*),
+    {BOX} a fresh directory the unprivileged uid can write (the row's
+    outputs land there); returns the
     process and that directory."""
     root, run, subst = box
     stub = root / "g1-bin" / "kubectl"
@@ -1136,7 +1147,7 @@ def _declared_run(box, script, argv, case_dir_name, holder):
     local = {**subst, "{BOX}": str(scratch), "{D}": holder}
     args = [_expand(a, local) for a in argv]
     proc = run(["env", "DA_LANG=en", f"PATH={stub.parent}{os.pathsep}{os.environ['PATH']}",
-                sys.executable, str(root / "scripts" / "tools" / "ops" / script), *args],
+                sys.executable, str(root / "scripts" / "tools" / script), *args],
                stdin=subprocess.DEVNULL)
     return proc, scratch
 
@@ -1298,6 +1309,16 @@ JUDGED_DECLARATIONS = {
     "config-diff --old-dir": ("allowed", None, "empty"),
     "config-diff --new-dir": ("refused", None, "refused"),
     "grafana-import --dashboard-dir": ("refused", None, "refused"),
+    # #3695 / #3751 (owner 2026-11-11): an empty conf.d was already rc 2
+    # (da-guard's "no .yaml files found"); now named by the flag.
+    "explain-keys --config-dir": ("refused", None, "refused"),
+    # #3751: an empty directory was a run over nothing (rc 0), and stays one.
+    "drift-detect --dirs": ("allowed", None, "refused"),
+    # #3751: as explain-keys; the dx tool the declared rows reach (DX_SITES).
+    "tenant-verify --conf-d": ("refused", "refused", "refused"),
+    # #3751: a snapshot of an empty conf.d was taken (rc 0: every file
+    # removed), and still is.
+    "config-history --config-dir": ("allowed", None, "refused"),
 }
 
 
@@ -1422,7 +1443,8 @@ def test_a_declared_document_refuses_content_it_cannot_read(tmp_path, declared_d
             given = case_dir / "input"
             given.write_bytes(content)
             subst = {**_document_subst(case_dir), "{F}": str(given)}
-            proc = _run_ops(script, [_expand(a, subst) for a in argv])
+            proc = _run_ops(script.split("/", 1)[1], [_expand(a, subst) for a in argv],
+                            under=script.split("/", 1)[0])
             out = proc.stdout + proc.stderr
             measured += 1
             why = []
