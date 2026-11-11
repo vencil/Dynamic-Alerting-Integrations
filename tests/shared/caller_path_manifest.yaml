@@ -69,8 +69,6 @@ commands:
   config-diff:
     "--at": not_path
     "--format": not_path
-  config-history:
-    "--config-dir": {kind: dir, no_row: "every subcommand creates .da-history beside --config-dir first, so a locked parent never reaches the check; a missing one does", pinned_by: "tests/shared/test_caller_paths.py::test_config_history_says_it_in_its_own_language"}
   config-history diff:
     id_a: not_path
     id_b: not_path
@@ -101,7 +99,6 @@ commands:
     "--prometheus": url
   drift-detect:
     "--context": not_path
-    "--dirs": dir
     "--ignore-prefix": not_path
     "--kubeconfig": {kind: reader, by: "kubectl, relayed as rc 2", pinned_by: "tests/shared/test_caller_path_manifest.py::test_kubectls_refusal_of_a_kubeconfig_is_relayed"}
     "--labels": not_path
@@ -113,7 +110,6 @@ commands:
   explain-keys:
     "--assert": {kind: reader, by: "explain_keys (ExplainError)", pinned_by: "tests/ops/test_explain_keys.py::test_caller_errors_exit_2_with_one_json_document"}
     "--at": not_path
-    "--config-dir": dir
     "--da-guard-binary": {kind: reader, by: "the da-guard resolver", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--tenant": not_path
     "--timeout": not_path
@@ -295,7 +291,6 @@ commands:
   state-reconcile:
     "--manifest-path": {kind: reader, by: "read_old_manifest: an existing one that is not a manifest is manifest_unreadable, never overwritten", pinned_by: "tests/ops/test_state_reconcile.py::test_an_unreadable_manifest_is_not_overwritten"}
   tenant-verify:
-    "--conf-d": dir
     "--expect-merged-hash": not_path
     tenant_id: not_path
   test-notification:

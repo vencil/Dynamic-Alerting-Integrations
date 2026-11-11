@@ -56,8 +56,10 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report, exit_caller_error,
-    partial_answer)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report, die_caller_error,
+    exit_caller_error, partial_answer)
+import _lib_input  # noqa: E402
+import _lib_parse_cache  # noqa: E402
 
 # Exit-code contract: the #452 0/1/2 SSOT (scripts/tools/_lib_exitcodes.py).
 # Until #3393 this tool inverted 1 and 2; the codes are load-bearing in a
@@ -228,9 +230,13 @@ def main() -> int:
         action="store_true",
         help="Verify every tenant in the conf.d tree.",
     )
-    parser.add_argument(
-        "--conf-d",
-        default="conf.d",
+    # #3751: an empty conf.d is refused naming the flag (it was da-guard's
+    # "no .yaml files found in <path>", rc 2, the flag unnamed); the default
+    # not there is refused as before.
+    _lib_input.add_input(
+        parser, "--conf-d", select=_lib_input.DA_GUARD_LISTS,
+        empty=_lib_input.EMPTY_REFUSED, default="conf.d",
+        absent_default=_lib_input.ABSENT_REFUSED,
         help="Path to conf.d/ directory (default: ./conf.d).",
     )
     parser.add_argument(
@@ -259,13 +265,16 @@ def main() -> int:
         )
         return EXIT_USAGE_ERROR
 
-    # #3276: the shared judgement of a caller-given path — of the string the
-    # caller gave (#3406): `Path('')` is `.`, so `''` judged after it was the
-    # current directory, verified at rc 0. A CallerError leaves through
-    # `run()` at the caller-error code 2.
-    from _lib_paths import require_dir
-    require_dir(args.conf_d, lang="en", flag="--conf-d")
-    conf_d = Path(args.conf_d).resolve()
+    # #3751: judged once — the path (#3276; the string the caller gave,
+    # #3406: `Path('')` is `.`), a root da-guard cannot list, a tree with no
+    # config file — each refusal naming --conf-d. A CallerError leaves
+    # through `run()` at the caller-error code 2.
+    try:
+        [conf_d] = _lib_parse_cache.declared_trees(args, "conf_d", lang="en")
+    except _lib_parse_cache.ParseTreeError as exc:
+        die_caller_error(f"ERROR: da-guard parse-tree: {' '.join(str(exc).split())}",
+                         "served_values_unavailable")
+    conf_d = conf_d.resolve()
 
     describe_mod = _load_describe_module()
     try:

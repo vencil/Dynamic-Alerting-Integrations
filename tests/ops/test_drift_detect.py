@@ -20,7 +20,8 @@ from unittest.mock import patch
 import pytest
 
 import drift_detect as dd  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, emit_result, encode_json  # noqa: E402  (#3216)
+from _lib_exitcodes import (  # noqa: E402  (#3216)
+    EXIT_CALLER_ERROR, CallerError, emit_result, encode_json)
 from _lib_confd import reset_warned_for_test  # noqa: E402
 
 
@@ -122,9 +123,10 @@ class TestComputeManifest:
         assert "db-a.yaml" in m.files
 
     def test_nonexistent_dir(self, tmp_path):
-        """不存在的目錄回傳空 manifest。"""
-        m = dd.compute_dir_manifest(str(tmp_path / "nope"))
-        assert m.files == {}
+        """#3751：不存在的目錄不再回傳空 manifest（那會把另一邊的每個檔都報成 drift）——
+        da-guard 列不到，fail closed。"""
+        with pytest.raises(dd._lib_parse_cache.ParseTreeError):
+            dd.compute_dir_manifest(str(tmp_path / "nope"))
 
     @pytest.mark.parametrize("carrier", ["alpha.yml", "Alpha.YAML"])
     def test_sees_yml_and_upper_case_the_same_as_yaml(self, tmp_path, carrier):
@@ -511,6 +513,51 @@ class TestCLI:
         assert args.dirs == "a,b"
         assert args.json is False
         assert args.ci is False
+
+    @pytest.mark.parametrize("dirs", ["{a},,{b}", "{a},{b},"])
+    def test_an_empty_item_is_refused(self, two_dirs, capsys, cli_argv, dirs):
+        """#3751：空項不是「略過」——`a,,b` 以前被讀成 `a,b`。"""
+        dir_a, dir_b = two_dirs
+        value = dirs.format(a=dir_a, b=dir_b)
+        cli_argv("drift_detect", "--dirs", value)
+        with pytest.raises(SystemExit) as e:
+            dd.main()
+        assert e.value.code == 2
+        assert f"an empty item in {value!r}" in capsys.readouterr().err
+
+    def test_labels_follow_the_rule_of_dirs(self, two_dirs, capsys, cli_argv):
+        """#3751 review：`--labels` 與 `--dirs` 依位置配對，同一條規則。"""
+        dir_a, dir_b = two_dirs
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A,")
+        with pytest.raises(SystemExit) as e:
+            dd.main()
+        assert e.value.code == 2
+        assert "argument --labels: an empty item in 'A,'" in capsys.readouterr().err
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "")
+        with pytest.raises(SystemExit) as e:
+            dd.main()
+        assert e.value.code == 2, "`--labels ''` is an empty item, not none given"
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A, B", "--json")
+        doc = dd.main().document
+        assert doc["pairs"][0]["target"] == " B", doc
+
+    def test_an_item_is_not_stripped(self, two_dirs, cli_argv):
+        """#3751：`a, b` 的空白是路徑的一部分，不被去掉成另一個目錄。"""
+        dir_a, dir_b = two_dirs
+        cli_argv("drift_detect", "--dirs", f"{dir_a}, {dir_b}")
+        with pytest.raises(CallerError) as e:
+            dd.main()
+        assert f"--dirs  {dir_b}" in str(e.value)
+
+    def test_every_item_is_judged_before_any_is_read(self, two_dirs, tmp_path, cli_argv):
+        """#3751：第二個目錄不存在時點名它，第一個目錄沒被讀（不會因為少一邊而報 drift）。"""
+        dir_a, _ = two_dirs
+        gone = tmp_path / "gone"
+        cli_argv("drift_detect", "--dirs", f"{dir_a},{gone}", "--json")
+        with pytest.raises(CallerError) as e:
+            dd.main()
+        assert e.value.reason == "dir_not_found"
+        assert f"--dirs {gone}" in str(e.value)
 
     def test_main_text_output(self, two_dirs, monkeypatch, capsys, cli_argv):
         """預設 text 輸出。"""

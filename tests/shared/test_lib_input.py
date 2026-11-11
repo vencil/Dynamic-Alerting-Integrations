@@ -632,3 +632,101 @@ def test_a_csv_document_whose_records_end_in_a_bare_cr_is_read(tmp_path):
     f.write_bytes(b"a,b\r1,2\r")
     assert _lib_input.document(p.parse_args(["--f", str(f)]), "f", lang="en") == [
         {"a": "1", "b": "2"}]
+
+
+# ── #3751: a list of directories, one value ───────────────────────────────
+
+def _list_parser():
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--dirs", select=_lib_input.DA_GUARD_LISTS, separator=",")
+    return p
+
+
+def test_a_list_selects_each_item_as_given(tmp_path):
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    args = _list_parser().parse_args(["--dirs", f"{tmp_path / 'a'},{tmp_path / 'b'}"])
+    assert _lib_input.selected(args, "dirs", lang="en") == [tmp_path / "a", tmp_path / "b"]
+    assert _lib_input.absent(args, "dirs") is False
+
+
+@pytest.mark.parametrize("value", ["a,,b", ",a", "a,", ","])
+def test_a_list_with_an_empty_item_is_refused_at_parse(value, capsys):
+    """The rule of every list flag (`url_list_type`): an empty item is no
+    item to skip — it was dropped (`a,,b` read as `a,b`)."""
+    with pytest.raises(SystemExit) as e:
+        _list_parser().parse_args(["--dirs", value])
+    assert e.value.code == 2
+    assert f"argument --dirs: an empty item in {value!r}" in capsys.readouterr().err
+
+
+def test_a_list_item_is_not_stripped(tmp_path):
+    """`a, b`: the space is part of the path it names — never stripped into
+    a directory the caller did not give."""
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    args = _list_parser().parse_args(["--dirs", f"{tmp_path / 'a'}, {tmp_path / 'b'}"])
+    with pytest.raises(CallerError) as e:
+        _lib_input.selected(args, "dirs", lang="en")
+    assert f"--dirs  {tmp_path / 'b'}" in str(e.value)
+
+
+def test_every_item_of_a_list_that_is_no_directory_is_named(tmp_path):
+    args = _list_parser().parse_args(["--dirs", f"{tmp_path / 'x'},{tmp_path / 'y'}"])
+    with pytest.raises(CallerError) as e:
+        _lib_input.selected(args, "dirs", lang="en")
+    assert e.value.reason == "dir_not_found"
+    assert f"--dirs {tmp_path / 'x'}" in str(e.value) and f"--dirs {tmp_path / 'y'}" in str(e.value)
+
+
+def test_an_empty_list_item_names_the_item(tmp_path):
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--dirs", select=_lib_input.DA_GUARD_LISTS, separator=",",
+                         empty=_lib_input.EMPTY_REFUSED)
+    args = p.parse_args(["--dirs", "a,b"])
+    with pytest.raises(CallerError) as e:
+        _lib_input.require_selection(args, "dirs", [], wanted="w", lang="en", item="b")
+    assert str(e.value).startswith("--dirs b: ")
+
+
+@pytest.mark.parametrize("kw", [
+    {"select": _lib_input.TopLevel("*")}, {"separator": ""},
+    {"default": "x", "absent_default": _lib_input.ABSENT_EMPTY},
+    {"missing": _lib_input.ABSENT_EMPTY},
+])
+def test_a_list_is_a_da_guard_listed_input_with_no_default(kw):
+    with pytest.raises(ValueError):
+        _lib_input.add_input(argparse.ArgumentParser(), "--dirs",
+                             **{"select": _lib_input.DA_GUARD_LISTS, "separator": ",", **kw})
+
+
+# ── #3751: a declared conf.d, judged once (`_lib_parse_cache.declared_trees`) ─
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_every_reader_of_a_declared_tree_names_the_flag(tmp_path):
+    """A library that opens a reader of its own (tenant-verify's scanner)
+    still names the flag for that tree — not the path alone."""
+    import _lib_parse_cache
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    (conf / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--c", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED)
+    assert _lib_parse_cache.declared_trees(p.parse_args(["--c", str(conf)]), "c",
+                                           lang="en") == [conf]
+    assert _lib_parse_cache.ConfdReader(f"{conf}/./").declared == ("--c", "en")
+    assert _lib_parse_cache.ConfdReader(tmp_path).declared is None
+
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_a_declared_tree_with_no_config_file_is_refused_by_its_declaration(tmp_path):
+    import _lib_parse_cache
+    (tmp_path / "notes.txt").write_text("x", encoding="utf-8")
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--c", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED)
+    with pytest.raises(CallerError) as e:
+        _lib_parse_cache.declared_trees(p.parse_args(["--c", str(tmp_path)]), "c", lang="en")
+    assert e.value.reason == "input_empty"
+    assert str(e.value).startswith(f"--c {tmp_path}: selects nothing")

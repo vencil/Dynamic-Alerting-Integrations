@@ -59,9 +59,10 @@ for _p in (_TOOLS, _HERE):
 
 import _lib_key_verdict as kv  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report)
 from _lib_io import YamlFileError, safe_label  # noqa: E402
-from _lib_paths import classify_path  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
@@ -93,20 +94,21 @@ def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optiona
     """The explain-keys document. *binary* / *timeout* (the CLI's
     `--da-guard-binary` / `--timeout`) are this run's da-guard for every
     read — the conf.d listing `_lib_confd` takes on its behalf as well as
-    the tree and served-values reads (`_lib_parse_tree.use_da_guard`, #3206)."""
+    the tree and served-values reads (`_lib_parse_tree.use_da_guard`, #3206).
+
+    ⛔ *conf_d* is the one `main` judged (`_lib_parse_cache.declared_trees`,
+    #3751): it is read through the run's reader of it (`reader_for`), never
+    judged again here."""
     with _lib_parse_tree.use_da_guard(binary, timeout):
         return _explain(conf_d, tenants, at, binary, timeout)
 
 
 def _explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optional[str],
              timeout: float) -> dict[str, Any]:
-    conf_d_problem = classify_path(conf_d, "dir", lang="en", flag="--config-dir")  # #3276
-    if conf_d_problem is not None:
-        raise ExplainError(conf_d_problem.message)
     # The verdict takes `_policies` from the root `_defaults.yaml` only, as
     # Policy-as-Code does; say which subdirectory ones it does not count.
     # #3206: ONE reader — one parse-tree document — for the note and the verdict.
-    reader = _lib_parse_cache.ConfdReader(conf_d, binary=binary, timeout=timeout)
+    reader = _lib_parse_cache.reader_for(conf_d)
     try:
         kv.note_root_only_policies(conf_d, reader)
         verdict = kv.judge_tree(conf_d, at=at, binary=binary, timeout=timeout, reader=reader)
@@ -242,7 +244,10 @@ def build_parser() -> argparse.ArgumentParser:
     h = _HELP["zh" if detect_cli_lang() == "zh" else "en"]
     p = argparse.ArgumentParser(prog="da-tools explain-keys", description=h["description"],
                                 epilog=h["epilog"])
-    p.add_argument("--config-dir", required=True, help=h["config_dir"])
+    # #3751: an empty conf.d is refused naming the flag (it was da-guard's
+    # "no .yaml files found in <path>", rc 2, the flag unnamed).
+    _lib_input.add_input(p, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED, required=True, help=h["config_dir"])
     p.add_argument("--tenant", action="append", default=[], help=h["tenant"])
     p.add_argument("--at", default=None, help=h["at"])
     p.add_argument("--assert", dest="assert_file", default=None, metavar="FILE", help=h["assert"])
@@ -262,6 +267,12 @@ def _fail(reason: str, as_json: bool) -> "int | Report":
 
 def main(argv: Optional[list[str]] = None) -> "int | Report":
     args = build_parser().parse_args(argv)
+    # One reader of --config-dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _main(args)
+
+
+def _main(args: argparse.Namespace) -> "int | Report":
     try:
         expected = None
         if args.assert_file is not None:
@@ -270,12 +281,17 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
                     expected = json.load(f)
             except (OSError, UnicodeDecodeError, ValueError) as e:
                 raise ExplainError(f"--assert: cannot read {args.assert_file}: {e}") from e
-        # #3276: the caller's string, before Path('') becomes '.'.
-        config_dir_problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
-        if config_dir_problem is not None:
-            raise ExplainError(config_dir_problem.message)
-        doc = explain(Path(args.config_dir), args.tenant, args.at, args.da_guard_binary, args.timeout)
+        # #3751: judged once — the path, a root da-guard cannot list, an
+        # empty tree — each refusal naming --config-dir.
+        [conf_d] = _lib_parse_cache.declared_trees(args, "config_dir", lang="en",
+                                                   binary=args.da_guard_binary,
+                                                   timeout=args.timeout)
+        doc = explain(conf_d, args.tenant, args.at, args.da_guard_binary, args.timeout)
         diffs = compare(doc, expected) if expected is not None else []
+    except CallerError:
+        raise  # rc 2, one line naming the flag (`_lib_exitcodes.run`)
+    except ParseTreeError as e:
+        return _fail(f"da-guard parse-tree: {' '.join(str(e).split())}", args.json)
     except ExplainError as e:
         return _fail(str(e), args.json)
     except Exception as e:  # noqa: BLE001 — every failure is exit 2 with a reason, never a traceback
