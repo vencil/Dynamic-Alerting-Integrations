@@ -1,39 +1,15 @@
-da-portal installed.
+da-portal installed (static-only).
 
-  Service : {{ include "da-portal.name" . }}.{{ .Release.Namespace }}.svc
-  Auth    : {{ if .Values.oauth2Proxy.enabled }}oauth2-proxy sidecar (client identity headers stripped + re-set){{ else }}NONE — static-only Tier 1 (reverse-proxy targets must be empty){{ end }}
+  Service : {{ include "da-portal.name" . }}.{{ .Release.Namespace }}.svc:{{ .Values.service.port }}
+  Auth    : none — this chart serves the bundled tools and data files only.
 
-SECURITY (GHSA-3g2h-rf85-5rrv) — header-trust surface:
-  nginx reverse-proxies /api/v1/ and /preview to tenant-api / recipe-preview,
-  forwarding X-Forwarded-Groups / X-Forwarded-Email. Those backends TRUST that
-  header on their internal port 8080 (oauth2-proxy bypass). The NetworkPolicy
-  shipped here is a REQUIRED control, not optional — this is why
-  oauth2Proxy.enabled=false forbids a non-empty reverse-proxy target (render fails).
+The portal pages that need a login (tenant management, recipe preview,
+federation tokens) are served by the tenant-api chart, inside its pod behind
+its oauth2-proxy (ADR-027 §5). This chart forwards nothing to tenant-api.
 
-{{- if .Values.portal.relayToken.enabled }}
-RELAY TOKEN (legacy; removed by ADR-027 §5): ENABLED — nginx presents the pod's
-  audience-bound SA token (aud=tenant-api, TTL 900s, kubelet-rotated) as
-  Authorization: Bearer on every /api/v1 request. It never gated user
-  authorization; it fed tenant-api's machine-identity audit, which is gone.
-  ⚠ PREREQUISITE: needs the njs-enabled da-portal image (portal/v2.10.0+) —
-  older images FAIL LOUD at startup (unknown directive "js_import"). Also
-  requires the tenant-api chart >= 2.9.13 (da-portal admitted on the port-8080
-  NetworkPolicy).
-  If this was flipped on with an OLD image by mistake, flip back IMMEDIATELY —
-  the ConfigMap mutates in place, so a container restart of the still-running
-  old pod would also hit js_import and take the portal down.
-  Nothing reads the token any more: tenant-api dropped its machine-identity
-  audit (#3628), and ADR-027 §5 removes this option with the reverse proxy.
-  Leave it off.
-{{- else }}
-RELAY TOKEN (legacy; removed by ADR-027 §5): disabled — leave it off. tenant-api
-  no longer audits machine identity (#3628), so nothing reads the token.
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy: ingress from {{ join ", " .Values.networkPolicy.allowedNamespaces }}; no egress.
+  It only works if your CNI enforces NetworkPolicy (Calico / Cilium / Antrea);
+  Flannel and some managed "simple" CNIs accept it and ignore it.
 {{- end }}
-
-NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some managed
-  "simple" CNIs SILENTLY IGNORE NetworkPolicy: the API server accepts it and this
-  install succeeds, but traffic is left unrestricted (security theater). Use a
-  NetworkPolicy-aware CNI (Calico / Cilium / Antrea) and verify by sending a packet
-  that SHOULD be denied — do not trust a successful install. The CNI-independent
-  root-cause fix is L7 identity verification (roadmap #5); this policy is L4
-  defense-in-depth.

@@ -5,8 +5,7 @@ its own pod, behind oauth2-proxy's "/" upstream. This guards, on the render:
 
   * the nginx config the portal container actually loads is the chart's —
     its command names it with ``-c`` and the directory is the chart's
-    ConfigMap — so the image's own config (which forwards /api/v1/ and
-    /preview for the standalone da-portal chart) is never read;
+    ConfigMap — so the image's own config is never read;
   * that config forwards nothing: no ``*_pass``, no njs, no include but
     mime.types; it listens on the pod's loopback only;
   * the container mounts no human socket and no secret, and its image is

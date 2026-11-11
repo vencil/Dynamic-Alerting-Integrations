@@ -2,19 +2,8 @@
 # branches on, so tests/pss judges the pods those branches shape. A new
 # if/with/range on .Values in a workload template needs a value here
 # (TestWorkloadConditionalsAreExercised). Not a deployment example.
-portal:
-  relayToken:
-    enabled: true
 customData:
   enabled: true
   type: configMap
-oauth2Proxy:
-  oidcIssuerUrl: "https://issuer.invalid"
-  scope: "openid email"
-  gitlabGroups:
-    - pss-gate
-  cookieExpire: "4h"
-  cookieRefresh: "1h"
 podAnnotations:
   pss-gate: "1"
-fullnameOverride: pss-gate-portal

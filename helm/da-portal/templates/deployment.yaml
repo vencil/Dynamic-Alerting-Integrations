@@ -26,7 +26,9 @@ spec:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
 
       containers:
-        # ── Primary: nginx (static portal) ──────────────────────────────────────
+        # The only container: nginx serving static files (ADR-027 §5 — no
+        # login, no reverse proxy; the logged-in portal lives in the
+        # tenant-api pod).
         - name: nginx
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
@@ -47,23 +49,13 @@ spec:
               mountPath: /var/cache/nginx
             - name: nginx-tmp
               mountPath: /var/run
-            {{- if .Values.portal.relayToken.enabled }}
-            # Audience-bound projected token that fed tenant-api's machine-identity
-            # audit, since removed (#3628) (legacy; removed by ADR-027 §5). readOnly; relay_token.js reads it per
-            # request (kubelet rotates the file at ~80% TTL, transparent to
-            # the reader). Nested under the nginx-tmp /var/run mount — k8s
-            # orders mounts by path, parent first.
-            - name: tenant-api-token
-              mountPath: /var/run/secrets/tokens
-              readOnly: true
-            {{- end }}
             {{- if .Values.customData.enabled }}
             - name: custom-data
               mountPath: /usr/share/nginx/html/custom
               readOnly: true
             {{- end }}
           resources:
-            {{- toYaml .Values.resources.nginx | nindent 12 }}
+            {{- toYaml .Values.resources | nindent 12 }}
           readinessProbe:
             httpGet:
               path: /healthz
@@ -79,74 +71,6 @@ spec:
             periodSeconds: 15
             failureThreshold: 3
 
-        # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
-        {{- if .Values.oauth2Proxy.enabled }}
-        - name: oauth2-proxy
-          image: "{{ .Values.oauth2Proxy.image.repository }}:{{ .Values.oauth2Proxy.image.tag }}{{ with .Values.oauth2Proxy.image.digest }}@{{ . }}{{ end }}"
-          imagePullPolicy: {{ .Values.oauth2Proxy.image.pullPolicy }}
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
-          args:
-            - --provider={{ .Values.oauth2Proxy.provider }}
-            {{- with .Values.oauth2Proxy.oidcIssuerUrl }}
-            - --oidc-issuer-url={{ . }}
-            {{- end }}
-            {{- with .Values.oauth2Proxy.scope }}
-            - --scope={{ . }}
-            {{- end }}
-            {{- range .Values.oauth2Proxy.gitlabGroups }}
-            - --gitlab-group={{ . }}
-            {{- end }}
-            - --upstream=http://localhost:{{ .Values.portal.listenPort }}/
-            - --http-address=0.0.0.0:4180
-            - --redirect-url={{ .Values.oauth2Proxy.redirectUrl }}
-            - --email-domain={{ .Values.oauth2Proxy.emailDomain }}
-            - --pass-user-headers=true
-            - --set-xauthrequest=true
-            - --skip-auth-route=^/healthz$
-            - --cookie-secure={{ .Values.oauth2Proxy.cookieSecure }}
-            - --cookie-httponly={{ .Values.oauth2Proxy.cookieHttpOnly }}
-            - --cookie-samesite={{ .Values.oauth2Proxy.cookieSameSite }}
-            - --cookie-name={{ .Values.oauth2Proxy.cookieName }}
-            {{- with .Values.oauth2Proxy.cookieExpire }}
-            - --cookie-expire={{ . }}
-            {{- end }}
-            {{- with .Values.oauth2Proxy.cookieRefresh }}
-            - --cookie-refresh={{ . }}
-            {{- end }}
-          env:
-            - name: OAUTH2_PROXY_COOKIE_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.oauth2Proxy.secretName }}
-                  key: OAUTH2_PROXY_COOKIE_SECRET
-            - name: OAUTH2_PROXY_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.oauth2Proxy.secretName }}
-                  key: OAUTH2_PROXY_CLIENT_ID
-            - name: OAUTH2_PROXY_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.oauth2Proxy.secretName }}
-                  key: OAUTH2_PROXY_CLIENT_SECRET
-          ports:
-            - name: http
-              containerPort: 4180
-              protocol: TCP
-          resources:
-            {{- toYaml .Values.resources.oauth2Proxy | nindent 12 }}
-          readinessProbe:
-            httpGet:
-              path: /ping
-              port: 4180
-            initialDelaySeconds: 5
-            periodSeconds: 5
-        {{- end }}
-
       volumes:
         - name: nginx-config
           configMap:
@@ -161,24 +85,6 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 32Mi
-
-        {{- if .Values.portal.relayToken.enabled }}
-        # Audience-bound machine-identity token that fed tenant-api's TokenReview
-        # audit, since removed (#3628) (legacy; removed by ADR-027 §5). The HARD
-        # `audience: tenant-api` binding was what stopped a default-audience pod
-        # token from being accepted by that TokenReview; kubelet auto-rotates it. This is an
-        # explicit, orthogonal mount — the SA keeps
-        # automountServiceAccountToken:false. Mirrors helm/recipe-preview.
-        - name: tenant-api-token
-          projected:
-            sources:
-              - serviceAccountToken:
-                  path: tenant-api-token
-                  audience: tenant-api
-                  # 900s (15m): caps a stolen-token replay window; well above
-                  # the apiserver 600s floor, kubelet refreshes at ~80% (~12m).
-                  expirationSeconds: 900
-        {{- end }}
 
         {{- if .Values.customData.enabled }}
         {{- if eq .Values.customData.type "configMap" }}

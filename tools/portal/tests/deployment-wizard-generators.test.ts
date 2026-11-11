@@ -115,16 +115,17 @@ describe('every emitted key is declared by the target chart (structural, all con
   it('lookup controls: finds keys the chart declares, rejects keys it does not', () => {
     expect(isDeclared('threshold-exporter', 'replicaCount')).toBe(true);
     expect(isDeclared('threshold-exporter', 'resources.limits.cpu')).toBe(true);
-    expect(isDeclared('da-portal', 'oauth2Proxy.oidcIssuerUrl')).toBe(true);
+    expect(isDeclared('tenant-api', 'oauth2Proxy.oidcIssuerUrl')).toBe(true);
     for (const fictional of [
       'tripleState.enabled', 'cardinalityGuard.maxPerTenant', 'configValidation.sha256',
       'thresholdExporter.replicaCount', 'prometheus.retention',
     ]) {
       expect(isDeclared('threshold-exporter', fictional), fictional).toBe(false);
     }
-    // da-portal's values.yaml declared this key until #2532 removed it as
-    // read by no template; it stays here as the negative control.
+    // da-portal's values.yaml declared these until #2532 / ADR-027 §5 removed
+    // them; they stay here as negative controls.
     expect(isDeclared('da-portal', 'serviceAccount.create')).toBe(false);
+    expect(isDeclared('da-portal', 'oauth2Proxy.oidcIssuerUrl')).toBe(false);
     // A map is not a leaf: only its children are.
     expect(isDeclared('threshold-exporter', 'resources')).toBe(false);
   });
@@ -166,10 +167,10 @@ describe('releases — tier gating and install commands', () => {
     expect(releases.map((r: { chart: string }) => r.chart)).toEqual(['threshold-exporter']);
   });
 
-  it('tier2 → + da-portal (monitoring) + tenant-api (its own namespace, #1004)', () => {
+  it('tier2 → + tenant-api (its own namespace, #1004), which carries the portal (ADR-027 §5)', () => {
     const { releases } = deployGenerateHelmReleases(config({ tier: 'tier2' }));
     expect(releases.map((r: { chart: string; namespace: string }) => `${r.chart}@${r.namespace}`))
-      .toEqual(['threshold-exporter@monitoring', 'da-portal@monitoring', 'tenant-api@tenant-api']);
+      .toEqual(['threshold-exporter@monitoring', 'tenant-api@tenant-api']);
   });
 
   it('install command targets the chart, its namespace and its own values file', () => {
@@ -203,14 +204,14 @@ describe('tenant size / environment drive the values the chart reads', () => {
   });
 
   it('production → operator-managed oauth2 Secret; local → no secure cookie', () => {
-    expect(releaseOf(config({ environment: 'production' }), 'da-portal').yaml).toMatch(/^  createSecret: false$/m);
-    expect(releaseOf(config({ environment: 'local' }), 'da-portal').yaml).toMatch(/^  cookieSecure: false$/m);
+    expect(releaseOf(config({ environment: 'production' }), 'tenant-api').yaml).toMatch(/^  createSecret: false$/m);
+    expect(releaseOf(config({ environment: 'local' }), 'tenant-api').yaml).toMatch(/^  cookieSecure: false$/m);
   });
 });
 
 describe('auth provider (tier2)', () => {
-  it.each(['github', 'google', 'gitlab'])('%s → provider on both oauth2-proxy sidecars, no issuer URL', auth => {
-    for (const chart of ['da-portal', 'tenant-api']) {
+  it.each(['github', 'google', 'gitlab'])('%s → provider on the oauth2-proxy sidecar, no issuer URL', auth => {
+    for (const chart of ['tenant-api']) {
       const yaml = releaseOf(config({ auth }), chart).yaml;
       expect(yaml).toMatch(new RegExp(`^  provider: ${auth}$`, 'm'));
       expect(yaml).not.toContain('oidcIssuerUrl');
@@ -218,13 +219,13 @@ describe('auth provider (tier2)', () => {
   });
 
   it('oidc → provider oidc + an issuer URL placeholder', () => {
-    const yaml = releaseOf(config({ auth: 'oidc' }), 'da-portal').yaml;
+    const yaml = releaseOf(config({ auth: 'oidc' }), 'tenant-api').yaml;
     expect(yaml).toMatch(/^  provider: oidc$/m);
     expect(yaml).toMatch(/^  oidcIssuerUrl: "https:\/\//m);
   });
 
   it('never overrides the chart-pinned oauth2-proxy image (#1302)', () => {
-    for (const chart of ['da-portal', 'tenant-api'])
+    for (const chart of ['tenant-api'])
       expect(releaseOf(config(), chart).yaml).not.toContain('oauth2-proxy/oauth2-proxy');
   });
 });

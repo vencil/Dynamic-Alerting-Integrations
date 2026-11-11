@@ -10,7 +10,7 @@ lang: en
 
 > **Language / 語言：** [中文](./gitlab-ce-sso.md) | **English (Current)**
 
-> Use **self-hosted GitLab Community Edition** as the platform SSO — to sign in to da-portal and tenant-api. No GitLab Enterprise (EE) features are required. How it works: oauth2-proxy's `gitlab` provider authenticates the user, resolves group membership from `/oauth/userinfo`, and injects `X-Forwarded-Groups`; tenant-api authorizes via [`_rbac.yaml`](../governance-security.en.md).
+> Use **self-hosted GitLab Community Edition** as the platform SSO — to sign in to the portal and tenant-api (both in one pod, behind one oauth2-proxy — [ADR-027 §5](../adr/027-tenant-api-caller-identity.en.md)). No GitLab Enterprise (EE) features are required. How it works: oauth2-proxy's `gitlab` provider authenticates the user, resolves group membership from `/oauth/userinfo`, and injects `X-Forwarded-Groups`; tenant-api authorizes via [`_rbac.yaml`](../governance-security.en.md).
 
 ## Prerequisites
 
@@ -22,22 +22,22 @@ lang: en
 
 In GitLab **User Settings → Applications** (or Group / Admin, per scope), create:
 
-- **Redirect URI**: `https://<your-portal-host>/oauth2/callback` (add a separate one if tenant-api is on another host, or front both with one oauth2-proxy).
+- **Redirect URI**: `https://<your-portal-host>/oauth2/callback` (the portal and the API share one host behind one oauth2-proxy, so this one is all you need).
 - **Scopes**: check `openid`, `profile`, `email`. **Groups need no extra scope** — under `openid` the full (inherited) group set is available from `/oauth/userinfo`. `read_api` is only needed if you use `--gitlab-group` for **project** filtering.
 - Record the **Application ID** and **Secret**.
 
 ## Step 2: Configure Helm values
 
-Put GitLab's client credentials into the existing `oauth2-proxy-secrets` (keys `OAUTH2_PROXY_CLIENT_SECRET` / `OAUTH2_PROXY_COOKIE_SECRET`; the da-portal chart also reads `OAUTH2_PROXY_CLIENT_ID`). The charts read the existing secret; no new channel is added.
+Put GitLab's client credentials into the existing `oauth2-proxy-secrets` (keys `OAUTH2_PROXY_CLIENT_SECRET` / `OAUTH2_PROXY_COOKIE_SECRET`). The chart reads the existing secret; no new channel is added.
 
 The tenant-api chart runs oauth2-proxy with a structured config file ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §10), so **the Application ID goes in the `oauth2Proxy.clientID` value**; the secret's `OAUTH2_PROXY_CLIENT_ID` is not read. GitLab's extra claims (an organization, say) are declared with `oauth2Proxy.claimHeaders` (which header carries each), and tenant-api learns them from the same file (see the [tenant-api README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md), "身分 header 由 oauth2-proxy 設定檔決定").
 
-Configure the `oauth2Proxy` block identically in both the tenant-api and da-portal charts (single SSO):
+Configure the `oauth2Proxy` block in the tenant-api chart (the deployment's only oauth2-proxy; the da-portal chart is a static, no-login deployment now):
 
 ```yaml
 oauth2Proxy:
   provider: gitlab
-  clientID: "<Application ID>"                     # tenant-api chart only; da-portal reads the secret
+  clientID: "<Application ID>"
   oidcIssuerUrl: "https://gitlab.acme.internal"   # your bare GitLab instance URL
   scope: "openid profile email"
   redirectUrl: "https://portal.acme.internal/oauth2/callback"
@@ -91,5 +91,5 @@ Groups are resolved **at login** and cached in the session cookie. **When `cooki
 - **Login loop / cookie not sent**: `cookieSecure: true` requires HTTPS. Either add TLS to the ingress or temporarily set `false` (testing only).
 - **Redirect URI mismatch**: the GitLab application's Redirect URI must match `redirectUrl` verbatim (including scheme and the `/oauth2/callback` suffix).
 - **Blank screen after login**: usually the `_rbac.yaml` group names are not GitLab full paths (see Step 3).
-- **4xx / `431 Request Header Fields Too Large` after login**: for users in **many GitLab groups** (including inherited ones), the session cookie (which encodes the groups and is sent by the client on every request) and the oauth2-proxy-injected `X-Forwarded-Groups` header can grow long enough to exceed the default header/buffer limit of the **ingress controller** or the **nginx inside da-portal**, and the request is dropped. Raise that layer's buffers (nginx-ingress: `nginx.ingress.kubernetes.io/proxy-buffer-size` + `large_client_header_buffers`), or narrow the login surface with `gitlabGroups`. (The tenant-api side is a Go app with a generous `MaxHeaderBytes`, so it is less likely to hit this.)
+- **4xx / `431 Request Header Fields Too Large` after login**: for users in **many GitLab groups** (including inherited ones), the session cookie (which encodes the groups and is sent by the client on every request) and the oauth2-proxy-injected `X-Forwarded-Groups` header can grow long enough to exceed the default header/buffer limit of the **ingress controller** or the **portal container's nginx**, and the request is dropped. Raise that layer's buffers (nginx-ingress: `nginx.ingress.kubernetes.io/proxy-buffer-size` + `large_client_header_buffers`), or narrow the login surface with `gitlabGroups`. (The tenant-api side is a Go app with a generous `MaxHeaderBytes`, so it is less likely to hit this.)
 - **Allow only specific groups**: use `gitlabGroups` (blocks login at the proxy); fine-grained authorization is still decided by `_rbac.yaml`.

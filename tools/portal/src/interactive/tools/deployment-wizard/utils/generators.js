@@ -2,7 +2,8 @@
 title: "Deployment Profile Wizard — per-chart Helm values generator"
 purpose: |
   Emits one Helm values file PER CHART THIS REPO SHIPS (threshold-exporter;
-  plus da-portal + tenant-api for Tier 2), each with its own install command,
+  plus tenant-api for Tier 2 — the logged-in portal runs inside the tenant-api
+  pod, ADR-027 §5, so da-portal is not part of it), each with its own install command,
   and a list of notes for the choices that are NOT Helm values.
 
   ⛔ Every key emitted here must be one the target chart's templates read.
@@ -77,32 +78,6 @@ function oauthProviderLines(auth) {
     ? `  provider: oidc
   oidcIssuerUrl: "https://your-idp.example.com/realms/your-realm"  # replace`
     : `  provider: ${auth || 'github'}`;
-}
-
-function daPortalValues(config) {
-  const { environment, auth } = config;
-  return `${header('da-portal', config)}
-replicaCount: ${pick(environment, 1, 2, 3)}
-
-${imageBlock('daPortal')}
-
-oauth2Proxy:
-  enabled: true
-${oauthProviderLines(auth)}
-  redirectUrl: "https://da-portal.example.com/oauth2/callback"  # replace with your host
-  cookieSecure: ${environment === 'local' ? 'false' : 'true'}
-  # Production: create the Secret yourself (client-id / client-secret / cookie-secret)
-  createSecret: ${environment === 'production' ? 'false' : 'true'}
-
-resources:
-  nginx:
-    requests:
-      cpu: ${pick(environment, '30m', '50m', '100m')}
-      memory: ${pick(environment, '64Mi', '64Mi', '128Mi')}
-    limits:
-      cpu: ${pick(environment, '100m', '200m', '500m')}
-      memory: ${pick(environment, '128Mi', '128Mi', '256Mi')}
-`;
 }
 
 // #2855: the chart refuses to render without writeBack.mode. local gets the
@@ -231,8 +206,8 @@ function deployNotes(config, size) {
       id: 'tier2-extra',
       title: t('Tier 2：這些仍需你自己補', 'Tier 2: what you still need to add yourself'),
       body: t(
-        `對外入口：在該 chart 的 values 設 \`ingress.enabled: true\`、\`ingress.className\` 與 \`ingress.hosts\`（兩個 chart 皆有 Ingress template，後端固定走 oauth2-proxy）。tenant-api 的 \`gitRepoUrl\`、\`writeBack.github.repo\` 要換成你的設定 repo，並先建好 token Secret（staging／production 用 PR 模式；local 是不會送到 exporter 的試用模式），見 chart 的 values.yaml。oauth2-proxy image 由 chart 以 tag + digest 釘住，請勿覆寫（#1302）。`,
-        `External access: set \`ingress.enabled: true\`, \`ingress.className\` and \`ingress.hosts\` in that chart's values (both charts ship an Ingress template; its backend is always oauth2-proxy). For tenant-api, replace \`gitRepoUrl\` and \`writeBack.github.repo\` with your config repo and create the token Secret first (staging / production use a PR mode; local is a trial mode whose writes never reach the exporter); see the chart's values.yaml. The oauth2-proxy image is pinned by the chart by tag + digest — do not override it (#1302).`,
+        `對外入口：在 tenant-api 的 values 設 \`ingress.enabled: true\`、\`ingress.className\` 與 \`ingress.hosts\`（後端固定走 oauth2-proxy；需要登入的 portal 也在同一個 pod 裡，由它分流）。tenant-api 的 \`gitRepoUrl\`、\`writeBack.github.repo\` 要換成你的設定 repo，並先建好 token Secret（staging／production 用 PR 模式；local 是不會送到 exporter 的試用模式），見 chart 的 values.yaml。oauth2-proxy image 由 chart 以 tag + digest 釘住，請勿覆寫（#1302）。`,
+        `External access: set \`ingress.enabled: true\`, \`ingress.className\` and \`ingress.hosts\` in the tenant-api values (its backend is always oauth2-proxy, which also serves the logged-in portal from the same pod). For tenant-api, replace \`gitRepoUrl\` and \`writeBack.github.repo\` with your config repo and create the token Secret first (staging / production use a PR mode; local is a trial mode whose writes never reach the exporter); see the chart's values.yaml. The oauth2-proxy image is pinned by the chart by tag + digest — do not override it (#1302).`,
       ),
     });
   }
@@ -243,9 +218,8 @@ function deployGenerateHelmReleases(config) {
   const size = TENANT_SIZES.find(s => s.id === config.tenantSize);
   const releases = [release('threshold-exporter', 'monitoring', thresholdExporterValues(config, size))];
   if (config.tier === 'tier2') {
-    releases.push(release('da-portal', 'monitoring', daPortalValues(config)));
-    // tenant-api lives in its own namespace (#1004); da-portal's default
-    // portal.tenantApiUrl and NetworkPolicy egress already point there.
+    // tenant-api lives in its own namespace (#1004) and carries the portal
+    // container behind its oauth2-proxy (ADR-027 §5).
     releases.push(release('tenant-api', 'tenant-api', tenantApiValues(config)));
   }
   return { releases, notes: deployNotes(config, size) };

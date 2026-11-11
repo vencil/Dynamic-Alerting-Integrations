@@ -113,12 +113,11 @@ class TestDiscovery:
         for expected in {"mariadb-instance", "vector", "da-portal", "tenant-api"}:
             assert expected in charts
 
-    def test_da_portal_has_tier_variants(self):
-        variants = helm.values_variants("helm/da-portal")
+    def test_overlay_variants_are_discovered(self):
+        variants = helm.values_variants("helm/vector")
         names = {v.rsplit("/", 1)[-1] if v else "values.yaml" for v in variants}
         assert "values.yaml" in names  # default (None)
-        assert "values-tier1.yaml" in names
-        assert "values-tier2.yaml" in names
+        assert "values-projection.yaml" in names
 
     def test_single_values_chart(self):
         assert helm.values_variants("helm/mariadb-instance") == [None]

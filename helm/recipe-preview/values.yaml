@@ -5,10 +5,9 @@
 # and trusts the portal-forwarded X-Forwarded-* identity headers.
 #
 # DEPLOY CONTRACT: install into the `monitoring` namespace
-# (`helm install recipe-preview ./helm/recipe-preview/ -n monitoring`) — da-portal's
-# `recipePreviewUrl` hardcodes recipe-preview.monitoring.svc.cluster.local:8082, so
-# the Service name (= Chart.Name, stable regardless of release name) + namespace
-# must resolve to that FQDN or the portal's /preview proxy gets a 502.
+# (`helm install recipe-preview ./helm/recipe-preview/ -n monitoring`). da-portal no
+# longer proxies /preview to it (ADR-027 §5); it moves into the tenant-api pod
+# behind an /api/ route, and this chart goes with that change.
 
 # In-memory per-tenant rate limiter is per-replica (app.py RateLimiter); >1 replica
 # multiplies the effective per-tenant ceiling. Keep at 1 unless a shared store lands.
@@ -23,7 +22,7 @@ image:
 
 service:
   type: ClusterIP
-  port: 8082                    # single port; matches da-portal recipePreviewUrl :8082
+  port: 8082                    # single port
 
 # tenant-api base URL the PEP calls for the /access authz probe. Full FQDN on
 # purpose: tenant-api lives in its dedicated `tenant-api` namespace (#1004

@@ -10,7 +10,7 @@ lang: zh
 
 > **Language / 語言：** **中文 (Current)** | [English](./gitlab-ce-sso.en.md)
 
-> 用 **self-hosted GitLab Community Edition** 當平台 SSO——登入 da-portal 與 tenant-api。全程免 GitLab Enterprise（EE）功能。原理：oauth2-proxy 的 `gitlab` provider 認證使用者、從 `/oauth/userinfo` 解出群組並注入 `X-Forwarded-Groups`，tenant-api 依 [`_rbac.yaml`](../governance-security.md) 授權。
+> 用 **self-hosted GitLab Community Edition** 當平台 SSO——登入 portal 與 tenant-api（兩者在同一個 pod、共用一個 oauth2-proxy，[ADR-027 §5](../adr/027-tenant-api-caller-identity.md)）。全程免 GitLab Enterprise（EE）功能。原理：oauth2-proxy 的 `gitlab` provider 認證使用者、從 `/oauth/userinfo` 解出群組並注入 `X-Forwarded-Groups`，tenant-api 依 [`_rbac.yaml`](../governance-security.md) 授權。
 
 ## 適用前提
 
@@ -22,22 +22,22 @@ lang: zh
 
 在 GitLab **User Settings → Applications**（或 Group / Admin，依範圍）建立：
 
-- **Redirect URI**：`https://<你的-portal-host>/oauth2/callback`（tenant-api 另一個 host 則各自加一條，或用同一 oauth2-proxy 前端）。
+- **Redirect URI**：`https://<你的-portal-host>/oauth2/callback`（portal 與 API 在同一個 host、同一個 oauth2-proxy 後面，只需要這一條）。
 - **Scopes**：勾 `openid`、`profile`、`email`。**群組不需要額外 scope**——`openid` 下即可從 `/oauth/userinfo` 取得完整（含繼承）群組。`read_api` 只有在要用 `--gitlab-group` 做**專案**過濾時才需要。
 - 建好後記下 **Application ID** 與 **Secret**。
 
 ## 步驟二：設定 Helm values
 
-把 GitLab 的 client 憑證放進既有的 `oauth2-proxy-secrets`（key `OAUTH2_PROXY_CLIENT_SECRET` / `OAUTH2_PROXY_COOKIE_SECRET`；da-portal chart 另讀 `OAUTH2_PROXY_CLIENT_ID`）。charts 讀既有 secret，不新增管道。
+把 GitLab 的 client 憑證放進既有的 `oauth2-proxy-secrets`（key `OAUTH2_PROXY_CLIENT_SECRET` / `OAUTH2_PROXY_COOKIE_SECRET`）。chart 讀既有 secret，不新增管道。
 
 tenant-api chart 的 oauth2-proxy 以結構化設定檔執行（[ADR-027](../adr/027-tenant-api-caller-identity.md) §10），**Application ID 寫在 values 的 `oauth2Proxy.clientID`**，不讀 secret 的 `OAUTH2_PROXY_CLIENT_ID`。GitLab 的額外 claim（例如組織）以 `oauth2Proxy.claimHeaders` 宣告注入哪個 header，tenant-api 從同一份設定檔得知（見 [tenant-api README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md)「身分 header 由 oauth2-proxy 設定檔決定」）。
 
-tenant-api 與 da-portal 兩個 chart 的 `oauth2Proxy` 區塊設定一致（單一 SSO）：
+在 tenant-api chart 設定 `oauth2Proxy` 區塊（整個部署只有這一個 oauth2-proxy；da-portal chart 只剩不經登入的純靜態部署）：
 
 ```yaml
 oauth2Proxy:
   provider: gitlab
-  clientID: "<Application ID>"                     # 僅 tenant-api chart；da-portal 讀 secret
+  clientID: "<Application ID>"
   oidcIssuerUrl: "https://gitlab.acme.internal"   # 你的 GitLab 裸 instance URL
   scope: "openid profile email"
   redirectUrl: "https://portal.acme.internal/oauth2/callback"
@@ -91,5 +91,5 @@ curl -s -H "Authorization: Bearer <access_token>" \
 - **登入迴圈 / cookie 不送**：`cookieSecure: true` 需 HTTPS。ingress 未上 TLS 時要嘛補 TLS、要嘛暫設 `false`（僅測試）。
 - **Redirect URI mismatch**：GitLab application 的 Redirect URI 必須逐字比對 `redirectUrl`（含 scheme 與 `/oauth2/callback` 尾段）。
 - **登入後全空畫面**：多半是 `_rbac.yaml` 群組名非 GitLab 全路徑（見步驟三）。
-- **登入後 4xx／`431 Request Header Fields Too Large`**：使用者隸屬**大量 GitLab 群組**（含繼承）時，session cookie（編碼 groups，每個請求由 client 帶回）與 oauth2-proxy 注入的 `X-Forwarded-Groups` 表頭會很長，可能超過 **ingress controller** 或 **da-portal 內 nginx** 的預設 header/buffer 上限而被丟棄。調高該層 buffer（nginx-ingress：`nginx.ingress.kubernetes.io/proxy-buffer-size` + `large_client_header_buffers`），或用 `gitlabGroups` 縮登入群組面。（tenant-api 側是 Go app、`MaxHeaderBytes` 較寬鬆，較不會中。）
+- **登入後 4xx／`431 Request Header Fields Too Large`**：使用者隸屬**大量 GitLab 群組**（含繼承）時，session cookie（編碼 groups，每個請求由 client 帶回）與 oauth2-proxy 注入的 `X-Forwarded-Groups` 表頭會很長，可能超過 **ingress controller** 或 **portal 容器 nginx** 的預設 header/buffer 上限而被丟棄。調高該層 buffer（nginx-ingress：`nginx.ingress.kubernetes.io/proxy-buffer-size` + `large_client_header_buffers`），或用 `gitlabGroups` 縮登入群組面。（tenant-api 側是 Go app、`MaxHeaderBytes` 較寬鬆，較不會中。）
 - **只想放行特定群組**：用 `gitlabGroups`（proxy 層擋登入）；細粒度授權仍由 `_rbac.yaml` 決定。

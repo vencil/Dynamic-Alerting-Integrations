@@ -1,161 +1,55 @@
 # da-portal Helm Chart
 
-Self-Hosted Interactive Tools Portal for the Dynamic Alerting Platform.
+Static-only Interactive Tools portal for the Dynamic Alerting Platform.
 
 ## Overview
 
-da-portal is an nginx-based static file server that delivers transpiled Interactive Tools (JSX) to users via browser-side Babel transpilation. It serves:
+da-portal is an nginx static file server for the pre-built Interactive Tools
+bundles and their data files (`platform-data.json`, `flows.json`, …). It has
+no login, no API behind it and no reverse proxy: every tool that works on
+static data works here, and the tools that call the API (Tenant Manager,
+saved views, recipe preview, federation tokens) show their offline state.
 
-- Static HTML/JavaScript/CSS for the Interactive Tools UI
-- `platform-data.json` and `flows.json` configuration
-- Reverse proxy to tenant-api at `/api/v1/` for API operations
-- oauth2-proxy sidecar for authentication
-
-### Key Features
-
-- **Static File Serving**: Optimized nginx with security headers, caching policies
-- **OAuth2 Authentication**: sidecar oauth2-proxy (GitHub, Google, OIDC, GitLab)
-- **Reverse Proxy**: Transparent proxy to tenant-api with proper header forwarding
-- **Health Checks**: `/healthz` endpoint for liveness/readiness probes
-- **Network Policies**: Namespace-based ingress control
-- **Security**: Non-root pod security context, read-only filesystems, seccomp
-- **Customization**: custom data volumes (platform-data.json, flows.json, static content)
-
-## Architecture
+**The portal that needs a login is not this chart.** It runs inside the
+tenant-api pod, behind tenant-api's oauth2-proxy, which routes `/api/` to
+tenant-api and everything else to the portal container
+([ADR-027 §5](../../docs/adr/027-tenant-api-caller-identity.md)). Install
+[`helm/tenant-api`](../tenant-api/) for that. One deployment has one
+oauth2-proxy, one Ingress and one session cookie.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│ Service (port 80) → oauth2-proxy (4180)                         │
-│                                                                  │
-│ Sidecar Pattern:                                                 │
-│ ┌──────────────────────┐         ┌─────────────────────┐       │
-│ │  nginx               │◄────────┤  oauth2-proxy       │       │
-│ │  (port 80)           │         │  (port 4180)        │       │
-│ │  - Static tools      │         │  - Authentication   │       │
-│ │  - /healthz          │         │  - Session mgmt     │       │
-│ │  - /api/v1/* proxy   │         │  - OAuth2 flow      │       │
-│ └──────────────────────┘         └─────────────────────┘       │
-│         │                                                        │
-│         ├─► /healthz (readiness/liveness)                      │
-│         ├─► / (static files from /usr/share/nginx/html)        │
-│         └─► /api/v1/* → tenant-api (reverse proxy)             │
-└─────────────────────────────────────────────────────────────────┘
+Service (port 80) ──► nginx (listenPort 80)
+                        ├─ /healthz                     → 200
+                        ├─ /api/v1/tenants/simulate     → 501 (not provided)
+                        └─ /                            → static files
 ```
-
-### Port Mapping
-
-| Port | Service | Audience | Purpose |
-|------|---------|----------|---------|
-| 80 | Service.port | External, via Ingress | oauth2-proxy entry point |
-| 4180 | oauth2-proxy internal | localhost only | Authentication/session |
-| 8080 | Service.internalPort | Cluster-internal | Direct nginx access (health, API) |
 
 ## Installation
 
-### Basic Install
-
 ```bash
-# Install with defaults
-helm install da-portal helm/da-portal \
-  -n monitoring \
-  -f helm/da-portal/values.yaml
-
-# Or with a deployment-tier overlay (e.g. full-stack Tier 2)
-helm install da-portal helm/da-portal \
-  -n monitoring \
-  -f helm/da-portal/values.yaml \
-  -f helm/da-portal/values-tier2.yaml
-```
-
-### Configuration
-
-#### OAuth2 Secrets
-
-You **must** provide valid OAuth2 credentials before deployment:
-
-```bash
-# Create placeholder secret
 helm install da-portal helm/da-portal -n monitoring
-
-# Edit the secret with real values
-kubectl -n monitoring edit secret oauth2-proxy-secrets
-
-# Key fields:
-# OAUTH2_PROXY_COOKIE_SECRET: <32-byte base64-encoded random>
-# OAUTH2_PROXY_CLIENT_ID: <GitHub OAuth App client ID>
-# OAUTH2_PROXY_CLIENT_SECRET: <GitHub OAuth App client secret>
 ```
 
-Or generate a new secret before install:
+Expose it with your own Ingress, `LoadBalancer` or `kubectl port-forward`;
+nothing behind it needs a login.
 
 ```bash
-# Generate 32-byte secret
-SECRET=$(openssl rand -base64 32)
-
-helm install da-portal helm/da-portal -n monitoring \
-  --set oauth2Proxy.secretName=my-oauth-secrets \
-  --set oauth2Proxy.createSecret=false \
-  -f - <<EOF
----
-apiVersion: v1
-kind: Secret
-metadata:
-  name: my-oauth-secrets
-type: Opaque
-stringData:
-  OAUTH2_PROXY_COOKIE_SECRET: "$SECRET"
-  OAUTH2_PROXY_CLIENT_ID: "your-client-id"
-  OAUTH2_PROXY_CLIENT_SECRET: "your-client-secret"
-EOF
+kubectl -n monitoring port-forward svc/da-portal 8080:80
+curl http://localhost:8080/healthz
 ```
 
-#### Ingress
+### Upgrading from a chart with oauth2-proxy (Tier 2)
 
-Enable ingress for external access:
+The `oauth2Proxy`, `ingress`, `portal.tenantApiUrl`,
+`portal.recipePreviewUrl`, `portal.relayToken`, `service.internalPort` and
+`networkPolicy.egress` keys, the `resources.nginx` / `resources.oauth2Proxy`
+split, and the `values-tier1.yaml` / `values-tier2.yaml` overlays are gone.
+`values.schema.json` refuses every removed key, so an old values file fails
+`helm upgrade` instead of being silently ignored. Move the logged-in portal to
+the tenant-api chart (its `portal` and `oauth2Proxy` values), then upgrade
+this release with the removed keys dropped — or uninstall it.
 
-```bash
-helm install da-portal helm/da-portal -n monitoring \
-  --set ingress.enabled=true \
-  --set ingress.className=nginx \
-  --set 'ingress.hosts[0].host=da-portal.example.com' \
-  --set oauth2Proxy.redirectUrl=https://da-portal.example.com/oauth2/callback \
-  --set oauth2Proxy.cookieSecure=true
-```
-
-The Ingress backend is always the Service `http` port (80 → oauth2-proxy :4180) and is not configurable: port 8080 reaches nginx without authentication and must never be published (GHSA-3g2h-rf85-5rrv). Rendering therefore fails when `ingress.enabled=true` and `oauth2Proxy.enabled=false`, and when `ingress.hosts` is empty. A host given without `paths` (as above) serves `/` with `pathType: Prefix`. Before #2027 these values were declared but no template read them.
-
-#### Tenant API URL
-
-By default, the chart assumes tenant-api is in the same cluster, in its dedicated `tenant-api` namespace (#1004), at:
-`http://tenant-api.tenant-api.svc.cluster.local:8080`
-
-To override:
-
-```bash
-helm install da-portal helm/da-portal -n monitoring \
-  --set 'portal.tenantApiUrl=http://tenant-api.tenant-api-staging.svc.cluster.local:8080'
-```
-
-#### Relay Token (legacy; removed by ADR-027 §5)
-
-⚠ **Legacy — leave it off.** This option predates ADR-027 and is kept only
-until ADR-027 §5 removes da-portal's reverse proxy, taking the option with it.
-tenant-api no longer runs the machine-identity audit (#3628), so nothing reads
-the token any more.
-
-What it did: when `portal.relayToken.enabled=true`, nginx read the pod's
-audience-bound projected ServiceAccount token (`aud=tenant-api`, TTL 900s,
-kubelet-rotated) on every `/api/v1` request and presented it as
-`Authorization: Bearer` to tenant-api's machine-identity audit, which recorded
-da-portal as a verified relay (GHSA-3g2h-rf85-5rrv hardening series). It was
-audit-only: user authorization rode the oauth2-proxy `X-Forwarded-*` headers,
-and a missing/unreadable token dropped the header without breaking the request.
-
-If a release still has it on, turn it off (`--set portal.relayToken.enabled=false`).
-Turning it on needed the njs main config in the da-portal image
-(`portal/v2.10.0`+; older images fail loud at startup on `js_import`).
-
-#### Custom Data (platform-data.json, flows.json, etc.)
+### Custom Data (platform-data.json, flows.json, etc.)
 
 Mount custom data from a ConfigMap:
 
@@ -187,41 +81,25 @@ helm install da-portal helm/da-portal -n monitoring \
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | portal.listenPort | int | 80 | nginx listening port |
-| portal.tenantApiUrl | string | `http://tenant-api.tenant-api.svc.cluster.local:8080` | Reverse proxy target |
-| portal.relayToken.enabled | bool | false | Inject the audience-bound SA relay token on /api/v1 (legacy, removed by ADR-027 §5; needs the portal/v2.10.0+ image) |
+| customData.enabled | bool | false | Mount custom data at `/usr/share/nginx/html/custom` |
+| customData.type | string | `configMap` | `configMap` or `emptyDir` |
+| customData.configMapName | string | `da-portal-custom` | ConfigMap to mount when `type: configMap` |
 
-### OAuth2 Proxy
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| oauth2Proxy.enabled | bool | true | Enable oauth2-proxy sidecar |
-| oauth2Proxy.provider | string | `github` | OAuth2 provider |
-| oauth2Proxy.redirectUrl | string | `http://da-portal.example.com/oauth2/callback` | OAuth redirect URI |
-| oauth2Proxy.emailDomain | string | `*` | Allowed email domain(s) |
-| oauth2Proxy.cookieSecure | bool | true | Secure cookie flag (set false for local dev) |
-| oauth2Proxy.cookieName | string | `_da_portal_session` | Session cookie name |
-| oauth2Proxy.secretName | string | `oauth2-proxy-secrets` | Secret containing credentials |
-| oauth2Proxy.createSecret | bool | true | Auto-create placeholder Secret |
-
-### Service & Ingress
+### Service
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | service.type | string | `ClusterIP` | Service type |
-| service.port | int | 80 | External port |
-| service.internalPort | int | 8080 | Internal port (nginx direct) |
-| ingress.enabled | bool | false | Enable Ingress |
-| ingress.className | string | `""` | Ingress class name |
-| ingress.hosts | list | `[{host: da-portal.example.com, paths: [{path: /, pathType: Prefix}]}]` | Ingress hosts, each an object with `host` and optional `paths` (inert while `ingress.enabled=false`) |
+| service.port | int | 80 | Service port (→ nginx `portal.listenPort`) |
 
 ### Resources
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| resources.nginx.requests.cpu | string | `30m` | nginx CPU request |
-| resources.nginx.requests.memory | string | `64Mi` | nginx memory request |
-| resources.oauth2Proxy.requests.cpu | string | `20m` | oauth2-proxy CPU request |
-| resources.oauth2Proxy.requests.memory | string | `32Mi` | oauth2-proxy memory request |
+| resources.requests.cpu | string | `10m` | nginx CPU request |
+| resources.requests.memory | string | `32Mi` | nginx memory request |
+| resources.limits.cpu | string | `100m` | nginx CPU limit |
+| resources.limits.memory | string | `128Mi` | nginx memory limit |
 
 ### Security
 
@@ -229,115 +107,19 @@ helm install da-portal helm/da-portal -n monitoring \
 |-----|------|---------|-------------|
 | podSecurityContext.runAsUser | int | 65534 | Pod run-as UID (nobody) |
 | podSecurityContext.runAsGroup | int | 65534 | Pod run-as GID |
-| networkPolicy.enabled | bool | true | Enable NetworkPolicy |
-| networkPolicy.allowedNamespaces | list | `[monitoring, ingress-nginx]` | Namespaces allowed ingress — infra sources only; ⛔ do NOT add tenant namespaces (GHSA-3g2h-rf85-5rrv) |
-
-## Deployment Examples
-
-### Local Development (Kind)
-
-```bash
-helm install da-portal helm/da-portal \
-  -n monitoring \
-  --set oauth2Proxy.cookieSecure=false \
-  --set oauth2Proxy.redirectUrl=http://localhost:8080/oauth2/callback \
-  --set oauth2Proxy.createSecret=false \
-  --set-string 'oauth2Proxy.secretName=dev-oauth-secrets'
-
-# Create mock secret
-kubectl -n monitoring create secret generic dev-oauth-secrets \
-  --from-literal=OAUTH2_PROXY_COOKIE_SECRET=dev-secret-12345678901234567890 \
-  --from-literal=OAUTH2_PROXY_CLIENT_ID=dev-client \
-  --from-literal=OAUTH2_PROXY_CLIENT_SECRET=dev-secret
-```
-
-### Production (HTTPS, Real OAuth)
-
-```bash
-# Create real OAuth2 secret (e.g., via Sealed Secrets)
-# ... (assume secret created separately)
-
-helm install da-portal helm/da-portal \
-  -n monitoring \
-  --set replicaCount=3 \
-  --set oauth2Proxy.cookieSecure=true \
-  --set oauth2Proxy.redirectUrl=https://da-portal.company.com/oauth2/callback \
-  --set oauth2Proxy.provider=google \
-  --set oauth2Proxy.emailDomain=company.com \
-  --set oauth2Proxy.createSecret=false \
-  --set 'oauth2Proxy.secretName=oauth2-secrets-prod' \
-  --set ingress.enabled=true \
-  --set ingress.className=nginx \
-  --set 'ingress.hosts[0].host=da-portal.company.com' \
-  --set 'ingress.hosts[0].paths[0].path=/' \
-  --set 'ingress.hosts[0].paths[0].pathType=Prefix'
-```
+| networkPolicy.enabled | bool | true | Ingress only from `allowedNamespaces`; no egress at all |
+| networkPolicy.allowedNamespaces | list | `[monitoring, ingress-nginx]` | Namespaces allowed to reach the portal (at least one); do not add tenant namespaces |
 
 ## Health Checks
 
-The chart includes readiness and liveness probes configured for the nginx container:
-
-```yaml
-readinessProbe:
-  httpGet:
-    path: /healthz
-    port: 80
-  initialDelaySeconds: 5
-  periodSeconds: 5
-  failureThreshold: 3
-
-livenessProbe:
-  httpGet:
-    path: /healthz
-    port: 80
-  initialDelaySeconds: 10
-  periodSeconds: 15
-  failureThreshold: 3
-```
-
-Test health endpoint:
-
-```bash
-# Inside container
-curl http://localhost/healthz
-
-# Via port-forward
-kubectl -n monitoring port-forward svc/da-portal 8080:8080
-curl http://localhost:8080/healthz
-```
-
-## Reverse Proxy Configuration
-
-The nginx configuration in `configmap-nginx.yaml` reverse-proxies `/api/v1/` to the tenant-api service:
-
-```nginx
-location /api/v1/ {
-  proxy_pass http://tenant-api.tenant-api.svc.cluster.local:8080/api/v1/;
-  proxy_set_header Host $host;
-  proxy_set_header X-Real-IP $remote_addr;
-  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-  proxy_set_header X-Forwarded-Proto $scheme;
-  # ... (auth headers, timeouts, buffering)
-}
-```
-
-This allows Interactive Tools to communicate with the tenant-api without cross-origin requests.
-
-The `/api/v1/` and `/preview` proxy blocks are rendered only when `portal.tenantApiUrl` / `portal.recipePreviewUrl` are set. Tier 1 (static-only, `values-tier1.yaml`) keeps both empty — the rendered config then serves static files only, with no proxy locations (an empty URL would otherwise produce a schemeless `proxy_pass` that fails `nginx -t`).
+Readiness and liveness probes hit `/healthz` on `portal.listenPort`.
 
 ## Troubleshooting
 
-### 401 Unauthorized
+### Tools show demo data or an offline notice
 
-- Verify oauth2-proxy is running: `kubectl -n monitoring logs -f deployment/da-portal -c oauth2-proxy`
-- Check Secret credentials: `kubectl -n monitoring get secret oauth2-proxy-secrets -o yaml`
-- Verify OAuth app callback URL matches `oauth2Proxy.redirectUrl`
-
-### 502 Bad Gateway
-
-- Check tenant-api service: `kubectl -n tenant-api get svc tenant-api`
-- Verify DNS resolution: `kubectl -n monitoring exec -it deployment/da-portal -c nginx -- nslookup tenant-api.tenant-api.svc.cluster.local`
-- Test proxy target: `kubectl -n tenant-api port-forward svc/tenant-api 8080:8080`
+Expected: this chart has no API. Use the portal in the tenant-api chart for
+live tenants.
 
 ### Static Files Not Loading
 
@@ -345,40 +127,20 @@ The `/api/v1/` and `/preview` proxy blocks are rendered only when `portal.tenant
 - Verify nginx container logs: `kubectl -n monitoring logs -f deployment/da-portal -c nginx`
 - Check image build: `docker inspect ghcr.io/vencil/da-portal:v2.9.0`
 
-## Upgrading
-
-```bash
-# Fetch latest chart
-helm repo update
-
-# Dry-run upgrade
-helm upgrade da-portal helm/da-portal \
-  -n monitoring \
-  --dry-run
-
-# Apply upgrade
-helm upgrade da-portal helm/da-portal \
-  -n monitoring \
-  -f helm/da-portal/values.yaml
-```
-
 ## Security Considerations
 
-1. **oauth2-proxy Credentials**: Store CLIENT_ID and CLIENT_SECRET in a secure secret backend (Sealed Secrets, Vault, External Secrets Operator). Never commit to Git.
-
-2. **HTTPS**: Always set `cookieSecure=true` and `redirectUrl=https://...` in production.
-
-3. **Email Domain Restriction**: Set `emailDomain` to your organization's domain to restrict access (e.g., `company.com`).
-
-4. **Network Policies**: The chart includes a NetworkPolicy that restricts ingress to specified namespaces. Customize `networkPolicy.allowedNamespaces` for your environment.
-
-5. **Pod Security Context**: Runs as non-root user (UID 65534) with read-only root filesystem. Do not override unless necessary.
+1. **No credentials**: the chart holds no secret and no ServiceAccount token
+   (`automountServiceAccountToken: false`).
+2. **NetworkPolicy**: ingress is limited to `networkPolicy.allowedNamespaces`
+   and egress is denied. It only takes effect on a CNI that enforces
+   NetworkPolicy (Calico / Cilium / Antrea).
+3. **Pod Security Context**: runs as non-root (UID 65534) with a read-only
+   root filesystem. Do not override unless necessary.
 
 ## Reference
 
-- [oauth2-proxy Configuration](https://oauth2-proxy.github.io/oauth2-proxy/configuration/overview/)
+- [ADR-027: tenant-api caller identity](../../docs/adr/027-tenant-api-caller-identity.md)
 - [nginx Documentation](https://nginx.org/en/docs/)
-- [Kubernetes Security Best Practices](https://kubernetes.io/docs/concepts/security/)
 - [Dynamic Alerting Architecture](../../docs/architecture-and-design.md)
 
 ## License

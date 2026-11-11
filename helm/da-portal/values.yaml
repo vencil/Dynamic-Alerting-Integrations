@@ -1,5 +1,13 @@
 # da-portal Helm values
-# Self-Hosted Interactive Tools Portal
+# Static-only Interactive Tools portal (Tier 1): nginx serves the bundled
+# tools and data files, with no login, no API and no reverse proxy.
+#
+# ADR-027 §5: the portal that needs a login (tenant management, recipe
+# preview, federation tokens) runs inside the tenant-api pod, behind its
+# oauth2-proxy — install the tenant-api chart for that. This chart cannot
+# forward anything to tenant-api: values.schema.json rejects the removed
+# keys (oauth2Proxy, ingress, portal.tenantApiUrl, …) so an old values file
+# fails the install instead of being silently ignored.
 
 replicaCount: 1
 
@@ -11,79 +19,8 @@ image:
 
 # Portal application settings
 portal:
-  # Port nginx listens on inside container
+  # Port nginx listens on inside the container
   listenPort: 80
-  # Tenant API URL for reverse proxy /api/v1/
-  tenantApiUrl: "http://tenant-api.tenant-api.svc.cluster.local:8080"
-  # recipe-preview URL for reverse proxy /preview (#657 would-fire preview)
-  recipePreviewUrl: "http://recipe-preview.monitoring.svc.cluster.local:8082"
-  # Machine-identity relay token (legacy; removed by ADR-027 §5; GHSA-3g2h-rf85-5rrv series).
-  # ⚠ Leave false: tenant-api no longer runs the machine-identity audit (#3628),
-  # so nothing reads the token. Kept until ADR-027 §5 removes the reverse proxy.
-  # What it did: nginx read the pod's audience-bound projected SA token
-  # (aud=tenant-api, TTL 900s — hardcoded in the deployment template, mirroring
-  # helm/recipe-preview) on EVERY /api/v1 request and presented it as
-  # `Authorization: Bearer` to tenant-api's machine-identity audit. Audit-only:
-  # the token never gated the user's authorization (X-Forwarded-* is the authz
-  # input); a missing or unreadable token dropped the header.
-  # ⛔ PREREQUISITE: the da-portal image must ship the njs main config
-  # (portal/v2.10.0+). Older images FAIL LOUD at startup (unknown directive
-  # "js_import") — leave false until the image line carries it. Also requires
-  # the tenant-api chart >= 2.9.13 (da-portal admitted on the port-8080 netpol).
-  # If flipped on with an old image BY MISTAKE, flip back immediately: the
-  # ConfigMap mutates in place, so a container restart of the still-running
-  # old pod would also hit js_import and take the portal down.
-  # NOTE: the token attested the da-portal WORKLOAD, not that a given request
-  # passed oauth2-proxy — traffic reaching nginx's internal port directly was
-  # relayed with the same token (contained by the NetworkPolicy).
-  relayToken:
-    enabled: false
-
-# oauth2-proxy sidecar configuration
-oauth2Proxy:
-  enabled: true
-  image:
-    # renovate: datasource=docker depName=quay.io/oauth2-proxy/oauth2-proxy
-    repository: quay.io/oauth2-proxy/oauth2-proxy
-    tag: "v7.15.5"
-    # Pinned by digest (#902 L2) — same digest as tenant-api's oauth2-proxy; the
-    # drift-guard requires both charts + the scan matrix to carry it identically.
-    # ⛔ Digest is AUTHORITATIVE: `--set oauth2Proxy.image.tag=…` ALONE does NOT
-    #    upgrade — k8s silently keeps running THIS digest. Also set
-    #    oauth2Proxy.image.digest to the new tag's digest; do NOT clear it.
-    #    Renovate (#902 L3) bumps tag + digest together.
-    digest: "sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
-    pullPolicy: IfNotPresent
-  # Provider: github | google | oidc | gitlab
-  provider: github
-  # OIDC issuer URL — REQUIRED for `provider: oidc` and `provider: gitlab`
-  # (self-hosted GitLab CE: the bare instance URL). Empty → github, flag not rendered.
-  # Keep in sync with the tenant-api chart for a single-SSO deployment.
-  # See docs/integration/gitlab-ce-sso.md.
-  oidcIssuerUrl: ""
-  # OAuth scope. GitLab CE: "openid profile email". Empty → provider default.
-  scope: ""
-  # Optional GitLab group restriction (--gitlab-group, repeatable, full paths). GitLab only.
-  gitlabGroups: []
-  # Session lifetime / refresh (revocation-lag guard). Empty → oauth2-proxy defaults.
-  cookieExpire: ""   # e.g. "4h"
-  cookieRefresh: ""  # e.g. "1h" (must be < cookieExpire)
-  # Redirect URL must match the registered OAuth2 app callback URL.
-  # Set to your actual Ingress host.
-  redirectUrl: "http://da-portal.example.com/oauth2/callback"
-  # Accept all email domains — restrict further via firewall/network policies
-  emailDomain: "*"
-  # Cookie settings
-  cookieSecure: true  # Requires HTTPS; set false only for local dev
-  cookieHttpOnly: true
-  # lower case: oauth2-proxy v7.15.5 refuses "Lax" at start.
-  cookieSameSite: "lax"
-  cookieName: "_da_portal_session"
-  # Set to false to skip creating the placeholder Secret
-  # (use this in production with externally managed secrets)
-  createSecret: true
-  # Secret name (must be pre-created; see secret-oauth2proxy.yaml template)
-  secretName: oauth2-proxy-secrets
 
 # Data volume mounts for customization (optional)
 # Use these to provide custom platform-data.json, flows.json, or static content
@@ -95,44 +32,22 @@ customData:
   configMapName: da-portal-custom
   # If type: emptyDir, you can use init container to clone/setup
 
-# Service configuration
+# Service configuration. Expose it with your own Ingress / LoadBalancer if
+# you want; nothing behind it needs a login.
 service:
   type: ClusterIP
-  # Port 80 → oauth2-proxy (4180) — external traffic
   port: 80
-  # Port 8080 → nginx directly — cluster-internal (health checks, internal access)
-  internalPort: 8080
 
-# Ingress (disabled by default — configure per-environment)
-ingress:
-  enabled: false
-  className: ""
-  annotations: {}
-  hosts:
-    - host: da-portal.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls: []
-
-# Resource requests and limits
+# Resource requests and limits (the single nginx container)
 resources:
-  nginx:
-    requests:
-      cpu: 30m
-      memory: 64Mi
-    limits:
-      cpu: 100m
-      memory: 128Mi
-  oauth2Proxy:
-    requests:
-      cpu: 20m
-      memory: 32Mi
-    limits:
-      cpu: 100m
-      memory: 64Mi
+  requests:
+    cpu: 10m
+    memory: 32Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
 
-# Pod security context (non-root, matching tenant-api)
+# Pod security context (non-root)
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65534
@@ -141,60 +56,17 @@ podSecurityContext:
   seccompProfile:
     type: RuntimeDefault
 
-# NetworkPolicy
-# ⛔ enabled: false is FORBIDDEN and will fail `helm template`/`install`
-# (GHSA-3g2h-rf85-5rrv). da-portal fronts tenant-api (header-trusting port 8080);
-# this policy is a required security control, not a toggle.
+# NetworkPolicy: ingress only from the listed namespaces, no egress at all
+# (a static file server opens no outbound connection, not even DNS).
 networkPolicy:
   enabled: true
-  # Namespaces allowed to reach the portal.
-  # ⛔ SECURITY (GHSA-3g2h-rf85-5rrv): do NOT list tenant namespaces (db-a/db-b).
-  # Real user traffic arrives through the ingress controller (browser → oauth2-proxy),
-  # NOT directly from tenant pods — a tenant pod has no legitimate reason to reach the
-  # portal, and granting it widens the blast radius of a compromised tenant workload.
-  # Keep this to infrastructure sources only:
-  #   • monitoring        — internal health checks / cluster tooling
-  #   • ingress-nginx      — the ingress controller that fronts external browser traffic
-  # Set to YOUR ingress controller's namespace (ingress-nginx | istio-system | traefik | …).
+  # Namespaces allowed to reach the portal. Do not list tenant namespaces:
+  # a tenant workload has no reason to reach the portal.
+  # Set the second entry to YOUR ingress controller's namespace
+  # (ingress-nginx | istio-system | traefik | …).
   allowedNamespaces:
     - monitoring
     - ingress-nginx
-  # Egress lockdown (#1004). da-portal fronts tenant-api's header-trusting path, so
-  # a compromised portal pod is a high-value pivot. When it runs as an auth proxy
-  # (oauth2Proxy.enabled) its only legitimate egress is: the two reverse-proxy
-  # backends (tenant-api /api/v1/ + recipe-preview /preview) and the external IdP
-  # (oauth2-proxy's OAuth/OIDC flow) — plus DNS. A Tier-1 static-only portal
-  # (oauth2Proxy.enabled=false, no upstreams — enforced by the open-proxy guard
-  # above) needs only DNS. Set enabled=false to fall back to the monitoring-ns
-  # baseline (default-deny-all still applies if present).
-  egress:
-    enabled: true
-    # tenant-api backend (/api/v1/ proxy). Cross-namespace: tenant-api lives in its
-    # dedicated `tenant-api` ns (#1004) — must track portal.tenantApiUrl above.
-    tenantApiNamespace: tenant-api
-    tenantApiPort: 8080
-    # OR-ed pod selectors: helm/tenant-api labels its pods app.kubernetes.io/name.
-    # (`app: tenant-api` was dropped in #1594 with the raw manifests that set it;
-    # a tenant-api run from your own manifests must carry this label or be added
-    # here.)
-    tenantApiPodSelectors:
-      - app.kubernetes.io/name: tenant-api
-    # recipe-preview backend (/preview proxy). Same ns as da-portal (monitoring).
-    recipePreviewPort: 8082
-    recipePreviewPodSelectors:
-      - app.kubernetes.io/name: recipe-preview
-    # External IdP for the oauth2-proxy OAuth/OIDC flow (GitHub/GitLab/OIDC over
-    # HTTPS). Defaults to the internet minus the cloud metadata endpoint (mirrors
-    # the alertmanager webhook-egress pattern). Tighten to your IdP's CIDR via
-    # extraEgress + set idpHttpsEnabled=false if your IdP range is known/fixed.
-    idpHttpsEnabled: true
-    idpHttpsPort: 443
-    # Extra egress rules merged verbatim (private IdP CIDR, redis session store…).
-    extraEgress: []
 
 # Pod annotations
-podAnnotations:
-  # Portal is a static file server; no metrics to scrape
-  # Leave empty or add custom annotations as needed
-  {}
-
+podAnnotations: {}

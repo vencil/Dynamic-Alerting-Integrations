@@ -536,8 +536,8 @@ spec:
         # Serves the portal behind oauth2-proxy's "/" upstream. It listens on
         # the pod's loopback only (tenant-api.portalAddress), reads no
         # identity header and forwards nothing: it runs the chart's nginx
-        # config (`-c`), never the image's own, which forwards /api/v1/ and
-        # /preview for the standalone da-portal chart.
+        # config (`-c`), never the image's own (which forwards nothing either,
+        # but is not this chart's to pin).
         - name: portal
           image: "{{ .Values.portal.image.repository }}:{{ .Values.portal.image.tag }}{{ with .Values.portal.image.digest }}@{{ . }}{{ end }}"
           imagePullPolicy: {{ .Values.portal.image.pullPolicy }}

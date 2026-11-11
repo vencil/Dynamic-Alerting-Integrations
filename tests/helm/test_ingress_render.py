@@ -1,16 +1,16 @@
-"""test_ingress_render.py — da-portal / tenant-api Ingress template (#2027)
+"""test_ingress_render.py — tenant-api Ingress template (#2027)
 
-Both charts carried a full `ingress:` block in values.yaml (and da-portal's
-values-tier2.yaml shipped `ingress.enabled: true`) with NO template reading
-it: `helm install` exited 0 and no Ingress existed. These tests pin:
+The chart carried a full `ingress:` block in values.yaml with NO template
+reading it: `helm install` exited 0 and no Ingress existed. (da-portal had the
+same defect; since ADR-027 §5 it has no Ingress at all — the deployment has one
+Ingress, tenant-api's — pinned by tests/helm/test_portal_static_tier_guard.py.)
+These tests pin:
 
   * the value is actually consumed — enabling it renders an Ingress whose
     host / class / TLS / annotations come from values (default stays off);
   * ⛔ the backend is the authenticated `http` Service port (80 → oauth2-proxy
-    :4180) and NEVER the internal 8080 port. On tenant-api that port trusts
-    injected identity headers; on da-portal it reaches nginx, which forwards
-    raw identity headers to that path (GHSA-3g2h-rf85-5rrv). An Ingress there
-    is an internet-facing identity-spoofing bypass;
+    :4180) and NEVER the internal 8080 port (GHSA-3g2h-rf85-5rrv): an Ingress
+    there would publish a port that skips the login;
   * render fails closed when the backend could not serve (oauth2Proxy off →
     nothing on :4180) or when there are no hosts (API-server-invalid object).
 
@@ -27,7 +27,7 @@ import pytest
 import yaml
 from _render_baseline import baseline_args
 
-_CHARTS = ["helm/da-portal", "helm/tenant-api"]
+_CHARTS = ["helm/tenant-api"]
 _HAS_HELM = shutil.which("helm") is not None
 _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm CLI not on PATH")
 
@@ -136,8 +136,7 @@ def test_backend_is_the_authenticated_port_only(repo_root: Path, chart: str):
 @_needs_helm
 @pytest.mark.parametrize("chart", _CHARTS)
 def test_host_given_without_paths_serves_root(repo_root: Path, chart: str):
-    """The da-portal README's own install line sets only
-    `ingress.hosts[0].host=…`. `--set` on a list index REPLACES the list, so
+    """An install line that sets only `ingress.hosts[0].host=…`. `--set` on a list index REPLACES the list, so
     `paths` is gone; an empty http.paths is rejected by the API server, i.e.
     the documented command would render an uninstallable object."""
     res = _helm_template(
@@ -150,28 +149,10 @@ def test_host_given_without_paths_serves_root(repo_root: Path, chart: str):
 
 
 @_needs_helm
-def test_tier2_overlay_now_renders_its_ingress(repo_root: Path):
-    """values-tier2.yaml has always said `ingress.enabled: true`; it must now
-    produce the Ingress it describes."""
-    res = _helm_template(
-        repo_root, "helm/da-portal", "-f", str(repo_root / "helm/da-portal/values-tier2.yaml"),
-    )
-    assert res.returncode == 0, res.stderr
-    [ing] = _kind(_docs(res.stdout), "Ingress")
-    assert ing["spec"]["tls"][0]["secretName"] == "da-portal-tls"
-
-
-@_needs_helm
 @pytest.mark.parametrize("chart", _CHARTS)
 def test_fails_closed_without_oauth2_proxy(repo_root: Path, chart: str):
-    # da-portal's own GHSA guard forbids upstream URLs without the proxy;
-    # clear them so the Ingress guard is the one that fires. tenant-api has no
-    # `portal` key, and its values.schema.json refuses unknown keys (#1594).
-    clear_upstreams = (("--set", "portal.tenantApiUrl=", "--set", "portal.recipePreviewUrl=")
-                       if chart == "helm/da-portal" else ())
     res = _helm_template(
         repo_root, chart, *_enable("--set", "oauth2Proxy.enabled=false"),
-        *clear_upstreams,
     )
     assert res.returncode != 0
     # tenant-api refuses oauth2Proxy.enabled=false outright (ADR-027 §2: the

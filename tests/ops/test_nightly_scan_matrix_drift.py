@@ -254,7 +254,7 @@ def _third_party_pins_in_helm_values() -> dict[str, set[str]]:
     #     test written for it — measured: both were `None` in the map while
     #     `helm/da-portal/README.md` WAS registered, purely because a docstring
     #     happened to name it. Same trap as #1313.
-    for known in ("helm/da-portal/values-tier1.yaml", "helm/da-portal/values-tier2.yaml"):
+    for known in ("helm/vector/values-projection.yaml",):
         assert ROOT / known in scanned, f"{known} is no longer in the sampling face"
 
     def _merge(base, over):
@@ -298,7 +298,7 @@ def test_every_helm_values_overlay_pin_is_in_the_scan_matrix() -> None:
     whatever the extractor finds. That is only a coverage guarantee while the
     extractor LOOKS at every place a deployed image can be pinned — and it did
     not: its glob was `helm/*/values.yaml`, so a `-f values-tier2.yaml` overlay
-    (a documented install profile, helm/da-portal/README.md) was invisible to
+    (then a documented da-portal install profile) was invisible to
     BOTH sides. Two sets derived from the same blind extractor stay equal while
     an image nobody scans ships.
 

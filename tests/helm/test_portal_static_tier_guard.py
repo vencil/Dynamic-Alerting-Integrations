@@ -1,20 +1,14 @@
-"""test_portal_static_tier_guard.py — tier1 靜態 portal 須渲染出可開機的 nginx config
+"""test_portal_static_tier_guard.py — da-portal chart 只剩純靜態部署（ADR-027 §5）
 
-values-tier1.yaml 依 GHSA-3g2h-rf85-5rrv 開放代理防護（networkpolicy.yaml
-render-time guard）要求 ``portal.tenantApiUrl`` / ``portal.recipePreviewUrl``
-皆為空字串。configmap-nginx.yaml 的兩個 reverse-proxy location 區塊因此必須
-「URL 非空才渲染」：空值內插會產出無 scheme 的 ``proxy_pass /api/v1/;``，
-``nginx -t`` 直接拒絕（[emerg] invalid URL prefix）→ 靜態 portal pod 啟動即
-crashloop，tier1 profile 實際上不可部署（pre-existing，於 #962 PR review 揪出）。
+需要登入的 portal 在 tenant-api 的 pod 裡；da-portal chart 只服務靜態檔：
 
-三層守法：
-  * tier1 render → 完全不含 proxy_pass / 兩個 proxy location；
-  * default / tier2 render → 兩個 proxy 區塊俱在（條件化不可誤吞正常路徑）；
-  * 任何 render 出的 proxy_pass target 必須帶 http(s):// scheme（通用防線，
-    防未來新 upstream 值重蹈空字串內插）。
-
-模板層（無 helm CLI 也會跑）的對應守門見
-tests/shared/test_helm_portal.py::TestNginxConfigmapHasProxy::test_nginx_proxy_blocks_are_conditional。
+  * render 出的 pod 只有一個 nginx 容器，沒有 oauth2-proxy；沒有 Ingress、
+    沒有 Secret；NetworkPolicy 不放行任何 egress；
+  * render 出的 nginx 設定沒有任何轉送指令、不碰身分 header（§9 第 3 項
+    「portal 容器實際載入的 nginx 設定沒有任何轉送」——image 那份見
+    tests/shared/test_portal_image_nginx_conf.py）；
+  * simulate 路徑仍固定回 501（#2125）；
+  * 仍設著已刪除 key 的舊 values 檔讓 render 失敗，而不是被默默忽略（§6）。
 """
 from __future__ import annotations
 
@@ -26,98 +20,124 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _helm_gate import helm_required
 
+_REPO = Path(__file__).resolve().parents[2]
+_CHART = _REPO / "helm" / "da-portal"
 _HAS_HELM = shutil.which("helm") is not None
-_needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm CLI not on PATH")
+_REQUIRE_HELM = helm_required()
 
-_PROXY_PASS_RE = re.compile(r"proxy_pass\s+(\S+?);")
+#: The value sets every render-time assertion runs against.
+VALUE_SETS = (None, "ci/pss-all-on-values.yaml", "ci/pss-custom-data-emptydir-values.yaml")
+
+#: nginx directives that hand a request (or a header) to somewhere else.
+FORWARDING_DIRECTIVES = ("proxy_pass", "fastcgi_pass", "uwsgi_pass", "grpc_pass",
+                         "scgi_pass", "proxy_set_header", "js_import", "js_set")
+
+#: Keys the static-only chart removed, the `--set` that sets one, and the name
+#: the schema refusal carries.
+REMOVED_SETS = (
+    ("oauth2Proxy.enabled=true", "oauth2Proxy"),
+    ("ingress.enabled=true", "ingress"),
+    ("portal.tenantApiUrl=http://tenant-api.tenant-api.svc:8080", "tenantApiUrl"),
+    ("portal.recipePreviewUrl=http://recipe-preview.monitoring.svc:8082", "recipePreviewUrl"),
+    ("portal.relayToken.enabled=false", "relayToken"),
+    ("service.internalPort=8080", "internalPort"),
+    ("networkPolicy.egress.enabled=true", "egress"),
+    ("resources.nginx.requests.cpu=10m", "nginx"),
+)
 
 
-@pytest.fixture(scope="session")
-def repo_root() -> Path:
-    return Path(__file__).parent.parent.parent
+def _helm_or_skip() -> None:
+    if not _HAS_HELM:
+        if _REQUIRE_HELM:
+            pytest.fail("helm is required in this environment but not on PATH")
+        pytest.skip("helm CLI not on PATH")
 
 
-def _render(chart_dir: Path, values_file: Path | None = None) -> list[dict]:
-    cmd = ["helm", "template", "t", str(chart_dir), "-n", "monitoring"]
-    if values_file is not None:
-        cmd += ["-f", str(values_file)]
-    out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=30)
-    return [d for d in yaml.safe_load_all(out.stdout) if d]
+def _run(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["helm", "template", "t", str(_CHART), "-n", "monitoring", *args],
+                          capture_output=True, text=True, encoding="utf-8",
+                          errors="replace", timeout=60)
+
+
+def _render(values_file: str | None) -> list[dict]:
+    res = _run(*(["-f", str(_CHART / values_file)] if values_file else []))
+    assert res.returncode == 0, res.stderr
+    return [d for d in yaml.safe_load_all(res.stdout) if d]
 
 
 def _nginx_conf(manifests: list[dict]) -> str:
-    """Return the rendered default.conf of the da-portal nginx ConfigMap."""
     for doc in manifests:
         if doc.get("kind") == "ConfigMap" and doc["metadata"]["name"].endswith("nginx-config"):
             return doc["data"]["default.conf"]
     raise AssertionError("da-portal nginx-config ConfigMap not found in render output")
 
 
-@_needs_helm
-def test_tier1_static_render_has_no_proxy_locations(repo_root: Path) -> None:
-    """tier1（兩個 upstream URL 皆空）→ 渲染出的 nginx conf 不得含任何 proxy 設定。"""
-    chart = repo_root / "helm/da-portal"
-    conf = _nginx_conf(_render(chart, values_file=chart / "values-tier1.yaml"))
-
-    assert "proxy_pass" not in conf, (
-        "tier1 static-only render 不應含 proxy_pass —— 空 URL 內插會產出無 scheme 的 "
-        "`proxy_pass /api/v1/;`，nginx -t fail → pod crashloop"
-    )
-    assert "location /api/v1/" not in conf, "tier1 render 不應含 /api/v1/ location 區塊"
-    assert "location = /preview" not in conf, "tier1 render 不應含 /preview location 區塊"
-    # 靜態服務主體必須仍在（條件化不可誤傷 static / healthz 路徑）
-    assert "location / {" in conf
-    assert "location = /healthz" in conf
+def _code(conf: str) -> str:
+    """The config without comments (descriptions must not trip the check)."""
+    return "\n".join(line.split("#", 1)[0] for line in conf.splitlines())
 
 
-@_needs_helm
-@pytest.mark.parametrize("values_file", [None, "values-tier2.yaml"])
-def test_full_render_keeps_both_proxy_locations(repo_root: Path, values_file: str | None) -> None:
-    """default / tier2（URL 非空）→ 兩個 proxy 區塊俱在且指向 http(s) upstream。"""
-    chart = repo_root / "helm/da-portal"
-    conf = _nginx_conf(_render(chart, values_file=chart / values_file if values_file else None))
-
-    assert "location /api/v1/" in conf
-    assert "location = /preview" in conf
-    targets = _PROXY_PASS_RE.findall(conf)
-    assert len(targets) == 2, f"應恰有 2 個 proxy_pass，得到 {targets}"
+@pytest.mark.parametrize("values_file", VALUE_SETS, ids=lambda v: v or "default")
+def test_rendered_nginx_conf_forwards_nothing(values_file: str | None) -> None:
+    _helm_or_skip()
+    code = _code(_nginx_conf(_render(values_file)))
+    assert "location / {" in code  # vacuity guard: this is the server block
+    for directive in FORWARDING_DIRECTIVES:
+        assert directive not in code, directive
+    assert "x-forwarded-" not in code.lower()
+    assert "x_forwarded_" not in code.lower()
 
 
-@_needs_helm
-@pytest.mark.parametrize("values_file", [None, "values-tier1.yaml", "values-tier2.yaml"])
-def test_simulate_not_provided_location_renders_on_every_tier(
-    repo_root: Path, values_file: str | None
-) -> None:
-    """#2125：每個 tier 都渲染 `location = /api/v1/tenants/simulate` → 501。
+@pytest.mark.parametrize("values_file", VALUE_SETS, ids=lambda v: v or "default")
+def test_pod_is_one_nginx_container_and_nothing_else_ships(values_file: str | None) -> None:
+    _helm_or_skip()
+    manifests = _render(values_file)
+    kinds = sorted(d["kind"] for d in manifests)
+    assert "Ingress" not in kinds and "Secret" not in kinds, kinds
+    deploy = next(d for d in manifests if d["kind"] == "Deployment")
+    pod = deploy["spec"]["template"]["spec"]
+    assert [c["name"] for c in pod["containers"]] == ["nginx"]
+    assert not pod.get("initContainers")
+    # No projected ServiceAccount token: nothing here talks to tenant-api.
+    assert all("projected" not in v for v in pod["volumes"]), pod["volumes"]
 
-    Tier-2 上它以 exact match 蓋過 /api/v1/ prefix（否則 tenant-api 把
-    `simulate` 當 tenant id 回 405）；Tier-1 沒有 /api/v1/ 代理也要明確回 501。
-    code 與 widget 的 drift 斷言見 tests/shared/test_portal_simulate_not_provided.py。
-    """
-    chart = repo_root / "helm/da-portal"
-    conf = _nginx_conf(_render(chart, values_file=chart / values_file if values_file else None))
 
+def test_networkpolicy_allows_no_egress() -> None:
+    _helm_or_skip()
+    netpol = next(d for d in _render(None) if d["kind"] == "NetworkPolicy")
+    assert "Egress" in netpol["spec"]["policyTypes"]
+    assert netpol["spec"]["egress"] == []
+
+
+@pytest.mark.parametrize("values_file", VALUE_SETS, ids=lambda v: v or "default")
+def test_simulate_not_provided_location_renders(values_file: str | None) -> None:
+    """#2125：simulate 固定回 501；code 與 widget 的 drift 斷言見
+    tests/shared/test_portal_simulate_not_provided.py。"""
+    _helm_or_skip()
+    conf = _nginx_conf(_render(values_file))
     # 區塊以獨立一行的 `}` 收尾（body 是 JSON，內含 `}`）。
     m = re.search(r"location = /api/v1/tenants/simulate \{(.*?)\n\s*\}", conf, re.S)
-    assert m is not None, f"{values_file or 'default'} render 缺 simulate not-provided location"
+    assert m is not None, "render 缺 simulate not-provided location"
     ret = re.search(r"return 501 '(\{.*\})';", m.group(1))
     assert ret is not None, f"simulate location 應回 501，實得 {m.group(1)!r}"
     assert json.loads(ret.group(1))["code"] == "SIMULATE_NOT_PROVIDED"
 
 
-@_needs_helm
-@pytest.mark.parametrize("values_file", [None, "values-tier1.yaml", "values-tier2.yaml"])
-def test_rendered_proxy_pass_targets_have_scheme(repo_root: Path, values_file: str | None) -> None:
-    """通用防線：任何渲染出的 proxy_pass target 必須帶 http(s):// scheme。
+@pytest.mark.parametrize("set_arg,name", REMOVED_SETS, ids=[s for s, _ in REMOVED_SETS])
+def test_a_removed_key_fails_the_render(set_arg: str, name: str) -> None:
+    _helm_or_skip()
+    res = _run("--set", set_arg)
+    assert res.returncode != 0, f"--set {set_arg} rendered"
+    assert name in res.stderr, res.stderr
 
-    無 scheme 的 proxy_pass（多半來自空值/錯值內插）通不過 ``nginx -t``。
-    """
-    chart = repo_root / "helm/da-portal"
-    conf = _nginx_conf(_render(chart, values_file=chart / values_file if values_file else None))
 
-    for target in _PROXY_PASS_RE.findall(conf):
-        assert re.match(r"^https?://", target), (
-            f"proxy_pass target {target!r} 缺 http(s):// scheme —— nginx -t 會以 "
-            f"[emerg] invalid URL prefix 拒絕此設定"
-        )
+def test_values_yaml_carries_no_removed_key() -> None:
+    values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
+    assert "oauth2Proxy" not in values and "ingress" not in values
+    assert sorted(values["portal"]) == ["listenPort"]
+    assert sorted(values["service"]) == ["port", "type"]
+    assert sorted(values["networkPolicy"]) == ["allowedNamespaces", "enabled"]
+    # The tier overlays are gone: there is one profile.
+    assert sorted(p.name for p in _CHART.glob("values*")) == ["values.schema.json", "values.yaml"]
