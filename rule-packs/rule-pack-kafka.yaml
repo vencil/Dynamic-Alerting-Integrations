@@ -6,12 +6,17 @@
 #   - danielqsj/kafka-exporter (https://github.com/danielqsj/kafka-exporter)
 #
 # >>> GENERATED:threshold-registry:pack-kafka — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   kafka_consumer_lag: 1000   # messages — Consumer lag warning
+#       未啟用（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
 #   kafka_under_replicated_partitions: 0   # count — Under-replicated partitions (should be 0)
+#       未啟用（待驗證）：0 是普世的不變式，但出貨前尚未對滾動重啟驗證
 #   kafka_broker_count: 3   # count — Minimum broker count warning
+#       未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
 #   kafka_active_controllers: 1   # count — Minimum active controllers (should be 1)
+#       未啟用（待驗證）：恰有一個 active controller 是普世的不變式，但出貨前尚未驗證
 #   kafka_request_rate: 10000   # msg/s — Message rate warning (5m)
+#       未啟用（依部署而定）：訊息量是工作負載而非故障，任何數字都只適用於特定部署
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，

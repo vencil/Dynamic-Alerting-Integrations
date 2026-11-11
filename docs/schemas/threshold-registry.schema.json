@@ -58,6 +58,13 @@
           "type": "object",
           "additionalProperties": false,
           "required": ["pack", "tier", "value", "unit", "desc", "metric_class"],
+          "allOf": [
+            {
+              "if": { "required": ["arming"], "properties": { "arming": { "not": { "const": "default" } } } },
+              "then": { "required": ["arming_reason", "arming_reason_zh"] },
+              "else": { "not": { "anyOf": [ { "required": ["arming_reason"] }, { "required": ["arming_reason_zh"] } ] } }
+            }
+          ],
           "properties": {
             "pack": {
               "type": "string",
@@ -76,9 +83,22 @@
               "description": "Semantic class of the threshold key (REQUIRED on every key — #1200 WS1a PR-2). saturation = bounded-resource usage/backlog with a paired symptom metric (CURATED, product-facing: drives scaffold's educational _critical annotation + portal metricClass hints — membership changes are deliberate product decisions, not mechanical edits). capacity = fill level of a bounded space/allocation (disk, tablespace, log, parts, memory budget) without the paired-symptom curation. throughput = work-rate volume (qps, ops/s, req/s, msg/s). latency = time-to-complete or stall accumulation (GC pause, wait-time rate). replication = replica sync health (lag, under-replication, replication queue). state = discrete expected-value/topology invariant (cluster color, broker count, active controllers, consumers present). efficiency = cache/buffer effectiveness & waste (hit/miss ratio, evictions). errors = undesirable-event rate (deadlocks).",
               "$comment": "Authored on every key, _critical derivatives included (since D-A PR-3 there is no inheritance step: the file states each class). Adding a new class is a contract change: extend this enum deliberately and define it in the description."
             },
-            "chart_default": {
-              "const": true,
-              "$comment": "The Helm chart ships this key enabled (thresholdConfig.defaults + the dev conf.d template are GENERATED from this set — #1200 WS1a PR-2). Sparse: present iff true, like metric_class. Only meaningful on tier:defaults (the fixed-point check fails loudly otherwise). Widening the set (e.g. promoting pg_*) is a deliberate D4-family product decision, not a mechanical edit."
+            "arming": {
+              "enum": ["default", "ratio_pending", "site_specific", "pending_validation"],
+              "description": "Why the Helm chart does or does not ship this key's value (D-A A1). default = shipped enabled: thresholdConfig.defaults and the dev conf.d template are GENERATED from this set; only on tier:defaults. ratio_pending = an absolute value that does not carry across deployments; the fix is a ratio form (#1320). site_specific = no universal value exists; the deployment must choose one. pending_validation = a portable candidate value exists but no shadow report has validated it (the input of D-A A2).",
+              "$comment": "REQUIRED on every key that is not a <base>_critical, FORBIDDEN on a <base>_critical (it follows its base: resolveCriticalRows needs defaults[base]). That split depends on the derived critical_of, so _registry_lib.arming_problems enforces it through the fixed-point check, not this schema. The reachability gate's 'not chart-armed' set is derived from this field (not_chart_armed_keys). Promoting a key to default is a deliberate D4-family product decision, not a mechanical edit."
+            },
+            "arming_reason": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\n\\r]+$",
+              "$comment": "Why the key is not chart-armed, one line in English. Required with every arming state but default and forbidden with default (the allOf below; _registry_lib.arming_problems also rejects surrounding whitespace, since the generated surfaces splice it into # comments)."
+            },
+            "arming_reason_zh": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\n\\r]+$",
+              "$comment": "The same reason in Traditional Chinese; the generated helm values and rule-pack headers render this one."
             },
             "critical_of": {
               "type": "string",

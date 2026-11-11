@@ -7,12 +7,17 @@
 #   - 或 Prometheus 內建 RabbitMQ 外掛
 #
 # >>> GENERATED:threshold-registry:pack-rabbitmq — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   rabbitmq_queue_messages: 100000   # messages — Queue depth warning
+#       未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
 #   rabbitmq_node_mem_percent: 80   # % — Node memory usage warning
+#       未啟用（待驗證）：佔節點記憶體的百分比可跨部署，但 80 尚未經 shadow 報表驗證
 #   rabbitmq_connections: 1000   # count — Connection count warning
+#       未啟用（依部署而定）：絕對連線數取決於客戶端數量，節點沒有匯出可當分母的連線上限
 #   rabbitmq_consumers: 5   # count — Minimum consumer count warning
+#       未啟用（依部署而定）：預期的 consumer 數是各部署的拓撲
 #   rabbitmq_unacked_messages: 10000   # messages — Unacknowledged messages warning
+#       未啟用（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，

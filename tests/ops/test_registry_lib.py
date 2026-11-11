@@ -62,6 +62,26 @@ SYNTH_PACKS = {
 }
 
 
+def _armed(*default_keys: str, packs: dict | None = None) -> dict:
+    """An arming table for *packs* (SYNTH_PACKS by default): `default` on
+    *default_keys*, `site_specific` with both reasons on every other key that
+    is not a `<base>_critical` — what strict arming demands of a full doc."""
+    packs = SYNTH_PACKS if packs is None else packs
+    out: dict = {}
+    for pack in packs.values():
+        tiers = {**(pack.get("defaults") or {}),
+                 **(pack.get("optional_overrides") or {})}
+        for key in tiers:
+            base = key[: -len("_critical")] if key.endswith("_critical") else None
+            if base and base in tiers:
+                continue
+            out[key] = ({"arming": "default"} if key in default_keys else
+                        {"arming": "site_specific",
+                         "arming_reason": f"{key} depends on the site",
+                         "arming_reason_zh": f"{key} 依部署而定"})
+    return out
+
+
 # ── extraction ────────────────────────────────────────────────────────────
 
 def test_build_registry_doc_structure():
@@ -149,15 +169,22 @@ def test_committed_registry_is_a_fixed_point():
 
 def test_synthetic_doc_is_a_fixed_point():
     doc = lib.build_registry_doc(
-        SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn"}),
-        strict_metric_class=True)
+        SYNTH_PACKS, arming=_armed("alpha_conn"),
+        strict_metric_class=True, strict_arming=True)
     assert lib.fixed_point_problems(doc) == []
     assert lib.validate_registry(doc) == []
 
 
+def _make_default(entry: dict) -> None:
+    """Turn *entry* into a reason-free `arming: default`."""
+    entry["arming"] = "default"
+    for f in lib.ARMING_REASON_FIELDS:
+        entry.pop(f, None)
+
+
 def _fixed_point_doc():
     return lib.build_registry_doc(
-        SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn"}),
+        SYNTH_PACKS, arming=_armed("alpha_conn"),
         deprecated_aliases={"alpha_conns": "alpha_conn"},
         strict_metric_class=True)
 
@@ -174,9 +201,34 @@ def _fixed_point_doc():
     ("critical_of pointing at the wrong base",
      lambda d: d["keys"]["alpha_conn_critical"].__setitem__("critical_of", "beta_lag"),
      "alpha_conn_critical"),
-    ("chart_default on an optional_overrides key",
-     lambda d: d["keys"]["alpha_conn_critical"].__setitem__("chart_default", True),
+    ("arming: default on an optional_overrides key",
+     lambda d: _make_default(d["keys"]["alpha_orphan_critical"]),
      "chart-shippable"),
+    ("arming authored on a critical tier",
+     lambda d: d["keys"]["alpha_conn_critical"].__setitem__("arming", "default"),
+     "follows its base"),
+    ("a key with no arming",
+     lambda d: [d["keys"]["beta_lag"].pop(f) for f in lib.ARMING_FIELDS],
+     "has no arming"),
+    ("an unknown arming state",
+     lambda d: d["keys"]["beta_lag"].__setitem__("arming", "later"),
+     "is not one of"),
+    ("a non-default state without its Chinese reason",
+     lambda d: d["keys"]["beta_lag"].pop("arming_reason_zh"),
+     "needs a non-blank arming_reason_zh"),
+    ("a blank reason",
+     lambda d: d["keys"]["beta_lag"].__setitem__("arming_reason", "  "),
+     "needs a non-blank arming_reason"),
+    ("a reason with a trailing newline",
+     lambda d: d["keys"]["beta_lag"].__setitem__("arming_reason", "x\n"),
+     "one line"),
+    ("a reason on a chart default",
+     lambda d: d["keys"]["alpha_conn"].__setitem__("arming_reason", "why"),
+     "remove ['arming_reason']"),
+    ("a reason with no state",
+     lambda d: (d["keys"]["beta_lag"].pop("arming"),
+                d["keys"]["beta_lag"].pop("arming_reason_zh")),
+     "but no arming state"),
     ("key under a pack the registry does not list",
      lambda d: d["keys"]["beta_lag"].__setitem__("pack", "gamma"),
      "not a valid contract"),
@@ -239,7 +291,7 @@ def test_a_key_written_twice_is_refused_not_last_wins(tmp_path):
 def test_packaged_doc_is_the_registry_minus_what_rule_packs_does_not_carry():
     committed = lib.load_registry()
     packaged = lib.packaged_registry_doc()
-    expected = {k: {f: v for f, v in e.items() if f != "chart_default"}
+    expected = {k: {f: v for f, v in e.items() if f not in lib.ARMING_FIELDS}
                 for k, e in committed["keys"].items()}
     assert packaged["keys"] == expected
     assert packaged["packs"] == committed["packs"]
@@ -347,51 +399,102 @@ def test_query_helpers():
     assert "alpha_conn_critical" in lib.keys_in_tier(doc, "optional_overrides")
 
 
-# ── chart_default (PR-2 rewire) ───────────────────────────────────────────
+# ── arming (D-A A1) ───────────────────────────────────────────────────────
 
 def test_synthetic_extraction_stays_pure():
     """Injected packs get NO enrichment unless the caller passes a table."""
     doc = lib.build_registry_doc(SYNTH_PACKS)
-    assert all("chart_default" not in e for e in doc["keys"].values())
+    assert all(f not in e for e in doc["keys"].values() for f in lib.ARMING_FIELDS)
 
 
-def test_chart_default_injected_table():
-    doc = lib.build_registry_doc(
-        SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn"}))
-    assert doc["keys"]["alpha_conn"]["chart_default"] is True
-    assert "chart_default" not in doc["keys"]["beta_lag"]
+def test_arming_injected_table():
+    doc = lib.build_registry_doc(SYNTH_PACKS, arming=_armed("alpha_conn"))
+    assert doc["keys"]["alpha_conn"]["arming"] == "default"
+    assert doc["keys"]["beta_lag"]["arming"] == "site_specific"
+    assert "arming" not in doc["keys"]["alpha_conn_critical"]
 
 
-def test_chart_default_non_defaults_tier_fails_loud():
+def test_arming_default_on_non_defaults_tier_fails_loud():
     with pytest.raises(ValueError, match="chart-shippable"):
         lib.build_registry_doc(
-            SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn_critical"}))
+            SYNTH_PACKS, arming={"alpha_orphan_critical": {"arming": "default"}})
 
 
-def test_chart_default_unknown_key_fails_loud():
+def test_arming_unknown_key_fails_loud():
     with pytest.raises(ValueError, match="not found in the packs"):
+        lib.build_registry_doc(SYNTH_PACKS, arming={"ghost": {"arming": "default"}})
+
+
+def test_arming_unknown_field_fails_loud():
+    with pytest.raises(ValueError, match="only .* are arming fields"):
         lib.build_registry_doc(
-            SYNTH_PACKS, chart_default_keys=frozenset({"ghost"}))
+            SYNTH_PACKS, arming={"alpha_conn": {"arming": "default", "why": "x"}})
+
+
+def test_strict_arming_names_every_unarmed_key():
+    with pytest.raises(ValueError) as exc:
+        lib.build_registry_doc(SYNTH_PACKS, strict_arming=True)
+    for key in ("alpha_conn", "beta_lag", "alpha_orphan_critical"):
+        assert f"{key!r} has no arming" in str(exc.value)
+    # a <base>_critical is never asked for one
+    assert "'alpha_conn_critical' has no arming" not in str(exc.value)
 
 
 def test_real_registry_chart_default_set():
-    """The real doc carries chart_default on the behavior-preserving 6-key
-    pre-rewire set plus the owner-decided pg_connections /
-    pg_replication_lag promotion (#1200 Q3=C / D4 folding, 2026-07-25)."""
+    """The chart set is the behavior-preserving 6-key pre-rewire set plus the
+    owner-decided pg_connections / pg_replication_lag promotion (#1200 Q3=C /
+    D4 folding, 2026-07-25). A1 changed the field, not the set."""
     doc = lib.build_registry_doc()
-    tagged = {k for k, e in doc["keys"].items() if e.get("chart_default")}
+    tagged = {k for k, e in doc["keys"].items() if lib.is_chart_armed(e)}
     # Pin the DECISION, not just the mechanism: the owner-approved pg
-    # promotion (#1232) must not silently vanish via a table edit that
-    # keeps the count intact (CodeRabbit review of #1232).
+    # promotion (#1232) must not silently vanish via an edit that keeps the
+    # count intact (CodeRabbit review of #1232).
     assert {"pg_connections", "pg_replication_lag"} <= tagged
     assert len(tagged) == 8
+
+
+def test_every_real_key_states_its_arming():
+    """Every non-critical key says why the chart ships it or not; no
+    `<base>_critical` says anything (it follows its base)."""
+    doc = lib.build_registry_doc()
+    for key, entry in doc["keys"].items():
+        if entry.get("critical_of"):
+            assert "arming" not in entry, key
+        else:
+            assert entry.get("arming") in lib.ARMING_STATES, key
+    assert lib.arming_problems(doc["keys"], strict=True) == []
+
+
+def test_not_chart_armed_is_the_registry_derivation():
+    """A defaults-tier key that is not `default`, and the `_critical` of one.
+
+    The 45 the gate kept by hand before A1 — pinned so the derivation can
+    only change with the registry, never with a rule edit here."""
+    doc = lib.build_registry_doc()
+    derived = lib.not_chart_armed_keys(doc)
+    keys = doc["keys"]
+    for key in derived:
+        owner = keys[keys[key].get("critical_of") or key]
+        assert owner["tier"] == "defaults" and not lib.is_chart_armed(owner), key
+    assert len(derived) == 45
+    # optional_overrides flat keys belong to the unreachable face, not here
+    assert not any(keys[k]["tier"] == "optional_overrides"
+                   and not keys[k].get("critical_of") for k in derived)
+
+
+def test_not_chart_armed_follows_a_promotion():
+    """Promote one key to `default`: it and its critical leave the set."""
+    doc = lib.build_registry_doc()
+    before = lib.not_chart_armed_keys(doc)
+    assert {"jvm_memory", "jvm_memory_critical"} <= before
+    _make_default(doc["keys"]["jvm_memory"])
+    assert before - lib.not_chart_armed_keys(doc) == {"jvm_memory", "jvm_memory_critical"}
 
 
 # ── generated surfaces: render / splice / freshness ───────────────────────
 
 def _synth_doc_with_chart():
-    return lib.build_registry_doc(
-        SYNTH_PACKS, chart_default_keys=frozenset({"alpha_conn"}))
+    return lib.build_registry_doc(SYNTH_PACKS, arming=_armed("alpha_conn"))
 
 
 def test_render_chart_defaults_only_chart_keys():
@@ -494,11 +597,52 @@ def _synth_optional_packs():
     return packs
 
 
+def test_pack_header_says_why_a_key_is_not_armed():
+    """A non-default key's header line carries its state and Chinese reason;
+    a chart default and a `<base>_critical` carry none."""
+    doc = _synth_doc_with_chart()
+    text = "\n".join(lib.render_pack_header_lines(doc, "beta"))
+    assert "未啟用（依部署而定）：beta_lag 依部署而定" in text
+    alpha = "\n".join(lib.render_pack_header_lines(doc, "alpha"))
+    assert "alpha_conn: 80   [chart-default]" in alpha
+    assert "未啟用" in alpha  # alpha_orphan_critical has no base: it states its own
+    crit_block = alpha.split("alpha_conn_critical", 1)[1].split("alpha_orphan", 1)[0]
+    assert "未啟用" not in crit_block
+
+
+def test_unarmed_block_lists_exactly_the_unshipped_defaults():
+    doc = _synth_doc_with_chart()
+    text = "\n".join(lib.render_unarmed_lines(doc, 4))
+    assert "#   beta_lag（依部署而定）：beta_lag 依部署而定" in text
+    # a chart default and an optional_overrides key are not in it
+    assert "alpha_conn" not in text and "alpha_orphan" not in text
+    assert all(line.startswith("    #") for line in text.split("\n"))
+
+
+def test_unarmed_block_is_empty_when_everything_ships():
+    doc = lib.build_registry_doc(
+        SYNTH_PACKS, arming=_armed("alpha_conn", "beta_lag"))
+    assert lib.render_unarmed_lines(doc, 4) == []
+
+
+def test_real_helm_unarmed_block_matches_the_derivation():
+    """The shipped values.yaml comment names every defaults-tier key the
+    derivation calls not-chart-armed, and nothing else."""
+    import re
+    doc = lib.build_registry_doc()
+    text = "\n".join(lib.render_unarmed_lines(doc, 4))
+    named = set(re.findall(r"#   ([a-z0-9_]+)（", text))
+    expected = {k for k in lib.not_chart_armed_keys(doc)
+                if not doc["keys"][k].get("critical_of")}
+    assert named == expected and len(named) == 34
+
+
 def _synth_optional_doc():
     """All three optional populations in one doc — `delta_conn` is the only
     chart default, so delta carries flat + base-shipped + dormant at once."""
+    packs = _synth_optional_packs()
     return lib.build_registry_doc(
-        _synth_optional_packs(), chart_default_keys=frozenset({"delta_conn"}))
+        packs, arming=_armed("delta_conn", packs=packs))
 
 
 def test_shipped_optional_predicate_excludes_critical_and_dimensional():
@@ -702,7 +846,7 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
     that was picked says something true about THIS key": a `_critical` renders
     under the settable-today warning IFF the chart actually ships its base, and
     under the dormant warning otherwise. Reads values.yaml (what an operator
-    gets), while the renderer reads the registry's `chart_default` — so a
+    gets), while the renderer reads the registry's `arming` — so a
     divergence between declaration and artifact surfaces here.
     """
     import yaml
@@ -793,15 +937,16 @@ def test_surface_specs_cover_helm_dev_and_threshold_packs():
     # `dev-example-defaults` (#3014) is the dev template's second `defaults`
     # block — the example tenants' packs — on the same file as `dev-defaults`.
     # The `dimensions:` blocks (#3475) follow, one per runtime carrier.
-    assert ids[:9] == [
-        "helm-defaults", "dev-defaults", "dev-example-defaults", "helm-optional",
-        "dev-optional", "try-local-optional",
+    assert ids[:10] == [
+        "helm-defaults", "helm-unarmed", "dev-defaults", "dev-example-defaults",
+        "helm-optional", "dev-optional", "try-local-optional",
         "helm-dimensions", "dev-dimensions", "try-local-dimensions"]
     assert "pack-mariadb" in ids and "pack-kubernetes" in ids
-    assert len(ids) == 9 + 13  # 13 threshold packs, non-threshold packs none
+    assert len(ids) == 10 + 13  # 13 threshold packs, non-threshold packs none
     # the two surfaces per file must target the same path but distinct blocks
     by_id = {s["id"]: s for s in specs}
     assert by_id["helm-defaults"]["path"] == by_id["helm-optional"]["path"]
+    assert by_id["helm-unarmed"]["path"] == by_id["helm-defaults"]["path"]
     assert by_id["dev-defaults"]["path"] == by_id["dev-optional"]["path"]
     assert by_id["dev-example-defaults"]["path"] == by_id["dev-defaults"]["path"]
     assert by_id["try-local-optional"]["path"] not in {

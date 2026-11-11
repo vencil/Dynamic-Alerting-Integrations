@@ -6,10 +6,13 @@
 #   - https://github.com/nginxinc/nginx-prometheus-exporter
 #
 # >>> GENERATED:threshold-registry:pack-nginx — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   nginx_connections: 1000   # count — Active connections warning
+#       未啟用（依部署而定）：絕對連線數取決於流量，worker_connections 沒有匯出可當分母
 #   nginx_request_rate: 5000   # req/s — Request rate warning
+#       未啟用（依部署而定）：請求量是工作負載而非故障，任何數字都只適用於特定部署
 #   nginx_waiting: 200   # count — Waiting connections (backlog) warning
+#       未啟用（依部署而定）：閒置的 keep-alive 連線也算 waiting，正常數量取決於流量與 keepalive 設定
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，

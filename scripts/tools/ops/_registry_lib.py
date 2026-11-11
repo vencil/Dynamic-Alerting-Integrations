@@ -16,13 +16,16 @@ hand-written):
      optional_overrides sub-sections, each under its own warning — see
      ``optional_warning_groups`` / ``render_pack_header_lines``);
   2. ``helm/threshold-exporter/values.yaml`` ``thresholdConfig.defaults``
-     (the ``chart_default`` key set);
+     (the ``arming: default`` key set);
   3. ``components/threshold-exporter/config/conf.d/_defaults.yaml``
-     ``defaults`` section (same ``chart_default`` set);
+     ``defaults`` section (same ``arming: default`` set);
   4. the ``optional_overrides:`` LIST on both of those runtime surfaces
      (#1310) — the declared-without-value key names the exporter recognises
      but asserts no value for. A LIST, not a mapping: see
-     ``render_optional_overrides_lines``.
+     ``render_optional_overrides_lines``;
+  5. the comment block under that ``thresholdConfig.defaults`` listing the
+     defaults-tier keys the chart does NOT ship, each with its arming state
+     and reason (``render_unarmed_lines``, D-A A1).
 
 Since D-A PR-3 the registry FILE is authored by hand and is the only place a
 threshold is written. ``scaffold_tenant.RULE_PACKS``'s threshold half is a
@@ -33,7 +36,7 @@ flat tool layout with no repo tree to find the YAML in. The extraction
 ``fixed_point_problems`` projects the registry back to the RULE_PACKS shape,
 extracts it again and requires the same document, so every rule the
 extraction enforces (``critical_of`` exactly where it derives,
-``chart_default`` only on the defaults tier, a ``metric_class`` on every key,
+every ``arming_problems`` rule, a ``metric_class`` on every key,
 aliases onto live keys only) holds for the authored file too. All of it is
 enforced by ``scripts/tools/lint/check_threshold_registry.py`` (schema +
 fixed point + surface freshness + header-prose key membership), wired as a
@@ -42,7 +45,7 @@ pre-commit gate. The fix on a red gate: edit the registry, then run
 the RULE_PACKS module included, in one shot.
 
 SCOPE (WS1a): threshold identity — ``defaults`` + ``optional_overrides`` tiers
-({pack, tier, value, unit, desc, metric_class, chart_default, critical
+({pack, tier, value, unit, desc, metric_class, arming, critical
 variant}). ``state_filters`` / ``dimensional_example`` stay scaffold-owned
 (they are state/config surface, not threshold identity; absorb later if a
 consumer needs them). Extraction is FULL (all packs, all keys — mechanical and
@@ -108,6 +111,34 @@ SCHEMA_PATH = _in_repo("docs", "schemas", "threshold-registry.schema.json")
 
 CRITICAL_SUFFIX = "_critical"
 
+# ---------------------------------------------------------------------------
+# arming (D-A A1): why the chart does or does not ship a key's value.
+#
+# Authored on every key that is not a `<base>_critical` (those follow their
+# base: `resolveCriticalRows` only emits one when `defaults[base]` has a value,
+# so a `_critical` can never be armed on its own). `default` is the chart set
+# (helm values, dev template); every other state names WHY a key the rule
+# packs read stays silent after `helm install`, with a one-line reason in each
+# language. ⛔ The "read by a rule pack but not shipped by the chart" list the
+# reachability gate used to keep by hand (NOT_CHART_ARMED) is DERIVED from this
+# field (`not_chart_armed_keys`) — a second, hand-kept copy is exactly what A1
+# removes.
+# ---------------------------------------------------------------------------
+ARMING_DEFAULT = "default"
+#: Every arming state. Order is the order the generated surfaces list them in.
+ARMING_STATES = (ARMING_DEFAULT, "ratio_pending", "site_specific",
+                 "pending_validation")
+#: The authored fields that make up one key's arming.
+ARMING_FIELDS = ("arming", "arming_reason", "arming_reason_zh")
+#: The reason fields, required on every non-default state and nowhere else.
+ARMING_REASON_FIELDS = ("arming_reason", "arming_reason_zh")
+#: How each non-default state reads in a generated Chinese surface.
+ARMING_LABEL_ZH = {
+    "ratio_pending": "待改比值",
+    "site_specific": "依部署而定",
+    "pending_validation": "待驗證",
+}
+
 # The two threshold tiers carried by the registry. Order matters: it is the
 # extraction order, and a same-name key in both tiers of one pack would be a
 # contract bug (build_registry_doc fails loudly on it).
@@ -115,7 +146,7 @@ TIERS = ("defaults", "optional_overrides")
 
 # ---------------------------------------------------------------------------
 # Since D-A PR-3 the registry FILE is the authored source of everything this
-# module used to merge in from side tables: `chart_default`, every key's
+# module used to merge in from side tables: the chart set (now `arming`), every key's
 # `metric_class` (the old METRIC_CLASS_BACKFILL) and the `deprecated_aliases`
 # section (the old DEPRECATED_KEY_ALIASES). Edit rule-packs/threshold-registry.yaml
 # and run `check_threshold_registry.py --regen`.
@@ -140,8 +171,8 @@ def __getattr__(name: str):
 
 # Canonical per-key field order for the emitted registry document.
 _FIELD_ORDER = (
-    "pack", "tier", "value", "unit", "desc", "metric_class", "chart_default",
-    "critical_of", "value_counterexample", "dimensions",
+    "pack", "tier", "value", "unit", "desc", "metric_class", "arming",
+    "arming_reason", "arming_reason_zh", "critical_of", "value_counterexample", "dimensions",
 )
 
 def _load_scaffold():
@@ -159,19 +190,22 @@ def _load_scaffold():
 def build_registry_doc(
     rule_packs: Optional[dict] = None,
     *,
-    chart_default_keys: Optional[frozenset[str]] = None,
+    arming: Optional[dict[str, dict]] = None,
     strict_metric_class: Optional[bool] = None,
+    strict_arming: Optional[bool] = None,
     deprecated_aliases: Optional[dict[str, str]] = None,
 ) -> dict:
     """The registry document of *rule_packs* — or, with none, the committed one.
 
     With ``rule_packs`` (packs shaped like scaffold's RULE_PACKS): extract.
     Per pack: {display, exporter, default_on, rule_pack_file}.
-    Per key : {pack, tier, value, unit, desc[, metric_class][, chart_default]
-    [, critical_of]}. ``critical_of`` is derived (never authored): key ends
-    with ``_critical`` AND its base key exists in the same pack -> the base
-    key name. ``chart_default: true`` is set on ``chart_default_keys``;
-    ``metric_class`` passes through and a ``_critical`` key without one
+    Per key : {pack, tier, value, unit, desc[, metric_class][, arming,
+    arming_reason, arming_reason_zh][, critical_of]}. ``critical_of`` is
+    derived (never authored): key ends with ``_critical`` AND its base key
+    exists in the same pack -> the base key name. ``arming`` maps a key to its
+    authored arming fields (see `arming_problems` for the rules); with
+    ``strict_arming`` every key that is not a ``<base>_critical`` must carry
+    one. ``metric_class`` passes through and a ``_critical`` key without one
     inherits its base key's class; with
     ``strict_metric_class`` a key left unclassified is a hard error.
 
@@ -181,9 +215,9 @@ def build_registry_doc(
     still binds the authored file.
 
     Fails loudly on identity collisions (same key in two tiers of one pack, or
-    in two packs) — a collision would silently shadow a contract entry — on a
-    chart_default key that is unknown or not defaults-tier (it would silently
-    un-ship a chart key).
+    in two packs) — a collision would silently shadow a contract entry — and
+    on an arming entry that names an unknown key or breaks `arming_problems`
+    (a typo would silently un-ship a chart key).
 
     ``deprecated_aliases`` (#1231) rides along as a top-level registry section
     (old spelling -> canonical key). Fail-loud contract: the old spelling must
@@ -196,7 +230,7 @@ def build_registry_doc(
         # so the "real extraction" is that file, checked to be a fixed point
         # of project -> extract (see `fixed_point_problems`).
         return committed_registry_doc()
-    chart_default_keys = chart_default_keys or frozenset()
+    arming = arming or {}
     strict_metric_class = bool(strict_metric_class)
     deprecated_aliases = deprecated_aliases or {}
 
@@ -248,26 +282,29 @@ def build_registry_doc(
                 # clause), so the registry states the measurement and lets the
                 # reader judge. #1176.
                 entry["value_counterexample"] = dict(info["value_counterexample"])
-            if key in chart_default_keys:
-                if tier != "defaults":
+            for f, v in (arming.get(key) or {}).items():
+                if f not in ARMING_FIELDS:
                     raise ValueError(
-                        f"chart_default key {key!r} sits in tier {tier!r} — "
-                        "only defaults-tier keys are chart-shippable"
+                        f"arming of {key!r} carries {f!r} — only "
+                        f"{list(ARMING_FIELDS)} are arming fields"
                     )
-                entry["chart_default"] = True
+                entry[f] = v
             if key.endswith(CRITICAL_SUFFIX):
                 base = key[: -len(CRITICAL_SUFFIX)]
                 if base in combined:
                     entry["critical_of"] = base
             keys[key] = entry
 
-    missing_chart = set(chart_default_keys) - set(keys)
-    if missing_chart:
+    missing_arming = set(arming) - set(keys)
+    if missing_arming:
         raise ValueError(
-            "chart_default keys not found in the packs: "
-            f"{sorted(missing_chart)} — a typo here would silently un-ship a "
+            "arming given for keys not found in the packs: "
+            f"{sorted(missing_arming)} — a typo here would silently un-ship a "
             "chart key"
         )
+    problems = arming_problems(keys, strict=bool(strict_arming))
+    if problems:
+        raise ValueError("; ".join(problems))
 
     # metric_class: _critical inheritance -> strict completeness.
     for key, entry in keys.items():
@@ -327,6 +364,97 @@ def build_registry_doc(
     return doc
 
 
+def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
+    """What is wrong with the arming of *keys* (registry key entries).
+
+    - a ``<base>_critical`` (``critical_of`` set) carries no arming: it follows
+      its base, and an authored one could say something the runtime cannot do;
+    - ``arming`` is one of `ARMING_STATES`;
+    - ``default`` sits on a ``defaults``-tier key (the chart ships only that
+      tier) and carries no reason;
+    - every other state carries both reasons, each one non-blank line with no
+      surrounding whitespace (they are spliced into ``#`` comments, where a
+      newline would put the tail at column 0);
+    - a reason never appears without a state;
+    - with *strict*, every key that is not a ``<base>_critical`` has a state.
+    """
+    out: list[str] = []
+    for key, entry in keys.items():
+        state = entry.get("arming")
+        reasons = [f for f in ARMING_REASON_FIELDS if f in entry]
+        if entry.get("critical_of"):
+            if state is not None or reasons:
+                out.append(
+                    f"{key!r} is a critical tier of {entry['critical_of']!r}: it "
+                    "follows its base's arming — remove its arming fields")
+            continue
+        if state is None:
+            if reasons:
+                out.append(f"{key!r} has {reasons} but no arming state")
+            elif strict:
+                out.append(
+                    f"{key!r} has no arming — every key that is not a "
+                    f"<base>_critical must say one of {list(ARMING_STATES)}")
+            continue
+        if state not in ARMING_STATES:
+            out.append(f"{key!r} arming {state!r} is not one of "
+                       f"{list(ARMING_STATES)}")
+            continue
+        if state == ARMING_DEFAULT:
+            if entry.get("tier") != "defaults":
+                out.append(
+                    f"{key!r} is arming: default but sits in tier "
+                    f"{entry.get('tier')!r} — only defaults-tier keys are "
+                    "chart-shippable")
+            if reasons:
+                out.append(f"{key!r} is arming: default — remove {reasons} "
+                           "(a reason explains why a key is NOT shipped)")
+            continue
+        for f in ARMING_REASON_FIELDS:
+            v = entry.get(f)
+            if not isinstance(v, str) or not v.strip():
+                out.append(f"{key!r} is arming: {state} and needs a non-blank "
+                           f"{f}")
+            elif v != v.strip() or "\n" in v or "\r" in v:
+                out.append(f"{key!r} {f} must be one line with no surrounding "
+                           "whitespace")
+    return out
+
+
+def is_chart_armed(entry: dict) -> bool:
+    """Whether the chart ships this registry key's value (``arming: default``)."""
+    return entry.get("arming") == ARMING_DEFAULT
+
+
+def effective_arming(doc: dict, key: str) -> Optional[str]:
+    """The arming state of *key*: its own, or its base's for a ``_critical``."""
+    keys = registry_keys(doc)
+    entry = keys.get(key) or {}
+    base = entry.get("critical_of")
+    return (keys.get(base) or {}).get("arming") if base else entry.get("arming")
+
+
+def not_chart_armed_keys(doc: dict) -> frozenset[str]:
+    """The keys the scaffold path supplies but the chart does not ship.
+
+    A ``defaults``-tier key whose arming is not ``default``, plus every
+    ``<base>_critical`` whose base is such a key (the critical row needs
+    ``defaults[base]``, which the chart then does not carry). This is what the
+    reachability gate's chart face must measure in the shipped values.yaml —
+    derived here so there is no hand-kept list to drift from the registry.
+    ``optional_overrides`` keys are not in it: the scaffold path supplies no
+    value for them either, so the gate's unreachable face owns them.
+    """
+    keys = registry_keys(doc)
+    out: set[str] = set()
+    for key, entry in keys.items():
+        base = entry.get("critical_of")
+        owner = keys.get(base) if base else entry
+        if owner and owner.get("tier") == "defaults" and not is_chart_armed(owner):
+            out.add(key)
+    return frozenset(out)
+
+
 # ---------------------------------------------------------------------------
 # The registry as source (D-A PR-3): project -> RULE_PACKS shape, fixed point,
 # and the generated Python module scaffold_tenant reads
@@ -360,7 +488,7 @@ def project_rule_packs(doc: dict) -> dict:
 
     Per pack: the `_PACK_FIELDS`, then the tiers in key order; per key the
     `_KEY_FIELDS` it carries. Derived fields (`critical_of`) and the
-    registry-only `chart_default` are not part of RULE_PACKS."""
+    registry-only arming fields are not part of RULE_PACKS."""
     packs: dict[str, dict] = {}
     for name, meta in (doc.get("packs") or {}).items():
         packs[name] = {f: meta[f] for f in _PACK_FIELDS if f in meta}
@@ -379,18 +507,20 @@ def project_rule_packs(doc: dict) -> dict:
 def fixed_point_problems(doc: dict) -> list[str]:
     """What keeps *doc* from being a fixed point of project -> extract.
 
-    Extracting `project_rule_packs(doc)` again — with its own chart_default
-    set, aliases and classes, strict classification — must
+    Extracting `project_rule_packs(doc)` again — with its own arming, aliases
+    and classes, strict classification and strict arming — must
     reproduce *doc*. That is how the authored file is held to every rule
     `build_registry_doc` enforces: collisions, `critical_of` exactly where it
-    derives, `chart_default` only on defaults-tier keys, a class on every
-    key, aliases onto live keys. Empty == holds."""
+    derives, every `arming_problems` rule, a class on every key, aliases onto
+    live keys. Empty == holds."""
     try:
         fresh = build_registry_doc(
             project_rule_packs(doc),
-            chart_default_keys=frozenset(
-                k for k, e in registry_keys(doc).items() if e.get("chart_default")),
+            arming={k: {f: e[f] for f in ARMING_FIELDS if f in e}
+                    for k, e in registry_keys(doc).items()
+                    if any(f in e for f in ARMING_FIELDS)},
             strict_metric_class=True,
+            strict_arming=True,
             deprecated_aliases=dict(doc.get("deprecated_aliases") or {}),
         )
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
@@ -427,7 +557,7 @@ def packaged_registry_doc() -> dict:
     For a reader that runs where no repo tree is (the da-tools image ships
     the module, not the YAML): every key's pack, tier, value, unit, desc,
     metric_class, dimensions and derived `critical_of` — but NOT
-    `chart_default` or `deprecated_aliases`, which RULE_PACKS does not
+    the arming fields or `deprecated_aliases`, which RULE_PACKS does not
     carry. In a checkout it equals the committed registry minus those two
     (pinned by tests/ops/test_registry_lib.py)."""
     import runpy  # noqa: PLC0415  (a data module: no import-system entry needed)
@@ -667,14 +797,27 @@ def _entry_lines(
     key: str, entry: dict, prefix: str = "#   ", cont: str = "#       "
 ) -> list[str]:
     """One registry key as pack-header comment lines (inline when short)."""
-    tag = "   [chart-default]" if entry.get("chart_default") else ""
+    tag = "   [chart-default]" if is_chart_armed(entry) else ""
     keyline = f"{prefix}{key}: {_fmt_value(entry['value'])}{tag}"
     meta = f"{entry['unit']} — {entry['desc']}"
     inline = f"{keyline}   # {meta}"
     lines = [inline] if len(inline) <= _COMMENT_WIDTH else [keyline] + [
         f"{cont}{seg}" for seg in _wrap_comment(meta, _COMMENT_WIDTH - len(cont))
     ]
-    return lines + _counterexample_lines(entry, cont)
+    return lines + _counterexample_lines(entry, cont) + _arming_note_lines(
+        entry, cont)
+
+
+def _arming_note_lines(entry: dict, cont: str) -> list[str]:
+    """Why the chart does not ship this key, as ``#`` comment lines.
+
+    Only for a key with an authored non-default arming; a ``_critical`` has
+    none (it follows its base, whose own lines say why)."""
+    label = ARMING_LABEL_ZH.get(entry.get("arming") or "")
+    if label is None:
+        return []
+    body = f"未啟用（{label}）：{entry['arming_reason_zh']}"
+    return [f"{cont}{seg}" for seg in _wrap_comment(body, _COMMENT_WIDTH - len(cont))]
 
 
 # The two directions are NOT interchangeable, and a single blanket caveat would
@@ -1016,9 +1159,9 @@ def has_shipped_chart_base(doc: dict, key: str) -> bool:
     Only ``<base>_critical`` keys have a base at all (``critical_of`` is derived,
     never authored — see ``build_registry_doc``). ``resolveCriticalRows`` emits a
     row the moment ``defaults[base]`` carries a value, so a ``_critical`` whose
-    base is ``chart_default: true`` is settable by a TENANT TODAY even though the
+    base is a shipped chart default is settable by a TENANT TODAY even though the
     key itself is (correctly) off the declared list — it never needed to be on
-    it. A ``_critical`` whose base is NOT shipped is the genuinely dormant case:
+    it. (Shipped = the base's ``arming`` is ``default``.) A ``_critical`` whose base is NOT shipped is the genuinely dormant case:
     the deployment must supply the base first.
 
     ⛔ This distinction is why the pack-header warning is three-way and not two.
@@ -1030,7 +1173,7 @@ def has_shipped_chart_base(doc: dict, key: str) -> bool:
     base = (doc.get("keys", {}).get(key) or {}).get("critical_of")
     if not base:
         return False
-    return bool((doc.get("keys", {}).get(base) or {}).get("chart_default"))
+    return is_chart_armed(doc.get("keys", {}).get(base) or {})
 
 
 # Warning A — the keys the platform SHIPS in the optional_overrides: list.
@@ -1135,7 +1278,8 @@ def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
     }
     lines = [
         "# 對應的 threshold-exporter defaults"
-        "（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:",
+        "（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；"
+        "未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:",
     ]
     for key, entry in defaults.items():
         lines += _entry_lines(key, entry)
@@ -1156,13 +1300,43 @@ def _critical_sibling(doc: dict, key: str) -> Optional[tuple[str, dict]]:
 def render_chart_defaults_lines(doc: dict, indent: int) -> list[str]:
     """The chart-shipped ``defaults`` mapping body (helm values / dev template).
 
-    Only ``chart_default: true`` keys, grouped by pack in registry order.
+    Only ``arming: default`` keys, grouped by pack in registry order.
     unit+desc render as comment lines above each key; when the registry
     carries a ``<key>_critical`` sibling, an opt-in hint (with the registry's
     suggested value) is appended so the hand-written hints the old copies
     carried are reproduced mechanically.
     """
     return _render_defaults_lines(doc, indent, _chart_default_keep)
+
+
+def render_unarmed_lines(doc: dict, indent: int) -> list[str]:
+    """The comment block under the chart's ``defaults``: every defaults-tier
+    key a rule pack reads but the chart does not ship, with why (D-A A1).
+
+    Comments only, so the mapping it sits in is unchanged. An operator who
+    only ran ``helm install`` reads here which alerts stay silent until they
+    supply a value, without opening the registry. Empty when every
+    defaults-tier key is chart-armed."""
+    ind = " " * indent
+    width = _COMMENT_WIDTH - indent - 2
+    groups = _defaults_by_pack(
+        doc, lambda _p, e: (e.get("tier") == "defaults"
+                            and e.get("arming") in ARMING_LABEL_ZH))
+    if not groups:
+        return []
+    lines = [f"{ind}# {seg}" for seg in _wrap_comment(
+        "下列 key 規則包會讀，但 chart 不出貨值：helm install 後對應的告警不會響，"
+        "要在上面的 defaults 補值才會生效（其 <key>_critical 也要先有 base 值）。"
+        "原因取自 threshold-registry 的 arming 欄位。", width)]
+    for pack_name, _meta, pairs in groups:
+        lines.append(f"{ind}# ── {pack_name} ──")
+        for key, entry in pairs:
+            body = (f"{key}（{ARMING_LABEL_ZH[entry['arming']]}）："
+                    f"{entry['arming_reason_zh']}")
+            segs = _wrap_comment(body, width - 2)
+            lines.append(f"{ind}#   {segs[0]}")
+            lines.extend(f"{ind}#     {seg}" for seg in segs[1:])
+    return lines
 
 
 # The packs whose `defaults`-tier keys the dev template's SECOND defaults block
@@ -1191,12 +1365,12 @@ def render_dev_example_defaults_lines(doc: dict, indent: int) -> list[str]:
 
 
 def _chart_default_keep(pack: str, entry: dict) -> bool:
-    return bool(entry.get("chart_default"))
+    return is_chart_armed(entry)
 
 
 def _dev_example_keep(pack: str, entry: dict) -> bool:
     return (pack in DEV_EXAMPLE_PACKS and entry.get("tier") == "defaults"
-            and not entry.get("chart_default"))
+            and not is_chart_armed(entry))
 
 
 def _defaults_by_pack(doc: dict, keep) -> list[tuple[str, dict, list]]:
@@ -1232,8 +1406,8 @@ def _render_defaults_lines(doc: dict, indent: int, keep) -> list[str]:
                 )
             for seg in _wrap_comment(meta, _COMMENT_WIDTH - indent - 2):
                 lines.append(f"{ind}# {seg}")
-            # Wired now, not "when a chart_default key gets one": no shipped
-            # chart_default carries a counter-example today, so this emits
+            # Wired now, not "when a chart-default key gets one": no shipped
+            # chart default carries a counter-example today, so this emits
             # nothing — but the alternative is a face that silently ships a
             # bare number the day the registry learns something about it.
             lines.extend(_counterexample_lines(entry, f"{ind}# "))
@@ -1819,6 +1993,14 @@ def surface_specs(doc: dict) -> list[dict]:
             "body": render_chart_defaults_lines(doc, 4),
         },
         {
+            # D-A A1: the defaults-tier keys the chart does NOT ship, and
+            # why — comments right under the generated defaults mapping.
+            "id": "helm-unarmed",
+            "path": HELM_VALUES_PATH,
+            "indent": " " * 4,
+            "body": render_unarmed_lines(doc, 4),
+        },
+        {
             "id": "dev-defaults",
             "path": DEV_DEFAULTS_PATH,
             "indent": " " * 2,
@@ -2212,7 +2394,8 @@ STRUCTURAL_PROSE_TOKENS: frozenset[str] = frozenset({
     "rule_pack_file",
     "default_on",
     "metric_class",
-    "chart_default",
+    "arming_reason",
+    "arming_reason_zh",
     "critical_of",
     "optional_overrides",
     "runbook_url",

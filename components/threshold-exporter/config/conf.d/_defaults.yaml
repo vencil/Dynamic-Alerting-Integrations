@@ -5,10 +5,10 @@
 # Only this file should contain 'defaults', 'state_filters', and '_routing_defaults'.
 #
 # defaults 為生成段（#1200 WS1a PR-2）：內容＝threshold-registry 的
-# chart_default 集，與 helm/threshold-exporter/values.yaml 出貨預設同源
+# arming: default 的 key，與 helm/threshold-exporter/values.yaml 出貨預設同源
 # （本範本先前多帶 pg_connections/pg_replication_lag＝helm↔dev 漂移，
-# 改生成後歸一；pg_* 是否升 chart_default 屬 D4 家族 owner 拍板）。
-# 改值走 scaffold_tenant.RULE_PACKS ＋ check_threshold_registry.py --regen。
+# 改生成後歸一；pg_* 是否升 arming: default 屬 D4 家族 owner 拍板）。
+# 改值走 rule-packs/threshold-registry.yaml ＋ check_threshold_registry.py --regen。
 defaults:
   # >>> GENERATED:threshold-registry:dev-defaults — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
   # ── kubernetes：Kubernetes (cAdvisor + KSM) ──

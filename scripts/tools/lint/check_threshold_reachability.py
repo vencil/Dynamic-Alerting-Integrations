@@ -59,8 +59,12 @@ what an operator who ran `helm install` receives. The chart ships
 classified against BOTH faces:
 
   1. chart-armed          — the shipped chart supplies it
-  2. NOT_CHART_ARMED      — the scaffold path can supply it, the chart does not
-                            (exit-locked ledger; operator must supply)
+  2. not chart-armed      — the scaffold path can supply it, the chart does not
+                            (operator must supply). The expected set is DERIVED
+                            from the registry's `arming` field
+                            (`_registry_lib.not_chart_armed_keys`, D-A A1);
+                            this face measures the shipped values.yaml
+                            against it, both directions.
   3. KNOWN_UNWIRED        — neither face can supply it (exit-locked ledger)
 
 Before this face existed the gate was green while describing face 1+2 as one
@@ -111,6 +115,7 @@ import scaffold_tenant  # noqa: E402
 # generators (`defaults_critical_keys` / `is_shipped_optional_key`). Spelling it
 # again here would be one more copy of the very contract this gate polices.
 from _registry_lib import CRITICAL_SUFFIX as _CRITICAL_SUFFIX  # noqa: E402
+import _registry_lib  # noqa: E402
 
 # ⛔ The conf.d root of a path comes from the module that already defines what a
 # conf.d root IS (nearest `conf.d` ancestor, inner-most wins for nested trees).
@@ -225,53 +230,17 @@ KNOWN_UNWIRED: dict[str, str] = {
 # `resolveCriticalRows` path) — but `resolveCriticalRows` iterates TENANT
 # OVERRIDES, so no `_critical` key is ever platform-supplied. Today 0 of the 16
 # demanded `_critical` keys sit in the chart set and structurally none can.
-NOT_CHART_ARMED: frozenset[str] = frozenset({
-    "clickhouse_active_connections",
-    "clickhouse_queries_rate",
-    "db2_bufferpool_hit_ratio",
-    "db2_connections_active",
-    "db2_lock_wait_time",
-    "es_disk_usage_percent",
-    "es_heap_usage_percent",
-    "es_pending_tasks",
-    "es_search_latency_ms",
-    "jvm_gc_pause",
-    "jvm_gc_pause_critical",
-    "jvm_memory",
-    "jvm_memory_critical",
-    "jvm_threads",
-    "jvm_threads_critical",
-    "kafka_active_controllers",
-    "kafka_broker_count",
-    "kafka_consumer_lag",
-    "kafka_consumer_lag_critical",
-    "kafka_request_rate",
-    "kafka_request_rate_critical",
-    "kafka_under_replicated_partitions",
-    "kafka_under_replicated_partitions_critical",
-    "mongodb_connections_current",
-    "mongodb_opcounters_rate",
-    "mongodb_replication_lag",
-    "nginx_connections",
-    "nginx_connections_critical",
-    "nginx_request_rate",
-    "nginx_request_rate_critical",
-    "nginx_waiting",
-    "nginx_waiting_critical",
-    "oracle_sessions_active",
-    "oracle_tablespace_used_percent",
-    "rabbitmq_connections",
-    "rabbitmq_consumers",
-    "rabbitmq_node_mem_percent",
-    "rabbitmq_node_mem_percent_critical",
-    "rabbitmq_queue_messages",
-    "rabbitmq_queue_messages_critical",
-    "rabbitmq_unacked_messages",
-    "redis_connected_clients",
-    "redis_evicted_keys_rate",
-    "redis_memory_used_bytes",
-    "redis_replication_lag",
-})
+def _not_chart_armed() -> frozenset[str]:
+    """The keys the registry says the chart does NOT ship (D-A A1).
+
+    Derived from each key's `arming` (and a `_critical`'s base) by
+    `_registry_lib.not_chart_armed_keys` — this used to be a hand-kept
+    frozenset of 45 names here, a second copy of a decision the registry
+    now states with a reason. The gate still READS the shipped values.yaml
+    (`_chart_supply`) and compares, so a generator that stopped honouring
+    `arming` would still turn it red.
+    """
+    return _registry_lib.not_chart_armed_keys(_registry_lib.load_registry())
 
 _CHART_VALUES = PROJECT_ROOT / "helm" / "threshold-exporter" / "values.yaml"
 
@@ -286,7 +255,7 @@ def _supply() -> set[str]:
 def _chart_supply() -> set[str]:
     """Every threshold key the SHIPPED helm chart installs as a platform default.
 
-    Reads the artifact, not the registry: `chart_default: true` in the registry
+    Reads the artifact, not the registry: `arming: default` in the registry
     is the DECLARATION, `thresholdConfig.defaults` in values.yaml is what an
     operator actually gets. The two are kept in step by
     check_threshold_registry.py; reading values.yaml here means this gate keeps
@@ -3309,7 +3278,7 @@ def run_check(
         # and flag every synthetic key. No chart info given ⇒ no narrowing.
         chart_supply = supply if injected_supply else _chart_supply()
     if not_chart_armed is None:
-        not_chart_armed = frozenset() if injected_supply else NOT_CHART_ARMED
+        not_chart_armed = frozenset() if injected_supply else _not_chart_armed()
 
     dead = {k for k in demand if not _reachable(k, supply, deferred)}
 
@@ -3523,8 +3492,10 @@ def run_check(
             f"NOT-CHART-ARMED: threshold key {k!r} is demanded by an alert and the "
             "scaffold path can supply it, but the shipped chart does NOT — an "
             "operator who only ran `helm install` gets an alert that cannot fire. "
-            "Ship it in helm/threshold-exporter/values.yaml, or add it to "
-            "NOT_CHART_ARMED with a deliberate operator-supplied decision. (TRK-337)"
+            "Set its `arming` in rule-packs/threshold-registry.yaml — `default` "
+            "ships it in the chart, any other state records why it is left to "
+            "the operator — then run check_threshold_registry.py --regen. "
+            "(TRK-337, D-A A1)"
         )
 
     for k in sorted(not_armed & not_chart_armed):
@@ -3534,18 +3505,20 @@ def run_check(
     for k in sorted(not_chart_armed - not_armed):
         if k not in demand:
             errors.append(
-                f"STALE-EXEMPTION: {k!r} is in NOT_CHART_ARMED but no alert demands "
-                "it anymore — remove it from NOT_CHART_ARMED."
+                f"STALE-ARMING: the registry says {k!r} is not chart-armed but no "
+                "alert demands it anymore — remove the key from the registry."
             )
         elif k in dead:
             errors.append(
-                f"STALE-EXEMPTION: {k!r} is in NOT_CHART_ARMED but is now UNREACHABLE "
-                "everywhere — it belongs in KNOWN_UNWIRED, not here."
+                f"STALE-ARMING: the registry says {k!r} is not chart-armed but it is "
+                "now UNREACHABLE everywhere — the scaffold path no longer supplies "
+                "it; fix its tier or the name mismatch."
             )
         else:
             errors.append(
-                f"STALE-EXEMPTION: {k!r} is in NOT_CHART_ARMED but the chart now "
-                "ships it — remove it from NOT_CHART_ARMED so the gate protects it."
+                f"STALE-ARMING: the registry says {k!r} is not chart-armed but the "
+                "shipped chart carries it — the values.yaml defaults no longer "
+                "match `arming`; run check_threshold_registry.py --regen."
             )
 
     # ⛔ The floor UNDER the face list itself (#1412): every check above can only
@@ -3598,7 +3571,7 @@ def main(argv: list[str] | None = None) -> int:
             "\n1 defaults-tier floor breach — the ❌ line above names the floor "
             "and its ticket. ⛔ NOTHING ELSE IN THIS MODULE RAN: not the "
             "TRK-337 reachability check, not the KNOWN_UNWIRED or "
-            "NOT_CHART_ARMED exit-locks, not the placement checks, and no INFO. "
+            "not-chart-armed comparison, not the placement checks, and no INFO. "
             "The floors are evaluated while the faces are built — before any "
             "check — precisely because an empty face passes every one of them "
             "vacuously. Fix this and re-run to see the rest.",
@@ -3717,7 +3690,7 @@ def main(argv: list[str] | None = None) -> int:
     print(
         f"✅ threshold reachability OK — {n_unwired} unreachable-everywhere "
         f"(KNOWN_UNWIRED, TRK-337) / {n_not_armed} reachable but NOT shipped by "
-        "the chart (NOT_CHART_ARMED — operator must supply), 0 new drift.",
+        "the chart (registry arming ≠ default — operator must supply), 0 new drift.",
         file=sys.stderr)
     return EXIT_OK
 
