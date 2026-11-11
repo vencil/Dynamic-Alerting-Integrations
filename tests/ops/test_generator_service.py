@@ -1630,8 +1630,7 @@ def test_a_relative_git_is_resolved_where_the_service_starts(tmp_path, monkeypat
     import _gsvc_child
     rel = "gsvc-test-tools/the-git"  # nothing at /gsvc-test-tools: from "/" it is missing
     assert not os.path.exists("/" + rel)
-    (tmp_path / "gsvc-test-tools").mkdir()
-    (tmp_path / rel).symlink_to(h.GIT)
+    h.stub(tmp_path / "gsvc-test-tools", "the-git", f'#!/bin/sh\nexec "{h.GIT}" "$@"\n')
     monkeypatch.chdir(tmp_path)
     monkeypatch.delitem(_gsvc_child._LOCAL_ENV_VARS, rel, raising=False)
     assert "GIT_DIR" not in _gsvc_child.git_env(rel)
@@ -1643,8 +1642,7 @@ def test_a_relative_git_reaches_every_judgement(tmp_path, world):
     not there for any judgement. It is made absolute at start, like --repo;
     the verdict is the one a plain `git` gives."""
     rel = "gsvc-tools/the-git"
-    (tmp_path / "gsvc-tools").mkdir()
-    (tmp_path / rel).symlink_to(h.GIT)
+    h.stub(tmp_path / "gsvc-tools", "the-git", f'#!/bin/sh\nexec "{h.GIT}" "$@"\n')
     fx = FIXTURES[0]
     _base, write = _split(fx)
     writes = [{"path": write, "content_b64": h.b64(cases.FIXTURES[fx][write])}]
