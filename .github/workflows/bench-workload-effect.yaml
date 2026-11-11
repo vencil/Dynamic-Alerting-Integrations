@@ -723,7 +723,7 @@ jobs:
       # 一次新的讓步。
       #
       # #2348 新增的「Probe the pinned nightly reference」被同一條規則點名（PR #3727，
-      # 1 筆 high，**待 owner 決定是否同樣標 won't fix**）。形狀相同：checkout 釘死參考後
+      # alert #489，1 筆 high；owner 2026-11-11 決定比照 #392–#395 標 `won't fix`）。形狀相同：checkout 釘死參考後
       # `go test -c` 編譯它；風險嚴格更低——那一步只在 `pull_request` 執行（step 的
       # `if: github.event_name == 'pull_request'`，而 pull_request 情境沒有特權）。
       # ⚠️ 實測：把條件從 `env.SELF_TEST` 改成直接判斷事件，警告仍在——這條規則不採信
