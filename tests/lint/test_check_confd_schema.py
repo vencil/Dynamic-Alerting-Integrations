@@ -708,8 +708,9 @@ class TestRootPlatformTenantsBlock:
         lines = result.stdout.splitlines()
         assert lines[0].startswith("skipped 1 meta-file(s) ") and lines[0].endswith(
             ": _profiles.yaml"), lines
-        assert lines[1] == ("  of which 1 root platform file(s) had their `tenants:` block "
-                            "checked against tenant-config.schema.json: _profiles.yaml"), lines
+        assert lines[1] == ("  of which 1 root platform file(s) had their `tenants:` / "
+                            "`profiles:` block checked against tenant-config.schema.json: "
+                            "_profiles.yaml"), lines
         assert lines[2] == ("OK: 2 conf.d file(s) valid against the tenant-config / "
                             "platform-defaults / routing-profiles schemas"), lines
 
@@ -721,6 +722,130 @@ class TestRootPlatformTenantsBlock:
         assert result.returncode == EXIT_VIOLATION, (result.stdout, result.stderr)
         assert "ERROR: _defaults.yaml: 'alertname' is not of type 'array', 'null' " \
                "@ /tenants/t1/_routing/group_by" in result.stderr, result.stderr
+
+
+class TestRootPlatformProfilesBlock:
+    """#3647: a profile's `_custom_alerts` in a ROOT platform file is the list
+    a tenant on that profile is served, so it is held to the tenant schema's
+    `customAlertList` — by `$ref`, quoting included — like the same list in a
+    tenant file. Before this only the `tenants:` block of such a file was
+    checked (#2743)."""
+
+    def test_a_platform_schema_without_the_definition_is_a_caller_error(self, confd):
+        """An older `--platform-schema` is named (rc 2), never a KeyError."""
+        old = json.load(open(_PLATFORM_SCHEMA, encoding="utf-8"))
+        del old["definitions"]
+        path = os.path.join(confd, "..", os.path.basename(confd) + "-old-platform.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(old, fh)
+        try:
+            _write(confd, "shop-a.yaml", self._TENANT.replace("    _profile: std\n", "    mysql_connections: \"70\"\n"))
+            _write(confd, "_profiles.yaml", "tenants: {}\n")
+            result = subprocess.run(  # subprocess-timeout: ignore
+                [sys.executable, _SCRIPT, "--config-dir", confd, "--platform-schema", path],
+                capture_output=True, text=True, encoding="utf-8")
+        finally:
+            os.remove(path)
+        assert result.returncode == EXIT_CALLER_ERROR, (result.stdout, result.stderr)
+        assert "definitions.rootPlatformProfiles" in result.stderr, result.stderr
+        assert "KeyError" not in result.stderr, result.stderr
+
+    _BARE = ("profiles:\n  std:\n    _custom_alerts:\n"
+             "      - recipe: p99_latency\n        name: api_latency_p99\n"
+             "        metric: http_request_duration_seconds\n        quantile: {q}\n"
+             "        op: \">\"\n        window: 5m\n        threshold: \"2:warning\"\n")
+    _TENANT = "tenants:\n  shop-a:\n    _profile: std\n"
+
+    def _lint(self, confd, schema, platform_schema, **kw):
+        return validate_dir(confd, schema, jsonschema, platform_schema, **kw)
+
+    def test_the_issue_shape_p5_is_a_violation(self, confd, schema, platform_schema):
+        _write(confd, "_profiles.yaml", self._BARE.format(q="95e-2"))
+        _write(confd, "shop-a.yaml", self._TENANT)
+        _c, viol, skipped = self._lint(confd, schema, platform_schema)
+        assert viol == [
+            "ERROR: _profiles.yaml: /profiles/std/_custom_alerts/0/quantile: '95e-2' is "
+            "read by yaml.v3 (every reader of conf.d) as YAML float, not as the string "
+            "the schema requires for this field — quote it, without a tag: "
+            "quantile: \"95e-2\"",
+            "ERROR: _profiles.yaml: 0.95 is not of type 'string' "
+            "@ /profiles/std/_custom_alerts/0/quantile"], viol
+        assert skipped == ["_profiles.yaml"]
+
+    def test_same_verdict_as_the_same_list_in_a_tenant_file(
+            self, confd, schema, platform_schema):
+        """One definition: p5 and its control p5c say the same, path aside."""
+        with tempfile.TemporaryDirectory() as other:
+            _write(confd, "_profiles.yaml", self._BARE.format(q="95e-2"))
+            _write(confd, "shop-a.yaml", self._TENANT)
+            body = self._BARE.format(q="95e-2").replace(
+                "profiles:\n  std:\n", "tenants:\n  shop-a:\n")
+            _write(other, "shop-a.yaml", body)
+            _c, prof, _s = self._lint(confd, schema, platform_schema)
+            _c, ten, _s = self._lint(other, schema, platform_schema)
+        norm = lambda v: v.split(": ", 2)[2]  # noqa: E731 - drop "ERROR: <file>: "
+        assert [norm(v).replace("/profiles/std/", "/X/") for v in prof] == \
+               [norm(v).replace("/tenants/shop-a/", "/X/") for v in ten], (prof, ten)
+
+    def test_a_schema_rule_beyond_quoting_applies(self, confd, schema, platform_schema):
+        """Not only quoting: the recipe contract (a recipe's required keys)."""
+        _write(confd, "_profiles.yaml",
+               "profiles:\n  std:\n    _custom_alerts:\n"
+               "      - {recipe: ratio, name: r, metric: m, window: 5m, threshold: \"1\"}\n")
+        _write(confd, "shop-a.yaml", self._TENANT)
+        _c, viol, _s = self._lint(confd, schema, platform_schema)
+        assert len(viol) == 1 and "denominator_metric" in viol[0] \
+            and viol[0].endswith("@ /profiles/std/_custom_alerts/0"), viol
+
+    def test_a_quoted_value_passes(self, confd, schema, platform_schema):
+        _write(confd, "_profiles.yaml", self._BARE.format(q='"0.95"'))
+        _write(confd, "shop-a.yaml", self._TENANT)
+        assert self._lint(confd, schema, platform_schema)[1] == []
+
+    def test_a_root_defaults_files_profiles_are_held_too(self, confd, schema, platform_schema):
+        _write(confd, "_defaults.yaml", "defaults:\n  mysql_connections: 80\n"
+               + self._BARE.format(q="95e-2"))
+        _write(confd, "shop-a.yaml", self._TENANT)
+        _c, viol, _s = self._lint(confd, schema, platform_schema)
+        assert [v.split(": ", 2)[1] for v in viol] == ["_defaults.yaml"] * 2, viol
+
+    def test_a_nested_platform_file_is_not_held(self, confd, schema, platform_schema):
+        """Control: below the root no plane reads a `profiles:` block."""
+        os.mkdir(os.path.join(confd, "sub"))
+        _write(confd, "sub/_profiles.yaml", self._BARE.format(q="95e-2"))
+        _write(confd, "sub/_defaults.yaml", self._BARE.format(q="95e-2"))
+        _write(confd, "sub/shop-a.yaml", self._TENANT)
+        assert self._lint(confd, schema, platform_schema)[1] == []
+
+    def test_quoting_reported_elsewhere_is_judged_as_quoted(
+            self, confd, schema, platform_schema):
+        """validate-config's yaml_quoting row names the value; json_schema
+        then judges it as quoted and does not report it a second time."""
+        _write(confd, "_profiles.yaml", self._BARE.format(q="95e-2"))
+        _write(confd, "shop-a.yaml", self._TENANT)
+        _c, viol, _s = self._lint(confd, schema, platform_schema,
+                                  quoting_reported_for=frozenset({"_profiles.yaml"}))
+        assert viol == [], viol
+
+    def test_cli_counts_a_profiles_only_file_as_checked(self, confd):
+        """`_profiles.yaml` with no `tenants:` block: skipped for its own
+        shape, yet its `profiles:` block was checked — the output says both."""
+        _write(confd, "_profiles.yaml", self._BARE.format(q='"0.95"'))
+        _write(confd, "shop-a.yaml", self._TENANT)
+        result = _run(confd)
+        assert result.returncode == EXIT_OK, result.stderr
+        lines = result.stdout.splitlines()
+        assert lines[1].startswith("  of which 1 root platform file(s) ") \
+            and lines[1].endswith(": _profiles.yaml"), lines
+        assert lines[2].startswith("OK: 2 conf.d file(s) "), lines
+
+    def test_the_definition_is_a_reference_not_a_copy(self, platform_schema):
+        node = platform_schema["definitions"]["rootPlatformProfiles"]
+        entry = node["properties"]["profiles"]["additionalProperties"]
+        assert entry["properties"]["_custom_alerts"] == {
+            "$ref": "tenant-config.schema.json#/definitions/customAlertList"}, entry
+        # Bound by no property: nested `_defaults*` keep a loose `profiles`.
+        assert "_custom_alerts" not in json.dumps(platform_schema["properties"]["profiles"])
 
 
 class TestPlatformSchemaDriftGuard:

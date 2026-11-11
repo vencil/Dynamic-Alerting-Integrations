@@ -362,6 +362,22 @@ def test_session_start_installs_the_dev_container_version(pin: str, feature: str
         f"checks {pin}_SHA256 — the pin this test binds is not what gets installed.")
 
 
+def test_session_start_node_major_is_the_dev_container_major() -> None:
+    """session-start pins an exact node release so the download can be
+    verified (#3611); the SSOT is still the dev container's MAJOR, and this is
+    what keeps the two from splitting."""
+    src = _SESSION_START.read_text(encoding="utf-8")
+    ver = _one(r"^NODE_VERSION=(\d+\.\d+\.\d+)\s*$", src, "session-start.sh NODE_VERSION")
+    _one(r"^NODE_SHA256=([0-9a-f]{64})\s*$", src, "session-start.sh NODE_SHA256")
+    dc = str(_feature("node")["version"])
+    assert ver.split(".")[0] == dc, (
+        f"session-start.sh NODE_VERSION={ver} but the dev container's node is {dc}. "
+        f"Pin a {dc}.x release and its SHA-256 from nodejs.org's SHASUMS256.txt.")
+    assert "v${NODE_VERSION}" in src and '"$NODE_SHA256"' in src, (
+        "session-start.sh no longer builds its node download from NODE_VERSION and "
+        "checks NODE_SHA256 — the pin this test binds is not what gets installed.")
+
+
 # ── CI binary vs lint-wrapper Docker fallback ──────────────────────────────
 
 
@@ -421,6 +437,48 @@ def test_session_start_reads_the_hadolint_pin_from_the_wrapper() -> None:
     assert '${HADOLINT_VERSION}' in src and '"$HADOLINT_SHA256"' in src, (
         "session-start.sh no longer builds its hadolint download from HADOLINT_VERSION "
         "and checks HADOLINT_SHA256 — the pin this test binds is not what gets installed.")
+
+
+@pytest.mark.parametrize("ci_var,wrapper,const", [
+    ("KL_SHA256", "check_iac_helm.py", "KUBE_LINTER_SHA256"),
+    ("PINT_SHA256", "check_pint.py", "PINT_SHA256"),
+])
+def test_ci_lint_checksum_matches_the_wrapper(ci_var: str, wrapper: str, const: str) -> None:
+    """kube-linter and pint as hadolint (#3611): the wrapper owns the release
+    tarball's checksum, session-start reads it from there, and ci.yml's own
+    copy in its install step must be the same bytes — or CI and a remote
+    session verify different archives."""
+    ci = set(re.findall(rf"^\s*{ci_var}=([0-9a-f]{{64}})\s*$",
+                        (_WORKFLOWS / "ci.yml").read_text(encoding="utf-8"), re.MULTILINE))
+    assert len(ci) == 1, f"expected one ci.yml {ci_var} value, got {sorted(ci)}"
+    src = (_REPO / "scripts" / "tools" / "lint" / wrapper).read_text(encoding="utf-8")
+    pinned = _one(rf'^{const}\s*=\s*"([0-9a-f]{{64}})"\s*$', src, f"{wrapper} {const}")
+    assert ci == {pinned}, (
+        f"ci.yml {ci_var}={ci.pop()} but {wrapper} {const}={pinned}. Re-verify the "
+        f"upstream checksum and write it in both.")
+
+
+@pytest.mark.parametrize("src_var,owner,reader,names", [
+    ("KUBE_LINTER_PIN_SRC", "scripts/tools/lint/check_iac_helm.py", "py_pin",
+     (("KUBE_LINTER_VERSION", "KUBE_LINTER_VERSION"), ("KUBE_LINTER_SHA256", "KUBE_LINTER_SHA256"))),
+    ("PINT_PIN_SRC", "scripts/tools/lint/check_pint.py", "py_pin",
+     (("PINT_VERSION", "PINT_VERSION"), ("PINT_SHA256", "PINT_SHA256"))),
+    ("PROMTOOL_PIN_SRC", ".devcontainer/install-promtool.sh", "sh_pin",
+     (("PROMTOOL_VERSION", "PROM_VERSION"), ("PROMTOOL_SHA256", "PROM_SHA256"))),
+])
+def test_session_start_reads_owned_pins_from_their_ssot(src_var, owner, reader, names) -> None:
+    """kube-linter, pint and promtool (#3611), as hadolint: session-start names
+    the file that owns each pin, reads both values out of it, and assigns no
+    literal of its own (a copy written later would silently win)."""
+    src = _SESSION_START.read_text(encoding="utf-8")
+    pin_src = _one(rf"^{src_var}=(\S+)\s*$", src, f"session-start.sh {src_var}")
+    assert pin_src == owner, f"session-start.sh reads {src_var} from {pin_src}, not {owner}"
+    for var, const in names:
+        assigns = re.findall(rf"^\s*{var}=(.*)$", src, re.MULTILINE)
+        assert assigns == [f'"$({reader} {const} "${src_var}")"'], (
+            f"session-start.sh must set {var} only from {owner} "
+            f"(`{reader} {const} \"${src_var}\"`); found {assigns}.")
+        assert f"${var}" in src or f"${{{var}}}" in src
 
 
 # ── kubectl / kind / no floating devcontainer features ─────────────────────

@@ -11,7 +11,7 @@
     "defaults": {
       "type": ["object", "null"],
       "title": "Platform default thresholds (metric → value)",
-      "description": "Map of metric key → default threshold. Keys are dynamic metric names → values left loose; only the top-level `defaults` key itself is guarded. ⚠️ Loose here is NOT loose at runtime: in the conf.d ROOT `_defaults.yaml` the exporter decodes this block as `map[string]float64`, so ONE non-numeric value (a quoted `\"70\"`, a word such as `disable`, a nested or scheduled mapping) drops the whole block, and an empty value is no write (#2518; it used to decode to a 0 threshold for every tenant), so that line declares nothing. This schema cannot see either; `validate-config`'s `root_defaults` row fails on both (#1414). The looseness exists for the hierarchy-merge fixtures under tests/golden/, which are not exporter input. `null`/empty is tolerated — Go unmarshals `defaults: null` (or `defaults:`) into a nil map (a valid empty-defaults placeholder); rejecting it would be Schema-red-but-system-runs friction (Gemini #913 對抗1)."
+      "description": "Map of metric key → default threshold. Keys are dynamic metric names → values left loose; only the top-level `defaults` key itself is guarded. ⚠️ Loose here is NOT loose at runtime: in the conf.d ROOT `_defaults.yaml` the exporter reads each value by its text, as it reads a tenant's (#3250): a number, quoted (`\"70\"`) or not, is served; a scalar that does not read as one (a word such as `disable`, `0x10`, `.nan`, an empty `\"\"`) is not served and refuses that key alone (da-guard `root_default_refused`; `validate-config`'s `guard_errors` row fails); a mapping or a list fails the decode and the exporter drops the whole file, not just this block (`root_defaults` and `guard_errors` both fail); a null value is no write (#2518), so that line declares nothing (`root_defaults` fails). That judgement is the exporter's own decode, so this schema deliberately does not restate it for the root file (#2824). The looseness exists for the hierarchy-merge fixtures under tests/golden/, which are not exporter input. `null`/empty is tolerated — Go unmarshals `defaults: null` (or `defaults:`) into a nil map (a valid empty-defaults placeholder); rejecting it would be Schema-red-but-system-runs friction (Gemini #913 對抗1)."
     },
     "optional_overrides": {
       "type": ["array", "null"],
@@ -86,5 +86,23 @@
   "patternProperties": {
     "^_state_": {},
     "^_routing": {}
+  },
+  "definitions": {
+    "rootPlatformProfiles": {
+      "title": "The `profiles:` block of a ROOT platform file, as its readers read it",
+      "$comment": "#3647: bound by no property of this schema — check_confd_schema.py (and validate-config's json_schema / yaml_quoting rows through it) applies it to every `_` file at the conf.d root the exporter reads (da-guard parse-tree's root_platform_file: `_profiles.yaml`, a root `_defaults*` …), because that is where the exporter and the custom-alert compiler take a profile from. Below the root no plane reads the block, so the `profiles` property above stays loose for the nested `_defaults*` documents this schema also binds (the precedent of `tenants`, #1576/#2743). A profile's `_custom_alerts` is the tenant's own definition by REFERENCE — never a copy — so the same recipe entry is judged, quoting included, wherever it is written.",
+      "type": "object",
+      "properties": {
+        "profiles": {
+          "additionalProperties": {
+            "properties": {
+              "_custom_alerts": {
+                "$ref": "tenant-config.schema.json#/definitions/customAlertList"
+              }
+            }
+          }
+        }
+      }
+    }
   }
 }

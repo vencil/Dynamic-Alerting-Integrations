@@ -300,7 +300,10 @@ def ci(tmp_path_factory) -> dict[str, str]:
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("rel: " + json.dumps(rel) + "\n", encoding="utf-8")
         rec = _RecordingValidator()
-        validate_dir(str(confd), {"id": "T"}, rec, {"id": "P"})
+        # A platform schema carries `definitions.rootPlatformProfiles` (#3647:
+        # what a root platform file's `profiles:` block is walked with).
+        validate_dir(str(confd), {"id": "T"}, rec,
+                     {"id": "P", "definitions": {"rootPlatformProfiles": {}}})
         assert set(rec.seen) <= {rel}, rec.seen
         seen[rel] = rec.seen.get(rel, "-")
     return seen

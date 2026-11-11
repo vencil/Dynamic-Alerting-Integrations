@@ -584,6 +584,59 @@ def misread_scalar_nodes(root: Any, schema: dict,
     return [node for node, _hit in _walk_misread_scalars(root, schema, schemas, schema_name)]
 
 
+# ── which schema(s) the #2164 quoting walk applies to one conf.d file ────
+#
+# ⛔ ONE selection, for `check_confd_schema.validate_dir` (json_schema) and
+# `validate-config`'s `yaml_quoting` row: were they to differ, a value would
+# be reported twice, or read as quoted by json_schema in a file yaml_quoting
+# never walked, so nobody reports it (#2695). It lives here, not in
+# check_confd_schema, because the da-tools image ships this module and not
+# that lint (yaml_quoting must run there).
+CONFD_TENANT_SCHEMA = "tenant-config.schema.json"
+CONFD_PLATFORM_SCHEMA = "platform-defaults.schema.json"
+CONFD_ROUTING_PROFILES_SCHEMA = "routing-profiles.schema.json"
+ROUTING_PROFILES_FILE_NAMES = ("_routing_profiles.yaml", "_routing_profiles.yml")
+ROOT_PROFILES_DEFINITION = "rootPlatformProfiles"
+
+
+def root_profiles_schema(platform_schema: dict) -> dict:
+    """The platform schema's `definitions.rootPlatformProfiles` (#3647): what
+    a ROOT platform file's `profiles:` block is held to — each profile's
+    `_custom_alerts`, by `$ref` to the tenant schema's own definition.
+    KeyError when the platform schema has none (one older than this tool)."""
+    return platform_schema["definitions"][ROOT_PROFILES_DEFINITION]
+
+
+def confd_quoting_schemas(entry: Any, schemas: "dict[str, Any]") -> "list[tuple[dict, str]]":
+    """`(schema, schema name)` pairs the quoting walk applies to *entry* (a
+    `_lib_parse_tree.Entry` of a config file), from *schemas* (basename →
+    parsed schema; a name absent is a schema not in play).
+
+    The file's own schema — `_defaults*` (da-guard's `defaults_document`)
+    the platform schema, `_routing_profiles` the routing-profiles one, any
+    other `_` file none, a tenant file the tenant schema — and, for a ROOT
+    platform file (da-guard's `root_platform_file`), its `tenants:` block
+    against the tenant schema (#2743) and its `profiles:` block against
+    `rootPlatformProfiles` (#3647). Below the root no plane reads either
+    block (#1576)."""
+    platform = schemas.get(CONFD_PLATFORM_SCHEMA)
+    routing = schemas.get(CONFD_ROUTING_PROFILES_SCHEMA)
+    tenant = schemas.get(CONFD_TENANT_SCHEMA)
+    pairs: list[tuple[dict, str]] = []
+    if entry.defaults_document and platform is not None:
+        pairs.append((platform, CONFD_PLATFORM_SCHEMA))
+    elif entry.name in ROUTING_PROFILES_FILE_NAMES and routing is not None:
+        pairs.append((routing, CONFD_ROUTING_PROFILES_SCHEMA))
+    elif not entry.reserved and tenant is not None:
+        pairs.append((tenant, CONFD_TENANT_SCHEMA))
+    if entry.root_platform_file:
+        if tenant is not None:
+            pairs.append((tenant, CONFD_TENANT_SCHEMA))
+        if platform is not None:
+            pairs.append((root_profiles_schema(platform), CONFD_PLATFORM_SCHEMA))
+    return pairs
+
+
 # ── #2509 → #2906: a YAML 1.1 boolean word in a field that takes a boolean
 #
 # `send_resolved: on` / `_routing_enforced: {enabled: yes}` is the STRING

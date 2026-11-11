@@ -16,12 +16,7 @@ lang: zh
 
 趕時間？三步把自己的 metrics 拉出來（細節見後續各節）：
 
-1. **取得 token** —— 由對你的租戶有 admin 權限者執行：
-   ```sh
-   curl -X POST "$TENANT_API/api/v1/federation/tokens" \
-     -H "Content-Type: application/json" \
-     -d '{"tenant_id": "<你的 tenant>", "description": "quickstart"}'
-   ```
+1. **取得 token** —— 由對你的租戶有 admin 權限者在 portal 操作：Tenant Manager 選取你的租戶 → **Federation tokens** → 類型選 `metrics` → **簽發**，複製畫面上的 token（只顯示這一次）。
 2. **設定拉取** —— 把回傳的 JWT 放進租戶側 Prometheus 的 `/federate` scrape 或 Grafana data source（一律走 `Authorization: Bearer` header；範例見 §4）。
 3. **驗證**：
    ```sh
@@ -86,15 +81,13 @@ flowchart LR
 
 ### 3.1 簽發
 
-federation token 由 **tenant-api** 簽發 —— 對目標租戶具 **admin** 權限者才能簽（資料域外持出，門檻高於一般 config write）：
+federation token 由 **tenant-api** 簽發 —— 對目標租戶具 **admin** 權限者才能簽（資料域外持出，門檻高於一般 config write）。簽發是人的操作，經 portal 進行（[ADR-027 §4](../adr/027-tenant-api-caller-identity.md)）：tenant-api 的 API 只接受經登入進來的請求，沒有可以直接用 curl 打的入口。
 
-```sh
-curl -X POST "$TENANT_API/api/v1/federation/tokens" \
-  -H "Content-Type: application/json" \
-  -d '{"tenant_id": "<你的 tenant>", "description": "grafana-prod"}'
-```
+1. 登入 portal，開 **Tenant Manager**，勾選你的租戶（只選一個）。
+2. 按 **Federation tokens**，類型選 `metrics`，說明填用途（例如 `grafana-prod`，選填、最多 256 字元），按 **簽發**。
+3. 畫面顯示簽好的 JWT（compact 字串）：**只顯示這一次**，關閉對話框後無法再取得，當下複製保存。
 
-回傳含簽好的 JWT（compact 字串）與其 `token_id`。token：
+token：
 
 - **RS256 簽章**，claim 帶 `tenant_id`（proxy 注入 label 用）、`token_id`（gateway 限流 key）、`iss=tenant-api`、`aud=tenant-federation`。
 - **TTL 預設 4h**（平台可調）。**無 sliding refresh** —— 過期前自行重新簽發。
@@ -102,21 +95,17 @@ curl -X POST "$TENANT_API/api/v1/federation/tokens" \
 
 ### 3.2 列出 / 撤銷
 
-```sh
-# 列出本租戶當前的 token（只回 metadata，不回 JWT 本身）
-curl "$TENANT_API/api/v1/federation/tokens?tenant_id=<你的 tenant>"
-
-# 撤銷
-curl -X DELETE "$TENANT_API/api/v1/federation/tokens/<token_id>"
-```
+同一個 **Federation tokens** 對話框列出本租戶尚未過期的 token（`token_id`、類型、說明、簽發者、到期時間；只有 metadata，不含 JWT 本身），每列有 **撤銷**（再按一次 **確認撤銷** 才送出）。找不到 token 與沒有權限撤銷它，畫面上是同一句話——伺服器刻意不區分兩者，免得 token id 洩漏它屬於哪個租戶。
 
 撤銷是**最終一致**的 —— 見 §7.1。
 
-### 3.3 自動換發（持續拉取必做）
+### 3.3 換發（目前只能手動）
 
-token TTL 4h、**無 sliding refresh** —— 持續性的拉取必須自動換發，否則每 4h 斷一次。最簡單的做法：一個 cron job 每隔 < 4h（例如每 3h）重新 `POST` 簽一把新 token、寫進你的 Prometheus / Grafana 設定後觸發 reload（Prometheus `kill -HUP` 或 `/-/reload`）。
+token TTL 4h、**無 sliding refresh** —— 持續性的拉取要在過期前換一把新的，否則每 4h 斷一次。
 
-注意每租戶同時最多 **16 把**有效 token —— 換發腳本應把上一把 `DELETE` 掉、或讓它自然過期（4h），別讓舊 token 累積撞 16 上限（會回 `409`）。
+⚠️ **目前沒有自動換發的方式。** 定期自動簽發的程式是「機器呼叫端」，tenant-api 目前不接受機器身分；在出現第一個需要它、且能實際執行的機器呼叫端之前，不提供非瀏覽器的簽發方式（[ADR-027 §4](../adr/027-tenant-api-caller-identity.md)）。所以現在的換發是在 portal 重新簽發一把、更新你的 Prometheus / Grafana 設定後 reload：Prometheus 送 `SIGHUP`（`kill -HUP <pid>`），或在啟用 `--web.enable-lifecycle` 時以 `POST /-/reload`（預設不開放）。設定 reload 之前，拉取仍用舊 token。需要長時間無人值守的拉取，請平台把 TTL 調長，並告訴平台你需要自動換發——這正是 ADR-027 §4 等待的觸發條件。
+
+注意每租戶同時最多 **16 把**有效 token —— 換發時把上一把撤銷掉、或讓它自然過期（4h），別讓舊 token 累積撞 16 上限（簽發會被拒，回 `409`）。
 
 ## 4. 設定你的 Prometheus / Grafana 拉取
 
