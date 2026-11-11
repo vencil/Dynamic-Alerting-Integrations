@@ -9,7 +9,7 @@ import (
 )
 
 // ErrWriteOverloaded is returned by a write call when the load-shedding
-// admission queue is full (TRK-320 / ADR-023 §C). The write plane is a single
+// admission queue is full (TRK-320 / ADR-023 §3). The write plane is a single
 // writer (one in-flight write) with a bounded queue; once running+queued exceeds
 // maxWriteAdmit the call fast-fails so a burst of PUTs sheds load instead of
 // piling up unbounded goroutines blocked on the lock. The handler maps it to a
@@ -50,7 +50,7 @@ func writeQueueDepthFromEnv() int32 {
 }
 
 // acquireWrite is the load-shedding gate every write passes before taking w.mu
-// (TRK-320 / ADR-023 §C). It must be paired with a deferred releaseWrite() on the
+// (TRK-320 / ADR-023 §3). It must be paired with a deferred releaseWrite() on the
 // nil-error path. Boundary (deliberate): context binds ONLY the queue/acquire
 // stage — once the token is held the caller enters the critical section and the
 // write runs to completion (never half-killed: a severed commit leaves a dirty

@@ -100,7 +100,7 @@ func TestLoad_DeletedFile(t *testing.T) {
 
 	// Reload after delete → empty config (this asserts the config STATE only;
 	// a manager built from a configured path now fails closed on empty groups
-	// per ADR-027 MED-8, not open — permission behavior is covered in
+	// per ADR-027 §7, not open — permission behavior is covered in
 	// empty_config_mode_test.go).
 	if err := m.Reload(); err != nil {
 		t.Fatalf("load after delete: %v", err)
