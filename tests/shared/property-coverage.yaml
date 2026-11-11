@@ -123,6 +123,8 @@ modules:
       ensure_dir_or_die: "Side-effecting I/O + sys.exit wrapper over ensure_dir (#1641); same gate"
       _die_on_write_error: "print-to-stderr + sys.exit; no value computation (#1641)"
       read_onboard_hints: "I/O-bound; covered by integration test"
+      root_profiles_schema: "#3647 a dict lookup of definitions.rootPlatformProfiles; no value computation — its shape pinned by tests/lint/test_check_confd_schema.py::TestRootPlatformProfilesBlock::test_the_definition_is_a_reference_not_a_copy"
+      confd_quoting_schemas: "#3647 a branch table over a da-guard parse-tree Entry's flags (defaults_document / reserved / root_platform_file); pinned by example over real parse-tree listings in tests/lint/test_check_confd_schema.py::TestRootPlatformProfilesBlock and ::TestRootPlatformTenantsBlock, and through validate-config in tests/ops/test_validate_config.py"
       claim_stdout: "run-scoped stdout owner (#3107 v2) over _lib_exitcodes.claim_stdout_owner; conflict and per-run reset pinned in tests/shared/test_lib_io_operator_output.py"
       _is_our_stdout: "fstat comparison against fd 1 (#3107 v2 R3); side-effect free but environment-bound, exercised via open_operator_output in tests/shared/test_lib_io_operator_output.py"
       targets_stdout: "path → _is_our_stdout predicate (#3107 v2); environment-bound, same file"

@@ -3085,6 +3085,54 @@ class TestJsonSchemaRow:
             "_profiles.yaml: 'alertname' is not of type 'array', 'null' "
             "@ /tenants/ta/_routing/group_by"], rows["json_schema"]
 
+    def test_a_root_profiles_custom_alerts_is_reported_once(
+            self, tmp_path, capsys, cli_argv):
+        """#3647: a profile's `_custom_alerts` in a root `_` file is the list a
+        tenant on that profile is served. `yaml_quoting` reports its misread
+        scalar; `json_schema` judges it as quoted and still reports the rest
+        of the entry (a ratio without `denominator_metric`). Both rows walk
+        the file through `_lib_io.confd_quoting_schemas`: were only one of
+        them to, the bare `quantile` would be reported by neither."""
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "_profiles.yaml": (
+                "profiles:\n  std:\n    _custom_alerts:\n"
+                "      - {recipe: p99_latency, name: p, metric: m, quantile: 95e-2,"
+                " window: 5m, threshold: \"2\"}\n"
+                "      - {recipe: ratio, name: r, metric: m, window: 5m, threshold: \"1\"}\n"),
+            "ta.yaml": "tenants:\n  ta:\n    _profile: std\n",
+        })
+        _rc, rows = self._run(d, capsys, cli_argv)
+        quoting = rows["yaml_quoting"]
+        assert quoting["status"] == "fail", quoting
+        assert [x.split(": ", 2)[:2] for x in quoting["details"]] == [
+            ["_profiles.yaml", "/profiles/std/_custom_alerts/0/quantile"]], quoting
+        schema_row = rows["json_schema"]
+        assert schema_row["status"] == "fail", schema_row
+        assert len(schema_row["details"]) == 1 \
+            and "denominator_metric" in schema_row["details"][0] \
+            and schema_row["details"][0].endswith("@ /profiles/std/_custom_alerts/1"), schema_row
+
+    def test_quoting_with_a_platform_schema_older_than_the_tool_is_a_caller_error(
+            self, tmp_path, monkeypatch):
+        """#3647: without `definitions.rootPlatformProfiles` the row names the
+        schema (caller error), never a KeyError."""
+        real = vc._find_schema(vc._PLATFORM_SCHEMA)
+        old = json.loads(real.read_text(encoding="utf-8"))
+        del old["definitions"]
+        old_path = tmp_path / "old-platform.json"
+        old_path.write_text(json.dumps(old), encoding="utf-8")
+        found = vc._find_schema
+        monkeypatch.setattr(vc, "_find_schema", lambda name: old_path
+                            if name == vc._PLATFORM_SCHEMA else found(name))
+        d = self._tree(tmp_path, {
+            "_defaults.yaml": self._DEFAULTS,
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
+        })
+        row = vc.check_yaml_quoting(d)
+        assert row["status"] == vc.FAIL and row.get("caller_error") is True, row
+        assert "definitions.rootPlatformProfiles" in row["details"][0], row
+
     def test_platform_schema_refusal_is_reported(self, tmp_path, capsys,
                                                  cli_argv):
         """A key platform-defaults.schema.json refuses (additionalProperties
