@@ -110,10 +110,10 @@ CASES = {
     # rules; a mapping entry used to crash the run (TypeError, rc 2).
     "enforce-group-by-mapping": (_cons("enforce_group_by: [{a: 1}]"),
                                  "constraints.enforce_group_by", "fin",
-                                 "constraint 'enforce_group_by' entry [0] is dict"),
+                                 "constraint 'enforce_group_by' entry [0] is a mapping of 1 key(s)"),  # #1560 ⑤-b: shape only
     "enforce-group-by-list": (_cons("enforce_group_by: [tenant, [a]]"),
                               "constraints.enforce_group_by", "fin",
-                              "constraint 'enforce_group_by' entry [1] is list"),
+                              "constraint 'enforce_group_by' entry [1] is a list of 1 item(s)"),  # #1560 ⑤-b: shape only
     "enforce-group-by-number": (_cons("enforce_group_by: [8]"),
                                 "constraints.enforce_group_by", "fin",
                                 "constraint 'enforce_group_by' entry [0] is int 8"),

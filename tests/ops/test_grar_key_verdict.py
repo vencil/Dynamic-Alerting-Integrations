@@ -151,11 +151,14 @@ def test_an_undecidable_key_beside_an_error_is_marked_as_blocking_too(tmp_path):
 
 def test_a_key_name_with_a_control_character_is_never_printed_raw(tmp_path):
     """#3016 review: the FAIL list repeats the blocking key verdict lines —
-    a tenant's key name in them goes through safe_label there too."""
+    a tenant's key name in them goes through safe_label there too; a key
+    that is not name-like is not printed at all (#1560 ⑤-b: it may be a
+    URL)."""
     files = dict(THRESHOLDS_ONLY, **{"t-a.yaml": "tenants:\n  t-a:\n    \"mysql_conn\\e[2Jx\": \"1\"\n"})
     res, _ = _cli(tmp_path, files, "--validate")
     assert res.returncode == 1, res.stderr
-    assert "FAIL:" in res.stderr and "mysql_conn?[2Jx" in res.stderr.split("FAIL:")[1], res.stderr
+    assert "FAIL:" in res.stderr and "a string of 15 chars" in res.stderr.split("FAIL:")[1], res.stderr
+    assert "mysql_conn" not in res.stderr
     assert "\x1b" not in res.stderr
 
 

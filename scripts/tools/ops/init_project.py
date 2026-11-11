@@ -495,11 +495,13 @@ RULE_PACK_CATALOG = {
     },
     'oracle': {
         'label': 'Oracle',
-        # Not in the registry (the pack reads it via `severity="critical"`),
-        # so this value has no other home.
-        'critical_overrides': {
-            'oracle_tablespace_used_percent_critical': 95,
-        },
+        # Read from the registry like every other seed. This used to be a
+        # `critical_overrides` entry whose comment said the pack read it via
+        # `severity="critical"` — the pack had no critical record or alert at
+        # all, so the seeded value armed nothing. #3658 declared the tier in
+        # `scaffold_tenant.RULE_PACKS` and shipped
+        # OracleTablespaceAlmostFullCritical, so the value now has one home.
+        'critical_seeds': ('oracle_tablespace_used_percent_critical',),
     },
     'db2': {
         'label': 'IBM DB2',

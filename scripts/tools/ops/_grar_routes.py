@@ -40,6 +40,7 @@ from dataclasses import dataclass
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
+from _lib_validation import value_text  # noqa: E402  (#1560 ⑤-b: values into messages)
 
 from _grar_merge import (  # noqa: E402
     Finding,
@@ -144,11 +145,13 @@ def enforced_match_invalid_text(where: str, value: object) -> str:
     """The refusal line's text for ``enforced_match_invalid`` (no prefix)."""
     return (f"_routing_enforced{where}: 'match' must be a list of Alertmanager "
             f"matcher strings, each non-empty (e.g. ['severity=\"critical\"']), got "
-            f"{type(value).__name__} {value!r} — platform-enforced (NOC) routing "
+            f"{value_text(value)} — platform-enforced (NOC) routing "
             f"is NOT rendered (no NOC route exists at all), skipping")
 
 
-def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
+def enforced_group_by_problems(enforced_routing: object, tenants: list[str], *,
+                               secrets: SecretBinding | None = None,
+                               allowed_domains: list[str] | None = None,
                                ) -> list[tuple[str, int, str, object]]:
     """``(ctx, index, kind, value)`` per bad group_by element of the
     ``_routing_enforced`` routes the generator renders (#2503 round 2).
@@ -159,8 +162,11 @@ def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
     id can repeat a listed label), and a route the generator does not render
     — no ``receiver``, or one ``build_receiver_config`` refuses — is not
     judged (F4). ``ctx`` matches the render's WARN (``_routing_enforced`` /
-    ``_routing_enforced (<tenant>)``). The domain allowlist (``--policy``)
-    is not applied: ``load_tenant_tree`` does not know it.
+    ``_routing_enforced (<tenant>)``).
+
+    Whether the render renders the route is ``build_receiver_config`` with
+    the render's own *secrets* and *allowed_domains*: one judgement, one set
+    of inputs (#1560 ⑤-b).
     """
     out: list[tuple[str, int, str, object]] = []
     if not isinstance(enforced_routing, dict) or not enforced_routing.get("receiver"):
@@ -171,11 +177,9 @@ def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
         if not (group_by and isinstance(group_by, list)):
             return
         # #1560: the owner as the render gives it (see
-        # _build_per_tenant_enforced_route). The policy's shared_secrets is not
-        # known here either, so a receiver with a shared Secret reference is
-        # not judged — like the domain allowlist above.
-        if build_receiver_config(cfg.get("receiver"), receiver_ctx,
-                                 owner_tenant=owner)[0] is None:
+        # _build_per_tenant_enforced_route), and the render's binding.
+        if build_receiver_config(cfg.get("receiver"), receiver_ctx, owner_tenant=owner,
+                                 secrets=secrets, allowed_domains=allowed_domains)[0] is None:
             return
         out.extend((ctx, idx, kind, value)
                    for idx, kind, value in group_by_problems(group_by)[1])

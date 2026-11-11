@@ -94,6 +94,18 @@ modules:
       _walk_present: "#1560 ⑤-a walk of one site pattern (key / * / []) yielding every value; every row and wildcard example-pinned by tests/shared/test_credential_plaintext_policy.py"
       _written_out: "#1560 ⑤-a type test (non-empty scalar, not null / '' / mapping / list); its quiet cases pinned per row by tests/shared/test_credential_plaintext_policy.py::test_reference_only_rows"
       plaintext_credential_findings: "#1560 ⑤-a table-driven judgement over CREDENTIAL_REF_SITES.plaintext + CREDENTIAL_PLAINTEXT_SITES (data, not a numeric/string law); positive and negative example per row in tests/shared/test_credential_plaintext_policy.py"
+      _step_matches: "#1560 ⑤-b one step of a table path against a concrete step ('*' any key, '[]' any index, else equal); exercised for every row by tests/ops/test_grar_credential_plaintext.py::test_no_message_quotes_a_credential_value"
+      is_credential_path: "#1560 ⑤-b prefix overlap of a receiver path with the rows of CREDENTIAL_REF_SITES + CREDENTIAL_PLAINTEXT_SITES (data, no law); every row × three bad shapes pinned by tests/ops/test_grar_credential_plaintext.py::test_no_message_quotes_a_credential_value"
+      shown_value: "#1560 ⑤-b the one exit of a config value into a message (mask a credential path, container → type and length, string → repr only when name-like); guarded by the dynamic canary matrix tests/ops/test_routing_value_canary_matrix.py and tests/ops/test_grar_credential_plaintext.py::test_no_message_quotes_a_credential_value"
+      shown_key: "#1560 ⑤-b shown_value(key, bare=True) for a key the author wrote; pinned by the key-name cases of tests/ops/test_routing_value_canary_matrix.py"
+      key_segment: "#1560 ⑤-b a path segment: the key when name-like, else <key> (two branches); pinned by tests/shared/test_receiver_file_reference_rule.py::test_a_key_that_is_not_a_string_is_refused and the key-name matrix cases"
+      scalar_text: "#1560 ⑤-b repr of a scalar, type and length of a container (two branches, no law); pinned by tests/shared/test_no_value_repr_in_messages.py and the wrapped-receiver canary cases of tests/ops/test_grar_credential_plaintext.py"
+      value_text: "#1560 ⑤-b '<type> <scalar_text>' or a container's scalar_text; pinned by tests/ops/test_grar_group_by.py / test_grar_routing_values_not_string.py messages"
+      receiver_value_repr: "#1560 ⑤-b repr or <masked> by is_credential_path; the canary test over both tables pins it (test_no_message_quotes_a_credential_value)"
+      receiver_type_name: "#1560 ⑤-b _type_name with its text through receiver_value_repr; pinned with it by test_no_message_quotes_a_credential_value"
+      site_path_text: "#1560 ⑤-b spelling of one CREDENTIAL_REF_SITES path (keys joined by '.', '*' kept, '[]' appended); every row's text pinned by tests/ops/test_grar_secret_ref.py::test_shared_secret_fields_are_the_table_paths"
+      shared_secret_field_texts: "#1560 ⑤-b set of site_path_text over CREDENTIAL_REF_SITES (data, no law); pinned with site_path_text by tests/ops/test_grar_secret_ref.py::test_shared_secret_fields_are_the_table_paths"
+      credential_shape_problems: "#1560 ⑤-b a walk of the credential site tables (data-table-driven, not a numeric/string law); example-pinned"
       value_paths_to_mask: "#1560 ⑤-a the masking list (every written-out scalar on or below a credential row); example-pinned by tests/shared/test_credential_plaintext_policy.py and the canary tests of tests/ops/test_migrate_credentials.py"
 
   scripts/tools/_lib_label.py:
@@ -325,6 +337,7 @@ modules:
     excluded:
       build_receiver_config: "Heavy state-machine over RECEIVER_TYPES; covered by test_generate_alertmanager_routes.py integration"
       ignored_key_warning: "#2960 one-line constructor of the IgnoredKeyWarning mark (same shape as skipped_entry_warning / replaced_value_warning); its blocking effect pinned by test_routing_ignored_keys.py"
+      credential_refusal: "#1560 ⑤-b one-line constructor of the CredentialRefusal mark (same shape as skipped_entry_warning); its blocking effect pinned by tests/ops/test_grar_credential_plaintext.py"
       receiver_type: "#2780 two-branch accessor (mapping receiver with a str type → that type, else ''); closed shape list (dict / list / int / bool / null type × main / overrides / routes × every check that reads a type) pinned by test_grar_strict_hardening.py::TestTenantReceiverTypeNotString"
       chain_levels: "#2326 path-prefix split of a POSIX directory level; example-covered by test_generate_routes_nested_tree.py (root / one / two levels) and the hier-* trees of routing_policy_parity_matrix.json"
       level_contains: "#2326 subtree membership (root contains all; prefix + '/' so `team` does not contain `team-b`); example-covered by test_generate_routes_nested_tree.py"
@@ -427,8 +440,8 @@ modules:
       blocking_generation_errors: "#2279 two-category filter (WARN…skipping | duplicate receiver name) shared by --validate and validate-config; example-covered by test_grar_receiver_name_collision.py (CLI rc 1, validate-config FAIL, shared-caller pin) + the existing #2164 skipped-entry tests"
       receiver_name_collisions: "#2279 group-by-name over (name, source) pairs; example-covered by test_grar_receiver_name_collision.py (routes- and overrides-type collisions name both sources, no-collision control)"
       duplicate_tenant_errors: "#2315 formatter over _lib_confd.duplicate_declarations' {id: [files]} (the grouping is that shared predicate's); example-covered by test_grar_duplicate_tenant.py (root pair, .yaml+.yml, root+nested name every file; overlay / distinct-tenant / filename controls; shared-scan agreement with validate-config)"
-      _load_shared_secrets: "#1560 fail-closed reader of the --policy shared_secrets (alias / Secret name / fields shape, da- prefix, auth_password); accepted and every refused shape pinned by tests/ops/test_grar_secret_ref.py::test_policy_reads_shared_secrets and test_unusable_shared_secrets_make_the_policy_unusable"
-      _shared_secret_fields: "#1560 set algebra (every field that takes a Secret reference, minus auth_password); read through _load_shared_secrets' refusals in tests/ops/test_grar_secret_ref.py"
+      _load_shared_secrets: "#1560 fail-closed reader of the --policy shared_secrets (alias / Secret name / fields shape, da- prefix, fields as full row paths — ⑤-b); accepted and every refused shape pinned by tests/ops/test_grar_secret_ref.py::test_policy_reads_shared_secrets and test_unusable_shared_secrets_make_the_policy_unusable"
+      _shared_secret_fields: "#1560 ⑤-b the full path of every CREDENTIAL_REF_SITES row (shared_secret_field_texts); read through _load_shared_secrets' refusals in tests/ops/test_grar_secret_ref.py"
 
   # ── Lint helpers (small but load-bearing) ─────────────────────────
 

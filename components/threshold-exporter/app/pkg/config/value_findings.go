@@ -166,17 +166,27 @@ func invalidWindowWhat(ws []invalidWindow) string {
 }
 
 // deadEntriesJudged reports whether the write gate judges the dead entries
-// — and, #3683, the windows it cannot read (newInvalidWindowFinding) — of sv, written under key (canonKey once #1231-canonicalized): only a value
-// /metrics may serve — a key whose platform key (PlatformKeyFor) the root
-// `defaults:` values or `optional_overrides:` declares, in the spelling the
-// tenant's map serves (normalized: of two spellings of one dimensional key,
-// the one normalizeKeys keeps). A key no reader reads is the shared key
-// verdict's unread, and a losing spelling is spelling_duplicate; neither
-// serves its schedule, so neither has a dead entry to report (#3502). Nor
-// does a dimensional key the resolver takes no row from: dimensionalRowRead,
-// the resolver's own entry test, on the root `dimensions:` dims — a label it
-// does not declare (#3684). That test only narrows the platform-key rule
-// above; it does not widen it to every row the resolver serves.
+// — and, #3683, the windows it cannot read (newInvalidWindowFinding) — of
+// sv, written under key (canonKey once #1231-canonicalized): only a value
+// /metrics may serve, in the spelling the tenant's map serves (normalized:
+// of two spellings of one dimensional key, the one normalizeKeys keeps). A
+// key no reader reads is the shared key verdict's unread, and a losing
+// spelling is spelling_duplicate; neither serves its schedule, so neither
+// has a dead entry to report (#3502).
+//
+// "May serve" is the resolver's own entry test for the key's shape (#3718),
+// the question the shared key verdict asks of the served reading:
+//   - a dimensional key: dimensionalRowRead on the root `dimensions:` dims —
+//     every label declared under its base (#3684), whether or not the base
+//     has a platform value (ADR-038 §11: `dimensions:` is the declaration);
+//   - a `<key>_critical` key: criticalRowRead — its base valued in the root
+//     `defaults:` (`optional_overrides:` declares no critical tier) — or, as
+//     the base phase reads it, the `<key>_critical` itself valued there;
+//   - any other key: its platform key (PlatformKeyFor) valued in the root
+//     `defaults:` or declared under `optional_overrides:`.
+//
+// cmd/da-guard's TestDeadEntries_WriteGateAndKeyVerdictAgree holds this to
+// the shared key verdict over every layout × key shape.
 func deadEntriesJudged(key, canonKey string, sv ScheduledValue, normalized map[string]ScheduledValue,
 	canonDefaults map[string]float64, canonOptional map[string]struct{}, dims map[string][]string) bool {
 	if len(sv.Overrides) == 0 {
@@ -186,13 +196,25 @@ func deadEntriesJudged(key, canonKey string, sv ScheduledValue, normalized map[s
 	if !ok {
 		return false
 	}
-	_, valued := canonDefaults[base]
-	_, declared := canonOptional[base]
-	if !valued && !declared {
-		return false
-	}
-	if strings.Contains(canonKey, "{") && !dimensionalRowRead(canonKey, dims) {
-		return false
+	switch {
+	case strings.Contains(canonKey, "{"):
+		if !dimensionalRowRead(canonKey, dims) {
+			return false
+		}
+	case strings.HasSuffix(canonKey, criticalSuffix):
+		// The critical phase reads it when its base is valued; the base
+		// phase reads it as a plain key when the root `defaults:` values the
+		// `<key>_critical` itself.
+		_, direct := canonDefaults[canonKey]
+		if _, read := criticalRowRead(canonKey, canonDefaults); !read && !direct {
+			return false
+		}
+	default:
+		_, valued := canonDefaults[base]
+		_, declared := canonOptional[base]
+		if !valued && !declared {
+			return false
+		}
 	}
 	if c, dim := canonicalDimensionalKey(key); dim {
 		if served, has := normalized[c]; has && !sameSchedule(served, sv) {

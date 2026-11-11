@@ -42,13 +42,25 @@ pack_level:
 # 出貨 alert 不在 candidate 內（exit-lock：alert 一旦加進 candidate，條目必須移除）
 # ---------------------------------------------------------------------
 absent_from_candidate:
-  oracle: []
+  oracle:
+    - alert: OracleHighActiveSessionsCritical
+      reason: >-
+        critical 級門檻走 user_threshold{severity="critical"}，租戶 opt-in（#3658；
+        registry 的 280 是建議起點，平台不供給 critical 列），無出貨預設值可 inline。
+    - alert: OracleTablespaceAlmostFullCritical
+      reason: 同 OracleHighActiveSessionsCritical——critical 級為租戶 opt-in（#3658），無出貨預設值可 inline。
   db2:
     - alert: DB2TablespaceAlmostFull
       reason: >-
         盲寫函式庫沒有 tablespace 故障 signature（anti-circularity：不回頭照規則
         補寫），規則放進 candidate 也永遠 inert；維持為 coverage-gap finding。
       tracking: "#1174"
+    - alert: DB2HighConnectionsCritical
+      reason: >-
+        critical 級門檻走 user_threshold{severity="critical"}，租戶 opt-in（#3658；
+        registry 的 400 是建議起點，平台不供給 critical 列），無出貨預設值可 inline。
+    - alert: DB2HighLockWaitTimeCritical
+      reason: 同 DB2HighConnectionsCritical——critical 級為租戶 opt-in（#3658），無出貨預設值可 inline。
   kubernetes:
     - alert: PodContainerHighCPUCritical
       reason: critical 級門檻走 user_threshold{severity="critical"}，租戶 opt-in、無出貨預設值可 inline。

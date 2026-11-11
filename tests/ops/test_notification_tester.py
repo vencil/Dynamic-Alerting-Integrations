@@ -1274,8 +1274,10 @@ class TestGeneratorVerdict:
     def test_unclosed_ipv6_bracket_is_refused_like_the_generator(self, dry_run):
         result = nt.test_receiver(_webhook("http://[::1/hook"), timeout=2, dry_run=dry_run)
         assert result.status == nt.STATUS_INVALID_URL, result.detail
+        # #1560 ⑤-b (blind review F1): the generator's own message, with the
+        # url — a credential place — masked, never quoted.
         assert result.detail == ("receiver type 'webhook' field 'url' value "
-                                 "'http://[::1/hook' is not in the format "
+                                 "<masked> is not in the format "
                                  "tenant-config.schema.json requires")
 
     @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
@@ -1325,7 +1327,9 @@ class TestGeneratorVerdict:
     def test_email_smarthost_non_numeric_port_is_invalid_url(self, dry_run):
         result = nt.test_receiver(_email(smarthost="smtp.example.com:abc"), dry_run=dry_run)
         assert result.status == nt.STATUS_INVALID_URL, result.detail
-        assert "field 'smarthost' value 'smtp.example.com:abc'" in result.detail
+        # #1560 ⑤-b (round 4): a value that is not name-like (here a ':') is
+        # named by its length, never quoted — the field is what to fix.
+        assert "field 'smarthost' value a string of 20 chars" in result.detail
 
     @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
     def test_email_smarthost_port_out_of_range_is_invalid_url(self, dry_run):

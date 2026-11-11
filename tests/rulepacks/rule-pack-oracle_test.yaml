@@ -238,6 +238,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: oracle_sessions_active
               tenant: db-a
             exp_annotations:
               summary: "Oracle high active sessions on db-a"
@@ -253,6 +254,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: oracle_sessions_active
               tenant: db-b
             exp_annotations:
               summary: "Oracle high active sessions on db-b"
@@ -276,6 +278,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: oracle_tablespace_used_percent
               tenant: db-a
             exp_annotations:
               summary: "Oracle tablespace nearing capacity on db-a"
@@ -290,6 +293,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
+              metric_group: oracle_tablespace_used_percent
               tenant: db-b
             exp_annotations:
               summary: "Oracle tablespace nearing capacity on db-b"

@@ -19,3 +19,211 @@ tests:
         exp_samples:
           - labels: 'tenant:alert_threshold:es_heap_usage_percent{tenant="t1"}'
             value: 85
+
+  # #3658 critical tier: es_heap_usage_percent_critical. t-fire sits above the critical
+  # threshold (90); t-quiet sits between warning (85) and critical,
+  # so only the warning twin ElasticsearchHighHeapUsage would page it — ElasticsearchHighHeapUsageCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "elasticsearch_jvm_memory_used_bytes{tenant=\"t-fire\", area=\"heap\"}"
+        values: "95x60"
+      - series: "elasticsearch_jvm_memory_max_bytes{tenant=\"t-fire\", area=\"heap\"}"
+        values: "100x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"es\", metric=\"heap_usage_percent\", severity=\"warning\"}"
+        values: "85x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"es\", metric=\"heap_usage_percent\", severity=\"critical\"}"
+        values: "90x60"
+      - series: "elasticsearch_jvm_memory_used_bytes{tenant=\"t-quiet\", area=\"heap\"}"
+        values: "88x60"
+      - series: "elasticsearch_jvm_memory_max_bytes{tenant=\"t-quiet\", area=\"heap\"}"
+        values: "100x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"es\", metric=\"heap_usage_percent\", severity=\"warning\"}"
+        values: "85x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"es\", metric=\"heap_usage_percent\", severity=\"critical\"}"
+        values: "90x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:es_heap_usage_percent_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:es_heap_usage_percent_critical{tenant=\"t-fire\"}"
+            value: 90
+          - labels: "tenant:alert_threshold:es_heap_usage_percent_critical{tenant=\"t-quiet\"}"
+            value: 90
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: ElasticsearchHighHeapUsageCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ElasticsearchHighHeapUsageCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "es_heap_usage_percent"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Elasticsearch heap usage critical on t-fire"
+              summary_zh: "t-fire 的 Elasticsearch JVM heap 使用率嚴重過高"
+              platform_summary: "[] t-fire: ES heap at critical level — circuit breakers trip and long GC pauses follow; shed heavy queries and aggregations now"
+              platform_summary_zh: "[] t-fire: Elasticsearch heap 達嚴重水位 — circuit breaker 將觸發並出現長時間 GC 停頓；請立即卸除重查詢與聚合"
+              description: "JVM heap: 95.0% (critical threshold exceeded)"
+              description_zh: "JVM heap: 95.0%（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: es_disk_usage_percent_critical. t-fire sits above the critical
+  # threshold (90); t-quiet sits between warning (85) and critical,
+  # so only the warning twin ElasticsearchHighDiskUsage would page it — ElasticsearchHighDiskUsageCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "elasticsearch_filesystem_data_available_bytes{tenant=\"t-fire\"}"
+        values: "5x60"
+      - series: "elasticsearch_filesystem_data_size_bytes{tenant=\"t-fire\"}"
+        values: "100x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"es\", metric=\"disk_usage_percent\", severity=\"warning\"}"
+        values: "85x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"es\", metric=\"disk_usage_percent\", severity=\"critical\"}"
+        values: "90x60"
+      - series: "elasticsearch_filesystem_data_available_bytes{tenant=\"t-quiet\"}"
+        values: "12x60"
+      - series: "elasticsearch_filesystem_data_size_bytes{tenant=\"t-quiet\"}"
+        values: "100x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"es\", metric=\"disk_usage_percent\", severity=\"warning\"}"
+        values: "85x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"es\", metric=\"disk_usage_percent\", severity=\"critical\"}"
+        values: "90x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:es_disk_usage_percent_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:es_disk_usage_percent_critical{tenant=\"t-fire\"}"
+            value: 90
+          - labels: "tenant:alert_threshold:es_disk_usage_percent_critical{tenant=\"t-quiet\"}"
+            value: 90
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: ElasticsearchHighDiskUsageCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ElasticsearchHighDiskUsageCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "es_disk_usage_percent"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Elasticsearch disk usage critical on t-fire"
+              summary_zh: "t-fire 的 Elasticsearch 磁碟使用率嚴重過高"
+              platform_summary: "[] t-fire: ES disk at critical level — near the high and flood-stage watermarks shards stop allocating and indices go read-only; free space or add nodes now"
+              platform_summary_zh: "[] t-fire: Elasticsearch 磁碟達嚴重水位 — 接近 high 與 flood-stage watermark 時分片停止配置、索引轉為唯讀；請立即清出空間或擴充節點"
+              description: "Disk usage: 95.0% (critical threshold exceeded)"
+              description_zh: "磁碟使用率: 95.0%（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: es_search_latency_ms_critical. t-fire sits above the critical
+  # threshold (2000); t-quiet sits between warning (1000) and critical,
+  # so only the warning twin ElasticsearchHighSearchLatency would page it — ElasticsearchHighSearchLatencyCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "elasticsearch_indices_search_query_time_seconds{tenant=\"t-fire\"}"
+        values: "0+3x60"
+      - series: "elasticsearch_indices_search_query_total{tenant=\"t-fire\"}"
+        values: "0+1x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"es\", metric=\"search_latency_ms\", severity=\"warning\"}"
+        values: "1000x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"es\", metric=\"search_latency_ms\", severity=\"critical\"}"
+        values: "2000x60"
+      - series: "elasticsearch_indices_search_query_time_seconds{tenant=\"t-quiet\"}"
+        values: "0+1.5x60"
+      - series: "elasticsearch_indices_search_query_total{tenant=\"t-quiet\"}"
+        values: "0+1x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"es\", metric=\"search_latency_ms\", severity=\"warning\"}"
+        values: "1000x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"es\", metric=\"search_latency_ms\", severity=\"critical\"}"
+        values: "2000x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:es_search_latency_ms_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:es_search_latency_ms_critical{tenant=\"t-fire\"}"
+            value: 2000
+          - labels: "tenant:alert_threshold:es_search_latency_ms_critical{tenant=\"t-quiet\"}"
+            value: 2000
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: ElasticsearchHighSearchLatencyCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ElasticsearchHighSearchLatencyCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "es_search_latency_ms"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Elasticsearch search latency critical on t-fire"
+              summary_zh: "t-fire 的 Elasticsearch 搜尋延遲嚴重過高"
+              platform_summary: "[] t-fire: ES search latency at critical level — user-facing timeouts are likely; find and throttle the slow queries (slow log) now"
+              platform_summary_zh: "[] t-fire: Elasticsearch 搜尋延遲達嚴重水位 — 使用者端很可能逾時；請立即從 slow log 找出並限制慢查詢"
+              description: "Average search latency: 3000ms (critical threshold exceeded)"
+              description_zh: "平均搜尋延遲: 3000ms（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # #3658 critical tier: es_pending_tasks_critical. t-fire sits above the critical
+  # threshold (150); t-quiet sits between warning (50) and critical,
+  # so only the warning twin ElasticsearchPendingTasks would page it — ElasticsearchPendingTasksCritical must not.
+  - interval: 15s
+    input_series:
+      - series: "elasticsearch_cluster_health_number_of_pending_tasks{tenant=\"t-fire\"}"
+        values: "200x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"es\", metric=\"pending_tasks\", severity=\"warning\"}"
+        values: "50x60"
+      - series: "user_threshold{tenant=\"t-fire\", component=\"es\", metric=\"pending_tasks\", severity=\"critical\"}"
+        values: "150x60"
+      - series: "elasticsearch_cluster_health_number_of_pending_tasks{tenant=\"t-quiet\"}"
+        values: "100x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"es\", metric=\"pending_tasks\", severity=\"warning\"}"
+        values: "50x60"
+      - series: "user_threshold{tenant=\"t-quiet\", component=\"es\", metric=\"pending_tasks\", severity=\"critical\"}"
+        values: "150x60"
+    promql_expr_test:
+      - expr: tenant:alert_threshold:es_pending_tasks_critical
+        eval_time: 1m
+        exp_samples:
+          - labels: "tenant:alert_threshold:es_pending_tasks_critical{tenant=\"t-fire\"}"
+            value: 150
+          - labels: "tenant:alert_threshold:es_pending_tasks_critical{tenant=\"t-quiet\"}"
+            value: 150
+    alert_rule_test:
+      - eval_time: 150s
+        alertname: ElasticsearchPendingTasksCritical
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: ElasticsearchPendingTasksCritical
+        exp_alerts:
+          # only t-fire; t-quiet is above warning but below critical.
+          - exp_labels:
+              severity: "critical"
+              maintenance: "mute"
+              metric_group: "es_pending_tasks"
+              tenant: "t-fire"
+            exp_annotations:
+              summary: "Elasticsearch pending cluster tasks critical on t-fire"
+              summary_zh: "t-fire 的 Elasticsearch 待處理叢集工作嚴重堆積"
+              platform_summary: "[] t-fire: ES master task backlog at critical level — mapping, settings and shard changes stall; stop bulk index or mapping churn and check master load now"
+              platform_summary_zh: "[] t-fire: Elasticsearch master 工作嚴重堆積 — mapping、設定與分片變更將停滯；請立即停止大量建立索引或 mapping 變動並檢查 master 負載"
+              description: "200 pending tasks (critical threshold exceeded)"
+              description_zh: "200 個待處理工作（超過嚴重閾值）"
+              runbook_url: ""
+              owner: ""
+              tier: ""

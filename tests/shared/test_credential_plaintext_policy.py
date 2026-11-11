@@ -61,6 +61,23 @@ NOT_CREDENTIALS: frozenset[tuple[str, tuple[str, ...]]] = frozenset({
                    "server_name")),
 })
 
+#: #1560 ⑤-b（題 A，owner 2026-11-07）：`NOT_CREDENTIALS` 裡名字含 `proxy` 的葉欄位，
+#: 各附一段理由——為什麼它不是租戶能用來導流的 proxy。上游新增 proxy 欄位時，
+#: `test_every_proxy_leaf_is_classified` 先轉紅，逼人在這裡、某列的 `proxies` 或禁止列
+#: 三者擇一分類。
+_PROXY_FROM_ENV_WHY = (
+    "reads the Alertmanager pod's own HTTPS_PROXY / NO_PROXY, which the platform "
+    "deployer sets, not the receiver's author; upstream refuses it together with "
+    "proxy_url or no_proxy, so it never names a proxy of the config's choosing")
+_NO_PROXY_WHY = ("lists hosts that bypass the proxy; it names no proxy and carries no "
+                 "credential, and is only read together with a proxy_url")
+NOT_CREDENTIAL_PROXY_REASONS: dict[tuple[str, tuple[str, ...]], str] = {
+    ("webhook", ("http_config", "proxy_from_environment")): _PROXY_FROM_ENV_WHY,
+    ("webhook", ("http_config", "oauth2", "proxy_from_environment")): _PROXY_FROM_ENV_WHY,
+    ("webhook", ("http_config", "no_proxy")): _NO_PROXY_WHY,
+    ("webhook", ("http_config", "oauth2", "no_proxy")): _NO_PROXY_WHY,
+}
+
 
 def _load() -> dict:
     with open(_SCHEMA, encoding="utf-8") as f:
@@ -153,6 +170,36 @@ def test_every_credential_leaf_is_classified_exactly_once():
             twice.append((rtype, path, hits))
     assert not unclassified, f"x-credential leaves no table classifies: {unclassified}"
     assert not twice, f"leaves classified more than once: {twice}"
+
+
+def test_every_proxy_leaf_is_classified():
+    """題 A（owner 2026-11-07）：schema 上名字含 `proxy` 的每個葉欄位（兩層 http_config
+    各一份），必須恰是三者之一：某列 `proxies`（可導流，受限列上禁設）、
+    `CREDENTIAL_PLAINTEXT_SITES` 的禁止列、或附理由的 `NOT_CREDENTIALS`。
+    「哪些 proxy 鍵可導流」只由 `CREDENTIAL_REF_SITES.proxies` 決定。"""
+    leaves, _nodes = _credential_subtrees(_load())
+    proxy_leaves = sorted((r, p) for r, p in leaves
+                          if any("proxy" in step for step in p))
+    # 正向控制：兩層的四個欄位都要走到。
+    for layer in (("http_config",), ("http_config", "oauth2")):
+        for leaf in ("proxy_url", "proxy_from_environment", "no_proxy"):
+            assert ("webhook", layer + (leaf,)) in proxy_leaves, (layer, leaf)
+        assert ("webhook", layer + ("proxy_connect_header", "*", "[]")) in proxy_leaves
+    routed = {(s.rtype, proxy) for s in CREDENTIAL_REF_SITES for proxy in s.proxies}
+    forbidden = {(s.rtype, s.path) for s in CREDENTIAL_PLAINTEXT_SITES
+                 if s.policy == PLAINTEXT_FORBIDDEN}
+    bad = []
+    for rtype, path in proxy_leaves:
+        kinds = [k for k, hit in (
+            ("proxies", any(r == rtype and _covers(p, path) for r, p in routed)),
+            ("forbidden", any(r == rtype and _covers(p, path) for r, p in forbidden)),
+            ("not-credential", (rtype, path) in NOT_CREDENTIALS
+             and bool(NOT_CREDENTIAL_PROXY_REASONS.get((rtype, path), "").strip())),
+        ) if hit]
+        if len(kinds) != 1:
+            bad.append((rtype, path, kinds))
+    assert not bad, f"proxy leaves not classified exactly once: {bad}"
+    assert set(NOT_CREDENTIAL_PROXY_REASONS) <= NOT_CREDENTIALS
 
 
 def test_every_row_names_a_place_the_schema_has():

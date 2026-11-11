@@ -562,19 +562,20 @@ def test_a_non_mapping_level_contributes_nothing(tmp_path):
     })
     res = _gar("--config-dir", str(d), "--output-alertmanager", "--dry-run")
     assert res.returncode == EXIT_OK, res.stderr
-    assert ("_routing_defaults in team/_defaults.yaml must be a mapping, got list"
+    assert ("_routing_defaults in team/_defaults.yaml must be a mapping, got a list of 2 item(s)"
             in res.stderr)
     assert _gar("--config-dir", str(d), "--validate").returncode == EXIT_VIOLATION
     tree = load_tenant_tree(str(d))
     assert tree.routing_configs["t-team"]["receiver"]["type"] == "email"
 
 
-_ROOT_NOT_A_MAPPING = [("[a, b]", "list"), ("not-a-mapping", "string"),
+# #1560 ⑤-b (round 3): the shape is named, never the content.
+_ROOT_NOT_A_MAPPING = [("[a, b]", "a list of 2 item(s)"), ("not-a-mapping", "a non-empty string"),
                        ("42", "int"), ("false", "boolean")]
 
 
 @pytest.mark.parametrize("value, kind", _ROOT_NOT_A_MAPPING,
-                         ids=[k for _v, k in _ROOT_NOT_A_MAPPING])
+                         ids=["list", "string", "int", "boolean"])
 def test_a_non_mapping_root_contributes_nothing(tmp_path, value, kind):
     """#2412: the ROOT gets the subdirectory verdict above — named, no layer
     — where it used to die in `resolve_routing_defaults`' `dict(root)` with a
