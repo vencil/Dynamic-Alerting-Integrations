@@ -117,6 +117,12 @@ func refusedThresholdCases(parityOwn string) []parityCase {
 			body: "tenants:\n  " + parityIn + ":\n    mysql_connections:\n      default: \"70\"\n" +
 				"      overrides:\n        - window: \"01:00-02:00\"\n          value: \"1e999\"\n",
 			want: http.StatusBadRequest, wantText: "is not a threshold the exporter reads", tree: true},
+		// #3683: a `window:` the exporter cannot read is refused where it
+		// is written (window_invalid), whatever its value.
+		parityCase{name: "unreadable_window", file: parityOwn, groups: "in-team", extra: parityThresholdDefaults,
+			body: "tenants:\n  " + parityIn + ":\n    mysql_connections:\n      default: \"70\"\n" +
+				"      overrides:\n        - window: \"25:00-26:00\"\n          value: \"5\"\n",
+			want: http.StatusBadRequest, wantText: "is not a UTC HH:MM-HH:MM with start different from end", tree: true},
 		// A `_critical` key's value is the number alone (resolveCriticalRows).
 		parityCase{name: "refused_severity_on_a_critical_key", file: parityOwn, groups: "in-team", extra: parityThresholdDefaults,
 			body: put("mysql_connections_critical", "90:critical"), want: http.StatusBadRequest,

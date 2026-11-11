@@ -176,16 +176,62 @@ func (r thresholdRefusal) notice(tenant string) string {
 // one: the two never report the same value. One value at a time, no
 // allocation for a value the resolvers read: it runs for every threshold key
 // of every tenant ValidateTenantKeys judges.
+//
+// #3683: only an entry /metrics may serve is judged. A value under a window
+// parseTimeWindow refuses is the write gate's window_invalid finding
+// (newInvalidWindowFinding), and one in an entry that serves no minute of
+// the day (ScheduledValue.DeadEntries) its dead_entry finding: each entry is
+// reported once, by the defect that keeps it from being served — the
+// exporter never reads the value, so refusing it as well would name a second
+// problem that is not the one to fix. Asked only for a refused value: the
+// entries the resolvers read cost nothing more.
 func thresholdRefusalIn(defaults map[string]float64, key string, sv ScheduledValue) (thresholdRefusal, bool) {
-	if r, ok := thresholdValueRefusal(defaults, key, sv.Default); ok {
+	if r, ok := thresholdValueRefusal(defaults, key, sv.Default); ok && !entryDead(sv, "default") {
 		return r, true
 	}
-	for _, o := range sv.Overrides {
-		if r, ok := thresholdValueRefusal(defaults, key, o.Value); ok {
-			return r, true
+	for i, o := range sv.Overrides {
+		r, ok := thresholdValueRefusal(defaults, key, o.Value)
+		if !ok {
+			continue
 		}
+		if _, _, valid := parseTimeWindow(o.Window, nil); !valid {
+			continue
+		}
+		if entryDead(sv, overrideEntry(i)) {
+			continue
+		}
+		return r, true
 	}
 	return thresholdRefusal{}, false
+}
+
+// servedEntryValues is the values of sv's entries /metrics may serve, as
+// written: its default unless the windows cover the whole day, then each
+// window's whose `window:` parses and that some minute is not shadowed from
+// (DeadEntries) — the entries thresholdRefusalIn judges.
+func servedEntryValues(sv ScheduledValue) []string {
+	out := make([]string, 0, 1+len(sv.Overrides))
+	if !entryDead(sv, "default") {
+		out = append(out, sv.Default)
+	}
+	for i, o := range sv.Overrides {
+		if _, _, ok := parseTimeWindow(o.Window, nil); !ok || entryDead(sv, overrideEntry(i)) {
+			continue
+		}
+		out = append(out, o.Value)
+	}
+	return out
+}
+
+// entryDead reports whether entry ("default" or overrideEntry(i)) of sv is
+// one of its DeadEntries.
+func entryDead(sv ScheduledValue, entry string) bool {
+	for _, d := range sv.DeadEntries() {
+		if d.Entry == entry {
+			return true
+		}
+	}
+	return false
 }
 
 func thresholdValueRefusal(defaults map[string]float64, key, raw string) (thresholdRefusal, bool) {
@@ -239,13 +285,16 @@ func refusedThresholdWriteMessage(key, raw string, whole bool) string {
 // the same instant. `abc` against `xyz`, a moved window, or overlapping
 // windows reordered so another one wins a minute are not.
 //
-// Every value written must also be one the other side writes (as a set of
-// readings, so a window repeating the default stays alike): a value under a
-// window that never applies — one that does not parse, or one wholly
-// shadowed by an earlier window — is never served, so the minute-by-minute
-// comparison cannot see it, yet it is a value the write adds, and a refused
-// one must not pass as the one already on disk. readAlike, the one "read
-// the same way" of a value finding, dispatches a threshold key to it.
+// Every value written in an entry /metrics may serve must also be one the
+// other side writes (as a set of readings, so a window repeating the default
+// stays alike): the minute-by-minute comparison sees only the entry that
+// wins each minute. An entry that serves no minute — a window that does not
+// parse, one wholly shadowed by an earlier window, a default the windows
+// cover — is not part of the reading (#3683): its value is not judged as a
+// threshold (thresholdRefusalIn), and the entry itself is the write gate's
+// window_invalid or dead_entry finding, ratcheted as written. So removing
+// such an entry leaves the rest read alike. readAlike, the one "read the
+// same way" of a value finding, dispatches a threshold key to it.
 func thresholdReadAlike(key string, a, b ScheduledValue) bool {
 	if expiryReading(a.Expiry) != expiryReading(b.Expiry) {
 		return false
@@ -265,12 +314,13 @@ func thresholdReadAlike(key string, a, b ScheduledValue) bool {
 }
 
 // sameValueReadings reports whether a and b write the same set of values —
-// default and every window's, by thresholdValueReading — wherever they sit.
+// default and every window's, by thresholdValueReading — wherever they sit,
+// leaving out each entry that serves no minute (servedEntryValues).
 func sameValueReadings(key string, a, b ScheduledValue) bool {
 	set := func(sv ScheduledValue) map[string]bool {
-		out := map[string]bool{thresholdValueReading(key, sv.Default): true}
-		for _, o := range sv.Overrides {
-			out[thresholdValueReading(key, o.Value)] = true
+		out := map[string]bool{}
+		for _, v := range servedEntryValues(sv) {
+			out[thresholdValueReading(key, v)] = true
 		}
 		return out
 	}
