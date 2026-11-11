@@ -113,15 +113,9 @@ helm install tenant-api ./helm/tenant-api/ -n tenant-api --create-namespace \
 - **state store 的備份與還原**：群組、saved views、federation 設定與 AccountID 帳本存在 `tenant-api-state` ConfigMap，`kubectl -n tenant-api get configmap tenant-api-state -o yaml > backup.yaml` 即為完整快照。⛔ **不要用 `kubectl apply` 把備份蓋回去**：備份之後配發的 AccountID 會被下一個租戶再拿到一次（跨租戶 log 洩漏）。還原一律經 `tenant-api state restore`，帳本只合併、不覆蓋（[#2884](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2884)；用法見 [tenant-api README §state store 的備份與還原](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#state-store-的備份與還原)）。
 - **產生器容器（必備）**：pod 裡固定有一個 da-tools 容器跑 `da-tools generator-service`（[ADR-036 §3](../adr/036-single-parser-effective-config.md)），以唯讀方式讀同一個 conf.d repo；tenant-api 每筆會改變 conf.d 內容的寫入，commit 前都經只有兩者掛載的 Unix socket 問它「這筆寫入後整棵 conf.d 能否通過 `generate-routes --validate --strict`」，通過才寫入（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)；回應碼見 [tenant-api 硬化 §3.9](../api/tenant-api-hardening.md)）。需要 git repo（`gitRepoUrl`，或 `confDir.type=pvc` 裡已有的 repo；節點上已有的 repo 先放進一個 PV，再以 `confDir.pvc.existingClaim` 指定綁到它的 PVC），否則 chart 不 render；資源 request＝limit（預設 512Mi／1 CPU）。部署端 policy 檔（`allowed_domains`）放在你自己管的 ConfigMap，以 `generator.policy.existingConfigMap`／`generator.policy.key` 指定，chart 不內建內容；同一份會掛進 tenant-api，用來核對產生器判定時用的是同一份。容器不可用或 policy 檔不可用時，寫入一律回 503，讀取不受影響（`tenant_api_policy_available` 為 0，告警 `TenantApiPolicyUnavailable`）。⚠️ chart 預設的 `tools/v2.9.0` 映像沒有這個子指令，要把 `generator.image` 指到含它的 da-tools 映像（下一個 tools 版本發布時預設會一起調升），否則容器反覆重啟、連帶 tenant-api 不 Ready。設了 `generator.image.digest` 時以 digest 為準，只改 tag 不會換映像：要同時更新或清除 digest，兩者都要指向含 `generator-service` 的映像。
 
-**da-portal**（Tenant Manager UI）：
+**Tenant Manager UI**：已在 tenant-api 的 pod 裡。chart 的 portal 容器跑 da-portal 映像，前面是同一個 oauth2-proxy：`/api/` 送 tenant-api、其餘送 portal（[ADR-027 §5](../adr/027-tenant-api-caller-identity.md)），不必另裝 chart；把 tenant-api 的 Ingress 打開即可從瀏覽器使用。
 
-```bash
-helm install da-portal ./helm/da-portal/ -n monitoring
-```
-
-需要：
-- **oauth2-proxy 必備**：portal nginx 把 `:80 → oauth2-proxy:4180`，**關掉 oauth2-proxy 會 CrashLoopBackOff**（它是 auth 前端）。
-- **後端**：`config.tenantApiUrl` 指向 tenant-api Service（預設 `http://tenant-api.tenant-api.svc.cluster.local:8080`）。
+`helm/da-portal` 只剩純靜態部署（無登入、不轉送任何請求），給只需要離線工具的環境：`helm install da-portal ./helm/da-portal/ -n monitoring`。
 
 > 一鍵本機體驗（不需 oauth2-proxy / git repo；dev-bypass + 從源碼 build tenant-api）見 [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)。
 
@@ -184,7 +178,7 @@ _routing_enforced:
   enabled: true                 # ⚠️ 省略＝false，整段被靜默忽略
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/xxx"
+    api_url: {secret: {shared: noc-slack, key: api-url}}  # 共用 Secret：別名須列在部署 policy 的 shared_secrets
     channel: "#noc-alerts"
   # ⚠️ match 必須是「matcher 字串的 list」。省略它會產生一條沒有任何 matcher
   #    的 route，加上固定帶的 continue: true ＝ 所有租戶的所有告警都被雙送到
@@ -205,7 +199,7 @@ NOC 收到的通知使用 `platform_summary` annotation，內容聚焦容量規�
 _routing_defaults:
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/{{tenant}}-alerts"
+    api_url: {secret: {key: slack-api-url}}
     channel: "#{{tenant}}-team"
   group_wait: "30s"
   repeat_interval: "4h"
@@ -250,13 +244,13 @@ routing_profiles:
   team-sre-apac:
     receiver:
       type: slack
-      api_url: "https://hooks.slack.com/sre-apac"
+      api_url: {secret: {key: slack-api-url}}
     group_wait: 30s
     repeat_interval: 4h
   team-dba-global:
     receiver:
       type: pagerduty
-      service_key: "dba-key-123"
+      service_key: {secret: {key: pagerduty-service-key}}
     repeat_interval: 1h
 ```
 

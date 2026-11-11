@@ -16,7 +16,7 @@ parent: architecture-and-design.md
 >
 > **相關**：[ADR-024 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md)，追蹤 issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)。recipe 是租戶在 portal 自助定義的告警規則；本文設計的是「填完當場確認它會不會觸發」的預覽。
 >
-> 本文的設計已實作：服務在 `components/recipe-preview/`，已有 `helm/recipe-preview` chart，da-portal 以 `portal.recipePreviewUrl` 接上。目前先上 try-local；正式環境部署延後（映像與 `recipe-preview/v*` tag 尚未發布）。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
+> 本文的設計已實作：服務在 `components/recipe-preview/`，已有 `helm/recipe-preview` chart。portal 原本經 da-portal 的反向代理（`portal.recipePreviewUrl`）呼叫它；那條路已隨 [ADR-027 §5](../adr/027-tenant-api-caller-identity.md) 移除，改為移進 tenant-api 的 pod、經 `/api/` 下的路由呼叫（進行中）。目前先上 try-local；正式環境部署延後（映像與 `recipe-preview/v*` tag 尚未發布）。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
 > - **已定案**：後端形態（獨立 Python 服務、先上 try-local）、API 契約、生產護欄。
 > - **首版範圍**：threshold 類 recipe（`>` `>=` `<` `<=` `==`）+ absence（缺口偵測——合成序列「不發該指標」即缺口）。
 > - **延後**：正式環境部署、其餘 recipe 型別、歷史回測（各項觸發條件見第 9 節）。

@@ -111,15 +111,9 @@ Requires:
 - **Backing up and restoring the state store**: groups, saved views, federation settings and the AccountID registry live in the `tenant-api-state` ConfigMap; `kubectl -n tenant-api get configmap tenant-api-state -o yaml > backup.yaml` is a complete snapshot. ⛔ **Do not put a backup back with `kubectl apply`**: an AccountID allocated after the backup would be handed to the next tenant again (a cross-tenant log leak). Restore only through `tenant-api state restore`, which merges the registry and never overwrites it ([#2884](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2884); usage in the [tenant-api README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#state-store-的備份與還原)).
 - **Generator container (required)**: the pod always has a da-tools container running `da-tools generator-service` ([ADR-036 §3](../adr/036-single-parser-effective-config.en.md)). It reads the same conf.d repository read-only; before committing any write that changes conf.d, tenant-api asks it, over a Unix socket only the two mount, whether the whole conf.d passes `generate-routes --validate --strict` with the write applied, and writes only on a pass ([#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903); responses in [tenant-api hardening §3.9](../api/tenant-api-hardening.en.md)). It needs a git repository (`gitRepoUrl`, or an existing repository in a `confDir.type=pvc` volume — for a repository already on a node, put it on a PV and name the PVC bound to it in `confDir.pvc.existingClaim`), or the chart does not render; its resource request equals its limit (512Mi / 1 CPU by default). The deployment policy file (`allowed_domains`) lives in a ConfigMap you manage, named with `generator.policy.existingConfigMap` / `generator.policy.key`; the chart ships no policy content. The same file is mounted into tenant-api, which checks the generator judged with it. While the container or the policy file is unavailable, writes answer 503 and reads keep working (`tenant_api_policy_available` is 0, alert `TenantApiPolicyUnavailable`). ⚠️ The chart's default `tools/v2.9.0` image has no such subcommand: point `generator.image` at a da-tools image that has it (the default is raised with the next tools release), or the container crash-loops and keeps tenant-api out of Ready. When `generator.image.digest` is set, the digest is what runs: changing only the tag changes nothing — update or clear the digest too, and make both name an image that ships `generator-service`.
 
-**da-portal** (Tenant Manager UI):
+**Tenant Manager UI**: already in the tenant-api pod. The chart's portal container runs the da-portal image behind the same oauth2-proxy, which sends `/api/` to tenant-api and everything else to the portal ([ADR-027 §5](../adr/027-tenant-api-caller-identity.en.md)); there is no second chart to install — enable tenant-api's Ingress to reach it from a browser.
 
-```bash
-helm install da-portal ./helm/da-portal/ -n monitoring
-```
-
-Requires:
-- **oauth2-proxy is mandatory**: the portal nginx routes `:80 → oauth2-proxy:4180`, so **disabling oauth2-proxy CrashLoopBackOffs** the pod (it is the auth front).
-- **Backend**: `config.tenantApiUrl` points at the tenant-api Service (default `http://tenant-api.tenant-api.svc.cluster.local:8080`).
+`helm/da-portal` is now a static-only deployment (no login, forwards nothing) for environments that only need the offline tools: `helm install da-portal ./helm/da-portal/ -n monitoring`.
 
 > For a one-command local trial (no oauth2-proxy / git repo; dev-bypass + tenant-api built from source) see [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md).
 
@@ -183,7 +177,7 @@ _routing_enforced:
   enabled: true                 # ⚠️ omitted = false; the whole block is silently ignored
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/xxx"
+    api_url: {secret: {shared: noc-slack, key: api-url}}  # shared Secret: the alias is listed in the deployment policy's shared_secrets
     channel: "#noc-alerts"
   # ⚠️ match MUST be a list of matcher strings. Omitting it yields a route with
   #    NO matchers, and with the hardcoded continue: true that double-sends every
@@ -205,7 +199,7 @@ NOC receives notifications using `platform_summary` annotation, focused on capac
 _routing_defaults:
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/{{tenant}}-alerts"
+    api_url: {secret: {key: slack-api-url}}
     channel: "#{{tenant}}-team"
   group_wait: "30s"
   repeat_interval: "4h"
@@ -250,13 +244,13 @@ routing_profiles:
   team-sre-apac:
     receiver:
       type: slack
-      api_url: "https://hooks.slack.com/sre-apac"
+      api_url: {secret: {key: slack-api-url}}
     group_wait: 30s
     repeat_interval: 4h
   team-dba-global:
     receiver:
       type: pagerduty
-      service_key: "dba-key-123"
+      service_key: {secret: {key: pagerduty-service-key}}
     repeat_interval: 1h
 ```
 

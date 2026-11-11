@@ -31,7 +31,7 @@ The platform provides **five** interactive tools to help different roles get sta
 These `.jsx` components can run directly in the following environments:
 
 1. **GitHub Pages (public access, recommended)** — Go to repo Settings → Pages → Source, select `main` / `/docs`. The landing page at `docs/interactive/index.html` lets visitors try all tools in the browser. Components are transpiled client-side via `docs/assets/jsx-loader.html` using Babel standalone — no build step required
-2. **da-portal Docker Image (enterprise intranet / air-gapped, recommended)** — `docker run -p 8080:80 ghcr.io/vencil/da-portal` to host the full Interactive Tools Portal on your internal network. Supports volume-mount customisation of `platform-data.json` and `flows.json`, and nginx reverse proxy to solve Prometheus CORS issues. See [components/da-portal/](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)
+2. **da-portal Docker Image (enterprise intranet / air-gapped, recommended)** — `docker run -p 8080:80 ghcr.io/vencil/da-portal` to host the full Interactive Tools Portal on your internal network. Supports volume-mount customisation of `platform-data.json` and `flows.json`; it serves static files only and forwards nothing — for the tools that need the API (Tenant Manager and others) use the portal inside the tenant-api chart. See [components/da-portal/](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)
 3. **Claude Artifacts** — Paste the `.jsx` content into a conversation and Claude renders it instantly
 4. **React dev environment** — Import the component into a `create-react-app` project
 5. **CodeSandbox / StackBlitz** — Online instant preview

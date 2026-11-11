@@ -757,12 +757,12 @@ tenants:
     _routing:
       receiver:
         type: slack
-        api_url: "https://hooks.slack.com/services/..."
+        api_url: {secret: {key: slack-api-url}}
       overrides:
         - alertname: "MariaDBReplicationLag"
           receiver:
             type: pagerduty
-            service_key: "abc123"
+            service_key: {secret: {key: pagerduty-service-key}}
         - metric_group: "redis"
           receiver:
             type: webhook
@@ -801,7 +801,7 @@ _routing_enforced:
   enabled: true
   receiver:
     type: "slack"
-    api_url: "https://hooks.slack.com/services/T/B/x"
+    api_url: {secret: {key: slack-api-url}}
     channel: "#alerts-{{tenant}}"    # → #alerts-db-a, #alerts-db-b, ...
 ```
 
@@ -817,7 +817,9 @@ When multiple tenants share the same on-call team and notification policy, the `
 # _routing_profiles.yaml
 routing_profiles:
   team-sre-apac:
-    receiver: slack-sre-apac
+    receiver:
+      type: slack
+      api_url: {secret: {key: slack-api-url}}
     group_by: [tenant, alertname, severity]
     group_wait: 30s
     repeat_interval: 4h

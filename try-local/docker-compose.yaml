@@ -170,9 +170,13 @@ services:
         condition: service_started
     networks:
       default:
-        # da-portal's nginx has a baked-in upstream of this exact FQDN, port
-        # 8080 (components/da-portal/nginx.conf — tenant-api lives in its
-        # dedicated `tenant-api` namespace, #1004). The alias makes it resolve
+        # The PINNED PUBLISHED portal image (v2.8.0) has a baked-in upstream of
+        # this exact FQDN, port 8080 (tenant-api lives in its dedicated
+        # `tenant-api` namespace, #1004). ⚠️ A portal image built after ADR-027
+        # §5 forwards nothing (components/da-portal/nginx.conf), so bumping
+        # PORTAL_TAG past it needs this topology changed first: oauth2-proxy
+        # routing "/" to the portal, as the tenant-api chart does — otherwise
+        # Tenant Manager silently shows demo data. The alias makes it resolve
         # to THIS proxy inside compose, so the published portal image runs
         # UNCHANGED (no file mount) and reaches the API the only way there is:
         # through oauth2-proxy (ADR-027 §2).

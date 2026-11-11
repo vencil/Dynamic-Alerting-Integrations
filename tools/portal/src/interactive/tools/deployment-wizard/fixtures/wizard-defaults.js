@@ -49,10 +49,10 @@ const DEPLOY_TIERS = [
   {
     id: 'tier2',
     name: t('Tier 2：Portal + API', 'Tier 2: Portal + API'),
-    desc: t('完整功能：Tier 1 + da-portal + tenant-api + OAuth2', 'Full-featured: Tier 1 + da-portal + tenant-api + OAuth2'),
+    desc: t('完整功能：Tier 1 + tenant-api（內含 Portal 與 OAuth2）', 'Full-featured: Tier 1 + tenant-api (with the Portal and OAuth2 in its pod)'),
     features: [
       t('所有 Tier 1 功能', 'All Tier 1 features'),
-      t('da-portal UI (自託管或 SaaS)', 'da-portal UI (self-hosted or SaaS)'),
+      t('Portal UI（在 tenant-api 的 pod 裡，登入後使用）', 'Portal UI (in the tenant-api pod, behind the login)'),
       t('tenant-api（RBAC + 熱更新）', 'tenant-api (RBAC + hot-reload)'),
       t('oauth2-proxy（GitHub / Google / OIDC）', 'oauth2-proxy (GitHub / Google / OIDC)'),
     ],

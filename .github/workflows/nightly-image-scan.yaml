@@ -245,7 +245,7 @@ jobs:
             ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:1c32c3720dc4c7f0c7dbe998737f32c200add6511eca7cec705008be488b87d6"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
-          - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
+          - name: oauth2-proxy # helm/tenant-api values.yaml
             ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
           # docker.io, NOT quay.io: upstream released v0.14.0 on 2026-06-23 but never
           # pushed it to quay — quay's v0.13.0/latest/v0 all still resolve to the April

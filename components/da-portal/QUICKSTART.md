@@ -37,4 +37,4 @@ docker run --rm -p 8080:80 ghcr.io/vencil/da-portal:v2.9.0
 
 - **先玩整套** → [`try-local/`](../../try-local/)：一鍵起完整監控網格 + 真實 critical 告警紅燈
 - **進階配置 / 完整參考** → [`README.md`](README.md)：build、部署、客製、troubleshooting
-- **上 production** → [`helm/da-portal/`](../../helm/da-portal/)：ingress + oauth2-proxy 接 tenant-api
+- **上 production（需登入的 Tenant Manager 等）** → [`helm/tenant-api/`](../../helm/tenant-api/)：portal 容器與 tenant-api 同 pod、共用一個 oauth2-proxy；只要離線工具 → [`helm/da-portal/`](../../helm/da-portal/)（純靜態）

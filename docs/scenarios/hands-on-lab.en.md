@@ -103,7 +103,7 @@ tenants:
     _routing:
       receiver:
         type: slack
-        api_url: https://hooks.slack.com/services/T00/B00/xxx
+        api_url: {secret: {key: slack-api-url}}
       group_by: [alertname, severity]
       group_wait: "30s"
       repeat_interval: "4h"
@@ -149,7 +149,7 @@ tenants:
     _routing:
       receiver:
         type: pagerduty
-        service_key: "<your-pagerduty-service-key>"
+        service_key: {secret: {key: pagerduty-service-key}}
       group_by: [alertname, topic]
       group_wait: "1m"
       repeat_interval: "12h"
@@ -209,7 +209,7 @@ routing_profiles:
   team-sre-apac:
     receiver:
       type: slack
-      api_url: https://hooks.slack.com/services/T00/B00/sre-apac
+      api_url: {secret: {key: slack-api-url}}
     group_by: [tenant, alertname, severity]
     group_wait: "30s"
     repeat_interval: "4h"
@@ -217,7 +217,7 @@ routing_profiles:
   domain-finance-tier1:
     receiver:
       type: pagerduty
-      service_key: "<your-finance-pagerduty-key>"
+      service_key: {secret: {key: pagerduty-service-key}}
     group_by: [tenant, alertname, severity]
     group_wait: "30s"
     repeat_interval: "1h"
@@ -428,7 +428,7 @@ Try changing prod-oracle's routing to use Slack: in `conf.d/prod-oracle.yaml`, a
 _routing:
   receiver:
     type: slack
-    api_url: https://hooks.slack.com/services/xxx
+    api_url: {secret: {key: slack-api-url}}
 ```
 
 Run validation again — you should see a domain policy warning: `finance` domain forbids `slack`. Add `--strict` and the warning escalates to an ERROR with a non-zero exit code (CI runs `--validate --strict`, blocking such violations before merge).

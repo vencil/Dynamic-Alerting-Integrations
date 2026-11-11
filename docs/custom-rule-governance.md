@@ -83,7 +83,7 @@ tenants:
     _routing:
       receiver:
         type: slack                    # webhook | email | slack | teams | rocketchat | pagerduty
-        api_url: "https://hooks.slack.com/services/..."
+        api_url: {secret: {key: slack-api-url}}
       group_wait: "30s"                # 5s–5m，平台 guardrails 自動 clamp
       repeat_interval: "4h"            # 1m–72h
       # Per-rule override— 特定 alert 走不同 receiver
@@ -91,7 +91,7 @@ tenants:
         - alertname: "MariaDBReplicationLag"
           receiver:
             type: pagerduty
-            service_key: "abc123"
+            service_key: {secret: {key: pagerduty-service-key}}
 ```
 
 `_routing` 通道現在同時遞送 custom alerts（`component="custom"`）：page-mode recipe 照租戶的 `_routing`（含 `routes` 與 per-rule overrides）分流，但沿用 custom 隔離子樹的 debounce（`group_wait` 30s／`group_interval` 5m、`group_by [tenant, alertname]`），不套用 tenant `_routing` 主層的 timing（子路由自己宣告的 timing 與 `group_by` 照樣生效）。無**有效** `_routing` 的租戶（既無顯式 `_routing`、也無適用的 `_routing_defaults`／profile 繼承），其 custom alerts 留在平台 firehose（AM UI 可見、不發通知）；要讓租戶完全不收 custom 通知，正解是 `_routing: disable`——純繼承 defaults 的租戶同樣會收到投遞。

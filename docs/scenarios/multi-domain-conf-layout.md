@@ -255,7 +255,7 @@ tenants:
     _routing:
       receiver:
         type: slack
-        api_url: https://hooks.slack.com/...
+        api_url: {secret: {key: slack-api-url}}
         channel: "#new-alerts"
     # 其他 tenant-specific 設定
 EOF

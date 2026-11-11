@@ -266,3 +266,11 @@ tools/portal/src/interactive/tools/rule-pack-detail.jsx
 # ADR-027 §5 (#1040): recipe-preview no longer authorizes or reads identity;
 # its PEP / dev-bypass / SA-token tests go with that code.
 tests/preview/test_app.py
+# ADR-027 §5 (#1040): the da-portal chart lost oauth2-proxy, Ingress, the reverse
+# proxy and the relay token; these files shrink with it (to 11–42% of before).
+helm/da-portal/README.md
+helm/da-portal/templates/NOTES.txt
+helm/da-portal/templates/configmap-nginx.yaml
+helm/da-portal/templates/deployment.yaml
+helm/da-portal/templates/networkpolicy.yaml
+helm/da-portal/values.yaml

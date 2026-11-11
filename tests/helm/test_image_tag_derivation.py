@@ -17,8 +17,7 @@ Two layers:
   * static (no helm needed) — guards the template expression + empty tag
     so a regression is caught even on runners without the helm CLI;
   * render (helm-gated) — proves the rendered image is the v-prefixed
-    pullable form, including the da-portal tier1/tier2 variants and that
-    the local-dev override (environments/local) is unaffected.
+    pullable form, and that the local-dev override (environments/local) is unaffected.
 """
 from __future__ import annotations
 
@@ -122,16 +121,6 @@ def test_appversion_equals_chart_version(repo_root: Path, chart_dir: str, repo: 
     )
 
 
-def test_da_portal_tiers_have_empty_tag(repo_root: Path) -> None:
-    """tier1/tier2 overlays must not pin a (stale, no-v) image tag."""
-    for tier in ("values-tier1.yaml", "values-tier2.yaml"):
-        values = yaml.safe_load((repo_root / "helm/da-portal" / tier).read_text(encoding="utf-8"))
-        assert values["image"]["tag"] == "", (
-            f"helm/da-portal/{tier} image.tag must be '' (derive from appVersion); "
-            f"it previously pinned a broken '2.5.0' (no v-prefix, #682)"
-        )
-
-
 # ── Render layer (helm-gated) ────────────────────────────────────────────────
 
 @_needs_helm
@@ -141,15 +130,6 @@ def test_rendered_image_is_v_prefixed_appversion(repo_root: Path, chart_dir: str
     manifests = _render(repo_root / chart_dir)
     expected = f"{repo}:v{_app_version(repo_root, chart_dir)}"
     assert _primary_image(manifests, repo) == expected
-
-
-@_needs_helm
-@pytest.mark.parametrize("tier", ["values-tier1.yaml", "values-tier2.yaml"])
-def test_da_portal_tier_render_is_pullable(repo_root: Path, tier: str) -> None:
-    chart = repo_root / "helm/da-portal"
-    manifests = _render(chart, values_file=chart / tier)
-    expected = f"ghcr.io/vencil/da-portal:v{_app_version(repo_root, 'helm/da-portal')}"
-    assert _primary_image(manifests, "ghcr.io/vencil/da-portal") == expected
 
 
 @_needs_helm

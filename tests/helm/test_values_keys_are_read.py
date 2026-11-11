@@ -329,7 +329,6 @@ def test_the_scan_covers_the_overlays():
     # Vacuity: the overlays this repo ships today. A discovery that stops
     # seeing them must fail here, not quietly shrink the parametrize below.
     known = {
-        "helm/da-portal/values-tier1.yaml", "helm/da-portal/values-tier2.yaml",
         "helm/vector/values-projection.yaml",
         "helm/values-db-a.yaml", "helm/values-db-b.yaml",
     }

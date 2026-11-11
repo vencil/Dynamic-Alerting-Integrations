@@ -76,8 +76,8 @@ export default function DeploymentWizard() {
   };
 
   /* ── Copy to clipboard ── */
-  // One values file per chart (threshold-exporter; + da-portal / tenant-api
-  // for Tier 2), each copied on its own — they go to different `helm -f`.
+  // One values file per chart (threshold-exporter; + tenant-api, which
+  // carries the portal, for Tier 2), each copied on its own `helm -f`.
   const output = useMemo(() => generateHelmReleases(config), [config]);
 
   /* ── Summary before output ── */

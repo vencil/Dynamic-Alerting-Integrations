@@ -24,7 +24,7 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "#902 L3 — split-knob Helm values (image.repository/tag/digest) for the 7 digest-pinned third-party charts. The '# renovate:' annotation above each 'repository:' anchors the match so multi-image charts (da-portal/tenant-api also carry a first-party app image) cannot cross-match tag/digest across blocks.",
+      "description": "#902 L3 — split-knob Helm values (image.repository/tag/digest) for the digest-pinned third-party images in helm/*/values.yaml. The '# renovate:' annotation above each 'repository:' anchors the match so multi-image charts (tenant-api also carries first-party app images) cannot cross-match tag/digest across blocks.",
       "managerFilePatterns": ["/^helm/.+/values\\.yaml$/"],
       "matchStrings": [
         "# renovate:\\s*datasource=(?<datasource>\\S+)\\s+depName=(?<depName>\\S+)[\\s\\S]*?\\n[ \\t]*tag:[ \\t]*[\"']?(?<currentValue>[^\"'\\s]+)[\"']?[\\s\\S]*?\\n[ \\t]*digest:[ \\t]*[\"']?(?<currentDigest>sha256:[0-9a-f]+)[\"']?"
