@@ -127,8 +127,9 @@ thresholdConfig:
     mysql_replication_lag: 30
     # <<< GENERATED:threshold-registry:helm-defaults
     # >>> GENERATED:threshold-registry:helm-unarmed — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-    # 下列 key 規則包會讀，但 chart 不出貨值：helm install 後對應的告警不會響，要在上面的 defaults 補值才會生效（其 <key>_critical 也要先有
-    # base 值）。原因取自 threshold-registry 的 arming 欄位。
+    # 下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了
+    # thresholdConfig.existingConfigMap 時 chart 不讀這裡，要在那個 ConfigMap 的來源補值（其 <key>_critical 也要先有 base
+    # 值）。原因取自 threshold-registry 的 arming 欄位。
     # ── redis ──
     #   redis_memory_used_bytes（待改比值）：絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory 的比例（redis_memory_max_bytes），待
     #     #1320

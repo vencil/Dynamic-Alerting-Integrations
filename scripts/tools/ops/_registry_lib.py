@@ -421,6 +421,18 @@ def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
     return out
 
 
+def arming_label_zh(entry: dict) -> Optional[str]:
+    """The Chinese label of *entry*'s non-default arming, else None.
+
+    Total over malformed input: the renderers run even when the registry
+    fails validation (the gate reports every violation in one pass), so an
+    authored ``arming: [site_specific]`` must render nothing here instead of
+    raising on an unhashable lookup and hiding the violation behind a crash.
+    """
+    state = entry.get("arming")
+    return ARMING_LABEL_ZH.get(state) if isinstance(state, str) else None
+
+
 def is_chart_armed(entry: dict) -> bool:
     """Whether the chart ships this registry key's value (``arming: default``)."""
     return entry.get("arming") == ARMING_DEFAULT
@@ -805,10 +817,11 @@ def _arming_note_lines(entry: dict, cont: str) -> list[str]:
 
     Only for a key with an authored non-default arming; a ``_critical`` has
     none (it follows its base, whose own lines say why)."""
-    label = ARMING_LABEL_ZH.get(entry.get("arming") or "")
-    if label is None:
+    label = arming_label_zh(entry)
+    reason = entry.get("arming_reason_zh")
+    if label is None or not isinstance(reason, str):
         return []
-    body = f"未啟用（{label}）：{entry['arming_reason_zh']}"
+    body = f"未啟用（{label}）：{reason}"
     return [f"{cont}{seg}" for seg in _wrap_comment(body, _COMMENT_WIDTH - len(cont))]
 
 
@@ -1313,17 +1326,20 @@ def render_unarmed_lines(doc: dict, indent: int) -> list[str]:
     width = _COMMENT_WIDTH - indent - 2
     groups = _defaults_by_pack(
         doc, lambda _p, e: (e.get("tier") == "defaults"
-                            and e.get("arming") in ARMING_LABEL_ZH))
+                            and arming_label_zh(e) is not None
+                            and isinstance(e.get("arming_reason_zh"), str)))
     if not groups:
         return []
     lines = [f"{ind}# {seg}" for seg in _wrap_comment(
-        "下列 key 規則包會讀，但 chart 不出貨值：helm install 後對應的告警不會響，"
-        "要在上面的 defaults 補值才會生效（其 <key>_critical 也要先有 base 值）。"
+        "下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。"
+        "用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了 "
+        "thresholdConfig.existingConfigMap 時 chart 不讀這裡，要在那個 ConfigMap 的來源補值"
+        "（其 <key>_critical 也要先有 base 值）。"
         "原因取自 threshold-registry 的 arming 欄位。", width)]
     for pack_name, _meta, pairs in groups:
         lines.append(f"{ind}# ── {pack_name} ──")
         for key, entry in pairs:
-            body = (f"{key}（{ARMING_LABEL_ZH[entry['arming']]}）："
+            body = (f"{key}（{arming_label_zh(entry)}）："
                     f"{entry['arming_reason_zh']}")
             segs = _wrap_comment(body, width - 2)
             lines.append(f"{ind}#   {segs[0]}")
