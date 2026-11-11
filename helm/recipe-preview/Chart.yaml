@@ -1,5 +1,5 @@
 apiVersion: v2
-name: recipe-preview            # → Service name "recipe-preview" (matches da-portal recipePreviewUrl)
+name: recipe-preview            # → Service name "recipe-preview"
 description: Would-fire preview service for the Dynamic Alerting Platform (#657)
 type: application
 # recipe-preview bundles the platform compiler (a byte-identical snapshot), so it

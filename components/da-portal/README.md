@@ -32,7 +32,7 @@ da-portal 把告警/維運能力封成瀏覽器工具，給三種角色。**各�
 - **Image（輸出）** — 一顆 nginx-alpine，COPY 進 Hub（`docs/interactive/`）+ 預先 build 的 `docs/assets/dist/` + 共享 assets + vendor；瀏覽器直接載入 ESM bundle，**runtime 不做 build / transpile**
 - **為什麼是「預先 build + 靜態服務」** — 1) 內網 / air-gapped 場景不能在 runtime 跑 npm；2) build 在 CI 一次完成、結果 committed，部署端零依賴；3) image 純靜態 → 不需 secret、不需 runtime config
 - **vendor probe（離線優先）** — `make vendor-download` 把 React 18.3 / ReactDOM / Tailwind / Lucide 抓進 `docs/assets/vendor/`；瀏覽器啟動先 probe local，找不到才 fallback CDN（每個工具 bundle 透過頁面提供的這些 global 執行）
-- **不做的事** — 不在 runtime build；不持久化（無 state，資料來自 mount 的 JSON 或 tenant-api proxy）；不直連 Prometheus（CORS-free 查詢走 tenant-api 或自訂 nginx proxy）
+- **不做的事** — 不在 runtime build；不持久化（無 state，資料來自 mount 的 JSON）；不轉送任何請求（不 proxy 到 tenant-api、Prometheus 或其他元件，見下方「需要登入的 portal」）
 
 > **Hub UX 細節**（工具的分類、journey-phase、related-tool 圖、search）見 [docs/interactive-tools.md](../../docs/interactive-tools.md)。本 README 只負責 operator quick-reference。
 
@@ -44,7 +44,7 @@ da-portal 把告警/維運能力封成瀏覽器工具，給三種角色。**各�
 
 - **Tenant Manager API-First** — Tenant Manager 預設打 `GET /api/v1/tenants/search`（live data，分頁避過千租戶 DOM freeze），無後端時 fallback 靜態 `platform-data.json` + demo-mode 提示
 - **Tenant Manager → Wizard 深連結** — `TenantCard` 可一鍵帶著 tenant id 跳到 Alert Builder / Routing Trace，少掉反覆 copy-paste
-- **oauth2-proxy CVE 收斂** — Helm 三個 profile 同步升到無已知 CRITICAL/HIGH 的版本
+- **oauth2-proxy CVE 收斂** — 升到無已知 CRITICAL/HIGH 的版本
 
 > **v2.8.0 之後（未 bump 版號）** — 工具的核心純邏輯（calculator / validator / parser / 路由演算法）已抽成可單元測試的模組並補上測試（behavior-preserving）；對部署 / 使用零影響。
 
@@ -72,20 +72,19 @@ docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.9.0
 
 > `make portal-build` 在改過任何工具 source 後必跑（CI 有 drift gate）。只是要跑 published image，直接 `docker run` 即可，無需以上 build 步驟。
 
-### Helm（K8s，含 oauth2-proxy 與 tenant-api integration）
+### Helm（K8s，純靜態）
 
 ```bash
 helm install da-portal \
   oci://ghcr.io/vencil/charts/da-portal --version 2.9.0 \
-  -n monitoring --create-namespace \
-  -f values-override.yaml
+  -n monitoring --create-namespace
 ```
 
-| Profile | Values file | 適用場景 |
-|---------|-------------|----------|
-| Default | `values.yaml` | 純 portal + tenant-api proxy（無 IdP） |
-| Tier-1 | `values-tier1.yaml` | portal + tenant-api + GitOps writeback |
-| Tier-2 | `values-tier2.yaml` | Tier-1 + oauth2-proxy + Ingress + NetworkPolicy |
+da-portal chart 只有純靜態部署：一個 nginx 容器，沒有登入、沒有 Ingress、不轉送任何請求。
+
+### 需要登入的 portal（Tenant Manager 等打 API 的工具）
+
+用 tenant-api chart：同一顆 image 以 portal 容器跑在 tenant-api 的 pod 裡，前面是 tenant-api 的 oauth2-proxy，`/api/` 送 tenant-api、其餘送 portal（[ADR-027 §5](../../docs/adr/027-tenant-api-caller-identity.md)）。整個部署只有一個 oauth2-proxy、一個 Ingress。
 
 詳 [helm/da-portal/README.md](../../helm/da-portal/README.md)。
 
@@ -111,25 +110,27 @@ helm install da-portal \
 │  ├─ /assets/jsx-loader.html     ── 載入工具 + vendor probe + theme   │
 │  └─ /assets/dist/<tool>.js      ── 預先 build 的 ESM bundle（esbuild）│
 └─────────────────────────────────────────────────────────────────────┘
-              │ static asset GET                  │ /api/v1/* (CORS-free)
-              ▼                                   ▼
-┌──────────────────────────┐         ┌────────────────────────────┐
-│ nginx (this image)       │         │ tenant-api / oauth2-proxy  │
-│  - serve docs/...        │ proxy → │  - GET /tenants/search     │
-│  - CSP / HSTS headers    │         │  - PUT /tenants/{id}       │
-│  - SPA fallback          │         │  - X-Forwarded-{Email,User,│
-│  - /healthz K8s probe    │         │    Groups} 注入            │
-│  - tenants/simulate: 501 │         └────────────────────────────┘
+              │ static asset GET
+              ▼
+┌──────────────────────────┐
+│ nginx (this image)       │
+│  - serve docs/...        │
+│  - CSP / HSTS headers    │
+│  - SPA fallback          │
+│  - /healthz K8s probe    │
+│  - tenants/simulate: 501 │
 └──────────────────────────┘
 ```
+
+登入後的 portal（tenant-api chart）：瀏覽器 → oauth2-proxy → `/api/` 經 pod 內 Unix socket 到 tenant-api、其餘到同 pod 的 portal 容器；portal 容器只讀 chart 自帶的 nginx 設定，同樣不轉送。
 
 關鍵點：
 
 - **Image 不含 build step** — `Dockerfile` 只 `COPY` 預先 build 的成品 + `apk del nginx-module-image-filter nginx-module-xslt`（移掉靜態 server 用不到的模組，cascade 拔 28 個 dep；image 從 72 → 44 packages）+ libavif 殘留檢查（CVE-2025-48174 mitigation）
 - **工具是 esbuild ESM bundle** — source 在 `tools/portal/src/`，`make portal-build` 產 `docs/assets/dist/`；瀏覽器直接 import，**不在瀏覽器端 transpile**
 - **vendor probe** — `jsx-loader.html` 啟動跑同源 sync XHR 試 `vendor/react.production.min.js`；HTTP 200 走 local，否則退 CDN（React 18.3.1 / ReactDOM / Tailwind / Lucide 0.436.0）
-- **tenant-api proxy** — `nginx.conf` 的 `/api/v1/` 預設 upstream 為 `tenant-api.tenant-api.svc.cluster.local:8080`（tenant-api 位於專屬 `tenant-api` namespace，#1004），自動轉 oauth2-proxy 注入的 `X-Forwarded-Email` / `X-Forwarded-User` / `X-Forwarded-Groups`
-- **simulate 不代理**（[#2125](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2125)）— `POST /api/v1/tenants/simulate` 由 threshold-exporter 提供、不在 tenant-api，本 image 與 Helm chart 都**不**代理它：`location = /api/v1/tenants/simulate` 固定回 `501` + `{"code":"SIMULATE_NOT_PROVIDED",...}`（exact match 優先於 `/api/v1/` prefix；Helm 各 tier 都渲染），simulate-preview 工具據此顯示「此部署不提供模擬預覽」
+- **不轉送** — `nginx.conf` 沒有任何 `proxy_pass`、不讀身分 header（ADR-027 §5；`tests/shared/test_portal_image_nginx_conf.py` 守）
+- **simulate 不代理**（[#2125](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2125)）— `POST /api/v1/tenants/simulate` 由 threshold-exporter 提供、不在 tenant-api，本 image 與 Helm chart 都**不**代理它：`location = /api/v1/tenants/simulate` 固定回 `501` + `{"code":"SIMULATE_NOT_PROVIDED",...}`，simulate-preview 工具據此顯示「此部署不提供模擬預覽」
 
 ---
 
@@ -152,7 +153,7 @@ docker run -p 8080:80 \
 | `tool-registry.yaml` | 工具的 metadata SSOT（title / audience / journey_phase / related） | hand-edited |
 | `design-tokens.css` | 主題 CSS 變數（色 / 間距 / 字 / 明暗主題） | hand-edited，CI 跑 `check_undefined_tokens.py` |
 
-### 改 nginx.conf（換 tenant-api upstream / 加 Prometheus proxy）
+### 改 nginx.conf
 
 ```bash
 docker run -p 8080:80 \
@@ -160,7 +161,7 @@ docker run -p 8080:80 \
   ghcr.io/vencil/da-portal:v2.9.0
 ```
 
-預設 `nginx.conf` 把 `/api/v1/` proxy 給 `tenant-api.tenant-api.svc.cluster.local:8080`。要改 upstream，或加 Prometheus reverse proxy 給 alert preview 直查 PromQL，editable 範本見 [`nginx.conf`](nginx.conf)。
+範本見 [`nginx.conf`](nginx.conf)。⚠️ 自行加 `proxy_pass` 把請求轉給 tenant-api 不會帶身分：tenant-api 只在自己 pod 內的 Unix socket 上接受身分（ADR-027 §1）。
 
 ---
 
@@ -229,8 +230,7 @@ docker run -p 8080:80 \
 |------|---------|------|
 | Hub 載入後工具白屏 / 404 | image 沒含 `docs/assets/dist/`（舊 / 自建 image） | 確認 `make portal-build` 跑過且 `docs/assets/dist/` 有進 image；重 build |
 | 404 on `/healthz` | 舊 image（< v2.3.0） | 重 build：`make portal-image` |
-| CORS error on tenant-api | nginx proxy upstream 錯 | 改 `nginx.conf` 的 `proxy_pass`，或在 K8s 確認 `tenant-api` Service 存在於專屬 `tenant-api` namespace（#1004；proxy_pass 應為 `tenant-api.tenant-api.svc.cluster.local:8080`） |
-| Tenant Manager 顯示的是示範租戶（`prod-mariadb-01` 等） | `/api/v1/tenants/search` 非 2xx（含 401／403）或連不上，**且** `platform-data.json` 缺或是空的（有內容時改顯示那份靜態資料） | 確認 tenant-api 跑著且 RBAC 有 read 權限；也可能是純靜態部署（無後端），demo mode 為 expected |
+| Tenant Manager 顯示的是示範租戶（`prod-mariadb-01` 等） | `/api/v1/tenants/search` 非 2xx（含 401／403）或連不上，**且** `platform-data.json` 缺或是空的（有內容時改顯示那份靜態資料） | 純靜態部署（本 image 單跑、da-portal chart）沒有後端，demo mode 為 expected；登入後的 portal（tenant-api chart）則確認 tenant-api 跑著且 RBAC 有 read 權限 |
 | 工具顯示舊資料 | 掛載的 `platform-data.json` 過舊 | `make platform-data` 重產 + 重 mount |
 | air-gapped 環境 vendor probe 失敗 | `make vendor-download` 沒跑 / `docs/assets/vendor/` 沒進 image | 確認 `docs/assets/vendor/react.production.min.js` 存在；重 build |
 | `var(--da-*)` 顯示為 fallback 色 | 用了未定義的 token | 跑 `python3 scripts/tools/lint/check_undefined_tokens.py`，補 `design-tokens.css` |
@@ -242,7 +242,7 @@ docker run -p 8080:80 \
 - [Interactive Tools Hub 使用指南](../../docs/interactive-tools.md)
 - [Tool Registry SSOT](../../docs/assets/tool-registry.yaml) — 工具 metadata
 - [Design Tokens](../../docs/assets/design-tokens.css) — 主題系統 CSS 變數
-- [Helm Chart README](../../helm/da-portal/README.md) — 三個 profile 細節
+- [Helm Chart README](../../helm/da-portal/README.md) — 純靜態部署
 - [架構深度](../../docs/architecture-and-design.md) — 9 個核心設計概念
 - [Dev Rules](../../docs/internal/dev-rules.md) — JSX 寫作守則 + 開發規範
 
@@ -260,4 +260,4 @@ docker run -p 8080:80 \
 
 ---
 
-> **回報問題** — Issue tracker：<https://github.com/vencil/Dynamic-Alerting-Integrations/issues>。若是工具載入 / vendor probe / tenant-api proxy 問題，請附 (1) 瀏覽器 console log，(2) `curl -I http://<portal>/assets/dist/<tool>.js` 與 `/assets/vendor/react.production.min.js` 結果，(3) `kubectl logs -l app=da-portal -c oauth2-proxy --tail 50`（如果是 Tier-2 deploy）。
+> **回報問題** — Issue tracker：<https://github.com/vencil/Dynamic-Alerting-Integrations/issues>。若是工具載入 / vendor probe / API 呼叫問題，請附 (1) 瀏覽器 console log，(2) `curl -I http://<portal>/assets/dist/<tool>.js` 與 `/assets/vendor/react.production.min.js` 結果，(3) 登入後的 portal：`kubectl -n tenant-api logs deploy/tenant-api -c oauth2-proxy --tail 50`。

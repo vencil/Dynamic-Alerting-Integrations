@@ -86,11 +86,8 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 # package, and that should be a decision someone made, not a surprise. Measured
 # from a real `helm package` of each chart — all three carry templates/ only.
 DECLARED_SUBTREES: Dict[str, Set[str]] = {
-    # #1352 case A: `files` is not decoration. A template renders it with
-    # `.Files.Get "files/relay_token.js"`, so a .tgz that lost the subtree
-    # would still install and still template — into an nginx ConfigMap with an
-    # empty script block.
-    "helm/da-portal": {"templates", "files"},
+    # `files/` (relay_token.js) left with the reverse proxy (ADR-027 §5).
+    "helm/da-portal": {"templates"},
     "helm/threshold-exporter": {"templates"},
     "helm/recipe-preview": {"templates"},
     "helm/tenant-api": {"templates"},

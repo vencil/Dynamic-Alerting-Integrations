@@ -1,44 +1,3 @@
-{{- /*
-  Fail-closed guard (GHSA-3g2h-rf85-5rrv). da-portal fronts tenant-api's
-  header-trusting proxy path; whenever it runs in authenticated-proxy mode
-  (oauth2Proxy.enabled=true) the NetworkPolicy is a REQUIRED security control and
-  MUST NOT be disabled. Tier 1 static-only portals (oauth2Proxy.enabled=false,
-  no tenant-api behind it) are exempt — there is no header-trust surface to guard.
-*/ -}}
-{{- if and .Values.oauth2Proxy.enabled (not .Values.networkPolicy.enabled) }}
-{{- fail "networkPolicy.enabled=false is forbidden when oauth2Proxy.enabled=true: da-portal then fronts tenant-api's header-trusting path; the NetworkPolicy is a REQUIRED security control (GHSA-3g2h-rf85-5rrv), not an optional feature." }}
-{{- end }}
-{{- /*
-  Open-proxy guard (GHSA-3g2h-rf85-5rrv). nginx reverse-proxies /api/v1/ ->
-  tenantApiUrl and /preview -> recipePreviewUrl, forwarding the RAW client
-  X-Forwarded-Groups/Email headers (configmap-nginx.yaml). The oauth2-proxy
-  sidecar is the ONLY thing that strips client-supplied identity headers before
-  nginx sees them. With oauth2Proxy.enabled=false there is no stripping proxy, so
-  any upstream still configured turns nginx into an UNAUTHENTICATED open proxy to
-  a header-trusting backend (assert X-Forwarded-Groups: platform-admins -> fleet
-  admin). A Tier-1 static-only portal (no auth proxy) MUST therefore carry no
-  reverse-proxy targets. This is render-time and CNI-independent — it does not
-  rely on the NetworkPolicy being enforced. If a deployment fronts da-portal with
-  an EXTERNAL auth proxy that strips client identity headers, that is a distinct
-  (currently unsupported) topology; add an explicit opt-in value before relaxing
-  this — do not silently widen it.
-*/ -}}
-{{- if and (not .Values.oauth2Proxy.enabled) (or .Values.portal.tenantApiUrl .Values.portal.recipePreviewUrl) }}
-{{- fail "oauth2Proxy.enabled=false requires portal.tenantApiUrl AND portal.recipePreviewUrl to be empty (GHSA-3g2h-rf85-5rrv): with no auth proxy stripping client headers, nginx would forward raw X-Forwarded-Groups to a header-trusting backend = unauthenticated identity spoofing. A static-only (Tier 1) portal must not reverse-proxy to tenant-api/recipe-preview." }}
-{{- end }}
-{{- /*
-  Empty-selector fail-guard (#1004). When da-portal proxies (oauth2Proxy.enabled)
-  with egress locked, the tenantApi/recipePreview pod-selector lists feed the
-  egress `to:` peers via range. An empty list renders an empty `to:`, which
-  Kubernetes treats as "all destinations" for that port — silently degrading the
-  8080/8082 egress lockdown to allow-any. Reject at render time (mirrors the
-  tenant-api ingress empty-selector guard).
-*/ -}}
-{{- if and .Values.networkPolicy.enabled .Values.networkPolicy.egress.enabled .Values.oauth2Proxy.enabled }}
-{{- if or (not .Values.networkPolicy.egress.tenantApiPodSelectors) (not .Values.networkPolicy.egress.recipePreviewPodSelectors) }}
-{{- fail "networkPolicy.egress.tenantApiPodSelectors/recipePreviewPodSelectors must be non-empty lists: an empty list renders an empty egress `to:` peer, which Kubernetes treats as ALL destinations for that port — reopening the 8080/8082 egress lockdown (#1004)." }}
-{{- end }}
-{{- end }}
 {{- if .Values.networkPolicy.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -53,22 +12,8 @@ spec:
       {{- include "da-portal.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
-    {{- if .Values.networkPolicy.egress.enabled }}
     - Egress
-    {{- end }}
   ingress:
-    # Allow oauth2-proxy port from specified namespaces and ingress
-    - from:
-        {{- range .Values.networkPolicy.allowedNamespaces }}
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ . }}
-        {{- end }}
-      ports:
-        - port: 4180
-          protocol: TCP
-
-    # Allow nginx internal port from cluster (for health checks, API calls)
     - from:
         {{- range .Values.networkPolicy.allowedNamespaces }}
         - namespaceSelector:
@@ -78,58 +23,7 @@ spec:
       ports:
         - port: {{ .Values.portal.listenPort }}
           protocol: TCP
-  {{- if .Values.networkPolicy.egress.enabled }}
-  egress:
-    # DNS resolution (kube-dns / CoreDNS) — every outbound name lookup needs it.
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
-    {{- if .Values.oauth2Proxy.enabled }}
-    # tenant-api backend (/api/v1/ proxy) on 8080 in its dedicated ns (#1004). One
-    # `to` entry per pod selector (entries OR-ed); each AND-s the ns with the pod.
-    - to:
-        {{- range .Values.networkPolicy.egress.tenantApiPodSelectors }}
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: {{ $.Values.networkPolicy.egress.tenantApiNamespace }}
-          podSelector:
-            matchLabels:
-              {{- toYaml . | nindent 14 }}
-        {{- end }}
-      ports:
-        - port: {{ .Values.networkPolicy.egress.tenantApiPort }}
-          protocol: TCP
-    # recipe-preview backend (/preview proxy) on 8082 in this same (monitoring) ns.
-    - to:
-        {{- range .Values.networkPolicy.egress.recipePreviewPodSelectors }}
-        - podSelector:
-            matchLabels:
-              {{- toYaml . | nindent 14 }}
-        {{- end }}
-      ports:
-        - port: {{ .Values.networkPolicy.egress.recipePreviewPort }}
-          protocol: TCP
-    {{- if .Values.networkPolicy.egress.idpHttpsEnabled }}
-    # External IdP (oauth2-proxy OAuth/OIDC flow) over HTTPS. Internet minus the
-    # cloud metadata endpoint (link-local) — mirrors the alertmanager webhook
-    # egress. Tighten to a known IdP CIDR via extraEgress + idpHttpsEnabled=false.
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except:
-              - 169.254.169.254/32
-      ports:
-        - port: {{ .Values.networkPolicy.egress.idpHttpsPort }}
-          protocol: TCP
-    {{- end }}
-    {{- end }}
-    {{- with .Values.networkPolicy.egress.extraEgress }}
-    # Deployment-specific allows (private IdP CIDR, redis session store, …).
-    {{- toYaml . | nindent 4 }}
-    {{- end }}
-  {{- end }}
+  # No egress rule: a static file server opens no outbound connection
+  # (ADR-027 §5 — it forwards nothing to tenant-api or anything else).
+  egress: []
 {{- end }}

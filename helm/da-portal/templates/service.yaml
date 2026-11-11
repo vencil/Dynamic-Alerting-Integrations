@@ -10,13 +10,7 @@ spec:
   selector:
     {{- include "da-portal.selectorLabels" . | nindent 4 }}
   ports:
-    # Port 80 → oauth2-proxy (4180) — external traffic
     - name: http
       port: {{ .Values.service.port }}
-      targetPort: 4180
-      protocol: TCP
-    # Port 8080 → nginx directly — cluster-internal (health checks, direct access)
-    - name: nginx-internal
-      port: {{ .Values.service.internalPort }}
       targetPort: {{ .Values.portal.listenPort }}
       protocol: TCP

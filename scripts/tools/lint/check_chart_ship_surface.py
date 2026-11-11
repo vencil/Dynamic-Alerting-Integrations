@@ -145,16 +145,13 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
         "values.yaml": (SHIP, "the chart's default values"),
         ".helmignore": (SHIP, "helm's own packing control file"),
-        "values-tier1.yaml": (
+        "values.schema.json": (
             SHIP,
-            "#1352 case A: a customer-facing deployment profile, not an "
-            "internal fixture — components/da-portal/README.md tells the "
-            "reader to deploy Tier-1 with `-f values-tier1.yaml`. Now that the "
-            "chart reaches customers over OCI, dropping it would reproduce "
-            "this ticket in miniature: documentation naming a file the "
-            "artifact does not contain.",
+            "ADR-027 §5: helm validates the customer's values against it at "
+            "install — a values file still setting a removed key (oauth2Proxy, "
+            "ingress, portal.tenantApiUrl, …) fails the render instead of being "
+            "silently ignored. Useless unless it ships.",
         ),
-        "values-tier2.yaml": (SHIP, "#1352 case A: the Tier-2 half of that pair."),
         "README.md": (
             EXCLUDE,
             "this chart's .helmignore names it, so `helm package` drops it. "

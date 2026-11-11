@@ -83,8 +83,8 @@ def _consumer_read():
 
 
 # Globs of the deployment sources humans hand-edit image refs into.
-# ⛔ `values*.yaml`, not `values.yaml` (#1302). A `-f values-tier2.yaml` overlay is
-# a DOCUMENTED deployment profile (helm/da-portal/README.md), and it can pin an
+# ⛔ `values*.yaml`, not `values.yaml` (#1302). A `-f values-<profile>.yaml` overlay
+# (da-portal shipped two as deployment profiles until ADR-027 §5) can pin an
 # image the base never mentions — which this extractor, and therefore the nightly
 # CVE scan's matrix-drift guard, would never have seen. Two sibling gates over the
 # same concern already read `values*` (check_iac_helm.py, check_image_pin_capability.py);

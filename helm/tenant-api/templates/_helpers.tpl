@@ -545,8 +545,7 @@ The whole nginx configuration the portal container loads (`nginx -c`): it
 serves the image's static files and nothing else. ⛔ No proxy_pass or any
 other *_pass, no njs, no include but mime.types (ADR-027 §5, §9 item 3:
 tests/helm/test_tenant_api_portal_container.py). The image's own
-/etc/nginx/nginx.conf and conf.d (which forward /api/v1/ and /preview for
-the standalone da-portal chart) are never read. Runs as the pod's non-root
+/etc/nginx/nginx.conf and conf.d are never read. Runs as the pod's non-root
 uid on a read-only root filesystem: pid and temp paths under /tmp.
 */}}
 {{- define "tenant-api.portalNginxConfig" -}}

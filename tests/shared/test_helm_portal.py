@@ -115,10 +115,9 @@ class TestValuesYamlValid:
         assert "portal" in values_yaml_content
         portal = values_yaml_content["portal"]
         assert "listenPort" in portal
-        assert "tenantApiUrl" in portal
 
     @pytest.mark.parametrize(
-        "values_file", ["values.yaml", "values-tier1.yaml", "values-tier2.yaml"]
+        "values_file", ["values.yaml"]
     )
     def test_no_dead_nginx_block(self, chart_dir: Path, values_file: str) -> None:
         """驗證頂層 `nginx:` 死值區塊不存在（防再漂移）。
@@ -134,30 +133,19 @@ class TestValuesYamlValid:
             "template 消費（死值）；如需新增請先在 template 接線"
         )
 
-    def test_oauth2_proxy_configuration(self, values_yaml_content: dict) -> None:
-        """驗證 oauth2Proxy 設定存在且完整。"""
-        assert "oauth2Proxy" in values_yaml_content
-        oauth2 = values_yaml_content["oauth2Proxy"]
-        assert "enabled" in oauth2
-        assert "image" in oauth2
-        assert "provider" in oauth2
-        assert "redirectUrl" in oauth2
-        assert "emailDomain" in oauth2
-
     def test_service_configuration(self, values_yaml_content: dict) -> None:
         """驗證 service 設定存在且有埠號定義。"""
         assert "service" in values_yaml_content
         service = values_yaml_content["service"]
         assert "type" in service
         assert "port" in service
-        assert "internalPort" in service
 
     def test_resources_configuration(self, values_yaml_content: dict) -> None:
         """驗證 resources 請求和限制存在。"""
         assert "resources" in values_yaml_content
         resources = values_yaml_content["resources"]
-        assert "nginx" in resources
-        assert "oauth2Proxy" in resources
+        assert "requests" in resources
+        assert "limits" in resources
 
     def test_pod_security_context(self, values_yaml_content: dict) -> None:
         """驗證 pod security context 存在。"""
@@ -218,65 +206,26 @@ class TestRequiredTemplatesExist:
         """驗證 serviceaccount.yaml 存在。"""
         assert (template_dir / "serviceaccount.yaml").exists()
 
-    def test_secret_oauth2proxy_template_exists(self, template_dir: Path) -> None:
-        """驗證 secret-oauth2proxy.yaml 存在。"""
-        assert (template_dir / "secret-oauth2proxy.yaml").exists()
+    def test_auth_and_ingress_templates_are_gone(self, template_dir: Path) -> None:
+        """ADR-027 §5：da-portal 不再有自己的 oauth2-proxy Secret 與 Ingress。"""
+        assert not (template_dir / "secret-oauth2proxy.yaml").exists()
+        assert not (template_dir / "ingress.yaml").exists()
+        assert not (template_dir.parent / "files").exists()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # 模板內容驗證
 # ──────────────────────────────────────────────────────────────────────────────
 
-class TestNginxConfigmapHasProxy:
-    """驗證 nginx configmap 包含反向代理設定。"""
+class TestNginxConfigmapIsStatic:
+    """nginx configmap 是純靜態設定（ADR-027 §5）；render 層驗證見
+    tests/helm/test_portal_static_tier_guard.py。"""
 
-    def test_nginx_configmap_has_api_proxy(self, template_dir: Path) -> None:
-        """驗證 configmap-nginx.yaml 包含 /api/v1/ 反向代理設定。"""
-        configmap_file = template_dir / "configmap-nginx.yaml"
-        with open(configmap_file, encoding="utf-8") as f:
-            content = f.read()
-
-        # Check for /api/v1/ location block
-        assert "location /api/v1/" in content, (
-            "configmap-nginx.yaml 應包含 /api/v1/ location 區塊"
-        )
-        # Check for proxy_pass directive
-        assert "proxy_pass" in content, (
-            "configmap-nginx.yaml 應包含 proxy_pass 指令"
-        )
-
-    def test_nginx_configmap_has_tenant_api_reference(
-        self, template_dir: Path, values_yaml_content: dict
-    ) -> None:
-        """驗證 nginx configmap 參考 tenantApiUrl。"""
-        configmap_file = template_dir / "configmap-nginx.yaml"
-        with open(configmap_file, encoding="utf-8") as f:
-            content = f.read()
-
-        # Check that tenantApiUrl is referenced in template
-        assert ".Values.portal.tenantApiUrl" in content, (
-            "configmap-nginx.yaml 應參考 .Values.portal.tenantApiUrl"
-        )
-
-    def test_nginx_proxy_blocks_are_conditional(self, template_dir: Path) -> None:
-        """兩個 proxy location 區塊必須以各自的 upstream URL 為條件渲染。
-
-        Tier 1（values-tier1.yaml）依 GHSA-3g2h-rf85-5rrv 開放代理防護要求
-        兩個 URL 皆為空字串；若無條件渲染，空值內插會產出無 scheme 的
-        `proxy_pass /api/v1/;` → `nginx -t` 直接 fail（invalid URL prefix）
-        → 靜態 portal pod 啟動即 crashloop。render 層驗證見
-        tests/helm/test_portal_static_tier_guard.py。
-        """
-        configmap_file = template_dir / "configmap-nginx.yaml"
-        with open(configmap_file, encoding="utf-8") as f:
-            content = f.read()
-
-        assert "{{- if .Values.portal.tenantApiUrl }}" in content, (
-            "/api/v1/ location 區塊須以 portal.tenantApiUrl 非空為渲染條件"
-        )
-        assert "{{- if .Values.portal.recipePreviewUrl }}" in content, (
-            "/preview location 區塊須以 portal.recipePreviewUrl 非空為渲染條件"
-        )
+    def test_nginx_configmap_reads_no_upstream_value(self, template_dir: Path) -> None:
+        content = (template_dir / "configmap-nginx.yaml").read_text(encoding="utf-8")
+        assert "location / {" in content
+        assert "proxy_pass" not in content
+        assert "tenantApiUrl" not in content and "recipePreviewUrl" not in content
 
 
 class TestDeploymentHasContainers:
@@ -295,20 +244,11 @@ class TestDeploymentHasContainers:
             "deployment.yaml 應參考 .Values.image.repository"
         )
 
-    def test_deployment_has_oauth2_proxy_container(self, template_dir: Path) -> None:
-        """驗證 deployment 包含 oauth2-proxy 容器定義。"""
-        deployment_file = template_dir / "deployment.yaml"
-        with open(deployment_file, encoding="utf-8") as f:
-            content = f.read()
-
-        assert "name: oauth2-proxy" in content, (
-            "deployment.yaml 應定義 name: oauth2-proxy 容器"
-        )
-        assert "quay.io/oauth2-proxy/oauth2-proxy" in content or (
-            ".Values.oauth2Proxy.image.repository" in content
-        ), (
-            "deployment.yaml 應參考 oauth2-proxy image"
-        )
+    def test_deployment_has_no_oauth2_proxy_container(self, template_dir: Path) -> None:
+        """ADR-027 §5：整個部署只有一個 oauth2-proxy，在 tenant-api 的 pod 裡。"""
+        content = (template_dir / "deployment.yaml").read_text(encoding="utf-8")
+        assert "oauth2-proxy" not in content
+        assert "oauth2Proxy" not in content
 
     def test_deployment_mounts_nginx_config(self, template_dir: Path) -> None:
         """驗證 deployment 掛載 nginx configmap。"""
@@ -339,24 +279,14 @@ class TestServicePortsDefined:
         # Verify from values.yaml that port is 80
         # This is checked in test_service_configuration
 
-    def test_service_has_internal_port(self, template_dir: Path) -> None:
-        """驗證 service 定義內部埠（8080）用於直接存取。"""
-        service_file = template_dir / "service.yaml"
-        with open(service_file, encoding="utf-8") as f:
-            content = f.read()
+    def test_service_has_one_port(self, template_dir: Path) -> None:
+        """只有一個埠，直接到 nginx：沒有「繞過登入的內部埠」這種東西了。"""
+        content = (template_dir / "service.yaml").read_text(encoding="utf-8")
+        assert content.count("- name:") == 1
+        assert "internalPort" not in content
 
-        assert ".Values.service.internalPort" in content, (
-            "service.yaml 應參考 .Values.service.internalPort"
-        )
-
-    def test_service_uses_values_for_ports(
-        self, template_dir: Path, values_yaml_content: dict
-    ) -> None:
-        """驗證 values.yaml 中的埠號設定符合預期。"""
-        # External port should be 80
+    def test_service_uses_values_for_ports(self, values_yaml_content: dict) -> None:
         assert values_yaml_content["service"]["port"] == 80
-        # Internal port should be 8080
-        assert values_yaml_content["service"]["internalPort"] == 8080
 
 
 # ──────────────────────────────────────────────────────────────────────────────

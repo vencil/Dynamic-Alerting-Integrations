@@ -1,8 +1,7 @@
-"""test_nginx_proxy.py — Nginx reverse proxy 配置驗證
+"""test_portal_image_nginx_conf.py — da-portal image 的 nginx.conf
 
-驗證 da-portal nginx.conf 的反向代理和安全標頭設定。
-
-v2.5.0 Phase A 新增。
+驗證 components/da-portal/nginx.conf 是純靜態設定（不轉送任何請求、不碰身分
+header；ADR-027 §5、§9 第 3 項），以及安全標頭、健康檢查、SPA fallback 與快取。
 """
 from __future__ import annotations
 
@@ -65,135 +64,29 @@ class TestNginxConfExists:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# 反向代理驗證
+# 不轉送任何東西（ADR-027 §5、§9 第 3 項）
 # ──────────────────────────────────────────────────────────────────────────────
 
-class TestProxyPassToTenantApi:
-    """驗證反向代理至 tenant-api 的設定。"""
+class TestNoForwarding:
+    """image 的 nginx.conf 是純靜態設定：沒有 proxy_pass、不碰身分 header。
 
-    def test_proxy_pass_directive_exists(self, nginx_conf_content: str) -> None:
-        """驗證 proxy_pass 指令存在。"""
-        assert "proxy_pass" in nginx_conf_content, (
-            "nginx.conf 應包含 proxy_pass 指令以進行反向代理"
-        )
+    登入後的 portal 在 tenant-api 的 pod 裡、用 chart 自帶的設定；da-portal
+    chart 也掛自己的 conf.d 蓋過它。這份檔案是 `docker run` 用到的，它轉送
+    任何請求都會讓「身分只經 oauth2-proxy → UDS 一跳」不成立。
+    """
 
-    def test_proxy_pass_targets_tenant_api(self, nginx_conf_content: str) -> None:
-        """驗證 proxy_pass 指向 tenant-api。"""
-        # Look for tenant-api reference in proxy_pass
-        assert "tenant-api" in nginx_conf_content, (
-            "nginx.conf 應包含 tenant-api 的參考"
-        )
+    def test_no_proxy_directive(self, nginx_conf_content: str) -> None:
+        # 去掉註解再比，避免說明文字裡的字樣誤判。
+        code = "\n".join(l.split("#", 1)[0] for l in nginx_conf_content.splitlines())
+        assert "server {" in code  # 讀到的是設定本身
+        for directive in ("proxy_pass", "fastcgi_pass", "uwsgi_pass", "grpc_pass",
+                          "scgi_pass", "proxy_set_header", "js_import", "js_set"):
+            assert directive not in code, directive
 
-    def test_proxy_includes_http_scheme(self, nginx_conf_content: str) -> None:
-        """驗證 proxy_pass 使用 http:// 方案。"""
-        assert re.search(r"proxy_pass\s+http://", nginx_conf_content), (
-            "proxy_pass 應使用 http:// 方案"
-        )
-
-
-class TestApiV1LocationBlock:
-    """驗證 /api/v1/ location 區塊。"""
-
-    def test_api_v1_location_exists(self, nginx_conf_content: str) -> None:
-        """驗證 /api/v1/ location 區塊存在。"""
-        assert "location /api/v1/" in nginx_conf_content, (
-            "nginx.conf 應定義 location /api/v1/ 區塊"
-        )
-
-    def test_api_v1_has_proxy_pass(self, nginx_conf_content: str) -> None:
-        """驗證 /api/v1/ location 區塊內有 proxy_pass。"""
-        # Extract the /api/v1/ location block
-        match = re.search(
-            r"location\s+/api/v1/\s*\{([^}]+)\}",
-            nginx_conf_content,
-            re.DOTALL
-        )
-        assert match is not None, (
-            "無法解析 /api/v1/ location 區塊"
-        )
-
-        location_block = match.group(1)
-        assert "proxy_pass" in location_block, (
-            "/api/v1/ location 區塊應包含 proxy_pass 指令"
-        )
-
-    def test_api_v1_proxy_pass_path_preserved(self, nginx_conf_content: str) -> None:
-        """驗證 proxy_pass 保留路徑（/api/v1/ → /api/v1/）。"""
-        match = re.search(
-            r"location\s+/api/v1/\s*\{([^}]+)\}",
-            nginx_conf_content,
-            re.DOTALL
-        )
-        assert match is not None
-
-        location_block = match.group(1)
-        # Check for proxy_pass with /api/v1/ in the target
-        assert re.search(
-            r"proxy_pass\s+[^;]+/api/v1/",
-            location_block
-        ), (
-            "proxy_pass 應保留 /api/v1/ 路徑"
-        )
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# 身份驗證標頭轉發驗證
-# ──────────────────────────────────────────────────────────────────────────────
-
-class TestIdentityHeadersForwarded:
-    """驗證身份相關標頭被正確轉發。"""
-
-    def test_x_forwarded_email_header(self, nginx_conf_content: str) -> None:
-        """驗證 X-Forwarded-Email 標頭被轉發。"""
-        # Look for X-Forwarded-Email in proxy_set_header
-        assert re.search(
-            r"proxy_set_header\s+X-Forwarded-Email",
-            nginx_conf_content,
-            re.IGNORECASE
-        ), (
-            "nginx.conf 應轉發 X-Forwarded-Email 標頭"
-        )
-
-    def test_x_forwarded_user_header(self, nginx_conf_content: str) -> None:
-        """驗證 X-Forwarded-User 標頭被轉發。"""
-        assert re.search(
-            r"proxy_set_header\s+X-Forwarded-User",
-            nginx_conf_content,
-            re.IGNORECASE
-        ), (
-            "nginx.conf 應轉發 X-Forwarded-User 標頭"
-        )
-
-    def test_x_forwarded_groups_header(self, nginx_conf_content: str) -> None:
-        """驗證 X-Forwarded-Groups 標頭被轉發。"""
-        assert re.search(
-            r"proxy_set_header\s+X-Forwarded-Groups",
-            nginx_conf_content,
-            re.IGNORECASE
-        ), (
-            "nginx.conf 應轉發 X-Forwarded-Groups 標頭"
-        )
-
-    def test_forwarded_headers_in_api_block(self, nginx_conf_content: str) -> None:
-        """驗證身份標頭轉發在 /api/v1/ location 區塊內。"""
-        match = re.search(
-            r"location\s+/api/v1/\s*\{([^}]+)\}",
-            nginx_conf_content,
-            re.DOTALL
-        )
-        assert match is not None
-
-        location_block = match.group(1)
-        # At least one identity header should be in the block
-        has_identity_header = any([
-            "X-Forwarded-Email" in location_block,
-            "X-Forwarded-User" in location_block,
-            "X-Forwarded-Groups" in location_block,
-            "X-Auth-Request" in location_block,
-        ])
-        assert has_identity_header, (
-            "/api/v1/ location 區塊應轉發身份標頭"
-        )
+    def test_no_identity_header(self, nginx_conf_content: str) -> None:
+        code = "\n".join(l.split("#", 1)[0] for l in nginx_conf_content.splitlines())
+        assert "x_forwarded_" not in code.lower()
+        assert "x-forwarded-" not in code.lower()
 
 
 # ──────────────────────────────────────────────────────────────────────────────
