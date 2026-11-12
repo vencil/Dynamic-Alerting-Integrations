@@ -957,6 +957,10 @@ byo-rulepack-table: $(DA_READ_PREREQ) ## 重新產生 BYO Prometheus 文件內�
 platform-data: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；Helm／k8s 檔經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
 	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
 
+.PHONY: renovate-fixup
+renovate-fixup: ## 在 Renovate「third-party container images」PR 分支上補齊它寫不到的連動修改（da-read go.sum、oauth2-proxy 測試函式庫、federation-e2e／try-local compose、platform-data＋portal IMAGE_MIRROR＋dist；#3799）。需要 go 與 make；剩下的紅燈是上游 API 變更，要人修
+	@python3 ./scripts/tools/dx/renovate_fixup.py
+
 .PHONY: rulepack-configmaps
 rulepack-configmaps: $(DA_READ_PREREQ) ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/generate_rulepack_configmaps.py

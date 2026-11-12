@@ -119,6 +119,7 @@ lang: en
 | `paired_trend_watch.py` | Judge a series of PAIRED nightly runs for a sustained regression (ADR-032). |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
 | `render_soak_diff.py` | v2.8.0 readiness harness: chaos soak result renderer. |
+| `renovate_fixup.py` | Finish a Renovate third-party image PR: write the follow-on edits it cannot (#3799). |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `run_chaos_soak.py` | v2.8.0 readiness harness: compressed-time chaos soak runner. |
 | `scaffold_lint.py` | generate a new pre-commit lint script from template. |
