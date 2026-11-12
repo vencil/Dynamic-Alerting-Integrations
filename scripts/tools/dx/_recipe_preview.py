@@ -328,7 +328,10 @@ def build_preview_test(recipe, tenant, value, judged):
                      "exp_samples": [{"labels": "{}", "value": 1 if fires else 0}]},
                     *extra]}
 
-    loaded = {"expr": f"count({_LOADED_RECORD})", "eval_time": f"{eval_min}m",
+    # `{tenant=""}`: the service's record has no labels, every synthetic
+    # series carries the tenant — a recipe whose metric is named like the
+    # record is not counted with it.
+    loaded = {"expr": f'count({_LOADED_RECORD}{{tenant=""}})', "eval_time": f"{eval_min}m",
               "exp_samples": [{"labels": "{}", "value": 1}]}
     doc_obj = {
         "rule_files": [_PACK_FILE],

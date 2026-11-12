@@ -285,9 +285,10 @@ def test_a_failure_is_returned_as_failed_whatever_caused_it(tmp_path):
     (1, _report(_case("fires"), _case("quiet"))),                         # rc 1, all passed
     (0, _report(_case("fires"), _case("quiet", "<skipped/>"))),
     (1, _report(_case("fires"), "<testcase><failure>x</failure></testcase>")),  # a nameless case
+    (137, _report(_case("fires"), _case("quiet", _FAIL))),               # killed after writing
     (0, "<testsuites>" + _report(_case("fires"), _case("quiet"))[12:-13] * 2 + "</testsuites>"),
 ], ids=["error", "no-report", "not-xml", "missing-group", "extra-group", "duplicate-group",
-        "rc0-failure", "rc1-all-passed", "skipped", "nameless-case", "two-suites"])
+        "rc0-failure", "rc1-all-passed", "skipped", "nameless-case", "killed-rc137", "two-suites"])
 def test_test_rules_without_the_report_of_this_run_is_no_proof(tmp_path, rc, report):
     proof = E.PROOFS[("promtool", "test-rules")]
     expect = ({"junit": str(tmp_path / "absent.xml"), "cases": _CASES} if report is None

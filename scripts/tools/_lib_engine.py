@@ -398,6 +398,8 @@ def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> dic
         raise NoProof(f"the report's test groups {sorted(map(str, names))} are not "
                       f"the ones the test file defines {sorted(expect['cases'])}")
     passed = {c.get("name"): c.find("failure") is None for c in cases}
+    if proc.returncode not in (0, 1):   # 0 all held, 1 one failed (3.15.1); else killed / crashed
+        raise NoProof(f"exit status {proc.returncode} is neither a pass nor a test failure")
     if (proc.returncode == 0) != all(passed.values()):
         raise NoProof(f"exit status {proc.returncode} disagrees with the report")
     return passed

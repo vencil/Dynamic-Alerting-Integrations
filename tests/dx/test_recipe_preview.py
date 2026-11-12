@@ -593,3 +593,11 @@ class TestDeadline:
         rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500}, deadline=104.0)
         assert [sub for sub, _ in timeouts] == ["check-rules", "test-rules"], timeouts
         assert all(t == pytest.approx(4.0) for _, t in timeouts), timeouts
+
+
+@_needs_promtool
+@pytest.mark.parametrize("value, want", [(1500, "firing"), (50, "inactive")])
+def test_a_recipe_metric_named_like_the_load_record_still_gets_a_verdict(value, want):
+    """The load proof counts only the service's own record (CodeRabbit on #3774)."""
+    recipe = {**_THRESHOLD, "metric": rp._LOADED_RECORD, "name": "named_like_canary"}
+    assert rp.preview_recipe(recipe, "shop-a", {"value": value})["states"][0]["state"] == want
