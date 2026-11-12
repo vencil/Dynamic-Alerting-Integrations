@@ -606,7 +606,9 @@ def test_real_validation_candidates_are_derived():
         "es_heap_usage_percent", "es_disk_usage_percent",
         "oracle_tablespace_used_percent", "rabbitmq_node_mem_percent",
         "jvm_memory", "db2_log_usage_percent", "db2_tablespace_used_percent",
-        "redis_replication_lag", "mongodb_replication_lag"}
+        "redis_replication_lag", "mongodb_replication_lag",
+        # #3770 fixed the URP sum, so its blocker is gone and 0 is portable
+        "kafka_under_replicated_partitions"}
 
 
 def test_real_kafka_blockers_point_at_their_issue():
@@ -614,7 +616,6 @@ def test_real_kafka_blockers_point_at_their_issue():
     blocked = {k: (e["blocker"]["kind"], e["blocker"]["tracking"])
                for k, e in doc["keys"].items() if "blocker" in e and k.startswith("kafka_")}
     assert blocked == {
-        "kafka_under_replicated_partitions": ("aggregation_bug", 3770),
         "kafka_active_controllers": ("unwired", 3783),
         "kafka_request_rate": ("unwired", 3783)}
 
