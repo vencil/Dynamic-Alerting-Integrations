@@ -80,8 +80,11 @@ reads/writes for cross-file communication.
 After ANY portal source change:
 
 1. `make portal-build` — rebuild the **committed** dist
-   (`docs/assets/dist/`); prod pages load committed dist, and "edited
-   source but forgot to rebuild dist" is NOT caught by any hook.
+   (`docs/assets/dist/`). Prod no longer loads the committed copy: Pages
+   deploy, the da-portal image and the smoke run each build it from
+   source (#3738). Until the follow-up PR takes dist out of git, CI's
+   dist drift gate still compares it, and "edited source but forgot to
+   rebuild dist" is NOT caught by any local hook.
 2. `make test-portal` — Vitest unit tests.
 3. Relevant E2E spec(s) under `tests/e2e/` for behavior changes.
 

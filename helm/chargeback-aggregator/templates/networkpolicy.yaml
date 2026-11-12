@@ -1,0 +1,45 @@
+{{- /* `helm upgrade --reuse-values` from 0.3.x carries the old release's values,
+which have no `networkPolicy` map at all: an ABSENT map takes the chart default
+(on, store in monitoring), the same shape as helm/vector's policy. */}}
+{{- $np := .Values.networkPolicy | default (dict "enabled" true "victorialogsNamespaceLabel" (dict "kubernetes.io/metadata.name" "monitoring")) }}
+{{- if $np.enabled }}
+# Egress for the aggregator's pods (the CronJob and the manual Job share the
+# selector labels). The documented install namespace, monitoring, default-denies
+# egress (k8s/03-monitoring/network-policies.yaml), and without this policy the
+# aggregator could resolve no name and reach no store: every run failed before
+# its first query. It receives no traffic, so it declares Egress only and
+# leaves ingress to the namespace's default deny.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "chargeback.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "chargeback.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "chargeback.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # VictoriaLogs (victorialogs.url, TCP 9428): the only off-pod dependency.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml (required "networkPolicy.victorialogsNamespaceLabel must be a non-empty namespace label selector: an empty one opens VictoriaLogs egress (9428) to every namespace" $np.victorialogsNamespaceLabel) | nindent 14 }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: victorialogs
+      ports:
+        - protocol: TCP
+          port: 9428
+{{- end }}

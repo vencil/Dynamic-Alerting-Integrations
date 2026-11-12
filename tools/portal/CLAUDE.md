@@ -4,6 +4,10 @@
 
 **不重複既有文件**：build / test 怎麼跑見 [`README.md`](README.md)；`_common/` 的消費方式與 dist gate 全表見 [`src/interactive/tools/_common/README.md`](src/interactive/tools/_common/README.md)；`@visual` baseline 重生 SOP 見 [`tests/e2e/README.md`](../../tests/e2e/README.md)；lint gate 清單見 [`docs/internal/lint-policy.md`](../../docs/internal/lint-policy.md)。以下只列**那些文件沒有寫、而且踩過的**。
 
+## dist 由誰 build（#3738 過渡期）
+
+每個消費端（Pages 部署、da-portal image、Smoke／visual baseline、本機 `serve-docs`／`test-e2e`）都在用之前自己 build，不讀 repo 裡那份 `docs/assets/dist/`；清單與守衛見 [`README.md`](README.md)「誰消費」一節。⚠️ dist **仍暫時 commit**、drift gate 仍在，所以下面兩節的 commit 規則照舊適用，直到下一張 PR 把 dist 移出 git。
+
 ## commit 階段
 
 ⛔ **`git commit --amend` 補 dist 一定失敗，要用 `git reset --soft HEAD~1`。**

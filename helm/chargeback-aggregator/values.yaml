@@ -118,3 +118,12 @@ extraEnvFrom: []
 # steady-state installs don't spam Job objects.
 manualJob:
   enabled: false
+
+# NetworkPolicy: egress to DNS and to VictoriaLogs only. Needed wherever the
+# namespace default-denies egress (monitoring does: k8s/03-monitoring).
+networkPolicy:
+  enabled: true
+  # Namespace label selector for the VictoriaLogs in victorialogs.url. Must be
+  # a non-empty map; the render fails otherwise.
+  victorialogsNamespaceLabel:
+    kubernetes.io/metadata.name: monitoring
