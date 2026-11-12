@@ -59,6 +59,9 @@ DOCKER_HUB = "registry-1.docker.io"
 #: single-component name under any of them is under ``library/``.
 DOCKER_HUB_ALIASES = frozenset({"docker.io", "index.docker.io", DOCKER_HUB})
 
+#: A digest as the OCI image spec writes it: ``<algorithm>:<encoded>``.
+_DIGEST = re.compile(r"[a-z0-9]+(?:[.+_-][a-z0-9]+)*:[a-zA-Z0-9=_-]+")
+
 #: Digest algorithms whose bytes can be checked here (OCI image-spec names).
 DIGEST_ALGORITHMS = frozenset({"sha256", "sha512"})
 
@@ -66,6 +69,11 @@ DIGEST_ALGORITHMS = frozenset({"sha256", "sha512"})
 class Answer(NamedTuple):
     outcome: str        # RESOLVED / NOT_RESOLVED / NO_ANSWER
     reason: str         # one line for the report ("" when RESOLVED)
+
+
+class InvalidRef(ValueError):
+    """Text that is not an image reference (``repo:v1@``, ``repo:``). Input
+    the check cannot read — the contract's 2 — not a verdict either way."""
 
 
 class Ref(NamedTuple):
@@ -84,7 +92,9 @@ def parse_ref(ref: str) -> Ref:
     ref carrying both a tag and a digest (``repo:tag@sha256:…``, how #902 pins
     third-party images) is resolved by its digest — the tag is informational.
     """
-    name, _, digest = ref.partition("@")
+    name, at, digest = ref.partition("@")
+    if at and not _DIGEST.fullmatch(digest):
+        raise InvalidRef(f"{ref!r}: '@' is not followed by an <algorithm>:<hex> digest")
     first, sep, rest = name.partition("/")
     if sep and ("." in first or ":" in first or first == "localhost"):
         host, path = first, rest
@@ -98,6 +108,10 @@ def parse_ref(ref: str) -> Ref:
     last = path.rsplit("/", 1)[-1]
     if ":" in last:
         repository, _, tag = path.rpartition(":")
+        if not tag:
+            raise InvalidRef(f"{ref!r}: ':' is not followed by a tag")
+    if not repository:
+        raise InvalidRef(f"{ref!r}: no repository name")
     return Ref(host, repository, digest or tag)
 
 
@@ -169,7 +183,11 @@ def _anonymous_token(challenge: dict, repository: str, timeout: float,
         raise _NoAnswer(f"HTTP {status} from the token service {realm}")
     payload = json.loads(body)
     token = payload.get("token") or payload.get("access_token") if isinstance(payload, dict) else None
-    return token if isinstance(token, str) and token else None
+    if not isinstance(token, str) or not token:
+        # A 200 without a token is not a refusal: going on without one would
+        # judge the manifest's tokenless 401 as "not pullable anonymously".
+        raise _NoAnswer(f"HTTP 200 from the token service {realm} without a token")
+    return token
 
 
 def _error_codes(body: bytes) -> list[str]:
@@ -230,6 +248,9 @@ def resolve(ref: str, *, timeout: float, transport: Transport = _urllib_transpor
     registry that did not answer: that is :data:`NO_ANSWER`."""
     try:
         parsed = parse_ref(ref)
+    except InvalidRef as exc:
+        return Answer(NO_ANSWER, f"not a valid image reference: {exc}")
+    try:
         url = (f"https://{parsed.host}/v2/{parsed.repository}/manifests/"
                f"{urllib.parse.quote(parsed.reference, safe=':')}")
         headers = {"Accept": ", ".join(MANIFEST_TYPES)}

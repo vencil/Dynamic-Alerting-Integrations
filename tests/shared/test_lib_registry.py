@@ -327,3 +327,26 @@ def test_a_cross_host_redirect_drops_the_token_and_a_same_host_one_keeps_it():
     same = handler.redirect_request(req, None, 307, "", {}, "https://registry.example/v2/x")
     assert not other.has_header("Authorization")
     assert same.get_header("Authorization") == "Bearer tok"
+
+
+# ── CodeRabbit findings on #3757 ────────────────────────────────────────────
+
+@pytest.mark.parametrize("ref", ["quay.io/o/p:v1@", "quay.io/o/p@", "quay.io/o/p:v1@sha256:",
+                                 "quay.io/o/p@v1", "quay.io/o/p:", "quay.io/:v1"])
+def test_text_that_is_not_an_image_reference_is_no_answer_and_asks_nothing(ref):
+    """`repo:v1@` used to fall back to the tag and resolve it — rc 0 over a
+    ref no runtime would pull. Unreadable input is 2, and no registry is asked."""
+    t = Script()
+    answer = R.resolve(ref, timeout=5, transport=t)
+    assert answer.outcome == R.NO_ANSWER and "not a valid image reference" in answer.reason
+    assert t.asked == []
+
+
+@pytest.mark.parametrize("body", [b"{}", b"[]", b'{"token": 123}', b'{"token": ""}'])
+def test_a_token_service_200_without_a_token_is_no_answer(body):
+    """Going on tokenless would judge the manifest's 401 as a finding."""
+    t = Script(("HEAD", 401, _headers(WWW_Authenticate=CHALLENGE), b""),
+               ("GET", 200, _headers(), body))
+    answer = R.resolve("example.io/o/p:v1", timeout=5, transport=t)
+    assert answer.outcome == R.NO_ANSWER and "without a token" in answer.reason
+    assert len(t.asked) == 2
