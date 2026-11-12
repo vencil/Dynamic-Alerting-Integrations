@@ -20,6 +20,23 @@ import _recipe_preview as rp  # noqa: E402
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
+def _assert_two_opposite_groups(doc, alertname):
+    """#3611: the builder writes the groups the verdict table reads — `fires`
+    expecting the alert, `quiet` expecting none plus the pack-loaded canary —
+    on one shared input."""
+    tests = yaml.safe_load(doc)["tests"]
+    assert [t["name"] for t in tests] == [rp._FIRES, rp._QUIET]
+    assert tests[0]["input_series"] == tests[1]["input_series"]
+    want = {rp._FIRES: [1], rp._QUIET: [0, 1]}
+    for t in tests:
+        exprs = t["promql_expr_test"]
+        assert [e["exp_samples"][0]["value"] for e in exprs] == want[t["name"]]
+        assert f'alertname="{alertname}"' in exprs[0]["expr"]
+        assert 'alertstate="firing"' in exprs[0]["expr"]
+    assert rp._LOADED_RECORD in tests[1]["promql_expr_test"][1]["expr"]
+    assert yaml.safe_load(doc)["rule_files"] == [rp._PACK_FILE]
+
+
 _needs_promtool = pytest.mark.skipif(
     shutil.which("promtool") is None, reason="promtool not on PATH"
 )
@@ -117,23 +134,25 @@ class TestGatingAndErrors:
         → state:error, never a wrong verdict."""
         out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": "1+2"})
         assert out["states"][0]["state"] == "error"
-        assert "numeric" in out["states"][0]["reason"]
+        assert "finite JSON number" in out["states"][0]["reason"]
 
-    def test_oserror_during_eval_is_fail_closed(self, monkeypatch):
-        """promtool vanishing mid-run (OSError) → state:error, never a crash
+    def test_promtool_vanishing_is_fail_closed(self, monkeypatch):
+        """promtool gone between locate and run → state:error, never a crash
         or a wrong verdict (the fail-closed contract)."""
-        real = rp.subprocess.run
-
-        def boom(cmd, *a, **k):
-            if cmd[0] == "/nonexistent/promtool":
-                raise FileNotFoundError("promtool disappeared")
-            return real(cmd, *a, **k)      # da-guard still runs
-        monkeypatch.setattr(rp, "_PROMTOOL", "/nonexistent/promtool")
-        monkeypatch.setattr(rp.subprocess, "run", boom)
+        monkeypatch.setattr(rp, "_PROMTOOL",
+                            rp.engine.Located("promtool", "binary", path="/nonexistent/promtool"))
         out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})
         assert out["supported"] is True
         assert out["states"][0]["state"] == "error"
-        assert "promtool eval failed" in out["states"][0]["reason"]
+        assert "cannot run promtool" in out["states"][0]["reason"]
+
+    def test_no_promtool_is_a_warning_not_a_state(self, monkeypatch):
+        """The service's optional engine (#3611 Q1): absent → "cannot evaluate
+        locally", no firing / inactive claimed."""
+        monkeypatch.setattr(rp, "_PROMTOOL", rp.engine.NoVerdict("promtool is not installed"))
+        out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})
+        assert out["supported"] is True and out["states"] == []
+        assert "promtool not available" in out["warnings"][0]
 
     def test_a_for_the_preview_cannot_size_is_error(self, monkeypatch):
         """The series is sized from the compiled rule's `for:`; one the preview
@@ -174,8 +193,16 @@ class TestBuildPreviewTest:
         assert "order_queue_depth{tenant=\"shop-a\"}" in doc
         assert "user_threshold{" in doc and "tenant_metadata_info{" in doc
         assert "values: 1000x11" in doc         # the served threshold, held past for
-        assert "exp_alerts: []" in doc          # inverted-assert
-        assert f"alertname: Custom_{slug}" in doc
+        _assert_two_opposite_groups(doc, f"Custom_{slug}")
+
+    @pytest.mark.parametrize("value, written", [(1500.0, "1500"), (10 ** 15, "1000000000000000"),
+                                                (1e16, "1e+16"), (-0.5, "-0.5")])
+    def test_the_value_is_written_by_the_threshold_s_formatter(self, tmp_path, value, written):
+        """One formatter for both sides of the comparison (`_fmt_value`), never
+        the value as given (#3611 A)."""
+        judged, doc = self._build(tmp_path, _THRESHOLD, value)
+        series = yaml.safe_load(doc)["tests"][0]["input_series"][0]
+        assert series["values"] == f"{written}x{judged.for_min + 10}"
 
     def test_for_window_sizes_eval_time(self, tmp_path):
         """A longer `for:` pushes eval_time past the pending window."""
@@ -214,8 +241,7 @@ class TestBuildPreviewTest:
         assert "user_threshold{" in doc and "tenant_metadata_info{" in doc
         assert "app_heartbeat_total{" not in doc      # metric intentionally absent
         assert "eval_time: 16m" in doc                # window 10 + for 1 + 5
-        assert "exp_alerts: []" in doc                # inverted-assert
-        assert f"alertname: Custom_{judged.slug}" in doc
+        _assert_two_opposite_groups(doc, f"Custom_{judged.slug}")
 
     def test_absence_compound_and_subsecond_window(self, tmp_path):
         """A compound / sub-second window (schema grammar, e.g. 1h30m / 500ms) must
@@ -300,22 +326,94 @@ class TestJudgedByTheExporter:
         assert set(_lib_parse_cache._SERVABLE) == before
 
 
-# ── promtool result classification (pure; finding 2 — rc!=0 ≠ firing) ──
+# ── the verdict comes from promtool's JUnit report, not its console (#3611 Q2) ──
 
-class TestClassifyPromtoolResult:
-    def test_rc0_is_inactive(self):
-        assert rp.classify_promtool_result(0, "Unit Testing: t\nSUCCESS") == "inactive"
+#: A stand-in promtool: `check rules` exits per CHECK_RC; `test rules --junit
+#: <xml> <test>` writes the report MODE names: which of the `fires` / `quiet`
+#: groups fail (shapes as promtool 3.15.1 writes them).
+_STAND_IN = f"""#!{sys.executable}
+import os, sys
+mode = os.environ["STAND_IN_MODE"]
+if sys.argv[1:3] == ["check", "rules"]:
+    sys.exit(int(os.environ.get("CHECK_RC", "0")))
+junit = sys.argv[sys.argv.index("--junit") + 1]
+def case(name, failed):
+    return '<testcase name="%s">%s</testcase>' % (name, "<failure>x</failure>" if failed else "")
+def write(cases, rc, errors=0):
+    fails = sum("<failure>" in c for c in cases)
+    open(junit, "w").write('<testsuites><testsuite name="t" tests="%d" failures="%d" errors="%d">%s'
+                           '</testsuite></testsuites>' % (len(cases), fails, errors, "".join(cases)))
+    sys.exit(rc)
+if mode == "fires":       write([case("fires", 0), case("quiet", 1)], 1)
+if mode == "quiet":       write([case("fires", 1), case("quiet", 0)], 1)
+if mode == "both-fail":   write([case("fires", 1), case("quiet", 1)], 1)
+if mode == "both-pass":   write([case("fires", 0), case("quiet", 0)], 0)
+if mode == "error":       write(['<testcase name="unknown"><error>yaml</error></testcase>'], 1, 1)
+if mode == "one-case":    write([case("fires", 0)], 0)
+if mode == "extra-case":  write([case("fires", 0), case("quiet", 1), case("x", 0)], 1)
+if mode == "rc-disagree": write([case("fires", 0), case("quiet", 1)], 0)
+if mode == "console-only":
+    print("  FAILED:\\n    exp:[], \\n    got:[\\n  0:\\n  ]"); sys.exit(1)
+"""
 
-    def test_mismatch_signature_is_firing(self):
-        out = ("  FAILED:\n    alertname: Custom_x, time: 6m, \n        exp:[], \n"
-               "        got:[\n  0:\n    Labels:{alertname=\"Custom_x\"}\n  ]")
-        assert rp.classify_promtool_result(1, out) == "firing"
 
-    def test_nonzero_without_marker_is_error_not_firing(self):
-        # OOM-kill / missing binary / test-file parse error all exit non-zero
-        # but must NOT be mislabeled as firing (finding 2).
-        assert rp.classify_promtool_result(137, "Killed") == "error"
-        assert rp.classify_promtool_result(1, "error loading test file: yaml: line 3") == "error"
+@pytest.fixture
+def stand_in_promtool(tmp_path, monkeypatch):
+    exe = tmp_path / "promtool"
+    exe.write_text(_STAND_IN, encoding="utf-8", newline="\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(rp, "_PROMTOOL", rp.engine.Located("promtool", "binary", path=str(exe)))
+
+    def run(mode, check_rc=0):
+        monkeypatch.setenv("STAND_IN_MODE", mode)
+        monkeypatch.setenv("CHECK_RC", str(check_rc))
+        return rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})["states"][0]
+    return run
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX stand-in for promtool")
+class TestVerdictSource:
+    """#3611 (owner ruling 2026-11-12): only "fires passed, quiet failed" is
+    firing and only "fires failed, quiet passed" is inactive."""
+
+    def test_only_the_fires_group_passing_is_firing(self, stand_in_promtool):
+        assert stand_in_promtool("fires")["state"] == "firing"
+
+    def test_only_the_quiet_group_passing_is_inactive(self, stand_in_promtool):
+        assert stand_in_promtool("quiet")["state"] == "inactive"
+
+    @pytest.mark.parametrize("mode", ["both-fail", "both-pass"])
+    def test_both_groups_alike_is_error(self, stand_in_promtool, mode):
+        """Both failing is what unreadable input or a rule that cannot load or
+        evaluate looks like — promtool reports each as a group <failure>."""
+        state = stand_in_promtool(mode)
+        assert state["state"] == "error" and "did not evaluate" in state["reason"], state
+
+    @pytest.mark.parametrize("mode", ["error", "one-case", "extra-case", "rc-disagree",
+                                      "console-only"])
+    def test_a_report_that_is_not_this_run_is_error(self, stand_in_promtool, mode):
+        """An <error>, groups other than the two written, an exit status that
+        disagrees, or no report at all — even with the old console signature
+        `FAILED:` + `got:[` on stdout."""
+        state = stand_in_promtool(mode)
+        assert state["state"] == "error", state
+        assert "promtool eval error" in state["reason"]
+
+    def test_a_rule_that_does_not_validate_is_error(self, stand_in_promtool):
+        state = stand_in_promtool("quiet", check_rc=1)
+        assert state["state"] == "error" and "promtool check rules" in state["reason"]
+
+
+@pytest.mark.parametrize("value", [True, False, "1500", "1500\n", " 1500", "\u0661\u0665\u0660\u0660",
+                                   float("nan"), float("inf"), -float("inf"), 10 ** 400, None, [1500]])
+def test_a_scenario_value_that_is_not_a_finite_json_number_is_error(value):
+    """#3611 A: checked before promtool runs (the "Python Tests" job has no
+    promtool). "1500\n" was a false inactive (promtool read one sample, then
+    stale); NaN / Infinity / true / non-ASCII digits are numbers to
+    json.loads or float() but not to promtool's series grammar."""
+    out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": value})
+    assert out["states"][0]["state"] == "error"
+    assert "scenario.value" in out["states"][0]["reason"]
 
 
 # ── end-to-end firing/inactive (needs promtool) ──
@@ -372,6 +470,60 @@ class TestWouldFire:
         assert out["alertname"] == "Custom_absence__app_heartbeat_total__absent__w10m__for1m"
 
 
+
+# ── the two-group design against the real engine (needs promtool) ──
+# What makes "fires failed" mean "did not fire": every way promtool can fail to
+# evaluate fails BOTH groups. Each case below bypasses the value check to put
+# the engine in that state, and must be error — never firing / inactive.
+
+@_needs_promtool
+class TestEngineCannotEvaluate:
+    def _rewrite_test(self, monkeypatch, old, new):
+        real = rp.build_preview_test
+
+        def rewritten(*a, **k):
+            doc = real(*a, **k)
+            assert old in doc
+            return doc.replace(old, new)
+        monkeypatch.setattr(rp, "build_preview_test", rewritten)
+
+    @pytest.mark.parametrize("value", [1500, 50])
+    def test_input_series_promtool_cannot_parse_is_error(self, monkeypatch, value):
+        self._rewrite_test(monkeypatch, f"values: {value}x", "values: Truex")
+        state = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": value})["states"][0]
+        assert state["state"] == "error" and "did not evaluate" in state["reason"], state
+
+    @pytest.mark.parametrize("value", [1500, 50])
+    def test_a_rule_that_errors_when_evaluated_is_error(self, monkeypatch, value):
+        """A many-to-many match: promtool records it as a group <failure>."""
+        real = rp.cc._render
+        broken = {"name": "boom", "rules": [{
+            "record": "boom", "expr": 'vector(1) * on() group_left {__name__=~"user_threshold|tenant_metadata_info"}'}]}
+        monkeypatch.setattr(rp.cc, "_render", lambda groups, *a, **k: real([*groups, broken], *a, **k))
+        state = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": value})["states"][0]
+        assert state["state"] == "error", state
+
+    @pytest.mark.parametrize("value", [1500, 50])
+    def test_a_pack_promtool_did_not_load_is_error(self, monkeypatch, value):
+        """A rule_files entry that matches nothing is no error to promtool —
+        it loads no rules. The pack-loaded canary makes that fail `quiet` too."""
+        self._rewrite_test(monkeypatch, rp._PACK_FILE, "no-such-pack.yaml")
+        state = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": value})["states"][0]
+        assert state["state"] == "error", state
+
+
+@_needs_promtool
+@pytest.mark.parametrize("op, value, want", [
+    (op, v, w) for op, verdicts in {
+        ">": ("inactive", "inactive", "firing"), ">=": ("inactive", "firing", "firing"),
+        "<": ("firing", "inactive", "inactive"), "<=": ("firing", "firing", "inactive"),
+        "==": ("inactive", "firing", "inactive"),
+    }.items() for v, w in zip((999, 1000, 1001), verdicts)])
+def test_every_op_on_both_sides_of_the_threshold(op, value, want):
+    recipe = {**_THRESHOLD, "op": op, "name": f"q_{op}".replace(">", "gt").replace("<", "lt").replace("=", "eq")}
+    assert rp.preview_recipe(recipe, "shop-a", {"value": value})["states"][0]["state"] == want
+
+
 # ── the caller's deadline bounds every run (ADR-027 §5: recipe-preview answers
 # tenant-api, whose request has a deadline shorter than a worst-case eval) ──
 class TestDeadline:
@@ -424,21 +576,28 @@ class TestDeadline:
         assert timeouts == [pytest.approx(29.0), pytest.approx(4.0)]
 
     def test_promtool_runs_are_bounded_by_the_deadline(self, monkeypatch):
+        """Both promtool runs (`check rules`, `test rules`) go through
+        `_lib_engine.run` (#3611) with the time left before the deadline."""
         timeouts = []
 
-        class _Done:
-            returncode = 0
-            stdout = ""
-            stderr = ""
+        def fake_run(located, subcommand, args, *, timeout, **kw):
+            timeouts.append((subcommand, timeout))
+            if subcommand == "check-rules":
+                return rp.engine.Ran(True, None)
+            return rp.engine.Ran({rp._FIRES: True, rp._QUIET: False}, None)
 
-        def fake_run(cmd, **kw):
-            timeouts.append(kw.get("timeout"))
-            return _Done()
-
-        if rp._PROMTOOL is None:
-            monkeypatch.setattr(rp, "_PROMTOOL", "/usr/bin/promtool")
-        monkeypatch.setattr(rp, "_run", fake_run)
+        monkeypatch.setattr(rp, "_PROMTOOL", rp.engine.Located("promtool", "binary", path="/p"))
+        monkeypatch.setattr(rp.engine, "run", fake_run)
         clock = iter([100.0] * 50)
         monkeypatch.setattr(rp.time, "monotonic", lambda: next(clock))
         rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500}, deadline=104.0)
-        assert timeouts and all(t == pytest.approx(4.0) for t in timeouts), timeouts
+        assert [sub for sub, _ in timeouts] == ["check-rules", "test-rules"], timeouts
+        assert all(t == pytest.approx(4.0) for _, t in timeouts), timeouts
+
+
+@_needs_promtool
+@pytest.mark.parametrize("value, want", [(1500, "firing"), (50, "inactive")])
+def test_a_recipe_metric_named_like_the_load_record_still_gets_a_verdict(value, want):
+    """The load proof counts only the service's own record (CodeRabbit on #3774)."""
+    recipe = {**_THRESHOLD, "metric": rp._LOADED_RECORD, "name": "named_like_canary"}
+    assert rp.preview_recipe(recipe, "shop-a", {"value": value})["states"][0]["state"] == want
