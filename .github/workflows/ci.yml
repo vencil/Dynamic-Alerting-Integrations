@@ -2412,16 +2412,18 @@ jobs:
 
       - name: Cache Go modules + build cache
         # Module cache (~/go/pkg/mod) is the primary key; build cache rides
-        # along. Key is shared with the tenant-api split job (same go.sum
-        # hash) so both restore the same warm cache.
+        # along. One key per module (#3541): this job and the tenant-api job
+        # build different things, and a shared key kept whichever saved first.
+        # The module name is plan_race_shards.MODULES' — nightly-race restores
+        # `<os>-go-<module>-<hash>` per leg; a guard test pins both sides.
         uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
+          key: ${{ runner.os }}-go-threshold-exporter-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-go-threshold-exporter-
             ${{ runner.os }}-go-
 
       # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
@@ -2491,15 +2493,18 @@ jobs:
         # path expanded to include ~/.cache/go-build so `go install swag@latest`
         # below benefits from a warm build cache on cache-hit runs (saves ~5-8s
         # on the swag CLI install step). Module cache (~/go/pkg/mod) is the
-        # primary key; build cache rides along.
+        # primary key; build cache rides along. Own per-module key (#3541) so
+        # what this job's tests build in-test (generator_real_test.go builds
+        # da-guard, da-crdecode and da-read) is what gets saved, and nightly
+        # race's tenant-api legs restore it instead of rebuilding cold.
         uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
+          key: ${{ runner.os }}-go-tenant-api-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-go-tenant-api-
             ${{ runner.os }}-go-
 
       # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
