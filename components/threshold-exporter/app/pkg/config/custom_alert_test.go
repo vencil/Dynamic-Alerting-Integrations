@@ -834,7 +834,9 @@ func TestCustomAlertEntries(t *testing.T) {
 func TestCustomAlertEntries_BlockError(t *testing.T) {
 	overrides := map[string]ScheduledValue{"_custom_alerts": valueAsWritten("{not: a list}")}
 	entries, blockErr := CustomAlertEntries("t1", overrides)
-	if entries != nil || !strings.Contains(blockErr, "cannot parse _custom_alerts") {
+	// The mapping's own decode error, not the scalar refusal (#3638).
+	if entries != nil || !strings.Contains(blockErr, "cannot parse _custom_alerts") ||
+		!strings.Contains(blockErr, "cannot unmarshal !!map") {
 		t.Errorf("entries %v, blockErr %q", entries, blockErr)
 	}
 	if entries, blockErr := CustomAlertEntries("t1", nil); len(entries) != 0 || blockErr != "" {

@@ -188,10 +188,10 @@ func TestCustomAlertSpecsOf_StructureNotText(t *testing.T) {
 		t.Errorf("list: write gate %v", v)
 	}
 
-	if entries, blockErr := CustomAlertEntries("t1", text); entries != nil || !strings.Contains(blockErr, "written as a string, not a list") {
+	if entries, blockErr := CustomAlertEntries("t1", text); entries != nil || !strings.Contains(blockErr, "written as a scalar, not a list") {
 		t.Errorf("string: entries %+v, blockErr %q", entries, blockErr)
 	}
-	if v := ValidateTenantCustomAlerts("t1", text, 20); len(v) != 1 || !strings.Contains(v[0], "written as a string, not a list") {
+	if v := ValidateTenantCustomAlerts("t1", text, 20); len(v) != 1 || !strings.Contains(v[0], "written as a scalar, not a list") {
 		t.Errorf("string: write gate %v", v)
 	}
 

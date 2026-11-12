@@ -267,9 +267,11 @@ _RC0_SHAPES = {
                         ["WARN: tenant=tenant-a: failed to parse _metadata: yaml: unmarshal errors:",
                          "  line 1: cannot unmarshal !!seq into config.TenantMetadata"]),
     # F2：rc 0 的 ERROR 行（custom alert 被拒，其餘照常發出）。
-    "ERROR line": ("tenants:\n  tenant-a:\n    _custom_alerts: 5\n",
+    # 清單裡放純量：仍是寫成清單的值，所以走結構解碼、錯誤是兩行（#3638 起
+    # 純量 `_custom_alerts: 5` 在解碼前就被拒，只剩一行）。
+    "ERROR line": ("tenants:\n  tenant-a:\n    _custom_alerts: [5]\n",
                    ["ERROR: tenant=tenant-a: custom alert \"<block>\" rejected: cannot parse _custom_alerts:",
-                    "  line 1: cannot unmarshal !!int `5` into []config.CustomAlertSpec"]),
+                    "  line 1: cannot unmarshal !!int `5` into config.CustomAlertSpec"]),
     # F4：Go `log` 帶日期時間前綴的 WARN。
     "date-prefixed WARN": ("tenants:\n  tenant-a:\n    mysql_connections:\n      default: \"70\"\n"
                            "      expires: bad\n",

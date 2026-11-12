@@ -1110,10 +1110,10 @@ type walkedCustomAlert struct {
 }
 
 // customAlertSpecsOf is the tenant's `_custom_alerts` as its readers read it
-// (#3638): the list it was written as, decoded from its structure. A string
+// (#3638): the list it was written as, decoded from its structure. A scalar
 // is no list, whatever its text holds — `_custom_alerts: "- recipe: …"`
 // used to be read as the list its text spelled; it is now refused
-// (errCustomAlertsString). An absent key, or an empty string, declares none.
+// (errCustomAlertsScalar). An absent key, or an empty string, declares none.
 // The one decode of the block: the exporter's walk and the write gate's
 // ValidateTenantCustomAlerts both take it from here.
 func customAlertSpecsOf(overrides map[string]ScheduledValue) ([]CustomAlertSpec, error) {
@@ -1126,7 +1126,7 @@ func customAlertSpecsOf(overrides map[string]ScheduledValue) ([]CustomAlertSpec,
 		if strings.TrimSpace(sv.Default) == "" {
 			return nil, nil
 		}
-		return nil, errCustomAlertsString
+		return nil, errCustomAlertsScalar
 	}
 	var specs []CustomAlertSpec
 	if err == nil {
@@ -1135,8 +1135,9 @@ func customAlertSpecsOf(overrides map[string]ScheduledValue) ([]CustomAlertSpec,
 	return specs, err
 }
 
-// errCustomAlertsString is customAlertSpecsOf's answer for a string.
-var errCustomAlertsString = errors.New("_custom_alerts is written as a string, not a list (#3638): write it as a YAML list of recipes")
+// errCustomAlertsScalar is customAlertSpecsOf's answer for a scalar (a
+// string, a number, a boolean).
+var errCustomAlertsScalar = errors.New("_custom_alerts is written as a scalar, not a list (#3638): write it as a YAML list of recipes")
 
 // walkCustomAlertSpecs decodes the tenant's `_custom_alerts` and judges each
 // entry in declaration order. A disabled entry is resolved once more with a
