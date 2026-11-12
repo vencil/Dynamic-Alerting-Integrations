@@ -93,7 +93,7 @@ func TestCollector_ObserveOncePerScrape(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]config.ScheduledValue{
 			"tenant-a": {
-				"_metadata":       {Default: "owner: team-a\nregion: r1\n"},
+				"_metadata":       svYAML("owner: team-a\nregion: r1\n"),
 				"_severity_dedup": {Default: "disable"},
 				"_silent_mode":    {Default: "warning"},
 			},

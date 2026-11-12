@@ -192,6 +192,12 @@ type ScheduledValue struct {
 	// like YAML (`"target: critical"`) stays the scalar it was written as.
 	// Beside deleted, in the struct's padding: ScheduledValue stays 56 bytes.
 	structured bool
+	// scheduleForm marks a value UnmarshalYAML decoded through its schedule
+	// branch (a mapping with a `default` key): what keepReservedMappings
+	// re-reads whole for a reserved mapping key (#2859). Exact where the text
+	// sniff it replaces missed a `default` whose text holds `:` (#3638).
+	// Same padding, same 56 bytes.
+	scheduleForm bool
 }
 
 // ExpiryMeta carries a ScheduledValue's optional time-box (PREVENT #656).

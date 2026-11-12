@@ -19,7 +19,7 @@ func TestResolveMetadata_WithMetadata(t *testing.T) {
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				"mysql_connections": SV("70"),
-				"_metadata":         SV("runbook_url: https://wiki.example.com/db-a\nowner: team-dba\ntier: gold\n"),
+				"_metadata":         SVYAML("runbook_url: https://wiki.example.com/db-a\nowner: team-dba\ntier: gold\n"),
 			},
 		},
 	}
@@ -64,7 +64,7 @@ func TestResolveMetadata_PartialMetadata(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_metadata": SV("owner: team-dba\n"),
+				"_metadata": SVYAML("owner: team-dba\n"),
 			},
 		},
 	}
@@ -108,7 +108,7 @@ func TestResolveMetadata_UnconditionalOutput(t *testing.T) {
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				"mysql_connections": SV("70"),
-				"_metadata":         SV("runbook_url: https://wiki.example.com/db-a\n"),
+				"_metadata":         SVYAML("runbook_url: https://wiki.example.com/db-a\n"),
 			},
 			"db-b": {"redis_memory": SV("1024")}, // no _metadata
 		},

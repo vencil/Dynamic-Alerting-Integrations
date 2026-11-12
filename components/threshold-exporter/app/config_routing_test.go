@@ -19,7 +19,7 @@ func TestValidateTenantKeys_MetadataReservedKey(t *testing.T) {
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				"mysql_connections": SV("70"),
-				"_metadata":         SV("owner: team-dba\n"),
+				"_metadata":         SVYAML("owner: team-dba\n"),
 			},
 		},
 	}
@@ -196,7 +196,7 @@ func TestResolve_ProfileRoutingLayerKeysAreNotApplied(t *testing.T) {
 				"_routing_profile":  SV("team"),
 				"_severity_dedup":   SV("disable"),
 				"mysql_connections": SV("60"),
-				"_metadata":         SV("owner: team-dba\n"),
+				"_metadata":         SVYAML("owner: team-dba\n"),
 			},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -239,7 +239,7 @@ func TestResolve_ProfileWithMetadata(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Profiles: map[string]map[string]ScheduledValue{
 			"standard-mariadb": {
-				"_metadata": SV("runbook_url: https://wiki.example.com/mariadb\nowner: team-dba\ntier: gold\n"),
+				"_metadata": SVYAML("runbook_url: https://wiki.example.com/mariadb\nowner: team-dba\ntier: gold\n"),
 			},
 		},
 		Tenants: map[string]map[string]ScheduledValue{

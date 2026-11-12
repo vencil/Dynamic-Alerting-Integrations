@@ -78,8 +78,9 @@ func labelChangeDeniedText(tenantID string, beforeKnown bool) string {
 	head := "only a platform administrator may change the environment or domain labels (_metadata) of tenant " +
 		tenantID + ": they decide which RBAC rules' environments/domains cover it"
 	if !beforeKnown {
-		return head + ", and the labels its current tenant file holds cannot be read, so this write cannot be " +
-			"shown to leave them as they were and is refused (ADR-027)"
+		return head + ", and the labels it currently resolves to cannot be read — its file, a root platform entry " +
+			"or its profile writes a _metadata that does not decode (e.g. the string form, #3638) — so this write " +
+			"cannot be shown to leave them as they were and is refused (ADR-027)"
 	}
 	return head + ", so this write, which would change them, is refused (ADR-027)"
 }

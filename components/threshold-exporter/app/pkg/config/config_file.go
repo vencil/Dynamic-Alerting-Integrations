@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
@@ -413,19 +412,13 @@ var mappingReservedKeys = map[string]bool{
 }
 
 // mayHaveStructuredReserved reports whether a body holds a mappingReservedKeys
-// value that the structured branch may have decoded. A mapping kept whole is
-// re-serialized YAML, so its text has a `:`; the structured branch leaves the
-// `default` scalar's text, and may leave overrides or an expiry. A `default`
-// whose own text has a `:` beside no overrides is missed — accepted, against
-// a second decode of every file.
+// value the structured (schedule) branch decoded — ScheduledValue.scheduleForm,
+// set by that branch: exact, with no second decode of a file that has none
+// (#3638 replaced a text sniff that missed a `default` whose text holds `:`).
 func mayHaveStructuredReserved(bodies map[string]map[string]ScheduledValue) bool {
 	for _, body := range bodies {
 		for k := range mappingReservedKeys {
-			sv, ok := body[k]
-			if !ok {
-				continue
-			}
-			if sv.Overrides != nil || sv.Expiry != nil || !strings.Contains(sv.Default, ":") {
+			if sv, ok := body[k]; ok && sv.scheduleForm {
 				return true
 			}
 		}
@@ -471,9 +464,10 @@ func TenantWritesStringMetadata(data []byte, tenantID string) bool {
 // WHY IT READS THE NODE. ScheduledValue stores a scalar as its text and a
 // mapping as its re-serialized YAML, both in Default, so after the typed
 // decode `_metadata: "environment: production"` and `_metadata:
-// {environment: production}` are the same value. The exporter keeps reading
-// both (a load-side refusal would drop every tenant of the file); this list
-// is what lets it say which entries still use the string form.
+// {environment: production}` used to be the same value. Since #3638 the
+// exporter reads only the mapping (ScheduledValue.structured); this list is
+// what lets it name the entries that still use the string form, which it
+// does not read.
 func stringMetadataEntries(doc *yaml.Node) []string {
 	root := derefAlias(doc)
 	if root.Kind == yaml.DocumentNode {

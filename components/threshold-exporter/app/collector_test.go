@@ -237,7 +237,7 @@ func TestCollector_FullConfig(t *testing.T) {
 				"mysql_connections": SV("90"),
 				"_silent_mode":      SV("critical"),
 				"_severity_dedup":   SV("enable"),
-				"_metadata":         SV("owner: dba-team\ntier: gold"),
+				"_metadata":         SVYAML("owner: dba-team\ntier: gold"),
 			},
 			"db-b": {
 				"mysql_connections": SV("70"),
@@ -741,7 +741,7 @@ func TestCollector_TenantMetadataInfo(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_metadata": SV("owner: dba-team\nrunbook_url: https://wiki.example.com/db-a\ntier: gold"),
+				"_metadata": SVYAML("owner: dba-team\nrunbook_url: https://wiki.example.com/db-a\ntier: gold"),
 			},
 		},
 	}
@@ -792,14 +792,14 @@ func TestCollector_TenantExpectedExporter(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_metadata": SV("db_type: mariadb\nowner: dba-team"),
+				"_metadata": SVYAML("db_type: mariadb\nowner: dba-team"),
 			},
 			"db-b": {
-				"_metadata": SV("db_type: postgresql\nowner: pg-team"),
+				"_metadata": SVYAML("db_type: postgresql\nowner: pg-team"),
 			},
 			"db-c": {
 				// _metadata present but db_type omitted → DBType=="" → skipped.
-				"_metadata": SV("owner: misc-team\ntier: bronze"),
+				"_metadata": SVYAML("owner: misc-team\ntier: bronze"),
 			},
 			"db-d": {
 				// No _metadata at all → DBType=="" → skipped.
