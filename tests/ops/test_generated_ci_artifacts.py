@@ -343,6 +343,8 @@ sys.path.insert(0, str(_TESTS_DIR / "ops"))
 import init_project as ip  # noqa: E402
 from test_init_project import CI_DEPLOY_COMBINATIONS  # noqa: E402
 from _platform_fs import symlink_or_skip  # noqa: E402
+sys.path.insert(0, str(_TESTS_DIR))
+from _tree import repo_files  # noqa: E402
 
 
 # ============================================================
@@ -8115,9 +8117,11 @@ def test_inline_uses_shape_is_read_and_prose_is_not() -> None:
     for prose in ("actions/checkout@v3 is retired", "`actions/checkout@v3` is retired",
                   "the `uses:` key takes `owner/action@ref`"):
         assert _DOC_INLINE_USES_RE.findall(prose) == [], prose
+    # Docs only: a changelog.d/ fragment is deleted when a release assembles
+    # it, so naming one here would break this test at the next release.
+    # Fragments are still SCANNED by the guard below, whichever exist.
     for rel in ("docs/scenarios/gitops-ci-integration.md",
-                "docs/scenarios/gitops-ci-integration.en.md",
-                "changelog.d/init-github-helm-pin.md"):
+                "docs/scenarios/gitops-ci-integration.en.md"):
         hits = _DOC_INLINE_USES_RE.findall(
             _REPO_ROOT.joinpath(rel).read_text(encoding="utf-8"))
         assert any(h.startswith("azure/setup-helm@") for h in hits), (
@@ -8139,8 +8143,8 @@ def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
     scanned = 0
     # changelog.d/ holds UNRELEASED entries — what the next release will tell
     # customers to do — so it is current text, unlike CHANGELOG.md.
-    paths = [*_REPO_ROOT.joinpath("docs").rglob("*.md"),
-             *_REPO_ROOT.joinpath("changelog.d").glob("*.md")]
+    paths = [p for p in repo_files(".md")
+             if p.relative_to(_REPO_ROOT).as_posix().startswith(("docs/", "changelog.d/"))]
     for path in sorted(paths):
         rel = path.relative_to(_REPO_ROOT).as_posix()
         if any(rel.startswith(skip) for skip in _DOC_SNIPPET_SKIP):

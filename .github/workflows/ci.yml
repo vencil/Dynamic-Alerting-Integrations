@@ -359,7 +359,11 @@ jobs:
               # tests/ops/test_generated_ci_artifacts.py scans the unreleased
               # fragments for `uses:` instructions that fell behind the
               # platform's action majors (a fragment is current text until
-              # it is assembled into CHANGELOG.md).
+              # it is assembled into CHANGELOG.md). It enumerates them with
+              # repo_files(), not by a literal path — fragments are deleted at
+              # release — so the path-filter scanner cannot see this read and
+              # does NOT pin this entry; deleting it would leave that module
+              # green.
               - "changelog.d/**"
               # ⛔ ALL of docs/, not a hand-picked few. Python tests read
               # documentation files as CONTRACT inputs (the

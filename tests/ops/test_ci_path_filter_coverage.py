@@ -1313,10 +1313,6 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # GAINED by #2761: tests/dx/test_session_start.py copies and runs the
     # real `.claude/hooks/session-start.sh`.
     ".claude/hooks/session-start.sh",
-    # GAINED by the setup-helm v5 PR (#1269 follow-up):
-    # tests/ops/test_generated_ci_artifacts.py reads changelog.d/ fragments
-    # for copy-me `uses:` instructions.
-    "changelog.d/**",
     # GAINED by #3156: tests/dx/test_subprocess_coverage_wiring.py builds a
     # Coverage from the real pyproject.toml to pin `patch = ["_exit"]`.
     "pyproject.toml",
