@@ -267,7 +267,7 @@ tenants:
 
 Output (excerpt, envelope fields omitted; measured by converting yaml.v3's nodes to JSON one by one, with `value` added by the rules above):
 
-```json {.illustrative reason="parse-tree output (JSON) for the file above, not a conf.d file"}
+```json
 {
   "t010.yaml": {
     "tenants": {

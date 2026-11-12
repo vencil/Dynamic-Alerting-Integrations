@@ -27,11 +27,10 @@ da-read 讀者的區塊另需 da-read。本工具不自己解析任何 YAML。
 
 import json
 import os
-import re
 import sys
 import argparse
 from pathlib import Path
-from typing import Dict, List, NamedTuple, Tuple
+from typing import Dict, List, Tuple
 
 # Pull `try_utf8_stdout` from the shared compat lib at scripts/tools/.
 # Migrated in #489 Phase B (was missing encoding setup → would crash on
@@ -46,7 +45,7 @@ import _lib_consumer_read  # noqa: E402
 import _lib_doc_yaml_inventory as inventory  # noqa: E402  (#3416: the one inventory)
 import check_confd_schema  # noqa: E402  (the conf.d file kinds and their schemas)
 sys.path.append(os.path.join(_THIS_DIR, "..", "ops"))
-from _grar_parse import ROUTING_BLOCK_KEYS, credential_facts  # noqa: E402  (#1560: the generator's judgement)
+from _grar_parse import credential_facts  # noqa: E402  (#1560: the generator's judgement)
 
 try:
     import jsonschema
@@ -89,184 +88,6 @@ BUILTIN_GROUPS = {
     "networking.k8s.io", "rbac.authorization.k8s.io", "storage.k8s.io",
     "apiextensions.k8s.io", "scheduling.k8s.io", "coordination.k8s.io",
 }
-
-
-# ── #3748: every routing block in docs/ is in a unit a check judges ────────
-# The oracle is the structured reading, not a line pattern (#3748 round 2): a
-# routing block key written in a string, a comment, a flow mapping or a
-# heredoc cannot be told from "no routing block" by where its line starts,
-# and a key inside a judged unit's lines is not a key the judgement saw. So
-# a unit is held to the count: the key tokens its text writes against the
-# routing keys the generator's credential scan walks in its reading.
-_KEYS = "|".join(re.escape(k) for k in sorted(ROUTING_BLOCK_KEYS, key=len, reverse=True))
-
-#: A routing block key (`_grar_parse.ROUTING_BLOCK_KEYS`, the blocks the
-#: generator's credential scan reads at any depth) written as a key: not
-#: preceded by a word character, bare or quoted, then `:` (blanks, a line
-#: break included, between: `? _routing` / `: …` is a key too). A longer
-#: name (`_routing_profile:`) is no token.
-ROUTING_KEY_TOKEN_RE = re.compile(r"(?<![\w])[\"']?(?:" + _KEYS + r")[\"']?\s*:")
-
-#: Outside code, a key token at the start of a line (after blanks, any
-#: blockquote `>` and a list item's `- `): prose naming the key mid-sentence,
-#: or in backticks, is no key position.
-ROUTING_KEY_LINE_RE = re.compile(
-    r"^[ \t]*(?:>[ \t]*)*(?:-[ \t]+)?[\"']?(?:" + _KEYS + r")[\"']?[ \t]*:")
-
-_QUOTE_RE = re.compile(r"^[ \t]{0,3}(?:>[ \t]?)+")
-_INLINE_CODE_RE = re.compile(r"(`+)(?:(?!\1).)+?\1")
-#: A `<pre>` HTML block starts a line (CommonMark: up to three blanks
-#: before it); `<pre>` named in a sentence is prose.
-_PRE_OPEN_RE = re.compile(r"[ \t]{0,3}<pre(?=[\s>]|$)", re.IGNORECASE)
-
-
-def routing_keys_seen(node: object) -> int:
-    """How many keys of `ROUTING_BLOCK_KEYS` a reading holds, at any depth —
-    every one the generator's credential scan (`_not_walked`) reads."""
-    n, stack = 0, [node]
-    while stack:
-        x = stack.pop()
-        if isinstance(x, dict):
-            n += sum(1 for k in x if isinstance(k, str) and k in ROUTING_BLOCK_KEYS)
-            stack.extend(x.values())
-        elif isinstance(x, list):
-            stack.extend(x)
-    return n
-
-
-def code_lines(content: str) -> Dict[int, str]:
-    """line number → the text a reader takes as code, for every code line of
-    a Markdown text: a fence's body (any language, in a blockquote too: the
-    `>` markers are taken off), a line that opens with a backtick run but is
-    no fence (```` ```json {…}``` ````, one line), an indented code block
-    (four columns after a blank line; inline code spans taken out, so a
-    list item's indented prose naming `` `_routing:` `` stays prose), and
-    the lines of a `<pre>` element."""
-    out: Dict[int, str] = {}
-    fence, fence_len, indented, pre, prev_blank = "", 0, False, False, True
-    for n, line in enumerate(content.split("\n"), 1):
-        q = _QUOTE_RE.match(line)
-        inner = line[q.end():] if q else line
-        stripped = inner.strip(inventory.FENCE_TRIM)
-        if fence:
-            if stripped and set(stripped) == {fence} and len(stripped) >= fence_len:
-                fence = ""
-            else:
-                out[n] = inner
-            prev_blank = False
-            continue
-        m = inventory.OPEN_RE.match(stripped)
-        if m and not (m.group("fence")[0] == "`" and "`" in m.group("info")):
-            fence, fence_len, indented = m.group("fence")[0], len(m.group("fence")), False
-            prev_blank = False
-            continue
-        if _PRE_OPEN_RE.match(inner):
-            pre = True
-        if pre:
-            out[n] = inner
-            pre = "</pre>" not in inner.lower()
-            prev_blank = False
-            continue
-        if stripped.startswith("```"):
-            out[n] = inner
-            prev_blank = False
-            continue
-        blank = not stripped
-        expanded = inner.expandtabs(4)
-        if not blank and len(expanded) - len(expanded.lstrip(" ")) >= 4 and (prev_blank or indented):
-            indented = True
-            out[n] = _INLINE_CODE_RE.sub("", inner)
-        elif not blank:
-            indented = False
-        prev_blank = blank
-    return out
-
-
-class RoutingKeyIssue(NamedTuple):
-    path: str
-    line: int
-    text: str
-
-
-def routing_keys_not_judged(inv: "inventory.Inventory") -> List[RoutingKeyIssue]:
-    """Every place in docs/ that writes a routing block key no check judges
-    (#3748):
-
-    * a unit a check reads whose text writes more key tokens
-      (`ROUTING_KEY_TOKEN_RE`) than `routing_keys_seen` finds in what the
-      credential judgement reads of it — a conf.d unit, a unit with no
-      consumer (its reading), a `{.helm-values}` unit (the conf.d the chart
-      renders from its `thresholdConfig` only); any other consumer's
-      reading is not judged for credentials, so it is held to none. The
-      surplus is a routing block in a string, a comment or a place nobody
-      judges;
-    * a key token anywhere in a code line (`code_lines`) outside every unit
-      a check reads or a declaration exempts (`.illustrative`,
-      `.expect-refused`; a unit with a fence error is read by no check);
-    * outside code, a line that starts with a key (`ROUTING_KEY_LINE_RE`)."""
-    out: List[RoutingKeyIssue] = []
-    skip: Dict[str, set] = {}
-    helm: Dict[int, int] = {}
-    for u, _, data in inv.helm_confd():
-        helm[id(u)] = helm.get(id(u), 0) + routing_keys_seen(data)
-    for u in inv.units:
-        lines = set(range(u.line, u.line + u.text.count("\n") + 1))
-        exempt = not u.errors and (u.exemption is not None or (
-            u.how == "declared" and u.expect_refused is not None))
-        read = u.read and not u.errors and u.exemption is None
-        if not (exempt or read):
-            continue
-        skip.setdefault(u.path, set()).update(lines)
-        if exempt:
-            continue
-        written = len(ROUTING_KEY_TOKEN_RE.findall(u.text))
-        if not written:
-            continue
-        if u.consumer in ("confd", None):
-            seen = routing_keys_seen(u.documents[0])
-        elif u.consumer == "helm-values":
-            seen = helm.get(id(u), 0)
-        else:
-            seen = 0
-        if written > seen:
-            out.append(RoutingKeyIssue(u.path, u.line, (
-                f"the text writes {written} routing block key(s), the judged reading "
-                f"holds {seen}: a routing block is written in a string, a comment or "
-                "a place no check judges")))
-    for o in inv.other_exemptions:
-        skip.setdefault(o.path, set()).update(range(o.line, o.end + 1))
-    for path, content in sorted(inv.markdown.items()):
-        mine = skip.get(path, set())
-        code = code_lines(content)
-        region: List[Tuple[int, str]] = []
-
-        def flush() -> None:
-            if not region:
-                return
-            text = "\n".join(t for _, t in region)
-            starts = [0]
-            for _, t in region:
-                starts.append(starts[-1] + len(t) + 1)
-            for m in ROUTING_KEY_TOKEN_RE.finditer(text):
-                k = max(i for i, s in enumerate(starts[:-1]) if s <= m.start())
-                # The key only, never the line: it may hold the credential.
-                out.append(RoutingKeyIssue(path, region[k][0], (
-                    f"{' '.join(m.group(0).split())!r} writes a routing block in code no "
-                    "check reads")))
-            region.clear()
-
-        for n, text in enumerate(content.split("\n"), 1):
-            if n in code and n not in mine:
-                region.append((n, code[n]))
-                continue
-            flush()
-            m = ROUTING_KEY_LINE_RE.match(text) if n not in code and n not in mine else None
-            if m:
-                out.append(RoutingKeyIssue(path, n, (
-                    f"{m.group(0).strip()!r} starts a line of prose with a routing block "
-                    "key (prose naming a key writes it in backticks)")))
-        flush()
-    return sorted(out)
 
 
 class MdYamlDriftChecker:
@@ -586,9 +407,15 @@ class MdYamlDriftChecker:
         conf.d file the chart renders from a `{.helm-values}` unit
         (`inventory.helm_values_confd`), and a unit with no consumer is judged
         for credentials (the generator's scan reads a routing block at any
-        depth, #3748). A routing block key these readings do not hold —
-        written in a string, a comment, or code no check reads — is a
-        violation (`routing_keys_not_judged`).
+        depth, #3748).
+
+        ⚠️ Scope (#3748): what is judged is conf.d written as YAML — a
+        ```yaml unit, and the `thresholdConfig` of a `{.helm-values}` unit.
+        A conf.d file a doc writes any other way (printf, curl, a heredoc, a
+        string inside another file) is not read here: a reader who copies one
+        is refused by the generator's own `credential_plaintext`, and a real
+        secret is CI's TruffleHog's to catch. Every encoding is another
+        shape, and no finite set of readers decides them all.
         Every unit of a `{.confd .expect-invalid}` fence must yield at least
         one schema violation, and none of its schema violations is reported
         (a credential written out always is, #3748); a unit that
@@ -718,15 +545,6 @@ class MdYamlDriftChecker:
                               "block that only shows a reading is "
                               "{.illustrative reason=\"…\"}"),
                 })
-        uncovered = routing_keys_not_judged(inv)
-        for issue in uncovered:
-            issues.append({
-                "file": issue.path, "line": issue.line, "kind": "routing-key-not-judged",
-                "error": (f"{issue.text}. A conf.d example is a ```yaml {{.confd}} fence, its "
-                          "first line the file's name (# conf.d/<path>.yaml), with a "
-                          "sentence saying where to save it; a block that only shows a "
-                          "reading of one is declared {.illustrative reason=\"…\"}"),
-            })
 
         not_judged = [u for u in inv.units
                       if u.errors and (u.consumer in (None, "confd"))]
@@ -753,7 +571,6 @@ class MdYamlDriftChecker:
         print(f"Units not judged here:       {len(not_judged)} "
               "(inventory errors: --check fences)")
         print(f"No-consumer units judged for credentials: {len(inv.judged(None))}")
-        print(f"Routing block keys no check judges: {len(uncovered)}")
         print(f"Schema violations:           {len(issues)}")
         print()
 

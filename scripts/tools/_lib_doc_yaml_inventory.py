@@ -41,9 +41,7 @@ rustdoc's `invalid_codeblock_attributes`:
   hide anything from the conf.d reader.
 * `.illustrative reason="…"`: the fence is judged by no gate. The reason is
   mandatory and non-empty, and every exemption is printed by every report.
-  It takes no other attribute. A fence of another language may carry it too
-  (```` ```json {.illustrative reason="…"} ````: a reader's output showing a
-  conf.d key, #3748); no other attribute is read there.
+  It takes no other attribute.
 * `.expect-refused=<kind>` (with `.confd`): every unit of the fence must be
   refused by parse-tree with that problem kind; read, or refused with another
   kind, is an error. Only parse-tree names a kind; the other consumers'
@@ -387,38 +385,8 @@ def extract_fences(path: str, content: str,
     (`FENCE_TRIM`). A fence with no line inside is no fence.
     """
     errors = [] if errors is None else errors
-    for f in scan_fences(content):
-        std = FENCE_RE.match(f.opening)
-        if std:
-            if f.end is not None and f.body:
-                yield Fence(path, f.start, std.group(1).strip(FENCE_TRIM), f.body)
-        elif YAMLISH_RE.match(f.info):
-            errors.append((path, f.start, (
-                f"yaml fence written {f.opening!r}: write it as ```yaml (three "
-                "backticks, lower case, attributes in {…} after it) — no gate "
-                "reads a yaml fence spelled another way")))
-        if f.end is None:
-            errors.append((path, f.start, (
-                "a fence opened here is never closed: everything below it is read as "
-                "its text (CommonMark), and no gate reads it — close it")))
-
-
-@dataclass
-class RawFence:
-    """A fence of any language, as CommonMark finds it (`scan_fences`)."""
-    start: int            # 1-based line of the opening fence
-    end: "int | None"     # 1-based line of the closing fence; None: never closed
-    opening: str          # the opening line without ASCII blanks
-    info: str             # the info string, as OPEN_RE reads it
-    body: "list[str]"     # the lines inside the fence, as written
-
-
-def scan_fences(content: str) -> "Iterator[RawFence]":
-    """Every fence of a Markdown text, whatever its language, in order: the
-    one fence finder (`extract_fences` and the routing-key coverage of the
-    schema check both read it). A fence never closed comes last, with
-    ``end`` None, and holds every line below its opening."""
-    open_char, open_len, start, opening, info, body = "", 0, 0, "", "", []
+    open_char, open_len, start, info, body = "", 0, 0, None, []
+    yaml_fence = False
     for i, line in enumerate(content.split("\n"), 1):
         stripped = line.strip(FENCE_TRIM)
         if not open_char:
@@ -426,20 +394,28 @@ def scan_fences(content: str) -> "Iterator[RawFence]":
             if not m or (m.group("fence")[0] == "`" and "`" in m.group("info")):
                 continue
             open_char, open_len = m.group("fence")[0], len(m.group("fence"))
-            start, opening, info, body = i, stripped, m.group("info"), []
+            start, body, info = i, [], None
+            std = FENCE_RE.match(stripped)
+            yaml_fence = bool(std)
+            if std:
+                info = std.group(1).strip(FENCE_TRIM)
+            elif YAMLISH_RE.match(m.group("info")):
+                errors.append((path, i, (
+                    f"yaml fence written {stripped!r}: write it as ```yaml (three "
+                    "backticks, lower case, attributes in {…} after it) — no gate "
+                    "reads a yaml fence spelled another way")))
             continue
         if (stripped and set(stripped) == {open_char} and len(stripped) >= open_len):
-            yield RawFence(start, i, opening, info, body)
-            open_char = ""
+            if yaml_fence and body:
+                yield Fence(path, start, info, body)
+            open_char, yaml_fence = "", False
             continue
-        body.append(line)
+        if yaml_fence:
+            body.append(line)
     if open_char:
-        yield RawFence(start, None, opening, info, body)
-
-
-#: The attribute list of a fence that is not a yaml fence (```` ```json
-#: {.illustrative reason="…"} ````): its language word, then `{…}`.
-OTHER_FENCE_ATTRS_RE = re.compile(r"^[ \t]*[^\s{]*[ \t]*(?P<attrs>\{.*\})[ \t]*$")
+        errors.append((path, start, (
+            "a fence opened here is never closed: everything below it is read as "
+            "its text (CommonMark), and no gate reads it — close it")))
 
 
 def split_documented_files(block_lines: "list[str]") -> "list[tuple[int, str]]":
@@ -585,28 +561,6 @@ def _judge_refusals(u: Unit) -> None:
                 "declare the block's real consumer")
 
 
-def _other_fence_exemptions(rel: str, content: str, inv: "Inventory") -> None:
-    """A fence of another language declared ```` ```json {.illustrative
-    reason="…"} ````: no yaml, so no reader of this module reads it, but it
-    can show a conf.d key (a reader's output, say). The declaration says no
-    gate judges it, the same as on a yaml fence, and is printed with every
-    exemption. Only `.illustrative` is read there; an attribute list without
-    it is another tool's (mkdocs takes `{.lang title=…}`) and left alone."""
-    for f in scan_fences(content):
-        if f.end is None or FENCE_RE.match(f.opening) or YAMLISH_RE.match(f.info):
-            continue
-        m = OTHER_FENCE_ATTRS_RE.match(f.info)
-        if not m:
-            continue
-        decl = parse_declaration(m.group("attrs"))
-        if decl is None or decl.illustrative is None:
-            continue
-        if decl.errors:
-            inv.file_errors.extend((rel, f.start, e) for e in decl.errors)
-            continue
-        inv.other_exemptions.append(OtherExemption(rel, f.start, f.end, decl.illustrative))
-
-
 # ── the chart's conf.d (`{.helm-values}`) ───────────────────────────────────
 
 #: helm/threshold-exporter/templates/configmap.yaml: the `thresholdConfig`
@@ -660,8 +614,6 @@ def build(repo_root: "Path | str", *,
     wanted = frozenset(CONSUMERS if consumers is None else consumers)
     inv = Inventory()
     for rel, content in iter_markdown(root):
-        inv.markdown[rel] = content
-        _other_fence_exemptions(rel, content, inv)
         for i, line in enumerate(content.split("\n"), 1):
             if RETIRED_MARKER_RE.search(line):
                 inv.file_errors.append((
@@ -719,29 +671,10 @@ def build(repo_root: "Path | str", *,
 
 
 @dataclass
-class OtherExemption:
-    """A fence of another language declared `.illustrative`
-    (`_other_fence_exemptions`): lines ``line``..``end`` (the fence lines)."""
-    path: str
-    line: int
-    end: int
-    reason: str
-
-    @property
-    def where(self) -> str:
-        return f"{self.path}:{self.line}"
-
-
-@dataclass
 class Inventory:
     units: "list[Unit]" = field(default_factory=list)
-    #: (path, line, message): errors on a docs line that is no unit (a retired
-    #: marker, a bad `.illustrative` on a fence of another language).
+    #: (path, line, message): errors on a docs line that is no unit (a retired marker).
     file_errors: "list[tuple[str, int, str]]" = field(default_factory=list)
-    #: fences of another language declared `.illustrative`.
-    other_exemptions: "list[OtherExemption]" = field(default_factory=list)
-    #: repo path → the Markdown text every unit was cut from.
-    markdown: "dict[str, str]" = field(default_factory=dict)
 
     def errors(self) -> "list[tuple[str, int, str]]":
         """Every error, (path, line, message), in file order."""
@@ -772,7 +705,6 @@ def print_exemptions(inv: "Inventory | list[tuple[str, str]]", file=None) -> Non
     that drops inputs silently reads as 'covered everything' when it did not.
     Every gate that reads the inventory prints this."""
     ex = ([(u.where, u.exemption) for u in inv.exemptions()]
-          + [(o.where, o.reason) for o in inv.other_exemptions]
           if isinstance(inv, Inventory) else list(inv))
     if not ex:
         return

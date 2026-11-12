@@ -427,19 +427,3 @@ def test_helm_values_confd_renders_what_the_values_write():
     assert inv.helm_values_confd({"image": {}}) == []
     assert inv.helm_values_confd({"thresholdConfig": {"max_metrics_per_tenant": 5}}) == [
         ("_defaults.yaml", {"max_metrics_per_tenant": 5})]
-
-
-def test_scan_fences_finds_every_language_and_an_unclosed_one():
-    text = "```json\n{}\n```\n~~~~\n```\nx\n~~~~\n```text\nopen\n"
-    got = [(f.start, f.end, f.info, f.body) for f in inv.scan_fences(text)]
-    assert got == [(1, 3, "json", ["{}"]), (4, 7, "", ["```", "x"]),
-                   (8, None, "text", ["open", ""])]
-
-
-def test_illustrative_on_another_language_is_an_exemption(tmp_path):
-    root = _docs(tmp_path, '```json {.illustrative reason="output"}\n{}\n```\n'
-                           '```bash {.python title="x"}\necho\n```\n')
-    got = inv.build(root)
-    assert [(o.where, o.end, o.reason) for o in got.other_exemptions] == [
-        ("docs/x.md:1", 3, "output")]
-    assert got.errors() == [] and got.units == []

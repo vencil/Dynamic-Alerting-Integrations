@@ -273,7 +273,7 @@ tenants:
 
 輸出（節錄，省略外層欄位；以 yaml.v3 的節點逐一轉成 JSON 實測，`value` 欄位依上述規則補上）：
 
-```json {.illustrative reason="parse-tree 對上面那份檔的輸出（JSON），不是 conf.d 檔"}
+```json
 {
   "t010.yaml": {
     "tenants": {
