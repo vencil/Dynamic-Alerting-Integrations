@@ -8090,6 +8090,12 @@ _DOC_USES_RE = re.compile(
     r"^\s*-?\s*uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[A-Za-z0-9_.-]+)\s*$",
     re.MULTILINE,
 )
+# The same structure as an inline code span — "add `- uses: azure/setup-helm@v5`
+# after `actions/checkout`" is a copy-me instruction too, just not fenced. Still
+# a `uses:` structure, never a bare `owner/action@vN` mention in a sentence.
+_DOC_INLINE_USES_RE = re.compile(
+    r"`\s*-?\s*uses:\s*([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+@[A-Za-z0-9_.-]+)\s*`"
+)
 
 # ⛔ Generated or historical trees, excluded by path rather than by judgement:
 #   * docs/interactive/** and docs/assets/dist/** are build output — the source
@@ -8097,6 +8103,26 @@ _DOC_USES_RE = re.compile(
 #   * CHANGELOG.md records what a release SHIPPED; rewriting a past entry to
 #     match today's major would make the history a lie.
 _DOC_SNIPPET_SKIP = ("docs/interactive/", "docs/assets/dist/")
+
+
+def test_inline_uses_shape_is_read_and_prose_is_not() -> None:
+    """The inline pattern reads the copy-me span and nothing looser, and the
+    passages that carry one today are actually reached by it."""
+    assert _DOC_INLINE_USES_RE.findall(
+        "add `- uses: azure/setup-helm@v5` with `with: {version: v3.22.1}`"
+    ) == ["azure/setup-helm@v5"]
+    assert _DOC_INLINE_USES_RE.findall("`uses: actions/checkout@v6`") == ["actions/checkout@v6"]
+    for prose in ("actions/checkout@v3 is retired", "`actions/checkout@v3` is retired",
+                  "the `uses:` key takes `owner/action@ref`"):
+        assert _DOC_INLINE_USES_RE.findall(prose) == [], prose
+    for rel in ("docs/scenarios/gitops-ci-integration.md",
+                "docs/scenarios/gitops-ci-integration.en.md",
+                "changelog.d/init-github-helm-pin.md"):
+        hits = _DOC_INLINE_USES_RE.findall(
+            _REPO_ROOT.joinpath(rel).read_text(encoding="utf-8"))
+        assert any(h.startswith("azure/setup-helm@") for h in hits), (
+            f"{rel}: the inline setup-helm instruction is no longer read — the "
+            f"doc guard would let it fall behind the platform silently")
 
 
 def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
@@ -8111,12 +8137,17 @@ def test_no_doc_snippet_pins_an_action_major_the_platform_left_behind() -> None:
     """
     offenders: dict[str, list[str]] = {}
     scanned = 0
-    for path in sorted(_REPO_ROOT.joinpath("docs").rglob("*.md")):
+    # changelog.d/ holds UNRELEASED entries — what the next release will tell
+    # customers to do — so it is current text, unlike CHANGELOG.md.
+    paths = [*_REPO_ROOT.joinpath("docs").rglob("*.md"),
+             *_REPO_ROOT.joinpath("changelog.d").glob("*.md")]
+    for path in sorted(paths):
         rel = path.relative_to(_REPO_ROOT).as_posix()
         if any(rel.startswith(skip) for skip in _DOC_SNIPPET_SKIP):
             continue
         scanned += 1
-        for ref in _DOC_USES_RE.findall(path.read_text(encoding="utf-8")):
+        text = path.read_text(encoding="utf-8")
+        for ref in [*_DOC_USES_RE.findall(text), *_DOC_INLINE_USES_RE.findall(text)]:
             parsed = _action_major(ref)
             if parsed is None:
                 continue
