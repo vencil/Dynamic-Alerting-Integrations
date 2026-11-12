@@ -21,6 +21,8 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 SCRIPT = REPO / "scripts" / "tools" / "lint" / "check_md_yaml_drift.py"
+sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
+from _grar_parse import ROUTING_BLOCK_KEYS  # noqa: E402  (the generator's key set)
 
 EXIT_OK = 0
 EXIT_VIOLATION = 1
@@ -412,6 +414,89 @@ def test_a_routing_block_no_check_reads_is_a_violation(tmp_path: Path, body: str
     assert "{.confd}" in r.stdout
 
 
+# Round 2 (blind review F1): a routing block in flow syntax, or as a key no
+# line-start pattern sees, in a shape no reader judges.
+_FLOW = '  db-a: {_routing: {receiver: {type: slack, api_url: "' + _SECRET_VALUE + '"}}}'
+
+
+@pytest.mark.parametrize("body, line", [
+    (f"```bash\ncat > conf.d/db-a.yaml << 'EOF'\ntenants:\n{_FLOW}\nEOF\n```\n", 4),
+    (f"> ```yaml\n> tenants:\n> {_FLOW}\n> ```\n", 3),
+    (f"Text.\n\n    tenants:\n    {_FLOW}\n\n", 4),
+    ('```json {"_routing": {"receiver": {"type": "slack"}}}```\n', 1),
+    ("```bash\necho '{_routing: {receiver: {type: slack}}}' > conf.d/x.yaml\n```\n", 2),
+    ("```text\ntenants:\n  t1:\n    ? _routing\n    : {receiver: {type: slack}}\n```\n", 4),
+    ("```text\ntenants:\n  t1:\n    !!str _routing: {receiver: {type: slack}}\n```\n", 4),
+    ('<pre>\ntenants: {t1: {_routing: {receiver: {type: slack}}}}\n</pre>\n', 2),
+], ids=["heredoc-flow", "blockquote-flow", "indented-flow", "one-line-json", "echo",
+        "complex-key", "tagged-key", "pre"])
+def test_a_flow_or_unusual_routing_key_no_check_reads_is_a_violation(
+        tmp_path: Path, body: str, line: int) -> None:
+    r = _run(_mkrepo(tmp_path, "f.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert f"[SCHEMA] docs/f.md:{line} (routing-key-not-judged)" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("key", sorted(ROUTING_BLOCK_KEYS))
+def test_every_routing_block_key_in_a_heredoc_is_a_violation(tmp_path: Path, key: str) -> None:
+    """Each key the generator's scan reads (the set is the generator's own):
+    a mutation dropping one from the check fails here."""
+    body = f"```bash\ncat > conf.d/x.yaml << 'EOF'\n{key}: {{receiver: {{type: slack}}}}\nEOF\n```\n"
+    r = _run(_mkrepo(tmp_path, "k.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/k.md:3 (routing-key-not-judged)" in r.stdout, r.stdout
+
+
+# Round 2 (blind review F2): a judged unit whose reading holds fewer routing
+# keys than its text writes — conf.d inside a string.
+@pytest.mark.parametrize("body", [
+    ("```yaml\njobs:\n  lint:\n    steps:\n      - run: |\n          cat > conf.d/db-a.yaml <<EOF\n"
+     "          tenants:\n            db-a:\n              _routing:\n                receiver:\n"
+     f"                  type: slack\n                  api_url: {_SECRET_VALUE}\n"
+     "          EOF\n```\n"),
+    ("```yaml\ndata:\n  db-a.yaml: |\n    tenants:\n      db-a:\n        _routing:\n"
+     f"          receiver: {{type: slack, api_url: {_SECRET_VALUE}}}\n```\n"),
+], ids=["ci-run-heredoc", "configmap-data-no-kind"])
+def test_conf_d_in_a_string_of_a_judged_unit_is_a_violation(tmp_path: Path, body: str) -> None:
+    r = _run(_mkrepo(tmp_path, "g.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/g.md:2 (routing-key-not-judged)" in r.stdout, r.stdout
+    assert "the judged reading holds 0" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+
+
+def test_a_routing_key_in_a_yaml_comment_is_a_violation(tmp_path: Path) -> None:
+    """Measured 0 on the tree: no yaml comment writes a routing key. Counted,
+    not excluded: a commented-out routing block is still copied by readers."""
+    body = ("```yaml {.confd}\ntenants:\n  t1:\n    mysql_connections: \"70\"\n"
+            "    # _routing: {receiver: {type: slack}}\n```\n")
+    r = _run(_mkrepo(tmp_path, "c.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/c.md:2 (routing-key-not-judged)" in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("body", [
+    ("```yaml\napiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: c\ndata:\n"
+     "  t.yaml: |\n    tenants: {t1: {_routing: {receiver: {type: slack}}}}\n```\n"),
+    ("```yaml {.k8s}\napiVersion: example.com/v1\nkind: Thing\nmetadata:\n  name: c\nspec:\n"
+     "  _routing: {receiver: {type: slack}}\n```\n"),
+], ids=["configmap-string", "object-key"])
+def test_a_k8s_unit_holds_no_routing_key(tmp_path: Path, body: str) -> None:
+    """Another consumer's reading is not judged for credentials: a conf.d
+    file in a ConfigMap, or a routing key kubectl's reading holds, is a key
+    the check never judges."""
+    r = _run(_mkrepo(tmp_path, "k.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/k.md:2 (routing-key-not-judged)" in r.stdout, r.stdout
+
+
+def test_a_longer_key_name_is_no_token(tmp_path: Path) -> None:
+    body = "```bash\necho '_routing_profile: team-a' >> conf.d/t.yaml\n```\n"
+    r = _run(_mkrepo(tmp_path, "l.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
 def test_another_languages_fence_declared_illustrative_is_covered(tmp_path: Path) -> None:
     body = ('```json {.illustrative reason="a reader\'s output, not a conf.d file"}\n'
             '{"tenants": {"t1": {\n  "_routing": {"receiver": {}}}}}\n```\n')
@@ -430,11 +515,14 @@ def test_another_languages_fence_declared_illustrative_is_covered(tmp_path: Path
     "Set `_routing:` per tenant, or `routing_profiles:` once.\n",
     "- `_routing`: the tenant's block\n- `_routing_defaults` — the platform's\n",
     "| key | |\n|---|---|\n| _routing: | x |\n",
-], ids=["inline", "list-item", "table"])
+    "1. Set it:\n\n    `_routing: disable` turns routing off.\n",
+    "Write `{_routing: {receiver: …}}` in the tenant file.\n",
+    "A `<pre>` element is code.\n\nWrite `{_routing: {receiver: …}}` in the file.\n",
+], ids=["inline", "list-item", "table", "indented-list-prose", "inline-flow", "pre-in-prose"])
 def test_prose_naming_a_routing_key_is_no_violation(tmp_path: Path, body: str) -> None:
     r = _run(_mkrepo(tmp_path, "p.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "Routing-key lines outside a judged unit: 0" in r.stdout, r.stdout
+    assert "Routing block keys no check judges: 0" in r.stdout, r.stdout
 
 
 def test_a_unit_refused_as_declared_is_covered(tmp_path: Path) -> None:
@@ -442,6 +530,8 @@ def test_a_unit_refused_as_declared_is_covered(tmp_path: Path) -> None:
             "    _routing:\n      !!merge q: {receiver: {type: slack}}\n```\n")
     r = _run(_mkrepo(tmp_path, "r.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "Units exempted (.expect-refused, refused on purpose): 1" in r.stdout, r.stdout
+    assert "docs/r.md:2 — refused as tag_not_allowed" in r.stdout, r.stdout
 
 
 @pytest.mark.parametrize("body", [
@@ -487,7 +577,18 @@ def test_helm_values_with_existing_configmap_renders_no_conf_d(tmp_path: Path) -
     body = _helm("{secret: {key: slack-api-url}}", "  existingConfigMap: threshold-config\n")
     r = _run(_mkrepo(tmp_path, "h.md", body))
     assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
-    assert "[SCHEMA] docs/h.md:9 (routing-key-not-judged)" in r.stdout, r.stdout
+    assert "[SCHEMA] docs/h.md:2 (routing-key-not-judged)" in r.stdout, r.stdout
+    assert "the judged reading holds 0" in r.stdout, r.stdout
+
+
+def test_helm_values_outside_thresholdconfig_is_not_judged(tmp_path: Path) -> None:
+    """Only the `thresholdConfig` the chart renders is conf.d: a routing key
+    elsewhere in the values is a key no check judges."""
+    body = _helm("{secret: {key: slack-api-url}}").replace(
+        "```\n", "extra:\n  _routing: {receiver: {type: slack}}\n```\n", 1)
+    r = _run(_mkrepo(tmp_path, "h.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "the text writes 2 routing block key(s), the judged reading holds 1" in r.stdout
 
 
 def _profiles(api_url: str) -> str:
