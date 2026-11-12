@@ -57,7 +57,8 @@ tests:
                 shared verdict. Counted per tenant, so one key in a platform
                 file or a profile counts once for each tenant it reaches. This
                 alert does not cover reserved keys the registry lists (e.g. a
-                `_state_<filter>` naming a removed filter).
+                `_state_<filter>` naming a removed filter) or a key a subtree
+                `_defaults.yaml` writes.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/038-unread-keys-judged-by-readers.md"
       - eval_time: 30m
         alertname: ConfigKeysUnread

@@ -240,3 +240,24 @@ func TestKeysUnreadRuleSelectsTheAlertingReasons(t *testing.T) {
 		}
 	}
 }
+
+// A subtree `_defaults.yaml` valuing the key the tenant's profile could not
+// fill in hands the tenant the key after ApplyProfiles ran: /metrics serves
+// it and the verdict reads it as read, so it is not profile_not_filled.
+func TestKeysUnreadGauge_ProfileNotFilledButSubtreeValuesIt(t *testing.T) {
+	t.Parallel()
+	_, cm, logBuf := loadDirWithLog(t, map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides: [redis_evicted_keys]\n" +
+			"profiles:\n  gold:\n    redis_evicted_keys: \"3\"\n",
+		"team/_defaults.yaml": "defaults:\n  redis_evicted_keys: 5\n",
+		"team/tx.yaml":        "tenants:\n  tx:\n    _profile: gold\n",
+		// the control: no subtree value, so the profile's is not filled in
+		"ty.yaml": "tenants:\n  ty:\n    _profile: gold\n",
+	})
+	if got := keysUnreadGauge(t, cm)["profile_not_filled"]; got != 1 {
+		t.Errorf("profile_not_filled = %v, want 1 (ty only; tx's subtree values the key)\n%s", got, logBuf.String())
+	}
+	if strings.Contains(logBuf.String(), `tenant="tx" key="redis_evicted_keys"`) {
+		t.Errorf("tx's subtree-valued key is listed:\n%s", logBuf.String())
+	}
+}

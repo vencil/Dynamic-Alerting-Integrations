@@ -256,8 +256,9 @@ data:
     \ on the conf.d tree for the file and the\n\n        shared verdict. Counted per\
     \ tenant, so one key in a platform\n\n        file or a profile counts once for\
     \ each tenant it reaches. This\n\n        alert does not cover reserved keys the\
-    \ registry lists (e.g. a\n\n        `_state_<filter>` naming a removed filter).\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/038-unread-keys-judged-by-readers.md\n\
+    \ registry lists (e.g. a\n\n        `_state_<filter>` naming a removed filter)\
+    \ or a key a subtree\n\n        `_defaults.yaml` writes.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/038-unread-keys-judged-by-readers.md\n\
     \      summary: Threshold-exporter reads no row for {{ $value }} tenant key(s)\
     \ ({{ $labels.reason }})\n  - alert: TenantMetricsOverLimit\n    expr: max without\
     \ (instance, pod) (da_tenant_metrics_over_limit) > 0\n    for: 5m\n    labels:\n\

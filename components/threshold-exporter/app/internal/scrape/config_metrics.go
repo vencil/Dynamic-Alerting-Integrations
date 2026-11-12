@@ -207,9 +207,9 @@ func NewConfigMetrics() *ConfigMetrics {
 			Name: "da_config_keys_unread",
 			Help: "Number of tenant keys in the committed config that no row of this exporter reads (#3353, ADR-038 §11), by reason: " +
 				config.KeysUnreadReasonsHelp() + ". Counted per (tenant, key): a key a platform file or a profile hands to N tenants counts N. " +
-				"A threshold key a Policy-as-Code rule of the root `_defaults.yaml` names is read (by policy_engine) and not counted. " +
+				"A key in the tenant's map that a Policy-as-Code rule of the root `_defaults.yaml` names is read (by policy_engine) and not counted as unconsumed or disabled_unread; profile_not_filled is counted whatever names it, as the shared verdict judges it. " +
 				"A fact of this reader, not the shared key verdict: run `da-tools explain-keys` or validate-config for the verdict. " +
-				"NOT COVERED, so 0 does not mean the verdict is clean: a registered reserved key no reader reads (a `_state_<filter>` naming a filter the platform removed, a `_routing*` key the route generator reads), a retired `_` key, a key of a profile no tenant binds, and a value read but not as written (da_config_values_not_served). " +
+				"NOT COVERED, so 0 does not mean the verdict is clean: a registered reserved key no reader reads (a `_state_<filter>` naming a filter the platform removed, a `_routing*` key the route generator reads), a retired `_` key, a key of a profile no tenant binds, a key a subtree `_defaults.yaml` writes that no row reads (da_config_subtree_undeliverable_tenants or da_config_values_not_served counts it), and a value read but not as written (da_config_values_not_served). " +
 				"State-coded: re-Set on every config commit, so it returns to 0 once the keys are fixed; every reason exists at 0 from the first scrape. The accompanying line (once per change of the set) names tenant, key and reason. " +
 				"Alert: ConfigKeysUnread (warning) on every reason but disabled_unread.",
 		}, []string{"reason"}),

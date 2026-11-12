@@ -32,6 +32,9 @@ package main
 //     generator): this exporter does not run the shared verdict;
 //   - a retired `_` key (the registry lists it with a migration hint);
 //   - a key of a profile no tenant binds (no tenant's map holds it);
+//   - a key a subtree `_defaults.yaml` writes that no row reads: the build
+//     never hands it to a tenant, and da_config_subtree_undeliverable_tenants
+//     or da_config_values_not_served{reason="value_rejected"} counts it;
 //   - a value that is read but not as written: that is
 //     da_config_values_not_served.
 
@@ -99,9 +102,11 @@ func rootPolicyHeads(cfg *ThresholdConfig, flatScan *flatScanState) []config.Pol
 // policy rule that applies to the tenant names is read by policy_engine and
 // left out (config.NamedByPolicy, the verdict's own test; a `_` key the
 // registry does not list is outside policy_engine's view, as there). The
-// tenant's map is the built one: a key a profile, a platform file's
-// `tenants:` entry or a subtree `_defaults.yaml` hands it is listed for each
-// tenant it reaches.
+// tenant's map is the built one: a key a profile or a platform file's
+// `tenants:` entry hands it is listed for each tenant it reaches. A key a
+// subtree `_defaults.yaml` writes that no row reads never reaches that map —
+// the build reports it undeliverable or value_rejected instead — so it is
+// not listed here.
 func collectKeysUnread(cfg *ThresholdConfig, verdicts map[string]map[string]string, disabled map[string][]string, heads []config.PolicyHead) []valueNotServed {
 	var out []valueNotServed
 	add := func(tenant, key, reason string) {
@@ -124,6 +129,15 @@ func collectKeysUnread(cfg *ThresholdConfig, verdicts map[string]map[string]stri
 	}
 	for tenant, keys := range cfg.ProfileNotFilled() {
 		for _, canon := range keys {
+			// ApplyProfiles runs before a subtree `_defaults.yaml` hands its
+			// values down, so the tenant's built map may hold the key after
+			// all — a value effective shows and /metrics serves, which the
+			// verdict reads as read (its profileNotFilled skips a key the
+			// tenant's view holds). Asked of the built map, in either #1231
+			// spelling.
+			if _, held := cfg.Tenants[tenant][writtenSpelling(cfg.Tenants[tenant], canon)]; held {
+				continue
+			}
 			// Not through add: a value no tenant is handed is in no view a
 			// policy rule reads, and the verdict judges it whatever names it.
 			out = append(out, valueNotServed{Tenant: tenant, Key: canon, Reason: config.NotServedProfileNotFilled})
@@ -152,7 +166,7 @@ func formatKeysUnreadLog(ku []valueNotServed, context string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b,
 		keysUnreadLogPrefix+" (%s): %d tenant key(s): "+config.KeysUnreadReasonsLine()+". A key may come from "+
-			"the tenant's file, a profile, a platform file's `tenants:` entry or a subtree `_defaults.yaml`. Whether one is "+
+			"the tenant's file, a profile or a platform file's `tenants:` entry. Whether one is "+
 			"an error is the shared key verdict's: run `da-tools explain-keys` on the conf.d tree, or validate-config. "+
 			"da_config_keys_unread counts them by reason. Keys:",
 		context, len(ku))
