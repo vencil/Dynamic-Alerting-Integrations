@@ -2,10 +2,17 @@
 # test-migrate-tool.sh — migrate_rule.py v2 驗證腳本
 # 測試 dry-run 模式 + 檔案化輸出 + 智能猜測
 # 用法: bash tests/scenarios/test-migrate-tool.sh
+#   工具讀規則檔走 da-read、tenant 輸出經 da-guard：先 `make da-guard-build da-read-build`，
+#   再設 DA_GUARD_BINARY / DA_READ_BINARY 指向 .build/ 底下的兩支 binary。
+#
+# 一律帶 --no-dictionary：本腳本驗的是轉換引擎（閾值抽取、聚合猜測、
+# 產物內容）。fixture 的 MySQL 規則全在 metric-dictionary.yaml 裡有黃金標準，
+# 開著字典會被分流成「建議使用黃金標準」、不進轉換產物，斷言就驗不到引擎。
+# 字典分流本身不歸這支腳本驗。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
-TOOL="${ROOT_DIR}/scripts/tools/migrate_rule.py"
+TOOL="${ROOT_DIR}/scripts/tools/ops/migrate_rule.py"
 INPUT="${ROOT_DIR}/tests/fixtures/legacy-dummy.yml"
 OUTPUT_DIR="${SCRIPT_DIR}/_test_output"
 
@@ -57,7 +64,7 @@ echo ""
 # Test Group 1: Dry-Run 模式
 # ============================================================
 echo "[Test Group 1] --dry-run 模式"
-DRY_OUTPUT=$(python3 "$TOOL" "$INPUT" --dry-run 2>&1)
+DRY_OUTPUT=$(python3 "$TOOL" "$INPUT" --no-dictionary --dry-run 2>&1)
 
 assert_contains "Dry-run 顯示總規則數" "總規則數.*4" "$DRY_OUTPUT"
 assert_contains "完美解析計數" "完美解析.*2" "$DRY_OUTPUT"
@@ -72,9 +79,9 @@ echo ""
 # Test Group 2: 檔案化輸出
 # ============================================================
 echo "[Test Group 2] 檔案化輸出"
-FILE_OUTPUT=$(python3 "$TOOL" "$INPUT" --tenant t1 -o "$OUTPUT_DIR" 2>&1)
+FILE_OUTPUT=$(python3 "$TOOL" "$INPUT" --no-dictionary --tenant t1 -o "$OUTPUT_DIR" 2>&1)
 
-assert_contains "STDOUT 顯示成功計數" "成功解析.*3.*條" "$FILE_OUTPUT"
+assert_contains "STDOUT 顯示成功計數" "成功轉換.*3.*條" "$FILE_OUTPUT"
 assert_contains "STDOUT 顯示需人工處理" "需人工處理" "$FILE_OUTPUT"
 assert_contains "STDOUT 顯示輸出路徑" "檔案已輸出" "$FILE_OUTPUT"
 
@@ -100,7 +107,8 @@ assert_contains "Tenant config 包含簡單閾值" 'mysql_global_status_threads_
 assert_contains "Tenant config 包含 critical 後綴" 'mysql_global_status_threads_connected_critical.*200' "$TENANT_CONTENT"
 
 # Recording Rules
-assert_contains "Recording rule 包含正確 metric" "tenant:mysql_global_status_threads_connected:" "$RECORDING_CONTENT"
+# 預設 custom_ 前綴隔離：record 名是 tenant:custom_<metric>:<agg>
+assert_contains "Recording rule 包含正確 metric" "tenant:custom_mysql_global_status_threads_connected:" "$RECORDING_CONTENT"
 assert_not_contains "base_key 不應為 rate" "tenant:rate:" "$RECORDING_CONTENT"
 assert_contains "Recording rule 包含聚合猜測註解" "(sum|max)" "$RECORDING_CONTENT"
 

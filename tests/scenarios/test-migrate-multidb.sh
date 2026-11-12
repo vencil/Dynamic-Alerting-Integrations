@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # test-migrate-multidb.sh — migrate_rule.py v2 Multi-DB + Dimensional 測試
 # 用法: bash tests/scenarios/test-migrate-multidb.sh
+#   工具讀規則檔走 da-read、tenant 輸出經 da-guard：先 `make da-guard-build da-read-build`，
+#   再設 DA_GUARD_BINARY / DA_READ_BINARY 指向 .build/ 底下的兩支 binary。
+#
+# 一律帶 --no-dictionary：本腳本驗的是轉換引擎（閾值抽取、維度提示、
+# 聚合猜測）。fixture 裡有黃金標準的 metric 開著字典會被分流成「建議使用
+# 黃金標準」、不進轉換產物，斷言就驗不到引擎。字典分流本身不歸這支腳本驗。
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$(dirname "$SCRIPT_DIR")")"
-TOOL="${ROOT_DIR}/scripts/tools/migrate_rule.py"
+TOOL="${ROOT_DIR}/scripts/tools/ops/migrate_rule.py"
 INPUT="${ROOT_DIR}/tests/fixtures/legacy-multidb.yml"
 OUTPUT_DIR="${SCRIPT_DIR}/_test_multidb_output"
 
@@ -44,9 +50,9 @@ echo ""
 # Test Group 0: 基本輸出驗證
 # ============================================================
 echo "[Test Group 0] 檔案化輸出"
-STDOUT=$(python3 "$TOOL" "$INPUT" --tenant t1 -o "$OUTPUT_DIR" 2>&1)
+STDOUT=$(python3 "$TOOL" "$INPUT" --no-dictionary --tenant t1 -o "$OUTPUT_DIR" 2>&1)
 
-assert_contains "成功解析計數" "成功解析.*7" "$STDOUT"
+assert_contains "成功轉換計數" "成功轉換.*7" "$STDOUT"
 assert_contains "需人工處理" "1.*需人工處理" "$STDOUT"
 
 TENANT_CONTENT=$(cat "$OUTPUT_DIR/.conf.d/t1.yaml")
@@ -60,7 +66,8 @@ echo ""
 # ============================================================
 echo "[Test Group 1] Redis 簡單閾值 (RedisHighMemory)"
 assert_contains "Redis 閾值寫入 tenant config" "redis_memory_used_bytes.*8589934592" "$TENANT_CONTENT"
-assert_contains "Redis recording rule 存在" "tenant:redis_memory_used_bytes:" "$RECORDING_CONTENT"
+# 預設 custom_ 前綴隔離：record 名是 tenant:custom_<metric>:<agg>
+assert_contains "Redis recording rule 存在" "tenant:custom_redis_memory_used_bytes:" "$RECORDING_CONTENT"
 
 echo ""
 
@@ -78,7 +85,7 @@ echo ""
 # ============================================================
 echo "[Test Group 3] Redis rate 複雜 (RedisHighKeyEvictions)"
 assert_not_contains "base_key 不應為 rate" "tenant:rate:" "$RECORDING_CONTENT"
-assert_contains "base_key 為 redis metric" "tenant:redis_evicted_keys_total" "$RECORDING_CONTENT"
+assert_contains "base_key 為 redis metric" "tenant:custom_redis_evicted_keys_total" "$RECORDING_CONTENT"
 # rate() 應猜測為 sum
 assert_contains "rate 猜測為 sum" "sum by.tenant. .rate." "$RECORDING_CONTENT"
 
@@ -106,7 +113,7 @@ echo ""
 # ============================================================
 echo "[Test Group 6] MongoDB 簡單閾值 (MongoDBHighConnections)"
 assert_contains "MongoDB 連線數閾值" "mongodb_connections_current.*500" "$TENANT_CONTENT"
-assert_contains "MongoDB recording rule" "tenant:mongodb_connections_current:" "$RECORDING_CONTENT"
+assert_contains "MongoDB recording rule" "tenant:custom_mongodb_connections_current:" "$RECORDING_CONTENT"
 # connections → max
 assert_contains "connections 猜測為 max" "max by.tenant..*(mongodb_connections_current)" "$RECORDING_CONTENT"
 
@@ -135,7 +142,7 @@ echo ""
 # Test Group 9: Dry-run 模式
 # ============================================================
 echo "[Test Group 9] --dry-run 模式"
-DRY_OUTPUT=$(python3 "$TOOL" "$INPUT" --dry-run 2>&1)
+DRY_OUTPUT=$(python3 "$TOOL" "$INPUT" --no-dictionary --dry-run 2>&1)
 assert_contains "Dry-run 顯示總計" "總規則數.*8" "$DRY_OUTPUT"
 assert_contains "Dry-run 不產生檔案" "Dry-Run" "$DRY_OUTPUT"
 
