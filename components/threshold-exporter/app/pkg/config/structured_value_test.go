@@ -193,3 +193,51 @@ func TestTenantMetadataOf_StringFormIsNotWarnedPerRead(t *testing.T) {
 		t.Errorf("undecodable mapping: decoded=%v logged=%q; want false, one WARN", decoded, logged)
 	}
 }
+
+// #3638 5/5: `_routing` is read from the mapping it was written as. The
+// same text as a block scalar — which used to be re-parsed into a routing —
+// is no routing (the route generator, which owns routing, reads it as
+// neither a mapping nor a disabling string), and says so; an empty string
+// is no routing and says nothing.
+func TestResolveRouting_StructureNotText(t *testing.T) {
+	t.Parallel()
+	parse := func(body string) *ThresholdConfig {
+		t.Helper()
+		cfg, err := ParseConfigFile([]byte("tenants:\n  t1:\n    _routing:" + body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &cfg
+	}
+	mapping := parse("\n      receiver: {type: webhook, url: \"https://example.com/a\"}\n")
+	block := " |\n"
+	for _, line := range strings.SplitAfter(mapping.Tenants["t1"]["_routing"].Default, "\n") {
+		if line != "" {
+			block += "      " + line
+		}
+	}
+	text, empty := parse(block), parse(" \"\"\n")
+	if mapping.Tenants["t1"]["_routing"].Default != text.Tenants["t1"]["_routing"].Default {
+		t.Fatalf("fixture: the mapping and the string must hold one text: %q vs %q",
+			mapping.Tenants["t1"]["_routing"].Default, text.Tenants["t1"]["_routing"].Default)
+	}
+	for _, c := range []struct {
+		name   string
+		cfg    *ThresholdConfig
+		routed int
+		warn   string
+	}{
+		{"mapping", mapping, 1, ""},
+		{"string", text, 0, "written as a scalar, not a mapping"},
+		{"empty string", empty, 0, ""},
+	} {
+		var logged []string
+		got := c.cfg.ResolveRoutingLogf(func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })
+		if len(got) != c.routed {
+			t.Errorf("%s: %d routing(s), want %d: %+v", c.name, len(got), c.routed, got)
+		}
+		if c.warn == "" && len(logged) != 0 || c.warn != "" && (len(logged) != 1 || !strings.Contains(logged[0], c.warn)) {
+			t.Errorf("%s: logged %q, want %q", c.name, logged, c.warn)
+		}
+	}
+}

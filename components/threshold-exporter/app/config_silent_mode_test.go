@@ -219,7 +219,7 @@ repeat_interval: "4h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -266,7 +266,7 @@ repeat_interval: "100h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -293,7 +293,7 @@ func TestResolveRouting_MissingReceiver(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -337,10 +337,10 @@ repeat_interval: "2h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingA),
+				"_routing": SVYAML(routingA),
 			},
 			"db-b": {
-				"_routing": SV(routingB),
+				"_routing": SVYAML(routingB),
 			},
 			"db-c": {
 				"mysql_connections": SV("70"),
@@ -377,7 +377,7 @@ func TestResolveRouting_MinimalConfig(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
