@@ -44,6 +44,7 @@ from _lib_prometheus import QueryError, prometheus_instant  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 from _lib_paths import require_dir  # noqa: E402  (#3276 / #3392)
+import _lib_input  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_metric_sources import TENANT_EXPORTER_JOB  # noqa: E402  (#3720)
 from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
@@ -268,9 +269,13 @@ class TenantNotFoundError(CallerError):
 
 
 def require_config_dir(config_dir: str) -> None:
-    """`--config-dir` as given must be a directory (`_lib_paths`, #3276):
-    else `CallerError`, rc 2. The one check, so `main()` can make it before
-    any query and `resolve_inheritance_chain` makes the same one."""
+    """`config_dir` as an importer gives it must be a directory
+    (`_lib_paths`, #3276): else `CallerError`, rc 2 — what
+    `resolve_inheritance_chain`, `check` and `load_chain_source` make for an
+    importer. ⛔ Not the CLI's judgement: `main` judges `--config-dir` once
+    as a declared input (`_lib_parse_cache.declared_trees`, #3751) and
+    reads the judged tree without coming back here (`_resolve_chain`,
+    `_check`)."""
     require_dir(config_dir, lang="en", flag="--config-dir")
 
 
@@ -369,8 +374,12 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
     if config_dir is None:
         return None
     require_config_dir(config_dir)
-    base = Path(config_dir)
+    return _resolve_chain(tenant, Path(config_dir))
 
+
+def _resolve_chain(tenant: str, base: Path) -> dict[str, object]:
+    """`resolve_inheritance_chain` of a tree already judged: *base* is a
+    directory `main` judged (#3751) or `require_config_dir` passed."""
     tree = _load_effective(base)
     _tenant_entry(tree, tenant, str(base))
     return chain_for(tenant, _chain_source(base, tree, load_served_tree(base)))
@@ -535,12 +544,19 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     """
     if chain is not None and config_dir is not None:
         raise TypeError("check(): pass config_dir or chain, not both")
-    errors = []
-    skipped = []
     if config_dir is not None:
         # #1524: an importer gets the path refusal before any query too, not
         # after up to four Prometheus queries and a kubectl call (step 4).
         require_config_dir(config_dir)
+    return _check(tenant, prom_url, base=None if config_dir is None else Path(config_dir),
+                  chain=chain)
+
+
+def _check(tenant: str, prom_url: str, *, base: Path | None, chain: dict | None) -> dict:
+    """`check` of a tree already judged (*base*: see `_resolve_chain`), or
+    of none."""
+    errors = []
+    skipped = []
 
     # 0. 資料庫類型：Pod 與 exporter 兩項只為 MariaDB 寫（本輪決策 N2）
     db_type, db_type_err = tenant_db_type(tenant, prom_url)
@@ -613,7 +629,8 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     # `profile_name`. #2526: that read is `da-guard effective`; when it
     # cannot be made, this raises (the CLI exits 2) rather than answer
     # without the chain.
-    inheritance = chain if chain is not None else resolve_inheritance_chain(tenant, config_dir)
+    inheritance = (chain if chain is not None
+                   else _resolve_chain(tenant, base) if base is not None else None)
     profile_name = inheritance["profile_name"] if inheritance else None
 
     # 5. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
@@ -674,8 +691,10 @@ def main() -> Report:
     )
     parser.add_argument("tenant", help=_h('tenant'))
     add_prometheus_arg(parser, help_text=_h('prometheus'))
-    parser.add_argument("--config-dir",
-                        help=_h('config_dir'))
+    # #3751: an empty conf.d is refused naming the flag (it was da-guard's
+    # "no .yaml files found in <path>", rc 2, the flag unnamed).
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED, help=_h('config_dir'))
     parser.add_argument("--show-inheritance", action="store_true",
                         help=_h('show_inheritance'))
     # #452 Track C: diagnose emits JSON by design (consumers parse its
@@ -686,25 +705,33 @@ def main() -> Report:
     parser.add_argument("--json", action="store_true", default=True,
                         help="Emit machine-readable JSON to stdout (default).")
     args = parser.parse_args()
+    # One reader of --config-dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _main(args)
 
+
+def _main(args: argparse.Namespace) -> Report:
     if args.show_inheritance and args.config_dir is None:
         print("ERROR: --show-inheritance requires --config-dir",
               file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)  # #452: missing required arg
+    conf_d = None
     if args.config_dir is not None:
         # #1524: before any query — a run told to read a tree it cannot
-        # read stops here (rc 2), not after the cluster checks.
-        require_config_dir(args.config_dir)
+        # read stops here (rc 2), not after the cluster checks. #3751:
+        # judged once — the path, a root da-guard cannot list, a tree with
+        # no config file — each refusal naming --config-dir.
+        [conf_d] = _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
 
     if args.show_inheritance:
         # #2526: fail closed — da-guard missing or failing, or a file the
         # exporter's load drops, exits 2 through the decorators on main();
         # #1524: so does a tree without the tenant (TenantNotFoundError).
-        inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
+        inheritance = _resolve_chain(args.tenant, conf_d)
         return Report(inheritance, EXIT_OK)  # #3216: run() encodes it
 
     try:
-        result = check(args.tenant, prometheus_url(args.prometheus), config_dir=args.config_dir)
+        result = _check(args.tenant, prometheus_url(args.prometheus), base=conf_d, chain=None)
     except KubectlError as exc:
         # issue 1513 / #2968 / #3349: no answer from the cluster — kubectl
         # missing (the da-tools image ships none), forbidden, unreachable or

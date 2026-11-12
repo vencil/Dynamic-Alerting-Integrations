@@ -1411,6 +1411,9 @@ class TestPrometheusEnvFallback:
 
     def _run_main_capture_url(self, monkeypatch, tmp_path, extra=()):
         captured = {}
+        # #3751: an empty --config-dir is refused naming the flag before the
+        # recommender is reached — give it a conf.d with a config file.
+        (tmp_path / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
 
         def fake_run_analysis(config_dir, *, prometheus_url=None, **kwargs):
             captured["url"] = prometheus_url

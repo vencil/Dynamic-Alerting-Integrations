@@ -140,6 +140,7 @@ from _lib_paths import require_path  # noqa: E402  (#3276)
 import _lib_input  # noqa: E402  (#3445: --silences-file is read by the lib)
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
+from _lib_label import safe_label  # noqa: E402
 
 
 # ─── Loading ──────────────────────────────────────────────────────────
@@ -202,18 +203,19 @@ def extract_alerts_from_pack(pack: dict, source_path: str) -> list[dict]:
 
 def load_alerts(rule_source: Path,
                 exclude: "list[str] | tuple[str, ...]" = (), *,
-                rule_pack_dir: bool = False) -> tuple[list[dict], list[str]]:
+                rule_pack_files: "list[Path] | None" = None) -> tuple[list[dict], list[str]]:
     """Load all alerts from a rule-source path, less the files *exclude*
-    leaves out — or, with *rule_pack_dir*, from the rule packs the
-    directory *rule_source* declares (`_lib_consumer_read.rule_pack_files`,
-    #3426). Returns (alerts, errors).
+    leaves out — or, given *rule_pack_files*, from those: the rule packs
+    ``--rule-pack-dir`` selected (``_lib_input.selected``, the rule-pack
+    declaration, #3426 / #3755 — judged and listed once, by ``main``).
+    Returns (alerts, errors).
     Raises ``_lib_consumer_read.ConsumerReadError`` when da-read /
     da-crdecode cannot be had, and its ``InputRefused`` when the files
     cannot be chosen (an undeclared YAML beside the packs, a dangling
     symlink, an `--exclude` that leaves nothing)."""
     errors: list[str] = []
-    files = ([Path(f) for f in _lib_consumer_read.rule_pack_files(rule_source)]
-             if rule_pack_dir else _yaml_files_in(rule_source, exclude))
+    files = ([Path(f) for f in rule_pack_files]
+             if rule_pack_files is not None else _yaml_files_in(rule_source, exclude))
     if not files:
         return [], [f"no YAML files found at {rule_source}"]
 
@@ -637,9 +639,16 @@ def main(argv: list[str] | None = None) -> "int | Report":
             "This or --rule-pack-dir is required."
         ),
     )
-    ap.add_argument(
+    # #3755: what --rule-pack-dir selects is declared (`_lib_input`, the
+    # rule-pack declaration RULE_PACKS) and judged once: not there, no
+    # directory, unlistable or holding no rule pack is rc 2 naming the flag.
+    # An empty directory was rc 2 already ("no YAML files found at <dir>",
+    # the flag not named).
+    _lib_input.add_input(
+        ap,
         "--rule-pack-dir",
-        default=None,
+        select=_lib_consumer_read.RULE_PACKS,
+        empty=_lib_input.EMPTY_REFUSED,
         metavar="DIR",
         help=(
             "Read the rule packs of a rule-packs directory as declared "
@@ -700,14 +709,23 @@ def main(argv: list[str] | None = None) -> "int | Report":
 
     silences = _lib_input.document(args, "silences_file", lang="en")
 
+    rule_pack_files = None
     if by_declaration:
-        require_path(rule_source, "dir", lang="en", flag="--rule-pack-dir")
+        # #3755: the one judgement and the one listing of the directory
+        # (a CallerError is rc 2 naming the flag); an entry the rule-pack
+        # declaration does not cover is named below.
+        try:
+            rule_pack_files = _lib_input.selected(args, "rule_pack_dir", lang="en")
+        except _lib_consumer_read.ConsumerReadError as exc:
+            print(f"ERROR: --rule-pack-dir {safe_label(str(rule_source))}: "
+                  f"{_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
     else:
         require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
 
     try:
         alerts, errors = load_alerts(rule_source, args.exclude,
-                                     rule_pack_dir=by_declaration)
+                                     rule_pack_files=rule_pack_files)
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR

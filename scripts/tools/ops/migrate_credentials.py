@@ -100,7 +100,7 @@ import _lib_io  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report, die_caller_error  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
-from _lib_paths import classify_path  # noqa: E402
+import _lib_input  # noqa: E402
 from _lib_validation import detect_cli_lang, is_valid_tenant_id  # noqa: E402
 from _lib_validation import (  # noqa: E402
     CREDENTIAL_REF_SITES,
@@ -219,7 +219,13 @@ def _parse_args(argv: Optional[list[str]]) -> argparse.Namespace:
     h = _HELP[lang]
     p = argparse.ArgumentParser(prog="da-tools migrate-credentials",
                                 description=h["description"])
-    _lib_io.add_config_dir_arg(p, help_text=h["config_dir"])
+    # #3751: a conf.d with no config file is a run with no credential to
+    # migrate (rc 0), as before; the path and a root da-guard cannot list
+    # are refused naming the flag. Declared here, not through the shared
+    # `_lib_io.add_config_dir_arg`.
+    _lib_input.add_input(p, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_ALLOWED, required=True,
+                         help=h["config_dir"])
     p.add_argument("--write", action="store_true", help=h["write"])
     p.add_argument("--manifests-out", metavar="DIR", default=None, help=h["manifests_out"])
     gar.add_policy_argument(p, lang=lang)
@@ -951,11 +957,18 @@ def main(argv: Optional[list[str]] = None) -> Any:
 
 
 def _main(argv: Optional[list[str]]) -> Any:
-    import generate_alertmanager_routes as gar
     args = _parse_args(argv)
-    problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
-    if problem is not None:
-        die_caller_error(f"ERROR: {problem.message}")
+    # One reader of --config-dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _run(args)
+
+
+def _run(args: argparse.Namespace) -> Any:
+    import generate_alertmanager_routes as gar
+    # #3751: judged once, before anything is read or written — the path, a
+    # root da-guard cannot list — each refusal naming --config-dir (a
+    # CallerError: rc 2 through `run()`; ParseTreeError: `main`'s decorator).
+    _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
     if args.write and args.manifests_out is None:
         die_caller_error("ERROR: --write needs --manifests-out DIR: the rewrite takes the "
                          "values out of conf.d, and the Secrets that hold them are written "
@@ -1015,7 +1028,7 @@ def _main(argv: Optional[list[str]]) -> Any:
                           "what is listed under blocked_after_rewrite")
     doc = {
         "schema": SCHEMA,
-        "config_dir": args.config_dir,
+        "config_dir": str(args.config_dir),
         "written": written,
         "plan": [{**_row(it, plan), "ref_key": it.entry}
                  for it in items if it.entry is not None],

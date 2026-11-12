@@ -21,6 +21,16 @@ import threshold_recommend as recommend
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
+@pytest.fixture
+def conf_d(tmp_path, da_guard_env):
+    """A conf.d with one config file (#3751: an empty --config-dir is refused
+    naming the flag before `run` is reached; these tests stub `run`)."""
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
+    return str(d)
+
+
 def _as_run(result):
     """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
     document is written and its status is the exit, as SystemExit."""
@@ -187,10 +197,10 @@ def test_removed_flags_are_caller_errors(monkeypatch, tmp_path, capsys, flag):
 
 
 @pytest.mark.parametrize("json_output", [False, True], ids=["text", "json"])
-def test_main_rc0_with_rotten_thresholds(monkeypatch, tmp_path, capsys, json_output):
+def test_main_rc0_with_rotten_thresholds(monkeypatch, tmp_path, capsys, json_output, conf_d):
     import sys
     _stub_reports(monkeypatch, ["db-a"])
-    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", conf_d,
                                       *(["--json"] if json_output else [])])
     with pytest.raises(SystemExit) as exc:
         _as_run(tg.main())
@@ -202,16 +212,16 @@ def test_main_rc0_with_rotten_thresholds(monkeypatch, tmp_path, capsys, json_out
         assert "Summary: 1 tenant(s) / 1 change(s) need retuning." in out
 
 
-def test_main_rc0_on_empty_plan(monkeypatch, tmp_path):
+def test_main_rc0_on_empty_plan(monkeypatch, tmp_path, conf_d):
     import sys
     monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: [])
-    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path)])
+    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", conf_d])
     with pytest.raises(SystemExit) as exc:
         _as_run(tg.main())
     assert exc.value.code == tg.EXIT_OK
 
 
-def test_main_exits_caller_error_on_missing_observed_map(monkeypatch, tmp_path, capsys):
+def test_main_exits_caller_error_on_missing_observed_map(monkeypatch, tmp_path, capsys, conf_d):
     # #3017: govern reads the map through recommend.run_analysis; an absent
     # map is an environment error (rc 2, named), not a traceback.
     import sys
@@ -219,7 +229,7 @@ def test_main_exits_caller_error_on_missing_observed_map(monkeypatch, tmp_path, 
     monkeypatch.setattr(tg.recommend.observed_map_lib, "DEFAULT_MAP_PATH", str(missing))
     monkeypatch.setattr(tg, "run",
                         lambda args: tg.recommend.observed_map_lib.load_observed_map())
-    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path)])
+    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", conf_d])
     with pytest.raises(SystemExit) as exc:
         _as_run(tg.main())
     assert exc.value.code == tg.EXIT_CALLER_ERROR
@@ -471,6 +481,7 @@ def test_govern_plan_table_tags_lower_bound_delta_with_miss():
 # ---------------------------------------------------------------------------
 # --prometheus env-var fallback (W1: add_prometheus_arg / README §6.1)
 # ---------------------------------------------------------------------------
+@pytest.mark.usefixtures("da_guard_env")  # #3751: --config-dir is listed by da-guard
 class TestPrometheusEnvFallback:
     """`--prometheus` 走 _lib_io.add_prometheus_arg 的 canonical env fallback。
 
@@ -482,6 +493,9 @@ class TestPrometheusEnvFallback:
 
     def _run_main_capture_url(self, monkeypatch, tmp_path, extra=()):
         import sys
+        # #3751: an empty --config-dir is refused naming the flag before the
+        # recommender is reached — give it a conf.d with a config file.
+        (tmp_path / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
         from types import SimpleNamespace
 
         captured = {}
@@ -591,10 +605,10 @@ class TestNotMeasured:
         assert "db-a/mysql_connections: connection refused" in text
 
     @pytest.mark.parametrize("json_output", [False, True], ids=["text", "json"])
-    def test_main_exits_2_with_one_error_line(self, monkeypatch, tmp_path, capsys, json_output):
+    def test_main_exits_2_with_one_error_line(self, monkeypatch, tmp_path, capsys, json_output, conf_d):
         import sys
         monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: self._reports())
-        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", conf_d,
                                           *(["--json"] if json_output else [])])
         with pytest.raises(SystemExit) as exc:
             _as_run(tg.main())
@@ -606,7 +620,7 @@ class TestNotMeasured:
         if json_output:
             assert json.loads(captured.out)["status"] == "partial"
 
-    def test_none_measured_is_no_answer_under_json(self, monkeypatch, tmp_path, capsys):
+    def test_none_measured_is_no_answer_under_json(self, monkeypatch, tmp_path, capsys, conf_d):
         """#3617: every threshold not measured — no partial answer, no document:
         a CallerError naming them (run() makes it rc 2, stdout empty)."""
         import sys
@@ -614,14 +628,14 @@ class TestNotMeasured:
         reports = [_report("db-a", [_not_measured()]),
                    _report("db-b", [_not_measured("pg_conn", "HTTP 503")])]
         monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
-        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", conf_d,
                                           "--json"])
         with pytest.raises(CallerError) as exc:
             tg.main()
         assert "db-a/mysql_connections" in str(exc.value) and "db-b/pg_conn" in str(exc.value)
         assert capsys.readouterr().out == ""
 
-    def test_a_key_never_queried_is_not_an_answered_part(self, monkeypatch, tmp_path, capsys):
+    def test_a_key_never_queried_is_not_an_answered_part(self, monkeypatch, tmp_path, capsys, conf_d):
         """#3617: the only query unanswered and a key that was never sent
         (unmapped / skipped) beside it — still no answer: a key not queried
         cannot count as the answered part."""
@@ -632,7 +646,7 @@ class TestNotMeasured:
             reason="no observed-load mapping for this key — not in observed-map (skipped)")
         reports = [_report("db-a", [_not_measured(), skipped])]
         monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
-        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+        monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", conf_d,
                                           "--json"])
         with pytest.raises(CallerError) as exc:
             tg.main()

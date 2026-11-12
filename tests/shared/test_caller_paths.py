@@ -78,8 +78,10 @@ OPS_SITES = [
      "--config-dir", None),
     ("validate-config --config-dir", "validate_config.py", ["--config-dir", "{D}", "--json"],
      "--config-dir", None),
+    # #3755: lint judges --rule-packs (its own --rule-pack-dir, named so in
+    # the custom_rules row); validate-config passes it on.
     ("validate-config --rule-packs", "validate_config.py",
-     ["--config-dir", "{CONF}", "--rule-packs", "{D}", "--json"], "--rule-packs", None),
+     ["--config-dir", "{CONF}", "--rule-packs", "{D}", "--json"], "--rule-pack-dir", None),
     ("validate-config --policy-dsl", "validate_config.py",
      ["--config-dir", "{CONF}", "--policy-dsl", "{F}", "--json"], "--policy-dsl", None),
     ("validate-config --policy", "validate_config.py",
@@ -566,7 +568,9 @@ def test_a_file_is_a_regular_file(tmp_path):
         os.close(held)
 
 
-@pytest.mark.parametrize("lang, words", [("zh", "--dir 無法使用："), ("en", "ERROR: --dir ")])
+# #3755: gitops-check refuses through its declaration (`_lib_input`): one
+# `ERROR:` line in either language; the detail is the tool's language.
+@pytest.mark.parametrize("lang, words", [("zh", "ERROR: --dir "), ("en", "ERROR: --dir ")])
 def test_a_tool_keeps_its_own_words(tmp_path, lang, words):
     """The judgement is shared; each tool's language for it stays its own —
     the judgement's detail included."""
@@ -1293,7 +1297,8 @@ def test_a_declared_default_that_is_there_but_no_directory_is_refused(box, decla
         out = proc.stdout + proc.stderr
         assert "Traceback" not in out, (rid, out[-3000:])
         assert proc.returncode == 2, (rid, out[-3000:])
-        assert f"{flag} {spec.default}: not a directory" in out, (rid, out[-3000:])
+        said = "不是目錄" if script in SPEAKS_ZH else "not a directory"
+        assert f"{flag} {spec.default}: {said}" in out, (rid, out[-3000:])
         assert _written(scratch) == [], (rid, f"written: {_written(scratch)}")
         measured += 1
     assert measured, "no declared input has a default: this test measured nothing"
@@ -1325,6 +1330,30 @@ JUDGED_DECLARATIONS = {
     # #3751: a snapshot of an empty conf.d was taken (rc 0: every file
     # removed), and still is.
     "config-history --config-dir": ("allowed", None, "refused"),
+    # #3755: measured on main — lint without --ci reads an empty directory as
+    # advisory (rc 0); the other three were already rc 2, the flag unnamed
+    # (rule-pack-split had made its output directories by then).
+    "lint --rule-pack-dir": ("allowed", None, "refused"),
+    "rule-pack-split --rule-packs-dir": ("refused", "refused", "refused"),
+    "silencer-drift-check --rule-pack-dir": ("refused", None, "refused"),
+    # #3755: the root it cannot list was rc 1 (a finding); empty, rc 2 with a
+    # partial report — now one line naming the flag, no report.
+    "validate-config --config-dir": ("refused", None, "refused"),
+    # #3755 (owner 2026-11-11): `empty` as measured on main as uid 65534 —
+    # rc 2 already (da-guard's "no .yaml files found", the flag unnamed):
+    "analyze-gaps --config-dir": ("refused", None, "refused"),
+    "blind-spot --config-dir": ("refused", None, "refused"),
+    "diagnose --config-dir": ("refused", None, "refused"),
+    "threshold-govern --config-dir": ("refused", None, "refused"),
+    "threshold-recommend --config-dir": ("refused", None, "refused"),
+    # rc 0 or 1 over an empty tree, and still so:
+    "explain-route --config-dir": ("allowed", None, "refused"),
+    "generate-routes --config-dir": ("allowed", None, "refused"),
+    "evaluate-policy --config-dir": ("allowed", None, "refused"),
+    "test-notification --config-dir": ("allowed", None, "refused"),
+    "migrate-credentials --config-dir": ("allowed", None, "refused"),
+    "gitops-check local --dir": ("allowed", None, "refused"),
+    "deprecate --config-dir": ("allowed", "refused", "refused"),
 }
 
 

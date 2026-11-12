@@ -485,8 +485,14 @@ def main():
         "paths", nargs="*",
         help="YAML file(s) or directory to scan (or --rule-pack-dir instead)"
     )
-    parser.add_argument(
-        "--rule-pack-dir", default=None, metavar="DIR",
+    # #3755: what --rule-pack-dir selects is declared (`_lib_input`, the
+    # rule-pack declaration RULE_PACKS) and judged once by `selected`: not
+    # there, no directory or unlistable is rc 2 naming the flag. An empty
+    # selection is a run over nothing as this tool reads it (EMPTY_ALLOWED):
+    # an advisory note at rc 0, a caller error under --ci (below).
+    _lib_input.add_input(
+        parser, "--rule-pack-dir", select=_lib_consumer_read.RULE_PACKS,
+        empty=_lib_input.EMPTY_ALLOWED, metavar="DIR",
         help="Lint the rule packs of a rule-packs directory as declared "
              "(rule-pack-*.yaml|yml at its top level; the registry beside them is "
              "declared too, any other YAML there is a caller error). The declared "
@@ -534,40 +540,43 @@ def main():
     # family as a missing target, and `!r` makes it visible as ''.
     # #3276: every other target is judged by the shared caller-path check —
     # under a parent the caller cannot enter it is named, not a traceback.
-    if "" in args.paths or args.rule_pack_dir == "":
+    # --rule-pack-dir '' is judged by its declaration below (`selected`:
+    # rc 2 naming the flag), never as the current directory.
+    if "" in args.paths:
         die_caller_error(
             "scan target(s) not found or empty: ''"
             "\n  ⛔ Do not drop the path to clear this — an absent target "
             "is not a clean one, and '' is not the current directory.")
-    if args.rule_pack_dir is not None:
-        problems = [p for p in [classify_path(args.rule_pack_dir, "dir", lang="en",
-                                              flag="--rule-pack-dir")] if p is not None]
-    else:
+    if args.rule_pack_dir is None:
         problems = [p for p in (classify_path(t, "any", lang="en") for t in args.paths)
                     if p is not None]
-    if problems:
-        die_caller_error(
-            "".join(f"ERROR: {p.message}\n" for p in problems)
-            + "  ⛔ Do not drop the path to clear this — an absent target "
-              "is not a clean one.", problems[0].reason)
+        if problems:
+            die_caller_error(
+                "".join(f"ERROR: {p.message}\n" for p in problems)
+                + "  ⛔ Do not drop the path to clear this — an absent target "
+                  "is not a clean one.", problems[0].reason)
 
     # #3426: which files are linted is a declaration by path — the rule
-    # packs of a rule-packs directory (`rule_pack_files`, the one
-    # declaration), or the targets less `--exclude`. An entry that cannot be
-    # chosen (an undeclared YAML beside the packs, a dangling symlink), and
-    # an `--exclude` that leaves nothing, are caller errors, named.
+    # packs of a rule-packs directory (RULE_PACKS, the one declaration), or
+    # the targets less `--exclude`. An entry that cannot be chosen (an
+    # undeclared YAML beside the packs, a dangling symlink), and an
+    # `--exclude` that leaves nothing, are caller errors, named.
     try:
         if args.rule_pack_dir is not None:
+            # #3755: the one judgement and the one listing of the directory
+            # (`_lib_input.selected`; a CallerError is rc 2 naming the flag).
             # #1595 D1a: the custom-rule policy (required `tenant` label, the
             # tenant-isolation deny-list) governs TENANT packs. A declared
             # platform pack (`PLATFORM_PACKS`) watches the platform and has no
             # tenant by design, so it is not this policy's to judge.
-            files = [str(f) for f in
-                     _lib_consumer_read.tenant_rule_pack_files(args.rule_pack_dir)]
+            files = [str(f) for f in _lib_input.selected(args, "rule_pack_dir", lang="en")
+                     if not _lib_consumer_read.is_platform_pack(
+                         _lib_consumer_read.RULE_PACKS.member(f))]
         else:
             files = collect_files(args.paths, args.exclude)
     except _lib_consumer_read.InputRefused as exc:
-        die_caller_error(f"ERROR: {_lib_consumer_read.error_text(exc)}")
+        label = ("--rule-pack-dir: " if args.rule_pack_dir is not None else "")
+        die_caller_error(f"ERROR: {label}{_lib_consumer_read.error_text(exc)}")
 
     if not files:
         # #3462: under --ci a run that selected no file is a caller error, not

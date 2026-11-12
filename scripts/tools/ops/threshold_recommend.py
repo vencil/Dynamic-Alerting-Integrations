@@ -81,9 +81,10 @@ from _lib_tenant_values import (  # noqa: E402
     print_load_warnings,
 )
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538; #1641; #3276)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report, partial_answer)
+    EXIT_CALLER_ERROR, EXIT_OK, Report, partial_answer)
+import _lib_input  # noqa: E402
+import _lib_parse_cache  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -1531,15 +1532,17 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
 @exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
 @observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # #3751: no usable parse-tree → rc 2
 def main() -> "Report | None":
     """CLI entry point: threshold recommendation engine."""
     parser = argparse.ArgumentParser(
         description=_HELP['description'][_LANG],
     )
-    parser.add_argument(
-        "--config-dir",
-        required=False,
-        default=None,
+    # #3751: an empty conf.d is refused naming the flag (it was da-guard's
+    # "no .yaml files found in <path>", rc 2, the flag unnamed).
+    _lib_input.add_input(
+        parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+        empty=_lib_input.EMPTY_REFUSED, required=False,
         help=_HELP['config_dir'][_LANG],
     )
     parser.add_argument(
@@ -1602,7 +1605,12 @@ def main() -> "Report | None":
         ),
     )
     args = parser.parse_args()
+    # One reader of --config-dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _main(args)
 
+
+def _main(args: argparse.Namespace) -> "Report | None":
     # #719: regenerate the observed-map and exit (does not need --config-dir).
     if args.generate_observed_map:
         try:
@@ -1671,11 +1679,10 @@ def main() -> "Report | None":
         print(msg, file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    # #3276: the shared judgement of a caller-given path, in this tool's words.
-    config_dir_problem = classify_path(args.config_dir, "dir", lang=_LANG, flag="--config-dir")
-    if config_dir_problem is not None:
-        raise CallerError(f"配置目錄無法使用: {config_dir_problem.message}" if _LANG == 'zh'
-                          else config_dir_problem.message, config_dir_problem.reason)
+    # #3751: judged once — the path (#3276), a root da-guard cannot list, a
+    # tree with no config file — each refusal naming --config-dir (a
+    # CallerError: rc 2 through `run()`).
+    [config_dir] = _lib_parse_cache.declared_trees(args, "config_dir", lang=_LANG)
 
     # Validate lookback
     lookback_secs = parse_duration_seconds(args.lookback)
@@ -1685,7 +1692,7 @@ def main() -> "Report | None":
         sys.exit(EXIT_CALLER_ERROR)
 
     reports = run_analysis(
-        args.config_dir,
+        str(config_dir),
         # #3528: a dry run only generates queries — no URL, so no env judged
         prometheus_url=None if args.dry_run else prometheus_url(args.prometheus),
         tenant_filter=args.tenant,

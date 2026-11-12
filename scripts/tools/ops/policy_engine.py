@@ -94,6 +94,7 @@ try:
 except ImportError:
     from scripts.tools._lib_io import load_confd_file  # type: ignore[no-redef]
     from scripts.tools._lib_paths import classify_path  # type: ignore[no-redef]
+import _lib_input  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
@@ -1135,8 +1136,12 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(
             description="Policy-as-Code 評估引擎 — 對 tenant 配置執行宣告式策略檢查。",
         )
-        parser.add_argument(
-            "--config-dir", required=True,
+        # #3751: a conf.d with no config file is a run with no rule and no
+        # tenant (rc 0), as before; the path and a root da-guard cannot
+        # list are refused naming the flag.
+        _lib_input.add_input(
+            parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+            empty=_lib_input.EMPTY_ALLOWED, required=True,
             help="conf.d/ 目錄路徑（含 tenant YAML）",
         )
         parser.add_argument(
@@ -1155,8 +1160,9 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
         parser = argparse.ArgumentParser(
             description="Policy-as-Code evaluation engine — declarative policy checks for tenant configs.",
         )
-        parser.add_argument(
-            "--config-dir", required=True,
+        _lib_input.add_input(  # #3751: as the zh parser above
+            parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+            empty=_lib_input.EMPTY_ALLOWED, required=True,
             help="Path to conf.d/ directory containing tenant YAML files",
         )
         parser.add_argument(
@@ -1262,11 +1268,13 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
     # EXISTS but has no _policies is a separate, legitimate no-op handled at
     # the `if not rules` path and left at EXIT_OK.)
     # #3276: judged by the shared caller-path check: rc 2, its line, nothing
-    # on stdout (#3558).
-    config_dir_problem = classify_path(args.config_dir, "dir", lang=lang, flag="--config-dir")
-    if config_dir_problem is not None:
-        raise CallerError(f"設定目錄無法使用: {config_dir_problem.message}" if lang == "zh"
-                          else config_dir_problem.message, config_dir_problem.reason)
+    # on stdout (#3558). #3751: judged once — the path, a root da-guard
+    # cannot list — each refusal naming --config-dir (a CallerError: rc 2
+    # through `run()`); every later read of the tree is this run's reader.
+    try:
+        _lib_parse_cache.declared_trees(args, "config_dir", lang=lang)
+    except ParseTreeError as exc:
+        return _load_error_exit(exc, args, 0)
 
     # #1651 (D-06 "fix the class, not the cell"): `--policy` SUPPLIED but not a
     # file is a caller error, never "no policy". Measured before the fix:

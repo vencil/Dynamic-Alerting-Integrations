@@ -41,6 +41,18 @@ def _as_run(result):
 _REPO = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture
+def listed_dir(tmp_path, da_guard_env):
+    """A --dir da-guard lists, for the tests that stub `check_local`: #3751
+    judges --dir in `main` (the path, a root da-guard cannot list) before
+    `check_local` is called, so a path that is not there no longer reaches
+    the stub."""
+    d = tmp_path / "config"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
+    return str(d)
+
+
 def run_main(argv):
     """Run emit_result(gc.main()) under the given sys.argv and return the pytest
     ExceptionInfo for the expected SystemExit. Callers assert on
@@ -133,32 +145,35 @@ class TestLocalDirNotAccessibleIsCallerError:
         (errno.ENOTDIR, "dir_not_found"),
         (errno.ELOOP, "dir_not_accessible"),  # #3392: `ls` lists a loop
     ])
-    def test_errno_decides_the_reason(self, monkeypatch, err, reason):
+    def test_errno_decides_the_reason(self, monkeypatch, err, reason, cli_argv):
         """By errno, not by which errnos this Python's `Path.is_dir` swallows
-        (3.13 raises EACCES, 3.14 returns False)."""
+        (3.13 raises EACCES, 3.14 returns False). #3751: judged by `main`
+        (the declared --dir), not by `check_local`."""
         from _lib_exitcodes import CallerError
 
         def _stat(path, *a, **kw):
             raise OSError(err, os.strerror(err), str(path))
+        cli_argv("gitops_check", "local", "--dir", "/locked/conf.d")
         monkeypatch.setattr(gc.os, "stat", _stat)
         with pytest.raises(CallerError) as exc_info:
-            gc.check_local("/locked/conf.d")
+            gc.main()
         monkeypatch.undo()
         assert exc_info.value.reason == reason
         assert "/locked/conf.d" in str(exc_info.value)
         if reason == "dir_not_accessible":
             assert os.strerror(err) in str(exc_info.value)
 
-    def test_a_python_whose_is_dir_swallows_eacces(self, monkeypatch):
+    def test_a_python_whose_is_dir_swallows_eacces(self, monkeypatch, cli_argv):
         """3.14's `Path.is_dir` answers False on EACCES: still named."""
         from _lib_exitcodes import CallerError
 
         def _stat(path, *a, **kw):
             raise PermissionError(errno.EACCES, "Permission denied", str(path))
+        cli_argv("gitops_check", "local", "--dir", "/locked/conf.d")
         monkeypatch.setattr(Path, "is_dir", lambda self, *a, **kw: False)
         monkeypatch.setattr(gc.os, "stat", _stat)
         with pytest.raises(CallerError) as exc_info:
-            gc.check_local("/locked/conf.d")
+            gc.main()
         monkeypatch.undo()
         assert exc_info.value.reason == "dir_not_accessible"
 
@@ -219,11 +234,13 @@ class TestCheckLocal:
         assert result.details["tenant_files"] == 2
         assert result.details["total_metrics"] == 5  # 3 from db-a + 2 from db-b
 
-    def test_local_directory_not_found(self):
-        """No directory to check is the caller's input, not a fail (#3211)."""
+    def test_local_directory_not_found(self, cli_argv):
+        """No directory to check is the caller's input, not a fail (#3211).
+        #3751: judged by `main` (the declared --dir), not by `check_local`."""
         from _lib_exitcodes import CallerError
+        cli_argv("gitops_check", "local", "--dir", "/nonexistent/path/xyz")
         with pytest.raises(CallerError) as exc_info:
-            gc.check_local("/nonexistent/path/xyz")
+            gc.main()
         assert exc_info.value.reason == "dir_not_found"
         assert "/nonexistent/path/xyz" in str(exc_info.value)
 
@@ -713,7 +730,7 @@ class TestMainLocal:
     """Test main() with local subcommand."""
 
     @patch("gitops_check.check_local")
-    def test_local_subcommand_pass(self, mock_check_local, capsys):
+    def test_local_subcommand_pass(self, mock_check_local, capsys, listed_dir):
         """local subcommand with pass status."""
         mock_check_local.return_value = gc.CheckResult(
             check="local",
@@ -727,14 +744,14 @@ class TestMainLocal:
             }
         )
 
-        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config"])
+        exc_info = run_main(["gitops-check", "local", "--dir", listed_dir])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "✓" in captured.out
 
     @patch("gitops_check.check_local")
-    def test_local_subcommand_json(self, mock_check_local, capsys):
+    def test_local_subcommand_json(self, mock_check_local, capsys, listed_dir):
         """local subcommand with --json output."""
         mock_check_local.return_value = gc.CheckResult(
             check="local",
@@ -743,7 +760,7 @@ class TestMainLocal:
             details={"directory": "/tmp/config"}
         )
 
-        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config", "--json"])
+        exc_info = run_main(["gitops-check", "local", "--dir", listed_dir, "--json"])
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
@@ -752,7 +769,7 @@ class TestMainLocal:
 
     @pytest.mark.parametrize("extra", [(), ("--json",)])
     @patch("gitops_check.check_local")
-    def test_local_fail_with_parse_errors(self, mock_check_local, capsys, extra):
+    def test_local_fail_with_parse_errors(self, mock_check_local, capsys, extra, listed_dir):
         """local subcommand with parse errors."""
         mock_check_local.return_value = gc.CheckResult(
             check="local",
@@ -767,7 +784,7 @@ class TestMainLocal:
             }
         )
 
-        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config", *extra])
+        exc_info = run_main(["gitops-check", "local", "--dir", listed_dir, *extra])
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
@@ -777,16 +794,16 @@ class TestMainLocal:
             assert "✗" in captured.out
 
     @patch("gitops_check.check_local")
-    def test_no_parse_tree_under_json_is_rc_2_with_the_report(self, mock_check_local, capsys):
+    def test_no_parse_tree_under_json_is_rc_2_with_the_report(self, mock_check_local, capsys, listed_dir):
         """ADR-036 step 4: no usable parse-tree is a caller error — the exit
         is 2. #3617: under --json stdout stays empty (it used to be a report
         whose one check said `da_guard_failed`); the cause is on stderr."""
         mock_check_local.side_effect = gc.ParseTreeError("no da-guard")
-        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config", "--json"])
+        exc_info = run_main(["gitops-check", "local", "--dir", listed_dir, "--json"])
         assert exc_info.value.code == EXIT_CALLER_ERROR
         out = capsys.readouterr()
         assert out.out == ""
-        assert ("ERROR: cannot read /tmp/config through `da-guard parse-tree`: no da-guard"
+        assert (f"ERROR: cannot read {listed_dir} through `da-guard parse-tree`: no da-guard"
                 in out.err), out.err
 
 
@@ -834,7 +851,7 @@ class TestOutputFormatting:
 
 
     @patch("gitops_check.check_local")
-    def test_details_in_output(self, mock_check_local, capsys):
+    def test_details_in_output(self, mock_check_local, capsys, listed_dir):
         """Details are printed in human-readable output."""
         mock_check_local.return_value = gc.CheckResult(
             check="local",
@@ -848,7 +865,7 @@ class TestOutputFormatting:
             }
         )
 
-        run_main(["gitops-check", "local", "--dir", "/path/to/config"])
+        run_main(["gitops-check", "local", "--dir", listed_dir])
 
         captured = capsys.readouterr()
         assert "directory" in captured.out
@@ -948,7 +965,8 @@ class TestErrorRecovery:
         assert "(walk_error)" in proc.stderr, proc.stderr
         assert "_defaults.yaml" not in proc.stdout + proc.stderr, proc.stdout + proc.stderr
         assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
-        assert "ERROR: .: " in proc.stderr, proc.stderr  # the refused path, named
+        # #3751: the refused root named as the flag the caller gave it with
+        assert f"ERROR: --dir {conf}: cannot list the directory" in proc.stderr, proc.stderr
 
 
 # ── 11. Timestamp Tests ────────────────────────────────────────────────────
@@ -957,7 +975,7 @@ class TestTimestamps:
     """Test timestamp generation in reports."""
 
     @patch("gitops_check.check_local")
-    def test_report_has_valid_iso_timestamp(self, mock_check_local, capsys):
+    def test_report_has_valid_iso_timestamp(self, mock_check_local, capsys, listed_dir):
         """Report contains valid ISO 8601 timestamp."""
         mock_check_local.return_value = gc.CheckResult(
             check="local",
@@ -966,7 +984,7 @@ class TestTimestamps:
             details={}
         )
 
-        run_main(["gitops-check", "local", "--dir", "/tmp", "--json"])
+        run_main(["gitops-check", "local", "--dir", listed_dir, "--json"])
 
         captured = capsys.readouterr()
         data = json.loads(captured.out)
