@@ -2,8 +2,9 @@ package handler
 
 // #2830: tenant-api reads a tenant's `_metadata` as threshold-exporter does
 // (/metrics' tenant_metadata_info, ResolveMetadata): a profile's `_metadata`
-// the tenant file does not write, the string form, and a non-string scalar
-// read as its text. The four tenants are the issue's table; t4 is the
+// the tenant file does not write, the string form (not read since #3638:
+// every field empty, metadata_incomplete — the exporter's decoded=false), and
+// a non-string scalar read as its text. The four tenants are the issue's table; t4 is the
 // control every reader read before. threshold-exporter's
 // metadata_layers_test.go pins the same shapes against LoadDir.
 
@@ -28,7 +29,7 @@ func exporterParityTree() map[string]string {
 // exporterParityWant is what threshold-exporter reads for each tenant.
 var exporterParityWant = map[string]listedMetadata{
 	"t1": {Environment: "production", Domain: "finance", Owner: "team-p"},
-	"t2": {Environment: "production", Domain: "finance", Owner: "team-s"},
+	"t2": {}, // #3638: the string form is not read
 	"t3": {Environment: "123", Domain: "finance", Owner: "456"},
 	"t4": {Environment: "production", Domain: "finance", Owner: "team-c"},
 }
@@ -46,8 +47,10 @@ func TestListTenants_MetadataReadLikeExporter(t *testing.T) {
 		if got := metadataOf(rows[id]); !reflect.DeepEqual(got, want) {
 			t.Errorf("%s metadata on LIST = %+v, want %+v", id, got, want)
 		}
-		if rows[id].MetadataIncomplete {
-			t.Errorf("%s: metadata_incomplete set with a readable root", id)
+		// The string form does not decode (#3638): metadata unknown, as the
+		// exporter reports it; every other form decodes.
+		if wantIncomplete := id == "t2"; rows[id].MetadataIncomplete != wantIncomplete {
+			t.Errorf("%s: metadata_incomplete = %v, want %v", id, rows[id].MetadataIncomplete, wantIncomplete)
 		}
 	}
 }
@@ -87,8 +90,8 @@ func TestSearchTenants_MetadataReadLikeExporter(t *testing.T) {
 		query string
 		want  []string
 	}{
-		{"domain=finance", []string{"t1", "t2", "t3", "t4"}},
-		{"environment=production", []string{"t1", "t2", "t4"}},
+		{"domain=finance", []string{"t1", "t3", "t4"}},
+		{"environment=production", []string{"t1", "t4"}},
 		{"environment=123", []string{"t3"}},
 	} {
 		if got := ids(search(tc.query)); !reflect.DeepEqual(got, tc.want) {

@@ -2081,10 +2081,9 @@ func validateShape(tenantID, yamlContent string) (cfg.ThresholdConfig, []string)
 	if confd.TenantFileManagement([]byte(yamlContent), tenantID) != "" {
 		return tcfg, []string{fmt.Sprintf(msgBodyNotAPIShaped, tenantID)}
 	}
-	// #2859: `_metadata` is a mapping (tenant-config schema). The exporter
-	// still reads a string that parses as YAML, but after its decode the two
-	// forms are the same value, so the string form is refused here, where it
-	// is written, not where it is read. Only this tenant's section: a flat
+	// #2859: `_metadata` is a mapping (tenant-config schema). Since #3638 the
+	// exporter does not read the string form at all; it is refused here,
+	// where it is written. Only this tenant's section: a flat
 	// file's other sections are not this write's.
 	if cfg.TenantWritesStringMetadata([]byte(yamlContent), tenantID) {
 		return tcfg, []string{fmt.Sprintf(

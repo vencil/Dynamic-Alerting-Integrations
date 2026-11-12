@@ -57,15 +57,8 @@ type defaultTextSite struct {
 // raw/val := TrimSpace(sv.Default)); none is a whole-file decode of disk data
 // (those use []byte variables and fall outside shape A).
 var defaultTextBaseline = map[defaultTextSite]int{
-	// _metadata value re-decoded from sv.Default.
-	{"metadata_layers.go", "decodeMetadataValue", "redecode"}: 1,
-	// _metadata (TenantMetadata) re-decoded from sv.Default (moved out of
-	// resolve.go tenantMetadataOf by #3653; the same site, not a new one).
-	{"metadata_value.go", "decodeTenantMetadata", "redecode"}: 1,
 	// _routing re-decoded from sv.Default (raw := sv.Default).
 	{"resolve.go", "ThresholdConfig.ResolveRoutingLogf", "redecode"}: 1,
-	// ":" sniff on sv.Default to decide whether a second decode is needed.
-	{"config_file.go", "mayHaveStructuredReserved", "sniff"}: 1,
 }
 
 // defaultTextTheDecoder is the one site stage 2 converges on, and stays:

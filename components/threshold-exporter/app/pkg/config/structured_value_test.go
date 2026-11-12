@@ -6,6 +6,7 @@ package config
 // turns red when one construction site stops setting or keeping it.
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -199,5 +200,48 @@ func TestCustomAlertSpecsOf_StructureNotText(t *testing.T) {
 	}
 	if v := ValidateTenantCustomAlerts("t1", empty, 20); v != nil {
 		t.Errorf("empty string: write gate %v", v)
+	}
+}
+
+// _metadata (#3638): no value is no metadata and no error; a string is an
+// error whatever its text reads like; a mapping decodes.
+func TestDecodeTenantMetadata_StructureNotText(t *testing.T) {
+	t.Parallel()
+	if tm, err := decodeTenantMetadata(ScheduledValue{}); err != nil || tm.Owner != "" {
+		t.Errorf("zero value: %+v, %v; want empty, nil", tm, err)
+	}
+	if _, err := decodeTenantMetadata(decodedValue(t, `"owner: dba"`)); err == nil {
+		t.Error("a string holding YAML decoded as metadata")
+	}
+	if tm, err := decodeTenantMetadata(decodedValue(t, "{owner: dba}")); err != nil || tm.Owner != "dba" {
+		t.Errorf("mapping: %+v, %v", tm, err)
+	}
+}
+
+// A reserved mapping whose `default` text holds `:` is still kept whole
+// (scheduleForm, #3638; the text sniff it replaced missed it).
+func TestStructured_KeepReservedMappingsDefaultWithColon(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseConfigFile([]byte("tenants:\n  t1:\n    _metadata: {default: \"environment: dev\", environment: production}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := decodeTenantMetadata(cfg.Tenants["t1"]["_metadata"])
+	if err != nil || tm.Environment != "production" {
+		t.Errorf("_metadata with a `default: \"a: b\"` key: %+v, %v; want environment production", tm, err)
+	}
+}
+
+// The string form is named once per commit, not on every scrape; a mapping
+// that does not decode still WARNs where it is read.
+func TestTenantMetadataOf_StringFormIsNotWarnedPerRead(t *testing.T) {
+	t.Parallel()
+	var logged []string
+	logf := func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	if _, decoded := tenantMetadataOf("t1", map[string]ScheduledValue{"_metadata": decodedValue(t, `"owner: x"`)}, logf); decoded || len(logged) != 0 {
+		t.Errorf("string form: decoded=%v logged=%q; want false, nothing", decoded, logged)
+	}
+	if _, decoded := tenantMetadataOf("t1", map[string]ScheduledValue{"_metadata": decodedValue(t, "{environment: {a: b}}")}, logf); decoded || len(logged) != 1 {
+		t.Errorf("undecodable mapping: decoded=%v logged=%q; want false, one WARN", decoded, logged)
 	}
 }

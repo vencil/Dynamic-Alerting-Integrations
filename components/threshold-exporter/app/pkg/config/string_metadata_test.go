@@ -6,9 +6,8 @@ import (
 	"testing"
 )
 
-// #2859: after the typed decode a string `_metadata` that reads as YAML is
-// the same value as a mapping, so ParseConfigFile records which entries
-// wrote the string form; the exporter keeps reading both.
+// #2859: ParseConfigFile records which entries wrote `_metadata` as a
+// string. #3638: the string form is no longer read — only a mapping is.
 func TestParseConfigFileRecordsStringMetadata(t *testing.T) {
 	data := []byte("profiles:\n" +
 		"  gold:\n    _metadata: \"tier: gold\"\n" +
@@ -31,11 +30,15 @@ func TestParseConfigFileRecordsStringMetadata(t *testing.T) {
 	if got := cfg.StringMetadataEntries(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("StringMetadataEntries = %q, want %q", got, want)
 	}
-	// Still read: the string form serves its fields as before.
-	for _, tenant := range []string{"t-str", "t-block", "t-map"} {
+	// The mapping is read; the string form, whatever its text reads like,
+	// is not (#3638): every field empty, reported as not decoded.
+	if meta, ok, decoded := (MetadataResolver{}).ResolveFile("t-map", data); !ok || !decoded || meta.Environment != "production" {
+		t.Errorf("t-map: metadata = %+v (ok %v, decoded %v); want environment production", meta, ok, decoded)
+	}
+	for _, tenant := range []string{"t-str", "t-block"} {
 		meta, ok, decoded := MetadataResolver{}.ResolveFile(tenant, data)
-		if !ok || !decoded || meta.Environment != "production" {
-			t.Errorf("%s: metadata = %+v (ok %v, decoded %v); want environment production", tenant, meta, ok, decoded)
+		if !ok || decoded || meta.Environment != "" {
+			t.Errorf("%s: metadata = %+v (ok %v, decoded %v); want no fields, not decoded", tenant, meta, ok, decoded)
 		}
 	}
 }

@@ -1558,7 +1558,9 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 	}
 	tm, err := decodeTenantMetadata(sv)
 	if err != nil {
-		if logf != nil {
+		// The string form is named once per config commit (the
+		// da_config_metadata_string_form WARN, #2859), not on every scrape.
+		if logf != nil && err != errMetadataString {
 			logf("WARN: tenant=%s: failed to parse _metadata: %v", tenant, err)
 		}
 		return meta, false
