@@ -75,6 +75,9 @@ sys.path.insert(0, str(REPO / "scripts" / "tools"))
 import _lib_input  # noqa: E402
 from _lib_exitcodes import CRASH_LINE_PREFIX  # noqa: E402
 
+sys.path.insert(0, str(REPO / "tests"))
+from _platform_fs import symlink_or_skip  # noqa: E402
+
 
 def _tables():
     spec = importlib.util.spec_from_file_location(
@@ -849,7 +852,7 @@ def test_a_flag_naming_a_link_removed_after_the_judgement_is_refused(tmp_path,
     (tmp_path / "tree").mkdir()
     (tmp_path / "tree" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
     link = tmp_path / "current"
-    link.symlink_to(tmp_path / "tree")
+    symlink_or_skip(tmp_path / "tree", link)
     pc.record_judgement(link, "--config-dir", "en", ["t.yaml"])
     link.unlink()
     assert pc.judged(link)
@@ -867,7 +870,7 @@ def test_a_file_linked_out_of_the_tree_gone_is_refused_by_its_place(tmp_path,
     outside.write_text("defaults: {}\n", encoding="utf-8")
     tree = tmp_path / "tree"
     tree.mkdir()
-    (tree / "_defaults.yaml").symlink_to(outside)
+    symlink_or_skip(outside, tree / "_defaults.yaml")
     pc.record_judgement(tree, "--config-dir", "en", ["_defaults.yaml"])
     outside.unlink()
     gone = FileNotFoundError(2, "No such file or directory")
