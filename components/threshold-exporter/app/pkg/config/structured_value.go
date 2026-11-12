@@ -16,8 +16,11 @@ import "gopkg.in/yaml.v3"
 // other site to that.
 //
 // What the text still loses: the generic decode before re-serialising
-// normalises a number's spelling (`0x1F` → 31). Whether such a spelling is
-// refused or normalised is decided apart from this (#3638), at the decode.
+// normalises a number's spelling (`0x1F` → 31). That is not judged here or
+// anywhere at runtime (#3764 owner ruling): the spelling is refused at the
+// entry, by validate-config's yaml_quoting row (`_lib_io`: a number in a
+// string field, or in a number field written other than in plain decimal),
+// which every reader shares through parse-tree's tags.
 
 // structureOf returns sv's structure — the node of the mapping or sequence
 // its Default was written as — and structured=true; nil and false for a
