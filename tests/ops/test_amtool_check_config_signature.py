@@ -63,7 +63,7 @@ def test_the_recordings_are_of_the_pinned_amtool():
 
 def test_every_verdict_is_recorded():
     assert {c["verdict"] for c in _CASES} == {
-        R.AMTOOL_ACCEPTED, R.AMTOOL_REJECTED, R.AMTOOL_UNUSABLE}
+        R.AM_ACCEPTED, R.AM_REJECTED, R.AM_UNUSABLE}
 
 
 @pytest.mark.parametrize("case", _CASES, ids=lambda c: c["input"])
@@ -79,12 +79,12 @@ def test_a_file_amtool_could_not_read_is_never_a_rejection():
     assert {c["input"] for c in io} == {"/proc/self/mem", "template_dir.yml", "noperm.yml"}
     for case in io:
         assert case["rc"] == 1 and "FAILED:" in case["output"]
-        assert R.amtool_verdict(1, case["output"]) == R.AMTOOL_UNUSABLE, case
+        assert R.amtool_verdict(1, case["output"]) == R.AM_UNUSABLE, case
 
 
 def test_a_failed_line_from_an_exit_other_than_1_is_not_a_rejection():
     """A Go panic exits 2; whatever it printed, amtool gave no verdict."""
-    assert R.amtool_verdict(2, "FAILED: something\npanic: boom") == R.AMTOOL_UNUSABLE
+    assert R.amtool_verdict(2, "FAILED: something\npanic: boom") == R.AM_UNUSABLE
 
 
 def _replayable(case):
@@ -127,7 +127,8 @@ def test_the_installed_amtool_still_prints_the_recording(case, tmp_path):
 @pytest.mark.parametrize("failure", ["open %s: permission denied", "read %s: input/output error",
                                      "read /etc/am/tmpl/x.tmpl: is a directory"])
 def test_amtool_check_reads_its_run_through_amtool_verdict(tmp_path, monkeypatch, failure):
-    """End to end through `amtool_check`: a stand-in amtool printing what the
+    """End to end through `_amtool_check` (#3689: the amtool step of
+    `alertmanager_check`): a stand-in amtool printing what the
     pinned one prints when it cannot read the config (or a template it names)
     gives no verdict, exit 2 — not "rejected"."""
     line = failure % "$2" if "%s" in failure else failure
@@ -138,6 +139,7 @@ def test_amtool_check_reads_its_run_through_amtool_verdict(tmp_path, monkeypatch
                     "exit 1\n", encoding="utf-8")
     stub.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path))
-    check = R.amtool_check("route:\n  receiver: r\nreceivers:\n- name: r\n",
-                           what="the config", refusing="write it")
-    assert (check.status, check.exit_code) == (R.AMTOOL_UNUSABLE, 2), check
+    check = R._amtool_check("route:\n  receiver: r\nreceivers:\n- name: r\n",
+                            what="the config", refusing="write it",
+                            not_found_notice=R.AMTOOL_NOT_FOUND_NOTICE)
+    assert (check.status, check.exit_code) == (R.AM_UNUSABLE, 2), check
