@@ -243,7 +243,6 @@ groups:
         labels:
           severity: critical
           maintenance: mute
-          metric_group: "kafka_active_controllers"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "No active Kafka controller on {{ $labels.tenant }}"
@@ -269,7 +268,6 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: "kafka_broker_count"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Low Kafka broker count on {{ $labels.tenant }}"
