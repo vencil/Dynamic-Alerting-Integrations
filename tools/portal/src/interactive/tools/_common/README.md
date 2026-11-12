@@ -12,7 +12,7 @@
 
 This directory is plain ESM source under `tools/portal/src/`. esbuild
 (`tools/portal/build.mjs`, `splitting: true`) bundles it into each
-tool's committed `docs/assets/dist/<tool>.js` via the normal `import`
+tool's `docs/assets/dist/<tool>.js` (build output, not in git) via the normal `import`
 graph. **The retired in-browser jsx-loader — `dependencies:` frontmatter
 + `window.__X` self-registration + indirect `eval` — is gone (TD-030z).**
 The canonical write-up of the pattern and the lint gates that enforce it

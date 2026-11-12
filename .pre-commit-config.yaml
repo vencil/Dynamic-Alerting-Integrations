@@ -1164,10 +1164,12 @@ repos:
 
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
-        entry: bash -c 'cd tests/e2e && npx playwright test'
+        # docs/assets/dist/ is build output and not in git (#3738): build it
+        # first, or every tool page the local server serves 404s its bundle.
+        entry: bash -c 'make portal-build && cd tests/e2e && npx playwright test'
         language: system
         pass_filenames: false
-        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|dist/|platform-data|template-data|recommendation-data))
+        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|platform-data|template-data|recommendation-data))
         stages: [manual]
 
       - id: playwright-lint

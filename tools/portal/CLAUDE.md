@@ -10,6 +10,8 @@
 
 ⇒ 改 portal source 的 commit **只含 source**。不要 `git add -f` dist 回來，也不必為了「dist 要跟上」而重 build——那件事已經沒有 gate 在比對。要在本機看結果才跑 `make portal-build`（`make serve-docs`／`test-e2e*` 會自己跑）。
 
+⛔ 舊分支（#3738 之前開、改過 dist）rebase／merge 到之後的 main，會撞上 dist 的 modify/delete 衝突：**不要解衝突內容**，一律 `git rm -r --cached docs/assets/dist` 後繼續。
+
 ⛔ **不要用「CI 全綠」推論 portal 那條 leg 有跑過**：path filter 沒命中時它是 **skipped 不是 failure**，畫面一樣綠。要查那顆 SHA 上具名的 job：
 
 ```bash

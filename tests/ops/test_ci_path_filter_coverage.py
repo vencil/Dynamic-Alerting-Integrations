@@ -1327,6 +1327,9 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # repo-root .dockerignore (the da-portal build context must exclude
     # tools/portal/node_modules).
     ".dockerignore",
+    # GAINED by #3738 PR2: tests/lint/test_portal_dist_not_tracked.py reads
+    # build.mjs's DIST_DIR to bind its dist path to where the build writes.
+    "tools/portal/build.mjs",
 }
 
 

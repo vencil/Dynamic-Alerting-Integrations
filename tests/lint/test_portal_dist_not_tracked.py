@@ -21,6 +21,8 @@ ref 上比對過它，但 branch protection 不是 strict，main 在比對與 me
    底下的新檔被忽略——否則全新 clone 跑一次 `make portal-build`，`git add -A`
    就會把整包 bundle 帶進 commit，第 1 條要到那時才紅。
 
+第三格把前兩格的路徑字面值綁到 `tools/portal/build.mjs` 實際的輸出目錄。
+
 只呼叫 git，不讀網路、不跑 node。
 """
 from __future__ import annotations
@@ -80,3 +82,15 @@ def test_root_gitignore_covers_the_dist_dir() -> None:
         assert source == ".gitignore", (
             f"{probe} is ignored by {source!r}, not by the repo-root .gitignore; "
             "that rule does not travel with the repository.\n" + verbose.stdout)
+
+
+def test_dist_is_where_the_build_writes() -> None:
+    """上面兩格的 `DIST` 是字面值；若 build.mjs 把輸出搬到別處，它們會守著一個
+    空目錄而照樣綠。這格把字面值綁到 build.mjs 實際寫入的 `DIST_DIR`。"""
+    build = (REPO_ROOT / "tools" / "portal" / "build.mjs").read_text(encoding="utf-8")
+    want = "const DIST_DIR = resolve(REPO_ROOT, " + ", ".join(
+        f"'{part}'" for part in DIST.split("/")) + ");"
+    assert want in build, (
+        f"tools/portal/build.mjs no longer writes to {DIST}/ (expected `{want}`). "
+        "Move DIST in this test, the .gitignore line and the consumers "
+        "(tests/ops/test_portal_dist_consumers_build.py) together.")
