@@ -250,7 +250,7 @@ func TestTenantMetadataOf_StringFormIsNotWarnedPerRead(t *testing.T) {
 // same text as a block scalar — which used to be re-parsed into a routing —
 // is no routing (the route generator, which owns routing, reads it as
 // neither a mapping nor a disabling string), and says so; an empty string
-// is no routing and says nothing.
+// or a disabling string is no routing and says nothing.
 func TestResolveRouting_StructureNotText(t *testing.T) {
 	t.Parallel()
 	parse := func(body string) *ThresholdConfig {
@@ -268,7 +268,7 @@ func TestResolveRouting_StructureNotText(t *testing.T) {
 			block += "      " + line
 		}
 	}
-	text, empty := parse(block), parse(" \"\"\n")
+	text, empty, disabled := parse(block), parse(" \"\"\n"), parse(" \" OFF \"\n")
 	if mapping.Tenants["t1"]["_routing"].Default != text.Tenants["t1"]["_routing"].Default {
 		t.Fatalf("fixture: the mapping and the string must hold one text: %q vs %q",
 			mapping.Tenants["t1"]["_routing"].Default, text.Tenants["t1"]["_routing"].Default)
@@ -282,6 +282,8 @@ func TestResolveRouting_StructureNotText(t *testing.T) {
 		{"mapping", mapping, 1, ""},
 		{"string", text, 0, "written as a scalar, not a mapping"},
 		{"empty string", empty, 0, ""},
+		// The documented opt-out: no routing, and no advice to write a mapping.
+		{"disabling string", disabled, 0, ""},
 	} {
 		var logged []string
 		got := c.cfg.ResolveRoutingLogf(func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })

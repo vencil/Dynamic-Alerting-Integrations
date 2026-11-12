@@ -2137,10 +2137,12 @@ func (c *ThresholdConfig) ResolveRoutingLogf(logf func(format string, args ...an
 		// _routing is read from the mapping it was written as (#3638): a
 		// scalar is no routing, whatever its text holds — the route
 		// generator, which owns routing, reads `_routing: "receiver: …"` as
-		// neither a mapping nor a disabling string, and so does this.
+		// neither a mapping nor a disabling string, and so does this. A
+		// disabling string (`_routing: disable`, the documented opt-out) is
+		// no routing either, and is not told to become a mapping.
 		node, structured, err := structureOf(sv)
 		if !structured {
-			if sv.Default != "" {
+			if sv.Default != "" && !isDisabled(strings.ToLower(strings.TrimSpace(sv.Default))) {
 				logf("WARN: invalid _routing config for tenant=%s: written as a scalar, not a mapping (#3638)", tenant)
 			}
 			continue
