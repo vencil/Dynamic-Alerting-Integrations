@@ -264,7 +264,8 @@ da-tools generate-routes --config-dir conf.d/ --output-configmap \
 # exit 2):
 da-tools generate-routes --config-dir conf.d/ --validate
 # ⚠️ --validate hands the config, assembled on the BUILT-IN default base (not
-#    yours), to amtool (#2260); the --output-configmap --base-config run above
+#    yours), to Alertmanager (its loader, then amtool; #2260, #3689); the
+#    --output-configmap --base-config run above
 #    checks the one assembled on your own base (#2219). alertmanager-base.yaml
 #    is the source (your own config, in git) and .output/ the output; your own
 #    routes and receivers in the base stay. Never pass the output as the base:

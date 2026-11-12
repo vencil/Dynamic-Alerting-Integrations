@@ -291,21 +291,23 @@ RECEIVER_COLLISION_ROUTES_HINT = (
     "it extends. Rename one of the tenants (or remove one of the entries); "
     "the receivers themselves are not invalid.")
 # #2311: the routes row now runs every `--validate` step, including
-# Alertmanager's own parser. These replace the generic routes advice where it
-# would send the operator to the wrong place.
-AMTOOL_REJECTED_ROUTES_HINT = (
-    "Alertmanager's own parser (amtool check-config) refused the config "
-    "generated from this tree; its message above names the field — often a "
-    "receiver value in _routing (e.g. a webhook URL) that the generator "
-    "accepts but Alertmanager cannot load. Fix that value, then re-run.")
-AMTOOL_UNUSABLE_ROUTES_HINT = (
-    "The amtool on PATH could not give a verdict (it could not run, timed "
-    "out or crashed) — that is this environment, not your config. Fix or "
-    "replace that amtool (or take it off PATH), then re-run.")
+# Alertmanager's own reading (#3689: its loader, then amtool). These replace
+# the generic routes advice where it would send the operator to the wrong place.
+AM_REJECTED_ROUTES_HINT = (
+    "Alertmanager (its config loader, or amtool check-config) refused the "
+    "config generated from this tree; its message above names the line and "
+    "field — often a receiver value in _routing (e.g. a webhook URL, or a "
+    "string where http_config wants a bool) that the generator accepts but "
+    "Alertmanager cannot load. Fix that value, then re-run.")
+AM_UNUSABLE_ROUTES_HINT = (
+    "Alertmanager's reading could not be had (no da-read / da-crdecode, or "
+    "the amtool on PATH could not run, timed out or crashed) — that is this "
+    "environment, not your config. Fix or replace that binary (an amtool may "
+    "also be taken off PATH), then re-run.")
 AMTOOL_NOT_FOUND_ROUTES_HINT = (
-    "Put Alertmanager's amtool on PATH so this row can check the generated "
-    "config with Alertmanager's own parser — without it, a value Alertmanager "
-    "refuses to load is not detected here.")
+    "Alertmanager's config loader accepted the generated config. Put "
+    "Alertmanager's amtool on PATH to also have amtool check-config parse the "
+    "template files a `templates:` glob matches.")
 ROUTES_INVARIANT_HINT = (
     "A platform invariant refused the generated config (see the lines "
     "above) — the same verdict `generate_alertmanager_routes.py --validate` "
@@ -982,7 +984,7 @@ def check_routes(
     # #2311: --validate semantics, by calling the SAME function
     # `_validate_mode` calls — skipped entries, duplicate receiver names
     # (#2164 / #2279), the ADR-025 inhibit tripwires, the invariants
-    # `assemble_configmap` enforces, and Alertmanager's own parser. Called
+    # `assemble_configmap` enforces, and Alertmanager's own reading. Called
     # OUTSIDE the stderr capture above: the function returns every line it has
     # instead of printing it, so nothing it says (amtool's "accepted" line, its
     # NOTICE) can be swept into this row as an issue.
@@ -994,35 +996,37 @@ def check_routes(
     if verdict.assembly_error is not None:
         details.append("the assembled Alertmanager config was refused: "
                        + verdict.assembly_error)
-    amtool = verdict.amtool
-    if amtool is not None and amtool.status != gen.AMTOOL_NOT_FOUND:
-        details.extend(ln for ln in amtool.message.splitlines() if ln.strip())
+    am = verdict.alertmanager
+    if am is not None and am.status != gen.AM_ACCEPTED_WITHOUT_AMTOOL:
+        details.extend(ln for ln in am.message.splitlines() if ln.strip())
 
     if verdict.errors:
         return _routes_fail(gen, details, verdict.errors)
     if verdict.assembly_error is not None:
         return _make_result("routes", FAIL, details, hint=ROUTES_INVARIANT_HINT)
-    if amtool.status == gen.AMTOOL_REJECTED:
+    if am.status == gen.AM_REJECTED:
         return _make_result("routes", FAIL, details,
-                            hint=AMTOOL_REJECTED_ROUTES_HINT)
-    if amtool.status == gen.AMTOOL_UNUSABLE:
+                            hint=AM_REJECTED_ROUTES_HINT)
+    if am.status == gen.AM_UNUSABLE:
         # No verdict on the config: an environment failure, exit 2 — the
         # same rc `--validate` gives for it.
         return _make_result("routes", FAIL, details, caller_error=True,
-                            hint=AMTOOL_UNUSABLE_ROUTES_HINT)
+                            hint=AM_UNUSABLE_ROUTES_HINT)
     # Same shape as before #2311: a clean row leads with the summary, a row
     # with findings lists the findings.
     has_findings = bool(all_issues or verdict.warnings)
     if not has_findings:
         details.insert(0, summary)
-    if amtool.status == gen.AMTOOL_NOT_FOUND:
+    if am.status == gen.AM_ACCEPTED_WITHOUT_AMTOOL:
         # ⛔ WARN, not a fourth status (the --json enum is pass/warn/fail,
-        # #2301): the row ran every Python check and passed them, but the
-        # verdict that catches what only Alertmanager refuses was not given.
+        # #2301): Alertmanager's loader accepted the config, but the one
+        # check only amtool adds (#3689: parsing the template files) was not
+        # made.
         details.append(
-            "Not validated by Alertmanager: amtool not found on PATH, so the "
-            "generated config (assembled on the built-in default base) was "
-            "not checked with Alertmanager's parser")
+            "Not checked by amtool: amtool not found on PATH, so the generated "
+            "config (assembled on the built-in default base) was read by "
+            "Alertmanager's config loader only, without amtool check-config's "
+            "parse of the template files its `templates:` globs match")
         return _make_result("routes", WARN, details,
                             hint=None if has_findings
                             else AMTOOL_NOT_FOUND_ROUTES_HINT)
