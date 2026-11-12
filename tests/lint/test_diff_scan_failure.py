@@ -501,45 +501,29 @@ def test_no_merge_base_is_a_caller_error_not_a_two_way_diff(in_repo, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# A main run that starts after newer merges (ci.yml / docs-ci.yaml set
-# LINT_DIFF_BASE to github.event.before on a push)
+# A main job that starts after newer merges (ci.yml / docs-ci.yaml no longer
+# cancel a push to main)
 # ---------------------------------------------------------------------------
-# A push to main is no longer cancelled by the next merge, so a job of an older
-# commit can start when origin/main is already ahead of its HEAD. Without
-# LINT_DIFF_BASE the base resolves to merge-base(origin/main, HEAD) = HEAD: the
-# diff is empty and the commit's own violation goes unseen. With the main tip
-# this push replaced, the lint answers for exactly what the push added.
+# origin/main is then AHEAD of the checked-out HEAD. The merge base is HEAD, so
+# a diff-aware lint sees an empty diff: it neither reddens an older commit for
+# what later merges changed nor re-judges the commit's own change, which was
+# judged on its PR (where PR-body exemptions are read). That is the intended
+# behaviour on main, not a gap — see the concurrency comment in ci.yml.
 
 
-def _pushed_commit_behind_newer_main(repo: Path, monkeypatch) -> str:
-    before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), check=True,
-                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout.strip()
-    _stage(repo, "_mine.bat", b"@echo off\r\ngit push\r\n")
-    _git(repo, "commit", "-q", "-m", "the pushed commit carries a violation")
-    _git(repo, "checkout", "-q", "-b", "newer")
-    _stage(repo, "later.txt", b"merged after the push\n")
-    _git(repo, "commit", "-q", "-m", "a newer merge")
-    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
-    _git(repo, "checkout", "-q", "-")
-    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
-    return before
-
-
-def test_a_late_starting_main_job_answers_for_its_commit(in_repo, monkeypatch, capsys):
-    before = _pushed_commit_behind_newer_main(in_repo, monkeypatch)
-    monkeypatch.setenv("LINT_DIFF_BASE", before)
-    assert _lint_helpers.resolve_diff_base() == before
-    rc, out, err = _run(monkeypatch, capsys, adhoc, [])
-    assert rc == 1, f"rc={rc}\n{out}{err}"
-    assert "_mine.bat" in err, err
-
-
-def test_without_the_push_base_the_same_job_sees_nothing(in_repo, monkeypatch, capsys):
-    """Why the workflows set LINT_DIFF_BASE: the origin/main default is vacuous here."""
-    _pushed_commit_behind_newer_main(in_repo, monkeypatch)
-    monkeypatch.setenv("LINT_DIFF_BASE", "")  # what a pull_request renders: unset
+def test_a_late_starting_main_job_resolves_to_an_empty_diff(in_repo, monkeypatch, capsys):
+    _stage(in_repo, "_mine.bat", b"@echo off\r\ngit push\r\n")
+    _git(in_repo, "commit", "-q", "-m", "the pushed commit")
     head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(in_repo), check=True,
                           capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout.strip()
+    _git(in_repo, "checkout", "-q", "-b", "newer")
+    _stage(in_repo, "_later.bat", b"@echo off\r\ngit commit\r\n")
+    _git(in_repo, "commit", "-q", "-m", "a newer merge")
+    _git(in_repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(in_repo, "checkout", "-q", head)
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    monkeypatch.delenv("LINT_DIFF_BASE", raising=False)
     assert _lint_helpers.resolve_diff_base_ref() == ("origin/main", head)
     rc, out, err = _run(monkeypatch, capsys, adhoc, [])
     assert rc == 0, f"rc={rc}\n{out}{err}"
+    assert "_later.bat" not in err and "_mine.bat" not in err, err

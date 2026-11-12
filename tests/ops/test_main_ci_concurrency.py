@@ -13,13 +13,14 @@ expression semantics with — not a string match):
 
   * a pull_request cancels the older run of the same PR; a push to main never
     cancels, and two pushes to main share one group, so GitHub keeps one run
-    going and replaces only the PENDING one — every commit is covered by a run
+    going and replaces only the PENDING one — the main tip always gets a run
     that finishes;
-  * LINT_DIFF_BASE renders to `github.event.before` on a push and to '' on a
-    pull_request. A main run that is no longer cancelled can start a job after
-    newer merges, and the diff-aware lints would otherwise take their base from
-    whatever origin/main is by then (tests/lint/test_diff_scan_failure.py shows
-    what that base misses).
+  * nothing sets LINT_DIFF_BASE: on a push the diff-aware lints resolve to an
+    empty diff (merge base of origin/main and HEAD is HEAD, even after newer
+    merges), which is what a PR-scoped check should do on main.
+
+A commit whose PENDING run was replaced keeps a cancelled status; the next
+run's full-tree checks and tests cover its content.
 """
 from __future__ import annotations
 
@@ -89,30 +90,20 @@ def test_a_newer_push_to_a_pr_still_cancels_its_older_run(rel) -> None:
 
 
 @pytest.mark.parametrize("rel", WORKFLOWS)
-def test_lint_diff_base_is_the_replaced_main_tip_on_push_only(rel) -> None:
-    env = _load(rel).get("env") or {}
-    assert "LINT_DIFF_BASE" in env, (
-        f"{rel}: no workflow-level LINT_DIFF_BASE. A main run that is not "
-        f"cancelled can start a job after newer merges and then take its diff "
-        f"base from that newer origin/main.")
-    on_push = render(env["LINT_DIFF_BASE"], _ctx("push"))
-    on_pr = render(env["LINT_DIFF_BASE"], _ctx("pull_request", pr=7))
-    assert on_push == _BEFORE, f"{rel}: on push LINT_DIFF_BASE renders {on_push!r}"
-    # '' is read as unset by _lint_helpers.resolve_diff_base_ref and by
-    # check_account_registry_monotonic, so a PR keeps origin/$GITHUB_BASE_REF
-    # (a pull_request `synchronize` payload carries `before` as well).
-    assert on_pr == "", f"{rel}: on pull_request LINT_DIFF_BASE renders {on_pr!r}"
-
-
-@pytest.mark.parametrize("rel", WORKFLOWS)
-def test_no_job_or_step_overrides_lint_diff_base(rel) -> None:
-    """One place sets it; a job-level copy would quietly win over it."""
+def test_no_level_sets_a_push_time_diff_base(rel) -> None:
+    """Diff-aware lints are PR checks: their exemptions are read from the PR
+    body (PR_BODY), which a push to main does not have. A push-time
+    LINT_DIFF_BASE (e.g. `github.event.before`) would make them re-judge a
+    merged change without its exemption and redden main for a change the PR
+    deliberately exempted (independent review, measured with
+    `bypass-lint: codename-leak`). Unset, they resolve to an empty diff on a
+    push (tests/lint/test_diff_scan_failure.py)."""
     wf = _load(rel)
-    found = []
+    found = ["env"] if "LINT_DIFF_BASE" in (wf.get("env") or {}) else []
     for name, job in (wf.get("jobs") or {}).items():
         if "LINT_DIFF_BASE" in (job.get("env") or {}):
             found.append(f"jobs.{name}.env")
         for i, step in enumerate(job.get("steps") or []):
             if "LINT_DIFF_BASE" in (step.get("env") or {}):
                 found.append(f"jobs.{name}.steps[{i}].env")
-    assert not found, f"{rel}: LINT_DIFF_BASE also set at {found}"
+    assert not found, f"{rel}: LINT_DIFF_BASE set at {found}"

@@ -35,19 +35,15 @@ on:
     branches: [main]
 
 # Same as ci.yml: a PR's newer push cancels its older run, a push to main
-# never cancels one, so main keeps a finished run for every commit.
-# Cancelling on main used to be what kept a run that started before the next
-# merge from reading the NEWER origin/main in drift-checks while checking out
-# its own older HEAD (against a release wrap-up that emptied `[Unreleased]`,
-# the changelog cap read the older tree as having grown it — red for no
-# reason). LINT_DIFF_BASE below does that job now: on a push the base is the
-# main tip this push replaced, not whatever origin/main is when a job starts.
+# never cancels one. Cancelling on main used to keep a run that started before
+# the next merge from reading the NEWER origin/main in drift-checks (the
+# changelog cap then read the older tree as having grown `[Unreleased]`). That
+# was a two-way diff; since #2217 every diff-aware check measures against the
+# merge base of origin/main and HEAD, which is HEAD itself once main has moved
+# on — an empty diff, not a false red (tests/lint/test_diff_scan_failure.py).
 concurrency:
   group: docs-ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
-
-env:
-  LINT_DIFF_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
 
 # Explicit least-privilege grant (repo default is read-only; every sibling
 # workflow declares this block too). pull-requests:read is specifically for
