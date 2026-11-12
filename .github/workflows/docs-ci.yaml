@@ -34,14 +34,20 @@ on:
   push:
     branches: [main]
 
-# Same as ci.yml. Since #1398 every push to main runs the docs legs, and a
-# run that started before the next merge fetches the NEWER origin/main in
-# drift-checks while checking out its own older HEAD — against a release
-# wrap-up that emptied `[Unreleased]`, the changelog cap then reads the older
-# tree as having grown it and marks that commit red for no reason.
+# Same as ci.yml: a PR's newer push cancels its older run, a push to main
+# never cancels one, so main keeps a finished run for every commit.
+# Cancelling on main used to be what kept a run that started before the next
+# merge from reading the NEWER origin/main in drift-checks while checking out
+# its own older HEAD (against a release wrap-up that emptied `[Unreleased]`,
+# the changelog cap read the older tree as having grown it — red for no
+# reason). LINT_DIFF_BASE below does that job now: on a push the base is the
+# main tip this push replaced, not whatever origin/main is when a job starts.
 concurrency:
   group: docs-ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  LINT_DIFF_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
 
 # Explicit least-privilege grant (repo default is read-only; every sibling
 # workflow declares this block too). pull-requests:read is specifically for

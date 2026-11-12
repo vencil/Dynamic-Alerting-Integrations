@@ -498,3 +498,48 @@ def test_no_merge_base_is_a_caller_error_not_a_two_way_diff(in_repo, monkeypatch
     rc, out, err = _run(monkeypatch, capsys, adhoc, [])
     assert rc == 2, f"rc={rc}\n{out}{err}"
     assert "OK" not in out, out
+
+
+# ---------------------------------------------------------------------------
+# A main run that starts after newer merges (ci.yml / docs-ci.yaml set
+# LINT_DIFF_BASE to github.event.before on a push)
+# ---------------------------------------------------------------------------
+# A push to main is no longer cancelled by the next merge, so a job of an older
+# commit can start when origin/main is already ahead of its HEAD. Without
+# LINT_DIFF_BASE the base resolves to merge-base(origin/main, HEAD) = HEAD: the
+# diff is empty and the commit's own violation goes unseen. With the main tip
+# this push replaced, the lint answers for exactly what the push added.
+
+
+def _pushed_commit_behind_newer_main(repo: Path, monkeypatch) -> str:
+    before = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(repo), check=True,
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout.strip()
+    _stage(repo, "_mine.bat", b"@echo off\r\ngit push\r\n")
+    _git(repo, "commit", "-q", "-m", "the pushed commit carries a violation")
+    _git(repo, "checkout", "-q", "-b", "newer")
+    _stage(repo, "later.txt", b"merged after the push\n")
+    _git(repo, "commit", "-q", "-m", "a newer merge")
+    _git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+    _git(repo, "checkout", "-q", "-")
+    monkeypatch.delenv("GITHUB_BASE_REF", raising=False)
+    return before
+
+
+def test_a_late_starting_main_job_answers_for_its_commit(in_repo, monkeypatch, capsys):
+    before = _pushed_commit_behind_newer_main(in_repo, monkeypatch)
+    monkeypatch.setenv("LINT_DIFF_BASE", before)
+    assert _lint_helpers.resolve_diff_base() == before
+    rc, out, err = _run(monkeypatch, capsys, adhoc, [])
+    assert rc == 1, f"rc={rc}\n{out}{err}"
+    assert "_mine.bat" in err, err
+
+
+def test_without_the_push_base_the_same_job_sees_nothing(in_repo, monkeypatch, capsys):
+    """Why the workflows set LINT_DIFF_BASE: the origin/main default is vacuous here."""
+    _pushed_commit_behind_newer_main(in_repo, monkeypatch)
+    monkeypatch.setenv("LINT_DIFF_BASE", "")  # what a pull_request renders: unset
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(in_repo), check=True,
+                          capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30).stdout.strip()
+    assert _lint_helpers.resolve_diff_base_ref() == ("origin/main", head)
+    rc, out, err = _run(monkeypatch, capsys, adhoc, [])
+    assert rc == 0, f"rc={rc}\n{out}{err}"

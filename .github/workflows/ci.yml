@@ -6,9 +6,26 @@ on:
   pull_request:
     branches: [main]
 
+# A PR's newer push cancels its older run; a push to main never cancels one.
+# Main's CI is the only check of the merged result (branch protection does not
+# require a PR to be up to date with main), and a run takes long enough that
+# cancelling on every merge left main with no finished run for hours. With
+# cancel-in-progress false the group still keeps one run going and replaces
+# the PENDING one, so every main commit is covered by some run that finishes
+# (a later run contains the earlier commits).
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# A run on main that is not cancelled can start a job after newer merges
+# landed, so it must not read "now" from origin/main: diff-aware lints and the
+# changelog cap resolve their base from LINT_DIFF_BASE first
+# (_lint_helpers.resolve_diff_base_ref), and on a push that is the main tip
+# this push replaced — what this commit added, whatever merged since. On a
+# pull_request it renders empty, which every reader treats as unset, so PRs
+# keep using origin/$GITHUB_BASE_REF.
+env:
+  LINT_DIFF_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
 
 jobs:
   # CI-ROI wave 6C: path-scope the critical-path test pillars so a
