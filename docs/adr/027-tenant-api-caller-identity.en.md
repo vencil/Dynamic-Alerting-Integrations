@@ -238,7 +238,29 @@ Fallback (not adopted, kept for the record): the Ingress routes `/api/` by path 
 
 ## Implementation
 
-Not implemented yet. Once the implementation PRs merge, the file for each check in §9 is listed here.
+The file holding each check in §9. Paths starting with `cmd/` or `internal/` are relative to `components/tenant-api/`; the rest are relative to the repository root.
+
+1. TCP plane: `cmd/server/tcp_router_test.go` (`TestTCPRouter_RegistersOnlyTheProbeRoutes`, `TestTCPRouter_EverythingElseIs404`, `TestTCPRouter_IdentityHeaderIs400`).
+2. Identity is built only on the UDS plane: `internal/rbac/identity_arch_test.go` (`TestHeaderResolutionOnlyInResolveIdentity`, `TestRateLimitLogAndBypassReadNoRequestHeader`).
+3. Chart render:
+   - One oauth2-proxy in the whole deployment: `tests/helm/test_identity_single_hop.py` (`test_the_only_oauth2_proxy_is_in_the_tenant_api_pod`, `test_no_raw_manifest_runs_an_oauth2_proxy`).
+   - `/api/` answers 401 without a session, and nothing skips login: `tests/oauth2-proxy/chart_test.go` (`TestChartConfig`).
+   - The human socket always exists and only tenant-api and oauth2-proxy mount it: `tests/helm/test_human_socket_guard.py` (`test_render_without_proxy_fails`, `test_render_default_points_upstream_at_socket`).
+   - oauth2-proxy and tenant-api mount the same config file: `tests/helm/test_oauth2_proxy_alpha_config.py` (`test_both_containers_read_the_same_file`).
+   - The portal container's nginx config forwards nothing: `tests/helm/test_tenant_api_portal_container.py` (`test_portal_runs_the_charts_config_and_it_forwards_nothing`).
+4. Every portal backend path is under `/api/`: `tests/shared/test_portal_backend_paths_under_api.py`; simulate answers 501: `cmd/server/simulate_route_test.go` (`TestSimulateNotProvided`).
+5. No identity relay, and the removed settings are gone:
+   - No configuration relays identity headers over the network: `tests/helm/test_identity_single_hop.py` (`test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header`, `test_no_raw_manifest_or_rule_pack_names_an_identity_header`).
+   - Removed chart keys: `tests/helm/test_tenant_api_machine_identity_removed.py`.
+   - threshold-govern's CronJob, NetworkPolicy allowance and alert: `tests/shared/test_threshold_govern_write_path_removed.py`.
+   - Removed environment variables: `cmd/server/env_check_test.go` (`TestCheckTAEnv_RefusesRemovedMachineIdentitySettings`).
+6. Authorization scope:
+   - An oauth2-proxy config file of the wrong shape is refused: `internal/proxyconfig/proxyconfig_test.go` (`TestLoad_RefusesAmbiguousShapes`, `TestParse_Refusals`), fixtures in `internal/proxyconfig/testdata/`; refused at start: `cmd/server/tcp_router_test.go` (`TestCheckIdentityPlaneFlags`).
+   - An `_rbac.yaml` with no rules denies all access: `internal/rbac/empty_config_mode_test.go`.
+   - Tag changes and overwriting a file whose tags cannot be read, judged under the writer lock: `internal/handler/label_guard_test.go`.
+7. `tenant-api config check --kind scope`: `cmd/server/scope_check_test.go`; agreement with the server: `internal/handler/scope_gap_planes_test.go` (`TestScopeGapsMatchEveryPlane`); run in CI on the sample config: the `Scope check on the try-local sample config` step of `.github/workflows/ci.yml`.
+8. ADR reference check: `scripts/tools/lint/check_adr_section_refs.py` (pre-commit and CI), tested in `tests/lint/test_check_adr_section_refs.py`.
+9. oauth2-proxy config check: CI job `go-tests-oauth2-proxy`; the library side is in `tests/oauth2-proxy/` (`TestADRSection10Routing` in `routing_test.go`, and `version_test.go`), the image side is `tests/oauth2-proxy/image_config_test.sh`.
 
 ## Related
 
