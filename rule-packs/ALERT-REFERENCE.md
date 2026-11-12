@@ -121,6 +121,7 @@ lang: zh
 | 告警名稱 | 嚴重度 | 維護期間 | 觸發條件 | 建議動作 | 相關指標 |
 |---|---|---|---|---|---|
 | TenantExporterAbsent | critical | 照常觸發 | No healthy up{job="tenant-exporters"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels. | 確認相關元件已啟動、配置正確；檢查元件日誌 | tenant_expected_exporter |
+| TenantExporterReplicaDown | warning | 靜音 | Target {{ $labels.instance }} (pod {{ $labels.pod }}, service {{ $labels.service }}) of tenant {{ $l | 立即檢查伺服器狀態、網路連線；查看系統日誌 | up |
 
 ---
 
