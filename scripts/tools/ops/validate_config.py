@@ -2530,7 +2530,9 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "1e3 / 2024-01-02 in a field the schema types as a string is read as "
         "a boolean, number or timestamp by yaml.v3 — by every reader of "
         "conf.d — so quote it; yes / no / on / off are strings to yaml.v3 and "
-        "a field that takes a boolean refuses them: write true / false.",
+        "a field that takes a boolean refuses them: write true / false. A "
+        "field that takes only numbers (min_events) takes them in plain "
+        "decimal: write the value the line names, unquoted (#3764).",
         "docs/cli-reference.md#validate-config",
     ),
     # #2695: placed before `schema` — that row is the generator's key check.

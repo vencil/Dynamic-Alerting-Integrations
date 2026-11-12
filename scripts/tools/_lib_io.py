@@ -596,10 +596,22 @@ def misread_scalar_nodes(root: Any, schema: dict,
 # at the entry instead — here, beside the string-field rule above, with the
 # same inputs: parse-tree's tag says the scalar is a number, the schema says
 # the field takes only numbers, and the text must then be the plain decimal
-# spelling of one (`-?(0|[1-9][0-9]*)`, plus `.digits` where the field takes
-# a non-integer number). No spelling list: a text either is that, or not.
-_PLAIN_INTEGER = re.compile(r"-?(0|[1-9][0-9]*)")
-_PLAIN_DECIMAL = re.compile(r"-?(0|[1-9][0-9]*)(\.[0-9]+)?")
+# spelling of that number — `0` or `-?[1-9][0-9]*`, plus `.digits` ending in
+# a non-zero digit where the field takes a non-integer number. No spelling
+# list: a text either is that, or not.
+#
+# Only a value the field can hold is this rule's: a non-integer in an
+# integer field (`1.5`), or a non-finite one (`.inf`, which parse-tree gives
+# no `value`), is a TYPE error the schema's own check (json_schema) reports;
+# so is a number whose value has no plain spelling (an integer beyond
+# yaml.v3's range, read as a float). Reporting those here would name a fix
+# that does not exist and report the value twice.
+#
+# ⚠️ The entry is CI's validate-config: a tree changed in direct mode without
+# it (a commit straight to git) is not judged until #3353's whole-tree
+# verdict runs this row too.
+_PLAIN_INTEGER = re.compile(r"0|-?[1-9][0-9]*")
+_PLAIN_DECIMAL = re.compile(r"(0|-?[1-9][0-9]*)(\.[0-9]*[1-9])?|-0\.[0-9]*[1-9]")
 
 
 class NondecimalNumber:
@@ -629,9 +641,11 @@ def find_nondecimal_numbers(root: Any, schema: dict,
                             schema_name: str = "") -> list[NondecimalNumber]:
     """Every scalar of *root* (a file's `da-guard parse-tree` nodes) that sits
     in a field of *schema* taking only numbers (``integer`` / ``number``,
-    plus ``null``), that yaml.v3 read as a number, and whose text is not the
-    plain decimal spelling of one (#3764). A field that also takes a string
-    is left alone, as :func:`find_misread_scalars` leaves a mixed field."""
+    plus ``null``), that yaml.v3 read as a number the field can hold, and
+    whose text is not that number's plain decimal spelling (#3764). A field
+    that also takes a string is left alone, as :func:`find_misread_scalars`
+    leaves a mixed field; a value the field cannot hold (``1.5`` in an
+    integer field, ``.inf``) is the schema's type check's to report."""
     found: list[NondecimalNumber] = []
     for node, cands, path in _tree_scalars_with_schema(root, schema, schemas, schema_name):
         if node["tag"] not in ("!!int", "!!float"):
@@ -646,8 +660,12 @@ def find_nondecimal_numbers(root: Any, schema: dict,
         plain = _PLAIN_INTEGER if integer else _PLAIN_DECIMAL
         if plain.fullmatch(node["text"]):
             continue
-        found.append(NondecimalNumber(path or "/", node["text"],
-                                      str(node.get("value", "")), integer))
+        # Its value, in the plain spelling the fix names — or, when it has
+        # none the field can hold, the schema's type check's to report.
+        value = node.get("value")
+        if not isinstance(value, str) or not plain.fullmatch(value):
+            continue
+        found.append(NondecimalNumber(path or "/", node["text"], value, integer))
     return found
 
 

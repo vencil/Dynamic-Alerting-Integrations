@@ -20,7 +20,9 @@ import "gopkg.in/yaml.v3"
 // anywhere at runtime (#3764 owner ruling): the spelling is refused at the
 // entry, by validate-config's yaml_quoting row (`_lib_io`: a number in a
 // string field, or in a number field written other than in plain decimal),
-// which every reader shares through parse-tree's tags.
+// which every reader shares through parse-tree's tags. ⚠️ In direct mode a
+// tree changed without that row (a commit straight to git) is not judged
+// until #3353's whole-tree verdict runs it.
 
 // structureOf returns sv's structure — the node of the mapping or sequence
 // its Default was written as — and structured=true; nil and false for a
