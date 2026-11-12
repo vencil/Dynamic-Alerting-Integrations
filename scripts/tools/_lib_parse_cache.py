@@ -219,12 +219,35 @@ def active() -> Optional[ParseCache]:
 #: by `declared_trees`, read by every `ConfdReader` of that tree.
 _DECLARED: "dict[str, tuple[str, str]]" = {}
 
+
+def _spellings(path: "str | os.PathLike[str]") -> "tuple[str, ...]":
+    """The keys a path is found under in `_DECLARED` / `_JUDGED_AS`: as given
+    (absolute, normalised) and resolved. Both are recorded (#3724 review): a
+    flag naming a symlink that is removed after the judgement resolves to
+    itself then, and a file reached through a link out of the tree resolves
+    outside it — either spelling alone would miss the declaration."""
+    given = os.path.normpath(os.path.abspath(os.fspath(path)))
+    real = os.path.realpath(path)
+    return (given,) if real == given else (given, real)
+
+
+def _declared_key(path: "str | os.PathLike[str]") -> "Optional[str]":
+    return next((k for k in _spellings(path) if k in _DECLARED), None)
+
+
+def _declare(root: "str | os.PathLike[str]", flag: str, lang: str) -> None:
+    for key in _spellings(root):
+        _DECLARED[key] = (flag, lang)
+
 #: realpath of a declared tree → what it was when it was judged (#3724): its
 #: root and every config file its listing named, each ``(st_dev, st_ino,
 #: st_mtime_ns)`` (None: not there). `refuse_changed` tells a tree changed
 #: since (gone, replaced, a file removed or rewritten, at any depth) from one
 #: da-guard refuses as it is (no config file, a tenant in two files).
 _JUDGED_AS: "dict[str, dict[str, Optional[tuple[int, int, int]]]]" = {}
+
+#: `_JUDGED_AS` key → the root as the caller spelled it (what a refusal names).
+_GIVEN: "dict[str, str]" = {}
 
 
 def _stamp(path: "str | os.PathLike[str]") -> "Optional[tuple[int, int, int]]":
@@ -268,7 +291,8 @@ class ConfdReader:
         #: Every reader of that tree in the process carries it (`_DECLARED`),
         #: not only the one that judged it — a tool whose library opens a
         #: reader of its own (tenant-verify's scanner) names the flag too.
-        self.declared: "Optional[tuple[str, str]]" = _DECLARED.get(os.path.realpath(root))
+        key = _declared_key(root)
+        self.declared: "Optional[tuple[str, str]]" = None if key is None else _DECLARED[key]
 
     def _judge_root(self, entries: "Iterable[_lib_parse_tree.Entry]") -> None:
         if self.declared is not None:
@@ -770,7 +794,7 @@ def declared_trees(args: Any, dest: str, *, lang: str, binary: Optional[str] = N
     roots = _lib_input.selected(args, dest, lang=lang)
     for root in roots:
         root_was = _stamp(root)  # before the listing: a change during it is a change
-        _DECLARED[os.path.realpath(root)] = (spec.flag, lang)
+        _declare(root, spec.flag, lang)
         reader = reader_for(root)
         reader.declared = (spec.flag, lang)
         with _lib_parse_tree.use_da_guard(binary, timeout):
@@ -792,12 +816,13 @@ def record_judgement(root: "str | os.PathLike[str]", flag: str, lang: str,
     the listing, else now), and `_lib_input.judged` says so. ⛔ Only the
     code that ends a tree's judgement calls it: `declared_trees`, or a tool
     that judges its trees itself (config-diff's two sides)."""
-    where = os.path.realpath(root)
-    _DECLARED[where] = (flag, lang)
+    _declare(root, flag, lang)
     stamps = _fingerprint(root, files)
     if root_was is not None:
         stamps["."] = root_was
-    _JUDGED_AS[where] = stamps
+    for key in _spellings(root):
+        _JUDGED_AS[key] = stamps
+        _GIVEN[key] = os.fspath(root)
     _lib_input.judged(flag, root)
 
 
@@ -812,18 +837,20 @@ def refuse_changed(root: "str | os.PathLike[str]", detail: str) -> None:
     declared input named, and for one still as it was judged: da-guard's
     refusal is then the tree's own (no config file, a tenant in two files),
     for the caller to report as it does."""
-    where = os.path.realpath(root)
-    declared = _DECLARED.get(where)
-    was = _JUDGED_AS.get(where)
-    if declared is None or (was is not None and _fingerprint(root, [r for r in was if r != "."])
-                            == was):
+    where = _declared_key(root)
+    if where is None:
         return
-    flag, lang = declared
-    detail = " ".join(str(detail).split())
+    was = _JUDGED_AS.get(where)
+    shown = _GIVEN.get(where, os.fspath(root))
+    if was is not None and _fingerprint(shown, [r for r in was if r != "."]) == was:
+        return
+    flag, lang = _DECLARED[where]
+    from _lib_label import safe_label  # one line, whatever the path or da-guard holds
+    detail = safe_label(" ".join(str(detail).split()))
     said = (f"判定之後已變動：{detail}" if lang == "zh"
             else f"changed after it was judged: {detail}")
     from _lib_exitcodes import InputChanged  # lazy: its import installs the crash hook
-    raise InputChanged(f"{flag} {root}: {said}")
+    raise InputChanged(f"{flag} {safe_label(shown)}: {said}")
 
 
 def refuse_gone(path: "str | os.PathLike[str]", exc: OSError) -> None:
@@ -834,10 +861,10 @@ def refuse_gone(path: "str | os.PathLike[str]", exc: OSError) -> None:
     from _lib_paths import _STAT_MISSING  # lazy, as `_lib_input` keeps it
     if exc.errno not in _STAT_MISSING:
         return
-    where = os.path.realpath(path)
-    for root in _DECLARED:
-        if where == root or where.startswith(root.rstrip(os.sep) + os.sep):
-            refuse_changed(root, f"{path}: {exc.strerror or exc.__class__.__name__}")
+    for where in _spellings(path):
+        for root in list(_DECLARED):
+            if where == root or where.startswith(root.rstrip(os.sep) + os.sep):
+                refuse_changed(root, f"{path}: {exc.strerror or exc.__class__.__name__}")
 
 
 def judged(root: "str | os.PathLike[str]") -> bool:
@@ -845,7 +872,7 @@ def judged(root: "str | os.PathLike[str]") -> bool:
     (`declared_trees` judged it) — so a library reader of it does not judge
     the path a second time (#3755: `_grar_parse.load_tenant_tree` did, for
     four tools). A library caller that took no declaration still judges."""
-    return os.path.realpath(root) in _DECLARED
+    return _declared_key(root) is not None
 
 
 # ── parse-tree's file selection, for the read-only tools (#2906 E1) ─────

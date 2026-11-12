@@ -32,7 +32,7 @@ refusal that names neither. A refusal blaming something else (a da-guard
 wording is not judged here.
 
 A row proves nothing unless it reads its input, so it is red when: its
-baseline is rc 2; the run never raised the judged event for the input (or
+baseline is rc 2 or a crash; the run never raised the judged event for the input (or
 raised it twice in one process: one judgement, #3721); or
 the baseline with the input's MINIMAL content answers exactly as with its
 live content (the answer does not depend on the input). The content and
@@ -646,6 +646,8 @@ def _gate_row(tmp_path, kind, rid, script, flag, plan, record_property):
     assert b0.rc != 2 and b1.rc != 2, (
         f"{rid}: the baseline is rc {b0.rc} — the row never gets past its input (dead "
         f"row; give it live content/argv in LIVE):\n{tail}")
+    assert not crashed(b0) and not crashed(b1), (
+        f"{rid}: a baseline crashed — the row proves nothing (dead row):\n{tail}")
     # The tool's own process (its parent is this test): a child that judges
     # the path for itself (the route generator) does not judge it for the tool.
     mine = [e for e in b0.judged if e["path"] == "{CASE}/in" and e["ppid"] == os.getpid()]
@@ -825,3 +827,61 @@ def test_a_refusal_must_name_and_not_crash():
     # A partial answer naming the path is still an answer.
     assert not named_refusal(base, _r(2, '{"detail": "--config-dir x: gone"}\n'),
                              "--config-dir", ["x"])
+
+
+# ── the refusal the fixes raise (`_lib_parse_cache.refuse_changed`) ─────
+
+@pytest.fixture
+def fresh_declarations(monkeypatch):
+    import _lib_parse_cache as pc
+    for name in ("_DECLARED", "_JUDGED_AS", "_GIVEN"):
+        monkeypatch.setattr(pc, name, {})
+    monkeypatch.setattr(pc._lib_input, "judged", lambda *_a: None)
+    return pc
+
+
+def test_a_flag_naming_a_link_removed_after_the_judgement_is_refused(tmp_path,
+                                                                    fresh_declarations):
+    """Keyed by the path as given as well as resolved: the link gone resolves
+    to itself, and the judgement must still be found (#3724 review)."""
+    from _lib_exitcodes import InputChanged
+    pc = fresh_declarations
+    (tmp_path / "tree").mkdir()
+    (tmp_path / "tree" / "t.yaml").write_text("tenants: {}\n", encoding="utf-8")
+    link = tmp_path / "current"
+    link.symlink_to(tmp_path / "tree")
+    pc.record_judgement(link, "--config-dir", "en", ["t.yaml"])
+    link.unlink()
+    assert pc.judged(link)
+    with pytest.raises(InputChanged, match=f"^--config-dir {re.escape(str(link))}: changed"):
+        pc.refuse_changed(link, "da-guard: gone")
+
+
+def test_a_file_linked_out_of_the_tree_gone_is_refused_by_its_place(tmp_path,
+                                                                    fresh_declarations):
+    """A file reached through a link out of the tree is found under the tree
+    by the link's own path, not only by where it resolves."""
+    from _lib_exitcodes import InputChanged
+    pc = fresh_declarations
+    outside = tmp_path / "shared-defaults.yaml"
+    outside.write_text("defaults: {}\n", encoding="utf-8")
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / "_defaults.yaml").symlink_to(outside)
+    pc.record_judgement(tree, "--config-dir", "en", ["_defaults.yaml"])
+    outside.unlink()
+    gone = FileNotFoundError(2, "No such file or directory")
+    with pytest.raises(InputChanged):
+        pc.refuse_gone(tree / "_defaults.yaml", gone)
+
+
+def test_the_refusal_is_one_line_whatever_the_path_holds(tmp_path, fresh_declarations):
+    from _lib_exitcodes import InputChanged
+    pc = fresh_declarations
+    root = tmp_path / "a\nERROR: forged\x1b[2J"
+    root.mkdir()
+    pc.record_judgement(root, "--config-dir", "en", [])
+    root.rmdir()
+    with pytest.raises(InputChanged) as exc:
+        pc.refuse_changed(root, "x\n\x1b[31my")
+    assert "\n" not in str(exc.value) and "\x1b" not in str(exc.value), str(exc.value)
