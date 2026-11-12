@@ -751,7 +751,7 @@ onboard-analyze: $(DA_READ_PREREQ) ## Analyze existing AM/Prometheus configs for
 #   MISSING    規則指向的檔案不存在
 #   GLOB-EMPTY glob 展開到 0 個檔案（整條規則對所有 gate 隱形）
 #   GLOB-DEAD  glob 展開到檔案、但整棵樹一個都沒撈到
-#   NO-SSOT    六條版號線之一讀不到 source-of-truth（該線全部規則未被評估）
+#   NO-SSOT    某條版號線讀不到 source-of-truth（該線全部規則未被評估）
 # `--scope` 過濾後剩 0 條規則會以 exit 2 擋下，不會回報「一致」。
 #
 # 第二行 `--sync-counts --check` 同一個理由（#1407 第三輪）：計數規則自己的三種
@@ -1162,7 +1162,7 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 	@echo "✓ All convention gates pass for $(SCRIPT)"
 
 .PHONY: version-show
-version-show: ## 顯示目前六條版號線（含讀不到 SSOT 的線）
+version-show: ## 顯示目前各版號線（含讀不到 SSOT 的線）
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
 .PHONY: bump-docs
@@ -1302,7 +1302,7 @@ chart-push: chart-package ## 推送 Helm chart 至 OCI registry (需先 docker l
 	@echo "✓ Pushed oci://$(OCI_REGISTRY)/charts/threshold-exporter:$(CHART_VER)"
 
 # ----------------------------------------------------------
-# Release Tag（六線版號策略）
+# Release Tag（各線版號；清單見 release.yaml 的 on.push.tags）
 # ----------------------------------------------------------
 .PHONY: release-tag-exporter
 release-tag-exporter: version-check ## 從 Chart.yaml 推導 exporter tag（觸發 image + Helm build）

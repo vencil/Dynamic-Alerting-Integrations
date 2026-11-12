@@ -220,6 +220,12 @@ RECIPE_PREVIEW_REPO = "ghcr.io/vencil/recipe-preview"
 RECIPE_PREVIEW_ENTRY = "recipe-preview"
 RELEASE_WORKFLOW = ".github/workflows/release.yaml"
 RECIPE_PREVIEW_JOB = "release-recipe-preview"
+# The ONE shape of that job's `if:` this gate accepts as "runs on a tools tag",
+# compared whole: a substring test accepted `!startsWith(...)` and
+# `false && startsWith(...)`. Any other shape reads as "not built" and fails
+# the pin — loud, and fixed by restoring this expression.
+RECIPE_PREVIEW_IF = f"startsWith(github.ref, 'refs/tags/{TAG_PREFIX}')"
+RECIPE_PREVIEW_TAG_GLOB = f"{TAG_PREFIX}v*"
 CAPABILITY_SOURCES = {
     "entrypoint": "components/da-tools/app/entrypoint.py",
     "build_sh": "components/da-tools/app/build.sh",
@@ -592,11 +598,12 @@ _builds_recipe_preview_cache: dict[str, bool] = {}
 def builds_recipe_preview(git_tag: str) -> bool:
     """Whether the `tools/v*` release at *git_tag* builds the recipe-preview image.
 
-    True iff that tag's release workflow has the `release-recipe-preview` job
-    and its `if:` admits a `refs/tags/tools/` ref. Read by parsing the YAML,
-    not by grepping it: the job name and the ref prefix both appear in
-    comments of that file. Unreadable or unparseable is a CapabilityError,
-    never a False (fail-closed)."""
+    True iff that tag's release workflow is triggered by `tools/v*` tags
+    (`on.push.tags`) and has the `release-recipe-preview` job whose `if:` is
+    exactly RECIPE_PREVIEW_IF. Read by parsing the YAML, not by grepping it:
+    the job name and the ref prefix both appear in comments of that file.
+    Unreadable or unparseable is a CapabilityError, never a False
+    (fail-closed)."""
     if git_tag in _builds_recipe_preview_cache:
         return _builds_recipe_preview_cache[git_tag]
     if not tag_exists(git_tag):
@@ -619,7 +626,13 @@ def builds_recipe_preview(git_tag: str) -> bool:
                               f"mapping — the parser is out of step with it.")
     job = jobs.get(RECIPE_PREVIEW_JOB)
     condition = job.get("if") if isinstance(job, dict) else None
-    built = isinstance(condition, str) and f"refs/tags/{TAG_PREFIX}" in condition
+    # PyYAML reads the bare key `on` as the boolean True.
+    trigger = doc.get(True, doc.get("on"))
+    push = trigger.get("push") if isinstance(trigger, dict) else None
+    tags = push.get("tags") if isinstance(push, dict) else None
+    built = (isinstance(condition, str)
+             and " ".join(condition.split()) == RECIPE_PREVIEW_IF
+             and isinstance(tags, list) and RECIPE_PREVIEW_TAG_GLOB in tags)
     _builds_recipe_preview_cache[git_tag] = built
     return built
 

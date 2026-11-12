@@ -3,8 +3,7 @@
 
 Locks in the #1004 namespace ruling: every governed service has ONE canonical
 namespace — `tenant-api` lives in its dedicated `tenant-api` namespace (raw
-v2.4.0 intent + GHSA blast-radius isolation), `recipe-preview` lives in
-`monitoring` — and every service URL in Helm values, raw k8s manifests, the
+v2.4.0 intent + GHSA blast-radius isolation) — and every service URL in Helm values, raw k8s manifests, the
 portal nginx proxy and try-local must agree with it.
 
 WHY: the past drift this lint prevents happened twice, in two shapes:
@@ -13,7 +12,9 @@ WHY: the past drift this lint prevents happened twice, in two shapes:
     the FQDN resolved to NOTHING on a raw-manifest cluster.
   - recipe-preview called bare `http://tenant-api:8080` from the `monitoring`
     ns — a bare service name only resolves inside the CALLER's own namespace,
-    so the cross-ns call was unresolvable.
+    so the cross-ns call was unresolvable. (recipe-preview has since become a
+    socket-only container in the tenant-api pod, #1040, and is no longer
+    governed: it has no Service.)
 All instances are fixed in the #1004 ns-hardening PR; this lint turns "fixed
 once" into "CI won't let it drift back". kube-linter cannot express this
 semantic check (verified: .kube-linter.yaml carries only built-in checks), so
@@ -554,8 +555,8 @@ def main() -> int:
             f"OK cross-namespace service-URL consistency (#1004) — "
             f"0 violations / {len(infos)} exempt-INFO across {n_files} "
             f"file(s).\n"
-            f"   服務 URL namespace 一致：tenant-api → 專屬 `tenant-api` ns、"
-            f"recipe-preview → `monitoring` ns；FQDN 與 bare-name 皆符合 "
+            f"   服務 URL namespace 一致：tenant-api → 專屬 `tenant-api` ns"
+            f"（受管清單見 cross_ns_url_lint.config.yaml）；FQDN 與 bare-name 皆符合 "
             f"canonical（豁免登記於 EXEMPTIONS，含退場條件）。"
         )
         return EXIT_OK
@@ -563,8 +564,8 @@ def main() -> int:
     print(
         f"\nFAIL cross-namespace service-URL consistency (#1004) — "
         f"{len(violations)} violation(s) / {len(infos)} exempt-INFO.\n"
-        f"   修法：tenant-api 一律 `tenant-api.tenant-api.svc.cluster.local`、"
-        f"recipe-preview 一律 `recipe-preview.monitoring.svc.cluster.local`；\n"
+        f"   修法：tenant-api 一律 `tenant-api.tenant-api.svc.cluster.local`"
+        f"（其餘受管服務見 cross_ns_url_lint.config.yaml）；\n"
         f"   跨 namespace 呼叫禁用 bare service name"
         f"（`http://tenant-api:8080` 只在 canonical ns 內可解析）。\n"
         f"   合法例外請登記 check_cross_ns_url_consistency.py 的 EXEMPTIONS"

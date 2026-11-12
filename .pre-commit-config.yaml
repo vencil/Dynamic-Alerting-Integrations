@@ -1257,7 +1257,7 @@ repos:
         # `fail` guard. Horizontal write scaling needs a K8s Lease (Deferred A3).
 
       - id: cross-ns-url-check
-        name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns, recipe-preview → monitoring)"
+        name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns)"
         # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
         # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
         entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_cross_ns_url_consistency.py --ci

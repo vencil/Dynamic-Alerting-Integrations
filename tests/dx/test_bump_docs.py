@@ -251,7 +251,7 @@ class TestReadCurrentVersions:
 
         原本這條只斷言 platform/exporter/tools/portal 四條，而且整個包在
         `if <chart>.exists()` 裡——recipe-preview 沒有被任何地方斷言過，
-        tenant-api 也是補上 read 之後才有人看。參數化到六條之後，新增第七條
+        tenant-api 也是補上 read 之後才有人看。參數化到 VERSION_LINES 之後，新增一條
         版號線時 VERSION_LINES 一改，這條就自動跟著要求它可讀。
         """
         versions = bump_docs.read_current_versions()
@@ -381,9 +381,9 @@ class TestMainCLI:
     """main() CLI 路徑覆蓋。"""
 
     def test_show_current(self, monkeypatch, capsys, cli_argv):
-        """--show-current 顯示全部六條線（讀不到的印 NOT FOUND 並 exit 1）。"""
+        """--show-current 顯示全部宣告的線（讀不到的印 NOT FOUND 並 exit 1）。"""
         cli_argv("bump_docs", "--show-current")
-        bump_docs.main()          # 真實 repo 六條都讀得到 → 不應 SystemExit
+        bump_docs.main()          # 真實 repo 每條都讀得到 → 不應 SystemExit
         out = capsys.readouterr().out
         assert "Current versions" in out
         for line in bump_docs.VERSION_LINES:

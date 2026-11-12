@@ -1107,15 +1107,22 @@ def _fake_release(monkeypatch, text):
     return tag
 
 
-_RP_JOB = "jobs:\n  release-recipe-preview:\n    if: {cond}\n    runs-on: x\n"
+_RP_JOB = ("on:\n  push:\n    tags: [{tags}]\n"
+           "jobs:\n  release-recipe-preview:\n    if: {cond}\n    runs-on: x\n")
+_TOOLS_IF = "startsWith(github.ref, 'refs/tags/tools/')"
 
 
-@pytest.mark.parametrize("cond, built", [
-    ("startsWith(github.ref, 'refs/tags/tools/')", True),
-    ("startsWith(github.ref, 'refs/tags/recipe-preview/')", False),
-], ids=["tools-tag", "own-line-only"])
-def test_builds_recipe_preview_reads_the_job_condition(monkeypatch, cond, built):
-    tag = _fake_release(monkeypatch, _RP_JOB.format(cond=f'"{cond}"'))
+@pytest.mark.parametrize("cond, tags, built", [
+    (_TOOLS_IF, '"tools/v*"', True),
+    ("startsWith(github.ref, 'refs/tags/recipe-preview/')", '"tools/v*"', False),
+    # Contain the right substring, mean the opposite: compared whole.
+    ("!" + _TOOLS_IF, '"tools/v*"', False),
+    ("false && " + _TOOLS_IF, '"tools/v*"', False),
+    # The job is right but no tools tag ever triggers the workflow.
+    (_TOOLS_IF, '"exporter/v*"', False),
+], ids=["tools-tag", "own-line-only", "negated", "and-false", "not-triggered"])
+def test_builds_recipe_preview_reads_the_job_condition(monkeypatch, cond, tags, built):
+    tag = _fake_release(monkeypatch, _RP_JOB.format(cond=f'"{cond}"', tags=tags))
     assert gate.builds_recipe_preview(tag) is built
     gate._builds_recipe_preview_cache.pop(tag, None)
 

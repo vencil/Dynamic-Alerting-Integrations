@@ -526,14 +526,19 @@ spec:
           # admits).
           # ⛔ No readinessProbe, on purpose. A pod is Ready only when every
           # container is, so a readiness failure here would take tenant-api —
-          # reads and writes — out of the Service over an optional feature.
-          # While the service does not answer, tenant-api answers the preview
-          # route 503 PREVIEW_UNAVAILABLE; liveness restarts a hung service.
+          # reads and writes — out of the Service over an optional feature;
+          # a running service that stops answering only turns the preview
+          # route into 503 PREVIEW_UNAVAILABLE, and liveness restarts it.
+          # ⚠️ That decoupling ends at the container's lifecycle: while it is
+          # restarting (an OOM kill, a liveness restart) or not yet past its
+          # startupProbe, it is not Ready, and neither is the pod. The startup
+          # window is kept short for that reason (the service binds its socket
+          # within a second); recipePreview.enabled=false removes the coupling.
           startupProbe:
             {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
-            periodSeconds: 2
+            periodSeconds: 1
             timeoutSeconds: 5
-            failureThreshold: 30
+            failureThreshold: 15
           livenessProbe:
             {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
             periodSeconds: 20
