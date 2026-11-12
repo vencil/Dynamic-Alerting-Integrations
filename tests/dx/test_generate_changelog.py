@@ -1253,3 +1253,56 @@ class TestCapBase:
         assert gc._git_show("HEAD", "history.md") == "committed\n"
         assert gc._git_show("HEAD", "MISSING.md") is None
         assert gc._git_show("nosuchref", "history.md") is None
+
+
+class TestALateMainJobAfterAReleaseWrapUpIsNotRed:
+    """docs-ci / ci.yml no longer cancel a push to main (#1269 follow-up), so a
+    job of an older main commit can start after a release wrap-up emptied
+    `[Unreleased]` and was pushed. That is the exact case the old
+    `cancel-in-progress: true` existed for (#2040): with a two-way diff the cap
+    read the older tree as having GROWN `[Unreleased]` against the newer
+    origin/main. The resolver's merge base (#2217) is HEAD in that shape, so
+    the cap measures zero growth. The explicit `--base origin/main` cell is the
+    anti-vacuity half: the same repo, measured two-way, is red."""
+
+    @staticmethod
+    def _main_after_wrap_up(tmp_path, monkeypatch):
+        repo = tmp_path / "r"
+        repo.mkdir()
+
+        def run(*a):
+            return subprocess.run(["git", *a], cwd=repo, check=True,
+                                  capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=60)
+
+        run("init", "-q")
+        run("config", "user.email", "t@t")
+        run("config", "user.name", "t")
+        f = repo / "history.md"
+        f.write_text(_unreleased(_entry("legacy", 60), _entry("fat", 3000)), encoding="utf-8")
+        run("add", "history.md")
+        run("commit", "-q", "-m", "an older main commit, still carrying [Unreleased]")
+        older = run("rev-parse", "HEAD").stdout.strip()
+        f.write_text(_unreleased(), encoding="utf-8")
+        run("add", "history.md")
+        run("commit", "-q", "-m", "release wrap-up empties [Unreleased]")
+        run("update-ref", "refs/remotes/origin/main", "HEAD")
+        run("checkout", "-q", older)
+        monkeypatch.setattr(lint_helpers, "REPO_ROOT", repo)
+        monkeypatch.setattr(gc, "resolve_diff_base_ref", lint_helpers.resolve_diff_base_ref)
+        monkeypatch.chdir(repo)
+
+    def test_the_resolved_base_measures_no_growth(self, tmp_path, monkeypatch, capsys):
+        self._main_after_wrap_up(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md"])
+        rc = gc.main()
+        out = capsys.readouterr().out
+        assert "grew by" not in out and "is frozen" not in out, out
+        assert rc == 0, out
+
+    def test_the_same_repo_measured_two_way_is_red(self, tmp_path, monkeypatch, capsys):
+        self._main_after_wrap_up(tmp_path, monkeypatch)
+        monkeypatch.setattr(sys, "argv", ["gc", "--lint", "history.md", "--base", "origin/main"])
+        rc = gc.main()
+        out = capsys.readouterr().out
+        assert rc == EXIT_VIOLATION and "grew by" in out, out

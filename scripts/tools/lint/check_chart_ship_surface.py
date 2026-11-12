@@ -59,8 +59,8 @@ read the bytes of the produced `.tgz`.
 ⚠️ The reason is NOT that helm is unobtainable. An earlier revision of this
 docstring said so and was wrong: `get.helm.sh` is indeed blocked by egress
 policy, but `go install helm.sh/helm/v3/cmd/helm@vX` builds it from source in
-about two minutes, and CI already installs it (`azure/setup-helm@v4`, three
-jobs in ci.yml and three in release.yaml). The real reason is placement: this
+about two minutes, and CI already installs it (`azure/setup-helm` in jobs of
+ci.yml and release.yaml). The real reason is placement: this
 gate runs in pre-commit's *automatic* stage, where a 107 MB toolchain fetch
 does not belong. A tarball-reading assertion is a separate check for the
 manual stage or a CI job, and is tracked as such rather than smuggled in here.
@@ -140,6 +140,12 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
             "published artifact, which is a release decision, not a lint fix.",
         ),
         ".helmignore": (SHIP, "helm's own packing control file"),
+        "values-config-validation.yaml": (
+            EXCLUDE,
+            "#3353: the Container SAST L2 render variant that turns the "
+            "config-validation CronJob on so kube-linter judges it — an input "
+            "to that gate, not a deployment profile.",
+        ),
     },
     "helm/da-portal": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),

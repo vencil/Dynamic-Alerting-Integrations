@@ -829,6 +829,30 @@ class TestHelmTwoLinePin:
         assert len(changed) == 1, changed
         assert len(before.splitlines()) == len(after.splitlines())
 
+    def test_exporter_config_validation_pin_is_bumped_alone(self, tmp_path, monkeypatch):
+        """#3353: threshold-exporter's values.yaml pins its own image (tag
+        derived from appVersion) and the config-validation CronJob's da-tools
+        image; the `--tools` rule must move only the latter, whose tag decides
+        which validate-config rows judge direct mode."""
+        real = bump_docs.REPO_ROOT / "helm" / "threshold-exporter" / "values.yaml"
+        before = real.read_text(encoding="utf-8")
+        target = tmp_path / "helm" / "threshold-exporter" / "values.yaml"
+        target.parent.mkdir(parents=True)
+        target.write_text(before, encoding="utf-8")
+        rules = self._tools_rules_for("helm/threshold-exporter/values.yaml")
+        assert len(rules) == 1 and rules[0].get("require_match")
+        monkeypatch.setattr(bump_docs, "REPO_ROOT", tmp_path)
+        changes = bump_docs.apply_rules(rules, "2.10.0", check_only=False)
+        assert [c[0] for c in changes] == ["UPDATE"], changes
+        after = target.read_text(encoding="utf-8")
+        parsed = yaml.safe_load(after)
+        assert parsed["configValidation"]["image"]["tag"] == "v2.10.0"
+        assert parsed["image"] == yaml.safe_load(before)["image"]
+        changed = [(a, b) for a, b in zip(before.splitlines(), after.splitlines())
+                   if a != b]
+        assert len(changed) == 1, changed
+        assert len(before.splitlines()) == len(after.splitlines())
+
 
 class TestLiveRepoRuleTargetsExist:
     """每一條規則指向的檔案，在今天的 repo 裡都必須真的存在。

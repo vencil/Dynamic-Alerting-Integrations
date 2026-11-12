@@ -1,10 +1,9 @@
 """Promtool pin parity gate — recipe-preview Dockerfile vs ci.yml (#657 PR-D2).
 
-The would-fire verdict (`firing` / `inactive` / `error`) is classified from
-promtool's *return code + output format*, which is version-bound:
-`_recipe_preview.classify_promtool_result` hard-codes the `FAILED:` /
-`got:[` markers, and ci.yml's `Preview would-fire e2e` step re-verifies them
-against whatever version is pinned. The recipe-preview IMAGE bundles a SHA-pinned promtool; the CI
+The would-fire verdict (`firing` / `inactive` / `error`) is read from
+promtool's JUnit report (`test rules --junit`: which of the two opposite test
+groups passed, #3611), which is version-bound, and ci.yml's `Preview
+would-fire e2e` step re-verifies it against whatever version is pinned. The recipe-preview IMAGE bundles a SHA-pinned promtool; the CI
 rule-pack gate (`.github/workflows/ci.yml`) installs its OWN pinned promtool.
 
 If those two pins ever skew, the image could classify a verdict differently from

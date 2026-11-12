@@ -1,0 +1,81 @@
+{{- /*
+  #3353: judge the deployed conf.d with CI's own validate-config, so a tree
+  changed without CI (direct mode) is judged too. See values.yaml
+  `configValidation` for what is and is not covered.
+
+  ⛔ Its pod labels are NOT `app: threshold-exporter`: the Service, the PDB,
+  the NetworkPolicy and the anti-affinity select that label, and a Job pod
+  matching it would be counted (and routed to) as an exporter replica.
+  ⛔ No ttlSecondsAfterFinished: CronJobLastRunFailed reads the Job objects
+  (kube_job_failed); a failed Job deleted early silences it. The history
+  limits bound what is kept.
+*/ -}}
+{{- if .Values.configValidation.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: threshold-exporter-config-validation
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: threshold-exporter-config-validation
+spec:
+  schedule: {{ .Values.configValidation.schedule | quote }}
+  # Explicit: a suspended CronJob creates no Job, and a rule that reads Jobs
+  # cannot see it (rule-pack-platform, CronJobLastRunFailed design notes).
+  suspend: false
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      # A FAIL row is deterministic for one tree: a retry judges the same tree.
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ .Values.configValidation.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            app: threshold-exporter-config-validation
+        spec:
+          restartPolicy: Never
+          automountServiceAccountToken: false
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+          - name: validate-config
+            {{- with .Values.configValidation.image }}
+            image: "{{ .repository }}:{{ .tag }}{{ with .digest }}@{{ . }}{{ end }}"
+            imagePullPolicy: {{ .pullPolicy }}
+            {{- end }}
+            args: ["validate-config", "--config-dir", "/etc/threshold-exporter/conf.d"]
+            env:
+            - name: HOME
+              value: /tmp
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
+            {{- $memory := include "threshold-exporter.validationMemory" . }}
+            resources:
+              requests:
+                cpu: {{ .Values.configValidation.cpuRequest | quote }}
+                memory: {{ $memory | quote }}
+              limits:
+                memory: {{ $memory | quote }}
+            volumeMounts:
+            - name: config
+              mountPath: /etc/threshold-exporter/conf.d
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+          volumes:
+          - name: config
+            configMap:
+              name: {{ include "threshold-exporter.configMapName" . | quote }}
+          - name: tmp
+            emptyDir: {}
+{{- end }}

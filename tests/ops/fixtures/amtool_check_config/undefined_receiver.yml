@@ -1,0 +1,4 @@
+route:
+  receiver: missing
+receivers:
+- name: r

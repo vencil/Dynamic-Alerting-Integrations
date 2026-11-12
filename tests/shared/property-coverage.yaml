@@ -180,6 +180,8 @@ modules:
       _walk_misread_scalars: "The one walk behind find_misread_scalars and misread_scalar_nodes (#2164, #2695); exercised through both"
       schema_scalar_types: "Scalar-type union over schema branches (#2164); string / boolean / mixed verdicts pinned in tests/shared/test_yaml_misread_scalars.py"
       MisreadScalar.message: "Operator-facing text (#2164); suggestion shapes (key / sequence item / null) pinned in tests/shared/test_yaml_misread_scalars.py"
+      find_nondecimal_numbers: "parse-tree nodes × schema walk for number-only fields (#3764); spelling matrix, plain-decimal / string controls, schema-only verdict flip (integer / number / mixed / string) and both entries pinned in tests/shared/test_yaml_nondecimal_numbers.py"
+      NondecimalNumber.message: "Operator-facing text (#3764); the suggested plain-decimal line pinned in tests/shared/test_yaml_nondecimal_numbers.py"
       _schema_expand: "$ref / allOf / anyOf / oneOf expansion (#2164); cross-file $ref and unloaded-ref KeyError pinned in tests/shared/test_yaml_misread_scalars.py"
       _schema_key_children: "properties / patternProperties / additionalProperties child lookup (#2164); exercised through find_misread_scalars pins"
       _schema_item_children: "items / additionalItems child lookup (#2164); sequence-item pin in tests/shared/test_yaml_misread_scalars.py"
