@@ -164,11 +164,6 @@ dir_rules:
     suite: tests/e2e
     runner: "make test-e2e"
     justification: Playwright spec 非 pytest
-  - name: scenario-shell
-    source: "tests/scenarios/**"
-    suite: tests/scenarios
-    runner: "bash tests/scenarios/<script>.sh（手動；無 make／CI 入口）"
-    justification: shell 腳本非 pytest 收集；刪掉本條會讓此目錄的變更掉進 fail-closed 全跑
   - name: federation-e2e-self
     source: "tests/federation-e2e/**"
     suite: tests/federation-e2e
