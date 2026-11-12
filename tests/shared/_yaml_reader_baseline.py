@@ -91,6 +91,8 @@ ALLOWED = {
     ('scripts/tools/lint/check_image_pin_capability.py', '_StrictLoader'):
         (1, "a Helm template with its Go actions cut out, text this gate makes and no consumer reads; "
             "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),
+    ('scripts/tools/lint/check_image_pin_capability.py', 'builds_recipe_preview'):
+        (1, '.github/workflows/release.yaml at a pinned tools/v* tag (git show); read by GitHub Actions, no Go consumer'),
     ('scripts/tools/lint/check_image_pin_capability.py', 'load_all_strict'):
         (1, "a Helm template with its Go actions cut out, text this gate makes and no consumer reads; "
             "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),
