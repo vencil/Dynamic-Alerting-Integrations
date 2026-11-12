@@ -1291,10 +1291,23 @@ def has_shipped_chart_base(doc: dict, key: str) -> bool:
     user_threshold" — false for all five of them, and false in the direction that
     talks a tenant out of protection they already have.
     """
-    base = (doc.get("keys", {}).get(key) or {}).get("critical_of")
+    return "helm" in base_topologies(doc, key)
+
+
+def base_topologies(doc: dict, key: str) -> frozenset[str]:
+    """The topologies (``TOPOLOGY_DEFAULTS_KEEPS``) whose generated defaults
+    value the base of ``key`` — where ``resolveCriticalRows`` has the
+    ``defaults[base]`` it admits a ``<base>_critical`` on. Empty for a key
+    with no base (no ``critical_of``)."""
+    keys = doc.get("keys", {})
+    base = (keys.get(key) or {}).get("critical_of")
     if not base:
-        return False
-    return is_chart_armed(doc.get("keys", {}).get(base) or {})
+        return frozenset()
+    entry = keys.get(base) or {}
+    pack = entry.get("pack", "?")
+    return frozenset(
+        topo for topo, keeps in TOPOLOGY_DEFAULTS_KEEPS.items()
+        if any(keep(pack, entry) for keep in keeps))
 
 
 # Warning A — the keys the platform SHIPS in the optional_overrides: list.
@@ -1334,10 +1347,28 @@ _OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES = (
     "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
 )
 
-# Warning C — off the shipped list AND the base is not shipped either. This is
-# the only population the original "documented-but-dormant" wording is still
-# true for. Worded by the property that actually gates them (`defaults[base]`),
-# not by the `_critical` spelling, so it stays true if the populations shift.
+# Warning B2 — off the shipped list; the base is valued by the repo's dev
+# conf.d template (its `dev-example-defaults` block) but not by the chart. True
+# in one topology and false in the other, so the header says both (#3730).
+_OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES = (
+    "#",
+    "# optional_overrides（不在出貨清單裡；base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨）：",
+    "# 下列 `<base>_critical` 的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值",
+    "# （components/threshold-exporter/app/pkg/config/resolve.go）。",
+    "# - repo 的 dev conf.d（components/threshold-exporter/config/conf.d/_defaults.yaml 的",
+    "#   dev-example-defaults 段）供給下列每個 key 的 base：在這棵樹裡租戶填一個，",
+    "#   resolveCriticalRows 就產出一條真的 critical row。",
+    "# - 出貨的 Helm values 不供給這些 base：用 chart 部署時，租戶填一個並不會產出任何 row，",
+    "#   要先由部署面供給 base（scaffold_tenant 針對選到的 pack 產生的 _defaults.yaml",
+    "#   就含 base，operator 也可自行填 Helm values）。",
+    "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
+)
+
+# Warning C — off the shipped list AND the base is valued in neither topology.
+# This is the only population the original "documented-but-dormant" wording is
+# still true for. Worded by the property that actually gates them
+# (`defaults[base]`), not by the `_critical` spelling, so it stays true if the
+# populations shift.
 _OPTIONAL_UNSHIPPED_WARNING_LINES = (
     "#",
     "# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：",
@@ -1345,9 +1376,8 @@ _OPTIONAL_UNSHIPPED_WARNING_LINES = (
     "# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，",
     "# 它讀的是 defaults[base]，base 沒有值就整列丟棄",
     "# （components/threshold-exporter/app/pkg/config/resolve.go）。",
-    "# 而下列每個 key 的 base 都**未**標 [chart-default]",
-    "# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：",
-    "# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。",
+    "# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：",
+    "# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。",
     "# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到",
     "# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），",
     "# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是",
@@ -1358,25 +1388,31 @@ _OPTIONAL_UNSHIPPED_WARNING_LINES = (
 def optional_warning_groups(doc: dict, optional: dict) -> list[tuple[tuple, dict]]:
     """[(warning_lines, {key: entry}), …] — the optional tier split by TRUTH.
 
-    Three populations, three different truths, and the split is DERIVED
-    (``is_shipped_optional_key`` for membership, ``has_shipped_chart_base`` for
-    the rest) rather than spelled out per pack — the whole point is that a
-    header can never claim something the resolver contradicts.
+    Four populations, four different truths, and the split is DERIVED
+    (``is_shipped_optional_key`` for membership, ``base_topologies`` for the
+    rest: base valued by the chart — and so by the dev template too —, by the
+    dev template only, or by neither) rather than spelled out per pack — the
+    whole point is that a header can never claim something the resolver
+    contradicts in either topology it speaks for (#3730).
 
     Empty groups are dropped, so a pack with no optional tier gets no warning
     line at all and a single-population pack gets exactly one.
     """
-    shipped, base_shipped, dormant = {}, {}, {}
+    shipped, base_shipped, dev_only, dormant = {}, {}, {}, {}
     for key, entry in optional.items():
+        topologies = base_topologies(doc, key)
         if is_shipped_optional_key(key):
             shipped[key] = entry
-        elif has_shipped_chart_base(doc, key):
+        elif "helm" in topologies:
             base_shipped[key] = entry
+        elif "dev" in topologies:
+            dev_only[key] = entry
         else:
             dormant[key] = entry
     groups = [
         (_OPTIONAL_SHIPPED_WARNING_LINES, shipped),
         (_OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES, base_shipped),
+        (_OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES, dev_only),
         (_OPTIONAL_UNSHIPPED_WARNING_LINES, dormant),
     ]
     return [(w, keys) for w, keys in groups if keys]
@@ -1385,10 +1421,11 @@ def optional_warning_groups(doc: dict, optional: dict) -> list[tuple[tuple, dict
 def render_pack_header_lines(doc: dict, pack_name: str) -> list[str]:
     """The generated threshold section of one rule-pack header (body only).
 
-    The optional tier renders as up to THREE sub-sections, each under its own
+    The optional tier renders as up to FOUR sub-sections, each under its own
     warning (see ``optional_warning_groups``): the keys the platform ships on
     the ``optional_overrides:`` list, the ``_critical`` keys whose base is a
-    shipped chart default (settable today), and the ones whose base is not
+    shipped chart default (settable today), the ones whose base only the
+    repo's dev conf.d template values, and the ones whose base neither does
     (genuinely dormant). A pack gets exactly the sub-sections its keys populate,
     in that order; a pack with no optional-tier key gets no warning whatsoever.
     """
@@ -1500,6 +1537,20 @@ def _chart_default_keep(pack: str, entry: dict) -> bool:
 def _dev_example_keep(pack: str, entry: dict) -> bool:
     return (pack in DEV_EXAMPLE_PACKS and entry.get("tier") == "defaults"
             and not is_chart_armed(entry))
+
+
+# The two topologies a pack header speaks for, and the defaults blocks each
+# one's generated `defaults:` mapping carries — by the very keep predicates
+# `regen_surfaces` renders those blocks with (helm values: the chart-default
+# block; the repo's dev conf.d `_defaults.yaml`: the same block plus the
+# example tenants' `dev-example-defaults` block). A header never asks one
+# topology and speaks for the other (#3730);
+# `test_topology_keeps_are_what_the_surfaces_carry` holds this table to the
+# generated files.
+TOPOLOGY_DEFAULTS_KEEPS: dict[str, tuple] = {
+    "helm": (_chart_default_keep,),
+    "dev": (_chart_default_keep, _dev_example_keep),
+}
 
 
 def _defaults_by_pack(doc: dict, keep) -> list[tuple[str, dict, list]]:

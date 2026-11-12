@@ -696,8 +696,9 @@ def test_render_pack_header_defaults_and_optional_sections():
 
 _SHIPPED_MARK = "已出貨在清單裡——平台認得這個 key"
 _BASE_SHIPPED_MARK = "但 base 已出貨——租戶今天就設得動"
+_DEV_ONLY_MARK = "base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨"
 _DORMANT_MARK = "base 也未出貨——documented-but-dormant"
-_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DORMANT_MARK)
+_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DEV_ONLY_MARK, _DORMANT_MARK)
 
 
 def test_the_three_warning_marks_cannot_alias_each_other():
@@ -839,11 +840,13 @@ def test_pack_header_warning_is_per_key_not_per_tier():
     assert _DORMANT_MARK in alpha
     assert _SHIPPED_MARK not in alpha and _BASE_SHIPPED_MARK not in alpha
 
-    # 3. MIXED -> all THREE sub-sections, each key under the right one
+    # 3. MIXED -> three sub-sections (no dev-only base here), each key under
+    #    the right one
     delta = lib.render_pack_header_lines(doc, "delta")
     text = "\n".join(delta)
-    for mark in _ALL_MARKS:
+    for mark in (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DORMANT_MARK):
         assert mark in text, (mark, delta)
+    assert _DEV_ONLY_MARK not in text
 
     def _line(pred):
         return next(i for i, ln in enumerate(delta) if pred(ln))
@@ -862,7 +865,63 @@ def test_pack_header_warning_is_per_key_not_per_tier():
     assert not any(m in beta for m in _ALL_MARKS)
 
 
-def test_warning_bodies_make_the_claims_their_headings_promise():
+def test_dev_only_base_gets_its_own_section(monkeypatch):
+    """#3730: a base the repo's dev conf.d template values (the example
+    tenants' packs) and the chart does not is neither "settable today" nor
+    "dormant" — it is each in one topology, and the header must say which.
+    Before, the split asked the chart alone and called these dormant, while
+    the dev tree serves them."""
+    monkeypatch.setattr(lib, "DEV_EXAMPLE_PACKS", ("delta",))
+    doc = _synth_optional_doc()
+    assert lib.base_topologies(doc, "delta_qsize_critical") == {"dev"}
+    assert lib.base_topologies(doc, "delta_conn_critical") == {"helm", "dev"}
+    assert lib.base_topologies(doc, "alpha_orphan_critical") == frozenset()
+    delta = lib.render_pack_header_lines(doc, "delta")
+
+    def _line(pred):
+        return next(i for i, ln in enumerate(delta) if pred(ln))
+
+    base_ln = _line(lambda ln: _BASE_SHIPPED_MARK in ln)
+    dev_ln = _line(lambda ln: _DEV_ONLY_MARK in ln)
+    live_i = _line(lambda ln: "delta_conn_critical:" in ln)
+    dev_i = _line(lambda ln: "delta_qsize_critical:" in ln)
+    assert base_ln < live_i < dev_ln < dev_i, delta
+    assert not any(_DORMANT_MARK in ln for ln in delta), (
+        "delta has no key whose base neither topology values", delta)
+    # the dormant pack stays dormant
+    alpha = "\n".join(lib.render_pack_header_lines(doc, "alpha"))
+    assert _DORMANT_MARK in alpha and _DEV_ONLY_MARK not in alpha
+
+
+def test_topology_keeps_are_what_the_surfaces_carry():
+    """TOPOLOGY_DEFAULTS_KEEPS is the header's claim about what each topology
+    values; the generated files are what it does value. Held equal, over the
+    registry's keys, so a block added to (or dropped from) either surface
+    without the table — or the reverse — is red here."""
+    import yaml
+
+    doc = lib.build_registry_doc()
+    registry = set(doc["keys"])
+    chart = yaml.safe_load(_CHART_VALUES.read_text(encoding="utf-8")) or {}
+    dev = yaml.safe_load(
+        (REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
+         / "_defaults.yaml").read_text(encoding="utf-8")) or {}
+    carried = {
+        "helm": set((chart.get("thresholdConfig") or {}).get("defaults") or {}),
+        "dev": set(dev.get("defaults") or {}),
+    }
+    assert set(carried) == set(lib.TOPOLOGY_DEFAULTS_KEEPS)
+    for topo, keeps in lib.TOPOLOGY_DEFAULTS_KEEPS.items():
+        assert carried[topo], f"{topo}: the surface parsed as empty"
+        by_table = {k for k, e in doc["keys"].items()
+                    if any(keep(e.get("pack", "?"), e) for keep in keeps)}
+        on_surface = carried[topo] & registry
+        assert by_table == on_surface, (
+            f"{topo}: table-only={sorted(by_table - on_surface)}, "
+            f"surface-only={sorted(on_surface - by_table)}")
+
+
+def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
     """Content, not section choice. The previous version of this test only
     checked WHICH heading was selected — the same shape that let a false body
     ship under a correct-looking heading. Assert what each body actually says
@@ -872,6 +931,8 @@ def test_warning_bodies_make_the_claims_their_headings_promise():
         _SHIPPED_MARK: "\n".join(lib._OPTIONAL_SHIPPED_WARNING_LINES),
         _BASE_SHIPPED_MARK:
             "\n".join(lib._OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES),
+        _DEV_ONLY_MARK:
+            "\n".join(lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES),
         _DORMANT_MARK: "\n".join(lib._OPTIONAL_UNSHIPPED_WARNING_LINES),
     }
     # only the DORMANT body may claim a tenant-set key produces nothing
@@ -884,14 +945,21 @@ def test_warning_bodies_make_the_claims_their_headings_promise():
     # and the live-critical body must name the mechanism that makes it live
     assert "defaults[base]" in bodies[_BASE_SHIPPED_MARK]
     assert "resolveCriticalRows" in bodies[_BASE_SHIPPED_MARK]
-    # every group the renderer can emit is covered above — no fourth body can
-    # be added without this test noticing
+    # the dev-only body states both topologies: a row in the dev tree, none
+    # under the chart
+    dev_only = bodies[_DEV_ONLY_MARK]
+    assert "產出一條真的 critical row" in dev_only
+    assert "用 chart 部署時，租戶填一個並不會產出任何 row" in dev_only
+    # every group the renderer can emit is covered above — no fifth body can
+    # be added without this test noticing (delta's qsize base is dev-only here)
+    monkeypatch.setattr(lib, "DEV_EXAMPLE_PACKS", ("delta",))
     groups = lib.optional_warning_groups(
         doc, {k: e for k, e in doc["keys"].items()
               if e.get("tier") == "optional_overrides"})
     assert {w for w, _ in groups} == {
         lib._OPTIONAL_SHIPPED_WARNING_LINES,
         lib._OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES,
+        lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES,
         lib._OPTIONAL_UNSHIPPED_WARNING_LINES,
     }
 
@@ -1000,10 +1068,12 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
 
     The claim under test is not "the right heading was picked" but "the heading
     that was picked says something true about THIS key": a `_critical` renders
-    under the settable-today warning IFF the chart actually ships its base, and
-    under the dormant warning otherwise. Reads values.yaml (what an operator
-    gets), while the renderer reads the registry's `arming` — so a
-    divergence between declaration and artifact surfaces here.
+    under the settable-today warning IFF the chart actually ships its base,
+    under the dev-only warning IFF only the repo's dev conf.d template values
+    it (#3730), and under the dormant warning otherwise. Reads values.yaml
+    (what an operator gets) and the dev `_defaults.yaml`, while the renderer
+    reads the registry — so a divergence between declaration and artifact
+    surfaces here.
     """
     import yaml
 
@@ -1014,6 +1084,11 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
     shipped_list = set(
         (chart_doc.get("thresholdConfig") or {}).get("optional_overrides") or [])
     assert chart_defaults and shipped_list, "values.yaml faces parsed as empty"
+    dev_doc = yaml.safe_load(
+        (REPO_ROOT / "components" / "threshold-exporter" / "config" / "conf.d"
+         / "_defaults.yaml").read_text(encoding="utf-8")) or {}
+    dev_defaults = set(dev_doc.get("defaults") or {})
+    assert dev_defaults, "the dev _defaults.yaml parsed as empty"
 
     checked = 0
     for pack in doc["packs"]:
@@ -1037,12 +1112,15 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 expected = _SHIPPED_MARK
             elif base and base in chart_defaults:
                 expected = _BASE_SHIPPED_MARK
+            elif base and base in dev_defaults:
+                expected = _DEV_ONLY_MARK
             else:
                 expected = _DORMANT_MARK
             assert sect == expected, (
                 f"{pack}/{key}: header claims {sect!r} but the shipped chart "
                 f"says {expected!r} (base={base!r}, "
                 f"base_in_chart={bool(base) and base in chart_defaults}, "
+                f"base_in_dev={bool(base) and base in dev_defaults}, "
                 f"on_declared_list={key in shipped_list})")
     assert checked == 44, (
         f"expected all 44 optional_overrides keys to be covered, saw {checked}")
