@@ -524,16 +524,16 @@ spec:
           # No HTTP port: the probes ask GET /v1/status over the socket with
           # the image's python, as the container's uid (which SO_PEERCRED
           # admits).
+          # ⛔ No readinessProbe, on purpose. A pod is Ready only when every
+          # container is, so a readiness failure here would take tenant-api —
+          # reads and writes — out of the Service over an optional feature.
+          # While the service does not answer, tenant-api answers the preview
+          # route 503 PREVIEW_UNAVAILABLE; liveness restarts a hung service.
           startupProbe:
             {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
             periodSeconds: 2
             timeoutSeconds: 5
             failureThreshold: 30
-          readinessProbe:
-            {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
-            periodSeconds: 10
-            timeoutSeconds: 5
-            failureThreshold: 3
           livenessProbe:
             {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
             periodSeconds: 20

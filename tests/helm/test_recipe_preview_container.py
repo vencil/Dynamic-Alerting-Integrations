@@ -19,7 +19,8 @@ live in the tenant-api chart, so the chart is what these tests pin:
   * the body limit is NOT configurable here: tenant-api sends at most
     recipepreview.MaxRequestBytes, which is the service's default.
   * the probe passes on the real service (which answers HTTP/1.0) and fails
-    without it or on a non-200.
+    without it or on a non-200; there is no readinessProbe (a pod is Ready
+    only when every container is, and preview is optional).
 
 Helm-gated like its siblings; CI installs helm via setup-helm.
 """
@@ -253,12 +254,21 @@ def test_fractional_integer_setting_fails() -> None:
 
 
 # ── probes ───────────────────────────────────────────────────────────────────
-_PROBES = ("startupProbe", "readinessProbe", "livenessProbe")
+_PROBES = ("startupProbe", "livenessProbe")
+
+
+@_needs_helm
+def test_no_readiness_probe() -> None:
+    """A pod is Ready only when every container is: a readiness failure here
+    would take tenant-api out of the Service over an optional feature."""
+    rp = _container(_pod(_render(*_ON)), "recipe-preview")
+    assert "readinessProbe" not in rp
+    assert {"startupProbe", "livenessProbe"} <= set(rp)
 
 
 def _probe_script(rp: dict) -> str:
     commands = [rp[name]["exec"]["command"] for name in _PROBES]
-    assert commands[0] == commands[1] == commands[2], "the three probes drifted apart"
+    assert commands[0] == commands[1], "the probes drifted apart"
     assert commands[0][:2] == ["python", "-c"]
     return commands[0][2]
 

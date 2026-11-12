@@ -777,7 +777,7 @@ v2.6.0 Phase .c-R2 發現 WritePR git push 失敗後仍回傳 PRWriteResult。�
 
 ### Release automation
 
-六線版號（platform/exporter/tools/portal/recipe-preview/tenant-api）的 tag + GitHub Release 仍是手動流程。可用 GitHub Actions 監聽 tag push 自動觸發 Release Notes 產生（基於 CHANGELOG section）和 OCI image build/push。v2.3.0 CI matrix 已到位，為自動化提供基礎。
+各版號線（清單見 `release.yaml` 的 `on.push.tags`，另加平台 `v*`）的 tag + GitHub Release 仍是手動流程。可用 GitHub Actions 監聽 tag push 自動觸發 Release Notes 產生（基於 CHANGELOG section）和 OCI image build/push。v2.3.0 CI matrix 已到位，為自動化提供基礎。
 
 ### dependabot / renovate
 

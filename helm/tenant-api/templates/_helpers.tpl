@@ -412,7 +412,7 @@ recipe-preview container (ADR-027 §5, #1040): fixed in-pod paths and image.
 The recipe-preview container's exec probe: GET /v1/status over the Unix socket
 with the image's python, passing on a 200. The service is Python's
 http.server, which answers HTTP/1.0, so the check reads the status code, not
-the version. Shared by the three probes so they cannot drift.
+the version. Shared by the probes so they cannot drift.
 */}}
 {{- define "tenant-api.recipePreviewProbe" -}}
 exec:

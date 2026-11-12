@@ -53,11 +53,11 @@ Token 只能存在 VM 的 `~/.git-credentials` 和 `~/.bashrc`（session 結束�
 | `ghcr.io/vencil/threshold-exporter` | `cmd/threshold-exporter/` | `exporter/v*` |
 | `ghcr.io/vencil/da-tools` | `scripts/tools/` | `tools/v*` |
 | `ghcr.io/vencil/da-portal` (+ OCI chart) | `portal/` | `portal/v*` |
-| `ghcr.io/vencil/recipe-preview` (+ OCI chart) ⛔ **尚未發布**（#1352 案例 B：`recipe-preview/v*` 零 tag，這條線從未被切過，兩個產物今天都不存在）| `scripts/tools/dx/`（bundled eval core）| `recipe-preview/v*` |
+| `ghcr.io/vencil/recipe-preview`（無 chart；tenant-api chart 的容器）⛔ **尚未發布**：#1040 起隨 `tools/v*` 建置，`tools/v2.9.0` 以前只由從未切過的 `recipe-preview/v*` 線建置，所以下一個 `tools/v*` 才是它的第一個 image | `components/recipe-preview/` + `scripts/tools/dx/`（bundled eval core）| `tools/v*` |
 | ~~`ghcr.io/vencil/dynamic-alerting` (platform OCI)~~ ⛔ **不存在**：`release.yaml` 的 trigger 不含 `v*`，也沒有任何 job 推這個 package；`v*` 只是平台版號的錨點 | — | `v*` |
 | `ghcr.io/vencil/tenant-api` | `cmd/tenant-api/` | `tenant-api/v*` |
 
-chart 的發佈狀態記在 `scripts/tools/lint/check_chart_pull_surface.py`（#1269）：真的推到 `oci://ghcr.io/vencil/charts/` 過的只有 threshold-exporter 與 tenant-api。da-portal 與 recipe-preview 有 push 步驟但這條線還沒帶著它發過版，列在 `UNRELEASED`——該線第一次發版後，release 收尾時把它從表裡拿掉。其餘 7 個（federation-*、vector、victorialogs、chargeback-aggregator、mariadb-instance）不發佈、只從 git checkout 安裝，列在 `GIT_ONLY` 並附理由；新 chart 沒有推也沒列表就會被擋。`GIT_ONLY` 與 `UNRELEASED` 的 chart，security advisory 不寫 chart 版號，而是寫修法 commit 與第一個含它的平台 tag。
+chart 的發佈狀態記在 `scripts/tools/lint/check_chart_pull_surface.py`（#1269）：真的推到 `oci://ghcr.io/vencil/charts/` 過的只有 threshold-exporter 與 tenant-api。da-portal 有 push 步驟但這條線還沒帶著它發過版，列在 `UNRELEASED`——該線第一次發版後，release 收尾時把它從表裡拿掉。其餘 7 個（federation-*、vector、victorialogs、chargeback-aggregator、mariadb-instance）不發佈、只從 git checkout 安裝，列在 `GIT_ONLY` 並附理由；新 chart 沒有推也沒列表就會被擋。`GIT_ONLY` 與 `UNRELEASED` 的 chart，security advisory 不寫 chart 版號，而是寫修法 commit 與第一個含它的平台 tag。
 
 推完 tag 後用 `gh api /users/vencil/packages?package_type=container` 驗證 package 是否更新，或直接在瀏覽器 <https://github.com/vencil?tab=packages> 確認。
 
@@ -156,40 +156,39 @@ make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 
 
 ### Step 3: 建立 Tag
 
-六條版號線各有對應 tag：
+每條版號線各有對應 tag。⛔ 線的清單以 `release.yaml` 的 `on.push.tags` 為準（另加平台 tag `v*`）；下表是操作說明，增刪線時兩邊一起改：
 
 | 版號線 | Tag 格式 | 建立方式 | CI 觸發（release.yaml） |
 |--------|---------|---------|---------|
 | Platform (docs) | `v1.9.0` | `git tag v1.9.0` | **不觸發 build**（僅作 GitHub Release 錨點） |
 | Exporter (Go) | `exporter/v1.8.0` | `make release-tag-exporter`（從 Chart.yaml 推導） | `release-exporter` job → Docker image + Helm chart |
-| da-tools (Python) | `tools/v1.9.0` | `git tag tools/v1.9.0` | `release-da-tools` job → Docker image |
+| da-tools (Python) | `tools/v1.9.0` | `git tag tools/v1.9.0` | `release-da-tools` job → Docker image；`release-recipe-preview` job → recipe-preview image（#1040，無 chart） |
 | da-portal (Static) | `portal/v2.0.0` | `make release-tag-portal` | `release-portal` job → Docker image + Helm chart（#1352 案例 A 起） |
-| recipe-preview (Python) | `recipe-preview/v2.9.0` ⛔ 從未切過 | `make release-tag-recipe-preview`（從 Chart.yaml 推導；#657 同步升） | `release-recipe-preview` job → Docker image + Helm chart（job 完整可用，但至今沒有任何一次執行紀錄） |
 | tenant-api (Go) | `tenant-api/v2.4.0` | `git tag tenant-api/v2.4.0` | `release-tenant-api` job → Docker image + Helm chart |
 
 **Workflow 整併：** `release.yaml` 是唯一的 release workflow（`release-exporter.yaml` 和 `release-tools.yaml` 已刪除）。`v*` tag 不在 trigger 列表中，不會觸發任何 CI job。
 
-**六線版號策略：** 六條獨立版號線（`v*` platform、`exporter/v*`、`tools/v*`、`portal/v*`、`recipe-preview/v*`、`tenant-api/v*`）各有各的生命週期。不是所有 component 每次都升版；僅推有 code change 的版號線。
+**版號線策略：** 各條版號線各有各的生命週期。不是所有 component 每次都升版；僅推有 code change 的版號線。⚠️ recipe-preview 改了就要切 `tools/v*`：它的 image 只隨那條線建置。
 
 > **⛔ Component tag 版號 = 該 component 的 `Chart.yaml` `version`**（**不是** `appVersion`，**不是**平台線版號）。`release.yaml` 每個 component job 起手有 `Verify Chart.yaml version matches tag` 硬 gate：`grep '^version:' <chart>` ≠ tag → `ERROR: Chart.yaml version (X) != tag (Y)` → fail。
-> - **exporter / portal / recipe-preview** chart 與 release 線同步升（feature PR 不 bump），故其 tag = 平台同版（如 `exporter/v2.9.0`、`recipe-preview/v2.9.0`）。recipe-preview 之所以**同步升而非獨立 cadence**：它打包平台 compiler 的 byte-identical 快照，獨立版號會讓 bundled compiler 悄悄漂離平台 rule-pack（#657 PR-D2）。⛔ 這是**設計**不是**紀錄**：`recipe-preview/v2.9.0` 只是這條規則推導出來的名字，實際上 origin 沒有任何 `recipe-preview/v*` tag（#1352 案例 B），所以那個「同步升」至今一次都沒發生過。
+> - **exporter / portal** chart 與 release 線同步升（feature PR 不 bump），故其 tag = 平台同版（如 `exporter/v2.9.0`）。
+> - **recipe-preview** 沒有自己的線（#1040）：image 由 `tools/v*` 建置，版號 = da-tools `VERSION`。它打包平台 compiler 的快照，與同一個 tag 建出的 da-tools（generator 容器）是同一份 compiler；tenant-api chart 的 recipe-preview 容器 tag 預設跟隨 `generator.image.tag`，所以兩者一起移動。
 > - **tenant-api** chart 是 **per-change**（每次 PR bump，dev-rule #7），版號會走在平台線前面，故 tenant-api **以自己的 chart 版號發版**（如 chart 2.9.7 → `tenant-api/v2.9.7`），**不跟平台 2.9.0**。硬壓 chart 回平台版 = 降級，禁止。
 >   - **tenant-api 的 `appVersion` 一律等於 `version`**（[#3228](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3228)）：image 由同一個 commit 建、標 `:v<version>`，chart 預設跑 `:v<appVersion>`，兩者不同就是讓 chart 跑別版 binary。`bump_docs.py --tenant-api <ver>` 兩個一起改；`release-tenant-api` job 的 `Verify Chart.yaml appVersion matches version and tag` 與 `tests/helm/test_image_tag_derivation.py` 在不相等時 fail。
 
 ```bash
-# 情況 A：六線全升（所有 component 有變更）
+# 情況 A：全部的線都升（所有 component 有變更）
 git tag v<PLATFORM>
 make release-tag-exporter                       # 從 exporter Chart.yaml version 推導 exporter/v<EXP_CHART_VER>
 git tag tools/v<TOOLS>
 git tag portal/v<PORTAL>
-make release-tag-recipe-preview                 # 從 recipe-preview Chart.yaml version 推導（同步升 = 平台同版）
 git tag tenant-api/v<TENANT_API_CHART_VER>      # = helm/tenant-api/Chart.yaml 的 version（非平台版）
 
 # ⛔ 逐個 push，不要把 >3 個 tag 塞進同一次 git push：
 #    GitHub Actions 對「單次 push 含多個 tag」有觸發上限，>3 個 → release.yaml
 #    完全不觸發（靜默，0 個 run）。燒過 v2.9.0：4 tag 一次 push → 0 觸發 →
-#    刪 remote tag + 逐個重推才生效。六線時更要逐個推。
-for t in exporter/v<EXP_CHART_VER> tools/v<TOOLS> portal/v<PORTAL> recipe-preview/v<RP_CHART_VER> tenant-api/v<TENANT_API_CHART_VER>; do
+#    刪 remote tag + 逐個重推才生效。線多時更要逐個推。
+for t in exporter/v<EXP_CHART_VER> tools/v<TOOLS> portal/v<PORTAL> tenant-api/v<TENANT_API_CHART_VER>; do
   git push origin "$t"; sleep 8      # 推一個、確認 release.yaml 觸發、再推下一個
 done
 git push origin v<PLATFORM>          # 平台 anchor 不觸發 build，最後推；它是 GitHub Release umbrella
