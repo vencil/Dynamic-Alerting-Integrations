@@ -1,0 +1,128 @@
+package config
+
+// #3638 stage 2: ScheduledValue.structured is the structure's kind — set
+// wherever a mapping or sequence is put into Default as text, kept by every
+// copy that keeps the text, and never set for a scalar. Each test below
+// turns red when one construction site stops setting or keeping it.
+
+import (
+	"strconv"
+	"testing"
+	"unsafe"
+
+	"gopkg.in/yaml.v3"
+)
+
+func decodedValue(t *testing.T, text string) ScheduledValue {
+	t.Helper()
+	var sv ScheduledValue
+	if err := yaml.Unmarshal([]byte(text), &sv); err != nil {
+		t.Fatalf("decode %q: %v", text, err)
+	}
+	return sv
+}
+
+func TestStructured_SetForAWrittenMappingOrSequenceOnly(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		text string
+		want bool
+	}{
+		{"warning", false},
+		{`"target: critical"`, false},               // a scalar that reads like a mapping
+		{"{target: all}", true},                     // the arbitrary-mapping branch
+		{"[a, b]", true},                            // the sequence branch
+		{"{default: \"70\", overrides: []}", false}, // the schedule form: Default is its `default`
+	} {
+		if got := decodedValue(t, c.text).structured; got != c.want {
+			t.Errorf("decode %q: structured=%v, want %v", c.text, got, c.want)
+		}
+	}
+}
+
+// A reserved mapping that happens to hold a `default` key is re-read whole
+// (keepReservedMappings) — still the mapping it was written as.
+func TestStructured_KeptByKeepReservedMappings(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseConfigFile([]byte("tenants:\n  t1:\n    _metadata:\n      default: x\n      owner: dba\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sv := cfg.Tenants["t1"]["_metadata"]; !sv.structured {
+		t.Errorf("_metadata with a `default` key: structured=false, Default=%q", sv.Default)
+	}
+}
+
+// Two _metadata mapping layers merge into a mapping.
+func TestStructured_KeptByOverlayMetadataValue(t *testing.T) {
+	t.Parallel()
+	got := overlayMetadataValue(decodedValue(t, "{owner: a}"), decodedValue(t, "{tier: gold}"))
+	if !got.structured {
+		t.Errorf("overlay of two mappings: structured=false, Default=%q", got.Default)
+	}
+}
+
+// A reserved key's schedule is dropped to its `default`; the default's kind
+// goes with it.
+func TestStructured_KeptByServedValue(t *testing.T) {
+	t.Parallel()
+	sv := decodedValue(t, "{target: all}")
+	sv.Overrides = []TimeWindowOverride{{Window: "01:00-02:00", Value: "x"}}
+	if got := servedValue("_silent_mode", sv); !got.structured {
+		t.Errorf("servedValue dropped structured: %+v", got)
+	}
+	body := map[string]map[string]ScheduledValue{"t1": {"_silent_mode": sv}}
+	stripScheduledReserved("tenants", body)
+	if !body["t1"]["_silent_mode"].structured {
+		t.Errorf("stripScheduledReserved dropped structured: %+v", body["t1"]["_silent_mode"])
+	}
+}
+
+// The flag sits in ScheduledValue's padding: the value is held per key per
+// tenant and copied on every merge and scrape (bench-gate #871), so a
+// layout that grows it is a decision, not an accident.
+func TestStructured_ScheduledValueSizeUnchanged(t *testing.T) {
+	t.Parallel()
+	if strconv.IntSize != 64 {
+		t.Skip("the pinned size is the 64-bit layout")
+	}
+	if got := unsafe.Sizeof(ScheduledValue{}); got != 56 {
+		t.Errorf("unsafe.Sizeof(ScheduledValue{}) = %d, want 56", got)
+	}
+}
+
+// structureOf never reads a scalar's text as YAML.
+func TestStructureOf_AScalarIsNoStructure(t *testing.T) {
+	t.Parallel()
+	if n, structured, err := structureOf(ScheduledValue{Default: "target: all\nexpires: x\n"}); n != nil || structured || err != nil {
+		t.Errorf("structureOf(scalar) = %v, %v, %v", n, structured, err)
+	}
+	n, structured, err := structureOf(decodedValue(t, "{target: all}"))
+	if !structured || err != nil || !mappingHasKey(n, "target") {
+		t.Errorf("structureOf(mapping) = %v, %v, %v", n, structured, err)
+	}
+}
+
+// The same text as a block scalar and as a mapping is not the same value.
+func TestSameSchedule_ScalarAndMappingOfOneTextDiffer(t *testing.T) {
+	t.Parallel()
+	scalar := decodedValue(t, "|\n  target: critical\n")
+	mapping := decodedValue(t, "{target: critical}")
+	if scalar.Default != mapping.Default {
+		t.Fatalf("fixture: Defaults differ: %q vs %q", scalar.Default, mapping.Default)
+	}
+	if sameSchedule(scalar, mapping) {
+		t.Error("sameSchedule(block scalar, mapping of the same text) = true")
+	}
+}
+
+// A mapping or sequence with no top-level `target` is an unknown value
+// (WARN), whatever its text holds.
+func TestSilentModeOf_StructureWithoutTargetIsUnknown(t *testing.T) {
+	t.Parallel()
+	for _, text := range []string{`{reason: "target: x"}`, "{note: {target: all}}", "[{target: all}]"} {
+		if r := silentModeOf(decodedValue(t, text)); r.kind != silentModeUnknownScalar {
+			t.Errorf("silentModeOf(%s): kind=%d, want unknown scalar", text, r.kind)
+		}
+	}
+}

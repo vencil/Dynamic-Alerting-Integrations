@@ -67,15 +67,20 @@ var defaultTextBaseline = map[defaultTextSite]int{
 	{"metadata_value.go", "decodeTenantMetadata", "redecode"}: 1,
 	// _routing re-decoded from sv.Default (raw := sv.Default).
 	{"resolve.go", "ThresholdConfig.ResolveRoutingLogf", "redecode"}: 1,
-	// _silent_mode: "target:" sniff, then re-decode of TrimSpace(sv.Default).
-	{"silent_mode.go", "silentModeOf", "sniff"}:    1,
-	{"silent_mode.go", "silentModeOf", "redecode"}: 1,
 	// _state_* values: re-decode of TrimSpace(sv.Default) (kind probe, then
 	// the structured maintenance form).
 	{"state_value.go", "stateValueOf", "redecode"}:           1,
 	{"state_value.go", "structuredStateValueOf", "redecode"}: 1,
 	// ":" sniff on sv.Default to decide whether a second decode is needed.
 	{"config_file.go", "mayHaveStructuredReserved", "sniff"}: 1,
+}
+
+// defaultTextTheDecoder is the one site stage 2 converges on, and stays:
+// structureOf decodes the text of a value ScheduledValue.structured marks
+// as a mapping or sequence — never a scalar's (#3638). A reader asks it,
+// not the text. Same count/stale rules as the baseline.
+var defaultTextTheDecoder = map[defaultTextSite]int{
+	{"structured_value.go", "structureOf", "redecode"}: 1,
 }
 
 // defaultTextNotStructure lists matches of the shapes that are NOT about the
@@ -95,7 +100,7 @@ func TestDefaultTextGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := map[defaultTextSite]int{}
-	for _, m := range []map[defaultTextSite]int{defaultTextBaseline, defaultTextNotStructure} {
+	for _, m := range []map[defaultTextSite]int{defaultTextBaseline, defaultTextTheDecoder, defaultTextNotStructure} {
 		for k, n := range m {
 			expected[k] += n
 		}

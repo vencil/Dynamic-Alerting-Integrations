@@ -56,7 +56,7 @@ func scheduledReserved(k string, sv ScheduledValue) bool {
 // it is a scheduledReserved value — its `default` alone.
 func servedValue(k string, sv ScheduledValue) ScheduledValue {
 	if scheduledReserved(k, sv) {
-		return ScheduledValue{Default: sv.Default}
+		return ScheduledValue{Default: sv.Default, structured: sv.structured}
 	}
 	return sv
 }
@@ -69,7 +69,7 @@ func stripScheduledReserved(section string, bodies map[string]map[string]Schedul
 	for name, body := range bodies {
 		for k, sv := range body {
 			if scheduledReserved(k, sv) {
-				body[k] = ScheduledValue{Default: sv.Default}
+				body[k] = ScheduledValue{Default: sv.Default, structured: sv.structured}
 				out = append(out, section+"."+name+"."+k)
 			}
 		}
@@ -153,7 +153,10 @@ func scheduleHint(k string) string {
 // sameSchedule reports whether a and b are the same value as written:
 // default, every window and the expiry, field for field.
 func sameSchedule(a, b ScheduledValue) bool {
-	if a.Default != b.Default || len(a.Overrides) != len(b.Overrides) {
+	// #3638: the same text written as a scalar and as a mapping is not the
+	// same value — a block scalar `|` holding "target: critical\n" and the
+	// mapping {target: critical} have one Default.
+	if a.Default != b.Default || a.structured != b.structured || len(a.Overrides) != len(b.Overrides) {
 		return false
 	}
 	for i := range a.Overrides {

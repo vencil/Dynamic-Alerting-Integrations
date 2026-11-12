@@ -24,6 +24,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -32,11 +33,23 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/testutil"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"gopkg.in/yaml.v3"
 )
 
 // SV is a test helper to create a scalar ScheduledValue.
 func SV(s string) ScheduledValue {
 	return ScheduledValue{Default: s}
+}
+
+// SVYAML is a test helper to create a ScheduledValue from YAML text, as a
+// conf.d file's value is decoded (ScheduledValue.UnmarshalYAML): a mapping or
+// sequence comes out structured (#3638), a scalar as the scalar it is.
+func SVYAML(text string) ScheduledValue {
+	var sv ScheduledValue
+	if err := yaml.Unmarshal([]byte(text), &sv); err != nil {
+		panic(fmt.Sprintf("SVYAML(%q): %v", text, err))
+	}
+	return sv
 }
 
 // SVScheduled is a test helper to create a ScheduledValue with time-window overrides.

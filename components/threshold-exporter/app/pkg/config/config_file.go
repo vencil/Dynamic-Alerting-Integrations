@@ -383,7 +383,7 @@ func keepReservedBodies(typed map[string]map[string]ScheduledValue, raw map[stri
 			if err != nil {
 				continue // not reachable for a mapping decoded from YAML
 			}
-			typed[name][k] = ScheduledValue{Default: string(out)}
+			typed[name][k] = ScheduledValue{Default: string(out), structured: true}
 		}
 	}
 }

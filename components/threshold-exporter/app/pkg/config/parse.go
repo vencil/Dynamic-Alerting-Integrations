@@ -60,7 +60,7 @@ func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
 		if err != nil {
 			return fmt.Errorf("ScheduledValue: failed to re-serialize mapping: %w", err)
 		}
-		sv.Default = string(out)
+		sv.Default, sv.structured = string(out), true
 		return nil
 	}
 	if value.Kind == yaml.SequenceNode {
@@ -82,7 +82,7 @@ func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
 		if err != nil {
 			return fmt.Errorf("ScheduledValue: failed to re-serialize sequence: %w", err)
 		}
-		sv.Default = string(out)
+		sv.Default, sv.structured = string(out), true
 		return nil
 	}
 	return fmt.Errorf("ScheduledValue: unsupported YAML node kind %d", value.Kind)

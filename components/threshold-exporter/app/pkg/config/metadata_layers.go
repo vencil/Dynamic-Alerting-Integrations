@@ -92,7 +92,7 @@ func overlayMetadataValue(prev, next ScheduledValue) ScheduledValue {
 	if err != nil {
 		return next
 	}
-	return ScheduledValue{Default: string(out)}
+	return ScheduledValue{Default: string(out), structured: true}
 }
 
 // overlayTenantLayer writes one layer of a tenant's overrides (src) over the
