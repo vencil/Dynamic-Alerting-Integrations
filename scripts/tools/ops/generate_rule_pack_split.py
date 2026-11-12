@@ -48,8 +48,8 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 # Standard library only, so the PyYAML-less fallback below keeps it (#3415).
-from _lib_paths import require_dir  # noqa: E402
 from _lib_label import safe_label  # noqa: E402
+import _lib_input  # noqa: E402  (#3755: what --rule-packs-dir selects; standard library only)
 
 try:
     from _lib_python import (
@@ -526,8 +526,14 @@ def process_rule_packs(
     namespace: str = "monitoring",
     gitops: bool = False,
     dry_run: bool = False,
+    rule_pack_files: "Optional[List[Path]]" = None,
 ) -> Dict[str, Any]:
     """Process all rule packs in directory.
+
+    *rule_pack_files*: the rule packs ``--rule-packs-dir`` selected
+    (``_lib_input.selected``, #3755) — ``main`` judges and lists the
+    directory once and hands them here. None (a library caller) reads the
+    rule-pack declaration of *rule_packs_dir* itself.
 
     Returns validation report.
     """
@@ -535,10 +541,6 @@ def process_rule_packs(
     output_path = Path(output_dir)
     edge_dir = output_path / "edge-rules"
     central_dir = output_path / "central-rules"
-
-    if not dry_run:
-        _safe_mkdir(edge_dir)
-        _safe_mkdir(central_dir)
 
     report = {
         "status": "success",
@@ -559,7 +561,11 @@ def process_rule_packs(
     # a declared platform pack (`PLATFORM_PACKS`) watches the platform's own
     # stack, has no edge normalization part, and is not split.
     try:
-        rule_files = _lib_consumer_read.tenant_rule_pack_files(rule_packs_path)
+        if rule_pack_files is None:
+            rule_files = _lib_consumer_read.tenant_rule_pack_files(rule_packs_path)
+        else:
+            rule_files = [f for f in rule_pack_files if not _lib_consumer_read.is_platform_pack(
+                _lib_consumer_read.RULE_PACKS.member(f))]
     except _lib_consumer_read.ConsumerReadError as e:
         report["errors"].append(f"rule packs: {_lib_consumer_read.error_text(e)}")
         report["status"] = "error"
@@ -570,6 +576,12 @@ def process_rule_packs(
         )
         report["status"] = "error"
         return report
+
+    # #3755 review: made only once there is something to split — a refusal
+    # leaves no output tree behind.
+    if not dry_run:
+        _safe_mkdir(edge_dir)
+        _safe_mkdir(central_dir)
 
     report["validation"]["total_packs"] = len(rule_files)
 
@@ -742,12 +754,20 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
 
-    parser.add_argument(
-        "--rule-packs-dir",
-        default="rule-packs/",
+    # #3755: what --rule-packs-dir selects is declared (`_lib_input`, the
+    # rule-pack declaration RULE_PACKS) and judged once, before anything is
+    # written: not there (given or the default), no directory, unlistable,
+    # or holding no rule pack is rc 2 naming the flag. An empty directory was
+    # rc 2 already ("No rule pack files found", after the output tree had
+    # been made, the flag not named).
+    _lib_input.add_input(
+        parser, "--rule-packs-dir", select=_lib_consumer_read.RULE_PACKS,
+        empty=_lib_input.EMPTY_REFUSED, default="rule-packs",
+        absent_default=_lib_input.ABSENT_REFUSED,
         help=t(
-            "規則包目錄（預設: rule-packs/）",
-            "Directory with rule pack files (default: rule-packs/)"
+            "規則包目錄（預設: rule-packs；須至少有一個 rule pack）",
+            "Directory with rule pack files (default: rule-packs; must hold at least "
+            "one rule pack)"
         ),
     )
     parser.add_argument(
@@ -801,20 +821,29 @@ def main():
 
     args = parser.parse_args()
 
-    # #3415: judged before anything is written — a missing directory was
-    # "No rule pack files found" (read as empty) after the output tree had
-    # been created.
-    require_dir(args.rule_packs_dir, lang="zh" if get_lang().startswith("zh") else "en",
-                flag="--rule-packs-dir")
+    # #3415 / #3755: judged before anything is written, once, by the
+    # declaration (`_lib_input.selected`: a CallerError is rc 2 naming the
+    # flag) — the one listing of the directory. A missing directory was "No
+    # rule pack files found" (read as empty) after the output tree had been
+    # created. An entry the rule-pack declaration does not cover (an
+    # undeclared YAML beside the packs) is rc 2 too, naming it.
+    lang = "zh" if get_lang().startswith("zh") else "en"
     try:
-        # A directory that stats but cannot be read (listed): `Path.glob`
-        # below swallows the EACCES and reads it as "no rule pack files"
-        # (#3415). Opened, not listed — the glob stays the one enumeration.
-        os.close(os.open(args.rule_packs_dir, os.O_RDONLY))
-    except OSError as exc:
+        selected_packs = _lib_input.selected(args, "rule_packs_dir", lang=lang)
+    except _lib_consumer_read.ConsumerReadError as exc:
         die_caller_error(f"ERROR: --rule-packs-dir {safe_label(args.rule_packs_dir)}: "
-                         f"{exc.strerror}", "dir_not_accessible")
+                         f"{_lib_consumer_read.error_text(exc)}")
+    # #3755 review: a directory of platform packs alone selects nothing this
+    # tool splits (it splits tenant packs, #1595 D1a) — refused naming the
+    # flag, in lint's words, before anything is written.
+    if not [f for f in selected_packs if not _lib_consumer_read.is_platform_pack(
+            _lib_consumer_read.RULE_PACKS.member(f))]:
+        raise _lib_input.refuse_empty(
+            f"--rule-packs-dir {safe_label(args.rule_packs_dir)}",
+            f"{_lib_consumer_read.RULE_PACKS.wanted}, less the declared platform packs",
+            lang=lang)
     report = process_rule_packs(
+        rule_pack_files=selected_packs,
         rule_packs_dir=args.rule_packs_dir,
         output_dir=args.output_dir,
         operator=args.operator,

@@ -72,7 +72,8 @@ from _grar_validate import (  # noqa: E402
     routing_defaults_not_mapping_text,
     routing_not_mapping_warning,
 )
-from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source, print_reader_warnings  # noqa: E402
+from _grar_parse import (  # noqa: E402
+    BLOCKING_TREE_KINDS, parse_tree_failure_exit, policy_level_source, print_reader_warnings)
 from _grar_routes import _build_enforced_routes, enforced_route_tenants  # noqa: E402
 from _grar_merge import SecretBinding  # noqa: E402  (#1560)
 # #2326: the layer chain across conf.d directory levels — the generator's own.
@@ -87,8 +88,10 @@ from _grar_merge import (  # noqa: E402
 )
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
-from _lib_paths import require_dir  # noqa: E402  (#3276)
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, CallerError, Report  # noqa: E402
+import _lib_input  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 #: the status of a receiver slot the --policy domain allowlist refuses (#3142).
 STATUS_POLICY_REFUSED = "POLICY_REFUSED"
@@ -1376,6 +1379,7 @@ class _StoreTraceInput(argparse.Action):
         namespace.given_trace_inputs = [*given, self.option_strings[0]]
 
 
+@_lib_parse_cache.session()  # #3755: one reader of --config-dir, the one declared_trees judged
 def main(argv: list[str] | None = None) -> int | Report:
     lang = detect_cli_lang()
 
@@ -1385,7 +1389,12 @@ def main(argv: list[str] | None = None) -> int | Report:
     parser = argparse.ArgumentParser(
         description="Routing merge pipeline debugger (ADR-007)",
     )
-    parser.add_argument("--config-dir", required=True, help=_h("config_dir"))
+    # #3751: a conf.d with no config file is explained as one with no
+    # tenant (rc 0), as before; the path and a root da-guard cannot list are
+    # refused naming the flag.
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_ALLOWED, required=True,
+                         help=_h("config_dir"))
     parser.add_argument("--tenant", action="append", dest="tenants",
                         help=_h("tenant"))
     parser.add_argument("--show-profile-expansion", action="store_true",
@@ -1419,7 +1428,12 @@ def main(argv: list[str] | None = None) -> int | Report:
     except ValueError as exc:
         parser.error(str(exc))
 
-    require_dir(args.config_dir, lang="en", flag="--config-dir")  # #3276
+    # #3751: judged once — the path (#3276), a root da-guard cannot list —
+    # each refusal naming --config-dir (a CallerError: rc 2 through `run()`).
+    try:
+        [config_dir] = _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
+    except ParseTreeError as exc:
+        parse_tree_failure_exit(exc, args.config_dir)
 
     # #3142: the deployment policy, read by the generator's own resolver —
     # an unusable file or an unmet min_generator_version is rc 2.
@@ -1434,7 +1448,7 @@ def main(argv: list[str] | None = None) -> int | Report:
     allowed_domains = policy.allowed_domains
     secrets = policy.secret_binding()  # #1560: the policy's shared_secrets
 
-    parsed = _parse_config_files(args.config_dir)
+    parsed = _parse_config_files(str(config_dir))
     # #2906: in every mode (--trace too), as the reader's own multi-carrier
     # WARN was before it became a finding.
     print_reader_warnings(parsed)

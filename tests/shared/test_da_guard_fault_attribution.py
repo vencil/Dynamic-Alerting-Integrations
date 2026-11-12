@@ -265,5 +265,8 @@ def test_empty_config_dir_with_policy_dsl_is_a_caller_error(tmp_path):
     empty.mkdir()
     row = vc.check_policy_dsl(str(empty), _policy(tmp_path))
     assert row["caller_error"] is True and row["hint"] == vc._POLICY_DSL_NO_CONFIG_FILE_HINT, row
-    rc, rows = _cli(empty, "--policy-dsl", _policy(tmp_path))
-    assert rc == 2, (rc, rows["policy_dsl"])
+    # #3755: the CLI refuses an empty --config-dir at its declaration — one
+    # line naming the flag, no report (it was rc 2 with a partial report).
+    rc, out, err = _cli_no_document(empty, "--policy-dsl", _policy(tmp_path))
+    assert rc == 2 and out == "", (rc, out)
+    assert f"--config-dir {empty}: selects nothing" in err, err

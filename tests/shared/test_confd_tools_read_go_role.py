@@ -332,7 +332,7 @@ def test_an_unlistable_conf_d_beside_a_bad_name_is_named_as_nobody() -> None:
     """conf.d is mode 000 and a SIBLING of it has a name that is not UTF-8.
     The reason for conf.d comes from conf.d's own listing — never from
     re-listing its parent, which da-guard refuses whole for that sibling —
-    so validate-config says the directory could not be read, no traceback."""
+    so validate-config refuses it naming --config-dir, no traceback."""
     with unprivileged_sandbox(str(REPO)) as (box, run):
         box = pathlib.Path(box)
         conf = _write(box / "conf.d", {"db-a.yaml": "tenants:\n  db-a: {}\n"})
@@ -346,7 +346,10 @@ def test_an_unlistable_conf_d_beside_a_bad_name_is_named_as_nobody() -> None:
                  "--config-dir", str(conf)])
         out = r.stdout + r.stderr
         assert "Traceback" not in out, out[-2000:]
-        assert "could not be read" in out, out[-2000:]
+        # #3755: refused at its declaration — rc 2, the flag named (it was a
+        # finding saying the directory could not be read, rc 1).
+        assert r.returncode == 2, out[-2000:]
+        assert f"--config-dir {conf}: cannot list the directory" in out, out[-2000:]
 
 
 # ── names that are not UTF-8: a clean refusal ───────────────────────────

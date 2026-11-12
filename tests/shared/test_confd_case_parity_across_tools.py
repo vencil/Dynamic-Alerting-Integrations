@@ -709,6 +709,15 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
 # so it listed nothing with or without the tenant files. It now lists every
 # slot the route generator judges, and the generator refuses that receiver
 # (INVALID_CONFIG per tenant), so removing the tenants changes its output.
+#
+# ⚠️ `migrate_credentials.py` ENTERED this set in #3755 without changing what
+# it reads: its --config-dir moved from `_lib_io.add_config_dir_arg` (which
+# the population walk does not see) to `_lib_input.add_input` (which it
+# does), so it is swept for the first time. The fixture writes no receiver
+# credential in any tenant — the only receiver is the routing profile's
+# string `receiver`, which it lists as not judged in every tree — so its
+# answer is the same with the tenant files removed. A tenant receiver with
+# a plaintext credential in the fixture would make it visible.
 KNOWN_INSENSITIVE: set[str] = {
     "analyze_rule_pack_gaps.py",
     "backtest_threshold.py",
@@ -717,6 +726,7 @@ KNOWN_INSENSITIVE: set[str] = {
     "config_history.py",
     "da_assembler.py",
     "generate_tenant_mapping_rules.py",
+    "migrate_credentials.py",
     "tenant_verify.py",
     "threshold_govern.py",
 }

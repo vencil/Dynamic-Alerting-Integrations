@@ -242,6 +242,47 @@ def test_without_key_refs_the_run_says_unchecked_and_behaves_as_before(
     assert "mysql_cpu" in (conf_d / "t1.yaml").read_text(encoding="utf-8")
 
 
+# ── #3755：da-guard 沒有回答的那一輪，不再同時宣稱「未發現任何引用」 ────────────
+
+_NO_REFERENCE = "✅ 未發現任何引用"
+_OWN_SCAN_ONLY = "本工具自己的掃描沒有找到引用——但 da-guard 沒有回答"
+
+
+def test_no_reference_is_claimed_only_with_the_exporters_answer(tmp_path, da_guard_binary):
+    """A tree that does not reference the metric: with key-refs answering the
+    run says 「未發現任何引用」 (the control); with key-refs failing (exit 2,
+    named on stderr) the same tree's run must not say it — it was printed
+    beside da-guard's error. rc is the same either way (D12: never blocks)."""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  disk_usage: 80\n",
+        "t1.yaml": "tenants:\n  t1:\n    disk_usage: \"70\"\n",
+    })
+    answered = _run(conf_d, env={**os.environ, "DA_GUARD_BINARY": da_guard_binary})
+    assert answered.returncode == 0, answered.stdout + answered.stderr
+    assert _NO_REFERENCE in answered.stdout, answered.stdout
+    assert _OWN_SCAN_ONLY not in answered.stdout, answered.stdout
+    failed = _run(conf_d, env=_key_refs_fails(tmp_path, da_guard_binary))
+    assert failed.returncode == answered.returncode, failed.stdout + failed.stderr
+    assert "key-refs: refused" in failed.stderr, failed.stderr
+    assert "未體檢：da-guard 無法回答" in failed.stdout, failed.stdout
+    assert _NO_REFERENCE not in failed.stdout, failed.stdout
+    assert _OWN_SCAN_ONLY in failed.stdout, failed.stdout
+
+
+def test_an_empty_conf_d_does_not_claim_no_reference(tmp_path, da_guard_env):
+    """The shape #3755 measured: an empty --config-dir (allowed: it selects
+    nothing) — da-guard key-refs refuses it ("no .yaml files found", on
+    stderr) and the run went on to print 「✅ 未發現任何引用」. rc stays 1 (the
+    `_defaults.yaml` it cannot clean is named at the end)."""
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    r = _run(conf_d)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "no .yaml files found" in r.stderr, r.stderr
+    assert _NO_REFERENCE not in r.stdout, r.stdout
+    assert _OWN_SCAN_ONLY in r.stdout, r.stdout
+
+
 # ── F1／F2：寫入後的判定只看 root 層 `_` 檔，照 exporter 的 walk 取檔 ─────────
 
 _BROKEN_CARRIER = _DEFAULTS + "optional_overrides: 5\n"

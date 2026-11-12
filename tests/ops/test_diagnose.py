@@ -740,12 +740,14 @@ class TestProfileLookupSharesTheChainRead:
                                   config_dir=d)
 
     def test_check_resolves_the_chain_once(self, tmp_path):
-        """Counts `resolve_inheritance_chain` CALLS from `check()` — the
-        profile comes from that one call, not from a second
-        `lookup_tenant_profile` call over the same files."""
+        """Counts chain reads from `check()` — the profile comes from that
+        one read, not from a second `lookup_tenant_profile` call over the
+        same files. #3751: the read is `_resolve_chain` (what
+        `resolve_inheritance_chain` runs once the path is judged, and what
+        `main` runs on the tree it judged), so that is what is counted."""
         d = self._confd(tmp_path)
-        real = diagnose.resolve_inheritance_chain
-        with mock.patch.object(diagnose, "resolve_inheritance_chain",
+        real = diagnose._resolve_chain
+        with mock.patch.object(diagnose, "_resolve_chain",
                                wraps=real) as spy:
             result = self._check(d)
         assert spy.call_count == 1

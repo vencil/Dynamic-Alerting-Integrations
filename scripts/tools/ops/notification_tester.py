@@ -91,7 +91,9 @@ from _lib_python import (  # noqa: E402
     positive_seconds,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402
+import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
 from _grar_merge import Finding  # noqa: E402  (#3076 a slot verdict's reason)
@@ -1053,9 +1055,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=_HELP['description'][_LANG],
     )
-    parser.add_argument(
-        "--config-dir",
-        required=True,
+    # #3751: a conf.d with no config file is a run with no receiver to test
+    # (rc 0), as before; the path and a root da-guard cannot list are
+    # refused naming the flag.
+    _lib_input.add_input(
+        parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+        empty=_lib_input.EMPTY_ALLOWED, required=True,
         help=_HELP['config_dir'][_LANG],
     )
     parser.add_argument(
@@ -1094,7 +1099,12 @@ def main() -> None:
     import generate_alertmanager_routes as gar  # the one --policy resolver (#3142)
     gar.add_policy_argument(parser, lang=_LANG)
     args = parser.parse_args()
+    # One reader of --config-dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _main(args, gar)
 
+
+def _main(args: argparse.Namespace, gar: Any) -> "Report | None":
     # #3142: decided before any receiver is sent — an unusable --policy (or
     # an unmet min_generator_version) is the caller's input, rc 2.
     try:
@@ -1104,15 +1114,17 @@ def main() -> None:
     if not policy.applied:
         print(gar.POLICY_NOT_APPLIED_NOTICE, file=sys.stderr)
 
-    # #3276: the shared judgement of a caller-given path, in this tool's words.
-    config_dir_problem = classify_path(args.config_dir, "dir", lang=_LANG, flag="--config-dir")
-    if config_dir_problem is not None:
-        raise CallerError(f"配置目錄無法使用: {config_dir_problem.message}" if _LANG == 'zh'
-                          else config_dir_problem.message, config_dir_problem.reason)
+    # #3751: judged once — the path (#3276), a root da-guard cannot list —
+    # each refusal naming --config-dir (a CallerError: rc 2 through `run()`).
+    try:
+        [config_dir] = _lib_parse_cache.declared_trees(args, "config_dir", lang=_LANG)
+    except ParseTreeError as exc:
+        from _grar_parse import parse_tree_failure_exit  # the generator reader's own line
+        parse_tree_failure_exit(exc, args.config_dir)
 
     try:
         reports = run_all_tests(
-            args.config_dir,
+            str(config_dir),
             tenant_filter=args.tenant,
             timeout=args.timeout,
             dry_run=args.dry_run,

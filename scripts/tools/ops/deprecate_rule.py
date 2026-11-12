@@ -86,7 +86,7 @@ import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: only Go writes conf.d)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection and reading)
 import _lib_parse_tree  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
-from _lib_paths import require_dir  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3751: --config-dir is a declared input)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402  (#1822 the exporter's own answer)
     DA_GUARD_PREFIX,
@@ -896,9 +896,14 @@ def _main():
     )
     parser.add_argument("metrics", nargs="+",
                         help="要下架的 metric key (例如 mysql_slave_lag)")
-    parser.add_argument("--config-dir",
-                        default="components/threshold-exporter/config/conf.d",
-                        help="conf.d 目錄路徑")
+    # #3751: a conf.d with no config file is a run that finds no reference
+    # (rc as before); the path, the default not there and a root da-guard
+    # cannot list are refused naming the flag.
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_ALLOWED,
+                         default="components/threshold-exporter/config/conf.d",
+                         absent_default=_lib_input.ABSENT_REFUSED,
+                         help="conf.d 目錄路徑")
     parser.add_argument("--execute", action="store_true",
                         help="實際執行下架 (預設只預覽)")
     parser.add_argument("--plane", choices=("root", "subtree"), default="root",
@@ -922,17 +927,24 @@ def _main():
         try:
             _lib_parse_cache.subtree_reader(args.config_dir, args.root_dir)
         except ValueError as exc:
+            # A --config-dir that is not a usable path is refused as that,
+            # naming the flag (#3276), before the plane's own refusal.
+            _lib_input.selected(args, "config_dir", lang="zh")
             parser.error(f"--config-dir / --root-dir: {exc}")
         _EDIT_ROOTS[os.path.realpath(args.config_dir)] = args.root_dir
     elif args.root_dir is not None:
         parser.error("--root-dir is for --plane subtree only")
+    # #3751: judged once, before anything is printed, read or written — the
+    # path (#3276), a root da-guard cannot list — each refusal naming
+    # --config-dir (a CallerError: rc 2 through `run()`). On the subtree
+    # plane the reader judged is the one `subtree_reader` cut from the
+    # root's document above, never a parse-tree run on the subtree.
+    _lib_parse_cache.declared_trees(args, "config_dir", lang="zh")
     return _deprecate(args)
 
 
 def _deprecate(args):
-    """The run, once the arguments are parsed."""
-    require_dir(args.config_dir, lang="zh", flag="--config-dir")  # #3276
-
+    """The run, once the arguments are parsed and --config-dir is judged."""
     mode = "執行" if args.execute else "預覽"
 
     print(f"{'='*60}")
@@ -1098,6 +1110,11 @@ def _deprecate(args):
                     print(f"     • {safe_label(f['filename'])} → "
                           f"[{safe_label(section)}] {safe_label(key)}: "
                           f"{safe_label(val)}")
+        elif unchecked:
+            # da-guard did not answer this run (named above): "no reference"
+            # would be this tool's own scan passed off as the verdict.
+            print("  ⚠️  本工具自己的掃描沒有找到引用——但 da-guard 沒有回答"
+                  "（未體檢，見上），不能當作「未發現任何引用」")
         else:
             print(f"  ✅ 未發現任何引用")
         # exporter 會丟棄／不讀的區塊只警告，一檔一區塊一次（含子目錄）。

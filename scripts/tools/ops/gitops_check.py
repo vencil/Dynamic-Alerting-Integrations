@@ -28,10 +28,10 @@ from typing import Any, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report)
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
+import _lib_input  # noqa: E402
 import _lib_parse_cache  # noqa: E402
-from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -84,17 +84,14 @@ class GitOpsReport:
 
 # ---------------------------------------------------------------------------
 def check_local(dir_path: str) -> CheckResult:
-    """Check local configuration directory structure and validity."""
+    """Check local configuration directory structure and validity.
+
+    ⛔ *dir_path* is the one `main` judged (`_lib_parse_cache.declared_trees`,
+    #3751): no directory to check is the caller's input, not a verdict
+    (#3211, #3241 → #3276), refused there naming --dir — never judged again
+    here; the tree is read through the run's reader of it (`reader_for`)."""
     details = {"directory": dir_path}
     base = Path(dir_path)
-
-    # No directory to check is the caller's input, not a verdict (#3211):
-    # the caller-error exit (rc 2, nothing on stdout) via `run()`, named
-    # by the shared judgement of a caller-given path (#3241 → #3276).
-    problem = classify_path(dir_path, "dir", lang=_LANG, flag="--dir")
-    if problem is not None:
-        raise CallerError(_h(f"ERROR: --dir 無法使用：{problem.message}",
-                             f"ERROR: {problem.message}"), problem.reason)
 
     # ADR-036 step 4 (#2906): which files there are and what each holds is
     # `da-guard parse-tree`'s answer — the files the exporter selects, read
@@ -174,9 +171,12 @@ def main() -> "Report | None":
         "local",
         help=_h("檢查本機配置結構", "Check local config structure"),
     )
-    local_parser.add_argument(
-        "--dir",
-        required=True,
+    # #3751: a conf.d with no config file is the check's own fail (no
+    # `_defaults.yaml`, rc 1), as before; the path and a root da-guard
+    # cannot list are refused naming the flag.
+    _lib_input.add_input(
+        local_parser, "--dir", select=_lib_input.DA_GUARD_LISTS,
+        empty=_lib_input.EMPTY_ALLOWED, required=True,
         help=_h("配置目錄路徑", "Config directory path"),
     )
     local_parser.add_argument(
@@ -192,8 +192,18 @@ def main() -> "Report | None":
         sys.exit(EXIT_CALLER_ERROR)
 
     timestamp = datetime.now(timezone.utc).isoformat()
+    # One reader of --dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _local(args, timestamp)
+
+
+def _local(args: argparse.Namespace, timestamp: str) -> "Report | None":
     try:
-        check = check_local(args.dir)
+        # #3751: judged once — the path, a root da-guard cannot list — each
+        # refusal naming --dir (a CallerError: rc 2 through `run()`, nothing
+        # on stdout).
+        _lib_parse_cache.declared_trees(args, "dir", lang=_LANG)
+        check = check_local(str(args.dir))  # the value judged, as the caller wrote it
     except ParseTreeError as exc:
         # ADR-036 step 4: no usable `da-guard parse-tree` — the tree was
         # not read, so there is no verdict: a caller error, not a fail.
