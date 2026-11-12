@@ -2191,8 +2191,6 @@ da-tools scaffold [options]
 | `--namespaces <LIST>` | 逗號分隔 K8s namespace 清單 | （互動詢問） |
 | `-o, --output-dir <DIR>` | 輸出目錄 | `scaffold_output` |
 | `--catalog` | 列出支援的 exporter 後結束 | false |
-| `--generate-profile <NAME>` | 改為產生 `_profiles.yaml` 骨架，profile 名為此值；需要 `--db` | （無） |
-| `--tier <TIER>` | `--generate-profile` 的門檻層級：`prod` 或 `staging` | `prod` |
 | `--from-onboard <FILE>` | 讀 `onboard-hints.json`，依 onboard 結果為每個租戶產生配置 | （無） |
 | `--profile <NAME>` | 租戶 YAML 引用這個 profile（`_profile`），只寫明確覆寫的值 | （無） |
 | `--topology <TOPOLOGY>` | 租戶對應拓撲（ADR-006）：`1:1`、`N:1`（需 `--namespaces`）、`1:N`（產生 mapping 提示，需 `--mapping-instance` 與 `--mapping-filter`）；缺了只印 WARN | `1:1` |
@@ -2241,7 +2239,7 @@ da-tools scaffold --non-interactive --tenant db-c --db mariadb,redis
 |------|------|
 | `0` | 成功 |
 | `1` | 只有未捕捉的例外（stderr 有 traceback）。`--from-onboard` 的內容讀不了或頂層不是物件自 [#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445) 起是 `2`，不在這一格 | <!-- datools-cmd-ignore: 只有 traceback 回 1，沒有出口可追 -->
-| `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；`--from-onboard` 不存在、打不開或內容讀不了（不是 UTF-8、不是合法 JSON、頂層不是物件；一行點名旗標與路徑，頂層不是物件先前是 traceback，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)），或裡面沒有任何租戶；租戶 id 不是 DNS-1123 label（`--tenant`、互動輸入，或 `--from-onboard` 清單裡任一個；[ADR-035](adr/035-tenant-id-single-source.md)），什麼都不寫；寫出 `_defaults.yaml`、`<tenant>.yaml`（1:N 時另有 `_instance_mapping.yaml`）之前，先以 `da-guard parse-tree` 在 `-o` 目錄裡要寫入的路徑讀回，內容不是產生的內容就一個檔都不寫（`--generate-profile` 的 `_profiles.yaml` 同樣先確認；`--from-onboard` 先確認所有租戶的檔，一個不過就一個都不寫）（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906）；找不到可用的 da-guard 也是 2。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
+| `2` | 呼叫端錯誤：參數錯誤、不支援的 `--db` 類型、`--non-interactive` 缺 `--tenant` 或 `--db`，或 `-o/--output-dir` 指到的輸出路徑寫不進去（#1641）；`--from-onboard` 不存在、打不開或內容讀不了（不是 UTF-8、不是合法 JSON、頂層不是物件；一行點名旗標與路徑，頂層不是物件先前是 traceback，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)），或裡面沒有任何租戶；租戶 id 不是 DNS-1123 label（`--tenant`、互動輸入，或 `--from-onboard` 清單裡任一個；[ADR-035](adr/035-tenant-id-single-source.md)），什麼都不寫；寫出 `_defaults.yaml`、`<tenant>.yaml`（1:N 時另有 `_instance_mapping.yaml`）之前，先以 `da-guard parse-tree` 在 `-o` 目錄裡要寫入的路徑讀回，內容不是產生的內容就一個檔都不寫（`--from-onboard` 先確認所有租戶的檔，一個不過就一個都不寫）（[ADR-036](adr/036-single-parser-effective-config.md) §2，#2906）；找不到可用的 da-guard 也是 2。⚠️ v2.9.0 映像不檢查租戶 id <!-- image-caveat: v2.9.0 --> |
 
 ---
 
