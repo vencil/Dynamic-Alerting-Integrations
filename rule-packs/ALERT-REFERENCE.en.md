@@ -121,7 +121,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 | Alert Name | Severity | In maintenance | Trigger Condition | Recommended Action | Related Metric |
 |---|---|---|---|---|---|
 | TenantExporterAbsent | critical | fires | No healthy up{job="tenant-exporters"}==1 target for tenant {{ $labels.tenant }} (db_type={{ $labels. | Verify component is running and configured correctly; check component logs | tenant_expected_exporter |
-| TenantExporterReplicaDown | warning | muted | Target {{ $labels.instance }} (pod {{ $labels.pod }}, service {{ $labels.service }}) of tenant {{ $l | Immediately check server status and network connectivity; review system logs | up |
+| TenantExporterReplicaDown | warning | muted | Target {{ $labels.instance }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tena | Immediately check server status and network connectivity; review system logs | up |
 
 ---
 
