@@ -151,6 +151,58 @@ func TestStateValueOf_StructuredTextThatDoesNotParse(t *testing.T) {
 	}
 }
 
+// #3638 4/5: `_custom_alerts` is read from the list it was written as. The
+// same recipe text written as a string — a block scalar, which used to be
+// decoded as the list it spelled — is refused by both readers: the
+// exporter's walk (CustomAlertEntries / the served rows) and the write gate
+// (ValidateTenantCustomAlerts). An empty string still declares none.
+func TestCustomAlertSpecsOf_StructureNotText(t *testing.T) {
+	t.Parallel()
+	const recipe = "{recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}"
+	parse := func(body string) map[string]ScheduledValue {
+		t.Helper()
+		cfg, err := ParseConfigFile([]byte("tenants:\n  t1:\n    _custom_alerts:" + body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Tenants["t1"]
+	}
+	list := parse("\n      - " + recipe + "\n")
+	// The string holds the list's text exactly: only the kind differs.
+	block := " |\n"
+	for _, line := range strings.SplitAfter(list["_custom_alerts"].Default, "\n") {
+		if line != "" {
+			block += "      " + line
+		}
+	}
+	text, empty := parse(block), parse(" \"\"\n")
+	if list["_custom_alerts"].Default != text["_custom_alerts"].Default {
+		t.Fatalf("fixture: the list and the string must hold one text: %q vs %q",
+			list["_custom_alerts"].Default, text["_custom_alerts"].Default)
+	}
+
+	if entries, blockErr := CustomAlertEntries("t1", list); len(entries) != 1 || entries[0].Status != CustomAlertServed || blockErr != "" {
+		t.Errorf("list: entries %+v, blockErr %q", entries, blockErr)
+	}
+	if v := ValidateTenantCustomAlerts("t1", list, 20); v != nil {
+		t.Errorf("list: write gate %v", v)
+	}
+
+	if entries, blockErr := CustomAlertEntries("t1", text); entries != nil || !strings.Contains(blockErr, "written as a scalar, not a list") {
+		t.Errorf("string: entries %+v, blockErr %q", entries, blockErr)
+	}
+	if v := ValidateTenantCustomAlerts("t1", text, 20); len(v) != 1 || !strings.Contains(v[0], "written as a scalar, not a list") {
+		t.Errorf("string: write gate %v", v)
+	}
+
+	if entries, blockErr := CustomAlertEntries("t1", empty); len(entries) != 0 || blockErr != "" {
+		t.Errorf("empty string: entries %+v, blockErr %q", entries, blockErr)
+	}
+	if v := ValidateTenantCustomAlerts("t1", empty, 20); v != nil {
+		t.Errorf("empty string: write gate %v", v)
+	}
+}
+
 // _metadata (#3638): no value is no metadata and no error; a string is an
 // error whatever its text reads like; a mapping decodes.
 func TestDecodeTenantMetadata_StructureNotText(t *testing.T) {
