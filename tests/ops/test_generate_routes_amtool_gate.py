@@ -327,7 +327,8 @@ class TestApplyGate:
 # Before this, --validate printed OK at rc 0 for a tree that --output-configmap
 # then refused (`http://[1]/`). It now assembles the config on the BUILT-IN
 # base (`--validate --base-config` stays rc 2, #1616) and hands it to
-# `amtool_gate` before printing OK — same verdicts as the write paths.
+# `alertmanager_check` (#3689: da-read, then amtool) before printing OK —
+# the one gate the write paths call too.
 _VALIDATE_NOT_VALIDATED = gar.VALIDATE_AMTOOL_NOT_FOUND_NOTICE
 
 
