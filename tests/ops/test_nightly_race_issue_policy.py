@@ -1576,3 +1576,37 @@ def test_slow_package_end_to_end_from_the_real_parser() -> None:
     assert _kinds(frag) == [("slow-package", SLOW_PKG)]
     inc = derive_incidents(frag)[0]
     assert inc["threshold_s"] == GO_TEST_TIMEOUT_S / 2 and inc["timeout_s"] == GO_TEST_TIMEOUT_S
+
+
+def _cache_keys(steps: list) -> list[str]:
+    return [str((s.get("with") or {}).get("key") or "") for s in steps
+            if str(s.get("uses") or "").startswith("actions/cache")]
+
+
+def test_each_race_module_restores_the_go_cache_pr_ci_saves_for_it() -> None:
+    """#3541: nightly legs restore `<os>-go-<module>-<hash>`, and for every
+    module in plan_race_shards.MODULES a PR CI job that runs that module's Go
+    tests saves exactly that key. A shared key kept whichever job saved first,
+    so tenant-api's in-test generator-tool builds never reached the nightly."""
+    import plan_race_shards
+    race = _load_workflow(WORKFLOW)["jobs"]["race"]
+    nightly = _cache_keys(race.get("steps") or [])
+    want_nightly = "${{ runner.os }}-go-${{ matrix.module }}-${{ hashFiles('**/go.mod', '**/go.sum') }}"
+    assert nightly == [want_nightly], (
+        f"nightly race legs must restore exactly the per-module PR CI key, got {nightly}")
+
+    ci_jobs = _load_workflow(CI_WORKFLOW)["jobs"]
+    missing = []
+    for m in plan_race_shards.MODULES:
+        want = "${{ runner.os }}-go-" + m["module"] + "-${{ hashFiles('**/go.mod', '**/go.sum') }}"
+        savers = []
+        for job_id, job in ci_jobs.items():
+            steps = (job or {}).get("steps") or []
+            runs_module = any(
+                str(s.get("working-directory") or "").rstrip("/") == m["workdir"]
+                and _go_test_commands(str(s.get("run") or "")) for s in steps)
+            if runs_module and want in _cache_keys(steps):
+                savers.append(job_id)
+        if not savers:
+            missing.append(f"{m['module']}: no ci.yml job running go test in {m['workdir']} saves {want}")
+    assert not missing, "\n".join(missing)
