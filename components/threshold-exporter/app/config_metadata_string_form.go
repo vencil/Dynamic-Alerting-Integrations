@@ -50,6 +50,6 @@ func publishMetadataStringForm(metrics *configMetrics, logger *log.Logger, entri
 		shown = shown[:maxLoggedStringMetadata]
 		more = " …"
 	}
-	logger.Printf("WARN: %d config entries write _metadata as a string, not a mapping (#2859): %s%s — still read, but tenant-api refuses to write this form and the conf.d schema lint fails on it; rewrite each as a mapping (environment: …, owner: …)",
+	logger.Printf("WARN: %d config entries write _metadata as a string, not a mapping (#2859): %s%s — NOT read since #3638: every field of such an entry reads empty (no tenant_metadata_info labels from it); tenant-api refuses to write this form and the conf.d schema lint fails on it; rewrite each as a mapping (environment: …, owner: …)",
 		len(entries), strings.Join(shown, ", "), more)
 }

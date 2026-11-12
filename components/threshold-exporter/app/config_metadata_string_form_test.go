@@ -26,9 +26,9 @@ func TestLoad_DirMode_PublishesMetadataStringForm(t *testing.T) {
 	if got := testutil.ToFloat64(fresh.metadataStringForm); got != 1 {
 		t.Fatalf("after Load: da_config_metadata_string_form=%v, want 1 (only t-a)", got)
 	}
-	// Still read: the string form keeps serving its metadata.
-	if env := metadataEnvironment(m, "t-a"); env != "production" {
-		t.Fatalf("t-a environment=%q, want production (the string form is still read)", env)
+	// #3638: the string form is not read — the metric and WARN name it.
+	if env := metadataEnvironment(m, "t-a"); env != "" {
+		t.Fatalf("t-a environment=%q, want empty (the string form is not read)", env)
 	}
 
 	writeTestYAML(t, filepath.Join(dir, "a.yaml"), "tenants:\n  t-a:\n    _metadata:\n      environment: production\n")

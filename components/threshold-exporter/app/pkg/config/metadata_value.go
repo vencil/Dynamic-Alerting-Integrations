@@ -14,20 +14,33 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-
-	"gopkg.in/yaml.v3"
 )
 
-// decodeTenantMetadata is the exporter's one decode of a `_metadata` value
-// (sv.Default: the mapping re-serialized, or a string holding YAML): a
-// non-string scalar field is read as its text, a field it does not know is
-// dropped, and a value that does not decode into TenantMetadata is an error
-// — every field then reads empty (tenantMetadataOf).
+// decodeTenantMetadata is the exporter's one decode of a `_metadata` value:
+// the mapping it was written as (structureOf, #3638) — a non-string scalar
+// field is read as its text, a field it does not know is dropped, and a
+// value that does not decode into TenantMetadata is an error; every field
+// then reads empty (tenantMetadataOf). A value written as a string is no
+// mapping, whatever its text reads like: an error (#2859 refused writing the
+// form; #3638 stops reading it).
 func decodeTenantMetadata(sv ScheduledValue) (TenantMetadata, error) {
 	var tm TenantMetadata
-	err := yaml.Unmarshal([]byte(sv.Default), &tm)
+	node, structured, err := structureOf(sv)
+	if !structured {
+		if sv.Default == "" {
+			return tm, nil
+		}
+		return tm, errMetadataString
+	}
+	if err == nil {
+		err = node.Decode(&tm)
+	}
 	return tm, err
 }
+
+// errMetadataString is decodeTenantMetadata's error for `_metadata` written
+// as a string.
+var errMetadataString = fmt.Errorf("_metadata is written as a string, not a mapping (#2859, #3638): rewrite it as a mapping (owner: …, tier: …)")
 
 // tenantMetadataFields is TenantMetadata's yaml tags, computed once.
 var tenantMetadataFields = func() map[string]bool {
