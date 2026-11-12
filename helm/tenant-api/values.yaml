@@ -547,6 +547,50 @@ generator:
     existingConfigMap: ""
     key: policy.yaml
 
+# ── recipe-preview container (ADR-027 §5, #1040) ─────────────────────────────
+# Answers POST /api/v1/tenants/{id}/recipe-preview ("would this recipe fire?")
+# for tenant-api, over a Unix socket in the pod: tenant-api authorizes the
+# caller on {id}, then asks it. No network port, no identity, no Kubernetes API
+# access. Runs as the pod's uid: the service answers only a peer of its own uid
+# (SO_PEERCRED), and tenant-api is that peer. Disabled, tenant-api answers the
+# route with 503 PREVIEW_NOT_CONFIGURED; everything else is unaffected.
+#
+# ⛔ IMAGE: the recipe-preview image ships with the da-tools release (one
+# `tools/v*` tag builds both, from one commit), so it carries the same bundled
+# compiler (da-guard) as the generator above, which judges every write. Its
+# tag is NOT set here: it follows generator.image.tag, the one pin
+# `bump_docs.py --tools` rewrites. Set image.tag only to run a different image
+# on purpose. The pin above (v2.9.0) predates this: no recipe-preview image
+# exists for it, so the container cannot be pulled until the next tools
+# release (check_image_pin_capability.py registers v2.9.0 as an exemption that
+# release turns stale) — until then, run with recipePreview.enabled=false or
+# point image.tag at an image you built.
+recipePreview:
+  enabled: true
+  image:
+    repository: ghcr.io/vencil/recipe-preview
+    # Empty = generator.image.tag (see above).
+    tag: ""
+    # Optional digest pin. ⛔ Not inherited from generator.image.digest: the
+    # two images differ. When set, the digest is what runs.
+    digest: ""
+    pullPolicy: IfNotPresent
+  # The service's own limits. The request body limit is NOT here: tenant-api
+  # checks the body it forwards against the service's default (64 KiB,
+  # recipepreview.MaxRequestBytes), so the two cannot disagree.
+  maxConcurrency: 4      # previews evaluated at once (each runs promtool)
+  queueTimeout: 10       # seconds a request waits for a slot
+  rateLimitPerMin: 30    # per tenant
+  # Previews are rare and short (the compiler plus one promtool process); the
+  # numbers the standalone recipe-preview chart shipped with.
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
 service:
   type: ClusterIP
   # Port 80 → oauth2-proxy (4180) — external traffic

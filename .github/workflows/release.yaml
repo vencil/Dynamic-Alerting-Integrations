@@ -1,17 +1,19 @@
 # release.yaml — Build & push container images + Helm chart on tag
 #
-# 觸發條件（六線版號策略）：
+# 觸發條件：本檔 `on.push.tags` 就是發布線的清單（單一來源；文件不另行計數）：
 #   - exporter/v*        → threshold-exporter Docker image + Helm chart
-#   - tools/v*           → da-tools Docker image
+#   - tools/v*           → da-tools Docker image，以及 recipe-preview Docker image
+#                          （#1040：同一個 tag、同一個 commit，見 Job 4）
 #   - portal/v*          → da-portal Docker image + Helm chart (Interactive Tools Portal)
-#   - recipe-preview/v*  → recipe-preview Docker image + Helm chart (#657 would-fire
-#                          preview) — ⛔ 這條線從未被切過，見下方「產出」
 #   - tenant-api/v*      → tenant-api Docker image + Helm chart
 #   - v*                 → platform tag，僅用於 GitHub Release 錨點，不觸發 build
+#                          （故不在 on.push.tags 裡）
 #
 # 產出：
 #   - ghcr.io/vencil/threshold-exporter:v<version>  (Docker image, v-prefixed)
 #   - ghcr.io/vencil/da-tools:v<da-tools-version>    (Docker image, v-prefixed)
+#   - ghcr.io/vencil/recipe-preview:v<da-tools-version> (Docker image；tenant-api
+#     chart 的 recipe-preview 容器，tag 跟隨 generator.image.tag)
 #   - ghcr.io/vencil/da-portal:v<version>             (Docker image, v-prefixed)
 #   - ghcr.io/vencil/tenant-api:v<version>             (Docker image, v-prefixed)
 #   - oci://ghcr.io/vencil/charts/threshold-exporter (Helm chart)
@@ -19,12 +21,10 @@
 #   - oci://ghcr.io/vencil/charts/tenant-api         (Helm chart)
 #
 # ⛔ 宣告 ≠ 已發布（#1352）。上面每一列是「切了對應 tag 之後這支 workflow 會
-#   產出的東西」。recipe-preview 是唯一一條從未被切過的線——
-#   `git ls-remote --tags origin 'refs/tags/recipe-preview/*'` 回空（其餘四
-#   條線都有 tag），所以 ghcr.io/vencil/recipe-preview 與
-#   oci://…/charts/recipe-preview 都不存在，刻意不列在上面。
-#   release-recipe-preview job 本身完整可用；要啟用這條線就切一個
-#   recipe-preview/v* tag，然後把這兩筆產物加回清單。
+#   產出的東西」。recipe-preview image 從下一個 tools/v* 起才會產出：
+#   tools/v2.9.0 以前它只由從未被切過的 recipe-preview/v* 線建置，所以
+#   ghcr.io/vencil/recipe-preview 目前不存在。哪個 tools tag 建了它，由
+#   scripts/tools/lint/check_image_pin_capability.py 解析該 tag 的本檔判定。
 #
 # 前置條件：
 #   - Repository Settings → Actions → Workflow permissions → Read and write
@@ -52,7 +52,6 @@ on:
       - "exporter/v*"
       - "tools/v*"
       - "portal/v*"
-      - "recipe-preview/v*"
       - "tenant-api/v*"
 
 env:
@@ -717,25 +716,23 @@ jobs:
             oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
 
   # ----------------------------------------------------------------
-  # Job 4: Build & push recipe-preview image + Helm chart (#657)
+  # Job 4: Build & push recipe-preview image (#657, #1040)
   # ----------------------------------------------------------------
-  # recipe-preview was DESIGNED as a "sync-bumped" line — re-tagged at every
-  # platform release (same commit as the rule-pack ConfigMap), NOT an independent
-  # cadence, so its bundled compiler snapshot cannot silently drift from the
-  # platform compiler.
-  #
-  # ⛔ #1352 case B: that is the DESIGN, not the record. The line has never been
-  # cut — zero `recipe-preview/v*` tags exist on origin — so this job has never
-  # run, and the drift it guards against has never actually been guarded. The
-  # sentence above used to read as a statement of fact about EVERY release; it is
-  # reworded rather than deleted because the job is complete and correct, and
-  # cutting the first tag is all that enabling the line takes.
+  # Runs on the tools/v* tag, beside release-da-tools: one tag, one commit,
+  # two images. The tenant-api chart's recipe-preview container takes its tag
+  # from generator.image.tag (the da-tools pin), so the image that previews a
+  # recipe carries the same bundled compiler (da-guard) as the generator that
+  # judges the write. It has no chart and no release line of its own (#1040
+  # removed both; the recipe-preview/v* line was never cut).
+  # ⛔ check_image_pin_capability.py parses this job's `if:` at a pinned tools
+  # tag to decide whether that tag built this image: keep the job name and the
+  # refs/tags/tools/ condition, or the gate stops recognising releases.
   # The image bundles a SHA-pinned promtool because the firing/inactive verdict
   # format is version-bound; PROM_VERSION + amd64 digest == ci.yml's promtool gate
   # is CI-enforced (tests/preview/test_promtool_pin_parity.py).
   release-recipe-preview:
     runs-on: ubuntu-24.04
-    if: startsWith(github.ref, 'refs/tags/recipe-preview/')
+    if: startsWith(github.ref, 'refs/tags/tools/')
     permissions:
       contents: read
       packages: write
@@ -749,14 +746,15 @@ jobs:
 
       - name: Extract version from tag
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#recipe-preview/v}" >> "$GITHUB_OUTPUT"
+        run: echo "VERSION=${GITHUB_REF_NAME#tools/v}" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Chart.yaml version matches tag
+      # Same check as release-da-tools: the tag is the da-tools version.
+      - name: Verify VERSION file matches tag
         run: |
-          CHART_VER=$(grep '^version:' helm/recipe-preview/Chart.yaml | awk '{print $2}')
-          if [ "$CHART_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
-            echo "ERROR: helm/recipe-preview/Chart.yaml version ($CHART_VER) != tag (${{ steps.version.outputs.VERSION }})"
-            echo "Run: make bump-docs RECIPE_PREVIEW=${{ steps.version.outputs.VERSION }}"
+          FILE_VER=$(tr -d '[:space:]' < components/da-tools/app/VERSION)
+          if [ "$FILE_VER" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "ERROR: components/da-tools/app/VERSION ($FILE_VER) != tag (${{ steps.version.outputs.VERSION }})"
+            echo "Run: make bump-docs TOOLS=${{ steps.version.outputs.VERSION }} && commit before re-tagging"
             exit 1
           fi
 
@@ -805,31 +803,6 @@ jobs:
 
       - name: Verify multi-arch manifest (#463)
         run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview@${{ steps.build.outputs.digest }}
-
-      # --- Helm chart: package + verify now (fail fast, publishes nothing);
-      # `helm push` waits until the image digest has passed the scan (#1278) ---
-      - name: Set up Helm
-        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
-        with:
-          # Explicit, never the action's `latest` default (which silently
-          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
-          version: v4.3.0
-
-      - name: Package Helm chart
-        run: |
-          mkdir -p .build
-          helm package helm/recipe-preview -d .build/
-
-      # ⛔ #1755: assert what the archive CONTAINS before it is published. The
-      # source-tree gate (check_chart_ship_surface.py) runs on every PR; this one
-      # reads the .tgz itself, which is the only place a package-time surprise —
-      # a stray file written by an earlier step, a newly pulled subchart — is
-      # visible. `check_chart_ship_surface.py` asserts this step still exists.
-      - name: Verify packaged chart contents (#1755)
-        run: |
-          python3 -X utf8 scripts/tools/lint/check_chart_package_contents.py \
-            --chart helm/recipe-preview \
-            --tgz .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz
 
       # --- Security scan (PRE-publish hard gate on the candidate digest; #1278) ---
       - name: Scan image with Trivy
@@ -885,18 +858,12 @@ jobs:
           done
 
       # --- L3 supply-chain digest verification (#445 AC iii) ---
-      # recipe-preview is sync-bumped: appVersion == version == tag, so this
-      # confirms the image we just promoted is queryable in GHCR.
+      # Confirms the image we just promoted is queryable in GHCR (no chart).
       - name: Verify image digest (#445 AC iii)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: bash scripts/ops/verify_release_digest.sh recipe-preview helm/recipe-preview/Chart.yaml
-
-      - name: Push Helm chart to OCI registry
-        run: |
-          helm push .build/recipe-preview-${{ steps.version.outputs.VERSION }}.tgz \
-            oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+        run: bash scripts/ops/verify_release_digest.sh recipe-preview
 
   # ----------------------------------------------------------------
   # Job 5: Build & push tenant-api image + Helm chart
@@ -1028,6 +995,24 @@ jobs:
           VERSION: ${{ steps.version.outputs.VERSION }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh tenant-api helm/tenant-api/Chart.yaml
+
+      # ⛔ #1040: the chart is not published while its DEFAULTS run an image
+      # nobody can pull. The tenant-api pod runs a generator and a
+      # recipe-preview container whose tags follow the da-tools pin, so a
+      # tenant-api release cut before the tools release that builds those
+      # images would publish a chart whose default install never becomes
+      # Ready. The render is the source (a derived tag is invisible in
+      # values.yaml), resolution is anonymous (as a customer pulls), and the
+      # tenant-api image itself was promoted above, so it resolves too.
+      - name: Set up Go (da-crdecode, for the rendered-chart image check)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Verify the chart's default images resolve (#1040)
+        run: bash scripts/ops/with_da_crdecode.sh python3 scripts/ops/check_image_refs_resolve.py --scope rendered --chart helm/tenant-api
 
       - name: Push Helm chart to OCI registry
         run: |

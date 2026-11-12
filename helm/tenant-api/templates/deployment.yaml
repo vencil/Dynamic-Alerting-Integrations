@@ -202,6 +202,13 @@ spec:
             {{- if .Values.generator.policy.existingConfigMap }}
             {{- include "tenant-api.taEnv" (list "TA_DEPLOY_POLICY" (include "tenant-api.generatorPolicyPath" .) "generator.policy (tenant-api.generatorPolicyPath)") | nindent 12 }}
             {{- end }}
+            {{- if .Values.recipePreview.enabled }}
+            # ADR-027 §5 (#1040): POST /api/v1/tenants/{id}/recipe-preview is
+            # answered by the recipe-preview container on this socket, after
+            # tenant-api authorizes the caller on {id}. Unset, the route
+            # answers 503 PREVIEW_NOT_CONFIGURED.
+            {{- include "tenant-api.taEnv" (list "TA_RECIPE_PREVIEW_SOCKET" (include "tenant-api.recipePreviewSocketPath" .) "tenant-api.recipePreviewSocketPath") | nindent 12 }}
+            {{- end }}
             {{- if .Values.federation.enabled }}
             {{- $keyFile := .Values.federation.signingKey.secretKey }}
             {{- include "tenant-api.taEnv" (list "TA_FEDERATION_KEY" (ternary "" (printf "/etc/federation/%s" (toString $keyFile)) (empty $keyFile)) "federation.signingKey.secretKey") | nindent 12 }}
@@ -364,6 +371,13 @@ spec:
               mountPath: {{ include "tenant-api.generatorPolicyDir" . }}
               readOnly: true
             {{- end }}
+            {{- if .Values.recipePreview.enabled }}
+            # ADR-027 §5 (#1040): the recipe-preview socket directory.
+            # tenant-api only dials the socket, so read-only.
+            - name: recipe-preview-sock
+              mountPath: {{ include "tenant-api.recipePreviewSocketDir" . }}
+              readOnly: true
+            {{- end }}
           resources:
             {{- toYaml .Values.resources.tenantApi | nindent 12 }}
           readinessProbe:
@@ -463,6 +477,74 @@ spec:
             periodSeconds: 20
             timeoutSeconds: 5
             failureThreshold: 3
+
+        {{- if .Values.recipePreview.enabled }}
+        # ── Sidecar: recipe-preview (ADR-027 §5, #1040) ────────────────────────
+        # Answers "would this recipe fire?" for tenant-api over a Unix socket.
+        # No network port, no identity of its own, no Kubernetes API access.
+        # Runs as the pod's uid (no runAsUser here): the service answers only a
+        # peer of its own uid (SO_PEERCRED), and tenant-api is that peer.
+        - name: recipe-preview
+          image: "{{ .Values.recipePreview.image.repository }}:{{ include "tenant-api.recipePreviewTag" . }}{{ with .Values.recipePreview.image.digest }}@{{ . }}{{ end }}"
+          imagePullPolicy: {{ .Values.recipePreview.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: PREVIEW_SOCKET
+              value: {{ include "tenant-api.recipePreviewSocketPath" . | quote }}
+            - name: PREVIEW_MAX_CONCURRENCY
+              value: {{ include "tenant-api.intEnv" (list "recipePreview.maxConcurrency" .Values.recipePreview.maxConcurrency) }}
+            - name: PREVIEW_RATE_LIMIT_PER_MIN
+              value: {{ include "tenant-api.intEnv" (list "recipePreview.rateLimitPerMin" .Values.recipePreview.rateLimitPerMin) }}
+            - name: PREVIEW_QUEUE_TIMEOUT
+              value: {{ .Values.recipePreview.queueTimeout | toString | quote }}
+            # promtool is Go: before Go 1.25 it sizes GOMAXPROCS from the NODE's
+            # CPU count, not this container's cpu limit. One short rule
+            # evaluation needs no parallelism.
+            - name: GOMAXPROCS
+              value: "1"
+          volumeMounts:
+            - name: recipe-preview-sock
+              mountPath: {{ include "tenant-api.recipePreviewSocketDir" . }}
+            # The evaluation writes promtool's rule and data files under
+            # tempfile.mkdtemp(); the root filesystem is read-only.
+            - name: recipe-preview-tmp
+              mountPath: /tmp
+            # Same as the generator: this container parses content API users
+            # write and needs no Kubernetes API access, so an empty directory
+            # shadows the ServiceAccount token the pod mounts everywhere.
+            - name: recipe-preview-no-sa-token
+              mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              readOnly: true
+          resources:
+            {{- toYaml .Values.recipePreview.resources | nindent 12 }}
+          # No HTTP port: the probes ask GET /v1/status over the socket with
+          # the image's python, as the container's uid (which SO_PEERCRED
+          # admits).
+          # ⛔ No readinessProbe, on purpose. A pod is Ready only when every
+          # container is, so a readiness failure here would take tenant-api —
+          # reads and writes — out of the Service over an optional feature;
+          # a running service that stops answering only turns the preview
+          # route into 503 PREVIEW_UNAVAILABLE, and liveness restarts it.
+          # ⚠️ That decoupling ends at the container's lifecycle: while it is
+          # restarting (an OOM kill, a liveness restart) or not yet past its
+          # startupProbe, it is not Ready, and neither is the pod. The startup
+          # window is kept short for that reason (the service binds its socket
+          # within a second); recipePreview.enabled=false removes the coupling.
+          startupProbe:
+            {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
+            periodSeconds: 1
+            timeoutSeconds: 5
+            failureThreshold: 15
+          livenessProbe:
+            {{- include "tenant-api.recipePreviewProbe" . | nindent 12 }}
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 3
+        {{- end }}
 
         # ── Sidecar: oauth2-proxy ──────────────────────────────────────────────
         {{- if .Values.oauth2Proxy.enabled }}
@@ -637,6 +719,25 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
+        {{- if .Values.recipePreview.enabled }}
+        # ADR-027 §5 (#1040): the recipe-preview socket directory. Mounted
+        # ONLY by recipe-preview and tenant-api (the service's trust boundary,
+        # pinned by tests/helm/test_recipe_preview_container.py).
+        - name: recipe-preview-sock
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        # promtool's per-preview rule and data files. Memory-backed, so it
+        # counts against the container's memory limit; one preview is small.
+        - name: recipe-preview-tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 32Mi
+        - name: recipe-preview-no-sa-token
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        {{- end }}
         {{- if .Values.generator.policy.existingConfigMap }}
         # ADR-036 §5: the deployment policy file, from a ConfigMap the operator
         # owns (the chart ships no policy content). Not optional: a missing

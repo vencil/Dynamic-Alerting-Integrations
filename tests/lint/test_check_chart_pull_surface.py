@@ -93,18 +93,6 @@ class TestLiveRepoIsClean:
                    for w in taught["da-portal"]), taught["da-portal"]
         assert "da-portal" in gate.discover_pushed_charts(REPO_ROOT)
 
-    def test_a_pushed_chart_nobody_teaches_is_legal(self) -> None:
-        """recipe-preview is published by its job and taught nowhere.
-
-        The gate is one-directional on purpose: demanding a document for every
-        published chart would be a policy this gate invented. If recipe-preview
-        ever gains an install doc this assertion should be re-aimed, not the
-        gate loosened.
-        """
-        pushed = gate.discover_pushed_charts(REPO_ROOT)
-        assert "recipe-preview" in pushed
-        assert "recipe-preview" not in gate.taught_charts(REPO_ROOT)
-
     def test_registry_and_owner_come_from_the_workflow(self) -> None:
         assert gate.registry_and_owner(REPO_ROOT) == ("ghcr.io", "vencil")
 
@@ -133,6 +121,16 @@ def test_a_taught_chart_that_is_pushed_is_green(tmp_path: Path) -> None:
         files={"components/widget/README.md":
                "helm install widget oci://ghcr.io/acme/charts/widget --version 1.0.0\n"},
     )
+    assert gate.check(repo) == []
+
+
+def test_a_pushed_chart_nobody_teaches_is_legal(tmp_path: Path) -> None:
+    """The gate is one-directional on purpose: demanding a document for every
+    published chart would be a policy this gate invented. (Synthetic since
+    #1040: the live repo's one such chart, recipe-preview, was removed.)"""
+    repo = _make_repo(tmp_path, workflow_extra=_PUSH_LINE.format(name="widget"))
+    assert "widget" in gate.discover_pushed_charts(repo)
+    assert "widget" not in gate.taught_charts(repo)
     assert gate.check(repo) == []
 
 

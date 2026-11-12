@@ -28,3 +28,7 @@ generator:
     digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   policy:
     existingConfigMap: pss-gate-generator-policy
+recipePreview:
+  image:
+    tag: "v0.0.0-pss-gate"
+    digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000"

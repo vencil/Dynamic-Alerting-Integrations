@@ -81,15 +81,13 @@ def test_r1_wrong_ns_fqdn_flagged():
 
 
 def test_r1_wrong_ns_short_svc_form_flagged():
-    out = lint.scan_scalar("recipe-preview.default.svc:8082", None)
+    out = lint.scan_scalar("tenant-api.default.svc:8080", None)
     assert len(out) == 1 and "WRONG namespace `default`" in out[0][1]
 
 
 def test_r1_canonical_fqdn_clean():
     assert lint.scan_scalar(
         "http://tenant-api.tenant-api.svc.cluster.local:8080", None) == []
-    assert lint.scan_scalar(
-        "http://recipe-preview.monitoring.svc.cluster.local:8082", None) == []
 
 
 def test_r1_fires_regardless_of_context():
@@ -114,7 +112,7 @@ def test_r2_bare_scheme_url_unknown_context_flagged():
 
 def test_r2_bare_name_in_canonical_ns_allowed():
     assert lint.scan_scalar("http://tenant-api:8080", "tenant-api") == []
-    assert lint.scan_scalar("recipe-preview:8082", "monitoring") == []
+    assert lint.scan_scalar("tenant-api:8080", "tenant-api") == []
 
 
 def test_r2_hostport_form_flagged():
@@ -259,7 +257,7 @@ def test_unexempted_compose_fqdn_drift_flagged(tmp_path):
     # A wrong-ns FQDN in compose that is NOT the registered alias stays a
     # violation (the exemption is substring-scoped, not file-wide).
     _write_repo(tmp_path,
-                compose_alias="recipe-preview.default.svc.cluster.local")
+                compose_alias="tenant-api.default.svc.cluster.local")
     violations, infos, _ = lint.check_repo(tmp_path)
     assert len(violations) == 1 and infos == []
 
@@ -315,11 +313,10 @@ def test_module_constants_loaded_from_real_config():
     # The module-level constants are the real repo config, loaded at import —
     # so every legacy test above (which references lint.GOVERNED_SERVICES etc.)
     # keeps working without any per-test config wiring.
-    assert lint.GOVERNED_SERVICES == {
-        "tenant-api": "tenant-api", "recipe-preview": "monitoring"}
+    assert lint.GOVERNED_SERVICES == {"tenant-api": "tenant-api"}
     assert lint.CHART_CONTEXT_NS["mariadb-instance"] is None
     assert lint.CHART_CONTEXT_NS["da-portal"] == "monitoring"
-    assert len(lint.CHART_CONTEXT_NS) == 11
+    assert len(lint.CHART_CONTEXT_NS) == 10
     key = (lint._COMPOSE, "tenant-api.monitoring.svc.cluster.local")
     assert key in lint.EXEMPTIONS
     rationale, exit_cond = lint.EXEMPTIONS[key]
@@ -491,7 +488,7 @@ def test_config_file_is_not_a_scan_target():
 
 def test_config_file_not_flagged_in_live_dogfood():
     # The live dogfood already proves 0 violations despite the config carrying
-    # tenant-api / recipe-preview / the exemption FQDN; assert the config path
+    # tenant-api / the exemption FQDN; assert the config path
     # never appears in any finding location.
     repo = Path(__file__).resolve().parents[2]
     cfg_rel = Path(lint.DEFAULT_CONFIG_PATH).resolve().relative_to(

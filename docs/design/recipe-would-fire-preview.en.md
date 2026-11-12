@@ -16,10 +16,10 @@ parent: architecture-and-design.en.md
 >
 > **Related**: [ADR-024 Custom Alerts](../adr/024-version-aware-threshold-via-dimensional-label.en.md); tracking issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657). A recipe is the alert rule a tenant defines for themselves in the portal; this doc designs the preview that confirms, right there, whether it would fire.
 >
-> This design is implemented: the service lives in `components/recipe-preview/`, a `helm/recipe-preview` chart exists. The portal used to reach it through da-portal's reverse proxy (`portal.recipePreviewUrl`); that path was removed with [ADR-027 §5](../adr/027-tenant-api-caller-identity.en.md), and the service is moving into the tenant-api pod behind a route under `/api/` (in progress). It runs in try-local first; production deployment is deferred (the image and a `recipe-preview/v*` tag have not been released). This doc focuses on two decisions: **a standalone backend service**, and **how the synthetic input is fed**.
+> This design is implemented: the service lives in `components/recipe-preview/`. The portal used to reach it through da-portal's reverse proxy (`portal.recipePreviewUrl`); that path was removed with [ADR-027 §5](../adr/027-tenant-api-caller-identity.en.md). It is now a container in the tenant-api pod (the tenant-api chart's `recipePreview`, on by default): the portal calls `POST /api/v1/tenants/{id}/recipe-preview`, and tenant-api authorizes the caller and forwards over a Unix socket inside the pod. The standalone `helm/recipe-preview` chart is gone. The image is built with `tools/v*`; the next tools release ships the first one, and until then try-local is the only place it runs. This doc focuses on two decisions: **a standalone backend service**, and **how the synthetic input is fed**.
 > - **Settled**: the backend's shape (a standalone Python service, try-local first), the API contract, the production guardrails.
 > - **First scope**: the threshold recipe (`>` `>=` `<` `<=` `==`) + absence (gap detection — the synthetic series simply doesn't emit the metric).
-> - **Deferred**: production deployment, the remaining recipe types, historical backtest (triggers for each in §9).
+> - **Deferred**: the remaining recipe types, historical backtest (triggers for each in §9). Production deployment was here too; #1040 landed it.
 
 ## 1. The problem
 
@@ -47,13 +47,13 @@ A second copy in the frontend will get these wrong, and **a wrong preview is wor
 
 ## 3. Preview backend: a standalone Python service (try-local first)
 
-**Decision**: the preview backend is a **standalone Python service** bundling the compiler + `promtool`, landing first in try-local (the local docker-compose trial stack); production deployment is deferred.
+**Decision**: the preview backend is a **standalone Python service** bundling the compiler + `promtool`, landing first in try-local (the local docker-compose trial stack). Production deployment was deferred at first; it has since landed with #1040, as a container in the tenant-api pod (see the header above).
 
 Why a standalone service rather than folding it into the existing tenant-api:
 
 | Option | Upside | Cost |
 |---|---|---|
-| **A. Standalone Python service (chosen)** | Also Python, so it can **call the compiler directly** (see 5.3), zero cross-language rewrite; `promtool` need not go into the production core image; if an eval hangs, the impact is contained in this one service | Needs its own nginx route + auth; production is a new deployment → so it ships try-local first |
+| **A. Standalone Python service (chosen)** | Also Python, so it can **call the compiler directly** (see 5.3), zero cross-language rewrite; `promtool` need not go into the production core image; if an eval hangs, the impact is contained in this one service | Originally: its own nginx route + auth, and production a new deployment → so it shipped try-local first. Now: no route or auth of its own — it is a container in the tenant-api pod, called by tenant-api over a pod-local Unix socket after authorization (#1040) |
 | B. Extend the existing tenant-api (Go calling out to a subprocess) | Reuses tenant-api's existing route + auth; production in one shot | Image grows; couples "eval" into the "write" critical path; repeatedly forking a subprocess inside a long-running service risks concurrency issues |
 
 Why A, in one line: the platform consistently keeps production lean and contains failure impact, and the preview's near-term users are in the local trial stage — no reason to couple eval into the production write path for that. (Full A/B comparison is in the [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) thread.)
@@ -189,7 +189,6 @@ The mechanism: the service hardcodes the supported set (`SUPPORTED_RECIPES_MVP` 
 
 | Deferred item | Trigger |
 |---|---|
-| Production deployment of the preview service | A real production customer authoring in the portal who needs preview (when the local trial isn't enough). Re-evaluate the deployment shape then |
 | Remaining recipe types | Domain experts / tenants actually need previews for these types |
 | Historical backtest ("how many times did my real data fire in the past 24h") | The recipe's recording rule lands; `for:` semantics ready |
 | Rule-pack impact-matrix CI (assess fleet-wide impact before changing a rule-pack) | A rule-pack change causes an unexpected fleet-wide alert shift, or a pre-merge impact assessment is needed. Note: the preview uses synthetic input and does **not** need this one's snapshot data |

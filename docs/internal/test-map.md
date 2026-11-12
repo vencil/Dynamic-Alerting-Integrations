@@ -212,7 +212,7 @@ crash 與具名的呼叫端錯誤同為 rc 2，只斷言 `returncode == 2` 的�
 | `ops/test_regression.py` | 已知 bug 回歸 | regression marker |
 | `ops/test_validate_config.py` | validate_config.py 配置驗證 | Wave 12 unittest→pytest |
 | `ops/test_config_diff.py` | config_diff.py 差異偵測 | Wave 12 unittest→pytest |
-| `dx/test_bump_docs.py` | bump_docs.py 六條版號線 + 計數同步 + 診斷 × gating mode | Wave 12 unittest→pytest；#1407 大幅擴充 |
+| `dx/test_bump_docs.py` | bump_docs.py 各版號線（`VERSION_LINE_SOURCES`）+ 計數同步 + 診斷 × gating mode | Wave 12 unittest→pytest；#1407 大幅擴充 |
 | `ops/test_init_project.py` | `da-tools init` 產生器：GitLab root 五態分類、子目錄接線、summary 真話、CLI 契約 | #1357 |
 | `ops/test_generated_ci_artifacts.py` | 產出的 CI YAML 本身（可解析 / 可達 / image pin / 不含 `git`） | #1357 / #1358 / #1408 |
 | `dx/test_line_ending_policy.py` | 行尾政策：出貨/生產 Python（`scripts`+`components`+`helm`）的寫檔 site 必須明確表態 `newline=` | ⚠️ 判定器本身在 pre-commit `open-encoding-audit`（#1366）；本檔是正反例樣本（對 hook 實作跑，證明偵測器活著）／hook 範圍釘住＋CI Lint job 逐名跑該 hook 的接線斷言（#2539）／行為測試只在 Windows 具鑑別力 |

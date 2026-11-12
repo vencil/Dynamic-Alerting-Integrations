@@ -876,7 +876,7 @@ jobs:
           # diff base; PR_BODY env (set on this job) carries the bypass tag.
           pre-commit run helm-values-secrets-check --all-files
           # Cross-ns service-URL consistency (#1004): tenant-api pins its
-          # dedicated `tenant-api` ns, recipe-preview pins `monitoring`, in
+          # dedicated `tenant-api` ns in
           # every Helm values / raw k8s manifest / portal nginx / try-local
           # URL. Wired unfiltered here (like the lints above) so a PR that
           # misses the hook's path filter still can't land namespace drift.

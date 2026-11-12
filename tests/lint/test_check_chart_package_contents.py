@@ -258,7 +258,7 @@ class TestAgainstRealHelm:
 
     @pytest.mark.parametrize(
         "chart",
-        ["helm/threshold-exporter", "helm/recipe-preview", "helm/tenant-api"],
+        ["helm/threshold-exporter", "helm/tenant-api"],
     )
     def test_live_chart(self, chart: str) -> None:
         if shutil.which("helm") is None:

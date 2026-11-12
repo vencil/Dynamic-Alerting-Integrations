@@ -85,7 +85,6 @@ class TestLiveRepoIsClean:
         sites = gate.discover_shipping_charts(REPO_ROOT)
         assert set(sites) == {
             "helm/threshold-exporter",
-            "helm/recipe-preview",
             "helm/tenant-api",
             # #1352 case A: release-portal published a Docker image and nothing
             # else while components/da-portal/README.md taught customers to pull

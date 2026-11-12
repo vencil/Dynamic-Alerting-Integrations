@@ -1,21 +1,21 @@
 ---
 name: vibe-release
-description: Vibe 六線版號 release 收尾 SOP — CHANGELOG distill + project-face refresh → 未發布 draft advisory 檢查 → make pre-tag → 6-line tag push → gh release ×6。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 六線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
+description: Vibe 多線版號 release 收尾 SOP — CHANGELOG distill + project-face refresh → 未發布 draft advisory 檢查 → make pre-tag → 各線 tag push → 每條線一個 gh release。Use when wrapping a Vibe release：user 說「release 收尾 / 進入 phase e / 準備 release」、問「release 準備好了嗎」、branch 名 `chore/v*-release-wrapup`、或動到 `make pre-tag` / 各線 tag push / `gh release create`。延伸 #474 Layer 3 的 inline checklist 為系統化流程。
 ---
 
-# vibe-release — 六線版號 release 收尾
+# vibe-release — 多線版號 release 收尾
 
 完整步驟、distribution artifacts、benchmark gate、踩坑見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。本 skill 是**收尾 agent 紀律**的濃縮：四條規則（Rule 1–3 源自 v2.8.0 收尾踩的 2 個 release blocker；Rule 4 源自 #1269 — draft advisory 不在任何會被例行掃到的清單裡），加 release-type 分流。
 
 ## 何時觸發
 
-release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase e / 準備 release」、「release 準備好了嗎」、`chore/v*-release-wrapup` branch、`make pre-tag` / 六線 tag push / `gh release create ×6`。
+release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase e / 準備 release」、「release 準備好了嗎」、`chore/v*-release-wrapup` branch、`make pre-tag` / 各線 tag push / `gh release create`。
 
 ## Release-type 分流
 
 | 類型 | 範例 | 推哪些 tag |
 |---|---|---|
-| **GA**（component 有變更） | v2.8.0 | 六線中有 code change 的線：`v*` / `exporter/v*` / `tools/v*` / `portal/v*` / `recipe-preview/v*` / `tenant-api/v*` |
+| **GA**（component 有變更） | v2.8.0 | 有 code change 的線＋平台 `v*`。⛔ 線的清單以 `.github/workflows/release.yaml` 的 `on.push.tags` 為準，這裡不列舉（recipe-preview 隨 `tools/v*`，#1040） |
 | **Interim DX**（僅平台 / 內部工具） | v2.8.1 | 通常只 `v*`（platform tag）；component binary 不變則不推其 tag |
 | **Hotfix** | 假想 v2.8.2 | 受影響 component tag（觸發 build/image）**＋ 平台 `v*` tag**（見下「錨點鐵則」） |
 
@@ -63,7 +63,7 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 >
 > ⛔ **release.yaml 的 Trivy 是「發布前」閘門（#1278）**：各 job 先推 `:candidate-<run_id>-<run_attempt>`、掃那個 digest，通過才 promote 成 `:v<ver>`／`:latest` 並簽章／`helm push`／建 Release。所以 `trivy-scan-all` 雖只是 informational，**它報的 fixable HIGH/CRITICAL 到 tag push 時就是一條被擋下、什麼都沒發布的 release 線**——打 tag 前清掉，別指望「先發再補」。被擋時的復原是 patch → 刪 git tag → 重打同名 tag；registry 上的候選 tag 不必清（理由見 playbook §Release-gate 陷阱）。
 
-### 5. 六線 tag push + `gh release create`
+### 5. 各線 tag push + `gh release create`
 
 依分流推 tag；步驟、artifact、benchmark gate 見 [`github-release-playbook.md`](../../../docs/internal/github-release-playbook.md)。
 
