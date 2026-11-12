@@ -240,7 +240,7 @@ def judge(recipe, tenant, confd, deadline=None):
 
 
 def build_preview_test(recipe, tenant, value, judged):
-    """Build a promtool test (YAML str) for a supported recipe — inverted assert.
+    """Build a promtool test (YAML str) for a supported recipe — two opposite groups.
 
     The `user_threshold` series is the row the exporter serves for the recipe
     (its labels, severity and value, `judged.row`), not one assembled here.
@@ -445,7 +445,7 @@ def preview_recipe(recipe, tenant, scenario, deadline=None):
 
         pack_path = work / _PACK_FILE
 
-        # ── render → syntax gate → inverted-assert. Every step's verdict is
+        # ── render → syntax gate → two opposite groups. Every step's verdict is
         # read from what proves the step ran (_lib_engine's promtool proofs:
         # exit 0 for `check rules`, the JUnit report for `test rules`, never
         # console text — #3611 Q2); anything else is state:error, never a

@@ -394,7 +394,7 @@ def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> dic
     if suites[0].find("testcase/skipped") is not None:
         raise NoProof("a test group was skipped")
     names = [c.get("name") for c in cases]
-    if sorted(names) != sorted(expect["cases"]):
+    if None in names or sorted(names) != sorted(expect["cases"]):
         raise NoProof(f"the report's test groups {sorted(map(str, names))} are not "
                       f"the ones the test file defines {sorted(expect['cases'])}")
     passed = {c.get("name"): c.find("failure") is None for c in cases}
