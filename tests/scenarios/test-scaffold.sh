@@ -6,7 +6,7 @@ set -euo pipefail
 PASS=0
 FAIL=0
 TOTAL=0
-TOOL="scripts/tools/scaffold_tenant.py"
+TOOL="scripts/tools/ops/scaffold_tenant.py"
 
 assert() {
   local desc="$1"
@@ -83,7 +83,7 @@ echo "[Test Group 3] 非互動模式 — 全部 DB"
 python3 "$TOOL" --tenant db-full --db mariadb,redis,mongodb,elasticsearch -o "$OUT/test3" 2>/dev/null
 assert_file_exists "生成 db-full.yaml" "$OUT/test3/db-full.yaml"
 assert_file_contains "defaults 含 mongodb" "$OUT/test3/_defaults.yaml" "mongodb_connections"
-assert_file_contains "defaults 含 elasticsearch" "$OUT/test3/_defaults.yaml" "es_jvm_memory"
+assert_file_contains "defaults 含 elasticsearch" "$OUT/test3/_defaults.yaml" "es_heap_usage_percent"
 assert_file_contains "report 含 MongoDB 已預載" "$OUT/test3/scaffold-report.txt" "MongoDB"
 assert_file_contains "report 含 Elasticsearch 已預載" "$OUT/test3/scaffold-report.txt" "Elasticsearch"
 assert_file_contains "report Helm 指令含 helm upgrade" "$OUT/test3/scaffold-report.txt" "helm upgrade"
