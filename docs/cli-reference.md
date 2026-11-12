@@ -2278,13 +2278,13 @@ da-tools migrate <input_file> [options]
 
 **標準模式**：
 
-- `migration_output/conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）
+- `migration_output/.conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）。目錄刻意以 `.` 開頭：`-o` 落在服務中的 conf.d 裡（指向它，或在它裡面用預設 `-o`）時，每個讀取端都會略過點開頭的目錄，草稿租戶不會被服務；要驗這兩個檔，把 `.conf.d/` 本身當 `--config-dir`
 - `migration_output/platform-recording-rules.yaml` — Recording rules
 - `migration_output/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
 - `migration_output/migration-report.txt` — 詳細遷移報告
 - `migration_output/triage-report.csv` — 需人工審閱的規則清單
 - `migration_output/prefix-mapping.yaml` — Metric 前綴對應表
-- `migration_output/conf.d/_defaults.yaml` — 要合併進 conf.d 根 `_defaults.yaml` 的 `defaults:` 區塊（合併，不要整份覆蓋；先前叫 `defaults-snippet.yaml`）。threshold-exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔） <!-- image-caveat: v2.9.0 -->
+- `migration_output/.conf.d/_defaults.yaml` — 要合併進 conf.d 根 `_defaults.yaml` 的 `defaults:` 區塊（合併，不要整份覆蓋；先前叫 `defaults-snippet.yaml`）。threshold-exporter 只發射宣告過的 key，沒合併時租戶檔的值不會生效。值取自原規則，宣告後 warning 層對所有租戶生效。有 warning 配對的 critical 層不能用 defaults 宣告，要 critical 的租戶各自在自己的檔案寫 `<key>_critical`；只有 critical 的舊規則改讀 base 列，值已在片段裡（v2.9.0 映像還沒有這個檔） <!-- image-caveat: v2.9.0 -->
 
 **Triage 模式**：
 

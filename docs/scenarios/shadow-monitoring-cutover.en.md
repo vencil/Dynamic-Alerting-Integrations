@@ -201,10 +201,10 @@ python3 scripts/tools/ops/migrate_rule.py /path/to/old_rules/alerts.yaml \
 # Output (migration_output/):
 #   - platform-recording-rules.yaml, platform-alert-rules.yaml
 #     (new rules; the alert rules carry the migration_status: shadow label)
-#   - conf.d/_defaults.yaml (merge its defaults: block into the conf.d root _defaults.yaml first,
+#   - .conf.d/_defaults.yaml (merge its defaults: block into the conf.d root _defaults.yaml first,
 #     merging rather than overwriting the whole file; the exporter only emits declared
 #     keys. Values come from the original rules; the warning tier applies to every tenant)
-#   - conf.d/db-a.yaml (the tenant given by --tenant, thresholds under tenants.db-a. For the
+#   - .conf.d/db-a.yaml (the tenant given by --tenant, thresholds under tenants.db-a. For the
 #     warning tier, only tenants that need a value different from the default;
 #     <key>_critical cannot go in defaults, so every tenant that wants the critical tier
 #     writes it into its own conf.d file; a legacy rule that only had a critical tier is
