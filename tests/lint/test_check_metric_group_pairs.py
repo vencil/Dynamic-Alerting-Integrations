@@ -189,7 +189,10 @@ def test_group_without_a_critical_or_a_warning_suppresses_nothing():
     only_warn = _ns({"rule-pack-a.yaml": {"g": ["warning"]}})
     assert [e for e in only_crit if e.startswith("NO-DEDUP-GROUP")], only_crit
     assert [e for e in only_warn if e.startswith("NO-DEDUP-GROUP")], only_warn
-    assert _ns({"rule-pack-a.yaml": {"g": ["info", "critical"]}}) == []
+    # The inhibit mutes severity="warning" only: an info member is no pair.
+    info_only = _ns({"rule-pack-a.yaml": {"g": ["info", "critical"]}})
+    assert [e for e in info_only if e.startswith("NO-DEDUP-GROUP")], info_only
+    assert _ns({"rule-pack-a.yaml": {"g": ["warning", "critical"]}}) == []
 
 
 def test_real_rule_packs_carry_no_templated_or_colliding_group():
@@ -202,8 +205,8 @@ def test_real_rule_packs_carry_no_templated_or_colliding_group():
 
 
 def test_templated_group_is_left_out(tmp_path):
-    """A templated value (`slo_{{ $labels.name }}`, the custom-alert
-    compiler's) exists per alert instance: no group check applies to it."""
+    """The compiler's templated `slo_{{ $labels.name }}` exists per alert
+    instance: no group check applies to it."""
     (tmp_path / "rule-packs").mkdir()
     (tmp_path / "rule-packs" / "rule-pack-custom-alerts.yaml").write_text(
         "groups:\n- name: g\n  rules:\n  - alert: SloBurn\n    expr: vector(1)\n"
@@ -212,3 +215,14 @@ def test_templated_group_is_left_out(tmp_path):
     by_pack = gate.collect_groups_by_pack(tmp_path)
     assert by_pack == {"rule-pack-custom-alerts.yaml": {}}
     assert _ns(by_pack) == []
+
+
+def test_only_the_compilers_slo_template_is_left_out(tmp_path):
+    """A templated value of a hand-written pack is checked as written."""
+    (tmp_path / "rule-packs").mkdir()
+    (tmp_path / "rule-packs" / "rule-pack-x.yaml").write_text(
+        "groups:\n- name: g\n  rules:\n  - alert: X\n    expr: vector(1)\n"
+        "    labels:\n      severity: critical\n"
+        "      metric_group: 'x_{{ $labels.db }}'\n", encoding="utf-8")
+    errs = _ns(gate.collect_groups_by_pack(tmp_path))
+    assert [e for e in errs if e.startswith("NO-DEDUP-GROUP")], errs

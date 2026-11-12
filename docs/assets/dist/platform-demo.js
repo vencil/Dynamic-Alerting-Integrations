@@ -29,7 +29,7 @@ tenants:
 #     custom_mysql_global_status_threads_connected_critical: "200"
 
 # --- From: MySQLTooManyConnections (severity: warning) ---
-# \u{1F4D6} Severity Dedup: \u5DF2\u914D\u5C0D critical (MySQLTooManyConnectionsCritical)\uFF0Cmetric_group="connected"\u3002Alertmanager inhibit \u9810\u8A2D\u58D3\u5236 warning \u901A\u77E5 (tenant \u53EF\u8A2D _severity_dedup: "disable" \u53D6\u6D88)
+# \u{1F4D6} Severity Dedup: \u5DF2\u914D\u5C0D critical (MySQLTooManyConnectionsCritical)\uFF0Cmetric_group="custom_mysql_global_status_threads_connected"\u3002Alertmanager inhibit \u9810\u8A2D\u58D3\u5236 warning \u901A\u77E5 (tenant \u53EF\u8A2D _severity_dedup: "disable" \u53D6\u6D88)
 custom_mysql_global_status_threads_connected: "150"
 
 # --- From: MySQLHighSlowQueries (severity: warning) ---

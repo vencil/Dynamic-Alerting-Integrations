@@ -525,7 +525,7 @@ tenants:
             type: "pagerduty"
             service_key: {secret: {key: pagerduty-urgent}}
 
-        - metric_group: "replication"
+        - metric_group: "mysql_replication_lag"
           receiver:
             type: "email"
             to: ["dba-team@example.com"]
