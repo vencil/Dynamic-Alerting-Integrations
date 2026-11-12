@@ -96,3 +96,25 @@ def test_the_installed_amtool_still_prints_the_recording(case, tmp_path):
     assert (got["rc"], got["output"]) == (case["rc"], case["output"]), (
         "the installed amtool no longer prints what was recorded; new entry:\n"
         + json.dumps(got, ensure_ascii=False))
+
+
+def test_a_failed_line_from_an_exit_other_than_1_is_not_a_rejection():
+    """A Go panic exits 2; whatever it printed, amtool gave no verdict."""
+    assert R.amtool_verdict(2, "FAILED: something\npanic: boom", "x.yml") == R.AMTOOL_UNUSABLE
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX stand-in for amtool")
+def test_amtool_check_reads_its_run_through_amtool_verdict(tmp_path, monkeypatch):
+    """End to end through `amtool_check`: a stand-in amtool that cannot open
+    the file it is handed prints what the pinned one prints (recorded above),
+    for the exact path `amtool_check` passed — no verdict, exit 2."""
+    stub = tmp_path / "amtool"
+    stub.write_text("#!/bin/sh\n"
+                    "printf \"Checking '%s'  FAILED: open %s: permission denied\\n\\n"
+                    "amtool: error: failed to validate 1 file(s)\\n\\n\" \"$2\" \"$2\"\n"
+                    "exit 1\n", encoding="utf-8")
+    stub.chmod(0o755)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    check = R.amtool_check("route:\n  receiver: r\nreceivers:\n- name: r\n",
+                           what="the config", refusing="write it")
+    assert (check.status, check.exit_code) == (R.AMTOOL_UNUSABLE, 2), check
