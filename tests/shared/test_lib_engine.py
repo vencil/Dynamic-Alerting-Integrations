@@ -283,3 +283,13 @@ def test_check_rules_is_proven_by_exit_0_alone():
     assert proof(_cp(0, "  SUCCESS: 0 rules found"), {}) is True
     with pytest.raises(E.NoProof):
         proof(_cp(1, "", "  FAILED:"), {})
+
+
+def test_an_error_in_the_report_is_no_proof_whatever_the_exit_status(tmp_path):
+    """The <error> itself decides — not only the rc it usually comes with — and
+    its text is the reason shown (the test file promtool could not run)."""
+    proof = E.PROOFS[("promtool", "test-rules")]
+    report = _junit(tmp_path, _SUITE.format(t=1, f=0, e=1, body="<error>yaml: line 1</error>"))
+    for rc in (0, 1):
+        with pytest.raises(E.NoProof, match="could not run the test: yaml: line 1"):
+            proof(_cp(rc, args=_JUNIT_ARGS), report)
