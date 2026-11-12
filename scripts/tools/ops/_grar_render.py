@@ -988,8 +988,9 @@ def amtool_verdict(returncode: int, output: str) -> str:
     * anything else (a missing path or a directory prints no ``FAILED:``; a Go
       panic exits 2) → ``unusable``.
 
-    The recorded outputs of the pinned amtool are tests/ops/fixtures/
-    amtool_check_config/recorded.json; a version bump re-records them."""
+    The recorded outputs of the pinned amtool are
+    tests/ops/fixtures/amtool_check_config/recorded.json; a version bump
+    re-records them."""
     if returncode == 0:
         return AMTOOL_ACCEPTED
     if returncode == 1 and "FAILED:" in output and not _AMTOOL_IO_FAILURE.search(output):
