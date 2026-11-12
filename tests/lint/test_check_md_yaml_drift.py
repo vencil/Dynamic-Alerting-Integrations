@@ -359,17 +359,135 @@ def test_unjudged_credential_place_fails(tmp_path: Path) -> None:
     assert "[SCHEMA] docs/c.md:2 (credential_unjudged)" in r.stdout, r.stdout
 
 
-def test_expect_invalid_counts_a_plaintext_credential(tmp_path: Path) -> None:
+def test_expect_invalid_does_not_mask_a_plaintext_credential(tmp_path: Path) -> None:
+    """#3748: a schema error on purpose (`send_resolved: yes`) must not hide
+    a credential written out in the same unit: credentials are never one of
+    an `.expect-invalid` unit's expected violations."""
     attrs = " {.confd .expect-invalid}"
-    r = _run(_mkrepo(tmp_path, "c.md", _slack(_SECRET_VALUE, attrs)))
-    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    body = _slack(_SECRET_VALUE, attrs).replace(
+        "\n```\n", "\n        send_resolved: yes\n```\n")
+    r = _run(_mkrepo(tmp_path, "c.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/c.md:2 (credential_plaintext)" in r.stdout, r.stdout
     assert "docs/c.md:2 — 1 violation(s) on purpose" in r.stdout, r.stdout
     assert "s3cr3t" not in r.stdout + r.stderr
+    # The credential as a Secret reference: the schema error alone, on purpose.
     (tmp_path / "docs" / "c.md").write_text(
-        _slack("{secret: {key: slack-api-url}}", attrs), encoding="utf-8")
+        body.replace(_SECRET_VALUE, "{secret: {key: slack-api-url}}"), encoding="utf-8")
     r = _run(tmp_path)
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
+def test_a_credential_alone_is_no_expected_violation(tmp_path: Path) -> None:
+    """A unit wrong only by its credential is no counter-example of the
+    schema: the credential and the unmet expectation are both reported."""
+    r = _run(_mkrepo(tmp_path, "c.md", _slack(_SECRET_VALUE, " {.confd .expect-invalid}")))
     assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "[SCHEMA] docs/c.md:2 (credential_plaintext)" in r.stdout, r.stdout
     assert "[SCHEMA] docs/c.md:2 (expect-invalid)" in r.stdout, r.stdout
+
+
+# ── #3748: every routing block in docs/ is in a unit a check judges ────────
+
+_ROUTING = ("tenants:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
+            "        api_url: {secret: {key: slack-api-url}}\n")
+
+
+def _indent(text: str, prefix: str) -> str:
+    return "".join(prefix + line + "\n" for line in text.splitlines())
+
+
+@pytest.mark.parametrize("body, line", [
+    (f"```bash\ncat > conf.d/t1.yaml << 'EOF'\n{_ROUTING}EOF\n```\n", 5),
+    (f"> ```yaml\n{_indent(_ROUTING, '> ')}> ```\n", 4),
+    (f"Text.\n\n{_indent(_ROUTING, '    ')}\n", 5),
+    ('```json\n{"tenants": {"t1": {\n  "_routing": {"receiver": {}}}}}\n```\n', 3),
+    (f"```text\n{_ROUTING}```\n", 4),
+], ids=["heredoc", "blockquote-fence", "indented-code", "json", "text"])
+def test_a_routing_block_no_check_reads_is_a_violation(tmp_path: Path, body: str,
+                                                        line: int) -> None:
+    r = _run(_mkrepo(tmp_path, "s.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert f"[SCHEMA] docs/s.md:{line} (routing-key-not-judged)" in r.stdout, r.stdout
+    assert "{.confd}" in r.stdout
+
+
+def test_another_languages_fence_declared_illustrative_is_covered(tmp_path: Path) -> None:
+    body = ('```json {.illustrative reason="a reader\'s output, not a conf.d file"}\n'
+            '{"tenants": {"t1": {\n  "_routing": {"receiver": {}}}}}\n```\n')
+    r = _run(_mkrepo(tmp_path, "j.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "docs/j.md:1 — a reader's output, not a conf.d file" in r.stdout, r.stdout
+    # The reason is as mandatory as on a yaml fence.
+    (tmp_path / "docs" / "j.md").write_text(body.replace(
+        ' reason="a reader\'s output, not a conf.d file"', ""), encoding="utf-8")
+    r = _run(tmp_path, check="fences")
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "[FENCE] docs/j.md:1" in r.stdout and "reason" in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("body", [
+    "Set `_routing:` per tenant, or `routing_profiles:` once.\n",
+    "- `_routing`: the tenant's block\n- `_routing_defaults` — the platform's\n",
+    "| key | |\n|---|---|\n| _routing: | x |\n",
+], ids=["inline", "list-item", "table"])
+def test_prose_naming_a_routing_key_is_no_violation(tmp_path: Path, body: str) -> None:
+    r = _run(_mkrepo(tmp_path, "p.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "Routing-key lines outside a judged unit: 0" in r.stdout, r.stdout
+
+
+def test_a_unit_refused_as_declared_is_covered(tmp_path: Path) -> None:
+    body = ("```yaml {.confd .expect-refused=tag_not_allowed}\ntenants:\n  t1:\n"
+            "    _routing:\n      !!merge q: {receiver: {type: slack}}\n```\n")
+    r = _run(_mkrepo(tmp_path, "r.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+
+
+@pytest.mark.parametrize("body", [
+    (f"```yaml\nfinance:\n  t1:\n    _routing:\n      receiver:\n        type: slack\n"
+     f"        api_url: {_SECRET_VALUE}\n```\n"),
+    f"```yaml\nfinance: {{t1: {{_routing: {{receiver: {{type: slack, api_url: {_SECRET_VALUE}}}}}}}}}\n```\n",
+], ids=["block", "flow"])
+def test_a_routing_block_two_levels_down_is_judged(tmp_path: Path, body: str) -> None:
+    """The issue's `finance: {t1: {_routing: …}}`: no conf.d example by its
+    top two levels, so no schema reads it, yet the generator would refuse
+    the file. Judged as the generator judges a file (its scan at any depth);
+    the flow form puts no key at a line's start, so the line check alone
+    would miss it."""
+    r = _run(_mkrepo(tmp_path, "d.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/d.md:2 (credential_unjudged)" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+
+
+def _helm(api_url: str, extra: str = "") -> str:
+    return ("```yaml {.helm-values}\n# values.yaml\nthresholdConfig:\n" + extra
+            + "  defaults:\n    mysql_connections: 80\n  tenants:\n    t1:\n"
+            "      _routing:\n        receiver:\n          type: slack\n"
+            f"          api_url: {api_url}\n```\n")
+
+
+def test_helm_values_thresholdconfig_is_judged_as_the_conf_d_it_renders(tmp_path: Path) -> None:
+    r = _run(_mkrepo(tmp_path, "h.md", _helm(_SECRET_VALUE)))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/h.md:2 (credential_plaintext)" in r.stdout, r.stdout
+    assert "helm-values thresholdConfig → t1.yaml" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+    (tmp_path / "docs" / "h.md").write_text(
+        _helm("{secret: {key: slack-api-url}}"), encoding="utf-8")
+    r = _run(tmp_path)
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "platform                 1" in r.stdout and "tenant-file              1" in r.stdout
+
+
+def test_helm_values_with_existing_configmap_renders_no_conf_d(tmp_path: Path) -> None:
+    """`existingConfigMap` set: the chart renders no ConfigMap, so nothing in
+    `thresholdConfig` is conf.d — a routing block there is in no judged unit."""
+    body = _helm("{secret: {key: slack-api-url}}", "  existingConfigMap: threshold-config\n")
+    r = _run(_mkrepo(tmp_path, "h.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/h.md:9 (routing-key-not-judged)" in r.stdout, r.stdout
 
 
 def _profiles(api_url: str) -> str:

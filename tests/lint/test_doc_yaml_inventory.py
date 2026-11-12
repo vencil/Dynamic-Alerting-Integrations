@@ -381,3 +381,65 @@ def test_the_json_document_is_the_one_encoders_text(tmp_path):
         capture_output=True, text=True, encoding="utf-8", timeout=300, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout == encode_json(json.loads(proc.stdout)) + "\n", proc.stdout[:500]
+
+
+# ── #3748: the conf.d the threshold-exporter chart renders from Helm values ──
+
+_CHART_CONFIGMAP = REPO / "helm" / "threshold-exporter" / "templates" / "configmap.yaml"
+
+
+def test_the_helm_mapping_is_the_charts_template():
+    """`helm_values_confd` mirrors configmap.yaml: every `thresholdConfig` key
+    the template reads is one the mapping knows, each platform key is a
+    top-level key of `_defaults.yaml` under the condition the mapping
+    applies, and each tenant is `<t>.yaml` holding `tenants: {<t>: …}`. A
+    key added to the template fails here until the mapping says where it goes."""
+    import re
+    tpl = _CHART_CONFIGMAP.read_text(encoding="utf-8")
+    read = set(re.findall(r"\.Values\.thresholdConfig\.(\w+)", tpl))
+    assert read == set(inv.HELM_PLATFORM_KEYS) | {"tenants", "existingConfigMap"}, read
+    assert "{{- if not .Values.thresholdConfig.existingConfigMap }}" in tpl
+    assert f"  {inv.HELM_DEFAULTS_FILE}: |\n" in tpl
+    for key in inv.HELM_PLATFORM_KEYS:
+        assert re.search(rf"^    {key}:", tpl, re.M), key
+    for key in ("optional_overrides", "dimensions", "state_filters"):
+        # written inside its own truthy `if` (comments may sit between)
+        assert re.search(r"\{\{- if \.Values\.thresholdConfig\." + key + r" \}\}"
+                         r"(?:(?!\{\{- end)[\s\S])*?\n    " + key + ":", tpl), key
+    assert "{{- if ne (int64 $cap) 0 }}\n    max_metrics_per_tenant:" in tpl
+    assert "    defaults:\n      {{- .Values.thresholdConfig.defaults | toYaml" in tpl
+    assert re.search(r"\{\{- range \$tenant, \$overrides := \.Values\.thresholdConfig\.tenants \}\}\n"
+                     r"  \{\{ \$tenant \}\}\.yaml: \|\n    tenants:\n      \{\{ \$tenant \}\}:\n"
+                     r"        \{\{- \$overrides \| toYaml", tpl), "tenant files"
+
+
+def test_helm_values_confd_renders_what_the_values_write():
+    values = {"thresholdConfig": {
+        "defaults": {"m": 1}, "state_filters": {}, "dimensions": None,
+        "optional_overrides": ["k"], "max_metrics_per_tenant": 0,
+        "tenants": {"t1": {"_routing": {"receiver": {"type": "webhook"}}}}}}
+    assert inv.helm_values_confd(values) == [
+        ("_defaults.yaml", {"defaults": {"m": 1}, "optional_overrides": ["k"]}),
+        ("t1.yaml", {"tenants": {"t1": {"_routing": {"receiver": {"type": "webhook"}}}}}),
+    ]
+    assert inv.helm_values_confd({"thresholdConfig": {"existingConfigMap": "x",
+                                                      "tenants": {"t1": {}}}}) == []
+    assert inv.helm_values_confd({"image": {}}) == []
+    assert inv.helm_values_confd({"thresholdConfig": {"max_metrics_per_tenant": 5}}) == [
+        ("_defaults.yaml", {"max_metrics_per_tenant": 5})]
+
+
+def test_scan_fences_finds_every_language_and_an_unclosed_one():
+    text = "```json\n{}\n```\n~~~~\n```\nx\n~~~~\n```text\nopen\n"
+    got = [(f.start, f.end, f.info, f.body) for f in inv.scan_fences(text)]
+    assert got == [(1, 3, "json", ["{}"]), (4, 7, "", ["```", "x"]),
+                   (8, None, "text", ["open", ""])]
+
+
+def test_illustrative_on_another_language_is_an_exemption(tmp_path):
+    root = _docs(tmp_path, '```json {.illustrative reason="output"}\n{}\n```\n'
+                           '```bash {.python title="x"}\necho\n```\n')
+    got = inv.build(root)
+    assert [(o.where, o.end, o.reason) for o in got.other_exemptions] == [
+        ("docs/x.md:1", 3, "output")]
+    assert got.errors() == [] and got.units == []

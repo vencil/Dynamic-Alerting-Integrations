@@ -41,17 +41,20 @@ rustdoc's `invalid_codeblock_attributes`:
   hide anything from the conf.d reader.
 * `.illustrative reason="…"`: the fence is judged by no gate. The reason is
   mandatory and non-empty, and every exemption is printed by every report.
-  It takes no other attribute.
+  It takes no other attribute. A fence of another language may carry it too
+  (```` ```json {.illustrative reason="…"} ````: a reader's output showing a
+  conf.d key, #3748); no other attribute is read there.
 * `.expect-refused=<kind>` (with `.confd`): every unit of the fence must be
   refused by parse-tree with that problem kind; read, or refused with another
   kind, is an error. Only parse-tree names a kind; the other consumers'
   readings give a reason without one, so they take no `.expect-refused`.
 * `.expect-invalid` (with `.confd`): a counter-example that reads but is
-  wrong on purpose (rustdoc's `compile_fail`). The schema check (with the
-  route generator's credential judgement) must find at
+  wrong on purpose (rustdoc's `compile_fail`). The schema check must find at
   least one violation in EVERY unit of the fence, and reports none of them; a
   unit with none is an error (a correct file shown beside the counter-example
-  goes in a fence of its own). A block that only shows a reading, and meets
+  goes in a fence of its own). A credential written out is never one of
+  them: the route generator's credential judgement reports it whatever the
+  fence declares (#3748). A block that only shows a reading, and meets
   the schema, is `.illustrative`. Its values are still read by the
   unit-sanity lint: a reader copies them as they are.
 
@@ -75,6 +78,11 @@ Which consumer reads a unit:
   read and not reported. Refused with any other kind: an error that asks the
   author to declare the fence — the refusal says nothing about whether the
   example is right, only that the conf.d reader cannot tell.
+
+A `{.helm-values}` unit's `thresholdConfig` is the conf.d the
+threshold-exporter chart renders from it (`helm_values_confd`, held to the
+chart's template by a test): the schema check judges those files as conf.d
+(#3748).
 
 CLI (`--json`) prints the inventory for a program that is not Python (the Go
 loader test). Exit codes: 0, 2 when a reader could not answer.
@@ -379,8 +387,38 @@ def extract_fences(path: str, content: str,
     (`FENCE_TRIM`). A fence with no line inside is no fence.
     """
     errors = [] if errors is None else errors
-    open_char, open_len, start, info, body = "", 0, 0, None, []
-    yaml_fence = False
+    for f in scan_fences(content):
+        std = FENCE_RE.match(f.opening)
+        if std:
+            if f.end is not None and f.body:
+                yield Fence(path, f.start, std.group(1).strip(FENCE_TRIM), f.body)
+        elif YAMLISH_RE.match(f.info):
+            errors.append((path, f.start, (
+                f"yaml fence written {f.opening!r}: write it as ```yaml (three "
+                "backticks, lower case, attributes in {…} after it) — no gate "
+                "reads a yaml fence spelled another way")))
+        if f.end is None:
+            errors.append((path, f.start, (
+                "a fence opened here is never closed: everything below it is read as "
+                "its text (CommonMark), and no gate reads it — close it")))
+
+
+@dataclass
+class RawFence:
+    """A fence of any language, as CommonMark finds it (`scan_fences`)."""
+    start: int            # 1-based line of the opening fence
+    end: "int | None"     # 1-based line of the closing fence; None: never closed
+    opening: str          # the opening line without ASCII blanks
+    info: str             # the info string, as OPEN_RE reads it
+    body: "list[str]"     # the lines inside the fence, as written
+
+
+def scan_fences(content: str) -> "Iterator[RawFence]":
+    """Every fence of a Markdown text, whatever its language, in order: the
+    one fence finder (`extract_fences` and the routing-key coverage of the
+    schema check both read it). A fence never closed comes last, with
+    ``end`` None, and holds every line below its opening."""
+    open_char, open_len, start, opening, info, body = "", 0, 0, "", "", []
     for i, line in enumerate(content.split("\n"), 1):
         stripped = line.strip(FENCE_TRIM)
         if not open_char:
@@ -388,28 +426,20 @@ def extract_fences(path: str, content: str,
             if not m or (m.group("fence")[0] == "`" and "`" in m.group("info")):
                 continue
             open_char, open_len = m.group("fence")[0], len(m.group("fence"))
-            start, body, info = i, [], None
-            std = FENCE_RE.match(stripped)
-            yaml_fence = bool(std)
-            if std:
-                info = std.group(1).strip(FENCE_TRIM)
-            elif YAMLISH_RE.match(m.group("info")):
-                errors.append((path, i, (
-                    f"yaml fence written {stripped!r}: write it as ```yaml (three "
-                    "backticks, lower case, attributes in {…} after it) — no gate "
-                    "reads a yaml fence spelled another way")))
+            start, opening, info, body = i, stripped, m.group("info"), []
             continue
         if (stripped and set(stripped) == {open_char} and len(stripped) >= open_len):
-            if yaml_fence and body:
-                yield Fence(path, start, info, body)
-            open_char, yaml_fence = "", False
+            yield RawFence(start, i, opening, info, body)
+            open_char = ""
             continue
-        if yaml_fence:
-            body.append(line)
+        body.append(line)
     if open_char:
-        errors.append((path, start, (
-            "a fence opened here is never closed: everything below it is read as "
-            "its text (CommonMark), and no gate reads it — close it")))
+        yield RawFence(start, None, opening, info, body)
+
+
+#: The attribute list of a fence that is not a yaml fence (```` ```json
+#: {.illustrative reason="…"} ````): its language word, then `{…}`.
+OTHER_FENCE_ATTRS_RE = re.compile(r"^[ \t]*[^\s{]*[ \t]*(?P<attrs>\{.*\})[ \t]*$")
 
 
 def split_documented_files(block_lines: "list[str]") -> "list[tuple[int, str]]":
@@ -555,6 +585,67 @@ def _judge_refusals(u: Unit) -> None:
                 "declare the block's real consumer")
 
 
+def _other_fence_exemptions(rel: str, content: str, inv: "Inventory") -> None:
+    """A fence of another language declared ```` ```json {.illustrative
+    reason="…"} ````: no yaml, so no reader of this module reads it, but it
+    can show a conf.d key (a reader's output, say). The declaration says no
+    gate judges it, the same as on a yaml fence, and is printed with every
+    exemption. Only `.illustrative` is read there; an attribute list without
+    it is another tool's (mkdocs takes `{.lang title=…}`) and left alone."""
+    for f in scan_fences(content):
+        if f.end is None or FENCE_RE.match(f.opening) or YAMLISH_RE.match(f.info):
+            continue
+        m = OTHER_FENCE_ATTRS_RE.match(f.info)
+        if not m:
+            continue
+        decl = parse_declaration(m.group("attrs"))
+        if decl is None or decl.illustrative is None:
+            continue
+        if decl.errors:
+            inv.file_errors.extend((rel, f.start, e) for e in decl.errors)
+            continue
+        inv.other_exemptions.append(OtherExemption(rel, f.start, f.end, decl.illustrative))
+
+
+# ── the chart's conf.d (`{.helm-values}`) ───────────────────────────────────
+
+#: helm/threshold-exporter/templates/configmap.yaml: the `thresholdConfig`
+#: keys the chart writes as top-level keys of `_defaults.yaml`, each with when
+#: it is written (`defaults` always; the three others when truthy;
+#: `max_metrics_per_tenant` when not 0). `tenants.<t>` becomes `<t>.yaml`,
+#: `tenants: {<t>: …}`; `existingConfigMap` set renders no ConfigMap at all.
+#: tests/lint/test_doc_yaml_inventory.py reads the template and holds it to
+#: this mapping.
+HELM_DEFAULTS_FILE = "_defaults.yaml"
+HELM_PLATFORM_KEYS = ("defaults", "optional_overrides", "dimensions", "state_filters",
+                      "max_metrics_per_tenant")
+
+
+def helm_values_confd(values: Any) -> "list[tuple[str, dict]]":
+    """The conf.d files the threshold-exporter chart renders from Helm values
+    *values* — (file name, content) — as far as *values* writes them: a key
+    it leaves out is the chart's own `values.yaml`, not the documented
+    example's. Empty when the chart renders no ConfigMap
+    (`thresholdConfig.existingConfigMap`) or *values* has no `thresholdConfig`."""
+    tc = values.get("thresholdConfig") if isinstance(values, dict) else None
+    if not isinstance(tc, dict) or tc.get("existingConfigMap"):
+        return []
+    platform: "dict[str, Any]" = {}
+    for key in HELM_PLATFORM_KEYS:
+        value = tc.get(key)
+        if key == "defaults" and key in tc:
+            platform[key] = value
+        elif key == "max_metrics_per_tenant" and value is not None and value != 0:
+            platform[key] = value
+        elif key not in ("defaults", "max_metrics_per_tenant") and value:
+            platform[key] = value
+    out = [(HELM_DEFAULTS_FILE, platform)] if platform else []
+    tenants = tc.get("tenants")
+    if isinstance(tenants, dict):
+        out.extend((f"{t}.yaml", {"tenants": {t: body}}) for t, body in tenants.items())
+    return out
+
+
 def build(repo_root: "Path | str", *,
           consumers: "Iterable[str] | None" = None) -> "Inventory":
     """The inventory of *repo_root*/docs/**/*.md.
@@ -569,6 +660,8 @@ def build(repo_root: "Path | str", *,
     wanted = frozenset(CONSUMERS if consumers is None else consumers)
     inv = Inventory()
     for rel, content in iter_markdown(root):
+        inv.markdown[rel] = content
+        _other_fence_exemptions(rel, content, inv)
         for i, line in enumerate(content.split("\n"), 1):
             if RETIRED_MARKER_RE.search(line):
                 inv.file_errors.append((
@@ -626,10 +719,29 @@ def build(repo_root: "Path | str", *,
 
 
 @dataclass
+class OtherExemption:
+    """A fence of another language declared `.illustrative`
+    (`_other_fence_exemptions`): lines ``line``..``end`` (the fence lines)."""
+    path: str
+    line: int
+    end: int
+    reason: str
+
+    @property
+    def where(self) -> str:
+        return f"{self.path}:{self.line}"
+
+
+@dataclass
 class Inventory:
     units: "list[Unit]" = field(default_factory=list)
-    #: (path, line, message): errors on a docs line that is no unit (a retired marker).
+    #: (path, line, message): errors on a docs line that is no unit (a retired
+    #: marker, a bad `.illustrative` on a fence of another language).
     file_errors: "list[tuple[str, int, str]]" = field(default_factory=list)
+    #: fences of another language declared `.illustrative`.
+    other_exemptions: "list[OtherExemption]" = field(default_factory=list)
+    #: repo path → the Markdown text every unit was cut from.
+    markdown: "dict[str, str]" = field(default_factory=dict)
 
     def errors(self) -> "list[tuple[str, int, str]]":
         """Every error, (path, line, message), in file order."""
@@ -640,6 +752,12 @@ class Inventory:
 
     def exemptions(self) -> "list[Unit]":
         return [u for u in self.units if u.exemption is not None]
+
+    def helm_confd(self) -> "list[tuple[Unit, str, dict]]":
+        """(unit, file name, content) of every conf.d file the chart renders
+        from a judged `{.helm-values}` unit (`helm_values_confd`)."""
+        return [(u, fname, data) for u in self.judged("helm-values")
+                for doc in u.documents for fname, data in helm_values_confd(doc)]
 
     def judged(self, consumer: "str | None" = ...) -> "list[Unit]":
         """Units with a reading and no error or exemption — what a gate
@@ -654,6 +772,7 @@ def print_exemptions(inv: "Inventory | list[tuple[str, str]]", file=None) -> Non
     that drops inputs silently reads as 'covered everything' when it did not.
     Every gate that reads the inventory prints this."""
     ex = ([(u.where, u.exemption) for u in inv.exemptions()]
+          + [(o.where, o.reason) for o in inv.other_exemptions]
           if isinstance(inv, Inventory) else list(inv))
     if not ex:
         return
