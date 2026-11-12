@@ -270,6 +270,44 @@ tests:
             the next tick reloads and the alert resolves.
           runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md
 
+  # ConfigKeysUnread: one unread tenant key, counted by both replicas.
+  - interval: 1m
+    name: keys-unread-two-replicas-fires-once
+    input_series:
+    - series: da_config_keys_unread{reason="unconsumed", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x20
+    - series: da_config_keys_unread{reason="unconsumed", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x20
+    alert_rule_test:
+    - eval_time: 16m
+      alertname: ConfigKeysUnread
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          alert_source: platform
+          job: threshold-exporter
+          reason: unconsumed
+        exp_annotations:
+          summary: Threshold-exporter reads no row for 1 tenant key(s) (unconsumed)
+          description: |
+            1 (tenant, key) pair(s) of the threshold-exporter's
+            committed config have been read by none of its rows for more
+            than 15 minutes (unconsumed): unconsumed = a threshold
+            key the root `_defaults.yaml` does not declare (a misspelt key)
+            or a `_critical` whose base has no root value; profile_not_filled
+            = a profile writes a key the root declares without a platform
+            value (`optional_overrides:`); unregistered = a `_` key the
+            reserved-key registry lists no reader for. The value written
+            there tunes no alert. The exporter log line "config keys no row
+            of this exporter reads" names every tenant and key; run
+            `da-tools explain-keys` on the conf.d tree for the file and the
+            shared verdict. Counted per tenant, so one key in a platform
+            file or a profile counts once for each tenant it reaches. This
+            alert does not cover reserved keys the registry lists (e.g. a
+            `_state_<filter>` naming a removed filter) or a key a subtree
+            `_defaults.yaml` writes.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/038-unread-keys-judged-by-readers.md
+
   # TenantMetricsOverLimit: one tenant 3 over the cap, reported by both replicas.
   - interval: 1m
     name: tenant-over-limit-two-replicas-fires-once
