@@ -79,6 +79,11 @@ on:
       - "helm/federation-gateway/audit-sidecar/**"
       - "helm/vector/projection-gate/**"
       - "try-local/generator/**"     # try-local generator runtime (#2903); its da-guard stage reads the exporter paths above (#3530)
+      # The repo-root build context's ignore file (#3738): it decides what
+      # da-portal, tenant-api, recipe-preview and the other root-context
+      # builds receive — e.g. that tools/portal/node_modules stays out of the
+      # portal-build stage. Pinned by tests/ops/test_portal_dist_consumers_build.py.
+      - ".dockerignore"
       - ".github/workflows/component-docker-build.yaml"
 
 concurrency:

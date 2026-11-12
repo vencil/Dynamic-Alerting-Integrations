@@ -1223,15 +1223,27 @@ test-e2e-visual-update: portal-build ## ⛔ 重產 visual baseline。**只能在
 	@cd tests/e2e && npm run test:visual:update -- $(ARGS)
 
 .PHONY: portal-build
-portal-build: ## Build portal ESM bundles (TRK-230 Option C; entries listed in tools/portal/manifest.json)
+portal-build: portal-deps ## Build portal ESM bundles (TRK-230 Option C; entries listed in tools/portal/manifest.json)
 	@cd tools/portal && npm run build
 
+# #3738：serve-docs／test-e2e 等 target 依賴 portal-build，而全新 checkout 沒有
+# tools/portal/node_modules（build 會死在找不到 esbuild）。node_modules 不存在、
+# 或 package-lock.json 比上次安裝新（npm 安裝時寫 node_modules/.package-lock.json）
+# 時才 `npm ci`；其他情況不重裝。
+.PHONY: portal-deps
+portal-deps: ## Install tools/portal npm deps when missing or older than package-lock.json
+	@if [ ! -f tools/portal/node_modules/.package-lock.json ] || \
+	    [ tools/portal/package-lock.json -nt tools/portal/node_modules/.package-lock.json ]; then \
+		echo "==> tools/portal: npm ci"; \
+		cd tools/portal && npm ci --no-audit --no-fund; \
+	fi
+
 .PHONY: portal-build-watch
-portal-build-watch: ## Watch-mode portal build for dev iteration (TRK-230)
+portal-build-watch: portal-deps ## Watch-mode portal build for dev iteration (TRK-230)
 	@cd tools/portal && npm run build:watch
 
 .PHONY: test-portal
-test-portal: ## Vitest unit tests for portal components (TRK-230; tests in tests/portal/)
+test-portal: portal-deps ## Vitest unit tests for portal components (TRK-230; tests in tests/portal/)
 	@cd tools/portal && npm run test
 
 .PHONY: portal-bundle-budget

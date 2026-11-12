@@ -22,9 +22,18 @@ WHAT THIS PINS (one test per consumer, plus the deploy trigger)
 * Smoke tests (``ci.yml`` ``smoke-tests-run``) and the visual-baseline
   workflow: a portal build runs before the step that starts the server over
   ``docs/``.
+* Every one of those steps (``setup-node``, ``npm ci``, the build) runs
+  unconditionally: no step-level ``if:`` and no ``continue-on-error`` on the
+  step or its job. Either one turns "the build ran" into "the build may have
+  been skipped or failed", and the consumer then serves the checkout's copy
+  with the job still green.
 * The da-portal image: a ``portal-build`` stage runs ``npm ci`` and
   ``npm run build``, and the final stage takes ``assets/dist/`` from that
-  stage — never from the build context's ``docs/assets/dist/``.
+  stage — never from the build context's ``docs/assets/dist/``, neither by
+  naming it nor by a later directory COPY whose destination contains
+  ``/assets/dist`` (``COPY docs/assets/ …/assets/`` would overwrite the
+  stage's bundles with the committed ones). Single-file COPYs into
+  ``/assets/`` stay allowed.
 
 WHAT THIS DOES NOT PIN
 ----------------------
@@ -90,24 +99,50 @@ def _index(steps: list[dict], pred, what: str) -> int:
     return hits[0]
 
 
+def _conditional(step: dict) -> list[str]:
+    """Why `step` may not run, or may fail without failing the job."""
+    why = []
+    if "if" in step:
+        why.append(f"if: {step['if']!r}")
+    if "continue-on-error" in step:
+        why.append(f"continue-on-error: {step['continue-on-error']!r}")
+    return why
+
+
+def _assert_job_fails_on_its_steps(wf: dict, job: str) -> None:
+    body = (wf.get("jobs") or {}).get(job, {})
+    assert "continue-on-error" not in body, (
+        f"job {job} sets continue-on-error: {body['continue-on-error']!r} — a "
+        f"failed portal build would leave the job green")
+
+
 def _portal_build_index(steps: list[dict], job: str) -> int:
-    """Index of the step that builds the bundles, after asserting `npm ci`
-    ran in tools/portal before it. Accepts `npm run build` in tools/portal or
+    """Index of the step that builds the bundles, after asserting an
+    unconditional `npm ci` ran in tools/portal before it and the build step
+    itself is unconditional. Accepts `npm run build` in tools/portal or
     `make portal-build` (the same command, via the Makefile)."""
     def is_build(s: dict) -> bool:
         run = _run(s)
         return (_in_portal(s) and re.search(r"\bnpm run build\b", run) is not None) or (
             re.search(r"\bmake\s+portal-build\b", run) is not None)
     b = _index(steps, is_build, f"in {job} builds the portal (npm run build in {_PORTAL})")
+    why = _conditional(steps[b])
+    assert not why, f"{job}: the portal build step is conditional ({'; '.join(why)})"
     ci = [i for i, s in enumerate(steps[:b])
           if _in_portal(s) and re.search(r"\bnpm ci\b", _run(s))]
     assert ci, f"{job}: the portal build has no `npm ci` in {_PORTAL} before it"
+    bad = {i: _conditional(steps[i]) for i in ci if _conditional(steps[i])}
+    assert len(bad) < len(ci), (
+        f"{job}: every `npm ci` in {_PORTAL} before the build is conditional: {bad}")
     return b
 
 
 def _setup_node_index(steps: list[dict], job: str) -> int:
-    return _index(steps, lambda s: str(s.get("uses", "")).startswith("actions/setup-node@"),
-                  f"in {job} uses actions/setup-node")
+    n = _index(steps, lambda s: str(s.get("uses", "")).startswith("actions/setup-node@"),
+               f"in {job} uses actions/setup-node")
+    why = _conditional(steps[n])
+    assert not why, f"{job}: setup-node is conditional ({'; '.join(why)})"
+    return n
 
 
 def _glob_re(pattern: str) -> re.Pattern:
@@ -162,6 +197,7 @@ def test_pages_deploy_builds_the_portal_before_mkdocs() -> None:
     assert jobs, "no job in mkdocs-deploy.yaml runs `mkdocs build` — re-derive this test"
     for job in jobs:
         steps = _steps(wf, job)
+        _assert_job_fails_on_its_steps(wf, job)
         mk = _index(steps, lambda s: re.search(r"\bmkdocs build\b", _run(s)) is not None,
                     f"in {job} runs mkdocs build")
         build = _portal_build_index(steps, job)
@@ -180,7 +216,9 @@ def test_pages_deploy_builds_the_portal_before_mkdocs() -> None:
     ("visual-baseline.yaml", "regenerate-baselines"),
 ])
 def test_portal_server_serves_a_fresh_build(workflow: str, job: str) -> None:
-    steps = _steps(_load(workflow), job)
+    wf = _load(workflow)
+    steps = _steps(wf, job)
+    _assert_job_fails_on_its_steps(wf, job)
     serve = _index(steps, lambda s: "serve:portal" in _run(s),
                    f"in {job} starts the portal server (npm run serve:portal)")
     build = _portal_build_index(steps, job)
@@ -239,6 +277,31 @@ def test_da_portal_image_builds_its_bundles() -> None:
         "context's committed docs/assets/dist/:\n  " + "\n  ".join(bad))
     ctx = [l for l in copies if "--from=" not in l and re.search(r"\sdocs/assets/dist\b", l)]
     assert not ctx, "the final stage still COPYs docs/assets/dist from the context:\n  " + "\n  ".join(ctx)
+    over = [l for l in copies if "--from=portal-build" not in l and _overwrites_dist(l)]
+    assert not over, (
+        "a COPY not from portal-build lands a directory over /assets/dist — it "
+        "would replace the stage's bundles with whatever the source holds (the "
+        "context's committed docs/assets/dist/):\n  " + "\n  ".join(over))
+
+
+_DIST_DEST = "/usr/share/nginx/html/assets/dist/"
+
+
+def _overwrites_dist(copy_line: str) -> bool:
+    """Does this COPY put a DIRECTORY (or glob) at /assets/dist or an ancestor
+    of it? A single-file source can only create one file, never a dist/ tree,
+    so `COPY docs/assets/flows.json /usr/share/nginx/html/assets/flows.json`
+    and `COPY a.json b.json /usr/share/nginx/html/assets/` are allowed."""
+    tokens = [t for t in copy_line.split()[1:] if not t.startswith("--")]
+    if len(tokens) < 2:
+        return False
+    *sources, dest = tokens
+    dest = dest if dest.endswith("/") else dest + "/"
+    if not _DIST_DEST.startswith(dest):
+        return False
+    return any(src.endswith("/") or src in (".", "./") or any(c in src for c in "*?[")
+               or "." not in src.rsplit("/", 1)[-1]
+               for src in sources)
 
 
 def test_build_context_excludes_portal_node_modules() -> None:
@@ -250,3 +313,16 @@ def test_build_context_excludes_portal_node_modules() -> None:
         ".dockerignore does not exclude /tools/portal/node_modules/")
     assert not any(l.startswith("!") and "tools/portal/node_modules" in l for l in lines), (
         ".dockerignore re-includes tools/portal/node_modules")
+
+
+def test_image_smoke_build_triggers_on_every_portal_build_input() -> None:
+    """Component Docker Build is the only pre-merge build of the da-portal
+    image. Since #3738 the image builds its bundles from tools/portal/ and
+    takes its context through the repo-root .dockerignore, so a PR touching
+    only either must still build it."""
+    paths = _on(_load("component-docker-build.yaml")).get("pull_request", {}).get("paths")
+    assert isinstance(paths, list) and paths, "component-docker-build.yaml has no on.pull_request.paths"
+    missing = _uncovered(paths, _portal_inputs() + [".dockerignore"])
+    assert not missing, (
+        "component-docker-build.yaml on.pull_request.paths misses inputs of the "
+        "da-portal image build:\n  " + "\n  ".join(missing[:20]))
