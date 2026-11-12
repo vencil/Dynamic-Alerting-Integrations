@@ -135,6 +135,22 @@ Extension trigger: a THIRD incident of this class on a non-da-tools image.
 At that point generalise the resolver (image repo -> tag prefix -> capability
 extractor) rather than bolting on a second special case.
 
+One image that IS in scope besides da-tools: recipe-preview (#1040)
+--------------------------------------------------------------------
+`ghcr.io/vencil/recipe-preview` has no release line of its own: the same
+`tools/vX.Y.Z` tag that builds da-tools builds it, so its tag is the da-tools
+tag and the tenant-api chart derives one from the other. The question for it
+is not "does the image contain the program" (it is single-purpose) but "was
+an image built for this tag AT ALL" — a pin to a tools tag cut before the
+image joined that release names an image that was never pushed, and the pod
+sits in ImagePullBackOff. That is a fact about the tag's tree too: the image
+exists for `tools/vX.Y.Z` iff that tag's `.github/workflows/release.yaml` has
+the `release-recipe-preview` job, gated on `refs/tags/tools/` (parsed, not
+grepped). Such a pin is a workload of kind `image`, entry `recipe-preview`,
+read from literal k8s manifests and from rendered charts (the tenant-api
+chart's image expression reads a tag helper the strip path cannot follow, so
+the strip path leaves it to the render path, which sees the literal).
+
 Known non-covered surfaces (accepted, not oversights):
   * `.github/workflows/**` — no workflow runs a pinned da-tools image since
     `config-diff.yaml` was retired (#3258); the release job runs the candidate
@@ -151,7 +167,8 @@ Usage
   python3 scripts/tools/lint/check_image_pin_capability.py
 
 Exit codes:
-  0 = every da-tools pin can run its workload (registered exemptions aside)
+  0 = every da-tools pin can run its workload and every recipe-preview pin
+      names a tag that built that image (registered exemptions aside)
   1 = at least one incapable pin, or an EXEMPTIONS entry to delete — stale
       (the image now provides the entry point) or orphaned (no workload
       resolves to that key any more)
@@ -198,6 +215,11 @@ DA_TOOLS_REPO = "ghcr.io/vencil/da-tools"
 IMAGE_TOOLS_DIR = "/opt/da-tools/"
 # Image tag vX.Y.Z <-> git tag tools/vX.Y.Z (the da-tools release line).
 TAG_PREFIX = "tools/"
+# Built by the same tools/v* release as da-tools (#1040); see the docstring.
+RECIPE_PREVIEW_REPO = "ghcr.io/vencil/recipe-preview"
+RECIPE_PREVIEW_ENTRY = "recipe-preview"
+RELEASE_WORKFLOW = ".github/workflows/release.yaml"
+RECIPE_PREVIEW_JOB = "release-recipe-preview"
 CAPABILITY_SOURCES = {
     "entrypoint": "components/da-tools/app/entrypoint.py",
     "build_sh": "components/da-tools/app/build.sh",
@@ -242,6 +264,16 @@ EXEMPTIONS: dict[tuple[str, str, str], str] = {
         "next tools release. EXIT: bump generator.image.tag in the next "
         "tools/v* release (bump_docs.py --tools does it); then delete this "
         "entry (the gate will demand it).",
+    ("helm/tenant-api", "recipe-preview", "v2.9.0"):
+        "#1040 moved the recipe-preview image onto the tools/v* release after "
+        "tools/v2.9.0 was cut (its release.yaml built the image only from a "
+        "recipe-preview/v* tag, and none was ever pushed), so "
+        "ghcr.io/vencil/recipe-preview:v2.9.0 does not exist and the "
+        "container, whose tag follows generator.image.tag, cannot be pulled. "
+        "Same release as the generator entry above, same instruction in "
+        "values.yaml. EXIT: the next tools/v* release builds the image and "
+        "bump_docs.py --tools moves generator.image.tag to it; then delete "
+        "this entry (the gate will demand it).",
 }
 
 # --- YAML loading (the strip path only) -------------------------------------
@@ -554,6 +586,44 @@ def capabilities_for_tag(git_tag: str) -> tuple[dict[str, str], set[str]]:
     return command_map, tool_files
 
 
+_builds_recipe_preview_cache: dict[str, bool] = {}
+
+
+def builds_recipe_preview(git_tag: str) -> bool:
+    """Whether the `tools/v*` release at *git_tag* builds the recipe-preview image.
+
+    True iff that tag's release workflow has the `release-recipe-preview` job
+    and its `if:` admits a `refs/tags/tools/` ref. Read by parsing the YAML,
+    not by grepping it: the job name and the ref prefix both appear in
+    comments of that file. Unreadable or unparseable is a CapabilityError,
+    never a False (fail-closed)."""
+    if git_tag in _builds_recipe_preview_cache:
+        return _builds_recipe_preview_cache[git_tag]
+    if not tag_exists(git_tag):
+        raise CapabilityError(
+            f"git tag '{git_tag}' does not resolve in this clone, so whether "
+            f"its release built {RECIPE_PREVIEW_REPO} cannot be told.\n"
+            f"    Locally: run `git fetch --tags`.")
+    src = show_blob(git_tag, RELEASE_WORKFLOW)
+    if src is None:
+        raise CapabilityError(f"tag '{git_tag}' has no {RELEASE_WORKFLOW} — cannot "
+                              f"tell whether it built {RECIPE_PREVIEW_REPO}.")
+    try:
+        doc = yaml.safe_load(src)
+    except yaml.YAMLError as exc:
+        raise CapabilityError(f"{RELEASE_WORKFLOW} at '{git_tag}' is not YAML "
+                              f"({exc.__class__.__name__})") from exc
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    if not isinstance(jobs, dict) or not jobs:
+        raise CapabilityError(f"{RELEASE_WORKFLOW} at '{git_tag}' has no `jobs:` "
+                              f"mapping — the parser is out of step with it.")
+    job = jobs.get(RECIPE_PREVIEW_JOB)
+    condition = job.get("if") if isinstance(job, dict) else None
+    built = isinstance(condition, str) and f"refs/tags/{TAG_PREFIX}" in condition
+    _builds_recipe_preview_cache[git_tag] = built
+    return built
+
+
 # --- manifest walking -------------------------------------------------------
 def parse_image_ref(image: str) -> tuple[str, str | None, str | None]:
     """Split an image reference into (repository, tag, digest)."""
@@ -669,7 +739,7 @@ class Workload:
         self.source = source          # EXEMPTIONS key half: manifest path or chart dir
         self.where = where            # human-readable location for the message
         self.image_tag = image_tag    # "v2.9.0"
-        self.kind = kind              # "subcommand" | "script"
+        self.kind = kind              # "subcommand" | "script" | "image"
         self.entry = entry            # "threshold-govern" | "foo.py"
 
     @property
@@ -723,7 +793,7 @@ def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
                 if not isinstance(image, str):
                     continue
                 repo, tag, digest = parse_image_ref(image)
-                if repo != DA_TOOLS_REPO:
+                if repo not in (DA_TOOLS_REPO, RECIPE_PREVIEW_REPO):
                     continue
                 name = container.get("name", "<unnamed>")
                 if digest:
@@ -735,6 +805,10 @@ def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
                     errors.append(f"{rel} (container {name}): da-tools image tag "
                                   f"{tag!r} is not a vX.Y.Z release tag; this gate "
                                   f"cannot map it to a {TAG_PREFIX}v* git tag")
+                    continue
+                if repo == RECIPE_PREVIEW_REPO:
+                    workloads.append(Workload(rel, f"{rel} (container {name})", tag,
+                                              "image", RECIPE_PREVIEW_ENTRY))
                     continue
                 resolved = resolve_entry(container)
                 if resolved is None:
@@ -949,15 +1023,16 @@ HELM_TIMEOUT_S = 120
 
 
 def _chart_pins_da_tools(chart: Path) -> bool:
-    """Whether any `values*.yaml` of *chart* pins the da-tools repository
-    (Helm's reading). A values file that cannot be read says nothing here:
+    """Whether any `values*.yaml` of *chart* pins the da-tools or the
+    recipe-preview repository (Helm's reading). A values file that cannot be read says nothing here:
     the strip path reports it."""
     for values in _yaml_files(chart, "values*"):
         try:
             doc = read_values(values)
         except _lib_consumer_read.ConsumerReadError:
             continue
-        if any(pin.get("repository") == DA_TOOLS_REPO for _t, pin in find_image_pins(doc)):
+        if any(pin.get("repository") in (DA_TOOLS_REPO, RECIPE_PREVIEW_REPO)
+               for _t, pin in find_image_pins(doc)):
             return True
     return False
 
@@ -1021,7 +1096,7 @@ def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
                     if not isinstance(image, str):
                         continue
                     repo, tag, digest = parse_image_ref(image)
-                    if repo != DA_TOOLS_REPO:
+                    if repo not in (DA_TOOLS_REPO, RECIPE_PREVIEW_REPO):
                         continue
                     name = container.get("name", "<unnamed>")
                     where = f"{chart_rel} rendered with {label} (container {name})"
@@ -1030,8 +1105,12 @@ def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
                                       f"digest cannot be mapped to a {TAG_PREFIX}v* tag")
                         continue
                     if not tag or not _TAG_RE.fullmatch(tag):
-                        errors.append(f"{where}: da-tools image tag {tag!r} is not a "
+                        errors.append(f"{where}: {repo} image tag {tag!r} is not a "
                                       f"vX.Y.Z release tag")
+                        continue
+                    if repo == RECIPE_PREVIEW_REPO:
+                        workloads.append(Workload(chart_rel, f"{where} @ {tag}", tag,
+                                                  "image", RECIPE_PREVIEW_ENTRY))
                         continue
                     resolved = resolve_entry(container)
                     if resolved is None:
@@ -1059,6 +1138,13 @@ def union_workloads(*paths: "list[Workload]") -> list[Workload]:
 
 def evaluate(workload: Workload) -> str | None:
     """Return a defect description if the pinned tag cannot run *workload*, else None."""
+    if workload.kind == "image":
+        if builds_recipe_preview(workload.git_tag):
+            return None
+        return (f"{RECIPE_PREVIEW_REPO}:{workload.image_tag} was never built: "
+                f"{RELEASE_WORKFLOW} at {workload.git_tag} has no "
+                f"`{RECIPE_PREVIEW_JOB}` job run by a `refs/tags/{TAG_PREFIX}` "
+                f"ref (the pod sits in ImagePullBackOff)")
     command_map, tool_files = capabilities_for_tag(workload.git_tag)
     if workload.kind == "subcommand":
         script = command_map.get(workload.entry)

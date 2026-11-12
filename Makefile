@@ -1166,13 +1166,12 @@ version-show: ## 顯示目前六條版號線（含讀不到 SSOT 的線）
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
 .PHONY: bump-docs
-bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0 TENANT_API=2.9.20)
+bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 TENANT_API=2.9.20)
 	@python3 ./scripts/tools/dx/bump_docs.py \
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
 		$(if $(EXPORTER),--exporter $(EXPORTER)) \
 		$(if $(TOOLS),--tools $(TOOLS)) \
 		$(if $(PORTAL),--portal $(PORTAL)) \
-		$(if $(RECIPE_PREVIEW),--recipe-preview $(RECIPE_PREVIEW)) \
 		$(if $(TENANT_API),--tenant-api $(TENANT_API))
 
 # ----------------------------------------------------------
@@ -1340,17 +1339,6 @@ release-tag-portal: version-check ## 建立 portal tag（觸發 da-portal image 
 	git tag "portal/v$$ver"; \
 	echo "✅ Tag portal/v$$ver created locally."; \
 	echo "Run: git push origin portal/v$$ver"
-
-.PHONY: release-tag-recipe-preview
-release-tag-recipe-preview: version-check ## 從 Chart.yaml 推導 recipe-preview tag（觸發 image + Helm build；#657 同步升）
-	@RP_VER=$$(grep '^version:' helm/recipe-preview/Chart.yaml | awk '{print $$2}'); \
-	echo "recipe-preview Chart.yaml version: $$RP_VER"; \
-	if git rev-parse "recipe-preview/v$$RP_VER" >/dev/null 2>&1; then \
-		echo "ERROR: tag recipe-preview/v$$RP_VER already exists"; exit 1; \
-	fi; \
-	git tag "recipe-preview/v$$RP_VER"; \
-	echo "✅ Tag recipe-preview/v$$RP_VER created locally."; \
-	echo "Run: git push origin recipe-preview/v$$RP_VER"
 
 # ----------------------------------------------------------
 # 文件本地伺服

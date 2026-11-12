@@ -247,7 +247,7 @@ class TestReadCurrentVersions:
 
     @pytest.mark.parametrize("line", bump_docs.VERSION_LINES)
     def test_reads_from_real_repo(self, line):
-        """六條線在今天的 repo 裡都必須讀得到，一條都不能少。
+        """每條宣告的線在今天的 repo 裡都必須讀得到，一條都不能少。
 
         原本這條只斷言 platform/exporter/tools/portal 四條，而且整個包在
         `if <chart>.exists()` 裡——recipe-preview 沒有被任何地方斷言過，
@@ -1178,15 +1178,12 @@ class TestCheckWithExplicitVersionFlags:
             capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=300,
         )
 
-    @pytest.mark.parametrize("flag", [
-        "--platform", "--exporter", "--tools",
-        "--portal", "--recipe-preview", "--tenant-api",
-    ])
+    @pytest.mark.parametrize("flag", [f"--{line}" for line in bump_docs.VERSION_LINES])
     def test_check_with_absurd_version_fails_for_every_line(self, flag):
-        """六條線一視同仁：沒有一條可以吞掉旗標。
+        """每條線一視同仁：沒有一條可以吞掉旗標。
 
-        參數化到全部六條，而不是只補 tenant-api——漏一條正是原本的 bug 形狀，
-        下次新增第七條版號線時這裡會逼人一起想到。
+        參數化到 VERSION_LINES 的全部，而不是只補 tenant-api——漏一條正是原本的
+        bug 形狀；清單從宣告推導，增刪版號線時這裡自動跟著變。
         """
         result = self._run("--check", flag, "9.9.9")
         assert result.returncode != 0, (
@@ -2220,12 +2217,10 @@ class TestSyncCountsFlagContract:
         assert r.returncode == 0, r.stdout[-1200:]
 
     # ⛔ EVERY flag the guard claims to reject. The bug it exists to prevent
-    # was itself a list that named five of six version lines and dropped
+    # was itself a list that named all but one version line and dropped
     # `tenant_api`; pinning a subset reproduces that shape one level up.
     @pytest.mark.parametrize("extra", [
-        ["--platform", "2.10.0"], ["--exporter", "2.10.0"],
-        ["--tools", "2.10.0"], ["--portal", "2.10.0"],
-        ["--recipe-preview", "2.10.0"], ["--tenant-api", "2.10.0"],
+        *[[f"--{line}", "2.10.0"] for line in bump_docs.VERSION_LINES],
         ["--scope", "docs"],
     ])
     def test_sync_counts_rejects_flags_it_would_discard(self, extra):
@@ -3440,7 +3435,7 @@ class TestSyncCountsRejectsEverythingItDiscards:
         probe = {
             "--platform": "2.10.0", "--exporter": "2.10.0",
             "--tools": "2.10.0", "--portal": "2.10.0",
-            "--recipe-preview": "2.10.0", "--tenant-api": "2.10.0",
+            "--tenant-api": "2.10.0",
             "--scope": "docs", "--init-changelog": "2.10.0",
             "--changelog-lang": "en",
         }

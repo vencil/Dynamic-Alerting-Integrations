@@ -89,7 +89,6 @@ DECLARED_SUBTREES: Dict[str, Set[str]] = {
     # `files/` (relay_token.js) left with the reverse proxy (ADR-027 §5).
     "helm/da-portal": {"templates"},
     "helm/threshold-exporter": {"templates"},
-    "helm/recipe-preview": {"templates"},
     "helm/tenant-api": {"templates"},
 }
 

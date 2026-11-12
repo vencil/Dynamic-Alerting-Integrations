@@ -43,7 +43,10 @@ _RECONCILER_KEY = ("helm/federation-reconciler",
 # #2902: tenant-api's opt-in generator container (generator.enabled=false by
 # default, because of exactly this).
 _GENERATOR_KEY = ("helm/tenant-api", "generator-service", "v2.9.0")
-_KNOWN_KEYS = (_RECONCILER_KEY, _GENERATOR_KEY)
+# #1040: tenant-api's recipe-preview container, whose image no release built
+# for v2.9.0 (the image joined the tools/v* release after that tag).
+_RECIPE_PREVIEW_KEY = ("helm/tenant-api", "recipe-preview", "v2.9.0")
+_KNOWN_KEYS = (_RECONCILER_KEY, _GENERATOR_KEY, _RECIPE_PREVIEW_KEY)
 
 # A workload the pinned image CAN run — the positive control. The repo's last
 # capable live pin (a CronJob running `maintenance_scheduler.py`) went with
@@ -83,6 +86,7 @@ class TestLiveRepoIsClean:
         keys = {w.key for w in workloads}
         assert _RECONCILER_KEY in keys
         assert _GENERATOR_KEY in keys
+        assert _RECIPE_PREVIEW_KEY in keys
 
     def test_only_the_registered_two_are_incapable(self, live):
         """No THIRD incapable pin has crept in behind the registry."""
@@ -137,7 +141,8 @@ class TestLiveRepoIsClean:
 
 # ── counterfactual: the gate, not the registry, does the catching ───────────
 @pytest.mark.parametrize("dropped", _KNOWN_KEYS,
-                         ids=["federation-reconciler", "tenant-api-generator"])
+                         ids=["federation-reconciler", "tenant-api-generator",
+                              "tenant-api-recipe-preview"])
 def test_de_registering_an_exemption_turns_the_gate_red(live, dropped):
     workloads, _ = live
     reduced = {k: v for k, v in gate.EXEMPTIONS.items() if k != dropped}
@@ -1081,6 +1086,75 @@ def test_missing_subcommand_finding_states_the_exact_exit_code(monkeypatch):
     msg = gate.evaluate(wl)
     assert "exits 1 with `Unknown command`" in msg, msg
     assert "before #1406" not in msg and "2 after" not in msg, msg
+
+
+# ── recipe-preview: was an image built for the tag at all (#1040) ───────────
+_RP_WORKLOAD = gate.Workload("k8s/x.yaml", "k8s/x.yaml (container c)", "v2.9.0",
+                             "image", gate.RECIPE_PREVIEW_ENTRY)
+
+
+def test_v290_release_did_not_build_recipe_preview():
+    """Ground truth for the registered recipe-preview pin, read off the tag."""
+    gate._builds_recipe_preview_cache.pop("tools/v2.9.0", None)
+    assert gate.builds_recipe_preview("tools/v2.9.0") is False
+
+
+def _fake_release(monkeypatch, text):
+    tag = "tools/v0.0.1"
+    gate._builds_recipe_preview_cache.pop(tag, None)
+    monkeypatch.setattr(gate, "tag_exists", lambda _t: True)
+    monkeypatch.setattr(gate, "show_blob", lambda _t, path: text if path == gate.RELEASE_WORKFLOW else None)
+    return tag
+
+
+_RP_JOB = "jobs:\n  release-recipe-preview:\n    if: {cond}\n    runs-on: x\n"
+
+
+@pytest.mark.parametrize("cond, built", [
+    ("startsWith(github.ref, 'refs/tags/tools/')", True),
+    ("startsWith(github.ref, 'refs/tags/recipe-preview/')", False),
+], ids=["tools-tag", "own-line-only"])
+def test_builds_recipe_preview_reads_the_job_condition(monkeypatch, cond, built):
+    tag = _fake_release(monkeypatch, _RP_JOB.format(cond=f'"{cond}"'))
+    assert gate.builds_recipe_preview(tag) is built
+    gate._builds_recipe_preview_cache.pop(tag, None)
+
+
+def test_a_comment_naming_the_job_is_not_a_job(monkeypatch):
+    """Parsed, not grepped: the name and the ref prefix in a comment build nothing."""
+    tag = _fake_release(monkeypatch, "# release-recipe-preview on refs/tags/tools/\n"
+                                     "jobs:\n  other:\n    if: \"refs/tags/tools/\"\n")
+    assert gate.builds_recipe_preview(tag) is False
+    gate._builds_recipe_preview_cache.pop(tag, None)
+
+
+@pytest.mark.parametrize("text", [None, "jobs: [\n", "name: x\n"], ids=["missing", "not-yaml", "no-jobs"])
+def test_unreadable_release_workflow_is_an_error_not_a_verdict(monkeypatch, text):
+    tag = _fake_release(monkeypatch, text)
+    with pytest.raises(gate.CapabilityError):
+        gate.builds_recipe_preview(tag)
+    gate._builds_recipe_preview_cache.pop(tag, None)
+
+
+def test_recipe_preview_pin_verdict_names_the_tag_and_the_job():
+    gate._builds_recipe_preview_cache.pop("tools/v2.9.0", None)
+    defect = gate.evaluate(_RP_WORKLOAD)
+    assert defect is not None
+    assert "tools/v2.9.0" in defect and gate.RECIPE_PREVIEW_JOB in defect
+
+
+def test_k8s_recipe_preview_pin_is_an_image_workload(tmp_path, monkeypatch):
+    manifest = tmp_path / "k8s" / "x.yaml"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        "apiVersion: v1\nkind: Pod\nspec:\n  containers:\n"
+        "    - name: c\n      image: ghcr.io/vencil/recipe-preview:v2.9.0\n",
+        encoding="utf-8")
+    monkeypatch.setattr(gate, "REPO_ROOT", tmp_path)
+    errors: list[str] = []
+    (workload,) = gate.collect_k8s_workloads(errors)
+    assert errors == []
+    assert (workload.kind, workload.entry, workload.image_tag) == ("image", "recipe-preview", "v2.9.0")
 
 
 def test_v290_lacks_both_entry_points():

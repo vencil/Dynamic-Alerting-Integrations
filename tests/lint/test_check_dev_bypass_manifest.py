@@ -35,12 +35,13 @@ def test_flags_env_var_in_helm_template(tmp_path: Path):
     assert "deployment.yaml" in v[0][0]
 
 
-def test_flags_preview_env_var_in_recipe_preview_chart(tmp_path: Path):
-    # #657 parity: recipe-preview's PREVIEW_DEV_BYPASS_AUTH must be caught too
-    # (the app's runtime k8s guard is L3; this is the L4 deploy-time backstop).
+def test_flags_preview_env_var_in_a_chart(tmp_path: Path):
+    # #657 parity: recipe-preview's PREVIEW_DEV_BYPASS_AUTH must be caught too.
+    # The service no longer reads it (#1040), but an image from before that
+    # did; setting it is never legitimate.
     _write(
         tmp_path,
-        "helm/recipe-preview/templates/deployment.yaml",
+        "helm/tenant-api/templates/deployment.yaml",
         'env:\n  - name: PREVIEW_DEV_BYPASS_AUTH\n    value: "true"\n',
     )
     v = guard.find_violations(tmp_path)
