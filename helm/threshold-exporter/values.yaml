@@ -80,11 +80,12 @@ extraEnvFrom: []
 # For multi-DB examples (Redis, MongoDB, Elasticsearch), see:
 #   config/conf.d/examples/ and migration-guide.md §7 (維度標籤)
 #
-# defaults 為生成段（#1200 WS1a PR-2）：內容＝threshold-registry 的
-# chart_default 集——kubernetes pack＝Scenario B container 閾值、mariadb pack
+# defaults 為生成段（#1200 WS1a PR-2）：內容＝threshold-registry 裡
+# arming: default 的 key——kubernetes pack＝Scenario B container 閾值、mariadb pack
 # ＝Scenario A MySQL 閾值、postgresql pack＝pg warning 兩鍵（#1200 Q3=C /
-# D4 folding 拍板升格，2026-07-25）。改值走 scaffold_tenant.RULE_PACKS ＋
-# check_threshold_registry.py --regen；出貨集增減是 D4 家族產品拍板，
+# D4 folding 拍板升格，2026-07-25）。改值走 rule-packs/threshold-registry.yaml ＋
+# check_threshold_registry.py --regen；緊接的 helm-unarmed 註解段列出規則包會讀、
+# chart 卻不出貨的 key 與原因（D-A A1）；出貨集增減是 D4 家族產品拍板，
 # 勿在此手改。
 # 史料：mysql_cpu 80→30 校準（#944）時本 chart 副本是最後被漏掉的一份
 # （#1200 WS1a 反向稽核補正）；改為生成段後該類漂移由 gate 根除。該 key 已於
@@ -125,6 +126,64 @@ thresholdConfig:
     # Q3=C)（critical 加嚴 opt-in：mysql_replication_lag_critical，registry 建議 120）
     mysql_replication_lag: 30
     # <<< GENERATED:threshold-registry:helm-defaults
+    # >>> GENERATED:threshold-registry:helm-unarmed — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+    # 下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了
+    # thresholdConfig.existingConfigMap 時 chart 不讀這裡，要在那個 ConfigMap 的來源補值（其 <key>_critical 也要先有 base
+    # 值）。原因取自 threshold-registry 的 arming 欄位。
+    # ── redis ──
+    #   redis_memory_used_bytes（待改比值）：絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory 的比例（redis_memory_max_bytes），待
+    #     #1320
+    #   redis_connected_clients（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔 maxclients 的比例（redis_config_maxclients），待
+    #     #1320
+    #   redis_evicted_keys_rate（依部署而定）：LRU 快取淘汰是常態，可容忍的速率取決於工作負載
+    #   redis_replication_lag（待驗證）：與已出貨的 mysql／pg replication_lag 同為 30 秒，尚未對 Redis 驗證
+    # ── mongodb ──
+    #   mongodb_connections_current（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320
+    #   mongodb_replication_lag（待驗證）：副本延遲秒數可跨部署比較，但 10 秒尚未驗證
+    #   mongodb_opcounters_rate（依部署而定）：操作量是工作負載而非故障，任何數字都只適用於特定部署
+    # ── elasticsearch ──
+    #   es_heap_usage_percent（待驗證）：佔 heap 上限的百分比可跨部署，但 85 尚未經 shadow 報表驗證
+    #   es_disk_usage_percent（待驗證）：佔磁碟的百分比可跨部署（85 與 Elasticsearch 的 low watermark 相同），但尚未經 shadow
+    #     報表驗證
+    #   es_pending_tasks（依部署而定）：正常的 pending task 量隨叢集規模與變更頻率而定
+    #   es_search_latency_ms（依部署而定）：可接受的搜尋延遲是各部署的服務等級選擇
+    # ── oracle ──
+    #   oracle_sessions_active（待改比值）：絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS 上限的比例，待
+    #     #1320
+    #     ⚠ 參考庫實測反例（#1176）：健康的日夜週期尖峰會到 240 個 active session —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+    #   oracle_tablespace_used_percent（待驗證）：佔 tablespace 的百分比可跨部署，但 85 尚未經 shadow 報表驗證
+    # ── db2 ──
+    #   db2_connections_active（待改比值）：絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320
+    #     ⚠ 參考庫實測反例（#1176）：尖峰時段的工作負載會到 360 個連線 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+    #   db2_bufferpool_hit_ratio（依部署而定）：交易型與分析型工作負載的合理命中率不同
+    #   db2_lock_wait_time（依部署而定）：可容忍的鎖等待累積量取決於工作負載與延遲預算
+    #     ⚠ 參考庫實測反例（#1176）：良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml） ——
+    #     此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+    # ── clickhouse ──
+    #   clickhouse_queries_rate（依部署而定）：查詢量是工作負載而非故障，任何數字都只適用於特定部署
+    #   clickhouse_active_connections（待改比值）：絕對連線數跨部署沒有意義；上限（max_connections）目前沒有匯出，分母由 #1320 決定
+    # ── kafka ──
+    #   kafka_consumer_lag（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
+    #   kafka_under_replicated_partitions（待驗證）：0 是普世的不變式，但出貨前尚未對滾動重啟驗證
+    #   kafka_broker_count（依部署而定）：預期的 broker 數是各部署的拓撲
+    #   kafka_active_controllers（待驗證）：恰有一個 active controller 是普世的不變式，但出貨前尚未驗證
+    #   kafka_request_rate（依部署而定）：訊息量是工作負載而非故障，任何數字都只適用於特定部署
+    # ── rabbitmq ──
+    #   rabbitmq_queue_messages（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
+    #   rabbitmq_node_mem_percent（待驗證）：佔節點記憶體的百分比可跨部署，但 80 尚未經 shadow 報表驗證
+    #   rabbitmq_connections（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available
+    #     是候選分母，但它由檔案描述符推得，由 #1320 決定
+    #   rabbitmq_consumers（依部署而定）：預期的 consumer 數是各部署的拓撲
+    #   rabbitmq_unacked_messages（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
+    # ── jvm ──
+    #   jvm_gc_pause（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
+    #   jvm_memory（待驗證）：佔 heap 上限的百分比可跨部署，但 80 尚未經 shadow 報表驗證
+    #   jvm_threads（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
+    # ── nginx ──
+    #   nginx_connections（依部署而定）：絕對連線數取決於流量，worker_connections 沒有匯出可當分母
+    #   nginx_request_rate（依部署而定）：請求量是工作負載而非故障，任何數字都只適用於特定部署
+    #   nginx_waiting（依部署而定）：閒置的 keep-alive 連線也算 waiting，正常數量取決於流量與 keepalive 設定
+    # <<< GENERATED:threshold-registry:helm-unarmed
 
   # optional_overrides 為生成段（#1310）——這一格的語意是「平台認得這個 key，
   # 但不主張它的值」。列在此的 key 通過租戶端 key 驗證（租戶可在自己的 conf.d

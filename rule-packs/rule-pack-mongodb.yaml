@@ -6,15 +6,18 @@
 #   - mongodb_exporter (https://github.com/percona/mongodb_exporter)
 #
 # >>> GENERATED:threshold-registry:pack-mongodb — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   mongodb_connections_current: 300   # count — Current connections warning
+#       未啟用（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔「已用＋可用」連線的比例，待 #1320
 #   mongodb_replication_lag: 10
 #       seconds — Replication lag warning; #1196 C identity fix: renamed from
 #       mongodb_repl_lag_seconds (alert demands mongodb_replication_lag) — unwired dead key, no
 #       alias
+#       未啟用（待驗證）：副本延遲秒數可跨部署比較，但 10 秒尚未驗證
 #   mongodb_opcounters_rate: 10000
 #       ops/s — Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total
 #       (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias
+#       未啟用（依部署而定）：操作量是工作負載而非故障，任何數字都只適用於特定部署
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，

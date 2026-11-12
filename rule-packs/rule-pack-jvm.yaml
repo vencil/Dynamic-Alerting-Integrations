@@ -7,10 +7,13 @@
 #   - 或 Micrometer Prometheus (Spring Boot Actuator)
 #
 # >>> GENERATED:threshold-registry:pack-jvm — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   jvm_gc_pause: 0.5   # seconds/5m — GC pause duration rate warning
+#       未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
 #   jvm_memory: 80   # % — Heap memory usage warning
+#       未啟用（待驗證）：佔 heap 上限的百分比可跨部署，但 80 尚未經 shadow 報表驗證
 #   jvm_threads: 500   # count — Active thread count warning
+#       未啟用（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
