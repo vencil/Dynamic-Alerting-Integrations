@@ -1,8 +1,9 @@
 """Tests for scripts/ops/check_image_refs_resolve.py (#902 L1-B).
 
-Exercises the EXTRACTION (parse) logic via `--list` — no network / skopeo, so it
-runs in the plain Python Tests CI job. The resolution (skopeo) path is enforced
-by the image-ref-resolve workflow, not here.
+Exercises the EXTRACTION (parse) logic via `--list` — no network, so it runs
+in the plain Python Tests CI job — and the verdict over `_lib_registry.resolve`
+answers (the registry conversation itself is tests/shared/test_lib_registry.py;
+the live run is the image-ref-resolve workflow).
 """
 from __future__ import annotations
 
@@ -14,6 +15,8 @@ from pathlib import Path
 import pytest
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "ops" / "check_image_refs_resolve.py"
+sys.path.insert(0, str(SCRIPT.parents[1] / "tools"))
+import _lib_registry  # noqa: E402  (the module main() imports: same object)
 
 # Load the script as a module to unit-test pure helpers directly (no subprocess).
 _spec = importlib.util.spec_from_file_location("_check_image_refs_resolve", SCRIPT)
@@ -109,20 +112,6 @@ def test_first_party_namespace_is_skipped(tmp_path: Path) -> None:
     assert _list_refs(tmp_path) == {"quay.io/o/p:v1"}
 
 
-def test_resolvable_drops_tag_when_digest_present() -> None:
-    # skopeo/docker reject a ref carrying BOTH a :tag and an @digest ("Error
-    # parsing reference"); resolve `repo@digest` (the digest is authoritative).
-    # #902 L2 pins as `repo:tag@digest`, so the resolver MUST normalize it.
-    assert _cir._resolvable("quay.io/o/p:v1@sha256:abc") == "quay.io/o/p@sha256:abc"
-    assert (
-        _cir._resolvable("envoyproxy/envoy:distroless-v1.0@sha256:def")
-        == "envoyproxy/envoy@sha256:def"
-    )
-    # tag-only and digest-only refs pass through unchanged.
-    assert _cir._resolvable("foo/bar:1.0") == "foo/bar:1.0"
-    assert _cir._resolvable("foo/bar@sha256:xyz") == "foo/bar@sha256:xyz"
-
-
 # ── #2966: --timeout must be a whole number of seconds above 0 ────────────────
 
 
@@ -151,26 +140,13 @@ def test_a_positive_timeout_is_accepted(tmp_path: Path, good: str) -> None:
     assert proc.returncode == 0, proc.stderr
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the poll() ceiling is POSIX")
-def test_the_ceiling_is_what_subprocess_can_actually_wait() -> None:
-    """MAX_TIMEOUT_S is the poll() millisecond C-int ceiling: subprocess.run with
-    capture_output accepts it and raises OverflowError one second past it (the
-    rc 1 traceback threading.TIMEOUT_MAX used to let through)."""
-    assert _cir.MAX_TIMEOUT_S == 2147483
-    subprocess.run([sys.executable, "-c", ""], capture_output=True,
-                   timeout=_cir.MAX_TIMEOUT_S, check=True)
-    with pytest.raises(OverflowError):
-        subprocess.run([sys.executable, "-c", ""], capture_output=True,
-                       timeout=_cir.MAX_TIMEOUT_S + 1)
-
-
-def test_timeout_reaches_the_resolver_as_an_int(tmp_path: Path, monkeypatch) -> None:
-    """The verdict text says "timeout after {N}s"; it stays an int, as before."""
+def test_timeout_reaches_the_registry_as_an_int(tmp_path: Path, monkeypatch) -> None:
+    """--timeout is the per-request timeout handed to the registry client."""
     _write(tmp_path / "helm/x/values.yaml", "image:\n  repository: quay.io/o/p\n  tag: v1\n")
     seen: list = []
-    monkeypatch.setattr(_cir, "_resolver", lambda: (lambda ref: ["true"], "stub"))
-    monkeypatch.setattr(_cir, "_resolve_once",
-                        lambda cmd, timeout: (seen.append(timeout), (_cir.RESOLVED, ""))[1])
+    monkeypatch.setattr(_lib_registry, "resolve",
+                        lambda ref, timeout: (seen.append(timeout),
+                                              _lib_registry.Answer(_lib_registry.RESOLVED, ""))[1])
     monkeypatch.setattr(sys, "argv", ["check_image_refs_resolve.py",
                                       "--root", str(tmp_path), "--timeout", "7"])
     assert _cir.main() == 0
@@ -179,46 +155,53 @@ def test_timeout_reaches_the_resolver_as_an_int(tmp_path: Path, monkeypatch) -> 
 
 @pytest.mark.parametrize("outcomes, rc", [
     ({"quay.io/o/a:v1": "not-resolved"}, 1),
-    ({"quay.io/o/a:v1": "unanswered"}, 2),
-    ({"quay.io/o/a:v1": "not-resolved", "quay.io/o/b:v1": "unanswered"}, 2),
+    ({"quay.io/o/a:v1": "no-answer"}, 2),
+    ({"quay.io/o/a:v1": "not-resolved", "quay.io/o/b:v1": "no-answer"}, 2),
 ], ids=["finding", "no-answer", "both-no-answer-wins"])
-def test_a_resolver_that_gave_no_answer_is_not_a_finding(
+def test_a_registry_that_gave_no_answer_is_not_a_finding(
         tmp_path: Path, monkeypatch, capsys, outcomes, rc) -> None:
-    """A timeout says nothing about the ref: 2, not the 1 of a ref that does not
-    resolve, and ahead of it when both happen in one run (#3577, #3611)."""
+    """No answer says nothing about the ref: 2, not the 1 of a ref that does
+    not resolve, and ahead of it when both happen in one run (#3577, #3611)."""
     _write(tmp_path / "helm/a/values.yaml", "image:\n  repository: quay.io/o/a\n  tag: v1\n")
     if len(outcomes) > 1:
         _write(tmp_path / "helm/b/values.yaml", "image:\n  repository: quay.io/o/b\n  tag: v1\n")
-    monkeypatch.setattr(_cir, "_resolver", lambda: (lambda ref: [ref], "stub"))
-    monkeypatch.setattr(_cir, "_resolve_once",
-                        lambda cmd, timeout: (outcomes[cmd[0]], "synthetic"))
+    monkeypatch.setattr(_lib_registry, "resolve",
+                        lambda ref, timeout: _lib_registry.Answer(outcomes[ref], "synthetic"))
     monkeypatch.setattr(sys, "argv", ["check_image_refs_resolve.py", "--root", str(tmp_path)])
     assert _cir.main() == rc
     if rc == 2:
         assert "NOT checked" in capsys.readouterr().err
 
 
-def test_a_timeout_then_an_answer_is_the_answer(tmp_path: Path, monkeypatch) -> None:
-    """The one retry: a resolver that timed out and then answered RESOLVED is
-    a resolved ref (0), and it was asked twice (review on #3626)."""
+def test_no_answer_then_an_answer_is_the_answer(tmp_path: Path, monkeypatch) -> None:
+    """The one retry: a registry that gave no answer and then RESOLVED is a
+    resolved ref (0), and it was asked twice (review on #3626)."""
     _write(tmp_path / "helm/a/values.yaml", "image:\n  repository: quay.io/o/a\n  tag: v1\n")
-    replies = iter([(_cir.UNANSWERED, "timeout after 30s"), (_cir.RESOLVED, "")])
+    replies = iter([_lib_registry.Answer(_lib_registry.NO_ANSWER, "HTTP 429"),
+                    _lib_registry.Answer(_lib_registry.RESOLVED, "")])
     calls: list = []
-    monkeypatch.setattr(_cir, "_resolver", lambda: (lambda ref: [ref], "stub"))
-    monkeypatch.setattr(_cir, "_resolve_once",
-                        lambda cmd, timeout: (calls.append(cmd), next(replies))[1])
+    monkeypatch.setattr(_lib_registry, "resolve",
+                        lambda ref, timeout: (calls.append(ref), next(replies))[1])
     monkeypatch.setattr(sys, "argv", ["check_image_refs_resolve.py", "--root", str(tmp_path)])
     assert _cir.main() == 0
     assert len(calls) == 2
 
 
-def test_resolve_once_tells_a_timeout_from_a_refusal() -> None:
-    """The structural half: only TimeoutExpired is UNANSWERED."""
-    assert _cir._resolve_once([sys.executable, "-c", "import time; time.sleep(5)"], 1)[0] \
-        == _cir.UNANSWERED
-    assert _cir._resolve_once([sys.executable, "-c", "raise SystemExit(1)"], 30)[0] \
-        == _cir.NOT_RESOLVED
-    assert _cir._resolve_once([sys.executable, "-c", ""], 30)[0] == _cir.RESOLVED
+@pytest.mark.parametrize("ci", [None, "true", "false"], ids=["no-CI", "CI=true", "CI=false"])
+def test_the_verdict_does_not_depend_on_the_ci_variable(
+        tmp_path: Path, monkeypatch, ci) -> None:
+    """#3611: the `CI` environment switch is gone. It made "no resolver" rc 0
+    on a dev box and rc 2 in CI (and `CI=false` counted as set); with no binary
+    to be missing, an unanswered registry is 2 everywhere."""
+    _write(tmp_path / "helm/a/values.yaml", "image:\n  repository: quay.io/o/a\n  tag: v1\n")
+    if ci is None:
+        monkeypatch.delenv("CI", raising=False)
+    else:
+        monkeypatch.setenv("CI", ci)
+    monkeypatch.setattr(_lib_registry, "resolve",
+                        lambda ref, timeout: _lib_registry.Answer(_lib_registry.NO_ANSWER, "x"))
+    monkeypatch.setattr(sys, "argv", ["check_image_refs_resolve.py", "--root", str(tmp_path)])
+    assert _cir.main() == 2
 
 
 # ── #3206 (ADR-036 §12): the sources are read as kubectl / Helm read them ──

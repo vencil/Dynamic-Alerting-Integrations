@@ -55,6 +55,13 @@ on:
       # #3579: the script exits through _lib_exitcodes.run(), which imports _lib_compat.
       - "scripts/tools/_lib_exitcodes.py"
       - "scripts/tools/_lib_compat.py"
+      # #3611: the registry is asked over its v2 API (_lib_registry), whose
+      # transport-error list is _lib_prometheus's; it imports _lib_validation,
+      # which imports _lib_constants (_lib_exitcodes is listed above).
+      - "scripts/tools/_lib_registry.py"
+      - "scripts/tools/_lib_prometheus.py"
+      - "scripts/tools/_lib_validation.py"
+      - "scripts/tools/_lib_constants.py"
       # #3206: the reading the scan asks (da-crdecode) and its client.
       - "scripts/tools/_lib_consumer_read.py"
       - "components/threshold-exporter/app/cmd/da-crdecode/**"
@@ -82,12 +89,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-
-      # skopeo is the purpose-built registry-query tool (no daemon); the script
-      # prefers it over `docker manifest inspect`. Anonymous manifest inspects are
-      # light (no layer pulls) so Docker Hub rate limits are not a concern here.
-      - name: Install skopeo
-        run: sudo apt-get update && sudo apt-get install -y skopeo
 
       - uses: actions/setup-python@v6
         with:
