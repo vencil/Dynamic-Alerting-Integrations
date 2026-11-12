@@ -328,6 +328,15 @@ networkPolicy:
     # clean all-clear. Both must be closed for the control to mean anything.
     - matchLabels:
         app.kubernetes.io/name: federation-reconciler
+    # Prometheus (k8s/03-monitoring, `app: prometheus`): scrapes /metrics on
+    # this same port (Service annotation `prometheus.io/port`). Without this
+    # row every scrape of the store was refused, so it had no series and
+    # nothing could alert on it. (vmauth's OWN metrics are on its internal
+    # port, not this one, and stay unscraped.) In `auth.mode:
+    # enforce` an unauthenticated request reaches only /metrics, /health and
+    # /ping; in `observe` it reaches every path, like any row here.
+    - matchLabels:
+        app: prometheus
   # `vector`: the log shipper's dedicated namespace (#1018 PSS privileged
   # carve-out — its 3 hostPath mounts are forbidden even by PSS baseline,
   # so it cannot share the restricted-tier `monitoring` ns). A

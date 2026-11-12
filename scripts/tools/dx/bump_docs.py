@@ -370,6 +370,21 @@ def _build_tools_rules():
         "require_match": True,
     })
 
+    # helm/threshold-exporter's config-validation CronJob (#3353) runs the
+    # da-tools image's validate-config, pinned the same two-line way under
+    # `configValidation.image`. The pin decides which rows the CronJob judges
+    # (v2.9.0 predates yaml_quoting and unread_keys), so a release that does
+    # not bump it leaves direct mode judged by an older validate-config.
+    rules.append({
+        "file": "helm/threshold-exporter/values.yaml",
+        "desc": "da-tools image tag in helm/threshold-exporter/values.yaml (configValidation.image, two-line repository/tag pin)",
+        "pair_anchor": r"^[ \t]*repository:[ \t]*ghcr\.io/vencil/da-tools[ \t]*$",
+        "pair_key": "tag",
+        "pattern": r'"v?' + _SEMVER + r'"',
+        "replacement": lambda v: f'"v{v}"',
+        "require_match": True,
+    })
+
     # mkdocs.yml tools_version
     rules.append({
         "file": "mkdocs.yml",

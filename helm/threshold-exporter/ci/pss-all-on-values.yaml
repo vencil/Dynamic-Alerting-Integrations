@@ -13,3 +13,6 @@ extraEnvFrom:
       name: pss-gate
 thresholdConfig:
   existingConfigMap: pss-gate-threshold-config
+# #3353: the config-validation CronJob's pod.
+configValidation:
+  enabled: true

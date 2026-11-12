@@ -56,6 +56,17 @@ jobs:
           npm ci
           npx playwright install --with-deps chromium
 
+      # #3738: baselines are screenshots of what the server below serves,
+      # docs/assets/dist/ included, so build it from source first. Pinned by
+      # tests/ops/test_portal_dist_consumers_build.py.
+      - name: Install portal build dependencies
+        working-directory: tools/portal
+        run: npm ci
+
+      - name: Build portal bundles (docs/assets/dist/)
+        working-directory: tools/portal
+        run: npm run build
+
       - name: Start portal server
         working-directory: tests/e2e
         run: |
