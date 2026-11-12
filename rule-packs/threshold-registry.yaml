@@ -750,11 +750,6 @@ keys:
     metric_class: replication
     arming: operator
     portability: portable
-    blocker:
-      kind: aggregation_bug
-      tracking: 3770
-      reason: "The recording rule takes max over a per-partition 0/1 flag, so it never exceeds 1 and no threshold above 0 can fire"
-      reason_zh: "記錄規則對逐 partition 的 0/1 旗標取 max，值不會超過 1，大於 0 的門檻都不可能觸發"
   kafka_broker_count:
     pack: kafka
     tier: defaults
