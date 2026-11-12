@@ -114,11 +114,13 @@ thresholdConfig:
     # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
     # count — Max threads_connected warning（critical 加嚴 opt-in：mysql_connections_critical，registry
     # 建議 120）
+    # 出貨例外（待改比值，#3778）：絕對連線數跨部署沒有意義；可攜的形式是佔 max_connections 的比例（#3778）
     mysql_connections: 80
     # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 =
     # PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the #944
     # keep — 2-release alias window, old spelling still resolves)（critical 加嚴
     # opt-in：mysql_threads_running_critical，registry 建議 50）
+    # 出貨例外（依部署而定，#3778）：健康的 running threads 數隨主機的 CPU 核數而定
     mysql_threads_running: 30
     # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
     # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
@@ -166,11 +168,11 @@ thresholdConfig:
     #   kafka_under_replicated_partitions 未啟用（聚合錯誤，#3770）：記錄規則對逐 partition 的 0/1 旗標取 max，值不會超過 1，大於
     #     0 的門檻都不可能觸發
     #   kafka_broker_count 未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
-    #   kafka_active_controllers 未啟用（沒有資料源，#3770）：宣告的 danielqsj/kafka_exporter 不輸出
+    #   kafka_active_controllers 未啟用（沒有資料源，#3783）：宣告的 danielqsj/kafka_exporter 不輸出
     #     kafka_controller_active_controller_count
-    #   kafka_request_rate 未啟用（沒有資料源，#3770）：kafka_server_brokertopicmetrics_messagesin_total 是 JMX
+    #   kafka_request_rate 未啟用（沒有資料源，#3783）：kafka_server_brokertopicmetrics_messagesin_total 是 JMX
     #     指標，宣告的 danielqsj/kafka_exporter 不輸出
-    #     未啟用（依部署而定）：訊息量是工作負載而非故障，任何數字都只適用於特定部署
+    #   kafka_request_rate 未啟用（依部署而定）：訊息量是工作負載而非故障，任何數字都只適用於特定部署
     # ── rabbitmq ──
     #   rabbitmq_queue_messages 未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
     #   rabbitmq_node_mem_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨

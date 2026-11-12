@@ -158,6 +158,9 @@ BLOCKER_LABEL_ZH = {
 }
 CANDIDATE_LABEL_ZH = "可攜，待驗證"
 CANDIDATE_NOTE_ZH = "這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨"
+#: The optional tier cannot ship as-is: `default` is defaults-tier only.
+CANDIDATE_NOTE_OPTIONAL_ZH = ("這個值可跨部署沿用，但還沒經 shadow 報表確認；"
+                              "確認後要先升到 defaults 層才能出貨")
 
 # The two threshold tiers carried by the registry. Order matters: it is the
 # extraction order, and a same-name key in both tiers of one pack would be a
@@ -547,7 +550,10 @@ def arming_notes_zh(entry: dict) -> list[str]:
         if port_label and isinstance(port_reason, str):
             notes.append(f"未啟用（{port_label}）：{port_reason}")
         elif port == PORTABLE and b is None:
-            notes.append(f"未啟用（{CANDIDATE_LABEL_ZH}）：{CANDIDATE_NOTE_ZH}")
+            note = (CANDIDATE_NOTE_OPTIONAL_ZH
+                    if entry.get("tier") == "optional_overrides"
+                    else CANDIDATE_NOTE_ZH)
+            notes.append(f"未啟用（{CANDIDATE_LABEL_ZH}）：{note}")
     elif state == ARMING_DEFAULT and port_label and isinstance(port_reason, str):
         exc = entry.get("default_exception")
         t = exc.get("tracking") if isinstance(exc, dict) else None
@@ -1449,11 +1455,11 @@ def render_unarmed_lines(doc: dict, indent: int) -> list[str]:
     for pack_name, _meta, pairs in groups:
         lines.append(f"{ind}# ── {pack_name} ──")
         for key, entry in pairs:
-            for i, note in enumerate(arming_notes_zh(entry)):
-                body = f"{key} {note}" if i == 0 else note
-                segs = _wrap_comment(body, width - 2)
-                lead = "#   " if i == 0 else "#     "
-                lines.append(f"{ind}{lead}{segs[0]}")
+            # Every note names its key: a second reason indented like a
+            # wrapped continuation read as part of the first.
+            for note in arming_notes_zh(entry):
+                segs = _wrap_comment(f"{key} {note}", width - 2)
+                lines.append(f"{ind}#   {segs[0]}")
                 lines.extend(f"{ind}#     {seg}" for seg in segs[1:])
             # Same discipline as every other face that hands a value over
             # (test_counterexample_coverage): a key with a measured
@@ -1534,6 +1540,12 @@ def _render_defaults_lines(doc: dict, indent: int, keep) -> list[str]:
             # nothing — but the alternative is a face that silently ships a
             # bare number the day the registry learns something about it.
             lines.extend(_counterexample_lines(entry, f"{ind}# "))
+            # A shipped value the registry records as non-portable says so
+            # here too, where the operator reads it (#3773 review F5). Only
+            # for chart defaults: the dev template's example block ships keys
+            # the chart does not, and "not shipped" would contradict it.
+            if is_chart_armed(entry):
+                lines.extend(_arming_note_lines(entry, f"{ind}# "))
             lines.append(f"{ind}{key}: {_fmt_value(entry['value'])}")
     return lines
 

@@ -513,6 +513,45 @@ def test_notes_say_why_and_render_nothing_for_a_clean_default():
     assert lib.arming_notes_zh({"arming": "default", "portability": "portable"}) == []
 
 
+def test_an_optional_tier_candidate_says_it_must_change_tier_first():
+    """`default` is defaults-tier only, so an optional-tier candidate cannot
+    "ship once confirmed" as the defaults-tier note says (#3773 review F3)."""
+    entry = {"arming": "operator", "portability": "portable",
+             "tier": "optional_overrides"}
+    assert lib.arming_notes_zh(entry) == [
+        f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_OPTIONAL_ZH}"]
+    assert lib.arming_notes_zh({**entry, "tier": "defaults"}) == [
+        f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_ZH}"]
+
+
+def test_unarmed_block_names_the_key_on_every_reason():
+    """A key with a blocker AND a non-portable reason renders both, each led
+    by the key (#3773 review F6)."""
+    packs = {"beta": {**SYNTH_PACKS["beta"]}}
+    arming = {"beta_lag": {
+        "arming": "operator", "portability": "site_specific",
+        "portability_reason": "r", "portability_reason_zh": "依部署",
+        "blocker": dict(_BLOCKER)}}
+    doc = lib.build_registry_doc(packs, arming=arming)
+    text = "\n".join(lib.render_unarmed_lines(doc, 4))
+    assert "#   beta_lag 未啟用（沒有資料源，#3770）：沒有資料源" in text
+    assert "#   beta_lag 未啟用（依部署而定）：依部署" in text
+
+
+def test_a_shipped_exception_is_marked_in_the_chart_defaults():
+    """A non-portable shipped value says so beside its value in helm values,
+    not only in the rule-pack header (#3773 review F5)."""
+    arming = _armed()
+    arming["alpha_conn"] = {
+        "arming": "default", "portability": "ratio_pending",
+        "portability_reason": "r", "portability_reason_zh": "絕對值",
+        "default_exception": {"tracking": 3778}}
+    doc = lib.build_registry_doc(SYNTH_PACKS, arming=arming)
+    text = "\n".join(lib.render_chart_defaults_lines(doc, 4))
+    assert "出貨例外（待改比值，#3778）：絕對值" in text
+    assert text.index("出貨例外") < text.index("alpha_conn: 80")
+
+
 def test_notes_are_total_over_malformed_fields():
     """The renderers run after validation fails; a malformed field renders
     nothing rather than raising and hiding the violation (CodeRabbit #3741)."""
@@ -556,7 +595,7 @@ def test_real_shipped_non_portable_keys_are_the_recorded_exceptions():
     doc = lib.build_registry_doc()
     exceptions = {k: e["default_exception"]["tracking"]
                   for k, e in doc["keys"].items() if "default_exception" in e}
-    assert exceptions == {"mysql_connections": 1320, "mysql_threads_running": 1320}
+    assert exceptions == {"mysql_connections": 3778, "mysql_threads_running": 3778}
 
 
 def test_real_validation_candidates_are_derived():
@@ -576,8 +615,8 @@ def test_real_kafka_blockers_point_at_their_issue():
                for k, e in doc["keys"].items() if "blocker" in e and k.startswith("kafka_")}
     assert blocked == {
         "kafka_under_replicated_partitions": ("aggregation_bug", 3770),
-        "kafka_active_controllers": ("unwired", 3770),
-        "kafka_request_rate": ("unwired", 3770)}
+        "kafka_active_controllers": ("unwired", 3783),
+        "kafka_request_rate": ("unwired", 3783)}
 
 
 def test_not_chart_armed_is_the_registry_derivation():
