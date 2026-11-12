@@ -76,6 +76,7 @@ def test_it_judges_the_configmap_the_exporter_mounts(args):
     (("--set", "resources.limits.memory=1Gi"), "4Gi"),
     (("--set", "resources.limits.memory=300M", "--set", "configValidation.memoryFactor=3"), "900M"),
     (("--set", "resources.limits.memory=268435456"), "1073741824"),
+    (("--set", "resources.limits.memory=500k"), "2000k"),            # decimal kilo is lowercase
 ])
 def test_memory_is_the_exporter_limit_times_the_factor(args, memory):
     c = _one(_docs(*_ON, *args), "CronJob")["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]
@@ -85,6 +86,7 @@ def test_memory_is_the_exporter_limit_times_the_factor(args, memory):
 
 @pytest.mark.parametrize("args,needle", [
     (("--set", "resources.limits.memory=1.5Gi"), "integer with an optional"),
+    (("--set", "resources.limits.memory=500K"), "integer with an optional"),  # not a Kubernetes suffix
     (("--set", "resources.limits=null"), "needs resources.limits.memory"),
     (("--set", "configValidation.memoryFactor=0"), "memoryFactor"),
     (("--set", "configValidation.memoryFactor=2.5"), "memoryFactor"),
@@ -121,6 +123,9 @@ def test_the_shapes_the_job_failure_alert_depends_on():
     cj = _one(_docs(*_ON), "CronJob")
     job = cj["spec"]["jobTemplate"]["spec"]
     assert cj["spec"]["suspend"] is False
+    # A failed Job deleted at once (limit 0) or after a TTL takes its
+    # kube_job_failed with it, and the rule never fires.
+    assert cj["spec"]["failedJobsHistoryLimit"] >= 1
     assert "ttlSecondsAfterFinished" not in job
     assert job["backoffLimit"] == 0
     assert job["template"]["spec"]["restartPolicy"] == "Never"

@@ -314,8 +314,10 @@ resources:
 # Config validation (#3353): a CronJob that runs `da-tools validate-config` —
 # the rows CI runs, with the same severities (the shared key verdict,
 # ADR-038; the yaml_quoting row, #3764) — on the ConfigMap the exporter
-# reads. It judges a tree changed WITHOUT CI: direct mode, where a commit
-# reaches the deployed ConfigMap with no PR. A FAIL row fails the Job, and
+# reads. It judges a tree that reached that ConfigMap WITHOUT CI — a commit
+# straight to git, a ConfigMap sync. (tenant-api's `direct` writes stay in
+# its pod and never reach this ConfigMap; they are not judged here, nor
+# served.) A FAIL row fails the Job, and
 # the platform rule CronJobLastRunFailed (rule-pack-platform) fires —
 # ⚠️ that rule watches the `monitoring` namespace only, so install this
 # release there for the alert to cover it. The findings are in the Job's log
@@ -327,11 +329,9 @@ resources:
 # the same alert fires.
 #
 # ⚠️ The image's validate-config is the one of its tools/v* tag: v2.9.0's
-# has 8 rows, without the 7 main has added since — yaml_quoting, unread_keys
-# (the shared key verdict), guard_errors, json_schema, root_defaults,
-# tenant_uniqueness, tenant_file_name — so with it this judges far less than
-# CI on main does. Bump `image.tag` to the next tools/v* release
-# (bump_docs.py --tools does it).
+# predates yaml_quoting, unread_keys (the shared key verdict), guard_errors
+# and json_schema, so with it this judges far less than CI on main does.
+# Bump `image.tag` to the next tools/v* release (bump_docs.py --tools does it).
 configValidation:
   enabled: false
   schedule: "*/15 * * * *"
