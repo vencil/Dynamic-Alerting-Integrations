@@ -47,13 +47,13 @@ parent: architecture-and-design.md
 
 ## 3. 預覽後端：一支獨立的 Python 服務（先上 try-local）
 
-**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）；正式環境部署延後。
+**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）。當初正式環境部署延後；後來已隨 #1040 落地，形態是 tenant-api pod 裡的容器（見本文開頭）。
 
 為什麼是獨立服務，而不是塞進現有的 tenant-api：
 
 | 方案 | 好處 | 代價 |
 |---|---|---|
-| **A. 獨立 Python 服務（採用）** | 同為 Python，可**直接呼叫編譯器**（見 5.3），零跨語言重寫；`promtool` 不必塞進正式環境的核心 image；萬一評估卡住，影響只侷限在這支服務 | 要自己的 nginx 路由 + 認證；正式環境是一條新部署 → 因此先只上 try-local |
+| **A. 獨立 Python 服務（採用）** | 同為 Python，可**直接呼叫編譯器**（見 5.3），零跨語言重寫；`promtool` 不必塞進正式環境的核心 image；萬一評估卡住，影響只侷限在這支服務 | 當初：要自己的 nginx 路由 + 認證、正式環境是一條新部署 → 先只上 try-local。現在：不需要自己的路由與認證——它是 tenant-api pod 裡的容器，tenant-api 授權後經 pod 內 Unix socket 呼叫（#1040） |
 | B. 擴充現有 tenant-api（Go 呼叫外部程式） | 重用 tenant-api 既有的路由 + 認證；正式環境一次到位 | image 變肥；把「評估」耦進「寫入」的關鍵路徑；長駐服務裡反覆開子程序有併發風險 |
 
 選 A 一句話：平台一向把正式環境保持精簡、把故障影響侷限化，而預覽近期的使用者就在本機試用階段——沒必要為此把評估耦進正式環境的寫入路徑。（A／B 完整比較見 [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) 討論串。）
