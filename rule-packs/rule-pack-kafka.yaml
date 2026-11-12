@@ -40,8 +40,8 @@
 #     messaging-a:
 #       kafka_consumer_lag: "5000"                        # 自訂消費者延遲警告閾值
 #       kafka_consumer_lag_critical: "10000"              # Critical 閾值
-#       kafka_under_replicated_partitions: "2"            # 警告閾值（複製不足的 partition 數）
-#       kafka_under_replicated_partitions_critical: "5"   # Critical 閾值（同上）
+#       kafka_under_replicated_partitions: "2"            # 警告：複製不足的 partition 超過 2 個
+#       kafka_under_replicated_partitions_critical: "5"   # Critical：複製不足的 partition 超過 5 個
 #       kafka_broker_count: "2"                           # 最小代理數警告閾值
 # ============================================================
 groups:
@@ -64,8 +64,12 @@ groups:
       # whole cluster from each instance, and tenant-exporters scrapes per pod
       # (#3723), so N exporter replicas yield N series per partition differing
       # only in instance/pod. Summing those directly would count each partition
-      # N times. Caveat: a tenant with two Kafka clusters sharing a topic name and
+      # N times. Max (not min) also keeps a partition counted when replicas
+      # disagree because their metadata refreshed at different times (1 vs 0).
+      # Caveat: a tenant with two Kafka clusters sharing a topic name and
       # partition number is undercounted (the exporter exposes no cluster label).
+      # Upstream blind spot: when the exporter's Replicas/ISR lookup for a
+      # partition fails it still emits 0 for that partition, so this undercounts.
       - record: tenant:kafka_under_replicated_partitions:sum
         expr: |
           sum by(tenant) (

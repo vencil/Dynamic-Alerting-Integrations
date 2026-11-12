@@ -6,8 +6,10 @@
 #   - 單一 partition 只過 warning 門檻 0、不過 critical 門檻 1
 #   - 全部健康不響
 #   - 兩個 exporter 副本（逐 pod scrape，#3723）回報同一 partition 不重複計數
+#   - 兩個副本對同一 partition 一報 1、一報 0 時仍計 1
 # 突變：改回 `max by(tenant)` 會讓 3-partition 的值變 1、critical 不響；拿掉內層
-# `max by(tenant, topic, partition)` 會讓雙副本的值變 2、critical 誤響。
+# `max by(tenant, topic, partition)` 會讓雙副本的值變 2、critical 誤響；內層改成
+# `min` 會讓 1／0 不一致的值變 0、warning 不響。
 # Run: promtool test rules tests/rulepacks/rule-pack-kafka-urp_test.yaml
 rule_files:
   - ../../rule-packs/rule-pack-kafka.yaml
@@ -165,3 +167,39 @@ tests:
       - eval_time: 1m
         alertname: KafkaUnderReplicatedPartitionsCritical
         exp_alerts: []
+
+  # 兩個副本對同一 partition 意見不一（metadata 刷新不同步：一個 1、一個 0）：
+  # 仍計 1 個 ⇒ 門檻 0 的 warning 響。內層若改成 min 會得 0、warning 不響。
+  - interval: 15s
+    input_series:
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.1:9308", topic="orders", partition="0"}'
+        values: '1x10'
+      - series: 'kafka_topic_partition_under_replicated_partition{tenant="t1", instance="10.0.0.2:9308", topic="orders", partition="0"}'
+        values: '0x10'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="under_replicated_partitions", severity="warning"}'
+        values: '0x10'
+    promql_expr_test:
+      - expr: tenant:kafka_under_replicated_partitions:sum
+        eval_time: 1m
+        exp_samples:
+          - labels: 'tenant:kafka_under_replicated_partitions:sum{tenant="t1"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: KafkaUnderReplicatedPartitions
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              metric_group: kafka_under_replicated_partitions
+              tenant: t1
+            exp_annotations:
+              summary: "Under-replicated partitions detected on t1"
+              summary_zh: "t1 偵測到複製不足的分割區"
+              platform_summary: "[] t1: under-replicated partitions — broker health check"
+              platform_summary_zh: "[] t1: 複製不足分割區 — 請檢查 broker 健康狀態"
+              description: "Under-replicated partitions: 1 (warning threshold exceeded)"
+              description_zh: "複製不足的分割區數: 1 (超過警告閾值)"
+              runbook_url: ""
+              owner: ""
+              tier: ""
