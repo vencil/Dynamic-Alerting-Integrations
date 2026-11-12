@@ -127,7 +127,7 @@ da-tools migrate /data/legacy-rules.yml --triage -o /data/output  # Large-tenant
 The tool automatically handles:
 
 - **Three input scenarios**: `✅ clean parse` / `⚠️ complex expression (with warning box)` / `🚨 unparseable (emits LLM Prompt)`
-- **Three-piece output**: `conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`) + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`, plus `conf.d/_defaults.yaml`, whose `defaults:` block must be merged into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file) before the exporter emits these thresholds
+- **Three-piece output**: `.conf.d/<tenant>.yaml` (thresholds under `tenants.<tenant>`) + `platform-recording-rules.yaml` + `platform-alert-rules.yaml` + `migration-report.txt`, plus `.conf.d/_defaults.yaml`, whose `defaults:` block must be merged into the conf.d root `_defaults.yaml` (merge, do not overwrite the whole file) before the exporter emits these thresholds. The v2.9.0 image has neither `--tenant` nor `.conf.d/`: it writes only `tenant-config.yaml` (thresholds flat at the top level, to indent under `tenants.<tenant>` yourself) and no defaults fragment <!-- image-caveat: v2.9.0 -->
 - **Auto-Suppression**: warning + critical pairs for the same metric are auto-matched; both alerts carry the same `metric_group` label, and Alertmanager inhibit suppresses the warning notification (a tenant can set `_severity_dedup: "disable"` to opt out)
 - **Aggregation-mode heuristic**: 6 heuristic rules guess `sum` / `max` automatically and emit an ASCII warning box asking the user to confirm
 

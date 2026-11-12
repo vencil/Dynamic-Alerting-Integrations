@@ -2,15 +2,15 @@
 """migrate_rule.py — 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。
 
 自動將傳統的 PromQL (寫死數值) 轉換為本專案的「動態多租戶」三件套：
-1. 租戶檔                  → migration_output/conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
+1. 租戶檔                  → migration_output/.conf.d/<tenant>.yaml（tenants: {<tenant>: …}；--tenant）
 2. 平台 Recording Rule      → migration_output/platform-recording-rules.yaml
 3. 平台動態 Alert Rule      → migration_output/platform-alert-rules.yaml
 4. 遷移報告                 → migration_output/migration-report.txt
 5. Triage CSV               → migration_output/triage-report.csv
 6. Prefix Mapping           → migration_output/prefix-mapping.yaml
-7. 根 defaults              → migration_output/conf.d/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
+7. 根 defaults              → migration_output/.conf.d/_defaults.yaml（合併進 conf.d 根的 _defaults.yaml）
 
-1 與 7 寫在 `-o` 底下自己的 `conf.d/`（#3671）：那是一棵只有這兩個檔的 conf.d，
+1 與 7 寫在 `-o` 底下自己的 `.conf.d/`（#3671）：那是一棵只有這兩個檔的 conf.d，
 可以整棵驗；2–6 不是 conf.d 檔，留在 `-o`，名稱也就不會與租戶檔相撞。
 
 1 與 7 是 conf.d 內容，由 Go 寫（ADR-036 §2，#3206）：兩個檔的資料（帶型別的值、
@@ -1071,7 +1071,17 @@ def _dedup_recording_rules(results):
 #: its two files are judged as a conf.d root holds them and the other
 #: outputs (rule packs, reports) — no conf.d files — never share a name with
 #: the tenant file.
-CONFD_DIR = "conf.d"
+#:
+#: ⛔ Dot-prefixed on purpose: the files are a draft (the `_defaults.yaml` is
+#: a fragment to merge by hand), and `-o` may lie inside a served conf.d —
+#: `-o` pointed at it, or the relative default run from inside it. Every
+#: reader prunes a `.`-prefixed directory whole (Go's `confdname.IsHidden`,
+#: shared by the exporter's walker and `da-guard parse-tree`), so the draft
+#: tenant is never served wherever `-o` lands, while the tree passed as a
+#: `--config-dir` root of its own is judged whole. No path is guessed here;
+#: tests/shared/test_writers_confirm_parse_tree.py runs the tool inside a served tree
+#: and asks Go which tenants it serves.
+CONFD_DIR = ".conf.d"
 
 #: The root defaults file of that conf.d: what declares the keys the tenant
 #: file writes — scaffold_tenant writes the same pair.
@@ -1490,9 +1500,9 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
 
     ADR-036 §2（#3206 步驟 10c）：寫 conf.d 的只有 Go。兩個 conf.d 內容檔
     （`<tenant>.yaml`、`_defaults.yaml`）一次交給同一次 `da-guard write`，寫進
-    `-o/conf.d`（`CONFD_DIR`，#3671；已存在就整份取代）：那棵樹判一次，兩個檔
+    `-o/.conf.d`（`CONFD_DIR`，#3671；已存在就整份取代）：那棵樹判一次，兩個檔
     同進退——一個被拒就一個都不寫、結束碼 2，其他檔也不寫。之前先讓既有的
-    `-o`（含 `conf.d/`）過共用的 conf.d 拒絕（`_require_output_tree`），且 `conf.d/` 不得有這兩個
+    `-o` 過共用的 conf.d 拒絕（`_require_output_tree`；點開頭的 `.conf.d/` 不在其中），且 `.conf.d/` 不得有這兩個
     檔以外的檔（另一次 `--tenant` 留下的租戶檔會成為多出來的租戶）。rule pack、
     報表、CSV、prefix mapping 不是 conf.d 檔，在批次之後由本工具照舊寫在 `-o`。
     """
@@ -1501,7 +1511,7 @@ def write_outputs(results, output_dir, prefix="custom_", dictionary=None, *, ten
               "— nothing was written", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
     conf_dir = Path(output_dir) / CONFD_DIR
-    _require_output_tree(output_dir)  # the whole -o, `conf.d/` included
+    _require_output_tree(output_dir)
     try:
         entries = [tenant_config_entry(results, tenant), defaults_snippet_entry(results)]
     except ValueError as exc:

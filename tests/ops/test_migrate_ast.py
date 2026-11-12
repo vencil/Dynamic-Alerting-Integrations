@@ -554,8 +554,8 @@ def test_write_outputs_basic():
 
         # Verify files exist
         expected_files = [
-            "conf.d/t1.yaml",
-            "conf.d/_defaults.yaml",
+            f"{migrate_rule.CONFD_DIR}/t1.yaml",
+            f"{migrate_rule.CONFD_DIR}/_defaults.yaml",
             "platform-recording-rules.yaml",
             "platform-alert-rules.yaml",
             "migration-report.txt",
