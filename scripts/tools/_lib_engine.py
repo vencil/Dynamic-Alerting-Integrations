@@ -45,6 +45,7 @@ import json
 import re
 import shutil
 import subprocess
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Union
@@ -341,6 +342,63 @@ def _mmdc_render(proc: subprocess.CompletedProcess, expect: dict) -> bool:
     return True
 
 
+def _promtool_check_rules(proc: subprocess.CompletedProcess, expect: dict) -> bool:
+    """``promtool check rules <file>``: exit 0 is the proof. It prints no
+    structured output, and its text (``SUCCESS: N rules found``) is not read
+    (#3611 Q2 allows a pinned text signature for amtool only); any other exit
+    — a rule that does not parse, a path that does not exist (both rc 1,
+    measured on 3.15.1) — is no verdict here. The caller knows how many rules
+    it wrote: it rendered the file."""
+    if proc.returncode != 0:
+        raise NoProof("the rule file did not validate")
+    return True
+
+
+def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> str:
+    """``promtool test rules --junit <xml> <test>``: ``"passed"`` or
+    ``"failed"``, read from the JUnit report ``expect["junit"]``, never from
+    the console text (#3611 Q2: ``FAILED:`` is printed for a file that could
+    not be read too).
+
+    Measured on 3.15.1: an assertion that does not hold is a ``<failure>``
+    (``failures="1"``, rc 1); a test file that cannot be read is an
+    ``<error>`` (``errors="1"``, rc 1); all assertions holding is rc 0 with
+    neither. One test file gives one ``<testsuite>``. An ``<error>``, a
+    report missing or not one suite with at least one test, or an exit
+    status that disagrees with the report, is no verdict.
+
+    ⚠️ A ``rule_files`` entry that does not exist is NOT an error to
+    promtool: it loads no rules and every ``exp_alerts: []`` holds (rc 0,
+    clean report). The report cannot show it; the caller must have checked
+    the rule file it names (``check-rules``) before trusting a pass."""
+    _requires(proc, "--junit")
+    try:
+        # The report promtool just wrote into the caller's temp dir, not
+        # outside input (same footing as coverage_delta's Cobertura read).
+        root = ElementTree.parse(expect["junit"]).getroot()
+    except (OSError, ElementTree.ParseError) as exc:
+        raise NoProof(f"no readable JUnit report: {exc}") from None
+    suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+    if len(suites) != 1:
+        raise NoProof(f"{len(suites)} test suites in the JUnit report, expected 1")
+    try:
+        tests, failures, errors = (int(suites[0].get(k, "")) for k in
+                                   ("tests", "failures", "errors"))
+    except ValueError:
+        raise NoProof("JUnit report without tests / failures / errors counts") from None
+    if errors:
+        error = suites[0].find("testcase/error")
+        raise NoProof("promtool could not run the test: "
+                      + ((error.text or "").strip()[:300] if error is not None else "?"))
+    if tests < 1:
+        raise NoProof("the JUnit report holds no test")
+    if failures == 0 and proc.returncode == 0:
+        return "passed"
+    if failures > 0 and proc.returncode == 1:
+        return "failed"
+    raise NoProof(f"exit status disagrees with the report ({failures} failure(s))")
+
+
 #: (engine, subcommand) → proof. The key is the pair, not the engine: one
 #: engine's subcommands prove a run differently (helm ``template`` vs
 #: ``package``; node runs a different driver for each tool).
@@ -352,4 +410,6 @@ PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess, dict], Any]
     ("node", "babel-parse"): _node_babel_parse,
     ("node", "cli-playground"): _node_cli_playground,
     ("pint", "lint"): _pint_lint,
+    ("promtool", "check-rules"): _promtool_check_rules,
+    ("promtool", "test-rules"): _promtool_test_rules,
 }

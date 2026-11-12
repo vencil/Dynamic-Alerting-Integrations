@@ -228,3 +228,58 @@ def test_mmdc_render_exit_1_is_undecided_not_a_verdict(tmp_path):
     assert proof(_cp(0), {"output": str(png)}) is True
     with pytest.raises(E.NoProof):
         proof(_cp(2), {"output": str(png)})
+
+
+# ── promtool proofs (#3611 PR 5) ────────────────────────────────────────────
+
+_SUITE = ('<testsuites><testsuite name="t.yaml" tests="{t}" failures="{f}" errors="{e}">'
+          '<testcase name="u">{body}</testcase></testsuite></testsuites>')
+_JUNIT_ARGS = ("promtool", "test", "rules", "--junit", "r.xml", "t.yaml")
+
+
+def _junit(tmp_path, text):
+    path = tmp_path / "r.xml"
+    path.write_text(text, encoding="utf-8")
+    return {"junit": str(path)}
+
+
+def test_test_rules_reads_the_junit_report_not_the_console(tmp_path):
+    """Shapes measured on promtool 3.15.1: a held assertion is rc 0 and a clean
+    suite, a broken one rc 1 and a <failure>."""
+    proof = E.PROOFS[("promtool", "test-rules")]
+    ok = _junit(tmp_path, _SUITE.format(t=1, f=0, e=0, body=""))
+    assert proof(_cp(0, args=_JUNIT_ARGS), ok) == "passed"
+    bad = _junit(tmp_path, _SUITE.format(t=1, f=1, e=0, body="<failure>got:[...]</failure>"))
+    assert proof(_cp(1, "  FAILED:", args=_JUNIT_ARGS), bad) == "failed"
+
+
+@pytest.mark.parametrize("rc, report", [
+    (1, _SUITE.format(t=1, f=0, e=1, body="<error>yaml: line 1</error>")),   # file not run
+    (1, None),                                                              # no report
+    (1, "not xml"),
+    (0, _SUITE.format(t=0, f=0, e=0, body="")),                             # no test
+    (1, _SUITE.format(t=1, f=0, e=0, body="")),                             # rc disagrees
+    (0, _SUITE.format(t=1, f=1, e=0, body="<failure/>")),                   # rc disagrees
+    (0, _SUITE.format(t="x", f=0, e=0, body="")),                           # no counts
+    (0, "<testsuites>" + _SUITE.format(t=1, f=0, e=0, body="")[12:-13] * 2 + "</testsuites>"),
+], ids=["error", "no-report", "not-xml", "no-test", "rc1-clean", "rc0-failure",
+        "bad-count", "two-suites"])
+def test_test_rules_without_a_consistent_report_is_no_proof(tmp_path, rc, report):
+    proof = E.PROOFS[("promtool", "test-rules")]
+    expect = {"junit": str(tmp_path / "absent.xml")} if report is None else _junit(tmp_path, report)
+    with pytest.raises(E.NoProof):
+        proof(_cp(rc, "  FAILED:\n got:[", args=_JUNIT_ARGS), expect)
+
+
+def test_test_rules_without_junit_in_argv_is_a_programming_error(tmp_path):
+    with pytest.raises(ValueError, match="--junit"):
+        E.PROOFS[("promtool", "test-rules")](
+            _cp(0, args=("promtool", "test", "rules", "t.yaml")),
+            _junit(tmp_path, _SUITE.format(t=1, f=0, e=0, body="")))
+
+
+def test_check_rules_is_proven_by_exit_0_alone():
+    proof = E.PROOFS[("promtool", "check-rules")]
+    assert proof(_cp(0, "  SUCCESS: 0 rules found"), {}) is True
+    with pytest.raises(E.NoProof):
+        proof(_cp(1, "", "  FAILED:"), {})

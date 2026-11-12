@@ -119,21 +119,23 @@ class TestGatingAndErrors:
         assert out["states"][0]["state"] == "error"
         assert "numeric" in out["states"][0]["reason"]
 
-    def test_oserror_during_eval_is_fail_closed(self, monkeypatch):
-        """promtool vanishing mid-run (OSError) → state:error, never a crash
+    def test_promtool_vanishing_is_fail_closed(self, monkeypatch):
+        """promtool gone between locate and run → state:error, never a crash
         or a wrong verdict (the fail-closed contract)."""
-        real = rp.subprocess.run
-
-        def boom(cmd, *a, **k):
-            if cmd[0] == "/nonexistent/promtool":
-                raise FileNotFoundError("promtool disappeared")
-            return real(cmd, *a, **k)      # da-guard still runs
-        monkeypatch.setattr(rp, "_PROMTOOL", "/nonexistent/promtool")
-        monkeypatch.setattr(rp.subprocess, "run", boom)
+        monkeypatch.setattr(rp, "_PROMTOOL",
+                            rp.engine.Located("promtool", "binary", path="/nonexistent/promtool"))
         out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})
         assert out["supported"] is True
         assert out["states"][0]["state"] == "error"
-        assert "promtool eval failed" in out["states"][0]["reason"]
+        assert "cannot run promtool" in out["states"][0]["reason"]
+
+    def test_no_promtool_is_a_warning_not_a_state(self, monkeypatch):
+        """The service's optional engine (#3611 Q1): absent → "cannot evaluate
+        locally", no firing / inactive claimed."""
+        monkeypatch.setattr(rp, "_PROMTOOL", rp.engine.NoVerdict("promtool is not installed"))
+        out = rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})
+        assert out["supported"] is True and out["states"] == []
+        assert "promtool not available" in out["warnings"][0]
 
     def test_a_for_the_preview_cannot_size_is_error(self, monkeypatch):
         """The series is sized from the compiled rule's `for:`; one the preview
@@ -300,22 +302,70 @@ class TestJudgedByTheExporter:
         assert set(_lib_parse_cache._SERVABLE) == before
 
 
-# ── promtool result classification (pure; finding 2 — rc!=0 ≠ firing) ──
+# ── the verdict comes from promtool's JUnit report, not its console (#3611 Q2) ──
 
-class TestClassifyPromtoolResult:
-    def test_rc0_is_inactive(self):
-        assert rp.classify_promtool_result(0, "Unit Testing: t\nSUCCESS") == "inactive"
+#: A stand-in promtool: `check rules` exits per CHECK_RC; `test rules --junit
+#: <xml> <test>` writes the report MODE asks for. Shapes are those promtool
+#: 3.15.1 was measured to write.
+_STAND_IN = f"""#!{sys.executable}
+import os, sys
+mode = os.environ["STAND_IN_MODE"]
+if sys.argv[1:3] == ["check", "rules"]:
+    sys.exit(int(os.environ.get("CHECK_RC", "0")))
+junit = sys.argv[sys.argv.index("--junit") + 1]
+suite = '<testsuites><testsuite name="t" tests="1" failures="{{f}}" errors="{{e}}"><testcase name="u">{{body}}</testcase></testsuite></testsuites>'
+def write(f, e, body=""):
+    open(junit, "w").write(suite.format(f=f, e=e, body=body))
+if mode == "pass":
+    write(0, 0); sys.exit(0)
+if mode == "fail":
+    write(1, 0, "<failure>exp:[], got:[0: Labels:{{}}]</failure>"); sys.exit(1)
+if mode == "error":
+    write(0, 1, "<error>yaml: line 1: did not find expected</error>"); sys.exit(1)
+if mode == "console-only":
+    print("  FAILED:\\n    exp:[], \\n    got:[\\n  0:\\n  ]"); sys.exit(1)
+if mode == "pass-but-rc1":
+    write(0, 0); sys.exit(1)
+if mode == "fail-but-rc0":
+    write(1, 0, "<failure>x</failure>"); sys.exit(0)
+"""
 
-    def test_mismatch_signature_is_firing(self):
-        out = ("  FAILED:\n    alertname: Custom_x, time: 6m, \n        exp:[], \n"
-               "        got:[\n  0:\n    Labels:{alertname=\"Custom_x\"}\n  ]")
-        assert rp.classify_promtool_result(1, out) == "firing"
 
-    def test_nonzero_without_marker_is_error_not_firing(self):
-        # OOM-kill / missing binary / test-file parse error all exit non-zero
-        # but must NOT be mislabeled as firing (finding 2).
-        assert rp.classify_promtool_result(137, "Killed") == "error"
-        assert rp.classify_promtool_result(1, "error loading test file: yaml: line 3") == "error"
+@pytest.fixture
+def stand_in_promtool(tmp_path, monkeypatch):
+    exe = tmp_path / "promtool"
+    exe.write_text(_STAND_IN, encoding="utf-8", newline="\n")
+    exe.chmod(0o755)
+    monkeypatch.setattr(rp, "_PROMTOOL", rp.engine.Located("promtool", "binary", path=str(exe)))
+
+    def run(mode, check_rc=0):
+        monkeypatch.setenv("STAND_IN_MODE", mode)
+        monkeypatch.setenv("CHECK_RC", str(check_rc))
+        return rp.preview_recipe(_THRESHOLD, "shop-a", {"value": 1500})["states"][0]
+    return run
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX stand-in for promtool")
+class TestVerdictSource:
+    def test_a_failed_assertion_is_firing(self, stand_in_promtool):
+        assert stand_in_promtool("fail")["state"] == "firing"
+
+    def test_all_assertions_holding_is_inactive(self, stand_in_promtool):
+        assert stand_in_promtool("pass")["state"] == "inactive"
+
+    @pytest.mark.parametrize("mode", ["error", "console-only", "pass-but-rc1", "fail-but-rc0"])
+    def test_anything_but_a_consistent_report_is_error(self, stand_in_promtool, mode):
+        """An <error> (the test file could not be run), no report at all — even
+        with the old console signature `FAILED:` + `got:[` on stdout, which
+        promtool also prints for a file it could not read — or an exit status
+        that disagrees with the report: never firing / inactive."""
+        state = stand_in_promtool(mode)
+        assert state["state"] == "error", state
+        assert "promtool eval error" in state["reason"]
+
+    def test_a_rule_that_does_not_validate_is_error(self, stand_in_promtool):
+        state = stand_in_promtool("pass", check_rc=1)
+        assert state["state"] == "error" and "promtool check rules" in state["reason"]
 
 
 # ── end-to-end firing/inactive (needs promtool) ──

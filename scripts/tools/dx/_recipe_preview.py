@@ -29,7 +29,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -41,6 +40,7 @@ sys.path.insert(0, _THIS_DIR)
 import compile_custom_alerts as cc  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402  (on the path compile_custom_alerts adds)
 import _lib_parse_cache  # noqa: E402
+import _lib_engine as engine  # noqa: E402  (#3611: a promtool run counts only on its proof)
 
 # `threshold` covers >, >=, <, <=, == (all value-crossing, flat series). `absence`
 # is presence-based — fires where a DECLARING tenant's metric had no sample over
@@ -98,7 +98,10 @@ def _window_minutes(window):
     return _duration_minutes(window)
 
 
-_PROMTOOL = shutil.which("promtool")
+#: Located, or the NoVerdict naming why not: promtool is this service's
+#: optional engine — without it a preview says "cannot evaluate locally"
+#: rather than failing (#3611 Q1: a customer tool's value-add engine).
+_PROMTOOL = engine.locate("promtool")
 
 _TIMEOUT = 60
 
@@ -284,26 +287,9 @@ def _err(reason, alertname=None):
             "states": [{"state": "error", "reason": reason}], "warnings": []}
 
 
-def classify_promtool_result(returncode, output):
-    """Map a promtool `test rules` (run with `exp_alerts: []`) result to a state.
-
-    rc != 0 alone is NOT "firing": promtool exits non-zero for OOM/kill, a
-    missing binary, or a test-file parse error too. Treating any of those as
-    "firing" would be a false positive (the exact false-confidence the design
-    forbids). So FIRING requires the alert-mismatch signature promtool prints
-    when an alert fires against our empty expectation — `FAILED:` plus a
-    non-empty `got:` block. Anything
-    else with rc != 0 is an infrastructure/parse error → `error`.
-
-      rc == 0                      → inactive (nothing fired)
-      rc != 0 + FAILED: + got:[    → firing
-      rc != 0 otherwise            → error
-    """
-    if returncode == 0:
-        return "inactive"
-    if "FAILED:" in output and "got:[" in output:
-        return "firing"
-    return "error"
+#: promtool `test rules` outcome (the inverted assert: `exp_alerts: []`)
+#: → preview state. An assertion that failed means the alert fired.
+_STATE_OF_TEST = {"passed": "inactive", "failed": "firing"}
 
 
 def preview_recipe(recipe, tenant, scenario):
@@ -397,50 +383,36 @@ def preview_recipe(recipe, tenant, scenario):
                         f"like 10m / 1h30m / 500ms, at most {_MAX_WINDOW_MIN}m)",
                         alertname=alertname)
 
-        if _PROMTOOL is None:
+        if isinstance(_PROMTOOL, engine.NoVerdict):
             return {"alertname": alertname, "supported": True, "states": [],
                     "warnings": ["promtool not available — cannot evaluate locally"]}
 
         pack_path = work / "rule-pack-custom-alerts.yaml"
 
-        # ── render → syntax gate → inverted-assert. Every failure here is
-        # fail-closed to state:error rather than ever mislabel an infra / IO /
-        # timeout failure as firing (§5.2 layering). `except OSError` catches
-        # promtool vanishing after the `which` probe or an unwritable temp dir,
-        # so the {state:error} contract holds even then. ──
+        # ── render → syntax gate → inverted-assert. Every step's verdict is
+        # read from what proves the step ran (_lib_engine's promtool proofs:
+        # exit 0 for `check rules`, the JUnit report for `test rules`, never
+        # console text — #3611 Q2); anything else is state:error, never a
+        # firing / inactive guess. `except OSError`: an unwritable temp dir. ──
         try:
             pack_path.write_text(cc._render(judged.pack.groups), encoding="utf-8", newline="\n")
-            # encoding is explicit: promtool echoes the rule's own annotations,
-            # which are UTF-8. Left to the locale codec, a non-UTF-8 host (cp950)
-            # raises inside subprocess's reader thread, the output arrives EMPTY,
-            # and a firing verdict silently degrades to `error` — the markers
-            # classify_promtool_result looks for are simply not there to find.
-            chk = subprocess.run(
-                [_PROMTOOL, "check", "rules", pack_path.name],
-                cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
-                encoding="utf-8", errors="replace",
-            )
-            if chk.returncode != 0:
-                return _err(f"compiled rule failed promtool check: "
-                            f"{(chk.stderr or chk.stdout).strip()[:300]}",
-                            alertname=alertname)
+            chk = engine.run(_PROMTOOL, "check-rules", ["check", "rules", pack_path.name],
+                             cwd=str(work), timeout=_TIMEOUT)
+            if isinstance(chk, engine.NoVerdict):
+                return _err(f"promtool check rules on the compiled rule: "
+                            f"{chk.message()[:300]}", alertname=alertname)
             test_doc = build_preview_test(recipe, tenant, value, judged)
             (work / "preview_test.yaml").write_text(test_doc, encoding="utf-8", newline="\n")
-            res = subprocess.run(
-                [_PROMTOOL, "test", "rules", "preview_test.yaml"],
-                cwd=work, capture_output=True, text=True, timeout=_TIMEOUT,
-                encoding="utf-8", errors="replace",
-            )
-        except subprocess.TimeoutExpired:
-            return _err(f"promtool timed out (>{_TIMEOUT}s)", alertname=alertname)
+            junit = work / "preview_test.junit.xml"
+            res = engine.run(_PROMTOOL, "test-rules",
+                             ["test", "rules", "--junit", junit.name, "preview_test.yaml"],
+                             cwd=str(work), timeout=_TIMEOUT, expect={"junit": str(junit)})
         except OSError as exc:
             return _err(f"promtool eval failed: {exc}", alertname=alertname)
 
-        out = (res.stdout or "") + (res.stderr or "")
-        state = classify_promtool_result(res.returncode, out)
-        if state == "error":
-            return _err(f"promtool eval error (rc={res.returncode}): "
-                        f"{out.strip()[:300] or 'no output'}", alertname=alertname)
+        if isinstance(res, engine.NoVerdict):
+            return _err(f"promtool eval error: {res.message()[:300]}", alertname=alertname)
+        state = _STATE_OF_TEST[res.data]
         severity = judged.row["severity"]
         thr_value = _fmt_value(judged.row["value"])
         mode = judged.row["labels"].get("mode")

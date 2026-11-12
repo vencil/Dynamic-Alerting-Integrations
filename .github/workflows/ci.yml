@@ -1076,12 +1076,13 @@ jobs:
           done
 
       - name: Preview would-fire e2e (pinned promtool x verdict-signature contract)
-        # The preview's firing/inactive verdict is version-bound: classify_promtool_result
-        # (scripts/tools/dx/_recipe_preview.py) requires promtool's `FAILED:` + `got:[`
-        # output signature. This is the ONLY CI spot where the PINNED promtool meets that
-        # contract — the "Python Tests" job has no promtool, so the @_needs_promtool e2e
-        # skips there. A promtool re-pin that changes the output format fails HERE, not
-        # in front of a Domain Expert.
+        # The preview's firing/inactive verdict is version-bound: it is read from
+        # `promtool test rules --junit` (_lib_engine's ("promtool", "test-rules") proof,
+        # #3611) — a <failure> is firing, an <error> or no report is error. This is the
+        # ONLY CI spot where the PINNED promtool meets that contract — the "Python
+        # Tests" job has no promtool, so the @_needs_promtool e2e skips there. A
+        # promtool re-pin that changes the report fails HERE, not in front of a
+        # Domain Expert.
         run: |
           pip install pytest -c requirements/ci-constraints.txt
           python -m pytest tests/dx/test_recipe_preview.py tests/preview/ -q
