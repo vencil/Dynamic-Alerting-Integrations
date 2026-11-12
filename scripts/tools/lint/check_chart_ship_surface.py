@@ -140,6 +140,12 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
             "published artifact, which is a release decision, not a lint fix.",
         ),
         ".helmignore": (SHIP, "helm's own packing control file"),
+        "values-config-validation.yaml": (
+            EXCLUDE,
+            "#3353: the Container SAST L2 render variant that turns the "
+            "config-validation CronJob on so kube-linter judges it — an input "
+            "to that gate, not a deployment profile.",
+        ),
     },
     "helm/da-portal": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),

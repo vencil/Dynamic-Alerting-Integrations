@@ -1,0 +1,10 @@
+# values-config-validation.yaml — Container SAST L2 lint VARIANT (#3353).
+#
+# NOT a deployment profile — this exists so kube-linter actually SEES the
+# config-validation CronJob. Under the chart's DEFAULT values
+# (configValidation.enabled: false) the CronJob is un-rendered, so
+# check_iac_helm.py's default render would lint no such workload and its
+# securityContext / resources could regress with no CI gate noticing.
+# check_iac_helm.py auto-discovers every values*.yaml as a render variant.
+configValidation:
+  enabled: true
