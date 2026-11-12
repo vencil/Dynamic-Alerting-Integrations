@@ -171,7 +171,7 @@ func TestCheckReservedValue_StateFilterThroughThePrefix(t *testing.T) {
 		{"_silent_mode", "warning", false},
 	}
 	for _, c := range cases {
-		got := CheckReservedValue(c.key, ScheduledValue{Default: c.val})
+		got := CheckReservedValue(c.key, valueAsWritten(c.val))
 		if (got != "") != c.problem {
 			t.Errorf("CheckReservedValue(%q, %q) = %q, want problem=%v", c.key, c.val, got, c.problem)
 		}
@@ -181,8 +181,8 @@ func TestCheckReservedValue_StateFilterThroughThePrefix(t *testing.T) {
 	}
 	// Ratchet's comparison: quoting and key order fall away; a different
 	// reading does not.
-	a := ScheduledValue{Default: "target: enable\nreason: r\n"}
-	b := ScheduledValue{Default: "reason: \"r\"\ntarget: ENABLE\n"}
+	a := valueAsWritten("target: enable\nreason: r\n")
+	b := valueAsWritten("reason: \"r\"\ntarget: ENABLE\n")
 	if !readAlike("_state_maintenance", a, b) {
 		t.Error("readAlike: the same reading spelt two ways is not alike")
 	}
@@ -190,7 +190,7 @@ func TestCheckReservedValue_StateFilterThroughThePrefix(t *testing.T) {
 		t.Error("readAlike: on and off are alike")
 	}
 	// A problem value compares without panicking, and alike with itself.
-	p := ScheduledValue{Default: "recurring:\n- cron: 0 2 * * *\n  duration: 1h\nenabled: off\n"}
+	p := valueAsWritten("recurring:\n- cron: 0 2 * * *\n  duration: 1h\nenabled: off\n")
 	if !readAlike("_state_maintenance", p, p) {
 		t.Error("readAlike: a problem value is not alike with itself")
 	}

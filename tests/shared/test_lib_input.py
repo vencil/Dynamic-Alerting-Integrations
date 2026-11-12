@@ -730,3 +730,32 @@ def test_a_declared_tree_with_no_config_file_is_refused_by_its_declaration(tmp_p
         _lib_parse_cache.declared_trees(p.parse_args(["--c", str(tmp_path)]), "c", lang="en")
     assert e.value.reason == "input_empty"
     assert str(e.value).startswith(f"--c {tmp_path}: selects nothing")
+
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_a_library_reader_does_not_judge_a_declared_tree_again(tmp_path, monkeypatch):
+    """#3755 review: `_grar_parse.load_tenant_tree` judged --config-dir again
+    after its CLI's declaration had (generate-routes, explain-route,
+    test-notification, validate-config). A tree no declaration named — a
+    library caller — is still judged there."""
+    sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
+    import _grar_parse
+    import _lib_parse_cache
+    seen = []
+    real = _grar_parse.classify_path
+    monkeypatch.setattr(_grar_parse, "classify_path",
+                        lambda *a, **k: seen.append(a[0]) or real(*a, **k))
+    undeclared = tmp_path / "lib"
+    undeclared.mkdir()
+    (undeclared / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    _grar_parse.load_tenant_tree(str(undeclared))
+    assert seen == [str(undeclared)]
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    (conf / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--config-dir", select=_lib_input.DA_GUARD_LISTS)
+    _lib_parse_cache.declared_trees(p.parse_args(["--config-dir", str(conf)]), "config_dir",
+                                    lang="en")
+    _grar_parse.load_tenant_tree(str(conf))
+    assert seen == [str(undeclared)], "the declared tree was judged a second time"

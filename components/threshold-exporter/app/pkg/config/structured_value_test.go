@@ -6,7 +6,9 @@ package config
 // turns red when one construction site stops setting or keeping it.
 
 import (
+	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -123,6 +125,173 @@ func TestSilentModeOf_StructureWithoutTargetIsUnknown(t *testing.T) {
 	for _, text := range []string{`{reason: "target: x"}`, "{note: {target: all}}", "[{target: all}]"} {
 		if r := silentModeOf(decodedValue(t, text)); r.kind != silentModeUnknownScalar {
 			t.Errorf("silentModeOf(%s): kind=%d, want unknown scalar", text, r.kind)
+		}
+	}
+}
+
+// valueAsWritten is a value as a conf.d file holding text would give it:
+// text decoded as YAML (a mapping or sequence comes out structured, #3638),
+// or — text that is no YAML, such as "expires: [" — the scalar a file
+// holds when it quotes that text.
+func valueAsWritten(text string) ScheduledValue {
+	var sv ScheduledValue
+	if err := yaml.Unmarshal([]byte(text), &sv); err != nil {
+		return ScheduledValue{Default: text}
+	}
+	return sv
+}
+
+// A structured value whose text does not parse (not reachable for a value
+// UnmarshalYAML built) is a structured problem, never on.
+func TestStateValueOf_StructuredTextThatDoesNotParse(t *testing.T) {
+	t.Parallel()
+	r := stateValueOf(maintenanceFilterName, ScheduledValue{Default: "expires: [\n", structured: true})
+	if r.kind != stateValueProblem || !r.structured || !strings.Contains(r.problem, "does not parse as YAML") {
+		t.Errorf("stateValueOf(broken structured) = %+v", r)
+	}
+}
+
+// #3638 4/5: `_custom_alerts` is read from the list it was written as. The
+// same recipe text written as a string — a block scalar, which used to be
+// decoded as the list it spelled — is refused by both readers: the
+// exporter's walk (CustomAlertEntries / the served rows) and the write gate
+// (ValidateTenantCustomAlerts). An empty string still declares none.
+func TestCustomAlertSpecsOf_StructureNotText(t *testing.T) {
+	t.Parallel()
+	const recipe = "{recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}"
+	parse := func(body string) map[string]ScheduledValue {
+		t.Helper()
+		cfg, err := ParseConfigFile([]byte("tenants:\n  t1:\n    _custom_alerts:" + body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg.Tenants["t1"]
+	}
+	list := parse("\n      - " + recipe + "\n")
+	// The string holds the list's text exactly: only the kind differs.
+	block := " |\n"
+	for _, line := range strings.SplitAfter(list["_custom_alerts"].Default, "\n") {
+		if line != "" {
+			block += "      " + line
+		}
+	}
+	text, empty := parse(block), parse(" \"\"\n")
+	if list["_custom_alerts"].Default != text["_custom_alerts"].Default {
+		t.Fatalf("fixture: the list and the string must hold one text: %q vs %q",
+			list["_custom_alerts"].Default, text["_custom_alerts"].Default)
+	}
+
+	if entries, blockErr := CustomAlertEntries("t1", list); len(entries) != 1 || entries[0].Status != CustomAlertServed || blockErr != "" {
+		t.Errorf("list: entries %+v, blockErr %q", entries, blockErr)
+	}
+	if v := ValidateTenantCustomAlerts("t1", list, 20); v != nil {
+		t.Errorf("list: write gate %v", v)
+	}
+
+	if entries, blockErr := CustomAlertEntries("t1", text); entries != nil || !strings.Contains(blockErr, "written as a scalar, not a list") {
+		t.Errorf("string: entries %+v, blockErr %q", entries, blockErr)
+	}
+	if v := ValidateTenantCustomAlerts("t1", text, 20); len(v) != 1 || !strings.Contains(v[0], "written as a scalar, not a list") {
+		t.Errorf("string: write gate %v", v)
+	}
+
+	if entries, blockErr := CustomAlertEntries("t1", empty); len(entries) != 0 || blockErr != "" {
+		t.Errorf("empty string: entries %+v, blockErr %q", entries, blockErr)
+	}
+	if v := ValidateTenantCustomAlerts("t1", empty, 20); v != nil {
+		t.Errorf("empty string: write gate %v", v)
+	}
+}
+
+// _metadata (#3638): no value is no metadata and no error; a string is an
+// error whatever its text reads like; a mapping decodes.
+func TestDecodeTenantMetadata_StructureNotText(t *testing.T) {
+	t.Parallel()
+	if tm, err := decodeTenantMetadata(ScheduledValue{}); err != nil || tm.Owner != "" {
+		t.Errorf("zero value: %+v, %v; want empty, nil", tm, err)
+	}
+	if _, err := decodeTenantMetadata(decodedValue(t, `"owner: dba"`)); err == nil {
+		t.Error("a string holding YAML decoded as metadata")
+	}
+	if tm, err := decodeTenantMetadata(decodedValue(t, "{owner: dba}")); err != nil || tm.Owner != "dba" {
+		t.Errorf("mapping: %+v, %v", tm, err)
+	}
+}
+
+// A reserved mapping whose `default` text holds `:` is still kept whole
+// (scheduleForm, #3638; the text sniff it replaced missed it).
+func TestStructured_KeepReservedMappingsDefaultWithColon(t *testing.T) {
+	t.Parallel()
+	cfg, err := ParseConfigFile([]byte("tenants:\n  t1:\n    _metadata: {default: \"environment: dev\", environment: production}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	tm, err := decodeTenantMetadata(cfg.Tenants["t1"]["_metadata"])
+	if err != nil || tm.Environment != "production" {
+		t.Errorf("_metadata with a `default: \"a: b\"` key: %+v, %v; want environment production", tm, err)
+	}
+}
+
+// The string form is named once per commit, not on every scrape; a mapping
+// that does not decode still WARNs where it is read.
+func TestTenantMetadataOf_StringFormIsNotWarnedPerRead(t *testing.T) {
+	t.Parallel()
+	var logged []string
+	logf := func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) }
+	if _, decoded := tenantMetadataOf("t1", map[string]ScheduledValue{"_metadata": decodedValue(t, `"owner: x"`)}, logf); decoded || len(logged) != 0 {
+		t.Errorf("string form: decoded=%v logged=%q; want false, nothing", decoded, logged)
+	}
+	if _, decoded := tenantMetadataOf("t1", map[string]ScheduledValue{"_metadata": decodedValue(t, "{environment: {a: b}}")}, logf); decoded || len(logged) != 1 {
+		t.Errorf("undecodable mapping: decoded=%v logged=%q; want false, one WARN", decoded, logged)
+	}
+}
+
+// #3638 5/5: `_routing` is read from the mapping it was written as. The
+// same text as a block scalar — which used to be re-parsed into a routing —
+// is no routing (the route generator, which owns routing, reads it as
+// neither a mapping nor a disabling string), and says so; an empty string
+// or a disabling string is no routing and says nothing.
+func TestResolveRouting_StructureNotText(t *testing.T) {
+	t.Parallel()
+	parse := func(body string) *ThresholdConfig {
+		t.Helper()
+		cfg, err := ParseConfigFile([]byte("tenants:\n  t1:\n    _routing:" + body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return &cfg
+	}
+	mapping := parse("\n      receiver: {type: webhook, url: \"https://example.com/a\"}\n")
+	block := " |\n"
+	for _, line := range strings.SplitAfter(mapping.Tenants["t1"]["_routing"].Default, "\n") {
+		if line != "" {
+			block += "      " + line
+		}
+	}
+	text, empty, disabled := parse(block), parse(" \"\"\n"), parse(" \" OFF \"\n")
+	if mapping.Tenants["t1"]["_routing"].Default != text.Tenants["t1"]["_routing"].Default {
+		t.Fatalf("fixture: the mapping and the string must hold one text: %q vs %q",
+			mapping.Tenants["t1"]["_routing"].Default, text.Tenants["t1"]["_routing"].Default)
+	}
+	for _, c := range []struct {
+		name   string
+		cfg    *ThresholdConfig
+		routed int
+		warn   string
+	}{
+		{"mapping", mapping, 1, ""},
+		{"string", text, 0, "written as a scalar, not a mapping"},
+		{"empty string", empty, 0, ""},
+		// The documented opt-out: no routing, and no advice to write a mapping.
+		{"disabling string", disabled, 0, ""},
+	} {
+		var logged []string
+		got := c.cfg.ResolveRoutingLogf(func(f string, a ...any) { logged = append(logged, fmt.Sprintf(f, a...)) })
+		if len(got) != c.routed {
+			t.Errorf("%s: %d routing(s), want %d: %+v", c.name, len(got), c.routed, got)
+		}
+		if c.warn == "" && len(logged) != 0 || c.warn != "" && (len(logged) != 1 || !strings.Contains(logged[0], c.warn)) {
+			t.Errorf("%s: logged %q, want %q", c.name, logged, c.warn)
 		}
 	}
 }

@@ -19,7 +19,6 @@ commands:
     "--prometheus": url
     "--tenant": not_path
   analyze-gaps:
-    "--config-dir": dir
     "--output": output
     "--tenant-config": file
   backtest:
@@ -49,7 +48,6 @@ commands:
     "--timeout": not_path
     "--workers": not_path
   blind-spot:
-    "--config-dir": dir
     "--exclude-jobs": not_path
     "--prometheus": url
   byo-check:
@@ -83,12 +81,10 @@ commands:
     "--prometheus": url
     "--tenant": not_path
   deprecate:
-    "--config-dir": dir
     "--plane": not_path
     "--root-dir": {kind: reader, by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     metrics: not_path
   diagnose:
-    "--config-dir": dir
     "--prometheus": url
     tenant: not_path
   discover-mappings:
@@ -105,7 +101,6 @@ commands:
     "--mode": not_path
     "--namespace": not_path
   evaluate-policy:
-    "--config-dir": dir
     "--policy": file
   explain-keys:
     "--assert": {kind: reader, by: "explain_keys (ExplainError)", pinned_by: "tests/ops/test_explain_keys.py::test_caller_errors_exit_2_with_one_json_document"}
@@ -116,7 +111,6 @@ commands:
   explain-route:
     "--alertname": not_path
     "--base-config": file
-    "--config-dir": dir
     "--label": not_path
     "--policy": file
     "--severity": not_path
@@ -133,7 +127,6 @@ commands:
     target: not_path
   generate-routes:
     "--base-config": file
-    "--config-dir": dir
     "--configmap": not_path
     "--findings-json": output
     "--namespace": not_path
@@ -166,7 +159,6 @@ commands:
     "--warm-seconds": not_path
     "--work-dir": output
   gitops-check local:
-    "--dir": dir
   grafana-import:
     "--name": not_path
     "--namespace": not_path
@@ -185,7 +177,6 @@ commands:
     "--tenants": not_path
   lint:
     "--exclude": not_path
-    "--rule-pack-dir": dir
     paths: any
   migrate:
     "--output-dir": output
@@ -193,7 +184,6 @@ commands:
     "--tenant": not_path
     input_file: {kind: reader, by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_migrate_rule_outputs.py::test_missing_input_file_exits_caller_error"}
   migrate-credentials:
-    "--config-dir": dir
     "--manifests-out": output
     "--policy": file
   migrate-to-operator:
@@ -256,7 +246,6 @@ commands:
   rule-pack-split:
     "--namespace": not_path
     "--output-dir": output
-    "--rule-packs-dir": dir
   runtime-audit:
     "--prometheus": url
   scaffold:
@@ -286,7 +275,6 @@ commands:
     phase: not_path
   silencer-drift-check:
     "--exclude": not_path
-    "--rule-pack-dir": dir
     "--rule-source": any
   state-reconcile:
     "--manifest-path": {kind: reader, by: "read_old_manifest: an existing one that is not a manifest is manifest_unreadable, never overwritten", pinned_by: "tests/ops/test_state_reconcile.py::test_an_unreadable_manifest_is_not_overwritten"}
@@ -294,20 +282,17 @@ commands:
     "--expect-merged-hash": not_path
     tenant_id: not_path
   test-notification:
-    "--config-dir": dir
     "--policy": file
     "--rate-limit": not_path
     "--tenant": not_path
     "--timeout": not_path
   threshold-govern:
-    "--config-dir": dir
     "--lookback": not_path
     "--min-delta-pct": not_path
     "--min-samples": not_path
     "--prometheus": url
     "--tenant": not_path
   threshold-recommend:
-    "--config-dir": dir
     "--lookback": not_path
     "--min-samples": not_path
     "--prometheus": url
@@ -323,7 +308,6 @@ commands:
     "--stability-window": not_path
     "--tolerance": not_path
   validate-config:
-    "--config-dir": dir
     "--policy": file
     "--policy-dsl": file
-    "--rule-packs": dir
+    "--rule-packs": {kind: reader, by: "lint_custom_rules --rule-pack-dir (subprocess; its rc 2 is the custom_rules caller_error row, #3755)", pinned_by: "tests/ops/test_validate_config.py::test_rule_packs_lint_refusal_is_a_caller_error_row"}

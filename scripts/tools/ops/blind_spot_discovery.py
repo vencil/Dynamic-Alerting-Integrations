@@ -38,7 +38,8 @@ from _lib_tenant_values import (  # noqa: E402
 )
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 from _lib_prometheus import prometheus_targets  # noqa: E402
-from _lib_paths import require_dir  # noqa: E402  (#3392)
+import _lib_input  # noqa: E402
+import _lib_parse_cache  # noqa: E402
 
 
 def query_prometheus_targets(prom_url):
@@ -116,12 +117,11 @@ def load_monitored_db_types(config_dir):
     no tenant from are named on stderr, after whatever da-guard prints on
     stderr (line by line, each behind `DA_GUARD_PREFIX`). da-guard missing or failing, or a
     file the load cannot decode, raises (the CLI exits 2). So does a
-    *config_dir* that is not there or not a directory (`CallerError`, #3392:
-    it was a WARN and every live DB reported as a blind spot, rc 0).
+    *config_dir* that is not there or not a directory (#3392: it was a WARN
+    and every live DB reported as a blind spot, rc 0) — judged by `main`
+    (`_lib_parse_cache.declared_trees`, #3751), never again here.
     """
     result = {}
-    require_dir(config_dir, lang="en", flag="--config-dir")
-
     tree = load_served_tree(config_dir)
     print_load_warnings(tree)
     for t_name, served in tree.tenants.items():
@@ -248,8 +248,11 @@ def build_parser():
     )
     add_prometheus_arg(parser,
                        help_text="Prometheus URL (default: $PROMETHEUS_URL or http://localhost:9090)")
-    parser.add_argument("--config-dir", required=True,
-                        help="Tenant config directory (conf.d/)")
+    # #3751: an empty conf.d is refused naming the flag (it was da-guard's
+    # "no .yaml files found in <path>", rc 2, the flag unnamed).
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED, required=True,
+                         help="Tenant config directory (conf.d/)")
     parser.add_argument("--json-output", action="store_true",
                         help="Output JSON instead of text report")
     parser.add_argument("--exclude-jobs", default=None,
@@ -259,17 +262,27 @@ def build_parser():
 
 @exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
 @exit_on_served_values_error  # #2115: da-guard missing or failing → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # #3751: no usable parse-tree → rc 2
 def main():
     """Entry point."""
     parser = build_parser()
     args = parser.parse_args()
+    # One reader of --config-dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _main(args)
 
+
+def _main(args):
+    # #3751: judged once, before anything else is asked — the path, a root
+    # da-guard cannot list, a tree with no config file — each refusal
+    # naming --config-dir (a CallerError: rc 2 through `run()`).
+    [config_dir] = _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
     exclude_jobs = [j.strip() for j in args.exclude_jobs.split(",")] if args.exclude_jobs else []
 
     # 1. Load monitored DB types from tenant configs — FIRST (#3206): a
     # conf.d da-guard validation names paths on ends the run through the
     # shared refusal before anything else is asked (Prometheus included).
-    monitored = load_monitored_db_types(args.config_dir)
+    monitored = load_monitored_db_types(config_dir)
     if monitored is None:
         sys.exit(EXIT_VIOLATION)
 

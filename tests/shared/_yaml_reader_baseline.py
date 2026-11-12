@@ -154,7 +154,7 @@ ALLOWED = {
     # which parses YAML for a YAML declaration only); each call is a point.
     ('scripts/tools/ops/alert_correlate.py', 'main'):
         (1, "the alerts file (--input), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
-    ('scripts/tools/ops/analyze_rule_pack_gaps.py', 'main'):
+    ('scripts/tools/ops/analyze_rule_pack_gaps.py', '_main'):
         (1, "a metric-dictionary.yaml given with --metric-dictionary, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/ops/cutover_tenant.py', 'main'):
         (1, "cutover-readiness.json (--readiness-json), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),

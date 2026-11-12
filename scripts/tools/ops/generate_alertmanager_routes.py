@@ -69,7 +69,9 @@ from _lib_python import (  # noqa: E402, F401
     PLATFORM_DEFAULTS,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error, effective_crash_exit_code)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, die_caller_error,
+    effective_crash_exit_code)
+import _lib_input  # noqa: E402  (#3751: --config-dir is a declared input)
 
 # ── Re-exports from _grar_validate ─────────────────────────────────
 from _grar_validate import (  # noqa: E402, F401
@@ -209,6 +211,8 @@ from _grar_merge import Finding, as_finding, unclassified  # noqa: E402
 # parse as allowed_domains, and the comparison the generator container shares.
 from _grar_validate import generator_version_problem, load_policy_document  # noqa: E402
 import _lib_parse_cache  # noqa: E402
+from _lib_parse_tree import ParseTreeError  # noqa: E402  (#3751: no usable da-guard)
+from _grar_parse import parse_tree_failure_exit  # noqa: E402  (#3751: its own rc-2 line)
 import _lib_consumer_read  # noqa: E402  (#3206: the platform rules as Prometheus reads them)
 import _lib_key_verdict  # noqa: E402  (ADR-038 §5: the shared key verdict)
 import _lib_tenant_values  # noqa: E402  (#1211: the custom alerts the exporter serves)
@@ -1095,8 +1099,12 @@ def _build_parser() -> argparse.ArgumentParser:
               %(prog)s --config-dir conf.d/ --output-alertmanager --dry-run
         """),
     )
-    parser.add_argument("--config-dir", required=True,
-                        help="Directory containing tenant YAML configs (conf.d/)")
+    # #3751: a conf.d with no config file is a tree with no tenant (the
+    # mode's own answer), as before; the path and a root da-guard cannot
+    # list are refused naming the flag.
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_ALLOWED, required=True,
+                         help="Directory containing tenant YAML configs (conf.d/)")
     parser.add_argument("-o", "--output", default=None,
                         help="Output file path for --output-configmap / "
                              "--output-alertmanager (default: stdout)")
@@ -1907,6 +1915,21 @@ def _run(args: argparse.Namespace, findings: list[str], *,
             f"--base-config is not read in this mode: {why}.\n{remedy}")
     if caller_error_lines:
         die_caller_error("\n".join(caller_error_lines))
+
+    # #3751: --config-dir judged once, before anything is read — the path,
+    # a root da-guard cannot list — each refusal naming the flag. Inside
+    # `main`'s session and `judging()`: the tree's reader is the one every
+    # later read takes (`load_tenant_tree`), and a tree Go names paths on
+    # stays this judge's own finding. The refusal leaves as every caller
+    # error of this run does (`die_caller_error`: rc 2, one line), so
+    # --findings-json records exit 2, not the crash code an exception
+    # through `main` gets.
+    try:
+        _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
+    except CallerError as exc:
+        die_caller_error(exc.error_line, exc.reason)
+    except ParseTreeError as exc:
+        parse_tree_failure_exit(exc, args.config_dir)
 
     # Load policy (webhook domain allowlist).
     # #1556: a supplied-but-unusable --policy is a caller error, not "no

@@ -4,8 +4,10 @@
 # under components/threshold-exporter/app). The image bundles a SHA-pinned
 # promtool because the firing/inactive verdict is version-bound (§6 #5), and
 # da-guard, which judges the recipe and compiles its rules (#3229) — the same
-# Go the exporter serves with. Runs as non-root, serves POST /preview on :8082.
-#   try-local:  docker compose up recipe-preview
+# Go the exporter serves with. Runs as non-root and serves POST /v1/preview on
+# the Unix socket PREVIEW_SOCKET names — no port (ADR-027 §5); tenant-api asks
+# it after authorizing the caller.
+#   try-local:  docker compose up tenant-api oauth2-proxy recipe-preview
 
 # ── da-guard ─────────────────────────────────────────────────────────────
 # Pinned to the native BUILDPLATFORM and cross-compiled to TARGETARCH
@@ -76,11 +78,11 @@ RUN set -eu; \
 FROM python:3.14.10-alpine3.23
 
 LABEL org.opencontainers.image.title="recipe-preview" \
-      org.opencontainers.image.description="Would-fire preview service (#657) — POST /preview" \
+      org.opencontainers.image.description="Would-fire preview service (#657) — POST /v1/preview on a Unix socket" \
       org.opencontainers.image.source="https://github.com/vencil/Dynamic-Alerting-Integrations" \
       org.opencontainers.image.vendor="Dynamic Alerting Platform"
 
-# Build provenance — the release/CI build stamps the git SHA so /healthz reports
+# Build provenance — the release/CI build stamps the git SHA so /v1/status reports
 # exactly which source built this image. recipe-preview bundles a byte-identical
 # snapshot of the platform compiler; GIT_SHA lets an operator confirm WHICH
 # commit's compiler is running (drift observability, design §6 #5). Local /
@@ -145,7 +147,13 @@ COPY components/recipe-preview/app.py           ./app.py
 RUN addgroup -S preview && adduser -S -G preview preview
 USER preview
 
-EXPOSE 8082
+# No port (ADR-027 §5): the service listens only on the Unix socket named by
+# PREVIEW_SOCKET, in a volume shared with tenant-api in its pod, and answers
+# only a peer running as its own uid — the tenant-api chart runs both
+# containers as the same uid. Liveness is the chart's (it asks GET /v1/status
+# on the socket).
+# The image's own check asks GET /v1/status over that socket, as the image
+# user (the service answers only its own uid).
 HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
-  CMD wget -qO- http://127.0.0.1:8082/healthz >/dev/null 2>&1 || exit 1
+  CMD ["python", "-c", "import os,socket,sys; s=socket.socket(socket.AF_UNIX); s.settimeout(2); s.connect(os.environ['PREVIEW_SOCKET']); s.sendall(b'GET /v1/status HTTP/1.0\\r\\n\\r\\n'); sys.exit(0 if s.recv(64).split()[1:2] == [b'200'] else 1)"]
 CMD ["python", "app.py"]

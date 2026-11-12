@@ -37,7 +37,7 @@ func TestStateValueOf_Rules(t *testing.T) {
 	}{
 		// Scalars, on any filter.
 		{"enable", "maintenance", "enable", stateValueOn, true, 0, ""},
-		{"enable any case, trimmed", "crashloop", "  EnAbLe ", stateValueOn, true, 0, ""},
+		{"enable any case, trimmed", "crashloop", "\"  EnAbLe \"", stateValueOn, true, 0, ""},
 		{"disable", "maintenance", "disable", stateValueOff, false, 0, ""},
 		{"disabled", "crashloop", "disabled", stateValueOff, false, 0, ""},
 		{"off", "crashloop", "off", stateValueOff, false, 0, ""},
@@ -56,6 +56,13 @@ func TestStateValueOf_Rules(t *testing.T) {
 
 		// The switch: target.
 		{"target enable", "maintenance", "target: enable\n", stateValueOn, true, 0, ""},
+		// #3638: a scalar that reads like the mapping is the scalar it was
+		// written as — not read, not on.
+		{"a scalar that reads like the mapping", "maintenance", "\"target: enable\"", stateValueProblem, false, 0, `"target: enable" is neither`},
+		{"a scalar that reads like a list", "maintenance", "\"[enable]\"", stateValueProblem, false, 0, `"[enable]" is neither`},
+		// A sequence is its text read as a scalar (as before #3638): not a
+		// mapping, not a structured problem.
+		{"a sequence", "maintenance", "[enable]", stateValueProblem, false, 0, `"- enable" is neither`},
 		{"target disable", "maintenance", "target: disable\n", stateValueOff, false, 0, ""},
 		{"target off (a disable word)", "maintenance", "target: \"off\"\n", stateValueOff, false, 0, ""},
 		{"target false (YAML boolean)", "maintenance", "target: false\n", stateValueOff, false, 0, ""},
@@ -142,7 +149,7 @@ func TestStateValueOf_Rules(t *testing.T) {
 		{"non-string keys", "maintenance", "1: x\n", stateValueProblem, false, 0, "takes only the fields"},
 	}
 	for _, c := range cases {
-		r := stateValueOf(c.filter, ScheduledValue{Default: c.val})
+		r := stateValueOf(c.filter, valueAsWritten(c.val))
 		if r.kind != c.kind {
 			t.Errorf("%s: kind = %d, want %d (problem %q)", c.name, r.kind, c.kind, r.problem)
 			continue
@@ -157,14 +164,14 @@ func TestStateValueOf_Rules(t *testing.T) {
 			t.Errorf("%s: problem = %q, want it to contain %q", c.name, r.problem, c.problemHas)
 		}
 		// The write gate refuses exactly what the reader does not read.
-		wp := stateFilterValueProblem("_state_"+c.filter, ScheduledValue{Default: c.val})
+		wp := stateFilterValueProblem("_state_"+c.filter, valueAsWritten(c.val))
 		wantRefused := c.kind == stateValueProblem || c.kind == stateValueInvalidExpires
 		if (wp != "") != wantRefused {
 			t.Errorf("%s: write problem = %q, want refused=%v", c.name, wp, wantRefused)
 		}
 		// Every reading is comparable (Ratchet's ==).
-		_ = any(stateFilterValueReading("_state_"+c.filter, ScheduledValue{Default: c.val})) ==
-			any(stateFilterValueReading("_state_"+c.filter, ScheduledValue{Default: c.val}))
+		_ = any(stateFilterValueReading("_state_"+c.filter, valueAsWritten(c.val))) ==
+			any(stateFilterValueReading("_state_"+c.filter, valueAsWritten(c.val)))
 	}
 }
 
@@ -227,7 +234,7 @@ func TestResolveStateFilters_The3620Counterexamples(t *testing.T) {
 		Tenants:      map[string]map[string]ScheduledValue{},
 	}
 	for tn, v := range tenants {
-		c.Tenants[tn] = map[string]ScheduledValue{"_state_maintenance": {Default: v}}
+		c.Tenants[tn] = map[string]ScheduledValue{"_state_maintenance": valueAsWritten(v)}
 	}
 	var warns []string
 	logf := func(format string, args ...any) { warns = append(warns, fmt.Sprintf(format, args...)) }
@@ -268,10 +275,10 @@ func TestResolveStateFilters_OtherFilterStrict(t *testing.T) {
 	c := ThresholdConfig{
 		StateFilters: map[string]StateFilter{"crashloop": {Severity: "critical", DefaultState: "enable"}},
 		Tenants: map[string]map[string]ScheduledValue{
-			"yes":     {"_state_crashloop": {Default: "yes"}},
-			"one":     {"_state_crashloop": {Default: "1"}},
-			"mapping": {"_state_crashloop": {Default: "target: enable\n"}},
-			"enable":  {"_state_crashloop": {Default: "enable"}},
+			"yes":     {"_state_crashloop": valueAsWritten("yes")},
+			"one":     {"_state_crashloop": valueAsWritten("1")},
+			"mapping": {"_state_crashloop": valueAsWritten("target: enable\n")},
+			"enable":  {"_state_crashloop": valueAsWritten("enable")},
 			"absent":  {"cpu": {Default: "80"}},
 		},
 	}
@@ -291,9 +298,9 @@ func TestResolveStateFilters_OtherFilterStrict(t *testing.T) {
 func TestResolveMaintenanceExpiries_WarnsOnlyForStructured(t *testing.T) {
 	t.Parallel()
 	c := ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
-		"bad-exp": {"_state_maintenance": {Default: "expires: soon\n"}},
-		"bad-map": {"_state_maintenance": {Default: "target: all\n"}},
-		"scalar":  {"_state_maintenance": {Default: "yes"}},
+		"bad-exp": {"_state_maintenance": valueAsWritten("expires: soon\n")},
+		"bad-map": {"_state_maintenance": valueAsWritten("target: all\n")},
+		"scalar":  {"_state_maintenance": valueAsWritten("yes")},
 	}}
 	var warns []string
 	logf := func(format string, args ...any) { warns = append(warns, fmt.Sprintf(format, args...)) }
@@ -402,9 +409,9 @@ func TestMaintenanceExpiries_WarnWhenExpiredButRecurring(t *testing.T) {
 	t.Parallel()
 	win := "recurring:\n- weekdays: [sun]\n  window: \"02:00-06:00\"\n"
 	c := ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
-		"past-rec": {"_state_maintenance": {Default: "expires: \"" + svPast + "\"\n" + win}},
-		"past":     {"_state_maintenance": {Default: "expires: \"" + svPast + "\"\n"}},
-		"future":   {"_state_maintenance": {Default: "expires: \"" + svFuture + "\"\n" + win}},
+		"past-rec": {"_state_maintenance": valueAsWritten("expires: \"" + svPast + "\"\n" + win)},
+		"past":     {"_state_maintenance": valueAsWritten("expires: \"" + svPast + "\"\n")},
+		"future":   {"_state_maintenance": valueAsWritten("expires: \"" + svFuture + "\"\n" + win)},
 	}}
 	// Both collector paths: the maintenance filter declared (what ships —
 	// the only config where the windows switch anything on, and where the

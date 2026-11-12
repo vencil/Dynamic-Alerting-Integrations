@@ -65,9 +65,10 @@ from _lib_python import (  # noqa: E402
 )
 from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report, partial_answer)
+    EXIT_CALLER_ERROR, EXIT_OK, Report, partial_answer)
+import _lib_input  # noqa: E402
+import _lib_parse_cache  # noqa: E402
 
 # Reuse the recommendation engine wholesale — threshold_govern is its gate
 # layer, never a re-implementation (the engine owns percentiles / observed-map /
@@ -633,6 +634,7 @@ def run(args: argparse.Namespace) -> GovernanceResult:
 @exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
 @recommend.observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error  # #3751: no usable parse-tree → rc 2
 def main() -> "Report | None":
     parser = argparse.ArgumentParser(
         description=(
@@ -642,9 +644,12 @@ def main() -> "Report | None":
             "retuning (read-only, writes nothing; #656)"
         ),
     )
-    parser.add_argument("--config-dir", required=True,
-                        help="租戶配置目錄路徑（conf.d/）" if _LANG == "zh"
-                        else "Path to tenant config directory (conf.d/)")
+    # #3751: an empty conf.d is refused naming the flag (it was da-guard's
+    # "no .yaml files found in <path>", rc 2, the flag unnamed).
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED, required=True,
+                         help="租戶配置目錄路徑（conf.d/）" if _LANG == "zh"
+                         else "Path to tenant config directory (conf.d/)")
     # W1: canonical env fallback — `os.environ.get(k, default)` returned ""
     # for a present-but-empty $PROMETHEUS_URL; _lib_io.prometheus_url treats
     # "" as unset (#3528: the one env fallback; the dispatcher adds none).
@@ -676,12 +681,17 @@ def main() -> "Report | None":
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="JSON 格式輸出" if _LANG == "zh" else "Output as JSON")
     args = parser.parse_args()
+    # One reader of --config-dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _main(args)
 
-    # #3276: the shared judgement of a caller-given path, in this tool's words.
-    config_dir_problem = classify_path(args.config_dir, "dir", lang=_LANG, flag="--config-dir")
-    if config_dir_problem is not None:
-        raise CallerError(f"配置目錄無法使用: {config_dir_problem.message}" if _LANG == "zh"
-                          else config_dir_problem.message, config_dir_problem.reason)
+
+def _main(args: argparse.Namespace) -> "Report | None":
+    # #3751: judged once — the path (#3276), a root da-guard cannot list, a
+    # tree with no config file — each refusal naming --config-dir (a
+    # CallerError: rc 2 through `run()`). `run` reads the tree at the path
+    # judged here.
+    _lib_parse_cache.declared_trees(args, "config_dir", lang=_LANG)
 
     if parse_duration_seconds(args.lookback) is None:
         msg = (f"無效的 lookback 值: {args.lookback}" if _LANG == "zh"

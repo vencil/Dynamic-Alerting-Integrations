@@ -13,7 +13,7 @@ Both directions are checked:
 * every table default equals the default the code falls back to.
 
 Defaults are derived from the AST, never by importing ``app.py`` (importing
-it runs the dev-bypass containment check and resolves the eval core).
+it resolves the eval core).
 """
 from __future__ import annotations
 
@@ -28,10 +28,7 @@ _APP = _REPO / "components" / "recipe-preview" / "app.py"
 _README = _REPO / "components" / "recipe-preview" / "README.md"
 
 # Read by app.py but not something an operator sets — kept out of the table.
-_NOT_OPERATOR_CONFIG = {
-    "KUBERNETES_SERVICE_HOST": "injected by Kubernetes into every pod; app.py only reads it to "
-    "detect the cluster for the dev-bypass containment check (documented in that row)",
-}
+_NOT_OPERATOR_CONFIG: dict[str, str] = {}
 
 _EMPTY = "(空)"
 

@@ -219,7 +219,7 @@ repeat_interval: "4h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -266,7 +266,7 @@ repeat_interval: "100h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -293,7 +293,7 @@ func TestResolveRouting_MissingReceiver(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -337,10 +337,10 @@ repeat_interval: "2h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingA),
+				"_routing": SVYAML(routingA),
 			},
 			"db-b": {
-				"_routing": SV(routingB),
+				"_routing": SVYAML(routingB),
 			},
 			"db-c": {
 				"mysql_connections": SV("70"),
@@ -377,7 +377,7 @@ func TestResolveRouting_MinimalConfig(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -824,17 +824,17 @@ func TestResolveMaintenanceExpiries(t *testing.T) {
 			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}}},
 			0, nil},
 		{"ScalarEnable",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("enable")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SVYAML("enable")}}},
 			0, nil},
 		{"StructuredActive",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + future + "\nreason: Scheduled upgrade\ntarget: enable\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SVYAML("expires: " + future + "\nreason: Scheduled upgrade\ntarget: enable\n")}}},
 			1, func(t *testing.T, r []ResolvedMaintenanceExpiry) {
 				if r[0].Expired || r[0].Reason != "Scheduled upgrade" {
 					t.Errorf("expected active with reason, got: %+v", r[0])
 				}
 			}},
 		{"StructuredExpired",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + past + "\nreason: Upgrade complete\ntarget: enable\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SVYAML("expires: " + past + "\nreason: Upgrade complete\ntarget: enable\n")}}},
 			1, func(t *testing.T, r []ResolvedMaintenanceExpiry) {
 				if !r[0].Expired {
 					t.Error("should be expired")
@@ -864,7 +864,7 @@ func TestResolveStateFilters_MaintenanceExpired(t *testing.T) {
 			"maintenance": {Severity: "warning", DefaultState: "disable"},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV(yamlStr)},
+			"db-a": {"_state_maintenance": SVYAML(yamlStr)},
 		},
 	}
 	result := cfg.ResolveStateFiltersAt(fixedNow)
@@ -883,7 +883,7 @@ func TestResolveStateFilters_MaintenanceActive(t *testing.T) {
 			"maintenance": {Severity: "warning", DefaultState: "disable"},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV(yamlStr)},
+			"db-a": {"_state_maintenance": SVYAML(yamlStr)},
 		},
 	}
 	result := cfg.ResolveStateFiltersAt(fixedNow)
@@ -903,7 +903,7 @@ func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
 			"maintenance": {Severity: "warning", DefaultState: "disable"},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV("enable")},
+			"db-a": {"_state_maintenance": SVYAML("enable")},
 		},
 	}
 	result := cfg.ResolveStateFiltersAt(fixedNow)
@@ -930,8 +930,8 @@ func TestOperationalStatesAt_Maintenance(t *testing.T) {
 		isActive bool
 	}{
 		{"ScalarEnable", declared, SV("enable"), true},
-		{"Expired", declared, SV("expires: " + past + "\ntarget: enable\n"), false},
-		{"NotExpiredYet", declared, SV("expires: " + future + "\ntarget: enable\n"), true},
+		{"Expired", declared, SVYAML("expires: " + past + "\ntarget: enable\n"), false},
+		{"NotExpiredYet", declared, SVYAML("expires: " + future + "\ntarget: enable\n"), true},
 		// #3620: "" is neither `enable` nor a disable word — a value the
 		// reader does not read, so not on (fail-closed); it used to be on.
 		// A zero ScheduledValue reads as "" too (a null in a loaded tree is

@@ -91,7 +91,7 @@ func maintenanceCfg(tenant, expires string) *ThresholdConfig {
 			"maintenance": {Severity: "warning", DefaultState: "disable"},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
-			tenant: {"_state_maintenance": SV("expires: \"" + expires + "\"\nreason: r\ntarget: enable\n")},
+			tenant: {"_state_maintenance": SVYAML("expires: \"" + expires + "\"\nreason: r\ntarget: enable\n")},
 		},
 	}
 }

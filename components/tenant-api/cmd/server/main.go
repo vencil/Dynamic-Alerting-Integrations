@@ -45,6 +45,7 @@ import (
 	"github.com/vencil/tenant-api/internal/groups"
 	"github.com/vencil/tenant-api/internal/handler"
 	"github.com/vencil/tenant-api/internal/rbac"
+	"github.com/vencil/tenant-api/internal/recipepreview"
 	"github.com/vencil/tenant-api/internal/statemigrate"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/views"
@@ -241,6 +242,10 @@ func main() {
 	// conf.d write asks it first, so it is required: no socket, no start.
 	generatorSocket := flag.String("generator-socket", envOrDefault("TA_GENERATOR_SOCKET", ""),
 		"#2903 (ADR-036 §3): Unix socket of the generator container (`da-tools generator-service`), which judges every content-changing conf.d write before it is committed. Required: tenant-api refuses to start without it")
+	// ADR-027 §5: the recipe-preview container of this pod. Optional: unset,
+	// POST /tenants/{id}/recipe-preview answers 503 PREVIEW_NOT_CONFIGURED.
+	recipePreviewSocket := flag.String("recipe-preview-socket", envOrDefault("TA_RECIPE_PREVIEW_SOCKET", ""),
+		"ADR-027 §5: Unix socket of the recipe-preview container in this pod, which answers would-fire previews (POST /api/v1/tenants/{id}/recipe-preview) after tenant-api has authorized the caller. Empty = that route answers 503 PREVIEW_NOT_CONFIGURED")
 	deployPolicy := flag.String("deploy-policy", envOrDefault("TA_DEPLOY_POLICY", ""),
 		"#2903 (ADR-036 §4/§5): read-only path of the deployment policy file the generator container judges with (its --policy). tenant-api hashes it to check that the generator judged with the same file. Empty = the generator runs without one (both sides must agree)")
 
@@ -563,6 +568,7 @@ func main() {
 		WriteMode:          wm,
 		HumanSocketPath:    *humanSocket,
 		SearchCache:        tenantSnapshots,
+		RecipePreview:      recipePreviewer(*recipePreviewSocket),
 		// #609 CodeRabbit: the fleet-wide AccountID backfill must be bounded by
 		// the operator's --write-timeout, NOT the global 30s request Timeout
 		// middleware — the handler detaches from the request deadline and uses
@@ -1000,4 +1006,14 @@ func formatClaimHeaders(m map[string]string) string {
 		pairs = append(pairs, k+"="+m[k])
 	}
 	return strings.Join(pairs, ",")
+}
+
+// recipePreviewer is the recipe-preview client for socket, or nil (the
+// interface's nil, not a typed nil) when the socket is not configured.
+func recipePreviewer(socket string) handler.RecipePreviewer {
+	if socket == "" {
+		return nil
+	}
+	slog.Info("recipe-preview container configured (ADR-027 §5)", "socket", socket)
+	return recipepreview.NewClient(socket)
 }

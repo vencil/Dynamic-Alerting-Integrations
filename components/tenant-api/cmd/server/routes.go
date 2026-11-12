@@ -225,14 +225,12 @@ func buildRouter(rd routerDeps) *chi.Mux {
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
 				Get("/metrics", handler.DiscoverMetrics(deps))
 
-			// #657: lightweight RBAC read-probe for sibling services (the
-			// recipe-preview would-fire service). 200 {allow:true} if the
-			// caller may read {id}, 403 otherwise — reuses this exact read
-			// middleware so the tenant-isolation decision is never
-			// re-implemented elsewhere, and returns only the boolean (not the
-			// tenant config). See §4.1 of the recipe-preview design.
+			// ADR-027 §5: would-fire preview of one recipe. The read gate
+			// authorizes the caller on {id}; only then does the handler ask
+			// the recipe-preview container of this pod (it reads no
+			// identity). POST: it carries the recipe; it writes nothing.
 			r.With(rbacMgr.Middleware(rbac.PermRead, handler.TenantIDFromPath)).
-				Get("/access", handler.CheckTenantAccess())
+				Post("/recipe-preview", handler.PreviewRecipe(deps))
 
 			// v2.9.0 ADR-024 §3 (#741): comment-preserving write of a
 			// tenant's _custom_alerts (RecipeBuilder modal). PermWrite —

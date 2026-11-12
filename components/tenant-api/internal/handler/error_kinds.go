@@ -135,6 +135,15 @@ var kindTable = []KindSpec{
 	// A deployment setting: no retry finds it configured, so no Retry-After.
 	{Kind: errkind.FederationNotConfigured, Status: http.StatusServiceUnavailable, Code: errcode.FederationNotConfigured},
 
+	// The recipe-preview container (ADR-027 §5). Busy is a 429 like the
+	// generator's: the container is fine, it gave no verdict this time.
+	{Kind: errkind.PreviewBusy, Status: http.StatusTooManyRequests, Code: errcode.PreviewBusy, Retryable: true, RetryAfterS: 5},
+	// 60: the container's per-tenant window is one minute.
+	{Kind: errkind.PreviewRateLimited, Status: http.StatusTooManyRequests, Code: errcode.RateLimited, Retryable: true, RetryAfterS: 60},
+	{Kind: errkind.PreviewRejected, Status: http.StatusBadRequest, Code: errcode.BadRequest, ClientError: true},
+	{Kind: errkind.PreviewUnavailable, Status: http.StatusServiceUnavailable, Code: errcode.PreviewUnavailable, Retryable: true, RetryAfterS: 5},
+	{Kind: errkind.PreviewNotConfigured, Status: http.StatusServiceUnavailable, Code: errcode.PreviewNotConfigured},
+
 	// The router's and the middleware chain's own answers (#3226).
 	{Kind: errkind.RouteNotFound, Status: http.StatusNotFound, Code: errcode.NotFound, ClientError: true},
 	{Kind: errkind.MethodNotAllowed, Status: http.StatusMethodNotAllowed, Code: errcode.MethodNotAllowed, ClientError: true},
@@ -229,6 +238,10 @@ var kindRules = []kindRule{
 	typedKind(errkind.GeneratorRejected),
 	typedKind(errkind.ValidatorUnavailable),
 	typedKind(errkind.PolicyUnavailable),
+	typedKind(errkind.PreviewBusy),
+	typedKind(errkind.PreviewRateLimited),
+	typedKind(errkind.PreviewRejected),
+	typedKind(errkind.PreviewUnavailable),
 	typedKind(errkind.TenantTreeUnreadable),
 	typedKind(errkind.TenantStoreFault),
 	typedKind(errkind.TenantFileUnreadable),
@@ -420,8 +433,11 @@ var (
 	// kindsBatchOp: what a batch op's "error" result is named by
 	// (batchErrorResult): the batch's failure as a whole, and the refusals
 	// of the op itself that the writer returns per op.
+	// PreviewRejected never reaches a batch; it is listed because every
+	// ClientError kind is (TestBatchProjections_CodeIsTheTableAnswer).
 	kindsBatchOp = kindsBatchFailure.with(errkind.Validation, errkind.ReservedTenantID,
-		errkind.MergeFailed, errkind.TenantGitManagedUnnamed, errkind.TenantConfigNotLoadable)
+		errkind.MergeFailed, errkind.TenantGitManagedUnnamed, errkind.TenantConfigNotLoadable,
+		errkind.PreviewRejected)
 	// kindsState: tenant-api's state store (#2856).
 	kindsState = kindsOf(errkind.StateConflict, errkind.StateUnavailable, errkind.StateFull)
 )

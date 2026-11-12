@@ -144,6 +144,7 @@ linters:
             - "**/internal/platform/**"
             - "**/internal/proxyconfig/**"
             - "**/internal/rbac/**"
+            - "**/internal/recipepreview/**"
             - "**/internal/statemigrate/**"
             - "**/internal/staterestore/**"
             - "**/internal/statestore/**"

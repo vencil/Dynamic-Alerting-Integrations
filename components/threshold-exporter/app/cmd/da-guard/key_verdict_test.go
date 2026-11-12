@@ -450,7 +450,7 @@ var kvWarnTree = map[string]string{
 	"_defaults.yaml": "state_filters:\n  maintenance: {reasons: [X], severity: critical}\n" + kvRoot,
 	"a.yaml": "tenants:\n  t1:\n    _profile: nope\n    nosuch_critical: \"5\"\n" +
 		"    mysql_connections: {default: \"5\", expires: \"bad\"}\n    _silent_mode: loud\n    _severity_dedup: maybe\n" +
-		"    _routing: {receiver: {type: webhook, url: \"https://a.example\"}, group_wait: \"1x\"}\n    _metadata: 5\n" +
+		"    _routing: {receiver: {type: webhook, url: \"https://a.example\"}, group_wait: \"1x\"}\n    _metadata: {environment: {a: b}}\n" +
 		"    _state_maintenance: {expires: \"zz\"}\n    _custom_alerts: [{recipe: nope, name: q}]\n",
 }
 

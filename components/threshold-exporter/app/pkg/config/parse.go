@@ -44,6 +44,7 @@ func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
 			}
 			sv.Default = structured.Default
 			sv.Overrides = structured.Overrides
+			sv.scheduleForm = true
 			// Allocate the expiry meta only when actually time-boxed — keeps the
 			// common (no-expiry) ScheduledValue a nil pointer, not 2 inline strings.
 			if structured.Expires != "" || structured.Reason != "" {

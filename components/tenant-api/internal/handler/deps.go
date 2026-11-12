@@ -106,6 +106,12 @@ type Deps struct {
 	// Views manages saved filter views (`_views.yaml`).
 	Views *views.Manager
 
+	// RecipePreview asks the recipe-preview container of this pod for a
+	// would-fire verdict (ADR-027 §5). Optional — nil when
+	// --recipe-preview-socket is unset; the route then answers 503
+	// PREVIEW_NOT_CONFIGURED.
+	RecipePreview RecipePreviewer
+
 	// Federation signs tenant federation tokens (ADR-020 IV-2d).
 	// Optional — nil when no signing key is configured, in which case
 	// main.go leaves the /federation/tokens routes unregistered, so

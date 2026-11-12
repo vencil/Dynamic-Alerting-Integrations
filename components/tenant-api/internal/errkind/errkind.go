@@ -162,6 +162,19 @@ const (
 	// configured on this server — a deployment setting, not a passing state.
 	FederationNotConfigured Kind = "federation_not_configured"
 
+	// PreviewBusy: the recipe-preview container gave no verdict this time
+	// (busy, deadline, no_time; ADR-027 §5).
+	PreviewBusy Kind = "preview_busy"
+	// PreviewRateLimited: the tenant's recipe-preview rate limit is used up.
+	PreviewRateLimited Kind = "preview_rate_limited"
+	// PreviewRejected: the recipe-preview container refuses the request
+	// itself (a malformed recipe or scenario).
+	PreviewRejected Kind = "preview_rejected"
+	// PreviewUnavailable: the recipe-preview container gave no usable answer.
+	PreviewUnavailable Kind = "preview_unavailable"
+	// PreviewNotConfigured: the deployment has no recipe-preview container.
+	PreviewNotConfigured Kind = "preview_not_configured"
+
 	// RouteNotFound: no route matches the request's path (#3226).
 	RouteNotFound Kind = "route_not_found"
 	// MethodNotAllowed: a route matches the path, but not the method.

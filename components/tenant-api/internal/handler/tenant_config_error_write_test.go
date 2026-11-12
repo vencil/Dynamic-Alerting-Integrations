@@ -399,7 +399,7 @@ var repairCallers = []struct {
 
 // labelsUnreadableFrag is the label gate's refusal of a write over labels
 // that cannot be read (labelChangeDeniedText).
-const labelsUnreadableFrag = "the labels its current tenant file holds cannot be read"
+const labelsUnreadableFrag = "the labels it currently resolves to cannot be read"
 
 // #2405: before the fix, a file whose YAML does not parse, whose `tenants:` is
 // not a mapping, or that repeats a key was refused by the end-of-life guard's

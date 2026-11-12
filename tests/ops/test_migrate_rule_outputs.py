@@ -584,7 +584,7 @@ class TestWriteOutputsIsThinWriter:
         ]
         dest = tmp_path / "out"
         mr.write_outputs(results, str(dest), prefix="custom_", dictionary={}, tenant="t1")
-        assert (dest / "conf.d" / "t1.yaml").read_text(encoding="utf-8") == \
+        assert (dest / mr.CONFD_DIR / "t1.yaml").read_text(encoding="utf-8") == \
             mr.render_tenant_config(results, "t1")
         assert (dest / "platform-recording-rules.yaml").read_text(encoding="utf-8") == \
             mr.render_recording_rules(results, "custom_")
