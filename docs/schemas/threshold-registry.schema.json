@@ -60,9 +60,9 @@
           "required": ["pack", "tier", "value", "unit", "desc", "metric_class"],
           "allOf": [
             {
-              "if": { "required": ["arming"], "properties": { "arming": { "not": { "const": "default" } } } },
-              "then": { "required": ["arming_reason", "arming_reason_zh"] },
-              "else": { "not": { "anyOf": [ { "required": ["arming_reason"] }, { "required": ["arming_reason_zh"] } ] } }
+              "if": { "required": ["portability"], "properties": { "portability": { "not": { "const": "portable" } } } },
+              "then": { "required": ["portability_reason", "portability_reason_zh"] },
+              "else": { "not": { "anyOf": [ { "required": ["portability_reason"] }, { "required": ["portability_reason_zh"] } ] } }
             }
           ],
           "properties": {
@@ -84,21 +84,45 @@
               "$comment": "Authored on every key, _critical derivatives included (since D-A PR-3 there is no inheritance step: the file states each class). Adding a new class is a contract change: extend this enum deliberately and define it in the description."
             },
             "arming": {
-              "enum": ["default", "ratio_pending", "site_specific", "pending_validation"],
-              "description": "Why the Helm chart does or does not ship this key's value (D-A A1). default = shipped enabled: thresholdConfig.defaults and the dev conf.d template are GENERATED from this set; only on tier:defaults. ratio_pending = an absolute value that does not carry across deployments; the fix is a ratio form (#1320). site_specific = no universal value exists; the deployment must choose one. pending_validation = a portable candidate value exists but no shadow report has validated it (the input of D-A A2).",
-              "$comment": "REQUIRED on every key that is not a <base>_critical, FORBIDDEN on a <base>_critical (it follows its base: resolveCriticalRows needs defaults[base]). That split depends on the derived critical_of, so _registry_lib.arming_problems enforces it through the fixed-point check, not this schema. The reachability gate's 'not chart-armed' set is derived from this field (not_chart_armed_keys). Promoting a key to default is a deliberate D4-family product decision, not a mechanical edit."
+              "enum": ["default", "operator"],
+              "description": "Whether the Helm chart ships this key's value (D-A A1, #3773). default = shipped enabled: thresholdConfig.defaults and the dev conf.d template are GENERATED from this set; only on tier:defaults. operator = not shipped; the deployment must supply it. (Not `off`: YAML 1.1 reads an unquoted off as false.)",
+              "$comment": "REQUIRED on every key that is not a <base>_critical, FORBIDDEN on a <base>_critical (it follows its base). That split depends on the derived critical_of, so _registry_lib.arming_problems enforces it through the fixed-point check, as it does the rule that a default key is portable and unblocked unless it records default_exception."
             },
-            "arming_reason": {
+            "portability": {
+              "enum": ["portable", "ratio_pending", "site_specific"],
+              "description": "Whether ONE value of this key carries across deployments. portable = yes. ratio_pending = an absolute value that does not; the fix is a ratio form (#1320). site_specific = no universal value exists. Required on shipped keys too, so a shipped absolute value is caught.",
+              "$comment": "Same presence rule as arming. A portable, unshipped, unblocked key is a validation candidate (the D-A A2 input), derived by _registry_lib.validation_candidates — never authored."
+            },
+            "portability_reason": {
               "type": "string",
               "minLength": 1,
               "pattern": "^[^\\n\\r]+$",
-              "$comment": "Why the key is not chart-armed, one line in English. Required with every arming state but default and forbidden with default (the allOf below; _registry_lib.arming_problems also rejects surrounding whitespace, since the generated surfaces splice it into # comments)."
+              "$comment": "Why one value does not carry, one line in English. Required iff portability is not portable (the allOf below); _registry_lib.arming_problems also rejects surrounding whitespace, since the generated surfaces splice it into # comments."
             },
-            "arming_reason_zh": {
+            "portability_reason_zh": {
               "type": "string",
               "minLength": 1,
               "pattern": "^[^\\n\\r]+$",
               "$comment": "The same reason in Traditional Chinese; the generated helm values and rule-pack headers render this one."
+            },
+            "blocker": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "tracking", "reason", "reason_zh"],
+              "description": "Something other than validation that stops the key from shipping, with the issue tracking it. A default key cannot carry one.",
+              "properties": {
+                "kind": {"enum": ["unwired", "aggregation_bug", "unmeasured", "value_disputed"]},
+                "tracking": {"type": "integer", "minimum": 1},
+                "reason": {"type": "string", "minLength": 1, "pattern": "^[^\\n\\r]+$"},
+                "reason_zh": {"type": "string", "minLength": 1, "pattern": "^[^\\n\\r]+$"}
+              }
+            },
+            "default_exception": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["tracking"],
+              "description": "Records why a non-portable value ships anyway (arming: default with portability other than portable), with the issue that resolves it. Forbidden anywhere else (enforced by _registry_lib.arming_problems).",
+              "properties": {"tracking": {"type": "integer", "minimum": 1}}
             },
             "critical_of": {
               "type": "string",
