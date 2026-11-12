@@ -447,11 +447,11 @@ auditLog:
   # rollout, and with the default `IfNotPresent` the kubelet keeps serving the
   # old image while the platform's nightly scan reports the new one.
   # tests/shared/test_federation_audit_metrics.py pins recipe ↔ tag.
-  # (History: 3.0.8-N while the image built mtail 3.0.8; alpine3.23.6-1 is the
-  # first logrotate-only build.)
+  # (History: 3.0.8-N while the image built mtail 3.0.8; alpine3.23.6-1 was the
+  # first logrotate-only build; alpine3.24.4-1 is the alpine 3.24 rebuild.)
   image:
     repository: federation-audit-sidecar
-    tag: "alpine3.23.6-1"
+    tag: "alpine3.24.4-1"
     pullPolicy: IfNotPresent
   # audit-metrics — tails sink 2 and exposes tenant_federation_requests_total,
   # tenant_log_query_requests_total and tenant_log_query_duration_ms on this

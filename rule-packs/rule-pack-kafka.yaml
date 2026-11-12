@@ -10,12 +10,14 @@
 #   kafka_consumer_lag: 1000   # messages — Consumer lag warning
 #       未啟用（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
 #   kafka_under_replicated_partitions: 0   # count — Under-replicated partitions (should be 0)
-#       未啟用（待驗證）：0 是普世的不變式，但出貨前尚未對滾動重啟驗證
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
 #   kafka_broker_count: 3   # count — Minimum broker count warning
 #       未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
 #   kafka_active_controllers: 1   # count — Minimum active controllers (should be 1)
-#       未啟用（待驗證）：恰有一個 active controller 是普世的不變式，但出貨前尚未驗證
+#       未啟用（沒有資料源，#3783）：宣告的 danielqsj/kafka_exporter 不輸出 kafka_controller_active_controller_count
 #   kafka_request_rate: 10000   # msg/s — Message rate warning (5m)
+#       未啟用（沒有資料源，#3783）：kafka_server_brokertopicmetrics_messagesin_total 是 JMX 指標，宣告的
+#       danielqsj/kafka_exporter 不輸出
 #       未啟用（依部署而定）：訊息量是工作負載而非故障，任何數字都只適用於特定部署
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
@@ -39,8 +41,8 @@
 #     messaging-a:
 #       kafka_consumer_lag: "5000"                        # 自訂消費者延遲警告閾值
 #       kafka_consumer_lag_critical: "10000"              # Critical 閾值
-#       kafka_under_replicated_partitions: "2"            # 警告閾值
-#       kafka_under_replicated_partitions_critical: "5"   # Critical 閾值
+#       kafka_under_replicated_partitions: "2"            # 警告：複製不足的 partition 超過 2 個
+#       kafka_under_replicated_partitions_critical: "5"   # Critical：複製不足的 partition 超過 5 個
 #       kafka_broker_count: "2"                           # 最小代理數警告閾值
 # ============================================================
 groups:
@@ -54,9 +56,26 @@ groups:
       - record: tenant:kafka_consumer_lag:max
         expr: max by(tenant) (kafka_consumergroup_lag_sum)
 
-      # Under-replicated partitions: partitions without all in-sync replicas
-      - record: tenant:kafka_under_replicated_partitions:max
-        expr: max by(tenant) (kafka_topic_partition_under_replicated_partition)
+      # Under-replicated partitions: number of partitions without all in-sync replicas.
+      # The source metric is a per-partition 0/1 flag ("1 if Topic/Partition is
+      # under Replicated", danielqsj/kafka_exporter), so the count is a SUM over
+      # partitions — a max across them is only ever 0 or 1 and never crosses a
+      # threshold >= 1 (#3770).
+      # Inner max dedups replicas: kafka_exporter reports every partition of the
+      # whole cluster from each instance, and tenant-exporters scrapes per pod
+      # (#3723), so N exporter replicas yield N series per partition differing
+      # only in instance/pod. Summing those directly would count each partition
+      # N times. Max (not min) also keeps a partition counted when replicas
+      # disagree because their metadata refreshed at different times (1 vs 0).
+      # Caveat: a tenant with two Kafka clusters sharing a topic name and
+      # partition number is undercounted (the exporter exposes no cluster label).
+      # Upstream blind spot: when the exporter's Replicas/ISR lookup for a
+      # partition fails it still emits 0 for that partition, so this undercounts.
+      - record: tenant:kafka_under_replicated_partitions:sum
+        expr: |
+          sum by(tenant) (
+            max by(tenant, topic, partition) (kafka_topic_partition_under_replicated_partition)
+          )
 
       # Active controllers: should be exactly 1
       - record: tenant:kafka_active_controllers:max
@@ -161,7 +180,7 @@ groups:
       - alert: KafkaUnderReplicatedPartitions
         expr: |
           (
-            tenant:kafka_under_replicated_partitions:max
+            tenant:kafka_under_replicated_partitions:sum
             > on(tenant) group_left
             tenant:alert_threshold:kafka_under_replicated_partitions
           )
@@ -178,8 +197,8 @@ groups:
           summary_zh: "{{ $labels.tenant }} 偵測到複製不足的分割區"
           platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: under-replicated partitions — broker health check"
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 複製不足分割區 — 請檢查 broker 健康狀態"
-          description: "{{ $value | printf \"%.0f\" }} partitions lack in-sync replicas (warning threshold exceeded)"
-          description_zh: "{{ $value | printf \"%.0f\" }} 個分割區缺少同步副本 (超過警告閾值)"
+          description: "Under-replicated partitions: {{ $value | printf \"%.0f\" }} (warning threshold exceeded)"
+          description_zh: "複製不足的分割區數: {{ $value | printf \"%.0f\" }} (超過警告閾值)"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
@@ -188,7 +207,7 @@ groups:
       - alert: KafkaUnderReplicatedPartitionsCritical
         expr: |
           (
-            tenant:kafka_under_replicated_partitions:max
+            tenant:kafka_under_replicated_partitions:sum
             > on(tenant) group_left
             tenant:alert_threshold:kafka_under_replicated_partitions_critical
           )
@@ -205,8 +224,8 @@ groups:
           summary_zh: "{{ $labels.tenant }} 的複製不足分割區情況嚴重"
           platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical under-replication — data durability at risk, escalate"
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 複製不足情況嚴重 — 資料耐久性有風險，請上報"
-          description: "{{ $value | printf \"%.0f\" }} partitions lack in-sync replicas (critical threshold exceeded)"
-          description_zh: "{{ $value | printf \"%.0f\" }} 個分割區缺少同步副本 (超過嚴重閾值)"
+          description: "Under-replicated partitions: {{ $value | printf \"%.0f\" }} (critical threshold exceeded)"
+          description_zh: "複製不足的分割區數: {{ $value | printf \"%.0f\" }} (超過嚴重閾值)"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"

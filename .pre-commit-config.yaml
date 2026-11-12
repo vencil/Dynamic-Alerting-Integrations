@@ -1707,7 +1707,7 @@ repos:
         # image ships no repo tree to read the YAML from. Gated: JSON-Schema
         # shape (pre-generation hard gate) + the registry is a fixed point of
         # its own extraction (a wrong critical_of, an arming: default on an
-        # optional key, a missing arming reason, an alias onto no key → red) +
+        # optional key, a missing portability reason, an alias onto no key → red) +
         # freshness of every GENERATED surface (the RULE_PACKS module / pack
         # header threshold sections / helm values thresholdConfig.defaults /
         # dev conf.d _defaults.yaml / the optional_overrides declared-key LIST

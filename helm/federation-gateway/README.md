@@ -306,7 +306,7 @@ exposed, 1 = one ingress, …).
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |
 | `auditLog.volumeSizeLimit` | `1Gi` | `emptyDir` cap for the audit-log mirror. Disk-backed (node ephemeral storage, not RAM). The headroom is deliberate: under a flood of rejected requests, logrotate has to rotate the file before the `emptyDir` fills and the kubelet evicts the pod |
 | `auditLog.image.repository` | `federation-audit-sidecar` | logrotate sidecar image — build from `audit-sidecar/Dockerfile` |
-| `auditLog.image.tag` | `alpine3.23.6-1` | `alpine<version>-<build revision>`. Bump it whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
+| `auditLog.image.tag` | `alpine3.24.4-1` | `alpine<version>-<build revision>`. Bump it whenever the Dockerfile changes: there is no `digest` knob here, so the tag is the only thing that makes `helm upgrade` roll the pods (#1337) |
 | `auditLog.metrics.image.*` | `timberio/vector:0.61.0-distroless-libc` + digest | The audit-metrics sidecar — kept identical to `helm/vector`'s image (one Vector version, one Renovate bump) |
 | `auditLog.metrics.port` | `3903` | `/metrics` port; the Service's scrape annotations point here |
 | `auditLog.metrics.resources` | 10m/48Mi req, 100m/128Mi limit | Measured ~42 MiB RSS |

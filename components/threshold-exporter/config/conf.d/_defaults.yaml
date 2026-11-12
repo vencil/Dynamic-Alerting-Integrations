@@ -31,11 +31,13 @@ defaults:
   # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
   # count — Max threads_connected warning（critical 加嚴 opt-in：mysql_connections_critical，registry 建議
   # 120）
+  # 出貨例外（待改比值，#3778）：絕對連線數跨部署沒有意義；可攜的形式是佔 max_connections 的比例（#3778）
   mysql_connections: 80
   # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30 =
   # PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the #944
   # keep — 2-release alias window, old spelling still resolves)（critical 加嚴
   # opt-in：mysql_threads_running_critical，registry 建議 50）
+  # 出貨例外（依部署而定，#3778）：健康的 running threads 數隨主機的 CPU 核數而定
   mysql_threads_running: 30
   # seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
   # APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's

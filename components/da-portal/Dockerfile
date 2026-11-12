@@ -36,7 +36,7 @@ COPY tools/portal/ ./
 RUN npm run build
 
 # ── Stage 2: the nginx image that serves them ───────────────────────
-FROM nginx:1.30-alpine3.23
+FROM nginx:1.31-alpine3.23
 
 LABEL org.opencontainers.image.title="da-portal" \
       org.opencontainers.image.description="Dynamic Alerting Interactive Tools Portal" \
