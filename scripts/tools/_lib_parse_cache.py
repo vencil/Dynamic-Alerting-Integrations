@@ -758,6 +758,14 @@ def declared_trees(args: Any, dest: str, *, lang: str, binary: Optional[str] = N
     return roots
 
 
+def judged(root: "str | os.PathLike[str]") -> bool:
+    """Whether *root* is a tree a declared input named in this process
+    (`declared_trees` judged it) — so a library reader of it does not judge
+    the path a second time (#3755: `_grar_parse.load_tenant_tree` did, for
+    four tools). A library caller that took no declaration still judges."""
+    return os.path.realpath(root) in _DECLARED
+
+
 # ── parse-tree's file selection, for the read-only tools (#2906 E1) ─────
 #
 # A tool that asks "which files are there" asks the same document it reads

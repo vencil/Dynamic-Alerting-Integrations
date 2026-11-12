@@ -286,6 +286,10 @@ def exit_caller_error(error: str, reason: Optional[str] = None, *,
 # ── Unexpected crash handling (#3090) ─────────────────────────────────
 
 _CRASH_MESSAGE_MAX = 500
+#: The start of the one line a crash prints (`crash_line`) — what a caller
+#: of a tool in a subprocess reads to tell a crash from a refusal, both of
+#: which exit 2 (#3755).
+CRASH_LINE_PREFIX: Final[str] = "ERROR: unexpected internal error ("
 _crash_exit_code: int = EXIT_CALLER_ERROR
 
 # #3092: set by test suites only (tests/conftest.py), read at every crash.
@@ -375,7 +379,7 @@ def crash_message(exc: BaseException) -> str:
     text = " ".join(text.split()) or "(no message)"
     if len(text) > _CRASH_MESSAGE_MAX:
         text = text[:_CRASH_MESSAGE_MAX] + "..."
-    return f"ERROR: unexpected internal error ({type(exc).__name__}): {text}"
+    return f"{CRASH_LINE_PREFIX}{type(exc).__name__}): {text}"
 
 
 def report_crash(exc: BaseException) -> None:

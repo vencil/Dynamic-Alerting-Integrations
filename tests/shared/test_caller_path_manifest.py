@@ -737,6 +737,7 @@ def test_a_manifest_dir_line_is_a_fault():
         "(#3755: the dir kind is gone)"]
     assert not [k for k, d in _entries(load_manifest()).items() if d.get("kind") == "dir"]
 
+
 def test_pending_is_a_ceiling_that_only_shrinks():
     pending = {"kind": "pending", "ticket": 1}
     key = frozenset({("t", "--n")})

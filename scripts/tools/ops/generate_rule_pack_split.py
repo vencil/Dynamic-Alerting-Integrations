@@ -542,10 +542,6 @@ def process_rule_packs(
     edge_dir = output_path / "edge-rules"
     central_dir = output_path / "central-rules"
 
-    if not dry_run:
-        _safe_mkdir(edge_dir)
-        _safe_mkdir(central_dir)
-
     report = {
         "status": "success",
         "errors": [],
@@ -580,6 +576,12 @@ def process_rule_packs(
         )
         report["status"] = "error"
         return report
+
+    # #3755 review: made only once there is something to split — a refusal
+    # leaves no output tree behind.
+    if not dry_run:
+        _safe_mkdir(edge_dir)
+        _safe_mkdir(central_dir)
 
     report["validation"]["total_packs"] = len(rule_files)
 
@@ -825,12 +827,21 @@ def main():
     # rule pack files found" (read as empty) after the output tree had been
     # created. An entry the rule-pack declaration does not cover (an
     # undeclared YAML beside the packs) is rc 2 too, naming it.
+    lang = "zh" if get_lang().startswith("zh") else "en"
     try:
-        selected_packs = _lib_input.selected(
-            args, "rule_packs_dir", lang="zh" if get_lang().startswith("zh") else "en")
+        selected_packs = _lib_input.selected(args, "rule_packs_dir", lang=lang)
     except _lib_consumer_read.ConsumerReadError as exc:
         die_caller_error(f"ERROR: --rule-packs-dir {safe_label(args.rule_packs_dir)}: "
                          f"{_lib_consumer_read.error_text(exc)}")
+    # #3755 review: a directory of platform packs alone selects nothing this
+    # tool splits (it splits tenant packs, #1595 D1a) — refused naming the
+    # flag, in lint's words, before anything is written.
+    if not [f for f in selected_packs if not _lib_consumer_read.is_platform_pack(
+            _lib_consumer_read.RULE_PACKS.member(f))]:
+        raise _lib_input.refuse_empty(
+            f"--rule-packs-dir {safe_label(args.rule_packs_dir)}",
+            f"{_lib_consumer_read.RULE_PACKS.wanted}, less the declared platform packs",
+            lang=lang)
     report = process_rule_packs(
         rule_pack_files=selected_packs,
         rule_packs_dir=args.rule_packs_dir,

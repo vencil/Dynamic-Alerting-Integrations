@@ -3517,3 +3517,19 @@ def test_config_dir_with_no_config_file_is_refused_naming_the_flag(tmp_path):
         assert r.returncode == EXIT_CALLER_ERROR, r.stdout[-2000:] + r.stderr
         assert r.stdout == "", r.stdout[-2000:]
         assert f"--config-dir {empty}: " in r.stderr, r.stderr
+
+
+def test_a_lint_crash_is_not_blamed_on_rule_packs(monkeypatch, tmp_path):
+    """#3755 review: a crash exits 2 as a refusal does; it is reported as a
+    crash of lint, never as "point --rule-packs at a rule-packs/ directory"."""
+    import subprocess as _sp
+    from _lib_exitcodes import CRASH_LINE_PREFIX, crash_message
+
+    line = crash_message(RuntimeError("boom"))
+    assert line.startswith(CRASH_LINE_PREFIX)
+    monkeypatch.setattr(vc.subprocess, "run", lambda *a, **k: _sp.CompletedProcess(
+        a[0], 2, "", "Traceback (most recent call last):\n" + line + "\n"))
+    row = vc.check_custom_rules(str(tmp_path), None)
+    assert row["status"] == vc.FAIL and row["caller_error"] is True, row
+    assert "crashed" in row["details"][0], row["details"]
+    assert "--rule-packs" not in row.get("suggested_action", ""), row

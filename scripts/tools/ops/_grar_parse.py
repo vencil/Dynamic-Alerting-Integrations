@@ -1187,7 +1187,11 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         "credential_facts": [],
     }
 
-    config_dir_problem = classify_path(config_dir, "dir", lang="en", flag="--config-dir")  # #3276
+    # #3276; #3755: a tree its CLI declared was judged there, once
+    # (`_lib_parse_cache.declared_trees`) — not again here. A library caller
+    # with no declaration (the generator container, tests) still is.
+    config_dir_problem = (None if _lib_parse_cache.judged(config_dir) else
+                          classify_path(config_dir, "dir", lang="en", flag="--config-dir"))
     if config_dir_problem is not None:
         print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

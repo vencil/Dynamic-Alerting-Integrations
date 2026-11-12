@@ -133,7 +133,8 @@ sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import YamlFileError, detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    CRASH_LINE_PREFIX, EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report)
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
@@ -1107,6 +1108,18 @@ def check_custom_rules(
         output = (result.stdout + result.stderr).strip()
         lines = [l for l in output.split("\n") if l.strip()] if output else []
 
+        if result.returncode == EXIT_CALLER_ERROR and any(
+                l.startswith(CRASH_LINE_PREFIX) for l in lines):
+            # #3755 review: a crash exits 2 as a refusal does; it is no
+            # verdict on --rule-packs — never sent there to be fixed.
+            row = _make_result(
+                "custom_rules", FAIL,
+                ["lint_custom_rules crashed (an internal error, not your input):",
+                 *lines],
+                caller_error=True,
+                hint="This is a defect in lint_custom_rules: report it with the lines above.")
+            row["reads_config_dir"] = False
+            return row
         if result.returncode == EXIT_CALLER_ERROR:
             # #3755: lint could not lint — its refusal is the caller's
             # (argv or environment), never a finding about the rule packs or
