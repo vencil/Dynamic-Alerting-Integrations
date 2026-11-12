@@ -188,12 +188,13 @@ updated_at: 2026-11-03
 ```yaml
 id: TRK-3541
 tracking_kind: tech-debt
-status: in-progress
+status: done
 domain: ci
 supersedes: [TRK-3180]
 target_version: v3.0.0
 created_at: 2026-11-03
-updated_at: 2026-11-05
+updated_at: 2026-11-12
+pr_ref: [3552, 3575, 3582]
 ```
 
 **來源**：[#3541](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3541)。nightly race 原本一個 module 一個 4 核 runner，所有 package 互搶核心，wall-clock 被擠壓灌水：11-02 那晚 tenant-api `internal/handler` 跑到 1718 s（`-timeout` 為 1800 s），threshold-exporter `cmd/da-guard` 1331 s。
@@ -203,6 +204,8 @@ updated_at: 2026-11-05
 **`-short` 定案**（2026-11-05 owner 裁決）：原計畫的 PR-C（量到放得下後拿掉 nightly 的 `-short`）取消。nightly 是重複壓力層、PR CI 是完整覆蓋層，與 Go 官方 race builder 帶 `-short`、完整測試在 `-longtest` builder 的分工相同；da-guard 完整矩陣 ×10 是單一 test binary 的成本，分片分不開。理由寫在 workflow 註解與守衛 `test_nightly_go_test_runs_with_short` 的 docstring。tenant-api `cmd/gen-error-contract`、`internal/handler` 獨佔一片仍約 950 s，由 tenant-api 線在 [#3574](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3574) 降 test 本身成本。
 
 **PR-B**（2026-11-05 owner 裁決 A，取代原本「PR CI 記錄每個 package 的 CPU 秒」的構想）：`parse_go_test_json.py` 在 fragment 加 `slow_packages`，列出 package 層級 `Elapsed` 超過 `-timeout` 一半的 package（比例是 `SLOW_PACKAGE_RATIO`，`-timeout` 是同檔的 `GO_TEST_TIMEOUT_S`，planner 也改從這裡讀）；已經逾時的 package 只算 `timeout`。report 為每個 slow package 開 `<module>|slow-package|<import path>` 追蹤 issue，與其他 kind 一樣原地刷新、「not seen」不關票，但屬警告：module 仍判 GREEN、report 不因它轉紅。
+
+**完成**（2026-11-12）：11-05～11-11 七次排程 nightly 每個 package 都 ≤ 900 s，#3541 已關。同時發現 race 腿自存的 Go cache 每晚都 restore 不到（11-04～11-11 每條腿皆 `Cache not found`），tenant-api `internal/handler` 每晚約 216 s 花在測試內冷建 da-read 等工具；改為唯讀 PR CI 的 Go cache key，不另存。
 
 ### Snapshot test 擴展
 

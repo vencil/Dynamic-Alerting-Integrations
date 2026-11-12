@@ -147,16 +147,22 @@ jobs:
       # build cache is content-addressed, so whichever shard saves it serves
       # every shard of the next night; the other legs of the run only log that
       # the key is taken. Restored by prefix, newest first.
-      - name: Cache Go modules and build cache
-        uses: actions/cache@v5
+      # Restore-only, from the key PR CI's Go jobs save (ci.yml, "Cache Go
+      # modules + build cache"). This leg's own per-run saves never came back:
+      # 11-04..11-11 every leg logged "Cache not found" for the previous
+      # night's key, so each night rebuilt cold — tenant-api internal/handler
+      # spent ~216 s of its Elapsed building da-read & co. inside the test
+      # (generator_real_test.go, cold da-read alone ~144 s). PR CI's entry is
+      # read on every PR, so it stays warm; reading it adds no tool list here.
+      - name: Restore Go modules and build cache (PR CI's key)
+        uses: actions/cache/restore@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-${{ hashFiles(format('{0}/go.sum', matrix.workdir)) }}-${{ github.run_id }}
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-${{ hashFiles(format('{0}/go.sum', matrix.workdir)) }}-
-            ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-
+            ${{ runner.os }}-go-
 
       # -json so the failure is machine-readable. `cmd/go` feeds the test
       # binary's stdout AND stderr through test2json, so a `WARNING: DATA RACE`
