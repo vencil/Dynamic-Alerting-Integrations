@@ -26,7 +26,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from tests._helm_gate import helm_required
+from _helm_gate import helm_required
 
 _CHART = "helm/threshold-exporter"
 _REPO = Path(__file__).resolve().parent.parent.parent
