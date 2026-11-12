@@ -1,0 +1,462 @@
+# promtool unit test — 單一 tenant-exporters target 停機（#3737）。
+# Run: promtool test rules tests/rulepacks/rule-pack-liveness-replica_test.yaml
+#
+# 對象：TenantExporterReplicaDown（rule-pack-liveness.yaml Rule B）與它和
+# TenantExporterAbsent（Rule A）的互斥：
+#   R1  兩副本一掛：9m 不響、剛滿 10m 響、只點名掛掉那個；Rule A 不響
+#   R2  兩副本都活                     → 都不響
+#   R3  單副本租戶全掛                 → 只有 Rule A
+#   R4  多副本全掛                     → 只有 Rule A
+#   R5  先一掛後全掛                   → Rule B 交棒給 Rule A
+#   R6  滾動重啟短暫 up=0              → 不響（for:10m）
+#   R7  租戶隔離                       → 不借別租戶的 up==1（攔 on(tenant)→on()）
+#   R8  維護中                         → 只靜音該租戶（maintenance: mute）
+#   R9  多 Service：一個 Service 全掛   → Rule B 響、Rule A 不響（攔 on(tenant, service)；#3771）
+#   R10 series 沒有 pod／service label  → 文案退回泛稱、不留空洞（攔拿掉 with）
+#   R11 未宣告 db_type 的租戶全掛       → 兩條都不響（Rule A 的 opt-in 契約；釘住現行行為）
+#   R12 同租戶只有別的 job 為 up=1       → Rule B 不響（攔拿掉右側 job filter）
+#   R13 別的 job 的 target up=0          → Rule B 不響（攔拿掉左側 job filter）
+# input_series 帶真實 scrape label（job/tenant/instance/pod/service）；tenant id 用
+# t1/t2（dev-rule：fixture 不寫死真實租戶名）。
+rule_files:
+  - ../../rule-packs/rule-pack-liveness.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ── R1 必響：兩副本一掛。9m 不響、剛滿 10m 那一點就響、只點名掛掉的那個；Rule A 不響
+  - interval: 1m
+    name: R1-one-of-two-replicas-down-fires-at-exactly-10m
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '0x20'
+    alert_rule_test:
+      # for:10m：0m 起 pending，9m 還沒滿。
+      - eval_time: 9m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      # 剛滿 10m：firing。for 改長（例如 12m）這一點就轉紅。
+      - eval_time: 10m
+        alertname: TenantExporterReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              job: tenant-exporters
+              tenant: t1
+              instance: "10.1.0.2:9104"
+              pod: mdb-1
+              service: mdb
+            exp_annotations:
+              summary: "Exporter target 10.1.0.2:9104 down for tenant t1 (another tenant-exporters target of the tenant is up)"
+              summary_zh: "租戶 t1 的 exporter target 10.1.0.2:9104 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+              description: "Target 10.1.0.2:9104 (pod mdb-1) of tenant t1 has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if Service mdb has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
+              description_zh: "租戶 t1 的 target 10.1.0.2:9104（pod mdb-1）已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若 Service mdb 沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 10m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantExporterReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              job: tenant-exporters
+              tenant: t1
+              instance: "10.1.0.2:9104"
+              pod: mdb-1
+              service: mdb
+            exp_annotations:
+              summary: "Exporter target 10.1.0.2:9104 down for tenant t1 (another tenant-exporters target of the tenant is up)"
+              summary_zh: "租戶 t1 的 exporter target 10.1.0.2:9104 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+              description: "Target 10.1.0.2:9104 (pod mdb-1) of tenant t1 has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if Service mdb has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
+              description_zh: "租戶 t1 的 target 10.1.0.2:9104（pod mdb-1）已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若 Service mdb 沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── R2 不響：兩副本都活
+  - interval: 1m
+    name: R2-both-replicas-up-nothing-fires
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── R3 單副本租戶全掛：只有 Rule A 響
+  - interval: 1m
+    name: R3-single-replica-tenant-down-only-absent-fires
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t2", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t2", instance="10.2.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              job: threshold-exporter
+              tenant: t2
+              db_type: mariadb
+            exp_annotations:
+              summary: "Exporter absent for tenant t2 (mariadb)"
+              summary_zh: "租戶 t2 (mariadb) 的 exporter 缺席"
+              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t2 (db_type=mariadb) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t2 (db_type=mariadb) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── R4 多副本全掛：只有 Rule A 響，Rule B 不疊響
+  - interval: 1m
+    name: R4-all-replicas-down-only-absent-fires
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '0x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              job: threshold-exporter
+              tenant: t1
+              db_type: mariadb
+            exp_annotations:
+              summary: "Exporter absent for tenant t1 (mariadb)"
+              summary_zh: "租戶 t1 (mariadb) 的 exporter 缺席"
+              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t1 (db_type=mariadb) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t1 (db_type=mariadb) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── R5 交棒：mdb-1 0m 起掛、mdb-0 15m 起也掛 → 先 Rule B，後只剩 Rule A
+  - interval: 1m
+    name: R5-handover-replica-alert-to-absent
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x30'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x14 0x15'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TenantExporterReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              job: tenant-exporters
+              tenant: t1
+              instance: "10.1.0.2:9104"
+              pod: mdb-1
+              service: mdb
+            exp_annotations:
+              summary: "Exporter target 10.1.0.2:9104 down for tenant t1 (another tenant-exporters target of the tenant is up)"
+              summary_zh: "租戶 t1 的 exporter target 10.1.0.2:9104 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+              description: "Target 10.1.0.2:9104 (pod mdb-1) of tenant t1 has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if Service mdb has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
+              description_zh: "租戶 t1 的 target 10.1.0.2:9104（pod mdb-1）已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若 Service mdb 沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 12m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+      # 20m：全掛已 5m → Rule A firing、Rule B 已解除。
+      - eval_time: 20m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              job: threshold-exporter
+              tenant: t1
+              db_type: mariadb
+            exp_annotations:
+              summary: "Exporter absent for tenant t1 (mariadb)"
+              summary_zh: "租戶 t1 (mariadb) 的 exporter 缺席"
+              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t1 (db_type=mariadb) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t1 (db_type=mariadb) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── R6 滾動重啟：一個副本 up=0 9 分鐘後回來 → for:10m 吸收，全程不響
+  - interval: 1m
+    name: R6-rolling-restart-absorbed-by-for
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x25'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x25'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '1 0x8 1x16'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── R7 租戶隔離：t1 唯一副本掛、t2 健康 → Rule B 不得借 t2 的 up==1（t1 歸 Rule A）
+  - interval: 1m
+    name: R7-tenant-isolation
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t2", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '0x20'
+      - series: 'up{job="tenant-exporters", tenant="t2", instance="10.2.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              job: threshold-exporter
+              tenant: t1
+              db_type: mariadb
+            exp_annotations:
+              summary: "Exporter absent for tenant t1 (mariadb)"
+              summary_zh: "租戶 t1 (mariadb) 的 exporter 缺席"
+              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t1 (db_type=mariadb) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t1 (db_type=mariadb) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── R8 maintenance: mute：t1 維護中不響；同形狀的 t2 沒在維護照響
+  - interval: 1m
+    name: R8-maintenance-mutes-only-that-tenant
+    input_series:
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '0x20'
+      - series: 'up{job="tenant-exporters", tenant="t2", instance="10.2.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t2", instance="10.2.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '0x20'
+      - series: 'user_state_filter{job="threshold-exporter", instance="10.0.0.9:8080", filter="maintenance", tenant="t1"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TenantExporterReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              job: tenant-exporters
+              tenant: t2
+              instance: "10.2.0.2:9104"
+              pod: mdb-1
+              service: mdb
+            exp_annotations:
+              summary: "Exporter target 10.2.0.2:9104 down for tenant t2 (another tenant-exporters target of the tenant is up)"
+              summary_zh: "租戶 t2 的 exporter target 10.2.0.2:9104 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+              description: "Target 10.2.0.2:9104 (pod mdb-1) of tenant t2 has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if Service mdb has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
+              description_zh: "租戶 t2 的 target 10.2.0.2:9104（pod mdb-1）已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若 Service mdb 沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── R9 多 Service：mariadb 唯一副本掛、同租戶 redis 健康 → Rule B 響（而 Rule A 被 redis 擋住，#3771）
+  - interval: 1m
+    name: R9-multi-service-only-replica-of-one-service-down
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '0x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.5:9121", pod="rds-0", service="rds"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TenantExporterReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              job: tenant-exporters
+              tenant: t1
+              instance: "10.1.0.1:9104"
+              pod: mdb-0
+              service: mdb
+            exp_annotations:
+              summary: "Exporter target 10.1.0.1:9104 down for tenant t1 (another tenant-exporters target of the tenant is up)"
+              summary_zh: "租戶 t1 的 exporter target 10.1.0.1:9104 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+              description: "Target 10.1.0.1:9104 (pod mdb-0) of tenant t1 has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if Service mdb has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
+              description_zh: "租戶 t1 的 target 10.1.0.1:9104（pod mdb-0）已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若 Service mdb 沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 12m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── R10 series 沒有 pod／service label（自建 Prometheus、舊設定、BYO）→ 文案不留空洞、退回泛稱
+  - interval: 1m
+    name: R10-no-pod-or-service-label-renders-without-gaps
+    input_series:
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TenantExporterReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              job: tenant-exporters
+              tenant: t1
+              instance: "10.1.0.2:9104"
+            exp_annotations:
+              summary: "Exporter target 10.1.0.2:9104 down for tenant t1 (another tenant-exporters target of the tenant is up)"
+              summary_zh: "租戶 t1 的 exporter target 10.1.0.2:9104 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+              description: "Target 10.1.0.2:9104 of tenant t1 has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if its Service has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
+              description_zh: "租戶 t1 的 target 10.1.0.2:9104已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若該 Service 沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── R11 沒在 _metadata 宣告 db_type 的租戶（無 tenant_expected_exporter）：先一掛 Rule B 響，全掛後兩條都不響（釘住現行行為）
+  - interval: 1m
+    name: R11-undeclared-db-type-tenant-all-down-nothing-fires
+    input_series:
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x14 0x15'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: TenantExporterReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              job: tenant-exporters
+              tenant: t1
+              instance: "10.1.0.2:9104"
+              pod: mdb-1
+              service: mdb
+            exp_annotations:
+              summary: "Exporter target 10.1.0.2:9104 down for tenant t1 (another tenant-exporters target of the tenant is up)"
+              summary_zh: "租戶 t1 的 exporter target 10.1.0.2:9104 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+              description: "Target 10.1.0.2:9104 (pod mdb-1) of tenant t1 has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if Service mdb has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent stays silent while another Service of the tenant is up (multi-Service gap: #3771). If every target of the tenant goes down, this alert resolves; TenantExporterAbsent (critical) takes over only for tenants that declare db_type in _metadata, otherwise nothing fires."
+              description_zh: "租戶 t1 的 target 10.1.0.2:9104（pod mdb-1）已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若 Service mdb 沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個 Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在 _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 12m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── R12 右側 job filter：同租戶只有別的 job 為 up=1、tenant-exporters 全掛 → Rule B 不響（只剩 Rule A）
+  - interval: 1m
+    name: R12-other-job-up-does-not-count-as-sibling
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '0x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.2:9104", pod="mdb-1", service="mdb"}'
+        values: '0x20'
+      - series: 'up{job="other", tenant="t1", instance="10.1.0.7:9100", pod="node-0", service="node"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              maintenance: page
+              job: threshold-exporter
+              tenant: t1
+              db_type: mariadb
+            exp_annotations:
+              summary: "Exporter absent for tenant t1 (mariadb)"
+              summary_zh: "租戶 t1 (mariadb) 的 exporter 缺席"
+              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant t1 (db_type=mariadb) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t1 (db_type=mariadb) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── R13 左側 job filter：別的 job 的 target up=0、tenant-exporters 健康 → Rule B 不響
+  - interval: 1m
+    name: R13-other-job-down-is-not-a-tenant-exporter
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t1", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t1", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1x20'
+      - series: 'up{job="other", tenant="t1", instance="10.1.0.7:9100", pod="node-0", service="node"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
