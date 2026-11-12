@@ -19,7 +19,7 @@ import pytest
 import yaml
 
 import validate_config as vc
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 from _lib_exitcodes import emit_result, encode_json  # noqa: E402  (#3216: in-process main() → exit status)
 
 
@@ -896,10 +896,15 @@ class TestMainCLI:
         assert any(r["check"] == "yaml_syntax" for r in parsed)
 
     def test_main_nonexistent_dir(self, monkeypatch, capsys, cli_argv):
+        """#3755: --config-dir is judged by its declaration before any row
+        runs: a CallerError naming the flag, which `_lib_exitcodes.run`
+        turns into rc 2 with stdout empty (no report)."""
         cli_argv("validate_config", "--config-dir", "/nonexistent/path")
-        with pytest.raises(SystemExit) as exc:
+        with pytest.raises(CallerError) as exc:
             _as_run(vc.main())
-        assert exc.value.code == EXIT_CALLER_ERROR
+        assert str(exc.value).startswith("--config-dir /nonexistent/path: "), str(exc.value)
+        assert exc.value.reason == "dir_not_found"
+        assert capsys.readouterr().out == ""
 
     def test_main_with_policy(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
@@ -3440,3 +3445,91 @@ class TestAnUnselectedDefaultsSpellingIsSkippedNotACrash:
         assert reader.not_read(d / "tenant-x.yaml") is None
         with pytest.raises(pc.NotSelected):
             reader.node(d / "_defaults.yml")
+
+
+# ============================================================
+# #3755: --rule-packs is judged by the lint subprocess alone; --config-dir
+# by its declaration, once, before any row.
+# ============================================================
+
+_VC_SCRIPT = os.path.join(_REPO_ROOT, "scripts", "tools", "ops", "validate_config.py")
+
+
+def _run_vc(*argv):
+    return subprocess.run([sys.executable, _VC_SCRIPT, *argv], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=300, check=False,
+                          stdin=subprocess.DEVNULL)
+
+
+@pytest.fixture
+def _flat_conf_d(tmp_path):
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    (d / "tenant-a.yaml").write_text(
+        "tenants:\n  tenant-a:\n    mysql_connections: '70'\n", encoding="utf-8")
+    return d
+
+
+@pytest.mark.usefixtures("da_read_env")
+@pytest.mark.parametrize("shape", ["missing", "empty"])
+def test_rule_packs_lint_refusal_is_a_caller_error_row(tmp_path, _flat_conf_d, shape):
+    """#3755: validate-config does not judge or list --rule-packs; the lint
+    subprocess (`--rule-pack-dir`, declared there) does. Its refusal — a
+    directory that is not there, or one holding no rule pack — is the
+    custom_rules row's `caller_error`, the run's rc 2 with the report kept,
+    and the row carries lint's own line naming the directory. It was folded
+    into a finding (rc 1) for an empty directory.
+
+    The control (a usable rule-packs dir) shows the rc 2 is that row's: no
+    other row of this conf.d is a caller error."""
+    good = tmp_path / "rule-packs"
+    good.mkdir()
+    (good / "rule-pack-x.yaml").write_text(
+        "groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up{tenant=\"t\"} == 0\n"
+        "    labels: {tenant: t, severity: warning, owner: o, expiry: '2030-01-01'}\n",
+        encoding="utf-8")
+    control = _run_vc("--config-dir", str(_flat_conf_d), "--rule-packs", str(good), "--json")
+    assert control.returncode != EXIT_CALLER_ERROR, control.stdout[-2000:] + control.stderr
+    assert not [r["check"] for r in json.loads(control.stdout) if r["caller_error"]]
+
+    rp = tmp_path / "rp-in"
+    if shape == "empty":
+        rp.mkdir()
+    r = _run_vc("--config-dir", str(_flat_conf_d), "--rule-packs", str(rp), "--json")
+    assert r.returncode == EXIT_CALLER_ERROR, r.stdout[-2000:] + r.stderr
+    rows = json.loads(r.stdout)  # the report is kept: a partial answer
+    assert [x["check"] for x in rows if x["caller_error"]] == ["custom_rules"], rows
+    [row] = [x for x in rows if x["check"] == "custom_rules"]
+    assert row["status"] == vc.FAIL and row["caller_error"] is True, row
+    assert any(f"--rule-pack-dir {rp}:" in d for d in row["details"]), row["details"]
+    assert "--rule-packs" in row.get("suggested_action", ""), row
+
+
+def test_config_dir_with_no_config_file_is_refused_naming_the_flag(tmp_path):
+    """#3755: an empty --config-dir is refused by its declaration
+    (`empty=EMPTY_REFUSED`) before any row runs: one line naming the flag,
+    rc 2, no report — it was a partial report at rc 2 that never named it."""
+    empty = tmp_path / "conf.d"
+    empty.mkdir()
+    for argv in ([], ["--json"]):
+        r = _run_vc("--config-dir", str(empty), *argv)
+        assert r.returncode == EXIT_CALLER_ERROR, r.stdout[-2000:] + r.stderr
+        assert r.stdout == "", r.stdout[-2000:]
+        assert f"--config-dir {empty}: " in r.stderr, r.stderr
+
+
+def test_a_lint_crash_is_not_blamed_on_rule_packs(monkeypatch, tmp_path):
+    """#3755 review: a crash exits 2 as a refusal does; it is reported as a
+    crash of lint, never as "point --rule-packs at a rule-packs/ directory"."""
+    import subprocess as _sp
+    from _lib_exitcodes import CRASH_LINE_PREFIX, crash_message
+
+    line = crash_message(RuntimeError("boom"))
+    assert line.startswith(CRASH_LINE_PREFIX)
+    monkeypatch.setattr(vc.subprocess, "run", lambda *a, **k: _sp.CompletedProcess(
+        a[0], 2, "", "Traceback (most recent call last):\n" + line + "\n"))
+    row = vc.check_custom_rules(str(tmp_path), None)
+    assert row["status"] == vc.FAIL and row["caller_error"] is True, row
+    assert "crashed" in row["details"][0], row["details"]
+    assert "--rule-packs" not in row.get("suggested_action", ""), row

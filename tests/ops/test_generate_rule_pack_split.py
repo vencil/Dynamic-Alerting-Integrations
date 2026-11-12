@@ -809,3 +809,25 @@ class TestMain:
         _exit_code(grps.main)
         out = capsys.readouterr().out
         assert "ERROR: parse failed" in out
+
+
+def test_a_directory_of_platform_packs_alone_is_refused_before_any_write(tmp_path):
+    """#3755 review: a declared platform pack is not split (#1595 D1a), so a
+    directory holding only one selects nothing — refused naming the flag, and
+    no edge-rules/ central-rules/ made first."""
+    import shutil
+    import subprocess
+    repo = Path(__file__).resolve().parents[2]
+    rp = tmp_path / "rp"
+    rp.mkdir()
+    shutil.copy2(repo / "rule-packs" / "rule-pack-platform.yaml", rp)
+    out = tmp_path / "out"
+    proc = subprocess.run(
+        [sys.executable, str(repo / "scripts" / "tools" / "ops" / "generate_rule_pack_split.py"),
+         "--rule-packs-dir", str(rp), "--output-dir", str(out), "--json"],
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
+        env={**os.environ, "DA_LANG": "en"})
+    assert proc.returncode == 2, proc.stderr
+    assert f"--rule-packs-dir {rp}: selects nothing" in proc.stderr, proc.stderr
+    assert proc.stdout == ""
+    assert not out.exists()

@@ -374,14 +374,17 @@ def print_report(results):
 
 @exit_on_yaml_file_error  # #1654: unreadable tenant/dictionary file → rc 2, named
 @exit_on_served_values_error  # #2115: da-guard missing or failing → rc 2, named
-@_lib_parse_cache.exit_on_parse_tree_error  # #2906: --tenant-config with no usable parse-tree → rc 2
+@_lib_parse_cache.exit_on_parse_tree_error  # #2906 / #3751: no usable parse-tree → rc 2
 def main():
     """CLI entry point: Rule Pack gap analysis for custom rules."""
     parser = argparse.ArgumentParser(
         description="Analyze custom_ rules and recommend official Rule Pack substitutes",
     )
-    parser.add_argument(
-        "--config-dir",
+    # #3751: an empty conf.d is refused naming the flag (it was da-guard's
+    # "no .yaml files found in <path>", rc 2, the flag unnamed).
+    _lib_input.add_input(
+        parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+        empty=_lib_input.EMPTY_REFUSED,
         help="Directory with tenant config YAML files",
     )
     parser.add_argument(
@@ -402,7 +405,12 @@ def main():
         help="Output JSON only",
     )
     args = parser.parse_args()
+    # One reader of --config-dir for the run: the one `declared_trees` judged.
+    with _lib_parse_cache.session():
+        return _main(args)
 
+
+def _main(args):
     if not args.config_dir and not args.tenant_config:
         print("ERROR: Specify --config-dir or --tenant-config", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
@@ -410,10 +418,14 @@ def main():
     # at rc=0 — indistinguishable from a real, clean scan (issue 1513).
     # #3276: judged by the shared caller-path check — under a parent the
     # caller cannot enter it is named as such, not "no such directory".
-    raise_path_problems([classify_path(path, kind, lang="en", flag=flag)
-                         for flag, path, kind in (("--config-dir", args.config_dir, "dir"),
-                                                  ("--tenant-config", args.tenant_config, "file"))
-                         if path])
+    if args.tenant_config:
+        raise_path_problems([classify_path(args.tenant_config, "file", lang="en",
+                                           flag="--tenant-config")])
+    # #3751: --config-dir judged once — the path, a root da-guard cannot
+    # list, a tree with no config file — each refusal naming the flag.
+    config_dir = None
+    if args.config_dir is not None:
+        [config_dir] = _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
     # #3445: a --metric-dictionary given is read by the lib (path and
     # content, named); the shipped one is the default.
     dictionary = _lib_input.document(args, "metric_dictionary", lang="en")
@@ -425,7 +437,7 @@ def main():
 
     # Load data
     configs = load_tenant_configs(
-        config_dir=args.config_dir,
+        config_dir=config_dir,
         tenant_config=args.tenant_config,
     )
     custom_metrics = extract_custom_metrics(configs)

@@ -133,7 +133,8 @@ sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import YamlFileError, detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    CRASH_LINE_PREFIX, EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report)
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
@@ -207,6 +208,7 @@ from _lib_python import (  # noqa: E402
 # one document per run (`_lib_parse_cache.session` in `main`), as the route
 # generator these rows ask reads it — never a PyYAML reading beside it.
 from _lib_io import load_confd_file  # noqa: E402
+import _lib_input  # noqa: E402  (#3755: --config-dir is a declared input)
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
@@ -325,7 +327,10 @@ NO_DECLARED_DEFAULTS_HINT = (
 # --rule-packs: the row read "Validate rule pack YAML syntax … run
 # rule-pack-split --check", about a tree the tool had never opened.
 _RULE_PACKS_INPUT_HINT = (
-    "Point --rule-packs at an existing rule-packs/ directory. ⛔ Dropping "
+    "The custom rule lint refused its input (exit 2): the line above is its "
+    "own, and names --rule-packs as lint's `--rule-pack-dir` (--policy as "
+    "`--policy`). Point --rule-packs at a rule-packs/ directory that holds at "
+    "least one tenant rule pack. ⛔ Dropping "
     "the flag does not make this row pass — the row DISAPPEARS (it is only "
     "appended when --rule-packs is given) and the exit code goes back to 0 "
     "with the custom rule lint no longer part of the run.")
@@ -474,6 +479,9 @@ def _unusable_consequence(bad: Path, listing) -> str:
                 "`items[].path`), or copy them into conf.d")
     # #3206: Go's structured verdict (role `unlistable_dir`, class
     # `directory`), never a prefix of the wording `unusable_reason` prints.
+    # ⛔ #3755: a directory BELOW the root only. A root da-guard cannot list
+    # never reaches a row: `--config-dir` is refused first (rc 2, naming the
+    # flag, `declared_trees` in `_main`); reading it here was a finding, rc 1.
     if entry is not None and entry.unlistable_dir:
         return ("so THIS REPORT IS INCOMPLETE: fix the permissions and "
                 "re-run before trusting it")
@@ -1056,6 +1064,16 @@ def check_custom_rules(
     that is not a directory used to produce the same ``PASS … skipped`` row as
     omitting it, so a typo or a renamed directory silently removed the custom
     rule lint from the run.
+
+    ⛔ #3755: this tool does not judge or list ``--rule-packs``: the lint
+    subprocess is its one reader (``--rule-pack-dir``, declared there with
+    ``_lib_input.add_input``). Judging it here as well was the double
+    judgement #3721 forbids. Lint's exit 2 — the directory missing,
+    unlistable or holding no tenant rule pack, an undeclared YAML beside the
+    packs, an unusable ``--policy``, a missing reader — is a caller error,
+    and this row says so (``caller_error``, the run's rc 2, the report kept),
+    carrying lint's own line that names the directory. It was folded into a
+    finding, rc 1.
     """
     # ⛔ `is None`, not `not rule_packs_dir`. An empty string is SUPPLIED — it is
     # what an unset shell variable expands to — and the falsy test routed it
@@ -1065,17 +1083,6 @@ def check_custom_rules(
     if rule_packs_dir is None:
         return _make_result("custom_rules", PASS,
                             ["No rule-packs dir — skipped"])
-    rule_packs_problem = classify_path(rule_packs_dir, "dir", lang="en", flag="--rule-packs")
-    if rule_packs_problem is not None:
-        result = _make_result(
-            "custom_rules", FAIL,
-            [rule_packs_problem.message,
-             "  ⛔ Do not drop the flag to clear this — that removes the "
-             "custom rule lint from the run, which is what this error stops."],
-            caller_error=True, hint=_RULE_PACKS_INPUT_HINT)
-        result["reads_config_dir"] = False
-        return result
-
     # #3426: the rule packs are chosen by the one declaration of what in a
     # rule-packs directory is a rule pack (`_lib_consumer_read.rule_pack_files`
     # behind `--rule-pack-dir`), never by a list of `--exclude` of our own.
@@ -1101,6 +1108,33 @@ def check_custom_rules(
         output = (result.stdout + result.stderr).strip()
         lines = [l for l in output.split("\n") if l.strip()] if output else []
 
+        if result.returncode == EXIT_CALLER_ERROR and any(
+                l.startswith(CRASH_LINE_PREFIX) for l in lines):
+            # #3755 review: a crash exits 2 as a refusal does; it is no
+            # verdict on --rule-packs — never sent there to be fixed.
+            row = _make_result(
+                "custom_rules", FAIL,
+                ["lint_custom_rules crashed (an internal error, not your input):",
+                 *lines],
+                caller_error=True,
+                hint="This is a defect in lint_custom_rules: report it with the lines above.")
+            row["reads_config_dir"] = False
+            return row
+        if result.returncode == EXIT_CALLER_ERROR:
+            # #3755: lint could not lint — its refusal is the caller's
+            # (argv or environment), never a finding about the rule packs or
+            # the conf.d: `_argv_error_row` keeps the run at rc 2 even when
+            # the conf.d has an unreadable file (`reads_config_dir`, as
+            # `_argv_error_row` sets it).
+            row = _make_result(
+                "custom_rules", FAIL,
+                ["lint_custom_rules refused its input (exit 2):",
+                 *(lines or ["(no output)"]),
+                 "  ⛔ Do not drop the flag to clear this — that removes the "
+                 "custom rule lint from the run, which is what this error stops."],
+                caller_error=True, hint=_RULE_PACKS_INPUT_HINT)
+            row["reads_config_dir"] = False
+            return row
         if result.returncode != 0:
             return _make_result("custom_rules", FAIL, lines)
         if any("WARN" in l for l in lines):
@@ -3081,8 +3115,11 @@ def _main() -> "Report | None":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=_h('description'))
-    parser.add_argument("--config-dir", required=True,
-                        help=_h('config_dir'))
+    # #3755: a declared conf.d (`_lib_input`, listed by da-guard), judged
+    # once by `_lib_parse_cache.declared_trees` below, before any row runs.
+    _lib_input.add_input(parser, "--config-dir", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED, required=True,
+                         help=_h('config_dir'))
     parser.add_argument("--policy",
                         help=_h('policy'))
     parser.add_argument("--rule-packs",
@@ -3097,20 +3134,21 @@ def _main() -> "Report | None":
                         help=_h('strict'))
     args = parser.parse_args()
 
-    # #3276: the shared judgement of a caller-given path — a directory under
-    # a parent the caller cannot enter is named as such, not "not found".
-    config_dir_problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
-    if config_dir_problem is not None:
-        print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
-        # #3617: no row ran, so there is no answer: stdout stays empty under
-        # --json (#1653 had made it a one-row document; that row only
-        # restated this line).
-        sys.exit(EXIT_CALLER_ERROR)
-
+    # #3755: --config-dir judged ONCE, before any row runs, by its
+    # declaration (`_lib_parse_cache.declared_trees`, in this run's session,
+    # so every row reads the reader it judged): not there, no directory, a
+    # parent it cannot enter, a root da-guard cannot list, or no config file
+    # under it — each rc 2, one line naming the flag, no document (#3617:
+    # no row ran, so there is no answer). A root da-guard cannot list was a
+    # yaml_syntax finding, rc 1; an empty tree a partial report at rc 2 that
+    # never named the flag. ⛔ `judging()` does not change this: the root is
+    # judged (`ConfdReader._judge_root`) before the reader decides whether
+    # to refuse a tree Go names paths on. A CallerError is not caught here:
+    # `_lib_exitcodes.run` prints its line and exits 2.
     # ADR-036 step 4 (#2906): no usable `da-guard parse-tree` — no row can
     # read the tree, so no row runs (a caller error, as for a missing dir).
     try:
-        _lib_parse_cache.reader_for(args.config_dir).require()
+        _lib_parse_cache.declared_trees(args, "config_dir", lang="en")
     except ParseTreeError as exc:
         row = _parse_tree_failure_row("config_dir", exc, _PARSE_TREE_HINT)
         print(f"ERROR: {safe_label(' '.join(row['details']))}", file=sys.stderr)
