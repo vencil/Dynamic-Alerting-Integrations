@@ -1474,6 +1474,11 @@ forge_create_failed => 503 UPSTREAM_ERROR retryable retry_after_s=5
 federation_token_limit => 409 TOKEN_LIMIT_REACHED
 federation_mint_rate_limited => 429 RATE_LIMITED retryable retry_after_s=60
 federation_not_configured => 503 FEDERATION_NOT_CONFIGURED
+preview_busy => 429 PREVIEW_BUSY retryable retry_after_s=5
+preview_rate_limited => 429 RATE_LIMITED retryable retry_after_s=60
+preview_rejected => 400 BAD_REQUEST client_error
+preview_unavailable => 503 PREVIEW_UNAVAILABLE retryable retry_after_s=5
+preview_not_configured => 503 PREVIEW_NOT_CONFIGURED
 route_not_found => 404 NOT_FOUND client_error
 method_not_allowed => 405 METHOD_NOT_ALLOWED client_error
 request_timeout => 504 REQUEST_TIMEOUT
@@ -1489,7 +1494,11 @@ generator_findings > generator_rejected_retryable => generator_findings
 generator_rejected_retryable > generator_rejected => generator_rejected_retryable
 generator_rejected > validator_unavailable => generator_rejected
 validator_unavailable > policy_unavailable => validator_unavailable
-policy_unavailable > tenant_tree_unreadable => policy_unavailable
+policy_unavailable > preview_busy => policy_unavailable
+preview_busy > preview_rate_limited => preview_busy
+preview_rate_limited > preview_rejected => preview_rate_limited
+preview_rejected > preview_unavailable => preview_rejected
+preview_unavailable > tenant_tree_unreadable => preview_unavailable
 tenant_tree_unreadable > tenant_store_fault => tenant_tree_unreadable
 tenant_store_fault > tenant_file_unreadable => tenant_store_fault
 tenant_file_unreadable > tenant_git_managed => tenant_file_unreadable

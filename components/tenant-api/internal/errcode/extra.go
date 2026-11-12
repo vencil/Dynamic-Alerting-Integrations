@@ -95,7 +95,7 @@ var extraFields = []ExtraField{
 	{Name: "pr_number", Type: ExtraInteger,
 		Doc: "The open PR/MR's number; 0 when the caller may not see it or it is still being created."},
 	{Name: "reason", Type: ExtraString,
-		Doc: "Why the route generator gave no verdict (unknown for a reason tenant-api does not know)."},
+		Doc: "Why the route generator or the recipe-preview service gave no verdict (unknown for a reason tenant-api does not know)."},
 	{Name: "tenant_id", Type: ExtraString,
 		Doc: "The tenant the refusal is about."},
 	{Name: "unreadable", Type: ExtraArray, Items: ExtraObject,
@@ -124,6 +124,8 @@ var codeExtra = map[Code][]string{
 	GeneratorBusy:           {"reason"},
 	ValidatorUnavailable:    {"reason"},
 	PolicyUnavailable:       {"reason"},
+	PreviewBusy:             {"reason"},
+	PreviewUnavailable:      {"reason"},
 	BatchCommitted:          {"committed", "commit"},
 }
 

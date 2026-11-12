@@ -89,6 +89,8 @@ var writeRouteManifest = map[string]string{
 		" — answers a fixed 501 SIMULATE_NOT_PROVIDED to any signed-in caller (ADR-027 §5); reads and writes nothing",
 	"POST /api/v1/tenants/{id}/diff": gateReadOp +
 		" — diff preview only; route middleware enforces PermRead on {id}; commits nothing",
+	"POST /api/v1/tenants/{id}/recipe-preview": gateReadOp +
+		" — would-fire preview; route read middleware on {id} (org-aware) decides before the recipe-preview container is asked (ADR-027 §5)",
 	"POST /api/v1/tenants/{id}/validate": gateReadOp +
 		" — validation preview only; route middleware enforces PermRead on {id}; commits nothing",
 	"PUT /api/v1/groups/{id}/": gateHelperFunnel +
@@ -160,7 +162,6 @@ var readRouteManifest = map[string]string{
 	"GET /api/v1/tenants/{id}/":           gateReadByIDOrg + " — primary IDOR: full tenant config incl. thresholds",
 	"GET /api/v1/tenants/{id}/effective":  gateReadByIDOrg + " — merged effective config + hashes",
 	"GET /api/v1/tenants/{id}/metrics":    gateReadByIDOrg + " — metric discovery catalog (Prometheus proxy)",
-	"GET /api/v1/tenants/{id}/access":     gateReadByIDOrg + " — recipe-preview PEP probe (#657); 403 = DENY",
 	"GET /api/v1/tenants/{id}/federation": gateReadByIDOrg + " — per-tenant federation metric subset",
 	// list / wildcard reads — middleware org-blind by design
 	"GET /api/v1/me":                 gateReadAuthenticated + " — caller's own identity and rule patterns (RulesMatching); names no tenant beyond the caller's own grants; zero grants → 200 with empty grants",

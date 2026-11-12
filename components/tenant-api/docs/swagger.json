@@ -1278,53 +1278,6 @@
                 }
             }
         },
-        "/api/v1/tenants/{id}/access": {
-            "get": {
-                "description": "Lightweight authorization probe that reuses the tenant read\nRBAC decision: returns 200 {allow:true} when the caller has\nread permission on {id}, or 403 otherwise. Purpose-built for\nsibling services (e.g. the recipe-preview service, #657) so\nthey never re-implement RBAC or over-fetch the tenant config.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "tenants"
-                ],
-                "summary": "Check whether the caller may read a tenant (RBAC probe)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Tenant ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/internal_handler.AccessResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/api/v1/tenants/{id}/custom-alerts": {
             "put": {
                 "description": "Merges the supplied recipe array into the tenant's\n`_custom_alerts` (comment-preserving AST edit), validates\n(S5 Go validator), and commits. Optimistic concurrency via\nbase_hash (409 on drift). Empty array deletes the key.\n409 TENANT_CONFIG_NOT_LOADABLE config_error not_round_trippable when re-encoding the tenant file would change content other than _custom_alerts (#2903; the message names the first difference inside the tenant's own block; nothing written).\n409 TENANT_CONFIG_NOT_LOADABLE (with tenant_id, config_error) when the tenant's file cannot be loaded as a\ntenant config (malformed_yaml | invalid_config, as on GET): repair the tenant file itself first. A\nwhole-file PUT /api/v1/tenants/{id} replaces it (an API-shaped file only: one that is not YAML, or\nis shared with other tenants, is git-managed and repaired in git); when parse-tree refuses the file (its kind\nis in parse_tree_kind, #3206) or that PUT's end-of-life check cannot read it, the PUT needs write permission on\nall tenants, and any other caller asks one who has it or repairs the file in git. Also 409 TENANT_CONFIG_NOT_LOADABLE with config_error\nnot_regular_file when the tenant's conf.d file is not a regular file: nothing is read or written, and the\nwhole-file PUT refuses it too, so replace it with a regular file in git.\n409 TENANT_TREE_UNREADABLE as on PUT /api/v1/tenants/{id} when conf.d holds an unresolvable symlink (dangling, looping, or with a non-directory in its path) other\nthan the tenant's file, 500 TENANT_STORE_FAULT when tenant-api's copy holds an entry the server cannot\nread (#2939; nothing written); 409 TENANT_CONFIG_NOT_LOADABLE config_error unreadable when the tenant's\nown file cannot be read.\n409 TENANT_GIT_MANAGED when the tenant is git-managed (#3064): its conf.d file is not API-shaped (shared\nwith other tenants, a name that is not the declared id, several documents, YAML indirection where tenants are\ndeclared, or not YAML), so GET shows no custom_alerts or source_hash and no edit can be based on them; judged\nbefore the base_hash check; nothing written. For an API-managed tenant the file holds that tenant alone, so\nbase_hash (the whole file's source_hash) covers exactly its content. A 409 CONFLICT carries\ncurrent_source_hash only when the current file is API-shaped.",
@@ -1736,6 +1689,83 @@
                 }
             }
         },
+        "/api/v1/tenants/{id}/recipe-preview": {
+            "post": {
+                "description": "Answers whether one ADR-024 recipe would fire for a scenario value, through the platform's own compiler and promtool, in the recipe-preview container of tenant-api's pod. Needs read permission on the tenant. 429 PREVIEW_BUSY (reason busy, deadline or no_time) and 503 PREVIEW_UNAVAILABLE carry Retry-After; 503 PREVIEW_NOT_CONFIGURED means the deployment has no recipe-preview container.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "tenants"
+                ],
+                "summary": "Would-fire preview of one recipe for a tenant",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Tenant ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Recipe and scenario",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.RecipePreviewRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/internal_handler.RecipePreviewResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/v1/tenants/{id}/validate": {
             "post": {
                 "description": "Dry-run validation of a tenant YAML without writing to disk.\nWhen conf.d holds an entry that cannot be read other than the tenant's file (#2939), the answer is\nvalid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a\nsymlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);\nwhen the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.\nThe body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file\nholds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare\ntenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false\nwith PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file, or an entry at the conf.d root whose name starts with _ (#3685), differing from HEAD\nin this server's copy (#1535: valid: false with PUT's 409 TENANT_FILE_DIRTY text and code: TENANT_FILE_DIRTY), a tenant another conf.d file also\ndeclares, validation. A refusal is valid: false with the text PUT refuses with (a validation error\nlisted bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest\nbase branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718) —\nso a reserved key's value (_silent_mode, #3227), which validation judges against the file the write replaces, is not judged here in PR mode.\nIn direct mode a body that passes those steps is then judged as PUT judges it (#3016): the route generator and the shared key verdict.\nTheir refusal is valid: false with PUT's text (its 400 key-verdict lines, its 422 findings as the caller may see them, a GENERATOR_REJECTED\nthat is a verdict on the write: too_large, invalid_request, normalized, key_verdict_undecidable, key_verdict_platform_file).\njudged is false when that judgement gave no verdict on the body, with not_judged saying why: refused (an earlier step refused the body),\npr_mode, unchanged (the body changes nothing), preview_busy (another preview is being judged; retry), no_validator, canceled,\nerror, or the generator's reason — what PUT would answer 429 (retry) or 503 with, or the container's own failure (memory,\nincomplete, key_verdict_memory, key_verdict_error). Then valid reflects only the earlier steps.\nThis route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write\nit gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on\nthe body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.",
@@ -2066,7 +2096,10 @@
                 "WRITE_OUTCOME_UNKNOWN",
                 "REQUEST_TIMEOUT",
                 "TOKEN_LIMIT_REACHED",
-                "FEDERATION_NOT_CONFIGURED"
+                "FEDERATION_NOT_CONFIGURED",
+                "PREVIEW_BUSY",
+                "PREVIEW_UNAVAILABLE",
+                "PREVIEW_NOT_CONFIGURED"
             ],
             "x-enum-varnames": [
                 "InvalidBody",
@@ -2112,7 +2145,10 @@
                 "WriteOutcomeUnknown",
                 "RequestTimeout",
                 "TokenLimitReached",
-                "FederationNotConfigured"
+                "FederationNotConfigured",
+                "PreviewBusy",
+                "PreviewUnavailable",
+                "PreviewNotConfigured"
             ]
         },
         "ErrorResponse": {
@@ -2198,7 +2234,7 @@
                     "type": "integer"
                 },
                 "reason": {
-                    "description": "Why the route generator gave no verdict (unknown for a reason tenant-api does not know). Codes that carry it: GENERATOR_BUSY, GENERATOR_REJECTED, POLICY_UNAVAILABLE, VALIDATOR_UNAVAILABLE.",
+                    "description": "Why the route generator or the recipe-preview service gave no verdict (unknown for a reason tenant-api does not know). Codes that carry it: GENERATOR_BUSY, GENERATOR_REJECTED, POLICY_UNAVAILABLE, PREVIEW_BUSY, PREVIEW_UNAVAILABLE, VALIDATOR_UNAVAILABLE.",
                     "type": "string"
                 },
                 "request_id": {
@@ -2811,23 +2847,6 @@
                     "type": "string"
                 },
                 "value": {
-                    "type": "string"
-                }
-            }
-        },
-        "internal_handler.AccessResponse": {
-            "type": "object",
-            "properties": {
-                "allow": {
-                    "description": "Allow is always true in a 200 response (see the type doc).",
-                    "type": "boolean"
-                },
-                "permission": {
-                    "description": "Permission is the permission level that was checked.",
-                    "type": "string"
-                },
-                "tenant": {
-                    "description": "Tenant echoes the authorized tenant ID.",
                     "type": "string"
                 }
             }
@@ -3496,6 +3515,62 @@
                     "type": "string",
                     "maxLength": 256,
                     "minLength": 1
+                }
+            }
+        },
+        "internal_handler.RecipePreviewRequest": {
+            "type": "object",
+            "properties": {
+                "recipe": {
+                    "description": "Recipe is one ADR-024 recipe, as the portal's recipe form writes it.",
+                    "type": "object"
+                },
+                "scenario": {
+                    "description": "Scenario is the synthetic input, e.g. {\"value\": 1500}.",
+                    "type": "object"
+                }
+            }
+        },
+        "internal_handler.RecipePreviewResponse": {
+            "type": "object",
+            "properties": {
+                "alertname": {
+                    "description": "Alertname is null for a recipe the preview does not support.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "states": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/internal_handler.RecipePreviewState"
+                    }
+                },
+                "supported": {
+                    "type": "boolean"
+                },
+                "warnings": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "internal_handler.RecipePreviewState": {
+            "type": "object",
+            "properties": {
+                "mode": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string"
+                },
+                "severity": {
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State is firing, inactive or error.",
+                    "type": "string"
                 }
             }
         },

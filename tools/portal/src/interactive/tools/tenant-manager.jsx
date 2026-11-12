@@ -458,7 +458,7 @@ export default function TenantManager() {
     setActiveGroupId(newGroup.id);
     // Try API if auth-aware
     if (authUser) {
-      const result = await apiCall(`/api/v1/groups/${newGroup.id}`, {
+      const result = await apiCall(`/api/v1/groups/${encodeURIComponent(newGroup.id)}`, {
         method: 'PUT',
         body: JSON.stringify({ label: newGroup.label, description: '', members }),
       });
@@ -483,7 +483,7 @@ export default function TenantManager() {
     if (activeGroupId === groupId) setActiveGroupId(null);
     // Try API if auth-aware
     if (authUser) {
-      const result = await apiCall(`/api/v1/groups/${groupId}`, { method: 'DELETE' });
+      const result = await apiCall(`/api/v1/groups/${encodeURIComponent(groupId)}`, { method: 'DELETE' });
       if (!result.ok) {
         // Revert on error
         setGroups(backup);

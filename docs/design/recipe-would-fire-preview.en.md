@@ -60,10 +60,10 @@ Why A, in one line: the platform consistently keeps production lean and contains
 
 ## 4. API contract
 
-The preview service exposes a single API endpoint (the portal forwards via nginx):
+The portal calls tenant-api's endpoint ([ADR-027 §5](../adr/027-tenant-api-caller-identity.en.md)); the tenant is in the path:
 
 ```http
-POST /preview
+POST /api/v1/tenants/{id}/recipe-preview
 ```
 
 **Request**
@@ -71,10 +71,11 @@ POST /preview
 ```json
 {
   "recipe":   { "...": "ADR-024 recipe object (same as the portal form emits)" },
-  "tenant":   "shop-a",
   "scenario": { "value": 1500 }
 }
 ```
+
+Once it has authorized the caller, tenant-api hands `{recipe, tenant, scenario, deadline_ms}` to the preview service over a pod-internal Unix socket (`POST /v1/preview`; `deadline_ms` is what is left of the request's time).
 
 - The first version's `scenario` is a single test value (threshold types need no time series).
 - The contract fields are forward-compatible: **later**, when time-dependent types arrive, `scenario` can grow into a "period / trend" description, or even a **per-dimension array** (e.g. one value per PVC, `[{pvc, value}, …]`, to demo multi-replica cases like "a big disk masking a small full one") — all of that is future, not the first version.
@@ -98,7 +99,7 @@ POST /preview
 
 ### 4.1 Auth and tenant isolation
 
-The preview service **inherits the portal's auth**: try-local uses dev-bypass ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md) four-layer containment), production goes through oauth2-proxy (same pattern as tenant-api). The service **must validate that the request's `tenant` is one the signed-in user may access**, else return 403 — otherwise "preview your own recipe" degrades into a cross-tenant query surface. `recipe` / `scenario` are user input: the service validates the shape first (or catches the compiler's config error) and **only compiles after it validates** (see 5.2): a body of the wrong type (`recipe` / `scenario` not an object, `tenant` missing) returns 400; missing fields or a failed compile return `state: error`.
+Authorization is tenant-api's: the route's read check (on the path's tenant, organization scope included) must pass before the preview service is asked, else 403 — otherwise "preview your own recipe" degrades into a cross-tenant query surface. The preview service runs in tenant-api's pod and serves only on a Unix socket in a shared volume (it answers only a process of its own uid); it **reads no identity and no longer checks access itself** ([ADR-027 §5](../adr/027-tenant-api-caller-identity.en.md)). try-local runs the same topology, with the identity injected by tenant-api's dev bypass ([ADR-022](../adr/022-dev-auth-bypass-four-layer-containment.md)). `recipe` / `scenario` are user input: the service validates the shape first (or catches the compiler's config error) and **only compiles after it validates** (see 5.2): a body of the wrong type (`recipe` / `scenario` not an object) returns 400; missing fields or a failed compile return `state: error`.
 
 ## 5. How the backend computes the state
 

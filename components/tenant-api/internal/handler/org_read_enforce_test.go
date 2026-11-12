@@ -4,7 +4,7 @@ package handler
 //
 // P4c closes the read-only IDOR/enumeration-oracle: a caller who knows another
 // org's tenant id could GET /api/v1/tenants/{id} (and /diff, /validate,
-// /effective, /metrics, /access, /federation) and read its config — the
+// /effective, /metrics, /recipe-preview, /federation) and read its config — the
 // read-by-id middleware gate (rbac.Middleware(PermRead, TenantIDFromPath) →
 // AllowedInOrgRead) now org-scopes every per-tenant read.
 //
@@ -12,7 +12,7 @@ package handler
 // route-independent: this file pins the middleware decision with a sentinel
 // (was the request let through?) across the caller × labeling matrix,
 // plus two real-handler e2e groundings — GetTenant (the primary IDOR) and
-// CheckTenantAccess (the recipe-preview PEP contract, #657). The route-manifest
+// PreviewRecipe (the read gate before the recipe-preview container, ADR-027 §5). The route-manifest
 // test (cmd/server/routes_test.go) pins that each of the 7 routes actually uses
 // this middleware.
 //
@@ -22,6 +22,7 @@ package handler
 // (org, NOT org_write) is assertable in isolation.
 
 import (
+	"bytes"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -225,32 +226,31 @@ func TestOrgReadGate_GetTenantIDORClosed(t *testing.T) {
 	}
 }
 
-// TestOrgReadGate_AccessProbeContract grounds the recipe-preview PEP contract
-// (#657): GET /tenants/{id}/access is org-aware via the same middleware, so a
-// cross-org would-fire preview is denied (403) — the recipe-preview PEP maps any
-// non-200 to DENY — while a same-org caller gets 200 {allow:true}. /access holds
-// zero authz logic; the gate is entirely the middleware.
-func TestOrgReadGate_AccessProbeContract(t *testing.T) {
+// TestOrgReadGate_RecipePreview: POST /tenants/{id}/recipe-preview is
+// org-aware via the same read middleware (ADR-027 §5 — tenant-api decides
+// before it asks the recipe-preview container, which reads no identity), so a
+// cross-org preview is refused 403 and the container is never asked, while a
+// same-org caller gets the verdict.
+func TestOrgReadGate_RecipePreview(t *testing.T) {
 	t.Parallel()
-	run := func(t *testing.T, tenant, callerOrg string) *httptest.ResponseRecorder {
+	run := func(t *testing.T, tenant, callerOrg string) (*httptest.ResponseRecorder, *fakePreviewer) {
 		t.Helper()
 		mgr, _, _ := newOrgReadManager(t, orgReadRBACYAML)
-		wrapped := wrapWithRBACMiddleware(CheckTenantAccess(), mgr, rbac.PermRead, TenantIDFromPath)
-		req := newRequestWithChiParam("GET", "/api/v1/tenants/"+tenant+"/access", "id", tenant, nil)
+		fp := &fakePreviewer{verdict: []byte(previewVerdict)}
+		wrapped := wrapWithRBACMiddleware(PreviewRecipe(&Deps{RecipePreview: fp}), mgr, rbac.PermRead, TenantIDFromPath)
+		req := newRequestWithChiParam("POST", "/api/v1/tenants/"+tenant+"/recipe-preview", "id", tenant,
+			bytes.NewBufferString(previewBody))
 		req = orgReadIdentity(req, callerOrg)
 		w := httptest.NewRecorder()
 		wrapped.ServeHTTP(w, req)
-		return w
+		return w, fp
 	}
 
-	// Same-org: 200 allow (recipe-preview proceeds).
-	if w := run(t, orgReadTenantIn, orgReadMemberOrg); w.Code != http.StatusOK {
-		t.Fatalf("same-org /access status = %d, want 200; body=%s", w.Code, w.Body.String())
+	if w, fp := run(t, orgReadTenantIn, orgReadMemberOrg); w.Code != http.StatusOK || fp.called != 1 {
+		t.Fatalf("same-org preview status = %d (asked %d); body=%s", w.Code, fp.called, w.Body.String())
 	}
-	// Cross-org: 403 (recipe-preview treats as DENY — never 404, /access is
-	// existence-blind so 403 leaks nothing).
-	if w := run(t, orgReadTenantIn, orgReadOutsiderOrg); w.Code != http.StatusForbidden {
-		t.Fatalf("cross-org /access status = %d, want 403; body=%s", w.Code, w.Body.String())
+	if w, fp := run(t, orgReadTenantIn, orgReadOutsiderOrg); w.Code != http.StatusForbidden || fp.called != 0 {
+		t.Fatalf("cross-org preview status = %d (asked %d), want 403 unasked; body=%s", w.Code, fp.called, w.Body.String())
 	}
 }
 

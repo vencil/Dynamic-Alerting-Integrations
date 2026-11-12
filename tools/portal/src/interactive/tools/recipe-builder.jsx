@@ -9,6 +9,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import ENUMS from './_common/data/recipe-enums.json';
 import { Loading } from './_common/components/Loading.jsx';
+import { redirectToSignIn } from './_common/auth/sign-in.js';
 import {
   recipeStatus,
   formSupported,
@@ -55,19 +56,22 @@ function defaultFetchMetrics(tenantId, q, signal) {
 }
 
 /* ── default live would-fire fetcher (#657; overridable for tests) ────
- * POSTs the recipe + a scenario value to the recipe-preview service via the
- * SAME-ORIGIN nginx /preview proxy (never cross-origin to :8082 — CSP
- * connect-src 'self'). Returns the service's verdict object verbatim; the
- * panel renders it as-is (dumb handoff — the backend owns the firing
- * contract). Surfaces the structured {error} body like defaultFetchMetrics. */
-function defaultPreviewFetch(tenantId, recipeObj, scenario, signal) {
-  return fetch('/preview', {
+ * ADR-027 §5: asks tenant-api, POST /api/v1/tenants/{id}/recipe-preview
+ * (same origin, behind the login). tenant-api authorizes the caller on the
+ * path's tenant and only then asks the recipe-preview container of its pod;
+ * the browser never reaches that container. Returns the verdict object
+ * verbatim; the panel renders it as-is (dumb handoff — the backend owns the
+ * firing contract). A refusal throws with the server's text and status; a
+ * 401 also sends the browser to sign in. */
+function defaultPreviewFetch(tenantId, recipeObj, scenario, signal, signIn = redirectToSignIn) {
+  return fetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}/recipe-preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ recipe: recipeObj, tenant: tenantId, scenario }),
+    body: JSON.stringify({ recipe: recipeObj, scenario }),
     signal,
   }).then(async (r) => {
     if (!r.ok) {
+      if (r.status === 401) signIn();
       let detail = r.statusText || `HTTP ${r.status}`;
       try { const b = await r.json(); if (b && typeof b.error === 'string') detail = b.error; } catch (_) { /* keep detail */ }
       const e = new Error(detail); e.status = r.status; throw e;
@@ -556,3 +560,5 @@ export default function RecipeBuilder(props) {
     </div>
   );
 }
+
+export { defaultPreviewFetch };

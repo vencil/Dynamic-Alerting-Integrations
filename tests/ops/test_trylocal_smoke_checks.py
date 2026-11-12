@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -49,12 +50,18 @@ pytestmark = pytest.mark.skipif(
 
 # ── smoke.sh ────────────────────────────────────────────────────────────
 
-GOOD_PREVIEW = {"healthz": "ok", "preview": "real"}
+GOOD_PREVIEW = {"preview": "real"}
 
 
 def _preview_verdict(body: dict, mode: str):
-    """What the stub /preview answers. `real` mimics the service: firing when
-    the scenario value crosses the recipe's threshold, inactive otherwise."""
+    """What the stub POST /api/v1/tenants/<id>/recipe-preview answers. `real`
+    mimics tenant-api with a working recipe-preview container: firing when the
+    scenario value crosses the recipe's threshold, inactive otherwise."""
+    if mode == "unavailable":
+        # The container never started (#2873): tenant-api finds nobody on
+        # its socket.
+        return 503, {"error": "the recipe preview is unavailable; retry shortly",
+                     "code": "PREVIEW_UNAVAILABLE", "reason": "unreachable"}
     if mode == "500":
         return 500, {"error": "internal error"}
     if mode == "error":
@@ -102,14 +109,6 @@ def _make_handler(preview: dict, seen: list):
                 self._send(200, [{"id": "tenant-one"}, {"id": "tenant-two"}])
             elif path == "/":
                 self._send(200, {})
-            elif path == "/healthz":
-                mode = preview["healthz"]
-                if mode == "down":
-                    self._send(503, {"error": "starting"})
-                elif mode == "no-promtool":
-                    self._send(200, {"status": "ok", "promtool": "absent"})
-                else:
-                    self._send(200, {"status": "ok", "promtool": "promtool, version 3"})
             else:
                 self._send(404, {"error": "not found"})
 
@@ -118,7 +117,8 @@ def _make_handler(preview: dict, seen: list):
             length = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(length) or b"{}")
             seen.append(("POST", path, body))
-            if path != "/preview":
+            m = re.fullmatch(r"/api/v1/tenants/([^/]+)/recipe-preview", path)
+            if not m:
                 self._send(404, {"error": "not found"})
                 return
             self._send(*_preview_verdict(body, preview["preview"]))
@@ -201,7 +201,7 @@ def _run_smoke(tmp_path: Path, preview: dict):
         env = {**os.environ, "SMOKE_HOST": "127.0.0.1", "SMOKE_ALERT_TIMEOUT": "5",
                "SMOKE_GENERATOR_TIMEOUT": "2",
                "EXPOSE_PROM_PORT": port, "EXPOSE_API_PORT": port,
-               "EXPOSE_PORTAL_PORT": port, "EXPOSE_PREVIEW_PORT": port,
+               "EXPOSE_PORTAL_PORT": port,
                "EXPOSE_API_PROBE_PORT": str(probe.server_address[1])}
         proc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
                               encoding="utf-8", env=env, timeout=60)
@@ -216,23 +216,23 @@ def test_smoke_passes_when_recipe_preview_answers_real_verdicts(tmp_path):
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert "ALL CHECKS PASSED" in proc.stdout
     posts = [s for s in seen if s[0] == "POST"]
-    # Both verdicts are asked for, against a tenant taken from /api/v1/tenants.
+    # Both verdicts are asked of tenant-api (ADR-027 §5), for a tenant taken
+    # from /api/v1/tenants and named in the path only.
     assert [p[2]["scenario"]["value"] for p in posts] == [1500, 1]
-    assert {p[2]["tenant"] for p in posts} == {"tenant-one"}
+    assert {p[1] for p in posts} == {"/api/v1/tenants/tenant-one/recipe-preview"}
+    assert all("tenant" not in p[2] for p in posts)
 
 
 @pytest.mark.parametrize("preview, needle", [
-    ({"healthz": "down", "preview": "real"}, "/healthz returned HTTP 503"),
-    ({"healthz": "no-promtool", "preview": "real"}, "reports no promtool"),
-    # The service listens, but the compiler / promtool path is broken: a 500,
-    # an `error` verdict, or no verdict. (#2873 itself never gets this far —
-    # app.py fails at import, so nothing listens; see the connection-refused
-    # test below.)
-    ({"healthz": "ok", "preview": "500"}, "returned HTTP 500"),
-    ({"healthz": "ok", "preview": "error"}, "gave 'error'"),
-    ({"healthz": "ok", "preview": "no-states"}, "gave 'none'"),
+    # #2873: the container never started — tenant-api finds nobody on its socket.
+    ({"preview": "unavailable"}, "returned HTTP 503"),
+    # The service answers, but the compiler / promtool path is broken: a 500,
+    # an `error` verdict, or no verdict (promtool absent).
+    ({"preview": "500"}, "returned HTTP 500"),
+    ({"preview": "error"}, "gave 'error'"),
+    ({"preview": "no-states"}, "gave 'none'"),
     # One verdict is not enough: an always-firing answer must not pass.
-    ({"healthz": "ok", "preview": "always-firing"}, "gave 'firing' (want inactive"),
+    ({"preview": "always-firing"}, "gave 'firing' (want inactive"),
 ])
 def test_smoke_fails_when_recipe_preview_is_broken(tmp_path, preview, needle):
     proc, _ = _run_smoke(tmp_path, preview)
@@ -273,35 +273,6 @@ def test_smoke_fails_when_the_tcp_port_accepts_identity_headers(tmp_path):
     proc, _ = _run_smoke(tmp_path, {**GOOD_PREVIEW, "probe": "ignores-identity"})
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "with an identity header returned HTTP 200 (want 400)" in proc.stderr, proc.stderr
-
-
-def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
-    """#2873 as smoke.sh sees it: app.py fails at import, the container
-    crash-loops, nothing listens — connection refused, no HTTP status."""
-    seen: list = []
-    srv = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(GOOD_PREVIEW, seen))
-    dead = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(GOOD_PREVIEW, seen))
-    dead_port = str(dead.server_address[1])
-    dead.server_close()  # the port is now closed
-    probe = ThreadingHTTPServer(("127.0.0.1", 0), _make_probe_handler(GOOD_PREVIEW, seen))
-    t = _serve(srv)
-    tp = _serve(probe)
-    try:
-        script = tmp_path / "smoke.sh"
-        shutil.copy(SMOKE, script)
-        port = str(srv.server_address[1])
-        env = {**os.environ, "SMOKE_HOST": "127.0.0.1", "SMOKE_ALERT_TIMEOUT": "5",
-               "SMOKE_GENERATOR_TIMEOUT": "2",
-               "EXPOSE_PROM_PORT": port, "EXPOSE_API_PORT": port,
-               "EXPOSE_PORTAL_PORT": port, "EXPOSE_PREVIEW_PORT": dead_port,
-               "EXPOSE_API_PROBE_PORT": str(probe.server_address[1])}
-        proc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
-                              encoding="utf-8", env=env, timeout=60)
-    finally:
-        _stop(srv, t)
-        _stop(probe, tp)
-    assert proc.returncode == 1, proc.stdout + proc.stderr
-    assert "recipe-preview /healthz returned HTTP 000" in proc.stderr, proc.stderr
 
 
 # ── scripts/ops/trylocal_wait_ready.sh ──────────────────────────────────

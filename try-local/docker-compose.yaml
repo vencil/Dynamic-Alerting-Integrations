@@ -11,7 +11,9 @@
 #                           port answers /health, /ready and /metrics only
 #   - generator             the generator container's service: tenant-api asks
 #                           it before every write (#2903; built from source)
-#   - recipe-preview :8082  would-fire preview API (POST /preview; #657)
+#   - recipe-preview        would-fire preview (#657), asked by tenant-api over
+#                           a shared Unix socket (ADR-027 §5; no port) —
+#                           POST :8080/api/v1/tenants/<id>/recipe-preview
 #   - prometheus     :9090  /alerts shows the headline critical FIRING
 #   - alertmanager   :9093  the firing alert, routed to a null receiver
 #   - grafana        :3000  the REAL federation-revocation security dashboard,
@@ -103,10 +105,14 @@ services:
       # #2903 (ADR-036 §3): every write that changes conf.d asks the generator
       # service below first; tenant-api refuses to start without its socket.
       TA_GENERATOR_SOCKET: /run/da-generator/generator.sock
+      # ADR-027 §5: the recipe-preview service below, on a socket in the
+      # shared `preview-sock` volume; asked only after tenant-api authorizes.
+      TA_RECIPE_PREVIEW_SOCKET: /run/recipe-preview/preview.sock
     volumes:
       - ./seed/conf.d:/conf.d:rw
       - tenant-api-state:/state
       - generator-sock:/run/da-generator
+      - preview-sock:/run/recipe-preview
       # Demo state records + state-seed.sh (#2885). Directory mount, not
       # single-file (the WSL2 single-file bind-mount landmine).
       - ./seed:/seed:ro
@@ -173,8 +179,7 @@ services:
         # Tenant Manager silently shows demo data. The alias makes it resolve
         # to THIS proxy inside compose, so the published portal image runs
         # UNCHANGED (no file mount) and reaches the API the only way there is:
-        # through oauth2-proxy (ADR-027 §2). recipe-preview's
-        # PREVIEW_TENANT_API_URL resolves here the same way.
+        # through oauth2-proxy (ADR-027 §2).
         # The old .monitoring alias is kept ONLY because the pinned PUBLISHED
         # v2.8.0 portal image still bakes the pre-#1004 upstream — nginx dies at
         # startup ("host not found in upstream") without it. Drop it when
@@ -249,34 +254,21 @@ services:
     restart: unless-stopped
 
   recipe-preview:
-    # Would-fire preview service (#657). Built from source like tenant-api
-    # (no published image yet). Answers POST /preview = "would this recipe
-    # fire?" via the platform's real compiler + a SHA-pinned promtool.
+    # Would-fire preview service (#657). Built from source like tenant-api.
+    # ADR-027 §5: no port and no identity — it listens only on a Unix socket
+    # in the `preview-sock` volume shared with tenant-api, answers only a
+    # peer of its own uid (tenant-api's, 10001), and tenant-api authorizes
+    # the caller before it asks. Reach it through the API:
+    #   POST :8080/api/v1/tenants/<id>/recipe-preview
     build:
       context: ..
       dockerfile: components/recipe-preview/Dockerfile
     image: da-try-local/recipe-preview:source
+    user: "10001:10001"
     environment:
-      # Prod-parity FQDN (#1004) — resolves via the oauth2-proxy service alias
-      # above: the API is reachable only through it (ADR-027 §2).
-      PREVIEW_TENANT_API_URL: http://tenant-api.tenant-api.svc.cluster.local:8080
-      PREVIEW_LISTEN_PORT: "8082"
-      # try-local only (mirrors tenant-api ADR-022): inject a demo identity when
-      # no oauth2-proxy header is present, so a header-less curl / the portal
-      # work. The identity it forwards to tenant-api's /access probe is
-      # stripped by oauth2-proxy; tenant-api's own dev bypass decides.
-      PREVIEW_DEV_BYPASS_AUTH: "true"
-      PREVIEW_DEV_BYPASS_EMAIL: dev@local
-      PREVIEW_DEV_BYPASS_GROUPS: demo-admins
-    ports:
-      # Loopback-only (same posture as tenant-api): dev-bypass treats any caller
-      # as the demo admin, so LAN exposure would be an access risk.
-      - "127.0.0.1:${EXPOSE_PREVIEW_PORT:-8082}:8082"
-    depends_on:
-      # the PEP calls tenant-api GET /tenants/{id}/access through oauth2-proxy
-      # — it must be up first.
-      oauth2-proxy:
-        condition: service_started
+      PREVIEW_SOCKET: /run/recipe-preview/preview.sock
+    volumes:
+      - preview-sock:/run/recipe-preview
     restart: unless-stopped
 
   # ── Monitoring stack (official multi-arch images) ────────────────────────
@@ -456,6 +448,13 @@ volumes:
   tenant-api-state:
   # The generator's socket directory (#2903); see the generator service.
   generator-sock:
+  # recipe-preview's socket directory (ADR-027 §5), shared with tenant-api;
+  # owned by the uid both run as.
+  preview-sock:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=10001,gid=10001,mode=0770"
   # The API's Unix socket directory (ADR-027 §2), shared by tenant-api (binds
   # the socket) and oauth2-proxy (dials it). tmpfs like the Helm chart's
   # memory emptyDir, owned by the uid both run as.
