@@ -15,8 +15,8 @@
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter operational mode | 0 | 4 |
 | oracle | oracledb_exporter | 13 | 9 |
-| platform | threshold-exporter self-monitoring | 0 | 54 |
+| platform | threshold-exporter self-monitoring | 0 | 55 |
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 14 | 9 |
 | redis | redis_exporter | 12 | 9 |
-| **Total** | | **171** | **184** |
+| **Total** | | **171** | **185** |

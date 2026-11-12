@@ -780,6 +780,48 @@ groups:
             the next tick reloads and the alert resolves.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
 
+      # --- Config Keys Unread (issue #3353, ADR-038 §11) ---
+      # A tree changed outside tenant-api in direct mode (git, a configmap
+      # sync) runs no whole-tree key verdict: no PR, so no CI. The exporter's
+      # reload is the one place every change passes, so it re-Sets
+      # da_config_keys_unread{reason} on every commit: the tenant keys no row
+      # of it reads. The reasons selected below are the ones the shared key
+      # verdict judges an error wherever they are written; disabled_unread
+      # (the verdict's disable_noop) is a warning there and may be a
+      # deliberate guard (ADR-038 decision 8), so it is counted, not alerted.
+      # ⛔ The reason matcher is pinned to config.KeysUnreadAlerts by
+      # TestKeysUnreadRuleSelectsTheAlertingReasons (threshold-exporter);
+      # add a reason there, not here alone.
+      # warning, not critical: the alert the key was meant to tune does not
+      # use the written value, but nothing that served stops serving.
+      # `for: 15m` rides out a rollout that fixes the root and the tenant
+      # in two commits. promtool: tests/rulepacks/platform-config-keys-unread_test.yaml.
+      - alert: ConfigKeysUnread
+        expr: max without (instance, pod) (da_config_keys_unread{reason!="disabled_unread"}) > 0
+        for: 15m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "Threshold-exporter reads no row for {{ $value }} tenant key(s) ({{ $labels.reason }})"
+          description: |
+            {{ $value }} (tenant, key) pair(s) of the threshold-exporter's
+            committed config have been read by none of its rows for more
+            than 15 minutes ({{ $labels.reason }}): unconsumed = a threshold
+            key the root `_defaults.yaml` does not declare (a misspelt key)
+            or a `_critical` whose base has no root value; profile_not_filled
+            = a profile writes a key the root declares without a platform
+            value (`optional_overrides:`); unregistered = a `_` key the
+            reserved-key registry lists no reader for. The value written
+            there tunes no alert. The exporter log line "config keys no row
+            of this exporter reads" names every tenant and key; run
+            `da-tools explain-keys` on the conf.d tree for the file and the
+            shared verdict. Counted per tenant, so one key in a platform
+            file or a profile counts once for each tenant it reaches. This
+            alert does not cover reserved keys the registry lists (e.g. a
+            `_state_<filter>` naming a removed filter).
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/038-unread-keys-judged-by-readers.md"
+
       # --- Tenant Cardinality Cap Truncation (issue #652) ---
       # Companion to the v1.5.0 runtime per-tenant cardinality cap
       # (`pkg/config/resolve.go:189-195`): the cap *enforces* a 500-

@@ -123,7 +123,7 @@ func TestPolicyHeads_ReadAsPolicyAsCodeReadsThem(t *testing.T) {
 	t.Parallel()
 	heads := func(doc string) []string {
 		out := []string{}
-		for _, h := range policyHeadsOf([]byte(doc)) {
+		for _, h := range config.PolicyHeadsOf([]byte(doc)) {
 			out = append(out, fmt.Sprintf("%s%v", h.Head, sortedKeys(h.Excluded)))
 		}
 		return out

@@ -2012,6 +2012,10 @@ func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	// Recomputed whole by every expansion: a re-run (the incremental reload
+	// runs it again over every tenant, #1569) must not keep a tenant that
+	// has since set the key itself or left the profile.
+	c.profileNotFilled = nil
 	if len(c.Profiles) == 0 {
 		return
 	}
@@ -2096,6 +2100,13 @@ func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 		// with the walker plane's expansion (/effective, da-guard; #2117) so
 		// the two planes cannot pick different keys.
 		fill := profileFill(canonicalView(profile), overrides, canonDeclared, func(key string) {
+			// #3353: per tenant, for the keys-unread audit
+			// (da_config_keys_unread{reason="profile_not_filled"}) — the
+			// same decision `da-guard effective` names profile_not_filled.
+			if c.profileNotFilled == nil {
+				c.profileNotFilled = map[string][]string{}
+			}
+			c.profileNotFilled[tenant] = append(c.profileNotFilled[tenant], key)
 			if _, seen := warnedProfileKeys[profileName+"\x00"+key]; !seen {
 				warnedProfileKeys[profileName+"\x00"+key] = struct{}{}
 				logf("WARN: profile %q supplies %q, but that key is declared without a platform value (optional_overrides) — ignoring. The platform not asserting a value is the point of that tier; to hand tenants a starting number, write it into their own file (scaffold_tenant does), and move the key to defaults: only if you mean to arm it for every tenant", profileName, key)
@@ -2105,6 +2116,19 @@ func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 			overrides[key] = profileValue
 		}
 	}
+	for _, keys := range c.profileNotFilled {
+		sort.Strings(keys)
+	}
+}
+
+// ProfileNotFilled is, per tenant, the keys (canonical spelling) its profile
+// writes that the last ApplyProfiles did not fill in because the root
+// declares them without a platform value (#1189) — the WARN above, per
+// tenant rather than per profile, and what `da-guard effective` names
+// profile_not_filled. nil before ApplyProfiles and when there is none.
+// Sorted per tenant.
+func (c *ThresholdConfig) ProfileNotFilled() map[string][]string {
+	return c.profileNotFilled
 }
 
 // ResolveRouting resolves alert routing configurations for all tenants.

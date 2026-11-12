@@ -196,12 +196,11 @@ type EffectiveTenant struct {
 	NotServed map[string]config.NotServedKey
 }
 
-// PolicyHead is the first path element of a Policy-as-Code rule's
-// `target` / `when.target`, and the tenants the rule leaves out.
-type PolicyHead struct {
-	Head     string
-	Excluded map[string]bool
-}
+// PolicyHead is config.PolicyHead: the first path element of a
+// Policy-as-Code rule's `target` / `when.target`, and the tenants the rule
+// leaves out (config.PolicyHeadsOf reads them; the exporter's keys-unread
+// audit reads the same, #3353).
+type PolicyHead = config.PolicyHead
 
 // Input is the readings Judge joins.
 type Input struct {
@@ -338,9 +337,8 @@ func fileLevelKey(key string) bool {
 func Judge(in Input) Tree {
 	// A key in the exporter's canonical spelling (#1231, canonicalSpelling):
 	// it looks a key up in the served reading, and it is how a policy rule
-	// names a key — one rule for both (#3556).
+	// names a key (config.NamedByPolicy) — one rule for both (#3556).
 	canon := canonicalSpelling
-	policy := canonicalSpelling
 	keys := map[string][]KeyVerdict{}
 	rootDefaults := map[string]string{}
 	tenants := map[string]bool{}
@@ -386,7 +384,7 @@ func Judge(in Input) Tree {
 				value = ef.Config[key]
 			}
 			rows = append(rows, judgeKey(tenant, key, sk, hasSk, src, hasSrc, value, servedValue, hasRows,
-				in.Heads, in.Undecidable, policy))
+				in.Heads, in.Undecidable))
 		}
 		rows = append(rows, profileNotFilled(tenant, ef.NotServed, all)...)
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
@@ -416,8 +414,7 @@ func Judge(in Input) Tree {
 
 // judgeKey is the verdict on one key (the module doc's rules).
 func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource, hasSrc bool,
-	value, servedValue any, hasRows bool, heads []PolicyHead, undecidable bool,
-	policy func(string) string) KeyVerdict {
+	value, servedValue any, hasRows bool, heads []PolicyHead, undecidable bool) KeyVerdict {
 	layer := ""
 	if hasSrc {
 		layer = src.Layer
@@ -478,7 +475,7 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 	// `_` key only when the registry lists it. A rule naming a `_` key
 	// outside that view finds nothing there.
 	inPolicyView := !reserved || (registered != nil && *registered)
-	if inPolicyView && namedByPolicy(tenant, key, heads, policy) {
+	if inPolicyView && config.NamedByPolicy(tenant, key, heads) {
 		readBy["policy_engine"] = true
 	}
 
@@ -517,20 +514,6 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		Disable: optional(disable), SwitchedOffWith: optional(sk.SwitchedOffWith),
 		DeadEntries: nonNilEntries(sk.DeadEntries), Value: value, Served: servedValue,
 	}
-}
-
-// namedByPolicy: a rule that applies to the tenant names the key itself, in
-// either #1231 spelling (canonicalSpelling).
-// A wildcard head (`mysql_*`) is compared as written, so it names only a key
-// literally spelt that way — never every misspelling it would match.
-func namedByPolicy(tenant, key string, heads []PolicyHead, policy func(string) string) bool {
-	c := policy(key)
-	for _, h := range heads {
-		if !h.Excluded[tenant] && policy(h.Head) == c {
-			return true
-		}
-	}
-	return false
 }
 
 // canonicalSpelling is a key in the exporter's canonical spelling

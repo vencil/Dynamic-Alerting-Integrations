@@ -939,6 +939,21 @@ func rootDefaultsCarrier(configDir string) (path string, data []byte, ok bool) {
 // selection of the same carrier (#3489).
 func (s *TreeScan) RootCarrier() (path string, data []byte, ok bool) { return rootCarrierOf(s) }
 
+// RootCarrierKey is the scan key (root-relative slash path) of the root
+// defaults carrier the chain selects, false when the root has none. Unlike
+// RootCarrier it needs no bytes, so it answers after ReleaseData too.
+func (s *TreeScan) RootCarrierKey() (string, bool) {
+	p, found := s.DefaultsCarriers().ByDir[s.AbsRoot]
+	if !found {
+		return "", false
+	}
+	rel, err := filepath.Rel(s.AbsRoot, p)
+	if err != nil {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
+}
+
 // rootCarrierOf is the root defaults carrier scan's chain selects: its path
 // and bytes, false when the root has none (or its bytes were not kept).
 func rootCarrierOf(scan *TreeScan) (path string, data []byte, ok bool) {

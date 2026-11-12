@@ -115,11 +115,11 @@ func writtenSpelling(overrides map[string]ScheduledValue, canon string) string {
 	return canon
 }
 
-// countValuesNotServed is the gauge's value per reason — (tenant, key) pairs
-// — every reason of valuesNotServedReasons present, 0 when none.
-func countValuesNotServed(vs []valueNotServed) map[string]int {
-	out := make(map[string]int, len(valuesNotServedReasons))
-	for _, r := range valuesNotServedReasons {
+// countValuesNotServed is a gauge's value per reason — (tenant, key) pairs
+// — every reason of reasons (its closed label set) present, 0 when none.
+func countValuesNotServed(vs []valueNotServed, reasons []string) map[string]int {
+	out := make(map[string]int, len(reasons))
+	for _, r := range reasons {
 		out[r] = 0
 	}
 	for _, v := range vs {
@@ -169,88 +169,11 @@ func (m *ConfigManager) auditValuesNotServed(cfg *ThresholdConfig, flatScan *fla
 	verdicts := m.valuesNotServedCache.verdicts(cfg, m.Now())
 	vs := collectValuesNotServed(cfg, verdicts, rejected)
 	metrics := m.getMetrics()
-	if m.valuesNotServed.recordAndDecide(vs, metrics.SetValuesNotServed) {
+	if m.valuesNotServed.recordAndDecide(vs, valuesNotServedReasons, metrics.SetValuesNotServed) {
 		m.getLogger().Print(formatValuesNotServedLog(vs, m.path, context))
 	}
-	if ku := collectKeysUnread(cfg, verdicts, m.valuesNotServedCache.disabledUnread()); m.keysUnread.recordAndDecide(ku, func(map[string]int) {}) {
-		m.getLogger().Print(formatKeysUnreadLog(ku, context))
-	}
+	m.auditKeysUnread(cfg, flatScan, verdicts, context)
 	return vs
-}
-
-// collectKeysUnread is what this exporter itself records as read by none of
-// its rows (ADR-038 §11): a tenant key the resolver records unconsumed
-// (#3378); one switched off in every window that no row phase reads
-// (disabled_unread: the `disable` switches nothing off — a misspelt key
-// written as `disable`); and a `_` key the reserved-key registry lists no
-// reader for (unregistered, #3045), in the written spelling. The tenant's
-// map is the built one: a key a profile, a platform file's `tenants:` entry
-// or a subtree `_defaults.yaml` hands it is listed for each tenant it
-// reaches. A fact of this reader, not
-// a judgement: whether such a key is an error is the shared key verdict's
-// (decision 4 — a generator key, for one, is read elsewhere and is in
-// neither set).
-func collectKeysUnread(cfg *ThresholdConfig, verdicts map[string]map[string]string, disabled map[string][]string) []valueNotServed {
-	var out []valueNotServed
-	for tenant, keys := range disabled {
-		for _, canon := range keys {
-			out = append(out, valueNotServed{Tenant: tenant, Key: writtenSpelling(cfg.Tenants[tenant], canon), Reason: keysUnreadDisabled})
-		}
-	}
-	for tenant, keys := range verdicts {
-		for canon, reason := range keys {
-			if reason == config.NotServedUnconsumed {
-				out = append(out, valueNotServed{Tenant: tenant, Key: writtenSpelling(cfg.Tenants[tenant], canon), Reason: reason})
-			}
-		}
-	}
-	for tenant, overrides := range cfg.Tenants {
-		for key := range overrides {
-			if config.IsUnregisteredUnderscoreKey(key) {
-				out = append(out, valueNotServed{Tenant: tenant, Key: key, Reason: config.NotServedUnregistered})
-			}
-		}
-	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Tenant != out[j].Tenant {
-			return out[i].Tenant < out[j].Tenant
-		}
-		return out[i].Key < out[j].Key
-	})
-	return out
-}
-
-// keysUnreadLogPrefix opens formatKeysUnreadLog's line.
-const keysUnreadLogPrefix = "config keys no row of this exporter reads"
-
-// keysUnreadDisabled is the keys-unread reason of a key switched off in every
-// window that no row phase reads (not a NotServed reason: see
-// ValuesNotServedAndDisabled).
-const keysUnreadDisabled = "disabled_unread"
-
-// formatKeysUnreadLog is collectKeysUnread's line: no severity word, since
-// how severe an unread key is depends on where it is written (ADR-038
-// decision 4), which the shared key verdict judges.
-func formatKeysUnreadLog(ku []valueNotServed, context string) string {
-	var b strings.Builder
-	fmt.Fprintf(&b,
-		keysUnreadLogPrefix+" (%s): %d tenant key(s): unconsumed is a key no threshold row reads (a misspelt key, "+
-			"a `_critical` whose base has no platform value), disabled_unread a `disable` of such a key — it switches "+
-			"nothing off — and unregistered a `_` key the reserved-key registry lists no reader for. A key may come from "+
-			"the tenant's file, a profile, a platform file's `tenants:` entry or a subtree `_defaults.yaml`. Whether one is "+
-			"an error is the shared key verdict's: run `da-tools explain-keys` on the conf.d tree, or validate-config. Keys:",
-		context, len(ku))
-	// Every key, not a sample: no metric names them, and this line is the one
-	// place the exporter states which keys it does not read.
-	for i, v := range ku {
-		if i > 0 {
-			b.WriteString(";")
-		}
-		// Quoted: a tenant id or key is the tenant's own text, and may hold
-		// a newline or a "; tenant=" of its own.
-		fmt.Fprintf(&b, " tenant=%q key=%q reason=%s", v.Tenant, v.Key, v.Reason)
-	}
-	return b.String()
 }
 
 // Now is the manager's clock (a test's fake one when set), else time.Now —
@@ -279,7 +202,7 @@ type valuesNotServedLogState struct {
 // write the WARN, under one lock (see undeliverableLogState.recordAndDecide
 // for why the gauge write is inside it). setGauge must stay a plain value
 // setter.
-func (d *valuesNotServedLogState) recordAndDecide(vs []valueNotServed, setGauge func(map[string]int)) bool {
+func (d *valuesNotServedLogState) recordAndDecide(vs []valueNotServed, reasons []string, setGauge func(map[string]int)) bool {
 	var b strings.Builder
 	for _, v := range vs {
 		b.WriteString(v.Tenant)
@@ -293,7 +216,7 @@ func (d *valuesNotServedLogState) recordAndDecide(vs []valueNotServed, setGauge 
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	setGauge(countValuesNotServed(vs))
+	setGauge(countValuesNotServed(vs, reasons))
 	if len(vs) == 0 {
 		d.last = ""
 		return false

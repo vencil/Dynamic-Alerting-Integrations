@@ -35,10 +35,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
-	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 	"github.com/vencil/threshold-exporter/pkg/keyverdict"
@@ -179,9 +176,9 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 			keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{}, errors: []keyError{},
 			setAside: setAside}
 	}
-	var heads []keyverdict.PolicyHead
+	var heads []config.PolicyHead
 	if _, data, ok := scan.RootCarrier(); ok {
-		heads = policyHeadsOf(data)
+		heads = config.PolicyHeadsOf(data)
 	}
 	cfg, rep, written, err := config.LoadDirFromScan(scan, dir, discard)
 	if errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) == 0 && rep.RootListErr == nil {
@@ -452,88 +449,6 @@ func hasRootPlatformFile(doc *parseTreeDoc) bool {
 		}
 	}
 	return false
-}
-
-// policyHeadsOf is Python's `policy_targets(_tree_rules(...))` over the root
-// carrier's bytes: the top-level `policies` when the document has that key
-// (whatever its value), else `_policies`; each rule's `target` and
-// `when.target` up to the first ".", with its `exclude_tenants` read as
-// scalar source text (`010` stays "010", #2114).
-//
-// ⚠️ Lenient where Python is not: a document, rule list, rule or field that
-// cannot be read is skipped here, while policy_engine raises
-// InvalidPolicyRules (#2961) and the Python verdict fails with it. A tree
-// carrying such rules is one Python judges not at all; this side judges it
-// without them.
-func policyHeadsOf(data []byte) []keyverdict.PolicyHead {
-	var doc yaml.Node
-	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
-		return nil
-	}
-	top := doc.Content[0]
-	if top.Kind != yaml.MappingNode {
-		return nil
-	}
-	rules := mappingValue(top, "policies")
-	if rules == nil {
-		rules = mappingValue(top, "_policies")
-	}
-	if rules == nil || rules.Kind != yaml.SequenceNode {
-		return nil
-	}
-	var out []keyverdict.PolicyHead
-	for _, rule := range rules.Content {
-		if rule.Kind != yaml.MappingNode {
-			continue
-		}
-		var targets []string
-		if t := stringScalar(mappingValue(rule, "target")); t != "" {
-			targets = append(targets, t)
-		}
-		if w := mappingValue(rule, "when"); w != nil && w.Kind == yaml.MappingNode {
-			if t := stringScalar(mappingValue(w, "target")); t != "" {
-				targets = append(targets, t)
-			}
-		}
-		excluded := map[string]bool{}
-		if ex := mappingValue(rule, "exclude_tenants"); ex != nil && ex.Kind == yaml.SequenceNode {
-			for _, item := range ex.Content {
-				if item.Kind == yaml.ScalarNode {
-					excluded[item.Value] = true
-				}
-			}
-		}
-		for _, t := range targets {
-			head, _, _ := strings.Cut(t, ".")
-			out = append(out, keyverdict.PolicyHead{Head: head, Excluded: excluded})
-		}
-	}
-	return out
-}
-
-// mappingValue is the value node of key in mapping m (aliases followed),
-// nil when m has no such key; a key present with a null value is a null
-// node, not nil (Python's `"policies" in data`).
-func mappingValue(m *yaml.Node, key string) *yaml.Node {
-	for i := 0; i+1 < len(m.Content); i += 2 {
-		if k := m.Content[i]; k.Kind == yaml.ScalarNode && k.Value == key {
-			v := m.Content[i+1]
-			for v.Kind == yaml.AliasNode && v.Alias != nil {
-				v = v.Alias
-			}
-			return v
-		}
-	}
-	return nil
-}
-
-// stringScalar is a `!!str` scalar's text, "" for anything else (Python
-// takes only a string target).
-func stringScalar(n *yaml.Node) string {
-	if n == nil || n.Kind != yaml.ScalarNode || n.ShortTag() != "!!str" {
-		return ""
-	}
-	return n.Value
 }
 
 func sortedKeys[V any](m map[string]V) []string {

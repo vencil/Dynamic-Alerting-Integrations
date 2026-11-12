@@ -299,6 +299,8 @@ type ThresholdConfig struct {
 	// header per note (#3269: ThresholdConfig is held per file and copied on
 	// every merge).
 	notes *fileNotes
+	// profileNotFilled is set by applyProfiles (ProfileNotFilled, #3353).
+	profileNotFilled map[string][]string
 }
 
 // fileNotes is what one file's decode records, without changing any value
@@ -311,6 +313,11 @@ type fileNotes struct {
 	// a schedule, which the decode kept only the `default` of
 	// (stripScheduledReserved, #3269).
 	scheduledReserved []string
+	// policyHeads: the Policy-as-Code rule heads the file writes
+	// (policyHeadsOfDoc). Read only from the root carrier's decode — the one
+	// file policy_engine reads rules from — by the exporter's keys-unread
+	// audit (#3353), which so needs no bytes of the file at commit time.
+	policyHeads []PolicyHead
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.

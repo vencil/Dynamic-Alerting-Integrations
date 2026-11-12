@@ -127,6 +127,12 @@ func decodeConfigFile(data []byte, generic bool) (ThresholdConfig, error) {
 		if sm := stringMetadataEntries(&doc); sm != nil {
 			cfg.notes = &fileNotes{stringMetadata: sm}
 		}
+		if ph := policyHeadsOfDoc(&doc); ph != nil {
+			if cfg.notes == nil {
+				cfg.notes = &fileNotes{}
+			}
+			cfg.notes.policyHeads = ph
+		}
 		keepReservedMappings(&cfg, data)
 		dropNullThresholds(&cfg, data)
 		dropNullShadowingSpellings(cfg.Defaults, data)
@@ -435,6 +441,16 @@ func (c *ThresholdConfig) StringMetadataEntries() []string {
 		return nil
 	}
 	return c.notes.stringMetadata
+}
+
+// PolicyHeads is the Policy-as-Code rule heads the file writes
+// (PolicyHeadsOf over its bytes). Set by ParseConfigFile only; nil for a
+// merged config. Only the root carrier's are rules policy_engine reads.
+func (c *ThresholdConfig) PolicyHeads() []PolicyHead {
+	if c.notes == nil {
+		return nil
+	}
+	return c.notes.policyHeads
 }
 
 // TenantWritesStringMetadata reports whether a tenant config document writes

@@ -34,6 +34,10 @@ package main
 //     reason ∈ valuesNotServedReasons
 //     re-Set by every commit (auditValuesNotServed).
 //
+//   da_config_keys_unread                  (GaugeVec, labels=[reason])  [#3353]
+//     reason ∈ keysUnreadReasons
+//     re-Set by every commit (auditKeysUnread).
+//
 //   da_config_metadata_string_form         (Gauge)  [#2859]
 //     re-Set by every commit (metadataStringFormOf).
 //
@@ -148,6 +152,8 @@ type configMetrics struct {
 	// #2065: da_config_values_not_served's children, keyed by
 	// valuesNotServedReasons.
 	valuesNotServed map[string]prometheus.Gauge
+	// #3353: da_config_keys_unread's children, keyed by keysUnreadReasons.
+	keysUnread map[string]prometheus.Gauge
 	// #2859: da_config_metadata_string_form. See SetMetadataStringForm.
 	metadataStringForm prometheus.Gauge
 	// #2914: da_config_profile_routing_keys. See SetProfileRoutingKeys.
@@ -322,7 +328,13 @@ func newConfigMetrics() *configMetrics {
 	for _, r := range valuesNotServedReasons {
 		valuesNotServed[r] = s.ValuesNotServed.WithLabelValues(r)
 	}
+	// #3353: and da_config_keys_unread.
+	keysUnread := make(map[string]prometheus.Gauge, len(keysUnreadReasons))
+	for _, r := range keysUnreadReasons {
+		keysUnread[r] = s.KeysUnread.WithLabelValues(r)
+	}
 	return &configMetrics{
+		keysUnread:                  keysUnread,
 		unreadableFiles:             unreadable,
 		defaultsUnusable:            defaultsUnusable,
 		valuesNotServed:             valuesNotServed,
@@ -623,6 +635,20 @@ func (cm *configMetrics) SetValuesNotServed(counts map[string]int) {
 		return
 	}
 	for r, g := range cm.valuesNotServed {
+		g.Set(float64(counts[r]))
+	}
+}
+
+// SetKeysUnread publishes da_config_keys_unread{reason} (#3353): counts
+// holds every reason of keysUnreadReasons. Called from
+// ConfigManager.auditKeysUnread on every config commit, including the
+// healthy one, so a fixed tree reads 0 again. A reason outside the closed
+// set is ignored. Nil-receiver safe (see IncParseFailure).
+func (cm *configMetrics) SetKeysUnread(counts map[string]int) {
+	if cm == nil {
+		return
+	}
+	for r, g := range cm.keysUnread {
 		g.Set(float64(counts[r]))
 	}
 }

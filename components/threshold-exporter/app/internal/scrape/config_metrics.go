@@ -68,6 +68,10 @@ type ConfigMetrics struct {
 	// of the committed config /metrics does not serve as written, by the
 	// not_served reason (package main's valuesNotServedReasons).
 	ValuesNotServed *prometheus.GaugeVec
+	// #3353: state-coded gauge, re-Set on every config commit: the tenant
+	// keys of the committed config no row of this exporter reads, by
+	// config.KeysUnreadReasons. Alert: ConfigKeysUnread.
+	KeysUnread *prometheus.GaugeVec
 	// #2859: state-coded gauge, re-Set on every config commit: the
 	// `tenants:` / `profiles:` entries of the committed config that write
 	// `_metadata` as a string. The exporter still reads them; the write
@@ -199,6 +203,16 @@ func NewConfigMetrics() *ConfigMetrics {
 			Help: "Number of threshold values in the committed config that /metrics does not serve as written (#2065), by reason: " +
 				config.ValueNotServedReasonsHelp() + ". Counted per (tenant, key), for threshold keys only. The verdicts are the resolver's and the build's own, the same ones `da-guard effective` reports as not_served and `da-guard` as value_not_served. State-coded: re-Set on every config commit, so it returns to 0 once the values are fixed; every reason exists at 0 from the first scrape. The accompanying WARN (once per change of the set) names tenant, key and reason; `da-guard effective` names the file of each. SUGGESTED alert: > 0 for 10m — no PrometheusRule ships for it.",
 		}, []string{"reason"}),
+		KeysUnread: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Name: "da_config_keys_unread",
+			Help: "Number of tenant keys in the committed config that no row of this exporter reads (#3353, ADR-038 §11), by reason: " +
+				config.KeysUnreadReasonsHelp() + ". Counted per (tenant, key): a key a platform file or a profile hands to N tenants counts N. " +
+				"A threshold key a Policy-as-Code rule of the root `_defaults.yaml` names is read (by policy_engine) and not counted. " +
+				"A fact of this reader, not the shared key verdict: run `da-tools explain-keys` or validate-config for the verdict. " +
+				"NOT COVERED, so 0 does not mean the verdict is clean: a registered reserved key no reader reads (a `_state_<filter>` naming a filter the platform removed, a `_routing*` key the route generator reads), a retired `_` key, a key of a profile no tenant binds, and a value read but not as written (da_config_values_not_served). " +
+				"State-coded: re-Set on every config commit, so it returns to 0 once the keys are fixed; every reason exists at 0 from the first scrape. The accompanying line (once per change of the set) names tenant, key and reason. " +
+				"Alert: ConfigKeysUnread (warning) on every reason but disabled_unread.",
+		}, []string{"reason"}),
 		MetadataStringForm: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "da_config_metadata_string_form",
 			Help: "Number of `tenants:` and `profiles:` entries in the committed config that write `_metadata` as a string rather than a mapping (#2859). Since #3638 the exporter does not read such a string: every field of the entry reads empty, so its metadata is not served; the conf.d schema lint fails on it, and tenant-api refuses a write whose target tenant section writes the form, so a tenant whose own section in its file uses it cannot be edited through tenant-api until that section is rewritten as a mapping; a counted non-empty profile or root platform-file entry leaves every tenant inheriting it with unreadable labels (an empty string `_metadata: \"\"` is counted but reads as no metadata, not as unreadable), which tenant-api treats as unknown: such tenants are hidden from scope-restricted readers and only a platform administrator can write them until the entry is rewritten. Counted per file of the committed config, so an entry written in two files counts twice; a file that failed to parse is not counted. State-coded: re-Set on every config commit, so it returns to 0 once every entry is a mapping. The accompanying WARN (once per commit) names the entries. Informational — no PrometheusRule ships for it.",
@@ -232,6 +246,7 @@ func (s *ConfigMetrics) Collectors() []prometheus.Collector {
 		s.UnreadableFiles,
 		s.DefaultsUnusable,
 		s.ValuesNotServed,
+		s.KeysUnread,
 		s.MetadataStringForm,
 		s.ProfileRoutingKeys,
 		s.ParseRefused,

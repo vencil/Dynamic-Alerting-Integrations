@@ -240,12 +240,31 @@ data:
     ). Fix the file;\n\n        the next tick reloads and the alert resolves.\n\n\
     \        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
     \      summary: Threshold-exporter cannot use a _defaults.yaml ({{ $labels.reason\
-    \ }}) — inherited thresholds dropped\n  - alert: TenantMetricsOverLimit\n    expr:\
-    \ max without (instance, pod) (da_tenant_metrics_over_limit) > 0\n    for: 5m\n\
-    \    labels:\n      alert_source: platform\n      severity: warning\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Tenant `{{ $labels.tenant\
-    \ }}` is producing more\n\n        thresholds than `max_metrics_per_tenant` allows\n\
-    \n        ({{ $value }} excess). The runtime silently truncated\n\n        the\
+    \ }}) — inherited thresholds dropped\n  - alert: ConfigKeysUnread\n    expr: max\
+    \ without (instance, pod) (da_config_keys_unread{reason!=\"disabled_unread\"})\
+    \ > 0\n    for: 15m\n    labels:\n      alert_source: platform\n      severity:\
+    \ warning\n    annotations:\n      description: '{{ $value }} (tenant, key) pair(s)\
+    \ of the threshold-exporter''s\n\n        committed config have been read by none\
+    \ of its rows for more\n\n        than 15 minutes ({{ $labels.reason }}): unconsumed\
+    \ = a threshold\n\n        key the root `_defaults.yaml` does not declare (a misspelt\
+    \ key)\n\n        or a `_critical` whose base has no root value; profile_not_filled\n\
+    \n        = a profile writes a key the root declares without a platform\n\n  \
+    \      value (`optional_overrides:`); unregistered = a `_` key the\n\n       \
+    \ reserved-key registry lists no reader for. The value written\n\n        there\
+    \ tunes no alert. The exporter log line \"config keys no row\n\n        of this\
+    \ exporter reads\" names every tenant and key; run\n\n        `da-tools explain-keys`\
+    \ on the conf.d tree for the file and the\n\n        shared verdict. Counted per\
+    \ tenant, so one key in a platform\n\n        file or a profile counts once for\
+    \ each tenant it reaches. This\n\n        alert does not cover reserved keys the\
+    \ registry lists (e.g. a\n\n        `_state_<filter>` naming a removed filter).\n\
+    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/038-unread-keys-judged-by-readers.md\n\
+    \      summary: Threshold-exporter reads no row for {{ $value }} tenant key(s)\
+    \ ({{ $labels.reason }})\n  - alert: TenantMetricsOverLimit\n    expr: max without\
+    \ (instance, pod) (da_tenant_metrics_over_limit) > 0\n    for: 5m\n    labels:\n\
+    \      alert_source: platform\n      severity: warning\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: 'Tenant `{{ $labels.tenant }}` is\
+    \ producing more\n\n        thresholds than `max_metrics_per_tenant` allows\n\n\
+    \        ({{ $value }} excess). The runtime silently truncated\n\n        the\
     \ excess (`pkg/config/resolve.go`), so the rules\n\n        falling outside the\
     \ cap stop evaluating until the\n\n        tenant either trims their config or\
     \ raises the\n\n        per-tenant limit.\n\n        If `DefaultsTruncationStorm`\

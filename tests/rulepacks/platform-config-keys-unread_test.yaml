@@ -1,0 +1,95 @@
+# promtool behavioural test for ConfigKeysUnread (#3353, ADR-038 §11).
+# da_config_keys_unread{reason} is a STATE gauge the exporter re-Sets on every
+# commit (every reason pre-initialised at 0), so a series holds its count for
+# as long as the keys stay unread and drops to 0 on the commit that fixes them.
+# Scrape 30s.
+#
+# Contract:
+#   1) an unread key FIRES within 15m and KEEPS firing while it stays unread;
+#   2) it RESOLVES on the first scrape after the fix;
+#   3) disabled_unread alone fires nothing (counted, not alerted: the verdict's
+#      disable_noop is a warning that may be deliberate, ADR-038 decision 8);
+#   4) a blip shorter than `for: 15m` fires nothing.
+# Which reasons the matcher selects is pinned to config.KeysUnreadAlerts by
+# TestKeysUnreadRuleSelectsTheAlertingReasons (threshold-exporter), not here.
+# Run: promtool test rules tests/rulepacks/platform-config-keys-unread_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-platform.yaml
+
+evaluation_interval: 30s
+
+tests:
+  # 1) + 2) unconsumed=2 from 2m30s through 30m30s; fixed at 31m. for: 15m ⇒
+  #    pending at 17m, firing from 17m30s, still at 30m, resolved at 31m.
+  - interval: 30s
+    name: unread-key-fires-and-holds-until-fixed
+    input_series:
+      - series: 'da_config_keys_unread{reason="unconsumed", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x4 2x56 0x20'
+      - series: 'da_config_keys_unread{reason="disabled_unread", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 17m
+        alertname: ConfigKeysUnread
+        exp_alerts: []
+      - eval_time: 18m
+        alertname: ConfigKeysUnread
+        exp_alerts: &unconsumed_firing
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              reason: unconsumed
+              job: threshold-exporter
+            exp_annotations:
+              summary: "Threshold-exporter reads no row for 2 tenant key(s) (unconsumed)"
+              description: |
+                2 (tenant, key) pair(s) of the threshold-exporter's
+                committed config have been read by none of its rows for more
+                than 15 minutes (unconsumed): unconsumed = a threshold
+                key the root `_defaults.yaml` does not declare (a misspelt key)
+                or a `_critical` whose base has no root value; profile_not_filled
+                = a profile writes a key the root declares without a platform
+                value (`optional_overrides:`); unregistered = a `_` key the
+                reserved-key registry lists no reader for. The value written
+                there tunes no alert. The exporter log line "config keys no row
+                of this exporter reads" names every tenant and key; run
+                `da-tools explain-keys` on the conf.d tree for the file and the
+                shared verdict. Counted per tenant, so one key in a platform
+                file or a profile counts once for each tenant it reaches. This
+                alert does not cover reserved keys the registry lists (e.g. a
+                `_state_<filter>` naming a removed filter).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/038-unread-keys-judged-by-readers.md"
+      - eval_time: 30m
+        alertname: ConfigKeysUnread
+        exp_alerts: *unconsumed_firing
+      - eval_time: 31m
+        alertname: ConfigKeysUnread
+        exp_alerts: []
+
+  # 3) disabled_unread stays up for 40m: counted, never alerted.
+  - interval: 30s
+    name: disabled-unread-is-not-alerted
+    input_series:
+      - series: 'da_config_keys_unread{reason="disabled_unread", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '3x80'
+      - series: 'da_config_keys_unread{reason="unconsumed", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x80'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: ConfigKeysUnread
+        exp_alerts: []
+
+  # 4) a 10m blip (two commits of one fix) fires nothing.
+  - interval: 30s
+    name: short-blip-does-not-fire
+    input_series:
+      - series: 'da_config_keys_unread{reason="unregistered", job="threshold-exporter", instance="10.0.0.9:8080"}'
+        values: '0x4 1x20 0x56'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: ConfigKeysUnread
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: ConfigKeysUnread
+        exp_alerts: []
+

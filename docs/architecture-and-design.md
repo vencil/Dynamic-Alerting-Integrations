@@ -257,11 +257,11 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter 運營模式 | 0 | 4 |
 | oracle | oracledb_exporter | 13 | 9 |
-| platform | threshold-exporter 自監控 | 0 | 54 |
+| platform | threshold-exporter 自監控 | 0 | 55 |
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 14 | 9 |
 | redis | redis_exporter | 12 | 9 |
-| **合計** | | **171** | **184** |
+| **合計** | | **171** | **185** |
 <!-- RULE_PACK_STATS_END -->
 
 
