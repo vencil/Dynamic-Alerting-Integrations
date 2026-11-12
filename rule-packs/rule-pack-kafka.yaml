@@ -10,12 +10,14 @@
 #   kafka_consumer_lag: 1000   # messages — Consumer lag warning
 #       未啟用（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
 #   kafka_under_replicated_partitions: 0   # count — Under-replicated partitions (should be 0)
-#       未啟用（待驗證）：0 是普世的不變式，但出貨前尚未對滾動重啟驗證
+#       未啟用（聚合錯誤，#3770）：記錄規則對逐 partition 的 0/1 旗標取 max，值不會超過 1，大於 0 的門檻都不可能觸發
 #   kafka_broker_count: 3   # count — Minimum broker count warning
 #       未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
 #   kafka_active_controllers: 1   # count — Minimum active controllers (should be 1)
-#       未啟用（待驗證）：恰有一個 active controller 是普世的不變式，但出貨前尚未驗證
+#       未啟用（沒有資料源，#3770）：宣告的 danielqsj/kafka_exporter 不輸出 kafka_controller_active_controller_count
 #   kafka_request_rate: 10000   # msg/s — Message rate warning (5m)
+#       未啟用（沒有資料源，#3770）：kafka_server_brokertopicmetrics_messagesin_total 是 JMX 指標，宣告的
+#       danielqsj/kafka_exporter 不輸出
 #       未啟用（依部署而定）：訊息量是工作負載而非故障，任何數字都只適用於特定部署
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：

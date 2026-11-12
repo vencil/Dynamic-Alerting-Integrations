@@ -19,7 +19,7 @@
 #       seconds — Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis
 #       replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231
 #       owner call); #1196 C identity fix, no alias
-#       未啟用（待驗證）：與已出貨的 mysql／pg replication_lag 同為 30 秒，尚未對 Redis 驗證
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
