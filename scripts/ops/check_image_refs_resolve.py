@@ -36,16 +36,27 @@ Two SCOPES, deliberately separate sets (see `--scope` and `delivered_refs`):
   * `delivered` — what a CUSTOMER installs: the third-party refs `da-tools init`
                   writes into their repo, imported from init_project.py.
 
+  * `rendered`  — what a chart's DEFAULTS run: `helm template --chart DIR`
+                  with check_iac_helm.RENDER_BASE_SETS, every concrete image
+                  ref of the render, first-party included (#1040). The release
+                  job runs it before `helm push`: a ref a template DERIVES
+                  (tenant-api's recipe-preview tag follows generator.image.tag)
+                  is invisible to `deploy`, which reads values files, and
+                  `deploy` skips first-party refs. Resolution is anonymous on
+                  purpose: a customer pulls the chart's defaults anonymously.
+
 There is deliberately NO `--scope all`; see the ⛔ note next to _SCOPES.
 
 Usage:
   check_image_refs_resolve.py [--root DIR] [--list] [--timeout SECS]
-                              [--scope {deploy,delivered}]
+                              [--scope {deploy,delivered,rendered}] [--chart DIR]
     --root    repo root to scan (default: cwd)
     --list    print the discovered concrete refs and exit 0 (no network) — for tests
     --timeout timeout of each registry request, whole seconds, 1..2147483 (default 30)
     --scope   which ref set to check (default: deploy — see the ⛔ note on
               `--list` compatibility next to _SCOPES below)
+    --chart   the chart directory, relative to --root (required by, and only
+              accepted with, --scope rendered)
 """
 from __future__ import annotations
 
@@ -151,7 +162,7 @@ SKIP_REPO_PREFIXES = ("ghcr.io/vencil/",)
 # runs, first time, in the dark; the repo's standing rule is to delete
 # speculative surface rather than carry it. If a combined run is ever genuinely
 # wanted, two invocations already give it, with better failure attribution.
-_SCOPES = ("deploy", "delivered")
+_SCOPES = ("deploy", "delivered", "rendered")
 
 # ⛔ IMPORTED, never transcribed. A hand-copied table here would be a fourth
 # spelling of the same four refs (init_project.py, the nightly matrix, this, and
@@ -454,6 +465,59 @@ def _walk_sources(root: Path, dropped: set[str] | None = None) -> set[str]:
     return refs
 
 
+#: Seconds one `helm template` may take.
+HELM_TIMEOUT_S = 120
+
+
+def rendered_refs(root: Path, chart: str) -> set[str]:
+    """Every concrete image ref in `helm template` of *chart* with its default
+    values (plus check_iac_helm.RENDER_BASE_SETS, the values a chart refuses to
+    render without), read the way kubectl reads it. First-party refs are kept:
+    this scope exists for them. Fail-closed: no helm, a render helm refuses,
+    an output da-crdecode refuses, or a render with no image at all ends the
+    run at rc 2."""
+    sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)),
+                                 os.pardir, "tools", "lint"))
+    import _lib_engine  # scripts/tools, appended to sys.path above
+    from check_iac_helm import RENDER_BASE_SETS
+    chart_dir = root / chart
+    # helm is run through _lib_engine (#3611): its `template` proof turns a
+    # failed or empty render into a NoVerdict instead of a clean-looking run.
+    located = _lib_engine.locate("helm")
+    if isinstance(located, _lib_engine.NoVerdict):
+        print(f"check_image_refs_resolve: the chart was not rendered, so none of its "
+              f"image refs were checked: {located.message()}", file=sys.stderr)
+        raise SystemExit(2)
+    args = ["template", "image-refs", str(chart_dir)]
+    for kv in RENDER_BASE_SETS.get(chart_dir.name, []):
+        args += ["--set", kv]
+    result = _lib_engine.run(located, "template", args, timeout=HELM_TIMEOUT_S)
+    if isinstance(result, _lib_engine.NoVerdict):
+        print(f"check_image_refs_resolve: helm template {chart}: {result.message()}",
+              file=sys.stderr)
+        raise SystemExit(2)
+    cr = _consumer_read()
+    try:
+        docs = cr.kubernetes_text_documents(result.data)
+    except cr.ConsumerReadError as exc:
+        print(f"check_image_refs_resolve: the render of {chart} cannot be read the way "
+              f"kubectl reads it: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    refs: set[str] = set()
+    try:
+        for doc in docs:
+            if doc is not None:
+                refs |= _refs_from_node(doc)
+    except NonStringImageField as exc:
+        print(f"check_image_refs_resolve: {chart}: {exc}", file=sys.stderr)
+        raise SystemExit(2) from exc
+    if not refs:
+        print(f"check_image_refs_resolve: the default render of {chart} holds no image ref; "
+              "refusing to report a clean chart that was not checked", file=sys.stderr)
+        raise SystemExit(2)
+    return refs
+
+
 def discover_refs(root: Path) -> set[str]:
     # L1-B = public third-party; see _keep.
     return {r for r in _walk_sources(root) if _keep(r)}
@@ -500,13 +564,20 @@ def main() -> int:
                          f"whole seconds from 1 to {MAX_TIMEOUT_S} (default 30)")
     ap.add_argument("--scope", choices=_SCOPES, default="deploy",
                     help="which ref set to check: deploy (helm values + k8s manifests, "
-                         "the default) or delivered (what `da-tools init` writes into a "
-                         "customer repo). There is no combined value on purpose — run "
-                         "it twice, so a failure says which scope broke.")
+                         "the default), delivered (what `da-tools init` writes into a "
+                         "customer repo) or rendered (the images a chart's defaults run, "
+                         "first-party included; needs --chart). There is no combined "
+                         "value on purpose — run it twice, so a failure says which scope broke.")
+    ap.add_argument("--chart", help="chart directory relative to --root (scope rendered only)")
     args = ap.parse_args()
+    if (args.scope == "rendered") != bool(args.chart):
+        ap.error("--chart is required by --scope rendered and accepted only with it")
 
     root = Path(args.root)
-    refs = sorted(discover_refs(root) if args.scope == "deploy" else delivered_refs(root))
+    if args.scope == "rendered":
+        refs = sorted(rendered_refs(root, args.chart))
+    else:
+        refs = sorted(discover_refs(root) if args.scope == "deploy" else delivered_refs(root))
 
     if args.list:
         for ref in refs:

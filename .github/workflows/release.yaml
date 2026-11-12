@@ -996,6 +996,24 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/ops/verify_release_digest.sh tenant-api helm/tenant-api/Chart.yaml
 
+      # ⛔ #1040: the chart is not published while its DEFAULTS run an image
+      # nobody can pull. The tenant-api pod runs a generator and a
+      # recipe-preview container whose tags follow the da-tools pin, so a
+      # tenant-api release cut before the tools release that builds those
+      # images would publish a chart whose default install never becomes
+      # Ready. The render is the source (a derived tag is invisible in
+      # values.yaml), resolution is anonymous (as a customer pulls), and the
+      # tenant-api image itself was promoted above, so it resolves too.
+      - name: Set up Go (da-crdecode, for the rendered-chart image check)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: Verify the chart's default images resolve (#1040)
+        run: bash scripts/ops/with_da_crdecode.sh python3 scripts/ops/check_image_refs_resolve.py --scope rendered --chart helm/tenant-api
+
       - name: Push Helm chart to OCI registry
         run: |
           helm push .build/tenant-api-${{ steps.version.outputs.VERSION }}.tgz \
