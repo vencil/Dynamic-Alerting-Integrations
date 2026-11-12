@@ -204,7 +204,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_dev_bypass_manifest.py": _R_LINT,
     "check_dev_rules_enforcement.py": _R_LINT,
     "check_devrules_size.py": _R_LINT,
-    "check_dist_source_consistency.py": _R_LINT,
     "check_doc_datools_cmds.py": _R_LINT,
     "check_doc_k8s_refs.py": _R_LINT,
     "check_doc_links.py": _R_LINT,

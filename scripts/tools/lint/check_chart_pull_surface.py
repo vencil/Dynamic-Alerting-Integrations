@@ -81,7 +81,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 EXCLUDED_PREFIXES: Tuple[str, ...] = (
     "site/",
-    "docs/assets/dist/",
     "tests/",
 )
 EXCLUDED_FILES: Tuple[str, ...] = (
