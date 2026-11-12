@@ -1068,7 +1068,7 @@ def _cli_gh_uses(deploy: str) -> list[str]:
     # helm the runner image carries, and `ubuntu-latest` moved to a Helm 4 image
     # in 2026-10/11 (actions/runner-images#14748) — across the major the GitLab
     # pin holds. kustomize still uses the runner's kubectl/kustomize.
-    extra = ["azure/setup-helm@v4"] if deploy == "helm" else []
+    extra = ["azure/setup-helm@v5"] if deploy == "helm" else []
     return sorted(["actions/checkout@v6"] * 3
                   + ["marocchino/sticky-pull-request-comment@v2"] + extra)
 

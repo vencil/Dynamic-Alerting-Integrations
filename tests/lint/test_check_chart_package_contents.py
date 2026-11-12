@@ -252,7 +252,7 @@ class TestAgainstRealHelm:
 
     helm is present in the dev container (devcontainer.json:
     kubectl-helm-minikube) and in CI's `python-tests-run` job
-    (azure/setup-helm@v4), so the green branch is the one that runs where it
+    (azure/setup-helm@v5), so the green branch is the one that runs where it
     matters.
     """
 
