@@ -2278,7 +2278,7 @@ da-tools migrate <input_file> [options]
 
 **標準模式**：
 
-- `migration_output/.conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）。目錄刻意以 `.` 開頭：`-o` 落在服務中的 conf.d 裡（指向它，或在它裡面用預設 `-o`）時，每個讀取端都會略過點開頭的目錄，草稿租戶不會被服務；要驗這兩個檔，把 `.conf.d/` 本身當 `--config-dir`
+- `migration_output/.conf.d/<tenant>.yaml` — 提取出的 threshold，寫在 `tenants.<tenant>` 底下（[#3671](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3671)：租戶檔頂層 `tenants` 以外的 key 沒有讀取端讀，先前的 `tenant-config.yaml` 平鋪在頂層）。目錄刻意以 `.` 開頭：`-o` 落在服務中的 conf.d 裡（指向它，或在它裡面用預設 `-o`）時，每個讀取端都會略過點開頭的目錄，草稿租戶不會被服務；但規則檔、mapping 與報告仍寫在 `-o` 根，會讓那棵樹的 schema 檢查轉紅，所以 `-o` 不要指向服務中的樹。要驗這兩個檔，把 `.conf.d/` 本身當 `--config-dir`
 - `migration_output/platform-recording-rules.yaml` — Recording rules
 - `migration_output/platform-alert-rules.yaml` — Alert rules。告警改讀依租戶聚合的 recording rule，`$labels` 只剩 `tenant`：原 annotation／label 引用的 label 若在原式子裡以 `=` 釘成單一值（例如 `queue="order-processing"`），直接代入該值；其他（例如 `instance`）改讀 `$labels.tenant`，annotation 附上「（原為 instance，已依租戶聚合）」，該告警上方與報告會列出改寫了哪些 label（v2.9.0 映像沒有改寫，這些引用會渲染成空字串） <!-- image-caveat: v2.9.0 -->
 - `migration_output/migration-report.txt` — 詳細遷移報告

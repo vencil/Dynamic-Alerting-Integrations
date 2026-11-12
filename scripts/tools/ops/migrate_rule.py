@@ -1079,7 +1079,7 @@ def _dedup_recording_rules(results):
 #: shared by the exporter's walker and `da-guard parse-tree`), so the draft
 #: tenant is never served wherever `-o` lands, while the tree passed as a
 #: `--config-dir` root of its own is judged whole. No path is guessed here;
-#: tests/ops/test_migrate_rule_outputs.py runs the tool inside a served tree
+#: tests/shared/test_writers_confirm_parse_tree.py runs the tool inside a served tree
 #: and asks Go which tenants it serves.
 CONFD_DIR = ".conf.d"
 
