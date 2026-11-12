@@ -12,7 +12,8 @@ test existed, with every component in `monitoring` as the docs install them:
   * Grafana's egress allowed Prometheus and DNS only — its VictoriaLogs
     datasource and the plugin install from grafana.com (443) were dropped;
   * Prometheus' egress had no 9428 and the store's ingress did not admit it —
-    the store and its vmauth sidecar were never scraped;
+    the store was never scraped (vmauth's own metrics are on its internal
+    port and are out of scope here);
   * chargeback-aggregator shipped no policy, so under the namespace's
     default-deny it could resolve no name and reach no store.
 
@@ -159,13 +160,22 @@ def _port_matches(rule: dict, port: int, proto: str) -> bool:
     return False
 
 
+def _policy_types(policy: dict) -> list[str]:
+    """`spec.policyTypes`, or the API's default when absent: Ingress always,
+    plus Egress when the policy has egress rules."""
+    spec = policy["spec"]
+    if spec.get("policyTypes"):
+        return spec["policyTypes"]
+    return ["Ingress", "Egress"] if spec.get("egress") else ["Ingress"]
+
+
 def _allowed(policies, pod: dict, direction: str, other: dict, port: int, proto: str) -> bool:
     """Is `pod`'s traffic in `direction` to/from `other` allowed by the policies
     that select it? No policy selecting it for this direction means allowed."""
     key, peers_key = ("Egress", "to") if direction == "egress" else ("Ingress", "from")
     selecting = [p for p in policies
                  if p["metadata"]["namespace"] == pod["ns"]
-                 and key in (p["spec"].get("policyTypes") or ["Ingress"])
+                 and key in _policy_types(p)
                  and _match_labels(p["spec"].get("podSelector") or {"matchLabels": {}}, pod["labels"])]
     if not selecting:
         return True
@@ -247,6 +257,12 @@ def test_an_unlisted_pod_cannot_reach_the_store(world) -> None:
     stranger = {"ns": "monitoring", "labels": {"app": "something-else"}}
     egress, ingress = _edge(policies, stranger, _pod(pods, *_STORE), _STORE_PORT)
     assert not egress and not ingress, (egress, ingress)
+
+
+def test_missing_policy_types_default_as_the_api_does() -> None:
+    assert _policy_types({"spec": {"egress": [{}]}}) == ["Ingress", "Egress"]
+    assert _policy_types({"spec": {"ingress": [{}]}}) == ["Ingress"]
+    assert _policy_types({"spec": {"policyTypes": ["Egress"]}}) == ["Egress"]
 
 
 def test_evaluator_refuses_what_it_does_not_model() -> None:
