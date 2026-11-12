@@ -253,9 +253,10 @@ def test_empty_config_dir_fails_with_the_no_config_hint(tmp_path):
     p = subprocess.run([sys.executable, str(OPS / "validate_config.py"), "--config-dir", str(conf_d),
                         "--json"], capture_output=True, text=True, encoding="utf-8",
                        errors="replace", timeout=300)
-    rows = {r["check"]: r for r in json.loads(p.stdout)}
-    assert p.returncode == 2, (p.returncode, rows["profiles"])
-    assert rows["profiles"]["suggested_action"] == vc._PROFILES_NO_CONFIG_FILE_HINT, rows["profiles"]
+    # #3755: the CLI refuses an empty --config-dir at its declaration — one
+    # line naming the flag, no report (it was rc 2 with this row's hint).
+    assert p.returncode == 2 and p.stdout == "", (p.returncode, p.stdout)
+    assert f"--config-dir {conf_d}: selects nothing" in p.stderr, p.stderr
 
 
 def test_missing_da_guard_is_a_caller_error(tmp_path, monkeypatch):
