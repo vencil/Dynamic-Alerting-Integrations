@@ -374,6 +374,10 @@ jobs:
               - "flaky-tests.yaml"
               - "renovate.json"
               - ".python-version"
+              # tests/ops/test_portal_dist_consumers_build.py requires the
+              # da-portal build context to exclude tools/portal/node_modules
+              # (#3738).
+              - ".dockerignore"
               - ".devcontainer/**"
               - ".github/workflows/**"
               - "environments/**"
@@ -3170,6 +3174,18 @@ jobs:
       - name: Install Playwright browsers
         working-directory: tests/e2e
         run: npx playwright install chromium
+
+      # #3738: the portal server below serves docs/assets/dist/, so build it
+      # from source rather than testing the committed copy. tools/portal/** is
+      # already in the `e2e` filter that gates this job. Pinned by
+      # tests/ops/test_portal_dist_consumers_build.py (before the server starts).
+      - name: Install portal build dependencies
+        working-directory: tools/portal
+        run: npm ci
+
+      - name: Build portal bundles (docs/assets/dist/)
+        working-directory: tools/portal
+        run: npm run build
 
       - name: Start Portal server
         working-directory: tests/e2e
