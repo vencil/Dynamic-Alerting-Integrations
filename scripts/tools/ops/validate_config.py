@@ -300,8 +300,9 @@ AMTOOL_REJECTED_ROUTES_HINT = (
     "accepts but Alertmanager cannot load. Fix that value, then re-run.")
 AMTOOL_UNUSABLE_ROUTES_HINT = (
     "The amtool on PATH could not give a verdict (it could not run, timed "
-    "out or crashed) — that is this environment, not your config. Fix or "
-    "replace that amtool (or take it off PATH), then re-run.")
+    "out, crashed, or could not read a file the config names — a template "
+    "path is read on THIS machine) — that is this environment, not your "
+    "config. Fix that (or take amtool off PATH), then re-run.")
 AMTOOL_NOT_FOUND_ROUTES_HINT = (
     "Put Alertmanager's amtool on PATH so this row can check the generated "
     "config with Alertmanager's own parser — without it, a value Alertmanager "
