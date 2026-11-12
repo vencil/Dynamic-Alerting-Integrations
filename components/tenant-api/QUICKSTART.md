@@ -78,7 +78,7 @@ docker run --rm -d --name tenant-api -p 127.0.0.1:8083:8080 --user "$(id -u):$(i
 # API 入口:oauth2-proxy(同 uid 才連得上 0660 的 socket)
 docker run --rm -d --name tenant-api-proxy -p 127.0.0.1:8080:8080 --user "$(id -u):$(id -g)" \
   -v "$(pwd)/sock:/run/ta-human" -v "$(pwd)/oauth2-proxy:/etc/oauth2-proxy:ro" \
-  quay.io/oauth2-proxy/oauth2-proxy:v7.15.5 \
+  quay.io/oauth2-proxy/oauth2-proxy:v7.15.6 \
   --alpha-config=/etc/oauth2-proxy/oauth2-proxy.yaml \
   --trusted-ip=0.0.0.0/0 --trusted-ip=::/0 --email-domain='*' \
   --cookie-secret=local-dev-not-a-secret-32-bytes! --cookie-secure=false

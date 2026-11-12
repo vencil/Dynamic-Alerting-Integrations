@@ -58,9 +58,9 @@ RUN sh scripts/ops/go_build.sh -X "main.version=${VERSION}" \
 
 # ── Final stage ──────────────────────────────────────────────────────────────
 # alpine + git: required because gitops/writer.go shells out to `git`.
-# 3.23.6: ships libcrypto3/libssl3 3.5.8-r0 (#1278; CVE-2026-14456 is fixed in
-# 3.5.8, and 3.23.5 ships 3.5.7).
-FROM alpine:3.23.6
+# 3.24.4 (Renovate #3715). History: 3.23.6 was picked for libcrypto3/libssl3
+# 3.5.8-r0 (#1278; CVE-2026-14456 is fixed in 3.5.8, and 3.23.5 ships 3.5.7).
+FROM alpine:3.24.4
 
 # Install git and ca-certs (needed for git over HTTPS)
 # Note: alpine already has nobody(65534); create nonroot with system-assigned IDs
