@@ -45,6 +45,7 @@ import json
 import re
 import shutil
 import subprocess
+import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence, Union
@@ -341,6 +342,69 @@ def _mmdc_render(proc: subprocess.CompletedProcess, expect: dict) -> bool:
     return True
 
 
+def _promtool_check_rules(proc: subprocess.CompletedProcess, expect: dict) -> bool:
+    """``promtool check rules <file>``: exit 0 is the proof. It prints no
+    structured output, and its text (``SUCCESS: N rules found``) is not read
+    (#3611 Q2 allows a pinned text signature for amtool only); any other exit
+    — a rule that does not parse, a path that does not exist (both rc 1,
+    measured on 3.15.1) — is no verdict here. The caller knows how many rules
+    it wrote: it rendered the file."""
+    if proc.returncode != 0:
+        raise NoProof("the rule file did not validate")
+    return True
+
+
+def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> dict[str, bool]:
+    """``promtool test rules --junit <xml> <test>``: which test groups passed,
+    ``{group name: passed}``, read from the JUnit report ``expect["junit"]``
+    — never from the console (#3611).
+
+    ⛔ A ``<failure>`` is NOT "the assertion did not hold". promtool reports
+    every error inside a test group — input series that do not parse, a rule
+    file that does not load, a rule that errors when evaluated, and an
+    assertion that does not hold — as the same ``<failure>`` (``tc.Fail`` in
+    upstream ``cmd/promtool/unittest.go``; measured on 3.15.1). Only the
+    caller's test design can tell them apart (recipe-preview: two groups that
+    assert opposite answers on one input), so this proof returns each group's
+    pass / fail and judges nothing more.
+
+    It does prove the report is the run asked for: one ``<testsuite>``, its
+    testcases exactly the groups named in ``expect["cases"]`` (each once —
+    promtool names a case after its group), no ``<error>`` (``ts.Abort``: the
+    file itself could not be read or parsed) and no ``<skipped>``, and an exit
+    status that agrees (0 exactly when nothing failed).
+
+    ⚠️ A ``rule_files`` entry that does not exist is not an error to promtool:
+    it loads no rules (rc 0 if the assertions then hold). Nothing here can see
+    that; the caller must assert something only its rule file produces."""
+    _requires(proc, "--junit")
+    try:
+        # The report promtool just wrote into the caller's temp dir, not
+        # outside input (same footing as coverage_delta's Cobertura read).
+        root = ElementTree.parse(expect["junit"]).getroot()  # nosec B314  # promtool's own report in the caller's mkdtemp
+    except (OSError, ElementTree.ParseError) as exc:
+        raise NoProof(f"no readable JUnit report: {exc}") from None
+    suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
+    if len(suites) != 1:
+        raise NoProof(f"{len(suites)} test suites in the JUnit report, expected 1")
+    cases = suites[0].findall("testcase")
+    error = suites[0].find("testcase/error")
+    if error is not None:
+        raise NoProof("promtool could not run the test: " + (error.text or "").strip()[:300])
+    if suites[0].find("testcase/skipped") is not None:
+        raise NoProof("a test group was skipped")
+    names = [c.get("name") for c in cases]
+    if None in names or sorted(names) != sorted(expect["cases"]):
+        raise NoProof(f"the report's test groups {sorted(map(str, names))} are not "
+                      f"the ones the test file defines {sorted(expect['cases'])}")
+    passed = {c.get("name"): c.find("failure") is None for c in cases}
+    if proc.returncode not in (0, 1):   # 0 all held, 1 one failed (3.15.1); else killed / crashed
+        raise NoProof(f"exit status {proc.returncode} is neither a pass nor a test failure")
+    if (proc.returncode == 0) != all(passed.values()):
+        raise NoProof(f"exit status {proc.returncode} disagrees with the report")
+    return passed
+
+
 #: (engine, subcommand) → proof. The key is the pair, not the engine: one
 #: engine's subcommands prove a run differently (helm ``template`` vs
 #: ``package``; node runs a different driver for each tool).
@@ -352,4 +416,6 @@ PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess, dict], Any]
     ("node", "babel-parse"): _node_babel_parse,
     ("node", "cli-playground"): _node_cli_playground,
     ("pint", "lint"): _pint_lint,
+    ("promtool", "check-rules"): _promtool_check_rules,
+    ("promtool", "test-rules"): _promtool_test_rules,
 }

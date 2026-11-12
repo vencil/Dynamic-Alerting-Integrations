@@ -1,0 +1,5 @@
+route:
+  receiver: r
+  group_wait: notaduration
+receivers:
+- name: r

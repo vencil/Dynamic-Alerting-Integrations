@@ -119,6 +119,28 @@
     "resources": {
       "description": "Kubernetes ResourceRequirements, passed through."
     },
+    "configValidation": {
+      "description": "#3353: a CronJob running `da-tools validate-config` on the exporter's ConfigMap (templates/cronjob-config-validation.yaml). Memory = resources.limits.memory × memoryFactor.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "schedule": { "type": "string", "minLength": 1 },
+        "memoryFactor": { "type": "integer", "minimum": 1 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "cpuRequest": { "type": "string", "minLength": 1 },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 },
+            "digest": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        }
+      }
+    },
     "startupProbe": {
       "description": "Kubernetes Probe, passed through; null omits it."
     },
