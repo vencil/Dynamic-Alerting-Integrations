@@ -1204,15 +1204,16 @@ coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 H
 	@$(if $(findstring --html,$(ARGS)),echo "✓ HTML 報告: .build/htmlcov/index.html")
 
 .PHONY: test-e2e
-test-e2e: ## Portal E2E 煙霧測試 (Playwright, 需 Node.js 24，與 CI 同版，排除 @visual)
+# #3738：E2E 伺服的 docs/ 含 docs/assets/dist/，先從 source 重建，不測 commit 進 repo 的那份。
+test-e2e: portal-build ## Portal E2E 煙霧測試 (Playwright, 需 Node.js 24，與 CI 同版，排除 @visual)
 	@cd tests/e2e && npm test -- $(ARGS)
 
 .PHONY: test-e2e-visual
-test-e2e-visual: ## Visual regression test (TRK-229)，比對 baseline png；CI 不跑，需 baseline 已存在
+test-e2e-visual: portal-build ## Visual regression test (TRK-229)，比對 baseline png；CI 不跑，需 baseline 已存在
 	@cd tests/e2e && npm run test:visual -- $(ARGS)
 
 .PHONY: test-e2e-visual-update
-test-e2e-visual-update: ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑（Windows host 字體渲染不同會產生 false positives）。建議用 GitHub Actions visual-baseline.yaml workflow_dispatch
+test-e2e-visual-update: portal-build ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑（Windows host 字體渲染不同會產生 false positives）。建議用 GitHub Actions visual-baseline.yaml workflow_dispatch
 	@if [ "$$(uname -s)" != "Linux" ]; then \
 		echo "❌ Refuse to run on non-Linux host: '$$(uname -s)'"; \
 		echo "   Use the 'Visual Regression Baseline Update' GitHub Actions workflow instead"; \
@@ -1222,19 +1223,31 @@ test-e2e-visual-update: ## ⛔ 重產 visual baseline。**只能在 Ubuntu** 跑
 	@cd tests/e2e && npm run test:visual:update -- $(ARGS)
 
 .PHONY: portal-build
-portal-build: ## Build portal ESM bundles (TRK-230 Option C; entries listed in tools/portal/manifest.json)
+portal-build: portal-deps ## Build portal ESM bundles (TRK-230 Option C; entries listed in tools/portal/manifest.json)
 	@cd tools/portal && npm run build
 
+# #3738：serve-docs／test-e2e 等 target 依賴 portal-build，而全新 checkout 沒有
+# tools/portal/node_modules（build 會死在找不到 esbuild）。node_modules 不存在、
+# 或 package-lock.json 比上次安裝新（npm 安裝時寫 node_modules/.package-lock.json）
+# 時才 `npm ci`；其他情況不重裝。
+.PHONY: portal-deps
+portal-deps: ## Install tools/portal npm deps when missing or older than package-lock.json
+	@if [ ! -f tools/portal/node_modules/.package-lock.json ] || \
+	    [ tools/portal/package-lock.json -nt tools/portal/node_modules/.package-lock.json ]; then \
+		echo "==> tools/portal: npm ci"; \
+		cd tools/portal && npm ci --no-audit --no-fund; \
+	fi
+
 .PHONY: portal-build-watch
-portal-build-watch: ## Watch-mode portal build for dev iteration (TRK-230)
+portal-build-watch: portal-deps ## Watch-mode portal build for dev iteration (TRK-230)
 	@cd tools/portal && npm run build:watch
 
 .PHONY: test-portal
-test-portal: ## Vitest unit tests for portal components (TRK-230; tests in tests/portal/)
+test-portal: portal-deps ## Vitest unit tests for portal components (TRK-230; tests in tests/portal/)
 	@cd tools/portal && npm run test
 
 .PHONY: portal-bundle-budget
-portal-bundle-budget: ## Check portal dist bundle size budgets (TRK-232a; per-tool 100KB / shared chunk 200KB / total 4MB)
+portal-bundle-budget: portal-build ## Check portal dist bundle size budgets (TRK-232a; per-tool 100KB / shared chunk 200KB / total 4MB)
 	@python3 scripts/tools/lint/check_portal_bundle_size.py --ci
 
 .PHONY: test-skip-audit
@@ -1356,7 +1369,8 @@ release-tag-recipe-preview: version-check ## 從 Chart.yaml 推導 recipe-previe
 # 文件本地伺服
 # ----------------------------------------------------------
 .PHONY: serve-docs
-serve-docs: ## 啟動本地文件伺服器（含互動工具）
+# #3738：互動工具載入 docs/assets/dist/，先從 source 重建再伺服。
+serve-docs: portal-build ## 啟動本地文件伺服器（含互動工具）
 	@echo "Starting local docs server at http://localhost:8080"
 	@echo "Interactive Tools Hub: http://localhost:8080/docs/interactive/"
 	@echo "Press Ctrl+C to stop."

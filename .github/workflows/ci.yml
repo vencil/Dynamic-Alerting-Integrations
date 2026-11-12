@@ -385,6 +385,10 @@ jobs:
               - "flaky-tests.yaml"
               - "renovate.json"
               - ".python-version"
+              # tests/ops/test_portal_dist_consumers_build.py requires the
+              # da-portal build context to exclude tools/portal/node_modules
+              # (#3738).
+              - ".dockerignore"
               - ".devcontainer/**"
               - ".github/workflows/**"
               - "environments/**"
@@ -3056,10 +3060,14 @@ jobs:
         run: npm run build
 
       - name: Verify committed dist matches fresh build (no stale dist)
-        # Root-cause guard for repo-wide dist staleness (TRK-239 / #444):
-        # production loads committed docs/assets/dist/ and mkdocs-deploy does
-        # NOT rebuild, so a source change that never re-runs `make portal-build`
-        # silently never reaches prod. build.mjs cleans + re-emits the dir, so
+        # Guard for the COMMITTED copy of docs/assets/dist/ (TRK-239 / #444).
+        # Since #3738 production no longer loads that copy: the Pages deploy,
+        # the da-portal image and the smoke run each build the bundles from
+        # tools/portal/ themselves. The copy is still in git until the
+        # follow-up PR removes it, and this step keeps it equal to a fresh
+        # build so nobody reading or serving it locally gets a stale bundle.
+        # It cannot close the merge-time window (#3738): main can move after
+        # this ran on the merge ref. build.mjs cleans + re-emits the dir, so
         # any drift (modified bundle, renamed chunk, orphan) shows as a staged
         # diff here. Build is byte-reproducible across the dev container and CI
         # (esbuild 0.28.2 linux-x64, pinned via package-lock) because both run
@@ -3183,6 +3191,18 @@ jobs:
       - name: Install Playwright browsers
         working-directory: tests/e2e
         run: npx playwright install chromium
+
+      # #3738: the portal server below serves docs/assets/dist/, so build it
+      # from source rather than testing the committed copy. tools/portal/** is
+      # already in the `e2e` filter that gates this job. Pinned by
+      # tests/ops/test_portal_dist_consumers_build.py (before the server starts).
+      - name: Install portal build dependencies
+        working-directory: tools/portal
+        run: npm ci
+
+      - name: Build portal bundles (docs/assets/dist/)
+        working-directory: tools/portal
+        run: npm run build
 
       - name: Start Portal server
         working-directory: tests/e2e

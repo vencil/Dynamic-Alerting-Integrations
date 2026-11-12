@@ -1323,6 +1323,10 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # requirements/ci-constraints.txt to hold pre-commit hooks' pinned
     # additional_dependencies to the same versions.
     "requirements/**",
+    # GAINED by #3738: tests/ops/test_portal_dist_consumers_build.py reads the
+    # repo-root .dockerignore (the da-portal build context must exclude
+    # tools/portal/node_modules).
+    ".dockerignore",
 }
 
 

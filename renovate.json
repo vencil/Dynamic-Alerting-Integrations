@@ -230,6 +230,13 @@
       "enabled": false
     },
     {
+      "description": "#3738 — da-portal's `portal-build` stage (`FROM node:<major>-alpine…@sha256:…`) is bound to the dev container's node feature major by tests/shared/test_toolchain_pin_parity.py, and the dev container side is not Renovate's (see the devcontainer node-version rule). A major bump here alone is red by construction; move it by hand per docs/internal/toolchain-versions.md. Digest refreshes of the same major stay on (the Dockerfile base images group).",
+      "matchManagers": ["dockerfile"],
+      "matchDepNames": ["node"],
+      "matchUpdateTypes": ["major"],
+      "enabled": false
+    },
+    {
       "description": "#1354 — `runs-on:` (depType github-runner) is bound to the dev container base image by test_toolchain_pin_parity.py; neither side may move alone. Disabled on both managers (see the devcontainer image rule).",
       "matchManagers": ["github-actions"],
       "matchDepTypes": ["github-runner"],
