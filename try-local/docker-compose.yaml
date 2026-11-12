@@ -142,7 +142,7 @@ services:
     # volume). Dev topology: every path is exempt from login, so nothing is
     # authenticated and no identity header is injected (client copies are
     # stripped); tenant-api's dev bypass supplies the demo identity.
-    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.6
     # tenant-api's uid: the socket is 0660, owner tenant-api (uid 10001).
     user: "10001:10001"
     command:
@@ -281,7 +281,7 @@ services:
     # service_started; the seed's curl --retry-connrefused covers listen lag.
 
   prometheus:
-    image: prom/prometheus:v3.15.1
+    image: prom/prometheus:v3.16.0
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--web.enable-lifecycle"
