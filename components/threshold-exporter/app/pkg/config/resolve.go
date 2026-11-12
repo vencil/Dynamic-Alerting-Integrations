@@ -9,8 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/vencil/threshold-exporter/pkg/receiverspec"
 )
 
@@ -2136,19 +2134,24 @@ func (c *ThresholdConfig) ResolveRoutingLogf(logf func(format string, args ...an
 			continue
 		}
 
-		// _routing is stored as a YAML string in ScheduledValue.Default
-		// but it's actually a structured map. We need to re-parse it.
-		raw := sv.Default
-		if raw == "" {
+		// _routing is read from the mapping it was written as (#3638): a
+		// scalar is no routing, whatever its text holds — the route
+		// generator, which owns routing, reads `_routing: "receiver: …"` as
+		// neither a mapping nor a disabling string, and so does this. A
+		// disabling string (`_routing: disable`, the documented opt-out) is
+		// no routing either, and is not told to become a mapping.
+		node, structured, err := structureOf(sv)
+		if !structured {
+			if sv.Default != "" && !isDisabled(strings.ToLower(strings.TrimSpace(sv.Default))) {
+				logf("WARN: invalid _routing config for tenant=%s: written as a scalar, not a mapping (#3638)", tenant)
+			}
 			continue
 		}
-
-		// Parse the routing config from the raw YAML value.
-		// In directory mode, _routing is a nested map that gets serialized
-		// as a ScheduledValue. We parse it from the original YAML structure.
 		var routingMap map[string]interface{}
-		if err := yaml.Unmarshal([]byte(raw), &routingMap); err != nil {
-			// If it's not valid YAML, it might be a simple string — skip
+		if err == nil {
+			err = node.Decode(&routingMap)
+		}
+		if err != nil {
 			logf("WARN: invalid _routing config for tenant=%s: %v", tenant, err)
 			continue
 		}
