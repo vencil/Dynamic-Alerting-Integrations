@@ -18,6 +18,7 @@ from __future__ import annotations
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -100,3 +101,75 @@ def test_displayed_command_parses_with_real_cli(command):
     assert proc.returncode == 0, (
         f"`{command}` → {os.path.basename(script)} rc={proc.returncode}\n"
         f"{proc.stderr[-800:]}")
+
+
+# ── migrate: the displayed output is a fresh run's output ───────────────
+#
+# The argv check above cannot see the output: migrate's playback kept
+# showing the old flat `tenant-config.yaml` ("copy into conf.d/<tenant>.yaml")
+# long after the tool started writing `.conf.d/<tenant>.yaml` (thresholds
+# under `tenants.<tenant>`) + a `defaults:` fragment for the root
+# `_defaults.yaml` (#3698, #3759). This runs the displayed command on the
+# fixture the transcript names and compares terminal + sample verbatim.
+
+_LEGACY_FIXTURE = REPO_ROOT / "tests" / "fixtures" / "legacy-dummy.yml"
+# Order the sample shows them in; each under a `# ── <path> ──` line.
+_MIGRATE_SAMPLE_FILES = ("demo-tenant.yaml", "_defaults.yaml")
+
+
+def _js_template_value(raw: str) -> str:
+    """Value of a JS template literal body that has no `${…}` interpolation."""
+    return re.sub(r"\\(.)", r"\1", raw, flags=re.DOTALL)
+
+
+def _js_template_body(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("`", "\\`").replace("${", "\\${")
+
+
+def _migrate_block() -> tuple[str, list[str], str]:
+    src = TRANSCRIPTS.read_text(encoding="utf-8")
+    m = re.search(
+        r"^  migrate: \{\n    command: '([^']+)',\n    terminal: \[\n(.*?)\n    \],\n"
+        r"    sample: `((?:[^`\\]|\\.)*)`,\n  \},$",
+        src, flags=re.MULTILINE | re.DOTALL)
+    assert m, "migrate block not found in the shape this test reads"
+    lines = re.findall(r"^      '((?:[^'\\]|\\.)*)',$", m.group(2), flags=re.MULTILINE)
+    assert len(lines) == m.group(2).count("\n") + 1, "unparsed terminal line"
+    assert "${" not in m.group(3).replace("\\${", ""), "sample interpolates"
+    return (m.group(1), [re.sub(r"\\(.)", r"\1", ln) for ln in lines],
+            _js_template_value(m.group(3)))
+
+
+def test_migrate_playback_matches_a_fresh_run(tmp_path):
+    command, terminal, sample = _migrate_block()
+    argv = shlex.split(command)
+    assert argv[:3] == ["da-tools", "migrate", "legacy_rules.yaml"], command
+    out_dir = argv[argv.index("-o") + 1]
+    shutil.copyfile(_LEGACY_FIXTURE, tmp_path / "legacy_rules.yaml")
+
+    # Through the da-tools dispatcher, as the page shows it being typed.
+    proc = subprocess.run(
+        [sys.executable, entrypoint.__file__, *argv[1:]],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding="utf-8", timeout=120,
+        cwd=tmp_path, env={**os.environ, "DA_LANG": "en"},
+    )
+    assert proc.returncode == 0, f"`{command}` rc={proc.returncode}\n{proc.stdout[-1500:]}"
+
+    conf_d = tmp_path / out_dir / ".conf.d"
+    written = sorted(p.name for p in conf_d.iterdir())
+    assert written == sorted(_MIGRATE_SAMPLE_FILES), written
+    fresh_terminal = [f"$ {command}", "", *proc.stdout.splitlines()]
+    fresh_sample = "\n".join(
+        f"# ── {out_dir}/.conf.d/{name} ──\n"
+        + (conf_d / name).read_text(encoding="utf-8").rstrip("\n")
+        for name in _MIGRATE_SAMPLE_FILES)
+
+    regenerated = (
+        "    terminal: [\n"
+        + "".join("      '%s',\n" % ln.replace("\\", "\\\\").replace("'", "\\'")
+                  for ln in fresh_terminal)
+        + "    ],\n    sample: `" + _js_template_body(fresh_sample) + "`,")
+    hint = f"re-capture {TRANSCRIPTS.name} migrate block from a fresh run:\n{regenerated}"
+    assert terminal == fresh_terminal, hint
+    assert sample == fresh_sample, hint
