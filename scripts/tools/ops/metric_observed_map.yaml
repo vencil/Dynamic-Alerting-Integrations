@@ -206,12 +206,12 @@ keys:
     pack: rule-pack-kafka.yaml
     scope: tenant
     direction: '>'
-    observed_series: tenant:kafka_under_replicated_partitions:max
+    observed_series: tenant:kafka_under_replicated_partitions:sum
   kafka_under_replicated_partitions_critical:
     pack: rule-pack-kafka.yaml
     scope: tenant
     direction: '>'
-    observed_series: tenant:kafka_under_replicated_partitions:max
+    observed_series: tenant:kafka_under_replicated_partitions:sum
   mongodb_connections_current:
     pack: rule-pack-mongodb.yaml
     scope: tenant
