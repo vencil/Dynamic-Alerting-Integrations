@@ -62,7 +62,7 @@ dist 是 build 產物、不在 git 裡，每個消費端都在用之前自己從
 
 守衛：`tests/ops/test_portal_dist_consumers_build.py`。`lint_tool_consistency.py` 判斷「某個 bundle 存不存在」讀的是 `manifest.json` + `entries/`，不是 dist 目錄。
 
-dist **不 commit 進 git**（`.gitignore` 蓋住；守衛 `tests/lint/test_portal_dist_not_tracked.py`）。拉到 #3738 之後工作樹就沒有 `docs/assets/dist/`（既有 clone checkout 過去也會被刪）：要在本機直接開 `docs/` 底下的互動工具，先 `make portal-build`（`make serve-docs`／`test-e2e*` 會自己跑）。CI 的 Portal Tests 仍跑 `npm run build`＋bundle size budget＋Vitest，量的是當次 build 的產物。
+dist **不 commit 進 git**（`.gitignore` 蓋住；守衛 `tests/lint/test_portal_dist_not_tracked.py`）。拉到 #3738 之後工作樹就沒有 `docs/assets/dist/`（既有 clone checkout 過去也會被刪；本機重 build 過、還沒 commit 的 dist 會讓 `git pull` 中止，先 `git restore docs/assets/dist`）。舊分支 rebase／merge 完跑 `git ls-files docs/assets/dist`，有輸出就 `git rm -r --cached docs/assets/dist`（只新增 chunk 的 commit 不會衝突、會把它悄悄帶回）。要在本機直接開 `docs/` 底下的互動工具，先 `make portal-build`（`make serve-docs`／`test-e2e*` 會自己跑）。CI 的 Portal Tests 仍跑 `npm run build`＋bundle size budget＋Vitest，量的是當次 build 的產物。
 
 ## 為什麼 esbuild
 
