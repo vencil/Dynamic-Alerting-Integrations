@@ -232,50 +232,85 @@ def test_mmdc_render_exit_1_is_undecided_not_a_verdict(tmp_path):
 
 # ── promtool proofs (#3611 PR 5) ────────────────────────────────────────────
 
-_SUITE = ('<testsuites><testsuite name="t.yaml" tests="{t}" failures="{f}" errors="{e}">'
-          '<testcase name="u">{body}</testcase></testsuite></testsuites>')
 _JUNIT_ARGS = ("promtool", "test", "rules", "--junit", "r.xml", "t.yaml")
+_CASES = {"fires", "quiet"}
 
 
-def _junit(tmp_path, text):
+def _case(name, body=""):
+    return f'<testcase name="{name}">{body}</testcase>'
+
+
+def _report(*cases, errors=0):
+    fails = sum("<failure" in c for c in cases)
+    return (f'<testsuites><testsuite name="t.yaml" tests="{len(cases)}" failures="{fails}" '
+            f'errors="{errors}">{"".join(cases)}</testsuite></testsuites>')
+
+
+def _junit(tmp_path, text, cases=_CASES):
     path = tmp_path / "r.xml"
     path.write_text(text, encoding="utf-8")
-    return {"junit": str(path)}
+    return {"junit": str(path), "cases": cases}
 
 
-def test_test_rules_reads_the_junit_report_not_the_console(tmp_path):
-    """Shapes measured on promtool 3.15.1: a held assertion is rc 0 and a clean
-    suite, a broken one rc 1 and a <failure>."""
+_FAIL = "<failure>x</failure>"
+
+
+def test_test_rules_returns_each_group_s_pass_fail_from_the_report(tmp_path):
+    """Shapes measured on promtool 3.15.1: one testcase per group, named after
+    it; a failed group carries a <failure>; rc 1 when any group failed."""
     proof = E.PROOFS[("promtool", "test-rules")]
-    ok = _junit(tmp_path, _SUITE.format(t=1, f=0, e=0, body=""))
-    assert proof(_cp(0, args=_JUNIT_ARGS), ok) == "passed"
-    bad = _junit(tmp_path, _SUITE.format(t=1, f=1, e=0, body="<failure>got:[...]</failure>"))
-    assert proof(_cp(1, "  FAILED:", args=_JUNIT_ARGS), bad) == "failed"
+    one_fails = _junit(tmp_path, _report(_case("fires"), _case("quiet", _FAIL)))
+    assert proof(_cp(1, "  FAILED:", args=_JUNIT_ARGS), one_fails) == {"fires": True, "quiet": False}
+    none_fail = _junit(tmp_path, _report(_case("fires"), _case("quiet")))
+    assert proof(_cp(0, args=_JUNIT_ARGS), none_fail) == {"fires": True, "quiet": True}
+
+
+def test_a_failure_is_returned_as_failed_whatever_caused_it(tmp_path):
+    """⛔ The proof does not read a <failure> as "the assertion did not hold":
+    promtool writes an unparseable series the same way. It only reports it."""
+    proof = E.PROOFS[("promtool", "test-rules")]
+    parse_error = '<failure>2:10: parse error: unexpected identifier "Truex5"</failure>'
+    both = _junit(tmp_path, _report(_case("fires", parse_error), _case("quiet", parse_error)))
+    assert proof(_cp(1, args=_JUNIT_ARGS), both) == {"fires": False, "quiet": False}
 
 
 @pytest.mark.parametrize("rc, report", [
-    (1, _SUITE.format(t=1, f=0, e=1, body="<error>yaml: line 1</error>")),   # file not run
-    (1, None),                                                              # no report
+    (1, _report('<testcase name="unknown"><error>yaml: line 1</error></testcase>', errors=1)),
+    (1, None),
     (1, "not xml"),
-    (0, _SUITE.format(t=0, f=0, e=0, body="")),                             # no test
-    (1, _SUITE.format(t=1, f=0, e=0, body="")),                             # rc disagrees
-    (0, _SUITE.format(t=1, f=1, e=0, body="<failure/>")),                   # rc disagrees
-    (0, _SUITE.format(t="x", f=0, e=0, body="")),                           # no counts
-    (0, "<testsuites>" + _SUITE.format(t=1, f=0, e=0, body="")[12:-13] * 2 + "</testsuites>"),
-], ids=["error", "no-report", "not-xml", "no-test", "rc1-clean", "rc0-failure",
-        "bad-count", "two-suites"])
-def test_test_rules_without_a_consistent_report_is_no_proof(tmp_path, rc, report):
+    (0, _report(_case("fires"))),                                         # a group missing
+    (1, _report(_case("fires"), _case("quiet", _FAIL), _case("other"))),  # an extra group
+    (1, _report(_case("fires"), _case("fires", _FAIL))),                  # a name twice
+    (0, _report(_case("fires"), _case("quiet", _FAIL))),                  # rc 0 with a failure
+    (1, _report(_case("fires"), _case("quiet"))),                         # rc 1, all passed
+    (0, _report(_case("fires"), _case("quiet", "<skipped/>"))),
+    (0, "<testsuites>" + _report(_case("fires"), _case("quiet"))[12:-13] * 2 + "</testsuites>"),
+], ids=["error", "no-report", "not-xml", "missing-group", "extra-group", "duplicate-group",
+        "rc0-failure", "rc1-all-passed", "skipped", "two-suites"])
+def test_test_rules_without_the_report_of_this_run_is_no_proof(tmp_path, rc, report):
     proof = E.PROOFS[("promtool", "test-rules")]
-    expect = {"junit": str(tmp_path / "absent.xml")} if report is None else _junit(tmp_path, report)
+    expect = ({"junit": str(tmp_path / "absent.xml"), "cases": _CASES} if report is None
+              else _junit(tmp_path, report))
     with pytest.raises(E.NoProof):
         proof(_cp(rc, "  FAILED:\n got:[", args=_JUNIT_ARGS), expect)
+
+
+def test_an_error_in_the_report_is_no_proof_whatever_the_exit_status(tmp_path):
+    """The <error> itself decides — not only the rc it usually comes with — and
+    its text is the reason shown (the test file promtool could not run)."""
+    proof = E.PROOFS[("promtool", "test-rules")]
+    report = _junit(tmp_path, _report('<testcase name="unknown"><error>yaml: line 1</error></testcase>',
+                                      errors=1))
+    for rc in (0, 1):
+        with pytest.raises(E.NoProof, match="could not run the test: yaml: line 1"):
+            proof(_cp(rc, args=_JUNIT_ARGS), report)
 
 
 def test_test_rules_without_junit_in_argv_is_a_programming_error(tmp_path):
     with pytest.raises(ValueError, match="--junit"):
         E.PROOFS[("promtool", "test-rules")](
             _cp(0, args=("promtool", "test", "rules", "t.yaml")),
-            _junit(tmp_path, _SUITE.format(t=1, f=0, e=0, body="")))
+            _junit(tmp_path, _report(_case("fires"), _case("quiet"))))
 
 
 def test_check_rules_is_proven_by_exit_0_alone():
@@ -283,13 +318,3 @@ def test_check_rules_is_proven_by_exit_0_alone():
     assert proof(_cp(0, "  SUCCESS: 0 rules found"), {}) is True
     with pytest.raises(E.NoProof):
         proof(_cp(1, "", "  FAILED:"), {})
-
-
-def test_an_error_in_the_report_is_no_proof_whatever_the_exit_status(tmp_path):
-    """The <error> itself decides — not only the rc it usually comes with — and
-    its text is the reason shown (the test file promtool could not run)."""
-    proof = E.PROOFS[("promtool", "test-rules")]
-    report = _junit(tmp_path, _SUITE.format(t=1, f=0, e=1, body="<error>yaml: line 1</error>"))
-    for rc in (0, 1):
-        with pytest.raises(E.NoProof, match="could not run the test: yaml: line 1"):
-            proof(_cp(rc, args=_JUNIT_ARGS), report)

@@ -354,49 +354,53 @@ def _promtool_check_rules(proc: subprocess.CompletedProcess, expect: dict) -> bo
     return True
 
 
-def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> str:
-    """``promtool test rules --junit <xml> <test>``: ``"passed"`` or
-    ``"failed"``, read from the JUnit report ``expect["junit"]``, never from
-    the console text (#3611 Q2: ``FAILED:`` is printed for a file that could
-    not be read too).
+def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> dict[str, bool]:
+    """``promtool test rules --junit <xml> <test>``: which test groups passed,
+    ``{group name: passed}``, read from the JUnit report ``expect["junit"]``
+    — never from the console (#3611).
 
-    Measured on 3.15.1: an assertion that does not hold is a ``<failure>``
-    (``failures="1"``, rc 1); a test file that cannot be read is an
-    ``<error>`` (``errors="1"``, rc 1); all assertions holding is rc 0 with
-    neither. One test file gives one ``<testsuite>``. An ``<error>``, a
-    report missing or not one suite with at least one test, or an exit
-    status that disagrees with the report, is no verdict.
+    ⛔ A ``<failure>`` is NOT "the assertion did not hold". promtool reports
+    every error inside a test group — input series that do not parse, a rule
+    file that does not load, a rule that errors when evaluated, and an
+    assertion that does not hold — as the same ``<failure>`` (``tc.Fail`` in
+    upstream ``cmd/promtool/unittest.go``; measured on 3.15.1). Only the
+    caller's test design can tell them apart (recipe-preview: two groups that
+    assert opposite answers on one input), so this proof returns each group's
+    pass / fail and judges nothing more.
 
-    ⚠️ A ``rule_files`` entry that does not exist is NOT an error to
-    promtool: it loads no rules and every ``exp_alerts: []`` holds (rc 0,
-    clean report). The report cannot show it; the caller must have checked
-    the rule file it names (``check-rules``) before trusting a pass."""
+    It does prove the report is the run asked for: one ``<testsuite>``, its
+    testcases exactly the groups named in ``expect["cases"]`` (each once —
+    promtool names a case after its group), no ``<error>`` (``ts.Abort``: the
+    file itself could not be read or parsed) and no ``<skipped>``, and an exit
+    status that agrees (0 exactly when nothing failed).
+
+    ⚠️ A ``rule_files`` entry that does not exist is not an error to promtool:
+    it loads no rules (rc 0 if the assertions then hold). Nothing here can see
+    that; the caller must assert something only its rule file produces."""
     _requires(proc, "--junit")
     try:
         # The report promtool just wrote into the caller's temp dir, not
         # outside input (same footing as coverage_delta's Cobertura read).
-        root = ElementTree.parse(expect["junit"]).getroot()
+        root = ElementTree.parse(expect["junit"]).getroot()  # nosec B314  # promtool's own report in the caller's mkdtemp
     except (OSError, ElementTree.ParseError) as exc:
         raise NoProof(f"no readable JUnit report: {exc}") from None
     suites = [root] if root.tag == "testsuite" else root.findall("testsuite")
     if len(suites) != 1:
         raise NoProof(f"{len(suites)} test suites in the JUnit report, expected 1")
-    try:
-        tests, failures, errors = (int(suites[0].get(k, "")) for k in
-                                   ("tests", "failures", "errors"))
-    except ValueError:
-        raise NoProof("JUnit report without tests / failures / errors counts") from None
-    if errors:
-        error = suites[0].find("testcase/error")
-        raise NoProof("promtool could not run the test: "
-                      + ((error.text or "").strip()[:300] if error is not None else "?"))
-    if tests < 1:
-        raise NoProof("the JUnit report holds no test")
-    if failures == 0 and proc.returncode == 0:
-        return "passed"
-    if failures > 0 and proc.returncode == 1:
-        return "failed"
-    raise NoProof(f"exit status disagrees with the report ({failures} failure(s))")
+    cases = suites[0].findall("testcase")
+    error = suites[0].find("testcase/error")
+    if error is not None:
+        raise NoProof("promtool could not run the test: " + (error.text or "").strip()[:300])
+    if suites[0].find("testcase/skipped") is not None:
+        raise NoProof("a test group was skipped")
+    names = [c.get("name") for c in cases]
+    if sorted(names) != sorted(expect["cases"]):
+        raise NoProof(f"the report's test groups {sorted(map(str, names))} are not "
+                      f"the ones the test file defines {sorted(expect['cases'])}")
+    passed = {c.get("name"): c.find("failure") is None for c in cases}
+    if (proc.returncode == 0) != all(passed.values()):
+        raise NoProof(f"exit status {proc.returncode} disagrees with the report")
+    return passed
 
 
 #: (engine, subcommand) → proof. The key is the pair, not the engine: one

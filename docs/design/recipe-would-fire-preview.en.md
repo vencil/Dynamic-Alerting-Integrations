@@ -128,22 +128,30 @@ A Prometheus rule compares "series" (labelled time series), not a single number.
 
 ### 5.2 Eval mechanism: a proof-by-contradiction that makes `promtool` tell you
 
-`promtool test rules` is an **assert** tool — you give it "which alerts you expect to fire" and it checks; but it won't volunteer "who fired", and the preview is exactly what doesn't know the answer. So we use it in reverse: feed the synthetic input + **assert "no alert fires"** (`exp_alerts: []`), then read `promtool`'s reaction — **no objection means nothing fired; an objection means something fired**.
+`promtool test rules` is an **assert** tool — you give it "which alerts you expect to fire" and it checks; but it won't volunteer "who fired", and the preview is exactly what doesn't know the answer. So we use it in reverse: the same synthetic input is written as **two test groups that assert opposite answers**, and we see which one does not hold.
 
-| `promtool` result | verdict |
-|---|---|
-| success (returncode 0) | no alert fired → `inactive` |
-| failure, output containing `FAILED:` + a non-empty `got:` (the alerts that actually fired) | an alert fired → `firing`; that block carries the labels + annotations |
-| failure **without** the above signature | compile/syntax error, timeout, killed, etc. → `error` (**must never be treated as firing**) |
+- `fires` group: asserts the alert **does** fire (`ALERTS{alertname=…, alertstate="firing"}` exists).
+- `quiet` group: asserts it does **not** fire, and also asserts that a recording rule the service adds to the rule file (`da_preview_loaded`) exists — proof the rule file was loaded and evaluated.
 
-Two details that must be followed (skip them and the answer is wrong):
+The result is always read from `promtool test rules --junit`'s report (one testcase per group), never from console text ([#3611](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3611)):
 
-1. **The eval time must be greater than the recipe's `for:` window.** Before `for:` is satisfied an alert is *pending* (not yet firing), and "assert nothing fires" does **not** count pending as a violation → `promtool` returns success → the preview wrongly reports "doesn't fire" (even though the value already crossed the threshold). So the synthetic test's eval time must be **strictly greater than `for:`** (e.g. `for: 30m` → eval at 35m), and the series must be long enough to span `for:`.
-2. **A non-zero returncode does not mean "fired".** An out-of-memory kill (OOM), a missing `promtool`, or a malformed synthetic test file all return non-zero. Blindly treating "non-zero" as firing would report an infrastructure error as firing. So a firing verdict **must also** see the failure signature (`FAILED:` + `got:`); otherwise it is `error`, surfacing the real error.
+| `fires` group | `quiet` group | verdict |
+|---|---|---|
+| holds | does not hold | `firing` |
+| does not hold | holds | `inactive` |
+| anything else (both fail, both hold, an `<error>` in the report, the wrong groups, an exit status that disagrees, no report) | | `error` (**must never be read as fired or not fired**) |
 
-To make sure a compile failure is never mislabeled as "fired", gate in three layers: ① a recipe the exporter rejects (no threshold row served) → `error`, with the exporter's reason; ② the compiled rules first pass `promtool check rules` (syntax) → failure is `error`; ③ only after syntax passes do we run the proof-by-contradiction above.
+Why two groups: `promtool` records **any** error inside a group — input series it cannot read, a rule that fails to load, a rule that errors when evaluated — as the very same `<failure>` an assertion that does not hold gets. With a single group, "did not run" reads as "fired". With two opposite groups, a real evaluation fails exactly one; one that could not evaluate fails both. A rule file promtool did not load is no error to it (it simply has no rules to run); the `quiet` group's load proof catches that.
 
-> Verified locally: value 1500 > threshold 1000 → failure, output carries the full alert; value 500 → success. The whole thing uses existing tools — no separate Prometheus instance needed.
+Three details that must be followed (skip them and the answer is wrong):
+
+1. **The eval time must be greater than the recipe's `for:` window.** Before `for:` is satisfied an alert is *pending* (not yet firing), and both groups look only at `alertstate="firing"` → too early an eval time reads as `inactive` (even though the value already crossed the threshold). So the synthetic test's eval time must be **strictly greater than `for:`** (e.g. `for: 30m` → eval at 35m), and the series must be long enough to span `for:`.
+2. **The test value must be a finite JSON number.** A string (even `"1500"`), a boolean, `NaN` or `Infinity` is `error` before `promtool` runs; the value is written in the same normalized form as the threshold. `promtool`'s series grammar is not Python's `float()`: `"1500\n"` reads as a single sample that is stale by eval time, which would be a false `inactive`.
+3. **The groups' names and the verdict table are one definition** (`_recipe_preview._FIRES` / `_QUIET` / `_VERDICT`), and the rule file name is written once, so the side that writes the test and the side that reads the report cannot disagree.
+
+To make sure a compile failure is never mislabeled as "fired", gate in three layers: ① a recipe the exporter rejects (no threshold row served) → `error`, with the exporter's reason; ② the compiled rules first pass `promtool check rules` (its exit status) → failure is `error`; ③ only after that do we run the two opposite groups above.
+
+> Verified locally (promtool 3.15.1): value 1500 > threshold 1000 → `fires` holds, `quiet` does not; value 500 → the reverse; an input it cannot read or a rule that errors when evaluated → both fail. The whole thing uses existing tools — no separate Prometheus instance needed.
 
 ### 5.3 Single-recipe compilation + reusing the compiler directly
 

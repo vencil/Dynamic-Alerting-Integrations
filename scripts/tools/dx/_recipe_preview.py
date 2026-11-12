@@ -19,13 +19,16 @@ absent series can't stand in for them:
     guaranteed to match an arbitrary regex, so a preview could silently report
     a false "inactive". Refusing is honest; lying is not.
 
-Eval mechanism (§5.2): `promtool test rules` is an ASSERT tool, so we run an
-INVERTED assert (synthetic input + `exp_alerts: []`): returncode 0 → nothing
-fired (inactive); returncode != 0 → it fired. A compile error must NOT be
-mislabeled as firing, so we gate with the exporter's verdict on the recipe +
-`promtool check rules` (syntax) BEFORE the inverted-assert (§5.2 layering).
+Eval mechanism (§5.2): `promtool test rules` is an ASSERT tool, so the same
+synthetic input is written as two groups asserting OPPOSITE answers (`fires`:
+the alert fires; `quiet`: it does not, and the pack loaded) and the verdict is
+which one held, read from the JUnit report — see `_FIRES` / `_VERDICT` (#3611).
+A compile error must NOT be mislabeled as firing, so we gate with the
+exporter's verdict on the recipe + `promtool check rules` BEFORE the test
+(§5.2 layering).
 """
 import json
+import math
 import os
 import re
 import shutil
@@ -109,6 +112,28 @@ _TIMEOUT = 60
 # tenant id (the caller's) never becomes a path.
 _TENANT_FILE = "tenant.yaml"
 
+# ── the promtool test: one definition the builder writes and the verdict reads ──
+# (#3611, owner ruling 2026-11-12). promtool reports EVERY error inside a test
+# group — unreadable input series, a rule that fails to load or to evaluate —
+# as the same JUnit <failure> an assertion that did not hold gets (upstream
+# cmd/promtool/unittest.go: tc.Fail). So no single group's failure can be read
+# as "the alert fired". Two groups assert OPPOSITE answers on one input: a real
+# evaluation fails exactly one of them; anything that kept promtool from
+# evaluating fails both. The quiet group also asserts a recording rule this
+# service adds to the pack it writes, so "inactive" carries proof the pack
+# loaded (a rule_files entry promtool cannot find loads no rules, silently).
+
+_PACK_FILE = "rule-pack-custom-alerts.yaml"
+_TEST_FILE = "preview_test.yaml"
+_LOADED_RECORD = "da_preview_loaded"
+_LOADED_GROUP = {"name": "da-preview-loaded",
+                 "rules": [{"record": _LOADED_RECORD, "expr": "vector(1)"}]}
+_FIRES, _QUIET = "fires", "quiet"
+
+#: (fires passed, quiet passed) → state. Every other combination — both
+#: failed, both passed, a group missing — is no verdict (state: error).
+_VERDICT = {(True, False): "firing", (False, True): "inactive"}
+
 
 def _labels(d):
     """Render a Prometheus label set `{k="v", ...}` (insertion order).
@@ -143,6 +168,14 @@ class Judged:
     @property
     def alertname(self):
         return f"Custom_{self.slug}"
+
+
+def _finite_or_inf(v):
+    """*v* as a float, or inf when it does not fit one (an int past 1e308)."""
+    try:
+        return float(v)
+    except OverflowError:
+        return math.inf
 
 
 def _fmt_value(v):
@@ -197,6 +230,10 @@ def build_preview_test(recipe, tenant, value, judged):
 
     The `user_threshold` series is the row the exporter serves for the recipe
     (its labels, severity and value, `judged.row`), not one assembled here.
+    *value* is a finite int / float (the caller checks it) and is written in
+    the threshold's own canonical form (`_fmt_value`), never as given.
+
+    The test is the two opposite groups described at `_FIRES` / `_QUIET`.
 
     POLYMORPHIC by recipe type (a flat series can't fake every shape):
       - threshold (>, >=, <, <=, ==): the observed metric @ the scenario `value`
@@ -251,7 +288,8 @@ def build_preview_test(recipe, tenant, value, judged):
         selectors = dict(judged.spec.get("selectors") or {})
         metric_labels = {"tenant": tenant, **selectors}
         input_series = [
-            {"series": f"{row['metric']}{_labels(metric_labels)}", "values": f"{value}x{n}"},
+            {"series": f"{row['metric']}{_labels(metric_labels)}",
+             "values": f"{_fmt_value(value)}x{n}"},
             {"series": f"user_threshold{_labels(ut_labels)}", "values": f"{thr_value}x{n}"},
             _md(n),
         ]
@@ -264,20 +302,24 @@ def build_preview_test(recipe, tenant, value, judged):
     # selector value that contains a single quote (e.g. `it's`): the `'` closed the
     # scalar early → promtool parse error → a would-actually-deploy recipe was
     # mislabeled state:error. safe_dump escapes per YAML rules, so any exact-selector
-    # value round-trips to the same string promtool sees. (`exp_alerts: []` = the
-    # inverted assert; sort_keys=False keeps promtool's expected key order.)
+    # value round-trips to the same string promtool sees. (sort_keys=False keeps
+    # promtool's expected key order.)
+    firing = (f"(count(ALERTS{_labels({'alertname': judged.alertname, 'alertstate': 'firing'})})"
+              f" > bool 0) or vector(0)")
+
+    def group(name, fires, extra=()):
+        return {"name": name, "interval": "1m", "input_series": input_series,
+                "promql_expr_test": [
+                    {"expr": firing, "eval_time": f"{eval_min}m",
+                     "exp_samples": [{"labels": "{}", "value": 1 if fires else 0}]},
+                    *extra]}
+
+    loaded = {"expr": f"count({_LOADED_RECORD})", "eval_time": f"{eval_min}m",
+              "exp_samples": [{"labels": "{}", "value": 1}]}
     doc_obj = {
-        "rule_files": ["rule-pack-custom-alerts.yaml"],
+        "rule_files": [_PACK_FILE],
         "evaluation_interval": "1m",
-        "tests": [{
-            "interval": "1m",
-            "input_series": input_series,
-            "alert_rule_test": [{
-                "eval_time": f"{eval_min}m",
-                "alertname": judged.alertname,
-                "exp_alerts": [],
-            }],
-        }],
+        "tests": [group(_FIRES, True), group(_QUIET, False, [loaded])],
     }
     return yaml.safe_dump(doc_obj, sort_keys=False, allow_unicode=True)
 
@@ -285,11 +327,6 @@ def build_preview_test(recipe, tenant, value, judged):
 def _err(reason, alertname=None):
     return {"alertname": alertname, "supported": True,
             "states": [{"state": "error", "reason": reason}], "warnings": []}
-
-
-#: promtool `test rules` outcome (the inverted assert: `exp_alerts: []`)
-#: → preview state. An assertion that failed means the alert fired.
-_STATE_OF_TEST = {"passed": "inactive", "failed": "firing"}
 
 
 def preview_recipe(recipe, tenant, scenario):
@@ -369,10 +406,13 @@ def preview_recipe(recipe, tenant, scenario):
             if value is None:
                 return _err("scenario.value is required for a threshold preview",
                             alertname=alertname)
-            try:
-                float(value)
-            except (TypeError, ValueError):
-                return _err(f"scenario.value must be numeric, got {value!r}",
+            # A JSON number only: a string (even "1500") is refused, so text
+            # promtool's series grammar reads differently ("1500\n" is one
+            # sample, then stale) never reaches it; bool is an int to Python,
+            # and NaN / Infinity are numbers to json.loads (#3611, 2026-11-12).
+            if (type(value) not in (int, float)
+                    or not math.isfinite(_finite_or_inf(value))):
+                return _err(f"scenario.value must be a finite JSON number, got {value!r}",
                             alertname=alertname)
         # absence sizes its eval_time from `window`; one the preview cannot size
         # (beyond a day) fails closed to error — never guess a window → wrong
@@ -387,7 +427,7 @@ def preview_recipe(recipe, tenant, scenario):
             return {"alertname": alertname, "supported": True, "states": [],
                     "warnings": ["promtool not available — cannot evaluate locally"]}
 
-        pack_path = work / "rule-pack-custom-alerts.yaml"
+        pack_path = work / _PACK_FILE
 
         # ── render → syntax gate → inverted-assert. Every step's verdict is
         # read from what proves the step ran (_lib_engine's promtool proofs:
@@ -395,24 +435,31 @@ def preview_recipe(recipe, tenant, scenario):
         # console text — #3611 Q2); anything else is state:error, never a
         # firing / inactive guess. `except OSError`: an unwritable temp dir. ──
         try:
-            pack_path.write_text(cc._render(judged.pack.groups), encoding="utf-8", newline="\n")
+            pack_path.write_text(cc._render([*judged.pack.groups, _LOADED_GROUP]),
+                                 encoding="utf-8", newline="\n")
             chk = engine.run(_PROMTOOL, "check-rules", ["check", "rules", pack_path.name],
                              cwd=str(work), timeout=_TIMEOUT)
             if isinstance(chk, engine.NoVerdict):
                 return _err(f"promtool check rules on the compiled rule: "
                             f"{chk.message()[:300]}", alertname=alertname)
             test_doc = build_preview_test(recipe, tenant, value, judged)
-            (work / "preview_test.yaml").write_text(test_doc, encoding="utf-8", newline="\n")
+            (work / _TEST_FILE).write_text(test_doc, encoding="utf-8", newline="\n")
             junit = work / "preview_test.junit.xml"
             res = engine.run(_PROMTOOL, "test-rules",
-                             ["test", "rules", "--junit", junit.name, "preview_test.yaml"],
-                             cwd=str(work), timeout=_TIMEOUT, expect={"junit": str(junit)})
+                             ["test", "rules", "--junit", junit.name, _TEST_FILE],
+                             cwd=str(work), timeout=_TIMEOUT,
+                             expect={"junit": str(junit), "cases": {_FIRES, _QUIET}})
         except OSError as exc:
             return _err(f"promtool eval failed: {exc}", alertname=alertname)
 
         if isinstance(res, engine.NoVerdict):
             return _err(f"promtool eval error: {res.message()[:300]}", alertname=alertname)
-        state = _STATE_OF_TEST[res.data]
+        state = _VERDICT.get((res.data[_FIRES], res.data[_QUIET]))
+        if state is None:
+            return _err("promtool did not evaluate the rule on this input: the "
+                        f"{_FIRES!r} and {_QUIET!r} test groups "
+                        + ("both failed" if not any(res.data.values()) else "both passed"),
+                        alertname=alertname)
         severity = judged.row["severity"]
         thr_value = _fmt_value(judged.row["value"])
         mode = judged.row["labels"].get("mode")
