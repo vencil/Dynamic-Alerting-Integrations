@@ -195,6 +195,15 @@ class TestBuildPreviewTest:
         assert "values: 1000x11" in doc         # the served threshold, held past for
         _assert_two_opposite_groups(doc, f"Custom_{slug}")
 
+    @pytest.mark.parametrize("value, written", [(1500.0, "1500"), (10 ** 15, "1000000000000000"),
+                                                (1e16, "1e+16"), (-0.5, "-0.5")])
+    def test_the_value_is_written_by_the_threshold_s_formatter(self, tmp_path, value, written):
+        """One formatter for both sides of the comparison (`_fmt_value`), never
+        the value as given (#3611 A)."""
+        judged, doc = self._build(tmp_path, _THRESHOLD, value)
+        series = yaml.safe_load(doc)["tests"][0]["input_series"][0]
+        assert series["values"] == f"{written}x{judged.for_min + 10}"
+
     def test_for_window_sizes_eval_time(self, tmp_path):
         """A longer `for:` pushes eval_time past the pending window."""
         _, doc = self._build(tmp_path, dict(_THRESHOLD, **{"for": "30m"}), 1500)
