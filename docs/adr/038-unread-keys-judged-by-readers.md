@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-07
+updated_at: 2026-11-12
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -59,6 +59,8 @@ updated_at: 2026-11-07
 2026-11-07 修訂：讀了但值讀不懂的保留鍵進共用判決（`value_unread`），在寫它的檔與層判，不在合併後的值上判：租戶檔 error，profile 與根平台檔 `tenants:` notice；`_metadata` 的子鍵與 `_severity_dedup` 也各有讀取端的值檢查。tenant-api 不因這類 finding 另外拒收，沿用決定 12 的寫入檢查（決定 10、12）。
 
 2026-11-07 修訂：送出了但沒有告警比較的鍵由 validate-config 的 `no_alert` 列以 `metric_observed_map.yaml` 判、只報不擋；範例樹的 3 個 `_critical` 鍵是規則包缺 critical 層，不是索引沒處理後綴（決定 10）。
+
+2026-11-12 修訂：沒經過 CI 就進了 exporter 所讀 ConfigMap 的樹，由 threshold-exporter chart 可選的 CronJob 跑 `validate-config` 判，失敗時告警（後果與已知限制）。
 
 ## 摘要
 
@@ -487,7 +489,7 @@ db-a
 - **平台刪掉根層宣告，錯掛在讀不到的那一層**：根 `_defaults.yaml` 拿掉某個閾值的宣告後，profile 與子目錄 `_defaults.yaml` 裡同名的值變成沒人讀，error 掛在那些 profile／子目錄檔，而不是被改的根檔；改根檔的寫入閘門不因此擋下，由整棵樹的 CI 報出。
 - **退役的 `_` 鍵沒有緩衝期**：寫在平台側的已退役鍵直接從 notice 變成 error，中間沒有一段 warning 的過渡；遷移靠登錄表為它寫的提示文字，所以判決的 `retired` finding 要帶上這段提示。
 - **寫入時只因 `disable_noop` 而未讀的鍵照收**：決定 4 讓它只報 warning，所以拼錯的鍵寫成 `disable` 時寫入照收、只附 warning，而今天 Go 會擋。
-- **direct 模式沒有整棵樹的判決**：寫入時只判被寫的租戶。平台檔改動讓既有租戶的鍵變成沒人讀這類不屬於單筆寫入的情況，PR 模式由 CI 判；direct 模式（寫入只留在 pod 裡、沒有 PR）目前沒有對應的整棵樹判決。
+- **direct 模式沒有整棵樹的判決；沒經過 CI 就進了線上的樹，要另外開啟 CronJob 才判**：寫入時只判被寫的租戶。平台檔改動讓既有租戶的鍵變成沒人讀這類不屬於單筆寫入的情況，PR 模式由 CI 判；direct 模式（寫入只留在 pod 裡、沒有 PR）目前沒有對應的整棵樹判決，這些寫入也不會進到 exporter 讀的 ConfigMap。在 tenant-api 之外改動、沒經過 CI 就進了那份 ConfigMap 的樹（直接 commit 到 git、ConfigMap 同步），由 threshold-exporter chart 的 `configValidation` 判：開啟後，一個 CronJob 定期在那份 ConfigMap 上跑 CI 用的同一支 `validate-config`，有 FAIL 時 Job 失敗、由平台規則 `CronJobLastRunFailed` 告警，細節在 Job 的 log（[#3353](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3353)）。它預設關閉；判到的範圍是映像裡那一版 `validate-config` 的範圍；告警只看 `monitoring` namespace；一次改動最多要等一個排程週期才被判到。
 - **沒有租戶綁的 profile 上的錯鍵進得了線上**：這種鍵不判，只報 notice（決定 4）；有租戶綁定之後，只有整棵樹的 CI 擋得到，direct 模式下綁定那筆寫入只給 warning。
 - **被租戶檔蓋掉的平台鍵不另報**：根平台檔 `tenants:` 下的鍵被租戶檔同名鍵蓋掉時，判決只判租戶那份（鍵名相同，拼錯就報在租戶檔）；平台那份的值不生效。例外：租戶寫 `typo: disable` 蓋掉平台的 `typo: 70` 時報的是 `disable_noop` warning，不是 error。
 - **錯字與有意省略不區分**：平台沒有宣告的閾值鍵，判決不知道是租戶拼錯還是平台漏宣告，兩者報同一個原因。

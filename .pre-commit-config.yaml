@@ -657,11 +657,13 @@ repos:
         pass_filenames: false
         # TRK-242: portal source moved docs/interactive/ → tools/portal/src/;
         # filter follows it (old docs/ jsx branches were dead → .jsx-only
-        # commits silently skipped the hook). dist + flows.json + mkdocs.yml
-        # (site_url) included because the lint reads them. Delete-only
-        # commits never trigger locally (pre-commit excludes D from staged
-        # files); CI --all-files is the backstop for removed dist bundles.
-        files: ^(docs/(assets/(tool-registry\.yaml|jsx-loader\.html|flows\.json|dist/[^/]+\.js)|interactive/index\.html|.*\.md)|tools/portal/src/.*\.jsx|README[^/]*\.md|mkdocs\.yml)$
+        # commits silently skipped the hook). flows.json + mkdocs.yml
+        # (site_url) included because the lint reads them. Which bundles exist
+        # is read from the build's input (tools/portal/manifest.json +
+        # entries/), not from docs/assets/dist/ (#3738). Delete-only commits
+        # never trigger locally (pre-commit excludes D from staged files); CI
+        # --all-files is the backstop for a removed entry.
+        files: ^(docs/(assets/(tool-registry\.yaml|jsx-loader\.html|flows\.json)|interactive/index\.html|.*\.md)|tools/portal/(src/.*\.jsx|manifest\.json|entries/[^/]+\.entry\.jsx)|README[^/]*\.md|mkdocs\.yml)$
 
       - id: portal-audience-enum-check
         name: Portal audience values must be in the closed vocabulary
@@ -1705,7 +1707,7 @@ repos:
         # image ships no repo tree to read the YAML from. Gated: JSON-Schema
         # shape (pre-generation hard gate) + the registry is a fixed point of
         # its own extraction (a wrong critical_of, an arming: default on an
-        # optional key, a missing arming reason, an alias onto no key → red) +
+        # optional key, a missing portability reason, an alias onto no key → red) +
         # freshness of every GENERATED surface (the RULE_PACKS module / pack
         # header threshold sections / helm values thresholdConfig.defaults /
         # dev conf.d _defaults.yaml / the optional_overrides declared-key LIST

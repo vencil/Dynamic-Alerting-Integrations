@@ -22,6 +22,20 @@ import pytest
 import lint_tool_consistency as ltc
 
 
+def _portal_build_input(root, *names, entry_files=True):
+    """Write the build's input for `names`: tools/portal/manifest.json plus,
+    by default, each entries/<name>.entry.jsx. #3738: which dist/<name>.js a
+    build emits is read from here, not from a dist directory."""
+    portal = root / "tools" / "portal"
+    (portal / "entries").mkdir(parents=True, exist_ok=True)
+    (portal / "manifest.json").write_text(
+        json.dumps({"entries": list(names)}), encoding="utf-8")
+    if entry_files:
+        for n in names:
+            (portal / "entries" / f"{n}.entry.jsx").write_text(
+                "export {};", encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # parse_registry
 # ---------------------------------------------------------------------------
@@ -234,22 +248,54 @@ class TestCheckFlowMapDist:
         };
     """)
 
-    def test_dist_present(self, patch_repo_root):
+    def test_bundle_in_manifest(self, patch_repo_root):
         tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
-        dist = tmp_path / "docs" / "assets" / "dist"
-        dist.mkdir(parents=True)
-        (dist / "my-tool.js").write_text("export {};", encoding="utf-8")
+        _portal_build_input(tmp_path, "my-tool")
         errors, warnings = [], []
         ltc.check_flow_map_dist(self.LOADER, errors, warnings)
         assert len(errors) == 0
 
-    def test_dist_missing_is_error(self, patch_repo_root):
-        patch_repo_root(ltc, "PROJECT_ROOT")
+    def test_bundle_missing_from_manifest_is_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        _portal_build_input(tmp_path, "other-tool")
         errors, warnings = [], []
         ltc.check_flow_map_dist(self.LOADER, errors, warnings)
         assert len(errors) == 1
         assert "my-tool.js" in errors[0]
         assert "404" in errors[0]
+
+    def test_a_committed_dist_file_does_not_count(self, patch_repo_root):
+        # #3738: dist is build output. A bundle sitting in docs/assets/dist/
+        # while the build no longer emits it (entry dropped from the
+        # manifest) is exactly the stale-copy case, so it must not satisfy
+        # the lint.
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        _portal_build_input(tmp_path)
+        dist = tmp_path / "docs" / "assets" / "dist"
+        dist.mkdir(parents=True)
+        (dist / "my-tool.js").write_text("export {};", encoding="utf-8")
+        errors, warnings = [], []
+        ltc.check_flow_map_dist(self.LOADER, errors, warnings)
+        assert len(errors) == 1 and "my-tool" in errors[0]
+
+    def test_manifest_entry_without_entry_file_is_error(self, patch_repo_root):
+        # build.mjs bundles entries/<name>.entry.jsx; listed but absent means
+        # the build fails and the bundle never exists.
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        _portal_build_input(tmp_path, "my-tool", entry_files=False)
+        errors, warnings = [], []
+        ltc.check_flow_map_dist(self.LOADER, errors, warnings)
+        assert len(errors) == 1 and "my-tool" in errors[0]
+
+    def test_unreadable_manifest_is_one_error(self, patch_repo_root):
+        tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
+        portal = tmp_path / "tools" / "portal"
+        portal.mkdir(parents=True)
+        (portal / "manifest.json").write_text("{not json", encoding="utf-8")
+        errors, warnings = [], []
+        ltc.check_flow_map_dist(self.LOADER, errors, warnings)
+        assert len(errors) == 1
+        assert "manifest.json" in errors[0]
 
     def test_no_map_is_silent(self, patch_repo_root):
         # Absence of the block is check_tool_meta's finding, not a dup here.
@@ -403,9 +449,7 @@ class TestCheckFlowComponents:
         portal_src = tmp_path / "tools" / "portal" / "src"
         portal_src.mkdir(parents=True)
         (portal_src / "step.jsx").write_text("content")
-        dist = assets / "dist"
-        dist.mkdir()
-        (dist / "step.js").write_text("export {};", encoding="utf-8")
+        _portal_build_input(tmp_path, "step")
         import json
         (assets / "flows.json").write_text(json.dumps({
             "flows": {"onboard": {**FLOW_META, "steps": [
@@ -419,14 +463,15 @@ class TestCheckFlowComponents:
         assert len(errors) == 0
 
     def test_step_component_without_dist_bundle(self, patch_repo_root):
-        # Source JSX exists but was never built — runtime loadDistBundle
-        # would 404 on docs/assets/dist/step.js.
+        # Source JSX exists but the build never emits it (not a manifest
+        # entry) — runtime loadDistBundle would 404 on docs/assets/dist/step.js.
         tmp_path = patch_repo_root(ltc, "PROJECT_ROOT")
         assets = tmp_path / "docs" / "assets"
         assets.mkdir(parents=True)
         portal_src = tmp_path / "tools" / "portal" / "src"
         portal_src.mkdir(parents=True)
         (portal_src / "step.jsx").write_text("content")
+        _portal_build_input(tmp_path, "some-other-entry")
         (assets / "flows.json").write_text(json.dumps({
             "flows": {"onboard": {**FLOW_META, "steps": [
                 {"tool": "wizard", "component": "step.jsx",
@@ -676,9 +721,7 @@ class TestCheckFlowComponents:
         portal_src = tmp_path / "tools" / "portal" / "src"
         portal_src.mkdir(parents=True)
         (portal_src / "step.jsx").write_text("content")
-        dist = tmp_path / "docs" / "assets" / "dist"
-        dist.mkdir(parents=True)
-        (dist / "step.js").write_text("export {};", encoding="utf-8")
+        _portal_build_input(tmp_path, "step")
         self._write_flows(tmp_path, {**FLOW_META, "steps": [
             {"tool": "wizard", "component": "step.jsx",
              "title": {"en": "Step 1", "zh": "步驟一"},

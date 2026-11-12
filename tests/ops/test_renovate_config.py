@@ -443,6 +443,9 @@ _MUST_BE_DISABLED = [
     # go.mod is the Go SSOT; test_go_toolchain_parity.py binds every builder to it.
     ("dockerfile", "golang", "docker", "stage", "patch"),
     ("dockerfile", "golang", "docker", "stage", "minor"),
+    # #3738: da-portal's portal-build stage, bound to the dev container node major
+    # (test_toolchain_pin_parity.py) — the major only; digest refreshes stay on.
+    ("dockerfile", "node", "docker", "stage", "major"),
     # runs-on == dev container base image (test_toolchain_pin_parity.py, runner).
     ("github-actions", "ubuntu", "github-runners", "github-runner", "major"),
     ("devcontainer", "mcr.microsoft.com/devcontainers/base", "docker", "image", "major"),

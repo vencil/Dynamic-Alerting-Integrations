@@ -100,7 +100,8 @@ class TestVictoriaLogs:
         allowlist must be EXACTLY the declared consumer set — vector (ingest,
         same-ns debug/pre-#1018 path), chargeback-aggregator (query), grafana
         (query), federation-gateway (tenant-scoped query, ADR-021 #609) and
-        federation-reconciler (evidence read, ADR-028 D1 / #1234).
+        federation-reconciler (evidence read, ADR-028 D1 / #1234), plus
+        Prometheus (the /metrics scrape on the same port).
 
         ⛔ EQUALITY, not `issubset`. The old subset form listed only the first
         three, so DELETING a later-added row — the reconciler's, added by #1234 —
@@ -136,6 +137,11 @@ class TestVictoriaLogs:
             (("app", "grafana"),),
             (("app.kubernetes.io/name", "federation-gateway"),),
             (("app.kubernetes.io/name", "federation-reconciler"),),
+            # Prometheus scrape of /metrics on the same port. Reviewed: in
+            # enforce an unauthenticated request reaches only /metrics,
+            # /health and /ping; in observe it reaches every path, as every
+            # other row here does (values.yaml prose beside the row).
+            (("app", "prometheus"),),
         }
         assert labels == expected, (
             f"missing consumers: {expected - labels} (a deleted row silently "

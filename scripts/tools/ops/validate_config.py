@@ -300,8 +300,9 @@ AMTOOL_REJECTED_ROUTES_HINT = (
     "accepts but Alertmanager cannot load. Fix that value, then re-run.")
 AMTOOL_UNUSABLE_ROUTES_HINT = (
     "The amtool on PATH could not give a verdict (it could not run, timed "
-    "out or crashed) — that is this environment, not your config. Fix or "
-    "replace that amtool (or take it off PATH), then re-run.")
+    "out, crashed, or could not read a file the config names — a template "
+    "path is read on THIS machine) — that is this environment, not your "
+    "config. Fix that (or take amtool off PATH), then re-run.")
 AMTOOL_NOT_FOUND_ROUTES_HINT = (
     "Put Alertmanager's amtool on PATH so this row can check the generated "
     "config with Alertmanager's own parser — without it, a value Alertmanager "
@@ -657,6 +658,11 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     see `_lib_io.find_misread_scalars`; nothing is listed here. `channel: yes`
     is the string "yes" to yaml.v3 and is no finding.
 
+    #3764: a number in a field that takes only numbers (`min_events`) must
+    be written in plain decimal — `0x10`, `010`, `1e1` are rewritten on the
+    way to the exporter's readers, which judge that field by its text
+    (`_lib_io.find_nondecimal_numbers`). Same row, same FAIL.
+
     A file that cannot be read is skipped: `yaml_syntax` already names it.
 
     #2509: a YAML 1.1 boolean word (`yes` / `no` / `on` / `off`), quoted or
@@ -671,7 +677,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     `_custom_alerts` in such a file's `profiles:` block (#3647) — the one
     selection, `_quoting_scope` over `_lib_io.confd_quoting_schemas`.
     """
-    from _lib_io import find_misread_scalars, find_yaml11_bool_words
+    from _lib_io import (find_misread_scalars, find_nondecimal_numbers,
+                         find_yaml11_bool_words)
     schemas: dict[str, object] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
         path = _find_schema(name)
@@ -705,6 +712,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
         for schema_, name_ in pairs:
             for hit in find_misread_scalars(root, schema_, schemas, name_):
                 errors.append(f"{label}: {hit.message()}")
+            for num in find_nondecimal_numbers(root, schema_, schemas, name_):
+                errors.append(f"{label}: {num.message()}")
             for word in find_yaml11_bool_words(root, schema_, schemas, name_):
                 warnings.append(f"WARN: {label}: {word.message()}")
     # #2509 blind review 5: each line carries its own remedy; the row's hint
@@ -716,7 +725,8 @@ def check_yaml_quoting(config_dir: str) -> dict[str, object]:
     return _make_result(
         "yaml_quoting", PASS,
         [f"{checked} files checked: no value in a string field "
-         f"is read by yaml.v3 as a non-string"])
+         f"is read by yaml.v3 as a non-string, and every number in a "
+         f"number field is written in plain decimal"])
 
 
 # ============================================================
@@ -2521,7 +2531,9 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "1e3 / 2024-01-02 in a field the schema types as a string is read as "
         "a boolean, number or timestamp by yaml.v3 — by every reader of "
         "conf.d — so quote it; yes / no / on / off are strings to yaml.v3 and "
-        "a field that takes a boolean refuses them: write true / false.",
+        "a field that takes a boolean refuses them: write true / false. A "
+        "field that takes only numbers (min_events) takes them in plain "
+        "decimal: write the value the line names, unquoted (#3764).",
         "docs/cli-reference.md#validate-config",
     ),
     # #2695: placed before `schema` — that row is the generator's key check.

@@ -114,6 +114,8 @@ MIGRATED: dict[Key, int] = {
     # #3611 PR 4: off the subprocess path altogether — the registry is asked
     # over its v2 API (_lib_registry), so skopeo has no caller left
     ("scripts/ops/check_image_refs_resolve.py", "skopeo"): 2,
+    # #3611 PR 5: recipe-preview's promtool — check rules / test rules --junit
+    ("scripts/tools/dx/_recipe_preview.py", "promtool"): 1,
 }
 
 #: Baseline sites the scanner counts that are not engine calls. They stay in
