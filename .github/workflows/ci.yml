@@ -6,9 +6,20 @@ on:
   pull_request:
     branches: [main]
 
+# A PR's newer push cancels its older run; a push to main never cancels one.
+# Main's CI is the only check of the merged result (branch protection does not
+# require a PR to be up to date with main), and a run takes long enough that
+# cancelling on every merge left main with no finished run for hours. With
+# cancel-in-progress false the group keeps the running run and replaces only
+# the PENDING one: the main tip always gets a finished run, and a commit whose
+# pending run was replaced is covered by the next run's full-tree checks and
+# tests (its own status stays "cancelled"). Diff-aware lints are PR checks —
+# their exemptions live in the PR body — and on a push they resolve to an empty
+# diff (merge base of origin/main and HEAD is HEAD, even when origin/main has
+# moved on), so a late-starting job cannot redden an older commit through them.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # CI-ROI wave 6C: path-scope the critical-path test pillars so a
