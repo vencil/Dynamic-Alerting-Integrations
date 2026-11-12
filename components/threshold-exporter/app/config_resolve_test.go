@@ -221,7 +221,7 @@ func TestResolveStateFilters_PerTenantDisable(t *testing.T) {
 		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {"mysql_connections": SV("70")},
-			"db-b": {"mysql_connections": SV("100"), "_state_container_crashloop": SV("disable")},
+			"db-b": {"mysql_connections": SV("100"), "_state_container_crashloop": SVYAML("disable")},
 		},
 	}
 
@@ -240,11 +240,11 @@ func TestResolveStateFilters_DisableVariants(t *testing.T) {
 		Defaults:     map[string]float64{},
 		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},
 		Tenants: map[string]map[string]ScheduledValue{
-			"t1": {"_state_container_crashloop": SV("disable")},
-			"t2": {"_state_container_crashloop": SV("disabled")},
-			"t3": {"_state_container_crashloop": SV("off")},
-			"t4": {"_state_container_crashloop": SV("false")},
-			"t5": {"_state_container_crashloop": SV("DISABLE")},
+			"t1": {"_state_container_crashloop": SVYAML("disable")},
+			"t2": {"_state_container_crashloop": SVYAML("disabled")},
+			"t3": {"_state_container_crashloop": SVYAML("off")},
+			"t4": {"_state_container_crashloop": SVYAML("false")},
+			"t5": {"_state_container_crashloop": SVYAML("DISABLE")},
 		},
 	}
 
@@ -288,7 +288,7 @@ func TestResolve_IgnoresStateKeys(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Defaults:     map[string]float64{"mysql_connections": 80},
 		StateFilters: map[string]StateFilter{"container_crashloop": {Reasons: []string{"CrashLoopBackOff"}, Severity: "critical"}},
-		Tenants:      map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70"), "_state_container_crashloop": SV("disable")}},
+		Tenants:      map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70"), "_state_container_crashloop": SVYAML("disable")}},
 	}
 
 	if thresholds := cfg.ResolveAt(fixedNow); len(thresholds) != 1 || thresholds[0].Value != 70 {

@@ -74,9 +74,10 @@ func servedValuesWarnCounts(t *testing.T, files map[string]string) (map[string]i
 func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 	t.Parallel()
 	const maintenanceWarn = `invalid expires "nope" in _state_maintenance for tenant=a8`
-	// a9's value is not YAML at all: the other maintenance WARN, same two
-	// resolvers, same once-per-scrape rule (#2426).
-	const maintenanceParseWarn = `_state_maintenance for tenant=a9: value "expires: [" is not read: it does not parse as YAML`
+	// a9's value is a scalar whose text is not YAML: the state-value WARN,
+	// once per scrape (#2426). #3638: a scalar is never parsed as YAML, so it
+	// is named as the scalar it is.
+	const maintenanceParseWarn = `_state_maintenance for tenant=a9: value "expires: [" is not read: "expires: [" is neither "enable"`
 	tenants := map[string]string{
 		"a9.yaml": "tenants:\n  a9:\n    _state_maintenance: \"expires: [\"\n",
 		"a1.yaml": "tenants:\n  a1:\n    _silent_mode: \"bogus\"\n",
@@ -90,20 +91,24 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		defaults string
-		// maintenanceWant is how many times each of the a8 and a9 WARNs is printed.
-		maintenanceWant int
+		// maintenanceWant is how many times the a8 WARN is printed, parseWant
+		// the a9 one.
+		maintenanceWant, parseWant int
 	}{
 		// No maintenance filter: ResolveStateFiltersAt never reaches a8, so
 		// only ResolveMaintenanceExpiriesAt warns — once, before #2374 too.
 		// This row therefore checks nothing about the fix for a8; it is here
 		// so the other six lines are counted over a tree that has it.
-		{"no maintenance filter", "defaults:\n  container_cpu: 80\n", 1},
+		// a9 is a scalar (#3638): only the state-filter resolver reads one,
+		// and it does not run here — no WARN, as for any scalar under an
+		// undeclared filter (the shared key verdict names that key).
+		{"no maintenance filter", "defaults:\n  container_cpu: 80\n", 1, 0},
 		// With the filter declared (as the repo's own conf.d/_defaults.yaml
 		// does), both collector resolvers parse the same value in one scrape;
 		// only the first logs it (#2426: printed twice before, three times
 		// before #2374).
 		{"maintenance filter declared", "defaults:\n  container_cpu: 80\n" +
-			"state_filters:\n  maintenance:\n    reasons: []\n    severity: \"info\"\n    default_state: \"disable\"\n", 1},
+			"state_filters:\n  maintenance:\n    reasons: []\n    severity: \"info\"\n    default_state: \"disable\"\n", 1, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -127,9 +132,9 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 					t.Errorf("WARN containing %q printed %d times, want 1; stderr:\n%s", want, n, stderr)
 				}
 			}
-			for _, want := range []string{maintenanceWarn, maintenanceParseWarn} {
-				if n := countContaining(count, want); n != tc.maintenanceWant {
-					t.Errorf("WARN containing %q printed %d times, want %d; stderr:\n%s", want, n, tc.maintenanceWant, stderr)
+			for want, wantN := range map[string]int{maintenanceWarn: tc.maintenanceWant, maintenanceParseWarn: tc.parseWant} {
+				if n := countContaining(count, want); n != wantN {
+					t.Errorf("WARN containing %q printed %d times, want %d; stderr:\n%s", want, n, wantN, stderr)
 				}
 			}
 			// Nothing else printed more than once.

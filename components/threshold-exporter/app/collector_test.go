@@ -89,7 +89,7 @@ func TestCollector_Collect_MaintenanceExpiry(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_state_maintenance": SV(`expires: "2020-01-01T00:00:00Z"`),
+				"_state_maintenance": SVYAML(`expires: "2020-01-01T00:00:00Z"`),
 			},
 		},
 	}
@@ -390,7 +390,7 @@ func TestCollector_Collect_ExpiredMaintenance(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_state_maintenance": SV("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\n"),
+				"_state_maintenance": SVYAML("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\n"),
 			},
 		},
 	}
@@ -989,7 +989,7 @@ func TestCollector_ConfigEvent_ExpiredSilenceAllWithReason_ServesMetrics(t *test
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"tenant-x": {"_silent_mode": SVYAML(`{target: all, expires: "2020-01-01T00:00:00Z", reason: "DB maintenance"}`)},
-			"tenant-y": {"_state_maintenance": SV("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\nreason: window\n")},
+			"tenant-y": {"_state_maintenance": SVYAML("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\nreason: window\n")},
 			"tenant-z": {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z", Reason: "incident"}}},
 		},
 	}

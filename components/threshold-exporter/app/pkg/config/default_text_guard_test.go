@@ -67,10 +67,6 @@ var defaultTextBaseline = map[defaultTextSite]int{
 	{"metadata_value.go", "decodeTenantMetadata", "redecode"}: 1,
 	// _routing re-decoded from sv.Default (raw := sv.Default).
 	{"resolve.go", "ThresholdConfig.ResolveRoutingLogf", "redecode"}: 1,
-	// _state_* values: re-decode of TrimSpace(sv.Default) (kind probe, then
-	// the structured maintenance form).
-	{"state_value.go", "stateValueOf", "redecode"}:           1,
-	{"state_value.go", "structuredStateValueOf", "redecode"}: 1,
 	// ":" sniff on sv.Default to decide whether a second decode is needed.
 	{"config_file.go", "mayHaveStructuredReserved", "sniff"}: 1,
 }

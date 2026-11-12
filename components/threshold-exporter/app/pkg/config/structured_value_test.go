@@ -7,6 +7,7 @@ package config
 
 import (
 	"strconv"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -124,5 +125,27 @@ func TestSilentModeOf_StructureWithoutTargetIsUnknown(t *testing.T) {
 		if r := silentModeOf(decodedValue(t, text)); r.kind != silentModeUnknownScalar {
 			t.Errorf("silentModeOf(%s): kind=%d, want unknown scalar", text, r.kind)
 		}
+	}
+}
+
+// valueAsWritten is a value as a conf.d file holding text would give it:
+// text decoded as YAML (a mapping or sequence comes out structured, #3638),
+// or — text that is no YAML, such as "expires: [" — the scalar a file
+// holds when it quotes that text.
+func valueAsWritten(text string) ScheduledValue {
+	var sv ScheduledValue
+	if err := yaml.Unmarshal([]byte(text), &sv); err != nil {
+		return ScheduledValue{Default: text}
+	}
+	return sv
+}
+
+// A structured value whose text does not parse (not reachable for a value
+// UnmarshalYAML built) is a structured problem, never on.
+func TestStateValueOf_StructuredTextThatDoesNotParse(t *testing.T) {
+	t.Parallel()
+	r := stateValueOf(maintenanceFilterName, ScheduledValue{Default: "expires: [\n", structured: true})
+	if r.kind != stateValueProblem || !r.structured || !strings.Contains(r.problem, "does not parse as YAML") {
+		t.Errorf("stateValueOf(broken structured) = %+v", r)
 	}
 }
