@@ -100,7 +100,7 @@ lang: zh
 **規則**：版號管理流程：
 1. `make version-check` — 檢查各版號線是否一致
 2. `make bump-docs` — 自動更新文件內的版號字串
-3. 推 tag — 每條線各自打。⛔ 線的清單以 [`release.yaml`](../../.github/workflows/release.yaml) 的 `on.push.tags` 為準（另加平台 tag `v*`），這裡不列舉；recipe-preview image 隨 `tools/v*` 建置，沒有自己的線（#1040）。
+3. 推 tag — 每條線各自打。⛔ 線的清單以 [`release.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/release.yaml) 的 `on.push.tags` 為準（另加平台 tag `v*`），這裡不列舉；recipe-preview image 隨 `tools/v*` 建置，沒有自己的線（#1040）。
 
 **為什麼**：各 component 獨立發版，避免「小修一個元件要 bump 整個 platform」。
 
