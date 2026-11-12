@@ -102,9 +102,11 @@ func TestRatchet_Boundaries(t *testing.T) {
 		{"structured: a date-only expires gains quotes",
 			"    _silent_mode:\n      target: purple\n      expires: 2026-07-01\n",
 			"    _silent_mode:\n      target: warning\n      expires: \"2026-07-01\"\n", false},
-		{"string form and mapping form read alike",
+		// #3638: a scalar that reads like the mapping is an unknown scalar,
+		// not the mapping — a different reading, so the write is new.
+		{"string that reads like the mapping is not the mapping",
 			"    _silent_mode: \"target: purple\"\n",
-			"    _silent_mode:\n      target: purple\n", true},
+			"    _silent_mode:\n      target: purple\n", false},
 		{"mapping form becomes an unknown scalar", "    _silent_mode:\n      target: purple\n",
 			"    _silent_mode: purple\n", false},
 	}

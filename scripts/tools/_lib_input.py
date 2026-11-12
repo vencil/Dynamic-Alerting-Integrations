@@ -98,7 +98,7 @@ from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
 from _lib_label import safe_label
-from _lib_paths import _DETAIL, _STAT_MISSING, classify_path
+from _lib_paths import _DETAIL, _STAT_MISSING, classify_path, raise_path_problems
 
 #: ``select``: the directory is the input and da-guard lists it (the
 #: exporter's walk); ``selected`` returns the directory itself.
@@ -279,6 +279,9 @@ class InputSpec(NamedTuple):
     missing: str = ABSENT_REFUSED
     """A given value with nothing at it (``_nothing_at``): ``ABSENT_REFUSED``
     (``dir_not_found``) or ``ABSENT_EMPTY`` (selects nothing), #3693."""
+    separator: Optional[str] = None
+    """A list of directories, one value (``a,b``), #3751: each item is one
+    directory, judged on its own; None for one directory."""
 
 
 class _Value(str):
@@ -307,13 +310,21 @@ class _InputAction(argparse._StoreAction):
 
     def __call__(self, parser: argparse.ArgumentParser, namespace: argparse.Namespace,
                  values: Any, option_string: Optional[str] = None) -> None:
+        sep = self.input_spec.separator
+        # #3751: the rule of every list flag (`_lib_validation.url_list_type`):
+        # an empty item is refused at parse time (rc 2), an item is not
+        # stripped — a space is part of the path it names.
+        if sep is not None and "" in values.split(sep):
+            parser.error(f"argument {'/'.join(self.option_strings)}: an empty item in "
+                         f"{values!r} ({sep!r}-separated directories)")
         setattr(namespace, self.dest, _Value(values, self.input_spec, True))
 
 
 def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
               decode: Optional[Document] = None, empty: str = EMPTY_ALLOWED,
               default: Optional[str] = None, absent_default: Optional[str] = None,
-              missing: str = ABSENT_REFUSED, **kwargs: Any) -> argparse.Action:
+              missing: str = ABSENT_REFUSED, separator: Optional[str] = None,
+              **kwargs: Any) -> argparse.Action:
     """Add the input flag *flag* (and its short *aliases*, ``-i``) to
     *parser* and declare what it is: exactly one of *select* or *decode*.
 
@@ -327,7 +338,11 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
     nothing is there. *missing*: what a value the caller gave is when
     nothing is there (``ABSENT_REFUSED`` / ``ABSENT_EMPTY``, #3693) — only
     nothing: a regular file, a dangling link or a path it cannot reach is
-    refused either way, as for a default.
+    refused either way, as for a default. *separator* (#3751): the value
+    is a list of directories (``a,b``), each judged on its own — an empty
+    item is refused at parse time, an item is not stripped (the rule of
+    ``_lib_validation.url_list_type``); ``select=DA_GUARD_LISTS`` only, no
+    *default*, *missing* ``ABSENT_REFUSED``.
 
     *decode* — a file input whose content the tool reads: a
     :class:`Document`, read by :func:`document`. It takes no *empty*,
@@ -371,11 +386,15 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
         raise ValueError(f"absent_default must be {ABSENT_EMPTY!r} or {ABSENT_REFUSED!r}")
     if missing not in (ABSENT_EMPTY, ABSENT_REFUSED):
         raise ValueError(f"missing must be {ABSENT_EMPTY!r} or {ABSENT_REFUSED!r}")
+    if separator is not None and (separator == "" or select != DA_GUARD_LISTS
+                                  or default is not None or missing != ABSENT_REFUSED):
+        raise ValueError("separator= is a non-empty separator of a select=DA_GUARD_LISTS "
+                         "input with no default= and missing=ABSENT_REFUSED")
     if default is not None and len(default) > 1 and default.endswith(("/", os.sep)):
         raise ValueError(f"default {default!r}: no trailing separator (see add_input)")
     action = parser.add_argument(flag, *aliases, action=_InputAction, default=None, **kwargs)
     spec = InputSpec(flag, action.dest, select, empty, default, absent_default, decode,
-                     missing)
+                     missing, separator)
     action.input_spec = spec
     if default is not None:
         action.default = _Value(default, spec, False)
@@ -421,18 +440,30 @@ def require_listed(flag: str, path: "str | os.PathLike[str]", root: Any, *,
     raise _caller_error(f"{_label(path, flag)}: {said}", "dir_not_accessible")
 
 
+def spec_of(args: argparse.Namespace, dest: str) -> InputSpec:
+    """The declaration of the flag at *dest* (what ``add_input`` declared).
+    Raises TypeError for a flag ``add_input`` did not declare, or one with no
+    value (no default, not given)."""
+    value = getattr(args, dest)
+    if not isinstance(value, _Value):
+        raise TypeError(f"{dest} was not declared with _lib_input.add_input, or has no value")
+    return value.spec
+
+
 def require_selection(args: argparse.Namespace, dest: str, chosen: "list[Any]", *,
-                      wanted: str, lang: str) -> "list[Any]":
+                      wanted: str, lang: str, item: Any = None) -> "list[Any]":
     """*chosen* — what was selected from the flag declared at *dest* by a
     listing made elsewhere (``DA_GUARD_LISTS``: da-guard's) — judged by the
     declaration's ``empty``: none, under ``EMPTY_REFUSED``, is
-    ``input_empty`` (*wanted*: what the listing looks for). Returns
-    *chosen*."""
+    ``input_empty`` (*wanted*: what the listing looks for). *item*: the one
+    directory of a ``separator`` list it was chosen from (named instead of
+    the whole value). Returns *chosen*."""
     value = getattr(args, dest)
     if not isinstance(value, _Value):
         raise TypeError(f"{dest} was not declared with _lib_input.add_input")
     if not chosen and value.spec.empty == EMPTY_REFUSED:
-        raise refuse_empty(_label(value, value.spec.flag), wanted, lang=lang)
+        raise refuse_empty(_label(value if item is None else item, value.spec.flag), wanted,
+                           lang=lang)
     return chosen
 
 
@@ -501,6 +532,14 @@ def selected(args: argparse.Namespace, dest: str, *, lang: str) -> "list[Path]":
         # by the next parse of the same parser (#3721).
         value = _Value(str(value), spec, False)
         setattr(args, dest, value)
+    if spec.separator is not None:
+        # #3751: each item on its own, as one directory is judged (no
+        # default, missing refused: `add_input`); all are judged before any
+        # is read.
+        items = value.split(spec.separator)
+        raise_path_problems([classify_path(i, "dir", lang=lang, flag=spec.flag) for i in items])
+        value.absent = False
+        return [Path(i) for i in items]
     problem = classify_path(value, "dir", lang=lang, flag=spec.flag)
     if problem is not None:
         nothing = (spec.missing if value.given else spec.absent_default) == ABSENT_EMPTY

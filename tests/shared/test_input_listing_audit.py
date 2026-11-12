@@ -80,7 +80,7 @@ def _run_audited(script: str, argv: list[str], sentinel: Path, tmp: Path,
     env = dict(os.environ, DA_INPUT_AUDIT_LOG=str(log), DA_INPUT_AUDIT_SENTINEL=str(sentinel),
                DA_LANG="en",
                PYTHONPATH=os.pathsep.join([str(AUDIT_DIR), os.environ.get("PYTHONPATH", "")]))
-    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / "ops" / script),
+    proc = subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / script),
                            *argv], cwd=tmp, env=env, capture_output=True, text=True,
                           encoding="utf-8", timeout=300, check=False, stdin=subprocess.DEVNULL)
     if not log.exists():
@@ -102,6 +102,11 @@ def test_a_declared_input_directory_is_listed_only_by_lib_input(declared, tmp_pa
         sentinel = case / "sentinel"
         sentinel.mkdir()
         (sentinel / "a.json").write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+        if da_guard_lists:
+            # A file da-guard lists as a config file: an `empty=EMPTY_REFUSED`
+            # tree would end at its judgement, and nothing after it would be
+            # audited (#3751 review).
+            (sentinel / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
         subst = {**_subst(case), "{D}": str(sentinel)}
         args = []
         for a in argv:

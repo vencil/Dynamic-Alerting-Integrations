@@ -367,18 +367,18 @@ def test_ledgered_not_chart_armed_is_info_only():
     assert any(m.startswith("not-chart-armed a_key") for m in r["infos"])
 
 
-def test_ledger_exit_lock_fires_when_chart_starts_shipping_it():
-    """Ledger can only shrink: once shipped, the entry must be removed."""
+def test_arming_disagreement_fires_when_chart_starts_shipping_it():
+    """Registry says not armed, chart ships it: the two disagree — red."""
     r = gate.run_check(**_BASE, chart_supply={"a_key"}, not_chart_armed=frozenset({"a_key"}))
-    assert any("STALE-EXEMPTION" in e and "chart now" in e for e in r["errors"])
+    assert any("STALE-ARMING" in e and "shipped chart carries it" in e for e in r["errors"])
 
 
-def test_ledger_exit_lock_fires_when_no_alert_demands_it():
+def test_arming_disagreement_fires_when_no_alert_demands_it():
     r = gate.run_check(
         demand=set(), supply={"a_key"}, deferred=set(), known_unwired={},
         chart_supply=set(), not_chart_armed=frozenset({"a_key"}),
     )
-    assert any("STALE-EXEMPTION" in e and "no alert demands" in e for e in r["errors"])
+    assert any("STALE-ARMING" in e and "no alert demands" in e for e in r["errors"])
 
 
 def test_dead_key_is_not_also_reported_as_not_chart_armed():
@@ -393,14 +393,24 @@ def test_dead_key_is_not_also_reported_as_not_chart_armed():
     assert any(m.startswith("known-unwired a_key") for m in r["infos"])
 
 
-def test_ledger_entry_that_became_fully_dead_is_redirected():
-    """Wrong-ledger drift: it belongs in KNOWN_UNWIRED now, not here."""
+def test_real_not_chart_armed_comes_from_the_registry():
+    """No hand-kept list: the gate's expected set IS the registry derivation,
+    and on the shipped tree it equals what values.yaml leaves out."""
+    lib = gate._registry_lib
+    expected = gate._not_chart_armed()
+    assert expected == lib.not_chart_armed_keys(lib.load_registry())
+    assert len(expected) == 61
+    assert not hasattr(gate, "NOT_CHART_ARMED")
+
+
+def test_arming_disagreement_fires_when_key_became_fully_dead():
+    """Registry says not armed but nothing supplies it any more — red."""
     r = gate.run_check(
         demand={"a_key"}, supply=set(), deferred=set(),
         known_unwired={"a_key": "grandfathered"},
         chart_supply=set(), not_chart_armed=frozenset({"a_key"}),
     )
-    assert any("STALE-EXEMPTION" in e and "UNREACHABLE" in e for e in r["errors"])
+    assert any("STALE-ARMING" in e and "UNREACHABLE" in e for e in r["errors"])
 
 
 def test_real_repo_chart_face_is_ledgered_and_non_vacuous():

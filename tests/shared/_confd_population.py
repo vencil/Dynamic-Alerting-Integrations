@@ -35,8 +35,10 @@ import pathlib
 # Every spelling a Vibe tool uses for "the tenant conf.d directory" as a
 # CLI flag. ⛔ This is a legitimate enumeration only because argparse is
 # the authority on how a flag is declared — it is not a list of tools.
-CONFD_FLAGS = ("--config-dir", "--conf-d", "--confd", "--config-base",
-               "--source-dir")
+# (`--source-dir` left in #3751: its one tool, migrate-to-operator, reads a
+# rule source there, no tenant conf.d since #3572 — it was in this list only
+# while `add_input` hid the flag from the walk.)
+CONFD_FLAGS = ("--config-dir", "--conf-d", "--confd", "--config-base")
 
 # Substrings that mark a file as talking about a tenant config dir.
 # `conf.d` (the literal directory name) joined the historical three in
@@ -81,6 +83,22 @@ def imports_lib_confd(tree: ast.AST) -> bool:
     return False
 
 
+def flag_names(call: ast.Call) -> "list[ast.expr] | None":
+    """The positional arguments of *call* that name a flag, when *call*
+    declares one — ``<parser>.add_argument(<names>...)`` or
+    ``_lib_input.add_input(<parser>, <names>...)`` (#3751: a flag declared
+    through the input declaration is the same flag; a walk that saw only
+    ``add_argument`` dropped every migrated tool out of its population) —
+    else None."""
+    fn = call.func
+    name = fn.attr if isinstance(fn, ast.Attribute) else getattr(fn, "id", None)
+    if name == "add_argument" and isinstance(fn, ast.Attribute):
+        return list(call.args)
+    if name == "add_input":
+        return list(call.args[1:])
+    return None
+
+
 def confd_flag(path: pathlib.Path) -> str | None:
     """K2 — which flag this tool takes a conf.d through, from its argparse AST.
 
@@ -104,12 +122,10 @@ def confd_flag(path: pathlib.Path) -> str | None:
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
-        fn = node.func
-        if not (isinstance(fn, ast.Attribute) and fn.attr == "add_argument"):
+        names = flag_names(node)
+        if names is None or is_suppressed(node):
             continue
-        if is_suppressed(node):
-            continue
-        for arg in node.args:
+        for arg in names:
             if isinstance(arg, ast.Constant) and arg.value in CONFD_FLAGS:
                 found.add(arg.value)
     # A tool declaring several: prefer the explicitly conf.d-named one.

@@ -1,12 +1,14 @@
 package config
 
-// Guard for #3638 (stage 1): no NEW site may recover structure from the text
-// of ScheduledValue.Default.
+// Guard for #3638: no site may recover structure from the text of
+// ScheduledValue.Default except structureOf.
 //
 // ScheduledValue.Default holds a structured (mapping / sequence) value as a
-// re-serialised YAML string, and some readers get the structure back from
-// that text. Stage 2 of #3638 moves those readers onto structure; until then
-// this test freezes the existing sites so the pattern does not spread.
+// re-serialised YAML string. Stage 1 froze the readers that got the
+// structure back from that text; stage 2 moved each onto structureOf
+// (silent_mode, state_value, metadata, custom_alert, routing) and the frozen
+// list is now empty. What remains is the one decoder and the listed matches
+// that are not about structure.
 //
 // The test parses every non-test .go file of package config with go/parser
 // (syntax only — no go/types: golang.org/x/tools is not a dependency of this
@@ -27,11 +29,11 @@ package config
 // top-level func — "Recv.Method" for methods, "<file scope>" outside any
 // func, shape), never by line number, so unrelated edits do not break it.
 //
-// The baseline records how many sites each key has. The test fails when
+// The two lists below record how many sites each key has. The test fails when
 //   - a key has MORE sites than recorded, or a key is not recorded at all:
 //     a new site — decode from structure instead (see #3638);
 //   - a key has FEWER sites than recorded (including zero): the entry is
-//     stale and must be lowered / deleted, so the list only shrinks.
+//     stale and must be lowered / deleted.
 
 import (
 	"fmt"
@@ -51,36 +53,17 @@ type defaultTextSite struct {
 	file, fn, shape string
 }
 
-// defaultTextBaseline is the frozen set measured on origin/main when the
-// guard landed. Every "redecode" entry below decodes the TEXT of a
-// ScheduledValue.Default (directly or via a local copy such as
-// raw/val := TrimSpace(sv.Default)); none is a whole-file decode of disk data
-// (those use []byte variables and fall outside shape A).
-var defaultTextBaseline = map[defaultTextSite]int{
-	// _custom_alerts specs re-decoded from sv.Default.
-	{"custom_alert.go", "ValidateTenantCustomAlerts", "redecode"}: 1,
-	{"custom_alert.go", "walkCustomAlertSpecs", "redecode"}:       1,
-	// _metadata value re-decoded from sv.Default.
-	{"metadata_layers.go", "decodeMetadataValue", "redecode"}: 1,
-	// _metadata (TenantMetadata) re-decoded from sv.Default (moved out of
-	// resolve.go tenantMetadataOf by #3653; the same site, not a new one).
-	{"metadata_value.go", "decodeTenantMetadata", "redecode"}: 1,
-	// _routing re-decoded from sv.Default (raw := sv.Default).
-	{"resolve.go", "ThresholdConfig.ResolveRoutingLogf", "redecode"}: 1,
-	// _silent_mode: "target:" sniff, then re-decode of TrimSpace(sv.Default).
-	{"silent_mode.go", "silentModeOf", "sniff"}:    1,
-	{"silent_mode.go", "silentModeOf", "redecode"}: 1,
-	// _state_* values: re-decode of TrimSpace(sv.Default) (kind probe, then
-	// the structured maintenance form).
-	{"state_value.go", "stateValueOf", "redecode"}:           1,
-	{"state_value.go", "structuredStateValueOf", "redecode"}: 1,
-	// ":" sniff on sv.Default to decide whether a second decode is needed.
-	{"config_file.go", "mayHaveStructuredReserved", "sniff"}: 1,
+// defaultTextTheDecoder is the one site stage 2 converges on, and stays:
+// structureOf decodes the text of a value ScheduledValue.structured marks
+// as a mapping or sequence — never a scalar's (#3638). A reader asks it,
+// not the text. Counted, with stale entries refused, as described above.
+var defaultTextTheDecoder = map[defaultTextSite]int{
+	{"structured_value.go", "structureOf", "redecode"}: 1,
 }
 
 // defaultTextNotStructure lists matches of the shapes that are NOT about the
 // structure of Default, so stage 2 does not remove them. Same count/stale
-// rules as the baseline; keep it short and justify each entry.
+// rules as defaultTextTheDecoder; keep it short and justify each entry.
 var defaultTextNotStructure = map[defaultTextSite]int{
 	// ":" on a scalar threshold string: detects the `<value>:<severity>`
 	// suffix of `disable:critical` (#3042), not a YAML key.
@@ -95,7 +78,7 @@ func TestDefaultTextGuard(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := map[defaultTextSite]int{}
-	for _, m := range []map[defaultTextSite]int{defaultTextBaseline, defaultTextNotStructure} {
+	for _, m := range []map[defaultTextSite]int{defaultTextTheDecoder, defaultTextNotStructure} {
 		for k, n := range m {
 			expected[k] += n
 		}
@@ -105,7 +88,7 @@ func TestDefaultTextGuard(t *testing.T) {
 		want := expected[k]
 		if n > want {
 			problems = append(problems, fmt.Sprintf(
-				"NEW %s site in %s func %s (%d found, baseline %d): do not recover structure "+
+				"NEW %s site in %s func %s (%d found, %d recorded): do not recover structure "+
 					"from the text of ScheduledValue.Default — decode from structure instead (#3638)",
 				k.shape, k.file, k.fn, n, want))
 		}
@@ -113,8 +96,8 @@ func TestDefaultTextGuard(t *testing.T) {
 	for k, want := range expected {
 		if n := got[k]; n < want {
 			problems = append(problems, fmt.Sprintf(
-				"STALE baseline entry {%q, %q, %q}: %d recorded, %d found — lower or delete it "+
-					"so the #3638 list only shrinks", k.file, k.fn, k.shape, want, n))
+				"STALE entry {%q, %q, %q}: %d recorded, %d found — lower or delete it "+
+					"(#3638)", k.file, k.fn, k.shape, want, n))
 		}
 	}
 	sort.Strings(problems)

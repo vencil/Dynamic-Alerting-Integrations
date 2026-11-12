@@ -23,7 +23,7 @@ diagnosed (18 dead keys from four hand-copied surfaces drifting):
      the RULE_PACKS shape and extracting it again (``_registry_lib.
      fixed_point_problems``) — so the authored file still obeys every rule
      the extraction enforces: ``critical_of`` exactly where it derives,
-     ``chart_default`` only on defaults-tier keys, a ``metric_class`` on every
+     every ``_registry_lib.arming_problems`` rule (D-A A1), a ``metric_class`` on every
      key, no key in two tiers or two packs, aliases onto live keys only.
   3. SURFACE FRESHNESS: each generated block in every surface, and the
      generated RULE_PACKS module as a whole, must be byte-equal to a fresh

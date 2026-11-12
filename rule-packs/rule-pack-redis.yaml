@@ -6,16 +6,20 @@
 #   - redis_exporter (https://github.com/oliver006/redis_exporter)
 #
 # >>> GENERATED:threshold-registry:pack-redis — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   redis_memory_used_bytes: 4294967296   # bytes (4GB) — Memory usage warning
+#       未啟用（待改比值）：絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory 的比例（redis_memory_max_bytes），待 #1320
 #   redis_connected_clients: 200   # count — Connected clients warning
+#       未啟用（待改比值）：絕對連線數跨部署沒有意義；可攜的形式是佔 maxclients 的比例（redis_config_maxclients），待 #1320
 #   redis_evicted_keys_rate: 100
 #       keys/s — Key eviction rate; #1196 B identity fix: renamed from redis_evicted_keys_total
 #       (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias
+#       未啟用（依部署而定）：LRU 快取淘汰是常態，可容忍的速率取決於工作負載
 #   redis_replication_lag: 30
 #       seconds — Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis
 #       replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231
 #       owner call); #1196 C identity fix, no alias
+#       未啟用（待驗證）：與已出貨的 mysql／pg replication_lag 同為 30 秒，尚未對 Redis 驗證
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，

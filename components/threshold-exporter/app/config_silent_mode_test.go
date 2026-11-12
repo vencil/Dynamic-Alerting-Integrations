@@ -29,17 +29,17 @@ func TestResolveSilentModes(t *testing.T) {
 		validate    func(t *testing.T, result []ResolvedSilentMode)
 	}{
 		{"Default", map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}}, 0, nil},
-		{"Warning", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("warning")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
+		{"Warning", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("warning")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
 			if r[0].Tenant != "db-a" || r[0].TargetSeverity != "warning" {
 				t.Errorf("unexpected: %+v", r[0])
 			}
 		}},
-		{"Critical", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("critical")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
+		{"Critical", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("critical")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
 			if r[0].TargetSeverity != "critical" {
 				t.Errorf("expected critical, got %s", r[0].TargetSeverity)
 			}
 		}},
-		{"All", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("all")}}, 2, func(t *testing.T, r []ResolvedSilentMode) {
+		{"All", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("all")}}, 2, func(t *testing.T, r []ResolvedSilentMode) {
 			sev := map[string]bool{}
 			for _, x := range r {
 				sev[x.TargetSeverity] = true
@@ -48,9 +48,9 @@ func TestResolveSilentModes(t *testing.T) {
 				t.Errorf("expected warning+critical, got %v", sev)
 			}
 		}},
-		{"Disable", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("disable")}}, 0, nil},
-		{"InvalidFallback", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("invalid_value")}}, 0, nil},
-		{"CaseInsensitive", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("WARNING")}, "db-b": {"_silent_mode": SV("All")}, "db-c": {"_silent_mode": SV(" Critical ")}}, 4, nil},
+		{"Disable", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("disable")}}, 0, nil},
+		{"InvalidFallback", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("invalid_value")}}, 0, nil},
+		{"CaseInsensitive", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("WARNING")}, "db-b": {"_silent_mode": SVYAML("All")}, "db-c": {"_silent_mode": SVYAML(" Critical ")}}, 4, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,9 +93,9 @@ func TestResolveSilentModes_MixedTenants(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("warning")},
-			"db-b": {"_silent_mode": SV("all")},
-			"db-c": {"_silent_mode": SV("disable")},
+			"db-a": {"_silent_mode": SVYAML("warning")},
+			"db-b": {"_silent_mode": SVYAML("all")},
+			"db-c": {"_silent_mode": SVYAML("disable")},
 			"db-d": {"mysql_connections": SV("70")}, // no silent_mode → Normal
 		},
 	}
@@ -219,7 +219,7 @@ repeat_interval: "4h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -266,7 +266,7 @@ repeat_interval: "100h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -293,7 +293,7 @@ func TestResolveRouting_MissingReceiver(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -337,10 +337,10 @@ repeat_interval: "2h"`
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingA),
+				"_routing": SVYAML(routingA),
 			},
 			"db-b": {
-				"_routing": SV(routingB),
+				"_routing": SVYAML(routingB),
 			},
 			"db-c": {
 				"mysql_connections": SV("70"),
@@ -377,7 +377,7 @@ func TestResolveRouting_MinimalConfig(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_routing": SV(routingYAML),
+				"_routing": SVYAML(routingYAML),
 			},
 		},
 	}
@@ -754,14 +754,14 @@ func TestResolveSilentModes_Structured(t *testing.T) {
 		check   func(t *testing.T, r []ResolvedSilentMode)
 	}{
 		{"WithExpires_Active",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("expires: " + future + "\nreason: Planned DB migration\ntarget: warning\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("expires: " + future + "\nreason: Planned DB migration\ntarget: warning\n")}}},
 			1, func(t *testing.T, r []ResolvedSilentMode) {
 				if r[0].Tenant != "db-a" || r[0].TargetSeverity != "warning" || r[0].Expired || r[0].Reason != "Planned DB migration" {
 					t.Errorf("unexpected: %+v", r[0])
 				}
 			}},
 		{"WithExpires_Expired",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("expires: " + past + "\nreason: DB migration done\ntarget: all\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("expires: " + past + "\nreason: DB migration done\ntarget: all\n")}}},
 			2, func(t *testing.T, r []ResolvedSilentMode) {
 				for _, x := range r {
 					if !x.Expired {
@@ -770,17 +770,17 @@ func TestResolveSilentModes_Structured(t *testing.T) {
 				}
 			}},
 		{"StructuredNoExpires",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("reason: Long-term silencing\ntarget: critical\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("reason: Long-term silencing\ntarget: critical\n")}}},
 			1, func(t *testing.T, r []ResolvedSilentMode) {
 				if r[0].Expired || r[0].Expires != (time.Time{}) {
 					t.Errorf("should not be expired, expires should be zero")
 				}
 			}},
 		{"StructuredDisable",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("target: disable\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("target: disable\n")}}},
 			0, nil},
 		{"ScalarBackwardCompat",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("warning")}, "db-b": {"_silent_mode": SV("all")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("warning")}, "db-b": {"_silent_mode": SVYAML("all")}}},
 			3, func(t *testing.T, r []ResolvedSilentMode) {
 				for _, x := range r {
 					if x.Expired || !x.Expires.IsZero() {
@@ -824,17 +824,17 @@ func TestResolveMaintenanceExpiries(t *testing.T) {
 			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}}},
 			0, nil},
 		{"ScalarEnable",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("enable")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SVYAML("enable")}}},
 			0, nil},
 		{"StructuredActive",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + future + "\nreason: Scheduled upgrade\ntarget: enable\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SVYAML("expires: " + future + "\nreason: Scheduled upgrade\ntarget: enable\n")}}},
 			1, func(t *testing.T, r []ResolvedMaintenanceExpiry) {
 				if r[0].Expired || r[0].Reason != "Scheduled upgrade" {
 					t.Errorf("expected active with reason, got: %+v", r[0])
 				}
 			}},
 		{"StructuredExpired",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SV("expires: " + past + "\nreason: Upgrade complete\ntarget: enable\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_state_maintenance": SVYAML("expires: " + past + "\nreason: Upgrade complete\ntarget: enable\n")}}},
 			1, func(t *testing.T, r []ResolvedMaintenanceExpiry) {
 				if !r[0].Expired {
 					t.Error("should be expired")
@@ -864,7 +864,7 @@ func TestResolveStateFilters_MaintenanceExpired(t *testing.T) {
 			"maintenance": {Severity: "warning", DefaultState: "disable"},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV(yamlStr)},
+			"db-a": {"_state_maintenance": SVYAML(yamlStr)},
 		},
 	}
 	result := cfg.ResolveStateFiltersAt(fixedNow)
@@ -883,7 +883,7 @@ func TestResolveStateFilters_MaintenanceActive(t *testing.T) {
 			"maintenance": {Severity: "warning", DefaultState: "disable"},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV(yamlStr)},
+			"db-a": {"_state_maintenance": SVYAML(yamlStr)},
 		},
 	}
 	result := cfg.ResolveStateFiltersAt(fixedNow)
@@ -903,7 +903,7 @@ func TestResolveStateFilters_MaintenanceScalarBackwardCompat(t *testing.T) {
 			"maintenance": {Severity: "warning", DefaultState: "disable"},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_state_maintenance": SV("enable")},
+			"db-a": {"_state_maintenance": SVYAML("enable")},
 		},
 	}
 	result := cfg.ResolveStateFiltersAt(fixedNow)
@@ -930,8 +930,8 @@ func TestOperationalStatesAt_Maintenance(t *testing.T) {
 		isActive bool
 	}{
 		{"ScalarEnable", declared, SV("enable"), true},
-		{"Expired", declared, SV("expires: " + past + "\ntarget: enable\n"), false},
-		{"NotExpiredYet", declared, SV("expires: " + future + "\ntarget: enable\n"), true},
+		{"Expired", declared, SVYAML("expires: " + past + "\ntarget: enable\n"), false},
+		{"NotExpiredYet", declared, SVYAML("expires: " + future + "\ntarget: enable\n"), true},
 		// #3620: "" is neither `enable` nor a disable word — a value the
 		// reader does not read, so not on (fail-closed); it used to be on.
 		// A zero ScheduledValue reads as "" too (a null in a loaded tree is

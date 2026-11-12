@@ -56,7 +56,7 @@ LIB = "scripts/tools/_lib_engine.py"
 NOT_ENGINES: dict[str, str] = {
     "bash": "runs repo shell scripts; their own exit status is the contract",
     "docker": "the containerised fallback runner, located by _lib_engine; "
-              "dx_run / image-ref resolution use it as a transport",
+              "dx_run uses it as a transport",
     "gh": "GitHub API transport for dx reports, not a lint verdict",
     "git": "repository plumbing; its exit status is the answer asked for",
     "go": "toolchain lookup (go env GOROOT) to find gofmt",
@@ -111,6 +111,9 @@ MIGRATED: dict[Key, int] = {
     ("scripts/tools/lint/check_cli_contract.py", "node"): 1,
     ("scripts/tools/lint/lint_jsx_babel.py", "node"): 2,
     ("scripts/tools/lint/validate_mermaid.py", "mmdc"): 2,
+    # #3611 PR 4: off the subprocess path altogether — the registry is asked
+    # over its v2 API (_lib_registry), so skopeo has no caller left
+    ("scripts/ops/check_image_refs_resolve.py", "skopeo"): 2,
 }
 
 #: Baseline sites the scanner counts that are not engine calls. They stay in

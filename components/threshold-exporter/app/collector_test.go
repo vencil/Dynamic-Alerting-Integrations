@@ -89,7 +89,7 @@ func TestCollector_Collect_MaintenanceExpiry(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_state_maintenance": SV(`expires: "2020-01-01T00:00:00Z"`),
+				"_state_maintenance": SVYAML(`expires: "2020-01-01T00:00:00Z"`),
 			},
 		},
 	}
@@ -237,7 +237,7 @@ func TestCollector_FullConfig(t *testing.T) {
 				"mysql_connections": SV("90"),
 				"_silent_mode":      SV("critical"),
 				"_severity_dedup":   SV("enable"),
-				"_metadata":         SV("owner: dba-team\ntier: gold"),
+				"_metadata":         SVYAML("owner: dba-team\ntier: gold"),
 			},
 			"db-b": {
 				"mysql_connections": SV("70"),
@@ -329,7 +329,7 @@ func TestCollector_Collect_ExpiredSilentMode(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("target: warning\nexpires: \"2020-01-01T00:00:00Z\"\n"),
+				"_silent_mode": SVYAML("target: warning\nexpires: \"2020-01-01T00:00:00Z\"\n"),
 			},
 		},
 	}
@@ -359,7 +359,7 @@ func TestCollector_Collect_ActiveSilentModeStructured(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("target: critical\nreason: Planned DB migration\nexpires: \"2099-12-31T00:00:00Z\"\n"),
+				"_silent_mode": SVYAML("target: critical\nreason: Planned DB migration\nexpires: \"2099-12-31T00:00:00Z\"\n"),
 			},
 		},
 	}
@@ -390,7 +390,7 @@ func TestCollector_Collect_ExpiredMaintenance(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_state_maintenance": SV("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\n"),
+				"_state_maintenance": SVYAML("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\n"),
 			},
 		},
 	}
@@ -624,7 +624,7 @@ func TestCollector_SilentMode_Warning(t *testing.T) {
 		Defaults:   map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("warning"),
+				"_silent_mode": SVYAML("warning"),
 			},
 		},
 	}
@@ -648,7 +648,7 @@ func TestCollector_SilentMode_All(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("all"),
+				"_silent_mode": SVYAML("all"),
 			},
 		},
 	}
@@ -669,7 +669,7 @@ func TestCollector_SilentMode_Disable(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("disable"),
+				"_silent_mode": SVYAML("disable"),
 			},
 		},
 	}
@@ -690,7 +690,7 @@ func TestCollector_SilentMode_NoLeakToThreshold(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("warning"),
+				"_silent_mode": SVYAML("warning"),
 			},
 		},
 	}
@@ -741,7 +741,7 @@ func TestCollector_TenantMetadataInfo(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_metadata": SV("owner: dba-team\nrunbook_url: https://wiki.example.com/db-a\ntier: gold"),
+				"_metadata": SVYAML("owner: dba-team\nrunbook_url: https://wiki.example.com/db-a\ntier: gold"),
 			},
 		},
 	}
@@ -792,14 +792,14 @@ func TestCollector_TenantExpectedExporter(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_metadata": SV("db_type: mariadb\nowner: dba-team"),
+				"_metadata": SVYAML("db_type: mariadb\nowner: dba-team"),
 			},
 			"db-b": {
-				"_metadata": SV("db_type: postgresql\nowner: pg-team"),
+				"_metadata": SVYAML("db_type: postgresql\nowner: pg-team"),
 			},
 			"db-c": {
 				// _metadata present but db_type omitted → DBType=="" → skipped.
-				"_metadata": SV("owner: misc-team\ntier: bronze"),
+				"_metadata": SVYAML("owner: misc-team\ntier: bronze"),
 			},
 			"db-d": {
 				// No _metadata at all → DBType=="" → skipped.
@@ -988,8 +988,8 @@ func TestCollector_ConfigEvent_ExpiredSilenceAllWithReason_ServesMetrics(t *test
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
-			"tenant-x": {"_silent_mode": SV(`{target: all, expires: "2020-01-01T00:00:00Z", reason: "DB maintenance"}`)},
-			"tenant-y": {"_state_maintenance": SV("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\nreason: window\n")},
+			"tenant-x": {"_silent_mode": SVYAML(`{target: all, expires: "2020-01-01T00:00:00Z", reason: "DB maintenance"}`)},
+			"tenant-y": {"_state_maintenance": SVYAML("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\nreason: window\n")},
 			"tenant-z": {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z", Reason: "incident"}}},
 		},
 	}

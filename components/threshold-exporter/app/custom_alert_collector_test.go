@@ -13,7 +13,7 @@ func TestCollector_CustomAlerts_EmitAndParseErrorGauge(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
 			// valid: one threshold custom alert (mode omitted → default page)
-			"good-t": {"_custom_alerts": {Default: "- {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n"}},
+			"good-t": {"_custom_alerts": SVYAML("- {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n")},
 			// malformed: scalar where a list is expected → dropped + counted
 			"bad-t": {"_custom_alerts": {Default: "not a yaml list\n"}},
 		},
@@ -91,8 +91,8 @@ func TestCollector_CustomAlerts_EmitAndParseErrorGauge(t *testing.T) {
 func TestCollector_SloObjectiveGauge(t *testing.T) {
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
-			"slo-t": {"_custom_alerts": {Default: "- {recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total, objective: \"99.9\"}\n"}},
-			"off-t": {"_custom_alerts": {Default: "- {recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total, objective: \"disable\"}\n"}},
+			"slo-t": {"_custom_alerts": SVYAML("- {recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total, objective: \"99.9\"}\n")},
+			"off-t": {"_custom_alerts": SVYAML("- {recipe: slo_burn_rate, name: avail, metric: err_total, denominator_metric: req_total, objective: \"disable\"}\n")},
 		},
 	}
 	manager := newTestManager(cfg)

@@ -20,6 +20,8 @@ import (
 	"slices"
 	"sort"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // tenantSchemaRaw is docs/schemas/tenant-config.schema.json and its path.
@@ -122,7 +124,11 @@ func TestSilentModeSchemaEnumsMatchReader(t *testing.T) {
 			want = silentModeOff
 		}
 		for _, doc := range []string{w, "target: " + w} {
-			r := silentModeOf(ScheduledValue{Default: doc})
+			var sv ScheduledValue // decoded as a conf.d value is: a mapping is structured
+			if err := yaml.Unmarshal([]byte(doc), &sv); err != nil {
+				t.Fatal(err)
+			}
+			r := silentModeOf(sv)
 			if r.problem() != "" || r.kind != want {
 				t.Errorf("silentModeOf(%q): kind=%d problem=%q, want kind=%d and no problem",
 					doc, r.kind, r.problem(), want)

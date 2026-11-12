@@ -15,6 +15,8 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPT = REPO_ROOT / "scripts" / "tools" / "lint" / "check_threshold_registry.py"
 
@@ -65,6 +67,18 @@ def test_missing_metric_class_is_a_schema_error(tmp_path):
     result = gate.run_check(registry_path=path)
     assert any(e.startswith("schema:") and "metric_class" in e
                for e in result["errors"]), result
+
+
+@pytest.mark.parametrize("bad", [["ratio_pending"], {"state": "x"}, 3])
+def test_a_malformed_arming_is_reported_not_raised(tmp_path, bad):
+    """The surfaces are rendered after validation finds problems; a
+    non-string arming must come back as a violation, not crash the gate
+    on an unhashable lookup (CodeRabbit #3741)."""
+    def malform(doc):
+        doc["keys"]["redis_memory_used_bytes"]["arming"] = bad
+    path = _write_registry_variant(tmp_path, malform)
+    result = gate.run_check(registry_path=path)
+    assert any("redis_memory_used_bytes" in e for e in result["errors"]), result
 
 
 def _module_stale(result):

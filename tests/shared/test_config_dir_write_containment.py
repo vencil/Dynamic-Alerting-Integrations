@@ -78,12 +78,13 @@ def config_dir_tools(root: Path) -> list[str]:
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(
                 func, "id", None)
+            names = _confd_population.flag_names(node)
             # #3572: a hidden (`help=argparse.SUPPRESS`) --config-dir is
             # declared only to be refused; it reads no tree.
             if name == "add_config_dir_arg" or (
-                    name == "add_argument" and not _confd_population.is_suppressed(node)
+                    names is not None and not _confd_population.is_suppressed(node)
                     and any(isinstance(a, ast.Constant) and a.value == "--config-dir"
-                            for a in node.args)):
+                            for a in names)):
                 out.append(p.relative_to(root).as_posix())
                 break
     return out
@@ -130,8 +131,7 @@ SOURCE_DIR_TOOLS: "set[str]" = set()
 EXPECTED_WRITES: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
     # Output follows the input: <parent of --config-dir>/.da-history.
     ("config_history.py", ("snapshot",)): {"beside": "run/.da-history/"},
-    # Even the read-only `log` creates that directory (an mkdir, no file).
-    ("config_history.py", ("log",)): {"beside": "run/.da-history/"},
+    # The read-only `log` writes nothing (#3751: it created that directory).
     # In-place edits of the tree pointed at, which is what --execute is for.
     ("deprecate_rule.py", ("{metric}", "--execute")): {"config": ""},
     ("offboard_tenant.py", ("{tenant}", "--execute", "--skip-state-check")): {"config": ""},

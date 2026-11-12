@@ -59,15 +59,21 @@ func overlayMetadata(base map[string]any, layer any) map[string]any {
 	return out
 }
 
-// decodeMetadataValue decodes a `_metadata` ScheduledValue back into the YAML
-// value it was written as (UnmarshalYAML re-serializes a mapping into
-// Default). An empty or undecodable Default decodes to nil — not a mapping.
+// decodeMetadataValue is a `_metadata` ScheduledValue as the YAML value it
+// was written as: the mapping or sequence's decode (structureOf, #3638), or
+// — for a value written as a string — that string, never the YAML its text
+// reads like. An empty Default, or a structure that does not decode, is nil.
+// Only a mapping is a mapping to the overlay.
 func decodeMetadataValue(sv ScheduledValue) any {
-	if sv.Default == "" {
-		return nil
+	node, structured, err := structureOf(sv)
+	if !structured {
+		if sv.Default == "" {
+			return nil
+		}
+		return sv.Default
 	}
 	var v any
-	if yaml.Unmarshal([]byte(sv.Default), &v) != nil {
+	if err != nil || node.Decode(&v) != nil {
 		return nil
 	}
 	return v
@@ -92,7 +98,7 @@ func overlayMetadataValue(prev, next ScheduledValue) ScheduledValue {
 	if err != nil {
 		return next
 	}
-	return ScheduledValue{Default: string(out)}
+	return ScheduledValue{Default: string(out), structured: true}
 }
 
 // overlayTenantLayer writes one layer of a tenant's overrides (src) over the
@@ -169,9 +175,9 @@ func LoadRootPlatformChecked(configDir string) (RootPlatform, error) {
 //     order, then the tenant file's, stacked with overlayTenantLayer (as
 //     mergePartialInto does) — for `_metadata`, the per-key rule at the top
 //     of this file; for `_profile`, the later layer's value. A layer written
-//     as a string holding YAML (`_metadata: "owner: x\n"`) decodes to the
-//     same mapping as the mapping form, as on /metrics, where both reach
-//     ScheduledValue's Default as YAML text.
+//     as a string (`_metadata: "owner: x\n"`) is no mapping, whatever its
+//     text reads like (#3638): it replaces the layers below whole and is not
+//     read itself, as on /metrics.
 //   - PROFILE: applyProfiles, the fill-in ApplyProfiles runs, over the
 //     profiles' `_metadata` alone: when no layer writes `_metadata`, the
 //     elected profile's fills it in whole; a layer that writes it keeps the

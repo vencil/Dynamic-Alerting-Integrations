@@ -4,17 +4,30 @@ package scrape
 // expiry event, which until #3368 re-read the wall clock on the exporter.
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"gopkg.in/yaml.v3"
 )
 
 type staticSource struct {
 	cfg *config.ThresholdConfig
 	at  time.Time
+}
+
+// svYAML is a ScheduledValue decoded from YAML text, as a conf.d file's
+// value is (ScheduledValue.UnmarshalYAML): a mapping comes out structured
+// (#3638).
+func svYAML(text string) config.ScheduledValue {
+	var sv config.ScheduledValue
+	if err := yaml.Unmarshal([]byte(text), &sv); err != nil {
+		panic(fmt.Sprintf("svYAML(%q): %v", text, err))
+	}
+	return sv
 }
 
 func (s staticSource) GetConfig() *config.ThresholdConfig { return s.cfg }
@@ -58,7 +71,7 @@ func TestCollector_MaintenanceExpiryFollowsSourceNow(t *testing.T) {
 	cfg := &config.ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]config.ScheduledValue{
-			"tenant-a": {"_state_maintenance": {Default: "target: enable\nexpires: \"2026-08-01T00:00:00Z\"\nreason: window\n"}},
+			"tenant-a": {"_state_maintenance": svYAML("target: enable\nexpires: \"2026-08-01T00:00:00Z\"\nreason: window\n")},
 		},
 	}
 	before := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
@@ -80,7 +93,7 @@ func TestCollector_ObserveOncePerScrape(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]config.ScheduledValue{
 			"tenant-a": {
-				"_metadata":       {Default: "owner: team-a\nregion: r1\n"},
+				"_metadata":       svYAML("owner: team-a\nregion: r1\n"),
 				"_severity_dedup": {Default: "disable"},
 				"_silent_mode":    {Default: "warning"},
 			},
@@ -116,7 +129,7 @@ func TestCollector_ObserveFollowsSourceNow(t *testing.T) {
 	cfg := &config.ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]config.ScheduledValue{
-			"tenant-a": {"_silent_mode": {Default: "target: warning\nexpires: \"2026-08-01T00:00:00Z\"\nreason: window\n"}},
+			"tenant-a": {"_silent_mode": svYAML("target: warning\nexpires: \"2026-08-01T00:00:00Z\"\nreason: window\n")},
 		},
 	}
 	observe := func(at time.Time) Reserved {

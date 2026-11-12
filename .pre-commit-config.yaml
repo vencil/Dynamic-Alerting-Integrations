@@ -1704,8 +1704,8 @@ repos:
         # (scripts/tools/ops/_rule_packs_generated.py), because the da-tools
         # image ships no repo tree to read the YAML from. Gated: JSON-Schema
         # shape (pre-generation hard gate) + the registry is a fixed point of
-        # its own extraction (a wrong critical_of, a chart_default on an
-        # optional key, an alias onto no key → red) +
+        # its own extraction (a wrong critical_of, an arming: default on an
+        # optional key, a missing arming reason, an alias onto no key → red) +
         # freshness of every GENERATED surface (the RULE_PACKS module / pack
         # header threshold sections / helm values thresholdConfig.defaults /
         # dev conf.d _defaults.yaml / the optional_overrides declared-key LIST

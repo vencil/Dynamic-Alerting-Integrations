@@ -130,7 +130,7 @@ func TestMetadataCheck(t *testing.T) {
 	}{
 		{"_metadata: {owner: a, tier: t1, tags: [x]}", false},
 		{"_metadata: {environment: 123}", false},        // a non-string scalar is read as its text
-		{"_metadata: \"owner: a\\n\"", false},           // a string holding YAML, as /metrics reads it
+		{"_metadata: \"owner: a\\n\"", true},            // #3638: a string holding YAML is no mapping, not read
 		{"_metadata: null", false},                      // no metadata
 		{"_metadata: {owner: a, bogus_field: x}", true}, // a field TenantMetadata does not know
 		{"_metadata: {owner: [a, b]}", true},            // does not decode: every field empty

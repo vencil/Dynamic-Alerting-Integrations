@@ -45,7 +45,7 @@ func TestSilentMode_MalformedExpiresFailsClosed(t *testing.T) {
 			t.Run(target+"/"+m.name, func(t *testing.T) {
 				t.Parallel()
 				cfg := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
-					tenant: {"_silent_mode": SV("expires: \"" + m.expires + "\"\nreason: r\ntarget: " + target + "\n")},
+					tenant: {"_silent_mode": SVYAML("expires: \"" + m.expires + "\"\nreason: r\ntarget: " + target + "\n")},
 				}}
 				if got := cfg.ResolveSilentModesAt(failClosedNow); len(got) != 0 {
 					t.Fatalf("expires %q is not RFC3339 → setting must be ignored (0 silent entries), got %+v", m.expires, got)
@@ -72,7 +72,7 @@ func TestSilentMode_ValidExpiresUnchanged(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{
-				tenant: {"_silent_mode": SV("expires: \"" + tt.expires + "\"\ntarget: warning\n")},
+				tenant: {"_silent_mode": SVYAML("expires: \"" + tt.expires + "\"\ntarget: warning\n")},
 			}}
 			got := cfg.ResolveSilentModesAt(failClosedNow)
 			if len(got) != 1 {
@@ -91,7 +91,7 @@ func maintenanceCfg(tenant, expires string) *ThresholdConfig {
 			"maintenance": {Severity: "warning", DefaultState: "disable"},
 		},
 		Tenants: map[string]map[string]ScheduledValue{
-			tenant: {"_state_maintenance": SV("expires: \"" + expires + "\"\nreason: r\ntarget: enable\n")},
+			tenant: {"_state_maintenance": SVYAML("expires: \"" + expires + "\"\nreason: r\ntarget: enable\n")},
 		},
 	}
 }

@@ -6,16 +6,19 @@
 #   - ibm_db2_exporter (community) or custom Prometheus exporter
 #
 # >>> GENERATED:threshold-registry:pack-db2 — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   db2_connections_active: 200   # count — Active connections warning
 #       ⚠ 參考庫實測反例（#1176）：尖峰時段的工作負載會到 360 個連線 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+#       未啟用（待改比值）：絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320
 #   db2_bufferpool_hit_ratio: 0.95   # ratio — Bufferpool hit ratio warning
+#       未啟用（依部署而定）：交易型與分析型工作負載的合理命中率不同
 #   db2_lock_wait_time: 10
 #       s/s — Lock wait accumulation rate warning (rate over 5m, summed across the tenant's
 #       instances); 10 ≈ 6.7x the 1.5 normal level both reference libraries agree on, below both
 #       fault levels (25/60) — full derivation + calibration workflow in the pack header (#1196 D)
 #       ⚠ 參考庫實測反例（#1176）：良性批次的 lock-wait 短暫維持 18 s/s 達 7 分鐘（negative-db2.yaml） ——
 #       此值會對正常運作誤警；這個數字是起點，不是平台背書的值
+#       未啟用（依部署而定）：可容忍的鎖等待累積量取決於工作負載與延遲預算
 #
 # optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
 # 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
@@ -25,10 +28,13 @@
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 # 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
 #   db2_log_usage_percent: 70   # % — Transaction log usage warning
+#       未啟用（待驗證）：佔交易日誌的百分比可跨部署，但 70 尚未驗證
 #   db2_deadlock_rate: 5   # count/s — Deadlock rate (5m)
 #       ⚠ 參考庫實測反例（#1176）：真實的 ~90/min deadlock storm 低於 5/s（＝300/min），因此接不到 ——
 #       此值接不到該抓的故障；這個數字是起點，不是平台背書的值
+#       未啟用（依部署而定）：#1176 量到真實的 deadlock storm 低於 5/s；值要在 #1320 重新推導或移除
 #   db2_tablespace_used_percent: 85   # % — Tablespace usage warning
+#       未啟用（待驗證）：佔 tablespace 的百分比可跨部署，但 85 尚未驗證
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，

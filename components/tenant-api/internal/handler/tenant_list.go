@@ -437,8 +437,8 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 // setMetadata copies the metadata a cfg.MetadataResolver read for the tenant
 // (#2830: /metrics' reading — the root platform files'
 // `tenants.<id>._metadata` and the tenant document's own merged per key
-// (#2370), else the elected profile's; the string form read like the mapping
-// form; a non-string scalar read as its text) into summary's metadata fields.
+// (#2370), else the elected profile's; the string form not read (#3638);
+// a non-string scalar read as its text) into summary's metadata fields.
 func setMetadata(summary *TenantSummary, meta cfg.ResolvedMetadata) {
 	summary.Environment = meta.Environment
 	summary.Region = meta.Region

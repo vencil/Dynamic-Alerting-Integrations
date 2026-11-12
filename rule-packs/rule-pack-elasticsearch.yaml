@@ -7,23 +7,27 @@
 #     (https://github.com/prometheus-community/elasticsearch_exporter)
 #
 # >>> GENERATED:threshold-registry:pack-elasticsearch — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
-# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者需部署面顯式供給後才發射可達）:
+# 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   es_heap_usage_percent: 85
 #       % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
 #       (alert demands es_heap_usage_percent) — unwired dead key, no alias
+#       未啟用（待驗證）：佔 heap 上限的百分比可跨部署，但 85 尚未經 shadow 報表驗證
 #   es_disk_usage_percent: 85
 #       % — Disk USAGE % warning (used = 1 - available/size, recording rule
 #       tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
 #       tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE
 #       %) — carrying 15 into a used-% rule would fire permanently
+#       未啟用（待驗證）：佔磁碟的百分比可跨部署（85 與 Elasticsearch 的 low watermark 相同），但尚未經 shadow 報表驗證
 #   es_pending_tasks: 50
 #       count — Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
 #       catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold
+#       未啟用（依部署而定）：正常的 pending task 量隨叢集規模與變更頻率而定
 #   es_search_latency_ms: 1000
 #       ms — Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 =
 #       Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning)
 #       — the only community rule semantically identical to ours; full derivation + calibration
 #       caveat in the pack header (#1196 D)
+#       未啟用（依部署而定）：可接受的搜尋延遲是各部署的服務等級選擇
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，

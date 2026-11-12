@@ -25,8 +25,8 @@ import (
 // scrapeWarnChildEnv selects the child's config: "declared" or "undeclared".
 const scrapeWarnChildEnv = "SCRAPE_WARN_CHILD_TREE"
 
-// scrapeWarnConfig is one bad maintenance expires, one maintenance value that
-// is not YAML at all (the other maintenance WARN), one good one (no WARN) and
+// scrapeWarnConfig is one bad maintenance expires, one maintenance scalar
+// whose text is not YAML (the state-value WARN), one good one (no WARN) and
 // one bad _silent_mode expires (another WARN type, printed once per scrape).
 func scrapeWarnConfig(declared bool) *config.ThresholdConfig {
 	cfg := &config.ThresholdConfig{
@@ -34,10 +34,10 @@ func scrapeWarnConfig(declared bool) *config.ThresholdConfig {
 		Tenants: map[string]map[string]config.ScheduledValue{
 			// #3620: `target: enable` — `all` is a _silent_mode target, which
 			// the state-value reader does not read (a problem of its own).
-			"t-bad":      {"_state_maintenance": {Default: "target: enable\nexpires: \"nope\"\n"}},
+			"t-bad":      {"_state_maintenance": svYAML("target: enable\nexpires: \"nope\"\n")},
 			"t-bad-yaml": {"_state_maintenance": {Default: "expires: [\n"}},
-			"t-good":     {"_state_maintenance": {Default: "target: enable\nexpires: \"2099-01-01T00:00:00Z\"\n"}},
-			"t-silent":   {"_silent_mode": {Default: "target: all\nexpires: \"not-a-date\"\n"}},
+			"t-good":     {"_state_maintenance": svYAML("target: enable\nexpires: \"2099-01-01T00:00:00Z\"\n")},
+			"t-silent":   {"_silent_mode": svYAML("target: all\nexpires: \"not-a-date\"\n")},
 		},
 	}
 	if declared {
@@ -88,8 +88,11 @@ func TestCollector_MaintenanceExpiresWarnOncePerScrape(t *testing.T) {
 				want int
 			}{
 				{`invalid expires "nope" in _state_maintenance for tenant=t-bad`, 1},
-				// #3620: the one reader's WARN for a value that is not YAML.
-				{`_state_maintenance for tenant=t-bad-yaml: value "expires: [" is not read: it does not parse as YAML`, 1},
+				// #3620: the one reader's WARN for a value it does not read.
+				// #3638: a scalar whose text is not YAML is a scalar — read
+				// by the state-filter resolver only, which runs only when
+				// the filter is declared.
+				{`_state_maintenance for tenant=t-bad-yaml: value "expires: [" is not read: "expires: [" is neither "enable"`, map[bool]int{true: 1, false: 0}[tree == "declared"]},
 				// Control: another expires WARN type, once per scrape before too.
 				{`invalid expires "not-a-date" in _silent_mode for tenant=t-silent`, 1},
 				// Control: a valid expires is not warned about.

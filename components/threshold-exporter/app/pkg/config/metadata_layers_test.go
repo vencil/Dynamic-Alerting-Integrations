@@ -33,11 +33,12 @@ func tenantMetadataTrees() []struct {
 			want: ResolvedMetadata{Environment: "production", Domain: "finance", Owner: "team-p"},
 		},
 		{
-			name: "string form",
+			// #3638: a string is no mapping, whatever its text reads like.
+			name: "string form is not read",
 			files: map[string]string{
 				"tx.yaml": "tenants:\n  tx:\n    _metadata: \"environment: production\\ndomain: finance\\nowner: team-s\\n\"\n",
 			},
-			want: ResolvedMetadata{Environment: "production", Domain: "finance", Owner: "team-s"},
+			want: ResolvedMetadata{},
 		},
 		{
 			name: "non-string scalar values are read as their text",
@@ -88,12 +89,14 @@ func tenantMetadataTrees() []struct {
 			want: ResolvedMetadata{},
 		},
 		{
-			name: "string form over a platform mapping merges per key",
+			// #3638: a string layer is no mapping, so it replaces the platform
+			// mapping whole (the non-mapping rule) — and is not read itself.
+			name: "string form over a platform mapping replaces it and is not read",
 			files: map[string]string{
 				"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      owner: plat-team\n      environment: staging\n",
 				"tx.yaml":        "tenants:\n  tx:\n    _metadata: \"environment: production\\n\"\n",
 			},
-			want: ResolvedMetadata{Environment: "production", Owner: "plat-team"},
+			want: ResolvedMetadata{},
 		},
 		{
 			name: "a value that does not decode leaves every field empty",
@@ -189,7 +192,7 @@ func TestMetadataResolverMatchesMetrics(t *testing.T) {
 func TestMetadataResolverWithoutRootAndUnreadBodies(t *testing.T) {
 	t.Parallel()
 	var root MetadataResolver
-	got, ok, _ := root.ResolveFile("tx", []byte("tenants:\n  tx:\n    _profile: pfin\n    _metadata: \"domain: finance\\n\"\n"))
+	got, ok, _ := root.ResolveFile("tx", []byte("tenants:\n  tx:\n    _profile: pfin\n    _metadata:\n      domain: finance\n"))
 	if want := (ResolvedMetadata{Tenant: "tx", Domain: "finance"}); !ok || !reflect.DeepEqual(got, want) {
 		t.Errorf("zero root = %+v, %v; want %+v, true", got, ok, want)
 	}

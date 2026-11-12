@@ -89,6 +89,7 @@ import _stub_upstream  # noqa: E402  (#3133: a Prometheus that answers)
 # argparse walk used to live here while `test_confd_enumeration_contract`
 # discovered its population by substring; a tool could satisfy neither
 # and be absent from both. Both gates now read `_confd_population`.
+import _confd_population  # noqa: E402
 from _confd_population import confd_flag
 # The prefix every da-guard stderr line a tool passes on carries (#1822).
 from _lib_tenant_values import DA_GUARD_PREFIX as _DA_GUARD_PREFIX
@@ -150,9 +151,9 @@ REPO_ANCHORED_OUTPUT: dict[str, str] = {
 # re-asked, and a real divergence (its `discover_tenant_configs` was a drifted
 # twin of `operator_generate`'s) sat behind the unmeasured label for months.
 # Measured: with `--source-dir <empty dir>` it runs, rc=0, and reports tenants.
-SANDBOX_DIR_ARGS: dict[str, str] = {
-    "migrate_to_operator.py": "--source-dir",
-}
+# #3751: emptied — since #3572 migrate-to-operator reads no conf.d at all
+# (its `--source-dir` is a rule source), so it is no tool of this file.
+SANDBOX_DIR_ARGS: dict[str, str] = {}
 
 # The fixture names, mapped to NEUTRAL sentinels rather than to each
 # other's lower-case spelling.
@@ -626,11 +627,10 @@ def test_no_tool_declares_flags_the_population_walk_cannot_read() -> None:
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call):
                     continue
-                fn = node.func
-                if not (isinstance(fn, ast.Attribute)
-                        and fn.attr == "add_argument"):
+                names = _confd_population.flag_names(node)
+                if names is None:
                     continue
-                for arg in node.args:
+                for arg in names:
                     if not (isinstance(arg, ast.Constant)
                             and isinstance(arg.value, str)):
                         offenders.append(
@@ -679,10 +679,9 @@ KNOWN_UNMEASURABLE: dict[str, str] = {
     # because inventing them would exercise a different code path than
     # the one an operator runs.
     #
-    # ⛔ `migrate_to_operator.py` LEFT this set in #1604 — see
-    # `SANDBOX_DIR_ARGS`. It is named here only so the next reader does not
-    # re-add it: an empty second tree removes the barrier without changing
-    # the code path `--config-dir` drives.
+    # ⛔ `migrate_to_operator.py` LEFT this set in #1604, and this file in
+    # #3751 (it reads no conf.d since #3572). Named here only so the next
+    # reader does not re-add it.
     #
     # ⚠️ `run_chaos_soak.py` stays, and its recorded reason is INCOMPLETE
     # rather than wrong: measured, `--target-url` and `--output-dir` are also
