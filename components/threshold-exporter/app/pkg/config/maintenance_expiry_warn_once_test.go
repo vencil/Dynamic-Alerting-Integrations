@@ -84,8 +84,8 @@ func TestMaintenanceExpiriesAfterStateFilters_SameWarnsOnceSameValues(t *testing
 					// Two tenants carry the shape, so a reader that warns
 					// for only one of them disagrees with the other; t3
 					// keeps the "no override" tenant in every cell.
-					"t1": {"_state_maintenance": {Default: value}},
-					"t2": {"_state_maintenance": {Default: value}},
+					"t1": {"_state_maintenance": valueAsWritten(value)},
+					"t2": {"_state_maintenance": valueAsWritten(value)},
 					"t3": {},
 				},
 			}

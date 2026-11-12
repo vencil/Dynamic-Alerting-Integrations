@@ -82,7 +82,7 @@ func TestStateFilterSchemaMatchesReader(t *testing.T) {
 	for _, w := range def.StateFilterScalar.Enum {
 		c := ThresholdConfig{
 			StateFilters: map[string]StateFilter{"crashloop": {Severity: "critical", DefaultState: "enable"}},
-			Tenants:      map[string]map[string]ScheduledValue{"t1": {"_state_crashloop": {Default: w}}},
+			Tenants:      map[string]map[string]ScheduledValue{"t1": {"_state_crashloop": valueAsWritten(w)}},
 		}
 		on := len(c.resolveStateFiltersAt(now, nil)) == 1
 		if on != (w == "enable") {
@@ -159,7 +159,7 @@ func TestMaintenanceSchemaMatchesReader(t *testing.T) {
 		t.Error("the structured branch must set additionalProperties: false (the reader refuses unknown fields)")
 	}
 	r := func(v string) stateValueReading {
-		return stateValueOf(maintenanceFilterName, ScheduledValue{Default: v})
+		return stateValueOf(maintenanceFilterName, valueAsWritten(v))
 	}
 	if got := r("bogus: 1\n"); got.kind != stateValueProblem {
 		t.Errorf("an unknown field reads as %d, want a problem", got.kind)

@@ -87,34 +87,35 @@ type stateValueReading struct {
 }
 
 // stateValueOf classifies sv, the value of `_state_<filterName>`.
+//
+// #3638: whether the value is a mapping is the structure's (structureOf),
+// never the text's — a scalar `"target: enable"` is the scalar it was written
+// as, not the mapping its text reads like, and every scalar is read without
+// a YAML decode. A sequence is its text read as a scalar, as before.
 func stateValueOf(filterName string, sv ScheduledValue) stateValueReading {
-	raw := strings.TrimSpace(sv.Default)
-	// Every scrape reads every tenant's `_state_*` value: text that cannot
-	// be a YAML mapping or sequence (no `:`, `{`, `[` or newline) is read as
-	// the scalar it is, without a YAML decode.
-	if !strings.ContainsAny(raw, ":{[\n") {
-		return scalarStateValueOf(raw)
+	node, structured, err := structureOf(sv)
+	if !structured {
+		return scalarStateValueOf(strings.TrimSpace(sv.Default))
 	}
-	// A mapping reaches here as YAML text (ScheduledValue.UnmarshalYAML
-	// re-marshals a mapping without a `default` key), so the value is
-	// decoded and its kind looked at — never a substring of it: a `reason`
-	// that says "expires:" is not a time-box.
 	var doc any
-	if err := yaml.Unmarshal([]byte(raw), &doc); err != nil {
-		// Not YAML at all (`expires: [`): a broken mapping as far as the
-		// reader can tell — structured, so the expiry reader names it too
-		// when the state-filter reader does not reach it (#2426).
+	if err == nil {
+		err = node.Decode(&doc)
+	}
+	if err != nil {
+		// Not reachable for a value UnmarshalYAML built; named as a broken
+		// mapping — structured, so the expiry reader names it too when the
+		// state-filter reader does not reach it (#2426).
 		return stateValueReading{kind: stateValueProblem, structured: true,
 			problem: fmt.Sprintf("it does not parse as YAML: %v", err)}
 	}
 	switch m := doc.(type) {
 	case map[string]any:
-		return structuredStateValueOf(filterName, raw, m)
+		return structuredStateValueOf(filterName, node, m)
 	case map[any]any:
 		return stateValueReading{kind: stateValueProblem, structured: true,
 			problem: fmt.Sprintf("the structured form takes only the fields %s", strings.Join(stateValueFields, ", "))}
 	}
-	return scalarStateValueOf(raw)
+	return scalarStateValueOf(strings.TrimSpace(sv.Default))
 }
 
 // scalarStateValueOf reads raw, a scalar value.
@@ -130,8 +131,8 @@ func scalarStateValueOf(raw string) stateValueReading {
 		problem: fmt.Sprintf("%q is neither %q nor a word that switches it off (%s)", raw, "enable", disabledWordList())}
 }
 
-// structuredStateValueOf reads a mapping.
-func structuredStateValueOf(filterName, raw string, m map[string]any) stateValueReading {
+// structuredStateValueOf reads a mapping: node, as m its generic decode.
+func structuredStateValueOf(filterName string, node *yaml.Node, m map[string]any) stateValueReading {
 	bad := func(format string, args ...any) stateValueReading {
 		return stateValueReading{kind: stateValueProblem, structured: true, problem: fmt.Sprintf(format, args...)}
 	}
@@ -176,7 +177,7 @@ func structuredStateValueOf(filterName, raw string, m map[string]any) stateValue
 		return bad("%s", problem)
 	}
 	var parsed maintenanceModeStructured
-	if err := yaml.Unmarshal([]byte(raw), &parsed); err != nil {
+	if err := node.Decode(&parsed); err != nil {
 		return bad("the structured form does not parse: %v", err)
 	}
 

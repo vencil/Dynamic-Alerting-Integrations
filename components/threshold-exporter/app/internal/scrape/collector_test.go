@@ -71,7 +71,7 @@ func TestCollector_MaintenanceExpiryFollowsSourceNow(t *testing.T) {
 	cfg := &config.ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]config.ScheduledValue{
-			"tenant-a": {"_state_maintenance": {Default: "target: enable\nexpires: \"2026-08-01T00:00:00Z\"\nreason: window\n"}},
+			"tenant-a": {"_state_maintenance": svYAML("target: enable\nexpires: \"2026-08-01T00:00:00Z\"\nreason: window\n")},
 		},
 	}
 	before := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
