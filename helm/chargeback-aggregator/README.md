@@ -65,7 +65,9 @@ kubectl logs -n monitoring -l app.kubernetes.io/name=chargeback-aggregator --tai
 and to VictoriaLogs on 9428 only. The documented namespace, `monitoring`,
 default-denies egress (`k8s/03-monitoring/network-policies.yaml`); without this
 policy every run fails before its first query. If VictoriaLogs runs in another
-namespace, set `networkPolicy.victorialogsNamespaceLabel` to match it.
+namespace, set `networkPolicy.victorialogsNamespaceLabel` to match it **and**
+add the aggregator's namespace to VictoriaLogs' `networkPolicy.allowedNamespaces`:
+the store admits consumers by pod label only within its own namespace.
 The policy selects the store by `app.kubernetes.io/name: victorialogs` on
 9428; a store not installed from `helm/victorialogs`, or on another port,
 needs `networkPolicy.enabled: false`. ⚠️ New in 0.4.0: upgrading turns this

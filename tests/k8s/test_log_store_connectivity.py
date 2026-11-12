@@ -153,6 +153,8 @@ def _port_matches(rule: dict, port: int, proto: str) -> bool:
     if not ports:
         return True
     for p in ports:
+        if "endPort" in p:
+            raise Unmodelled(f"endPort range {p}")
         if not isinstance(p.get("port", port), int):
             raise Unmodelled(f"named port {p}")
         if p.get("protocol", "TCP") == proto and p.get("port", port) == port:
@@ -270,3 +272,18 @@ def test_evaluator_refuses_what_it_does_not_model() -> None:
         _match_labels({"matchExpressions": [{"key": "a", "operator": "Exists"}]}, {})
     with pytest.raises(Unmodelled):
         _port_matches({"ports": [{"port": "http"}]}, 80, "TCP")
+    with pytest.raises(Unmodelled):
+        _port_matches({"ports": [{"port": 80, "endPort": 443}]}, 443, "TCP")
+
+
+@_needs_helm
+def test_reuse_values_from_a_release_without_the_map_keeps_the_policy() -> None:
+    """`helm upgrade --reuse-values` from chargeback-aggregator 0.3.x carries
+    values with no `networkPolicy` map; the render must not fail and must keep
+    the chart default (policy on, store in monitoring)."""
+    docs = _render("helm/chargeback-aggregator", _MON, ["--set", "networkPolicy=null"])
+    nps = [d for d in docs if d.get("kind") == "NetworkPolicy"]
+    assert len(nps) == 1, nps
+    peers = [peer for rule in nps[0]["spec"]["egress"] for peer in rule.get("to", [])]
+    assert {"kubernetes.io/metadata.name": "monitoring"} in [
+        (p.get("namespaceSelector") or {}).get("matchLabels") for p in peers], peers

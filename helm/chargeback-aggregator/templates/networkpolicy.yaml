@@ -1,4 +1,8 @@
-{{- if .Values.networkPolicy.enabled }}
+{{- /* `helm upgrade --reuse-values` from 0.3.x carries the old release's values,
+which have no `networkPolicy` map at all: an ABSENT map takes the chart default
+(on, store in monitoring), the same shape as helm/vector's policy. */}}
+{{- $np := .Values.networkPolicy | default (dict "enabled" true "victorialogsNamespaceLabel" (dict "kubernetes.io/metadata.name" "monitoring")) }}
+{{- if $np.enabled }}
 # Egress for the aggregator's pods (the CronJob and the manual Job share the
 # selector labels). The documented install namespace, monitoring, default-denies
 # egress (k8s/03-monitoring/network-policies.yaml), and without this policy the
@@ -31,7 +35,7 @@ spec:
     - to:
         - namespaceSelector:
             matchLabels:
-              {{- toYaml (required "networkPolicy.victorialogsNamespaceLabel must be a non-empty namespace label selector: an empty one opens VictoriaLogs egress (9428) to every namespace" .Values.networkPolicy.victorialogsNamespaceLabel) | nindent 14 }}
+              {{- toYaml (required "networkPolicy.victorialogsNamespaceLabel must be a non-empty namespace label selector: an empty one opens VictoriaLogs egress (9428) to every namespace" $np.victorialogsNamespaceLabel) | nindent 14 }}
           podSelector:
             matchLabels:
               app.kubernetes.io/name: victorialogs
