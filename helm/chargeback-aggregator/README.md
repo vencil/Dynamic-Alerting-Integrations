@@ -59,6 +59,14 @@ helm upgrade chargeback ./helm/chargeback-aggregator -n monitoring \
 kubectl logs -n monitoring -l app.kubernetes.io/name=chargeback-aggregator --tail=50
 ```
 
+## NetworkPolicy
+
+`networkPolicy.enabled` (default on) gives the aggregator's pods egress to DNS
+and to VictoriaLogs on 9428 only. The documented namespace, `monitoring`,
+default-denies egress (`k8s/03-monitoring/network-policies.yaml`); without this
+policy every run fails before its first query. If VictoriaLogs runs in another
+namespace, set `networkPolicy.victorialogsNamespaceLabel` to match it.
+
 ## Retention
 
 `output.retentionDays: 90` by default (CSV files older than that are deleted at the start of each run). Bump for finance teams that keep longer billing-cycle records.

@@ -10,7 +10,8 @@
 # chargeback CronJob (query), Grafana (query), the federation-gateway in
 # `mode: victorialogs` (tenant-scoped log query, ADR-021 #609), the
 # federation-reconciler (revocation-evidence read, ADR-028 D1 / #1234),
-# and same-pod loopback (probes).
+# Prometheus (the /metrics scrape on the same port) and same-pod loopback
+# (probes).
 #
 # ⛔ HOW STRONG THIS ACTUALLY IS — corrected in #1295. This block used to
 # end with "Any other pod in the cluster — including a freshly
@@ -23,7 +24,7 @@
 #     boundary.
 #   * `allowedPodSelectors` renders a bare `podSelector`, i.e. a match on
 #     SELF-DECLARED pod labels within this namespace. Any principal able to
-#     create a pod here can wear one of the five labels and be admitted.
+#     create a pod here can wear one of the listed labels and be admitted.
 # So what the policy buys is: everything from other namespaces is blocked
 # unless explicitly allowed, and same-namespace workloads that are not
 # deliberately impersonating a consumer are blocked. What it does NOT buy
