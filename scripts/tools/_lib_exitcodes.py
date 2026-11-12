@@ -268,6 +268,31 @@ class CallerError(Exception):
         return text if text.startswith("ERROR") else f"ERROR: {text}"
 
 
+class InputChanged(BaseException):
+    """A declared input that changed after `_lib_input` judged it (#3724):
+    gone, emptied, refused by da-guard on a later read. It ends the run as a
+    caller error (rc 2, one ``ERROR:`` line, the flag and the path named),
+    like :class:`CallerError` — but it is NOT an ``Exception``: the
+    handlers that turn a failure into a notice, a degraded row or "not
+    checked" (``except Exception``, ``except (Exception, SystemExit)``)
+    must not absorb it, or the answer is made from less input than the
+    caller gave. ⛔ The reason it derives from ``BaseException``, as
+    ``asyncio.CancelledError`` does since Python 3.8 for the same reason:
+    catch-alls were swallowing it. :func:`exit_on_crash`, :func:`run` and
+    the module excepthook report it; nothing else should catch it."""
+
+    reason: str = "input_changed"
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+
+    @property
+    def error_line(self) -> str:
+        """The stderr line, as :attr:`CallerError.error_line`."""
+        text = str(self)
+        return text if text.startswith("ERROR") else f"ERROR: {text}"
+
+
 def die_caller_error(message: str, reason: Optional[str] = None, *,
                      code: Optional[int] = None) -> NoReturn:
     """Print *message* to stderr and exit with the caller-error code (or
@@ -436,9 +461,9 @@ def _to_stderr(line: str) -> None:
 def exit_on_crash(exc: BaseException, *, code: Optional[int] = None) -> NoReturn:
     """Report *exc* as an unexpected crash and exit with *code*, else the
     process crash code (``DA_TEST_CRASH_EXIT_CODE`` overrides both). Not a
-    crash: a ``CallerError`` (its caller-error exit) and a failing stdout
+    crash: a ``CallerError`` or ``InputChanged`` (the caller-error exit) and a failing stdout
     (the stdout-failure exit)."""
-    if isinstance(exc, CallerError):
+    if isinstance(exc, (CallerError, InputChanged)):
         die_caller_error(exc.error_line, exc.reason)
     if _from_stdout(exc):
         _stdout_failed(exc)
@@ -470,7 +495,7 @@ def _interactive() -> bool:
 
 
 def _crash_excepthook(exc_type, exc, tb) -> None:
-    if not issubclass(exc_type, Exception) or _interactive():
+    if not issubclass(exc_type, (Exception, InputChanged)) or _interactive():
         _previous_excepthook(exc_type, exc, tb)
         return
     if exc is None:  # defensive: hook called with a bare type
@@ -746,7 +771,7 @@ def run(entry: Callable[[], Any]) -> NoReturn:
 
     *entry*'s return value is the exit status (as ``sys.exit`` reads it), or
     a :class:`Report`, whose document is encoded and printed here. An
-    ``Exception`` goes to ``exit_on_crash``. The last flush of stdout is
+    ``Exception`` (and an :class:`InputChanged`) goes to ``exit_on_crash``. The last flush of stdout is
     made here (``_close_stdout``).
 
     Gate: tests/shared/test_single_exit_path.py.
@@ -759,7 +784,7 @@ def run(entry: Callable[[], Any]) -> NoReturn:
         status = _contract_status(emit_result(entry()), entry)
     except SystemExit as exc:
         status = _contract_status(exc.code, entry)
-    except Exception as exc:  # noqa: BLE001 — that is the point
+    except (Exception, InputChanged) as exc:  # noqa: BLE001 — that is the point
         if _interactive():
             raise
         try:

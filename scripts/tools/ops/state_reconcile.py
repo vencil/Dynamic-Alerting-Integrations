@@ -111,6 +111,16 @@ def read_state(filepath: Path) -> tuple[dict | None, str | None]:
         return None, f"invalid JSON: {exc}"
 
 
+def _decode_state(raw: bytes) -> tuple[dict | None, str | None]:
+    """A state file's bytes as `read_state` reads its text: (data, error)."""
+    try:
+        return json.loads(raw.decode("utf-8")), None
+    except UnicodeDecodeError as exc:
+        return None, f"not UTF-8: {exc}"
+    except json.JSONDecodeError as exc:
+        return None, f"invalid JSON: {exc}"
+
+
 def normalize_schema_version(value) -> str | None:
     """Coerce a parsed schema_version to canonical string form.
 
@@ -315,7 +325,10 @@ def reconcile(
 
     # 1. Schema validation + migration per file
     for sf in state_files:
-        data, err = read_state(sf)
+        # #3724: read through `_lib_input.read_bytes` — a selected file gone
+        # (or unreadable) since --state-dir was judged is a refusal naming
+        # it, rc 2, never a file set aside as "unresolvable" drift.
+        data, err = _decode_state(_lib_input.read_bytes(sf, flag="--state-dir", lang="en"))
         if err is not None:
             report["schema_drift_unresolvable"].append(
                 {"file": str(sf), "reason": err}

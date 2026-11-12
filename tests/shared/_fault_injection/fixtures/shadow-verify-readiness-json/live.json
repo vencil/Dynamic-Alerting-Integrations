@@ -1,0 +1,12 @@
+{
+  "ready": false,
+  "timestamp": "2026-03-07T12:00:00Z",
+  "convergence_percentage": 60.0,
+  "converged_count": 3,
+  "total_pairs": 5,
+  "converged_pairs": ["pair_0", "pair_1", "pair_2"],
+  "unconverged_pairs": ["pair_3", "pair_4"],
+  "round_count": 10,
+  "stability_window": 5,
+  "recommendation": "Not ready"
+}

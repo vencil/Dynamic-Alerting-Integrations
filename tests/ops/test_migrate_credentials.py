@@ -1018,3 +1018,29 @@ tenants:
     doc = json.loads(_run("--config-dir", root, "--json").stdout)
     assert [d["reason"] for d in doc["decisions"]] == ["key_invalid"]
     assert doc["plan"] == []
+
+
+@pytest.mark.parametrize("stage", ["write", "verify"])
+def test_a_changed_config_dir_names_what_is_already_on_disk(stage, monkeypatch):
+    """#3724: --config-dir changed since its judgement is a refusal naming the
+    flag (`InputChanged`); when it is met at the write or after it, the line
+    still says what the run left on disk — the Secret manifests written, and
+    whether conf.d was changed."""
+    from _lib_exitcodes import InputChanged
+    gone = InputChanged("--config-dir /c: changed after it was judged: x")
+
+    def boom(*_a, **_k):
+        raise gone
+
+    manifests = [{"path": "/out/da-t.yaml"}]
+    if stage == "write":
+        monkeypatch.setattr(mc._lib_confedit, "write_all", boom)
+        call, said = (lambda: mc._write_confd("/c", [], manifests)), "conf.d was not changed"
+    else:
+        monkeypatch.setattr(mc, "_read_text", boom)
+        call, said = (lambda: mc._verify_written("/c", None, ["t.yaml"], [], manifests),
+                      "conf.d was written before that")
+    with pytest.raises(InputChanged) as exc:
+        call()
+    assert str(exc.value).startswith(str(gone)) and said in str(exc.value)
+    assert "The Secret manifests were written: /out/da-t.yaml" in str(exc.value)

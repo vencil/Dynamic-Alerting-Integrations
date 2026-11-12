@@ -849,7 +849,8 @@ def exporter_after_writes(config_dir, metrics, spellings):
                 try:
                     with open(real, "rb") as src:
                         data = src.read()
-                except OSError:
+                except OSError as e:
+                    _lib_parse_cache.refuse_gone(real, e)  # #3724: gone since judged
                     continue
                 (copy / name).write_bytes(data)
             with contextlib.redirect_stdout(io.StringIO()), \
