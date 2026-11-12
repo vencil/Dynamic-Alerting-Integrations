@@ -965,6 +965,39 @@ class AmtoolCheck:
     message: str
 
 
+#: A Go file-I/O error as amtool prints it after ``FAILED:`` — ``open <path>:``
+#: / ``read <path>:`` (``os.ReadFile``), for the config file or any template it
+#: names. Config, YAML and template errors are worded otherwise.
+_AMTOOL_IO_FAILURE = re.compile(r"FAILED: (?:open|read) \S")
+
+
+def amtool_verdict(returncode: int, output: str) -> str:
+    """``amtool check-config``'s exit status and output → ``accepted`` /
+    ``rejected`` / ``unusable``. The one place that reads amtool's text
+    (#3611 Q2: a pinned text signature is allowed for amtool only, because its
+    kingpin ``Fatalf`` exits 1 for every failure).
+
+    * rc 0 → ``accepted``;
+    * rc 1 with ``FAILED:`` → ``rejected``: the config itself is wrong (YAML,
+      an undefined receiver, a bad duration, an empty file, a template that
+      does not parse) — EXCEPT a file amtool could not read, ``FAILED: open
+      <path>:`` / ``FAILED: read <path>:``. Measured on 0.34.2 for the config
+      file (no permission, an I/O error) and for a template it names (a
+      directory where the glob points): rc 1 exactly like a rejection, and
+      about this machine's files, not the config;
+    * anything else (a missing path or a directory prints no ``FAILED:``; a Go
+      panic exits 2) → ``unusable``.
+
+    The recorded outputs of the pinned amtool are
+    tests/ops/fixtures/amtool_check_config/recorded.json; a version bump
+    re-records them."""
+    if returncode == 0:
+        return AMTOOL_ACCEPTED
+    if returncode == 1 and "FAILED:" in output and not _AMTOOL_IO_FAILURE.search(output):
+        return AMTOOL_REJECTED
+    return AMTOOL_UNUSABLE
+
+
 def amtool_check(am_yml: str, *, what: str, refusing: str,
                  not_found_notice: str = AMTOOL_NOT_FOUND_NOTICE) -> AmtoolCheck:
     """Run ``amtool check-config`` over *am_yml* — the exact text Alertmanager
@@ -974,7 +1007,8 @@ def amtool_check(am_yml: str, *, what: str, refusing: str,
     * amtool absent → ``not_found``, exit None (the rc is unchanged, but the
       message says the run was not validated — never silent);
     * amtool accepts → ``accepted``, exit None;
-    * amtool rejects (rc 1 with its ``FAILED:`` verdict) → ``rejected``,
+    * amtool rejects (:func:`amtool_verdict`: rc 1 with its ``FAILED:``
+      verdict, not a file it could not read) → ``rejected``,
       EXIT_VIOLATION (the CONFIG is wrong: the tool ran and found something
       the user must fix);
     * anything else non-zero — could not run, timed out, crashed (a Go panic
@@ -1001,14 +1035,15 @@ def amtool_check(am_yml: str, *, what: str, refusing: str,
         # it, this keeps the file itself owner-only too (SAST write gate).
         os.chmod(path, 0o600)
         result = _run_binary([amtool, "check-config", str(path)], timeout=60)
+    verdict = amtool_verdict(result.returncode, result.stdout + result.stderr)
     output = "\n".join(safe_label(ln) for ln in
                        (result.stdout + result.stderr).strip().splitlines())
-    if result.returncode == 0:
+    if verdict == AMTOOL_ACCEPTED:
         return AmtoolCheck(
             AMTOOL_ACCEPTED, None,
             f"amtool check-config: {what} accepted by Alertmanager's parser "
             f"({safe_label(amtool)})")
-    if not (result.returncode == 1 and "FAILED:" in output):
+    if verdict == AMTOOL_UNUSABLE:
         return AmtoolCheck(
             AMTOOL_UNUSABLE, EXIT_CALLER_ERROR,
             f"ERROR: amtool check-config could not validate {what} "

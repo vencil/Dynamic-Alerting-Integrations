@@ -45,6 +45,14 @@ After install, the in-cluster URLs are:
 | LogsQL HTTP query | `http://victorialogs.<ns>.svc:9428/select/logsql/query` |
 | `/metrics` (Prometheus scrape) | same port; annotations on the Service |
 
+The NetworkPolicy admits the listed consumers by pod label **in this
+namespace** (Vector by its own namespace), plus `app: prometheus` for the
+scrape. A consumer installed in another namespace (federation-gateway,
+federation-reconciler) needs that namespace in `networkPolicy.allowedNamespaces`;
+its podSelector row alone does not admit it. The connections the documented
+install depends on are evaluated end to end in
+`tests/k8s/test_log_store_connectivity.py`.
+
 ### Consumer authorization (#1295)
 
 A vmauth sidecar owns the Service port; VictoriaLogs listens on loopback only.
