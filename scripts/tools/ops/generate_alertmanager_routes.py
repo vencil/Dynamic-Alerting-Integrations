@@ -160,7 +160,7 @@ from _grar_render import (  # noqa: E402, F401
 # `_lib_io` block above for why that marker must stay off used imports).
 from _grar_render import (  # noqa: E402
     AlertmanagerConfigInvariantViolated, AlertmanagerConfigRejected, BaseIsAnOutputError,
-    amtool_gate,
+    alertmanager_check,
 )
 # #2660: the root-receiver-has-no-integration WARN (--output-configmap here;
 # --apply emits it inside apply_to_configmap). Used, so no F401 marker.
@@ -174,8 +174,7 @@ from _grar_render import (  # noqa: E402
 from _grar_render import watchdog_receiver_findings  # noqa: E402
 # #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
 from _grar_render import (  # noqa: E402
-    ConsumerReadError, InputRefused, alertmanager_reading, consumer_read_message,
-    emitted_alertmanager_yml,
+    ConsumerReadError, consumer_read_message, emitted_alertmanager_yml,
 )
 # #3257: the base config's global may not hand a credential to a receiver.
 from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
@@ -183,7 +182,7 @@ from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E40
 # row (it calls `gen.evaluate_generated_config`). Used, so no F401 marker.
 from _grar_render import evaluate_generated_config  # noqa: E402
 from _grar_render import (  # noqa: E402, F401  (read as `gen.…` by validate_config)
-    AMTOOL_ACCEPTED, AMTOOL_NOT_FOUND, AMTOOL_REJECTED, AMTOOL_UNUSABLE,
+    AM_ACCEPTED, AM_ACCEPTED_WITHOUT_AMTOOL, AM_REJECTED, AM_UNUSABLE,
 )
 # Re-exported only (tests and callers read it as `gar.…`); the --validate
 # wording moved into _grar_render with the verdict it belongs to (#2311).
@@ -254,7 +253,7 @@ def _assembly_failed(exc: ValueError, refusing: str) -> None:
 def _unverifiable(exc: PlatformProbeSetUnverifiable, refusing: str) -> None:
     """#1533: the probe set degraded and an operator-supplied tenant-triggered
     inhibit rule could not be checked against it. No verdict on the config —
-    rc 2, like amtool being unusable — and nothing is written or applied."""
+    rc 2, like Alertmanager giving no verdict — and nothing is written or applied."""
     print(f"ERROR: the assembled Alertmanager config could not be verified — "
           f"{refusing}:\n  {safe_label(str(exc))}", file=sys.stderr)
     sys.exit(EXIT_CALLER_ERROR)
@@ -315,10 +314,10 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     if verdict.assembly_error is not None:
         _assembly_failed(ValueError(verdict.assembly_error),
                          "validation cannot pass")
-    # #2260: Alertmanager's own parser, same verdicts as the write paths
-    # (#2219): rejected → rc 1, amtool unusable → rc 2, amtool absent → a
-    # NOTICE and the rc is unchanged.
-    print(verdict.amtool.message, file=sys.stderr)
+    # #2260 / #3689: Alertmanager, through the write paths' own gate:
+    # rejected → rc 1, no verdict → rc 2, amtool absent → a NOTICE and the rc
+    # is unchanged.
+    print(verdict.alertmanager.message, file=sys.stderr)
     if verdict.exit_code is not None:
         sys.exit(verdict.exit_code)
     print("OK: all configs valid")
@@ -425,7 +424,8 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
                                      configmap_name, strict=strict,
                                      judge_merged=judge_merged)
     except AlertmanagerConfigRejected as exc:
-        # #2219: amtool refused the merged config BEFORE kubectl was called.
+        # #2219 / #3689: Alertmanager refused the merged config (or gave no
+        # verdict) BEFORE kubectl was called.
         sys.exit(exc.exit_code)
     except AlertmanagerConfigInvariantViolated as exc:
         # #2506: the same `FAIL:` verdict #2260 gave --output-configmap and
@@ -442,8 +442,8 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
     # #2219: a failed `/-/reload` IS one of those paths now — it used to be
     # warning-level (#1243) and exited 0 while the running Alertmanager stayed
     # on the old config. Unreachable is environment, so 2 fits; a reload the
-    # new config made fail is prevented earlier by the amtool gate when amtool
-    # is on PATH. ⛔ And it is NOT true that every
+    # new config made fail is prevented earlier by `alertmanager_check`.
+    # ⛔ And it is NOT true that every
     # such path is a kubectl invocation failing: with kubectl returning 0,
     # a ConfigMap missing `alertmanager.yml` — or holding a value that is
     # not a mapping — also returns False. Measured; each of those now emits
@@ -497,7 +497,7 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
         _unverifiable(exc, f"nothing was written to {target}")
 
     # #2219: validate what Alertmanager will LOAD from what this run EMITS.
-    # For a ConfigMap the alertmanager.yml handed to amtool is parsed back
+    # For a ConfigMap the alertmanager.yml handed to Alertmanager is parsed back
     # OUT of the emitted text, not taken from the dict or the inner dump —
     # the outer dump is where a U+0085 in a value got folded into a line
     # break, so only a round trip of the emitted text sees what the cluster
@@ -515,25 +515,15 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
             sys.exit(EXIT_CALLER_ERROR)
     else:
         am_yml = content
-    rc = amtool_gate(am_yml, what=am_what,
-                     refusing=f"write it to {target} (nothing was written)")
-    if rc is not None:
-        sys.exit(rc)
-    # #2660: on the same emitted text amtool checked, so a --base-config's
-    # own root receiver is what is judged, not the built-in one. Alertmanager's
-    # loader refusing it (amtool absent, so nothing refused it yet) is the
-    # verdict amtool would give: rc 1, nothing written.
-    try:
-        emitted = alertmanager_reading(am_yml)
-    except ConsumerReadError as exc:
-        if not isinstance(exc, InputRefused):
-            print(f"ERROR: cannot read {am_what} the way Alertmanager does — refusing "
-                  f"to write it to {target} (nothing was written): {exc}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-        print(f"FAIL: Alertmanager's config loader refuses {am_what} "
-              f"— refusing to write it to {target} (nothing was written): "
-              f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
-        sys.exit(EXIT_VIOLATION)
+    # #3689: the one gate --validate and --apply ask too, in its one order.
+    check = alertmanager_check(am_yml, what=am_what,
+                               refusing=f"write it to {target} (nothing was written)")
+    print(check.message, file=sys.stderr)
+    if check.exit_code is not None:
+        sys.exit(check.exit_code)
+    # #2660: the gate's reading of the emitted text, so a --base-config's own
+    # root receiver is what is judged, not the built-in one.
+    emitted = check.reading
     warn_if_root_receiver_without_integration(emitted)
     # #1211: the emitted firehose / watchdog-heartbeat receivers — a
     # --base-config's own, else the name-only placeholders — decide whether

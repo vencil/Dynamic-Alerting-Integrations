@@ -1,5 +1,7 @@
 """#2219: Alertmanager's own parser (`amtool check-config`) as the last gate
-of generate_alertmanager_routes.py.
+of generate_alertmanager_routes.py — asked, since #3689, only after
+Alertmanager's own loader (da-read) accepted the text, through the ONE gate
+every mode shares (`_grar_render.alertmanager_check`).
 
 The schema and the generator's Python checks accept values Alertmanager
 refuses at load time (a webhook URL `http://[1]/`; a host carrying U+0085 that
@@ -13,8 +15,10 @@ The contract pinned here:
 * amtool on PATH, rejects  → rc 1, amtool's message on stderr, NOTHING written
   (not to -o, not to stdout) and, under --apply, kubectl never asked to apply;
 * amtool not runnable      → rc 2 (environment), nothing written;
+* loader (da-read) refuses → rc 1 and amtool is never asked (#3689);
 * amtool absent            → rc and output unchanged, but a NOTICE says the
-  config was NOT validated — never silent;
+  one check only amtool adds (the template-file parse) was not made — never
+  silent;
 * fragment (render) mode   → always a NOTICE: a fragment has no root receiver,
   so amtool cannot check it at all;
 * --apply reload failure   → rc 2;
@@ -51,8 +55,7 @@ _POSIX_ONLY = pytest.mark.skipif(
     sys.platform == "win32",
     reason="shell-stub amtool is not executable on Windows")
 
-_NOT_VALIDATED = ("NOTICE: amtool not found on PATH; generated Alertmanager "
-                  "config was NOT validated by Alertmanager")
+_NOT_VALIDATED = render.AMTOOL_NOT_FOUND_NOTICE
 
 
 @pytest.fixture
@@ -290,6 +293,24 @@ class TestApplyGate:
         assert any(c[:2] == ["kubectl", "apply"] for c in calls), calls
         assert _NOT_VALIDATED in capsys.readouterr().err
 
+    def test_loader_refusal_never_asks_amtool_nor_kubectl(self, monkeypatch, capsys):
+        """#3689: the merged text goes to Alertmanager's loader FIRST; its
+        refusal is rc 1, without amtool (here present and accepting)."""
+        calls = _fake_cluster(monkeypatch, amtool_rc=0)
+        receivers = [{"name": "tenant-t1", "webhook_configs": [{
+            "url": "https://x.example.com/h",
+            "http_config": {"follow_redirects": "CANARY3689"}}]}]
+        with pytest.raises(SystemExit) as exc:
+            gar._apply_mode(_ROUTES, receivers, [], "monitoring",
+                            "alertmanager-config", yes_flag=True)
+        assert exc.value.code == 1
+        assert not any(c[0] == "/fake/amtool" for c in calls), calls
+        assert not any(c[:2] in (["kubectl", "apply"], ["kubectl", "create"])
+                       for c in calls), calls
+        err = capsys.readouterr().err
+        assert "config loader refuses" in err and "nothing was applied" in err, err
+        assert "CANARY" not in err, err
+
     def test_reload_failure_is_exit_2(self, monkeypatch, capsys):
         calls = _fake_cluster(monkeypatch, amtool_rc=0, curl_rc=22)
         assert self._run_apply_mode() == 2
@@ -306,7 +327,8 @@ class TestApplyGate:
 # Before this, --validate printed OK at rc 0 for a tree that --output-configmap
 # then refused (`http://[1]/`). It now assembles the config on the BUILT-IN
 # base (`--validate --base-config` stays rc 2, #1616) and hands it to
-# `amtool_gate` before printing OK — same verdicts as the write paths.
+# `alertmanager_check` (#3689: da-read, then amtool) before printing OK —
+# the one gate the write paths call too.
 _VALIDATE_NOT_VALIDATED = gar.VALIDATE_AMTOOL_NOT_FOUND_NOTICE
 
 
@@ -429,7 +451,10 @@ class TestValidateWithRealAmtool:
         r = self._run(d)
         err = r.stderr.decode("utf-8", "replace")
         assert r.returncode == 1, err
-        assert "FAILED:" in err and "http://[1]/" in err, err
+        # #3689: Alertmanager's loader (da-read) refuses it first, so the
+        # real amtool on PATH is never asked — no `FAILED:` of its own.
+        assert "Alertmanager's config loader refuses" in err and "http://[1]/" in err, err
+        assert "FAILED:" not in err, err
         assert b"OK: all configs valid" not in r.stdout
 
     def test_repo_conf_d_is_accepted(self):

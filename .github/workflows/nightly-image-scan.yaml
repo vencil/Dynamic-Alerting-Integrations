@@ -240,18 +240,18 @@ jobs:
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
           - name: vmauth # helm/victorialogs/values.yaml auth.image (#1295)
-            ref: "victoriametrics/vmauth:v1.155.0@sha256:dfeb63e5eff4bc32ed0fa2d43d8e85b717e8442c8b5c753e83c216669665a7de"
+            ref: "victoriametrics/vmauth:v1.156.0@sha256:e4b739ed468de88906550911c03fee2b0da89785679343a006639b8f471df051"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:1c32c3720dc4c7f0c7dbe998737f32c200add6511eca7cec705008be488b87d6"
+            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:c3ed2b61f3c4e410685565ceb3c818197b552832521b39d53eca5d2d9d0dc1e1"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/tenant-api values.yaml
-            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.5@sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
+            ref: "quay.io/oauth2-proxy/oauth2-proxy:v7.15.6@sha256:c3415e8660af553f5e18f5d90db050614c02493c0ac6260ac59442f6d9b12048"
           # docker.io, NOT quay.io: upstream released v0.14.0 on 2026-06-23 but never
           # pushed it to quay — quay's v0.13.0/latest/v0 all still resolve to the April
           # build. Staying on quay freezes x/net + prometheus lib at April versions.
           - name: prom-label-proxy # helm/federation-proxy/values.yaml
-            ref: "prometheuscommunity/prom-label-proxy:v0.15.1@sha256:186f9fe791158ef25d6f810109746ac0acdb35cb8401b554526c77c065483373"
+            ref: "prometheuscommunity/prom-label-proxy:v0.16.2@sha256:5709cd2e1add82a57bc613fe34f0f6864fdba84d77c13f87e2508fc0eaf71888"
           - name: mariadb # helm/mariadb-instance/values.yaml
             ref: "mariadb:11.8.9@sha256:c4124d1afa875e47f2892edf26b482fa54f796e2f342d3717a04ca091a22a9bd"
           - name: mysqld-exporter # helm/mariadb-instance/values.yaml
@@ -259,7 +259,7 @@ jobs:
           - name: grafana # k8s/03-monitoring/deployment-grafana.yaml
             ref: "grafana/grafana:12.4.14@sha256:ae509d9ae8c1021ca32ec370a9ca975d40165eda9fccd1e1102d317ff8787cd7"
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
-            ref: "prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
+            ref: "prom/prometheus:v3.16.0@sha256:e04987641b57704f408e31f6373ba4138ecf27cb4a165d24aabb6c38fddd0f06"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
             ref: "prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
@@ -272,7 +272,7 @@ jobs:
           # (routing config, #1243) and deployment-prometheus.yaml (Rule Packs, #1246).
           # A digest refresh MUST update both or they drift silently.
           - name: config-reloader # k8s/03-monitoring/deployment-{alertmanager,prometheus}.yaml (sidecars)
-            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.94.2@sha256:a1897c67478bc23434534e91ad3855280771196b1daf17144db9dbcb655bef71"
+            ref: "quay.io/prometheus-operator/prometheus-config-reloader:v0.95.1@sha256:39bdbade0c64f7c38bb6d18d6f602b14ad489bc189b709dc9266b49e6647aac1"
           # NOTE: alpine/git's VERSION tags are mutable — upstream's Sunday cron
           # re-pushes v<X.Y.Z> from a fresh `apk add` (alpine-docker/git build.yml), so
           # the same tag silently gains OS fixes. Only the digest pins it; a digest-only
@@ -294,7 +294,7 @@ jobs:
             # inventory", never as clean.
             no_inventory: true
           - name: alpine-git # helm/tenant-api/templates/deployment.yaml (git-clone / git-gc-off init containers, hardcoded in the template)
-            ref: "alpine/git:v2.54.0@sha256:ac6c828f15d82775d204d3d75112e1d34af8945da80ccf922713c9891ba68e7a"
+            ref: "alpine/git:v2.54.0@sha256:6a1fdb962814ca11508ca8d1bab94375b5b7ac4e4a9a40981c29fc32c02f095d"
           # try-local demo stack ONLY (#1337 ①) — README points prospective customers
           # at it and try-local-smoke runs it nightly, but nothing under helm/ or k8s/
           # pulls these two, so the extractor cannot see them. The compose file keeps

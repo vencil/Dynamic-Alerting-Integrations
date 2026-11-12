@@ -72,7 +72,7 @@ func TestRulesKeepOnlyTheWrittenKeys(t *testing.T) {
 			`{"groups":[{"name":"g","interval":"1m","limit":0,"labels":{"team":"a"},` +
 				`"rules":[{"record":"r:x","expr":"1"}]}]}`},
 		{"empty-rules", "groups:\n- name: g\n  rules: []\n", `{"groups":[{"name":"g","rules":[]}]}`},
-		// Duration expressions are on in Prometheus v3.15 with no feature flag.
+		// Duration expressions are on in Prometheus v3.16 with no feature flag.
 		{"duration-expr", "groups:\n- name: g\n  rules:\n  - {record: 'r:y', expr: 'rate(x[5m * 2])'}\n",
 			`{"groups":[{"name":"g","rules":[{"record":"r:y","expr":"rate(x[5m * 2])"}]}]}`},
 	}

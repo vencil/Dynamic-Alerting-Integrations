@@ -110,11 +110,12 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "tenant_slot_verdicts",  # #3076, for notification_tester (gar.*)
     ),
     "_grar_render": (
-        # #2311: amtool verdict statuses, read by validate_config as `gen.…`
-        "AMTOOL_ACCEPTED",
-        "AMTOOL_NOT_FOUND",
-        "AMTOOL_REJECTED",
-        "AMTOOL_UNUSABLE",
+        # #2311 / #3689: Alertmanager verdict statuses, read by
+        # validate_config as `gen.…`
+        "AM_ACCEPTED",
+        "AM_ACCEPTED_WITHOUT_AMTOOL",
+        "AM_REJECTED",
+        "AM_UNUSABLE",
         "BaseConfigInputError",  # #1616 supplied-but-unusable --base-config
         "_apply_merged_configmap",
         "_read_existing_configmap",
