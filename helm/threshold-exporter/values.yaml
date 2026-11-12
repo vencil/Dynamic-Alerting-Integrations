@@ -311,6 +311,44 @@ resources:
     cpu: 200m
     memory: 128Mi
 
+# Config validation (#3353): a CronJob that runs `da-tools validate-config` —
+# the rows CI runs, with the same severities (the shared key verdict,
+# ADR-038; the yaml_quoting row, #3764) — on the ConfigMap the exporter
+# reads. It judges a tree changed WITHOUT CI: direct mode, where a commit
+# reaches the deployed ConfigMap with no PR. A FAIL row fails the Job, and
+# the platform rule CronJobLastRunFailed (rule-pack-platform) fires —
+# ⚠️ that rule watches the `monitoring` namespace only, so install this
+# release there for the alert to cover it. The findings are in the Job's log
+# (`kubectl logs job/<name>`).
+#
+# Memory is NOT a second number: it is resources.limits.memory above ×
+# memoryFactor (templates/_helpers.tpl), so raising the exporter for more
+# tenants raises this with it; a factor too small fails the Job (OOM), and
+# the same alert fires.
+#
+# ⚠️ The image's validate-config is the one of its tools/v* tag: v2.9.0's
+# has 8 rows, without the 7 main has added since — yaml_quoting, unread_keys
+# (the shared key verdict), guard_errors, json_schema, root_defaults,
+# tenant_uniqueness, tenant_file_name — so with it this judges far less than
+# CI on main does. Bump `image.tag` to the next tools/v* release
+# (bump_docs.py --tools does it).
+configValidation:
+  enabled: false
+  schedule: "*/15 * * * *"
+  # Measured validate-config peak / exporter load RSS: 2.5× at 500 tenants,
+  # 3.2× at 5000 (synthetic-v2). A positive integer.
+  memoryFactor: 4
+  # A run past this is killed and counts as failed (5000 tenants took ~3.5
+  # minutes in the measurement above).
+  activeDeadlineSeconds: 1800
+  cpuRequest: 100m
+  image:
+    repository: ghcr.io/vencil/da-tools
+    tag: "v2.9.0"
+    # Optional digest pin (supply-chain; #566 T5 / #902). Empty = tag only.
+    digest: ""
+    pullPolicy: IfNotPresent
+
 # startupProbe covers the startup config load (#2153). The exporter loads
 # the whole conf.d tree BEFORE its HTTP server starts, so /health refuses
 # connections for as long as that load takes. Without a startupProbe the
