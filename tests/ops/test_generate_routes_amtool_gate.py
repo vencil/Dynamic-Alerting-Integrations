@@ -451,7 +451,10 @@ class TestValidateWithRealAmtool:
         r = self._run(d)
         err = r.stderr.decode("utf-8", "replace")
         assert r.returncode == 1, err
-        assert "FAILED:" in err and "http://[1]/" in err, err
+        # #3689: Alertmanager's loader (da-read) refuses it first, so the
+        # real amtool on PATH is never asked — no `FAILED:` of its own.
+        assert "Alertmanager's config loader refuses" in err and "http://[1]/" in err, err
+        assert "FAILED:" not in err, err
         assert b"OK: all configs valid" not in r.stdout
 
     def test_repo_conf_d_is_accepted(self):
