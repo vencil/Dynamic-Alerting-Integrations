@@ -41,8 +41,6 @@ uncovered:
   - KafkaHighRequestRateCritical
   - KafkaLowBrokerCount
   - KafkaNoActiveController
-  - KafkaUnderReplicatedPartitions
-  - KafkaUnderReplicatedPartitionsCritical
   rule-pack-kubernetes.yaml:
   - ContainerCrashLoop
   - ContainerImagePullFailure
