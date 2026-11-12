@@ -19,12 +19,17 @@ Empty / templated ({{ ... }}) tags are SKIPPED: first-party `tag: ""` resolves t
 the chart appVersion (built at release, exists by construction), and Helm template
 expressions aren't real refs.
 
-Resolution: `skopeo inspect docker://<ref>` (preferred) or `docker manifest
-inspect <ref>`. If NEITHER tool is available the check SKIPS (exit 0) with a loud
-note — so a dev box without skopeo/docker doesn't false-fail; CI installs skopeo.
+Resolution: each ref's registry is asked through the distribution v2 API
+(`scripts/tools/_lib_registry.py`, #3611), which tells "no such manifest" from
+"no answer" by the registry's own `errors[].code` — skopeo / docker could not,
+both exit non-zero either way. No binary is needed, so there is no "resolver
+not installed" case and no `CI` environment switch.
 
-Exit: 0 = all concrete refs resolve (or resolver unavailable / nothing to check);
-1 = at least one ref does not resolve (the #897 class).
+Exit: 0 = every concrete ref resolves (or there is nothing to check);
+1 = at least one ref does not resolve: the registry has no such manifest, or
+    will not serve it anonymously (the #897 class; 401 → 1 per #3611 Q3);
+2 = at least one ref got no answer (rate limit, 5xx, no connection, timeout,
+    or a reply this check does not read), so whether it resolves was NOT checked.
 
 Two SCOPES, deliberately separate sets (see `--scope` and `delivered_refs`):
   * `deploy`    (default) — what WE install: helm values + k8s manifests.
@@ -38,7 +43,7 @@ Usage:
                               [--scope {deploy,delivered}]
     --root    repo root to scan (default: cwd)
     --list    print the discovered concrete refs and exit 0 (no network) — for tests
-    --timeout per-ref resolver timeout in whole seconds, 1..2147483 (default 30)
+    --timeout timeout of each registry request, whole seconds, 1..2147483 (default 30)
     --scope   which ref set to check (default: deploy — see the ⛔ note on
               `--list` compatibility next to _SCOPES below)
 """
@@ -46,9 +51,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import shutil
 import site
-import subprocess
 import sys
 import sysconfig
 from pathlib import Path
@@ -57,10 +60,10 @@ from pathlib import Path
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
-# No resolver under CI, or a resolver that gave no answer (timeout).
-# Distinct from EXIT_VIOLATION (1): "the check could not run" is not "the refs are
-# bad", and a reader of a CI log must be able to tell those apart. That is the
-# contract's caller error, 2 (scripts/tools/_lib_exitcodes.py; #3577, #3611).
+# A registry that gave no answer about a ref. Distinct from EXIT_VIOLATION (1):
+# "the check could not run" is not "the refs are bad", and a reader of a CI log
+# must be able to tell those apart. That is the contract's caller error, 2
+# (scripts/tools/_lib_exitcodes.py; #3577, #3611).
 EXIT_NOT_CHECKED = 2
 
 
@@ -279,17 +282,8 @@ def delivered_refs(root: Path) -> set[str]:
     # so a single blanked pin would sail past a `not apply_refs` test and reach
     # the registry as an unparseable ref.
     #
-    # ⚠️ The first version of this comment said flatly "this is not a fail-open,
-    # the resolver fails and the gate exits 1". That is true only WHERE A RESOLVER
-    # IS INSTALLED: `main()` below prints `::warning::` and returns 0 when neither
-    # skopeo nor docker is present. CI installs skopeo (image-ref-resolve.yaml,
-    # pinned by test_the_delivered_scope_job_has_a_resolver_installed), so the
-    # gate itself is safe. ⚠️ Tense matters here: WITHOUT this check, a local
-    # `--scope delivered` run on a box with neither WOULD exit 0 over a blanked
-    # pin. With it, that run exits 1 — the SystemExit below fires before `main()`
-    # ever consults `_resolver()`. So: where a resolver exists this check buys a
-    # message that names the pin table instead of a registry error about an empty
-    # string, and where one does not it is the only thing that fires at all.
+    # It buys a message that names the pin table instead of a registry error
+    # about an empty string, and it fires before any registry is asked.
     table = getattr(mod, "_GITLAB_APPLY_IMAGES", {})
     # ⚠️ Count non-empty VALUES, not the deduped set: two entries may legitimately
     # pin the same image, and comparing `len(set)` against the entry count would
@@ -329,17 +323,6 @@ def delivered_refs(root: Path) -> set[str]:
 def _repo_of(ref: str) -> str:
     """The repository portion of a ref (strip @digest then :tag)."""
     return ref.split("@", 1)[0].rsplit(":", 1)[0]
-
-
-def _resolvable(ref: str) -> str:
-    """A form the resolver can parse. skopeo/docker reject a ref carrying BOTH a
-    `:tag` AND an `@digest` (fatal "Error parsing reference"); the digest is
-    authoritative, so resolve `<repo>@<digest>` and drop the informational tag.
-    Tag-only refs pass through unchanged. (#902 L2 pins as `repo:tag@digest` —
-    readable tag + immutable digest, which Kubernetes accepts but skopeo won't.)"""
-    if "@" in ref:
-        return f"{_repo_of(ref)}@{ref.split('@', 1)[1]}"
-    return ref
 
 
 def _is_concrete(ref: str) -> bool:
@@ -485,34 +468,18 @@ def discover_dropped_refs(root: Path) -> set[str]:
     return {r for r in dropped if _keep(r.split(" (tag:", 1)[0])}
 
 
-def _resolver():
-    """Return (cmd_builder, name) for the available resolver, or (None, None)."""
-    if shutil.which("skopeo"):
-        return (lambda ref: ["skopeo", "inspect", "--no-tags", f"docker://{ref}"], "skopeo")
-    if shutil.which("docker"):
-        return (lambda ref: ["docker", "manifest", "inspect", ref], "docker")
-    return (None, None)
-
-
-# Ceiling for --timeout (#2966). NOT threading.TIMEOUT_MAX: on Linux,
-# subprocess.run(capture_output=True, timeout=…) waits in poll(), whose timeout
-# is a C int of milliseconds, so anything past 2**31-1 ms = 2147483 s raises
-# OverflowError ("timeout is too large") — a traceback, rc 1, which this gate
-# uses for "a ref does not resolve". Measured: 2147483 runs, 2147484 raises.
+# Ceiling for --timeout (#2966). It was the subprocess poll() ceiling while the
+# resolver was a subprocess (2**31-1 ms; one second more raised OverflowError).
+# The registry is now asked over a socket, which accepts more (measured
+# 2026-11-12), so the bound no longer guards a crash — it is kept so the range
+# the CLI accepts does not change with the transport.
 MAX_TIMEOUT_S = (2**31 - 1) // 1000
 
 
 def _positive_timeout(text: str) -> int:
     """argparse type for --timeout (#2966): a whole number of seconds from 1 to
-    MAX_TIMEOUT_S (the subprocess poll() ceiling, see above). 0 or a negative
-    value made every ref report "timeout after 0s" — a false verdict about
-    registry state; a larger value crashed with OverflowError.
-
-    Local on purpose, not scripts/tools/_lib_validation.positive_int_seconds
-    (whose ceiling is threading.TIMEOUT_MAX, too high for a subprocess timeout):
-    this module (also loaded in-process by tests) only appends scripts/tools to
-    the end of sys.path, for its run() exit (#3579), and keeps its module cache
-    effects confined to the init_project load above.
+    MAX_TIMEOUT_S (see above). 0 or a negative value would make every request
+    time out at once — no verdict about any ref — so it is refused up front.
     """
     try:
         value = int(text)
@@ -524,36 +491,13 @@ def _positive_timeout(text: str) -> int:
     return value
 
 
-#: `_resolve_once` outcomes. UNANSWERED is a resolver that ran out of time: the
-#: registry said nothing about the ref, so it is no verdict (the contract's 2),
-#: not the "does not resolve" finding (1) (#3577, #3611).
-RESOLVED, NOT_RESOLVED, UNANSWERED = "resolved", "not-resolved", "unanswered"
-
-
-def _resolve_once(cmd: list[str], timeout: int) -> tuple[str, str]:
-    """Run one resolver command; return (outcome, last-line-of-reason).
-
-    ⚠️ A non-zero resolver exit is NOT_RESOLVED whatever its cause: skopeo and
-    docker exit 1 both for a tag the registry does not have and for a registry
-    they could not reach, so the exit status cannot tell those apart, and this
-    does not guess from the message text. Only a timeout is known to be no answer.
-    """
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
-    except subprocess.TimeoutExpired:
-        return (UNANSWERED, f"timeout after {timeout}s")
-    if proc.returncode == 0:
-        return (RESOLVED, "")
-    lines = (proc.stderr or proc.stdout or "non-zero exit").strip().splitlines()
-    return (NOT_RESOLVED, lines[-1] if lines else "non-zero exit")
-
-
 def main() -> int:
     ap = argparse.ArgumentParser(description="Verify chart/manifest image refs resolve in their registry.")
     ap.add_argument("--root", default=".", help="repo root to scan (default: cwd)")
     ap.add_argument("--list", action="store_true", help="print discovered concrete refs and exit (no network)")
     ap.add_argument("--timeout", type=_positive_timeout, default=30,
-                    help=f"per-ref resolver timeout, whole seconds from 1 to {MAX_TIMEOUT_S} (default 30)")
+                    help=f"timeout of each registry request (a ref takes up to four), "
+                         f"whole seconds from 1 to {MAX_TIMEOUT_S} (default 30)")
     ap.add_argument("--scope", choices=_SCOPES, default="deploy",
                     help="which ref set to check: deploy (helm values + k8s manifests, "
                          "the default) or delivered (what `da-tools init` writes into a "
@@ -573,46 +517,25 @@ def main() -> int:
         print("check_image_refs_resolve: no concrete image refs found — nothing to check.")
         return 0
 
-    build_cmd, name = _resolver()
-    if build_cmd is None:
-        # ⛔ This is the only fail-open in the design, and on a dev box it is the
-        # right one: a laptop without skopeo must not fail a check about registry
-        # state. In CI it is the wrong one, and it was defended only by the
-        # continued existence of an `apt-get install skopeo` step. The realistic
-        # way that step stops working is not deletion — a guard covers that — it
-        # is someone answering an apt flake with `continue-on-error: true`, after
-        # which the step's conclusion is `success`, every scope prints this
-        # warning, every scope returns 0, and both gates are green forever with
-        # nothing asserting otherwise. So: advisory locally, fail-closed under CI.
-        in_ci = bool(os.environ.get("CI"))
-        stream = sys.stderr if in_ci else sys.stdout
-        level = "error" if in_ci else "warning"
-        print(f"::{level}:: neither skopeo nor docker available — image-ref "
-              f"resolution did NOT run"
-              + (" (this is CI: a check that cannot run must not report success)"
-                 if in_ci else " (install skopeo to enforce locally)")
-              + ". Refs that WOULD be checked:", file=stream)
-        for ref in refs:
-            print(f"  - {ref}", file=stream)
-        return EXIT_NOT_CHECKED if in_ci else 0
+    import _lib_registry  # scripts/tools, appended to sys.path above
 
-    print(f"Resolving {len(refs)} concrete image ref(s) [scope={args.scope}] via {name}...")
+    print(f"Resolving {len(refs)} concrete image ref(s) [scope={args.scope}] "
+          "via the registry v2 API...")
     failed: list[tuple[str, str]] = []
     unanswered: list[tuple[str, str]] = []
     for ref in refs:
-        resolvable = _resolvable(ref)  # `repo:tag@digest` → `repo@digest` for the resolver
-        outcome, reason = _resolve_once(build_cmd(resolvable), args.timeout)
-        if outcome != RESOLVED:
+        answer = _lib_registry.resolve(ref, timeout=args.timeout)
+        if answer.outcome != _lib_registry.RESOLVED:
             # One retry absorbs a transient registry blip before failing the gate.
-            outcome, reason = _resolve_once(build_cmd(resolvable), args.timeout)
-        if outcome == RESOLVED:
+            answer = _lib_registry.resolve(ref, timeout=args.timeout)
+        if answer.outcome == _lib_registry.RESOLVED:
             print(f"  ok       {ref}")
-        elif outcome == UNANSWERED:
-            unanswered.append((ref, reason))
-            print(f"  NO-ANSWER {ref}  ({reason})")
+        elif answer.outcome == _lib_registry.NO_ANSWER:
+            unanswered.append((ref, answer.reason))
+            print(f"  NO-ANSWER {ref}  ({answer.reason})")
         else:
-            failed.append((ref, reason))
-            print(f"  FAIL     {ref}  ({reason})")
+            failed.append((ref, answer.reason))
+            print(f"  FAIL     {ref}  ({answer.reason})")
 
     if failed:
         print(f"\n::error:: {len(failed)} image ref(s) do NOT resolve in their registry "
@@ -621,7 +544,7 @@ def main() -> int:
             print(f"  - {ref}: {reason}", file=sys.stderr)
     if unanswered:
         print(f"\n::error:: {len(unanswered)} image ref(s) got NO answer from the "
-              f"resolver, so whether they resolve was NOT checked:", file=sys.stderr)
+              f"registry, so whether they resolve was NOT checked:", file=sys.stderr)
         for ref, reason in unanswered:
             print(f"  - {ref}: {reason}", file=sys.stderr)
         return EXIT_NOT_CHECKED

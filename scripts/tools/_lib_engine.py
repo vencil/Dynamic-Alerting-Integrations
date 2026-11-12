@@ -64,7 +64,6 @@ ENGINES: dict[str, str] = {
     "node": "node",
     "pint": "pint",
     "promtool": "promtool",
-    "skopeo": "skopeo",
 }
 
 #: Exit status a timed-out engine is reported with in a NoVerdict reason

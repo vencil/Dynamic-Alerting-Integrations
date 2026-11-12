@@ -266,6 +266,7 @@ lang: zh
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.
 - `scripts/tools/_lib_redact.py`：Which config fields hold a credential, and how a report prints them.
+- `scripts/tools/_lib_registry.py`：Does an image ref resolve? Asked of its registry through the distribution v2 API (#3611).
 - `scripts/tools/_lib_shadow_report.py`：The validation report `validate` writes and `shadow-verify` reads (#3662).
 - `scripts/tools/_lib_tenant_state.py`：Read tenant-api's state records as tenant-api reads them (#2883, ADR-036 §12).
 - `scripts/tools/_lib_tenant_uniqueness.py`：Does this ARTIFACT declare one tenant twice? One measurement, two producers.
