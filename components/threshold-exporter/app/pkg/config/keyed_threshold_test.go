@@ -191,7 +191,7 @@ func TestResolveAtWithKeys_ReportsTheServedKey(t *testing.T) {
 				"mysql_cpu":                         {Default: "44"},
 				"kafka_lag":                         {Default: "1000"},
 				`redis_queue_length{queue="tasks"}`: {Default: "5"},
-				"_custom_alerts":                    {Default: "- {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n"},
+				"_custom_alerts":                    valueAsWritten("- {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n"),
 			},
 		},
 	}

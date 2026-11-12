@@ -57,9 +57,6 @@ type defaultTextSite struct {
 // raw/val := TrimSpace(sv.Default)); none is a whole-file decode of disk data
 // (those use []byte variables and fall outside shape A).
 var defaultTextBaseline = map[defaultTextSite]int{
-	// _custom_alerts specs re-decoded from sv.Default.
-	{"custom_alert.go", "ValidateTenantCustomAlerts", "redecode"}: 1,
-	{"custom_alert.go", "walkCustomAlertSpecs", "redecode"}:       1,
 	// _metadata value re-decoded from sv.Default.
 	{"metadata_layers.go", "decodeMetadataValue", "redecode"}: 1,
 	// _metadata (TenantMetadata) re-decoded from sv.Default (moved out of

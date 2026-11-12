@@ -3,8 +3,9 @@ package config
 // Custom Alerts data-plane emission (ADR-024 能力 B, #741 S3a).
 //
 // A tenant declares `_custom_alerts` (a list) in conf.d; the directory scanner
-// stores the list as a YAML string in ScheduledValue.Default (parse.go). Here we
-// re-parse it and emit one user_threshold series per declaration:
+// stores the list re-serialised in ScheduledValue.Default, flagged structured
+// (parse.go); customAlertSpecsOf decodes it from that structure, and here we
+// emit one user_threshold series per declaration:
 //
 //	user_threshold{component="custom", metric=<metric>, severity=<sev>,
 //	               recipe_id=<slug>, name=<name>, mode=<page|silent>} = <value>
@@ -1108,6 +1109,35 @@ type walkedCustomAlert struct {
 	dup       CustomAlertDuplicate
 }
 
+// customAlertSpecsOf is the tenant's `_custom_alerts` as its readers read it
+// (#3638): the list it was written as, decoded from its structure. A string
+// is no list, whatever its text holds — `_custom_alerts: "- recipe: …"`
+// used to be read as the list its text spelled; it is now refused
+// (errCustomAlertsString). An absent key, or an empty string, declares none.
+// The one decode of the block: the exporter's walk and the write gate's
+// ValidateTenantCustomAlerts both take it from here.
+func customAlertSpecsOf(overrides map[string]ScheduledValue) ([]CustomAlertSpec, error) {
+	sv, ok := overrides["_custom_alerts"]
+	if !ok {
+		return nil, nil
+	}
+	node, structured, err := structureOf(sv)
+	if !structured {
+		if strings.TrimSpace(sv.Default) == "" {
+			return nil, nil
+		}
+		return nil, errCustomAlertsString
+	}
+	var specs []CustomAlertSpec
+	if err == nil {
+		err = node.Decode(&specs)
+	}
+	return specs, err
+}
+
+// errCustomAlertsString is customAlertSpecsOf's answer for a string.
+var errCustomAlertsString = errors.New("_custom_alerts is written as a string, not a list (#3638): write it as a YAML list of recipes")
+
 // walkCustomAlertSpecs decodes the tenant's `_custom_alerts` and judges each
 // entry in declaration order. A disabled entry is resolved once more with a
 // value in place of the switched-off one (disabledProbe): it is disabled when
@@ -1117,12 +1147,8 @@ func walkCustomAlertSpecs(tenant string, overrides map[string]ScheduledValue, lo
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
-	sv, ok := overrides["_custom_alerts"]
-	if !ok || strings.TrimSpace(sv.Default) == "" {
-		return nil, nil
-	}
-	var specs []CustomAlertSpec
-	if err := yaml.Unmarshal([]byte(sv.Default), &specs); err != nil {
+	specs, err := customAlertSpecsOf(overrides)
+	if err != nil {
 		// whole block unparseable → count as 1 error; the tenant gets NO custom
 		// alerts but the rest of its config is unaffected.
 		err = fmt.Errorf("cannot parse _custom_alerts: %w", err)
@@ -1370,12 +1396,8 @@ var MaxCustomRecipesDefault = contract.Cap
 // the authoritative global SOT). `threshold: "disable"` (three-state opt-out) is
 // VALID and does not count toward the cap.
 func ValidateTenantCustomAlerts(tenant string, overrides map[string]ScheduledValue, maxOwnRecipes int) []string {
-	sv, ok := overrides["_custom_alerts"]
-	if !ok || strings.TrimSpace(sv.Default) == "" {
-		return nil
-	}
-	var specs []CustomAlertSpec
-	if err := yaml.Unmarshal([]byte(sv.Default), &specs); err != nil {
+	specs, err := customAlertSpecsOf(overrides)
+	if err != nil {
 		return []string{fmt.Sprintf("_custom_alerts is not a valid recipe list: %v", err)}
 	}
 	var violations []string
