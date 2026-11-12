@@ -205,7 +205,7 @@ pr_ref: [3552, 3575, 3582]
 
 **PR-B**（2026-11-05 owner 裁決 A，取代原本「PR CI 記錄每個 package 的 CPU 秒」的構想）：`parse_go_test_json.py` 在 fragment 加 `slow_packages`，列出 package 層級 `Elapsed` 超過 `-timeout` 一半的 package（比例是 `SLOW_PACKAGE_RATIO`，`-timeout` 是同檔的 `GO_TEST_TIMEOUT_S`，planner 也改從這裡讀）；已經逾時的 package 只算 `timeout`。report 為每個 slow package 開 `<module>|slow-package|<import path>` 追蹤 issue，與其他 kind 一樣原地刷新、「not seen」不關票，但屬警告：module 仍判 GREEN、report 不因它轉紅。
 
-**完成**（2026-11-12）：11-05～11-11 七次排程 nightly 每個 package 都 ≤ 900 s，#3541 已關。同時發現 race 腿自存的 Go cache 每晚都 restore 不到（11-04～11-11 每條腿皆 `Cache not found`），tenant-api `internal/handler` 每晚約 216 s 花在測試內冷建 da-read 等工具；改為唯讀 PR CI 的 Go cache key，不另存。
+**完成**（2026-11-12）：11-05～11-11 七次排程 nightly 每個 package 都 ≤ 900 s，#3541 已關。同時發現 race 腿自存的 Go cache 每晚都 restore 不到（11-04～11-11 每條腿皆 `Cache not found`），改為唯讀 PR CI 的 Go cache key、不另存（分支實跑 8/8 條腿命中，各腿加總 4113 s → 3906 s）。tenant-api `internal/handler` 第一輪約 200 s 花在測試內冷建 da-read 等工具，這份 cache 不含它，仍是冷的。
 
 ### Snapshot test 擴展
 
