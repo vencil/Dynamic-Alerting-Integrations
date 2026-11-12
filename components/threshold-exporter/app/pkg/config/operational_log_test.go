@@ -22,7 +22,7 @@ import (
 var operationalLogTree = map[string]string{
 	"_defaults.yaml": "defaults:\n  m1_x: 1\nstate_filters:\n  maintenance:\n    severity: warning\n",
 	"ta.yaml":        "tenants:\n  ta:\n    _silent_mode: \"bogus\"\n",
-	"tb.yaml":        "tenants:\n  tb:\n    _silent_mode: \"target: [\"\n",
+	"tb.yaml":        "tenants:\n  tb:\n    _silent_mode:\n      target: [a]\n",
 	"tc.yaml":        "tenants:\n  tc:\n    _silent_mode:\n      target: all\n      expires: \"nope\"\n",
 	"td.yaml":        "tenants:\n  td:\n    _state_maintenance: \"expires: [\"\n",
 	"te.yaml":        "tenants:\n  te:\n    _state_maintenance:\n      expires: \"nope\"\n",

@@ -29,17 +29,17 @@ func TestResolveSilentModes(t *testing.T) {
 		validate    func(t *testing.T, result []ResolvedSilentMode)
 	}{
 		{"Default", map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": SV("70")}}, 0, nil},
-		{"Warning", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("warning")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
+		{"Warning", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("warning")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
 			if r[0].Tenant != "db-a" || r[0].TargetSeverity != "warning" {
 				t.Errorf("unexpected: %+v", r[0])
 			}
 		}},
-		{"Critical", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("critical")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
+		{"Critical", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("critical")}}, 1, func(t *testing.T, r []ResolvedSilentMode) {
 			if r[0].TargetSeverity != "critical" {
 				t.Errorf("expected critical, got %s", r[0].TargetSeverity)
 			}
 		}},
-		{"All", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("all")}}, 2, func(t *testing.T, r []ResolvedSilentMode) {
+		{"All", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("all")}}, 2, func(t *testing.T, r []ResolvedSilentMode) {
 			sev := map[string]bool{}
 			for _, x := range r {
 				sev[x.TargetSeverity] = true
@@ -48,9 +48,9 @@ func TestResolveSilentModes(t *testing.T) {
 				t.Errorf("expected warning+critical, got %v", sev)
 			}
 		}},
-		{"Disable", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("disable")}}, 0, nil},
-		{"InvalidFallback", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("invalid_value")}}, 0, nil},
-		{"CaseInsensitive", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("WARNING")}, "db-b": {"_silent_mode": SV("All")}, "db-c": {"_silent_mode": SV(" Critical ")}}, 4, nil},
+		{"Disable", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("disable")}}, 0, nil},
+		{"InvalidFallback", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("invalid_value")}}, 0, nil},
+		{"CaseInsensitive", map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("WARNING")}, "db-b": {"_silent_mode": SVYAML("All")}, "db-c": {"_silent_mode": SVYAML(" Critical ")}}, 4, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,9 +93,9 @@ func TestResolveSilentModes_MixedTenants(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
 		Tenants: map[string]map[string]ScheduledValue{
-			"db-a": {"_silent_mode": SV("warning")},
-			"db-b": {"_silent_mode": SV("all")},
-			"db-c": {"_silent_mode": SV("disable")},
+			"db-a": {"_silent_mode": SVYAML("warning")},
+			"db-b": {"_silent_mode": SVYAML("all")},
+			"db-c": {"_silent_mode": SVYAML("disable")},
 			"db-d": {"mysql_connections": SV("70")}, // no silent_mode → Normal
 		},
 	}
@@ -754,14 +754,14 @@ func TestResolveSilentModes_Structured(t *testing.T) {
 		check   func(t *testing.T, r []ResolvedSilentMode)
 	}{
 		{"WithExpires_Active",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("expires: " + future + "\nreason: Planned DB migration\ntarget: warning\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("expires: " + future + "\nreason: Planned DB migration\ntarget: warning\n")}}},
 			1, func(t *testing.T, r []ResolvedSilentMode) {
 				if r[0].Tenant != "db-a" || r[0].TargetSeverity != "warning" || r[0].Expired || r[0].Reason != "Planned DB migration" {
 					t.Errorf("unexpected: %+v", r[0])
 				}
 			}},
 		{"WithExpires_Expired",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("expires: " + past + "\nreason: DB migration done\ntarget: all\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("expires: " + past + "\nreason: DB migration done\ntarget: all\n")}}},
 			2, func(t *testing.T, r []ResolvedSilentMode) {
 				for _, x := range r {
 					if !x.Expired {
@@ -770,17 +770,17 @@ func TestResolveSilentModes_Structured(t *testing.T) {
 				}
 			}},
 		{"StructuredNoExpires",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("reason: Long-term silencing\ntarget: critical\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("reason: Long-term silencing\ntarget: critical\n")}}},
 			1, func(t *testing.T, r []ResolvedSilentMode) {
 				if r[0].Expired || r[0].Expires != (time.Time{}) {
 					t.Errorf("should not be expired, expires should be zero")
 				}
 			}},
 		{"StructuredDisable",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("target: disable\n")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("target: disable\n")}}},
 			0, nil},
 		{"ScalarBackwardCompat",
-			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SV("warning")}, "db-b": {"_silent_mode": SV("all")}}},
+			&ThresholdConfig{Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silent_mode": SVYAML("warning")}, "db-b": {"_silent_mode": SVYAML("all")}}},
 			3, func(t *testing.T, r []ResolvedSilentMode) {
 				for _, x := range r {
 					if x.Expired || !x.Expires.IsZero() {

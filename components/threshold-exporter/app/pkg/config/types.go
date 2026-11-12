@@ -185,6 +185,13 @@ type ScheduledValue struct {
 	// reads what it always read; the readers for which "" and "no key" part
 	// ask through tenantReserved.
 	deleted bool
+	// structured marks a Default that is a YAML mapping or sequence the
+	// decode re-serialised as text (UnmarshalYAML's mapping and sequence
+	// branches, #3638). Only such a value is read for structure, and only
+	// through structureOf (structured_value.go); a scalar whose text looks
+	// like YAML (`"target: critical"`) stays the scalar it was written as.
+	// Beside deleted, in the struct's padding: ScheduledValue stays 56 bytes.
+	structured bool
 }
 
 // ExpiryMeta carries a ScheduledValue's optional time-box (PREVENT #656).

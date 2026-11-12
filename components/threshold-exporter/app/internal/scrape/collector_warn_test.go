@@ -37,7 +37,7 @@ func scrapeWarnConfig(declared bool) *config.ThresholdConfig {
 			"t-bad":      {"_state_maintenance": {Default: "target: enable\nexpires: \"nope\"\n"}},
 			"t-bad-yaml": {"_state_maintenance": {Default: "expires: [\n"}},
 			"t-good":     {"_state_maintenance": {Default: "target: enable\nexpires: \"2099-01-01T00:00:00Z\"\n"}},
-			"t-silent":   {"_silent_mode": {Default: "target: all\nexpires: \"not-a-date\"\n"}},
+			"t-silent":   {"_silent_mode": svYAML("target: all\nexpires: \"not-a-date\"\n")},
 		},
 	}
 	if declared {

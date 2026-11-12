@@ -5,8 +5,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"gopkg.in/yaml.v3"
 )
 
 // silentModeTargets are the _silent_mode targets that silence something —
@@ -94,16 +92,24 @@ type silentModeReading struct {
 }
 
 // silentModeOf reads a _silent_mode value the way the exporter does: only
-// sv.Default (time-window overrides are not consulted), scalar form unless
-// the trimmed value contains "target:", then the structured form.
+// sv.Default (time-window overrides are not consulted), the structured form
+// for a mapping written with a `target` key, the scalar form otherwise.
+//
+// #3638: which form is the structure's (structureOf), never the text's — a
+// scalar `"target: critical"` is the unknown scalar it was written as, not
+// the mapping its text reads like. A mapping or sequence without a top-level
+// `target` key is its text read as an unknown scalar (WARN, refused on
+// write) — before #3638 one whose text held "target:" somewhere
+// (`{reason: "target: x"}`, `[{target: all}]`) read as off or as a parse
+// error instead.
 func silentModeOf(sv ScheduledValue) silentModeReading {
-	val := strings.TrimSpace(sv.Default)
-
-	// Structured format: ScheduledValue.UnmarshalYAML serializes a mapping
-	// back to a YAML string, so a mapping shows up here as "target: ...".
-	if strings.Contains(val, "target:") {
+	node, structured, err := structureOf(sv)
+	if structured && err != nil {
+		return silentModeReading{kind: silentModeParseError, err: err}
+	}
+	if mappingHasKey(node, "target") {
 		parsed := silentModeStructured{}
-		if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
+		if err := node.Decode(&parsed); err != nil {
 			return silentModeReading{kind: silentModeParseError, err: err}
 		}
 		target := strings.TrimSpace(strings.ToLower(parsed.Target))
@@ -131,7 +137,7 @@ func silentModeOf(sv ScheduledValue) silentModeReading {
 	}
 
 	// Scalar format (backward compatible).
-	lower := strings.TrimSpace(strings.ToLower(val))
+	lower := strings.TrimSpace(strings.ToLower(sv.Default))
 	if isDisabled(lower) || lower == "" {
 		return silentModeReading{kind: silentModeOff}
 	}

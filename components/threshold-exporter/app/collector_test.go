@@ -329,7 +329,7 @@ func TestCollector_Collect_ExpiredSilentMode(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("target: warning\nexpires: \"2020-01-01T00:00:00Z\"\n"),
+				"_silent_mode": SVYAML("target: warning\nexpires: \"2020-01-01T00:00:00Z\"\n"),
 			},
 		},
 	}
@@ -359,7 +359,7 @@ func TestCollector_Collect_ActiveSilentModeStructured(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("target: critical\nreason: Planned DB migration\nexpires: \"2099-12-31T00:00:00Z\"\n"),
+				"_silent_mode": SVYAML("target: critical\nreason: Planned DB migration\nexpires: \"2099-12-31T00:00:00Z\"\n"),
 			},
 		},
 	}
@@ -624,7 +624,7 @@ func TestCollector_SilentMode_Warning(t *testing.T) {
 		Defaults:   map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("warning"),
+				"_silent_mode": SVYAML("warning"),
 			},
 		},
 	}
@@ -648,7 +648,7 @@ func TestCollector_SilentMode_All(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("all"),
+				"_silent_mode": SVYAML("all"),
 			},
 		},
 	}
@@ -669,7 +669,7 @@ func TestCollector_SilentMode_Disable(t *testing.T) {
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("disable"),
+				"_silent_mode": SVYAML("disable"),
 			},
 		},
 	}
@@ -690,7 +690,7 @@ func TestCollector_SilentMode_NoLeakToThreshold(t *testing.T) {
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
-				"_silent_mode": SV("warning"),
+				"_silent_mode": SVYAML("warning"),
 			},
 		},
 	}
@@ -988,7 +988,7 @@ func TestCollector_ConfigEvent_ExpiredSilenceAllWithReason_ServesMetrics(t *test
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
-			"tenant-x": {"_silent_mode": SV(`{target: all, expires: "2020-01-01T00:00:00Z", reason: "DB maintenance"}`)},
+			"tenant-x": {"_silent_mode": SVYAML(`{target: all, expires: "2020-01-01T00:00:00Z", reason: "DB maintenance"}`)},
 			"tenant-y": {"_state_maintenance": SV("target: enable\nexpires: \"2020-01-01T00:00:00Z\"\nreason: window\n")},
 			"tenant-z": {"mysql_connections": {Default: "2000", Expiry: &ExpiryMeta{Expires: "2020-01-01T00:00:00Z", Reason: "incident"}}},
 		},
