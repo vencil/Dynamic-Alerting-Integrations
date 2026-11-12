@@ -929,6 +929,11 @@ def _run_da_guard(
                 f"da-guard {subcommand} exited {proc.returncode}, and this da-guard does not accept "
                 f"`{subcommand}` with {' '.join(a for a in cmd[2:] if a.startswith('--'))} — it is "
                 "older than this tool: upgrade or rebuild it", proc.returncode, stderr, stale=True)
+        # #3724: on a tree a declared input named that changed since its
+        # judgement, exit 2 is that change — a refusal naming the flag
+        # (`refuse_changed` tells it from the tree's own refusal).
+        _lib_parse_cache.refuse_changed(
+            conf_d, (_nonempty_lines(stderr) or [f"da-guard {subcommand} exited 2"])[0])
         raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
     if proc.returncode < 0:
         # Killed by a signal (OOM, a timeout of the CI job, …): not classified,

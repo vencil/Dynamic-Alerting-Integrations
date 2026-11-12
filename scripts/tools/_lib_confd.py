@@ -148,12 +148,17 @@ def config_listing(config_dir: "str | os.PathLike[str]", *, reader: Any = None) 
     listing`, the snapshot it reads the content from) when given, else the
     run's reader of the tree (`_lib_parse_cache.reader_for`; see the section
     comment). Raises `_lib_parse_tree.ParseTreeError`; ends the run on a tree
-    Go names paths on (`ConfdReader.tree`)."""
+    Go names paths on (`ConfdReader.tree`).
+
+    ⛔ A tree a declared input named (`_lib_parse_cache.judged`, #3724) is
+    not looked at again: it was judged a directory once, so its listing is
+    the reader's — a tree gone since is refused there, naming it, never
+    answered as "not a directory" (None: no tenants, rc 0)."""
     root = Path(config_dir)
-    if not root.is_dir():
+    from _lib_parse_cache import judged, reader_for  # lazy: see the section comment
+    if not judged(root) and not root.is_dir():
         return None
     if reader is None:
-        from _lib_parse_cache import reader_for  # lazy: see the section comment
         reader = reader_for(root)
     return reader.listing()
 
