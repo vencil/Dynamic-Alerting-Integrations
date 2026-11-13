@@ -101,18 +101,34 @@ func PatchableAsString(k string) (ok bool, reason string) {
 }
 
 // BatchUnsettable reports whether a batch op's `unset` may remove k: the
-// registry's `batch.unset` keys and every retired key.
+// registry's `batch.unset` keys and every retired key — the reserved
+// registry's and the threshold registry's `retired_keys:` (#3829), with
+// their `_critical` and dimensional `<key>{…}` spellings: while one is on
+// disk the key verdict refuses it, so the tenant must be able to remove it
+// through the API.
 func BatchUnsettable(k string) bool {
-	for _, u := range batchUnsettableKeys {
+	return batchUnsettableIn(batchUnsettableKeys, retiredThresholdKeys, k)
+}
+
+func batchUnsettableIn(reserved []string, retired []retiredThresholdKey, k string) bool {
+	for _, u := range reserved {
 		if u == k {
 			return true
 		}
 	}
-	return false
+	_, ok := retiredThresholdIn(retired, k)
+	return ok
 }
 
-// BatchUnsettableKeys are the keys BatchUnsettable admits, sorted.
-func BatchUnsettableKeys() []string { return sortedCopy(batchUnsettableKeys) }
+// BatchUnsettableKeys are the keys BatchUnsettable admits, sorted (a retired
+// threshold key by its base spelling).
+func BatchUnsettableKeys() []string {
+	return batchUnsettableKeysOf(batchUnsettableKeys, retiredThresholdKeys)
+}
+
+func batchUnsettableKeysOf(reserved []string, retired []retiredThresholdKey) []string {
+	return sortedCopy(append(append([]string(nil), reserved...), retiredThresholdKeyNames(retired)...))
+}
 
 // ScopeMetadataKeys are the keys that decide a tenant's environment/domain
 // through the entry they name (`_profile`: its profile's `_metadata`), sorted.

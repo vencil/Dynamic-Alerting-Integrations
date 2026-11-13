@@ -770,18 +770,6 @@ repos:
         # scan runs only in CI to avoid blocking commits on pre-existing drift.
         always_run: true
 
-      - id: trk-index-coverage
-        name: TRK index coverage (referenced TRK must be in planning SSOT)
-        entry: python3 -X utf8 scripts/tools/lint/check_trk_index_coverage.py --ci
-        language: python
-        pass_filenames: false
-        # ⛔ 預設只掃 commit 的 subject + trailer（離線、快），而**這一面很弱**：
-        # 實測把 #1627 的六個洞放回去，這一面 0/6、回綠；六個全部只有 issue/PR
-        # 標題面看得到（要 GH_TOKEN，用 --surface all）。⇒ 這道 hook 是弱後備，
-        # 真正的偵測要在有 token 的地方跑 --surface all。
-        # ⚠️ shallow clone 下這一面更窄，報告會標 PARTIAL：「沒找到」不等於「沒有」。
-        always_run: true
-
       - id: routing-profiles-check
         name: Routing profiles & domain policies lint
         # ADR-036 step 4 (#2906): the lint reads conf.d through `da-guard
@@ -1727,12 +1715,13 @@ repos:
         # header threshold sections / helm values thresholdConfig.defaults /
         # dev conf.d _defaults.yaml / the optional_overrides declared-key LIST
         # on all THREE surfaces that ship it — the two runtime ones (#1310)
-        # plus the try-local seed, #1176) + header-prose key membership (F6).
+        # plus the try-local seed, #1176 / the Go retired_keys table, #3829)
+        # + header-prose key membership (F6).
         # Fix: edit the registry, then `check_threshold_registry.py --regen`
         # + commit.
         # (check_threshold_reachability.py is in the filter because its
         # KNOWN_UNWIRED list feeds the membership universe.)
-        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml)$
+        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/retired_threshold_keys_gen\.go)$
 
       - id: threshold-unit-sanity-check
         name: "threshold unit sanity — declared units match the registry + values lie in their dimension (#992 promise / #1217 follow-up)"

@@ -136,6 +136,8 @@ make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 
 
 **#1269 / #1295 — 未發布的 draft advisory 也是 hard gate**：`make pre-tag` 另含 `draft-advisory-check`（它要呼叫 `gh`，所以 PATH 上必須有 `gh`）。draft advisory 不出現在任何維護者會例行掃的清單，GitHub 也無到期提醒，所以「等發版再一起發」這個決定沒有東西會叫醒你——唯一必然發生的事件是發版本身。有 draft 就中止並印出 GHSA id；`gh` 缺席或查詢失敗**也**中止（「查不到」不得被讀成「沒有」）。決定「這次不發」用 `ADVISORY_ACK=1 make pre-tag` 明示。⚠️ **它只涵蓋這條本地路徑**：`release.yaml` 由 tag push 觸發且沒有任何機制強制 pre-tag 先跑，所以直接 push tag 仍會繞過——這一點與 Layer 3 的 discipline 要求是同一個理由。
 
+**#1269 — advisory 的 patched 版號要真的存在**：`make pre-tag` 另含 `advisory-patched-check`（`scripts/tools/dx/check_advisory_patched_versions.py`），draft 與已發布的 advisory 都檢查，**不受 `ADVISORY_ACK` 影響**。每一列 package 名稱的括號標明它屬於哪個版號空間（`container image: ghcr.io/…`、`Helm chart: oci://…`、`Helm chart, git-only: helm/<dir>`、`platform release: git tag v*`）。patched 有填就必須在該空間存在；沒填而空間裡已有比受影響版本都新的版本，就是忘了回填。需要 `gh`、能連 ghcr.io，git-only 列還需要非 shallow 的 clone；任一做不到就中止。⚠️ 它擋不住「帶修正的那次發版」本身：pre-tag 時新版本還不存在。順序是 tag → 發布 → 回填 patched → 發布 advisory；漏了回填，下一次 pre-tag 會擋。
+
 > **Release wrap-up agent discipline（#474 Layer 3）**：tag push 前，wrap-up agent **必須**跑 `make pre-tag`（含 draft-advisory-check + docker-build-all + trivy-scan-all），或手動等價指令。⛔ **這條 discipline 沒有因為 #1295 把 advisory 檢查機械化而變得可省**——那道 gate 掛在 `make pre-tag` 上，而沒有任何東西強制 tag push 前一定要跑過它；**跳過 pre-tag 直接 push tag，等於同時跳過那道 gate**。Makefile 是 authoritative-but-incomplete contract — agent 負責 audit「Makefile 涵蓋什麼 vs `release.yaml` 實際做什麼」。這是 #468 author-time checklist 的 release 類比：機械 gate 漏的，discipline gate 補。系統化版本見 TRK-306 `vibe-release` skill（規劃中）。
 
 #### Trigger-asymmetry workflow audit（#474 generalization）
@@ -233,7 +235,7 @@ GitHub Release page 是客戶下載 binary 必經的入口；release body 兼任
 - ✅ <feature/component> — `<test surface>`
 - ✅ Trivy <version> CVE audit — <X HIGH + Y CRITICAL → 0/0 clean OR 殘留說明>
 - ✅ `make pr-preflight` 全綠
-- ✅ `make pre-tag` 全綠（version-check + lint-docs + changelog-fragments-consumed + draft-advisory-check + docker-build-all；若用 `ADVISORY_ACK=1` 放行請一併記錄理由）
+- ✅ `make pre-tag` 全綠（version-check + lint-docs + changelog-fragments-consumed + draft-advisory-check + advisory-patched-check + docker-build-all；若用 `ADVISORY_ACK=1` 放行請一併記錄理由）
 
 ## Known limits
 <已知但未在本 release 解的問題。每條一行，連到 issue / docs/api 的 §「Known gaps」>

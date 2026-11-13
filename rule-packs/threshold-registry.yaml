@@ -44,6 +44,16 @@
 # deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。
 # 本區段是 alias SSOT——唯一的 runtime 鏡像 Go（pkg/config/aliases.go）由 pin 測試
 # 釘住本區段（鏡像漂移＝CI 紅）；Python 不留副本，經 da-guard key-spellings 問（#3556）。
+#
+# retired_keys（#3829）：已退役、沒有 rule pack 再讀的閾值 key →
+#   {replaced_by: <現役 key>|null, tracking: <issue>, hint: <給 operator 的英文一句>}。
+# 共用 key 判決對它一律判 unread／error／retired（不論哪一層寫、有沒有 reader 讀），
+# hint 點名 replaced_by；tenant-api 的 batch unset 放行它。alias 窗口關閉時，舊拼法從
+# deprecated_aliases 移到這裡。--regen 生成 Go 表
+# components/threshold-exporter/app/pkg/config/retired_threshold_keys_gen.go（stale＝--ci 紅）。
+# 一致性（--ci）：不得是現役 key、不得在 deprecated_aliases 任一側、replaced_by 須為
+# 現役 key 或 null、tracking 必填。<old>_critical 隨 base 一併退役（判成以
+# <replaced_by>_critical 替代，同 alias 的推導），所以 <old>_critical 也不得是現役 key。
 version: 1
 packs:
   kubernetes:
@@ -1014,3 +1024,4 @@ keys:
     critical_of: nginx_waiting
 deprecated_aliases:
   mysql_cpu: mysql_threads_running
+retired_keys: {}
