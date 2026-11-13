@@ -20,7 +20,6 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "enabled": {},
         "image": {},
         "provider": {},
         "clientID": {
@@ -61,7 +60,7 @@
     "portal": {
       "type": "object",
       "additionalProperties": false,
-      "description": "ADR-027 §5: the portal static-file container in this pod (rendered with oauth2Proxy.enabled).",
+      "description": "ADR-027 §5: the portal static-file container in this pod.",
       "properties": {
         "image": {
           "type": "object",

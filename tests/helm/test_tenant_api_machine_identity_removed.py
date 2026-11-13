@@ -33,6 +33,10 @@ REMOVED_SETS = (
     ("humanSocket.path=/run/x/x.sock", "humanSocket"),
     ("networkPolicy.internalPortAllow.recipePreview.app=recipe-preview", "recipePreview"),
     ("networkPolicy.internalPortAllow.daPortal.app=da-portal", "daPortal"),
+    # §6: the switch for "is oauth2-proxy enabled" is deleted; the pod's only
+    # oauth2-proxy (§5) always renders. Either value is refused.
+    ("oauth2Proxy.enabled=true", "enabled"),
+    ("oauth2Proxy.enabled=false", "enabled"),
 )
 
 #: The tenant-api variables ADR-027 §6 removed.
@@ -63,6 +67,7 @@ def test_values_yaml_carries_no_removed_key() -> None:
     values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
     assert "machineIdentity" not in values
     assert "humanSocket" not in values
+    assert "enabled" not in values["oauth2Proxy"], "oauth2Proxy.enabled was removed (ADR-027 §6)"
     allow = values["networkPolicy"]["internalPortAllow"]
     assert sorted(allow) == ["prometheus", "prometheusOperator"], sorted(allow)
 

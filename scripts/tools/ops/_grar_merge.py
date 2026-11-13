@@ -150,8 +150,9 @@ FINDING_KINDS: dict[str, str] = {
         "_routing_enforced.enabled is not a boolean (a string such as "
         "\"true\" included); the whole tree is refused in every mode.",
     "severity_dedup_invalid":
-        "A tenant's _severity_dedup is neither a boolean nor one of the "
-        "enable / disable words; the whole tree is refused in every mode.",
+        "A _severity_dedup the exporter does not read, or one written with a "
+        "time window or expires (da-guard severity-dedup, #3621); the whole "
+        "tree is refused in every mode.",
     "unknown_routing_profile":
         "A tenant's _routing_profile names a profile its directory chain "
         "does not define.",
