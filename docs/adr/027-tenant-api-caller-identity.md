@@ -259,7 +259,7 @@ upstreamConfig:
    - human socket 必定存在：`tests/helm/test_human_socket_guard.py`（`test_render_without_proxy_fails`、`test_socket_path_is_a_chart_constant`、`test_deployment_wires_the_socket`、`test_render_default_points_upstream_at_socket`）；tenant-api 缺 socket 或設定檔路徑就不啟動：`cmd/server/tcp_router_test.go`（`TestCheckIdentityPlaneFlags`）。portal 容器不掛載它：`tests/helm/test_tenant_api_portal_container.py`（`test_portal_container_mounts_no_identity_or_secret`）。
    - oauth2-proxy 與 tenant-api 掛載同一份設定檔：`tests/helm/test_oauth2_proxy_alpha_config.py`（`test_both_containers_read_the_same_file`）。
    - portal 容器的 nginx 設定沒有轉送：`tests/helm/test_tenant_api_portal_container.py`（`test_portal_runs_the_charts_config_and_it_forwards_nothing`）。
-4. portal 的後端路徑都在 `/api/` 下：`tests/shared/test_portal_backend_paths_under_api.py`；simulate 回 501：`cmd/server/simulate_route_test.go`（`TestSimulateNotProvided`），body 與原本 portal nginx 回的逐字相同：`tests/shared/test_portal_simulate_not_provided.py`（`test_tenant_api_answers_the_same_code`、`test_tenant_api_answers_the_same_body`）。
+4. portal 的後端路徑都在 `/api/` 下：`tests/shared/test_portal_backend_paths_under_api.py`；simulate 回 501：`cmd/server/simulate_route_test.go`（`TestSimulateNotProvided`），body 的 `code` 與 `error` 文字與原本 portal nginx 回的逐字相同（tenant-api 另可帶 `request_id`）：`tests/shared/test_portal_simulate_not_provided.py`（`test_tenant_api_answers_the_same_code`、`test_tenant_api_answers_the_same_body`）。
 5. 不轉送身分、已刪除的設定不存在：
    - 沒有設定跨網路轉送身分 header：`tests/helm/test_identity_single_hop.py`（`test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header`、`test_no_raw_manifest_or_rule_pack_names_an_identity_header`）。
    - 刪除的 chart key：`tests/helm/test_tenant_api_machine_identity_removed.py`（機器身分、human socket 與轉送放行）、`tests/helm/test_tenant_api_scope_switches_removed.py`（範圍軸與 open mode 的開關）。
@@ -271,7 +271,7 @@ upstreamConfig:
    - 標記變更與覆寫標記讀不到的檔案、在寫入鎖內判定：`internal/handler/label_guard_test.go`。
 7. `tenant-api config check --kind scope`：`cmd/server/scope_check_test.go`；與 server 判定一致（環境與 domain 兩條軸）：`internal/handler/scope_gap_planes_test.go`（`TestScopeGapsMatchEveryPlane`）；CI 對範例設定執行：`.github/workflows/ci.yml` 的 `Scope check on the try-local sample config (ADR-027 §7)` 步驟。
 8. ADR 引用檢查：`scripts/tools/lint/check_adr_section_refs.py`（pre-commit 與 CI），測試在 `tests/lint/test_check_adr_section_refs.py`。
-9. oauth2-proxy 設定檢查：CI job `go-tests-oauth2-proxy`。程式庫端：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`，以釘住的同版本程式庫載入 chart 產生的設定檔，斷言分流與 §10 的表一致）、`routing_test.go`（`TestADRSection10Routing`，§10 的範例本身）、`version_test.go`；image 端：`tests/oauth2-proxy/image_config_test.sh`（對 `TestChartConfig` 寫出的設定檔執行 `--config-test`）。
+9. oauth2-proxy 設定檢查：CI job `go-tests-oauth2-proxy`。程式庫端：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`，以釘住的同版本程式庫載入 chart 產生的設定檔，斷言分流與 §10 的表一致）、`tests/oauth2-proxy/routing_test.go`（`TestADRSection10Routing`，§10 的範例本身）、`tests/oauth2-proxy/version_test.go`；image 端：`tests/oauth2-proxy/image_config_test.sh`（對 `TestChartConfig` 寫出的設定檔執行 `--config-test`）。
 
 目前沒有檢查的子句：
 
