@@ -36,6 +36,11 @@ version: {version}
 """
 
 
+@pytest.fixture(autouse=True)
+def _no_ambient_base(monkeypatch) -> None:
+    monkeypatch.delenv(gate.BASE_ENV, raising=False)
+
+
 def test_helm_present_when_required() -> None:
     reason = helm_required()
     if reason:
@@ -138,15 +143,73 @@ def test_a_chart_a_release_line_pushes_is_skipped_and_said_so(repo: Path, capsys
 
 
 @needs_helm
-def test_on_the_base_tip_it_compares_with_the_parent(repo: Path, capsys, monkeypatch) -> None:
-    """CI on a push to main: HEAD is the base, so the merged commit itself is checked."""
+def test_a_branch_with_no_commit_of_its_own_compares_with_head(repo: Path, capsys, monkeypatch) -> None:
+    """The merge base IS HEAD (a fresh branch off main): the working tree is
+    compared with HEAD — never HEAD^1, which would excuse an edit on top of a
+    bump the last main commit made (and does not exist in a depth-1 clone)."""
+    _set_version(repo, "0.1.1")
+    _git(repo, "commit", "-qam", "bump on main")
     (repo / "helm/demo/values.yaml").write_text("replicas: 2\n", encoding="utf-8")
-    _git(repo, "commit", "-qam", "change without bump")
     monkeypatch.setattr(gate, "resolve_diff_base_ref",
                         lambda: ("origin/main", _git(repo, "rev-parse", "HEAD")))
     rc = gate.main(["--repo", str(repo)])
     out = capsys.readouterr()
-    assert rc == 1 and "HEAD^1" in out.err and "still 0.1.0" in out.err, out
+    assert rc == 1 and "still 0.1.1" in out.err, out
+
+
+@needs_helm
+def test_a_push_compares_with_its_before_commit(repo: Path, capsys, monkeypatch) -> None:
+    """A rebase-merged PR lands two commits: bump, then another edit. Against
+    `before` (main before the push) that is one bumped change — green; HEAD^1
+    would have judged the second commit alone and gone red."""
+    before = _git(repo, "rev-parse", "HEAD")
+    _set_version(repo, "0.1.1")
+    (repo / "helm/demo/values.yaml").write_text("replicas: 2\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "bump + edit")
+    (repo / "helm/demo/values.yaml").write_text("replicas: 3\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "edit again")
+    monkeypatch.setenv(gate.BASE_ENV, before)
+    rc = gate.main(["--repo", str(repo)])
+    out = capsys.readouterr()
+    assert rc == 0 and before[:12] in out.out, out
+
+
+@needs_helm
+def test_an_all_zero_before_is_ignored(repo: Path, capsys, monkeypatch) -> None:
+    monkeypatch.setenv(gate.BASE_ENV, "0" * 40)
+    monkeypatch.setattr(gate, "resolve_diff_base_ref",
+                        lambda: ("origin/main", _git(repo, "rev-parse", "HEAD")))
+    assert gate.main(["--repo", str(repo)]) == 0, capsys.readouterr()
+
+
+@needs_helm
+def test_moving_a_chart_does_not_reset_its_version(repo: Path, capsys) -> None:
+    """Paired by `name`: a new directory with the same chart name and changed
+    content is the same chart, not a new one."""
+    _git(repo, "mv", "helm/demo", "helm/demo-moved")
+    (repo / "helm/demo-moved/values.yaml").write_text("replicas: 2\n", encoding="utf-8")
+    rc, out = _run(repo, capsys)
+    assert rc == 1 and "helm/demo-moved (was helm/demo)" in out and "still 0.1.0" in out, out
+
+
+@needs_helm
+def test_renaming_the_chart_makes_it_a_new_one(repo: Path, capsys) -> None:
+    (repo / "helm/demo/Chart.yaml").write_text(
+        CHART_YAML.format(version="0.1.0").replace("name: demo", "name: demo2"), encoding="utf-8")
+    rc, out = _run(repo, capsys)
+    assert rc == 0, out
+
+
+def test_ci_passes_the_push_before_commit_to_the_hook() -> None:
+    """The Lint step that runs the hook carries CHART_VERSION_BUMP_BASE = the
+    push's `before` on push events, and nothing on pull_request."""
+    import yaml
+    wf = yaml.safe_load((REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    steps = [s for s in wf["jobs"]["lint"]["steps"]
+             if "pre-commit run chart-version-bump --all-files" in (s.get("run") or "")]
+    assert len(steps) == 1, steps
+    value = (steps[0].get("env") or {}).get(gate.BASE_ENV, "")
+    assert value.replace(" ", "") == "${{github.event_name=='push'&&github.event.before||''}}", value
 
 
 def test_semver_precedence() -> None:

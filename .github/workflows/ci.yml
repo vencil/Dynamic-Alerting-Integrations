@@ -702,6 +702,10 @@ jobs:
         # events (not a PR) — bypass simply not applicable in that mode.
         env:
           PR_BODY: ${{ github.event.pull_request.body }}
+          # #1269 chart-version-bump: on a push, the commit main was at before
+          # it (not HEAD^1 — a rebase-merged PR's HEAD^1 is its own previous
+          # commit). Empty on pull_request, where the base is the PR's target.
+          CHART_VERSION_BUMP_BASE: ${{ github.event_name == 'push' && github.event.before || '' }}
         run: |
           pre-commit run tool-map-check --all-files
           pre-commit run doc-map-check --all-files
@@ -906,8 +910,9 @@ jobs:
           pre-commit run image-pin-capability-check --all-files
           # #1269: a git-only chart whose PACKAGED content changed must raise
           # `version` (helm package on both sides, compared file by file). On a
-          # push to main it compares with HEAD^1, which is the one place two PRs
-          # that each bumped to the same version are seen together.
+          # push to main it compares with the push's `before` (step env above),
+          # the one place two PRs that each bumped to the same version are seen
+          # together.
           pre-commit run chart-version-bump --all-files
           # The same image carrier, from the source side (#1503): build.sh ↔
           # COMMAND_MAP, the shipped set's transitive imports / data files, and

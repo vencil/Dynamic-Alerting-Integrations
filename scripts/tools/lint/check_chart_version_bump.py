@@ -28,29 +28,40 @@ The version is the one helm itself read: it names the archive
 disagree with helm about what the version is (ADR-036 §12).
 
 Rule: content differs ⇒ HEAD's version must be higher than the base's (semver
-precedence). A new chart, a removed chart and an unchanged package pass.
+precedence). Charts are paired by their `name` (what a version identifies), not
+their directory, so moving a chart to a new directory does not turn it into a
+"new chart" that may keep its version. A new name and a removed name pass; an
+unchanged package passes.
 
 Scope: charts with no `helm push` site — the git-only charts, installed from a
-checkout, whose version nothing else keeps unique (the push sites come from
-`check_chart_ship_surface.discover_pushed_charts`, the same derivation
+checkout (the push sites come from
+`check_chart_ship_surface.discover_pushed_charts`, the derivation
 `check_chart_pull_surface` uses for GIT_ONLY). A chart a release line pushes is
-listed and skipped, on purpose: its version is set at the release wrap
-(`bump_docs.py`), the release job refuses a Chart.yaml version that differs
-from the tag, and a git tag cannot be pushed twice — so a published version
-already names exactly one package. Requiring a bump in every PR there would
-fight that model (tenant-api's appVersion must equal its version, which must be
-an image tag the release builds). What this leaves open for those charts: main,
-between releases, carries the last released version over newer content.
+listed and skipped: its version is set at the release wrap (`bump_docs.py`) and
+must equal the tag, so a per-PR bump would fight that model (tenant-api's
+appVersion must equal its version, which must be an image tag the release
+builds).
+⛔ That skip is NOT a claim that those versions are unique. They are not held:
+the release playbook's re-tag SOP moves a tag to a new commit under the same
+version, `helm push` in release.yaml does not check whether the version is
+already published (an OCI tag is overwritten), and `make chart-push` pushes the
+working tree under Chart.yaml's version with no tag at all. Between releases,
+main also carries the last released version over newer content. Closing that
+needs a publish-time check, not this one (#1269).
 
 Base
 ----
-The merge base of `$LINT_DIFF_BASE` / `origin/$GITHUB_BASE_REF` / `origin/main`
-with HEAD — the repo's one resolver (`_lint_helpers.resolve_diff_base_ref`).
-When HEAD *is* that base (CI on a push to main), it compares with HEAD^1
-instead: branch protection does not require a PR to be up to date with main, so
-two PRs that each raised a chart to the same new version — each green against
-the main it forked from — can both merge, and only main's own run sees the
-result.
+`--base` when given. Otherwise the merge base of `$LINT_DIFF_BASE` /
+`origin/$GITHUB_BASE_REF` / `origin/main` with HEAD — the repo's one resolver
+(`_lint_helpers.resolve_diff_base_ref`). When that merge base IS HEAD (a branch
+with no commit of its own yet), the working tree is compared with HEAD.
+CI on a push to main passes the push's `before` commit in
+`$CHART_VERSION_BUMP_BASE` (read like `--base`; this tool's own name, so no
+other diff-aware hook in the same step changes base):
+branch protection does not require a PR to be up to date with main, so two PRs
+that each raised a chart to the same version can both merge, and only main's
+run sees them together. `before`, not HEAD^1: with rebase-merge allowed, HEAD^1
+is the previous commit of the same PR.
 
 Exit codes
     0  every changed package carries a higher version
@@ -87,6 +98,7 @@ from check_chart_package_contents import CallerError, package  # noqa: E402
 from check_chart_ship_surface import discover_pushed_charts  # noqa: E402
 
 CHARTS_DIR = "helm"
+BASE_ENV = "CHART_VERSION_BUMP_BASE"
 _SEMVER = re.compile(
     r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)"
     r"(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z.-]+)?$"
@@ -124,7 +136,12 @@ def semver_key(version: str) -> Tuple:
 
 
 def resolve_base(repo: Path, explicit: Optional[str]) -> Tuple[str, str]:
-    """Return (commit, label) of what HEAD is compared with."""
+    """Return (commit, label) of what the working tree is compared with."""
+    if not explicit:
+        env = os.environ.get(BASE_ENV, "").strip()
+        # GitHub sends forty zeros as `before` when a push creates the branch.
+        if env and env.strip("0"):
+            explicit = env
     if explicit:
         commit = _git(repo, "rev-parse", "--verify", f"{explicit}^{{commit}}").stdout.strip()
         return commit, explicit
@@ -132,10 +149,6 @@ def resolve_base(repo: Path, explicit: Optional[str]) -> Tuple[str, str]:
         ref, commit = resolve_diff_base_ref()
     except DiffBaseMissingError as exc:
         raise CallerError(str(exc)) from exc
-    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
-    if commit == head:
-        parent = _git(repo, "rev-parse", "--verify", "HEAD^1^{commit}").stdout.strip()
-        return parent, f"HEAD^1 ({parent[:12]}; HEAD is {ref} itself)"
     return commit, f"{ref} (merge base {commit[:12]})"
 
 
@@ -188,31 +201,54 @@ def package_digest(chart_dir: Path, workdir: Path) -> Tuple[str, str, Dict[str, 
     return name, stem[len(name) + 1:], files
 
 
-def check_chart(repo: Path, base: str, chart: str, scratch: Path,
-                pushed: Set[str]) -> Tuple[Optional[str], Optional[str]]:
-    """(violation, note) for one chart; either may be None."""
-    head_dir = repo / chart
-    if not (head_dir / "Chart.yaml").is_file():
-        return None, None  # removed (or not a chart): nothing ships under its name
-    name, head_version, head_files = package_digest(head_dir, scratch / "head")
-    if name in pushed:
-        return None, (f"{chart}: skipped — a release line pushes {name!r}, so its tag "
-                      f"keeps each published version unique")
-    base_dir = _extract_base_chart(repo, base, chart, scratch / "base-tree")
-    if base_dir is None:
-        return None, None  # new chart: any version is its first
-    _, base_version, base_files = package_digest(base_dir, scratch / "base")
-    if base_files == head_files:
-        return None, None
-    if semver_key(head_version) > semver_key(base_version):
-        return None, None
-    changed = sorted(
-        {k for k in base_files.keys() | head_files.keys() if base_files.get(k) != head_files.get(k)})
-    shown = ", ".join(changed[:8]) + (f" (+{len(changed) - 8} more)" if len(changed) > 8 else "")
-    verb = "still" if head_version == base_version else "went DOWN to"
-    return (f"{chart}: the package changed ({shown}) but version {verb} {head_version} "
+Package = Tuple[str, str, Dict[str, str]]  # (dir, version, files)
+
+
+def _packages(repo: Path, base: str, charts: List[str], scratch: Path
+              ) -> Tuple[Dict[str, Package], Dict[str, Package]]:
+    """name -> package, for the changed chart dirs at base and in the working tree."""
+    head: Dict[str, Package] = {}
+    old: Dict[str, Package] = {}
+    for i, chart in enumerate(charts):
+        if (repo / chart / "Chart.yaml").is_file():
+            name, version, files = package_digest(repo / chart, scratch / f"head-{i}")
+            if name in head:
+                raise CallerError(f"two charts are named {name!r}: {head[name][0]} and {chart}")
+            head[name] = (chart, version, files)
+        base_dir = _extract_base_chart(repo, base, chart, scratch / f"base-tree-{i}")
+        if base_dir is not None:
+            name, version, files = package_digest(base_dir, scratch / f"base-{i}")
+            old[name] = (chart, version, files)
+    return head, old
+
+
+def check(repo: Path, base: str, charts: List[str], scratch: Path,
+          pushed: Set[str]) -> Tuple[List[str], List[str]]:
+    """(violations, notes) for the changed chart dirs, paired by chart name."""
+    head, old = _packages(repo, base, charts, scratch)
+    violations: List[str] = []
+    notes: List[str] = []
+    for name in sorted(head):
+        chart, head_version, head_files = head[name]
+        if name in pushed:
+            notes.append(f"{chart}: skipped — a release line pushes {name!r}; its version is "
+                         f"set at the release wrap, and nothing here checks it (#1269)")
+            continue
+        if name not in old:
+            continue  # a new name: any version is its first
+        base_chart, base_version, base_files = old[name]
+        if base_files == head_files or semver_key(head_version) > semver_key(base_version):
+            continue
+        changed = sorted(
+            {k for k in base_files.keys() | head_files.keys() if base_files.get(k) != head_files.get(k)})
+        shown = ", ".join(changed[:8]) + (f" (+{len(changed) - 8} more)" if len(changed) > 8 else "")
+        verb = "still" if head_version == base_version else "went DOWN to"
+        moved = f" (was {base_chart})" if base_chart != chart else ""
+        violations.append(
+            f"{chart}{moved}: the package changed ({shown}) but version {verb} {head_version} "
             f"(base: {base_version}). Raise `version:` in {chart}/Chart.yaml and add a "
-            f"history line: the same version must never name two different packages."), None
+            f"history line: the same version must never name two different packages.")
+    return violations, notes
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -230,10 +266,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--base",
         help=i18n_text(
             "比對的 commit；省略時取 $LINT_DIFF_BASE／origin/$GITHUB_BASE_REF／"
-            "origin/main 與 HEAD 的 merge base，HEAD 就是該 base 時改比 HEAD^1",
+            "origin/main 與 HEAD 的 merge base",
             "commit to compare with; omitted, the merge base of $LINT_DIFF_BASE / "
-            "origin/$GITHUB_BASE_REF / origin/main with HEAD, or HEAD^1 when HEAD "
-            "is that base",
+            "origin/$GITHUB_BASE_REF / origin/main with HEAD",
         ),
     )
     parser.add_argument("--repo", default=str(Path(__file__).resolve().parents[3]),
@@ -247,13 +282,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         base, label = resolve_base(repo, args.base)
         charts = changed_charts(repo, base)
         pushed = set(discover_pushed_charts(repo)) if charts else set()
-        for chart in charts:
-            with tempfile.TemporaryDirectory(prefix="chart-version-bump-") as tmp:
-                v, note = check_chart(repo, base, chart, Path(tmp), pushed)
-            if v:
-                violations.append(v)
-            if note:
-                notes.append(note)
+        with tempfile.TemporaryDirectory(prefix="chart-version-bump-") as tmp:
+            violations, notes = check(repo, base, charts, Path(tmp), pushed)
     except CallerError as exc:
         print(f"❌ chart version bump check could not run: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
