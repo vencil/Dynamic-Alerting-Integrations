@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: dx
 created_at: 2026-10-31
-updated_at: 2026-11-01
+updated_at: 2026-11-13
 ---
 
 # ADR-039: 刻意付出的效能成本寫進 repo 裡的接受帳本，由 bench 閘門核對實測
@@ -21,6 +21,8 @@ updated_at: 2026-11-01
 ✅ **Accepted**（2026-10-31）。帳本與兩道閘門（PR 上的 bench gate、合併到 main 後的逐 commit 歸因）的判定已上線。累積預算、PR 上改為擋 merge、換參考版本時帳本如何處理，見 §尚未決定。
 
 **2026-11-01 修訂**：舊的絕對 ns/op 夜跑監測器退役（[ADR-032](032-paired-interleaved-bench-measurement.md) §待決 6 撤回），確定性指標的累積預算因此成為唯一規劃中的逐夜趨勢偵測器；在它上線之前，逐 commit 都低於門檻的累積漂移沒有逐夜的自動偵測，只有發版時的 Tier 2 比對（`bench-gate-release.yaml`）仍會把相對前一個平台版本 ≥10% 的退化寫進報告。
+
+**2026-11-13 修訂**：§尚未決定裡「雙峰、量不穩的 benchmark 要不要獨立一類」改以 bench 閘門的判定為觸發，不再等專門量測的結論；那組量測三輪都判不出，已停止。
 
 ## 背景
 
@@ -121,7 +123,7 @@ Scan_1000-4    7.000k ± 0%   9.100k ± 0%  +30.00% (p=0.002 n=6)  [declared ≤
 | **確定性指標的累積預算**：夜跑在 main 對參考版本的比值上加入 `B/op`、`allocs/op`，抓逐 commit 都低於 5%、但累積起來很大的漂移。這是唯一規劃中的逐夜趨勢偵測器：絕對 ns/op 監測器已退役，配對 ns/op 只供參考 | 夜跑已開始記錄：配對量測與比值計算都成功的夜，輸出（`bench-paired/v3`）帶 `deterministic` 欄位，對兩側都有資料的 benchmark 記下 `B/op`、`allocs/op` 的中位數與比值，只記錄、不判定；配對失敗、記為無法評估的夜沒有這個欄位（`scripts/tools/dx/pair_bench_ratio.py`）。累積至少四週、量出它們真實的夜間噪音後再決定預算。設計時必須先解決一個已知問題：若預期值用「上限的連乘」，接受過的上限會變成之後的退化可以花用的額度，改善也會被當成額度 |
 | **PR 上對「沒宣告的確定性退化」改為擋 merge** | 帳本上線滿四週，且這段期間每一次被標的確定性退化都能用帳本解掉時，由 owner 決定 |
 | **換參考版本時帳本怎麼處理**（ADR-032 §待決 1） | 與累積預算一起決定。目前夜跑不開票、不讀帳本，所以換參考版本不會關到任何票；累積預算若要開票，ADR-032 的不變量（換參考版本不得關閉尚未結案的效能票）要在它的設計裡成立 |
-| **雙峰、量不穩的 benchmark 要不要獨立一類** | 依 ADR-032 §待決 7，等該 benchmark 的量測有結論 |
+| **雙峰、量不穩的 benchmark 要不要獨立一類** | 這裡指的是 `BenchmarkIncrementalLoad_1000_OneFileChanged`（ADR-032 §待決 7）：在 GitHub runner 上重複量測，sec/op 比值逐次散佈 11 個百分點以上。等任一道 bench 閘門以 `timing-replicated` 標出它時再決定：只有 sec/op 被標，第二次獨立的交錯量測也標到同一支（PR 上的判定摘要寫 `sec/op only, confirmed`，合併後的歸因票寫 `sec/op only, confirmed by a second independent interleaved pass`）。這個判定本身就表示 `B/op`、`allocs/op` 沒有被標。到時以那次兩輪的數字決定：讓它獨立一類，或把它的 sec/op 寫進接受帳本。複驗不保證擋得住這種散佈：兩輪剛好落在同一側時，閘門仍可能標出不存在的退化。專門的量測已跑三輪都判不出，不再量（[#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)） |
 
 ## 考慮過但沒有採用的做法
 
