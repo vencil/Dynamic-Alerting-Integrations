@@ -2324,6 +2324,121 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     return _make_result("no_alert", WARN, details)
 
 
+_TIER_INVERSION_HINT = (
+    "Make each tenant's critical threshold stricter than its warning one "
+    "(above it for an alert that fires on a high value, below it for one that "
+    "fires on a low value), in whichever file the line names the value from: "
+    "the tenant's file, a profile or a platform file. An inverted pair has the "
+    "critical alert fire first or together, and severity dedup then mutes the "
+    "warning for as long as both fire (#3691).")
+
+
+def _hhmm(t: str) -> int:
+    h, _, m = t.partition(":")
+    return int(h) * 60 + int(m)
+
+
+def check_tier_inversion(config_dir: str) -> dict[str, object]:
+    """A tenant whose served critical threshold is not stricter than its
+    warning one, across files (#3691): a profile's `<base>_critical` against a
+    platform file's `<base>`, a tenant's value against a profile's, a window of
+    one against the other's default.
+
+    ⛔ Judged on what /metrics serves each tenant over the whole UTC day
+    (da-guard served-values `--schedules`: every part of the day in which some
+    schedule changes), never on one file: check_threshold_unit_sanity's
+    TIER-INVERSION judges each file alone, which is what let a profile's
+    critical land under a platform default's warning unseen. Per tenant, a
+    warning series and a critical series of the same `metric_key` and
+    dimensions are paired over the minutes both are served; a dimensional
+    warning with no critical of its own is paired with the plain critical,
+    which the exporter serves for every selector of the base.
+
+    Which way is stricter is the shipped alert's comparison (`direction` in
+    `metric_observed_map.yaml`, generated from the rule packs): `>` needs
+    critical above warning, `<` below. A key no shipped alert compares, or one
+    the map defers (`_observed_map_lib.KNOWN_DEFERRED`: its alerts compare a
+    version-aware recording rule), has no direction and is not judged.
+    Not covered: a profile no tenant binds (no tenant is served from it).
+
+    FAIL on an inverted pair. A tree served-values or the map cannot read is
+    a WARN saying it was not checked.
+    """
+    import _observed_map_lib  # ops/: the observed-map the recommender reads
+
+    def not_checked(why: str) -> dict[str, object]:
+        return _make_result("tier_inversion", WARN, [
+            f"not checked: tier inversion across files was not judged ({why})"],
+            hint=_TIER_INVERSION_HINT)
+    try:
+        observed = _observed_map_lib.load_observed_map()
+        tree = load_served_tree(config_dir, schedules=True, partial=True)
+    except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError,
+            YamlFileError) as exc:
+        return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
+
+    found: list[str] = []
+    pairs = 0
+    for tenant, tv in sorted(tree.tenants.items()):
+        if tv.schedules is None:
+            return not_checked(f"served-values gave no schedules for tenant {tenant!r}")
+        # (metric_key, dimensions) -> severity -> [(start, end, value)]
+        rows: dict[tuple, dict[str, list[tuple[int, int, float]]]] = {}
+        for sched in tv.schedules.values():
+            for seg in sched.segments:
+                if seg.value is None or not seg.series:
+                    continue
+                for se in seg.series:
+                    if se.legacy_twin:
+                        continue
+                    sev = se.labels.get("severity")
+                    if sev not in ("warning", "critical"):
+                        continue
+                    dims = (tuple(sorted(se.dimensions.items())),
+                            tuple(sorted(se.dimensions_regex.items())))
+                    rows.setdefault((se.metric_key, dims), {}).setdefault(sev, []).append(
+                        (_hhmm(seg.start), _hhmm(seg.end), seg.value))
+        plain = ((), ())
+        for (metric_key, dims), by_sev in sorted(rows.items()):
+            warnings_ = by_sev.get("warning")
+            crits = by_sev.get("critical") or rows.get((metric_key, plain), {}).get("critical")
+            if not warnings_ or not crits:
+                continue
+            kind, entry = _observed_map_lib.lookup(observed, metric_key)
+            direction = (entry or {}).get("direction") if kind is _observed_map_lib.LookupKind.COMPARED else None
+            if direction not in (">", "<"):
+                continue
+            for ws, we, wv in warnings_:
+                for cs, ce, cv in crits:
+                    start, end = max(ws, cs), min(we, ce)
+                    if start >= end:
+                        continue
+                    pairs += 1
+                    if (cv <= wv) if direction == ">" else (cv >= wv):
+                        sel = ",".join(f"{k}={v}" for k, v in dims[0]) + ",".join(
+                            f"{k}=~{v}" for k, v in dims[1])
+                        found.append(
+                            f"tier_inversion tenant {tenant!r} `{metric_key}`"
+                            f"{'{' + sel + '}' if sel else ''} "
+                            f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d} UTC: "
+                            f"critical {cv:g} is not {'above' if direction == '>' else 'below'} "
+                            f"warning {wv:g} (the shipped alert fires when the value is {direction} "
+                            "the threshold)")
+    if not found:
+        if not pairs:
+            # Nothing compared is not "compared and fine" (#3691).
+            return _make_result("tier_inversion", PASS, [
+                "no tenant is served a warning and a critical threshold of one key that a "
+                "shipped alert compares, so there was nothing to compare"])
+        return _make_result("tier_inversion", PASS, [
+            f"{pairs} served warning/critical pair-window(s): every critical is stricter than "
+            "its warning (a profile no tenant binds is not served, so not judged)"])
+    shown = found[:WARN_LIMIT]
+    if len(found) > len(shown):
+        shown.append(f"+{len(found) - len(shown)} more")
+    return _make_result("tier_inversion", FAIL, shown, hint=_TIER_INVERSION_HINT)
+
+
 def _root_defaults_verdicts(root: dict, dr) -> list[tuple[str | None, str, str]]:
     """What of the root carrier's `defaults:` makes the exporter drop the
     file or leave a key unwritten, read off the file's parse-tree nodes
@@ -2622,6 +2737,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     ),
     # ADR-038: each line names the file, the key, the reason and the tenants.
     "no_alert": (_NO_ALERT_HINT, "docs/cli-reference.md#validate-config"),
+    "tier_inversion": (_TIER_INVERSION_HINT, "docs/cli-reference.md#validate-config"),
     "unread_keys": (
         "Fix a misspelt key, or remove a key nothing reads; a `disable` that "
         "switches nothing off usually sits on a misspelt key; a value_unread "
@@ -3267,6 +3383,11 @@ def _main() -> "Report | None":
     # verdict the row above gave.
     results.append(_run_check("no_alert", check_no_alert, args.config_dir,
                               verdict=verdicts[0] if verdicts else None, judge=False,
+                              _config_dir=args.config_dir))
+
+    # 16. A tenant's served critical not stricter than its warning, across
+    # files (#3691) — unconditional; FAIL on an inverted pair.
+    results.append(_run_check("tier_inversion", check_tier_inversion, args.config_dir,
                               _config_dir=args.config_dir))
 
     _effective_runs = None
