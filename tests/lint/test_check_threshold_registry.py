@@ -448,7 +448,24 @@ def test_a_retired_base_with_an_active_critical_tier_is_reported():
     assert any("still has an ACTIVE critical tier 'aaa_old_critical'" in p for p in problems), problems
     # Without the critical tier the same entry is consistent.
     assert lib.retired_key_problems(
-        {"aaa_old": {"replaced_by": "aaa_new", **_OK_ENTRY}}, {"aaa_new": {}}, {}) == []
+        {"aaa_old": {"replaced_by": "aaa_new", **_OK_ENTRY}},
+        {"aaa_new": {}, "aaa_new_critical": {}}, {}) == []
+
+
+def test_a_derived_critical_replacement_must_be_a_registry_key():
+    """#3829 second review: `<old>_critical` is derived to `<repl>_critical`.
+    When repl has no critical tier that hint would name no key, so the
+    critical spelling needs its own entry — which then wins over the
+    derivation."""
+    entry = {"replaced_by": "aaa_new", **_OK_ENTRY}
+    problems = lib.retired_key_problems({"aaa_old": entry}, {"aaa_new": {}}, {})
+    assert any("'aaa_new_critical', not a registry key" in p for p in problems), problems
+    own = {"replaced_by": None, **_OK_ENTRY}
+    assert lib.retired_key_problems(
+        {"aaa_old": entry, "aaa_old_critical": own}, {"aaa_new": {}}, {}) == []
+    # A null replacement derives no critical key, so nothing to check.
+    assert lib.retired_key_problems(
+        {"aaa_old": {"replaced_by": None, **_OK_ENTRY}}, {"aaa_new": {}}, {}) == []
 
 
 def test_a_missing_tracking_is_also_a_schema_error(tmp_path):

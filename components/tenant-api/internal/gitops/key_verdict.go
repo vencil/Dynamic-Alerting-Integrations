@@ -379,8 +379,11 @@ func verdictLine(f KeyFinding, tenants []string) string {
 	}
 	if f.Hint != "" {
 		// #3829: a retired threshold key — the exporter may still read it,
-		// so not "read by no reader"; the hint names what replaces it.
-		what = "is a retired key: " + f.Hint
+		// so not "read by no reader"; the hint names what replaces it. It
+		// stays on disk until removed: a patch writing the replacement does
+		// not remove it, so the way out is named.
+		what = "is retired — " + f.Hint + "; remove it with a batch `unset` " +
+			"(writing the replacement in a patch leaves the old key in the file)"
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: %s: key %s", msgVerdictPrefix, f.Severity, f.Key)
@@ -388,7 +391,7 @@ func verdictLine(f KeyFinding, tenants []string) string {
 		fmt.Fprintf(&b, " in %s", f.File)
 	}
 	fmt.Fprintf(&b, " %s", what)
-	if f.Reason != "" {
+	if f.Reason != "" && f.Hint == "" {
 		fmt.Fprintf(&b, " (%s)", f.Reason)
 	}
 	if len(tenants) > 0 {

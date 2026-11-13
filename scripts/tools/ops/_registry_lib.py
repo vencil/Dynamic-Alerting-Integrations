@@ -447,6 +447,16 @@ def retired_key_problems(retired: dict, keys: dict, aliases: dict[str, str]) -> 
             problems.append(
                 f"retired key {old!r} is replaced_by {repl!r}, which is not an "
                 "active registry key — name the live key, or null for none")
+        elif (repl is not None and repl + CRITICAL_SUFFIX not in keys
+              and old + CRITICAL_SUFFIX not in retired):
+            # The lookup derives `<old>_critical` -> `<repl>_critical`; when
+            # repl has no critical tier that hint would name a key that does
+            # not exist, so the critical spelling needs its own entry.
+            problems.append(
+                f"retired key {old!r} is replaced_by {repl!r}, which has no critical "
+                f"tier, so the derived hint for {old + CRITICAL_SUFFIX!r} would name "
+                f"{repl + CRITICAL_SUFFIX!r}, not a registry key — add a retired entry "
+                f"for {old + CRITICAL_SUFFIX!r} (replaced_by: null)")
         if "tracking" not in entry:
             problems.append(f"retired key {old!r} needs tracking: <issue>")
         else:

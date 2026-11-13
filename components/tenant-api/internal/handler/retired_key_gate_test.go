@@ -66,6 +66,8 @@ func TestRetiredKeyOnDisk_RefusesWritesUntilABatchUnsetRemovesIt(t *testing.T) {
 	code, res, _ := f.run(t, "", patch, false)
 	if code == http.StatusOK || len(res) != 1 || res[0].Status != "error" ||
 		!strings.Contains(res[0].Message, "write `mysql_connections` instead") ||
+		!strings.Contains(res[0].Message, "batch `unset`") ||
+		strings.Contains(res[0].Message, "(retired)") ||
 		strings.Contains(res[0].Message, "is read by no reader") {
 		t.Fatalf("patch with the retired key on disk: %d %+v", code, res)
 	}
