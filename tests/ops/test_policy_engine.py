@@ -318,6 +318,26 @@ class TestEvaluateWhen:
         config = {"_metadata": {"db_type": ["mariadb", "redis"]}}
         assert len(pe.evaluate_rule(rule, "t-a", config)) == 1
 
+    @pytest.mark.parametrize("tags,violations", [
+        (["prod"], 0),
+        (["prod", "other"], 0),
+        (["other"], 1),
+        (["a", "b"], 1),
+        ([], 1),
+        (None, 0),  # 沒寫 tags：when 不成立，與舊的 contains（找不到就跳過）一致
+    ])
+    def test_documented_tag_presence_recipe(self, tags, violations):
+        """#3771 CodeRabbit：cli-reference 與 changelog 寫的「要求列表含某個 tag」配方——
+        `when: not_equals prod` 加主規則 `equals prod`。單寫 `when` 或改用 `one_of` 都不等價
+        （`one_of: [prod]` 拒收 [prod, other]）；文件改寫法時這裡要一起改。"""
+        rules = pe.rules_from_policy_data({"policies": [{
+            "name": "need-prod", "target": "_metadata.tags", "operator": "equals",
+            "value": "prod",
+            "when": {"target": "_metadata.tags", "operator": "not_equals", "value": "prod"},
+        }]})
+        meta = {} if tags is None else {"tags": tags}
+        assert len(pe.evaluate_rule(rules[0], "t-a", {"_metadata": meta})) == violations
+
     def test_when_required_true(self, sample_config):
         """when required 條件成立。"""
         when = {"target": "_routing", "operator": "required"}

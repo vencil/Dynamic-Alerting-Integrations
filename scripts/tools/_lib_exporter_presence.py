@@ -89,6 +89,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import _lib_exitcodes  # noqa: E402  (the one exit path: tests/shared/test_single_exit_path.py)
 from _lib_consumer_read import RULE_PACKS  # noqa: E402  (#3471: the rule-pack file names)
+from _lib_python import detect_cli_lang  # noqa: E402  (dev-rules §9: CLI help 語言)
 
 #: db_type → the metric(s) whose presence under job="tenant-exporters" means an
 #: exporter of that kind is answering. Several metrics: any one counts.
@@ -227,11 +228,14 @@ def rewrite(text: str, alert: str, expr: str) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
+    zh = detect_cli_lang() == "zh"
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--write", action="store_true",
-                        help="rewrite the three alerts' expr from the table")
+                        help=("依對照表改寫三條告警的 expr" if zh
+                              else "rewrite the three alerts' expr from the table"))
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[2]),
-                        help="repository root (default: this tree's)")
+                        help=("repo 根目錄（預設：本工作樹）" if zh
+                              else "repository root (default: this tree's)"))
     args = parser.parse_args(argv)
     stale = []
     texts: dict[Path, str] = {}
