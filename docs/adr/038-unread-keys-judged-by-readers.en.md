@@ -56,6 +56,8 @@ Revised 2026-11-07: a served key no alert compares is reported by validate-confi
 
 Revised 2026-11-12: a tree that reaches the ConfigMap the exporter reads without CI is judged by an optional CronJob of the threshold-exporter chart running `validate-config`, alerting on failure (consequences and known limits).
 
+Revised 2026-11-13: a threshold key the threshold registry's `retired_keys:` lists is `unread`, reason `retired`, at error, whichever layer writes it and whatever reads it; the finding carries a hint naming the key that replaces it, and tenant-api's batch `unset` can remove it (decision 4).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -224,7 +226,7 @@ For each key of each tenant, the shared function gives:
 | verdict | Meaning | Level |
 |---|---|---|
 | `read` | At least one reader reads it; keys registered as `annotation` also count | — |
-| `unread` | No reader reads it; always so for a `_` key the registry does not list (reason `unregistered`), and for a retired `_` key (reason `retired`) | Error, whether written in a tenant file, a profile, a sub-directory `_defaults.yaml` or a root platform file's `tenants:`; from a file other than the tenant file, the file is named. Two exceptions: unread only because of `disable_noop`: warning (see decision 8); a `_state_<filter>` naming a filter the platform has not declared: notice (see decision 7) |
+| `unread` | No reader reads it; always so for a `_` key the registry does not list (reason `unregistered`), and for a retired `_` key (reason `retired`); so is a retired threshold key the threshold registry's `retired_keys:` lists (reason `retired`), even though the exporter still serves a row for it — one the deployment's root `defaults:` writes included; the finding's `hint` names the key that replaces it | Error, whether written in a tenant file, a profile, a sub-directory `_defaults.yaml` or a root platform file's `tenants:`; from a file other than the tenant file, the file is named. Two exceptions: unread only because of `disable_noop`: warning (see decision 8); a `_state_<filter>` naming a filter the platform has not declared: notice (see decision 7) |
 | `undecidable` | No root platform file was read, so the exporter half cannot judge the threshold keys the tenant wrote; reserved keys are judged as usual (see decision 7) | The verdict output returns rc 2 |
 
 The same typo coming from a platform file is reported only once (deduplicated by file and key), listing the affected tenants, rather than one finding per tenant.

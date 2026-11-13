@@ -15,6 +15,7 @@
         "severity": "error",
         "reason": "unregistered",
         "disable": "noop",
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "disable",
@@ -29,6 +30,7 @@
         "severity": null,
         "reason": "no_row",
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": 70,
@@ -46,6 +48,7 @@
         "ta"
       ],
       "reason": "unregistered",
+      "hint": null,
       "base": null,
       "dead_entries": null,
       "blocks": true

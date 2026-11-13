@@ -85,6 +85,9 @@ class Finding(NamedTuple):
     blocks: bool = False                # a whole-tree gate refuses it (Go's keyverdict.Blocking)
     base: str | None = None             # disable_cascade: the base whose `disable` switches it off
     dead_entries: "tuple[tv.DeadEntry, ...]" = ()  # dead_entry (#3502): its entries, in the order written
+    # #3829: a retired threshold key's hint (reason `retired`), naming the key
+    # that replaces it; None for any other finding.
+    hint: str | None = None
 
 
 class TreeVerdict(NamedTuple):
@@ -246,7 +249,8 @@ def _finding(f: dict) -> Finding:
                    _one_of(f["kind"], "findings.kind", _KINDS), _str(f["key"], "findings.key"),
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
                    _optional(f["reason"], "findings.reason"), _bool(f["blocks"], "findings.blocks"),
-                   _optional(f["base"], "findings.base"), _finding_dead_entries(f))
+                   _optional(f["base"], "findings.base"), _finding_dead_entries(f),
+                   _optional(f["hint"], "findings.hint"))
 
 
 def _finding_dead_entries(f: dict) -> "tuple[tv.DeadEntry, ...]":
@@ -314,6 +318,9 @@ def finding_line(f: Finding, limit: int) -> str:
     who = ", ".join(f.tenants[:limit]) + (
         f" (+{len(f.tenants) - limit} more)" if len(f.tenants) > limit else "")
     why = f" ({f.reason})" if f.reason else ""
+    if f.hint:
+        # #3829: a retired threshold key — name what replaces it.
+        why = f" ({f.reason}: {f.hint})"
     if f.base:
         # #3046: name the base whose `disable` switches the key off.
         why = f" (switched off with its base `{shown_key(f.base)}`)"

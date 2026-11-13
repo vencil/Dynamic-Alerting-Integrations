@@ -365,7 +365,10 @@ type servedKey struct {
 	// → the layers it reads the key in. The caller joins them with the
 	// key's layer (da-guard effective's key_sources). Absent when none.
 	Declared map[string][]string `json:"declared,omitempty"`
-	// Hint is the registry's hint for a retired key.
+	// Hint is the registry's hint for a retired key: a retired reserved
+	// key (Reason retired), or a retired threshold key (the threshold
+	// registry's `retired_keys:`, #3829), whose Exporter / Reason stay what
+	// /metrics measured.
 	Hint string `json:"hint,omitempty"`
 	// Refused (#3140), for a threshold key only: why the row resolver
 	// refused the key's value at --at — config.RefusedNonFinite
@@ -1229,6 +1232,10 @@ func servedKeys(tv servedTenantValues,
 		}
 		if !strings.HasPrefix(k, "_") {
 			threshold()
+			// #3829: a retired threshold key keeps what /metrics measured
+			// (Exporter, Reason) and carries the registry's hint, which the
+			// shared key verdict refuses it with.
+			e.Hint = config.RetiredThresholdHint(k)
 			out[k] = e
 			return
 		}

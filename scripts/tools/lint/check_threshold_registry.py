@@ -179,6 +179,13 @@ def run_check(
     if msg:
         errors.append(f"stale-surface: {msg}")
 
+    # 3c. the generated Go table of `retired_keys:` (#3829), which the key
+    #     verdict refuses every retired key from.
+    go_path = (surface_paths or {}).get(registry_lib.RETIRED_KEYS_GO_ID)
+    msg = registry_lib.check_retired_keys_go(doc, go_path)
+    if msg:
+        errors.append(f"stale-surface: {msg}")
+
     # 4. header-prose key membership (F6).
     if prose_files is None:
         # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;

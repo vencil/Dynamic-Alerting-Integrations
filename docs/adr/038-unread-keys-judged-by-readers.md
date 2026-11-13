@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-12
+updated_at: 2026-11-13
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -61,6 +61,8 @@ updated_at: 2026-11-12
 2026-11-07 修訂：送出了但沒有告警比較的鍵由 validate-config 的 `no_alert` 列以 `metric_observed_map.yaml` 判、只報不擋；範例樹的 3 個 `_critical` 鍵是規則包缺 critical 層，不是索引沒處理後綴（決定 10）。
 
 2026-11-12 修訂：沒經過 CI 就進了 exporter 所讀 ConfigMap 的樹，由 threshold-exporter chart 可選的 CronJob 跑 `validate-config` 判，失敗時告警（後果與已知限制）。
+
+2026-11-13 修訂：閾值 registry 的 `retired_keys:` 登記的退役閾值鍵，不論寫在哪一層、有沒有讀取端讀，一律判 `unread`、原因 `retired`、等級 error，finding 帶點名替代鍵的提示；tenant-api 的 batch `unset` 可以刪它（決定 4）。
 
 ## 摘要
 
@@ -230,7 +232,7 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 | verdict | 意義 | 等級 |
 |---|---|---|
 | `read` | 至少一個讀取端讀它；登記為 `annotation` 的鍵也算 | — |
-| `unread` | 沒有任何讀取端讀它；登錄表沒有的 `_` 鍵一律是（原因 `unregistered`），已退役的 `_` 鍵也是（原因 `retired`） | error，不論寫在租戶檔、profile、子目錄 `_defaults.yaml` 還是根平台檔的 `tenants:`；來自租戶檔以外的檔時指名那個檔。例外兩個：只因 `disable_noop` 而未讀：warning（見決定 8）；`_state_<filter>` 指向平台沒有宣告的 filter：notice（見決定 7） |
+| `unread` | 沒有任何讀取端讀它；登錄表沒有的 `_` 鍵一律是（原因 `unregistered`），已退役的 `_` 鍵也是（原因 `retired`）；閾值 registry `retired_keys:` 登記的退役閾值鍵也是（原因 `retired`），即使 exporter 仍為它送出一列——部署方根 `defaults:` 寫的也算；finding 的 `hint` 點名替代鍵 | error，不論寫在租戶檔、profile、子目錄 `_defaults.yaml` 還是根平台檔的 `tenants:`；來自租戶檔以外的檔時指名那個檔。例外兩個：只因 `disable_noop` 而未讀：warning（見決定 8）；`_state_<filter>` 指向平台沒有宣告的 filter：notice（見決定 7） |
 | `undecidable` | 沒有讀到任何根平台檔，租戶寫的閾值鍵在 exporter 那半無從判斷；保留鍵照常判（見決定 7） | 判決輸出回 rc 2 |
 
 同一個錯字來自平台檔時只報一次（依檔案與鍵去重），並列出受影響的租戶，不會變成每個租戶各一筆。
