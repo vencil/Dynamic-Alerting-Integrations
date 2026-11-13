@@ -858,7 +858,7 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 # git-only chart rows.
 .PHONY: advisory-patched-check
 advisory-patched-check: ## ⛔ 擋住「advisory 的 patched 版號不存在，或修正版已發布卻沒回填」（#1269）
-	@python3 -X utf8 scripts/tools/ops/check_advisory_patched_versions.py
+	@python3 -X utf8 scripts/tools/dx/check_advisory_patched_versions.py
 
 # --- #474 Layer 2: local pre-tag Docker build + Trivy gate ---
 # release.yaml builds 5 of these 8 images at tag push; building them locally in

@@ -26,7 +26,6 @@ lang: en
 | `blind_spot_discovery.py` | Scan Prometheus targets and cross-reference tenant configs |
 | `byo_check.py` | BYO Prometheus & Alertmanager integration verification. |
 | `cardinality_forecasting.py` | 基數預測工具（§5.8）。 |
-| `check_advisory_patched_versions.py` | every advisory's `patched_versions` names a version that exists (#1269). |
 | `check_alert.py` | Check Prometheus alert state for a specific tenant. |
 | `config_diff.py` | What a conf.d change does, for GitOps PR review (ADR-037). |
 | `config_history.py` | Config Snapshot & History tracker. |
@@ -85,6 +84,7 @@ lang: en
 | `bench_verdict.py` | Turn a benchstat comparison into the bench gate's verdict (shared core). |
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
+| `check_advisory_patched_versions.py` | every advisory's `patched_versions` names a version that exists (#1269). |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
 | `compile_custom_alerts.py` | Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml. |
 | `converge_status.py` | Judge whether a multi-round fix chain is converging, from its ROUNDS.jsonl ledger. |

@@ -1,4 +1,4 @@
-"""Tests for scripts/tools/ops/check_advisory_patched_versions.py (#1269).
+"""Tests for scripts/tools/dx/check_advisory_patched_versions.py (#1269).
 
 Registry spaces are injected (no network); the git-only space runs against a
 throwaway repo; the platform space against that repo's tags. The live API path
@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-_SCRIPT = REPO_ROOT / "scripts" / "tools" / "ops" / "check_advisory_patched_versions.py"
+_SCRIPT = REPO_ROOT / "scripts" / "tools" / "dx" / "check_advisory_patched_versions.py"
 _spec = importlib.util.spec_from_file_location("check_advisory_patched_versions", _SCRIPT)
 gate = importlib.util.module_from_spec(_spec)
 sys.modules["check_advisory_patched_versions"] = gate
