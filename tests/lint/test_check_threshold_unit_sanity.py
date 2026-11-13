@@ -697,9 +697,13 @@ DROPPED_SINCE_INVENTORY = {
     # (PyYAML over every fence, the old ignore marker not consulted).
     ("docs/internal/testing-playbook.md", "mysql_connection_usage_percent", 70.0),
     # ADR-036's two-document example ({.confd .expect-refused=
-    # multiple_documents}) left this list with #3778: it is written in
-    # `mysql_connections`, which is no longer a registry key (retired), so
-    # the scan no longer counts its values as registry-key values.
+    # multiple_documents}): its reader refuses the unit by design (the example
+    # IS the refusal). Written in the current key since #3778 (it used the
+    # retired `mysql_connections`, which the scan does not count).
+    ("docs/adr/036-single-parser-effective-config.md", "mysql_connection_usage_percent", 80.0),
+    ("docs/adr/036-single-parser-effective-config.md", "mysql_connection_usage_percent", 90.0),
+    ("docs/adr/036-single-parser-effective-config.en.md", "mysql_connection_usage_percent", 80.0),
+    ("docs/adr/036-single-parser-effective-config.en.md", "mysql_connection_usage_percent", 90.0),
 }
 
 
