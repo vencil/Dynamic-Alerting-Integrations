@@ -28,7 +28,7 @@ da-portal 把告警/維運能力封成瀏覽器工具，給三種角色。**各�
 ## 1. What & Why
 
 - **Source（輸入）** — `tools/portal/src/interactive/tools/*.jsx`（`tools/portal/manifest.json` 為 build entry SSOT、`docs/assets/tool-registry.yaml` 為工具 metadata SSOT）+ `tools/portal/src/getting-started/wizard.jsx`
-- **Build** — `make portal-build` 跑 [esbuild](../../tools/portal/build.mjs)，把每個工具 bundle 成 ESM 檔輸出到 `docs/assets/dist/<tool>.js`。**每個消費端自己 build**：image 的 `portal-build` stage、Pages 部署、Smoke／visual baseline 都從 `tools/portal/` 現場 build，不讀 repo 裡那份 dist（[#3738](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3738)）。dist 目前仍暫時 commit 在 repo，下一張 PR 移出 git。測試走 `make test-portal`（Vitest）
+- **Build** — `make portal-build` 跑 [esbuild](../../tools/portal/build.mjs)，把每個工具 bundle 成 ESM 檔輸出到 `docs/assets/dist/<tool>.js`。**每個消費端自己 build**：image 的 `portal-build` stage、Pages 部署、Smoke／visual baseline 都從 `tools/portal/` 現場 build；dist 是 build 產物，不在 git 裡（[#3738](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3738)）。測試走 `make test-portal`（Vitest）
 - **Image（輸出）** — 一顆 nginx-alpine，COPY 進 Hub（`docs/interactive/`）+ `portal-build` stage 建出的 bundle（落在 `/assets/dist/`）+ 共享 assets + vendor；瀏覽器直接載入 ESM bundle，**runtime 不做 build / transpile**
 - **為什麼是「預先 build + 靜態服務」** — 1) 內網 / air-gapped 場景不能在 runtime 跑 npm；2) build 在 image build／部署流程裡完成，跑起來的 image 與部署端零 Node 依賴；3) image 純靜態 → 不需 secret、不需 runtime config
 - **vendor probe（離線優先）** — `make vendor-download` 把 React 18.3 / ReactDOM / Tailwind / Lucide 抓進 `docs/assets/vendor/`；瀏覽器啟動先 probe local，找不到才 fallback CDN（每個工具 bundle 透過頁面提供的這些 global 執行）
@@ -68,7 +68,7 @@ docker run -p 8080:80 ghcr.io/vencil/da-portal:v2.9.0
 # 開瀏覽器：http://localhost:8080  →  Hub
 ```
 
-> image 不讀 repo 裡 commit 的 `docs/assets/dist/`，所以 build image 前不必先 `make portal-build`。改過工具 source 仍要 `make portal-build` 並一起 commit dist——在 dist 移出 git 之前，CI 的 drift gate 照舊比對它。只是要跑 published image，直接 `docker run` 即可，無需以上 build 步驟。
+> image 的 `portal-build` stage 自己 build bundle，所以 build image 前不必先 `make portal-build`；本機 `docs/assets/dist/` 不會進 build context（`.dockerignore`）。dist 不進 git，改過工具 source 只 commit source。只是要跑 published image，直接 `docker run` 即可，無需以上 build 步驟。
 
 ### Helm（K8s，純靜態）
 
@@ -124,7 +124,7 @@ da-portal chart 只有純靜態部署：一個 nginx 容器，沒有登入、沒
 
 關鍵點：
 
-- **Image 不含 build step** — `Dockerfile` 只 `COPY` 預先 build 的成品 + `apk del nginx-module-image-filter nginx-module-xslt`（移掉靜態 server 用不到的模組，cascade 拔 28 個 dep；image 從 72 → 44 packages）+ libavif 殘留檢查（CVE-2025-48174 mitigation）
+- **最終 image 不含 build 工具** — bundle 在 `portal-build` stage（node）建好，最終 nginx stage 只 `COPY --from=portal-build` 成品 + `apk del nginx-module-image-filter nginx-module-xslt`（移掉靜態 server 用不到的模組，cascade 拔 28 個 dep；image 從 72 → 44 packages）+ libavif 殘留檢查（CVE-2025-48174 mitigation）
 - **工具是 esbuild ESM bundle** — source 在 `tools/portal/src/`，`make portal-build` 產 `docs/assets/dist/`；瀏覽器直接 import，**不在瀏覽器端 transpile**
 - **vendor probe** — `jsx-loader.html` 啟動跑同源 sync XHR 試 `vendor/react.production.min.js`；HTTP 200 走 local，否則退 CDN（React 18.3.1 / ReactDOM / Tailwind / Lucide 0.436.0）
 - **不轉送** — `nginx.conf` 沒有任何 `proxy_pass`、不讀身分 header（ADR-027 §5；`tests/shared/test_portal_image_nginx_conf.py` 守）
@@ -214,7 +214,7 @@ docker run -p 8080:80 \
 | 7. E2E（Playwright） | spec 在 `tests/e2e/portal-*.spec.ts` |
 
 **JSX 寫作守則：**
-1. **ESM imports** — 工具與其 sibling 模組用標準 `import` / `export`；`make portal-build` 由 esbuild bundle 成 dist。改過 source 後必跑 `portal-build`（CI 有 source↔dist drift gate）
+1. **ESM imports** — 工具與其 sibling 模組用標準 `import` / `export`；`make portal-build` 由 esbuild bundle 成 dist。dist 不進 git，只 commit source；CI 的 Portal Tests 會從 source build 並跑 bundle size budget 與 Vitest
 2. **Design tokens not hardcoded colors** — 用 `var(--da-color-accent)` 而非 `bg-blue-500`；CI lint（`check_undefined_tokens.py`）會抓未定義 token
 3. **重邏輯抽成可測模組** — calculator / validator / parser 等純邏輯抽到 tool-local `<tool>/<engine>.js` + 補 Vitest，別讓單檔長成 monolith
 
