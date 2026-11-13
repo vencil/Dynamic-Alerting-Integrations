@@ -73,9 +73,9 @@ BROKEN = {
     "unterminated_string.jsx": "export const a = 'abc;\n",
     "unterminated_template.jsx": "export const a = `abc;\n",
     "duplicate_default.jsx": "export default function A() {}\nexport default function B() {}\n",
-    # No import/export of its own: parsed as a module all the same, as it ships.
-    "top_level_return.js": "const a = 1;\nreturn a;\n",
-    "legacy_octal.js": "const a = 010;\n",
+    # With an import/export it is a module, as the build takes it: strict mode.
+    "return_in_a_module.js": "export const a = 1;\nreturn a;\n",
+    "octal_in_a_module.js": "export const a = 010;\n",
     "html_comment.jsx": "export default function A() { return <div><!-- c --></div>; }\n",
     "unclosed_front_matter.jsx": "---\ntitle: x\nexport default function A() { return null; }\n",
     "typescript_in_jsx.jsx": "export const a: number = 1;\n",
@@ -91,6 +91,11 @@ VALID = {
     "front_matter.jsx":
         "---\ntitle: x\npurpose: |\n  ------\n  separators inside the block\n---\n" + _OK,
     "top_level_await.js": "export const a = await Promise.resolve(1);\n",
+    # No import/export of its own: a script to esbuild, which the build wraps
+    # and ships, and which then runs — not stricter than the build (#3669
+    # review: appending `export {}` made the lint red where the build is not).
+    "script_top_level_return.js": "const a = 1;\nreturn a;\n",
+    "script_legacy_octal.js": "const a = 010;\n",
 }
 
 
@@ -144,7 +149,8 @@ def test_every_real_portal_source_parses():
     _require_esbuild()
     proc = _run("--ci")
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    n = sum(1 for p in (PORTAL / "src").rglob("*") if p.suffix in (".jsx", ".js"))
+    n = sum(1 for tree in ("src", "entries") for p in (PORTAL / tree).rglob("*")
+            if p.suffix in (".jsx", ".js"))
     assert f"All {n} portal source files parse" in proc.stdout, proc.stdout
 
 
@@ -163,6 +169,54 @@ def test_no_esbuild_is_no_verdict_with_the_remedy(tmp_path, ci):
     proc = _run(*ci, "--portal-dir", str(portal), "--src", str(src))
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "esbuild is not installed" in proc.stderr and "make portal-deps" in proc.stderr
+
+
+@pytest.mark.parametrize("ci", [["--ci"], []], ids=["ci", "report"])
+def _fake_esbuild(at, version):
+    """A package named esbuild at *at* (node_modules/esbuild) with *version*."""
+    d = at / "esbuild"
+    d.mkdir(parents=True)
+    (d / "package.json").write_text(
+        f'{{"name": "esbuild", "version": "{version}", "main": "index.js"}}', encoding="utf-8")
+    (d / "index.js").write_text("module.exports = {};\n", encoding="utf-8")
+
+
+def _locked_version():
+    import json
+    lock = json.loads((PORTAL / "package-lock.json").read_text(encoding="utf-8"))
+    return lock["packages"]["node_modules/esbuild"]["version"]
+
+
+def _fake_portal(tmp_path):
+    portal = tmp_path / "work" / "portal"
+    portal.mkdir(parents=True)
+    shutil.copy(PORTAL / "esbuild-shared.mjs", portal)
+    shutil.copy(PORTAL / "package-lock.json", portal)
+    (portal / "package.json").write_text('{"name": "p", "private": true}', encoding="utf-8")
+    return portal
+
+
+def test_an_esbuild_outside_the_portal_is_no_verdict(tmp_path):
+    """node finds an esbuild in a parent directory's node_modules (or on
+    NODE_PATH): not the lockfile's install, so no verdict — never a pass."""
+    if not shutil.which("node"):
+        pytest.skip("node is not on PATH")
+    portal = _fake_portal(tmp_path)
+    _fake_esbuild(tmp_path / "work" / "node_modules", _locked_version())
+    proc = _run("--ci", "--portal-dir", str(portal), "--src", str(_tree(tmp_path, {"a.jsx": _OK})))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "esbuild resolved outside" in proc.stderr and "make portal-deps" in proc.stderr
+
+
+def test_an_esbuild_of_another_version_than_the_lockfile_is_no_verdict(tmp_path):
+    """A stale install after a lockfile bump: no verdict, not a pass."""
+    if not shutil.which("node"):
+        pytest.skip("node is not on PATH")
+    portal = _fake_portal(tmp_path)
+    _fake_esbuild(portal / "node_modules", "0.0.1")
+    proc = _run("--ci", "--portal-dir", str(portal), "--src", str(_tree(tmp_path, {"a.jsx": _OK})))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "esbuild 0.0.1 is installed, the lockfile pins" in proc.stderr
 
 
 @pytest.mark.parametrize("ci", [["--ci"], []], ids=["ci", "report"])
@@ -221,14 +275,51 @@ def test_a_missing_tree_is_named(tmp_path):
 
 # ── one definition of the build's transform ──────────────────────────────
 
-def test_the_build_reads_the_shared_transform_not_a_copy():
-    """build.mjs takes the strip, loader and JSX settings from
-    esbuild-shared.mjs: a second copy there is what let the old lint's
-    regex and the build's drift apart."""
+#: esbuild options that change how a file is parsed. In build.mjs they may
+#: come only from TRANSFORM_OPTIONS (or the shared strip / loader).
+_PARSE_KEYS = {"target", "supported", "format", "loader", "jsx", "jsxFactory",
+               "jsxFragment", "jsxImportSource", "jsxDev", "jsxSideEffects",
+               "tsconfig", "tsconfigRaw", "charset"}
+
+
+def _config_literal(build: str) -> list[str]:
+    import re
+    start = build.index("  const config = {")
+    end = build.index("\n  };", start)
+    body = build[start:end].splitlines()[1:]
+    # The literal's own top-level lines (4-space indent), comments dropped.
+    return [ln.strip() for ln in body
+            if re.match(r"^    \S", ln) and not ln.strip().startswith("//")]
+
+
+def test_the_build_parses_with_the_shared_transform_only():
+    """build.mjs takes the strip, loader and every parse-relevant setting from
+    esbuild-shared.mjs, and spreads TRANSFORM_OPTIONS LAST, so no key in the
+    config can override it — the lint parses exactly as the build does. Read
+    off the config literal's own keys (#3669 review: a string match let
+    `target: 'es2020'` after the spread through)."""
+    import re
     build = (PORTAL / "build.mjs").read_text(encoding="utf-8")
     assert "from './esbuild-shared.mjs'" in build
-    for copy in ("^---", "jsxImportSource:", "jsx: 'automatic'", "format: 'esm'"):
-        assert copy not in build, copy
+    top = _config_literal(build)
+    assert top[-1] == "...TRANSFORM_OPTIONS,", top[-1]
+    keys = {m.group(1) for ln in top if (m := re.match(r"^(\w+)\s*:", ln))}
+    assert not keys & _PARSE_KEYS, keys & _PARSE_KEYS
+    assert not re.search(r"\bconfig(\.\w+|\[)\s*=", build), "config mutated after it is built"
+    assert "stripFrontmatter(" in build and "loaderFor(" in build
+    assert "/^---" not in build, "a second front-matter regex"
+
+
+@pytest.mark.parametrize("override", ["    target: 'es2020',", "    supported: {},",
+                                       "    jsx: 'transform',"])
+def test_the_build_guard_sees_an_override(override):
+    """The guard's own control: a parse-relevant key in the config is named."""
+    import re
+    build = (PORTAL / "build.mjs").read_text(encoding="utf-8")
+    mutated = build.replace("    bundle: true,", "    bundle: true,\n" + override, 1)
+    top = _config_literal(mutated)
+    keys = {m.group(1) for ln in top if (m := re.match(r"^(\w+)\s*:", ln))}
+    assert keys & _PARSE_KEYS
 
 
 def test_one_hook_runs_each_jsx_check_in_its_strictest_mode():
@@ -244,6 +335,10 @@ def test_one_hook_runs_each_jsx_check_in_its_strictest_mode():
     import re
     files = re.compile(syntax["files"])
     for path in ("tools/portal/src/interactive/tools/x.jsx", "tools/portal/src/a/b.js",
+                 "tools/portal/entries/x.entry.jsx", "tools/portal/build.mjs",
+                 # Built, not a literal: only matched against the regex,
+                 # never read (the path-filter scanner harvests literals).
+                 "tools/portal/" + "package.json",
                  "tools/portal/esbuild-shared.mjs", "tools/portal/package-lock.json",
                  "scripts/tools/lint/lint_jsx_syntax.py"):
         assert files.search(path), path

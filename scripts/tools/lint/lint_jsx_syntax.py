@@ -1,22 +1,29 @@
 #!/usr/bin/env python3
 """lint_jsx_syntax.py — Parse every portal source file the way the portal build does.
 
-Each ``*.jsx`` / ``*.js`` under ``tools/portal/src`` is handed to esbuild — the
+Each ``*.jsx`` / ``*.js`` under ``tools/portal/src`` and ``tools/portal/entries``
+(the build's entry points) is handed to esbuild — the
 copy ``tools/portal/package-lock.json`` pins, the one ``build.mjs`` bundles
 with — through the transform the build applies: the front-matter strip, the
 loader and the JSX settings all come from ``tools/portal/esbuild-shared.mjs``,
 the one definition both read (#3669). A file this lint passes is one the
 build parses; there is no second parser whose version or rules could drift.
 
-One stricter step than a bare transform: ``export {};`` is appended, so the
-file is parsed as an ES module even when it has no ``import`` / ``export`` of
-its own. The bundle ships as ESM, which is strict mode, so a top-level
-``return`` or a legacy octal literal would fail in the browser at load time;
-esbuild accepts both in a file it takes for a script.
+No stricter than the build: a file with no ``import`` / ``export`` of its own
+is a script to esbuild (a top-level ``return``, a legacy octal literal are
+accepted), as the bundle treats it — esbuild wraps such a file, and its output
+runs (measured in #3669's review). The lint answers "does the build parse
+this", nothing more.
+
+The esbuild is the lockfile's, checked: it must resolve under the portal's own
+``node_modules`` (not a parent directory's, not ``NODE_PATH``), and its
+version must be the one ``package-lock.json`` names — a stale install after a
+lockfile bump is no verdict, not a pass.
 
 The parse runs in node, located and judged through ``_lib_engine``
 (``("node", "esbuild-parse")``). No node, no esbuild under
-``tools/portal/node_modules`` (run ``make portal-deps``), or a node run that
+``tools/portal/node_modules`` or another version than the lockfile's (run
+``make portal-deps``), or a node run that
 does not return one result per file is no verdict: exit 2, with or without
 ``--ci`` — never a green run that skipped the parse. A file that is not UTF-8
 is a finding without being sent to node.
@@ -33,8 +40,9 @@ Usage:
 Exit codes:
     0 = every file parses (or, without --ci, findings were printed)
     1 = --ci and at least one file does not parse (or is not UTF-8)
-    2 = no verdict: node missing, esbuild not installed, the node run did not
-        return one result per file, or no source file was found
+    2 = no verdict: node missing, esbuild not installed under the portal or not
+        the lockfile's version, the node run did not return one result per
+        file, or no source file was found
 """
 from __future__ import annotations
 
@@ -62,25 +70,39 @@ SUFFIXES = (".jsx", ".js")
 NODE_DRIVER = r"""
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync, realpathSync } from 'node:fs';
+import { join, sep } from 'node:path';
 
 const portal = process.env.DA_PORTAL_DIR;
-let esbuild;
+const modules = join(portal, 'node_modules');
+const remedy = ' — run `make portal-deps` (npm ci in tools/portal)\n';
+const fail = (why) => { process.stderr.write(why + remedy); process.exit(3); };
+const require = createRequire(join(portal, 'package.json'));
+let resolved;
 try {
-  esbuild = createRequire(join(portal, 'package.json'))('esbuild');
+  resolved = realpathSync(require.resolve('esbuild'));
 } catch (e) {
-  process.stderr.write(`esbuild is not installed under ${join(portal, 'node_modules')}`
-    + ' — run `make portal-deps` (npm ci in tools/portal)\n');
-  process.exit(3);
+  fail(`esbuild is not installed under ${modules}`);
 }
+// The lockfile's esbuild, and only the portal's own: node would also find one
+// in a parent directory or on NODE_PATH, at whatever version (#3669 review).
+if (!resolved.startsWith(realpathSync(portal) + sep + 'node_modules' + sep)) {
+  fail(`esbuild resolved outside ${modules} (${resolved})`);
+}
+const lock = JSON.parse(readFileSync(join(portal, 'package-lock.json'), 'utf8'));
+const want = lock.packages && lock.packages['node_modules/esbuild']
+  && lock.packages['node_modules/esbuild'].version;
+const have = JSON.parse(readFileSync(join(modules, 'esbuild', 'package.json'), 'utf8')).version;
+if (!want || have !== want) {
+  fail(`esbuild ${have} is installed, the lockfile pins ${want || 'none'}`);
+}
+const esbuild = require('esbuild');
 const shared = await import(pathToFileURL(join(portal, 'esbuild-shared.mjs')).href);
 const files = JSON.parse(readFileSync(0, 'utf8'));
 const results = [];
 for (const f of files) {
   try {
-    // `export {}`: parsed as an ES module (strict mode), as the bundle ships.
-    await esbuild.transform(shared.stripFrontmatter(f.source) + '\nexport {};\n', {
+    await esbuild.transform(shared.stripFrontmatter(f.source), {
       ...shared.TRANSFORM_OPTIONS,
       loader: shared.loaderFor(f.path),
       sourcefile: f.path,
@@ -123,19 +145,22 @@ def main() -> int:
                         help="the portal package: its node_modules/esbuild and "
                              "esbuild-shared.mjs (default: tools/portal)")
     parser.add_argument("--src", default=None,
-                        help="the tree to check (default: <portal-dir>/src)")
+                        help="the tree to check (default: <portal-dir>/src and "
+                             "<portal-dir>/entries, the build's entry points)")
     args = parser.parse_args()
 
     import _lib_input
     import _lib_paths
     portal = Path(args.portal_dir)
-    src = Path(args.src) if args.src is not None else portal / "src"
+    trees = [Path(args.src)] if args.src is not None else [portal / "src", portal / "entries"]
     _lib_paths.require_dir(portal, lang="en", flag="--portal-dir")
-    _lib_paths.require_dir(src, lang="en", flag="--src" if args.src is not None else None)
+    for tree in trees:
+        _lib_paths.require_dir(tree, lang="en", flag="--src" if args.src is not None else None)
+    src = trees[0]
 
     findings: list[dict] = []
     files: list[dict] = []
-    for path in _sources(src):
+    for path in [p for tree in trees for p in _sources(tree)]:
         label = _label(path)
         try:
             source = path.read_bytes().decode("utf-8")

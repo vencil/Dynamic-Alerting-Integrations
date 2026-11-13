@@ -145,7 +145,6 @@ async function main() {
       entries.map((name) => [name, resolve(ENTRIES_DIR, `${name}.entry.jsx`)]),
     ),
     bundle: true,
-    ...TRANSFORM_OPTIONS, // format, target, jsx, jsxImportSource (esbuild-shared.mjs)
     outdir: DIST_DIR,
     splitting: true,
     platform: 'browser',
@@ -191,6 +190,10 @@ async function main() {
     },
     minify: !watch,
     logLevel: 'info',
+    // ⛔ LAST, so no key above can override how a file is parsed: the
+    // lint parses with exactly these (esbuild-shared.mjs, #3669; guarded by
+    // tests/lint/test_lint_jsx_syntax.py).
+    ...TRANSFORM_OPTIONS,
   };
 
   console.log(`[portal-build] Bundling ${entries.length} entries:`);

@@ -986,7 +986,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/lint_jsx_syntax.py --ci
         language: python
         pass_filenames: false
-        files: ^(tools/portal/src/.*\.jsx?|tools/portal/esbuild-shared\.mjs|tools/portal/package-lock\.json|scripts/tools/lint/lint_jsx_syntax\.py)$
+        files: ^(tools/portal/(src|entries)/.*\.jsx?|tools/portal/(esbuild-shared\.mjs|build\.mjs|package\.json|package-lock\.json)|scripts/tools/lint/lint_jsx_syntax\.py)$
         # #3669: parses every tools/portal/src file with the lockfile's esbuild
         # and esbuild-shared.mjs's transform — what build.mjs bundles with.
         # Needs node and tools/portal/node_modules (`make portal-deps`): without

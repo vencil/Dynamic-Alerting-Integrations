@@ -425,6 +425,11 @@ jobs:
               # tests/lint/test_portal_dist_not_tracked.py reads build.mjs's
               # DIST_DIR to bind its dist path to where the build writes (#3738).
               - "tools/portal/build.mjs"
+              # tests/lint/test_lint_jsx_syntax.py parses with the transform
+              # esbuild-shared.mjs defines and pins the esbuild version the
+              # lockfile names (#3669).
+              - "tools/portal/esbuild-shared.mjs"
+              - "tools/portal/package-lock.json"
             # Portal Tests: Vitest + esbuild build verification + bundle-size
             # budget + the RBAC wizard drift byte-clamp. Runs when portal
             # source changes (dist is build output, not in git — #3738), AND when the wizard testdata
