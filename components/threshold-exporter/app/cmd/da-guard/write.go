@@ -109,8 +109,8 @@ const (
 	// writeKindCopy: {"path", "copy": <an absolute path outside --config-dir>,
 	// "replace"?: true} — the source's bytes, as they are, at path (another
 	// tree's file: what assemble_config_dir puts together). Judged and put in
-	// place as a create (mode 0600); with replace the target may exist and is
-	// then judged and put in place as a replace's (its mode and owner kept).
+	// place as a create; with replace the target may exist and is then judged
+	// and put in place as a replace's (its owner kept). Mode: config.ConfDFileMode.
 	writeKindCopy = "copy"
 )
 
@@ -383,7 +383,7 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"      the file's whole text is the value and its comments, as a create's; the path may hold\n"+
 		"      a file (a regular one, no symlink, a path a reader reads: else not_read / symlink),\n"+
 		"      nothing of which is kept — not even a text parse-tree cannot read, which this repairs;\n"+
-		"      its mode, owner and group are kept, its line ending and BOM are not (LF, no BOM). A\n"+
+		"      its owner and group are kept, its line ending and BOM are not (LF, no BOM). A\n"+
 		"      text equal to the file's bytes is unchanged. No file there: a create\n"+
 		"  {\"path\": <rel>, \"delete\": true}   remove the file, judged as a move's source; no file\n"+
 		"      there: unchanged. With \"tenants\": [<id>, ...] the file, as read for the judgement, must\n"+
@@ -393,8 +393,8 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"      they are, comments and layout too; the source is opened without following a symlink and\n"+
 		"      must be a regular file (a symlink, a directory, a FIFO: bad_source; missing:\n"+
 		"      source_missing; exit 2). Without replace (optional) the target must not exist, as a\n"+
-		"      create's (mode 0600); with it an existing target is replaced as a replace's (its mode\n"+
-		"      and owner kept; the same bytes: unchanged)\n"+
+		"      create's; with it an existing target is replaced as a replace's (its owner kept; the\n"+
+		"      same bytes: unchanged)\n"+
 		"<rel> is relative to --config-dir. A create's or a move's target must not exist: an existing\n"+
 		"regular file is a caller error (path_exists, exit 2); an existing path that is no regular\n"+
 		"file (a FIFO, a device, a directory, a symlink to one) is refused not_read (exit 1). Missing\n"+
@@ -412,8 +412,10 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"spaces, a trailing comment is set one space after its value, an explicit key (`? a`) is\n"+
 		"written `a:`, blank lines may go. The line ending (CRLF or LF, from the first line) and a\n"+
 		"leading UTF-8 BOM are kept. An edit whose result is the file's own node tree is unchanged:\n"+
-		"nothing is written. A written file keeps the original's mode, and its owner and group when\n"+
-		"they can be set (else a warning); a moved file is the same file (its mode and owner too).\n\n")
+		"nothing is written. Every written file is mode 0644 (conf.d is a repo artifact: committed,\n"+
+		"read by another uid; #3535), whatever the original's; it keeps the original's owner and\n"+
+		"group when they can be set (else a warning). A moved file is the same file (its mode and\n"+
+		"owner too): nothing is written.\n\n")
 	fmt.Fprintf(errOut, "<value> names its type, so a mapping's order and a scalar's type are the caller's:\n"+
 		"  {\"str\": \"80\"}  written double-quoted (under _custom_alerts, a multi-line string is a literal\n"+
 		"                 block when it reads back the same)\n"+
@@ -1049,7 +1051,7 @@ func (w *writer) prepareEdit(scan *config.TreeScan, f *writeFile) {
 	if !ok {
 		return
 	}
-	original, ofi, fi, base := orig.data, orig.ofi, orig.fi, orig.base
+	original, ofi, base := orig.data, orig.ofi, orig.base
 	// A verdict on the original is not a refusal (repair is allowed): the
 	// text in place after the call must have none (judgeTree).
 
@@ -1122,7 +1124,7 @@ func (w *writer) prepareEdit(scan *config.TreeScan, f *writeFile) {
 	// The original's line ending and BOM; every check below reads these
 	// very bytes.
 	out := confedit.KeepFraming(original, encoded)
-	f.original, f.ofi, f.perm, f.want = original, ofi, fi.Mode().Perm(), want
+	f.original, f.ofi, f.perm, f.want = original, ofi, config.ConfDFileMode, want
 	if _, _, _, same := confedit.ContentDifference(base, want); same && (lead != nil || confedit.SameTree(original, out)) {
 		// Nothing changes, in the file's nodes nor in what the ops mean: a
 		// layout-only re-encode is not worth a write (and a commit). Both
@@ -1194,9 +1196,7 @@ func (w *writer) prepareCreate(scan *config.TreeScan, f *writeFile) {
 		return
 	}
 	if w.encodeValue(f) {
-		// 0600, as the Python writers it replaces wrote (_lib_io.write_text_or_die,
-		// #3105): a tenant file can hold a receiver URL with a token in it.
-		f.perm = 0o600
+		f.perm = config.ConfDFileMode // a repo artifact's (#3535), as every conf.d write
 	}
 }
 
@@ -1221,14 +1221,14 @@ func (w *writer) encodeValue(f *writeFile) bool {
 }
 
 // prepareReplace judges one replace alone. A missing target is a create's
-// (prepareTarget, mode 0600, put in place as a create). An existing one is
+// (prepareTarget, put in place as a create). An existing one is
 // judged as an edit's original (readOriginal: a regular file, no symlink, a
 // path a reader reads) except that parse-tree need not read it — its text is
 // neither kept nor read as a base, so a file the exporter cannot read is
 // repaired by its replacement. The text written is exactly the value and
 // its comments: LF line endings and no BOM whatever the old file had (the
-// whole text is new; nothing of the old file is framing to keep); the mode,
-// owner and group are the old file's, as an edit's. A text equal to the old
+// whole text is new; nothing of the old file is framing to keep); the owner
+// and group are the old file's, as an edit's, the mode config.ConfDFileMode. A text equal to the old
 // bytes is unchanged — and, as an edit's, still judged where it stays.
 func (w *writer) prepareReplace(scan *config.TreeScan, f *writeFile) {
 	switch _, err := os.Lstat(f.abs); {
@@ -1247,7 +1247,7 @@ func (w *writer) prepareReplace(scan *config.TreeScan, f *writeFile) {
 		return
 	}
 	f.replaces = true
-	f.original, f.ofi, f.perm = orig.data, orig.ofi, orig.fi.Mode().Perm()
+	f.original, f.ofi, f.perm = orig.data, orig.ofi, config.ConfDFileMode
 	if bytes.Equal(f.out, orig.data) {
 		f.unchanged, f.out = true, orig.data
 	}
@@ -1329,9 +1329,9 @@ func (w *writer) prepareMove(scan *config.TreeScan, f *writeFile) {
 // prepareCopy judges one copy alone: its source — an absolute path outside
 // the tree (a file of the tree is a move's), opened without following a
 // symlink, a regular file, read whole (readCopySource) — and its target, as
-// a create's (prepareTarget; mode 0600, never the source's) or, with
-// "replace" and a file there, as a replace's (readOriginal, any text: its
-// mode and owner kept; the same bytes are unchanged). The bytes are the
+// a create's (prepareTarget) or, with "replace" and a file there, as a
+// replace's (readOriginal, any text: its owner kept; the same bytes are
+// unchanged). The mode is config.ConfDFileMode, never the source's. The bytes are the
 // source's as they are: nothing is decoded and re-encoded, so comments and
 // layout stay. What parse-tree must read at the target is what it reads in
 // those bytes at that path (file mode); the tree with every file of the
@@ -1361,7 +1361,7 @@ func (w *writer) prepareCopy(scan *config.TreeScan, f *writeFile) {
 				return
 			}
 			f.replaces = true
-			f.original, f.ofi, f.perm = orig.data, orig.ofi, orig.fi.Mode().Perm()
+			f.original, f.ofi, f.perm = orig.data, orig.ofi, config.ConfDFileMode
 			f.unchanged = bytes.Equal(data, orig.data)
 		case !errors.Is(lerr, fs.ErrNotExist):
 			w.fileCallerError(f, writeReasonBadPath, "%q: %v", f.rel, lerr)
@@ -1372,7 +1372,7 @@ func (w *writer) prepareCopy(scan *config.TreeScan, f *writeFile) {
 		if !w.prepareTarget(scan, f) {
 			return
 		}
-		f.perm = 0o600 // a create's (prepareCreate): never the source's mode
+		f.perm = config.ConfDFileMode // a create's (prepareCreate): never the source's mode
 	}
 	_, _, want, err := judgeAt(scan, f.rel, data)
 	if err != nil {

@@ -6713,20 +6713,25 @@ def test_an_unlistable_directory_refuses_the_run_whatever_its_name(
 
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="Windows NTFS doesn't honor Unix mode bits")
-def test_confd_files_are_created_0600_and_a_replaced_one_keeps_its_mode(tmp_path):
-    """#3206 10c-3: `da-guard write` creates init's conf.d files 0o600 — the
-    mode init's own writer always gave them (a tenant file can hold a
-    receiver URL with a token); a file `--force` replaces keeps its mode."""
+def test_confd_files_are_written_0644_whatever_the_old_mode(tmp_path):
+    """#3535: `da-guard write` writes init's conf.d files 0o644, a repo
+    artifact's mode (committed, read by another uid) — a file a re-run
+    replaces too, whatever mode it had."""
     config = {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
               "tenants": ["db-a"], "namespace": "monitoring",
               "da_tools_image": ip.DA_TOOLS_IMAGE}
     ip.run_init(config, str(tmp_path))
     conf = tmp_path / "conf.d"
     for name in ("_defaults.yaml", "db-a.yaml"):
-        assert (conf / name).stat().st_mode & 0o777 == 0o600, name
+        assert (conf / name).stat().st_mode & 0o777 == 0o644, name
+    # Another text, so the re-run replaces it (the same text is unchanged:
+    # nothing is written).
+    with (conf / "db-a.yaml").open("a", encoding="utf-8") as f:
+        f.write("# hand edit\n")
     (conf / "db-a.yaml").chmod(0o640)
     ip.run_init(config, str(tmp_path))
-    assert (conf / "db-a.yaml").stat().st_mode & 0o777 == 0o640
+    assert "# hand edit" not in (conf / "db-a.yaml").read_text(encoding="utf-8")
+    assert (conf / "db-a.yaml").stat().st_mode & 0o777 == 0o644
 
 
 # ── issue 1465: the ownership ledger in .da-init.yaml ──────────────────────
