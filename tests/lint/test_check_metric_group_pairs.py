@@ -158,3 +158,71 @@ def test_main_ci_passes_when_clean(monkeypatch):
     monkeypatch.setattr(gate, "run_check",
                         lambda: {"errors": [], "infos": ["4 known-ungrouped"]})
     assert gate.main(["--ci"]) == gate.EXIT_OK
+
+
+# ── #3692: the group namespace across rule packs ──────────────────────────
+
+def _ns(by_pack):
+    return gate.group_namespace_errors(by_pack)
+
+
+def test_same_group_in_two_packs_is_a_collision():
+    """The measured bug: `liveness` in mariadb and mongodb let one pack's
+    critical mute the other's warning for a tenant running both."""
+    errs = _ns({"rule-pack-a.yaml": {"liveness": ["warning", "critical"]},
+                "rule-pack-b.yaml": {"liveness": ["warning", "critical"]}})
+    assert [e for e in errs if e.startswith("GROUP-COLLISION")], errs
+
+
+def test_distinct_groups_per_pack_are_clean():
+    assert _ns({"rule-pack-a.yaml": {"a_liveness": ["warning", "critical"]},
+                "rule-pack-b.yaml": {"b_liveness": ["warning", "critical"]}}) == []
+
+
+def test_slo_prefix_is_reserved_for_the_custom_alert_compiler():
+    errs = _ns({"rule-pack-a.yaml": {"slo_latency": ["warning", "critical"]}})
+    assert [e for e in errs if e.startswith("RESERVED-PREFIX")], errs
+
+
+def test_group_without_a_critical_or_a_warning_suppresses_nothing():
+    only_crit = _ns({"rule-pack-a.yaml": {"g": ["critical"]}})
+    only_warn = _ns({"rule-pack-a.yaml": {"g": ["warning"]}})
+    assert [e for e in only_crit if e.startswith("NO-DEDUP-GROUP")], only_crit
+    assert [e for e in only_warn if e.startswith("NO-DEDUP-GROUP")], only_warn
+    # The inhibit mutes severity="warning" only: an info member is no pair.
+    info_only = _ns({"rule-pack-a.yaml": {"g": ["info", "critical"]}})
+    assert [e for e in info_only if e.startswith("NO-DEDUP-GROUP")], info_only
+    assert _ns({"rule-pack-a.yaml": {"g": ["warning", "critical"]}}) == []
+
+
+def test_real_rule_packs_carry_no_templated_or_colliding_group():
+    """Read through the real loader: every group the source packs carry is
+    owned by one pack and pairs a critical with a warning/info."""
+    by_pack = gate.collect_groups_by_pack()
+    assert by_pack, "no rule pack read — the check would pass over nothing"
+    assert any(by_pack.values()), "no metric_group read at all"
+    assert _ns(by_pack) == []
+
+
+def test_templated_group_is_left_out(tmp_path):
+    """The compiler's templated `slo_{{ $labels.name }}` exists per alert
+    instance: no group check applies to it."""
+    (tmp_path / "rule-packs").mkdir()
+    (tmp_path / "rule-packs" / "rule-pack-custom-alerts.yaml").write_text(
+        "groups:\n- name: g\n  rules:\n  - alert: SloBurn\n    expr: vector(1)\n"
+        "    labels:\n      severity: critical\n"
+        "      metric_group: 'slo_{{ $labels.name }}'\n", encoding="utf-8")
+    by_pack = gate.collect_groups_by_pack(tmp_path)
+    assert by_pack == {"rule-pack-custom-alerts.yaml": {}}
+    assert _ns(by_pack) == []
+
+
+def test_only_the_compilers_slo_template_is_left_out(tmp_path):
+    """A templated value of a hand-written pack is checked as written."""
+    (tmp_path / "rule-packs").mkdir()
+    (tmp_path / "rule-packs" / "rule-pack-x.yaml").write_text(
+        "groups:\n- name: g\n  rules:\n  - alert: X\n    expr: vector(1)\n"
+        "    labels:\n      severity: critical\n"
+        "      metric_group: 'x_{{ $labels.db }}'\n", encoding="utf-8")
+    errs = _ns(gate.collect_groups_by_pack(tmp_path))
+    assert [e for e in errs if e.startswith("NO-DEDUP-GROUP")], errs

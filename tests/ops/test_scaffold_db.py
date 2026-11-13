@@ -458,8 +458,11 @@ class TestKafkaRabbitMQAlertCompleteness:
         mgs = self._get_metric_groups(data["groups"])
         expected = {
             "kafka_consumer_lag", "kafka_under_replicated_partitions",
-            "kafka_active_controllers", "kafka_broker_count", "kafka_request_rate",
+            "kafka_request_rate",
         }
+        # #3692: a single-member group suppresses nothing, so the two
+        # floor alerts with no critical twin carry none.
+        assert not mgs & {"kafka_active_controllers", "kafka_broker_count"}, mgs
         for mg in expected:
             assert mg in mgs, f"Missing metric_group: {mg}"
 

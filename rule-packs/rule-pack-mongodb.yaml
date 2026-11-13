@@ -126,7 +126,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: liveness
+          metric_group: mongodb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB member {{ $labels.instance }} is down (tenant {{ $labels.tenant }})"
@@ -156,7 +156,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: liveness
+          metric_group: mongodb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB: ALL instances down for tenant {{ $labels.tenant }}"
@@ -199,7 +199,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: liveness
+          metric_group: mongodb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MongoDB: no PRIMARY in replica set for tenant {{ $labels.tenant }}"

@@ -152,20 +152,19 @@ data:
     \ > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause\\n  and on(tenant)\\\
     n  tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      metric_group: jvm_performance\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: Both GC pause and memory exceed thresholds — JVM performance\
-    \ degraded\n      description_zh: GC pause 和記憶體皆超出閾值 — JVM 效能降級\n      owner:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: multi-signal JVM degradation — escalate'\n      platform_summary_zh: '[{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}：多訊號 JVM 降級 — 需升級處理'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: JVMPerformanceDegraded on {{ $labels.tenant }}\n      summary_zh:\
-    \ '{{ $labels.tenant }} 上 JVM 效能降級'\n      tier: '{{ with query (printf `topk(1,\
+    n\"\n    for: 5m\n    labels:\n      maintenance: mute\n      severity: critical\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Both\
+    \ GC pause and memory exceed thresholds — JVM performance degraded\n      description_zh:\
+    \ GC pause 和記憶體皆超出閾值 — JVM 效能降級\n      owner: '{{ with query (printf `topk(1,\
+    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner\
+    \ }}{{ end }}{{ end }}'\n      platform_summary: '[{{ with query (printf `topk(1,\
     \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}'\n"
+    \ }}{{ end }}{{ end }}] {{ $labels.tenant }}: multi-signal JVM degradation — escalate'\n\
+    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}：多訊號 JVM 降級 — 需升級處理'\n      runbook_url: '{{ with query\
+    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
+    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: JVMPerformanceDegraded\
+    \ on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 上 JVM 效能降級'\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
