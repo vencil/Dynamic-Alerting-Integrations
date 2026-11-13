@@ -8,9 +8,11 @@ ADR-036 步驟 4 讓產生器改讀 yaml.v3（`da-guard parse-tree`）之後，�
   `constraints.require_critical_escalation`、receiver 的 `send_resolved`、email
   `require_tls`、webhook `http_config.proxy_from_environment`。加引號的 `"yes"`、`"true"`
   一律是型別錯誤；不再把字串轉回布林（`coerce_yaml_bool` 已刪）。
-* 列舉欄位只收定義的值：租戶的 `_severity_dedup` 收 `enable`／`disable`（以及 exporter
-  也認得的 `enabled`／`on`／`true`、`disabled`／`off`／`false`，去空白、不分大小寫），
-  或布林、null（＝預設 enable）。`"no"`、`"yes"`、`""`、數字一律拒收。
+* 租戶的 `_severity_dedup` 照 exporter 自己的合併與讀法（#3621）：模式取自 `da-guard
+  severity-dedup`，exporter 讀不懂的值（`"no"`、`"yes"`、`""`、數字…，與 key verdict 的
+  value_unread 同一個 Go 檢查）、以及寫成排程的值，整棵樹拒收，kind 仍是
+  `severity_dedup_invalid`。產生器自己不再有詞表（詞表與 schema 的對照在
+  tests/shared/test_severity_dedup_vocabulary_parity.py）。
 * 拒收＝所有模式（`--output-alertmanager`（含 `-o`、stdout、`--dry-run`）、`--output-configmap`、`--apply`、`--validate`、
   `--strict`）rc 1、不寫出、不套用，走 `tree_refusal` 那一條路；validate-config 的
   routes 列 FAIL。
@@ -18,8 +20,8 @@ ADR-036 步驟 4 讓產生器改讀 yaml.v3（`da-guard parse-tree`）之後，�
   的 `{default: p1, overrides: [...]}`）、數字、布林、list 一律拒收；過去整個值被靜默略過，
   租戶落回預設路由。
 * 未加引號的 `enabled: yes`、`send_resolved: off`、`_severity_dedup: no` 是字串，
-  同樣拒收（步驟 4 之前 PyYAML 讀成布林、照收）；`_severity_dedup: off` 是 exporter
-  也認得的詞，照收。
+  同樣拒收（步驟 4 之前 PyYAML 讀成布林、照收）；`_severity_dedup: off` exporter
+  讀得懂，照收。
 
 租戶 id 都是 fixture 名稱（CLAUDE.md #9）。
 """
@@ -37,11 +39,7 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
-from _grar_parse import (  # noqa: E402
-    SEVERITY_DEDUP_WORDS,
-    load_tenant_tree,
-    severity_dedup_mode,
-)
+from _grar_parse import load_tenant_tree  # noqa: E402
 import generate_alertmanager_routes as gar  # noqa: E402
 import validate_config as vc  # noqa: E402
 
@@ -306,20 +304,10 @@ def test_validate_config_routes_row_fails(tmp_path, name):
 
 # ── _severity_dedup: what each accepted value means ──────────────────────
 
-@pytest.mark.parametrize("value,mode", [
-    (None, "enable"), (True, "enable"), (False, "disable"),
-    *((w, "enable") for w in SEVERITY_DEDUP_WORDS[:4]),
-    *((w, "disable") for w in SEVERITY_DEDUP_WORDS[4:]),
-    (" Disable ", "disable"), ("ENABLED", "enable"),
-    ("no", None), ("yes", None), ("", None), (0, None), (1, None),
-    (["disable"], None), ({"a": 1}, None),
-])
-def test_severity_dedup_mode(value, mode):
-    assert severity_dedup_mode(value) == mode
-
-
 @pytest.mark.parametrize("value,dedup", [("disable", "disable"), ("off", "disable"),
-                                         ("false", "disable"), ("enable", "enable")])
+                                         ("false", "disable"), ("enable", "enable"),
+                                         ('" Disabled "', "disable"), ("ENABLED", "enable"),
+                                         ("~", "enable")])
 def test_unquoted_dedup_words_keep_their_meaning(tmp_path, value, dedup):
     """`off` unquoted is the string "off" to yaml.v3 — a word the exporter
     reads as disable — and `false` the boolean: both disable."""
