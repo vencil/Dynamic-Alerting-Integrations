@@ -118,13 +118,37 @@ def test_gateway_explicit_upstream_namespace_wins() -> None:
 
 
 @pytest.mark.parametrize("host", ["vmselect.corp", "vmselect.corp.example", "10.0.0.1",
+                                  "fd00::1",  # an IPv6 literal must not read as a bare Service name
                                   # an external FQDN whose third label happens to be `svc`
                                   "api.prod.svc.example.com",
                                   # a custom cluster domain cannot be told from the above
                                   "federation-proxy.monitoring.svc.corp.local", "a.b"])
 def test_gateway_refuses_a_host_it_cannot_place(host: str) -> None:
     out = _helm(GATEWAY, "--set", f"upstream.host={host}")
-    assert out.returncode != 0 and "cannot tell which namespace" in out.stderr, out.stderr[-400:]
+    assert out.returncode != 0 and ("cannot tell which namespace" in out.stderr
+                                    or "is an IP address" in out.stderr), out.stderr[-400:]
+
+
+def test_gateway_lower_cases_the_host() -> None:
+    """DNS is case-insensitive, namespace names are not: `MONITORING` would select nothing."""
+    assert _upstream_ns(_gateway_egress("--set", "upstream.host=Proxy.MONITORING.svc")) == "monitoring"
+
+
+@pytest.mark.parametrize("args, needle", [
+    (["--set", "upstream.host=..svc"], "is not a namespace name"),
+    (["--set", "networkPolicy.upstreamNamespace=Obs"], "is not a namespace name"),
+    (["--set", "networkPolicy.upstreamPort=0"], "is not 1-65535"),
+    (["--set", "upstream.port=70000"], "is not 1-65535"),
+])
+def test_gateway_refuses_bad_targets(args, needle) -> None:
+    out = _helm(GATEWAY, *args)
+    assert out.returncode != 0 and needle in out.stderr, out.stderr[-400:]
+
+
+def test_gateway_explicit_pod_port_wins() -> None:
+    """Service port -> a different pod port: the rule must name the pod port."""
+    egress = _gateway_egress("--set", "upstream.port=9090", "--set", "networkPolicy.upstreamPort=10902")
+    assert egress[1]["ports"] == [{"protocol": "TCP", "port": 10902}], egress
 
 
 @pytest.mark.parametrize("value, restricted", [("false", False), ("true", True), ("null", True)])

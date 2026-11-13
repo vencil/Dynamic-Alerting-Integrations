@@ -172,22 +172,46 @@ which is this consumer's name in helm/victorialogs auth.consumers
 federation-gateway (#1295 PR2). The namespace the upstream runs in, for the
 egress rule: `networkPolicy.upstreamNamespace` when set, else read from
 `upstream.host` — `name` is this release's namespace, `name.ns.svc` or
-`name.ns.svc.cluster.local` is `ns`. Anything else (an external FQDN, an IP,
-a custom cluster domain, a bare `name.ns`, which could
+`name.ns.svc.cluster.local` is `ns`, lower-cased. Anything else (an external
+FQDN, an IP, a custom cluster domain, a bare `name.ns`, which could
 just as well be a domain) fails: the egress rule must not be a guess.
 */}}
 {{- define "federation-gateway.upstreamNamespace" -}}
 {{- $np := .Values.networkPolicy | default dict -}}
+{{- /* DNS is case-insensitive, namespace names are not: lower-case first. */ -}}
+{{- $host := lower (toString .Values.upstream.host) -}}
+{{- $ns := "" -}}
+{{- $parts := splitList "." $host -}}
 {{- if $np.upstreamNamespace -}}
-{{- $np.upstreamNamespace -}}
-{{- else -}}
-{{- $parts := splitList "." (toString .Values.upstream.host) -}}
-{{- if eq (len $parts) 1 -}}
-{{- .Release.Namespace -}}
+{{- $ns = toString $np.upstreamNamespace -}}
+{{- else if contains ":" $host -}}
+{{- fail (printf "federation-gateway: upstream.host %q is an IP address; set networkPolicy.upstreamNamespace, or networkPolicy.restrictEgress=false and allow that egress yourself (#1295)" (toString .Values.upstream.host)) -}}
+{{- else if eq (len $parts) 1 -}}
+{{- $ns = .Release.Namespace -}}
 {{- else if and (ge (len $parts) 3) (eq (index $parts 2) "svc") (or (eq (len $parts) 3) (eq (join "." (slice $parts 3)) "cluster.local")) -}}
-{{- index $parts 1 -}}
+{{- $ns = index $parts 1 -}}
 {{- else -}}
 {{- fail (printf "federation-gateway: cannot tell which namespace upstream.host %q is in, and the NetworkPolicy allows egress only to it. Use the Service form `<svc>.<namespace>.svc` (or `.svc.cluster.local`), or set networkPolicy.upstreamNamespace (a custom cluster domain needs it too); for an upstream outside the cluster set networkPolicy.restrictEgress=false and allow that egress yourself (#1295)" (toString .Values.upstream.host)) -}}
 {{- end -}}
+{{- if not (regexMatch "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$" $ns) -}}
+{{- fail (printf "federation-gateway: %q is not a namespace name (lower-case DNS label); a rule for it would select nothing and drop the upstream traffic silently (#1295)" $ns) -}}
 {{- end -}}
+{{- $ns -}}
+{{- end }}
+
+{{/*
+federation-gateway (#1295). The upstream POD port the egress rule allows:
+networkPolicy.upstreamPort when set, else upstream.port (a Service port —
+NetworkPolicy matches the pod port, so set the override when they differ).
+*/}}
+{{- define "federation-gateway.upstreamPort" -}}
+{{- $np := .Values.networkPolicy | default dict -}}
+{{- $port := atoi (toString .Values.upstream.port) -}}
+{{- if and (hasKey $np "upstreamPort") (ne (toString $np.upstreamPort) "") (ne (toString $np.upstreamPort) "<nil>") -}}
+{{- $port = atoi (toString $np.upstreamPort) -}}
+{{- end -}}
+{{- if or (lt $port 1) (gt $port 65535) -}}
+{{- fail (printf "federation-gateway: upstream port %d (upstream.port or networkPolicy.upstreamPort) is not 1-65535 (#1295)" $port) -}}
+{{- end -}}
+{{- $port -}}
 {{- end }}

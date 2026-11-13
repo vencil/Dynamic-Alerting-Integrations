@@ -351,6 +351,10 @@ networkPolicy:
   # (`<svc>` = this release's namespace, `<svc>.<ns>.svc[...]` = <ns>); any
   # other host form fails the render rather than guess.
   upstreamNamespace: ""
+  # The upstream POD port the egress rule allows. Empty = upstream.port.
+  # NetworkPolicy matches the pod port, not the Service's, so set this when
+  # the upstream Service maps one port to another.
+  upstreamPort: ""
 
 # ServiceMonitor for a Prometheus Operator install (kube-prometheus-stack),
 # #1595 D1b. Off by default: without the monitoring.coreos.com CRDs the object
