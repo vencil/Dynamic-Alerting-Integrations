@@ -33,8 +33,10 @@ import yaml
 CHART = Path(__file__).resolve().parents[2] / "helm" / "victorialogs"
 pytestmark = pytest.mark.skipif(shutil.which("helm") is None, reason="helm CLI not on PATH")
 
-TWO_CONSUMERS = ('auth.consumers=[{"name":"vector","paths":["/insert/.*"],"existingSecret":"vl-vector"},'
-                 '{"name":"federation-gateway","paths":["/select/.*"],"existingSecret":"vl-gw"}]')
+TWO_CONSUMERS = ('auth.consumers=[{"name":"vector","paths":["/insert/.*"],"existingSecret":"vl-vector",'
+                 '"from":{"namespace":"vector"}},'
+                 '{"name":"federation-gateway","paths":["/select/.*"],"existingSecret":"vl-gw",'
+                 '"from":{"podLabels":{"app.kubernetes.io/name":"federation-gateway"}}}]')
 
 
 # The default is auth.mode=enforce, which refuses to render until every

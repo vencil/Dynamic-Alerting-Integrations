@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // runBatch runs edit or emit with stdin and --json, and decodes its one
@@ -407,7 +409,7 @@ func TestEmit_KeepsTheCallersOrder(t *testing.T) {
 	if len(got) != 1 || got["team/_t9.yaml"] != want {
 		t.Fatalf("got %v\nwant\n%s", got, want)
 	}
-	if fi, err := os.Stat(filepath.Join(root, "team", "_t9.yaml")); err != nil || fi.Mode().Perm() != 0o600 {
+	if fi, err := os.Stat(filepath.Join(root, "team", "_t9.yaml")); err != nil || fi.Mode().Perm() != config.ConfDFileMode {
 		t.Fatalf("mode %v %v", fi.Mode(), err)
 	}
 }

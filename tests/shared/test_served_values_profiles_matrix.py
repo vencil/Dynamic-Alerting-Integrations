@@ -339,10 +339,15 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     # ADR-036 step 4 (#2906): one parse-tree read of the tree, then effective
     # (no served-values to borrow the reason from), then da-guard's check,
     # then the unread_keys row's own `key-verdict` (#3489: it reads the
-    # verdict from da-guard, and says it is incomplete on this tree). #3621:
-    # the two rows that load the routing tree (schema, routes) each ask
-    # `severity-dedup` for the tenants' `_severity_dedup` — before effective,
-    # so never to borrow the profiles row's reason.
+    # verdict from da-guard, and says it is incomplete on this tree), then
+    # the tier_inversion row's own served-values (#3691: it compares the
+    # served tiers, last of the rows). #3621: the two rows that load the
+    # routing tree (schema, routes) each ask `severity-dedup` for the
+    # tenants' `_severity_dedup` — before effective, so never to borrow the
+    # profiles row's reason. A profiles row that borrowed its reason from
+    # served-values again would call it right after effective, so the whole
+    # ordered list still catches that.
     assert log.read_text(encoding="utf-8").split() == ["parse-tree", "severity-dedup", "severity-dedup",
-                                                       "effective", "--config-dir", "key-verdict"]
+                                                       "effective", "--config-dir", "key-verdict",
+                                                       "served-values"]
     assert rows["unread_keys"]["details"][0].startswith("verdict incomplete: "), rows["unread_keys"]

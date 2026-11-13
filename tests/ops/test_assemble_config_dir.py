@@ -294,20 +294,20 @@ class TestAssemble:
                "asserts Unix-specific semantics.",
     )
     def test_file_permissions(self, config_dir):
-        """#3206：檔案由 da-guard write 放進去——新檔 0600（不沿用來源的權限，
-        也不再 chmod 0644）；`--output` 已有的檔被取代時保留它原本的權限。"""
+        """#3206：檔案由 da-guard write 放進去；#3535：conf.d 屬 repo 生成物，
+        新檔與被取代的檔一律 0644（不沿用來源或 `--output` 原檔的權限）。"""
         src = Path(config_dir) / "src"
         out = Path(config_dir) / "out"
         src.mkdir()
         _write_file(src / "a.yaml", "tenants:\n  t-a: {}\n")
         _write_file(src / "b.yaml", "tenants:\n  t-b: {}\n")
-        os.chmod(src / "a.yaml", 0o644)
+        os.chmod(src / "a.yaml", 0o600)
         out.mkdir()
         _write_file(out / "b.yaml", "tenants:\n  t-b:\n    cpu: '1'\n")
         os.chmod(out / "b.yaml", 0o640)
         assemble({"a.yaml": src / "a.yaml", "b.yaml": src / "b.yaml"}, out)
-        assert os.stat(out / "a.yaml").st_mode & 0o777 == 0o600
-        assert os.stat(out / "b.yaml").st_mode & 0o777 == 0o640
+        assert os.stat(out / "a.yaml").st_mode & 0o777 == 0o644
+        assert os.stat(out / "b.yaml").st_mode & 0o777 == 0o644
         assert (out / "b.yaml").read_text(encoding="utf-8") == "tenants:\n  t-b: {}\n"
 
 
