@@ -4,6 +4,7 @@ import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 import { useModalFocusTrap } from '../../_common/hooks/useModalFocusTrap.js';
 import { ERROR_CODES, classifyApiError, apiErrorMessage } from '../../_common/api/classify-error.js';
 import { apiFetch } from '../../_common/api/api-fetch.js';
+import { holdSignIn } from '../../_common/auth/sign-in.js';
 
 /* ── i18n ──────────────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -115,6 +116,11 @@ function CustomAlertsModal(props) {
   const liveRef = useRef(true);
 
   const isDirty = JSON.stringify(recipes) !== originalJSON || phase === 'form';
+  // Unsaved edits live only on this page: while there are any, a 401 from
+  // any request (its own save, the page's background polls) must not send
+  // the browser to sign in and lose them (apiFetch honours the hold). Let go
+  // once saved, discarded or closed.
+  useEffect(() => (isDirty ? holdSignIn() : undefined), [isDirty]);
 
   // Reef 9: Just-In-Time fresh load on open — the base_hash MUST be fresh at
   // the edit start, never the tenant grid's page-load-cached hash.
@@ -227,6 +233,17 @@ function CustomAlertsModal(props) {
           // #1231: surface the API's non-blocking advisories verbatim
           // (pass-through — the message text is owned by the backend).
           setWarnings(Array.isArray(res.data && res.data.warnings) ? res.data.warnings : []);
+          return;
+        }
+        if (res.status === 401) {
+          // The session expired; the hold above kept the page here, so the
+          // edits are still on screen.
+          setSaveError({
+            remedy: 'permission',
+            message: t('登入已過期。未儲存的變更仍在畫面上：先記下內容，再重新整理頁面登入。',
+              'Your session has expired. Your unsaved changes are still on screen: note them down, then reload the page to sign in.'),
+            detail: 'HTTP 401',
+          });
           return;
         }
         const data = (res.data && typeof res.data === 'object') ? res.data : {};

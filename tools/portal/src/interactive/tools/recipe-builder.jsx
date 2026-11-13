@@ -10,6 +10,7 @@ import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import ENUMS from './_common/data/recipe-enums.json';
 import { Loading } from './_common/components/Loading.jsx';
 import { apiFetch } from './_common/api/api-fetch.js';
+import { holdSignIn } from './_common/auth/sign-in.js';
 import {
   recipeStatus,
   formSupported,
@@ -386,6 +387,15 @@ export default function RecipeBuilder(props) {
     ...(initialValue || {}),
   }));
   const set = (k, v) => setF((prev) => ({ ...prev, [k]: v }));
+
+  // The draft lives only on this page: once it differs from what it opened
+  // with, a 401 (metrics discovery, the preview) must not send the browser
+  // to sign in and lose it — apiFetch honours the hold. Let go on unmount or
+  // when the draft is back to where it started.
+  const initial = useRef(null);
+  if (initial.current === null) initial.current = JSON.stringify([recipe, f]);
+  const draftChanged = JSON.stringify([recipe, f]) !== initial.current;
+  useEffect(() => (draftChanged ? holdSignIn() : undefined), [draftChanged]);
 
   const fields = FIELDS_BY_RECIPE[recipe] || [];
   const summary = useMemo(() => recipeSummary(recipe, f), [recipe, f]);
