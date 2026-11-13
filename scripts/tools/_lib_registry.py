@@ -25,16 +25,39 @@ no ``errors[].code`` to read.
 
 Transport failures are :data:`_lib_prometheus.TRANSPORT_ERRORS`, the one list
 of "no usable HTTP answer" (#3477), not an enumeration of its own.
+
+Reading what a repository holds (#3848)
+---------------------------------------
+:class:`Repository` is the same client asked for content rather than a
+yes/no: a manifest's bytes (:meth:`Repository.manifest`), a blob's bytes
+(:meth:`Repository.blob`), the tag list (:meth:`Repository.tags`, following
+``Link: rel="next"``). Every byte that comes back is checked against the
+digest that names it, so "the registry holds X" is never read off a body
+that is not X. Its contract is narrower than :func:`resolve`'s:
+
+* only a ``404`` ``MANIFEST_UNKNOWN`` / ``NAME_UNKNOWN`` is "no such
+  manifest" (``manifest()`` returns None);
+* a ``401`` / ``403`` is :class:`NoAnswer`, never "absent": anonymously a
+  registry answers a repository it does not have exactly as it answers a
+  private one (ghcr.io: the token service refuses with ``403 DENIED`` either
+  way, measured 2026-11-13), and a caller that must tell them apart gives
+  :class:`Credentials`. Those are sent only after the anonymous attempt is
+  refused, only as HTTP Basic to the registry's own token service (a realm on
+  another host is refused, not followed), so a reply that a public repository
+  gives anonymously stays the measured one;
+* everything else — a 5xx, a 429, no connection, a body that is not what was
+  asked for, bytes whose digest differs — is :class:`NoAnswer`.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import re
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Callable, NamedTuple, Optional
+from typing import Callable, List, NamedTuple, Optional
 
 from _lib_prometheus import TRANSPORT_ERRORS
 
@@ -158,8 +181,10 @@ def _bearer_challenge(headers) -> Optional[dict]:
     return None
 
 
-class _NoAnswer(Exception):
-    """A step that got no usable answer; becomes :data:`NO_ANSWER`."""
+class NoAnswer(Exception):
+    """A step that got no usable answer; :func:`resolve` turns it into
+    :data:`NO_ANSWER`, :class:`Repository` raises it to its caller."""
+
 
 
 def _anonymous_token(challenge: dict, repository: str, timeout: float,
@@ -180,13 +205,13 @@ def _anonymous_token(challenge: dict, repository: str, timeout: float,
     if status in (401, 403):
         return None
     if status != 200:
-        raise _NoAnswer(f"HTTP {status} from the token service {realm}")
+        raise NoAnswer(f"HTTP {status} from the token service {realm}")
     payload = json.loads(body)
     token = payload.get("token") or payload.get("access_token") if isinstance(payload, dict) else None
     if not isinstance(token, str) or not token:
         # A 200 without a token is not a refusal: going on without one would
         # judge the manifest's tokenless 401 as "not pullable anonymously".
-        raise _NoAnswer(f"HTTP 200 from the token service {realm} without a token")
+        raise NoAnswer(f"HTTP 200 from the token service {realm} without a token")
     return token
 
 
@@ -272,8 +297,214 @@ def resolve(ref: str, *, timeout: float, transport: Transport = _urllib_transpor
         if status == 200:
             return _judge_ok(parsed, reply, body) or Answer(NO_ANSWER, "HTTP 200 without a body")
         return _judge_error(parsed, status, body)
-    except _NoAnswer as exc:
+    except NoAnswer as exc:
         return Answer(NO_ANSWER, str(exc))
     except (*TRANSPORT_ERRORS, RecursionError) as exc:
         # RecursionError: json.loads of a pathologically nested body.
         return Answer(NO_ANSWER, f"no answer from the registry: {type(exc).__name__}: {exc}")
+
+
+# ── reading what a repository holds (#3848) ─────────────────────────────────
+
+
+class Credentials(NamedTuple):
+    """HTTP Basic credentials for a registry's token service."""
+    username: str
+    password: str
+
+
+class Manifest(NamedTuple):
+    media_type: str     # the reply's Content-Type, one of MANIFEST_TYPES
+    digest: str         # sha256 of the bytes, as the registry names them
+    document: dict      # the parsed JSON
+
+
+#: A manifest larger than this is not read (the distribution spec lets a
+#: registry refuse anything over 4 MiB, so no real manifest is near it).
+MAX_MANIFEST_BYTES = 4 * 1024 * 1024
+
+#: Hard cap on a ``tags/list`` walk; a registry looping its ``Link`` header
+#: would otherwise never end.
+MAX_TAG_PAGES = 100
+
+_NEXT_LINK = re.compile(r'<([^>]+)>\s*;\s*rel="?next"?')
+
+
+def _digest_of(algorithm: str, body: bytes) -> str:
+    if algorithm not in DIGEST_ALGORITHMS:
+        raise NoAnswer(f"cannot check a {algorithm} digest")
+    return f"{algorithm}:" + hashlib.new(algorithm, body).hexdigest()
+
+
+def _refusal(status: int, body: bytes, credentials: Optional[Credentials]) -> str:
+    codes = _error_codes(body)
+    detail = f"HTTP {status} {','.join(codes) or 'without an errors[].code'}"
+    if status in (401, 403):
+        if credentials is None:
+            return (f"{detail}: not readable anonymously — a registry answers a repository it "
+                    f"does not have exactly as it answers a private one, so this is neither "
+                    f"'absent' nor 'present' (give credentials to tell them apart)")
+        return f"{detail}: refused with the given credentials"
+    if status == 429 or "TOOMANYREQUESTS" in codes:
+        return f"{detail}: rate limited"
+    if 500 <= status <= 599:
+        return f"{detail}: registry error"
+    return f"{detail}: not an answer this reader reads"
+
+
+class Repository:
+    """One repository of one registry, read over the distribution v2 API.
+
+    Raises :class:`NoAnswer` for every answer that is not the one asked for
+    (see the module docstring); never returns a body it has not checked.
+    """
+
+    def __init__(self, host: str, repository: str, *, timeout: float,
+                 transport: Transport = _urllib_transport,
+                 credentials: Optional[Credentials] = None) -> None:
+        self.host, self.repository, self.timeout = host, repository, timeout
+        self.transport, self.credentials = transport, credentials
+        self._token: Optional[str] = None
+        self._challenge: Optional[dict] = None
+        self._anonymous_tried = self._credentials_used = False
+
+    @classmethod
+    def of(cls, ref: str, **kwargs) -> tuple["Repository", str]:
+        """(the repository *ref* names, its tag or digest)."""
+        parsed = parse_ref(ref)
+        return cls(parsed.host, parsed.repository, **kwargs), parsed.reference
+
+    def _url(self, tail: str) -> str:
+        return f"https://{self.host}/v2/{self.repository}/{tail}"
+
+    def _credential_token(self) -> str:
+        challenge = self._challenge or {}
+        realm = challenge.get("realm") or ""
+        if urllib.parse.urlsplit(realm).scheme != "https" \
+                or urllib.parse.urlsplit(realm).hostname != self.host.split(":", 1)[0]:
+            raise NoAnswer(f"refusing to send credentials to the token service {realm or '<none>'}: "
+                           f"not https on the registry's own host {self.host}")
+        query = {"scope": challenge.get("scope") or f"repository:{self.repository}:pull"}
+        if challenge.get("service"):
+            query["service"] = challenge["service"]
+        basic = base64.b64encode(
+            f"{self.credentials.username}:{self.credentials.password}".encode()).decode()
+        status, _, body = self.transport("GET", f"{realm}?{urllib.parse.urlencode(query)}",
+                                         {"Authorization": f"Basic {basic}"}, self.timeout)
+        if status != 200:
+            raise NoAnswer(f"HTTP {status} from the token service {realm} for the given credentials")
+        payload = json.loads(body)
+        token = payload.get("token") or payload.get("access_token") if isinstance(payload, dict) else None
+        if not isinstance(token, str) or not token:
+            raise NoAnswer(f"HTTP 200 from the token service {realm} without a token")
+        return token
+
+    def _get(self, url: str, accept: Optional[str] = None) -> tuple:
+        """GET *url*, authorising as the registry asks: an anonymous token
+        first, credentials only once that is refused."""
+        while True:
+            headers = {"Accept": accept} if accept else {}
+            if self._token:
+                headers["Authorization"] = f"Bearer {self._token}"
+            status, reply, body = self.transport("GET", url, headers, self.timeout)
+            if status == 401:
+                self._challenge = _bearer_challenge(reply) or self._challenge
+            if status not in (401, 403) or self._challenge is None:
+                return status, reply, body
+            if not self._anonymous_tried:
+                self._anonymous_tried = True
+                token = _anonymous_token(self._challenge, self.repository, self.timeout,
+                                         self.transport)
+                if token:
+                    self._token = token
+                    continue
+            if self.credentials is not None and not self._credentials_used:
+                self._credentials_used = True
+                self._token = self._credential_token()
+                continue
+            return status, reply, body
+
+    def _ask(self, url: str, accept: Optional[str] = None) -> tuple:
+        try:
+            return self._get(url, accept)
+        except NoAnswer:
+            raise
+        except (*TRANSPORT_ERRORS, RecursionError) as exc:
+            raise NoAnswer(f"no answer from {self.host}: {type(exc).__name__}: {exc}") from exc
+
+    def manifest(self, reference: str) -> Optional[Manifest]:
+        """The manifest *reference* (tag or digest) names; None only when the
+        registry says it has no such manifest."""
+        url = self._url(f"manifests/{urllib.parse.quote(reference, safe=':')}")
+        status, reply, body = self._ask(url, ", ".join(MANIFEST_TYPES))
+        where = f"{self.host}/{self.repository}:{reference}"
+        if status == 404 and NOT_FOUND_CODES.intersection(_error_codes(body)):
+            return None
+        if status != 200:
+            raise NoAnswer(f"{where}: {_refusal(status, body, self.credentials)}")
+        content_type = _content_type(reply)
+        if content_type not in MANIFEST_TYPES:
+            raise NoAnswer(f"{where}: HTTP 200 but not a manifest "
+                           f"(Content-Type {content_type or 'absent'})")
+        if len(body) > MAX_MANIFEST_BYTES:
+            raise NoAnswer(f"{where}: a {len(body)}-byte manifest is not read")
+        algorithm, colon, _ = reference.partition(":")
+        if colon:                                   # a digest ref: the bytes must be it
+            if _digest_of(algorithm, body) != reference:
+                raise NoAnswer(f"{where}: HTTP 200 for a different manifest")
+        claimed = reply.get("Docker-Content-Digest")
+        if claimed and _digest_of(claimed.partition(":")[0], body) != claimed:
+            raise NoAnswer(f"{where}: the body's digest is not the {claimed} the registry names")
+        try:
+            document = json.loads(body)
+        except (ValueError, RecursionError) as exc:
+            raise NoAnswer(f"{where}: manifest is not JSON: {exc}") from exc
+        if not isinstance(document, dict):
+            raise NoAnswer(f"{where}: manifest is not a JSON object")
+        return Manifest(content_type, _digest_of("sha256", body), document)
+
+    def blob(self, digest: str, *, size: Optional[int] = None, max_bytes: int) -> bytes:
+        """The blob *digest* names, checked against it (and against *size*,
+        the descriptor's, when given). A blob a manifest names that is not
+        there is no answer, not an absence."""
+        where = f"{self.host}/{self.repository}@{digest}"
+        if size is not None and (not isinstance(size, int) or size < 0 or size > max_bytes):
+            raise NoAnswer(f"{where}: descriptor size {size!r} is not a size this reader reads "
+                           f"(limit {max_bytes})")
+        status, _, body = self._ask(self._url(f"blobs/{digest}"))
+        if status != 200:
+            raise NoAnswer(f"{where}: {_refusal(status, body, self.credentials)}")
+        if len(body) > max_bytes or (size is not None and len(body) != size):
+            raise NoAnswer(f"{where}: {len(body)} bytes, the descriptor says {size}")
+        if _digest_of(digest.partition(":")[0], body) != digest:
+            raise NoAnswer(f"{where}: the bytes do not hash to the digest that names them")
+        return body
+
+    def tags(self, page_size: int = 1000) -> List[str]:
+        """Every tag of the repository, following ``Link: rel="next"`` on the
+        registry's own host."""
+        tags: List[str] = []
+        url: Optional[str] = self._url(f"tags/list?n={page_size}")
+        for _ in range(MAX_TAG_PAGES):
+            status, reply, body = self._ask(url)
+            if status != 200:
+                raise NoAnswer(f"{self.host}/{self.repository} tags: "
+                               f"{_refusal(status, body, self.credentials)}")
+            try:
+                payload = json.loads(body)
+            except (ValueError, RecursionError) as exc:
+                raise NoAnswer(f"{self.host}/{self.repository} tags: not JSON: {exc}") from exc
+            page = payload.get("tags") if isinstance(payload, dict) else None
+            if page is None and isinstance(payload, dict) and "tags" in payload:
+                page = []                            # a repository with no tags says null
+            if not isinstance(page, list) or not all(isinstance(t, str) for t in page):
+                raise NoAnswer(f"{self.host}/{self.repository} tags: no `tags` list in the reply")
+            tags.extend(page)
+            match = _NEXT_LINK.search(reply.get("Link") or "")
+            if not match:
+                return tags
+            url = urllib.parse.urljoin(f"https://{self.host}/", match.group(1))
+            if urllib.parse.urlsplit(url).netloc != self.host or not url.startswith("https://"):
+                raise NoAnswer(f"{self.host}/{self.repository} tags: next page {url} "
+                               f"is not on the registry")
+        raise NoAnswer(f"{self.host}/{self.repository} tags: more than {MAX_TAG_PAGES} pages")

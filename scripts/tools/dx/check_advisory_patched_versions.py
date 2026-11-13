@@ -62,9 +62,6 @@ import os
 import re
 import subprocess  # nosec B404 — fixed argv, no shell
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
@@ -79,6 +76,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+from _lib_registry import NoAnswer, Repository  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -214,35 +212,28 @@ def git_platform_tags(repo: Path) -> Set[str]:
     return {t[1:] for t in _git(repo, "tag", "-l", "v*").split() if _SEMVER.match(t)}
 
 
-def ghcr_tags(where: str, opener: Callable = urllib.request.urlopen) -> Set[str]:
-    """Tags of a public ghcr.io repository, via the anonymous pull token."""
+def ghcr_tags(where: str, transport: Optional[Callable] = None) -> Set[str]:
+    """Tags of a public ghcr.io repository, asked through _lib_registry (the
+    one registry client: anonymous token, https-only redirects, Link
+    pagination). Anything but the tag list — a 401/403, a 404, a 5xx, no
+    connection — is a CallerError: "could not ask", never "no such version"."""
     ref = where[len("oci://"):] if where.startswith("oci://") else where
     host, _, repo = ref.partition("/")
     if host != "ghcr.io" or not repo:
         raise CallerError(f"{where!r}: only ghcr.io references are supported")
+    kwargs = {"transport": transport} if transport is not None else {}
     try:
-        with opener(f"https://ghcr.io/token?scope=repository:{urllib.parse.quote(repo)}:pull",
-                    timeout=30) as resp:
-            token = json.load(resp)["token"]
-        tags: Set[str] = set()
-        url: Optional[str] = f"https://ghcr.io/v2/{repo}/tags/list?n=1000"
-        while url:
-            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
-            with opener(req, timeout=30) as resp:
-                tags.update(json.load(resp).get("tags") or [])
-                link = resp.headers.get("Link", "")
-            m = re.search(r"<([^>]+)>;\s*rel=\"next\"", link)
-            url = urllib.parse.urljoin("https://ghcr.io", m.group(1)) if m else None
-    except (urllib.error.URLError, OSError, KeyError, ValueError) as exc:
+        return set(Repository(host, repo, timeout=30, **kwargs).tags())
+    except NoAnswer as exc:
         raise CallerError(f"cannot list the tags of {where}: {exc}") from exc
-    return tags
 
 
 class Spaces:
     """Version space per Space, each fetched once."""
 
-    def __init__(self, repo: Path, registry: Callable[[str], Set[str]] = ghcr_tags):
-        self.repo, self.registry, self._cache = repo, registry, {}
+    def __init__(self, repo: Path, registry: Optional[Callable[[str], Set[str]]] = None):
+        # Looked up at call time, so a test that replaces ghcr_tags reaches here.
+        self.repo, self.registry, self._cache = repo, registry or (lambda w: ghcr_tags(w)), {}
 
     def versions(self, space: Space) -> Set[str]:
         if space not in self._cache:

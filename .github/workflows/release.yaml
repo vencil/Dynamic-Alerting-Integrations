@@ -43,6 +43,17 @@
 #   da-tools 另在 Trivy 之後、簽章與 promote 之前，對同一個 digest 實際執行映像
 #   （scripts/ops/smoke_da_tools_image.sh，#3258）；不過就不發布。位置由
 #   tests/ops/test_release_da_tools_smoke.py 守住。
+#
+# ⛔ 已發布的版號不可變（#3848）。第一個發布動作（簽章 / promote / helm push）
+#   之前，scripts/tools/dx/check_release_immutable.py 先問 registry：
+#   - 映像正式 tag 已存在 → 讀它的 org.opencontainers.image.revision label；
+#     等於 github.sha 就不 promote（tag 留在原 digest），不同或沒有 label 就失敗；
+#   - chart 版號已存在 → 與這次打包的 .tgz 逐檔比對（Chart.yaml 以 YAML 比），
+#     相同就不 push，不同就失敗並列出檔案。
+#   只有 registry 回「沒有這個 manifest」（404）才算第一次發布；其餘（401/403、
+#   5xx、429、斷線、內容對不上 digest）一律 rc 2、job 失敗。每個發布步驟的 `if:`
+#   取自同一 job 前面那個檢查步驟的 `publish` 輸出，且每個 build 都寫入
+#   revision label——由 tests/ops/test_release_immutable_wiring.py 解析本檔守住。
 
 name: Release
 
@@ -111,11 +122,24 @@ jobs:
           file: components/threshold-exporter/app/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # #3848: the commit this image is built from, read back before a
+          # re-run may skip promotion (check_release_immutable.py image).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify multi-arch manifest (#463)
         run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter@${{ steps.build.outputs.digest }}
+
+      # check_release_immutable.py chart compares Chart.yaml as YAML (#3848).
+      - name: Set up Python (release immutability check)
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install PyYAML (release immutability check)
+        run: pip install pyyaml -c requirements/ci-constraints.txt
 
       # --- Helm chart: package + verify now (fail fast, publishes nothing);
       # `helm push` waits until the image digest has passed the scan ---
@@ -162,10 +186,41 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
+      # ⛔ #3848: a published version never moves. Absent → promote; already
+      # published from this commit → skip (re-run); from another commit, or
+      # without a revision label → fail. 401/403/5xx/no answer → rc 2, fail.
+      # REGISTRY_* are sent only if the anonymous read is refused (a new repo).
+      - name: Check the image version is not already published (#3848)
+        id: image_immutable
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -X utf8 scripts/tools/dx/check_release_immutable.py image \
+            --ref "${IMG}:v${VERSION}" --revision "$REVISION" --candidate-digest "$DIGEST"
+
+      # ⛔ #3848: the chart version already published → compare file by file
+      # with this package; same → skip `helm push`, different → fail.
+      - name: Check the chart version is not already published (#3848)
+        id: chart_immutable
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -X utf8 scripts/tools/dx/check_release_immutable.py chart \
+            --tgz ".build/threshold-exporter-${VERSION}.tgz" --registry "$CHARTS"
+
       # Point the formal tags at the SCANNED digest (single-source imagetools
       # create keeps the index as-is), then read every tag back and fail unless
       # it resolves to exactly that digest.
       - name: Promote scanned digest to release tags
+        if: steps.image_immutable.outputs.publish == 'true'
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -195,6 +250,7 @@ jobs:
         run: bash scripts/ops/verify_release_digest.sh threshold-exporter helm/threshold-exporter/Chart.yaml
 
       - name: Push Helm chart to OCI registry
+        if: steps.chart_immutable.outputs.publish == 'true'
         run: |
           helm push .build/threshold-exporter-${{ steps.version.outputs.VERSION }}.tgz \
             oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
@@ -307,6 +363,10 @@ jobs:
           context: components/da-tools/app
           platforms: linux/amd64,linux/arm64
           push: true
+          # #3848: the commit this image is built from, read back before a
+          # re-run may skip promotion (check_release_immutable.py image).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -343,6 +403,23 @@ jobs:
           [[ "$DIGEST" == sha256:* ]] || { echo "::error::build step produced no digest ('$DIGEST')"; exit 1; }
           bash scripts/ops/smoke_da_tools_image.sh "${IMG}@${DIGEST}"
 
+      # ⛔ #3848: a published version never moves. Absent → promote; already
+      # published from this commit → skip (re-run); from another commit, or
+      # without a revision label → fail. 401/403/5xx/no answer → rc 2, fail.
+      # REGISTRY_* are sent only if the anonymous read is refused (a new repo).
+      - name: Check the image version is not already published (#3848)
+        id: image_immutable
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -X utf8 scripts/tools/dx/check_release_immutable.py image \
+            --ref "${IMG}:v${VERSION}" --revision "$REVISION" --candidate-digest "$DIGEST"
+
       # C-11 PR-3 Layer 1: sign the Docker image with cosign keyless.
       # We sign by digest (not tag) — tags can be moved, digests are
       # immutable. The digest is the build step's output, i.e. the object
@@ -351,6 +428,7 @@ jobs:
       # unsigned. `cosign sign --yes` skips the interactive Y/N prompt
       # which doesn't work in non-tty CI.
       - name: Sign Docker image (cosign keyless)
+        if: steps.image_immutable.outputs.publish == 'true'
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -362,6 +440,7 @@ jobs:
           cosign sign --yes "${IMG}@${DIGEST}"
 
       - name: Promote scanned digest to release tags
+        if: steps.image_immutable.outputs.publish == 'true'
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -392,14 +471,17 @@ jobs:
       # Different customer security teams prefer different formats;
       # shipping both costs ~50KB and avoids "we don't accept that
       # format" rejection on first onboarding review. Generated from the
-      # scanned digest, not a tag lookup (#1278).
+      # digest the release tag names, not a tag lookup (#1278): the scanned
+      # candidate just promoted, or — on a re-run that skipped promotion
+      # (#3848) — the digest already published, never this run's rebuild.
       - name: Generate SBOM for Docker image
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image_immutable.outputs.digest }}
         run: |
           set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::no release digest ('$DIGEST')"; exit 1; }
           mkdir -p "$RUNNER_TEMP/sbom"
           syft "${IMG}@${DIGEST}" -o spdx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.spdx.json"
           syft "${IMG}@${DIGEST}" -o cyclonedx-json="$RUNNER_TEMP/sbom/da-tools-image-v${VERSION}.cyclonedx.json"
@@ -510,14 +592,16 @@ jobs:
       - name: Save image as gzipped tar (air-gapped customers)
         env:
           VERSION: ${{ steps.version.outputs.VERSION }}
-          DIGEST: ${{ steps.build.outputs.digest }}
+          DIGEST: ${{ steps.image_immutable.outputs.digest }}
         run: |
           set -euo pipefail
+          [[ "$DIGEST" == sha256:* ]] || { echo "::error::no release digest ('$DIGEST')"; exit 1; }
           REPO="${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-tools"
           IMG="${REPO}:v${VERSION}"
           OUT="$RUNNER_TEMP/da-tools-image-v${VERSION}.tar.gz"
-          # Pull the scanned digest (#1278), then tag it so `docker load`
-          # on the air-gapped side yields the familiar `da-tools:v<ver>`.
+          # Pull the digest the release tag names (#1278; #3848: the published
+          # one on a re-run), then tag it so `docker load` on the air-gapped
+          # side yields the familiar `da-tools:v<ver>`.
           docker pull "${REPO}@${DIGEST}"
           docker tag "${REPO}@${DIGEST}" "$IMG"
           docker save "$IMG" | gzip > "$OUT"
@@ -636,11 +720,24 @@ jobs:
           file: components/da-portal/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
+          # #3848: the commit this image is built from, read back before a
+          # re-run may skip promotion (check_release_immutable.py image).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Verify multi-arch manifest (#463)
         run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal@${{ steps.build.outputs.digest }}
+
+      # check_release_immutable.py chart compares Chart.yaml as YAML (#3848).
+      - name: Set up Python (release immutability check)
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install PyYAML (release immutability check)
+        run: pip install pyyaml -c requirements/ci-constraints.txt
 
       # --- Helm chart (#1352 case A) ---
       # ⛔ Added because the customer-facing install path was a lie: this job
@@ -687,7 +784,38 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
+      # ⛔ #3848: a published version never moves. Absent → promote; already
+      # published from this commit → skip (re-run); from another commit, or
+      # without a revision label → fail. 401/403/5xx/no answer → rc 2, fail.
+      # REGISTRY_* are sent only if the anonymous read is refused (a new repo).
+      - name: Check the image version is not already published (#3848)
+        id: image_immutable
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -X utf8 scripts/tools/dx/check_release_immutable.py image \
+            --ref "${IMG}:v${VERSION}" --revision "$REVISION" --candidate-digest "$DIGEST"
+
+      # ⛔ #3848: the chart version already published → compare file by file
+      # with this package; same → skip `helm push`, different → fail.
+      - name: Check the chart version is not already published (#3848)
+        id: chart_immutable
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -X utf8 scripts/tools/dx/check_release_immutable.py chart \
+            --tgz ".build/da-portal-${VERSION}.tgz" --registry "$CHARTS"
+
       - name: Promote scanned digest to release tags
+        if: steps.image_immutable.outputs.publish == 'true'
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -711,6 +839,7 @@ jobs:
         run: bash scripts/ops/verify_release_digest.sh da-portal helm/da-portal/Chart.yaml
 
       - name: Push Helm chart to OCI registry
+        if: steps.chart_immutable.outputs.publish == 'true'
         run: |
           helm push .build/da-portal-${{ steps.version.outputs.VERSION }}.tgz \
             oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
@@ -827,11 +956,29 @@ jobs:
           # register's entries are waived.
           trivyignores: components/recipe-preview/.trivyignore.yaml
 
+      # ⛔ #3848: a published version never moves. Absent → promote; already
+      # published from this commit → skip (re-run); from another commit, or
+      # without a revision label → fail. 401/403/5xx/no answer → rc 2, fail.
+      # REGISTRY_* are sent only if the anonymous read is refused (a new repo).
+      - name: Check the image version is not already published (#3848)
+        id: image_immutable
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -X utf8 scripts/tools/dx/check_release_immutable.py image \
+            --ref "${IMG}:v${VERSION}" --revision "$REVISION" --candidate-digest "$DIGEST"
+
       # Sign by IMMUTABLE digest — the build step's output, i.e. the object
       # Trivy just scanned and the next step re-tags (#1278). Signed BEFORE
       # promotion, so no formal tag can ever exist unsigned because a later
       # step aborted.
       - name: Sign Docker image (cosign keyless)
+        if: steps.image_immutable.outputs.publish == 'true'
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -843,6 +990,7 @@ jobs:
           cosign sign --yes "${IMG}@${DIGEST}"
 
       - name: Promote scanned digest to release tags
+        if: steps.image_immutable.outputs.publish == 'true'
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/recipe-preview
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -966,6 +1114,10 @@ jobs:
           # (Dockerfile ARG VERSION → -X main.version).
           build-args: |
             VERSION=v${{ steps.version.outputs.VERSION }}
+          # #3848: the commit this image is built from, read back before a
+          # re-run may skip promotion (check_release_immutable.py image).
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api:candidate-${{ github.run_id }}-${{ github.run_attempt }}
 
@@ -1004,7 +1156,38 @@ jobs:
           severity: CRITICAL,HIGH
           ignore-unfixed: true
 
+      # ⛔ #3848: a published version never moves. Absent → promote; already
+      # published from this commit → skip (re-run); from another commit, or
+      # without a revision label → fail. 401/403/5xx/no answer → rc 2, fail.
+      # REGISTRY_* are sent only if the anonymous read is refused (a new repo).
+      - name: Check the image version is not already published (#3848)
+        id: image_immutable
+        env:
+          IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api
+          DIGEST: ${{ steps.build.outputs.digest }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          REVISION: ${{ github.sha }}
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -X utf8 scripts/tools/dx/check_release_immutable.py image \
+            --ref "${IMG}:v${VERSION}" --revision "$REVISION" --candidate-digest "$DIGEST"
+
+      # ⛔ #3848: the chart version already published → compare file by file
+      # with this package; same → skip `helm push`, different → fail.
+      - name: Check the chart version is not already published (#3848)
+        id: chart_immutable
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+          CHARTS: oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts
+          REGISTRY_USERNAME: ${{ github.actor }}
+          REGISTRY_PASSWORD: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 -X utf8 scripts/tools/dx/check_release_immutable.py chart \
+            --tgz ".build/tenant-api-${VERSION}.tgz" --registry "$CHARTS"
+
       - name: Promote scanned digest to release tags
+        if: steps.image_immutable.outputs.publish == 'true'
         env:
           IMG: ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/tenant-api
           DIGEST: ${{ steps.build.outputs.digest }}
@@ -1041,6 +1224,7 @@ jobs:
         run: bash scripts/ops/with_da_crdecode.sh python3 scripts/ops/check_image_refs_resolve.py --scope rendered --chart helm/tenant-api
 
       - name: Push Helm chart to OCI registry
+        if: steps.chart_immutable.outputs.publish == 'true'
         run: |
           helm push .build/tenant-api-${{ steps.version.outputs.VERSION }}.tgz \
             oci://${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/charts

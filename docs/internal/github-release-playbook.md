@@ -457,7 +457,7 @@ bash smoke.sh   # 需 curl + jq
 | 11 | Release `already_exists`（tag 已被 CI 或先前操作建立） | 先 GET `/releases/tags/<tag>` 取 `id`，再 PATCH `/releases/<id>` 更新 name + body |
 | 12 | 合併版號時遺漏語義更新 | 全局 sed 改版號後，需手動校正：CHANGELOG（合併 section）、da-tools 版號表（Git Tag + 說明）、architecture 底部版本戳（日期 + 功能摘要 + CLI 命令數） |
 | 13 | 刪除遠端 tag 會連帶刪除關聯 Release | `git push origin :refs/tags/v*` 刪除 tag 後，GitHub 自動刪除該 tag 的 Release；重推 tag 後須重新 `POST /releases` 建立 |
-| 14 | Re-tag 完整 SOP（同版號新 commit） | ① 修正經 PR merge 進 main → ② 逐一刪遠端 tag → ③ 刪本地 tag → ④ 建新 tag on HEAD → ⑤ **逐一** push tag → ⑥ 重建 Release（因 #13 刪 tag 會刪 Release）→ ⑦ 重部署 GitHub Pages |
+| 14 | ⛔ 已發布的版號不能重打（[#3848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3848)） | 映像正式 tag 或 chart 版號一旦出現在 registry，同一版號就**不能**改指別的 commit 或別的內容：`release.yaml` 在第一個發布動作前跑 `scripts/tools/dx/check_release_immutable.py`，映像的 `org.opencontainers.image.revision` 不是這次的 commit（或沒有這個 label）、chart 逐檔比對不同，job 直接失敗。修正 → 經 PR merge 進 main → **升版號、打新 tag**。同一個 commit 的 run 失敗（例如 `helm push` 時網路斷掉）直接 re-run：已發布的部分會被認出來而跳過，不會重推。只有該 tag 的每條 job 都**還沒發布任何東西**（例如全被 Trivy 擋在 promote 之前）才可刪 tag、在新 commit 上重打同名 tag（下一節）；刪 tag 會連帶刪 Release（#13），要重建 |
 | 15 | ~~`mkdocs gh-deploy` 連續失敗~~ | 🗄️ 已歸檔（workaround 已轉移至 Windows-MCP #29-30）。詳見 [archive/lessons-learned.md](archive/lessons-learned.md) |
 | 16 | `bump_docs.py` 漏網規則 | 每次 release 前先跑 `bump_docs.py --what-if` 審計所有規則。新增 component 時須同步加入版號線（`--tenant-api` 等） |
 | 17 | Rule Pack 計數混淆 | `rule-packs/` yaml 檔案數 ≠ pack 總數（後者另含 platform / liveness 等 ConfigMap-only pack）。**一律以 `platform-data.json` 的 `totals.packs` 為準，勿在文件寫死數字**（曾寫死 15，liveness 加入後即過期） |
@@ -472,7 +472,7 @@ bash smoke.sh   # 需 curl + jq
 >
 > **何時重新評估（owner 拍板，2026-09-29）**：出現下列任一情況就開票做清理（建議形狀是獨立的排程 workflow，把刪除權限與發版 job 隔開）：① 第一次有 release 被 Trivy gate 擋下而留下孤兒版本；② 任一 package 的孤兒 `candidate-*` 版本累積到 3 個。量法（公開 package 可匿名）：對 `https://ghcr.io/v2/vencil/<image>/tags/list` 數 `candidate-` 開頭的 tag，扣掉與某個 `v*` tag 同 digest 的那些。⚠️ 過濾條件必須是「該版本**沒有任何** `v*` tag」，不能只看「帶 candidate tag」：GHCR 的版本就是 digest，可重現 build 會讓後來成功的 release 落在同一個 digest，只看 candidate tag 會把已發布的映像一起刪掉。孤兒映像在公開 package 裡任何人都拉得到，而它正是因為含可修 HIGH/CRITICAL 才被擋——這是選擇先不做時接受的殘留。
 >
-> **重打 tag**：掃描擋下時沒有任何正式產物，patch 後刪掉 git tag、在新 commit 上重打同名 tag 即可；舊 run 的候選 tag 不會被新 run 覆寫（`run_id` 不同）。
+> **重打 tag 只限「還沒發布任何東西」**：掃描在 promote 之前擋下時沒有任何正式產物，patch 後刪掉 git tag、在新 commit 上重打同名 tag 即可——發布前的檢查問到 registry 回 404，當作第一次發布；舊 run 的候選 tag 不會被新 run 覆寫（`run_id` 不同）。⛔ 只要該版號的正式 tag 或 chart 已經出現過（`tools/v*` 一個 tag 有兩條 job，任一條 promote 了就算），就不能重打：檢查會讀到不同的 revision 而讓 job 失敗，只能升版號發新版（[#3848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3848)）。
 
 v2.9.0 首次真實五線 release 連續觸發下列三類：
 
@@ -676,7 +676,7 @@ foreach ($r in $fails) {
 16. **推送 + 等 CI 全綠 + Release**
     - release PR merge 進 main 後，對 main HEAD 推對應 tag
     - **等所有 Release workflow 完成並 success 後**才建 GitHub Release
-    - 若 CI 失敗：修正走新的 PR merge 進 main → 依本檔「Release 流程陷阱」表的 #14 re-tag
+    - 若 CI 失敗：同一個 commit 的暫時性失敗直接 re-run；要改 code 的，修正走新的 PR merge 進 main，再依本檔「Release 流程陷阱」表的 #14——該版號已有東西發布就升版號，什麼都還沒發布才可重打同名 tag
     - GitHub Pages 部署確認
     - 建立 GitHub Release（英文敘述）
 

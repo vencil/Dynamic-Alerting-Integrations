@@ -350,3 +350,107 @@ def test_a_token_service_200_without_a_token_is_no_answer(body):
     answer = R.resolve("example.io/o/p:v1", timeout=5, transport=t)
     assert answer.outcome == R.NO_ANSWER and "without a token" in answer.reason
     assert len(t.asked) == 2
+
+
+# ── Repository: reading what a repository holds (#3848) ─────────────────────
+
+MANIFEST = "application/vnd.oci.image.manifest.v1+json"
+
+
+def _repo(t, **kw):
+    return R.Repository("ghcr.io", "o/p", timeout=5, transport=t, **kw)
+
+
+@pytest.mark.parametrize("code", ["MANIFEST_UNKNOWN", "NAME_UNKNOWN"])
+def test_repository_manifest_is_none_only_on_the_registrys_no_such_manifest(code):
+    assert _repo(Script(("GET", 404, _headers(), _errors(code)))).manifest("v1") is None
+
+
+@pytest.mark.parametrize("status, body", [
+    (401, _errors("UNAUTHORIZED")), (403, _errors("DENIED")), (404, b""),
+    (404, _errors("BLOB_UNKNOWN")), (429, b""), (500, b""), (503, _errors("UNAVAILABLE")),
+    (200, b"<html>"),
+], ids=["401", "403", "404-bare", "404-other", "429", "500", "503", "200-not-a-manifest"])
+def test_repository_manifest_anything_else_is_no_answer(status, body):
+    headers = _headers(Content_Type="text/html") if status == 200 else _headers()
+    with pytest.raises(R.NoAnswer):
+        _repo(Script(("GET", status, headers, body))).manifest("v1")
+
+
+def test_repository_manifest_checks_its_bytes():
+    body = b'{"schemaVersion":2}'
+    good = "sha256:" + hashlib.sha256(body).hexdigest()
+    got = _repo(Script(("GET", 200, _headers(Content_Type=MANIFEST, Docker_Content_Digest=good), body)))
+    assert got.manifest("v1") == (MANIFEST, good, {"schemaVersion": 2})
+    with pytest.raises(R.NoAnswer, match="different manifest"):
+        _repo(Script(("GET", 200, _headers(Content_Type=MANIFEST), body))).manifest("sha256:" + "0" * 64)
+    with pytest.raises(R.NoAnswer, match="not the sha256"):
+        _repo(Script(("GET", 200, _headers(Content_Type=MANIFEST,
+                                           Docker_Content_Digest="sha256:" + "0" * 64), body))).manifest("v1")
+    with pytest.raises(R.NoAnswer, match="not a JSON object"):
+        _repo(Script(("GET", 200, _headers(Content_Type=MANIFEST), b"[]"))).manifest("v1")
+
+
+def test_repository_takes_an_anonymous_token_and_keeps_it():
+    t = Script(("GET", 401, _headers(WWW_Authenticate=CHALLENGE), _errors("UNAUTHORIZED")),
+               ("GET", 200, _headers(), json.dumps({"token": "tok"}).encode()),
+               ("GET", 404, _headers(), _errors("MANIFEST_UNKNOWN")),
+               ("GET", 404, _headers(), _errors("MANIFEST_UNKNOWN")))
+    repo = _repo(t)
+    assert repo.manifest("v1") is None and repo.manifest("v2") is None
+    assert t.asked[2][2]["Authorization"] == "Bearer tok" == t.asked[3][2]["Authorization"]
+
+
+def test_repository_without_credentials_reports_an_anonymous_refusal_as_no_answer():
+    t = Script(("GET", 401, _headers(WWW_Authenticate=CHALLENGE), _errors("UNAUTHORIZED")),
+               ("GET", 403, _headers(), _errors("DENIED")))
+    with pytest.raises(R.NoAnswer, match="not readable anonymously"):
+        _repo(t).manifest("v1")
+
+
+def test_repository_blob_is_checked_against_digest_and_size():
+    body = b"config"
+    digest = "sha256:" + hashlib.sha256(body).hexdigest()
+    assert _repo(Script(("GET", 200, _headers(), body))).blob(digest, size=6, max_bytes=10) == body
+    with pytest.raises(R.NoAnswer, match="do not hash"):
+        _repo(Script(("GET", 200, _headers(), b"CONFIG"))).blob(digest, size=6, max_bytes=10)
+    with pytest.raises(R.NoAnswer, match="descriptor says"):
+        _repo(Script(("GET", 200, _headers(), body))).blob(digest, size=5, max_bytes=10)
+    with pytest.raises(R.NoAnswer, match="descriptor size"):
+        _repo(Script()).blob(digest, size=11, max_bytes=10)
+    with pytest.raises(R.NoAnswer, match="cannot check a blake3"):
+        _repo(Script(("GET", 200, _headers(), body))).blob("blake3:" + "a" * 64, max_bytes=10)
+    with pytest.raises(R.NoAnswer):                      # a blob a manifest names must be there
+        _repo(Script(("GET", 404, _headers(), _errors("BLOB_UNKNOWN")))).blob(digest, max_bytes=10)
+
+
+def _tags(*tags, link=None):
+    headers = _headers(Link=link) if link else _headers()
+    return ("GET", 200, headers, json.dumps({"name": "o/p", "tags": list(tags)}).encode())
+
+
+def test_repository_tags_follow_the_next_link_on_the_registry():
+    t = Script(_tags("v1", link='</v2/o/p/tags/list?last=v1&n=1>; rel="next"'), _tags("v2"))
+    assert _repo(t).tags(page_size=1) == ["v1", "v2"]
+    assert t.asked[1][1] == "https://ghcr.io/v2/o/p/tags/list?last=v1&n=1"
+
+
+def test_repository_tags_refuse_a_next_link_off_the_registry():
+    t = Script(_tags("v1", link='<https://elsewhere.example/v2/o/p/tags/list?last=v1>; rel="next"'))
+    with pytest.raises(R.NoAnswer, match="not on the registry"):
+        _repo(t).tags()
+
+
+def test_repository_tags_cannot_loop_forever(monkeypatch):
+    monkeypatch.setattr(R, "MAX_TAG_PAGES", 3)
+    t = Script(*[_tags("v1", link='</v2/o/p/tags/list?last=v1>; rel="next"')] * 3)
+    with pytest.raises(R.NoAnswer, match="more than 3 pages"):
+        _repo(t).tags()
+
+
+def test_repository_tags_null_is_empty_and_a_missing_list_is_no_answer():
+    assert _repo(Script(("GET", 200, _headers(), b'{"name":"o/p","tags":null}'))).tags() == []
+    with pytest.raises(R.NoAnswer, match="no `tags` list"):
+        _repo(Script(("GET", 200, _headers(), b'{"name":"o/p"}'))).tags()
+    with pytest.raises(R.NoAnswer, match="not JSON"):
+        _repo(Script(("GET", 200, _headers(), b"<html>"))).tags()
