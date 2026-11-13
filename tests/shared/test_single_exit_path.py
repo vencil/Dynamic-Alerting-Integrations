@@ -1499,6 +1499,7 @@ def test_probe_leaves_every_piece_of_exit_state_dirty(monkeypatch):
     ec.claim_stdout_owner("probe")
     ec._failure_reported = True          # a stdout failure said this run
     ec._best_effort = True               # a best-effort Report written
+    ec._stderr_lost = True               # a stderr write lost its text (#3599)
     ec._stdout_failure_line = lambda d: "ERROR [X]: " + d
 
 
@@ -1506,9 +1507,9 @@ def test_probe_leaves_every_piece_of_exit_state_dirty(monkeypatch):
 def test_probe_sees_clean_exit_state():
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
-    assert (ec._failure_reported, ec._best_effort, ec._stdout_failure_line,
+    assert (ec._failure_reported, ec._best_effort, ec._stderr_lost, ec._stdout_failure_line,
             ec._stdout_owner, ec.get_crash_exit_code(),
-            ec.get_caller_error_code()) == (False, False, None, None,
+            ec.get_caller_error_code()) == (False, False, False, None, None,
                                             ec._IMPORT_CRASH_EXIT_CODE,
                                             ec._IMPORT_CALLER_ERROR_CODE)
 
@@ -2692,3 +2693,182 @@ def test_the_registry_gate_on_known_shapes(files, not_exit, want):
     assert len(faults) == len(want), faults
     for fault, prefix in zip(faults, want):
         assert fault.startswith(prefix), (fault, prefix)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #3599 — a stderr write that fails loses its text, not the run (owner ruling W)
+# ═══════════════════════════════════════════════════════════════════════════
+# The tool says something on stderr, then delivers its stdout and ends with
+# its own code. stderr cannot take it: its reader left, or it is /dev/full.
+_STDERR_FAILS = ("reader-gone", "dev-full")
+
+
+def _with_broken_stderr(tmp_path: Path, body: str, how: str, buffering: str,
+                        name: str = "tool.py",
+                        env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    script = _script(tmp_path, body, name=name)
+    env = dict(_BUFFERING[buffering] if env is None else env)
+    env.pop("DA_TEST_CRASH_EXIT_CODE", None)
+    if how == "dev-full":
+        if not os.path.exists("/dev/full"):
+            pytest.skip("/dev/full does not exist here")
+        with open("/dev/full", "wb") as full:
+            return subprocess.run([sys.executable, str(script)], stdout=subprocess.PIPE,
+                                  stderr=full.fileno(), timeout=60, env=env)
+    r, w = os.pipe()
+    os.close(r)
+    try:
+        return subprocess.run([sys.executable, str(script)], stdout=subprocess.PIPE,
+                              stderr=w, timeout=60, env=env)
+    finally:
+        os.close(w)
+
+
+def _says_then_ends(code: str, size: str = "10") -> str:
+    return _armed("print('progress ' * " + size + ", file=sys.stderr)\n"
+                  "print('the answer')\n"
+                  f"return {code}\n")
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("how", _STDERR_FAILS)
+@pytest.mark.parametrize("size", ["10", "io.DEFAULT_BUFFER_SIZE"])
+def test_a_lost_stderr_turns_a_clean_0_into_2_and_the_run_goes_on(tmp_path, how, buffering, size):
+    """W: the write does not end the tool — its stdout still arrives — and
+    the 0 it ends with is not the whole answer: 2 (gnulib close_stdout's
+    "never 0"). Before #3599 the first stderr write crashed the run: rc 2
+    from the crash path, and no stdout."""
+    proc = _with_broken_stderr(tmp_path, _says_then_ends("0", size), how, buffering)
+    assert proc.returncode == 2
+    assert proc.stdout == b"the answer\n"
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("how", _STDERR_FAILS)
+@pytest.mark.parametrize("code", [1, 2, 3])
+def test_a_lost_stderr_keeps_a_non_zero_code(tmp_path, how, buffering, code):
+    """W: 1 (a finding), 2 and a registered 3 keep their meaning — under
+    the crash path they all became the crash code."""
+    proc = _with_broken_stderr(tmp_path, _says_then_ends(str(code)), how, buffering,
+                               name=_CODED_TOOL)
+    assert proc.returncode == code
+    assert proc.stdout == b"the answer\n"
+
+
+@pytest.mark.parametrize("how", _STDERR_FAILS)
+def test_a_lost_stderr_keeps_a_best_effort_0(tmp_path, how):
+    """W: a Report delivered best effort (patch-config) keeps even its 0."""
+    body = _armed("print('progress', file=sys.stderr)\n"
+                  "return _lib_exitcodes.Report({'n': 1}, 0, delivery='best_effort')\n")
+    proc = _with_broken_stderr(tmp_path, body, how, "buffered", name=_CODED_TOOL)
+    assert proc.returncode == 0
+    assert json.loads(proc.stdout) == {"n": 1}
+
+
+@pytest.mark.parametrize("how", _STDERR_FAILS)
+def test_a_lost_stderr_under_the_hook_protocol_does_not_block(tmp_path, how):
+    """A session guard's 0 becomes the hook protocol's caller-error code,
+    1 ("non-blocking error") — 2 would block the tool call."""
+    body = "_lib_exitcodes.use_hook_protocol()\n" + _says_then_ends("0")
+    proc = _with_broken_stderr(tmp_path, body, how, "buffered")
+    assert proc.returncode == 1
+    assert proc.stdout == b"the answer\n"
+
+
+@pytest.mark.parametrize("how", _STDERR_FAILS)
+def test_a_crash_with_a_lost_stderr_keeps_the_crash_code(tmp_path, how):
+    """A crash is still a crash: its code, with or without the test override."""
+    body = _armed("print('progress', file=sys.stderr)\nraise RuntimeError('boom')\n")
+    env = dict(_ENV, DA_TEST_CRASH_EXIT_CODE="77")
+    script = _script(tmp_path, body)
+    if how == "dev-full":
+        if not os.path.exists("/dev/full"):
+            pytest.skip("/dev/full does not exist here")
+        with open("/dev/full", "wb") as full:
+            proc = subprocess.run([sys.executable, str(script)], stdout=subprocess.PIPE,
+                                  stderr=full.fileno(), timeout=60, env=env)
+    else:
+        r, w = os.pipe()
+        os.close(r)
+        try:
+            proc = subprocess.run([sys.executable, str(script)], stdout=subprocess.PIPE,
+                                  stderr=w, timeout=60, env=env)
+        finally:
+            os.close(w)
+    assert proc.returncode == 77
+
+
+def test_a_lost_stderr_at_import_time_is_counted(tmp_path):
+    """A module-level stderr line (before main) is the run's text too."""
+    body = ("print('module-level note', file=sys.stderr)\n"
+            "_lib_exitcodes.run(lambda: print('the answer'))\n")
+    proc = _with_broken_stderr(tmp_path, body, "reader-gone", "buffered")
+    assert proc.returncode == 2
+    assert proc.stdout == b"the answer\n"
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+def test_a_healthy_stderr_is_unchanged(tmp_path, buffering):
+    """Control: stderr takes the text — bytes as written, 0 stays 0, and
+    sys.stderr is still sys.__stderr__ (redirect_stdout(sys.stderr) and
+    identity checks see one object) and still names fd 2."""
+    body = _armed("print('progress \u2713 \u4e2d', file=sys.stderr)\n"
+                  "assert sys.stderr is sys.__stderr__\n"
+                  "assert sys.stderr.fileno() == 2\n"
+                  "print('the answer')\n"
+                  "return 0\n")
+    proc = _run(_script(tmp_path, body), env=dict(_BUFFERING[buffering], PYTHONIOENCODING="utf-8"))
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stderr == "progress \u2713 \u4e2d\n".encode("utf-8")
+    assert proc.stdout == b"the answer\n"
+
+
+def test_the_replaced_stderr_keeps_the_interpreters_attributes(tmp_path):
+    """`name`, `mode`, and `tell()` on a file: as the stream it replaced."""
+    script = tmp_path / "tool.py"
+    script.write_text(
+        "import sys\n"
+        "before = (sys.stderr.name, sys.stderr.mode, sys.stderr.isatty())\n"
+        "sys.stderr.write('x'); sys.stderr.flush()\n"
+        f"sys.path.insert(0, {str(TOOLS_DIR)!r})\n"
+        "import _lib_exitcodes\n"
+        "assert _lib_exitcodes._ORIGINAL_STDERR is not None\n"
+        "after = (sys.stderr.name, sys.stderr.mode, sys.stderr.isatty())\n"
+        "assert before == after, (before, after)\n"
+        "sys.stderr.write('y'); sys.stderr.flush()\n"
+        "assert sys.stderr.tell() == 2\n", encoding="utf-8")
+    with open(tmp_path / "err", "wb") as err:
+        proc = subprocess.run([sys.executable, str(script)], stderr=err, timeout=60, env=_ENV)
+    assert proc.returncode == 0, (tmp_path / "err").read_text(encoding="utf-8")
+
+
+def test_a_second_copy_of_the_module_still_sees_the_loss(tmp_path):
+    """A copy loaded by path finds the first copy's wrapper (no double wrap)
+    and its run() reads the loss that wrapper recorded."""
+    body = (f"import importlib.util\n"
+            f"spec = importlib.util.spec_from_file_location('lib2', {str(TOOLS_DIR / '_lib_exitcodes.py')!r})\n"
+            "lib2 = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(lib2)\n"
+            "assert lib2._ORIGINAL_STDERR is None\n"
+            "def main():\n"
+            "    print('progress', file=sys.stderr)\n"
+            "    return 0\n"
+            "lib2.run(main)\n")
+    proc = _with_broken_stderr(tmp_path, body, "dev-full", "buffered")
+    assert proc.returncode == 2
+
+
+def test_a_rebound_stderr_is_left_alone(tmp_path):
+    """Only the interpreter's own stderr is replaced: a stderr the caller
+    rebound before the import (a test harness's capture) is not touched."""
+    script = tmp_path / "tool.py"
+    script.write_text(
+        "import io, sys\n"
+        "mine = io.StringIO()\n"
+        "sys.stderr = mine\n"
+        f"sys.path.insert(0, {str(TOOLS_DIR)!r})\n"
+        "import _lib_exitcodes\n"
+        "assert sys.stderr is mine\n"
+        "assert _lib_exitcodes._ORIGINAL_STDERR is None\n", encoding="utf-8")
+    proc = _run(script)
+    assert proc.returncode == 0, proc.stderr
