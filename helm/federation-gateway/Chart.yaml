@@ -64,7 +64,8 @@ type: application
 #         the pods. No value keys change. PATCH.
 #         ⚠️ REQUIRES ACTION: rebuild audit-sidecar/Dockerfile and push it as
 #         alpine3.24.4-1 BEFORE upgrading, or logrotate hits ImagePullBackOff.
-version: 0.7.1
+# 0.8.0 — #1295: the NetworkPolicy also restricts egress, to DNS and TCP upstream.port in the upstream's namespace (`networkPolicy.upstreamNamespace`, else read from upstream.host `<svc>.<ns>.svc`). Before, the gateway had no egress at all in a namespace that defaults to deny, as k8s/03-monitoring does. ⚠️ BREAKING: an upstream.host that is not a Service name (external FQDN, IP) fails the render until upstreamNamespace is set or `networkPolicy.restrictEgress: false`; the rule matches the destination POD port: where the upstream Service maps ports, set `networkPolicy.upstreamPort`
+version: 0.8.0
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

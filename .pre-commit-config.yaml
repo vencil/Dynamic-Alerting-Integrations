@@ -981,21 +981,26 @@ repos:
         files: ^(components/|docs/|scripts/tools/_lib_constants\.py|scripts/tools/dx/sync_schema\.py|tools/portal/src/interactive/tools/_common/data/reserved-keys\.json)
         stages: [manual]
 
-      - id: jsx-babel-check
-        name: JSX Babel parse + static + line-count gate
-        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
+      - id: jsx-syntax-check
+        name: Portal JSX/JS parse with the build's esbuild
+        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_syntax.py --ci
         language: python
         pass_filenames: false
-        files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
-        # One hook (#3611 B2): it used to be two — this one with `--ci` and
-        # jsx-babel-check-strict-linecount with `--ci --strict-linecount`,
-        # the same files:, a strict superset — so every commit ran Babel
-        # twice. `--strict-linecount` makes soft-cap (>1500 lines) fatal
-        # too: 0 soft-cap warnings since PR-2d (#153), this keeps it there.
-        # Pre-existing `style={{}}` warnings stay non-fatal (granular flag,
-        # NOT `--strict`; PR #160). Needs node: without it, or without an
-        # installable @babel/standalone, the hook exits 2, never a silent
-        # skip (#3611).
+        files: ^(tools/portal/(src|entries)/.*\.jsx?|tools/portal/(esbuild-shared\.mjs|build\.mjs|package\.json|package-lock\.json)|scripts/tools/lint/lint_jsx_syntax\.py)$
+        # #3669: parses every tools/portal/src file with the lockfile's esbuild
+        # and esbuild-shared.mjs's transform — what build.mjs bundles with.
+        # Needs node and tools/portal/node_modules (`make portal-deps`): without
+        # either the hook exits 2, never a silent skip. Replaces jsx-babel-check,
+        # whose @babel/standalone the browser no longer runs.
+
+      - id: jsx-linecount-check
+        name: Portal JSX line-count caps (soft 1500 / hard 2500)
+        entry: python3 -X utf8 scripts/tools/lint/check_jsx_linecount.py --ci --strict
+        language: python
+        pass_filenames: false
+        files: ^(tools/portal/src/(interactive/tools|getting-started)/.*\.jsx|scripts/tools/lint/check_jsx_linecount\.py)$
+        # #152 / #153: 0 soft-cap files since PR-2d; `--strict` keeps it there.
+        # Pure Python (#3669): no node, so no toolchain gap costs it its verdict.
 
       - id: dev-rules-enforcement-check
         name: dev-rules.md ↔ pre-commit-config.yaml drift check
