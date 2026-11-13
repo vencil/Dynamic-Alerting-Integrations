@@ -323,20 +323,26 @@ class TestEvaluateWhen:
         (["prod", "other"], 0),
         (["other"], 1),
         (["a", "b"], 1),
-        ([], 1),
+        ([], 0),    # 空列表與沒寫同讀（written_config 濾掉 exporter 補的空值）
         (None, 0),  # 沒寫 tags：when 不成立，與舊的 contains（找不到就跳過）一致
     ])
     def test_documented_tag_presence_recipe(self, tags, violations):
         """#3771 CodeRabbit：cli-reference 與 changelog 寫的「要求列表含某個 tag」配方——
         `when: not_equals prod` 加主規則 `equals prod`。單寫 `when` 或改用 `one_of` 都不等價
-        （`one_of: [prod]` 拒收 [prod, other]）；文件改寫法時這裡要一起改。"""
+        （`one_of: [prod]` 拒收 [prod, other]）；文件改寫法時這裡要一起改。
+        值經 `written_config` 讀出，與 evaluate-policy 同一條路（審查：空列表在那裡
+        等同沒寫，直接餵 dict 會得到文件沒在講的那一層的答案）。"""
+        from types import SimpleNamespace
+        import _lib_tenant_values as tv
         rules = pe.rules_from_policy_data({"policies": [{
             "name": "need-prod", "target": "_metadata.tags", "operator": "equals",
             "value": "prod",
             "when": {"target": "_metadata.tags", "operator": "not_equals", "value": "prod"},
         }]})
-        meta = {} if tags is None else {"tags": tags}
-        assert len(pe.evaluate_rule(rules[0], "t-a", {"_metadata": meta})) == violations
+        served = SimpleNamespace(values={"_metadata": {
+            "tags": [] if tags is None else tags, "owner": "o"}})
+        config = tv.written_config(SimpleNamespace(effective_config={}), served)
+        assert len(pe.evaluate_rule(rules[0], "t-a", config)) == violations
 
     def test_when_required_true(self, sample_config):
         """when required 條件成立。"""
