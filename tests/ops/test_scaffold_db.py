@@ -438,18 +438,17 @@ class TestKafkaRabbitMQAlertCompleteness:
         }
 
     def test_kafka_has_all_expected_alerts(self):
-        """Kafka rule pack 包含所有 CHANGELOG 承諾的 alerts。"""
+        """Kafka rule pack 恰好是這幾條 alert（#3783 移除了
+        KafkaNoActiveController 與 KafkaHighRequestRate[Critical]：宣告的
+        exporter 不輸出它們讀的指標）——加回任何一條都要先改這裡。"""
         data = _load_yaml(os.path.join(RULE_PACKS_DIR, "rule-pack-kafka.yaml"))
         alerts = self._get_alert_names(data["groups"])
         expected = [
             "KafkaHighConsumerLag", "KafkaHighConsumerLagCritical",
             "KafkaUnderReplicatedPartitions", "KafkaUnderReplicatedPartitionsCritical",
-            "KafkaNoActiveController",
             "KafkaLowBrokerCount",
-            "KafkaHighRequestRate", "KafkaHighRequestRateCritical",
         ]
-        for name in expected:
-            assert name in alerts, f"Missing alert: {name}"
+        assert sorted(alerts) == sorted(expected)
 
     def test_kafka_metric_groups_cover_all_metrics(self):
         """Kafka alerts 有完整的 metric_group 覆蓋。"""
@@ -457,16 +456,14 @@ class TestKafkaRabbitMQAlertCompleteness:
         mgs = self._get_metric_groups(data["groups"])
         expected = {
             "kafka_consumer_lag", "kafka_under_replicated_partitions",
-            "kafka_request_rate",
         }
-        # #3692: a single-member group suppresses nothing, so the two
-        # floor alerts with no critical twin carry none.
-        assert not mgs & {"kafka_active_controllers", "kafka_broker_count"}, mgs
-        for mg in expected:
-            assert mg in mgs, f"Missing metric_group: {mg}"
+        # #3692: a single-member group suppresses nothing, so the floor
+        # alert with no critical twin carries none.
+        assert "kafka_broker_count" not in mgs, mgs
+        assert mgs == expected
 
     @pytest.mark.parametrize("alert_name", [
-        "KafkaNoActiveController", "KafkaLowBrokerCount",
+        "KafkaLowBrokerCount",
     ])
     def test_kafka_low_alerts_use_less_than(self, alert_name):
         """低值觸發的 Kafka alert 使用 < operator。"""

@@ -38,6 +38,19 @@ class TestLiveRepoIsClean:
         )
 
 
+class TestTargetFiles:
+    def test_local_composite_actions_are_scanned(self, tmp_path):
+        """A `run:` step in a local composite action runs inside the workflow
+        that uses it, so its installs are in scope like the workflow's own."""
+        act = tmp_path / ".github" / "actions" / "x"
+        act.mkdir(parents=True)
+        (act / "action.yml").write_text(
+            "runs:\n  using: composite\n  steps:\n    - run: pip install pyyaml\n"
+            "      shell: bash\n", encoding="utf-8")
+        assert act / "action.yml" in gate._target_files(tmp_path)
+        assert [f.kind for f in gate.scan_repo(tmp_path)] == ["pip"]
+
+
 class TestPipDetection:
     def test_constraint_file_pins_everything(self):
         assert gate._pip_unpinned(" pyyaml -c requirements/ci-constraints.txt") == []

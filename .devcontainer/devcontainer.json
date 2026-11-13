@@ -75,6 +75,8 @@
   //      `make lint-docs-mkdocs` 需要的三件組（dev-rules.md #4 Doc-as-Code
   //      要求 docs/**.md push 前必跑此 lint；缺它就只能等 CI 回報 site-root
   //      vs filesystem path 語意衝突）。PR #375 從踩到的痛中加進來。
+  //    - mkdocs（與 markdown、pymdown-extensions）：文件 yaml 區塊清冊用站台
+  //      渲染器找程式碼區塊（#3814），CI 明列安裝，這裡也明列。
   // 2. 安裝 Kind（pinned v0.33.0 + 上游 sha256sum 驗證）。叢集的 node image 不靠
   //    kind 預設值，釘在 scripts/ops/kind-node-image.env（kindest/node v1.37.0），
   //    上方 kubectl 1.37.1 跟著它走。原本的 v0.20.0 預設
@@ -128,7 +130,7 @@
   // read the tenants through da-guard, built from this checkout's Go source into
   // the gitignored .build/ (`make validate-config` rebuilds it on each run; this
   // one makes a broken Go toolchain fail at create time, by name).
-  "postCreateCommand": "pip3 install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions -c requirements/ci-constraints.txt && curl -fsSLo ./kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 && echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  ./kind' | sha256sum -c - && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh && bash .devcontainer/install-vector.sh && bash .devcontainer/install-trivy.sh && make da-guard-build",
+  "postCreateCommand": "pip3 install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pytest-benchmark mkdocs-material mkdocs-static-i18n pymdown-extensions mkdocs -c requirements/ci-constraints.txt && curl -fsSLo ./kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64 && echo 'aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d  ./kind' | sha256sum -c - && chmod +x ./kind && sudo mv ./kind /usr/local/bin/kind && bash .devcontainer/install-promtool.sh && bash .devcontainer/install-vector.sh && bash .devcontainer/install-trivy.sh && make da-guard-build",
 
   "customizations": {
     "vscode": {

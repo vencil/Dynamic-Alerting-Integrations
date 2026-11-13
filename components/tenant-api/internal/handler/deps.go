@@ -150,7 +150,7 @@ type Deps struct {
 
 	// RetiredThresholdKeys (#3829) is a TEST SEAM: threshold keys a batch
 	// op's `unset` may remove beside cfg.BatchUnsettable's (the registry's
-	// `retired_keys:`, empty in the committed registry). nil in production;
+	// `retired_keys:`). nil in production;
 	// a handler test sets it for the key its fake generator's verdict
 	// retires, instead of swapping the generated table.
 	RetiredThresholdKeys []string
