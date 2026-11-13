@@ -751,7 +751,7 @@ Self-Review-Pass-2:
 
 > **觸發**：S#92 PR #182 第一次 CI E2E run 失敗 — `routing-trace.jsx` 在 `computeTrace` 加了 `export function`（命名 export）。在 jsx-loader 的 Babel-standalone（**script mode**, not module mode）context，Babel 把命名 export 編譯成 `exports.computeTrace = ...`，runtime `ReferenceError: exports is not defined`（`exports` 在 script-mode 不是 global），React tree 不 mount，4 specs 全 fail。
 
-**為何 `jsx-babel-check` 沒擋住**：那個 hook 只 PARSE JSX，`export function` 是合法 AST node。Babel-standalone `runtime` 才會嘗試把它編譯成 `exports.x = ...` 並炸。**CI E2E 是唯一暴露 runtime failure 的關卡**，pre-commit 全綠不代表瀏覽器跑得起來。
+**為何 `jsx-babel-check` 沒擋住**（該 hook 已由 #3669 的 `jsx-syntax-check` 取代，以 build 用的 esbuild 解析）：那個 hook 只 PARSE JSX，`export function` 是合法 AST node。Babel-standalone `runtime` 才會嘗試把它編譯成 `exports.x = ...` 並炸。**CI E2E 是唯一暴露 runtime failure 的關卡**，pre-commit 全綠不代表瀏覽器跑得起來。
 
 **當時的 JSX-loader 約束（legacy Babel-standalone 時代；`transformImports` 已隨 TD-030z 移除，現況見本節末段）**：
 
