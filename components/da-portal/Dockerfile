@@ -2,8 +2,8 @@
 #
 # Tools are pre-built into ESM bundles (esbuild) and served as static files —
 # no runtime build/transpile in the browser. The bundles are built from
-# tools/portal/ in the `portal-build` stage below (#3738), NOT copied from the
-# docs/assets/dist/ the repo still commits. Vendor JS (React / Tailwind /
+# tools/portal/ in the `portal-build` stage below (#3738); docs/assets/dist/ is
+# not in git and .dockerignore keeps a host-built copy out of the context. Vendor JS (React / Tailwind /
 # Lucide) is bundled for air-gapped / offline deployment, with CDN fallback
 # otherwise.
 #
@@ -78,8 +78,8 @@ COPY --chown=nginx:nginx docs/interactive/ /usr/share/nginx/html/interactive/
 # ── Tool bundles (esbuild ESM output from the portal-build stage) ──
 # jsx-loader.html loads /assets/dist/<tool>.js at runtime; the legacy
 # in-browser Babel transpile path is gone, so these bundles MUST be in the
-# image or every tool 404s. Taken from the stage above, never from the
-# committed docs/assets/dist/ (#3738).
+# image or every tool 404s. Taken from the stage above, never from a
+# docs/assets/dist/ in the build context (#3738).
 COPY --from=portal-build --chown=nginx:nginx /src/docs/assets/dist/ /usr/share/nginx/html/assets/dist/
 
 # ── Getting Started Wizard ────────────────────────────────────

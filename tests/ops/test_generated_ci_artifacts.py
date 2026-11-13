@@ -3834,7 +3834,7 @@ def test_portal_preview_actually_varies_with_the_deploy_choice(tmp_path) -> None
         # rename sweep found the other, contiguous mention in this same file and
         # left this one pointing at a file that no longer existed. #1373 verbatim.
         "tools/portal/src/interactive/tools/cicd-setup-wizard/utils/generators.js"
-        " (cicdGenerateGitHubActionsPreview) and rebuild docs/assets/dist/."
+        " (cicdGenerateGitHubActionsPreview)."
     )
 
 
@@ -6118,7 +6118,7 @@ def test_portal_file_tree_matches_what_init_writes(
         f"  promised by the wizard, never written: {sorted(claimed - actual)}\n"
         f"  written by the CLI, not shown: {sorted(actual - claimed)}\n"
         "The wizard is the copy; edit cicdGeneratedPaths in generators.js "
-        "(then rebuild docs/assets/dist/). Do NOT silence this by widening the "
+        "Do NOT silence this by widening the "
         "comparison — the whole point is that the two must be equal."
     )
 

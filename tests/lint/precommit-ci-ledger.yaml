@@ -319,12 +319,6 @@ hooks:
   evidence:
     pytest:
     - tests/lint/test_check_critical_tier_twins.py
-- id: dist-source-consistency-check
-  category: exempt
-  evidence:
-    reason: Reads only `git diff --cached`; CI has nothing staged, so it is green by construction.
-      The stronger CI counterpart is the ci.yml portal step "Verify committed dist matches
-      fresh build".
 - id: playwright-rtl-drift-check
   category: b
   evidence:
