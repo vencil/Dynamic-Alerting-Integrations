@@ -96,6 +96,7 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
             result.returncode,
             f"cmd failed ({result.returncode}): {' '.join(cmd)}\n"
             f"stderr: {result.stderr.strip()}"
+            + (f"\nstdout: {result.stdout.strip()}" if result.stdout.strip() else "")
         )
     return result.stdout.strip()
 
@@ -220,7 +221,7 @@ def plumbing_commit(
             pass
 
 
-def require_pre_commit_hook(repo_root: pathlib.Path) -> None:
+def require_pre_commit_hook() -> None:
     """The normal path runs the checks through git's pre-commit hook: refuse
     (RuntimeError → exit 2) when it would not run them, instead of committing
     unchecked with exit 0 (#3634). The hook git would run is the one
@@ -228,10 +229,11 @@ def require_pre_commit_hook(repo_root: pathlib.Path) -> None:
     `core.hooksPath`). It must be an executable file; a pre-commit framework
     shim must also be able to start pre-commit — its INSTALL_PYTHON with
     pre_commit importable, else `pre-commit` on PATH, as the shim itself
-    tries — or it fails every commit without running a hook."""
-    hook = pathlib.Path(_run(["git", "rev-parse", "--git-path", "hooks/pre-commit"]))
-    if not hook.is_absolute():
-        hook = repo_root / hook
+    tries — or it fails every commit without running a hook. The path is
+    asked for absolute: plain `--git-path` is relative to the current
+    directory, not the repository root."""
+    hook = pathlib.Path(_run(["git", "rev-parse", "--path-format=absolute",
+                              "--git-path", "hooks/pre-commit"]))
     if not hook.is_file() or not os.access(hook, os.X_OK):
         raise RuntimeError(
             f"no executable pre-commit hook at {hook}: the checks would not run; "
@@ -249,8 +251,11 @@ def require_pre_commit_hook(repo_root: pathlib.Path) -> None:
     if shutil.which("pre-commit"):
         candidates.append(["pre-commit", "--version"])
     for cmd in candidates:
-        if subprocess.run(cmd, capture_output=True, check=False, timeout=60).returncode == 0:
-            return
+        try:
+            if subprocess.run(cmd, capture_output=True, check=False, timeout=60).returncode == 0:
+                return
+        except (OSError, subprocess.TimeoutExpired):
+            continue  # cannot start it (a directory, no permission, hangs): not runnable
     raise RuntimeError(
         f"the pre-commit hook at {hook} cannot start pre-commit (INSTALL_PYTHON "
         f"{python or '(none)'} has no pre_commit, and no pre-commit on PATH): "
@@ -268,7 +273,7 @@ def normal_commit(
     (exit 2): git ends a hook failure at 1 whether the hook found something
     or could not run (pre-commit flattens both to 1), so it is never claimed
     to be a finding (#3634)."""
-    require_pre_commit_hook(repo_root)
+    require_pre_commit_hook()
     for rel in files:
         _run(["git", "add", rel])
     cmd = ["git", "commit", "-m", message]
