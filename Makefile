@@ -751,7 +751,7 @@ onboard-analyze: $(DA_READ_PREREQ) ## Analyze existing AM/Prometheus configs for
 #   MISSING    規則指向的檔案不存在
 #   GLOB-EMPTY glob 展開到 0 個檔案（整條規則對所有 gate 隱形）
 #   GLOB-DEAD  glob 展開到檔案、但整棵樹一個都沒撈到
-#   NO-SSOT    六條版號線之一讀不到 source-of-truth（該線全部規則未被評估）
+#   NO-SSOT    某條版號線讀不到 source-of-truth（該線全部規則未被評估）
 # `--scope` 過濾後剩 0 條規則會以 exit 2 擋下，不會回報「一致」。
 #
 # 第二行 `--sync-counts --check` 同一個理由（#1407 第三輪）：計數規則自己的三種
@@ -956,6 +956,10 @@ byo-rulepack-table: $(DA_READ_PREREQ) ## 重新產生 BYO Prometheus 文件內�
 .PHONY: platform-data
 platform-data: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；Helm／k8s 檔經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
 	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
+
+.PHONY: renovate-fixup
+renovate-fixup: $(DA_CRDECODE_PREREQ) ## 在 Renovate「third-party container images」PR 分支上補齊它寫不到的連動修改（da-read go.sum、oauth2-proxy 測試函式庫、federation-e2e／try-local compose、platform-data＋portal IMAGE_MIRROR＋dist；#3799）。需要 go 與 make；剩下的紅燈是上游 API 變更，要人修
+	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/renovate_fixup.py
 
 .PHONY: rulepack-configmaps
 rulepack-configmaps: $(DA_READ_PREREQ) ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
@@ -1162,17 +1166,16 @@ lint-new-script: ## Run all CLI/SAST conventions on a single new lint script (PR
 	@echo "✓ All convention gates pass for $(SCRIPT)"
 
 .PHONY: version-show
-version-show: ## 顯示目前六條版號線（含讀不到 SSOT 的線）
+version-show: ## 顯示目前各版號線（含讀不到 SSOT 的線）
 	@python3 ./scripts/tools/dx/bump_docs.py --show-current
 
 .PHONY: bump-docs
-bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 RECIPE_PREVIEW=2.9.0 TENANT_API=2.9.20)
+bump-docs: ## 更新版號引用 (使用: make bump-docs PLATFORM=0.10.0 TOOLS=0.2.0 EXPORTER=0.6.0 PORTAL=2.8.0 TENANT_API=2.9.20)
 	@python3 ./scripts/tools/dx/bump_docs.py \
 		$(if $(PLATFORM),--platform $(PLATFORM)) \
 		$(if $(EXPORTER),--exporter $(EXPORTER)) \
 		$(if $(TOOLS),--tools $(TOOLS)) \
 		$(if $(PORTAL),--portal $(PORTAL)) \
-		$(if $(RECIPE_PREVIEW),--recipe-preview $(RECIPE_PREVIEW)) \
 		$(if $(TENANT_API),--tenant-api $(TENANT_API))
 
 # ----------------------------------------------------------
@@ -1204,7 +1207,7 @@ coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 H
 	@$(if $(findstring --html,$(ARGS)),echo "✓ HTML 報告: .build/htmlcov/index.html")
 
 .PHONY: test-e2e
-# #3738：E2E 伺服的 docs/ 含 docs/assets/dist/，先從 source 重建，不測 commit 進 repo 的那份。
+# #3738：E2E 伺服的 docs/ 含 docs/assets/dist/，那是 build 產物、不在 git 裡，先從 source 建出來。
 test-e2e: portal-build ## Portal E2E 煙霧測試 (Playwright, 需 Node.js 24，與 CI 同版，排除 @visual)
 	@cd tests/e2e && npm test -- $(ARGS)
 
@@ -1316,7 +1319,7 @@ chart-push: chart-package ## 推送 Helm chart 至 OCI registry (需先 docker l
 	@echo "✓ Pushed oci://$(OCI_REGISTRY)/charts/threshold-exporter:$(CHART_VER)"
 
 # ----------------------------------------------------------
-# Release Tag（六線版號策略）
+# Release Tag（各線版號；清單見 release.yaml 的 on.push.tags）
 # ----------------------------------------------------------
 .PHONY: release-tag-exporter
 release-tag-exporter: version-check ## 從 Chart.yaml 推導 exporter tag（觸發 image + Helm build）
@@ -1353,17 +1356,6 @@ release-tag-portal: version-check ## 建立 portal tag（觸發 da-portal image 
 	git tag "portal/v$$ver"; \
 	echo "✅ Tag portal/v$$ver created locally."; \
 	echo "Run: git push origin portal/v$$ver"
-
-.PHONY: release-tag-recipe-preview
-release-tag-recipe-preview: version-check ## 從 Chart.yaml 推導 recipe-preview tag（觸發 image + Helm build；#657 同步升）
-	@RP_VER=$$(grep '^version:' helm/recipe-preview/Chart.yaml | awk '{print $$2}'); \
-	echo "recipe-preview Chart.yaml version: $$RP_VER"; \
-	if git rev-parse "recipe-preview/v$$RP_VER" >/dev/null 2>&1; then \
-		echo "ERROR: tag recipe-preview/v$$RP_VER already exists"; exit 1; \
-	fi; \
-	git tag "recipe-preview/v$$RP_VER"; \
-	echo "✅ Tag recipe-preview/v$$RP_VER created locally."; \
-	echo "Run: git push origin recipe-preview/v$$RP_VER"
 
 # ----------------------------------------------------------
 # 文件本地伺服

@@ -1,0 +1,4 @@
+custom_mysql_connections:
+  original_metric: mysql_global_status_threads_connected
+  old_query: max by(tenant) (mysql_global_status_threads_connected)
+  new_query: tenant:custom_mysql_connections:max

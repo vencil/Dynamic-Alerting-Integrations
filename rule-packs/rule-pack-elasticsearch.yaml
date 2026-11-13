@@ -11,13 +11,13 @@
 #   es_heap_usage_percent: 85
 #       % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
 #       (alert demands es_heap_usage_percent) — unwired dead key, no alias
-#       未啟用（待驗證）：佔 heap 上限的百分比可跨部署，但 85 尚未經 shadow 報表驗證
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
 #   es_disk_usage_percent: 85
 #       % — Disk USAGE % warning (used = 1 - available/size, recording rule
 #       tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
 #       tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE
 #       %) — carrying 15 into a used-% rule would fire permanently
-#       未啟用（待驗證）：佔磁碟的百分比可跨部署（85 與 Elasticsearch 的 low watermark 相同），但尚未經 shadow 報表驗證
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
 #   es_pending_tasks: 50
 #       count — Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
 #       catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from scaffold
@@ -29,18 +29,16 @@
 #       caveat in the pack header (#1196 D)
 #       未啟用（依部署而定）：可接受的搜尋延遲是各部署的服務等級選擇
 #
-# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
-# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
-# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
-# 它讀的是 defaults[base]，base 沒有值就整列丟棄
+# optional_overrides（不在出貨清單裡；base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨）：
+# 下列 `<base>_critical` 的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值
 # （components/threshold-exporter/app/pkg/config/resolve.go）。
-# 而下列每個 key 的 base 都**未**標 [chart-default]
-# ⇒ 出貨的 Helm values / dev conf.d 範本沒有供給它：
-# 租戶在這個拓撲下填一個並不會發射任何 user_threshold。
-# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
-# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
-# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
-# 一格裝飾（#1311）。
+# - repo 的 dev conf.d（components/threshold-exporter/config/conf.d/_defaults.yaml 的
+#   dev-example-defaults 段）供給下列每個 key 的 base：在這棵樹裡租戶填一個，
+#   resolveCriticalRows 就產出一條真的 critical row。
+# - 出貨的 Helm values 不供給這些 base：用 chart 部署時，租戶填一個並不會產出任何 row，
+#   要先由部署面供給 base（scaffold_tenant 針對選到的 pack 產生的 _defaults.yaml
+#   就含 base，operator 也可自行填 Helm values）。
+# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 #   es_disk_usage_percent_critical: 90   # % — Disk usage critical
 #   es_heap_usage_percent_critical: 90   # % — JVM heap usage critical
 #   es_pending_tasks_critical: 150   # count — Pending cluster tasks critical

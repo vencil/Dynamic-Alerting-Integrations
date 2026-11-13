@@ -1164,10 +1164,12 @@ repos:
 
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
-        entry: bash -c 'cd tests/e2e && npx playwright test'
+        # docs/assets/dist/ is build output and not in git (#3738): build it
+        # first, or every tool page the local server serves 404s its bundle.
+        entry: bash -c 'make portal-build && cd tests/e2e && npx playwright test'
         language: system
         pass_filenames: false
-        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|dist/|platform-data|template-data|recommendation-data))
+        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|platform-data|template-data|recommendation-data))
         stages: [manual]
 
       - id: playwright-lint
@@ -1259,7 +1261,7 @@ repos:
         # `fail` guard. Horizontal write scaling needs a K8s Lease (Deferred A3).
 
       - id: cross-ns-url-check
-        name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns, recipe-preview → monitoring)"
+        name: "#1004: service URLs must pin canonical namespaces (tenant-api → tenant-api ns)"
         # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
         # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
         entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_cross_ns_url_consistency.py --ci
@@ -1707,7 +1709,7 @@ repos:
         # image ships no repo tree to read the YAML from. Gated: JSON-Schema
         # shape (pre-generation hard gate) + the registry is a fixed point of
         # its own extraction (a wrong critical_of, an arming: default on an
-        # optional key, a missing arming reason, an alias onto no key → red) +
+        # optional key, a missing portability reason, an alias onto no key → red) +
         # freshness of every GENERATED surface (the RULE_PACKS module / pack
         # header threshold sections / helm values thresholdConfig.defaults /
         # dev conf.d _defaults.yaml / the optional_overrides declared-key LIST
@@ -1997,19 +1999,6 @@ repos:
         # showed 0 violations (TRK-233/034 cleared all instances). Per-line
         # escape via `<!-- window-x-no-fallback: ignore -->` for legitimate
         # exceptions (illustrative comments only).
-
-      - id: dist-source-consistency-check
-        name: "Catch portal dist commits without matching source change (testing-playbook §LL v2.8.0 §2, TRK-239)"
-        entry: python3 -X utf8 scripts/tools/lint/check_dist_source_consistency.py
-        language: python
-        pass_filenames: false
-        always_run: true
-        # Auto-stage, FATAL on findings. Triggers when staged files include
-        # docs/assets/dist/*.js but no matching source-of-rebuild signal
-        # (entries / build.mjs / manifest / shims / tools/portal/src/**).
-        # Codifies the PR-E (#269) regression pattern: dist drift hidden
-        # behind a single visible source change. Escape: BYPASS_DIST_CHECK=1
-        # for legitimate dist-only commits (e.g. CI bot regen).
 
       - id: skip-a11y-justification-check
         name: "Require TD-ticket justification for `skipA11y: true` (testing-playbook §LL v2.8.0 §5, TRK-239)"

@@ -81,7 +81,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 EXCLUDED_PREFIXES: Tuple[str, ...] = (
     "site/",
-    "docs/assets/dist/",
     "tests/",
 )
 EXCLUDED_FILES: Tuple[str, ...] = (
@@ -185,7 +184,6 @@ GIT_ONLY: Dict[str, str] = {
 #: GIT_ONLY until the first release; drop the entry at that release wrap.
 UNRELEASED: Dict[str, str] = {
     "da-portal": "push step added by #1352 after the last portal/v* tag (portal/v2.9.0)",
-    "recipe-preview": "the recipe-preview/v* tag line has never been cut (#1352 case B)",
 }
 
 _CHART_YAML_RE = re.compile(r"^helm/[^/]+/Chart\.yaml$")

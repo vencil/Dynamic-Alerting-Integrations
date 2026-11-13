@@ -921,6 +921,9 @@ def main():
         wanted=i18n_text("da-guard 列為頂層 config 檔的檔案",
                          "a top-level file da-guard lists as a config file"),
         lang=_LANG)
+    # #3724: the judgement of --source-dir is done (not a conf.d, so not
+    # `declared_trees`'): every later look at it is a reading.
+    _lib_input.judged("--source-dir", source_dir)
     analysis = _sources_or_exit(analyze_migration, source_dir, source_listing)
 
     if analysis["issues"]:

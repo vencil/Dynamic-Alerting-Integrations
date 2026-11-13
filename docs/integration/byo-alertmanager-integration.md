@@ -216,7 +216,7 @@ da-tools generate-routes --config-dir conf.d/ --apply --yes
 
 > **注意**：三種模式（與 `--validate`）互斥，一次只能帶一個。`--namespace` / `--configmap` 只有 `--output-configmap` 與 `--apply` 讀，配 `--output-alertmanager` 是結束碼 2。
 
-PATH 上有 `amtool` 時，三種模式都會先用它驗證要寫出／套用的 `alertmanager.yml`，Alertmanager 拒收就結束碼 1、不寫檔也不 apply；沒有 `amtool` 會印 NOTICE 說明「未經 Alertmanager 驗證」。`--validate` 也會做，但它組的是**內建預設 base** 而不是你的 base（#2260），所以要驗你自己的 base 仍得跑 `--output-alertmanager --base-config ... --dry-run`（或 `--output-configmap`）。`--apply` 的 reload 失敗是結束碼 2（#2219）。⚠️ v2.9.0 映像的 `--validate` 不經 `amtool` <!-- image-caveat: v2.9.0 -->
+三種模式都會先把要寫出／套用的 `alertmanager.yml` 交給 Alertmanager 自己的設定載入器（`da-read`），收下後 PATH 上有 `amtool` 再跑 `amtool check-config`；任一個拒收就結束碼 1、不寫檔也不 apply。沒有 `amtool` 會印 NOTICE，少掉的只有 `amtool` 對 `templates:` 模板檔的解析（#3689）。`--validate` 走同一道閘門，但它組的是**內建預設 base** 而不是你的 base（#2260），所以要驗你自己的 base 仍得跑 `--output-alertmanager --base-config ... --dry-run`（或 `--output-configmap`）。`--apply` 的 reload 失敗是結束碼 2（#2219）。⚠️ v2.9.0 映像的 `--validate` 不經 `amtool` <!-- image-caveat: v2.9.0 -->
 
 ### Step 6: Reload Alertmanager
 

@@ -119,6 +119,7 @@ lang: zh
 | `paired_trend_watch.py` | Judge a series of PAIRED nightly runs for a sustained regression (ADR-032). |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
 | `render_soak_diff.py` | v2.8.0 readiness harness: chaos soak result renderer. |
+| `renovate_fixup.py` | Finish a Renovate third-party image PR: write the follow-on edits it cannot (#3799). |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `run_chaos_soak.py` | v2.8.0 readiness harness: compressed-time chaos soak runner. |
 | `scaffold_lint.py` | generate a new pre-commit lint script from template. |
@@ -164,7 +165,6 @@ lang: zh
 | `check_dev_rules_enforcement.py` | detect doc-drift in dev-rules.md. |
 | `check_devcontainer_dep_parity.py` | dev container must declare every Python dep CI installs. |
 | `check_devrules_size.py` | Dev-rules 尺寸上限檢查。 |
-| `check_dist_source_consistency.py` | Catch portal dist commits without matching source change (testing-playbook §LL §2, TRK-239). |
 | `check_doc_datools_cmds.py` | documented `da-tools` binary-wrapper subcommands |
 | `check_doc_k8s_refs.py` | docs must reference k8s manifests accurately. |
 | `check_doc_links.py` | 文件間交叉引用一致性檢查 |

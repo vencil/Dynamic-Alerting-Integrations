@@ -1,0 +1,19 @@
+# An organisation's custom-rule policy, stricter than the built-in one
+# (.github/custom-rule-policy.yaml): shorter range vectors, a tighter group
+# interval, `absent` denied as well, and `severity` required beside `tenant`.
+denied_functions:
+  - holt_winters
+  - predict_linear
+  - quantile_over_time
+  - absent
+
+denied_patterns:
+  - '=~".*"'
+  - 'without(tenant)'
+
+required_labels:
+  - tenant
+  - severity
+
+max_range_duration: 5m
+max_evaluation_interval: 30s

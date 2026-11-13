@@ -1,0 +1,12 @@
+{
+  "ready": true,
+  "timestamp": "2026-03-07T12:00:00Z",
+  "convergence_percentage": 100.0,
+  "converged_count": 5,
+  "total_pairs": 5,
+  "converged_pairs": ["pair_0", "pair_1", "pair_2", "pair_3", "pair_4"],
+  "unconverged_pairs": [],
+  "round_count": 10,
+  "stability_window": 5,
+  "recommendation": "Safe to cutover"
+}

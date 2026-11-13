@@ -45,13 +45,13 @@ tools/portal/
 ├── shims/              # build-time shims (lucide-react etc.)
 └── tests/              # ★ Vitest specs (was tests/portal/)
 
-docs/assets/dist/       # build output (per-tool ESM bundles) — written from build.mjs
+docs/assets/dist/       # build output (per-tool ESM bundles) — written from build.mjs; gitignored (#3738)
 docs/interactive/index.html  # portal hub page — STAYS in docs/ (it's a real docs page)
 ```
 
 ## 誰消費 `docs/assets/dist/`：各自 build
 
-dist 是 build 產物，每個消費端都在用之前自己從這棵樹 build，不讀 repo 裡 commit 的那份（[#3738](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3738)）：
+dist 是 build 產物、不在 git 裡，每個消費端都在用之前自己從這棵樹 build（[#3738](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3738)）：
 
 | 消費端 | 在哪裡 build |
 |---|---|
@@ -62,7 +62,7 @@ dist 是 build 產物，每個消費端都在用之前自己從這棵樹 build�
 
 守衛：`tests/ops/test_portal_dist_consumers_build.py`。`lint_tool_consistency.py` 判斷「某個 bundle 存不存在」讀的是 `manifest.json` + `entries/`，不是 dist 目錄。
 
-⚠️ 過渡期：dist **仍暫時 commit** 在 repo，`dist-source-consistency` hook 與 CI 的 dist drift gate 也還在，改 source 照舊要 `make portal-build` 並一起 commit；下一張 PR 把 dist 移出 git。
+dist **不 commit 進 git**（`.gitignore` 蓋住；守衛 `tests/lint/test_portal_dist_not_tracked.py`）。拉到 #3738 之後工作樹就沒有 `docs/assets/dist/`（既有 clone checkout 過去也會被刪；本機重 build 過、還沒 commit 的 dist 會讓 `git pull` 中止，先 `git restore docs/assets/dist`）。舊分支 rebase／merge 完跑 `git ls-files docs/assets/dist`，有輸出就 `git rm -r --cached docs/assets/dist`（只新增 chunk 的 commit 不會衝突、會把它悄悄帶回）。要在本機直接開 `docs/` 底下的互動工具，先 `make portal-build`（`make serve-docs`／`test-e2e*` 會自己跑）。CI 的 Portal Tests 仍跑 `npm run build`＋bundle size budget＋Vitest，量的是當次 build 的產物。
 
 ## 為什麼 esbuild
 

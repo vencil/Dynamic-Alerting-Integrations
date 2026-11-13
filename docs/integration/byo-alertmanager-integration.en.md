@@ -222,7 +222,7 @@ Without `--base-config` the merge goes into a built-in placeholder base (`resolv
 
 > **Note**: the three modes (and `--validate`) are mutually exclusive; pass exactly one. `--namespace` / `--configmap` are read only by `--output-configmap` and `--apply`; with `--output-alertmanager` they are exit 2.
 
-When `amtool` is on PATH, all three modes first validate the `alertmanager.yml` they are about to write / apply with it; if Alertmanager rejects it the exit code is 1 and nothing is written or applied. Without `amtool` a NOTICE says the config was not validated by Alertmanager. `--validate` does this too, but on the **built-in default base** rather than yours (#2260), so validating your own base still takes `--output-alertmanager --base-config ... --dry-run` (or `--output-configmap`). A failed reload under `--apply` is exit code 2 (#2219). ⚠️ In the v2.9.0 image `--validate` does not go through `amtool` <!-- image-caveat: v2.9.0 -->
+All three modes first hand the `alertmanager.yml` they are about to write / apply to Alertmanager's own config loader (`da-read`), then, once it accepts and when `amtool` is on PATH, to `amtool check-config`; if either rejects it the exit code is 1 and nothing is written or applied. Without `amtool` a NOTICE says so; all that is missing is amtool's parse of the `templates:` template files (#3689). `--validate` goes through the same gate, but on the **built-in default base** rather than yours (#2260), so validating your own base still takes `--output-alertmanager --base-config ... --dry-run` (or `--output-configmap`). A failed reload under `--apply` is exit code 2 (#2219). ⚠️ In the v2.9.0 image `--validate` does not go through `amtool` <!-- image-caveat: v2.9.0 -->
 
 ### Step 6: Reload Alertmanager
 

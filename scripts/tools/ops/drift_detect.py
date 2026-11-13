@@ -130,9 +130,15 @@ class DriftReport:
 # ---------------------------------------------------------------------------
 
 def _file_sha256(path: Path) -> str:
-    """Compute SHA-256 hex digest of a file."""
+    """Compute SHA-256 hex digest of a file. A file da-guard listed under a
+    judged ``--dirs`` tree that is gone now is the tree changed since: rc 2,
+    the flag named (#3724), never a crash."""
     h = hashlib.sha256()
-    h.update(path.read_bytes())
+    try:
+        h.update(path.read_bytes())
+    except OSError as e:
+        _lib_parse_cache.refuse_gone(path, e)
+        raise
     return h.hexdigest()
 
 

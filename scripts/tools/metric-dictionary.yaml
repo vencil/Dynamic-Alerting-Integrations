@@ -325,7 +325,7 @@ kafka_topic_partition_under_replicated_partition:
   maps_to: kafka_under_replicated_partitions
   golden_rule: KafkaUnderReplicatedPartitions
   rule_pack: kafka
-  note: "Under-replicated partitions — max by(tenant), 預期值 0"
+  note: "Under-replicated partitions — 逐 partition 0/1 旗標，跨 exporter 副本去重後 sum by(tenant) 成 partition 數，預期值 0"
 
 kafka_controller_active_controller_count:
   maps_to: kafka_active_controllers

@@ -154,21 +154,11 @@ dir_rules:
     suite: tools/portal/tests
     runner: "make test-portal"
     justification: portal JSX/vitest 非 pytest（TRK-230；vitest 測試實際位於 tools/portal/tests）
-  - name: portal-dist
-    source: "docs/assets/dist/**"
-    suite: tools/portal/tests
-    runner: "make test-portal"
-    justification: esbuild 產物，源頭在 tools/portal；以 vitest 驗源碼
   - name: portal-e2e
     source: "tests/e2e/**"
     suite: tests/e2e
     runner: "make test-e2e"
     justification: Playwright spec 非 pytest
-  - name: scenario-shell
-    source: "tests/scenarios/**"
-    suite: tests/scenarios
-    runner: "bash tests/scenarios/<script>.sh（手動；無 make／CI 入口）"
-    justification: shell 腳本非 pytest 收集；刪掉本條會讓此目錄的變更掉進 fail-closed 全跑
   - name: federation-e2e-self
     source: "tests/federation-e2e/**"
     suite: tests/federation-e2e
@@ -188,7 +178,7 @@ safe_ignore:
   - pattern: "**/go.sum"
     justification: 同 Go 側不做選擇
   - pattern: "docs/**"
-    justification: 文件/靜態資產（tool-registry.yaml 與 dist/** 已由 special-basename text_map 與 dir_rule 先攔）
+    justification: 文件/靜態資產（tool-registry.yaml 已由 special-basename text_map 先攔；portal 的 docs/assets/dist/ 不在 git，不會出現在 diff，#3738）
   - pattern: "LICENSE"
     justification: 法務文件無測試面
   - pattern: ".gitignore"

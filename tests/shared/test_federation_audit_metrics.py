@@ -250,8 +250,8 @@ def test_a_logrotate_cycle_loses_and_repeats_nothing(vector_run) -> None:
 # default `IfNotPresent` the node keeps serving the previous build while the
 # nightly scan reports the new one. The digest covers the Dockerfile's
 # INSTRUCTION lines only (comments and blanks stripped).
-_RECIPE_DIGEST = "b036803fac522f2ff153f766e840c9e014dc8f0113efb1201f13d2cda72b18f6"
-_EXPECTED_TAG = "alpine3.23.6-1"
+_RECIPE_DIGEST = "c5d5e297b8d56c75b3c655bcbd61aa162aee946cee9695c1dc3adf490fdf2fd8"
+_EXPECTED_TAG = "alpine3.24.4-1"
 
 
 def _recipe_digest(dockerfile: Path) -> str:

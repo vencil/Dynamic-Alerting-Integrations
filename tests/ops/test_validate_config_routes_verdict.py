@@ -8,8 +8,11 @@ The contract pinned here:
 
 * every verdict `--validate` exits 1 on is a FAIL row, and the two agree
   (parity is asserted per case, not assumed);
+* Alertmanager's loader (da-read) is asked first and always (#3689): its
+  refusal is FAIL at exit 1 without asking amtool; no reading at all is FAIL
+  with ``caller_error`` (exit 2);
 * amtool absent → WARN (never a fourth status, #2301) with a detail line
-  saying the config was NOT validated by Alertmanager; exit code unchanged;
+  saying only amtool's template parse was not made; exit code unchanged;
 * amtool present but without a verdict → FAIL with ``caller_error`` (exit 2),
   as `--validate` exits 2;
 * amtool's own "accepted" line is not an issue: a clean tree is still PASS;
@@ -113,7 +116,7 @@ class TestEvaluateGeneratedConfig:
         v = render.evaluate_generated_config(_ROUTES, _RECEIVERS,
                                              [_WATCHDOG_RULE], [])
         assert any("Watchdog heartbeat" in e for e in v.errors), v.errors
-        assert v.amtool is None and calls == []
+        assert v.alertmanager is None and calls == []
         assert v.exit_code == 1
 
     def test_tenant_silence_tripwire(self, monkeypatch):
@@ -140,23 +143,47 @@ class TestEvaluateGeneratedConfig:
         v = render.evaluate_generated_config(_ROUTES, _RECEIVERS, [], [])
         assert v.errors == []
         assert v.assembly_error == "fake assembly invariant #2311"
-        assert v.amtool is None and calls == [] and v.exit_code == 1
+        assert v.alertmanager is None and calls == [] and v.exit_code == 1
 
     @pytest.mark.parametrize("rc,output,status,exit_code", [
-        (None, "", render.AMTOOL_NOT_FOUND, None),
-        (0, "SUCCESS", render.AMTOOL_ACCEPTED, None),
-        (1, "Checking x  FAILED: nope", render.AMTOOL_REJECTED, 1),
-        (127, "cannot run", render.AMTOOL_UNUSABLE, 2),
+        (None, "", render.AM_ACCEPTED_WITHOUT_AMTOOL, None),
+        (0, "SUCCESS", render.AM_ACCEPTED, None),
+        (1, "Checking x  FAILED: nope", render.AM_REJECTED, 1),
+        (127, "cannot run", render.AM_UNUSABLE, 2),
     ], ids=["not_found", "accepted", "rejected", "unusable"])
     def test_amtool_status(self, monkeypatch, capsys, rc, output, status,
                            exit_code):
         _fake_amtool(monkeypatch, rc, output)
         v = render.evaluate_generated_config(_ROUTES, _RECEIVERS, [], [])
-        assert v.amtool.status == status
+        assert v.alertmanager.status == status
         assert v.exit_code == exit_code
         # returned, never printed
         cap = capsys.readouterr()
         assert cap.out == "" and cap.err == "", cap
+
+    def test_loader_refusal_is_rejected_before_amtool(self, monkeypatch, capsys):
+        """#3689: Alertmanager's loader refuses a string where http_config
+        wants a bool; amtool, though present and accepting, is never asked."""
+        calls = _fake_amtool(monkeypatch, 0, "SUCCESS")
+        receivers = [{"name": "tenant-t1", "webhook_configs": [{
+            "url": "https://x.example.com/h",
+            "http_config": {"follow_redirects": "CANARY3689"}}]}]
+        v = render.evaluate_generated_config(_ROUTES, receivers, [], [])
+        assert v.alertmanager.status == render.AM_REJECTED, v.alertmanager
+        assert v.exit_code == 1 and calls == []
+        assert "config loader refuses" in v.alertmanager.message
+        assert "CANARY" not in v.alertmanager.message
+        assert capsys.readouterr().err == ""
+
+    def test_no_loader_reading_is_unusable(self, monkeypatch):
+        calls = _fake_amtool(monkeypatch, 0, "SUCCESS")
+
+        def no_da_read(_text):
+            raise render.ConsumerReadError("da-read not found")
+        monkeypatch.setattr(render, "alertmanager_reading", no_da_read)
+        v = render.evaluate_generated_config(_ROUTES, _RECEIVERS, [], [])
+        assert v.alertmanager.status == render.AM_UNUSABLE
+        assert v.exit_code == 2 and calls == []
 
 
 # ── validate-config's routes row, and parity with --validate ─────────
@@ -186,7 +213,7 @@ class TestRoutesRowMatchesValidate:
         _fake_amtool(monkeypatch, 1, "Checking x  FAILED: fake-2311")
         row = vc.check_routes(str(tenant_dir))
         assert any("fake-2311" in d for d in row["details"]), row
-        assert row["hint"] == vc.AMTOOL_REJECTED_ROUTES_HINT
+        assert row["hint"] == vc.AM_REJECTED_ROUTES_HINT
 
     def test_amtool_unusable_is_a_caller_error(self, tenant_dir, monkeypatch,
                                                capsys):
@@ -195,13 +222,13 @@ class TestRoutesRowMatchesValidate:
         assert row["status"] == vc.FAIL and row["caller_error"] is True, row
         assert _validate_rc(tenant_dir, monkeypatch, capsys) == 2
 
-    def test_no_amtool_is_warn_with_a_not_validated_line(self, tenant_dir,
-                                                         monkeypatch, capsys):
+    def test_no_amtool_is_warn_with_a_not_checked_by_amtool_line(
+            self, tenant_dir, monkeypatch, capsys):
         _fake_amtool(monkeypatch, None)
         row = vc.check_routes(str(tenant_dir))
         assert row["status"] == vc.WARN, row
         assert row["status"] in (vc.PASS, vc.WARN, vc.FAIL)  # no 4th value
-        assert any(d.startswith("Not validated by Alertmanager")
+        assert any(d.startswith("Not checked by amtool")
                    for d in row["details"]), row
         assert row["hint"] == vc.AMTOOL_NOT_FOUND_ROUTES_HINT
         assert _validate_rc(tenant_dir, monkeypatch, capsys) == 0
@@ -226,4 +253,4 @@ class TestRoutesRowMatchesValidate:
             encoding="utf-8")
         row = vc.check_routes(str(d))
         assert calls == []
-        assert not any("Not validated" in x for x in row["details"]), row
+        assert not any("Not checked by amtool" in x for x in row["details"]), row

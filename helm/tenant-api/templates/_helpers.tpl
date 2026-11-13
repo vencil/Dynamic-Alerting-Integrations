@@ -383,6 +383,52 @@ exec:
 {{- end }}
 
 {{/*
+recipe-preview container (ADR-027 §5, #1040): fixed in-pod paths and image.
+
+  socketDir   the emptyDir holding preview.sock. Mounted ONLY by the
+              recipe-preview container (which binds the socket) and tenant-api
+              (which dials it, TA_RECIPE_PREVIEW_SOCKET): the service's trust
+              boundary is that mount plus the socket's 0600 mode plus a
+              same-uid peer (SO_PEERCRED).
+  image       the tag follows generator.image.tag unless recipePreview.image.tag
+              is set: one `tools/v*` release builds both images, so the one
+              pin bump_docs.py --tools rewrites moves both. A digest is never
+              inherited (the images differ).
+*/}}
+{{- define "tenant-api.recipePreviewSocketDir" -}}/run/recipe-preview{{- end }}
+{{- define "tenant-api.recipePreviewSocketPath" -}}{{ include "tenant-api.recipePreviewSocketDir" . }}/preview.sock{{- end }}
+{{- /* ⛔ Only the TAG is a helper; deployment.yaml writes the repository
+     and digest as .Values reads, so check_image_pin_capability.py's strip
+     path can attribute the container to the recipePreview.image pin. */ -}}
+{{- define "tenant-api.recipePreviewTag" -}}
+{{- $tag := .Values.recipePreview.image.tag | default .Values.generator.image.tag -}}
+{{- if not $tag -}}
+{{- fail "recipePreview.image.tag is empty and so is generator.image.tag, which it follows: set one (#1040)." -}}
+{{- end -}}
+{{- $tag -}}
+{{- end }}
+
+{{/*
+The recipe-preview container's exec probe: GET /v1/status over the Unix socket
+with the image's python, passing on a 200. The service is Python's
+http.server, which answers HTTP/1.0, so the check reads the status code, not
+the version. Shared by the probes so they cannot drift.
+*/}}
+{{- define "tenant-api.recipePreviewProbe" -}}
+exec:
+  command:
+    - python
+    - -c
+    - |
+      import socket, sys
+      s = socket.socket(socket.AF_UNIX)
+      s.settimeout(4)
+      s.connect("{{ include "tenant-api.recipePreviewSocketPath" . }}")
+      s.sendall(b"GET /v1/status HTTP/1.0\r\n\r\n")
+      sys.exit(0 if s.recv(64).split()[1:2] == [b"200"] else 1)
+{{- end }}
+
+{{/*
 The port the tenant-api container listens on: 8080. Every place the chart
 names that port reads it here — the container port, its probes, the Service's
 targetPort, the NetworkPolicy, the oauth2-proxy TCP upstream and both

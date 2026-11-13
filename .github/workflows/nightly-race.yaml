@@ -152,17 +152,20 @@ jobs:
       # 11-04..11-11 every leg logged "Cache not found" for the previous
       # night's key, so they only cost cache storage. PR CI's entry is read on
       # every PR and restores on every leg (dispatch 43213073031: 8/8 hits;
-      # legs summed 4113 s -> 3906 s). It does NOT warm the generator tools
-      # tenant-api's real-generator tests build in-test (generator_real_test.go,
-      # ~200 s on their first run either way): that entry lacks da-read's build.
-      - name: Restore Go modules and build cache (PR CI's key)
+      # legs summed 4113 s -> 3906 s). The shared key did NOT warm the
+      # generator tools tenant-api's real-generator tests build in-test
+      # (generator_real_test.go, ~200 s on their first run): it lacked da-read's
+      # build. So each PR CI Go job saves its own `<os>-go-<module>-<hash>` and
+      # each leg restores its module's (#3541); a guard test pins the names.
+      - name: Restore Go modules and build cache (PR CI's key for this module)
         uses: actions/cache/restore@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
+          key: ${{ runner.os }}-go-${{ matrix.module }}-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.module }}-
             ${{ runner.os }}-go-
 
       # -json so the failure is machine-readable. `cmd/go` feeds the test

@@ -60,7 +60,7 @@ var errNotInReading = errors.New("the text writes it, but the loader's reading h
 func readAlertmanager(data []byte) ([]byte, error) {
 	extra, err := laterDocumentWithContent(data)
 	if err != nil {
-		return nil, fmt.Errorf("refused by Alertmanager's config loader: %v", err)
+		return nil, loaderRefusal(err)
 	}
 	if extra > 0 {
 		return nil, fmt.Errorf("YAML document %d of the file has content; Alertmanager reads only "+
@@ -68,7 +68,7 @@ func readAlertmanager(data []byte) ([]byte, error) {
 	}
 	cfg, err := config.Load(string(data))
 	if err != nil {
-		return nil, fmt.Errorf("refused by Alertmanager's config loader: %v", err)
+		return nil, loaderRefusal(err)
 	}
 	reading, err := marshalWithSecrets(cfg)
 	if err != nil {
@@ -89,6 +89,46 @@ func readAlertmanager(data []byte) ([]byte, error) {
 	}
 	w.out.WriteString(`]}`)
 	return w.out.Bytes(), nil
+}
+
+// loaderRefusal is the one spelling of "Alertmanager's loader refused the
+// text" (#3689). yaml.v2 quotes the value it could not decode into each
+// *yamlv2.TypeError entry (line 61: cannot unmarshal !!str `hunter2` into
+// bool) and the refused field may be a credential (an `http_config`
+// password written where a bool belongs), so the entries are reprinted
+// without it (line 61: cannot unmarshal !!str into bool). The line, the
+// tag and the Go type say what is wrong; the value is the operator's own.
+func loaderRefusal(err error) error {
+	var te *yamlv2.TypeError
+	if errors.As(err, &te) {
+		redacted := make([]string, len(te.Errors))
+		for i, e := range te.Errors {
+			redacted[i] = withoutQuotedValue(e)
+		}
+		err = &yamlv2.TypeError{Errors: redacted}
+	}
+	return fmt.Errorf("refused by Alertmanager's config loader: %v", err)
+}
+
+// withoutQuotedValue drops the backquoted value yaml.v2's decoder writes between
+// the tag and "into" of one TypeError entry (decode.go's terror:
+// "line %d: cannot unmarshal %s%s into %s", the middle verb " `value`", or
+// " `first7...`" past 10 bytes, empty for a sequence or mapping). The value
+// is the operator's text and may hold a backtick or " into "; the Go type
+// after the last "` into " never holds a backtick, so that is where it ends.
+func withoutQuotedValue(entry string) string {
+	const verb = "cannot unmarshal "
+	i := strings.Index(entry, verb)
+	if i < 0 {
+		return entry
+	}
+	rest := entry[i+len(verb):]
+	open := strings.Index(rest, " `")
+	end := strings.LastIndex(rest, "` into ")
+	if open < 0 || end < open {
+		return entry
+	}
+	return entry[:i+len(verb)] + rest[:open] + rest[end+1:]
 }
 
 // Secrets are printed as their values: the caller copies them (a receiver's

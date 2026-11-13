@@ -16,10 +16,10 @@ parent: architecture-and-design.md
 >
 > **相關**：[ADR-024 自訂告警](../adr/024-version-aware-threshold-via-dimensional-label.md)，追蹤 issue [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657)。recipe 是租戶在 portal 自助定義的告警規則；本文設計的是「填完當場確認它會不會觸發」的預覽。
 >
-> 本文的設計已實作：服務在 `components/recipe-preview/`，已有 `helm/recipe-preview` chart。portal 原本經 da-portal 的反向代理（`portal.recipePreviewUrl`）呼叫它；那條路已隨 [ADR-027 §5](../adr/027-tenant-api-caller-identity.md) 移除，改為移進 tenant-api 的 pod、經 `/api/` 下的路由呼叫（進行中）。目前先上 try-local；正式環境部署延後（映像與 `recipe-preview/v*` tag 尚未發布）。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
+> 本文的設計已實作：服務在 `components/recipe-preview/`。portal 原本經 da-portal 的反向代理（`portal.recipePreviewUrl`）呼叫它；那條路已隨 [ADR-027 §5](../adr/027-tenant-api-caller-identity.md) 移除。現在它是 tenant-api pod 裡的容器（tenant-api chart 的 `recipePreview`，預設開啟），portal 呼叫 `POST /api/v1/tenants/{id}/recipe-preview`，tenant-api 授權後經 pod 內 Unix socket 轉給它；獨立的 `helm/recipe-preview` chart 已刪除。映像隨 `tools/v*` 建置，下一個 tools release 才有第一個映像，在那之前 try-local 是唯一能跑的地方。本文聚焦兩個決策：**後端用獨立服務**、**合成輸入怎麼餵**。
 > - **已定案**：後端形態（獨立 Python 服務、先上 try-local）、API 契約、生產護欄。
 > - **首版範圍**：threshold 類 recipe（`>` `>=` `<` `<=` `==`）+ absence（缺口偵測——合成序列「不發該指標」即缺口）。
-> - **延後**：正式環境部署、其餘 recipe 型別、歷史回測（各項觸發條件見第 9 節）。
+> - **延後**：其餘 recipe 型別、歷史回測（各項觸發條件見第 9 節）。正式環境部署原本也在這裡，已隨 #1040 落地。
 
 ## 1. 要解決的問題
 
@@ -47,13 +47,13 @@ parent: architecture-and-design.md
 
 ## 3. 預覽後端：一支獨立的 Python 服務（先上 try-local）
 
-**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）；正式環境部署延後。
+**決策**：預覽後端是一支**獨立的 Python 服務**，內含編譯器 + `promtool`，先放進 try-local（本機 docker-compose 試用環境）。當初正式環境部署延後；後來已隨 #1040 落地，形態是 tenant-api pod 裡的容器（見本文開頭）。
 
 為什麼是獨立服務，而不是塞進現有的 tenant-api：
 
 | 方案 | 好處 | 代價 |
 |---|---|---|
-| **A. 獨立 Python 服務（採用）** | 同為 Python，可**直接呼叫編譯器**（見 5.3），零跨語言重寫；`promtool` 不必塞進正式環境的核心 image；萬一評估卡住，影響只侷限在這支服務 | 要自己的 nginx 路由 + 認證；正式環境是一條新部署 → 因此先只上 try-local |
+| **A. 獨立 Python 服務（採用）** | 同為 Python，可**直接呼叫編譯器**（見 5.3），零跨語言重寫；`promtool` 不必塞進正式環境的核心 image；萬一評估卡住，影響只侷限在這支服務 | 當初：要自己的 nginx 路由 + 認證、正式環境是一條新部署 → 先只上 try-local。現在：不需要自己的路由與認證——它是 tenant-api pod 裡的容器，tenant-api 授權後經 pod 內 Unix socket 呼叫（#1040） |
 | B. 擴充現有 tenant-api（Go 呼叫外部程式） | 重用 tenant-api 既有的路由 + 認證；正式環境一次到位 | image 變肥；把「評估」耦進「寫入」的關鍵路徑；長駐服務裡反覆開子程序有併發風險 |
 
 選 A 一句話：平台一向把正式環境保持精簡、把故障影響侷限化，而預覽近期的使用者就在本機試用階段——沒必要為此把評估耦進正式環境的寫入路徑。（A／B 完整比較見 [#657](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/657) 討論串。）
@@ -189,7 +189,6 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 
 | 延後項 | 觸發條件 |
 |---|---|
-| 正式環境部署預覽服務 | 真正的正式客戶在 portal 寫 recipe 且需要預覽（本機試用不夠時）。屆時重評部署形態 |
 | 其餘 recipe 型別 | 領域專家／租戶實際需要這些型別的預覽 |
 | 歷史回測（「過去 24h 我的真實資料觸發過幾次」） | recipe 的 recording rule 落地、`for:` 語意就緒 |
 | rule-pack 影響矩陣 CI（改 rule-pack 前評估對全租戶的影響） | rule-pack 變更造成預期外的全租戶告警漂移，或需要合併前的影響評估。注意：預覽用合成輸入，**不需要**這條的快照資料 |

@@ -17,8 +17,8 @@ import (
 // `da-read prometheus-rules`: a Prometheus rule file as Prometheus' rule
 // manager loads it, keeping only the keys the text writes (ADR-036 §12).
 //
-// The file goes to rulefmt.Parse with the arguments Prometheus v3.15 passes
-// when it loads rule files (github.com/prometheus/prometheus v0.315.0):
+// The file goes to rulefmt.Parse with the arguments Prometheus v3.16 passes
+// when it loads rule files (github.com/prometheus/prometheus v0.316.0):
 //
 //   - rules/manager.go Manager.Update → LoadGroups(..., ignoreUnknownFields
 //     false, ...) → FileLoader.Load → rulefmt.ParseFile → rulefmt.Parse: an
@@ -31,10 +31,12 @@ import (
 //     UTF-8: a deployment whose prometheus.yml asks for `legacy` judges label
 //     names more strictly than this;
 //   - the PromQL parser is cmd/prometheus/main.go's
-//     parser.NewParser(cfg.parserOpts): parser.Options{ExperimentalDurationExpr:
-//     true} with no feature flag (the deployed Prometheus,
+//     parser.NewParser(cfg.parserOpts): the zero parser.Options with no
+//     feature flag (the deployed Prometheus,
 //     k8s/03-monitoring/deployment-prometheus.yaml, passes no
 //     --enable-feature), so experimental PromQL functions are refused.
+//     Duration expressions need no option: v3.16 made them permanent and
+//     removed parser.Options.ExperimentalDurationExpr.
 //
 // rulefmt decodes with go.yaml.in/yaml/v3, so the walk (yamlwalk.go) spells
 // values with it and composes `<<` merges by v3's rules (written.go).
@@ -47,11 +49,11 @@ import (
 // formatV3 spells values as rulefmt's YAML library does.
 var formatV3 = yamlFormat{marshal: yaml.Marshal, unmarshal: yaml.Unmarshal}
 
-// ruleNameValidation and ruleParser are what Prometheus v3.15 loads rule
+// ruleNameValidation and ruleParser are what Prometheus v3.16 loads rule
 // files with when nothing overrides them (see above).
 var (
 	ruleNameValidation = model.UTF8Validation
-	ruleParser         = parser.NewParser(parser.Options{ExperimentalDurationExpr: true})
+	ruleParser         = parser.NewParser(parser.Options{})
 )
 
 // readRuleFile returns the rule file *data* as Prometheus loads it: one JSON

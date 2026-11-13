@@ -165,15 +165,6 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
             "changing what the first published da-portal .tgz contains.",
         ),
     },
-    "helm/recipe-preview": {
-        "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
-        "values.yaml": (SHIP, "the chart's default values"),
-        ".helmignore": (
-            SHIP,
-            "helm's own packing control file; added in #1018 to keep the Pod "
-            "Security gate's ci/ value sets out of the package.",
-        ),
-    },
     "helm/tenant-api": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
         "values.yaml": (SHIP, "the chart's default values"),

@@ -422,9 +422,12 @@ jobs:
               # `test_scanned_portal_tree_matches_the_vitest_include` pins the
               # two together so the entry cannot rot into decoration.
               - "tools/portal/vitest.config.ts"
-            # Portal Tests: Vitest + esbuild build verification + committed-dist
-            # freshness + the RBAC wizard drift byte-clamp. Runs when portal
-            # source or its committed dist change, AND when the wizard testdata
+              # tests/lint/test_portal_dist_not_tracked.py reads build.mjs's
+              # DIST_DIR to bind its dist path to where the build writes (#3738).
+              - "tools/portal/build.mjs"
+            # Portal Tests: Vitest + esbuild build verification + bundle-size
+            # budget + the RBAC wizard drift byte-clamp. Runs when portal
+            # source changes (dist is build output, not in git — #3738), AND when the wizard testdata
             # fixtures change: those fixtures live under components/tenant-api/**
             # but the byte-clamp that binds them to the JS generator is a Vitest,
             # so a hand-edited fixture must run THIS leg or the JS end of the
@@ -463,7 +466,6 @@ jobs:
             # it was first broken.
             portal:
               - "tools/portal/**"
-              - "docs/assets/dist/**"
               - "docs/assets/platform-data.json"
               # The Config Template Gallery's shipped templates. A Vitest reads
               # them to assert every counter-example key a one-click-copy
@@ -876,7 +878,7 @@ jobs:
           # diff base; PR_BODY env (set on this job) carries the bypass tag.
           pre-commit run helm-values-secrets-check --all-files
           # Cross-ns service-URL consistency (#1004): tenant-api pins its
-          # dedicated `tenant-api` ns, recipe-preview pins `monitoring`, in
+          # dedicated `tenant-api` ns in
           # every Helm values / raw k8s manifest / portal nginx / try-local
           # URL. Wired unfiltered here (like the lints above) so a PR that
           # misses the hook's path filter still can't land namespace drift.
@@ -2412,16 +2414,18 @@ jobs:
 
       - name: Cache Go modules + build cache
         # Module cache (~/go/pkg/mod) is the primary key; build cache rides
-        # along. Key is shared with the tenant-api split job (same go.sum
-        # hash) so both restore the same warm cache.
+        # along. One key per module (#3541): this job and the tenant-api job
+        # build different things, and a shared key kept whichever saved first.
+        # The module name is plan_race_shards.MODULES' — nightly-race restores
+        # `<os>-go-<module>-<hash>` per leg; a guard test pins both sides.
         uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
+          key: ${{ runner.os }}-go-threshold-exporter-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-go-threshold-exporter-
             ${{ runner.os }}-go-
 
       # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
@@ -2491,15 +2495,18 @@ jobs:
         # path expanded to include ~/.cache/go-build so `go install swag@latest`
         # below benefits from a warm build cache on cache-hit runs (saves ~5-8s
         # on the swag CLI install step). Module cache (~/go/pkg/mod) is the
-        # primary key; build cache rides along.
+        # primary key; build cache rides along. Own per-module key (#3541) so
+        # what this job's tests build in-test (generator_real_test.go builds
+        # da-guard, da-crdecode and da-read) is what gets saved, and nightly
+        # race's tenant-api legs restore it instead of rebuilding cold.
         uses: actions/cache@v5
         with:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
+          key: ${{ runner.os }}-go-tenant-api-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-go-tenant-api-
             ${{ runner.os }}-go-
 
       # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
@@ -3038,7 +3045,7 @@ jobs:
     name: Portal Tests Run
     runs-on: ubuntu-24.04
     # Least-privilege token (CodeQL: workflow-missing-permissions). Checkout +
-    # local npm build/test/dist-diff only — no writes, no PR/API access.
+    # local npm build/test only — no writes, no PR/API access.
     permissions:
       contents: read
     needs: detect-changes
@@ -3049,11 +3056,10 @@ jobs:
 
       - name: Set up Node.js 24
         # Pinned to Node 24 to match the dev container (where `make
-        # portal-build` produces the committed dist). Keeping CI and the
-        # canonical build env on the SAME major removes node/npm version as
-        # a variable in the dist-reproducibility gate below — a fresh
-        # `npm ci` under a different npm major can resolve a transitive dep
-        # differently and re-hash a shared chunk, false-redding the gate.
+        # portal-build` runs locally) and the other consumers that build the
+        # bundles (Pages deploy, da-portal image, smoke run). The bundles are
+        # not committed (#3738); each of those builds them from the same
+        # source and lockfile this leg builds and tests.
         uses: actions/setup-node@v6
         with:
           node-version: '24'
@@ -3067,27 +3073,6 @@ jobs:
       - name: Verify portal build (manifest may be empty)
         working-directory: tools/portal
         run: npm run build
-
-      - name: Verify committed dist matches fresh build (no stale dist)
-        # Guard for the COMMITTED copy of docs/assets/dist/ (TRK-239 / #444).
-        # Since #3738 production no longer loads that copy: the Pages deploy,
-        # the da-portal image and the smoke run each build the bundles from
-        # tools/portal/ themselves. The copy is still in git until the
-        # follow-up PR removes it, and this step keeps it equal to a fresh
-        # build so nobody reading or serving it locally gets a stale bundle.
-        # It cannot close the merge-time window (#3738): main can move after
-        # this ran on the merge ref. build.mjs cleans + re-emits the dir, so
-        # any drift (modified bundle, renamed chunk, orphan) shows as a staged
-        # diff here. Build is byte-reproducible across the dev container and CI
-        # (esbuild 0.28.2 linux-x64, pinned via package-lock) because both run
-        # the SAME Node major (24) — so this gate does not false-red.
-        run: |
-          git add -A docs/assets/dist
-          if ! git diff --cached --quiet -- docs/assets/dist; then
-            echo "::error::docs/assets/dist/ is out of sync with source. Run 'make portal-build' in the dev container and commit the rebuilt bundles."
-            git diff --cached --stat -- docs/assets/dist
-            exit 1
-          fi
 
       - name: Enforce portal bundle size budget (TRK-232a)
         # Per-tool 100 KB / shared chunk 200 KB / total 4 MB.
@@ -3201,8 +3186,8 @@ jobs:
         working-directory: tests/e2e
         run: npx playwright install chromium
 
-      # #3738: the portal server below serves docs/assets/dist/, so build it
-      # from source rather than testing the committed copy. tools/portal/** is
+      # #3738: the portal server below serves docs/assets/dist/, which is
+      # build output and not in git, so build it from source. tools/portal/** is
       # already in the `e2e` filter that gates this job. Pinned by
       # tests/ops/test_portal_dist_consumers_build.py (before the server starts).
       - name: Install portal build dependencies

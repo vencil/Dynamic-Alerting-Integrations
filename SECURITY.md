@@ -2,14 +2,13 @@
 
 ## 支援的版本
 
-本專案採六線版號（`v*` / `exporter/v*` / `tools/v*` / `portal/v*` / `recipe-preview/v*` / `tenant-api/v*`）。
+本專案分多條發布線，各自打 tag：清單以 [`release.yaml`](.github/workflows/release.yaml) 的 `on.push.tags` 為準，另加只作 Release 錨點的平台 tag `v*`。本檔刻意不列舉，以免與實際觸發條件脫節。
 
 **每條線只有最新的已發布 tag 受安全支援**，更早的版本不回補安全修補。各線目前的最新版本見
 [Releases](https://github.com/vencil/Dynamic-Alerting-Integrations/releases)——本檔刻意不複製版號，
 以免它腐爛成一份與實際發布不符的清單。
 
 ⚠️ 判準一律以 Releases 為準：**某條線在 Releases 上沒有任何版本，就代表它目前沒有受支援的已發布版本**。
-（`recipe-preview/v*` 是隨平台 release 重打的「同步升」線，不走獨立 cadence。）
 
 ## 回報漏洞
 
@@ -61,7 +60,7 @@ advisory only after the maintainer explicitly accepts it. Submitting a report ne
 Please include the affected component and version/commit, reproduction steps or a minimal PoC, and the impact
 you actually observed. If part of your report is inferred rather than measured, say so explicitly.
 
-**Supported versions:** only the latest released tag on each of the six release lines is supported; see
+**Supported versions:** only the latest released tag on each release line is supported (the lines are the `on.push.tags` of `.github/workflows/release.yaml`, plus the platform tag `v*`); see
 [Releases](https://github.com/vencil/Dynamic-Alerting-Integrations/releases). A line with no entry in
 Releases has no supported released version.
 

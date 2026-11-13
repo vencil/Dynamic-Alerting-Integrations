@@ -98,7 +98,8 @@ import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d)
 import _lib_exitcodes  # noqa: E402
 import _lib_io  # noqa: E402
 import _lib_parse_cache  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report, die_caller_error  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, InputChanged, Report, die_caller_error)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 import _lib_input  # noqa: E402
 from _lib_validation import detect_cli_lang, is_valid_tenant_id  # noqa: E402
@@ -550,8 +551,14 @@ class Plan(NamedTuple):
 
 
 def _read_text(path: str) -> str:
-    with open(path, encoding="utf-8", newline="") as fh:
-        return fh.read()
+    """A file of --config-dir, read after its judgement: gone since is the
+    tree changed — a refusal naming the flag (#3724), not a crash."""
+    try:
+        with open(path, encoding="utf-8", newline="") as fh:
+            return fh.read()
+    except OSError as exc:
+        _lib_parse_cache.refuse_gone(path, exc)
+        raise
 
 
 def _lines(config_dir: str, nodes: dict, by_file: dict, notes: list[str]
@@ -644,6 +651,7 @@ def _plan(config_dir: str, reader: Any, items: list[Item], raws: list[RawReceive
         try:
             still = _still_written_out(config_dir, reader, rewritten, final)
         except ParseTreeError as exc:
+            _lib_parse_cache.refuse_changed(config_dir, str(exc))  # #3724
             notes.append(f"the rewrite could not be read back: {_refusal_text(exc)}")
             still = [it for it in final if it.file in rewritten and it.entry is not None]
         for f in sorted({it.file for it in still}):
@@ -724,6 +732,14 @@ def _judge_tree(root: str, policy: Any) -> Optional[tuple[set, list]]:
     return set(tree.routing_configs), warnings
 
 
+def _copy_failure(exc: BaseException) -> str:
+    """One line for a failed ``copytree``: the first file it names."""
+    if isinstance(exc, shutil.Error) and exc.args and exc.args[0]:
+        src, _dst, why = exc.args[0][0]
+        return f"{src}: {why}"
+    return str(exc)
+
+
 def _still_refused(config_dir: str, rewritten: dict[str, str], policy: Any) -> list[dict]:
     """What the rewrite leaves refused, judged by the generator on a copy of
     the tree with *rewritten* in place, under *policy*: its Secret-reference
@@ -739,7 +755,13 @@ def _still_refused(config_dir: str, rewritten: dict[str, str], policy: Any) -> l
     before = _judge_tree(config_dir, policy)
     with tempfile.TemporaryDirectory(prefix="da-migrate-credentials-") as tmp:
         copy_root = os.path.join(tmp, "conf.d")
-        shutil.copytree(config_dir, copy_root, symlinks=True)
+        try:
+            shutil.copytree(config_dir, copy_root, symlinks=True)
+        except (OSError, shutil.Error) as exc:
+            # #3724: --config-dir changed since its judgement (gone, a file
+            # removed): a refusal naming the flag, never a crash.
+            _lib_parse_cache.refuse_changed(config_dir, f"copying it: {_copy_failure(exc)}")
+            raise
         for rel, text in rewritten.items():
             target = os.path.join(copy_root, rel)
             with open(target, "w", encoding="utf-8", newline="") as fh:
@@ -817,6 +839,11 @@ def _write_confd(config_dir: str, entries: list[dict], manifests: list[dict]) ->
     shown = ", ".join(_lib_io.safe_label(m["path"]) for m in manifests) or "(none)"
     try:
         _lib_confedit.write_all(config_dir, entries)
+    except InputChanged as exc:
+        # #3724: --config-dir changed since its judgement; the batch wrote
+        # nothing (a part-way write is PartialWrite) — say what is on disk.
+        raise InputChanged(f"{exc}; conf.d was not changed. "
+                           f"The Secret manifests were written: {shown}") from exc
     except _lib_confedit.PartialWrite as exc:
         left = [*exc.written, *exc.maybe_written]
         _die(f"ERROR: the conf.d write stopped part-way ({_refusal_text(exc.cause)}): "
@@ -833,14 +860,18 @@ def _verify_written(config_dir: str, reader: Any, files: list[str], items: list[
     (``_still_written_out``). A place still written out — the file changed
     between the plan and the write, say — is rc 2 naming the places (never
     their values) and the manifests written."""
-    texts = {f: _read_text(os.path.join(config_dir, f)) for f in files}
+    shown = ", ".join(_lib_io.safe_label(m["path"]) for m in manifests) or "(none)"
     try:
+        texts = {f: _read_text(os.path.join(config_dir, f)) for f in files}
         still = _still_written_out(config_dir, reader, texts, items)
+    except InputChanged as exc:
+        # #3724: changed since its judgement — after the write: say so.
+        raise InputChanged(f"{exc}; conf.d was written before that. "
+                           f"The Secret manifests were written: {shown}") from exc
     except ParseTreeError as exc:
         _die(f"ERROR: conf.d was written, but it could not be read back "
              f"({_refusal_text(exc)}): check it before relying on it")
     if still:
-        shown = ", ".join(_lib_io.safe_label(m["path"]) for m in manifests) or "(none)"
         places = "; ".join(f"{it.file}: {_render(_safe_parts(it))}" for it in still)
         _die(f"ERROR: conf.d was written, but these places are still written out: "
              f"{places}. The Secret manifests were written: {shown}")
