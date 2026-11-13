@@ -170,7 +170,7 @@ TD-030z 之後 portal 工具一律以 esbuild ESM dist-bundle 載入（`docs/ass
 - **測試陷阱**: 修改 `_common/` 或 portal-shared 會連動影響三個 tabs，需完整迴歸測試；單獨改某 tab 風險較低
 - **module-eval throw 偵測**: ESM bundle 評估期 throw 不觸發 `script.onerror`（只 fire window `error` 事件，`onload` 照常）→ jsx-loader 對此顯示 error banner；e2e smoke（`portal-tool-smoke.ts`）斷言無 same-origin pageerror + `#root` 非空。此防線建立前，這類失敗完全靜默：CI 綠、prod 空白頁（self-service-portal 曾因 tab 在 module scope destructure 一個從未被 import 的 `window.__portalShared` 而整包載入即 throw，smoke 三項檢查全過）
 
-修改任何 portal 檔案後 `make portal-build` 重建 dist（canonical env：dev container；Windows host build 與 CI Linux byte-compare 不合），並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具——SOT 是 `docs/assets/tool-registry.yaml`（`scripts/tools/dx/sync_tool_registry.py` 同步進 CUSTOM_FLOW_MAP），registry ↔ CUSTOM_FLOW_MAP 的 bare-key 對應自 #828 起由 `lint_tool_consistency.py` 機械驗證；map key 僅 `?flow=custom` 白名單必需，單一 component 模式對未知 bare-key 有 fallback 直接推 dist 名。
+修改任何 portal 檔案後，要在本機看結果就 `make portal-build` 重建 dist（dist 不進 git，只 commit source；各消費端自己 build，#3738），並確認 jsx-loader 的 CUSTOM_FLOW_MAP 已同步新增工具——SOT 是 `docs/assets/tool-registry.yaml`（`scripts/tools/dx/sync_tool_registry.py` 同步進 CUSTOM_FLOW_MAP），registry ↔ CUSTOM_FLOW_MAP 的 bare-key 對應自 #828 起由 `lint_tool_consistency.py` 機械驗證；map key 僅 `?flow=custom` 白名單必需，單一 component 模式對未知 bare-key 有 fallback 直接推 dist 名。
 
 ## CI Matrix × Snapshot Testing（Phase .d）
 
