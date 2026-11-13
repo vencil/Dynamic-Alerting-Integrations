@@ -766,11 +766,11 @@ version-check: $(DA_READ_PREREQ) ## 檢查版號一致性 + 計數一致性 (CI 
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs lint-image-caveats init-chart-pin-published playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
+pre-tag: version-check lint-docs lint-image-caveats init-chart-pin-published playbook-freshness-ll changelog-fragments-consumed draft-advisory-check advisory-patched-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
 	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  init-chart-pin ✅  playbook-freshness (advisory — read its output above; it never blocks)"
-	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Docker build (8 self-built images) ✅  Trivy CVE scan (informational)"
+	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Advisory patched versions ✅  Docker build (8 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
 	@echo "============================================================"
@@ -846,6 +846,19 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 	else \
 		echo "✅ draft-advisory-check: 無未發布 draft advisory"; \
 	fi
+
+# --- #1269: every advisory row's patched_versions must exist in its version space ---
+# GitHub validates neither version field for ecosystem `other`, so a row can
+# name a version that was never published, or stay empty after the fix
+# shipped. Runs WITHOUT regard to ADVISORY_ACK: that acknowledges "drafts are
+# not published now", not "their rows may be wrong". Fail-closed both ways
+# (rc 2 when it cannot ask). ⚠️ It cannot fail the release that CREATES the
+# fixed version (not published yet at pre-tag); a forgotten fill fails the
+# next pre-tag. Needs gh, network to ghcr.io, and a non-shallow clone for
+# git-only chart rows.
+.PHONY: advisory-patched-check
+advisory-patched-check: ## ⛔ 擋住「advisory 的 patched 版號不存在，或修正版已發布卻沒回填」（#1269）
+	@python3 -X utf8 scripts/tools/dx/check_advisory_patched_versions.py
 
 # --- #474 Layer 2: local pre-tag Docker build + Trivy gate ---
 # release.yaml builds 5 of these 8 images at tag push; building them locally in
