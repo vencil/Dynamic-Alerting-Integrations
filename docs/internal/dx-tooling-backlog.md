@@ -347,7 +347,7 @@ Harness Audit R2 發現 33 支 lint 工具中 18 支沒有對應 `test_*.py`。�
 |--------|------|------|------|
 | P0 | `validate_docs_versions.py` | 1,089 | 最大 lint 工具，邏輯複雜 |
 | P0 | `check_head_blob_hygiene.py` | 447 | 安全底線工具 |
-| P1 | `lint_jsx_babel.py` | 302 | auto hook，Babel 相容性 |
+| P1 | `lint_jsx_babel.py`（#3669 起由 `lint_jsx_syntax.py`／`check_jsx_linecount.py` 取代） | 302 | auto hook，Babel 相容性 |
 | P1 | `check_bilingual_structure.py` | 371 | auto hook |
 | P1 | `check_jsx_i18n.py` | 291 | auto hook |
 | P1 | `check_metric_dictionary.py` | 233 | auto hook |

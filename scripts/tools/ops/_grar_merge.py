@@ -256,6 +256,10 @@ FINDING_KINDS: dict[str, str] = {
     "conflicting_override_matcher":
         "An override with both alertname and metric_group; it is not "
         "rendered.",
+    "unknown_override_metric_group":
+        "An override's metric_group is the group of no shipped rule pack "
+        "alert (#3692); it routes nothing unless the tenant's own rules carry "
+        "that group. Rendered; advisory.",
     "duplicate_override_matcher":
         "An override with the same matcher as an earlier one; the earlier "
         "one catches those alerts first, so it never takes effect.",

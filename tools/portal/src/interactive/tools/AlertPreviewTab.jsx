@@ -11,6 +11,7 @@ import React, { useState, useMemo, useCallback, useEffect } from 'react';
 // the producer never ran.
 import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
 import { parseYaml } from './_common/validation/yaml-parser.js';
+import { fetchPageData } from './_common/api/api-fetch.js';
 import { generateSampleYaml, simulateAlerts } from './_common/sim/alert-engine.js';
 import { RulePackSelector } from './portal-shared.jsx';
 
@@ -59,7 +60,7 @@ function AlertPreviewTab() {
 
   // Load recommendation data on mount
   useEffect(() => {
-    fetch('recommendation-data.json')
+    fetchPageData('recommendation-data.json')
       .then(res => res.json())
       .then(data => setRecData(data))
       .catch(err => console.error('Failed to load recommendation data:', err));

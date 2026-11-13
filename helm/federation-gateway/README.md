@@ -301,6 +301,9 @@ exposed, 1 = one ingress, …).
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
 | `networkPolicy.scrapeNamespaceLabel` | `kubernetes.io/metadata.name: monitoring` | Namespace label selector for the Prometheus that scrapes `auditLog.metrics.port` (where Prometheus runs, not this chart; any pod there, so a kube-prometheus-stack Prometheus in that namespace is admitted). `null` = any namespace (`namespaceSelector: {}`); `{}` does not clear it — Helm merges maps |
+| `networkPolicy.restrictEgress` | `true` | Egress only to DNS and TCP `upstream.port` in the upstream's namespace. Set `false` only to supply your own egress policy (e.g. an upstream outside the cluster) |
+| `networkPolicy.upstreamNamespace` | `""` | Namespace of the upstream for that egress rule. Empty = read from `upstream.host` (`<svc>` = this release's namespace, `<svc>.<ns>.svc[.cluster.local]` = `<ns>`, lower-cased); any other host form (an IP, an external name) fails the render |
+| `networkPolicy.upstreamPort` | `""` | The upstream POD port for that egress rule. Empty = `upstream.port`. Set it when the upstream Service maps one port to another |
 | `serviceMonitor.enabled` | `false` | Prometheus Operator only: a ServiceMonitor for the metrics port (needs `auditLog.enabled`), no `jobLabel`; `serviceMonitor.labels` defaults to `release: kube-prometheus-stack` |
 | `auditLog.enabled` | `true` | Master switch for the metrics pipeline (audit-metrics + logrotate sidecars, `emptyDir` mirror, scrape). `false` keeps only the stdout audit log |
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |

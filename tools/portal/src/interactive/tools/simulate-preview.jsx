@@ -14,6 +14,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 // esbuild bundles them natively (TD-030z retired the jsx-loader transform).
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import { Loading } from './_common/components/Loading.jsx';
+import { apiFetch } from './_common/api/api-fetch.js';
 
 /* ── i18n + repo helpers ───────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -138,7 +139,7 @@ function SimulatePreview() {
 
       let resp;
       try {
-        resp = await fetch('/api/v1/tenants/simulate', {
+        resp = await apiFetch('/api/v1/tenants/simulate', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),

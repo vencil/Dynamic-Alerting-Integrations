@@ -981,21 +981,26 @@ repos:
         files: ^(components/|docs/|scripts/tools/_lib_constants\.py|scripts/tools/dx/sync_schema\.py|tools/portal/src/interactive/tools/_common/data/reserved-keys\.json)
         stages: [manual]
 
-      - id: jsx-babel-check
-        name: JSX Babel parse + static + line-count gate
-        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
+      - id: jsx-syntax-check
+        name: Portal JSX/JS parse with the build's esbuild
+        entry: python3 -X utf8 scripts/tools/lint/lint_jsx_syntax.py --ci
         language: python
         pass_filenames: false
-        files: ^tools/portal/src/(interactive/tools|getting-started)/.*\.jsx$
-        # One hook (#3611 B2): it used to be two — this one with `--ci` and
-        # jsx-babel-check-strict-linecount with `--ci --strict-linecount`,
-        # the same files:, a strict superset — so every commit ran Babel
-        # twice. `--strict-linecount` makes soft-cap (>1500 lines) fatal
-        # too: 0 soft-cap warnings since PR-2d (#153), this keeps it there.
-        # Pre-existing `style={{}}` warnings stay non-fatal (granular flag,
-        # NOT `--strict`; PR #160). Needs node: without it, or without an
-        # installable @babel/standalone, the hook exits 2, never a silent
-        # skip (#3611).
+        files: ^(tools/portal/(src|entries)/.*\.jsx?|tools/portal/(esbuild-shared\.mjs|build\.mjs|package\.json|package-lock\.json)|scripts/tools/lint/lint_jsx_syntax\.py)$
+        # #3669: parses every tools/portal/src file with the lockfile's esbuild
+        # and esbuild-shared.mjs's transform — what build.mjs bundles with.
+        # Needs node and tools/portal/node_modules (`make portal-deps`): without
+        # either the hook exits 2, never a silent skip. Replaces jsx-babel-check,
+        # whose @babel/standalone the browser no longer runs.
+
+      - id: jsx-linecount-check
+        name: Portal JSX line-count caps (soft 1500 / hard 2500)
+        entry: python3 -X utf8 scripts/tools/lint/check_jsx_linecount.py --ci --strict
+        language: python
+        pass_filenames: false
+        files: ^(tools/portal/src/(interactive/tools|getting-started)/.*\.jsx|scripts/tools/lint/check_jsx_linecount\.py)$
+        # #152 / #153: 0 soft-cap files since PR-2d; `--strict` keeps it there.
+        # Pure Python (#3669): no node, so no toolchain gap costs it its verdict.
 
       - id: dev-rules-enforcement-check
         name: dev-rules.md ↔ pre-commit-config.yaml drift check
@@ -1528,7 +1533,7 @@ repos:
         name: "#1231: forbid re-introducing the retired mysql_cpu threshold key as a live value"
         entry: '\bmysql_[c]pu(_critical)?["'']?\s*:\s*(["'']?[0-9.]|["'']?disable|\{|\s*$)|tenant:alert_threshold:mysql_[c]pu'
         language: pygrep
-        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py|components/threshold-exporter/app/cmd/da-guard/served_values_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_test\.go|tests/shared/test_lib_tenant_values\.py|tests/ops/test_policy_opa_bridge\.py|components/threshold-exporter/app/cmd/da-guard/effective_test\.go|components/threshold-exporter/app/pkg/config/keyed_threshold_test\.go|components/threshold-exporter/app/pkg/config/platform_alias_layer_test\.go|components/threshold-exporter/app/pkg/config/effective_view_test\.go|components/threshold-exporter/app/cmd/da-guard/effective_view_gate_test\.go|components/threshold-exporter/app/config_platform_alias_test\.go|components/threshold-exporter/app/cmd/da-guard/platform_alias_guard_test\.go|tests/shared/platform_tenant_overlay_matrix\.json|tests/shared/test_threshold_ownership_matrix\.py|components/threshold-exporter/app/pkg/config/key_refs_test\.go|components/threshold-exporter/app/cmd/da-guard/key_refs_test\.go|tests/ops/test_deprecate_rule_exporter_precheck\.py|components/threshold-exporter/app/pkg/config/merge_tenant_profile_test\.go|tests/shared/test_key_verdict\.py|tests/ops/test_backtest_threshold\.py|components/threshold-exporter/app/pkg/config/loaddir_undeliverable_test\.go|components/threshold-exporter/app/pkg/config/dimensions_test\.go)$
+        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py|components/threshold-exporter/app/cmd/da-guard/served_values_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_differential_test\.go|tests/shared/test_lib_tenant_values\.py|tests/ops/test_policy_opa_bridge\.py|components/threshold-exporter/app/cmd/da-guard/effective_test\.go|components/threshold-exporter/app/pkg/config/keyed_threshold_test\.go|components/threshold-exporter/app/pkg/config/platform_alias_layer_test\.go|components/threshold-exporter/app/pkg/config/effective_view_test\.go|components/threshold-exporter/app/cmd/da-guard/effective_view_gate_test\.go|components/threshold-exporter/app/config_platform_alias_test\.go|components/threshold-exporter/app/cmd/da-guard/platform_alias_guard_test\.go|tests/shared/platform_tenant_overlay_matrix\.json|tests/shared/test_threshold_ownership_matrix\.py|components/threshold-exporter/app/pkg/config/key_refs_test\.go|components/threshold-exporter/app/cmd/da-guard/key_refs_test\.go|tests/ops/test_deprecate_rule_exporter_precheck\.py|components/threshold-exporter/app/pkg/config/merge_tenant_profile_test\.go|tests/shared/test_key_verdict\.py|tests/ops/test_backtest_threshold\.py|components/threshold-exporter/app/pkg/config/loaddir_undeliverable_test\.go|components/threshold-exporter/app/pkg/config/dimensions_test\.go)$
         # #1231 renamed mysql_cpu → mysql_threads_running (the metric never
         # measured host CPU%). Prose mentions ("renamed from mysql_cpu") and the
         # alias SSOT (`mysql_cpu: mysql_threads_running` — value is an
@@ -1852,6 +1857,19 @@ repos:
         # check. Measured at 0.36s on the full tree, which is cheaper than
         # enumerating carriers and being wrong about one.
         files: .
+
+      - id: chart-version-bump
+        name: "chart version bump — a git-only chart whose packaged content changed must raise `version` (#1269)"
+        # Compares each git-only chart's package with the package at the commit
+        # that first carried its version (helm package on both sides, file by
+        # file): a Chart.yaml comment or a .helmignore'd file needs no bump, a
+        # changed default or a deleted template does. Charts a release line
+        # pushes are listed and skipped — NOT checked anywhere yet (see the
+        # script). Needs history back to each version's first commit.
+        entry: python3 -X utf8 scripts/tools/lint/check_chart_version_bump.py
+        language: python
+        pass_filenames: false
+        files: ^(helm/|scripts/tools/lint/check_chart_(version_bump|package_contents|ship_surface)\.py$)
 
       - id: devcontainer-dep-parity
         name: "dev container must declare every Python dep CI installs (#1254)"

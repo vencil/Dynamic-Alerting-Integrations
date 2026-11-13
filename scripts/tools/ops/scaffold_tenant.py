@@ -165,14 +165,6 @@ _HELP = {
         'zh': 'onboard-hints.json 的路徑 (自動從上船結果生成)',
         'en': 'Path to onboard-hints.json (auto-scaffold from onboard results)'
     },
-    'generate_profile': {
-        'zh': '生成 _profiles.yaml 框架。值為設定檔名稱 (例如 standard-mariadb-prod)。需要 --db',
-        'en': 'Generate a _profiles.yaml skeleton. Value is profile name (e.g., standard-mariadb-prod). Requires --db.'
-    },
-    'tier': {
-        'zh': '環境層級，用於設定檔閾值調整',
-        'en': 'Environment tier for profile thresholds'
-    },
     'epilog': {
         'zh': '''範例:
   %(prog)s                                                      # 互動模式
@@ -399,61 +391,6 @@ def prompt_value(metric: str, info: dict[str, object], current: str | None = Non
     if raw.lower() in ("skip", "disable"):
         return raw if raw.lower() == "disable" else None
     return raw
-
-
-def generate_profile(profile_name: str, selected_dbs: list[str], tier: str = "prod") -> dict:
-    """Generate a _profiles.yaml skeleton with metric defaults for selected DBs.
-
-    Args:
-        profile_name: Profile name (e.g., "standard-mariadb-prod")
-        selected_dbs: List of DB type keys (e.g., ["kubernetes", "mariadb"])
-        tier: Environment tier hint for threshold adjustment
-              ("prod" = conservative, "staging" = relaxed)
-
-    Returns:
-        dict: {"profiles": {profile_name: {metric_key: value, ...}}}
-    """
-    profile = {}
-    tier_factor = 1.0 if tier == "prod" else 1.2  # staging: 20% more relaxed
-
-    for db in selected_dbs:
-        pack = RULE_PACKS.get(db)
-        if not pack:
-            continue
-        for key, info in pack.get("defaults", {}).items():
-            value = info["value"]
-            if isinstance(value, (int, float)) and tier_factor != 1.0:
-                value = type(info["value"])(value * tier_factor)
-            profile[key] = value
-
-        # Optional-tier keys: the `_critical` twins go in, the flat ones do not.
-        #
-        # They look alike in the registry but behave nothing alike. A
-        # `<base>_critical` resolves through resolveCriticalRows, which only
-        # requires the BASE to be in `defaults:` — true for pg_connections,
-        # mysql_connections and the rest — so a profile supplying it produces a
-        # real critical-tier row today. Keep them.
-        #
-        # ⛔ The flat ones (oracle_* / db2_* / clickhouse_*) are the
-        # declared-without-value tier (#1189 / TRK-337). A profile is
-        # platform-authored, and that tier's whole meaning is that the platform
-        # asserts no value, so ApplyProfiles now refuses to fill one in and logs
-        # the entry as ignored. Writing them here would emit a file whose
-        # entries are dead on arrival.
-        #
-        # Nothing that worked stops working: those flat keys are absent from
-        # `defaults:` and resolveBaseRows walks `defaults`, so they never
-        # reached a metric. (The old comment claimed these were "commented
-        # hints" while the code wrote real values, and called the whole set
-        # "critical tiers" — inaccurate for exactly the flat ones.) The
-        # suggested-starting-value job for those belongs in the TENANT's own
-        # file, which the interactive prompt already handles.
-        for key, info in pack.get("optional_overrides", {}).items():
-            if not key.endswith("_critical"):
-                continue
-            profile[key] = info["value"]
-
-    return {"profiles": {profile_name: profile}}
 
 
 def generate_defaults(selected_dbs: list[str]) -> dict:
@@ -1394,9 +1331,6 @@ def main() -> None:
     parser.add_argument("--profile", help=_h('profile'))
     _lib_input.add_input(parser, "--from-onboard", decode=ONBOARD_HINTS_DOCUMENT,
                          help=_h('from_onboard'))
-    parser.add_argument("--generate-profile", help=_h('generate_profile'))
-    parser.add_argument("--tier", choices=["prod", "staging"], default="prod",
-                        help=_h('tier'))
 
     args = parser.parse_args()
     if args.tenant is not None:
@@ -1404,34 +1338,6 @@ def main() -> None:
 
     if args.catalog:
         print_catalog()
-        sys.exit(EXIT_OK)
-
-    if args.generate_profile:
-        if not args.db:
-            print("錯誤: --generate-profile 需要 --db 參數", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-        selected_dbs = ["kubernetes"] + [db.strip() for db in args.db.split(",")]
-        for db in selected_dbs:
-            if db not in RULE_PACKS:
-                print(f"錯誤: 不支援的 DB 類型 '{db}'", file=sys.stderr)
-                sys.exit(EXIT_CALLER_ERROR)
-        profile_data = generate_profile(args.generate_profile, selected_dbs,
-                                        tier=args.tier)
-        output_dir = args.output_dir
-        profiles_path = str(Path(output_dir) / "_profiles.yaml")
-        # ADR-036 §2 (#2906, #3206 10c-3): `_profiles.yaml` is a conf.d file
-        # too — written by `da-guard write`, the saturation note above each
-        # saturation `<base>_critical` (純顯示).
-        _write_confd_files(Path(output_dir), [_lib_confedit.NewFile(
-            "_profiles.yaml", profile_data, "\n".join([
-                "_profiles.yaml — Tenant Profile definitions",
-                "Generated by scaffold_tenant.py --generate-profile",
-                "Four-layer inheritance: Defaults → Rule Pack → Profile → Tenant",
-            ]), node_head=saturation_critical_head)])
-        print(f"✅ Profile skeleton generated: {profiles_path}")
-        print(f"   Profile: {args.generate_profile} (tier={args.tier})")
-        print(f"   DBs: {', '.join(selected_dbs)}")
-        print(f"   Metrics: {len(profile_data['profiles'][args.generate_profile])} keys")
         sys.exit(EXIT_OK)
 
     if args.from_onboard:

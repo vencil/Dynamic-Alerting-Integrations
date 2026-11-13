@@ -250,7 +250,6 @@ commands:
     "--prometheus": url
   scaffold:
     "--db": not_path
-    "--generate-profile": not_path
     "--mapping-filter": not_path
     "--mapping-instance": not_path
     "--namespaces": not_path
@@ -267,7 +266,6 @@ commands:
     "--severity-dedup": not_path
     "--silent-mode": not_path
     "--tenant": not_path
-    "--tier": not_path
     "--topology": not_path
   shadow-verify:
     "--alertmanager": url

@@ -11,9 +11,9 @@ which failed at runtime with ``ReferenceError: exports is not defined``
 because ``exports`` is not a global in script mode. The React tree
 never mounted → all 4 testid lookups in the spec failed → CI failed.
 
-`pre-commit run jsx-babel-check` PARSES JSX successfully (`export
-function` is a valid AST node), so the syntactic gate did not catch
-this. Local pre-commit doesn't run E2E. Only CI runtime caught it.
+`pre-commit run jsx-babel-check` (replaced by `jsx-syntax-check` in
+#3669) PARSED the JSX successfully (`export function` is a valid AST
+node), so the syntactic gate did not catch this. Local pre-commit doesn't run E2E. Only CI runtime caught it.
 
 This lint shifted catch-time from CI to commit, mechanically.
 

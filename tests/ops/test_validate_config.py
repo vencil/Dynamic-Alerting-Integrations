@@ -1962,6 +1962,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # four above: without it the row asserts "no duplicate
             # declaration" about a tree it did not finish reading.
             "tenant_uniqueness",
+            # #3691. Reads the tree through da-guard served-values under
+            # `--config-dir`.
+            "tier_inversion",
             # ADR-038. Reads the tree through da-guard (served-values and
             # effective) under `--config-dir`, like `profiles`.
             "unread_keys",

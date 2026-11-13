@@ -80,7 +80,7 @@
     },
     {
       "customType": "regex",
-      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/alertmanager at the version of the amtool the da-tools image ships (tests/ops/test_da_tools_amtool_pin_parity.py). The gomod manager is off (go.mod is the Go SSOT), so this one require line is read here, from the Go module proxy, and the packageRule below puts it in the SAME grouped PR as the prom/alertmanager image refs. ⚠️ Renovate does not run `go mod tidy` here: that PR must refresh components/da-read/go.sum by hand, and CI's da-read leg stays red until it does (fail-closed, not a silent skew).",
+      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/alertmanager at the version of the amtool the da-tools image ships (tests/ops/test_da_tools_amtool_pin_parity.py). The gomod manager is off (go.mod is the Go SSOT), so this one require line is read here, from the Go module proxy, and the packageRule below puts it in the SAME grouped PR as the prom/alertmanager image refs. ⚠️ Renovate does not run `go mod tidy` here (fail-closed, not a silent skew): CI's da-read leg stays red until `make renovate-fixup` (#3799) is run on the PR branch, which also writes the other copies this group's PR cannot reach.",
       "managerFilePatterns": ["/^components/da-read/go\\.mod$/"],
       "matchStrings": [
         "\\n[ \\t]*(?<depName>github\\.com/prometheus/alertmanager)[ \\t]+(?<currentValue>v[0-9][^\\s]*)"
@@ -90,7 +90,7 @@
     },
     {
       "customType": "regex",
-      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/prometheus at the Go module of the Prometheus the platform deploys (k8s/03-monitoring/deployment-prometheus.yaml, prom/prometheus; tests/ops/test_da_read_prometheus_pin_parity.py). Image v3.X.Y is module v0.3XX.Y (X two digits), so the versioning regex reads that back as major 3 / minor X / patch Y: a Prometheus major (v0.4XX) is a Renovate major and waits for the Dashboard like the image major, and the proxy's legacy v2.*+incompatible tags and -rc tags do not parse, so they are never proposed (under plain semver v2.55.1+incompatible would outrank v0.315.1). The packageRule below puts it in the SAME grouped PR as the prom/prometheus image refs. ⚠️ Renovate does not run `go mod tidy` here: that PR must refresh components/da-read/go.sum by hand, and CI's da-read leg stays red until it does (fail-closed, not a silent skew).",
+      "description": "#3206 — components/da-read/go.mod requires github.com/prometheus/prometheus at the Go module of the Prometheus the platform deploys (k8s/03-monitoring/deployment-prometheus.yaml, prom/prometheus; tests/ops/test_da_read_prometheus_pin_parity.py). Image v3.X.Y is module v0.3XX.Y (X two digits), so the versioning regex reads that back as major 3 / minor X / patch Y: a Prometheus major (v0.4XX) is a Renovate major and waits for the Dashboard like the image major, and the proxy's legacy v2.*+incompatible tags and -rc tags do not parse, so they are never proposed (under plain semver v2.55.1+incompatible would outrank v0.315.1). The packageRule below puts it in the SAME grouped PR as the prom/prometheus image refs. ⚠️ Renovate does not run `go mod tidy` here (fail-closed, not a silent skew): CI's da-read leg stays red until `make renovate-fixup` (#3799) is run on the PR branch, which also writes the other copies this group's PR cannot reach.",
       "managerFilePatterns": ["/^components/da-read/go\\.mod$/"],
       "matchStrings": [
         "\\n[ \\t]*(?<depName>github\\.com/prometheus/prometheus)[ \\t]+(?<currentValue>v[0-9][^\\s]*)"
@@ -146,7 +146,8 @@
       "matchManagers": ["custom.regex"],
       "matchDatasources": ["docker"],
       "matchUpdateTypes": ["minor", "patch", "digest", "pin"],
-      "groupName": "third-party container images"
+      "groupName": "third-party container images",
+      "prBodyNotes": ["⚠️ This PR opens red by design (#3799): on its branch run `make renovate-fixup` (dev container: `make dc-run CMD=\"make renovate-fixup\"`), review the diff and push. It refreshes components/da-read/go.sum, the tests/oauth2-proxy library, the federation-e2e and try-local compose refs, platform-data, the portal IMAGE_MIRROR and dist. A compile error left after that is an upstream API change in a bumped Go module: fix it by hand."]
     },
     {
       "description": "#2442 — the forge-e2e GitLab CE pin gets its own PR: it is test infrastructure (nightly forge-e2e-gitlab.yaml), not a deployed image, so it must not ride the third-party deploy group. Majors still wait for the Dependency Dashboard via the docker major rule below.",

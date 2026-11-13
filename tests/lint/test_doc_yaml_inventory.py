@@ -122,6 +122,35 @@ def test_a_yaml_fence_spelled_another_way_is_an_error(tmp_path, opening):
     assert "write it as ```yaml" in i.file_errors[0][2]
 
 
+@pytest.mark.parametrize("opening, close", [
+    ("> ```yaml {.confd}", "> ```"),
+    ("> ```yaml", "> ```"),
+    ("> ~~~yaml", "> ~~~"),
+    ("> > ```yml", "> > ```"),
+], ids=["declared", "undeclared", "tilde", "nested"])
+def test_a_yaml_fence_in_a_blockquote_is_an_error(tmp_path, opening, close):
+    """#3748: no extractor reads past a blockquote's `>`, so such a fence
+    left every gate in silence. Refused, not read: move it out."""
+    prefix = close[:-3]
+    body = (f"{opening}\n{prefix}tenants:\n{prefix}  t1:\n{prefix}    _routing:\n"
+            f"{prefix}      receiver: {{type: slack, api_url: https://h.example/s3cr3t}}\n{close}\n")
+    root = _docs(tmp_path, body)
+    i = inv.build(root)
+    assert i.units == []
+    assert [(p, ln) for p, ln, _e in i.file_errors] == [("docs/x.md", 1)], i.file_errors
+    assert "move it out of the blockquote" in i.file_errors[0][2]
+    r = _fences(root)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "[FENCE] docs/x.md:1" in r.stdout, r.stdout
+
+
+def test_another_language_in_a_blockquote_is_left_alone(tmp_path):
+    root = _docs(tmp_path, "> Run:\n>\n> ```bash\n> make lint-docs\n> ```\n")
+    i = inv.build(root)
+    assert i.file_errors == [] and i.units == []
+    assert _fences(root).returncode == 0
+
+
 @pytest.mark.parametrize("body", [
     "```yaml\na: 1\n",                          # a yaml fence never closed
     "```bash\necho\n\n```yaml\na: 1\n",          # a bash fence never closed
@@ -263,11 +292,12 @@ def test_a_repeated_key_in_a_k8s_object_is_kubectls_to_answer(tmp_path):
 
 def test_each_expect_invalid_unit_must_be_invalid(tmp_path):
     """#3416 review: judged per fence, a counter-example unit (B1) hid every
-    violation of a second, really broken unit (B2: a receiver that is a
-    number). Per unit, B2 has violations of its own and passes — and a
-    correct unit in such a fence is named."""
+    violation of a second, really broken unit (B2: a threshold of the wrong
+    type). Per unit, B2 has violations of its own and passes — and a
+    correct unit in such a fence is named. (B2 touches no receiver: the
+    credential judgement is never absorbed, #3748.)"""
     b1 = "# a/_defaults.yaml\ndefaults:\n  foo: 1\nbogus_top: 1\n"
-    b2 = "# b/t.yaml\ntenants:\n  tenant-x:\n    _routing:\n      receiver: 5\n"
+    b2 = "# b/t.yaml\ntenants:\n  tenant-x:\n    mysql_connections: 123\n"
     ok = "# c/t.yaml\ntenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
     root = _docs(tmp_path, "```yaml {.confd .expect-invalid}\n" + b1 + b2 + ok + "```\n")
     (tmp_path / "docs" / "schemas").mkdir()
@@ -279,7 +309,7 @@ def test_each_expect_invalid_unit_must_be_invalid(tmp_path):
         capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert r.returncode == 1, r.stdout + r.stderr
     assert r.stdout.count("[SCHEMA]") == 1, r.stdout
-    assert "[SCHEMA] docs/x.md:11 (expect-invalid)" in r.stdout, r.stdout
+    assert "[SCHEMA] docs/x.md:10 (expect-invalid)" in r.stdout, r.stdout
     assert "'# c/t.yaml'" in r.stdout, r.stdout
     assert "docs/x.md:2 — " in r.stdout and "docs/x.md:6 — " in r.stdout, r.stdout
 
@@ -381,3 +411,49 @@ def test_the_json_document_is_the_one_encoders_text(tmp_path):
         capture_output=True, text=True, encoding="utf-8", timeout=300, check=False)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert proc.stdout == encode_json(json.loads(proc.stdout)) + "\n", proc.stdout[:500]
+
+
+# ── #3748: the conf.d the threshold-exporter chart renders from Helm values ──
+
+_CHART_CONFIGMAP = REPO / "helm" / "threshold-exporter" / "templates" / "configmap.yaml"
+
+
+def test_the_helm_mapping_is_the_charts_template():
+    """`helm_values_confd` mirrors configmap.yaml: every `thresholdConfig` key
+    the template reads is one the mapping knows, each platform key is a
+    top-level key of `_defaults.yaml` under the condition the mapping
+    applies, and each tenant is `<t>.yaml` holding `tenants: {<t>: …}`. A
+    key added to the template fails here until the mapping says where it goes."""
+    import re
+    tpl = _CHART_CONFIGMAP.read_text(encoding="utf-8")
+    read = set(re.findall(r"\.Values\.thresholdConfig\.(\w+)", tpl))
+    assert read == set(inv.HELM_PLATFORM_KEYS) | {"tenants", "existingConfigMap"}, read
+    assert "{{- if not .Values.thresholdConfig.existingConfigMap }}" in tpl
+    assert f"  {inv.HELM_DEFAULTS_FILE}: |\n" in tpl
+    for key in inv.HELM_PLATFORM_KEYS:
+        assert re.search(rf"^    {key}:", tpl, re.M), key
+    for key in ("optional_overrides", "dimensions", "state_filters"):
+        # written inside its own truthy `if` (comments may sit between)
+        assert re.search(r"\{\{- if \.Values\.thresholdConfig\." + key + r" \}\}"
+                         r"(?:(?!\{\{- end)[\s\S])*?\n    " + key + ":", tpl), key
+    assert "{{- if ne (int64 $cap) 0 }}\n    max_metrics_per_tenant:" in tpl
+    assert "    defaults:\n      {{- .Values.thresholdConfig.defaults | toYaml" in tpl
+    assert re.search(r"\{\{- range \$tenant, \$overrides := \.Values\.thresholdConfig\.tenants \}\}\n"
+                     r"  \{\{ \$tenant \}\}\.yaml: \|\n    tenants:\n      \{\{ \$tenant \}\}:\n"
+                     r"        \{\{- \$overrides \| toYaml", tpl), "tenant files"
+
+
+def test_helm_values_confd_renders_what_the_values_write():
+    values = {"thresholdConfig": {
+        "defaults": {"m": 1}, "state_filters": {}, "dimensions": None,
+        "optional_overrides": ["k"], "max_metrics_per_tenant": 0,
+        "tenants": {"t1": {"_routing": {"receiver": {"type": "webhook"}}}}}}
+    assert inv.helm_values_confd(values) == [
+        ("_defaults.yaml", {"defaults": {"m": 1}, "optional_overrides": ["k"]}),
+        ("t1.yaml", {"tenants": {"t1": {"_routing": {"receiver": {"type": "webhook"}}}}}),
+    ]
+    assert inv.helm_values_confd({"thresholdConfig": {"existingConfigMap": "x",
+                                                      "tenants": {"t1": {}}}}) == []
+    assert inv.helm_values_confd({"image": {}}) == []
+    assert inv.helm_values_confd({"thresholdConfig": {"max_metrics_per_tenant": 5}}) == [
+        ("_defaults.yaml", {"max_metrics_per_tenant": 5})]
