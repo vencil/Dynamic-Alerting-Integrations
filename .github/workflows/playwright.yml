@@ -12,7 +12,6 @@ on:
       # how it runs.
       - 'tools/portal/**'
       - 'docs/interactive/index.html'
-      - 'docs/assets/dist/**'
       - 'docs/assets/jsx-loader.html'
       - 'tests/e2e/**'
       - 'package.json'
@@ -31,7 +30,6 @@ on:
     paths:
       - 'tools/portal/**'
       - 'docs/interactive/index.html'
-      - 'docs/assets/dist/**'
       - 'docs/assets/jsx-loader.html'
       - 'tests/e2e/**'
       - 'package.json'
