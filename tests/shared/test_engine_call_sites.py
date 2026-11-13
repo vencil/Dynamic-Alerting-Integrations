@@ -62,8 +62,8 @@ NOT_ENGINES: dict[str, str] = {
     "go": "toolchain lookup (go env GOROOT) to find gofmt",
     "da-guard": "first-party binary with the same 0/1/2 contract (_lib_godispatch)",
     "da-crdecode": "first-party binary with the same 0/1/2 contract (_lib_consumer_read)",
-    "npm": "installs @babel/standalone for lint_jsx_babel's node pass; its "
-           "failure is that tool's no-verdict, judged with node (#3611 PR 2)",
+    "npm": "package installer, not a verdict engine (lint_jsx_babel installed "
+           "@babel/standalone with it until #3669; no caller left)",
     "openssl": "key generation (federation_keygen), not a lint verdict",
     "notify-send": "desktop notification (validate_all --notify)",
     "osascript": "desktop notification (validate_all --notify)",
