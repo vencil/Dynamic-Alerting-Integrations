@@ -397,7 +397,7 @@ repos:
         #     import 都可能讓區塊過期；
         #   * 死條目的判定對象是 tracked 檔集合，任何檔的刪除／改名都可能讓某條
         #     pattern 變成比對不到東西。
-        # 兩者都無法用路徑 regex 表達，所以每次 commit 都跑（不到一秒）。
+        # 兩者都無法用路徑 regex 表達，所以每次 commit 都跑。
         always_run: true
 
       - id: verify-diff-check
