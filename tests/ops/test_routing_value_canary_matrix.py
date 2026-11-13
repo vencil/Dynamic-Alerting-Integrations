@@ -14,7 +14,7 @@
   profile、根層 `_routing_enforced`）的每個鍵，各塞兩種值：一個裝著帶 canary
   的 receiver 的 mapping，與一個帶 userinfo 的 canary URL 字串。
 * 跑 `--validate --strict --findings-json`：stdout、stderr、findings 都不得出現
-  canary。PATH 裡不放 amtool：amtool 的原文轉印是另一條通道（另開票）。
+  canary。
 * 每格還要證明那個位置真的被讀了：沒有判到東西的 run 也沒有 canary 可漏。
 """
 from __future__ import annotations

@@ -291,24 +291,18 @@ RECEIVER_COLLISION_ROUTES_HINT = (
     "it extends. Rename one of the tenants (or remove one of the entries); "
     "the receivers themselves are not invalid.")
 # #2311: the routes row now runs every `--validate` step, including
-# Alertmanager's own reading (#3689: its loader, then amtool). These replace
+# Alertmanager's own reading (#3689: its config loader, da-read). These replace
 # the generic routes advice where it would send the operator to the wrong place.
 AM_REJECTED_ROUTES_HINT = (
-    "Alertmanager (its config loader, or amtool check-config) refused the "
+    "Alertmanager's config loader refused the "
     "config generated from this tree; its message above names the line and "
     "field — often a receiver value in _routing (e.g. a webhook URL, or a "
     "string where http_config wants a bool) that the generator accepts but "
     "Alertmanager cannot load. Fix that value, then re-run.")
 AM_UNUSABLE_ROUTES_HINT = (
     "Alertmanager's reading could not be had (no da-read / da-crdecode, or "
-    "the amtool on PATH could not run, timed out, crashed, or could not read "
-    "a file the config names — a template path is read on THIS machine) — "
-    "that is this environment, not your config. Fix that (or take amtool "
-    "off PATH), then re-run.")
-AMTOOL_NOT_FOUND_ROUTES_HINT = (
-    "Alertmanager's config loader accepted the generated config. Put "
-    "Alertmanager's amtool on PATH to also have amtool check-config parse the "
-    "template files a `templates:` glob matches.")
+    "one could not run) — that is this environment, not your config. Fix "
+    "that, then re-run.")
 ROUTES_INVARIANT_HINT = (
     "A platform invariant refused the generated config (see the lines "
     "above) — the same verdict `generate_alertmanager_routes.py --validate` "
@@ -759,8 +753,7 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
 
     Without jsonschema (the da-tools image does not install it) or without
     the lint module beside this tool, the row is WARN and says it did not
-    check — the `routes` row's precedent for a missing amtool, not a caller
-    error: every other row still gave its verdict.
+    check — not a caller error: every other row still gave its verdict.
     """
     schemas: dict[str, dict] = {}
     for name in (_TENANT_SCHEMA, _PLATFORM_SCHEMA, _PROFILES_SCHEMA):
@@ -978,7 +971,7 @@ def check_routes(
                f"{len(inhibit_rules)} inhibit_rules")
     if not routes and not inhibit_rules:
         # Nothing was generated, so there is nothing to assemble or hand to
-        # amtool. ⚠️ This is where the row and `--validate` DISAGREE, and did
+        # Alertmanager. ⚠️ This is where the row and `--validate` DISAGREE, and did
         # before #2311 too: on a tree whose tenants generate nothing (e.g.
         # only `_severity_dedup: disable`) `--validate` exits 1 with "No valid
         # routes or inhibit rules generated.", while this row is WARN/PASS at
@@ -996,8 +989,8 @@ def check_routes(
     # (#2164 / #2279), the ADR-025 inhibit tripwires, the invariants
     # `assemble_configmap` enforces, and Alertmanager's own reading. Called
     # OUTSIDE the stderr capture above: the function returns every line it has
-    # instead of printing it, so nothing it says (amtool's "accepted" line, its
-    # NOTICE) can be swept into this row as an issue.
+    # instead of printing it, so nothing it says (Alertmanager's "accepted"
+    # line) can be swept into this row as an issue.
     verdict = gen.evaluate_generated_config(routes, receivers, inhibit_rules,
                                             all_issues)
     details = list(all_issues)
@@ -1007,7 +1000,7 @@ def check_routes(
         details.append("the assembled Alertmanager config was refused: "
                        + verdict.assembly_error)
     am = verdict.alertmanager
-    if am is not None and am.status != gen.AM_ACCEPTED_WITHOUT_AMTOOL:
+    if am is not None:
         details.extend(ln for ln in am.message.splitlines() if ln.strip())
 
     if verdict.errors:
@@ -1027,19 +1020,6 @@ def check_routes(
     has_findings = bool(all_issues or verdict.warnings)
     if not has_findings:
         details.insert(0, summary)
-    if am.status == gen.AM_ACCEPTED_WITHOUT_AMTOOL:
-        # ⛔ WARN, not a fourth status (the --json enum is pass/warn/fail,
-        # #2301): Alertmanager's loader accepted the config, but the one
-        # check only amtool adds (#3689: parsing the template files) was not
-        # made.
-        details.append(
-            "Not checked by amtool: amtool not found on PATH, so the generated "
-            "config (assembled on the built-in default base) was read by "
-            "Alertmanager's config loader only, without amtool check-config's "
-            "parse of the template files its `templates:` globs match")
-        return _make_result("routes", WARN, details,
-                            hint=None if has_findings
-                            else AMTOOL_NOT_FOUND_ROUTES_HINT)
     return _make_result("routes", WARN if has_findings else PASS, details)
 
 

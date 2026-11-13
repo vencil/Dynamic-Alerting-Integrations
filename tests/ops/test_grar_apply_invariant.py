@@ -57,7 +57,7 @@ def _run_apply(monkeypatch, tmp_path, config_dir, inhibit_rule):
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
-    monkeypatch.setenv("PATH", str(tmp_path))          # no amtool on PATH
+    monkeypatch.setenv("PATH", str(tmp_path))          # an empty PATH
     monkeypatch.setattr(sys, "argv", [
         "generate_alertmanager_routes.py", "--config-dir", str(config_dir),
         "--apply", "--yes"])
@@ -76,7 +76,7 @@ def test_cluster_rule_suppressing_watchdog_is_a_fail_verdict(
     assert "nothing was applied to the cluster" in out.err
     assert "Watchdog" in out.err
     assert "Traceback" not in out.err + out.out
-    # Read the cluster, refused before amtool / kubectl apply / reload.
+    # Read the cluster, refused before Alertmanager's loader / kubectl apply / reload.
     assert [c[:2] for c in calls] == [["kubectl", "get"]], calls
 
 
