@@ -1,0 +1,55 @@
+{
+  "jobs": {
+    "resolve": {
+      "files": [
+        "components/da-tools/app/VERSION",
+        "scripts/ops/check_image_refs_resolve.py",
+        "scripts/ops/path_trace/sitecustomize.py",
+        "scripts/ops/paths_filter_glob.py",
+        "scripts/ops/workflow_path_filter.py",
+        "scripts/tools/_lib_compat.py",
+        "scripts/tools/_lib_confd.py",
+        "scripts/tools/_lib_confedit.py",
+        "scripts/tools/_lib_constants.py",
+        "scripts/tools/_lib_consumer_read.py",
+        "scripts/tools/_lib_exitcodes.py",
+        "scripts/tools/_lib_godispatch.py",
+        "scripts/tools/_lib_input.py",
+        "scripts/tools/_lib_io.py",
+        "scripts/tools/_lib_label.py",
+        "scripts/tools/_lib_parse_cache.py",
+        "scripts/tools/_lib_parse_tree.py",
+        "scripts/tools/_lib_paths.py",
+        "scripts/tools/_lib_prometheus.py",
+        "scripts/tools/_lib_python.py",
+        "scripts/tools/_lib_registry.py",
+        "scripts/tools/_lib_validation.py",
+        "scripts/tools/_lib_write_check.py",
+        "scripts/tools/ops/_registry_lib.py",
+        "scripts/tools/ops/guard_dispatch.py",
+        "scripts/tools/ops/init_project.py"
+      ],
+      "go": [
+        {
+          "module_dir": "components/threshold-exporter/app",
+          "package": "./cmd/da-crdecode",
+          "sources": [
+            "components/threshold-exporter/app/cmd/da-crdecode/*.go",
+            "components/threshold-exporter/app/go.mod",
+            "components/threshold-exporter/app/go.sum",
+            "components/threshold-exporter/app/third_party/yaml.v3/*.go",
+            "components/threshold-exporter/app/third_party/yaml.v3/go.mod"
+          ]
+        }
+      ],
+      "import_dirs": [
+        "scripts",
+        "scripts/ops",
+        "scripts/ops/path_trace",
+        "scripts/tools",
+        "scripts/tools/ops"
+      ]
+    }
+  },
+  "workflow": "image-ref-resolve.yaml"
+}

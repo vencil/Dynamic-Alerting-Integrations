@@ -386,6 +386,20 @@ repos:
         # 已提交的投影變成「產生器現在拒收的 map」的產物。
         files: ^(\.agents/|\.claude/(skills|agents)/|\.cursor/skills/|\.github/instructions/|AGENTS\.md$|scripts/tools/dx/gen_agent_adapters\.py$|scripts/session-guards/paths_map\.py$)
 
+      - id: workflow-path-filter-check
+        name: Workflow path filters (generated path-trace block drift + dead / unmodelled patterns)
+        entry: python3 -X utf8 scripts/ops/workflow_path_filter.py generate --check
+        language: python
+        pass_filenames: false
+        additional_dependencies: ['pyyaml']
+        # 觸發面不能只掛 workflow 與追蹤檔（#3756）：
+        #   * 區塊含「已列檔案裡字面寫死的 import」的閉包，所以任何 .py 多寫一行
+        #     import 都可能讓區塊過期；
+        #   * 死條目的判定對象是 tracked 檔集合，任何檔的刪除／改名都可能讓某條
+        #     pattern 變成比對不到東西。
+        # 兩者都無法用路徑 regex 表達，所以每次 commit 都跑（不到一秒）。
+        always_run: true
+
       - id: verify-diff-check
         name: verify_diff test-file reachability (source→test mapping)
         entry: python3 -X utf8 scripts/tools/dx/verify_diff.py --check

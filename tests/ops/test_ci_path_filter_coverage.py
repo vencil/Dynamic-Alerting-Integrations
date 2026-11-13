@@ -126,7 +126,15 @@ ROOT = Path(__file__).resolve().parents[2]
 _GLOB_SPEC = importlib.util.spec_from_file_location(
     "paths_filter_glob", ROOT / "scripts" / "ops" / "paths_filter_glob.py")
 _GLOB = importlib.util.module_from_spec(_GLOB_SPEC)
-_GLOB_SPEC.loader.exec_module(_GLOB)
+# Registered under its own name: workflow_path_filter.py imports it by that
+# name, and must get THIS object — two module objects would be two `Unmodelled`
+# classes, and an `except` on one would not catch the other.
+sys.modules.setdefault("paths_filter_glob", _GLOB)
+_GLOB = sys.modules["paths_filter_glob"]
+if not hasattr(_GLOB, "covers"):
+    _GLOB_SPEC.loader.exec_module(_GLOB)
+sys.path.append(str(ROOT / "scripts" / "ops"))
+import workflow_path_filter as _WPF  # noqa: E402  (scripts/ops, appended above)
 WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 PORTAL_TESTS = ROOT / "tools" / "portal" / "tests"
 # The config whose `include:` is what makes the line above true. Hard-coding a
@@ -2579,10 +2587,45 @@ def test_covers_matches_only_the_shapes_in_use() -> None:
     assert _covers("zdocs/*.zmd", "zdocs/index.zmd")
     assert not _covers("zdocs/*.zmd", "zdocs/zsub/index.zmd")
 
-    # Unrecognised shapes must fail loud (report uncovered), never be guessed.
-    assert not _covers("z*x/**", "zyx/a.txt")
-    assert not _covers("zdocs/z?.zmd", "zdocs/za.zmd")
-    assert not _covers("zdocs/*", "zdocs/index.zmd")
+    # `*` inside a segment and `[...]` classes (#3756): four patterns the
+    # workflows really use were unmodelled, so they read as covering nothing —
+    # and a dead-entry check asking this function would have called them dead.
+    assert _covers("z*x/**", "zyx/a.txt")
+    assert not _covers("z*x/**", "zyq/a.txt")
+    assert _covers("zdocs/*", "zdocs/index.zmd")
+    assert not _covers("zdocs/*", "zdocs/zsub/index.zmd")
+    assert _covers("zops/_zgr_*.zpy", "zops/_zgr_core.zpy")
+    assert not _covers("zops/_zgr_*.zpy", "zops/zgr_core.zpy")
+    assert _covers("**/_*.[Yy][Aa][Mm][Ll]", "zconf/_zdefaults.YAML")
+    assert _covers("**/_*.[Yy][Aa][Mm][Ll]", "_zdefaults.yaml")
+    assert not _covers("**/_*.[Yy][Aa][Mm][Ll]", "zconf/zdefaults.yaml")
+    assert not _covers("**/_*.[Yy][Aa][Mm][Ll]", "zconf/_zdefaults.yamlx")
+    assert _covers("zdocs/z[a-c].zmd", "zdocs/zb.zmd")
+    assert not _covers("zdocs/z[a-c].zmd", "zdocs/zd.zmd")
+    # A regex metacharacter in a literal stays a literal.
+    assert not _covers("zdocs/a.zmd", "zdocs/abzmd")
+    assert not _covers("zdocs/z*.zmd", "zdocs/zabzmd")
+
+    # Unrecognised shapes must fail loud (report uncovered), never be guessed —
+    # and `unmodelled` must name each one, or the dead-entry check would read
+    # "cannot say" as "matches nothing".
+    for pattern, path in (
+            ("zdocs/z?.zmd", "zdocs/za.zmd"),      # GitHub: zero-or-one; picomatch: any one
+            ("zdocs/z+.zmd", "zdocs/zz.zmd"),
+            ("zdocs/{a,b}.zmd", "zdocs/a.zmd"),
+            ("zdocs/[!a].zmd", "zdocs/b.zmd"),
+            ("zdocs/[^a].zmd", "zdocs/b.zmd"),
+            ("zdocs/**.zmd", "zdocs/a.zmd"),
+            ("zdocs**/a.zmd", "zdocs/a.zmd"),
+            ("./zdocs/a.zmd", "zdocs/a.zmd"),
+            ("zdocs/", "zdocs"),
+            ("zdocs/[a.zmd", "zdocs/[a.zmd")):
+        assert not _covers(pattern, path), pattern
+        assert _GLOB.unmodelled(pattern), pattern
+    for pattern in ("Zfile", "zreq/**", "**/*.zpy", "z*x/**", "zdocs/*",
+                    "**/_*.[Yy][Aa][Mm][Ll]", "zdocs/z[a-c].zmd"):
+        assert _GLOB.unmodelled(pattern) is None, pattern
+    assert "exclusion" in _GLOB.unmodelled("!zdocs/**")
 
 
 def test_condition_evaluator_handles_the_shapes_that_defeated_heuristics() -> None:
@@ -3843,6 +3886,15 @@ def test_the_version_check_filter_covers_the_trees_bump_docs_now_reads():
 #     is in use, so it is refused rather than modelled speculatively).
 #   * A workflow that does not parse is LISTED and turns the test red — never
 #     skipped, because an unparsed workflow is one this guard did not look at.
+#
+# ⚠️ The "reached indirectly through a script" blind spot above is closed a
+# different way, per workflow (#3756): a workflow that carries the `GENERATED
+# path-trace` block has its list derived from what its jobs were MEASURED to
+# load, and its last step fails on a load the list does not cover
+# (scripts/ops/workflow_path_filter.py; tests/ops/test_workflow_path_filter.py).
+# This static invariant stays for every workflow, traced or not — it reads the
+# steps without running them, so it also sees a step the traced run skipped —
+# and both grade with the same two functions, bound just below.
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 WORKFLOW_PATHS_SCOPE = "scripts/"
 
@@ -3889,106 +3941,15 @@ WORKFLOW_PATHS_NOT_TRIGGERED: dict[tuple[str, str],
 }
 
 
-def _pull_request_paths(workflow: object, where: str) -> list[str] | None:
-    """The workflow's `on.pull_request.paths`, or None when it has none.
-
-    None means "not in scope": a workflow without a pull_request path gate
-    starts on every PR, so nothing it runs can be skipped by this mechanism.
-    """
-    if not isinstance(workflow, dict):
-        return None
-    on = workflow.get("on", workflow.get(True))
-    if not isinstance(on, dict):
-        return None
-    gates = [on[e] for e in ("pull_request", "pull_request_target")
-             if isinstance(on.get(e), dict)
-             and ("paths" in on[e] or "paths-ignore" in on[e])]
-    if not gates:
-        return None
-    if len(gates) > 1:
-        raise AssertionError(
-            f"{where}: both `pull_request` and `pull_request_target` carry a "
-            "path gate — not modelled (the scripts would need covering by "
-            "each). Model it before using it.")
-    pr = gates[0]
-    if "paths-ignore" in pr:
-        raise AssertionError(
-            f"{where}: `paths-ignore` on a pull_request event is not modelled — the "
-            "covered set is its complement, which an OR over positive patterns "
-            "cannot express. Model it before using it; do not drop it from the "
-            "scan.")
-    paths = pr.get("paths")
-    if paths is None:
-        return None
-    if not (isinstance(paths, list) and paths
-            and all(isinstance(p, str) for p in paths)):
-        raise AssertionError(
-            f"{where}: `on.pull_request.paths` is {paths!r}, not a non-empty "
-            "list of strings — refusing to grade a shape this guard does not "
-            "understand.")
-    if all(p.startswith("!") for p in paths):
-        raise AssertionError(
-            f"{where}: `on.pull_request.paths` holds only `!` patterns, which "
-            "match nothing — GitHub needs a positive pattern first.")
-    return paths
-
-
-def _on_paths_covers(patterns: list[str], path: str) -> bool:
-    """GitHub's `on.<event>.paths` rule: in order, the last match decides.
-
-    "A matching negative pattern (prefixed with `!`) after a positive match
-    will exclude the path. A matching positive pattern after a negative match
-    will include the path again." — GitHub workflow syntax docs.
-    """
-    covered = False
-    for pattern in patterns:
-        if pattern.startswith("!"):
-            if _negation_may_match(pattern[1:], path):
-                covered = False
-        elif _covers(pattern, path):
-            covered = True
-    return covered
-
-
-# Every character GitHub's filter cheat sheet gives a glob meaning to that can
-# sit inside one segment. `+` ("one or more of the preceding character") is
-# easy to forget — round 2 of #3601's review caught it missing.
-_GLOB_CHARS = re.compile(r"[*?\[+]")
-# Shapes refused outright in a `!` pattern rather than approximated: a brace or
-# extglob group can contain `/`, so splitting on `/` would cut it apart, and a
-# `./` prefix or trailing `/` has no documented meaning in `on.paths`.
-_NEGATION_REFUSED = re.compile(r"[{}()]|^\./|/$")
-
-
-def _negation_may_match(pattern: str, path: str) -> bool:
-    """An OVER-approximation of GitHub's match, for `!` patterns only.
-
-    A segment containing `**` anywhere (`**`, `**.py`, `ops**`) absorbs ANY
-    run of segments — GitHub's `**` matches any characters, `/` included. Any
-    other segment holding a glob character matches any single segment. A
-    literal segment must be equal. Every path GitHub's matcher accepts is
-    therefore accepted here, so an exclusion is never under-applied; the cost
-    is a possible false "excluded", the loud direction for a negative pattern.
-    """
-    if _NEGATION_REFUSED.search(pattern):
-        raise AssertionError(
-            f"`!{pattern}`: braces, extglob groups, a `./` prefix and a "
-            "trailing `/` are not modelled in a negated `on.paths` pattern — "
-            "an exclusion this guard cannot bound might hide an uncovered "
-            "script. Rewrite it as plain segments.")
-
-    def walk(pat: list[str], parts: list[str]) -> bool:
-        if not pat:
-            return not parts
-        head, rest = pat[0], pat[1:]
-        if "**" in head:
-            return any(walk(rest, parts[i:]) for i in range(len(parts) + 1))
-        if not parts:
-            return False
-        if not _GLOB_CHARS.search(head) and parts[0] != head:
-            return False
-        return walk(rest, parts[1:])
-    return walk(pattern.split("/"), path.split("/"))
+# ⛔ The gate's extraction and GitHub's ordered `!` rule are NOT defined here
+# any more (#3756). scripts/ops/workflow_path_filter.py asks the same two
+# questions at run time, inside the workflow, of the files a job really loaded
+# — and a second copy of "what is this workflow's gate" / "does it cover this
+# path" would be a second answer. Both live beside the matcher and are bound
+# here by name, so every assertion below grades with the functions CI runs.
+_pull_request_paths = _WPF.pull_request_paths
+_on_paths_covers = _GLOB.on_paths_covers
+_negation_may_match = _GLOB.negation_may_match
 
 
 def _workflow_paths_scan(

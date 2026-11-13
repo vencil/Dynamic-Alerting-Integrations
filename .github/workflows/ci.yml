@@ -518,8 +518,11 @@ jobs:
               # that stops reading a key the wizard emits must not skip it.
               - "helm/**"
               # Same test checks each Rule Pack note names a shipped ConfigMap.
-              - "k8s/03-monitoring/configmap-rules-*.yaml"
-              - "k8s/03-monitoring/configmap-rules-*.yml"
+              # One pattern for both names the family declares (`.yaml` and
+              # `.yml`, tests/shared/test_rule_source_globs_declared_once.py):
+              # a separate `*.yml` line matches no tracked file today, and a
+              # pattern that matches nothing is refused as a dead entry (#3756).
+              - "k8s/03-monitoring/configmap-rules-*.y*ml"
               # ⛔ Same class as `requirements/**` in `python` above, found by
               # the same mechanical guard: this leg RUNS this script as its
               # bundle-size gate, and no other job executes it against the real
@@ -541,7 +544,6 @@ jobs:
               - "docs/interactive/**"
               - "docs/assets/**"
               - "tests/e2e/**"
-              - "package.json"
               - ".github/workflows/ci.yml"
             # docs: threshold-exporter's
             # pkg/config/docs_defaults_sample_test.go (#1327) walks
