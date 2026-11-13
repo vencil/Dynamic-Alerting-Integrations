@@ -51,6 +51,9 @@ modules:
       - detect_cli_lang
       - i18n_text
     excluded:
+      is_threshold_number_text: "#3457 fullmatch of the pattern generated from the recipe contract; held row by row to Go's grammar_ok column of threshold_value_matrix.json and to the grammar written as a digit count over 150k generated strings by tests/shared/test_threshold_value_parity.py"
+      threshold_number: "#3457 is_threshold_number_text then float + isfinite; held row by row to Go's float_ok column and number by the same file (test_python_reads_a_threshold_number_as_the_matrix_says)"
+      threshold_number_text: "#3457 repr, or the 17-digit exponent form when repr is outside the grammar; round trip through threshold_number run over 50k random floats and the edge values by test_threshold_number_text_reads_back_as_the_number"
       url_problem: "#3528 the one URL judgement; scheme dispatch property-tested through its wrapper _lib_prometheus._validate_url_scheme (tests/shared/test_property_tools.py), every unusable shape run through every URL flag's parser by tests/shared/test_caller_path_manifest.py"
       url_type: "#3528 constructor of the UrlArg argparse type; run per flag by tests/shared/test_caller_path_manifest.py::test_a_url_flag_refuses_an_unusable_value_by_name"
       url_list_type: "#3528 constructor of the separator-list UrlArg; run by the same gate (federation-check --edge-urls)"

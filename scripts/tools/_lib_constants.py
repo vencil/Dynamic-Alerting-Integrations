@@ -183,6 +183,7 @@ RESERVED_PREFIX_READERS: Final[tuple[tuple[str, dict[str, tuple[str, ...]]], ...
 # BEGIN GENERATED recipe contract — scripts/tools/dx/gen_recipe_contract.py --update writes this
 # block from components/threshold-exporter/app/pkg/config/recipe_contract.json. DO NOT EDIT.
 FORECAST_MAX_LOOKBACK: Final[str] = "96h"
+THRESHOLD_NUMBER_PATTERN: Final[str] = "^[-+]?(?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:[0-9](?:\\.)?|\\.[0-9]{0,1})?|\\.[0-9]{0,2})?|\\.[0-9]{0,3})?|\\.[0-9]{0,4})?|\\.[0-9]{0,5})?|\\.[0-9]{0,6})?|\\.[0-9]{0,7})?|\\.[0-9]{0,8})?|\\.[0-9]{0,9})?|\\.[0-9]{0,10})?|\\.[0-9]{0,11})?|\\.[0-9]{0,12})?|\\.[0-9]{0,13})?|\\.[0-9]{0,14})?|\\.[0-9]{0,15})?|\\.[0-9]{0,16})?|\\.[0-9]{0,17})?|\\.[0-9]{0,18})?|\\.[0-9]{0,19})?|\\.[0-9]{1,20})(?:[eE][-+]?[0-9]+)?$"
 # END GENERATED recipe contract
 
 # ============================================================

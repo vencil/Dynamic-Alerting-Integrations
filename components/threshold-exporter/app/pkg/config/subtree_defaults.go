@@ -1056,6 +1056,14 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 	if err := yaml.Unmarshal(encoded, &sv); err != nil {
 		return sv, false
 	}
+	// #3457: yaml.v3 writes a float in strconv's 'g' form, which spells some
+	// finite numbers with more digits than a threshold number may have
+	// (1.2345678901234567e-4 comes out as 0.00012345678901234567, 21 digits).
+	// The tenant file would have been read as the number, so the overlay
+	// carries the number in the one form that is always in the grammar.
+	if f, isFloat := raw.(float64); isFloat && finiteThreshold(f) && !thresholdNumberRe.MatchString(sv.Default) {
+		sv.Default = thresholdNumberText(f)
+	}
 	return sv, true
 }
 

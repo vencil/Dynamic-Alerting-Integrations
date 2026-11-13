@@ -191,30 +191,34 @@ def test_non_finite_tenant_string_stays_out_of_domain(tmp_path, value):
     assert any("OUT-OF-DOMAIN" in e and "pct = " in e and "inf" in e for e in errs), errs
 
 
-@pytest.mark.parametrize("value, shown", [("1_000", "1000"), ("-1_0", "-10"), ("1_0e2:critical", "1000")])
-def test_an_underscored_number_is_judged_as_the_exporter_reads_it(tmp_path, value, shown):
-    """#3140: Go's ParseFloat reads `1_000` as 1000, and so did this lint
-    (Python's `float`) before #3140; a refusal of `_` here let an
-    out-of-domain value through (`--ci` 1 → 0)."""
+@pytest.mark.parametrize("value, shown", [("1e3", "1000"), ("+1000.", "1000"), ("1.024E3:critical", "1024"),
+                                          ("-1e1", "-10")])
+def test_a_decimal_spelling_is_judged_as_the_exporter_reads_it(tmp_path, value, shown):
+    """#3267: every value is read by the exporter (`da-guard
+    threshold-values`); whatever decimal spelling its grammar takes is judged
+    at the number it reads."""
     _conf_d(tmp_path, {"tenants": {"t": {"pct": value}}})
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert any("OUT-OF-DOMAIN" in e and f"pct = {shown} " in e for e in errs), errs
 
 
-@pytest.mark.parametrize("value, shown", [("0x1p10", "1024"), ("0X1P10:critical", "1024"),
-                                          ("0x1p1024", "inf"), ("-0x1p1024", "-inf")])
-def test_a_hex_float_is_judged_as_the_exporter_reads_it(tmp_path, value, shown):
-    """#3267 (owner-approved, the one intended change): the exporter reads
-    `0x1p10` (1024), and every value is now read by the exporter
-    (`da-guard threshold-values`), so a hex float is judged — it was skipped
-    while the lint read values with a Python copy (`--ci` 0 → 1)."""
+@pytest.mark.parametrize("value", ["1_000", "-1_0", "1_0e2:critical", "0x1p10", "0X1P10:critical", "0x1p1024",
+                                   "-0x1p1024", "123456789012345678901"])
+def test_a_spelling_outside_the_grammar_is_not_judged(tmp_path, value):
+    """#3457: `_` between digits, a hex float and a mantissa of more than 20
+    digits are not threshold numbers: the exporter serves none of them, so
+    there is no number to judge — like `abc`. (da-guard's `value_not_served`
+    is the gate that names them.) Python's `float` reads `1_000`; this lint
+    does not read values itself."""
     _conf_d(tmp_path, {"tenants": {"t": {"pct": value}}})
-    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
-    assert any("OUT-OF-DOMAIN" in e and f"pct = {shown} " in e for e in errs), errs
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+    # The same key is judged when the value is a number: the test is not vacuous.
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": "1000"}}})
+    assert any("OUT-OF-DOMAIN" in e for e in _errors(_registry(pct=_spec(80, "%")), tmp_path))
 
 
-def test_an_in_domain_hex_float_is_clean(tmp_path):
-    _conf_d(tmp_path, {"tenants": {"t": {"pct": "0x1p4"}}})
+def test_an_in_domain_exponent_spelling_is_clean(tmp_path):
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": "1.6e1"}}})
     assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
 
 
@@ -255,18 +259,20 @@ def _main_rc(tmp_path, monkeypatch, registry, argv=("--ci",)):
 
 
 @pytest.mark.parametrize("files, registry, rc", [
-    # hex out of domain (old 0)
+    # #3457: a hex float is not a threshold number — the exporter reads none,
+    # so nothing is judged (0, as before #3267; an exponent spelling is judged)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
-      "tenants:\n  t:\n    pct: '0x1p10'\n"}, _registry(pct=_spec(80, "%")), 1),
-    # hex overflow, ±Inf (old 0)
+      "tenants:\n  t:\n    pct: '0x1p10'\n"}, _registry(pct=_spec(80, "%")), 0),
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
-      "tenants:\n  t:\n    pct: '0x1p1024'\n"}, _registry(pct=_spec(80, "%")), 1),
-    # a hex percentile in recommendation-data (old 0)
+      "tenants:\n  t:\n    pct: '0x1p1024'\n"}, _registry(pct=_spec(80, "%")), 0),
     ({"docs/assets/recommendation-data.json":
-      '{"recommendations": {"pct": {"p50": "0x1p10", "unit": "%"}}}'}, _registry(pct=_spec(80, "%")), 1),
-    # a hex value outside an enum (old 0)
+      '{"recommendations": {"pct": {"p50": "0x1p10", "unit": "%"}}}'}, _registry(pct=_spec(80, "%")), 0),
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
-      "tenants:\n  t:\n    h: '0x1.8p1'\n"}, _registry(h=_spec(0, _ENUM)), 1),
+      "tenants:\n  t:\n    h: '0x1.8p1'\n"}, _registry(h=_spec(0, _ENUM)), 0),
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    pct: '1.024e3'\n"}, _registry(pct=_spec(80, "%")), 1),
+    ({"docs/assets/recommendation-data.json":
+      '{"recommendations": {"pct": {"p50": "1.024e3", "unit": "%"}}}'}, _registry(pct=_spec(80, "%")), 1),
     # a signed NaN: Go reads no number, so nothing is judged (old 1: Python read NaN)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
       "tenants:\n  t:\n    h: '+nan'\n"}, _registry(h=_spec(0, _ENUM)), 0),
@@ -289,7 +295,7 @@ def _main_rc(tmp_path, monkeypatch, registry, argv=("--ci",)):
     ({"docs/assets/platform-data.json":
       '{"rulePacks": {"p": {"defaults": {"pct": {"value": 1' + "0" * 400 + ', "unit": "%"}}}}}'},
      _registry(pct=_spec(80, "%")), 2),
-], ids=["hex", "hex-overflow", "hex-percentile", "hex-enum", "plus-nan", "minus-nan-suffix",
+], ids=["hex", "hex-overflow", "hex-percentile", "hex-enum", "exponent", "exponent-percentile", "plus-nan", "minus-nan-suffix",
         "nan", "arabic-overflow", "nan-hid-inversion", "critical-suffix", "huge-int"])
 def test_ci_exit_code(tmp_path, monkeypatch, files, registry, rc):
     for rel, text in files.items():

@@ -120,7 +120,19 @@ class TestValidateDir:
         assert "[Ww]" not in viol[0] and "\\u" not in viol[0] and "does not match" not in viol[0]
         assert viol[0].endswith(f"@ /tenants/db-a/{where}")
 
-    @pytest.mark.parametrize("value", ["70", "70:Critical", " 70 : warning ", "disable"])
+    @pytest.mark.parametrize("value", ["1_000", "0x1F", "0x1p4:critical", "abc", "Infinity", "",
+                                       "123456789012345678901"])
+    def test_a_number_outside_the_grammar_is_rejected_readably(self, confd, schema, value):
+        """#3457: thresholdScalar's pattern is the exporter's grammar of a
+        threshold number too, generated from the recipe contract."""
+        _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    mysql_connections: "{value}"\n')
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert len(viol) == 1, viol
+        assert "decimal number of at most 20 digits" in viol[0], viol
+        assert "[0-9]" not in viol[0] and "does not match" not in viol[0]
+
+    @pytest.mark.parametrize("value", ["70", "70:Critical", " 70 : warning ", "disable", "+5", ".5", "1e3",
+                                       "12345678901234567890", "OFF"])
     def test_a_severity_suffix_the_exporter_reads_passes(self, confd, schema, value):
         _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    mysql_connections: "{value}"\n')
         assert validate_dir(confd, schema, jsonschema)[1] == []

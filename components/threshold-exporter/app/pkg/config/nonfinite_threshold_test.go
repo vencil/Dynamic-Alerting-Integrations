@@ -214,8 +214,11 @@ func TestRefusedThresholdWrites(t *testing.T) {
 		"pg_off_sev":                 {Default: "disable:critical"},
 		"pg_crit_critical":           {Default: "70:critical"},
 		"pg_window":                  {Default: "70", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "abc"}}},
-		"ok_underscore":              {Default: "1_000"},
-		"ok_hex":                     {Default: "0x1p4"},
+		"pg_underscore":              {Default: "1_000"},
+		"pg_hex":                     {Default: "0x1p4"},
+		"pg_digits":                  {Default: "123456789012345678901"},
+		"ok_digits":                  {Default: "12345678901234567890"},
+		"ok_exp":                     {Default: "+1.5e3"},
 		"ok_sev":                     {Default: "70:critical"},
 		"ok_off":                     {Default: "disable"},
 		"_silent_mode":               {Default: "abc"},
@@ -227,7 +230,8 @@ func TestRefusedThresholdWrites(t *testing.T) {
 			t.Errorf("%s: message %q does not name the key", r.Key, r.Message)
 		}
 	}
-	want := []string{"pg_crit_critical", "pg_hexrange", "pg_high", "pg_off_sev", "pg_range", "pg_window", "pg_x"}
+	want := []string{"pg_crit_critical", "pg_digits", "pg_hex", "pg_hexrange", "pg_high", "pg_off_sev", "pg_range",
+		"pg_underscore", "pg_window", "pg_x"}
 	if !reflect.DeepEqual(keys, want) {
 		t.Errorf("keys = %v, want %v (%+v)", keys, want, got)
 	}
@@ -238,7 +242,8 @@ func TestRefusedThresholdWrites(t *testing.T) {
 func TestRefusedThresholdWrites_IsRefusedValueAt(t *testing.T) {
 	t.Parallel()
 	values := []string{"70", "1_000", "0x1p4", "70:critical", " 70 : Warning ", "disable", "off", "017",
-		"abc", "70:high", "70:", "1e999", "0x1p1024", "0x1F", "", "NaN", "-Inf:critical", "disable:critical", "CRİTICAL"}
+		"abc", "70:high", "70:", "1e999", "0x1p1024", "0x1F", "", "NaN", "-Inf:critical", "disable:critical", "CRİTICAL",
+		"+.5e1", "12345678901234567890", "123456789012345678901", "1_0e999", "Infinity:critical"}
 	for _, key := range []string{"mysql_connections", "mysql_connections_critical", "x{db=\"a\"}"} {
 		for _, v := range values {
 			sv := ScheduledValue{Default: v}
@@ -268,7 +273,8 @@ func TestThresholdReadAlike(t *testing.T) {
 		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: " abc "}},
 		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc:warning"}},
 		{"k", ScheduledValue{Default: "70:high"}, ScheduledValue{Default: "70 : HIGH"}},
-		{"k", ScheduledValue{Default: "1_000"}, ScheduledValue{Default: "1000"}},
+		{"k", ScheduledValue{Default: "1e3"}, ScheduledValue{Default: "1000"}},
+		{"k", ScheduledValue{Default: "+1000."}, ScheduledValue{Default: "1000"}},
 		{"k", ScheduledValue{Default: "70:Critical"}, ScheduledValue{Default: "70.0:critical"}},
 		{"k", ScheduledValue{Default: "disable"}, ScheduledValue{Default: "OFF"}},
 		{"k", w("70", "01:00-02:00", "abc"), w("70", " 01:00-02:00 ", " abc")},

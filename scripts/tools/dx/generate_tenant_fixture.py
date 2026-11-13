@@ -55,6 +55,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_validation import threshold_number  # noqa: E402  (#3457)
 
 # ⛔ The predicate that decides whether a key can live under `defaults:` at all,
 # imported from the module that owns it rather than respelled here (#1412). A
@@ -724,8 +725,10 @@ def main() -> None:
             "(with or without --with-defaults). "
             "Repeat for multiple keys (e.g. --extra-defaults bench_trigger=50). "
             "v2.8.0 Phase B Track A A6: replaces the inline-YAML rewrite "
-            "that bench_e2e_run.sh did post-staging (cycle-3 RCA). Values "
-            "must parse as int or float; non-numeric raises an error."
+            "that bench_e2e_run.sh did post-staging (cycle-3 RCA). A value "
+            "must be a number the exporter reads as a threshold: finite, "
+            "decimal, at most 20 digits, with an optional exponent (so not "
+            "1_000, 0x1F, nan or inf); anything else is an error."
         ),
     )
     args = parser.parse_args()
@@ -739,18 +742,19 @@ def main() -> None:
         raw = raw.strip()
         if not key:
             parser.error(f"--extra-defaults key is empty in {spec!r}")
-        # Try int first (preserves int identity which is what _defaults
-        # parser most often expects); fall back to float for `1.5` etc.
-        try:
-            extra_defaults[key] = int(raw)
-        except ValueError:
-            try:
-                extra_defaults[key] = float(raw)
-            except ValueError:
-                parser.error(
-                    f"--extra-defaults {spec!r}: value must be numeric "
-                    f"(_defaults.yaml parser rejects non-numeric — cycle-6 RCA)"
-                )
+        # The exporter's own grammar of a threshold number (#3457): int() and
+        # float() also read `1_000`, `nan` and `inf`, which the exporter
+        # does not serve as a default.
+        number = threshold_number(raw)
+        if number is None:
+            parser.error(
+                f"--extra-defaults {spec!r}: value must be a finite decimal number of at "
+                f"most 20 digits, with an optional exponent (the exporter serves nothing "
+                f"else as a default — cycle-6 RCA)"
+            )
+        # An integer stays an int (the identity the _defaults parser most
+        # often expects); `1.5`, `1e3` and the like are floats.
+        extra_defaults[key] = int(raw) if raw.lstrip("+-").isdecimal() and raw.isascii() else number
 
     if args.output:
         output_dir = Path(args.output)

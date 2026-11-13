@@ -352,7 +352,7 @@ def _explain(exc, validator) -> str:
             and err.schema.get("patternErrorMessage")):
         # jsonschema's own message would print the whole regex, not the rule
         # it encodes: the closed `_` namespace (#3016 R3) or a threshold's
-        # `:severity` suffix (#3071, thresholdScalar).
+        # number and `:severity` suffix (#3071, #3457, thresholdScalar).
         if "propertyNames" in err.schema_path:
             return f"unknown key '{err.instance}': {err.schema['patternErrorMessage']}"
         return f"{err.instance!r}: {err.schema['patternErrorMessage']}"

@@ -5,7 +5,6 @@ import (
 	"log"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -953,7 +952,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 			continue // a root default of a family the tenant switched off
 		}
 		// Its parse failure is warnUnparsedRootDims' line, once per resolve.
-		rows = c.appendDimensionalRow(rows, tenant, key, ScheduledValue{Default: strconv.FormatFloat(v, 'g', -1, 64)}, false, now, sink, discardLogf, nil)
+		rows = c.appendDimensionalRow(rows, tenant, key, ScheduledValue{Default: thresholdNumberText(v)}, false, now, sink, discardLogf, nil)
 	}
 	for key, sv := range overrides {
 		if !dimensionalRowRead(key, c.Dimensions) {

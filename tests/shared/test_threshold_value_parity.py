@@ -1,11 +1,17 @@
-"""A threshold value's ``value[:severity]`` suffix ↔ the exporter (#3071):
-Python half of tests/shared/threshold_value_matrix.json.
+"""A threshold value, ``value[:severity]`` ↔ the exporter (#3071, #3457):
+the Python and JSON-schema half of tests/shared/threshold_value_matrix.json.
 
-The matrix's verdict columns and ``severities`` are written by Go
+The matrix's verdict columns and its header are written by Go
 (components/threshold-exporter/app/pkg/config/threshold_value_parity_test.go,
-from ``splitThresholdSeverity`` and ``ThresholdSeverities``, the one grammar
-the threshold rows and custom alerts share). Held to the same columns here:
+from ``splitThresholdSeverity``, ``parseThresholdNumber`` and
+``ThresholdSeverities``, the one grammar the threshold rows and custom alerts
+share). Held to the same columns here:
 
+* ``_lib_validation.threshold_number`` / ``is_threshold_number_text`` — the
+  Python reader of a threshold NUMBER, from the pattern generated out of the
+  recipe contract (``grammar_ok`` / ``float_ok``);
+* the contract's ``patterns.thresholdNumber`` itself, against the grammar
+  written out as a count (``_in_grammar``);
 * ``da-guard threshold-values`` (#3267), as ``_lib_parse_tree.threshold_values``
   reads it — the reading the unit-sanity lint judges. Python has no reader
   of a threshold value of its own any more (the ``_lib_validation`` copy of
@@ -17,12 +23,13 @@ the threshold rows and custom alerts share). Held to the same columns here:
 * ``backtest_threshold._served_written`` — how ``backtest --tenant`` reads a
   value written for a base key: from da-guard served-values (#3140 PR2);
 * the severity set the backtest compares against;
-* tenant-config.schema.json ``thresholdScalar``'s ``pattern``, which checks
-  the suffix only (``ok`` is false only for a refused suffix), through ``re``
-  and jsonschema.
+* tenant-config.schema.json ``thresholdScalar``'s ``pattern`` (generated:
+  a number of the grammar or a disable word, then an optional severity),
+  through ``re`` and jsonschema.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import math
 import os
@@ -43,9 +50,45 @@ import check_threshold_unit_sanity as unit_sanity  # noqa: E402
 
 _MATRIX = os.path.join(_REPO_ROOT, "tests", "shared", "threshold_value_matrix.json")
 _SCHEMA = os.path.join(_REPO_ROOT, "docs", "schemas", "tenant-config.schema.json")
+_CONTRACT = os.path.join(_REPO_ROOT, "components", "threshold-exporter", "app", "pkg", "config",
+                         "recipe_contract.json")
 
 # The samples #3071 is about, at the least.
 _REQUIRED_SAMPLES = {"70", "70:critical", "70:Critical", "70:high", "70:", "7O:critical"}
+
+#: The most digits a threshold number's mantissa may have (#3457), every
+#: digit counted: leading and trailing zeros, both sides of the `.`.
+_MAX_MANTISSA_DIGITS = 20
+_LONG_MANTISSA = "1" + "0" * 800 + "e-800"  # #3827: mathematically 1
+
+
+def _contract_pattern() -> str:
+    with open(_CONTRACT, encoding="utf-8") as f:
+        return json.load(f)["patterns"]["thresholdNumber"]
+
+
+def _in_grammar(text: str) -> bool:
+    """The grammar of a threshold number, by counting: an optional `+` or
+    `-`; a mantissa of ASCII digits with at most one `.`, at least one digit
+    and at most `_MAX_MANTISSA_DIGITS`; then optionally `e` or `E`, an
+    optional sign and at least one ASCII digit (any number of them)."""
+    digits = "0123456789"
+    if text[:1] in ("+", "-"):
+        text = text[1:]
+    mantissa, exponent = text, None
+    for i, ch in enumerate(text):
+        if ch in "eE":
+            mantissa, exponent = text[:i], text[i + 1:]
+            break
+    count = sum(ch in digits for ch in mantissa)
+    if (any(ch not in digits + "." for ch in mantissa) or mantissa.count(".") > 1
+            or not 1 <= count <= _MAX_MANTISSA_DIGITS):
+        return False
+    if exponent is None:
+        return True
+    if exponent[:1] in ("+", "-"):
+        exponent = exponent[1:]
+    return exponent != "" and all(ch in digits for ch in exponent)
 
 
 def _matrix() -> dict:
@@ -67,6 +110,8 @@ def test_matrix_is_written_by_go():
     assert m["severities"], "no severities: regenerate with DA_REGEN_THRESHOLD_VALUE_MATRIX=1"
     assert all({"value", "ok", "row_disabled"} <= set(r) for r in m["rows"]), (
         "a row without Go's verdict: regenerate with DA_REGEN_THRESHOLD_VALUE_MATRIX=1")
+    assert all(({"value_part", "severity", "grammar_ok", "float_ok"} <= set(r)) == r["ok"] for r in m["rows"]), (
+        "the value-half columns are written exactly for the rows whose suffix reads")
     assert _REQUIRED_SAMPLES <= {r["value"] for r in m["rows"]}
     assert {r["ok"] for r in m["rows"]} == {True, False}, "the table needs both verdicts"
 
@@ -78,11 +123,90 @@ def test_severity_sets_are_gos():
 
 def _number(text):
     """The number of a `value_part` Go's `float_ok` accepts — test-side only,
-    to check the value Go answers: a hex float by `float.fromhex`, anything
-    else by `float` (both without the `_` Go and Python allow between
-    digits)."""
-    text = text.replace("_", "")
-    return float.fromhex(text) if "x" in text.lower() else float(text)
+    to check the value Go answers. Such a text is in the grammar (decimal,
+    at most 20 digits), where `float` rounds as Go does."""
+    assert _in_grammar(text), text
+    return float(text)
+
+
+def test_contract_pattern_is_the_documented_count():
+    """#3457: patterns.thresholdNumber accepts exactly what the count
+    accepts — every string of up to five characters over the grammar's
+    alphabet and the characters it must refuse, and every mantissa length
+    around the bound with the `.` (or a `_`) at every position. Widening the
+    pattern (a `_`, a 21st digit, a hex prefix) fails here."""
+    pattern = re.compile(_contract_pattern(), re.ASCII)
+    samples = {"".join(s) for n in range(6) for s in itertools.product("09.eE+-_x \n", repeat=n)}
+    for digits in range(1, _MAX_MANTISSA_DIGITS + 4):
+        run = "7" * digits
+        for sign, exp in itertools.product(("", "+", "-"), ("", "e5", "E-5", "e+" + "9" * 40, "e", "e_1")):
+            samples.add(sign + run + exp)
+            for dot in range(digits + 1):
+                samples.add(sign + run[:dot] + "." + run[dot:] + exp)
+                samples.add(sign + run[:dot] + "_" + run[dot:] + exp)
+    samples |= {"0x10", "0x1p4", "0o17", "0b101", "1_000", "Inf", "NaN", "infinity", "\uff11", "\u0661",
+                "1\n", _LONG_MANTISSA}
+    assert len(samples) > 150_000
+    wrong = sorted(s for s in samples if (pattern.fullmatch(s) is not None) != _in_grammar(s))
+    assert not wrong, wrong[:20]
+    assert sum(map(_in_grammar, samples)) > 1000, "the sample holds too few accepted strings"
+
+
+def test_contract_pattern_is_portable():
+    """One pattern for Go (RE2), ECMAScript and Python: ASCII classes only,
+    no lookaround, no backreference, no flag group — nothing one of the
+    three engines reads another way."""
+    pattern = _contract_pattern()
+    assert pattern.isascii() and pattern.startswith("^") and pattern.endswith("$")
+    for construct in ("(?=", "(?!", "(?<", "(?P", "\\d", "\\s", "\\w", "\\b", "(?i", "(?m", "(?s"):
+        assert construct not in pattern, construct
+    assert not re.search(r"\\[0-9]", pattern), "a backreference"
+    assert "[0-9]" in pattern
+
+
+@pytest.mark.parametrize("row", [r for r in _rows() if r["ok"]], ids=lambda r: repr(r["value"]))
+def test_python_reads_a_threshold_number_as_the_matrix_says(row):
+    """#3457: `_lib_validation`'s reader of a threshold number is the
+    exporter's on every value half — in the grammar exactly when
+    `grammar_ok`, a number exactly when `float_ok`."""
+    part = row["value_part"]
+    assert _lib_validation.is_threshold_number_text(part) == row["grammar_ok"] == _in_grammar(part), row
+    got = _lib_validation.threshold_number(part)
+    assert (got is not None) == row["float_ok"], row
+    if got is not None:
+        assert math.isfinite(got) and got == float(part), row
+
+
+def test_python_number_reader_takes_no_text_float_alone_would():
+    """`float()` reads all of these; the grammar reads none."""
+    for text in ("1_000", " 5", "5 ", "5\n", "nan", "inf", "-Infinity", "\uff15", "\u0665", "1e999",
+                 "1" * 21, _LONG_MANTISSA):
+        float(text)  # no ValueError: this is what must not be relied on
+        assert _lib_validation.threshold_number(text) is None, text
+    for value in (None, 5, 5.0, True, b"5"):
+        assert _lib_validation.threshold_number(value) is None
+        assert not _lib_validation.is_threshold_number_text(value)
+
+
+def test_threshold_number_text_reads_back_as_the_number():
+    """The text a tool writes a number with is in the grammar for every
+    finite float — `repr` alone is not (21 digits below)."""
+    import random
+    import struct
+    outside = 1.2345678901234567e-4
+    assert not _lib_validation.is_threshold_number_text(repr(outside)), repr(outside)
+    rng = random.Random(3457)
+    values = [0.0, -0.0, 1.0, 70.0, 0.1, 1e21, 1e-7, outside, -outside, 1.7976931348623157e308, 5e-324,
+              0.30000000000000004]
+    values += [struct.unpack("<d", struct.pack("<Q", rng.getrandbits(64)))[0] for _ in range(50_000)]
+    for v in values:
+        if math.isfinite(v):
+            text = _lib_validation.threshold_number_text(v)
+            assert _lib_validation.threshold_number(text) == v, (v, text)
+    assert _lib_validation.threshold_number_text(30) == "30.0"
+    assert _lib_validation.threshold_number_text(0.8) == "0.8"
+    assert _lib_validation.threshold_number_text(-math.inf) == "-inf"
+    assert _lib_validation.threshold_number_text(math.nan) == "nan"
 
 
 def _same(a, b):
@@ -126,10 +250,11 @@ def test_threshold_values_reads_as_the_matrix_says(row, _readings):
 @pytest.mark.usefixtures("da_guard_env")
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
 def test_unit_sanity_lint_judges_the_number_the_exporter_reads(row, _readings):
-    """The number the exporter reads — every spelling it reads, a hex float
-    included (#3267) — and, owner ruling on #3140 (D), a non-finite one too,
-    which the exporter refuses but this lint judges (±Inf is OUT-OF-DOMAIN).
-    A value whose suffix the exporter refuses is not judged."""
+    """The number the exporter reads (#3267) and, owner ruling on #3140 (D),
+    a non-finite one too, which the exporter refuses but this lint judges
+    (±Inf is OUT-OF-DOMAIN). A value whose suffix the exporter refuses, or
+    whose number is outside the grammar (`1_000`, `0x1p4`, #3457), is not
+    judged."""
     got = unit_sanity._numbers([("mysql_connections", row["value"])])[0]
     if not row["ok"]:
         assert got is None, row
@@ -174,25 +299,50 @@ def test_backtest_reads_a_base_key_value_as_the_exporter_does(row):
     if row["row_disabled"]:
         assert got is None, row
     elif row["ok"] and row["float_ok"]:
-        # `1_000`, `0x1p4` included: backtested at the number the exporter
-        # serves (#3267), with no spelling table of this tool's own.
+        # Backtested at the number the exporter serves (#3267), with no
+        # spelling table of this tool's own.
         assert got == (_number(row["value_part"]), row["severity"]), row
     else:
         assert got in ("not read", (80.0, "warning")), (row, got)
 
 
-@pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
-def test_schema_pattern_refuses_exactly_the_refused_suffixes(row):
-    assert (re.search(_pattern(), row["value"]) is not None) == row["ok"], row
+def _schema_accepts(row) -> bool:
+    """What thresholdScalar's pattern can say of a row (#3457): the suffix is
+    readable, and the value half is a number of the grammar or a disable
+    word. Whether that number is finite, and that a threshold ROW (unlike a
+    custom alert) refuses `disable:<severity>`, are the exporter's alone."""
+    return row["ok"] and (row["grammar_ok"] or row["custom_alert_disabled"])
 
 
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
-def test_schema_validator_refuses_exactly_the_refused_suffixes(row):
+def test_schema_pattern_accepts_what_the_grammar_reads(row):
+    assert (re.search(_pattern(), row["value"]) is not None) == _schema_accepts(row), row
+
+
+@pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
+def test_schema_validator_accepts_what_the_grammar_reads(row):
     jsonschema = pytest.importorskip("jsonschema")
     with open(_SCHEMA, encoding="utf-8") as f:
         schema = json.load(f)
     wrapper = {"$ref": "#/definitions/thresholdScalar", "definitions": schema["definitions"]}
-    assert jsonschema.Draft7Validator(wrapper).is_valid(row["value"]) == row["ok"], row
+    assert jsonschema.Draft7Validator(wrapper).is_valid(row["value"]) == _schema_accepts(row), row
+
+
+def test_schema_pattern_differs_from_the_exporter_only_where_a_pattern_cannot_say():
+    """Every row the exporter serves or reads as a disable is schema-valid;
+    a schema-valid row it does not is an overflow of the grammar (`1e999`)
+    or a `disable:<severity>`."""
+    pattern = re.compile(_pattern())
+    extra = []
+    for row in _rows():
+        served = (row["ok"] and row["float_ok"]) or row["row_disabled"]
+        valid = pattern.search(row["value"]) is not None
+        assert valid or not served, row
+        if valid and not served:
+            extra.append(row["value"])
+            assert (row["grammar_ok"] and not row["float_ok"]) or (
+                row["custom_alert_disabled"] and ":" in row["value"]), row
+    assert {"1e999", "disable:critical"} <= set(extra), extra
 
 
 def test_matrix_carries_the_non_finite_and_row_disable_samples():
@@ -210,16 +360,43 @@ def test_matrix_carries_the_non_finite_and_row_disable_samples():
     assert rows["disable:critical"]["custom_alert_disabled"] is True  # #3042: unchanged
 
 
-def test_matrix_carries_the_go_number_spellings():
-    """#3140: what Go's ParseFloat reads beyond Python's `float` (a hex
-    float) and the `_` both read between digits — so the readers checked
-    here (`da-guard threshold-values`, the lint's judging, #3267) are held
-    to Go on them."""
+def test_matrix_carries_the_spellings_outside_the_grammar():
+    """#3457: what Go's ParseFloat, JavaScript's Number or Python's float
+    read and the grammar does not — `_` between digits, a hex float or
+    integer, an octal or binary prefix, a mantissa of more than 20 digits
+    (#3827) — and the trims the three languages do not share. Each is a row,
+    so every reader checked against the matrix is held to the exporter on
+    it."""
     rows = {r["value"]: r for r in _rows()}
-    for v in ("1_000", "-1_0", "1e1_0", "0x1p4", "0x_1p4", "0x1.p1"):
-        assert rows[v]["ok"] and rows[v]["float_ok"] is True, v
-    for v in ("1__0", "_1", "1_", "0x10", "0x1p_4", "0x1p99999", "\u0661\u0660"):
-        assert rows[v]["ok"] and rows[v]["float_ok"] is False, v
+    outside = ("1_000", "-1_0", "1e1_0", "0x1p4", "0x_1p4", "0x1.p1", "0X1P-2:critical", "1__0", "_1", "1_",
+               "0x10", "0x1F", "0o17", "0b101", "0x1p_4", "0x1p99999", "\u0661\u0660", "Infinity",
+               "123456789012345678901", "000000000000000000001", "0.12345678901234567890",
+               _LONG_MANTISSA, "", "\ufeff70", "70\ufeff", "\u001c70", "70\u001f")
+    for v in outside:
+        assert rows[v]["ok"] and rows[v]["grammar_ok"] is False and rows[v]["float_ok"] is False, v
+    inside = {"12345678901234567890": 12345678901234567890.0, "00000000000000000001": 1.0,
+              "1.2345678901234567890": 1.234567890123456789, "+5": 5.0, "5.": 5.0, ".5": 0.5, "017": 17.0,
+              "1e-400": 0.0, "\u008570": 70.0, "70\u0085": 70.0}
+    for v, number in inside.items():
+        assert rows[v]["ok"] and rows[v]["grammar_ok"] is True and rows[v]["float_ok"] is True, v
+        assert _lib_validation.threshold_number(rows[v]["value_part"]) == number, v
+    # In the grammar, not finite: the two columns are told apart.
+    for v in ("1e999", "1e309", "-1e309"):
+        assert rows[v]["grammar_ok"] is True and rows[v]["float_ok"] is False, v
+    assert rows[":critical"]["ok"] and rows[":critical"]["grammar_ok"] is False
+
+
+def test_matrix_header_is_written_by_go():
+    """The header the generator composes the schema's pattern and the
+    portal's trim from. U+0085 is trimmed and U+FEFF is not: the reverse of
+    JavaScript's trim()."""
+    m = _matrix()
+    assert 0x85 in m["trim_code_points"] and 0xFEFF not in m["trim_code_points"]
+    assert not {0x1C, 0x1D, 0x1E, 0x1F} & set(m["trim_code_points"]), "Python's strip() trims these, Go does not"
+    assert m["trim_code_points"] == sorted(set(m["trim_code_points"]))
+    assert set(m["disable_words"]) == set(_lib_validation._DISABLED_VALUES)
+    assert set(m["disable_letters"]) == set("".join(m["disable_words"]))
+    assert 0x130 in m["disable_letters"]["i"], "Go lower-cases U+0130 to i"
 
 
 def test_matrix_carries_the_opt_out_samples():

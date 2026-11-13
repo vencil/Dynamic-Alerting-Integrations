@@ -22,7 +22,8 @@ purpose: |
     recipeStatus(r)                 ADR-024 §8 lifecycle status (advisory)
     formSupported(recipe)           does the recipe have a form (vs YAML-only)
     isValidName/Metric/Window(s)    per-field structural validators
-    parseThresholdValue(s)          leading numeric of a "value[:sev]" string
+    readThreshold(s)                a "value[:sev]" string as the exporter reads it
+    parseThresholdValue(s)          its number, or NaN when the exporter reads none
     composeThreshold(f)             fold value + severity → "value:severity"
     requiredFields(recipe)          required-field list for the state gate
     isFieldValid(field, value)      per-field validity
@@ -104,18 +105,86 @@ function isValidName(s) { return typeof s === 'string' && NAME_RE.test(s); }
 function isValidMetric(s) { return typeof s === 'string' && METRIC_RE.test(s); }
 function isValidWindow(s) { return typeof s === 'string' && WINDOW_RE.test(s); }
 
+/* ── the threshold value, read as the exporter reads it (#3457) ───────
+ * One grammar, three readers held to one table
+ * (tests/shared/threshold_value_matrix.json; this file's half is
+ * tests/threshold-value-matrix.test.ts):
+ *   - split at the LAST ':' and trim both halves — with the exporter's trim
+ *     (ENUMS.thresholdTrim, the characters Go's strings.TrimSpace takes), NOT
+ *     String.prototype.trim: that one also strips U+FEFF and leaves U+0085;
+ *   - the severity is warning/critical in ASCII letters of either case, and
+ *     no ':' is the default severity;
+ *   - the value half is a number only if it matches the contract's
+ *     patterns.thresholdNumber (decimal, at most 20 digits, optional
+ *     exponent) AND is finite.
+ * ⛔ Number() is called only on a text the pattern has matched. On its own
+ * it also reads `0x1F`, `0o17`, `0b101`, `Infinity` and (as 0) the empty
+ * string — values the exporter refuses, which the form used to call valid. */
+const THRESHOLD_NUMBER_RE = new RegExp(ENUMS.patterns.thresholdNumber);
+const THRESHOLD_TRIM = new Set(ENUMS.thresholdTrim);
+
+function trimThreshold(s) {
+  const chars = Array.from(s); // by code point: U+3000 etc. are single entries
+  let start = 0;
+  let end = chars.length;
+  while (start < end && THRESHOLD_TRIM.has(chars[start].codePointAt(0))) start += 1;
+  while (end > start && THRESHOLD_TRIM.has(chars[end - 1].codePointAt(0))) end -= 1;
+  return chars.slice(start, end).join('');
+}
+
+function isAscii(s) {
+  for (let i = 0; i < s.length; i += 1) {
+    if (s.charCodeAt(i) > 0x7f) return false;
+  }
+  return true;
+}
+
+/* readThreshold(s) → { ok: false } when the severity suffix is unreadable
+ * ('70:high', '70:'), else { ok: true, valuePart, severity, grammarOk,
+ * number }: `grammarOk` says the value half is in the grammar of a threshold
+ * number, `number` is that number, or null when it is not in the grammar or
+ * not finite ('1e999'). */
+function readThreshold(s) {
+  if (typeof s !== 'string') return { ok: false };
+  const raw = trimThreshold(s);
+  const colon = raw.lastIndexOf(':');
+  let valuePart = raw;
+  let severity = ENUMS.severityDefault;
+  if (colon >= 0) {
+    valuePart = trimThreshold(raw.slice(0, colon));
+    const suffix = trimThreshold(raw.slice(colon + 1));
+    // The exporter lower-cases an ASCII suffix only: 'CRİTICAL' is refused.
+    severity = isAscii(suffix) ? suffix.toLowerCase() : null;
+    if (!ENUMS.severity.includes(severity)) return { ok: false };
+  }
+  const grammarOk = THRESHOLD_NUMBER_RE.test(valuePart);
+  const number = grammarOk ? Number(valuePart) : NaN;
+  return {
+    ok: true, valuePart, severity, grammarOk, number: Number.isFinite(number) ? number : null,
+  };
+}
+
 function parseThresholdValue(s) {
-  if (typeof s !== 'string' || s.trim() === '') return NaN;
-  return Number(s.split(':')[0].trim());
+  const read = readThreshold(s);
+  return read.ok && read.number !== null ? read.number : NaN;
+}
+
+/* The value half of what is typed in the threshold field, for display and
+ * for composeThreshold. A field the exporter cannot read keeps its whole
+ * text, so the composed value is one the exporter refuses too — never a
+ * different, readable value cut out of it. */
+function thresholdValuePart(s) {
+  const read = readThreshold(s);
+  return read.ok ? read.valuePart : trimThreshold(typeof s === 'string' ? s : '');
 }
 
 /* The threshold field holds the VALUE only; the severity dropdown is the
  * single source of severity (no dual-entry). composeThreshold folds them
  * back into the schema's `value:severity` string for the emitted recipe +
- * summary, so the dropdown is never a no-op. A stray ':sev' typed into the
- * value field is stripped (the dropdown wins). */
+ * summary, so the dropdown is never a no-op. A ':warning' / ':critical'
+ * typed into the value field is dropped (the dropdown wins). */
 function composeThreshold(f) {
-  const value = (f.threshold || '').split(':')[0].trim();
+  const value = thresholdValuePart(f.threshold);
   const sev = f.severity || ENUMS.severityDefault;
   return `${value}:${sev}`;
 }
@@ -205,7 +274,7 @@ function allRequiredValid(recipe, f) {
  * series / labels). null until allRequiredValid. ───────────────────── */
 function recipeSummary(recipe, f) {
   if (!allRequiredValid(recipe, f)) return null;
-  const value = (f.threshold || '').split(':')[0].trim();
+  const value = thresholdValuePart(f.threshold);
   const sev = f.severity || ENUMS.severityDefault; // dropdown is the SoT
   const op = f.op || ENUMS.opDefault;
   switch (recipe) {
@@ -293,6 +362,7 @@ export {
   isValidName,
   isValidMetric,
   isValidWindow,
+  readThreshold,
   parseThresholdValue,
   composeThreshold,
   requiredFields,

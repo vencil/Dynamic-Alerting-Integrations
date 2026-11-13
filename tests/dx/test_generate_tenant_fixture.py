@@ -450,3 +450,40 @@ def test_cli_extra_defaults_refusal_is_a_caller_error_not_a_traceback(
     assert r.returncode == 2, r.stdout + r.stderr
     assert "Traceback" not in r.stderr, r.stderr
     assert "--extra-defaults" in r.stderr and "mysql_connections_critical" in r.stderr, r.stderr
+
+
+def _fixture_cli(tmp_path, value):
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    script = (Path(__file__).resolve().parents[2]
+              / "scripts" / "tools" / "dx" / "generate_tenant_fixture.py")
+    out = tmp_path / "conf.d"
+    cmd = [sys.executable, str(script), "--count", "2", "--output", str(out),
+           "--extra-defaults", f"bench_trigger={value}"]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=120)
+    return r, out
+
+
+@pytest.mark.parametrize("value", ["1_000", "nan", "inf", "-Infinity", "0x1F", "1e999",
+                                   "123456789012345678901", "abc", ""])
+def test_cli_extra_defaults_refuses_what_the_exporter_does_not_read(tmp_path, value):
+    """#3457: the value is judged by the exporter's grammar of a threshold
+    number, not by `int()` / `float()`, which read `1_000` (as 1000), `nan`
+    and `inf` — values the exporter serves no default for."""
+    r, out = _fixture_cli(tmp_path, value)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "finite decimal number" in r.stderr, r.stderr
+    assert not out.exists(), "nothing is written for a refused argument"
+
+
+@pytest.mark.parametrize("value, written", [("50", 50), ("+50", 50), ("007", 7), ("1.5", 1.5), ("1e3", 1000.0),
+                                            (".5", 0.5)])
+def test_cli_extra_defaults_takes_a_threshold_number(tmp_path, value, written):
+    import yaml  # noqa: PLC0415
+    r, out = _fixture_cli(tmp_path, value)
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((out / "_defaults.yaml").read_text(encoding="utf-8"))
+    got = doc["defaults"]["bench_trigger"]
+    assert got == written and type(got) is type(written), got

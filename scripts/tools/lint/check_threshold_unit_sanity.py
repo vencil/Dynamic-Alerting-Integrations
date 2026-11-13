@@ -76,7 +76,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
-from _lib_validation import i18n_text  # noqa: E402
+from _lib_validation import i18n_text, threshold_number_text  # noqa: E402
 # ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`
 # (the rule-pack registry, chart values and docs are not conf.d: PyYAML).
 import _lib_parse_cache  # noqa: E402
@@ -169,9 +169,10 @@ def _value_text(raw) -> str | None:
     conf.d thresholds are text (every scalar's source text, `_as_source_text`)
     and so are most values elsewhere; a value a JSON or PyYAML reader already
     made a number (`platform-data.json`'s `value`, the registry's `30`, a
-    JSON `-Infinity`, a YAML `.inf`) is that number as Python spells it
-    (`repr(float(raw))`: `30.0`, `0.8`, `-inf`), which reads as the same
-    number; an int no float holds raises OverflowError, as it always has.
+    JSON `-Infinity`, a YAML `.inf`) is that number as
+    `threshold_number_text` spells it (`30.0`, `0.8`, `-inf`), which the
+    exporter reads as the same number; an int no float holds raises
+    OverflowError, as it always has.
 
     A string UTF-8 cannot carry (a lone surrogate from a JSON `"\\ud800"`)
     is no text any reader reads as a number, and JSON cannot hand it to
@@ -180,7 +181,7 @@ def _value_text(raw) -> str | None:
     if isinstance(raw, bool):
         return None
     if isinstance(raw, (int, float)):
-        return repr(float(raw))
+        return threshold_number_text(float(raw))
     if isinstance(raw, str):
         try:
             raw.encode("utf-8")

@@ -55,7 +55,7 @@ Tenant 透過 `tenant.yaml` 自助管理以下設定，不接觸 PromQL：
 tenants:
   db-a:
     mysql_connections: "800"           # Custom: 自訂閾值
-    mysql_threads_running: ""          # Default: 採用平台預設值
+    # mysql_threads_running:           # Default: 不寫這個 key，採用平台預設值（空字串不是合法的值）
     mysql_replication_lag: "disable"   # Disable: 關閉此告警
     mysql_connections_critical: "1000"  # 多層嚴重度（_critical suffix）
     "mysql_connections{instance='db-primary:3306'}": "500"  # 維度標籤篩選（label 須在根 _defaults.yaml 的 dimensions: 為該 base 宣告；出貨的 Rule Pack 以 max by(tenant) 合成單一租戶門檻，#3475）
