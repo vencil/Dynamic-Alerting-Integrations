@@ -30,7 +30,6 @@ Exit codes:
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import sys
@@ -52,6 +51,8 @@ try:
 except Exception:  # pragma: no cover — standalone fallback, never block
     def try_utf8_stdout() -> None:  # type: ignore
         return None
+sys.path.insert(0, str(_THIS.parent))
+import _guardlib as gl  # noqa: E402  (#3598: the one reader of the payload)
 
 # ---------------------------------------------------------------------------
 # Patterns
@@ -178,15 +179,12 @@ def _check_write(file_path: str) -> tuple[int, str]:
 
 def main() -> int:
     try_utf8_stdout()
-    # Read JSON payload from stdin per Claude Code PreToolUse hook contract.
-    raw = sys.stdin.read()
-    if not raw.strip():
-        # Manual invocation with no payload — nothing to check.
-        return 0
-    try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        print(f"[preflight] warning: invalid JSON ({exc}); allowing", file=sys.stderr)
+    # Read JSON payload from stdin per Claude Code PreToolUse hook contract:
+    # UTF-8 whatever the locale (#3598). None: a manual run with no payload
+    # (nothing to check), or one that cannot be read (warned; allowed).
+    payload = gl.read_payload(
+        lambda why: print(f"[preflight] warning: {why}; allowing", file=sys.stderr))
+    if payload is None:
         return 0
 
     tool_name = payload.get("tool_name") or ""
