@@ -1068,6 +1068,25 @@ def test_the_ci_legs_signal_is_not_silently_switched_off() -> None:
     )
 
 
+def test_the_behavioural_step_builds_no_go_binary() -> None:
+    """The behavioural step runs only eslint and a handful of Python tests;
+    none needs da-guard, da-crdecode or da-read. tests/conftest.py builds all
+    three up front for every session with `go` — minutes on the runner's cold
+    Go cache, which ran this `timeout-minutes: 5` job out of time. The step
+    declares it needs none (`VIBE_TEST_GO_BINARIES=skip`; the variable's
+    contract is pinned in tests/shared/test_session_go_binaries_opt_out.py).
+    """
+    _, job, _ = _script_step()
+    steps = job.get("steps") or []
+    (step,) = [st for st in steps if _runs_behaviour_test(str(st.get("run", "")))]
+    env = {**(_workflow().get("env") or {}), **(job.get("env") or {}),
+           **(step.get("env") or {})}
+    assert str(env.get("VIBE_TEST_GO_BINARIES")) == "skip", (
+        f"`VIBE_TEST_GO_BINARIES` is {env.get('VIBE_TEST_GO_BINARIES')!r} for "
+        "the behavioural step, not \"skip\": its pytest session builds three Go "
+        "binaries it never runs before the first test starts.")
+
+
 def test_the_behavioural_test_runs_in_the_job_that_installs_eslint() -> None:
     """⛔ The execution point for `test_e2e_spec_lint_behaviour.py` (#1446).
 
