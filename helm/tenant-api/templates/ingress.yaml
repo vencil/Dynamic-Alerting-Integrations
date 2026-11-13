@@ -11,13 +11,10 @@
   would let anyone on the internet assert any identity, platform-admins
   included.
 
-  ⇒ With oauth2Proxy.enabled=false nothing listens on 4180, so an Ingress would
-  only ever answer 502. Refuse to render it instead of shipping a dead route.
+  The oauth2-proxy sidecar is always rendered (ADR-027 §5, §6: there is no
+  switch to turn it off), so the `http` port always has a listener.
 */ -}}
 {{- if .Values.ingress.enabled }}
-{{- if not .Values.oauth2Proxy.enabled }}
-{{- fail "ingress.enabled=true requires oauth2Proxy.enabled=true: the Ingress backend is the authenticated `http` port (oauth2-proxy :4180), which has no listener without the sidecar. It is never pointed at the header-trusting api-internal port 8080 (GHSA-3g2h-rf85-5rrv)." }}
-{{- end }}
 {{- if not .Values.ingress.hosts }}
 {{- fail "ingress.enabled=true requires at least one entry in ingress.hosts: an Ingress with no rules and no default backend is rejected by the API server." }}
 {{- end }}

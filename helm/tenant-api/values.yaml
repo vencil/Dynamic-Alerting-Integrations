@@ -19,9 +19,10 @@ image:
   tag: ""
   pullPolicy: IfNotPresent
 
-# oauth2-proxy sidecar configuration
+# oauth2-proxy sidecar configuration. Always rendered: it is the pod's only
+# oauth2-proxy and the only way to the API (ADR-027 §5); the former
+# `oauth2Proxy.enabled` switch was removed (§6) and the schema refuses it.
 oauth2Proxy:
-  enabled: true
   image:
     # renovate: datasource=docker depName=quay.io/oauth2-proxy/oauth2-proxy
     repository: quay.io/oauth2-proxy/oauth2-proxy
@@ -100,7 +101,7 @@ oauth2Proxy:
 # tenant-api application settings
 # ADR-027 §5: the portal's static files, served from a container in this pod
 # behind oauth2-proxy's "/" upstream (the API is /api/ → tenant-api's Unix
-# socket). Rendered with oauth2Proxy.enabled. The container listens on the
+# socket). The container listens on the
 # pod's loopback only and runs the chart's nginx config, which forwards
 # nothing (templates/_helpers.tpl tenant-api.portalNginxConfig).
 portal:
@@ -654,7 +655,7 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65534
   runAsGroup: 65534
-  # ⛔ Keep fsGroup when oauth2Proxy.enabled: the client-secret file is
+  # ⛔ Keep fsGroup: the oauth2-proxy client-secret file is
   # mounted 0440 and oauth2-proxy (pod-level uid/gid) reads it through this
   # group; without it oauth2-proxy cannot read clientSecretFile and exits.
   fsGroup: 65534
