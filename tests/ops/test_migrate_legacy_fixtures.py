@@ -60,14 +60,21 @@ def multidb(tmp_path_factory):
     return _migrate(tmp_path_factory, _MULTIDB)
 
 
-@pytest.fixture(scope="module")
-def dummy_dry_run():
-    return _run(_DUMMY, "--dry-run")
+def _dry_run(tmp_path_factory, fixture):
+    # 帶一個不存在的 -o：dry-run 若寫了任何檔，這個目錄就會出現。只驗輸出
+    # 訊息不夠——悄悄寫檔又沒印「檔案已輸出」的退化會漏掉。
+    out = tmp_path_factory.mktemp(f"{fixture.stem}-dry") / "out"
+    return _run(fixture, "--dry-run", "-o", out), out
 
 
 @pytest.fixture(scope="module")
-def multidb_dry_run():
-    return _run(_MULTIDB, "--dry-run")
+def dummy_dry_run(tmp_path_factory):
+    return _dry_run(tmp_path_factory, _DUMMY)
+
+
+@pytest.fixture(scope="module")
+def multidb_dry_run(tmp_path_factory):
+    return _dry_run(tmp_path_factory, _MULTIDB)
 
 
 def _has(pattern, text):
@@ -86,11 +93,14 @@ def _has(pattern, text):
     r"單點",  # 聚合猜測說明（單點上限）
 ])
 def test_dummy_dry_run_reports_counts_and_guess(dummy_dry_run, pattern):
-    assert _has(pattern, dummy_dry_run), dummy_dry_run
+    stdout, _ = dummy_dry_run
+    assert _has(pattern, stdout), stdout
 
 
 def test_dummy_dry_run_writes_nothing(dummy_dry_run):
-    assert "檔案已輸出" not in dummy_dry_run
+    stdout, out = dummy_dry_run
+    assert "檔案已輸出" not in stdout
+    assert not out.exists(), sorted(p.name for p in out.rglob("*"))
 
 
 @pytest.mark.parametrize("pattern", [r"成功轉換.*3.*條", r"需人工處理", r"檔案已輸出"])
@@ -181,4 +191,10 @@ def test_multidb_report_carries_the_absent_rule(multidb, word):
 
 @pytest.mark.parametrize("pattern", [r"總規則數.*8", r"Dry-Run"])
 def test_multidb_dry_run(multidb_dry_run, pattern):
-    assert _has(pattern, multidb_dry_run), multidb_dry_run
+    stdout, _ = multidb_dry_run
+    assert _has(pattern, stdout), stdout
+
+
+def test_multidb_dry_run_writes_nothing(multidb_dry_run):
+    _, out = multidb_dry_run
+    assert not out.exists(), sorted(p.name for p in out.rglob("*"))

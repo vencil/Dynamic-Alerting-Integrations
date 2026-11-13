@@ -256,12 +256,16 @@ Effective configuration:
 
 ### Scenario 2: Adding a New Tenant (Hierarchy-Ready)
 
-```bash
-# 1. Create directory structure (if not exists)
-mkdir -p conf.d/finance/ap-south/prod
+**1.** Create directory structure (if not exists):
 
-# 2. Create tenant config
-cat > conf.d/finance/ap-south/prod/tenant-new.yaml << 'EOF'
+```bash
+mkdir -p conf.d/finance/ap-south/prod
+```
+
+**2.** Create the tenant config: save the following as `conf.d/finance/ap-south/prod/tenant-new.yaml`.
+
+```yaml {.confd}
+# conf.d/finance/ap-south/prod/tenant-new.yaml
 tenants:
   tenant-new:
     _routing:
@@ -270,9 +274,11 @@ tenants:
         api_url: {secret: {key: slack-api-url}}
         channel: "#new-alerts"
     # Other tenant-specific settings
-EOF
+```
 
-# 3. Verify (inheritance applied automatically)
+**3.** Verify (inheritance applied automatically):
+
+```bash
 python scripts/tools/dx/describe_tenant.py tenant-new --show-sources
 ```
 
@@ -287,13 +293,16 @@ The system automatically searches for:
 
 Example: All EU-West tenants need tighter PostgreSQL connection budgets
 
-```bash
-cat > conf.d/finance/eu-west/_defaults.yaml << 'EOF'
+Save the following as `conf.d/finance/eu-west/_defaults.yaml`:
+
+```yaml {.confd}
+# conf.d/finance/eu-west/_defaults.yaml
 defaults:
   pg_connections: 70          # EU-West runs tighter connection budgets
   pg_replication_lag: 20
-EOF
+```
 
+```bash
 # Verify: inspect an eu-west tenant to confirm it inherited the region-level defaults
 # (describe_tenant has no region filter; check per-tenant or via --all)
 python scripts/tools/dx/describe_tenant.py tenant-d --show-sources

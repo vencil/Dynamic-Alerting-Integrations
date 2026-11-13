@@ -52,7 +52,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-a
             exp_annotations:
               summary: "MariaDB semi-sync degraded — durability guarantee lost for tenant db-a"
@@ -68,7 +68,7 @@ tests:
           - exp_labels:
               maintenance: page
               severity: critical
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-b
             exp_annotations:
               summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-b"
@@ -114,7 +114,7 @@ tests:
           - exp_labels:
               maintenance: page
               severity: critical
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-e
             exp_annotations:
               summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-e"
@@ -151,7 +151,7 @@ tests:
   # ── Convergence steady state: a REAL clients=0 outage has BOTH status=0 AND
   #    clients=0 on the SAME tenant (clients=0 → after the timeout, status flips to 0).
   #    Both rules fire at the PromQL level; in production Alertmanager inhibit
-  #    (metric_group:liveness) suppresses the Degraded warning so only the
+  #    (metric_group:mariadb_liveness) suppresses the Degraded warning so only the
   #    ReplicasGone critical pages — that inhibit is not promtool-testable. ──
   - interval: 15s
     name: convergence-both-conditions-both-rules-fire
@@ -169,7 +169,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-f
             exp_annotations:
               summary: "MariaDB semi-sync degraded — durability guarantee lost for tenant db-f"
@@ -185,7 +185,7 @@ tests:
           - exp_labels:
               maintenance: page
               severity: critical
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-f
             exp_annotations:
               summary: "MariaDB semi-sync has ZERO connected replicas for tenant db-f"

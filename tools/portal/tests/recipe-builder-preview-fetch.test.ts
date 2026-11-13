@@ -35,14 +35,16 @@ describe('defaultPreviewFetch', () => {
 
   it('a refusal throws with the server text and the status', async () => {
     stubFetch(429, { error: 'the recipe preview gave no verdict this time; retry shortly', code: 'PREVIEW_BUSY', reason: 'busy' });
-    await expect(defaultPreviewFetch('t', RECIPE, {}, undefined, () => true))
+    await expect(defaultPreviewFetch('t', RECIPE, {}, undefined))
       .rejects.toMatchObject({ status: 429, message: expect.stringContaining('no verdict') });
   });
 
   it('401 sends the browser to sign in', async () => {
     stubFetch(401, { error: 'missing identity', code: 'UNAUTHORIZED' });
-    const signIn = vi.fn(() => true);
-    await expect(defaultPreviewFetch('t', RECIPE, {}, undefined, signIn)).rejects.toMatchObject({ status: 401 });
-    expect(signIn).toHaveBeenCalled();
+    window.sessionStorage.clear();
+    const assign = vi.fn();
+    vi.stubGlobal('location', { ...window.location, pathname: '/interactive/', search: '', hash: '', assign });
+    await expect(defaultPreviewFetch('t', RECIPE, {}, undefined)).rejects.toMatchObject({ status: 401 });
+    expect(assign).toHaveBeenCalledTimes(1);
   });
 });
