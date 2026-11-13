@@ -33,8 +33,10 @@ type BatchOperation struct {
 	// key → value to set (e.g., "_silent_mode": "warning"); at most 1000 entries.
 	// May be omitted; an operation with neither patch nor unset changes nothing.
 	Patch map[string]string `json:"patch" validate:"max=1000"`
-	// keys to remove from the tenant's config block; at most 1000 entries. Only "_routing" and
-	// "_routing_receiver_type" are accepted: removing `_routing` resets the tenant to
+	// keys to remove from the tenant's config block; at most 1000 entries. Only "_routing",
+	// "_routing_receiver_type" and the threshold registry's retired keys (with their
+	// `_critical` twins; removing one drops a line nothing reads, #3829) are accepted:
+	// removing `_routing` resets the tenant to
 	// `_routing_defaults` and its routing profile, which turns routing back on for a tenant a
 	// disabling `_routing` turned off (the route generator judges the result, as every
 	// write); removing `_routing_receiver_type` drops the flat key tenant-api used to write,
@@ -146,7 +148,7 @@ type BatchResponse struct {
 // @Description When any operation is refused, nothing is written: 422 with status rejected, the refused operations with status error (message, code) and every other operation with status not_applied.
 // @Description With ?async=true (direct mode) the same verdict is reached when the task runs; a rejected batch ends the task as failed, with the same per-operation results.
 // @Description The batch is applied and judged in a separate staging git worktree; the branch is advanced first, then the served config files, so readers never see content that was not committed (while the files are updated they may see some of the batch's files new and others old, all committed).
-// @Description An operation may also remove keys with unset (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for a tenant a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write, which nothing renders and which, while on disk, makes every other write to the tenant fail key validation (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400 INVALID_BODY).
+// @Description An operation may also remove keys with unset (only "_routing", "_routing_receiver_type" and the threshold registry's retired keys): unset ["_routing"] turns routing back on for a tenant a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write, which nothing renders and which, while on disk, makes every other write to the tenant fail key validation (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400 INVALID_BODY).
 // @Description Patch keys are judged up front against the reserved-key registry (400 INVALID_BODY): a key whose value is a mapping or a list (_metadata, _custom_alerts, _namespaces: write it with PUT /api/v1/tenants/{id}). Whether any reader reads a key (a _ key the registry does not list, e.g. _timeout_ms; a _routing key the generator does not read) is the shared key verdict's: the operation of that tenant is refused with code BAD_REQUEST and the batch rejected (422; ADR-038 decision 5). A reserved key's value is judged per operation by the write's own validation, with the exporter's reader (#3227): an operation setting _silent_mode to a value the exporter ignores (e.g. purple) is refused with code BAD_REQUEST and rejects the batch (422; async: the task fails); a value the tenant file already holds that the operation leaves as it is does not block it and comes back as a NOTICE naming the tenant: in direct mode in that operation's warnings, in PR write-back mode in the batch-level warnings (the operations' results are fixed as included before the write runs).
 // @Description Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
 // @Description is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.

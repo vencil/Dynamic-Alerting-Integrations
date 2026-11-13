@@ -771,36 +771,6 @@ keys:
     portability: site_specific
     portability_reason: "The expected broker count is the deployment's topology"
     portability_reason_zh: "預期的 broker 數是各部署的拓撲"
-  kafka_active_controllers:
-    pack: kafka
-    tier: defaults
-    value: 1
-    unit: count
-    desc: Minimum active controllers (should be 1)
-    metric_class: state
-    arming: operator
-    portability: portable
-    blocker:
-      kind: unwired
-      tracking: 3783
-      reason: "kafka_controller_active_controller_count is not exported by the declared danielqsj/kafka_exporter"
-      reason_zh: "宣告的 danielqsj/kafka_exporter 不輸出 kafka_controller_active_controller_count"
-  kafka_request_rate:
-    pack: kafka
-    tier: defaults
-    value: 10000
-    unit: msg/s
-    desc: Message rate warning (5m)
-    metric_class: throughput
-    arming: operator
-    portability: site_specific
-    portability_reason: "Message volume is workload, not a fault; any number is specific to the deployment"
-    portability_reason_zh: "訊息量是工作負載而非故障，任何數字都只適用於特定部署"
-    blocker:
-      kind: unwired
-      tracking: 3783
-      reason: "kafka_server_brokertopicmetrics_messagesin_total is a JMX metric that the declared danielqsj/kafka_exporter does not export"
-      reason_zh: "kafka_server_brokertopicmetrics_messagesin_total 是 JMX 指標，宣告的 danielqsj/kafka_exporter 不輸出"
   kafka_consumer_lag_critical:
     pack: kafka
     tier: optional_overrides
@@ -817,14 +787,6 @@ keys:
     desc: Under-replicated critical
     metric_class: replication
     critical_of: kafka_under_replicated_partitions
-  kafka_request_rate_critical:
-    pack: kafka
-    tier: optional_overrides
-    value: 50000
-    unit: msg/s
-    desc: Message rate critical
-    metric_class: throughput
-    critical_of: kafka_request_rate
   rabbitmq_queue_messages:
     pack: rabbitmq
     tier: defaults
@@ -1024,4 +986,12 @@ keys:
     critical_of: nginx_waiting
 deprecated_aliases:
   mysql_cpu: mysql_threads_running
-retired_keys: {}
+retired_keys:
+  kafka_active_controllers:
+    replaced_by: null
+    tracking: 3783
+    hint: "the declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key"
+  kafka_request_rate:
+    replaced_by: null
+    tracking: 3783
+    hint: "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"

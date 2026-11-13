@@ -1040,11 +1040,11 @@ class TestAnalyzeTenantLowerBound:
             "observed_series": "tenant:db2_bufferpool_hit_ratio:min",
             "recommendation_mode": "percentile-lower",
         },
-        "kafka_active_controllers": {
+        "kafka_broker_count": {
             "scope": "tenant", "direction": "<",
-            "candidates": ["tenant:kafka_active_controllers:max"],
+            "candidates": ["tenant:kafka_broker_count:max"],
             "recommendation_mode": "not-applicable",
-            "reason": "by-design not-applicable — invariant (#916)",
+            "reason": "by-design not-applicable — topology floor (#916)",
         },
     }
 
@@ -1059,7 +1059,7 @@ class TestAnalyzeTenantLowerBound:
         assert report.recommended_changes == 1
 
     def test_not_applicable_key_skipped_by_design(self):
-        report = tr.analyze_tenant("db-x", {"kafka_active_controllers": "1"},
+        report = tr.analyze_tenant("db-x", {"kafka_broker_count": "3"},
                                    dry_run=False, prometheus_url="http://p:9090",
                                    observed_map=self.LOWER_MAP)
         rec = report.keys[0]

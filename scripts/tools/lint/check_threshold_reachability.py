@@ -683,15 +683,18 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      strictly below the floor of 60.)
 #   DOWN (removal) — the floor itself fires when its class drops below it, which
 #     is the floor doing its job. Today the slack is total − floor: artifacts 12
-#     keys, generators 13 (was 22 until issue 1196 retired init's 9 surplus
+#     keys, generators 11 (was 22 until issue 1196 retired init's 9 surplus
 #     keys — dead ones, so no floor edit). Red here means REPAIR THE PRODUCER — and only if keys
 #     were removed on purpose (a fixture retired) does it mean LOWER the floor,
-#     in the same commit, naming what went.
+#     in the same commit, naming what went. #3783 removed two defaults-tier keys
+#     (kafka_active_controllers, kafka_request_rate), each counted by two
+#     generators: generators total -4, biggest group -2. The floor went 80 -> 78 so
+#     UP stays +28; DOWN went 13 -> 11.
 #
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 80
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 78
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 74
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class

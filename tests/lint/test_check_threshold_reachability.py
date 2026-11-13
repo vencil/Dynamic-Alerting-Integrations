@@ -399,7 +399,7 @@ def test_real_not_chart_armed_comes_from_the_registry():
     lib = gate._registry_lib
     expected = gate._not_chart_armed()
     assert expected == lib.not_chart_armed_keys(lib.load_registry())
-    assert len(expected) == 61
+    assert len(expected) == 58  # 61 less the three keys #3783 removed
     assert not hasattr(gate, "NOT_CHART_ARMED")
 
 
@@ -4062,8 +4062,8 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # DOWN: how many keys may disappear before the floor itself speaks.
     down_gen = g_total - gate._DEFAULTS_GENERATOR_KEYS_FLOOR
     down_art = a_total - gate._DEFAULTS_ARTIFACT_KEYS_FLOOR
-    assert (down_art, down_gen) == (12, 13), (
-        f"the note says artifacts 12 / generators 13 downward — and the fifth "
+    assert (down_art, down_gen) == (12, 11), (
+        f"the note says artifacts 12 / generators 11 downward — and the fifth "
         f"floor's own comment repeats the artifact one as '12 keys of slack'; "
         f"measured {down_art} / {down_gen}. Both places move together.")
 
