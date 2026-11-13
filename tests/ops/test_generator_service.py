@@ -6,7 +6,7 @@ socket 打請求。
   fixture 各一筆，含會擋下的）。
 - 拒收該筆（HTTP 200、``result: rejected``）：期限（判定中到期時子孫程序一併
   結束）、排隊中到期、佇列滿、記憶體上限、沒有完整結果、git 讀兩次都失敗。
-- 容器不可用（503）：找不到 amtool、產生器比 policy 要求的舊、部署端 policy
+- 容器不可用（503）：找不到 da-read、產生器比 policy 要求的舊、部署端 policy
   檔不可用；每次判定都重查。
 - git 讀取失敗重試一次；只實體化一般檔（100644／100755），symlink、gitlink
   等其他 mode 一律判 not_regular_file（#2981）。
@@ -71,7 +71,6 @@ def _credential_scoped(rec: dict, write: str) -> dict:
 def world(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gsvc")
     bin_dir = tmp / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
     repo = h.init_repo(tmp / "repo")
     commits = {}
     for fx in FIXTURES:
@@ -311,7 +310,6 @@ def _held_da_read(tmp_path: Path, held: str, env: "dict | None" = None) -> tuple
     if not real:
         pytest.fail("no da-read ($DA_READ_BINARY / PATH) to hold the judgement in")
     bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)  # the service's readiness check
     wrapper = h.stub(tmp_path / "held", "da-read",
                      '#!/bin/sh\nif [ "$1" = alertmanager ]; then\n' + held
                      + f'fi\nexec \'{real}\' "$@"\n')
@@ -502,7 +500,6 @@ def test_a_da_guard_failing_on_names_is_not_a_git_read(tmp_path):
     h.run_git(repo, "commit", "-qm", "x")
     commit = h.run_git(repo, "rev-parse", "HEAD")
     bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
     with h.Service(tmp_path / "s", repo, bin_dir=bin_dir,
                    env={"DA_GUARD_BINARY": str(wrapper)}) as svc:
         status, doc = svc.validate(commit)
@@ -704,22 +701,106 @@ def test_sha256_repository(tmp_path, world):
 
 # ── 503: container / policy unavailable ──────────────────────────────────
 
-def test_amtool_missing_is_503(tmp_path, world):
-    empty = tmp_path / "empty-bin"
-    empty.mkdir()
-    with h.Service(tmp_path / "s", world["repo"], bin_dir=empty) as svc:
+@pytest.mark.parametrize("how", ["missing", "not_executable"])
+def test_da_read_missing_is_503(tmp_path, world, how):
+    """ADR-036 §3: whether Alertmanager accepts the rendered config is its
+    loader's answer (da-read). Without the da-read the judgement process
+    would run — $DA_READ_BINARY, then PATH — the container is unavailable,
+    checked before every judgement."""
+    if how == "missing":
+        named = ""  # blank is not set: PATH is asked, and has no da-read
+    else:
+        target = tmp_path / "da-read"
+        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        target.chmod(0o644)
+        named = str(target)
+    assert shutil.which("da-read", path=str(world["bin"])) is None
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   env={"DA_READ_BINARY": named}) as svc:
         status, doc = svc.validate(world["commits"]["clean"])
-        assert status == 503
-        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "amtool_missing")
+        assert status == 503, doc
+        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "da_read_missing")
         _s, st = svc.call("GET", "/v1/status")
-        assert st["amtool_available"] is False and st["ready"] is False
+        assert st["da_read_available"] is False and st["ready"] is False
+        m = svc.metrics()
+        assert m['da_generator_unavailable_total{reason="da_read_missing"}'] == 1
+        # No judgement process ran: the ratio keeps the last real reading (none).
+        assert m["da_generator_judgement_deadline_ratio"] == 0
+
+
+_READERS = {"da-guard": "DA_GUARD_BINARY", "da-read": "DA_READ_BINARY",
+            "da-crdecode": "DA_CRDECODE_BINARY"}
+
+
+def _relative_path_service(tmp_path, world, on_relative_path: tuple[str, ...],
+                           unset: tuple[str, ...]):
+    """The service started in a directory whose ``rbin/`` is on $PATH as the
+    relative entry ``rbin``: the readers of *on_relative_path* are there,
+    those of *unset* have no variable, the rest are named by absolute
+    variables. Returns (service, rbin)."""
+    cwd = tmp_path / "cwd"
+    rbin = cwd / "rbin"
+    rbin.mkdir(parents=True)
+    env = {"PATH": "rbin"}
+    for name, var in _READERS.items():
+        if name in on_relative_path:
+            shutil.copy2(os.environ[var], rbin / name)
+        env[var] = "" if name in unset else os.environ[var]
+    # The harness puts its own da-guard copy in bin_dir: one that is not on
+    # this service's $PATH.
+    return h.Service(tmp_path / "s", world["repo"], bin_dir=tmp_path / "unused-bin",
+                     env=env, cwd=cwd), rbin
+
+
+@pytest.mark.parametrize("reader", sorted(_READERS))
+def test_a_reader_on_a_relative_path_entry_is_the_one_the_judgement_runs(
+        tmp_path, world, reader):
+    """#3839 review: readiness looked the reader up from the service's
+    directory, the judgement process from its job directory — a relative
+    $PATH entry named a reader for the first and nothing for the second, so
+    /v1/status said ready while every write came back without a verdict.
+    What a check finds is pinned, absolute, into the reader's variable, so
+    status and judgement run one binary."""
+    svc, _rbin = _relative_path_service(tmp_path, world, (reader,), (reader,))
+    with svc:
+        _s, st = svc.call("GET", "/v1/status")
+        status, doc = svc.validate(world["commits"]["clean"])
+    assert st["ready"] is True, st
+    assert status == 200 and doc["result"] == "pass", doc
+
+
+def test_a_da_read_that_appears_on_path_later_is_found_and_judges(tmp_path, world):
+    """A reader not there at start is looked for again at every check; the
+    check that finds it pins it, so the judgement that follows runs it."""
+    svc, rbin = _relative_path_service(tmp_path, world, (), ("da-read",))
+    with svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 503 and doc["reason"] == "da_read_missing", doc
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_read_available"] is False and st["ready"] is False, st
+        shutil.copy2(os.environ["DA_READ_BINARY"], rbin / "da-read")
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_read_available"] is True and st["ready"] is True, st
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 200 and doc["result"] == "pass", doc
+
+
+def test_ready_without_amtool(world):
+    """amtool is not asked for a verdict, so a container without one judges:
+    nothing on the service's PATH is called amtool, and it is ready."""
+    assert shutil.which("amtool", path=str(world["bin"])) is None
+    _s, st = world["svc"].call("GET", "/v1/status")
+    assert st["da_read_available"] is True and st["ready"] is True, st
+    assert "amtool_available" not in st
+    status, doc = world["svc"].validate(world["commits"]["clean"])
+    assert status == 200 and doc["result"] == "pass", doc
 
 
 @pytest.mark.parametrize("how", ["missing", "not_executable", "does_not_run"])
 def test_da_guard_missing_is_503(tmp_path, world, how):
     """ADR-036 §3 (2026-10-30): without a da-guard the judgement process can
     run, no key verdict (ADR-038 §5) can be given — the container is
-    unavailable, checked before every judgement like amtool."""
+    unavailable, checked before every judgement like da-read."""
     target = tmp_path / "da-guard"
     if how == "not_executable":
         target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
@@ -908,7 +989,7 @@ def test_status_reports_versions(world):
     status, st = world["svc"].call("GET", "/v1/status")
     assert status == 200
     assert set(st) == {"policy", "generator_version", "generator_too_old",
-                       "da_guard_version", "amtool_available", "da_guard_available", "ready",
+                       "da_guard_version", "da_read_available", "da_guard_available", "ready",
                        "cache_base_coverage_ratio", "warm"}
     assert st["policy"] == {"configured": False, "available": True, "sha256": None,
                             "error": None, "min_generator_version": None}
@@ -1524,7 +1605,6 @@ def test_the_service_log_never_carries_the_generators_text(tmp_path):
             "      receiver:\n        type: webhook\n        url: https://hooks.example.com/a\n"
             f"      group_wait: x-{canary}\n")
     bin_dir = tmp_path / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
     with h.Service(tmp_path / "svc", repo, bin_dir=bin_dir) as svc:
         status, doc = svc.validate(commit, [{"path": "t-a.yaml", "content_b64": h.b64(body)}])
         assert status == 200 and doc["result"] == "findings", doc
