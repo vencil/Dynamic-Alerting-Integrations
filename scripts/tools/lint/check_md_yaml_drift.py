@@ -13,14 +13,16 @@ schema 變更時自動偵測漂移。
   python3 scripts/tools/lint/check_md_yaml_drift.py --check fences|crd
 
 Every check reads the documented examples from ONE inventory
-(scripts/tools/_lib_doc_yaml_inventory.py, #3416): which fence is which file,
+(scripts/tools/_lib_doc_yaml_inventory.py, #3416): which code blocks exist (the
+site's renderer, #3814), which fence is which file,
 which consumer reads it, its reading or its refusal, its declaration and its
 exemption are decided there and nowhere here. A fence says what it is with an
 attribute list (```` ```yaml {.confd} ````, ``{.k8s}``,
 ``{.illustrative reason="…"}``, ``{.confd .expect-refused=<kind>}``,
 ``{.confd .expect-invalid}``; the module docstring has the closed vocabulary).
 
-需要: jsonschema（schema / crd）；da-guard（$DA_GUARD_BINARY 或 $PATH：每個區塊
+需要: jsonschema（schema / crd）；markdown、pymdown-extensions、mkdocs（站台渲染器，
+找出區塊用，#3814）；da-guard（$DA_GUARD_BINARY 或 $PATH：每個區塊
 預設由 `da-guard parse-tree` 讀）、da-crdecode（k8s 物件與 Helm values）、宣告了
 da-read 讀者的區塊另需 da-read。本工具不自己解析任何 YAML。
 """
@@ -118,7 +120,8 @@ class MdYamlDriftChecker:
 
     def inventory(self) -> "inventory.Inventory":
         """The docs' inventory, built once. Raises when a reader cannot
-        answer (ParseTreeError / ConsumerReadError): nothing is judged then."""
+        answer (ParseTreeError / ConsumerReadError / RendererError): nothing
+        is judged then."""
         if self._inventory is None:
             self._inventory = inventory.build(self.repo_root)
         return self._inventory
@@ -135,6 +138,9 @@ class MdYamlDriftChecker:
             print(f"ERROR: cannot read the docs' examples the way their consumer does "
                   f"(da-crdecode for k8s objects, the way kubectl does; da-read for a "
                   f"declared Prometheus / Alertmanager file): {e}", file=sys.stderr)
+        except inventory.RendererError as e:
+            print(f"ERROR: the docs' code blocks are found by the site's renderer, which "
+                  f"cannot be had: {e}", file=sys.stderr)
         return None, EXIT_CALLER_ERROR
 
     def _route(self, data: Dict) -> Tuple[Dict, Dict, str]:
@@ -162,8 +168,9 @@ class MdYamlDriftChecker:
         """Fence hygiene: every ```yaml block in docs/ is one its reader reads.
 
         Every error the inventory finds is reported here: an attribute outside
-        the closed vocabulary or written without braces, the retired comment
-        marker, a declared consumer refusing its block, an `.expect-refused`
+        the closed vocabulary, a code block the inventory cannot locate in its
+        file (#3814: the site's renderer says which blocks exist), the retired
+        comment marker, a declared consumer refusing its block, an `.expect-refused`
         that does not hold, and an undeclared block the conf.d reader
         (parse-tree, the default reader) refuses for a reason other than a top
         level that is not a mapping — a syntax error included (a mislabelled

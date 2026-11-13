@@ -126,10 +126,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
+      # The pilot itself is Python; each mutant runs `go test` over
+      # threshold-exporter, whose pkg/config docs tests run the docs' YAML
+      # inventory with the site's renderer (#3814). Without those packages
+      # every mutant's run fails for a reason that is not the mutant.
+      - name: Set up Python with the docs inventory's deps
+        uses: ./.github/actions/docs-inventory-python
 
       - name: Set up Go (version from go.mod)
         uses: actions/setup-go@v6
