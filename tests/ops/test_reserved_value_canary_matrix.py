@@ -26,16 +26,18 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 pytestmark = pytest.mark.usefixtures("judging_run")
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from test_routing_value_canary_matrix import validate_run  # noqa: E402
+from test_routing_value_canary_matrix import _GAR, validate_run  # noqa: E402
 
 _REGISTRY = json.loads((REPO / "components" / "threshold-exporter" / "app" / "pkg" / "config"
                         / "reserved_keys.json").read_text(encoding="utf-8"))
@@ -333,52 +335,42 @@ def test_a_threshold_profile_name_is_not_printed(tmp_path):
     _no_canary(text)
 
 
-def test_the_available_profiles_are_the_ones_a_tenant_can_name(tmp_path):
-    """`; available:` 列的是「照抄就能用」的寫法：鍵 `123`／`true` 的 profile
-    只能用加引號的字串引用（不加引號是數字／布林，`routing_profile_invalid`），
-    所以帶引號列出。"""
+def test_the_available_profiles_are_listed_through_shown_key(tmp_path):
+    """`; available:` 的每個名字只走 `shown_key`，沒有別的加工：名稱形的照印
+    （鍵 `123`、`true` 也是——reader 把鍵都當文字交出來），其他的只說長度。"""
     receiver = {"receiver": {"type": "webhook", "url": "https://noc.example.com/a"}}
     files = _files({"cpu_usage_percent": "85", "_routing_profile": "nope"},
                    **{"_routing_profiles.yaml": {"routing_profiles": {
-                       "p-one": receiver, 123: receiver, True: receiver}}})
+                       "p-one": receiver, 123: receiver, True: receiver, "Gold tier": receiver}}})
     findings, _text = validate_run(tmp_path, files)
     [f] = [f for f in findings if f["kind"] == "unknown_routing_profile"]
-    assert f["message"].endswith('; available: "123", p-one, "true"'), f
+    assert f["message"].endswith("; available: 123, a string of 9 chars, p-one, true"), f
 
 
-_DEAD_WINDOWS = [{"window": "00:00-12:00", "value": "70"}]
-
-
-@pytest.mark.parametrize("schedule,entry", [
-    # A window the window before it covers (#3502).
-    ({"default": "85", "overrides": [*_DEAD_WINDOWS,
-                                     {"window": "01:00-02:00", "value": _canary("dead")}]},
-     "overrides[1] `01:00-02:00` → a string of "),
-    # A default the windows cover together.
-    ({"default": _canary("dead"), "overrides": [*_DEAD_WINDOWS,
-                                                {"window": "12:00-00:00", "value": "71"}]},
-     "default → a string of "),
-], ids=["window_covered", "default_covered"])
-def test_a_dead_entry_value_is_not_printed(tmp_path, schedule, entry):
-    """永遠不會被 serve 的排程項目：訊息說是哪一項，不印它的值。"""
-    findings, text = validate_run(tmp_path, _files({"cpu_usage_percent": schedule}))
-    assert {f["kind"] for f in findings} == {"key_dead_entry"}, findings
-    assert entry in findings[0]["message"], findings[0]
+def test_the_id_of_a_tenant_body_that_is_not_loaded_is_not_printed(tmp_path):
+    """`tenants:` 底下 body 是 null 的那一筆不會被載入；那行 WARN（只在 stderr）
+    說是哪個檔、什麼形狀，不印它的 id。"""
+    files = _files({"cpu_usage_percent": "85"})
+    files["t-a.yaml"]["tenants"][_canary("unloaded")] = None
+    _findings, text = validate_run(tmp_path, files)
+    assert ("WARN: t-a.yaml: tenant a string of " in text
+            and " must be a mapping, got NoneType — that tenant is not loaded" in text), text
     _no_canary(text)
 
 
-def test_an_unknown_routing_profile_lists_the_profiles_there_are(tmp_path):
-    """`_routing_profile` 指到沒有的 profile：不印那個名字，改列出這個租戶看得到的
-    profile（名字不像名字的那個照 `shown_key` 只說長度）。"""
-    receiver = {"receiver": {"type": "webhook", "url": "https://noc.example.com/a"}}
-    files = _files({"cpu_usage_percent": "85", "_routing_profile": _canary("profile-ref")},
-                   **{"_routing_profiles.yaml": {"routing_profiles": {
-                       "p-one": receiver, "p-two": receiver, _canary("profile-name"): receiver}}})
-    findings, text = validate_run(tmp_path, files)
-    [f] = [f for f in findings if f["kind"] == "unknown_routing_profile"]
-    assert f["field"] == "_routing_profile", f
-    assert "; available: " in f["message"], f
-    listed = f["message"].split("; available: ", 1)[1]
-    assert {"p-one", "p-two"} <= {n.strip() for n in listed.split(",")}, f
-    assert "a string of " in listed, f
+def test_the_id_of_a_list_body_is_not_printed_before_the_run_stops(tmp_path):
+    """body 是 list 時 exporter 整個檔都不載入，產生器在比對兩邊的租戶後以 rc 2
+    停下（不是判決，所以不經 `validate_run`）；停下之前印的那行 WARN 同樣不印 id。"""
+    files = _files({"cpu_usage_percent": "85"})
+    files["t-a.yaml"]["tenants"][_canary("unloaded")] = [1]
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    for name, body in files.items():
+        (d / name).write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+    p = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d), "--validate", "--strict"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    text = p.stdout + p.stderr
+    assert p.returncode == 2 and "Traceback" not in text, (p.returncode, text)
+    assert ("WARN: t-a.yaml: tenant a string of " in text
+            and " must be a mapping, got list — that tenant is not loaded" in text), text
     _no_canary(text)

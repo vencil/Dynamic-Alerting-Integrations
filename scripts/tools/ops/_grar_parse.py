@@ -1428,8 +1428,10 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
                 # exporter loads a null body as a tenant with no keys.
                 if not is_reserved:
                     result.setdefault("unloaded_tenants", set()).add(tenant)
+                # #3703: the id of a body that is not loaded is whatever
+                # the author wrote — shown_value, not the text.
                 print(f"  WARN: {safe_label(fname)}: tenant "
-                      f"'{safe_label(str(tenant))}' must be a mapping, got "
+                      f"{shown_value(str(tenant))} must be a mapping, got "
                       f"{type(overrides).__name__} — that tenant is not "
                       f"loaded", file=sys.stderr)
                 continue

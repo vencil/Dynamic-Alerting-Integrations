@@ -1246,23 +1246,6 @@ def writes_nothing(key: object, value: object) -> bool:
     return value is None or is_null_schedule(value)
 
 
-def _profile_name_to_write(name: object) -> str:
-    """A routing profile's name as a tenant has to WRITE it to reference it
-    (``shown_key``; #3703). The reader hands every mapping key as its text,
-    so a profile keyed ``123`` or ``true`` is listed — and is referenced by
-    the quoted string only: unquoted, ``_routing_profile: 123`` is a number
-    and is refused (routing_profile_invalid). Such a name is listed in
-    double quotes."""
-    shown = shown_key(name)
-    if shown != name:
-        return shown  # not name-like: its length, nothing to copy
-    try:
-        plain = isinstance(yaml.safe_load(shown), str)
-    except yaml.YAMLError:
-        plain = False
-    return shown if plain else f'"{shown}"'
-
-
 def _validate_profile_refs(parsed: dict) -> list[str]:
     """Validate that _routing_profile references point to existing profiles.
 
@@ -1288,7 +1271,7 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
             # not name-like is not printed; what the author can choose from
             # is — the profiles this tenant's chain defines.
             names = sorted(visible, key=str)
-            listed = ", ".join(_profile_name_to_write(n) for n in names[:WARN_LIMIT]) + (
+            listed = ", ".join(shown_key(n) for n in names[:WARN_LIMIT]) + (
                 f" (+{len(names) - WARN_LIMIT} more)" if len(names) > WARN_LIMIT else "")
             available = (f"; available: {listed}" if names
                          else "; no routing profile is defined for this tenant")

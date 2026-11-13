@@ -47,16 +47,17 @@ func TestSeverityDedup_Spellings(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		yaml, mode string
-		problem    string // "" when read; else the value as the resolver compares it (not in Problem, #3703)
+		unread     bool   // the exporter does not read it: a problem is reported
+		value      string // then: Value, the value as the file wrote it (a list as re-serialised)
 	}{
-		{"enable", "enable", ""}, {"disable", "disable", ""},
-		{"Enabled", "enable", ""}, {`"  DISABLED "`, "disable", ""},
-		{"on", "enable", ""}, {"off", "disable", ""}, {"'Off'", "disable", ""},
-		{"true", "enable", ""}, {"false", "disable", ""}, {"FALSE", "disable", ""},
-		{"~", "enable", ""},
-		{`"no"`, "enable", "no"}, {"no", "enable", "no"}, {"yes", "enable", "yes"},
-		{`""`, "enable", ""}, {"1.00", "enable", "1.00"}, {"0x1F", "enable", "0x1f"},
-		{"maybe", "enable", "maybe"}, {"[disable]", "enable", "- disable"},
+		{"enable", "enable", false, ""}, {"disable", "disable", false, ""},
+		{"Enabled", "enable", false, ""}, {`"  DISABLED "`, "disable", false, ""},
+		{"on", "enable", false, ""}, {"off", "disable", false, ""}, {"'Off'", "disable", false, ""},
+		{"true", "enable", false, ""}, {"false", "disable", false, ""}, {"FALSE", "disable", false, ""},
+		{"~", "enable", false, ""},
+		{`"no"`, "enable", true, "no"}, {"no", "enable", true, "no"}, {"yes", "enable", true, "yes"},
+		{`""`, "enable", true, ""}, {"1.00", "enable", true, "1.00"}, {"0x1F", "enable", true, "0x1F"},
+		{"maybe", "enable", true, "maybe"}, {"[disable]", "enable", true, "- disable\n"},
 	}
 	var b strings.Builder
 	b.WriteString("tenants:\n")
@@ -77,9 +78,8 @@ func TestSeverityDedup_Spellings(t *testing.T) {
 			t.Errorf("%s: mode %q, want %q", c.yaml, got, c.mode)
 		}
 		p, has := problems[tenant]
-		wantProblem := c.problem != "" || c.yaml == `""`
-		if has != wantProblem {
-			t.Errorf("%s: problem %+v (present %v), want present %v", c.yaml, p, has, wantProblem)
+		if has != c.unread {
+			t.Errorf("%s: problem %+v (present %v), want present %v", c.yaml, p, has, c.unread)
 			continue
 		}
 		if has {
@@ -87,8 +87,10 @@ func TestSeverityDedup_Spellings(t *testing.T) {
 				p.Problem != "unknown severity_dedup value (valid: enable, disable)" {
 				t.Errorf("%s: problem %+v", c.yaml, p)
 			}
-			if strings.TrimSpace(p.Value) == "" && c.yaml != `""` {
-				t.Errorf("%s: value as written missing: %+v", c.yaml, p)
+			// #3703: the sentence no longer quotes the value, so what was
+			// written is pinned on the field that carries it.
+			if p.Value != c.value {
+				t.Errorf("%s: value %q, want %q", c.yaml, p.Value, c.value)
 			}
 		}
 	}
