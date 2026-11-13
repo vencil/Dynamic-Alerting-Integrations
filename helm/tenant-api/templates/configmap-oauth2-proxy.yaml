@@ -18,7 +18,6 @@
   values.yaml pins, and loads it with the same oauth2-proxy library version
   (tests/oauth2-proxy/, ADR-027 §9 item 9).
 */ -}}
-{{- if .Values.oauth2Proxy.enabled }}
 {{- $config := include "tenant-api.oauth2ProxyConfig" . }}
 {{- if contains "$" $config }}
 {{- fail "oauth2Proxy: a value holds '$' — oauth2-proxy expands environment references in its config file and tenant-api refuses such a file (ADR-027 §2)" }}
@@ -35,4 +34,3 @@ immutable: true
 data:
   {{ include "tenant-api.oauth2ProxyConfigKey" . }}: |
     {{- $config | nindent 4 }}
-{{- end }}

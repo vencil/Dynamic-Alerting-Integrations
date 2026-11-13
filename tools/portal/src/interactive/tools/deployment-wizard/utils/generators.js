@@ -126,7 +126,6 @@ ${writeBackBlock(environment)}
 ${imageBlock('tenantApi')}
 
 oauth2Proxy:
-  enabled: true
 ${oauthProviderLines(auth)}
   redirectUrl: "https://tenant-api.example.com/oauth2/callback"  # replace with your host
   cookieSecure: ${environment === 'local' ? 'false' : 'true'}
