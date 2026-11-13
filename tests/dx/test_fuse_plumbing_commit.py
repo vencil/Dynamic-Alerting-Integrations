@@ -237,21 +237,141 @@ def test_cli_rejects_message_conflict(tmp_path: Path, monkeypatch) -> None:
     assert "not allowed with" in proc.stderr or "argument" in proc.stderr
 
 
-def test_a_hook_refusal_is_a_finding_and_no_repo_is_a_caller_error(tmp_path: Path) -> None:
-    """#3577: the normal path's `git commit` refused by a hook asks for a
-    change to the content (1); not being in a repository is the caller's
-    (2). Both used to be 1."""
-    repo = _init_tmp_repo(tmp_path)
+def _hook(repo: Path, body: str, mode: int = 0o755) -> Path:
     hook = repo / ".git" / "hooks" / "pre-commit"
-    hook.write_text("#!/bin/sh\necho 'lint: forbidden content' >&2\nexit 1\n", encoding="utf-8")
-    hook.chmod(0o755)
-    (repo / "f.txt").write_text("x\n", encoding="utf-8")
-    proc = subprocess.run(  # subprocess-timeout: ignore
+    hook.write_text(body, encoding="utf-8")
+    hook.chmod(mode)
+    return hook
+
+
+def _auto(repo: Path, env: dict | None = None, *,
+          cwd: Path | None = None) -> subprocess.CompletedProcess:
+    cwd = cwd or repo
+    (cwd / "f.txt").write_text("x\n", encoding="utf-8")
+    return subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), "--auto", "-m", "test: x", "f.txt"],
-        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo,
-    )
-    assert proc.returncode == 1, proc.stderr
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=cwd,
+        env=env)
+
+
+def _head(repo: Path) -> str:
+    return subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True,
+                          text=True, encoding="ascii", check=True, timeout=30).stdout.strip()
+
+
+@pytest.mark.parametrize("hook_exit", [1, 2, 3, 127])
+def test_any_hook_failure_is_no_commit_never_a_finding(tmp_path: Path, hook_exit: int) -> None:
+    """#3634 (owner ruling 2026-11-13): git ends every pre-commit hook failure
+    at 1 — a finding and a hook that could not run alike (pre-commit
+    flattens its hooks' 2/3/127 and a missing executable to 1 too) — so the
+    tool cannot prove "change the content": 2, with the hook's own output
+    passed through. Before #3634 it was 1."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, f"#!/bin/sh\necho 'lint: forbidden content' >&2\nexit {hook_exit}\n")
+    proc = _auto(repo)
+    assert proc.returncode == 2, proc.stderr
     assert "forbidden content" in proc.stderr
+    assert "a hook failed" in proc.stderr
+    assert _head(repo) == before
+
+
+def test_a_passing_hook_commits(tmp_path: Path) -> None:
+    """Control: the hook runs and passes — the commit lands, exit 0."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/bin/sh\nexit 0\n")
+    proc = _auto(repo)
+    assert proc.returncode == 0, proc.stderr
+    assert _head(repo) != before
+
+
+@pytest.mark.parametrize("hooks_path", [None, "hk"])
+def test_a_run_from_a_subdirectory_finds_the_hook(tmp_path: Path, hooks_path: str | None) -> None:
+    """`git rev-parse --git-path` answers relative to the current directory:
+    a run from a subdirectory must find the same hook, default or a relative
+    core.hooksPath, and commit — not refuse a correct install."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    if hooks_path:
+        (repo / hooks_path).mkdir()
+        hook = repo / hooks_path / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        hook.chmod(0o755)
+        subprocess.run(["git", "config", "core.hooksPath", hooks_path], cwd=repo,
+                       check=True, timeout=30)
+    else:
+        _hook(repo, "#!/bin/sh\nexit 0\n")
+    (repo / "sub").mkdir()
+    proc = _auto(repo, cwd=repo / "sub")
+    assert proc.returncode == 0, proc.stderr
+    assert _head(repo) != before
+
+
+def test_nothing_to_commit_says_so(tmp_path: Path) -> None:
+    """git says "nothing to commit" on stdout: the error carries it."""
+    repo = _init_tmp_repo(tmp_path)
+    _hook(repo, "#!/bin/sh\nexit 0\n")
+    assert _auto(repo).returncode == 0
+    proc = _auto(repo)  # the same content again
+    assert proc.returncode == 2, proc.stderr
+    assert "nothing to commit" in proc.stderr.split("`git commit` failed")[0], proc.stderr
+
+
+@pytest.mark.parametrize("state", ["absent", "not-executable", "hooks-path-elsewhere"])
+def test_no_runnable_pre_commit_hook_is_no_commit(tmp_path: Path, state: str) -> None:
+    """The normal path commits only when git would run the checks: no hook,
+    a hook git would skip (not executable), or core.hooksPath pointing away
+    from the installed one is 2 and nothing committed — it used to commit
+    unchecked with exit 0 (#3634)."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    if state == "not-executable":
+        _hook(repo, "#!/bin/sh\nexit 0\n", mode=0o644)
+    if state == "hooks-path-elsewhere":
+        _hook(repo, "#!/bin/sh\nexit 0\n")
+        (repo / "empty-hooks").mkdir()
+        subprocess.run(["git", "config", "core.hooksPath", "empty-hooks"], cwd=repo,
+                       check=True, timeout=30)
+    proc = _auto(repo)
+    assert proc.returncode == 2, proc.stderr
+    assert "no executable pre-commit hook" in proc.stderr
+    assert _head(repo) == before
+
+
+def test_a_pre_commit_shim_that_cannot_start_pre_commit_is_no_commit(tmp_path: Path) -> None:
+    """pre-commit's own shim, but its INSTALL_PYTHON is gone and no
+    pre-commit is on PATH: every commit would fail without a check run."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    _hook(repo, "#!/usr/bin/env bash\n# File generated by pre-commit\n"
+                f"INSTALL_PYTHON={tmp_path / 'gone' / 'python'}\nexit 1\n")
+    path = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep)
+                           if not (Path(p) / "pre-commit").exists())
+    proc = _auto(repo, env={**os.environ, "PATH": path})
+    assert proc.returncode == 2, proc.stderr
+    assert "cannot start pre-commit" in proc.stderr
+    assert _head(repo) == before
+
+
+def test_a_shim_python_that_cannot_be_executed_is_a_named_2(tmp_path: Path) -> None:
+    """INSTALL_PYTHON names a directory (os.access says executable): the
+    check names it instead of crashing on PermissionError."""
+    repo = _init_tmp_repo(tmp_path)
+    before = _head(repo)
+    (tmp_path / "pydir").mkdir()
+    _hook(repo, "#!/usr/bin/env bash\n# File generated by pre-commit\n"
+                f"INSTALL_PYTHON={tmp_path / 'pydir'}\nexit 1\n")
+    path = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep)
+                           if not (Path(p) / "pre-commit").exists())
+    proc = _auto(repo, env={**os.environ, "PATH": path})
+    assert proc.returncode == 2, proc.stderr
+    assert "cannot start pre-commit" in proc.stderr and "Traceback" not in proc.stderr
+    assert _head(repo) == before
+
+
+def test_no_repo_is_a_caller_error(tmp_path: Path) -> None:
+    """#3577: not being in a repository is the caller's (2)."""
 
     outside = tmp_path / "not-a-repo"
     outside.mkdir()
@@ -279,6 +399,7 @@ def test_a_git_fatal_error_on_commit_is_a_caller_error(tmp_path: Path) -> None:
     subprocess.run(["git", "config", "--unset", "user.name"], cwd=repo, check=False, timeout=30)
     subprocess.run(["git", "config", "user.useConfigOnly", "true"], cwd=repo, check=True,
                    timeout=30)
+    _hook(repo, "#!/bin/sh\nexit 0\n")  # a hook git runs: the 128 is git's own
     proc = subprocess.run(  # subprocess-timeout: ignore
         [sys.executable, str(_SCRIPT), "--auto", "-m", "test: x", "f.txt"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo, env=env,

@@ -39,6 +39,7 @@ func emptyRuleSetManagers(t *testing.T) map[string]*Manager {
 
 // Every entry point denies on an empty rule set, for every caller shape —
 // including the nil (anonymous) principal and one carrying groups + claims.
+// adr-check: ADR-027/9.6c
 func TestEmptyRuleSet_EveryEntryPointDenies(t *testing.T) {
 	t.Parallel()
 	callers := map[string]*VerifiedPrincipal{
@@ -118,6 +119,7 @@ func TestEmptyRuleSet_EveryEntryPointDenies(t *testing.T) {
 
 // The legacy groups-slice shims follow the production core on an empty rule
 // set (the historical HasPermission/HasMetadataAccess call sites deny too).
+// adr-check: ADR-027/9.6c
 func TestEmptyRuleSet_LegacyShimsDeny(t *testing.T) {
 	t.Parallel()
 	for mName, m := range emptyRuleSetManagers(t) {

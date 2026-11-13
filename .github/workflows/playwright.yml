@@ -116,6 +116,10 @@ jobs:
       - name: A-13 chain catches a parked spec (behavioural test)
         env:
           VIBE_REQUIRE_E2E_ESLINT: "1"
+          # No test here runs a Go binary; without this tests/conftest.py builds
+          # da-guard, da-crdecode and da-read on the cold Go cache first —
+          # minutes, past this job's timeout (test_e2e_spec_lint.py pins it).
+          VIBE_TEST_GO_BINARIES: skip
         run: |
           pip install pytest pyyaml -c requirements/ci-constraints.txt
           python -m pytest tests/lint/test_e2e_spec_lint_behaviour.py -q -rs

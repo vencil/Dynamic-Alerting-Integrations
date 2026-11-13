@@ -13,6 +13,7 @@ import (
 	"github.com/vencil/tenant-api/internal/errcode"
 )
 
+// adr-check: ADR-027/9.4b
 func TestSimulateNotProvided(t *testing.T) {
 	t.Parallel()
 	f := newGateFixture(t, "groups:\n  - name: ops\n    tenants: [\"*\"]\n    permissions: [read, write]\n")
