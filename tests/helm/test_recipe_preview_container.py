@@ -53,7 +53,7 @@ _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm CLI not on PATH")
 _REQUIRE_HELM = helm_required()  # tests/_helm_gate.py: CI or a remote session
 
 _ON = ("gitRepoUrl=https://git.example.com/org/conf.git",)
-_EVERYTHING = (*_ON, "federation.enabled=true", "oauth2Proxy.enabled=true",
+_EVERYTHING = (*_ON, "federation.enabled=true",
                "generator.policy.existingConfigMap=da-policy")
 _SA_TOKEN_PATH = "/var/run/secrets/kubernetes.io/serviceaccount"
 _SOCK_VOLUME = "recipe-preview-sock"
