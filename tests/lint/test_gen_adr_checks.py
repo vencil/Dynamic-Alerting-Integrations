@@ -238,3 +238,15 @@ def test_a_yaml_name_key_outside_ci_is_not_a_step_name(tmp_path) -> None:
     root = _tree(tmp_path, {"helm/x/Chart.yaml": "# adr-check: ADR-042/9.1a\nname: chart\n"})
     (m,) = gen.collect_markers(root, ["helm/x/Chart.yaml"])
     assert m.name is None
+
+
+def test_a_longer_fence_is_closed_only_by_a_matching_fence() -> None:
+    # A four-backtick block may show a three-backtick fence and a heading;
+    # neither ends the block, and the clause after the real close is read.
+    text = ADR_ZH.replace("2. 其他：", "````md\n```\n### 10. 範例標題\n```\n````\n2. 其他：")
+    assert gen.parse_clauses(text, "9") == ["1a", "1b", "2a"]
+
+
+def test_a_tilde_fence_is_not_closed_by_backticks() -> None:
+    text = ADR_ZH.replace("2. 其他：", "~~~\n```\n### 10. 範例\n~~~\n2. 其他：")
+    assert gen.parse_clauses(text, "9") == ["1a", "1b", "2a"]

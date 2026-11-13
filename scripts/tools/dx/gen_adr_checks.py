@@ -83,7 +83,7 @@ _CLAUSE = re.compile(r"^\s*-\s+\*\*(\d+[a-z])\*\*\s")
 # Written like a clause but not in the clause's exact form: an error, so a
 # clause cannot drop out of the list by being spelt differently.
 _CLAUSE_LIKE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+\*\*\d+[A-Za-z]\*\*")
-_FENCE = re.compile(r"^\s*(?:```|~~~)")
+_FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 _HEADING = re.compile(r"^(#{2,4})\s+(\d+)\.\s")
 
 _GAP = {"zh": "尚無檢查", "en": "no check yet"}
@@ -111,12 +111,18 @@ def parse_clauses(text: str, section: str) -> list[str]:
     same or a higher level), in order."""
     out: list[str] = []
     level = None
-    in_fence = False
+    fence: str | None = None  # the opening fence while inside a code block
     for line in text.splitlines():
-        if _FENCE.match(line):
-            in_fence = not in_fence
+        f = _FENCE.match(line)
+        if fence is not None:
+            # CommonMark: closed only by the same character, at least as
+            # long, with nothing but whitespace after it.
+            if f and f.group(1)[0] == fence[0] and len(f.group(1)) >= len(fence) \
+                    and not f.group(2).strip():
+                fence = None
             continue
-        if in_fence:
+        if f:
+            fence = f.group(1)
             continue
         h = _HEADING.match(line)
         if h or re.match(r"^#{1,4}\s", line):

@@ -95,6 +95,30 @@ def _upstream_uris(out: str) -> list[str]:
     raise AssertionError("no oauth2-proxy config in the render")
 
 
+def _pod_specs(out: str):
+    """(workload name, pod spec) for every workload kind in a render."""
+    for d in yaml.safe_load_all(out):
+        if not d:
+            continue
+        spec = d.get("spec") or {}
+        if d.get("kind") == "CronJob":
+            spec = ((spec.get("jobTemplate") or {}).get("spec") or {})
+        pod = (spec.get("template") or {}).get("spec")
+        if pod:
+            yield d["metadata"]["name"], pod
+
+
+def _socket_mounters(out: str) -> list[str]:
+    """`workload/container` for every container (init containers included) in
+    every workload that mounts the human-sock volume."""
+    found = []
+    for workload, pod in _pod_specs(out):
+        for c in (pod.get("initContainers") or []) + (pod.get("containers") or []):
+            if any(m.get("name") == "human-sock" for m in c.get("volumeMounts") or []):
+                found.append(f"{workload}/{c['name']}")
+    return sorted(found)
+
+
 def _helm_template(repo_root: Path, *set_args: str, template: str | None = None):
     cmd = ["helm", "template", "t", str(repo_root / _CHART), *baseline_args(_CHART)]
     if template:
@@ -136,11 +160,11 @@ def test_render_default_points_upstream_at_socket(repo_root: Path):
     assert _ta_env(out, "TA_HUMAN_SOCKET") == "/run/ta-human/human.sock", (
         "enabled render must pass TA_HUMAN_SOCKET to tenant-api"
     )
-    # the volume is mounted into both containers (2 mounts) + defined once (1).
-    assert out.count("name: human-sock") == 3, (
-        "human-sock must appear 3× (tenant-api mount + oauth2-proxy mount + volume def); "
-        f"got {out.count('name: human-sock')}"
-    )
+    # Only tenant-api and oauth2-proxy mount the socket: every container of
+    # every workload is read, sidecars and init containers included.
+    mounters = _socket_mounters(out)
+    assert [m.split("/", 1)[1] for m in mounters] == ["oauth2-proxy", "tenant-api"], mounters
+    assert len({m.split("/", 1)[0] for m in mounters}) == 1, mounters
 
 
 @_needs_helm

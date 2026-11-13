@@ -93,3 +93,16 @@ def test_no_threshold_governance_stale_alert():
                 for n in _alert_names(d)}
     assert "CronJobLastRunFailed" in embedded, "positive control: the ConfigMap was not read"
     assert _ALERT not in embedded
+
+
+# adr-check: ADR-027/9.5c
+def test_no_chart_mentions_threshold_govern():
+    """The scans above read k8s/ as YAML; chart templates are Go templates, so
+    a CronJob or alert re-added to a chart would not parse there. Read every
+    file under helm/ as text instead: none names the CronJob or its alert.
+    Broader than a parse on purpose — no chart has a reason to mention it."""
+    files = [p for p in repo_files() if p.relative_to(REPO_ROOT).parts[0] == "helm"]
+    assert files, "no helm/ files enumerated — the scan would pass on nothing"
+    found = [str(p.relative_to(REPO_ROOT)) for p in files
+             if _NAME in (t := p.read_text(encoding="utf-8", errors="replace")) or _ALERT in t]
+    assert found == [], found
