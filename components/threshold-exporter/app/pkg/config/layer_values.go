@@ -54,6 +54,10 @@ type LayerValueProblem struct {
 	// carries the value for the machine.
 	// TestLayerValueProblems_CarryNoAuthorText guards it.
 	Problem string
+	// Value: the value as the file wrote it (its `default` for a schedule,
+	// a list or mapping as the decode re-serialised it), for a reader that
+	// shows the value apart from Problem's own quoting of it (#3621).
+	Value string
 	// Reading: the value as the reader reads it (ValueReading) — two values
 	// whose readings are equal are the same unread value, so a write that
 	// swaps one unread value for another makes a new one (the Ratchet's
@@ -87,6 +91,7 @@ func LayerValueProblems(scan *TreeScan, built *FlatBuild) []LayerValueProblem {
 			if p := layerValueProblem(layer, key, sv, values, profiles); p != "" {
 				canon, _ := canonicalKeyFor(key)
 				out = append(out, LayerValueProblem{File: file, Layer: layer, Owner: owner, Key: key, Problem: p,
+					Value:   sv.Default,
 					Reading: ValueReading(canon, sv), RefersToRoot: canon == "_profile"})
 			}
 		}

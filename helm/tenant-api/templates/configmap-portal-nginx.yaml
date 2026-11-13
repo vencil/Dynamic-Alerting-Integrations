@@ -4,7 +4,6 @@
   renamed on every change, as the oauth2-proxy config is, so a change rolls
   the pod.
 */ -}}
-{{- if .Values.oauth2Proxy.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -16,4 +15,3 @@ immutable: true
 data:
   nginx.conf: |
     {{- include "tenant-api.portalNginxConfig" . | nindent 4 }}
-{{- end }}
