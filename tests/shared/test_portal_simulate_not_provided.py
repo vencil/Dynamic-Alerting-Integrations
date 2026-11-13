@@ -111,3 +111,21 @@ def test_tenant_api_answers_the_same_code():
     assert found == [_widget_code()], (
         f"tenant-api 的 errcode.SimulateNotProvided 應等於 widget 讀的 code，得到 {found}"
     )
+
+
+TENANT_API_HTTP_EXITS = REPO_ROOT / "components/tenant-api/internal/handler/http_exits.go"
+_GO_MSG_RE = re.compile(r"^const msgSimulateNotProvided = ((?:\"[^\"\n]*\"(?:\s*\+\s*)?)+)$", re.M)
+
+
+def test_tenant_api_answers_the_same_body():
+    """ADR-027 §9 第 4 項：simulate 回 501「與原 body」——tenant-api 的
+    error 文字與原本 portal nginx 回的逐字相同（widget 會把它顯示給使用者）。"""
+    found = _GO_MSG_RE.findall(TENANT_API_HTTP_EXITS.read_text(encoding="utf-8"))
+    assert len(found) == 1, f"http_exits.go 應恰有一個 msgSimulateNotProvided 常數，得到 {found}"
+    go_text = "".join(re.findall(r'"([^"\n]*)"', found[0]))
+    for name, path in sorted(CONFS.items()):
+        (_status, body), = _RETURN_RE.findall(_location_block(path))
+        assert json.loads(body)["error"] == go_text, (
+            f"{name}: nginx 回的 error 與 tenant-api 的 msgSimulateNotProvided 不一致\n"
+            f"  nginx:      {json.loads(body)['error']!r}\n  tenant-api: {go_text!r}"
+        )

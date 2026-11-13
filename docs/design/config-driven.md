@@ -641,7 +641,9 @@ v1.2.0 採用 per-tenant inhibit rules 實現可選化：
 | `_severity_dedup: "enable"`（預設） | ✅ | ✅ | ❌ 被 AM 攔截 | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connections"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: liveness`，使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
+**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connections"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: mariadb_liveness`（MongoDB 的同類告警帶 `mongodb_liveness`），使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
+
+**群組名在一個租戶內是同一個命名空間**：inhibit 只比對 `metric_group`，不比對規則包，所以兩個規則包若用同一個值，同時使用兩包的租戶會被另一包的 critical 抑制 warning。`check_metric_group_pairs.py` 因此要求：每個值只屬於一個規則包；每個群組同時有 critical 與 warning 成員（inhibit 只抑制 `severity="warning"`，否則不抑制任何東西）；`slo_` 開頭保留給 custom alert 編譯器（[#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)）。`migrate_rule` 產生的群組名是完整的門檻鍵名。
 
 **Tenant 配置**
 
@@ -740,7 +742,7 @@ tenants:
           receiver:
             type: pagerduty
             service_key: {secret: {key: pagerduty-service-key}}
-        - metric_group: "redis"
+        - metric_group: "redis_memory_used_bytes"
           receiver:
             type: webhook
             url: "https://oncall.example.com/redis"

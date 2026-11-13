@@ -50,6 +50,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // placeOrder is step 3's order (by writeFile.group): what can be undone
@@ -236,9 +238,14 @@ func (w *writer) makeDirs(dir string, created *[]string) error {
 		mkdir = os.Mkdir
 	}
 	for i := len(missing) - 1; i >= 0; i-- {
-		switch err := mkdir(missing[i], 0o755); { // #nosec G301 -- conf.d directories are world-readable by convention
+		switch err := mkdir(missing[i], config.ConfDDirMode); { // #nosec G301 -- conf.d directories are world-readable by convention
 		case err == nil:
 			*created = append(*created, missing[i])
+			// The umask narrowed what mkdir made; a conf.d directory is
+			// another uid's to enter (#3535).
+			if cerr := os.Chmod(missing[i], config.ConfDDirMode); cerr != nil {
+				return cerr
+			}
 		case errors.Is(err, fs.ErrExist):
 			if fi, serr := os.Stat(missing[i]); serr != nil || !fi.IsDir() {
 				return fmt.Errorf("%s exists and is no directory", missing[i])

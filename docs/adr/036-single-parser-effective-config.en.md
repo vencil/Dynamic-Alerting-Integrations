@@ -82,7 +82,7 @@ YAML has a way to "merge another mapping in", usually written `<<:`. PyYAML trea
 tenants:
   t1:
     _routing:
-      !!merge q: {receiver: {type: slack, api_url: "https://hooks.slack.com/x"}}
+      !!merge q: {receiver: {type: slack, api_url: {secret: {key: slack-api-url}}}}
 ```
 
 - **The generator** applies the merge, so t1's receiver is `slack`. If the domain policy forbids slack, the generator reports an error and exits 1.
@@ -260,7 +260,7 @@ tenants:
     _routing:
       receiver:
         type: slack
-        api_url: "https://hooks.slack.com/x"
+        api_url: {secret: {key: slack-api-url}}
         send_resolved: yes
       group_wait: 30s
 ```
@@ -275,7 +275,7 @@ Output (excerpt, envelope fields omitted; measured by converting yaml.v3's nodes
         "_routing": {
           "group_wait": {"text": "30s", "tag": "!!str", "value": "30s"},
           "receiver": {
-            "api_url": {"text": "https://hooks.slack.com/x", "tag": "!!str", "value": "https://hooks.slack.com/x"},
+            "api_url": {"secret": {"key": {"text": "slack-api-url", "tag": "!!str", "value": "slack-api-url"}}},
             "send_resolved": {"text": "yes", "tag": "!!str", "value": "yes"},
             "type": {"text": "slack", "tag": "!!str", "value": "slack"}
           }

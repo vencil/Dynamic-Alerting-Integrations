@@ -40,7 +40,7 @@ HELP_CONTRACTS = {
             "--routing-receiver-type", "--routing-smarthost",
             "--routing-group-by", "--routing-group-wait",
             "--routing-group-interval", "--routing-repeat-interval",
-            "--profile", "--from-onboard", "--generate-profile", "--tier",
+            "--profile", "--from-onboard",
         ],
         "required": [],
         "choices": {
@@ -49,7 +49,6 @@ HELP_CONTRACTS = {
             "--severity-dedup": "{enable,disable}",
             "--routing-receiver-type":
                 "{webhook,email,slack,teams,rocketchat,pagerduty}",
-            "--tier": "{prod,staging}",
         },
     },
     "validate_config": {

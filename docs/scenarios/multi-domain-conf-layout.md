@@ -244,12 +244,16 @@ Effective configuration:
 
 ### 情景 2：加入新 Tenant（hierarchy-ready）
 
-```bash
-# 1. 建立目錄結構（若不存在）
-mkdir -p conf.d/finance/ap-south/prod
+**1.** 建立目錄結構（若不存在）：
 
-# 2. 建立 tenant 配置
-cat > conf.d/finance/ap-south/prod/tenant-new.yaml << 'EOF'
+```bash
+mkdir -p conf.d/finance/ap-south/prod
+```
+
+**2.** 建立 tenant 配置：把下面這份存成 `conf.d/finance/ap-south/prod/tenant-new.yaml`。
+
+```yaml {.confd}
+# conf.d/finance/ap-south/prod/tenant-new.yaml
 tenants:
   tenant-new:
     _routing:
@@ -258,9 +262,11 @@ tenants:
         api_url: {secret: {key: slack-api-url}}
         channel: "#new-alerts"
     # 其他 tenant-specific 設定
-EOF
+```
 
-# 3. 驗證（自動應用繼承）
+**3.** 驗證（自動應用繼承）：
+
+```bash
 python scripts/tools/dx/describe_tenant.py tenant-new --show-sources
 ```
 
@@ -275,13 +281,16 @@ python scripts/tools/dx/describe_tenant.py tenant-new --show-sources
 
 例：所有 EU-West tenant 需要更緊的 PostgreSQL 連線預算
 
-```bash
-cat > conf.d/finance/eu-west/_defaults.yaml << 'EOF'
+把下面這份存成 `conf.d/finance/eu-west/_defaults.yaml`：
+
+```yaml {.confd}
+# conf.d/finance/eu-west/_defaults.yaml
 defaults:
   pg_connections: 70          # EU-West 的連線預算較緊
   pg_replication_lag: 20
-EOF
+```
 
+```bash
 # 驗證：抽一個 eu-west tenant，確認已繼承 region 層預設
 # （describe_tenant 無 region filter；逐 tenant 或 --all 檢視）
 python scripts/tools/dx/describe_tenant.py tenant-d --show-sources

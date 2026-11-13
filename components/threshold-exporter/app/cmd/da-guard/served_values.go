@@ -603,6 +603,13 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 // logger on errOut; the resolvers' log lines go wherever the process's `log`
 // already goes (stderr in the binary).
 func runServedValues(args []string, stdout, errOut io.Writer) int {
+	return runServedValuesFilled(args, stdout, errOut, addSchedules)
+}
+
+// runServedValuesFilled is runServedValues with fill as what --schedules
+// runs (addSchedules); a test passes the whole-tree reading it replaced
+// (#3808) to compare the two documents byte for byte.
+func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill scheduleFiller) int {
 	f, err := parseServedValuesFlags(args, errOut)
 	if errors.Is(err, flag.ErrHelp) {
 		return exitOK
@@ -631,7 +638,11 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 	requested := f.tenants.requested()
 	if !allUnreadable {
 		sub := subsetConfig(cfg, requested)
-		tenants, err = servedValues(sub, at, rep.Undeliverable, f.schedules, written, refusedTextsOf(rep))
+		var withSchedules scheduleFiller
+		if f.schedules {
+			withSchedules = fill
+		}
+		tenants, err = servedValuesFilled(sub, at, rep.Undeliverable, withSchedules, written, refusedTextsOf(rep), false)
 		if err == nil && f.disableEffects {
 			err = addDisableEffects(sub, at, tenants, written)
 		}
@@ -846,6 +857,23 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 // it (`da-guard write`'s key verdict, #3489). The reading is the same.
 func servedValuesWith(cfg *config.ThresholdConfig, at time.Time,
 	undeliverable map[string]map[string]config.ScheduledValue, withSchedules bool,
+	written map[string]map[string]string, refusedTexts map[string]string, quiet bool,
+) (map[string]servedTenantValues, error) {
+	var fill scheduleFiller
+	if withSchedules {
+		fill = addSchedules
+	}
+	return servedValuesFilled(cfg, at, undeliverable, fill, written, refusedTexts, quiet)
+}
+
+// scheduleFiller fills the Schedules of servedValues' tenants: addSchedules.
+type scheduleFiller func(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
+	expiries []config.ResolvedThresholdExpiry, name keyNamer) error
+
+// servedValuesFilled is servedValuesWith with withSchedules, when not nil,
+// as what fills Schedules.
+func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
+	undeliverable map[string]map[string]config.ScheduledValue, withSchedules scheduleFiller,
 	written map[string]map[string]string, refusedTexts map[string]string, quiet bool,
 ) (map[string]servedTenantValues, error) {
 	name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
@@ -1071,8 +1099,8 @@ func servedValuesWith(cfg *config.ThresholdConfig, at time.Time,
 		addRootRefused(tv, overrides, rootRefused)
 		out[tenant] = tv
 	}
-	if withSchedules {
-		if err := addSchedules(cfg, at, out, res.ThresholdExpiries, name); err != nil {
+	if withSchedules != nil {
+		if err := withSchedules(cfg, at, out, res.ThresholdExpiries, name); err != nil {
 			return nil, err
 		}
 	}

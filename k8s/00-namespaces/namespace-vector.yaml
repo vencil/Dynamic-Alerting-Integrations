@@ -18,8 +18,9 @@
 # ⛔ Single-workload namespace by design: only the Vector log shipper (and
 # its projection-gate init-container) belongs here. Do NOT co-locate other
 # components — anything scheduled here escapes restricted admission, and the
-# victorialogs NetworkPolicy admits this namespace wholesale
-# (helm/victorialogs values.yaml `networkPolicy.allowedNamespaces`).
+# victorialogs NetworkPolicy admits this namespace together with Vector's pod
+# label, which any pod here can wear
+# (helm/victorialogs values.yaml `auth.consumers[vector].from`).
 #
 # Migration of an existing monitoring-ns Vector install:
 # docs/internal/platform-log-aggregation-runbook.md §1.1.

@@ -119,6 +119,7 @@ lang: zh
 | `paired_trend_watch.py` | Judge a series of PAIRED nightly runs for a sustained regression (ADR-032). |
 | `pr_preflight.py` | PR Preflight Check — branch 收尾前的自動化檢查。 |
 | `render_soak_diff.py` | v2.8.0 readiness harness: chaos soak result renderer. |
+| `renovate_fixup.py` | Finish a Renovate third-party image PR: write the follow-on edits it cannot (#3799). |
 | `reword_chain.py` | 批次改寫 commit chain 的 subject line（preserve tree + author/committer date） |
 | `run_chaos_soak.py` | v2.8.0 readiness harness: compressed-time chaos soak runner. |
 | `scaffold_lint.py` | generate a new pre-commit lint script from template. |
@@ -149,6 +150,7 @@ lang: zh
 | `check_chart_package_contents.py` | assert what a packaged Helm chart .tgz actually contains (#1755). |
 | `check_chart_pull_surface.py` | Every chart we TELL customers to pull must be a chart we actually push. |
 | `check_chart_ship_surface.py` | a shipping chart's root files must be declared SHIP or .helmignore'd (#1755). |
+| `check_chart_version_bump.py` | a git-only chart's version must name one package (#1269). |
 | `check_cli_contract.py` | 文件裡教人抄的 da-tools 命令 ↔ 活的 argparse 契約（#1379 / TRK-370）。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_cli_default_drift.py` | cli-reference 的「預設值」欄 vs argparse 的實際 default。 |
@@ -184,6 +186,7 @@ lang: zh
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_init_chart_pin_published.py` | Init chart-pin gate — the chart `da-tools init` pins must be the chart in the tree. |
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
+| `check_jsx_linecount.py` | Flag portal JSX files grown too large to audit (issue #152). |
 | `check_jsx_loader_compat.py` | Detect JSX-loader-incompatible module syntax (named exports / non-allowlist imports / require() calls). |
 | `check_k8s_manifests.py` | Container/k8s IaC SAST, Layer 4 (raw k8s manifests). |
 | `check_ksm_version_allowlist.py` | KSM version-allowlist invariant lint (ADR-024 partial-misconfig defense). |
@@ -234,7 +237,7 @@ lang: zh
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |
 | `lint_html_doc_links.py` | Raw HTML doc-link validator for MkDocs output. |
-| `lint_jsx_babel.py` | Validate JSX files parse correctly via Babel standalone. |
+| `lint_jsx_syntax.py` | Parse every portal source file the way the portal build does. |
 | `lint_tool_consistency.py` | 互動工具一致性驗證 |
 | `trufflehog_to_sarif.py` | convert trufflehog JSON findings to SARIF 2.1.0 |
 | `validate_docs_versions.py` | 文件版號與計數一致性檢查 |

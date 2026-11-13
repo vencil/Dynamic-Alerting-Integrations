@@ -251,7 +251,7 @@ Tenant: db-a
       { name: '--trace', label: t('五步路由追蹤模擬', 'Five-step route tracing simulation'), required: false, type: 'checkbox' },
       { name: '--alertname', label: t('追蹤用告警名稱', 'Alert name for trace'), required: false, placeholder: 'HighMemoryUsage' },
       { name: '--severity', label: t('追蹤用嚴重度', 'Severity for trace'), required: false, placeholder: 'warning' },
-      { name: '--label', label: t('追蹤用額外 label（KEY=VALUE）', 'Extra label for trace (KEY=VALUE)'), required: false, placeholder: 'metric_group=connections' },
+      { name: '--label', label: t('追蹤用額外 label（KEY=VALUE）', 'Extra label for trace (KEY=VALUE)'), required: false, placeholder: 'metric_group=mysql_connections' },
       { name: '--base-config', label: t('追蹤用 base Alertmanager YAML', 'Base Alertmanager YAML for trace'), required: false, placeholder: 'base-alertmanager.yaml' },
       { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
     ]

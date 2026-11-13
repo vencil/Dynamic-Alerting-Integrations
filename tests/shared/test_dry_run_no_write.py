@@ -697,6 +697,22 @@ RECIPES: list[Recipe] = [
       lambda t, s: _ssot_pilot(t),
       sandbox=(), cwd="repo", write_control=True),
 
+    # 沒有 write_control：寫入模式會在副本裡跑 `go mod tidy` 與 `make
+    # platform-data`／`portal-build`，副本沒有 Go module 與 Makefile，跑不起來。
+    # fixture 把 federation-e2e 的 prometheus 改舊，dry-run 走到「有東西要改」
+    # 的 PLAN 分支（#3799）。部署 ref 經 da-crdecode 讀，同 generate_platform_data。
+    R("renovate_fixup",
+      lambda t, s: (
+          _edit(_sb(t, "tests/federation-e2e/docker-compose.yml"),
+                "image: prom/prometheus:v", "image: prom/prometheus:v0.")
+          or ["--dry-run"]),
+      sandbox=("k8s", "helm", "scripts/ops/check_image_refs_resolve.py",
+               "tests/federation-e2e/docker-compose.yml", "try-local/docker-compose.yaml",
+               ".github/workflows/nightly-image-scan.yaml", "tests/oauth2-proxy/go.mod",
+               "docs/assets/platform-data.json",
+               "tools/portal/src/interactive/tools/_common/data/images.js"),
+      cwd="repo"),
+
     R("reword_chain",
       lambda t, s: _reword_repo(t),
       cwd="gitrepo", env=lambda t: dict(_GIT_ENV), write_control=True),
@@ -748,7 +764,7 @@ def test_recipe_table_covers_every_dry_run_tool():
 # dx 再少一支：inject_related_docs 在 #1984 退役。
 # dx 再少一支：analyze_bench_history 的 --trend-watch（唯一用 --dry-run 的路徑）
 # 隨舊的 ns/op 趨勢監測退役。
-EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 17, "dx": 12}
+EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 17, "dx": 13}
 
 
 def test_dry_run_tool_count_per_dir_is_pinned():

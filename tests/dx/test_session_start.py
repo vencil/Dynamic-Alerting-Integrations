@@ -284,7 +284,9 @@ def test_a_refusal_skips_pre_commit_install_and_nothing_else(tmp_path, setup):
 
 
 @pytest.mark.parametrize("state", [
-    "last-run-failed", "no-pre-commit-on-PATH", "e2e-deps-gone", "helm-off-pin",
+    "last-run-failed", "no-pre-commit-on-PATH", "e2e-deps-gone", "portal-deps-gone",
+    "portal-deps-stale",
+    "helm-off-pin",
     "golangci-lint-off-pin", "hadolint-off-pin", "hadolint-absent",
     "kube-linter-off-pin", "pint-off-pin", "promtool-absent",
     # One suffix away from the pin: an exact match, not a prefix or substring.
@@ -301,6 +303,20 @@ def test_a_no_op_needs_every_condition(tmp_path, state):
     if state == "e2e-deps-gone":
         (repo / "tests" / "e2e").mkdir(parents=True)
         (repo / "tests" / "e2e" / "package.json").write_text("{}\n", encoding="utf-8")
+    if state == "portal-deps-gone":
+        (repo / "tools" / "portal").mkdir(parents=True)
+        (repo / "tools" / "portal" / "package.json").write_text("{}\n", encoding="utf-8")
+    if state == "portal-deps-stale":
+        # Installed, then the lockfile changed (another branch's bump): the
+        # `make portal-deps` predicate — package-lock.json newer than
+        # node_modules/.package-lock.json — must reinstall.
+        portal = repo / "tools" / "portal"
+        (portal / "node_modules").mkdir(parents=True)
+        (portal / "package.json").write_text("{}\n", encoding="utf-8")
+        installed = portal / "node_modules" / ".package-lock.json"
+        installed.write_text("{}\n", encoding="utf-8")
+        os.utime(installed, (1_000_000_000, 1_000_000_000))
+        (portal / "package-lock.json").write_text("{}\n", encoding="utf-8")
     marker_text = ("RESULT=failed (not importable: mkdocs)\n" if state == "last-run-failed"
                    else "RESULT=ok\n")
 

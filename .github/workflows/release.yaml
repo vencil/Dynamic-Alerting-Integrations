@@ -901,6 +901,45 @@ jobs:
             exit 1
           fi
 
+      # ⛔ #3228: the chart is not released while its DEFAULT pins name a
+      # da-tools / recipe-preview image that cannot run the container the
+      # chart starts from it. The PR gate (image-pin-capability-check) honours
+      # the registered EXEMPTIONS so PRs stay green until a capable tools/v*
+      # tag exists; a release must not ride on them, so they are refused here.
+      # Until that tools release (and bump_docs.py --tools moving
+      # generator.image.tag to it), this step fails BY DESIGN: tenant-api is
+      # released after tools. It runs before the image build, so a refusal
+      # leaves no candidate image or promoted tag behind (it needs neither).
+      # tests/ops/test_release_tenant_api_pin_capability_gate.py
+      - name: Set up Python (image-pin capability gate)
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Install PyYAML (image-pin capability gate)
+        run: pip install pyyaml -c requirements/ci-constraints.txt
+
+      - name: Set up Helm
+        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
+        with:
+          # Explicit, never the action's `latest` default (which silently
+          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
+
+      - name: Set up Go (da-crdecode, for the image-pin and rendered-chart checks)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      # The gate reads each pinned tools/vX.Y.Z tag's tree (`git show`); the
+      # default checkout has no tags, and without them the gate exits 2.
+      - name: Verify the chart's da-tools pins can run, exemptions refused (#3228)
+        run: |
+          git fetch --quiet --tags origin
+          bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_image_pin_capability.py --chart helm/tenant-api --refuse-exemptions
+
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -935,13 +974,6 @@ jobs:
 
       # --- Helm chart: package + verify now (fail fast, publishes nothing);
       # `helm push` waits until the image digest has passed the scan (#1278) ---
-      - name: Set up Helm
-        uses: azure/setup-helm@2f5e7bc67f1f9972ab16657bb795f36d8f04de0e # v5.1.0
-        with:
-          # Explicit, never the action's `latest` default (which silently
-          # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
-          version: v4.3.0
-
       - name: Package Helm chart
         run: |
           mkdir -p .build
@@ -1004,13 +1036,7 @@ jobs:
       # Ready. The render is the source (a derived tag is invisible in
       # values.yaml), resolution is anonymous (as a customer pulls), and the
       # tenant-api image itself was promoted above, so it resolves too.
-      - name: Set up Go (da-crdecode, for the rendered-chart image check)
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: components/threshold-exporter/app/go.mod
-          cache: true
-          cache-dependency-path: components/threshold-exporter/app/go.sum
-
+      # (helm and Go — da-crdecode — were set up before the capability gate.)
       - name: Verify the chart's default images resolve (#1040)
         run: bash scripts/ops/with_da_crdecode.sh python3 scripts/ops/check_image_refs_resolve.py --scope rendered --chart helm/tenant-api
 

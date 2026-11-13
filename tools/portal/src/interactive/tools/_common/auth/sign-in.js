@@ -46,6 +46,23 @@ function writeAttempt(win, now) {
   }
 }
 
+// Set once this page has been sent to sign in: every later 401 belongs to a
+// page that is already leaving, not to a refusal after signing in.
+let leaving = false;
+
+/** Whether this page has been sent to sign in (redirectToSignIn returned
+ * true). A 401 that arrives after that should not be shown as a refusal. */
+export function leavingForSignIn() {
+  return leaving;
+}
+
+/** Tests only: forget holds and a past departure (module state outlives a
+ * test inside one file). */
+export function resetSignInStateForTests() {
+  holds = 0;
+  leaving = false;
+}
+
 // Holds on leaving for sign-in: while one is held, redirectToSignIn() stays
 // on the page. A dialog showing something that cannot be read back (a
 // one-time federation token) holds one, so a 401 from ANY request on the
@@ -86,5 +103,6 @@ export function redirectToSignIn(win = window, now = Date.now()) {
   }
   writeAttempt(win, now);
   win.location.assign(signInUrl(win.location));
+  leaving = true;
   return true;
 }

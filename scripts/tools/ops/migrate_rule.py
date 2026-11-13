@@ -842,10 +842,12 @@ def apply_auto_suppression(results):
         if not warn_r.alert_rules or len(crit_r.recording_rules) < 2:
             continue
 
-        # 從 base_key 推導 metric_group（取最後一段作為 group name）
-        # 例: mysql_connections → connections, container_cpu → cpu
-        parts = base_key.split("_")
-        metric_group = parts[-1] if parts else base_key
+        # metric_group 就是 base_key 本身（#3692），與規則包孿生配對的命名
+        # 相同（#3658：孿生的 metric_group 是門檻鍵名）。severity dedup 在
+        # 一個租戶內以 metric_group 配對，所以只取最後一段（mysql_replication_lag
+        # 與 redis_replication_lag 都會變成 "lag"）會讓不同規則的 critical
+        # 互相抑制對方的 warning。
+        metric_group = base_key
 
         # 為 warning 和 critical alert 加上 metric_group label
         for ar in warn_r.alert_rules:

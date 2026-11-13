@@ -233,7 +233,8 @@ Default deny-all (Ingress + Egress) + per-component whitelist:
 | Prometheus | monitoring namespace (9090) | tenant ns 9104/8080, Alertmanager 9093, kube-state-metrics, VictoriaLogs 9428 (/metrics), DNS, K8s API 6443 |
 | Alertmanager | Prometheus (9093) | DNS, webhook HTTPS 443 (block cloud metadata 169.254.169.254) |
 | Grafana | monitoring namespace (3000) | Prometheus 9090, VictoriaLogs 9428, external HTTPS 443 (grafana.com plugin install; blocks cloud metadata 169.254.169.254), DNS |
-| VictoriaLogs (helm) | the listed consumers on 9428 (Vector by its namespace; Grafana, chargeback-aggregator, federation-gateway/reconciler and Prometheus by pod label in the same namespace) | none |
+| VictoriaLogs (helm) | 9428, only each `auth.consumers` entry's `from` (Vector: the `vector` namespace and its pod label; Grafana, chargeback-aggregator, federation-gateway/reconciler: pod label in the same namespace) and `networkPolicy.scrapers` (Prometheus) — the same list vmauth authorizes | none |
+| federation-gateway (helm) | listenPort (`networkPolicy.allowedNamespaces`, empty = cluster-wide); the audit-metrics port (Prometheus's namespace) | DNS, `upstream.port` in the upstream's namespace |
 | chargeback-aggregator (helm) | none | DNS, VictoriaLogs 9428 |
 | federation-proxy (helm) | listenPort, only from the federation-gateway pod label (`networkPolicy.gatewaySelector` / `gatewayNamespace`) | DNS, the upstream port in the upstream's namespace (default Prometheus 9090) |
 | threshold-exporter | Prometheus (8080) | DNS only |
