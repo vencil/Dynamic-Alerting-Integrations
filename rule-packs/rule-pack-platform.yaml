@@ -2037,6 +2037,13 @@ groups:
       # [mariadb, redis] adds 2 to the denominator, and 1 to the numerator when
       # only its mariadb exporter is gone. The floor (> 5) and ratio (> 0.1)
       # below are therefore pairs, and the summary says so. The
+      # DEPENDENCY (#3771 review): tenant:exporter_present and the sentinel
+      # tenant:exporter_presence_loaded are recorded by rule-pack-liveness.yaml.
+      # `and on() tenant:exporter_presence_loaded` keeps this rule silent where
+      # this pack is loaded without them (only the platform pack, or a hand-split
+      # copy of the liveness pack) — otherwise every declared pair reads as
+      # absent and this pages forever. ExporterPresenceRulesNotLoaded (below)
+      # names that state.
       # `without(...)` form + no tenant label is exactly why this cannot live in
       # rule-packs/ (lint_custom_rules denies `without(tenant)` and mandates a
       # tenant label).
@@ -2088,6 +2095,7 @@ groups:
             ) > 0.1
           )
           unless on() absent(up{job="tenant-exporters"})
+          and on() tenant:exporter_presence_loaded
         for: 3m
         labels:
           severity: critical
@@ -2108,6 +2116,33 @@ groups:
             the fanned-out TenantExporterAbsent alerts. If instead the WHOLE
             tenant-exporters job is gone, TenantExporterJobAbsent fires instead.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage"
+
+      # --- Presence rules not loaded (#3771 review) ---
+      # TenantExporterAbsent and MassExporterOutage read the presence rules the
+      # liveness pack records (tenant:exporter_present) and are AND-ed with its
+      # sentinel tenant:exporter_presence_loaded, so without them they stay
+      # silent rather than paging for every declared (tenant, db_type). This
+      # makes that silence visible: tenants declare db_type (the exporter emits
+      # tenant_expected_exporter) but the sentinel is absent — the liveness pack
+      # is not loaded, or a copy of it lost its presence rules. It lives here,
+      # not in the liveness pack: the liveness pack missing is the case it is for.
+      - alert: ExporterPresenceRulesNotLoaded
+        expr: absent(tenant:exporter_presence_loaded) and on() count(tenant_expected_exporter) > 0
+        for: 10m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "Exporter presence rules are not loaded — per-tenant exporter liveness is off"
+          description: |
+            Tenants declare _metadata.db_type (tenant_expected_exporter is
+            present) but tenant:exporter_presence_loaded, recorded by
+            rule-pack-liveness.yaml, is absent for 10m. TenantExporterAbsent and
+            MassExporterOutage are guarded on it and stay silent, so no
+            tenant's exporter outage pages. Load the whole liveness pack
+            (its one rule file / ConfigMap key holds the presence rules and the
+            alerts together) next to this platform pack.
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/byo-prometheus-integration.md"
 
   # ============================================================
   # Federation Audit (ADR-020 IV-2f, issue #511)

@@ -278,8 +278,6 @@ spec:
                   name: prometheus-rules-liveness
                   optional: true
                   items:
-                    - key: liveness-recording.yml
-                      path: liveness-recording.yml
                     - key: liveness-alert.yml
                       path: liveness-alert.yml
               - configMap:

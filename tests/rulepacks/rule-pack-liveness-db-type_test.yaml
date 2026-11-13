@@ -12,13 +12,15 @@
 #   M3  兩種都健康 → 不響
 #   M4  存在指標只認 job="tenant-exporters"：別的 job 的 mysql_up 不算 → 響
 #   M5  rabbitmq 兩種 exporter：只有內建 plugin 的 rabbitmq_identity_info 也算在場 → 不響
-#   U1  未宣告租戶有 target → Undeclared 響（warning）；宣告過的租戶不響
+#   U1  未宣告租戶有 DB exporter（存在指標在場）→ Undeclared 響（warning）；宣告過的租戶不響
+#   U4  （併在 U1）未宣告、只有 nginx exporter 的租戶 → 不響（enum 沒有它可宣告的種類）
 #   U2  沒有任何租戶宣告 db_type、threshold-exporter 活著 → Undeclared 照響
 #       （守門讀 tenant_metadata_info，不是 tenant_expected_exporter；守門改讀後者就轉紅）
 #   U3  threshold-exporter 全掛（tenant_metadata_info、tenant_expected_exporter 都缺席）
 #       → Undeclared 一條都不響（拿掉守門就對每個租戶齊響）
 #   P1  6 個租戶各宣告 [mariadb, redis]、mariadb 全掛 → MassExporterOutage 響，
 #       $value＝6 組 (tenant, db_type)，分母 12 組（舊的 on(tenant) 下 redis 擋住全部、不響）
+#       兩個 pack 都載入 → ExporterPresenceRulesNotLoaded 不響
 #   P2  同形狀只有 5 個租戶 → 5 不 > 5，不響（門檻是「組」）
 # tenant id 用 t-* placeholder（dev-rule：fixture 不寫死真實租戶名）。
 rule_files:
@@ -190,12 +192,22 @@ tests:
         values: '1x30'
       - series: 'tenant_metadata_info{tenant="t-declared", owner="", runbook_url="", tier=""}'
         values: '1x30'
-      # 未宣告：target 是否 up 不影響（up=0 也是「被 scrape」）。
+      # 未宣告、有 DB exporter（mysql_up 在場）→ 響；另一個 target up=0 不影響。
       - series: 'up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
         values: '1x30'
       - series: 'up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.3:9104"}'
         values: '0x30'
       - series: 'tenant_metadata_info{tenant="t-loose", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+      # U4：未宣告、只有 nginx exporter（enum 沒有可宣告的種類）→ 不響。
+      #     左手邊改回 up{job="tenant-exporters"} 就轉紅（t-web 也會響）。
+      - series: 'up{job="tenant-exporters", tenant="t-web", instance="10.4.0.4:9113"}'
+        values: '1x30'
+      - series: 'nginx_up{job="tenant-exporters", tenant="t-web", instance="10.4.0.4:9113"}'
+        values: '1x30'
+      - series: 'tenant_metadata_info{tenant="t-web", owner="", runbook_url="", tier=""}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 14m
@@ -209,10 +221,10 @@ tests:
               maintenance: mute
               tenant: t-loose
             exp_annotations:
-              summary: "Tenant t-loose has tenant-exporters targets but declares no db_type"
-              summary_zh: "租戶 t-loose 有 tenant-exporters target，但沒有宣告 db_type"
-              description: "Tenant t-loose has been scraped under job=\"tenant-exporters\" for 15m but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a string, or a list such as [mariadb, redis])."
-              description_zh: "租戶 t-loose 已 15 分鐘在 job=\"tenant-exporters\" 下被 scrape，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。"
+              summary: "Tenant t-loose runs a database exporter but declares no db_type"
+              summary_zh: "租戶 t-loose 有資料庫 exporter 在回應，但沒有宣告 db_type"
+              description: "A database exporter of tenant t-loose (one of the kinds _metadata.db_type accepts) has answered under job=\"tenant-exporters\" for 15m but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a string, or a list such as [mariadb, redis])."
+              description_zh: "租戶 t-loose 有資料庫 exporter（_metadata.db_type 可宣告的種類之一）已 15 分鐘在 job=\"tenant-exporters\" 下回應，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -222,6 +234,8 @@ tests:
     name: U2-nobody-declared-yet-still-fires
     input_series:
       - series: 'up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
         values: '1x30'
       - series: 'tenant_metadata_info{tenant="t-loose", owner="", runbook_url="", tier=""}'
         values: '1x30'
@@ -234,10 +248,10 @@ tests:
               maintenance: mute
               tenant: t-loose
             exp_annotations:
-              summary: "Tenant t-loose has tenant-exporters targets but declares no db_type"
-              summary_zh: "租戶 t-loose 有 tenant-exporters target，但沒有宣告 db_type"
-              description: "Tenant t-loose has been scraped under job=\"tenant-exporters\" for 15m but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a string, or a list such as [mariadb, redis])."
-              description_zh: "租戶 t-loose 已 15 分鐘在 job=\"tenant-exporters\" 下被 scrape，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。"
+              summary: "Tenant t-loose runs a database exporter but declares no db_type"
+              summary_zh: "租戶 t-loose 有資料庫 exporter 在回應，但沒有宣告 db_type"
+              description: "A database exporter of tenant t-loose (one of the kinds _metadata.db_type accepts) has answered under job=\"tenant-exporters\" for 15m but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a string, or a list such as [mariadb, redis])."
+              description_zh: "租戶 t-loose 有資料庫 exporter（_metadata.db_type 可宣告的種類之一）已 15 分鐘在 job=\"tenant-exporters\" 下回應，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -252,6 +266,8 @@ tests:
       - series: 'mysql_up{job="tenant-exporters", tenant="t-declared", instance="10.4.0.1:9104"}'
         values: '1x30'
       - series: 'up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 20m
@@ -312,6 +328,10 @@ tests:
       - series: 'redis_up{job="tenant-exporters", tenant="t-6", instance="t-6-rds"}'
         values: '1x10'
     alert_rule_test:
+      # liveness pack 有載 → 哨兵在場，ExporterPresenceRulesNotLoaded 不響。
+      - eval_time: 15m
+        alertname: ExporterPresenceRulesNotLoaded
+        exp_alerts: []
       - eval_time: 5m
         alertname: MassExporterOutage
         exp_alerts:

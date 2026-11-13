@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -126,3 +128,51 @@ def test_cross_pack_records_are_liveness_records_on_the_tenant_exporters_job():
                 jobs = ms._job_matchers(metric, rule["expr"])
                 assert jobs and all(j == ("=", ms.TENANT_EXPORTER_JOB) for j in jobs), (
                     name, metric, jobs)
+
+
+_PRESENCE_GONE_TEST = """\
+rule_files:
+  - {liveness}
+  - {platform}
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'tenant_expected_exporter{{tenant="t-a", db_type="mariadb"}}'
+        values: '1x20'
+      - series: 'up{{job="tenant-exporters", tenant="t-a", instance="10.6.0.1:9104"}}'
+        values: '0x20'
+    promql_expr_test:
+      # Which of the two alerts is firing, by name only (their annotations are
+      # pinned by the promtool suites; here only firing / not matters).
+      - expr: count by(alertname) (ALERTS{{alertstate="firing", alertname=~"TenantExporterAbsent|ExporterPresenceRulesNotLoaded"}})
+        eval_time: 15m
+        exp_samples:
+          - labels: '{{alertname="{firing}"}}'
+            value: 1
+"""
+
+
+@pytest.mark.skipif(shutil.which("promtool") is None, reason="promtool not on PATH")
+@pytest.mark.parametrize("presence_loaded", [True, False], ids=["whole-pack", "presence-gone"])
+def test_absent_is_guarded_on_the_presence_sentinel(tmp_path, presence_loaded):
+    """The liveness pack with its generated presence rules cut out (a hand-split
+    copy, an old projection): TenantExporterAbsent must stay silent instead of
+    paging for every declared pair, and ExporterPresenceRulesNotLoaded must
+    name the state. The whole pack, same input: Absent fires (the input does
+    exercise it) and the sentinel alert does not."""
+    text = LIVENESS.read_text(encoding="utf-8")
+    if not presence_loaded:
+        before, _block, after = presence._split(text)
+        text = before + after
+    liveness = tmp_path / "liveness.yaml"
+    liveness.write_text(text, encoding="utf-8")
+    test = tmp_path / "t_test.yaml"
+    test.write_text(_PRESENCE_GONE_TEST.format(
+        liveness=liveness, platform=PLATFORM,
+        firing="TenantExporterAbsent" if presence_loaded else "ExporterPresenceRulesNotLoaded",
+    ), encoding="utf-8")
+    proc = subprocess.run(["promtool", "test", "rules", str(test)],
+                          capture_output=True, text=True, encoding="utf-8",
+                          timeout=120, check=False)
+    assert proc.returncode == 0, proc.stdout[-3000:] + proc.stderr[-2000:]

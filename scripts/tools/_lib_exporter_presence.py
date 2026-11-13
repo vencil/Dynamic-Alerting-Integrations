@@ -94,11 +94,22 @@ EXPORTER_PRESENCE: dict[str, tuple[str, ...]] = {
 }
 
 PRESENCE_RECORD = "tenant:exporter_present"
-PRESENCE_GROUP = "tenant-liveness-presence"
+#: Always 1 wherever the presence rules are loaded: the absence rules (here and
+#: the platform pack's MassExporterOutage) are AND-ed with it, so a Prometheus
+#: that has them without the presence rules stays silent instead of reading
+#: every declared (tenant, db_type) as absent, and the platform pack's
+#: ExporterPresenceRulesNotLoaded names that state.
+SENTINEL_RECORD = "tenant:exporter_presence_loaded"
+#: The group the generated rules sit in — the liveness alerts' own, so the
+#: ConfigMap generator (one key per recording-only / alerting group set) puts
+#: them under the same key as the alerts: one key cannot be projected without
+#: the other.
+LIVENESS_GROUP = "tenant-liveness"
 JOB_SELECTOR = 'job="tenant-exporters"'
 
 BEGIN_MARK = "# >>> GENERATED:exporter-presence"
 END_MARK = "# <<< GENERATED:exporter-presence"
+_INDENT = "      "
 
 LIVENESS_PACK = Path(RULE_PACKS.directory) / RULE_PACKS.file_name("liveness")
 
@@ -123,28 +134,33 @@ def presence_rules() -> list[dict]:
 
 
 def render_block() -> str:
-    """The generated group, delimiters included, as it sits under ``groups:``."""
+    """The generated rules, delimiters included, as they sit at the head of
+    the ``tenant-liveness`` group's ``rules:`` (before the alerts that read
+    them: a group is evaluated in order)."""
+    i = _INDENT
     lines = [
-        f"  {BEGIN_MARK} — generated block, DO NOT EDIT"
+        f"{i}{BEGIN_MARK} — generated block, DO NOT EDIT"
         "（改 scripts/tools/_lib_exporter_presence.py 的 EXPORTER_PRESENCE 後跑它的 --write）",
-        f"  - name: {PRESENCE_GROUP}",
-        "    rules:",
     ]
     for d in EXPORTER_PRESENCE:
-        lines.append(f"      # db_type={d}: {' / '.join(EXPORTER_PRESENCE[d])}")
-        lines.append(f"      - record: {PRESENCE_RECORD}")
-        lines.append(f"        expr: {presence_expr(d)}")
-        lines.append("        labels:")
-        lines.append(f"          db_type: {d}")
-    lines.append(f"  {END_MARK}")
+        lines.append(f"{i}# db_type={d}: {' / '.join(EXPORTER_PRESENCE[d])}")
+        lines.append(f"{i}- record: {PRESENCE_RECORD}")
+        lines.append(f"{i}  expr: {presence_expr(d)}")
+        lines.append(f"{i}  labels:")
+        lines.append(f"{i}    db_type: {d}")
+    lines.append(f"{i}# 哨兵：存在判定已載入（absence 規則 and on() 它；缺席由平台 pack 的")
+    lines.append(f"{i}# ExporterPresenceRulesNotLoaded 指名）")
+    lines.append(f"{i}- record: {SENTINEL_RECORD}")
+    lines.append(f"{i}  expr: vector(1)")
+    lines.append(f"{i}{END_MARK}")
     return "\n".join(lines) + "\n"
 
 
 def _split(text: str) -> tuple[str, str, str]:
     """(before, block, after) around the generated block; ValueError if absent."""
-    start = text.find(f"  {BEGIN_MARK}")
-    end = text.find(f"  {END_MARK}")
-    if start < 0 or end < 0 or end < start:
+    start = text.find(f"{_INDENT}{BEGIN_MARK}")
+    end = text.find(f"{_INDENT}{END_MARK}")
+    if start < 0 or end < 0 or end < start or (start and text[start - 1] != "\n"):
         raise ValueError(f"{LIVENESS_PACK}: generated block markers not found")
     stop = text.index("\n", end) + 1
     return text[:start], text[start:stop], text[stop:]

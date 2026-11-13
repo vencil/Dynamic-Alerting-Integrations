@@ -14,8 +14,9 @@ DSL 運算子：
   matches     — 正則表達式匹配
   one_of      — 值必須在指定清單內
   contains    — 字串包含子字串
-  （欄位值是 list 時——`_metadata.db_type`（#3771）、`tags`——逐元素比：
-   `not_equals` 要每個元素都不相等，其餘值運算子有一個元素成立即成立）
+  （欄位值是 list 時——`_metadata.db_type`（#3771）、`tags`、`groups`——逐元素比：
+   `one_of`／`matches`／`not_equals` 要每個元素都成立，`equals`／`contains` 有一個
+   元素成立即成立；空 list 只滿足 `not_equals`）
 
 條件式規則：
   when 子句：僅在條件成立時才評估主規則。
@@ -749,6 +750,8 @@ def _to_comparable(value: Any) -> Union[float, str]:
 
 #: Value operators read element by element on a list-valued field (#3771).
 _ELEMENTWISE_OPERATORS = frozenset({"equals", "not_equals", "matches", "one_of", "contains"})
+#: Of those, the ones every element must satisfy (the rest: some element).
+_EVERY_ELEMENT_OPERATORS = frozenset({"not_equals", "matches", "one_of"})
 
 
 def _evaluate_operator(operator: str, actual: Any, expected: Any) -> bool:
@@ -777,13 +780,18 @@ def _evaluate_operator(operator: str, actual: Any, expected: Any) -> bool:
         return actual is None
 
     # A list-valued field (`_metadata.db_type` since #3771, `tags`, `groups`)
-    # is read element by element: `not_equals` holds when no element equals
-    # the value, every other value operator when some element satisfies it.
-    # A one-element list therefore reads as the scalar it replaces
-    # (`db_type: mariadb` is served as ["mariadb"]).
+    # is read element by element. The constraints — `one_of`, `matches`,
+    # `not_equals` — hold when EVERY element satisfies them, so a list cannot
+    # slip an unlisted value past an allowlist (`one_of: [mariadb, postgresql]`
+    # with [mariadb, oracle] is a violation). `equals` / `contains` ask about
+    # membership and hold when SOME element does. A one-element list reads as
+    # the scalar it replaces (`db_type: mariadb` is served as ["mariadb"]); an
+    # empty list satisfies only `not_equals`.
     if isinstance(actual, list) and operator in _ELEMENTWISE_OPERATORS:
         if operator == "not_equals":
             return all(_evaluate_operator(operator, a, expected) for a in actual)
+        if operator in _EVERY_ELEMENT_OPERATORS:
+            return bool(actual) and all(_evaluate_operator(operator, a, expected) for a in actual)
         return any(_evaluate_operator(operator, a, expected) for a in actual)
 
     if operator == "equals":

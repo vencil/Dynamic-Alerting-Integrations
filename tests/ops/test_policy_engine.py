@@ -253,21 +253,33 @@ class TestEvaluateOperator:
         ("equals", "redis", False, True),
         ("not_equals", "mariadb", False, False),
         ("not_equals", "redis", True, False),
-        ("matches", "^red", False, True),
-        ("one_of", ["redis", "kafka"], False, True),
+        ("not_equals", "kafka", True, True),
+        ("matches", "^red", False, False),
+        ("matches", "^(maria|red)", True, True),
+        ("one_of", ["redis", "kafka"], False, False),
+        ("one_of", ["mariadb", "redis"], True, True),
+        ("one_of", ["mariadb", "postgresql"], True, False),
         ("contains", "maria", True, True),
+        ("contains", "red", False, True),
     ])
     def test_list_value_is_read_element_by_element(self, op, expected_val, want_one, want_two):
         """#3771：db_type 以 list 送出；一元素 list 等同原本的純量，多元素逐元素比
-        （not_equals 要每個元素都不等，其餘任一元素成立即成立）。"""
+        （one_of／matches／not_equals 要每個元素都成立，equals／contains 任一元素）。"""
         assert pe._evaluate_operator(op, ["mariadb"], expected_val) is want_one
         assert pe._evaluate_operator(op, ["mariadb", "redis"], expected_val) is want_two
         # 一元素 list 與原本的純量同讀
         assert pe._evaluate_operator(op, "mariadb", expected_val) is want_one
 
+    def test_list_cannot_slip_past_an_allowlist(self):
+        """#3771 審查：one_of 是 allowlist，列表裡有一個不在清單內就是違規。"""
+        assert pe._evaluate_operator("one_of", ["mariadb", "oracle"],
+                                     ["mariadb", "postgresql"]) is False
+        assert pe._evaluate_operator("matches", ["prod-a", "dev-b"], "^prod-") is False
+
     def test_empty_list_value(self):
-        """空 list：沒有元素成立；not_equals 恆成立。"""
-        assert pe._evaluate_operator("equals", [], "x") is False
+        """空 list：只滿足 not_equals。"""
+        for op, val in [("equals", "x"), ("matches", "x"), ("one_of", ["x"]), ("contains", "x")]:
+            assert pe._evaluate_operator(op, [], val) is False, op
         assert pe._evaluate_operator("not_equals", [], "x") is True
 
 

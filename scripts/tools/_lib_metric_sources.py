@@ -232,7 +232,8 @@ TENANT_EXPORTER_JOB = "tenant-exporters"
 #: it has a source wherever the platform pack runs.
 #: tests/rulepacks/test_exporter_presence.py holds each name to a record of
 #: rule-pack-liveness.yaml whose every input selects that job.
-CROSS_PACK_RECORDS: frozenset = frozenset({"tenant:exporter_present"})
+CROSS_PACK_RECORDS: frozenset = frozenset({"tenant:exporter_present",
+                                           "tenant:exporter_presence_loaded"})
 
 #: Series Prometheus itself manufactures (no exporter, no /metrics line):
 #: `up` per scrape target, `ALERTS` per alert. `up` carries the target's job,

@@ -16,7 +16,9 @@ package config
 // Layering is unchanged: `_metadata` merges PER KEY and a value is
 // REPLACED WHOLE (metadata_layers.go), so a tenant file writing
 // `db_type: [redis]` over a platform layer's `db_type: [mariadb]` reads
-// `[redis]` — the lists are not unioned.
+// `[redis]` — the lists are not unioned. The contract is the schema's: a
+// layer writes a string or a non-empty list. An empty list is refused there;
+// what this reader makes of one is not a contract and is not tested.
 
 import (
 	"fmt"

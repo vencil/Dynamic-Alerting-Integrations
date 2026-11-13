@@ -2811,7 +2811,7 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 
 `required`、`forbidden`、`equals`、`not_equals`、`gte`、`lte`、`gt`、`lt`、`matches`、`one_of`、`contains`
 
-欄位值是 list 時（`_metadata.db_type`、`tags`、`groups`）逐元素比：`not_equals` 要每個元素都不等於 `value`，`equals`／`matches`／`one_of`／`contains` 有一個元素成立即成立。`db_type` 自 [#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771) 起以 list 送出（寫成字串的也是一元素 list），所以既有的 `db_type` 規則讀法不變；宣告 `[mariadb, redis]` 的租戶符合 `equals: redis`，也違反 `not_equals: mariadb`。
+欄位值是 list 時（`_metadata.db_type`、`_metadata.tags`、`_metadata.groups`）逐元素比：限制型的 `one_of`／`matches`／`not_equals` 要**每個**元素都成立（列表不能夾帶 allowlist 以外的值：`one_of: [mariadb, postgresql]` 對 `[mariadb, oracle]` 是違規），`equals`／`contains` 問的是成員，有一個元素成立即成立；空 list 只滿足 `not_equals`。`db_type` 自 [#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771) 起以 list 送出（寫成字串的也是一元素 list），所以既有的單值 `db_type` 規則讀法不變；宣告 `[mariadb, redis]` 的租戶符合 `equals: redis`，違反 `not_equals: mariadb` 與 `one_of: [mariadb]`。⚠️ `tags`／`groups` 過去是把整個列表當成一個字串（`['a', 'b']`）比，`equals`／`not_equals`／`one_of`／`matches` 對它們的結果因此改變。
 
 **哪些寫法會被拒**（[#2987](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2987)；主規則與 `when` 同一套，任一條命中即結束碼 `2`、不評估任何規則，訊息指名第幾條規則、哪個欄位、為什麼）：
 

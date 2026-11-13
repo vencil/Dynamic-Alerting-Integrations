@@ -38,10 +38,10 @@ parent: architecture-and-design.md
 | JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 6 |
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
-| Exporter Liveness | `prometheus-rules-liveness` | 10 | 3 |
+| Exporter Liveness | `prometheus-rules-liveness` | 11 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
-| Platform | `prometheus-rules-platform` | 0 | 54 |
-| **總計** | | **181** | **186** (= **367** rules) |
+| Platform | `prometheus-rules-platform` | 0 | 55 |
+| **總計** | | **182** | **187** (= **369** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）

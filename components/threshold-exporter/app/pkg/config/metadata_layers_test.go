@@ -166,14 +166,6 @@ func tenantMetadataTrees() []struct {
 			want: ResolvedMetadata{Owner: "team-t", DBType: DBTypes{"mariadb", "redis"}},
 		},
 		{
-			name: "db_type: a tenant file writing [] clears the platform list",
-			files: map[string]string{
-				"_platform.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: [mariadb, redis]\n",
-				"tx.yaml":        "tenants:\n  tx:\n    _metadata:\n      db_type: []\n",
-			},
-			want: ResolvedMetadata{},
-		},
-		{
 			name: "db_type written as a mapping does not decode",
 			files: map[string]string{
 				"tx.yaml": "tenants:\n  tx:\n    _metadata:\n      db_type: {a: b}\n      owner: team-m\n",

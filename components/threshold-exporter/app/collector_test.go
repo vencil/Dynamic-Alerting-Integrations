@@ -789,7 +789,7 @@ func TestCollector_TenantExpectedExporter(t *testing.T) {
 	// postgresql (emits); db-c has _metadata but NO db_type (must NOT emit — the
 	// db_type="" guard); db-d has no _metadata at all (must NOT emit).
 	// #3771: db-e writes the list form (one series per kind, a repeat and an
-	// empty entry dropped); db-f writes an empty list (declares nothing).
+	// empty entry dropped).
 	cfg := &ThresholdConfig{
 		Defaults: map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -809,17 +809,14 @@ func TestCollector_TenantExpectedExporter(t *testing.T) {
 			"db-e": {
 				"_metadata": SVYAML("db_type: [mariadb, redis, mariadb, \"\"]\nowner: multi-team"),
 			},
-			"db-f": {
-				"_metadata": SVYAML("db_type: []\nowner: none-team"),
-			},
 		},
 	}
 
 	manager := newTestManager(cfg)
 	collector := NewThresholdCollector(manager)
 
-	// db-a and db-b one series each; db-e one per declared kind; db-c, db-d
-	// and db-f are absent (opt-in via db_type).
+	// db-a and db-b one series each; db-e one per declared kind; db-c and db-d
+	// are absent (opt-in via db_type).
 	expected := `
 		# HELP tenant_expected_exporter Liveness expectation (always 1) for each db_type a tenant declares in _metadata. LHS of the TenantExporterAbsent anti-join (#869, #3771). One series per declared (tenant, db_type).
 		# TYPE tenant_expected_exporter gauge

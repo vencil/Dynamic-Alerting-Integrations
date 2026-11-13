@@ -13,16 +13,16 @@ metadata:
     app: prometheus
     rule-pack: liveness
 data:
-  liveness-recording.yml: "groups:\n- name: tenant-liveness-presence\n  rules:\n \
-    \ - record: tenant:exporter_present\n    expr: group by(tenant) (mysql_up{job=\"\
-    tenant-exporters\"})\n    labels:\n      db_type: mariadb\n  - record: tenant:exporter_present\n\
-    \    expr: group by(tenant) (pg_up{job=\"tenant-exporters\"})\n    labels:\n \
-    \     db_type: postgresql\n  - record: tenant:exporter_present\n    expr: group\
-    \ by(tenant) (redis_up{job=\"tenant-exporters\"})\n    labels:\n      db_type:\
-    \ redis\n  - record: tenant:exporter_present\n    expr: group by(tenant) (mongodb_up{job=\"\
-    tenant-exporters\"})\n    labels:\n      db_type: mongodb\n  - record: tenant:exporter_present\n\
-    \    expr: group by(tenant) (elasticsearch_exporter_build_info{job=\"tenant-exporters\"\
-    })\n    labels:\n      db_type: elasticsearch\n  - record: tenant:exporter_present\n\
+  liveness-alert.yml: "groups:\n- name: tenant-liveness\n  rules:\n  - record: tenant:exporter_present\n\
+    \    expr: group by(tenant) (mysql_up{job=\"tenant-exporters\"})\n    labels:\n\
+    \      db_type: mariadb\n  - record: tenant:exporter_present\n    expr: group\
+    \ by(tenant) (pg_up{job=\"tenant-exporters\"})\n    labels:\n      db_type: postgresql\n\
+    \  - record: tenant:exporter_present\n    expr: group by(tenant) (redis_up{job=\"\
+    tenant-exporters\"})\n    labels:\n      db_type: redis\n  - record: tenant:exporter_present\n\
+    \    expr: group by(tenant) (mongodb_up{job=\"tenant-exporters\"})\n    labels:\n\
+    \      db_type: mongodb\n  - record: tenant:exporter_present\n    expr: group\
+    \ by(tenant) (elasticsearch_exporter_build_info{job=\"tenant-exporters\"})\n \
+    \   labels:\n      db_type: elasticsearch\n  - record: tenant:exporter_present\n\
     \    expr: group by(tenant) (oracledb_up{job=\"tenant-exporters\"})\n    labels:\n\
     \      db_type: oracle\n  - record: tenant:exporter_present\n    expr: group by(tenant)\
     \ (db2_up{job=\"tenant-exporters\"})\n    labels:\n      db_type: db2\n  - record:\
@@ -31,16 +31,17 @@ data:
     \    expr: group by(tenant) (kafka_brokers{job=\"tenant-exporters\"})\n    labels:\n\
     \      db_type: kafka\n  - record: tenant:exporter_present\n    expr: group by(tenant)\
     \ (rabbitmq_up{job=\"tenant-exporters\"} or rabbitmq_identity_info{job=\"tenant-exporters\"\
-    })\n    labels:\n      db_type: rabbitmq\n"
-  liveness-alert.yml: "groups:\n- name: tenant-liveness\n  rules:\n  - alert: TenantExporterAbsent\n\
-    \    expr: max without(instance, pod) (tenant_expected_exporter) unless on(tenant,\
-    \ db_type) tenant:exporter_present\n    for: 3m\n    labels:\n      maintenance:\
-    \ page\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: No {{ $labels.db_type }} exporter of tenant {{ $labels.tenant\
-    \ }} has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"\
-    {{ $labels.db_type }}\"} is absent; other exporter kinds of the tenant may still\
-    \ be up). Either the exporter pod is down (up=0, Service alive) or the tenant's\
-    \ scrape target was removed (series absent). If the tenant no longer runs {{ $labels.db_type\
+    })\n    labels:\n      db_type: rabbitmq\n  - record: tenant:exporter_presence_loaded\n\
+    \    expr: vector(1)\n  - alert: TenantExporterAbsent\n    expr: 'max without(instance,\
+    \ pod) (tenant_expected_exporter) unless on(tenant, db_type) tenant:exporter_present\n\
+    \n      and on() tenant:exporter_presence_loaded\n\n      '\n    for: 3m\n   \
+    \ labels:\n      maintenance: page\n      severity: critical\n      tenant: '{{\
+    \ $labels.tenant }}'\n    annotations:\n      description: No {{ $labels.db_type\
+    \ }} exporter of tenant {{ $labels.tenant }} has answered a scrape under job=\"\
+    tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"{{ $labels.db_type\
+    \ }}\"} is absent; other exporter kinds of the tenant may still be up). Either\
+    \ the exporter pod is down (up=0, Service alive) or the tenant's scrape target\
+    \ was removed (series absent). If the tenant no longer runs {{ $labels.db_type\
     \ }}, remove it from _metadata.db_type; if the tenant was de-provisioned, remove\
     \ its conf.d _metadata too (otherwise this is a stale-config false positive).\n\
     \      description_zh: 租戶 {{ $labels.tenant }} 的 {{ $labels.db_type }} exporter\
@@ -89,24 +90,25 @@ data:
     \ }} 停機（同租戶仍有其他 tenant-exporters target 為 up）\n      tier: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
     \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: TenantExporterUndeclared\n\
-    \    expr: 'group by(tenant) (up{job=\"tenant-exporters\"})\n\n      unless on(tenant)\
+    \    expr: 'group by(tenant) (tenant:exporter_present)\n\n      unless on(tenant)\
     \ tenant_expected_exporter\n\n      and on() tenant_metadata_info\n\n      unless\
     \ on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n   \
     \   '\n    for: 15m\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Tenant\
-    \ {{ $labels.tenant }} has been scraped under job=\"tenant-exporters\" for 15m\
-    \ but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent,\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'A\
+    \ database exporter of tenant {{ $labels.tenant }} (one of the kinds _metadata.db_type\
+    \ accepts) has answered under job=\"tenant-exporters\" for 15m but its _metadata\
+    \ declares no db_type, so the exporter liveness alerts (TenantExporterAbsent,\
     \ TenantExporterReplicaDown) do not cover it: if its exporters stop answering,\
     \ nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a\
     \ string, or a list such as [mariadb, redis]).'\n      description_zh: 租戶 {{ $labels.tenant\
-    \ }} 已 15 分鐘在 job=\"tenant-exporters\" 下被 scrape，但 _metadata 沒有宣告 db_type，所以 exporter\
-    \ 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在\
-    \ _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。\n      owner: '{{\
-    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Tenant {{ $labels.tenant }} has tenant-exporters targets but declares no db_type\n\
-    \      summary_zh: 租戶 {{ $labels.tenant }} 有 tenant-exporters target，但沒有宣告 db_type\n\
-    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ }} 有資料庫 exporter（_metadata.db_type 可宣告的種類之一）已 15 分鐘在 job=\"tenant-exporters\"\
+    \ 下回應，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的\
+    \ exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis]\
+    \ 這樣的列表）。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
+    \ }}'\n      summary: Tenant {{ $labels.tenant }} runs a database exporter but\
+    \ declares no db_type\n      summary_zh: 租戶 {{ $labels.tenant }} 有資料庫 exporter\
+    \ 在回應，但沒有宣告 db_type\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
