@@ -518,11 +518,13 @@ jobs:
               # that stops reading a key the wizard emits must not skip it.
               - "helm/**"
               # Same test checks each Rule Pack note names a shipped ConfigMap.
-              # One pattern for both names the family declares (`.yaml` and
-              # `.yml`, tests/shared/test_rule_source_globs_declared_once.py):
-              # a separate `*.yml` line matches no tracked file today, and a
-              # pattern that matches nothing is refused as a dead entry (#3756).
-              - "k8s/03-monitoring/configmap-rules-*.y*ml"
+              - "k8s/03-monitoring/configmap-rules-*.yaml"
+              # No `.yml` file is tracked today, so this line matches nothing
+              # and would be refused as a dead entry (#3756). It stays because
+              # the family declares both names: it is a reserved entry, listed
+              # with that reason in RESERVED_PATTERNS
+              # (scripts/ops/workflow_path_filter.py), which is checked both ways.
+              - "k8s/03-monitoring/configmap-rules-*.yml"
               # ⛔ Same class as `requirements/**` in `python` above, found by
               # the same mechanical guard: this leg RUNS this script as its
               # bundle-size gate, and no other job executes it against the real

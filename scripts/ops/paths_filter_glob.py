@@ -60,6 +60,12 @@ def unmodelled(pattern: str) -> str | None:
         if hit:
             return (f"{hit.group()!r} in the segment {segment!r} (only literals, "
                     "`*` and `[...]` classes of literals and ranges are modelled)")
+        try:
+            _segment_regex(segment)
+        except re.error as exc:
+            # `[z-a]`: a class the two matchers do not agree on either
+            # (picomatch reads a reversed range as literals).
+            return f"a character class in the segment {segment!r} is not valid ({exc})"
     return None
 
 
@@ -107,10 +113,14 @@ def _segment_regex(segment: str) -> re.Pattern[str]:
             out.append("[" + re.sub(r"([\\\]^])", r"\\\1", klass.group(1)) + "]")
             i = klass.end()
         elif segment[i] == "*":
-            # A leading `*` does not match the empty string: `*.ext` is a file
-            # NAMED something, never the dotfile `.ext` (picomatch's rule, and
-            # what the pre-#3756 `*.ext` branch did).
-            out.append("[^/]+" if i == 0 else "[^/]*")
+            # Any run of characters inside the segment, the empty one included:
+            # `*.md` covers the dotfile `.md`, `*foo` covers `foo`. Measured
+            # against picomatch with `dot: true` (what dorny/paths-filter
+            # passes), and held against it for every pattern in the workflows
+            # by tests/ops/test_workflow_path_filter.py. ⚠️ Before #3756 the
+            # `*.ext` branch refused the bare dotfile; that was this module's
+            # own rule, not picomatch's.
+            out.append("[^/]*")
             i += 1
         else:
             out.append(re.escape(segment[i]))
@@ -131,8 +141,11 @@ def match_segments(pat: list[str], parts: list[str]) -> bool:
     if "*" in head or "[" in head:
         if _SEGMENT_REFUSED.search(_CLASS.sub("", head)) or "**" in head:
             return False  # outside the modelled alphabet — fail loud
-        if not _segment_regex(head).fullmatch(parts[0]):
-            return False
+        try:
+            if not _segment_regex(head).fullmatch(parts[0]):
+                return False
+        except re.error:
+            return False  # `[z-a]`: `unmodelled` names it; never a traceback
     elif "?" in head:
         return False  # outside the modelled alphabet — fail loud
     elif parts[0] != head:

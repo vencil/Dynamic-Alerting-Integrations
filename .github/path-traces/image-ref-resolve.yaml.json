@@ -3,10 +3,9 @@
     "resolve": {
       "files": [
         "components/da-tools/app/VERSION",
+        "requirements/ci-constraints.txt",
         "scripts/ops/check_image_refs_resolve.py",
         "scripts/ops/path_trace/sitecustomize.py",
-        "scripts/ops/paths_filter_glob.py",
-        "scripts/ops/workflow_path_filter.py",
         "scripts/tools/_lib_compat.py",
         "scripts/tools/_lib_confd.py",
         "scripts/tools/_lib_confedit.py",
@@ -43,6 +42,7 @@
         }
       ],
       "import_dirs": [
+        ".",
         "scripts",
         "scripts/ops",
         "scripts/ops/path_trace",

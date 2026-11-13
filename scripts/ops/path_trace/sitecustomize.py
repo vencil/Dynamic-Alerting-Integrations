@@ -16,19 +16,29 @@ to a log in that directory:
               tool that rolls `sys.modules` back after loading something
               (check_image_refs_resolve.py does) leaves nothing to dump.
   * `open`  — every file opened for reading through Python (the `open` audit
-              event): data files, and the source of a module with no cache.
+              event, `os.open` included): data files, and the source of a
+              module with no cache.
   * `mod`   — `__file__` of every module still in `sys.modules` at exit.
   * `path`  — the `sys.path` entries seen. They are where a literal `import x`
               in a listed file is looked up (see the consumer).
+  * `error` — an event this module could not record (not a path: the event and
+              the exception). The consumer refuses a trace that holds one: an
+              event that was dropped is a load nobody measured.
+
+A relative path is resolved against the working directory AT THE EVENT, and
+the resolved path is what is de-duplicated: `open("README.md")` before and
+after an `os.chdir` are two files.
 
 Which of those are first-party, and whether the workflow's path filter covers
 them, is decided by `scripts/ops/workflow_path_filter.py`, never here: this file
-runs inside every interpreter of the job, so it stays small and never raises.
+runs inside every interpreter of the job, so it stays small. Nothing raised in
+the hook reaches the traced program — it becomes an `error` line.
 
 NOT seen, by construction (the consumer's docstring lists them as boundaries):
 a file read by a non-Python process (`cat`, `go build`, node), an interpreter
-started with `-I` / `-E` / `-S` (those ignore `PYTHONPATH` or `site`), and a
-directory listing (a file ADDED to a scanned directory).
+started with `-I` / `-E` / `-S` or with an `env=` that drops the two variables
+(those ignore `PYTHONPATH`, `site`, or never get it), and a directory listing
+(a file ADDED to a scanned directory).
 
 Lines are written with one `os.write` each to an `O_APPEND` descriptor opened
 before the hook is installed, so a forked child shares the log safely and a
@@ -51,42 +61,56 @@ def _install():
     abspath, fsdecode, write = os.path.abspath, os.fsdecode, os.write
     write_only = os.O_WRONLY  # an `open` with this access mode cannot read
 
-    def record(kind, path):
-        try:
-            if isinstance(path, int) or path is None:
-                return
-            path = fsdecode(path)
-            if not path or path.startswith("<") or "\n" in path or "\t" in path:
-                return
-            key = (kind, path)
-            if key in seen:
-                return
+    def emit(kind, text):
+        key = (kind, text)
+        if key not in seen:
             seen.add(key)
-            write(fd, ("%s\t%s\n" % (kind, abspath(path))).encode(
-                "utf-8", "surrogateescape"))
-        except Exception:  # noqa: BLE001 — never break the traced program
+            write(fd, ("%s\t%s\n" % (kind, text)).encode("utf-8", "surrogateescape"))
+
+    def record(kind, path):
+        if path is None or isinstance(path, int):
+            return  # a file descriptor: whatever opened it was recorded then
+        path = fsdecode(path)
+        if not path or path.startswith("<") or "\n" in path or "\t" in path:
+            return
+        emit(kind, abspath(path))
+
+    def failed(event, exc):
+        try:
+            emit("error", "%s event: %s: %s" % (
+                event, type(exc).__name__, str(exc).replace("\n", " ")[:200]))
+        except Exception:  # noqa: BLE001 — nothing left to tell it to
             pass
 
     def hook(event, args):
-        if event == "exec":
-            record("exec", getattr(args[0], "co_filename", None))
-        elif event == "open":
-            path, mode, flags = args
-            if mode is None:
-                if isinstance(flags, int) and flags & os.O_ACCMODE == write_only:
+        if event != "exec" and event != "open" and event != "import":
+            return
+        try:
+            if event == "exec":
+                record("exec", getattr(args[0], "co_filename", None))
+            elif event == "open":
+                mode = args[1] if len(args) > 1 else None
+                flags = args[2] if len(args) > 2 else None
+                if isinstance(mode, str):
+                    if "r" not in mode and "+" not in mode:
+                        return
+                elif isinstance(flags, int) and flags & os.O_ACCMODE == write_only:
                     return
-            elif "r" not in mode and "+" not in mode:
-                return
-            record("open", path)
-        elif event == "import":
-            for entry in args[2] or ():
-                record("path", entry or os.curdir)
+                record("open", args[0])
+            else:
+                for entry in args[2] or ():
+                    record("path", entry or os.curdir)
+        except Exception as exc:  # noqa: BLE001 — never into the traced program
+            failed(event, exc)
 
     def at_exit():
-        for module in list(sys.modules.values()):
-            record("mod", getattr(module, "__file__", None))
-        for entry in list(sys.path):
-            record("path", entry or os.curdir)
+        try:
+            for module in list(sys.modules.values()):
+                record("mod", getattr(module, "__file__", None))
+            for entry in list(sys.path):
+                record("path", entry or os.curdir)
+        except Exception as exc:  # noqa: BLE001
+            failed("exit", exc)
 
     import atexit
     atexit.register(at_exit)

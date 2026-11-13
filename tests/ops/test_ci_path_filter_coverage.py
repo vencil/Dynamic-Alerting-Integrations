@@ -2572,8 +2572,12 @@ def test_covers_matches_only_the_shapes_in_use() -> None:
     assert not _covers("**/zmod.txt", "zmod.txt.bak")
     assert _covers("**/*.zpy", "zsrc/zlint/ztool.zpy")
     assert not _covers("**/*.zpy", "zreq/pins.txt")
-    # A bare ".zpy" is a filename, not a file matched by `*.zpy`.
-    assert not _covers("**/*.zpy", ".zpy")
+    # ⛔ A bare ".zpy" IS matched by `*.zpy`: picomatch with `dot: true` (what
+    # dorny/paths-filter passes) lets `*` match the empty string. This line
+    # asserted the opposite until #3756, on the strength of a comment; it is
+    # now measured against the real picomatch for every pattern in the
+    # workflows (tests/ops/test_workflow_path_filter.py).
+    assert _covers("**/*.zpy", ".zpy")
 
     # `prefix/**/*.ext`, the shape docs-ci.yaml's filter uses. `**` must also
     # absorb ZERO segments, or `zsrc/ztop.zpy` reads as uncovered.
@@ -2619,7 +2623,8 @@ def test_covers_matches_only_the_shapes_in_use() -> None:
             ("zdocs**/a.zmd", "zdocs/a.zmd"),
             ("./zdocs/a.zmd", "zdocs/a.zmd"),
             ("zdocs/", "zdocs"),
-            ("zdocs/[a.zmd", "zdocs/[a.zmd")):
+            ("zdocs/[a.zmd", "zdocs/[a.zmd"),
+            ("zdocs/[z-a]*.zmd", "zdocs/zb.zmd")):     # a reversed range: no traceback
         assert not _covers(pattern, path), pattern
         assert _GLOB.unmodelled(pattern), pattern
     for pattern in ("Zfile", "zreq/**", "**/*.zpy", "z*x/**", "zdocs/*",
