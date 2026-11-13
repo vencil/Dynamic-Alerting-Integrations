@@ -9,9 +9,11 @@ scoped to `helm/tenant-api`, with `--refuse-exemptions`, before anything is
 published.
 
 Read as structure, not as text: the workflow is parsed as YAML and every
-`run:` as shell words (`shlex`), so a commented-out command, a flag inside an
-`echo`, or the flag on another script does not count. A workflow that does not
-parse fails the test — there is no skip path.
+`run:` as shell words (`shlex`), so a commented-out command or the flag on
+another script does not count. A gate that runs but whose failure does not
+fail the job (`continue-on-error`, a step `if:`, `|| true`, a pipe, `set +e`,
+`echo …`) does not count either. A workflow that does not parse fails the
+test — there is no skip path.
 """
 from __future__ import annotations
 
@@ -86,6 +88,9 @@ def test_release_runs_the_capability_gate_once_scoped_and_refusing_exemptions() 
     assert len(calls) == 1, f"expected one {GATE} call in {JOB}, got {calls}"
     _, args = calls[0]
     assert "--refuse-exemptions" in args, args
+    # argparse keeps the LAST --chart: a second one would silently re-scope it.
+    charts = [t for t in args if t == "--chart" or t.startswith("--chart=")]
+    assert len(charts) == 1, args
     assert _flag_value(args, "--chart") == "helm/tenant-api", args
 
 
@@ -130,3 +135,29 @@ def test_the_gate_has_what_it_needs_before_it_runs() -> None:
     # da-crdecode: the gate's manifest / render reads go through it.
     gate_cmd = _commands(steps[gate_i])[gate_j]
     assert "scripts/ops/with_da_crdecode.sh" in gate_cmd[:gate_cmd.index(GATE)], gate_cmd
+
+
+def test_a_failing_gate_fails_the_job() -> None:
+    """The gate's non-zero exit must stop the release. GitHub runs `run:` with
+    `bash -e` and no pipefail: anything after the gate on its line (`|| true`,
+    `| tee log`) or a `set +e` before it swallows the exit code."""
+    wf = yaml.safe_load(RELEASE.read_text(encoding="utf-8"))
+    job = wf["jobs"][JOB]
+    assert not job.get("continue-on-error"), "the job must not continue on error"
+    steps = job["steps"]
+    (gate_i, _), = _gate_invocations(steps)
+    step = steps[gate_i]
+    for key in ("continue-on-error", "if", "shell"):
+        assert key not in step, f"gate step sets {key!r}: {step.get(key)!r}"
+    run = step["run"]
+    assert not any(c[:2] == ["set", "+e"] for c in _commands(step)), "set +e in the gate step"
+    lines = [ln for ln in run.replace("\\\n", " ").splitlines() if GATE in ln]
+    assert len(lines) == 1, lines
+    lx = shlex.shlex(lines[0], posix=True, punctuation_chars=";&|")
+    lx.whitespace_split = True
+    lx.commenters = "#"
+    tokens = list(lx)
+    assert not any(set(t) <= set(";&|") for t in tokens), (
+        f"the gate shares its line with another command: {lines[0]!r}")
+    # The wrapper runs the gate itself: not `echo …`, not another program.
+    assert tokens[:3] == ["bash", "scripts/ops/with_da_crdecode.sh", "python3"], tokens

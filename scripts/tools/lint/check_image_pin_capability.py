@@ -1355,7 +1355,8 @@ def main() -> int:
                 "\nRelease blocked (--refuse-exemptions): do NOT delete or "
                 "re-register the exemption to get past this. Publish the "
                 "tools/v* release that ships the entry point first, move the pin "
-                "to it (bump_docs.py --tools), delete the then-stale exemption, "
+                "to it (bump_docs.py --tools), delete the exemption that then "
+                "matches no workload (this gate reports it as orphaned), "
                 "and re-run this release."
             )
         if len(refused) < len(violations):
