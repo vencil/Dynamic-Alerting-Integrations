@@ -616,7 +616,7 @@ func logMatrixMetrics(t *testing.T) {
 		{"status not ready with a policy error",
 			func() (int, any) {
 				return 200, map[string]any{"policy": map[string]any{"configured": true, "available": false,
-					"error": canaryOf("policy-error")}, "amtool_available": true, "da_guard_available": true, "ready": false}
+					"error": canaryOf("policy-error")}, "da_read_available": true, "da_guard_available": true, "ready": false}
 			},
 			nil},
 		{"status not JSON",
