@@ -61,7 +61,8 @@ class Commands:
         elif argv[:3] == ["gh", "release", "list"]:
             rc, out = self.list_rc, json.dumps([{"tagName": t} for t in self.releases])
         elif argv[:3] == ["gh", "release", "view"]:
-            out = json.dumps({"assets": [{"name": n} for n in self.assets or []]})
+            out = json.dumps({"assets": [a if isinstance(a, dict) else {"name": a, "state": "uploaded"}
+                                         for a in self.assets or []]})
         return subprocess.CompletedProcess(argv, rc, out + "\n", "boom" if rc else "")
 
     def verbs(self) -> list[str]:
@@ -288,3 +289,12 @@ def test_assets_that_cannot_be_listed_or_read_are_rc_2(env, monkeypatch, files, 
     assert _assets(monkeypatch, Commands(), [*files, files[0] + ".missing"]) == 2
     assert _assets(monkeypatch, Commands(), [*files, files[0]]) == 2   # a name twice
     capsys.readouterr()
+
+
+def test_an_asset_whose_upload_did_not_complete_is_not_present(env, monkeypatch, files, capsys):
+    """gh lists an interrupted upload with a state other than `uploaded`."""
+    cmds = Commands(releases=["tools/v1.0.0"],
+                    assets=["a.tar.gz", "SHA256SUMS", {"name": "a.tar.gz.sig", "state": "starter"}])
+    assert _assets(monkeypatch, cmds, files) == 1
+    assert not any(c[:3] == ["gh", "release", "upload"] for c in cmds.calls)
+    assert "not fully uploaded" in capsys.readouterr().err

@@ -463,6 +463,7 @@ bash smoke.sh   # 需 curl + jq
 | 17 | Rule Pack 計數混淆 | `rule-packs/` yaml 檔案數 ≠ pack 總數（後者另含 platform / liveness 等 ConfigMap-only pack）。**一律以 `platform-data.json` 的 `totals.packs` 為準，勿在文件寫死數字**（曾寫死 15，liveness 加入後即過期） |
 | 18 | Cowork VM mount 製造 phantom lock | 詳見 [Windows-MCP Playbook #27](windows-mcp-playbook.md)。Release 場景的 workaround：fresh `git clone --depth 1` 到暫存目錄做 tag 操作 |
 | 19 | 新 component 上線遺漏版號工具 | 新增 component 時，除了 `release.yaml` 加 job，還須：① `bump_docs.py` 加版號線 ② `validate_docs_versions.py` 加規則 ③ Dockerfile base image 驗證 |
+| 20 | `latest` 可能倒退 | `latest` 指向「最後一個成功發布的 run」，不是最高版號：舊版號的延遲 re-run 或 backport 發布會把 `latest` 移回舊版（[#3848](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3848)）。發 backport 後若要 `latest` 回到最高版號，就再發一次最高版號線的新版 |
 
 ### Release-gate 陷阱（component `release.yaml` 實戰，v2.9.0 首次五線 GA）
 
@@ -476,7 +477,26 @@ bash smoke.sh   # 需 curl + jq
 >
 > **`latest` 與中途失敗**：要發布時 `latest` 先寫、版號 tag 最後寫。所以中途失敗留下的是「`latest` 已移動、版號 tag 不存在」，同一個 commit re-run 時版號仍視為未發布，會重新寫兩個 tag（re-run 是重 build，digest 會換成新的那個）。反過來，版號已發布時 re-run 什麼都不寫、`latest` 也不動。
 >
-> **第一次發布一個 repository**（下一次是 `charts/da-portal` 與 `recipe-preview`）：匿名查詢時 ghcr 對不存在的 repository 與私有的一樣回 401/403，所以發布步驟帶 `GITHUB_TOKEN` 再問一次。2026-11-13 實測（Actions run 43448765258，`packages: write`）：token 200、manifest `404 MANIFEST_UNKNOWN`，判為第一次發布。若哪天變成 rc 2 並寫著 `refused with the given credentials`：owner 在本機用有 `read:packages` 的 PAT 跑 `REGISTRY_USERNAME=<user> REGISTRY_PASSWORD=<PAT> python3 scripts/tools/dx/check_release_immutable.py chart --tgz <tgz> --registry oci://ghcr.io/vencil/charts`（映像用 `image --ref … --revision <sha>`）；確認回 `publish` 後，用 `helm push`（映像用 `docker buildx imagetools create`）手動發布這一次，再 re-run job，它會認出已發布而跳過。
+> **第一次發布一個 repository**（下一次是 `charts/da-portal` 與 `recipe-preview`）：匿名查詢時 ghcr 對不存在的 repository 與私有的一樣回 401/403，所以發布步驟帶 `GITHUB_TOKEN` 再問一次。2026-11-13 實測（Actions run 43448765258，`packages: write`）：token 200、manifest `404 MANIFEST_UNKNOWN`，判為第一次發布。
+>
+> **發布步驟意外 rc 2（寫著 `refused with the given credentials`）時的手動處理**：owner 在本機用有 `read:packages`／`write:packages` 的 PAT 登入（`docker login ghcr.io`、`helm registry login ghcr.io`），先確認版號真的不存在，再照 wrapper 的順序發布，最後 re-run 失敗的 job，它會認出已發布而跳過。映像要用**失敗那次 run 掃過的候選 digest**，不要重 build：
+>
+> ```bash
+> export REGISTRY_USERNAME=<user> REGISTRY_PASSWORD=<PAT>
+> IMG=ghcr.io/vencil/<image>; VERSION=<x.y.z>; REVISION=<該 tag 的 commit sha>
+> DIGEST=$(docker buildx imagetools inspect "$IMG:candidate-<run_id>-<run_attempt>" --format '{{.Manifest.Digest}}')
+> python3 scripts/tools/dx/check_release_immutable.py image --ref "$IMG:v$VERSION" --revision "$REVISION"  # 必須印 ✅ publish
+> cosign sign --yes "$IMG@$DIGEST"                                   # 只有 da-tools、recipe-preview（release.yaml 帶 --sign 的）
+> docker buildx imagetools create --tag "$IMG:latest" "$IMG@$DIGEST"   # latest 先
+> docker buildx imagetools create --tag "$IMG:v$VERSION" "$IMG@$DIGEST" # 版號最後
+> docker buildx imagetools inspect "$IMG:v$VERSION" --format '{{.Manifest.Digest}}'  # 必須等於 $DIGEST
+>
+> # chart：用失敗那次 run 同一個 commit 重新 helm package 出來的 .tgz
+> python3 scripts/tools/dx/check_release_immutable.py chart --tgz .build/<chart>-<x.y.z>.tgz --registry oci://ghcr.io/vencil/charts  # 必須印 ✅ publish
+> helm push .build/<chart>-<x.y.z>.tgz oci://ghcr.io/vencil/charts
+> ```
+>
+> `<run_id>`、`<run_attempt>` 是失敗那次 run 的編號（Actions 頁面網址與 attempt 數）；cosign keyless 在本機會開瀏覽器走 OIDC，簽章身分因此是 owner 而不是 workflow——客戶若以 workflow 身分驗章，這一版要在 Release 說明裡註明。
 
 v2.9.0 首次真實五線 release 連續觸發下列三類：
 

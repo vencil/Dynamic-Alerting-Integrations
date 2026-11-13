@@ -31,9 +31,9 @@ process, and release.yaml calls nothing else that publishes
         re-run rebuilds archives whose bytes differ (mtimes), so a replaced
         asset would no longer match what was downloaded and checksummed.
         Release absent → created (`--generate-notes`). Of FILE's basenames:
-        all present → nothing uploaded; none present → all uploaded; some →
-        violation (delete the partial set with `gh release delete-asset`,
-        then re-run).
+        all present with `state: uploaded` → nothing uploaded; none present →
+        all uploaded; some, or any not in state `uploaded` → violation
+        (delete those with `gh release delete-asset`, then re-run).
 
 Credentials for the registry read: $REGISTRY_USERNAME / $REGISTRY_PASSWORD
 (see check_release_immutable). docker / helm / cosign use their own login.
@@ -176,7 +176,16 @@ def publish_assets(tag: str, title: str, files: List[str]) -> immutable.Decision
         assets = view.get("assets") if isinstance(view, dict) else None
         if not isinstance(assets, list):
             raise CallerError(f"gh release view {tag} has no assets list")
+        # Only an asset whose upload completed counts; `state` is in gh's
+        # asset JSON (verified on this repo's releases: "uploaded"). One still
+        # "starter" (an interrupted upload) leaves the set partial.
         present = {a.get("name") for a in assets if isinstance(a, dict)}
+        stale = sorted(a.get("name") for a in assets if isinstance(a, dict)
+                       and a.get("name") in names and a.get("state") != "uploaded")
+        if stale:
+            raise Violation(f"Release {tag}: {stale} are not fully uploaded (state is not "
+                            f"`uploaded`) — delete them (gh release delete-asset {tag} <name>), "
+                            f"then re-run.")
     else:
         print(_run(["gh", "release", "create", tag, "--title", title, "--generate-notes"],
                    timeout=120), end="")

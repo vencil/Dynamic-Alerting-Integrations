@@ -488,3 +488,46 @@ def test_an_archive_with_too_many_members_is_refused(monkeypatch):
     with pytest.raises(ValueError, match="more than 3 members"):
         tool.chart_files(_tgz({f"demo/f{i}": b"" for i in range(4)}))
     assert len(tool.chart_files(_tgz({f"demo/f{i}": b"" for i in range(3)}))) == 3
+
+
+def test_a_pax_header_bomb_is_refused_before_tarfile_reads_it(monkeypatch):
+    """A PAX (or GNU long-name) header is read whole by tarfile; a few hundred
+    KiB of gzip can carry a GiB of it (#3848 review). The cap is on the gunzip
+    stream, so the header never reaches tarfile."""
+    monkeypatch.setattr(tool, "MAX_UNPACKED_BYTES", 1024 * 1024)
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz", format=tarfile.PAX_FORMAT) as tar:
+        info = tarfile.TarInfo("demo/Chart.yaml")
+        info.size = len(CHART_YAML)
+        info.pax_headers = {"comment": "a" * (2 * 1024 * 1024)}
+        tar.addfile(info, io.BytesIO(CHART_YAML))
+    seen, inflated = [], []
+    real = tool.zlib.decompressobj
+
+    class Recording:
+        def __init__(self, *a):
+            self.inner = real(*a)
+
+        def decompress(self, *a):
+            out = self.inner.decompress(*a)
+            inflated.append(len(out))
+            return out
+
+        def __getattr__(self, name):
+            return getattr(self.inner, name)
+
+    monkeypatch.setattr(tool.zlib, "decompressobj", Recording)
+    monkeypatch.setattr(tool.tarfile, "open", lambda *a, **k: seen.append(a) or (_ for _ in ()).throw(
+        AssertionError("tarfile reached")))
+    with pytest.raises(ValueError, match="unpacks to more than"):
+        tool.chart_files(buf.getvalue())
+    assert seen == [], "tarfile parsed the bomb"
+    assert inflated and max(inflated) <= tool.MAX_UNPACKED_BYTES + 1, \
+        f"inflated {max(inflated)} bytes past the cap before refusing"
+
+
+@pytest.mark.parametrize("data", [b"not gzip", _tgz(BASE)[:-8], _tgz(BASE) + _tgz(BASE)],
+                         ids=["not-gzip", "truncated", "two-streams"])
+def test_an_archive_that_is_not_one_complete_gzip_stream_is_refused(data):
+    with pytest.raises(ValueError):
+        tool.chart_files(data)

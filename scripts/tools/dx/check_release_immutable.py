@@ -58,6 +58,7 @@ import os
 import re
 import sys
 import tarfile
+import zlib
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional
 
@@ -85,8 +86,11 @@ IMAGE_TYPES = frozenset({
 })
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
 MAX_CHART_BYTES = 50 * 1024 * 1024
-#: Unpacked size a chart archive may reach before it is refused as a bomb.
-MAX_UNPACKED_BYTES = 200 * 1024 * 1024
+#: Uncompressed size a chart archive may reach before it is refused as a bomb.
+#: Enforced on the gunzip stream BEFORE tarfile parses anything, so tar
+#: metadata (a PAX or GNU long-name header is read whole into memory) counts
+#: too. A real chart is well under 1 MiB.
+MAX_UNPACKED_BYTES = 64 * 1024 * 1024
 #: Members a chart archive may hold before it is refused (a real chart has tens).
 MAX_MEMBERS = 10_000
 _COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
@@ -190,12 +194,28 @@ def judge_image(repo: registry.Repository, reference: str, revision: str,
 # ── chart ───────────────────────────────────────────────────────────────────
 
 
+def _gunzip(data: bytes) -> bytes:
+    """The tar stream inside a .tgz, never more than MAX_UNPACKED_BYTES."""
+    inflater = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    out = inflater.decompress(data, MAX_UNPACKED_BYTES + 1)
+    if len(out) > MAX_UNPACKED_BYTES:
+        raise ValueError(f"unpacks to more than {MAX_UNPACKED_BYTES} bytes")
+    if not inflater.eof or inflater.unused_data:
+        raise ValueError("not one complete gzip stream")
+    return out
+
+
 def chart_files(data: bytes) -> Dict[str, bytes]:
     """path → content of every member of a chart archive (directories left
-    out; a link is its target, marked). Read in memory, never extracted."""
+    out; a link is its target, marked). Read in memory, never extracted; the
+    gzip layer is inflated under a cap first, so no header can make tarfile
+    allocate more than that."""
     files: Dict[str, bytes] = {}
-    total = 0
-    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+    try:
+        tar_bytes = _gunzip(data)
+    except zlib.error as exc:
+        raise ValueError(f"not gzip: {exc}") from exc
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes), mode="r:") as tar:
         for count, member in enumerate(tar, 1):
             if count > MAX_MEMBERS:
                 raise ValueError(f"holds more than {MAX_MEMBERS} members")
@@ -204,9 +224,6 @@ def chart_files(data: bytes) -> Dict[str, bytes]:
             if member.name in files:
                 raise ValueError(f"the archive holds {member.name} twice")
             if member.isfile():
-                total += member.size
-                if total > MAX_UNPACKED_BYTES:
-                    raise ValueError(f"unpacks to more than {MAX_UNPACKED_BYTES} bytes")
                 handle = tar.extractfile(member)
                 files[member.name] = handle.read() if handle else b""
             else:
