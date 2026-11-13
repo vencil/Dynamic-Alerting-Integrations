@@ -367,7 +367,9 @@ def test_no_re2_incompatible_lookarounds():
     lookaround.)"""
     cfg = _load_config()
     banned = ["(?=", "(?!", "(?<=", "(?<!"]
-    for mgr in cfg["customManagers"]:
+    # bumpVersions (#3849) runs its matchStrings through the same engine.
+    bump_patterns = [b for r in cfg["packageRules"] for b in r.get("bumpVersions", [])]
+    for mgr in [*cfg["customManagers"], *bump_patterns]:
         for s in mgr["matchStrings"]:
             for tok in banned:
                 assert tok not in s, (
@@ -411,11 +413,15 @@ def test_python_minor_bump_requires_dashboard_approval():
 _EMULATED_MATCHERS = {
     "matchManagers", "matchDatasources", "matchDepTypes",
     "matchDepNames", "matchPackageNames", "matchUpdateTypes",
+    # #3849: only the `helm/<chart>/**` shape, matched against `file`. A case
+    # that names no file is never under such a rule (Renovate always has one;
+    # the cases below are about rules that do not look at it).
+    "matchFileNames",
 }
 
 
 def _resolve(cfg: dict, *, manager: str, dep: str, datasource: str,
-             update: str, dep_type: str | None = None) -> dict:
+             update: str, dep_type: str | None = None, file: str | None = None) -> dict:
     facts = {
         "matchManagers": manager, "matchDatasources": datasource,
         "matchDepTypes": dep_type, "matchDepNames": dep,
@@ -430,9 +436,19 @@ def _resolve(cfg: dict, *, manager: str, dep: str, datasource: str,
             f"{rule.get('description', '')[:80]}")
         for k in keys:
             for v in rule[k]:
+                if k == "matchFileNames":
+                    assert re.fullmatch(r"[a-z0-9./-]+/\*\*", v), (
+                        f"matchFileNames {v!r}: the emulator models only `<dir>/**`")
+                    continue
                 assert not (v.startswith(("/", "!")) or "*" in v), (
                     f"{k} value {v!r} is a pattern; the emulator matches exact strings only")
-        if all(facts[k] in rule[k] for k in keys):
+
+        def holds(k: str) -> bool:
+            if k == "matchFileNames":
+                return file is not None and any(fnmatch_path(file, g) for g in rule[k])
+            return facts[k] in rule[k]
+
+        if all(holds(k) for k in keys):
             out.update({k: v for k, v in rule.items() if k not in keys and k != "description"})
     return out
 
@@ -737,3 +753,106 @@ def test_da_read_prometheus_versioning_reads_the_module_as_the_image_version():
         assert m and (m["major"], m["minor"], m["patch"]) == want, (version, m)
     for refused in ("v2.55.1+incompatible", "v2.5.0", "v0.316.0-rc.2", "v0.35.0", "v0.3150.0"):
         assert not rx.match(refused), refused
+
+
+# ---------------------------------------------------------------------------
+# #3849: a Renovate PR that moves an image in a git-only chart must raise that
+# chart's `version` too, or chart-version-bump (#1269) holds the PR red. The
+# git-only set is not restated here: it is helm/*/Chart.yaml minus the charts a
+# release line pushes — the same derivation check_chart_version_bump.py uses.
+# ---------------------------------------------------------------------------
+
+def _git_only_charts() -> set[str]:
+    import sys
+    sys.path[:0] = [str(REPO / "scripts" / "tools" / "lint"), str(REPO / "scripts" / "tools")]
+    from check_chart_ship_surface import discover_pushed_charts
+    pushed = set(discover_pushed_charts(REPO))
+    return {c.parent.name for c in (REPO / "helm").glob("*/Chart.yaml")} - pushed
+
+
+def _bump_rules(cfg: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
+    for rule in cfg["packageRules"]:
+        if "bumpVersions" not in rule:
+            continue
+        files = rule.get("matchFileNames", [])
+        assert len(files) == 1 and re.fullmatch(r"helm/[a-z0-9-]+/\*\*", files[0]), (
+            f"a bumpVersions rule must name exactly one chart directory, got {files}")
+        chart = files[0].split("/")[1]
+        assert chart not in out, f"two bumpVersions rules for {chart}"
+        out[chart] = rule
+    return out
+
+
+def test_bump_rules_cover_exactly_the_git_only_charts():
+    """A git-only chart without a rule: its Renovate PRs go red on the bump
+    guard. A pushed chart with one: its version belongs to the release wrap
+    (#1269), and Renovate would move it between releases."""
+    git_only = _git_only_charts()
+    assert git_only, "no git-only chart found: the derivation is broken, not the config"
+    rules = _bump_rules(_load_config())
+    assert set(rules) == git_only, (
+        f"missing a rule: {sorted(git_only - set(rules))}; "
+        f"rule for a chart a release line pushes (or that does not exist): {sorted(set(rules) - git_only)}")
+
+
+def test_each_bump_rule_raises_its_own_charts_version():
+    """The rule is scoped to the manager that edits the chart and to that
+    chart's files, and bumps that chart's Chart.yaml `version` — matched once,
+    on the real key (not appVersion, not a history comment)."""
+    import yaml
+    for chart, rule in _bump_rules(_load_config()).items():
+        assert rule.get("matchManagers") == ["custom.regex"], (chart, rule.get("matchManagers"))
+        assert len(rule["bumpVersions"]) == 1, chart
+        bump = rule["bumpVersions"][0]
+        assert bump.get("filePatterns") == [f"helm/{chart}/Chart.yaml"], (chart, bump.get("filePatterns"))
+        assert bump.get("bumpType") == "patch", chart
+        text = (REPO / "helm" / chart / "Chart.yaml").read_text(encoding="utf-8")
+        hits = [m.group("version") for s in bump["matchStrings"] for m in _py_regex(s).finditer(text)]
+        assert hits == [str(yaml.safe_load(text)["version"])], (
+            f"{chart}: matchStrings must hit the `version:` key exactly once, got {hits}")
+
+
+def test_every_renovate_edit_in_a_git_only_chart_is_under_its_bump_rule():
+    """Each file a customManager extracts a dep from inside a git-only chart
+    must sit under that chart's rule; a manager that starts editing a file the
+    rule does not cover would move the image without the bump."""
+    cfg = _load_config()
+    rules = _bump_rules(cfg)
+    edited = {d["file"] for mgr in cfg["customManagers"] for d in _extract(mgr)}
+    for path in sorted(edited):
+        parts = path.split("/")
+        if parts[0] != "helm" or parts[1] not in rules:
+            continue
+        assert fnmatch_path(path, rules[parts[1]]["matchFileNames"][0]), (path, rules[parts[1]])
+    touched = {p.split("/")[1] for p in edited if p.startswith("helm/")}
+    assert touched & set(rules), "no Renovate-managed file in any git-only chart: the walk is broken"
+
+
+def fnmatch_path(path: str, glob: str) -> bool:
+    """Renovate's matchFileNames glob for the one shape used here: `dir/**`."""
+    assert glob.endswith("/**"), glob
+    return path.startswith(glob[:-2])
+
+
+@pytest.mark.parametrize("file,chart", [
+    ("helm/vector/values.yaml", "vector"),
+    ("helm/mariadb-instance/values.yaml", "mariadb-instance"),
+    ("helm/federation-gateway/values.yaml", "federation-gateway"),
+])
+def test_an_image_bump_in_a_git_only_chart_carries_that_charts_bump(file, chart):
+    """Resolved the way Renovate applies packageRules: the chart rule adds its
+    bump and changes nothing else (group, enabled, approval stay as before)."""
+    cfg = _load_config()
+    case = {"manager": "custom.regex", "dep": "busybox", "datasource": "docker", "update": "patch"}
+    with_file = _resolve(cfg, **case, file=file)
+    without = _resolve(cfg, **case)
+    assert [b["name"] for b in with_file.get("bumpVersions", [])] == [f"chart-{chart}"], with_file
+    assert {k: v for k, v in with_file.items() if k != "bumpVersions"} == without
+
+
+def test_a_pushed_chart_gets_no_bump():
+    """tenant-api's own pins: its version is set at the release wrap (#1269)."""
+    got = _resolve(_load_config(), manager="custom.regex", dep="alpine/git",
+                   datasource="docker", update="patch", file="helm/tenant-api/values.yaml")
+    assert "bumpVersions" not in got, got
