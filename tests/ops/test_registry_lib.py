@@ -1000,7 +1000,9 @@ def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
     # _defaults.yaml carries the base") is false for it; this body must name
     # the only remedy and must not repeat that one.
     base_optional = bodies[_BASE_OPTIONAL_MARK]
-    assert "部署面必須自己在 `defaults:` 寫 base 的值" in base_optional
+    assert "部署面必須自己在根層 `defaults:`" in base_optional
+    # review: a subtree _defaults.yaml is not defaults[base] — say so
+    assert "子樹 _defaults.yaml" in base_optional
     assert "_defaults.yaml 就含 base" not in base_optional
     # every group the renderer can emit is covered above — no fifth body can
     # be added without this test noticing (delta's qsize base is dev-only here)

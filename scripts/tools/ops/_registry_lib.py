@@ -1544,8 +1544,10 @@ _OPTIONAL_UNSHIPPED_WARNING_LINES = (
 # Warning C's remedy — "scaffold_tenant's _defaults.yaml carries the base" —
 # is false here: generators list an optional-tier base under
 # `optional_overrides:`, never under `defaults:`, and a tenant-level value of
-# the base is not `defaults[base]`. The only remedy is the deployer writing
-# the base under `defaults:` by hand.
+# the base is not `defaults[base]` — nor is a subtree `_defaults.yaml` or a
+# profile, which merge into the tenant's overrides (resolve.go
+# criticalRowRead reads the ROOT defaults). The only remedy is the deployer
+# writing the base under the ROOT `defaults:` by hand.
 _OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES = (
     "#",
     "# optional_overrides（不在出貨清單裡；base 本身也是 optional_overrides 層）：",
@@ -1554,7 +1556,9 @@ _OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES = (
     "# 而 base 屬 optional_overrides 層：沒有任何產生器把它寫進 `defaults:`",
     "# （出貨的 Helm values、repo 的 dev conf.d 範本、scaffold_tenant 都只把它列進",
     "# `optional_overrides:` 清單），租戶在自己的 conf.d 填 base 也不算 `defaults[base]`。",
-    "# ⇒ 要讓 critical 覆寫產出 row，部署面必須自己在 `defaults:` 寫 base 的值。",
+    "# ⇒ 要讓 critical 覆寫產出 row，部署面必須自己在根層 `defaults:`（根目錄的",
+    "# _defaults.yaml 或 Helm values）寫 base 的值；子樹 _defaults.yaml、profile、",
+    "# CRD 的 spec.defaults（渲染成 <ns>/_defaults.yaml，屬子樹層）都不算 `defaults[base]`。",
     "# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。",
 )
 
