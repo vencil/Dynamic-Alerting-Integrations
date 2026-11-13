@@ -58,6 +58,7 @@ def _render(*set_args: str) -> subprocess.CompletedProcess:
                           errors="replace", timeout=60)
 
 
+# adr-check: ADR-027/9.5b
 def test_values_yaml_carries_no_removed_key() -> None:
     values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
     assert "machineIdentity" not in values
@@ -77,6 +78,7 @@ def test_the_machine_identity_template_is_gone() -> None:
         assert gone not in templates, gone
 
 
+# adr-check: ADR-027/9.5b
 @pytest.mark.parametrize("set_arg,name", REMOVED_SETS, ids=[s for s, _ in REMOVED_SETS])
 def test_a_removed_key_fails_the_render(set_arg: str, name: str) -> None:
     _helm_or_skip()

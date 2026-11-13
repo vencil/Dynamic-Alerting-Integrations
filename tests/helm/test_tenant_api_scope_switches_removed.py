@@ -55,6 +55,7 @@ def _render(*set_args: str) -> subprocess.CompletedProcess:
                           errors="replace", timeout=60)
 
 
+# adr-check: ADR-027/9.5b ADR-027/9.6d
 def test_values_yaml_carries_no_removed_key() -> None:
     values = yaml.safe_load((_CHART / "values.yaml").read_text(encoding="utf-8"))
     rbac = values.get("rbac") or {}
@@ -64,6 +65,7 @@ def test_values_yaml_carries_no_removed_key() -> None:
     assert "_rbacYaml" in rbac
 
 
+# adr-check: ADR-027/9.5b ADR-027/9.6d
 @pytest.mark.parametrize("key", REMOVED_KEYS)
 def test_a_removed_key_fails_the_render(key: str) -> None:
     _helm_or_skip()
@@ -72,6 +74,7 @@ def test_a_removed_key_fails_the_render(key: str) -> None:
     assert key.split(".", 1)[1] in res.stderr, res.stderr
 
 
+# adr-check: ADR-027/9.6d
 def test_the_default_render_sets_no_removed_variable() -> None:
     _helm_or_skip()
     res = _render()

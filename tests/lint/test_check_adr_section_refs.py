@@ -71,6 +71,7 @@ def _sections(adrs, line: str) -> list[str]:
         "ADR-027 §7",
     ],
 )
+# adr-check: ADR-027/9.8a
 def test_existing_sections_pass(adrs, line):
     assert _sections(adrs, line) == []
 
@@ -86,6 +87,7 @@ def test_existing_sections_pass(adrs, line):
         ("ADR-099 §1", ["1"]),  # no such ADR
     ],
 )
+# adr-check: ADR-027/9.8a
 def test_missing_sections_fail(adrs, line, want):
     assert _sections(adrs, line) == want
 
@@ -100,10 +102,12 @@ def test_missing_sections_fail(adrs, line, want):
         ("ADR-027 / LD-6)", "LD-6"),
     ],
 )
+# adr-check: ADR-027/9.8b
 def test_withdrawn_draft_codes_fail(adrs, line, code):
     assert _sections(adrs, line) == [code]
 
 
+# adr-check: ADR-027/9.8b
 def test_draft_code_needs_adr_027_before_it(adrs):
     # MED-8 alone is a security-finding ID, not an ADR reference.
     assert _sections(adrs, "MED-8: an empty _rbac.yaml denies everyone") == []
@@ -174,5 +178,6 @@ def test_main_json_report_carries_the_ci_status(monkeypatch):
                         "reason": "no heading of the ADR has this number or name"}]
 
 
+# adr-check: ADR-027/9.8a
 def test_the_repository_is_clean():
     assert lint.find_findings() == []

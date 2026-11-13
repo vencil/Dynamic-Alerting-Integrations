@@ -50,6 +50,7 @@ def repo_root() -> Path:
 
 
 # ── static layer ────────────────────────────────────────────────────────────
+# adr-check: ADR-027/9.3d
 def test_socket_path_is_a_chart_constant(repo_root: Path):
     """The socket path is fixed by the chart, not a value (ADR-027 §6)."""
     helpers = (repo_root / "helm/tenant-api/templates/_helpers.tpl").read_text(encoding="utf-8")
@@ -58,6 +59,7 @@ def test_socket_path_is_a_chart_constant(repo_root: Path):
     )
 
 
+# adr-check: ADR-027/9.3d
 def test_deployment_wires_the_socket(repo_root: Path):
     """tenant-api gets the socket as TA_HUMAN_SOCKET, the guard refuses a render
     without oauth2-proxy, and the oauth2-proxy upstream is the socket."""
@@ -102,6 +104,7 @@ def _helm_template(repo_root: Path, *set_args: str, template: str | None = None)
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
+# adr-check: ADR-027/9.3d
 @_needs_helm
 def test_render_without_proxy_fails(repo_root: Path):
     """tenant-api refuses to start without the oauth2-proxy config (ADR-027
@@ -114,6 +117,7 @@ def test_render_without_proxy_fails(repo_root: Path):
     )
 
 
+# adr-check: ADR-027/9.3c ADR-027/9.3d
 @_needs_helm
 def test_render_default_points_upstream_at_socket(repo_root: Path):
     """Default render: unix:// upstream, TA_HUMAN_SOCKET, and the human-sock

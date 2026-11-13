@@ -47,6 +47,7 @@ func serveTCP(t *testing.T, r http.Handler, method, path string, hdr map[string]
 	return w.Code
 }
 
+// adr-check: ADR-027/9.1a
 func TestTCPRouter_RegistersOnlyTheProbeRoutes(t *testing.T) {
 	t.Parallel()
 	var got []string
@@ -63,6 +64,7 @@ func TestTCPRouter_RegistersOnlyTheProbeRoutes(t *testing.T) {
 	}
 }
 
+// adr-check: ADR-027/9.1b
 func TestTCPRouter_EverythingElseIs404(t *testing.T) {
 	t.Parallel()
 	r := newTCPRouter(t)
@@ -79,6 +81,7 @@ func TestTCPRouter_EverythingElseIs404(t *testing.T) {
 	}
 }
 
+// adr-check: ADR-027/9.1c
 func TestTCPRouter_IdentityHeaderIs400(t *testing.T) {
 	t.Parallel()
 	r := newTCPRouter(t)
@@ -109,6 +112,7 @@ func TestIdentityHeaderNames(t *testing.T) {
 	}
 }
 
+// adr-check: ADR-027/9.3d
 func TestCheckIdentityPlaneFlags(t *testing.T) {
 	t.Parallel()
 	if err := checkIdentityPlaneFlags("/run/ta-human/human.sock", "/etc/oauth2-proxy/oauth2-proxy.yaml"); err != nil {

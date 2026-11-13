@@ -103,6 +103,7 @@ func TestCheckTAEnv(t *testing.T) {
 // had effect — the machine-identity audit, the switch that read the trusted
 // claim headers from the environment (now from the oauth2-proxy config), and
 // the switches that turned the scope axes or empty-_rbac.yaml denial off.
+// adr-check: ADR-027/9.5d ADR-027/9.6d
 func TestCheckTAEnv_RefusesSettingsADR027Removed(t *testing.T) {
 	for _, name := range []string{
 		"TA_MACHINE_IDENTITY_AUDIT", "TA_MACHINE_IDENTITY_AUDIENCE", "TA_MACHINE_IDENTITY_ISSUER",

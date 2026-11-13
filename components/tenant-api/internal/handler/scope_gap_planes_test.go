@@ -18,6 +18,7 @@ import (
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
+// adr-check: ADR-027/9.7b
 func TestScopeGapsMatchEveryPlane(t *testing.T) {
 	t.Parallel()
 	// Every rule's allow-lists include the labeled tenant's labels, so a

@@ -84,6 +84,7 @@ def _mounts_of(container: dict, volume: str) -> list[dict]:
     return [m for m in container.get("volumeMounts") or [] if m["name"] == volume]
 
 
+# adr-check: ADR-027/9.3e
 def test_both_containers_read_the_same_file() -> None:
     _helm_or_skip()
     _, cm, ta, c = _parts()

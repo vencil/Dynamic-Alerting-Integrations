@@ -73,6 +73,7 @@ func runScope(t *testing.T, args ...string) (code int, stdout, stderr string) {
 // The whole document, byte for byte: every finding kind (an unlabeled tenant,
 // and a tenant whose metadata cannot be read under each rule restricting a
 // metadata axis), the order, the tenant problems and the summary.
+// adr-check: ADR-027/9.7a
 func TestConfigCheckScope_Fixture(t *testing.T) {
 	t.Parallel()
 	dir := scopeFixture(t, nil, map[string]string{

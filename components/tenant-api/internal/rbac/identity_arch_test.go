@@ -62,6 +62,7 @@ func prodFiles(t *testing.T) (map[string]*ast.File, *token.FileSet) {
 // Only ResolveIdentity turns headers into a principal: a one-argument
 // .Resolve(…) call (HeaderResolver.Resolve's shape) anywhere else is a second
 // place identity is built, and nothing would keep it off the TCP plane.
+// adr-check: ADR-027/9.2a
 func TestHeaderResolutionOnlyInResolveIdentity(t *testing.T) {
 	t.Parallel()
 	files, fset := prodFiles(t)
@@ -100,6 +101,7 @@ func TestHeaderResolutionOnlyInResolveIdentity(t *testing.T) {
 // defined (proxyconfig), as the resolver's fallback (principal.go) and in the
 // TCP plane's refusal (tcp_router.go). Anywhere else a literal or a reference
 // to them is a read of identity that skips the resolver.
+// adr-check: ADR-027/9.2a
 func TestIdentityHeaderNamesOnlyInTheirOwners(t *testing.T) {
 	t.Parallel()
 	files, fset := prodFiles(t)
@@ -139,6 +141,7 @@ func TestIdentityHeaderNamesOnlyInTheirOwners(t *testing.T) {
 // The rate limiter's caller key, the request log and the dev bypass do not
 // touch a request's headers at all: a `<x>.Header` field read (a method call
 // such as w.Header() on the response writer is not one) in their bodies fails.
+// adr-check: ADR-027/9.2b
 func TestRateLimitLogAndBypassReadNoRequestHeader(t *testing.T) {
 	t.Parallel()
 	files, fset := prodFiles(t)

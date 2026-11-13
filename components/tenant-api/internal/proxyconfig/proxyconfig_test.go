@@ -32,6 +32,7 @@ func TestLoad_ChartShape(t *testing.T) {
 	}
 }
 
+// adr-check: ADR-027/9.6b
 func TestLoad_RefusesAmbiguousShapes(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
@@ -75,6 +76,7 @@ func headersDoc(extra string) string {
 ` + extra
 }
 
+// adr-check: ADR-027/9.6b
 func TestParse_Refusals(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
