@@ -501,7 +501,7 @@ func (w *Writer) applyBatchOp(st *stagingTree, op BatchOp, names TenantNames) (o
 	if existing != nil && string(existing) == content {
 		return BatchOpOutcome{NoOp: true, Notices: notices}, target
 	}
-	if werr := w.writeTenant(filePath, []byte(content), 0644); werr != nil {
+	if werr := w.writeTenant(filePath, []byte(content), cfg.ConfDFileMode); werr != nil {
 		return BatchOpOutcome{Err: fmt.Errorf("write file for %s: %w", op.TenantID, werr)}, target
 	}
 	rel, err := filepath.Rel(st.root, filePath)
@@ -960,7 +960,7 @@ func (w *Writer) syncServingPaths(commit string, rels []string) error {
 		}
 		content, err := w.gitOutput(w.gitDir, "show", commit+":"+filepath.ToSlash(rel))
 		if err == nil {
-			err = writeFileAtomic(serving[i], content, 0644)
+			err = writeFileAtomic(serving[i], content, cfg.ConfDFileMode)
 		}
 		if err != nil {
 			return fmt.Errorf("update the serving worktree: %w", err)

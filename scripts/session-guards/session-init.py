@@ -59,6 +59,8 @@ try:
 except Exception:  # pragma: no cover — standalone fallback, never block
     def try_utf8_stdout() -> None:  # type: ignore
         return None
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import _guardlib as gl  # noqa: E402  (#3598: the one reader of the payload)
 
 MARKER_DIR = Path("/tmp")
 MARKER_PREFIX = "vibe-session-init"
@@ -86,17 +88,9 @@ def _payload_session_id() -> str | None:
     no-op、不重新 toggle VS Code Git。payload 的 session_id 是 harness
     每次都帶的真實 session 識別。讀取失敗一律回 None，絕不 block。
     """
-    try:
-        stdin = sys.stdin
-        if stdin is None or stdin.isatty():
-            return None
-        raw = stdin.read()
-        if not raw or not raw.strip():
-            return None
-        sid = json.loads(raw).get("session_id")
-        return str(sid) if sid else None
-    except Exception:
-        return None
+    payload = gl.read_payload()  # UTF-8 whatever the locale (#3598)
+    sid = payload.get("session_id") if payload is not None else None
+    return str(sid) if sid else None
 
 
 def _session_id(payload_sid: str | None = None) -> str:

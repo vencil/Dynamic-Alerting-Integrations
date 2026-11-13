@@ -11,15 +11,31 @@ auth:
     - name: vector
       paths: [/insert/.*]
       existingSecret: victorialogs-vector
+      from:
+        namespace: vector
+        podLabels:
+          app.kubernetes.io/name: vector
     - name: grafana
       paths: [/select/.*]
       existingSecret: victorialogs-grafana
+      from:
+        podLabels:
+          app: grafana
     - name: chargeback-aggregator
       paths: [/select/.*]
       existingSecret: victorialogs-chargeback-aggregator
+      from:
+        podLabels:
+          app.kubernetes.io/name: chargeback-aggregator
     - name: federation-gateway
       paths: [/select/.*]
       existingSecret: victorialogs-federation-gateway
+      from:
+        podLabels:
+          app.kubernetes.io/name: federation-gateway
     - name: federation-reconciler
       paths: [/select/.*]
       existingSecret: victorialogs-federation-reconciler
+      from:
+        podLabels:
+          app.kubernetes.io/name: federation-reconciler

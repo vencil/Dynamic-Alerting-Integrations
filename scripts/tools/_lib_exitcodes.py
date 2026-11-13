@@ -82,10 +82,20 @@ device instead: a tool's own stderr line must neither land on stdout nor
 end a run that ``2>&-`` asked to be quiet (fd 2 itself stays read-only,
 so a child process writing it is told).
 
+A stderr that cannot be written (#3599, owner ruling W) does not end the
+run: importing this module rebinds the interpreter's own ``sys.stderr``
+(and ``sys.__stderr__``, so it stays one object) to the same text stream
+over a raw layer that drops what it cannot write and records the loss
+(``_LossyStderr``). At the end, a 0 becomes the caller-error code — the
+tool said something that did not arrive (gnulib ``close_stdout``'s "never
+0") — while a non-zero code keeps its meaning. A stderr a test harness or
+the caller rebound is left alone.
+
 ``Report(..., delivery="best_effort")`` (patch-config only; gate:
 tests/shared/test_json_stdout_contract.py): stdout failing still prints the
 line, but the run keeps the tool's status — patch-config's exit code says
-what the ConfigMap holds, which a lost stdout does not change.
+what the ConfigMap holds, which a lost stdout does not change. A lost
+stderr keeps that status too, a 0 included.
 
 Known limits (dev-rules §13): argparse's own ``--help`` / usage output
 swallows a write error; the unbuffered partial write (CPython gh-85393,
@@ -151,6 +161,7 @@ New subcommands MUST follow this contract — see docs/internal/dev-rules.md.
 """
 from __future__ import annotations
 
+import io
 import os
 import sys
 import traceback
@@ -203,6 +214,115 @@ def sanitize_std_fds():
 
 
 sanitize_std_fds()
+
+# #3599 (owner ruling W): a stderr write that fails loses its text, not the
+# run. Set by _LossyStderr; read once, by _finalize_and_exit.
+_stderr_lost = False
+
+
+class _LossyStderr(io.RawIOBase):
+    """The raw layer under ``sys.stderr`` (#3599): it writes through the
+    interpreter's own raw stream (a Windows console keeps its console I/O),
+    and a write that fails — the reader left (EPIPE), ``2>/dev/full``
+    (ENOSPC), EIO, a closed stream — drops the bytes and records the loss
+    instead of raising into the tool (as git, jq and bash treat ENOSPC)."""
+
+    #: Recognised by this marker, not by class: a second copy of this module
+    #: (loaded by path) must see the first one's wrapper and read its loss.
+    _da_lossy_stderr = True
+
+    def __init__(self, raw: Any) -> None:
+        super().__init__()
+        self._raw = raw
+        self.lost = False  # read by every copy of this module (_stderr_was_lost)
+
+    @property
+    def name(self) -> Any:
+        return self._raw.name
+
+    def writable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        try:
+            return self._raw.seekable()
+        except (OSError, ValueError):
+            return False
+
+    def tell(self) -> int:
+        return self._raw.tell()
+
+    def fileno(self) -> int:
+        return self._raw.fileno()
+
+    def isatty(self) -> bool:
+        try:
+            return self._raw.isatty()
+        except (OSError, ValueError):
+            return False
+
+    def write(self, b: Any) -> int:
+        global _stderr_lost
+        size = memoryview(b).nbytes
+        try:
+            written = self._raw.write(b)
+        except (OSError, ValueError):  # ValueError: the stream was closed
+            written = None
+        if written is None:  # None: a non-blocking fd would block — lost too
+            _stderr_lost = self.lost = True
+            return size
+        return written
+
+
+def _lossy_stderr() -> None:
+    """Rebind ``sys.stderr`` (and ``sys.__stderr__``, so identity checks and
+    ``redirect_stdout(sys.stderr)`` still see one object) to a text stream
+    over :class:`_LossyStderr`, configured as the one it replaces. Only the
+    interpreter's own stderr is replaced: one a test harness or a caller
+    rebound, or the null device ``sanitize_std_fds`` gave a None one, is left
+    as it is. The replaced object is kept alive (``_ORIGINAL_STDERR``), so
+    its finalizer cannot close the raw stream written through."""
+    global _ORIGINAL_STDERR, _stderr_lost
+    err = sys.stderr
+    if err is None or err is not sys.__stderr__ or type(err) is not io.TextIOWrapper:
+        return
+    buffer = err.buffer
+    raw = getattr(buffer, "raw", buffer)
+    if getattr(raw, "_da_lossy_stderr", False) or not isinstance(raw, io.RawIOBase):
+        return
+    try:
+        if raw.fileno() != 2:
+            return
+        err.flush()
+    except OSError:
+        _stderr_lost = True  # what it still held is lost; the stream is replaced all the same
+    except ValueError:
+        return
+    lossy: Any = _LossyStderr(raw)
+    if isinstance(buffer, io.BufferedWriter):
+        lossy = io.BufferedWriter(lossy)
+    _ORIGINAL_STDERR = err
+    wrapper = io.TextIOWrapper(
+        lossy, encoding=err.encoding, errors=err.errors,
+        newline="\n",  # as sanitize_std_fds' own streams (.gitattributes: eol=lf)
+        line_buffering=err.line_buffering, write_through=err.write_through)
+    wrapper.mode = "w"  # as the interpreter's own (create_stdio); `name` comes from the raw
+    sys.stderr = sys.__stderr__ = wrapper
+
+
+def _lossy_raw() -> Any:
+    """The :class:`_LossyStderr` under ``sys.__stderr__`` (any copy's), or None."""
+    buffer = getattr(sys.__stderr__, "buffer", None)
+    raw = getattr(buffer, "raw", buffer)
+    return raw if getattr(raw, "_da_lossy_stderr", False) else None
+
+
+def _stderr_was_lost() -> bool:
+    return _stderr_lost or bool(getattr(_lossy_raw(), "lost", False))
+
+
+_ORIGINAL_STDERR: Any = None
+_lossy_stderr()
 
 # Import-time stdout hardening (cp950-class consoles): every da-tools CLI
 # imports at least one of the four root libs (_lib_compat / _lib_python /
@@ -438,7 +558,11 @@ def reset_exit_state() -> None:
     """This module's process-global exit state back to its import-time
     value (tests/conftest.py, after every test: an idempotent reset)."""
     global _crash_exit_code, _caller_error_code, _stdout_owner
-    global _stdout_failure_line, _failure_reported, _best_effort
+    global _stdout_failure_line, _failure_reported, _best_effort, _stderr_lost
+    _stderr_lost = False
+    raw = _lossy_raw()
+    if raw is not None:
+        raw.lost = False
     _failure_reported = False
     _best_effort = False
     _stdout_owner = None
@@ -1003,6 +1127,14 @@ def _exit_status(status: Any) -> int:
 
 def _finalize_and_exit(status: Any) -> NoReturn:
     code = _close_stdout(_exit_status(status))
+    if code == 0 and _stderr_was_lost() and not _best_effort:
+        # #3599 (owner ruling W): stderr lost some of what the tool said, so
+        # a clean 0 is not the whole answer — the caller-error code (gnulib
+        # close_stdout's "never 0"); a non-zero code keeps its meaning, and a
+        # best-effort Report keeps its status. Here only, not in
+        # _close_stdout: the atexit fallback calls that with a stand-in 0.
+        _to_stderr("ERROR: cannot write to stderr: some of this run's messages were lost")
+        code = _caller_error_code
     if code != _exit_status(status):
         if status is not None and not isinstance(status, int):
             _to_stderr(str(status))  # sys.exit("msg"): printed, as Python would

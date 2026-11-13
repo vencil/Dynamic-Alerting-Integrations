@@ -341,6 +341,20 @@ networkPolicy:
   # clear it: Helm merges a map into the default, so the default stays.
   scrapeNamespaceLabel:
     kubernetes.io/metadata.name: monitoring
+  # Egress (#1295 PR2): DNS plus TCP upstream.port to the upstream's namespace,
+  # nothing else. On by default — a namespace that defaults to deny (as
+  # k8s/03-monitoring does) otherwise leaves the gateway no egress at all.
+  # Set false only to supply your own egress policy (e.g. an upstream outside
+  # the cluster); unset counts as on.
+  restrictEgress: true
+  # The namespace the upstream runs in. Empty = read it from upstream.host
+  # (`<svc>` = this release's namespace, `<svc>.<ns>.svc[...]` = <ns>); any
+  # other host form fails the render rather than guess.
+  upstreamNamespace: ""
+  # The upstream POD port the egress rule allows. Empty = upstream.port.
+  # NetworkPolicy matches the pod port, not the Service's, so set this when
+  # the upstream Service maps one port to another.
+  upstreamPort: ""
 
 # ServiceMonitor for a Prometheus Operator install (kube-prometheus-stack),
 # #1595 D1b. Off by default: without the monitoring.coreos.com CRDs the object

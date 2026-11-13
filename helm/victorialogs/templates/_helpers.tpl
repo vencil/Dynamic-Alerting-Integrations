@@ -126,3 +126,50 @@ and that 0.4.x → 0.5.0 upgrade is exactly the one that names new Secrets
 {{- define "victorialogs.checkSecretsOnUpgrade" -}}
 {{- if ne (toString .Values.auth.checkSecretsOnUpgrade) "false" -}}true{{- end -}}
 {{- end }}
+
+{{/*
+victorialogs (#1295 PR2). One NetworkPolicy `from` peer for a network identity
+{namespace, podLabels}, given {who: <label for errors>, from: <map>, ns:
+<release namespace>}. `namespace` alone admits every pod of that namespace;
+`podLabels` alone matches pods of THIS namespace (a podSelector with no
+namespaceSelector beside it); both = one peer, i.e. those labels in that
+namespace. Unknown keys fail, so a typo (`podSelector:`) cannot silently drop
+the restriction. A bare `namespace` equal to this release's namespace fails: it
+would admit every pod beside the store.
+*/}}
+{{- define "victorialogs.netpolPeer" -}}
+{{- $from := .from -}}
+{{- if not $from -}}
+{{- fail (printf "%s has no `from`. Since chart 0.6.0 each consumer carries the network identity the store's NetworkPolicy admits it by (it replaced networkPolicy.allowedPodSelectors / allowedNamespaces): a values file that restates auth.consumers must restate `from` too — copy it from the chart's values.yaml (#1295)" .who) -}}
+{{- end -}}
+{{- if not (kindIs "map" $from) -}}
+{{- fail (printf "%s: `from` must be a map with `namespace` and/or `podLabels` (got %v); see values.yaml auth.consumers (#1295)" .who $from) -}}
+{{- end -}}
+{{- range $k, $_ := $from -}}
+{{- if not (has $k (list "namespace" "podLabels")) -}}
+{{- fail (printf "%s: unknown key %q in `from` — only `namespace` and `podLabels` (#1295)" $.who $k) -}}
+{{- end -}}
+{{- end -}}
+{{- if and (hasKey $from "namespace") (not (kindIs "string" $from.namespace)) -}}
+{{- fail (printf "%s: `from.namespace` must be a string (got %v) — quote it: a bare `no`/`on`/`123` is not read as a name (#1295)" .who $from.namespace) -}}
+{{- end -}}
+{{- $ns := $from.namespace | default "" -}}
+{{- $labels := $from.podLabels | default dict -}}
+{{- if not (kindIs "map" $labels) -}}
+{{- fail (printf "%s: `from.podLabels` must be a map of label: value (#1295)" .who) -}}
+{{- end -}}
+{{- if and (not $ns) (not $labels) -}}
+{{- fail (printf "%s: `from` needs `namespace`, `podLabels`, or both — an empty one would admit nothing or everything (#1295)" .who) -}}
+{{- end -}}
+{{- if and (eq $ns .ns) (not $labels) -}}
+{{- fail (printf "%s: `from.namespace: %s` without `podLabels` admits every pod in the store's own namespace — add podLabels (#1295)" .who $ns) -}}
+{{- end -}}
+{{- $peer := dict -}}
+{{- if $ns -}}
+{{- $_ := set $peer "namespaceSelector" (dict "matchLabels" (dict "kubernetes.io/metadata.name" $ns)) -}}
+{{- end -}}
+{{- if $labels -}}
+{{- $_ := set $peer "podSelector" (dict "matchLabels" $labels) -}}
+{{- end -}}
+{{- toYaml (list $peer) -}}
+{{- end }}
