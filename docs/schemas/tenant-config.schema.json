@@ -1158,8 +1158,8 @@
     },
     "severityDedup": {
       "title": "Severity dedup mode",
-      "description": "'enable' (default) or 'disable', and every other spelling the route generator and the exporter's ResolveSeverityDedup read (trimmed, any case): enable / enabled / on / true turn dedup on, disable / disabled / off / false turn it off. Also an unquoted true / false, or null (the default, enable). Any other value — `\"no\"`, an unquoted `no` or `yes` (strings to yaml.v3), a number — is refused, as the route generator refuses the whole tree on it.",
-      "$comment": "#2906: the word list is _grar_parse.SEVERITY_DEDUP_*_WORDS, pinned to resolve.go's ResolveSeverityDedup by tests/shared/test_severity_dedup_vocabulary_parity.py.",
+      "description": "'enable' (default) or 'disable', and every other spelling the exporter's ResolveSeverityDedup reads (trimmed, any case): enable / enabled / on / true turn dedup on, disable / disabled / off / false turn it off. Also an unquoted true / false, or null (the default, enable). Any other value — `\"no\"`, an unquoted `no` or `yes` (strings to yaml.v3), a number — is one the exporter does not read (it serves enable), and the route generator refuses the whole tree on it, as on a value written with a time window or expires. A mapping is refused here even as `{default: disable}` alone, which the exporter and the route generator read as its default: write the value alone.",
+      "$comment": "#3621: the one word list is the exporter's (pkg/config ResolveSeverityDedupLogf); the route generator reads each tenant's mode and the values the exporter does not read from `da-guard severity-dedup`. tests/shared/test_severity_dedup_vocabulary_parity.py feeds a corpus of spellings to that subcommand and pins: this pattern accepts a scalar exactly when the exporter reads it.",
       "default": "enable",
       "anyOf": [
         { "type": ["boolean", "null"] },

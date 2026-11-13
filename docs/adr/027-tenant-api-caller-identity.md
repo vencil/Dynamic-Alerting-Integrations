@@ -6,7 +6,7 @@ version: v2.9.0
 lang: zh
 id: ADR-027
 tracking_kind: adr
-status: proposed
+status: accepted
 domain: tenant-api
 created_at: 2026-07-03
 updated_at: 2026-11-13
@@ -18,7 +18,7 @@ updated_at: 2026-11-13
 
 ## 狀態
 
-🟡 **Proposed**（2026-11-04 改寫；同日 owner 裁決原待決的三項：瀏覽器入口、threshold-govern、範圍軸 shadow 模式）。owner 核可全文後昇格 Accepted。
+✅ **Accepted**（2026-11-13，owner 核可）。§9 的每個子句都有對應的檢查，見「實作位置」。全文於 2026-11-04 改寫，同日 owner 裁決瀏覽器入口、threshold-govern 與範圍軸 shadow 模式三項。
 
 2026-11-05 修訂：§10 改為實測結果，採用 oauth2-proxy 的結構化設定檔（alpha config）；tenant-api 由同一份設定檔決定信任哪些 header（§2、§7）；§6 的「一次生效」限於會拒絕舊設定的變更。
 
