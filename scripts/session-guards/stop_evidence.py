@@ -384,9 +384,11 @@ def main(argv: list[str] | None = None) -> int:
         except UnicodeDecodeError as exc:
             raise _lib_exitcodes.CallerError(
                 f"--message-stdin: stdin is not UTF-8 ({exc})", reason="stdin_not_utf8") from None
-        if message is None:  # no stdin, or a terminal: no message was read — not "ok"
+        if message is None or not message.strip():
+            # No message was read (no stdin, a terminal, `<&-`, an empty pipe):
+            # there is nothing to judge, so never "ok" for it.
             raise _lib_exitcodes.CallerError(
-                "--message-stdin: no message on stdin (it is closed or a terminal); "
+                "--message-stdin: no message on stdin (empty, closed or a terminal); "
                 "pipe the message in", reason="stdin_absent")
         executed = executed_commands(args.transcript, args.prompt_id) if args.transcript else None
         ok, reasons = verdict(message, executed)

@@ -165,12 +165,14 @@ def test_stop_evidence_reads_a_chinese_message(encoding):
     assert json.loads(proc.stdout)["ok"] is True
 
 
-def test_stop_evidence_names_a_closed_stdin():
-    """`<&-`: no message was read — a named 1, never `"ok": true` for a
-    message nobody measured."""
+@pytest.mark.parametrize("stdin", ["<&-", "< /dev/null", "<<< ' '"])
+def test_stop_evidence_names_a_missing_message(stdin):
+    """No message was read (closed, empty, blank): a named 1, never `"ok":
+    true` for a message nobody measured. `<&-` reads as empty input once
+    #3602 binds a closed stdin, so the two must answer alike."""
     import shutil
     bash = shutil.which("bash") or pytest.skip("bash is not on PATH")
-    proc = subprocess.run([bash, "-c", 'exec "$0" "$1" --message-stdin <&-', sys.executable,
+    proc = subprocess.run([bash, "-c", f'exec "$0" "$1" --message-stdin {stdin}', sys.executable,
                            str(GUARDS / "stop_evidence.py")], capture_output=True, timeout=60,
                           env=_UTF8)
     err = proc.stderr.decode("utf-8", "replace")
