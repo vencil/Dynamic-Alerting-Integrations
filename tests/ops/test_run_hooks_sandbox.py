@@ -44,7 +44,8 @@ def _gate(root: Path) -> subprocess.CompletedProcess:
         pytest.skip("pre-commit is not installed")
     env = {**os.environ, "PRECOMMIT_LOG": str(root.parent / "hooks.log"),
            "PRE_COMMIT_HOME": str(root.parent / "pc-home")}
-    return subprocess.run(["bash", str(root / "scripts" / "ops" / "run_hooks_sandbox.sh"),
+    bash = shutil.which("bash") or pytest.skip("bash is not on PATH")
+    return subprocess.run([bash, str(root / "scripts" / "ops" / "run_hooks_sandbox.sh"),
                            "f.txt"], cwd=root, capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=300, env=env)
 
