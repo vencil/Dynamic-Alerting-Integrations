@@ -792,11 +792,11 @@ class TestExpandRoutingOverrides:
     def test_metric_group_override(self):
         """metric_group override 產生正確 matcher。"""
         routing = {"receiver": make_receiver(), "overrides": [
-            make_override("metric_group", "cpu_metrics")
+            make_override("metric_group", "container_cpu")
         ]}
         sub, recv, warns = expand_routing_overrides("db-a", routing)
         assert len(sub) == 1
-        assert sub[0]["matchers"] == ['metric_group="cpu_metrics"']
+        assert sub[0]["matchers"] == ['metric_group="container_cpu"']
 
     def test_alertname_override_matchers(self):
         """alertname override 只產生自己的 alertname matcher；tenant matcher
@@ -1070,7 +1070,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
     def test_overrides_are_children_of_the_tenant_route(self):
         routes, receivers, warnings = generate_routes(self._cfg(
             self._ov(alertname="DiskFull"),
-            self._ov(metric_group="cpu_metrics")), tenants=())
+            self._ov(metric_group="container_cpu")), tenants=())
         assert warnings == []
         assert len(routes) == 1, routes
         parent = routes[0]
@@ -1079,7 +1079,7 @@ class TestOverrideRoutesNestUnderTenantRoute:
         assert parent["routes"] == [
             {"matchers": ['alertname="DiskFull"'],
              "receiver": f"tenant-{self._T}-override-0"},
-            {"matchers": ['metric_group="cpu_metrics"'],
+            {"matchers": ['metric_group="container_cpu"'],
              "receiver": f"tenant-{self._T}-override-1"},
         ]
         assert sorted(r["name"] for r in receivers) == [

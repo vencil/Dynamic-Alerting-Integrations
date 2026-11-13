@@ -42,19 +42,19 @@ MARK = "zzqmark"
 
 _RECEIVER = ("    _routing:\n      receiver:\n        type: webhook\n"
              "        url: https://hook.example/x\n")
-_TENANT = 'tenants:\n  tenant-a:\n    mysql_connections: "70"\n' + _RECEIVER
-_SELECTED = "defaults:\n  mysql_connections: 80\n"
+_TENANT = 'tenants:\n  tenant-a:\n    mysql_connection_usage_percent: "70"\n' + _RECEIVER
+_SELECTED = "defaults:\n  mysql_connection_usage_percent: 80\n"
 #: The content of every file parse-tree lists in `not_read`: a value each
 #: tool would report if it read the file — a threshold that is no number, a
 #: routing / policy / custom-alert block of the wrong shape, a tenant that
 #: references a profile nobody defines — each carrying MARK.
-_UNREAD = (f"defaults:\n  {MARK}_metric: \"{MARK}\"\n  mysql_connections: {MARK}\n"
+_UNREAD = (f"defaults:\n  {MARK}_metric: \"{MARK}\"\n  mysql_connection_usage_percent: {MARK}\n"
            f"_routing_enforced:\n  enabled: {MARK}\n"
            f"_routing_defaults:\n  receiver: {MARK}\n"
            f"_policies:\n  - name: {MARK}\n    target: {MARK}\n    operator: {MARK}\n"
            f"_custom_alerts: {MARK}\n"
            f"tenants:\n  {MARK}:\n    _routing_profile: {MARK}\n"
-           f"  tenant-a:\n    mysql_connections: {MARK}\n")
+           f"  tenant-a:\n    mysql_connection_usage_percent: {MARK}\n")
 
 #: shape → ({rel: content}, the files parse-tree must list in `not_read`).
 #: A `.yaml` spelling beats a `.yml` one; among `.yaml` case variants the

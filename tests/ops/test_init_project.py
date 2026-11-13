@@ -202,16 +202,16 @@ class TestRulePackCatalog:
         """MariaDB renders the expected metric keys, in the right tier."""
         mariadb = ip._catalog_defaults(['mariadb'])
         critical = ip._catalog_critical(['mariadb'])
-        assert 'mysql_connections' in mariadb
+        assert 'mysql_connection_usage_percent' in mariadb
         assert 'mysql_replication_lag' in mariadb
-        assert mariadb['mysql_connections'] == 80
+        assert mariadb['mysql_connection_usage_percent'] == 80
         # #1218: the critical twin is asserted against the TENANT-stub tier,
         # not merely "somewhere in the pack", because the section is the whole
         # difference between a critical threshold and an unconsumed warning
-        # series. issue 1196: its value is the registry's (120), not the old
-        # hand-copied 150.
-        assert critical['mysql_connections_critical'] == 120
-        assert 'mysql_connections_critical' not in mariadb
+        # series. issue 1196: its value is the registry's, not a hand copy —
+        # 90 (% of max_connections) since #3778 replaced the absolute 120.
+        assert critical['mysql_connection_usage_percent_critical'] == 90
+        assert 'mysql_connection_usage_percent_critical' not in mariadb
         # #1231 rename guard: the canonical spelling, never the retired
         # mysql_cpu one.
         assert 'mysql_threads_running' in mariadb
@@ -353,10 +353,10 @@ class TestGenDefaultsYaml:
         yaml_str = ip._gen_defaults_yaml(['mariadb'], 'monitoring')
         config = yaml.safe_load(yaml_str)
         defaults = config['defaults']
-        assert 'mysql_connections' in defaults
-        assert defaults['mysql_connections'] == 80
+        assert 'mysql_connection_usage_percent' in defaults
+        assert defaults['mysql_connection_usage_percent'] == 80
         # …and its critical twin is NOT here (#1218). See TestCriticalTierPlacement.
-        assert 'mysql_connections_critical' not in defaults
+        assert 'mysql_connection_usage_percent_critical' not in defaults
 
     def test_multiple_rule_packs_merged(self):
         """Multiple rule packs' defaults are all merged."""
@@ -364,7 +364,7 @@ class TestGenDefaultsYaml:
         config = yaml.safe_load(yaml_str)
         defaults = config['defaults']
         # MariaDB keys
-        assert 'mysql_connections' in defaults
+        assert 'mysql_connection_usage_percent' in defaults
         # Redis keys — the key the Redis pack reads (issue 1196: the old
         # catalog's `redis_memory_usage` matched no alert)
         assert 'redis_memory_used_bytes' in defaults
@@ -670,9 +670,9 @@ class TestGenTenantYamlDeclaredBlock:
         """
         from _registry_lib import render_tenant_critical_note_lines
         without = '\n'.join(render_tenant_critical_note_lines(
-            {'mysql_connections': 80}, lang='en'))
+            {'mysql_connection_usage_percent': 80}, lang='en'))
         with_crit = '\n'.join(render_tenant_critical_note_lines(
-            {'mysql_connections': 80, 'mysql_connections_critical': 150},
+            {'mysql_connection_usage_percent': 80, 'mysql_connection_usage_percent_critical': 95},
             lang='en'))
         assert 'lists none of them' in without
         assert 'lists none of them' not in with_crit
@@ -689,7 +689,7 @@ class TestGenTenantYamlDeclaredBlock:
         the sentence this issue is about.
         """
         from _registry_lib import render_tenant_critical_note_lines
-        misplaced = {'mysql_connections': 80, 'mysql_connections_critical': 150}
+        misplaced = {'mysql_connection_usage_percent': 80, 'mysql_connection_usage_percent_critical': 95}
         for lang, ok_marker, banned in (
             ('en', 'the wrong section', 'fires without you doing anything'),
             ('zh', '放錯區塊', '本來就會發射'),
@@ -1178,7 +1178,7 @@ class TestCriticalTierPlacement:
             conf = Path(tmpdir) / 'conf.d'
             conf.mkdir()
             (conf / '_defaults.yaml').write_text(
-                'defaults:\n  mysql_connections: 80\n', encoding='utf-8')
+                'defaults:\n  mysql_connection_usage_percent: 80\n', encoding='utf-8')
             (conf / 'db-a.yaml').write_text(
                 'tenants:\n  db-a:\n    pg_connections_critical: "150"\n',
                 encoding='utf-8')
@@ -1290,7 +1290,7 @@ class TestCriticalTierPlacement:
             conf = Path(tmpdir) / 'conf.d'
             conf.mkdir()
             (conf / '_defaults.yaml').write_text(
-                'defaults:\n  mysql_connections: 412\n', encoding='utf-8')
+                'defaults:\n  mysql_connection_usage_percent: 63\n', encoding='utf-8')
             proc = run(tmpdir, '--force')
             assert proc.returncode == 0, proc.stderr[-400:]
             assert ('conf.d/_defaults.yaml (overwritten) (not written by init)'
@@ -1317,14 +1317,14 @@ class TestCriticalTierPlacement:
             conf = Path(tmpdir) / 'conf.d'
             conf.mkdir()
             (conf / '_defaults.yaml').write_text(
-                'defaults:\n  mysql_connections: 412\n', encoding='utf-8')
+                'defaults:\n  mysql_connection_usage_percent: 63\n', encoding='utf-8')
             proc = run(tmpdir)
             assert proc.returncode == 0, proc.stderr[-400:]
             assert 'would be overwritten' in proc.stdout, proc.stdout[-600:]
             assert 'already exist and would be replaced' in proc.stdout
             # The preview must not have written anything.
             assert (conf / '_defaults.yaml').read_text(
-                encoding='utf-8').strip().endswith('412')
+                encoding='utf-8').strip().endswith('63')
 
         with tempfile.TemporaryDirectory() as fresh:
             proc = run(fresh)
@@ -1464,14 +1464,14 @@ class TestCriticalTierPlacement:
 
         def without_base(packs):
             return {k: v for k, v in real(packs).items()
-                    if k != 'mysql_connections'}
+                    if k != 'mysql_connection_usage_percent'}
 
         monkeypatch.setattr(ip, '_catalog_defaults', without_base)
-        assert 'mysql_connections' not in ip._catalog_defaults(['mariadb']), (
+        assert 'mysql_connection_usage_percent' not in ip._catalog_defaults(['mariadb']), (
             'the patch did not take — everything below would be vacuous')
 
         seeded = ip._catalog_critical(['mariadb'])
-        assert 'mysql_connections_critical' not in seeded
+        assert 'mysql_connection_usage_percent_critical' not in seeded
         assert 'mysql_threads_running_critical' in seeded
 
 
@@ -1839,7 +1839,7 @@ class TestKustomizeBaseEnumeratesConfd:
             ip.run_init(cfg, tmp)
             with open(os.path.join(tmp, 'conf.d', 't-three.yml'), 'w',
                       encoding='utf-8') as fh:
-                fh.write('tenants:\n  t-three:\n    mysql_connections: "80"\n')
+                fh.write('tenants:\n  t-three:\n    mysql_connection_usage_percent: "80"\n')
             ip.run_init(cfg, tmp)  # the `--force` re-run, same flags
             assert 't-three.yml' in _kust_files(tmp)
             assert 't-three.yml' in _readme_link_targets(tmp)
@@ -2180,7 +2180,7 @@ class TestKustomizeBaseEnumeratesConfd:
                 # The customer's carrier declares the mariadb keys the
                 # tenant file gets: one that declares none leaves them read
                 # by nothing, and `da-guard write` refuses that (#3489).
-                fh.write('defaults:\n  mysql_connections: 80\n'
+                fh.write('defaults:\n  mysql_connection_usage_percent: 80\n'
                          '  mysql_replication_lag: 30\n  mysql_threads_running: 50\n')
             ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
             files = _kust_files(tmp)
@@ -3674,7 +3674,7 @@ class TestEdgeCases:
             defaults_path = os.path.join(tmpdir, 'conf.d', '_defaults.yaml')
             with open(defaults_path, 'r', encoding='utf-8') as f:
                 defaults = yaml.safe_load(f)
-            assert 'mysql_connections' in defaults['defaults']
+            assert 'mysql_connection_usage_percent' in defaults['defaults']
 
     def test_all_selectable_rule_packs(self):
         """Initialization with all 13 selectable packs works."""
@@ -6713,20 +6713,25 @@ def test_an_unlistable_directory_refuses_the_run_whatever_its_name(
 
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="Windows NTFS doesn't honor Unix mode bits")
-def test_confd_files_are_created_0600_and_a_replaced_one_keeps_its_mode(tmp_path):
-    """#3206 10c-3: `da-guard write` creates init's conf.d files 0o600 — the
-    mode init's own writer always gave them (a tenant file can hold a
-    receiver URL with a token); a file `--force` replaces keeps its mode."""
+def test_confd_files_are_written_0644_whatever_the_old_mode(tmp_path):
+    """#3535: `da-guard write` writes init's conf.d files 0o644, a repo
+    artifact's mode (committed, read by another uid) — a file a re-run
+    replaces too, whatever mode it had."""
     config = {"ci": "github", "deploy": "kustomize", "rule_packs": ["mariadb"],
               "tenants": ["db-a"], "namespace": "monitoring",
               "da_tools_image": ip.DA_TOOLS_IMAGE}
     ip.run_init(config, str(tmp_path))
     conf = tmp_path / "conf.d"
     for name in ("_defaults.yaml", "db-a.yaml"):
-        assert (conf / name).stat().st_mode & 0o777 == 0o600, name
+        assert (conf / name).stat().st_mode & 0o777 == 0o644, name
+    # Another text, so the re-run replaces it (the same text is unchanged:
+    # nothing is written).
+    with (conf / "db-a.yaml").open("a", encoding="utf-8") as f:
+        f.write("# hand edit\n")
     (conf / "db-a.yaml").chmod(0o640)
     ip.run_init(config, str(tmp_path))
-    assert (conf / "db-a.yaml").stat().st_mode & 0o777 == 0o640
+    assert "# hand edit" not in (conf / "db-a.yaml").read_text(encoding="utf-8")
+    assert (conf / "db-a.yaml").stat().st_mode & 0o777 == 0o644
 
 
 # ── issue 1465: the ownership ledger in .da-init.yaml ──────────────────────
@@ -6734,15 +6739,15 @@ class TestOwnershipLedger:
     """`.da-init.yaml` `files:` is the only answer to "which files are init's".
 
     The defect: with no marker, init owned nothing yet overwrote a
-    hand-written `_defaults.yaml` (412 → 80) and `t1.yaml` with rc 0 — the
+    hand-written `_defaults.yaml` (63 → 80) and `t1.yaml` with rc 0 — the
     marker was the whole gate, so a repo that never ran init (or deleted the
     marker) had none. Every test drives the real CLI in a throwaway directory
     and compares bytes, not messages alone, so a build that prints the refusal
     and writes anyway still fails.
     """
 
-    _HAND_DEFAULTS = 'defaults:\n  mysql_connections: 412\n'
-    _HAND_TENANT = 'tenants:\n  t1:\n    mysql_connections: "412"\n'
+    _HAND_DEFAULTS = 'defaults:\n  mysql_connection_usage_percent: 63\n'
+    _HAND_TENANT = 'tenants:\n  t1:\n    mysql_connection_usage_percent: "63"\n'
 
     @staticmethod
     def _cli(out, *extra):
@@ -6790,7 +6795,7 @@ class TestOwnershipLedger:
         out = self._hand_written(tmp_path)
         run = self._cli(out, '--force')
         assert run.returncode == 0, run.stderr[-800:]
-        assert '412' not in (out / 'conf.d' / '_defaults.yaml').read_text(encoding='utf-8')
+        assert ': 63' not in (out / 'conf.d' / '_defaults.yaml').read_text(encoding='utf-8')
         assert ('conf.d/_defaults.yaml (overwritten) (not written by init)'
                 in run.stdout), run.stdout[-800:]
 

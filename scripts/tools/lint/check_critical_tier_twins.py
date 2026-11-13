@@ -6,7 +6,7 @@ WHY: a tenant declares `<base>_critical` (scaffold_tenant.RULE_PACKS
 `critical_of`) and expects the platform to page at that value. Nothing tied
 that declaration to a rule: a declared key with no critical alert is a
 setting that does nothing; a critical alert whose base is undeclared is a
-tier no tenant is told it can set (`--generate-profile` never writes it);
+tier no tenant is told it can set (scaffold never offers it);
 and a critical alert that drifted from its warning alert (another `for`,
 another label set, another expression shape) pages differently from what
 the warning tier promised. This gate makes the declaration and the rules

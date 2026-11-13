@@ -49,7 +49,7 @@ func verdictErrors(t *testing.T, root string) []string {
 	return out
 }
 
-const kvRoot = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
+const kvRoot = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
 
 func TestKeyVerdict_TheErrorLayer(t *testing.T) {
 	t.Parallel()
@@ -95,7 +95,7 @@ func TestKeyVerdict_TheErrorLayer(t *testing.T) {
 		{"a when.target head names its key",
 			map[string]string{
 				"_defaults.yaml": kvRoot + "_policies:\n" +
-					"  - {name: p, target: mysql_connections, operator: lte, value: 100, when: {target: owner_tag, operator: required}}\n",
+					"  - {name: p, target: mysql_connection_usage_percent, operator: lte, value: 100, when: {target: owner_tag, operator: required}}\n",
 				"a.yaml": tenant(a, "    owner_tag: x\n")},
 			[]string{}},
 		{"no root platform file: threshold keys are undecidable, reserved keys judged",
@@ -163,7 +163,7 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 		t.Fatalf("head %v %v %v %v", doc["schema"], doc["at"], doc["undecidable"], doc["blocks"])
 	}
 	misspelt := map[string]any{"key": "mysql_conections", "layer": "tenant", "file": "a.yaml", "read_by": []any{},
-		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "switched_off_with": nil,
+		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "hint": nil, "switched_off_with": nil,
 		"dead_entries": []any{}, "value": "70", "served": nil}
 	rows := doc["tenants"].(map[string]any)["t1"].([]any)
 	if got := fmt.Sprintf("%d %v", len(rows), rows[0].(map[string]any)["key"]); got != "4 mysql_conections" {
@@ -173,7 +173,7 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 		t.Fatalf("t1's misspelt key %v, want %v", rows[0], misspelt)
 	}
 	finding := map[string]any{"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "a.yaml",
-		"tenants": []any{"t1"}, "reason": "no_row", "base": nil, "dead_entries": nil, "blocks": true}
+		"tenants": []any{"t1"}, "reason": "no_row", "hint": nil, "base": nil, "dead_entries": nil, "blocks": true}
 	if fs := doc["findings"].([]any); len(fs) != 1 || !reflect.DeepEqual(fs[0], finding) {
 		t.Fatalf("findings %v, want [%v]", fs, finding)
 	}
@@ -214,7 +214,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 	}
 	t.Run("a misspelt key is refused", func(t *testing.T) {
 		t.Parallel()
-		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": "tenants:\n  t1:\n    mysql_connections: \"70\"\n"})
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": "tenants:\n  t1:\n    mysql_connection_usage_percent: \"70\"\n"})
 		before := snapshot(t, root)
 		code, res := runBatch(t, writeCmd, set("mysql_conections", "60"), "--config-dir", root)
 		if code != exitFindings || callReason(res) != writeReasonWorsensTree {
@@ -237,7 +237,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 	t.Run("a new misspelt key in a profile file is refused (#3016, #3394)", func(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
-			"_profiles.yaml": "profiles:\n  p1:\n    mysql_connections: \"70\"\n",
+			"_profiles.yaml": "profiles:\n  p1:\n    mysql_connection_usage_percent: \"70\"\n",
 			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n"})
 		in := `{"files":[{"path":"_profiles.yaml","ops":[{"op":"set","path":["profiles","p1","mysql_conections"],` +
 			`"value":{"str":"60"}}]}]}`
@@ -305,7 +305,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
 			"a.yaml": "tenants:\n  t1:\n    mysql_conections: \"70\"\n"})
-		if code, res := runBatch(t, writeCmd, set("mysql_connections", "60"), "--config-dir", root); code != exitOK {
+		if code, res := runBatch(t, writeCmd, set("mysql_connection_usage_percent", "60"), "--config-dir", root); code != exitOK {
 			t.Fatalf("an unrelated key: exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
 		}
 		unset := `{"files":[{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","t1","mysql_conections"]}]}]}`
@@ -348,7 +348,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 	t.Run("a tenant file written with a new unread key is refused beside another tenant's errors", func(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
-			"a.yaml": "tenants:\n  t1:\n    mysql_connections: \"70\"\n",
+			"a.yaml": "tenants:\n  t1:\n    mysql_connection_usage_percent: \"70\"\n",
 			"b.yaml": "tenants:\n  t2:\n    redis_memroy: \"1\"\n"})
 		code, res := runBatch(t, writeCmd, set("mysql_conections", "60"), "--config-dir", root)
 		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread a.yaml t1"}) {
@@ -372,7 +372,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
 			"a.yaml": "tenants:\n  tz: {}\n", "b.yaml": "tenants:\n  tz: {}\n",
-			"sub/t.yaml": "tenants:\n  t1:\n    mysql_connections: \"70\"\n"})
+			"sub/t.yaml": "tenants:\n  t1:\n    mysql_connection_usage_percent: \"70\"\n"})
 		in := `{"files":[{"path":"sub/t.yaml","ops":[{"op":"set","path":["tenants","t1","mysql_conections"],"value":{"str":"1"}}]}]}`
 		code, res := runBatch(t, writeCmd, in, "--config-dir", root, "--dry-run")
 		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread sub/t.yaml t1"}) {
@@ -384,7 +384,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
 			"a.yaml": "tenants:\n  tz:\n    mysql_conections: \"1\"\n", "b.yaml": "tenants:\n  tz: {}\n"})
 		in := `{"files":[{"path":"b.yaml","delete":true},
-			{"path":"a.yaml","ops":[{"op":"set","path":["tenants","tz","mysql_connections"],"value":{"str":"5"}}]}]}`
+			{"path":"a.yaml","ops":[{"op":"set","path":["tenants","tz","mysql_connection_usage_percent"],"value":{"str":"5"}}]}]}`
 		if code, res := runBatch(t, writeCmd, in, "--config-dir", root, "--dry-run"); code != exitOK {
 			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
 		}
@@ -392,7 +392,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 	t.Run("an empty tree is an empty baseline", func(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"README": "no config yet\n"})
-		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connections",{"int":"80"}]]}]]}},
+		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connection_usage_percent",{"int":"80"}]]}]]}},
 			{"path":"t.yaml","create":{"map":[["tenants",{"map":[["t1",{"map":[["_routng",{"str":"x"}],["mysql_conections",{"str":"1"}]]}]]}]]}}]}`
 		code, res := runBatch(t, writeCmd, in, "--config-dir", root, "--dry-run")
 		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread t.yaml t1", "unread t.yaml t1"}) {
@@ -402,7 +402,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 	t.Run("a new threshold key beside the root carrier the batch adds is judged", func(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"u.yaml": "tenants:\n  t9:\n    mysql_conections: \"1\"\n"})
-		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connections",{"int":"80"}]]}]]}},
+		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connection_usage_percent",{"int":"80"}]]}]]}},
 			{"path":"t.yaml","create":{"map":[["tenants",{"map":[["t1",{"map":[["mysql_conections",{"str":"1"}]]}]]}]]}}]}`
 		code, res := runBatch(t, writeCmd, in, "--config-dir", root, "--dry-run")
 		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread t.yaml t1"}) {
@@ -414,8 +414,8 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 		// tx's /metrics cannot be gathered (two keys, one series) before the
 		// call; the batch repairs that and writes a typo beside it.
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
-			"a.yaml": "tenants:\n  tx:\n    mysql_connections: \"70:critical\"\n    mysql_connections_critical: 95\n"})
-		in := `{"files":[{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","tx","mysql_connections_critical"]},
+			"a.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent: \"70:critical\"\n    mysql_connection_usage_percent_critical: 95\n"})
+		in := `{"files":[{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","tx","mysql_connection_usage_percent_critical"]},
 			{"op":"set","path":["tenants","tx","mysql_conections"],"value":{"str":"1"}}]}]}`
 		var out, errOut bytes.Buffer
 		runWrite(writeCmd, []string{"--config-dir", root, "--dry-run", "--json", "--input", "-"}, strings.NewReader(in), &out, &errOut)
@@ -432,7 +432,7 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 	t.Run("adding the root carrier is not charged with the threshold keys it makes judgeable", func(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1:\n    mysql_conections: \"70\"\n"})
-		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connections",{"int":"80"}]]}]]}}]}`
+		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connection_usage_percent",{"int":"80"}]]}]]}}]}`
 		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
 			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
 		}
@@ -449,7 +449,7 @@ func strconvQuote(s string) string {
 var kvWarnTree = map[string]string{
 	"_defaults.yaml": "state_filters:\n  maintenance: {reasons: [X], severity: critical}\n" + kvRoot,
 	"a.yaml": "tenants:\n  t1:\n    _profile: nope\n    nosuch_critical: \"5\"\n" +
-		"    mysql_connections: {default: \"5\", expires: \"bad\"}\n    _silent_mode: loud\n    _severity_dedup: maybe\n" +
+		"    mysql_connection_usage_percent: {default: \"5\", expires: \"bad\"}\n    _silent_mode: loud\n    _severity_dedup: maybe\n" +
 		"    _routing: {receiver: {type: webhook, url: \"https://a.example\"}, group_wait: \"1x\"}\n    _metadata: {environment: {a: b}}\n" +
 		"    _state_maintenance: {expires: \"zz\"}\n    _custom_alerts: [{recipe: nope, name: q}]\n",
 }
@@ -533,7 +533,7 @@ func TestKeyVerdict_AnUnboundProfileNeedsTheWholeTree(t *testing.T) {
 		}
 		return code, n
 	}
-	profiles := "profiles:\n  gold:\n    mysql_connections: \"70\"\n"
+	profiles := "profiles:\n  gold:\n    mysql_connection_usage_percent: \"70\"\n"
 	if _, n := notJudged(map[string]string{"_defaults.yaml": kvRoot, "_profiles.yaml": profiles,
 		"b.yaml": "tenants:\n  t2: {}\n"}); n != 1 {
 		t.Errorf("unbound over the whole tree: %d notice(s), want 1", n)

@@ -13,13 +13,12 @@ tenants:
   db-demo:
     mysql_connection_usage_percent: "50"           # warning threshold (% of max_connections)
     mysql_connection_usage_percent_critical: "90"  # critical threshold → headline alert
-    # Running-threads saturation warning (gauge: concurrent threads executing, a
-    # USE-method proxy — NOT host CPU%). Dormant by design: push-metrics.sh seeds no
-    # mysql_global_status_threads_running, so MariaDBHighThreadsRunning stays quiet and the
-    # single connections-critical red light remains the headline. The platform ships no
-    # default for this key (a healthy value scales with the host's CPU count, #3778), so
-    # the tenant supplies its own: 40 = sized for this host.
-    mysql_threads_running: "40"
+    # No mysql_threads_running here (#3778): the platform ships no default for it (a
+    # healthy value scales with the host's CPU count, arming: operator), and the exporter
+    # serves a tenant key only when a defaults carrier holds its base — a tenant line
+    # alone reaches no /metrics row. An operator who wants MariaDBHighThreadsRunning
+    # puts a host-sized base in _defaults.yaml; the demo leaves it off (push-metrics.sh
+    # seeds no mysql_global_status_threads_running, so it would stay quiet anyway).
     _metadata:
       owner: "platform-db-team"
       tier: "tier-1"

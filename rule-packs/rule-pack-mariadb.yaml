@@ -193,7 +193,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB instance {{ $labels.instance }} is down (tenant {{ $labels.tenant }})"
@@ -220,7 +220,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB: ALL instances down for tenant {{ $labels.tenant }}"
@@ -258,7 +258,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB: no writable primary for tenant {{ $labels.tenant }}"
@@ -281,7 +281,7 @@ groups:
       # INTENT (semi-sync vs not) — NOT primary-vs-replica. Since #3680 the tenant-exporters
       # scrape is role:endpointslice with the real instance (one series per pod), so the
       # `on(tenant, instance)` pairing below matches each pod's own two gauges.
-      # metric_group:liveness → severity-dedup (NoPrimary/ReplicasGone critical inhibits
+      # metric_group:mariadb_liveness → severity-dedup (NoPrimary/ReplicasGone critical inhibits
       # this warning). Lab can't produce the EVENT (needs 2-node semi-sync) → promtool
       # synthetic only; ⛔ verify metric presence at customer rollout.
       - alert: MariaDBSemiSyncDegraded
@@ -299,7 +299,7 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB semi-sync degraded — durability guarantee lost for tenant {{ $labels.tenant }}"
@@ -327,7 +327,7 @@ groups:
         labels:
           severity: critical
           maintenance: page
-          metric_group: liveness
+          metric_group: mariadb_liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "MariaDB semi-sync has ZERO connected replicas for tenant {{ $labels.tenant }}"

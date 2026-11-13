@@ -124,7 +124,8 @@ TOOLS = [
     ("tool_consistency", "lint/lint_tool_consistency.py", [], "Tool registry ↔ Hub ↔ JSX ↔ MD links"),
     ("repo_name", "lint/check_repo_name.py", ["--ci"], "Repo name guard (no vibe-k8s-lab in URLs)"),
     ("structure", "lint/check_structure.py", ["--ci"], "Project structure enforcement"),
-    ("jsx_babel", "lint/lint_jsx_babel.py", ["--ci"], "JSX Babel standalone parse validation"),
+    ("jsx_syntax", "lint/lint_jsx_syntax.py", ["--ci"], "Portal JSX/JS parse with the build's esbuild"),
+    ("jsx_linecount", "lint/check_jsx_linecount.py", ["--ci", "--strict"], "Portal JSX line-count caps"),
     ("html_doc_links", "lint/lint_html_doc_links.py", ["--ci"], "Raw HTML doc-link validation (MkDocs-aware)"),
     ("head_blob_hygiene", "lint/check_head_blob_hygiene.py", ["--ci"], "HEAD blob hygiene (NUL bytes / truncated EOF)"),
     ("cli_coverage", "lint/check_cli_coverage.py", ["--ci"], "CLI command coverage (entrypoint ↔ docs)"),
@@ -441,7 +442,7 @@ def _extract_detail(output: str) -> str:
     warning(s)`). A marker-preferring variant — walk from the end, prefer
     the last line containing ❌ / ✗ / ERROR / error: / FAIL / Traceback —
     picked the identical line in 15/15, so it buys nothing measurable, and
-    it has a measured false-positive source: jsx_babel prints `✗ 361
+    it had a measured false-positive source: jsx_babel (until #3669) printed `✗ 361
     browser-incompatible pattern(s) found:` on a GREEN run, so a marker in
     the middle of an output proves nothing about the verdict. The simpler
     predicate is the one kept. Tracebacks are on stderr and never reach

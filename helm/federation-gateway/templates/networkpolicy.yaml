@@ -1,4 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- /* Unset counts as on: `--reuse-values` from 0.7.x carries no such key. */}}
+{{- $restrictEgress := ne (toString .Values.networkPolicy.restrictEgress) "false" }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -12,6 +14,9 @@ spec:
       {{- include "federation-gateway.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if $restrictEgress }}
+    - Egress
+    {{- end }}
   ingress:
     - ports:
         - port: {{ .Values.listenPort }}
@@ -43,4 +48,31 @@ spec:
         - namespaceSelector: {}
         {{- end }}
     {{- end }}
+  {{- if $restrictEgress }}
+  # Egress (#1295 PR2): DNS and the one upstream — Envoy has no other off-pod
+  # dependency (JWKS and the revoked set are mounted files). Without this the
+  # gateway had no egress at all wherever its namespace defaults to deny, as
+  # k8s/03-monitoring does. What it allows is wider than "the upstream": port 53
+  # on any pod, and upstream.port on ANY pod of the upstream's namespace (in
+  # the default install, every :8080 there) — those pods' own ingress rules
+  # are what keep the gateway out of them.
+  # ⚠️ NetworkPolicy matches the destination POD port, and upstream.port is the
+  # Service port. They are equal for federation-proxy and victorialogs by
+  # default; where they differ, set networkPolicy.upstreamPort to the pod port.
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "federation-gateway.upstreamNamespace" . | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ include "federation-gateway.upstreamPort" . }}
+  {{- end }}
 {{- end }}

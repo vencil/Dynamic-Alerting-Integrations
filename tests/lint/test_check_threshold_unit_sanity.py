@@ -11,7 +11,7 @@ kind that make a gate quietly wrong rather than loudly broken:
   * a blanket "threshold must be > 0" rule flagged the shipped-and-correct
     `kafka_under_replicated_partitions: 0` (`> 0` = alert if ANY);
   * feeding the recommendation file's PERCENTILES into tier ordering flagged
-    `mysql_connections_critical` for sharing its base key's observed
+    `mysql_connection_usage_percent_critical` for sharing its base key's observed
     distribution — which is correct data, not an inversion.
 """
 from __future__ import annotations
@@ -695,15 +695,11 @@ DROPPED_SINCE_INVENTORY = {
     # The flat-shape ❌ counter-example (`.illustrative`): wrong in shape,
     # not in value. The one entry the scan before the inventory looked at
     # (PyYAML over every fence, the old ignore marker not consulted).
-    ("docs/internal/testing-playbook.md", "mysql_connections", 70.0),
+    ("docs/internal/testing-playbook.md", "mysql_connection_usage_percent", 70.0),
     # ADR-036's two-document example ({.confd .expect-refused=
-    # multiple_documents}): the exporter serves neither document. The scan
-    # before did not see these either (PyYAML's single-document load
-    # refused the stream).
-    ("docs/adr/036-single-parser-effective-config.en.md", "mysql_connections", 80.0),
-    ("docs/adr/036-single-parser-effective-config.en.md", "mysql_connections", 90.0),
-    ("docs/adr/036-single-parser-effective-config.md", "mysql_connections", 80.0),
-    ("docs/adr/036-single-parser-effective-config.md", "mysql_connections", 90.0),
+    # multiple_documents}) left this list with #3778: it is written in
+    # `mysql_connections`, which is no longer a registry key (retired), so
+    # the scan no longer counts its values as registry-key values.
 }
 
 

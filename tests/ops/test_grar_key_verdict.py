@@ -35,11 +35,11 @@ import generate_alertmanager_routes as gar  # noqa: E402
 #: The route generator reads trees Go names paths on as its own findings.
 pytestmark = pytest.mark.usefixtures("judging_run")
 
-DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n"
 # No `_routing`: only the severity-dedup inhibit rule is rendered.
 THRESHOLDS_ONLY = {
     "_defaults.yaml": DEFAULTS,
-    "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"
+    "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n"
                 "    mysql_conections: \"70\"\n    _routng: x\n",
 }
 # Nothing to render (no `_routing`, dedup off): the generator ends before
@@ -50,7 +50,7 @@ NOTHING_RENDERED = {
 }
 ROUTED = {
     "_defaults.yaml": DEFAULTS,
-    "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n    mysql_conections: \"70\"\n"
+    "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n    mysql_conections: \"70\"\n"
                 "    _routing:\n      receiver:\n        type: webhook\n"
                 "        url: https://hooks.example.com/t-a\n",
 }
@@ -93,7 +93,7 @@ def test_a_warning_alone_does_not_fail_validate(tmp_path):
     """A `disable` that switches nothing off is a warning (decision 8): it is
     reported, `blocks: never`, and the run passes."""
     files = {"_defaults.yaml": DEFAULTS,
-             "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n    mysql_slave_lagg: disable\n"}
+             "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n    mysql_slave_lagg: disable\n"}
     res, doc = _cli(tmp_path, files, "--validate")
     assert res.returncode == 0, res.stderr
     assert [(r["kind"], r["blocks"], r["severity"]) for r in _key_records(doc)] == [
@@ -118,7 +118,7 @@ def test_without_validate_nothing_is_judged(tmp_path):
 
 
 def test_a_refused_tree_is_not_judged(tmp_path):
-    files = dict(THRESHOLDS_ONLY, **{"t-b.yaml": "tenants:\n  t-a:\n    mysql_connections: \"1\"\n"})
+    files = dict(THRESHOLDS_ONLY, **{"t-b.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"1\"\n"})
     res, doc = _cli(tmp_path, files, "--validate")
     assert res.returncode == 1, res.stderr  # a tenant declared twice
     assert "key verdict" not in res.stderr
@@ -128,7 +128,7 @@ def test_a_refused_tree_is_not_judged(tmp_path):
 def test_a_threshold_key_no_root_platform_file_lets_the_verdict_judge_fails(tmp_path):
     """#3016 option A: an undecidable threshold key fails `--validate`, as
     tenant-api refuses such a write (422)."""
-    files = {"t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"}
+    files = {"t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n"}
     res, doc = _cli(tmp_path, files, "--validate")
     assert res.returncode == 1, res.stderr
     recs = _key_records(doc)
@@ -141,7 +141,7 @@ def test_an_undecidable_key_beside_an_error_is_marked_as_blocking_too(tmp_path):
     """#3016 review: with an error also there, the undecidable line still
     says it blocks — fixing the error alone leaves rc 1 (Go's
     `undecidable_blocks`, not inferred from the findings)."""
-    files = {"t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n    _routng: x\n"}
+    files = {"t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n    _routng: x\n"}
     res, doc = _cli(tmp_path, files, "--validate")
     assert res.returncode == 1, res.stderr
     got = {(r["kind"], r["severity"], r["blocks"]) for r in _key_records(doc)}
@@ -237,7 +237,7 @@ def test_the_generator_container_does_not_judge_keys_inside_the_generator(tmp_pa
     generator must not judge them a second time, outside it."""
     repo = h.init_repo(tmp_path / "repo")
     base = h.commit_tree(repo, {"_defaults.yaml": DEFAULTS,
-                                "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"50\"\n"})
+                                "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"50\"\n"})
     write = proto.Write("t-a.yaml", h.b64("tenants:\n  t-a:\n    mysql_conections: \"50\"\n"))
     req = proto.ValidateRequest(base, (write,), 20000)
     job_dir = tmp_path / "job"

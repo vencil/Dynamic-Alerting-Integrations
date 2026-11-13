@@ -49,10 +49,8 @@ tools build a separate parser per help language (alert_quality declares
 ``--min-score`` once in each), and one language would leave the other's
 declaration unexercised.
 
-Environment is pinned where it would change a verdict: a fake ``amtool``
-that accepts every config is first on PATH (``amtool_accepts``), because
-validate_config's routes row is WARN without amtool, PASS or FAIL with one —
-and the CI Python Tests jobs install a real one.
+Environment is pinned where it would change a verdict: ``PROMETHEUS_URL`` is
+removed from every run's environment.
 
 SCOPE — WHICH FLAGS
 -------------------
@@ -414,13 +412,13 @@ def _confd_with_policy(tmp: Path, forbidden_receiver: str) -> str:
     not. Nothing else in the tree is a finding."""
     d = tmp / f"confd-forbid-{forbidden_receiver}"
     _write(d / "_defaults.yaml", (
-        "defaults:\n  mysql_connections: 80\n"
+        "defaults:\n  mysql_connection_usage_percent: 80\n"
         "_routing_defaults:\n"
         "  group_by: [tenant, alertname]\n  group_wait: 30s\n"
         "  repeat_interval: 4h\n"
         "  receiver:\n    type: slack\n    api_url: {secret: {key: slack-url}}\n"))
     _write(d / "tenant-one.yaml",
-           'tenants:\n  tenant-one:\n    mysql_connections: "90"\n')
+           'tenants:\n  tenant-one:\n    mysql_connection_usage_percent: "90"\n')
     _write(d / "_domain_policy.yaml", (
         "domain_policies:\n  fin:\n    tenants: [tenant-one]\n"
         "    constraints:\n"
@@ -433,9 +431,9 @@ def _confd_with_group_wait(tmp: Path, group_wait: str) -> str:
     unparsable duration ('5x') is rendered as the platform default and
     reported as a blocking generation warning; '30s' is clean."""
     d = tmp / f"confd-group-wait-{group_wait}"
-    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
     _write(d / "tenant-one.yaml", (
-        "tenants:\n  tenant-one:\n    mysql_connections: \"90\"\n"
+        "tenants:\n  tenant-one:\n    mysql_connection_usage_percent: \"90\"\n"
         "    _routing:\n      receiver:\n        type: webhook\n"
         "        url: https://hooks.example/a\n"
         f"      group_wait: {group_wait}\n"))
@@ -447,7 +445,7 @@ def _confd_with_instance_mapping(tmp: Path, mapped_tenant: str) -> str:
     `mapped_tenant` — a tenant that does or does not exist."""
     d = tmp / f"confd-mapping-{mapped_tenant}"
     _write(d / "tenant-one.yaml",
-           'tenants:\n  tenant-one:\n    mysql_connections: "90"\n')
+           'tenants:\n  tenant-one:\n    mysql_connection_usage_percent: "90"\n')
     _write(d / "_instance_mapping.yaml", (
         "instance_tenant_mapping:\n  shared-db-01:\n"
         f"    - tenant: {mapped_tenant}\n"
@@ -481,8 +479,8 @@ def _mysql_only_confd(tmp: Path) -> str:
     """One tenant monitored for mysql only — the stub's redis and postgres
     targets are the blind spots."""
     d = tmp / "confd-mysql-only"
-    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 80\n")
-    _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    mysql_connections: 90\n")
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n")
+    _write(d / "tenant-one.yaml", "tenants:\n  tenant-one:\n    mysql_connection_usage_percent: 90\n")
     return str(d)
 
 
@@ -660,8 +658,8 @@ RECIPES: list[Recipe] = [
       boundary_base=lambda t, s: ["--config-dir",
                                   _confd_with_policy(t, "pagerduty")],
       note="forbidden slack receiver: WARN -> FAIL; no violation stays 0. "
-           "With amtool accepting, the boundary tree has no WARN at all, so "
-           "a --strict that escalated every WARN would still pass here"),
+           "The boundary tree has no WARN at all, so a --strict that "
+           "escalated every WARN would still pass here"),
 
     # --min-score is read only under --ci (it gates the same line as BAD
     # alerts). The stub's tenant scores 75 with no BAD alert: 80 fails it,
@@ -1104,10 +1102,10 @@ LANGS = ("zh", "en")
 @pytest.mark.parametrize("lang", LANGS)
 @pytest.mark.parametrize("recipe", [pytest.param(r, id=r.id) for r in RECIPES])
 def test_verdict_flag_changes_the_result(recipe: Recipe, lang: str, tmp_path: Path,
-                                         stub_url: str, amtool_accepts: Path):
+                                         stub_url: str):
     cwd = tmp_path / "cwd"
     cwd.mkdir()
-    env = dict(os.environ)   # PATH already starts with amtool_accepts
+    env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     env["DA_LANG"] = lang
     env.pop("PROMETHEUS_URL", None)

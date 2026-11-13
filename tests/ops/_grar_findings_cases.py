@@ -27,7 +27,7 @@ CONFDIR_TOKEN = "<CONFDIR>"
 
 _DEFAULTS = (
     "defaults:\n"
-    "  mysql_connections: 80\n"
+    "  mysql_connection_usage_percent: 80\n"
     "_routing_defaults:\n"
     "  group_by: [alertname, tenant]\n"
     "  group_wait: 30s\n"
@@ -44,7 +44,7 @@ _EMAIL = ("      receiver:\n"
 
 
 def _tenant(t: str, receiver: str = _WEBHOOK, extra: str = "") -> str:
-    return (f"tenants:\n  {t}:\n    mysql_connections: 70\n    _routing:\n"
+    return (f"tenants:\n  {t}:\n    mysql_connection_usage_percent: 70\n    _routing:\n"
             + receiver.format(t=t) + extra)
 
 
@@ -109,7 +109,7 @@ FIXTURES: dict[str, dict[str, str]] = {
     # #1460: one tenant file does not parse.
     "unreadable": {
         "_defaults.yaml": _DEFAULTS,
-        "alpha.yaml": 'tenants:\n  alpha:\n    mysql_connections: "70\n',
+        "alpha.yaml": 'tenants:\n  alpha:\n    mysql_connection_usage_percent: "70\n',
         "beta.yaml": _tenant("beta"),
     },
     # #2315: one tenant id in two files.
@@ -169,8 +169,8 @@ FIXTURES: dict[str, dict[str, str]] = {
     # Advisory lines: a mistyped key, an unknown profile, a clamped value.
     "advisory": {
         "_defaults.yaml": _DEFAULTS.replace(
-            "  mysql_connections: 80\n",
-            "  mysql_connections: 80\n  mysql_threads_running: 50\n"),
+            "  mysql_connection_usage_percent: 80\n",
+            "  mysql_connection_usage_percent: 80\n  mysql_threads_running: 50\n"),
         "alpha.yaml": _tenant("alpha", _WEBHOOK,
                               "      group_wait: 1s\n")
         + "    mysql_conections: 40\n    _routing_profile: nowhere\n",
@@ -221,9 +221,10 @@ def build_tree(root: Path, fixture: str) -> Path:
 
 def run_gar(confdir: Path, argv: list[str],
             extra: list[str] | None = None) -> subprocess.CompletedProcess:
-    """Run the generator with no ``amtool`` on PATH (deterministic NOTICE)."""
+    """Run the generator with an empty PATH (nothing installed here changes
+    its output; da-guard / da-read / da-crdecode come from their env vars)."""
     env = {k: v for k, v in os.environ.items() if k != "PATH"}
-    env["PATH"] = os.devnull  # nothing resolvable: amtool is "not found"
+    env["PATH"] = os.devnull  # nothing resolvable on PATH
     env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
         [sys.executable, "-s", str(GAR), "--config-dir", str(confdir),

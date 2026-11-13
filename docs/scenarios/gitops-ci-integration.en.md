@@ -249,7 +249,7 @@ da-tools validate-config --config-dir conf.d/
 
 ### 2.3 Stage 2: Generate
 
-Runs only on PRs. Generates the merged Alertmanager config and computes blast radius. ⚠️ The comment below saying the da-tools image bundles amtool does not hold for the v2.9.0 image: it does not bundle `amtool`; the v2.9.0 image also still has the old generator (a fragment when no mode flag is given, and an `--output-configmap` that replaces `route.routes` whole) <!-- image-caveat: v2.9.0 -->
+Runs only on PRs. Generates the merged Alertmanager config and computes blast radius. ⚠️ The comment below saying the da-tools image bundles da-read does not hold for the v2.9.0 image: it has no `da-read`; the v2.9.0 image also still has the old generator (a fragment when no mode flag is given, and an `--output-configmap` that replaces `route.routes` whole) <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # Merge the tenant routing into your Alertmanager base, as a complete ConfigMap
@@ -264,13 +264,13 @@ da-tools generate-routes --config-dir conf.d/ --output-configmap \
 # exit 2):
 da-tools generate-routes --config-dir conf.d/ --validate
 # ⚠️ --validate hands the config, assembled on the BUILT-IN default base (not
-#    yours), to Alertmanager (its loader, then amtool; #2260, #3689); the
+#    yours), to Alertmanager's config loader (da-read; #2260, #3689); the
 #    --output-configmap --base-config run above
 #    checks the one assembled on your own base (#2219). alertmanager-base.yaml
 #    is the source (your own config, in git) and .output/ the output; your own
 #    routes and receivers in the base stay. Never pass the output as the base:
 #    its tenant-* receivers are refused (exit 1).
-#    amtool ships in the image (#2294), so inside it both checks run by default.
+#    da-read ships in the image, so inside it both checks run by default.
 
 # Compute blast radius (which tenants, which metrics affected)
 # In CI, first extract the base branch's conf.d/ into conf.d.base/

@@ -52,7 +52,7 @@ def _crdecode(da_crdecode_env):
 def _make_cr(name="db-a", namespace="db-a", tenants=None):
     """輔助函數：建立最小的 ThresholdConfig CR 字典。"""
     if tenants is None:
-        tenants = {name: {"mysql_connections": "70"}}
+        tenants = {name: {"mysql_connection_usage_percent": "70"}}
     return {
         "apiVersion": "dynamicalerting.io/v1alpha1",
         "kind": "ThresholdConfig",
@@ -82,13 +82,13 @@ class TestRenderCrFiles:
         先前寫在租戶檔頂層，exporter 印 `should only be in _defaults.yaml,
         ignoring` 後不讀。會讓本測試轉紅的改動：把 defaults 寫回租戶檔。"""
         cr = _make_cr()
-        cr["spec"]["defaults"] = {"mysql_connections": 80}
+        cr["spec"]["defaults"] = {"mysql_connection_usage_percent": 80}
         files = render_cr_files(cr)
         assert sorted(files) == ["db-a/_defaults.yaml", "db-a/db-a.yaml"]
         def body(text):
             return yaml.safe_load("\n".join(
                 ln for ln in text.splitlines() if not ln.startswith("#")))
-        assert body(files["db-a/_defaults.yaml"]) == {"defaults": {"mysql_connections": 80}}
+        assert body(files["db-a/_defaults.yaml"]) == {"defaults": {"mysql_connection_usage_percent": 80}}
         assert list(body(files["db-a/db-a.yaml"])) == ["tenants"]
 
     @pytest.mark.parametrize("field, value, words", [
@@ -151,8 +151,8 @@ class TestWriteRendered:
     def test_writes_file(self, tmp_path):
         """寫入的就是 render_cr_files 預覽的文字；回傳的 sha 是各檔路徑與位元組的。"""
         cr = _make_cr(name="test")
-        cr["spec"]["defaults"] = {"mysql_connections": 80}
-        (tmp_path / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 1\n",
+        cr["spec"]["defaults"] = {"mysql_connection_usage_percent": 80}
+        (tmp_path / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 1\n",
                                                  encoding="utf-8")
         changed, sha = write_rendered(tmp_path, render_entries(cr))
         assert changed
@@ -206,10 +206,10 @@ class TestWriteRendered:
 
     def test_dropping_the_defaults_drops_their_file(self, tmp_path):
         """CR 拿掉 defaults，再 reconcile 就刪掉它目錄的 `_defaults.yaml`。"""
-        (tmp_path / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 1\n",
+        (tmp_path / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 1\n",
                                                  encoding="utf-8")
         cr = _make_cr(name="test")
-        cr["spec"]["defaults"] = {"mysql_connections": 80}
+        cr["spec"]["defaults"] = {"mysql_connection_usage_percent": 80}
         write_rendered(tmp_path, render_entries(cr))
         assert (tmp_path / "test" / "_defaults.yaml").exists()
         del cr["spec"]["defaults"]
@@ -217,18 +217,14 @@ class TestWriteRendered:
         assert sorted(p.name for p in (tmp_path / "test").iterdir()) == ["test.yaml"]
 
     def test_the_file_mode_is_da_guards(self, tmp_path):
-        """新檔是 da-guard write 的 0600、取代的檔保留原權限（先前一律 chmod 0644）。
-
-        ⚠️ 未決（#3206）：exporter 若以不同 uid 讀這個目錄，0600 的新檔它讀不到；
-        要哪一種做法（write 可指定 mode、寫後 chmod、部署同 uid）尚未拍板，這支只釘
-        現況，拍板後隨之改。
-        """
+        """新檔與取代的檔都是 da-guard write 的 0644（#3535：conf.d 屬 repo 生成物，
+        exporter 以不同 uid 讀這個目錄），不沿用原檔權限。"""
         cr = _make_cr(name="test")
         write_rendered(tmp_path, render_entries(cr))
         dest = tmp_path / "test" / "test.yaml"
-        assert dest.stat().st_mode & 0o777 == 0o600
-        os.chmod(dest, 0o644)
-        cr["spec"]["tenants"]["test"]["mysql_connections"] = "71"
+        assert dest.stat().st_mode & 0o777 == 0o644
+        os.chmod(dest, 0o600)
+        cr["spec"]["tenants"]["test"]["mysql_connection_usage_percent"] = "71"
         assert write_rendered(tmp_path, render_entries(cr))[0]
         assert dest.stat().st_mode & 0o777 == 0o644
 
@@ -960,7 +956,7 @@ class TestRenderCrFile:
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
             self._K + "metadata: {name: ok}\nspec:\n  tenants:\n"
-            "    t1: {mysql_connections: '70'}\n"
+            "    t1: {mysql_connection_usage_percent: '70'}\n"
             f"    t2: {value}\n", encoding="utf-8")
         out_dir = tmp_path / "out"
         out_dir.mkdir()
@@ -1032,7 +1028,7 @@ class TestRenderCrFile:
 # every row with `da-guard served-values` (rc 3 = the exporter refused the
 # file); the other tests pin the tool's rc for the same rows.
 
-_T1 = "  tenants:\n    t1: {mysql_connections: '70'}\n"
+_T1 = "  tenants:\n    t1: {mysql_connection_usage_percent: '70'}\n"
 
 # An explicitly tagged, quoted int (`!!int "…"`) is a Python int, dumped as
 # its decimal digits; past 64 bits yaml.v3 reads those through ParseFloat.
@@ -1142,7 +1138,7 @@ _CR_HEAD = "kind: ThresholdConfig\nmetadata: {name: ok}\nspec:\n"
 #: The conf.d root these rows render into (#3671): the CR's defaults are the
 #: subtree layer of its directory, which delivers a key only when the root
 #: declares it — as a real conf.d's root `_defaults.yaml` does.
-_ROOT_DEFAULTS = "defaults:\n  cpu: 1\n  mem: 1\n  mysql_connections: 1\n"
+_ROOT_DEFAULTS = "defaults:\n  cpu: 1\n  mem: 1\n  mysql_connection_usage_percent: 1\n"
 
 
 def _write_cr(tmp_path, body):
@@ -3199,18 +3195,18 @@ class TestACrOwnsItsPathsWhole:
     手寫租戶的值悄悄改變。會讓本類轉紅的改動：拿掉 `_ownership_error` 的呼叫，
     或 DELETED 改回刪 `rendered_paths` 全部。"""
 
-    _ROOT = "defaults:\n  mysql_connections: 80\n  container_cpu: 50\n"
+    _ROOT = "defaults:\n  mysql_connection_usage_percent: 80\n  container_cpu: 50\n"
 
     def _tree(self, tmp_path):
         (tmp_path / "_defaults.yaml").write_text(self._ROOT, encoding="utf-8")
         (tmp_path / "team-a").mkdir()
-        hand = {"team-a/_defaults.yaml": "defaults:\n  mysql_connections: 90\n",
+        hand = {"team-a/_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 90\n",
                 "team-a/hand.yaml": "tenants:\n  t-hand:\n    container_cpu: '5'\n"}
         for rel, text in hand.items():
             (tmp_path / rel).write_text(text, encoding="utf-8")
         return {rel: (tmp_path / rel).read_bytes() for rel in hand}
 
-    @pytest.mark.parametrize("defaults", [None, {"mysql_connections": 10}])
+    @pytest.mark.parametrize("defaults", [None, {"mysql_connection_usage_percent": 10}])
     def test_a_hand_written_directory_of_the_same_name_is_refused(self, tmp_path, caplog, defaults):
         before = self._tree(tmp_path)
         cr = _make_cr(name="team-a", namespace="ns", tenants={"t-cr": {"container_cpu": "7"}})

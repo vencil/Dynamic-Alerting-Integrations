@@ -165,6 +165,17 @@ Known non-covered surfaces (accepted, not oversights):
 Usage
 -----
   python3 scripts/tools/lint/check_image_pin_capability.py
+  python3 scripts/tools/lint/check_image_pin_capability.py \
+      --chart helm/tenant-api --refuse-exemptions      # release gate (#3228)
+
+  --chart DIR           only that chart (no k8s manifests, no other chart;
+                        other charts' EXEMPTIONS are out of scope, not
+                        orphaned). A chart that yields no workload is exit 2.
+  --refuse-exemptions   a pin an EXEMPTIONS entry covers is a violation
+                        naming that entry ("REFUSED EXEMPTION"). The PR gate
+                        honours exemptions; release-tenant-api runs this
+                        before `helm push`, so a chart is never PUBLISHED with
+                        a default pin that cannot run.
 
 Exit codes:
   0 = every da-tools pin can run its workload and every recipe-preview pin
@@ -778,9 +789,14 @@ def _k8s_files() -> list[Path]:
     return _yaml_files(REPO_ROOT / "k8s", "**/*")
 
 
-def _chart_dirs() -> list[Path]:
-    return sorted({p.parent for ext in ("yaml", "yml")
-                   for p in REPO_ROOT.glob(f"helm/*/Chart.{ext}")})
+def _chart_dirs(only_chart: str | None = None) -> list[Path]:
+    """Every chart directory, or — with *only_chart* (`--chart`) — just that
+    one (empty when it is not a chart dir; `main` refuses that up front)."""
+    charts = sorted({p.parent for ext in ("yaml", "yml")
+                     for p in REPO_ROOT.glob(f"helm/*/Chart.{ext}")})
+    if only_chart is None:
+        return charts
+    return [c for c in charts if c.relative_to(REPO_ROOT).as_posix() == only_chart]
 
 
 def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
@@ -834,7 +850,8 @@ def collect_k8s_workloads(errors: list[str]) -> list[Workload]:
     return workloads
 
 
-def collect_helm_workloads(errors: list[str]) -> list[Workload]:
+def collect_helm_workloads(errors: list[str],
+                           only_chart: str | None = None) -> list[Workload]:
     """da-tools containers in Helm charts (pins from values*.yaml, invocation from templates/).
 
     Association is CHART-level, deliberately. A chart's pin lives in
@@ -859,7 +876,7 @@ def collect_helm_workloads(errors: list[str]) -> list[Workload]:
         this gate exists to remove.
     """
     workloads: list[Workload] = []
-    for chart in _chart_dirs():
+    for chart in _chart_dirs(only_chart):
         chart_rel = chart.relative_to(REPO_ROOT).as_posix()
         values_files = _yaml_files(chart, "values*")
         if not values_files:
@@ -1050,7 +1067,8 @@ def _chart_pins_da_tools(chart: Path) -> bool:
     return False
 
 
-def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
+def collect_rendered_workloads(errors: list[str],
+                               only_chart: str | None = None) -> list[Workload]:
     """da-tools containers in what `helm template` renders (THE RENDER PATH).
 
     Every chart that pins da-tools is rendered with its default values and
@@ -1062,7 +1080,7 @@ def collect_rendered_workloads(errors: list[str]) -> list[Workload]:
     whose tag or entry point cannot be resolved — each is an error. helm's and
     da-crdecode's exit codes are read separately (two runs, no pipe)."""
     workloads: list[Workload] = []
-    charts = [c for c in _chart_dirs() if _chart_pins_da_tools(c)]
+    charts = [c for c in _chart_dirs(only_chart) if _chart_pins_da_tools(c)]
     if not charts:
         return workloads
     helm = shutil.which("helm")
@@ -1178,10 +1196,18 @@ def evaluate(workload: Workload) -> str | None:
     return None
 
 
-def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], str]):
+def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], str],
+              refuse_exemptions: bool = False):
     """Classify *workloads*.
 
     Returns (violations, exempted, stale_exemptions, orphaned_exemptions).
+
+    *refuse_exemptions* (`--refuse-exemptions`, #3228): an incapable workload
+    a registered exemption covers is a VIOLATION that names the entry, not an
+    EXEMPT note. An exemption is a licence to keep a PR green while no capable
+    tag exists; it is not a licence to PUBLISH a chart whose default install
+    cannot run — the release job asks this question, the PR gate does not.
+    Matching (orphaned / stale) is unchanged.
     """
     violations: list[str] = []
     exempted: list[str] = []
@@ -1194,6 +1220,15 @@ def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], 
         if defect is None:
             if workload.key in exemptions:
                 satisfied_keys.add(workload.key)
+            continue
+        if workload.key in exemptions and refuse_exemptions:
+            source, entry, tag = workload.key
+            violations.append(
+                f"REFUSED EXEMPTION {source} / {entry} @ {tag}: {workload.where}: "
+                f"{defect} — the EXEMPTIONS entry is refused under "
+                f"--refuse-exemptions; a release that ships this pin must wait "
+                f"for a tools/v* tag that provides the entry point "
+                f"(registered: {exemptions[workload.key]})")
             continue
         if workload.key in exemptions:
             exempted.append(f"{workload.where}: {defect}\n      registered: "
@@ -1223,7 +1258,7 @@ def run_check(workloads: list[Workload], exemptions: dict[tuple[str, str, str], 
 
 
 def main() -> int:
-    # argparse with no flags — enforces the repo-wide CLI contract
+    # argparse enforces the repo-wide CLI contract
     # (test_help_exits_zero / test_invalid_args_exits_nonzero): `--help`
     # exits 0; unknown flags exit 2 (argparse default).
     # CJK in --help would raise UnicodeEncodeError on a legacy Windows console
@@ -1237,12 +1272,44 @@ def main() -> int:
             "the program the workload pinned to it runs.",
         ),
     )
-    parser.parse_args()
+    parser.add_argument(
+        "--chart", metavar="DIR",
+        help=i18n_text(
+            "只檢查這一個 chart（repo 相對路徑，例如 helm/tenant-api）；"
+            "k8s manifest 與其他 chart 不掃，其他 chart 的豁免也不算 orphaned。"
+            "該 chart 找不到任何 da-tools／recipe-preview workload 時回 2。",
+            "check only this chart (repo-relative, e.g. helm/tenant-api): no "
+            "k8s manifests, no other chart, and other charts' exemptions are "
+            "not orphaned. Exit 2 if the chart yields no da-tools / "
+            "recipe-preview workload.",
+        ),
+    )
+    parser.add_argument(
+        "--refuse-exemptions", action="store_true",
+        help=i18n_text(
+            "已登記豁免的 pin 一律當 violation（release 用：豁免讓 PR 保持綠，"
+            "但不准發布預設安裝跑不起來的 chart）。",
+            "treat every pin a registered exemption covers as a violation "
+            "(for releases: an exemption keeps a PR green, it does not license "
+            "publishing a chart whose default install cannot run).",
+        ),
+    )
+    args = parser.parse_args()
+
+    only_chart = args.chart
+    if only_chart is not None and not _chart_dirs(only_chart):
+        print(f"ERROR: --chart {only_chart!r} is not a chart directory "
+              f"(expected a repo-relative helm/<name> holding Chart.yaml)",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     errors: list[str] = []
+    k8s_workloads = [] if only_chart is not None else collect_k8s_workloads(errors)
     workloads = union_workloads(
-        collect_k8s_workloads(errors) + collect_helm_workloads(errors),
-        collect_rendered_workloads(errors))
+        k8s_workloads + collect_helm_workloads(errors, only_chart),
+        collect_rendered_workloads(errors, only_chart))
+    exemptions = (EXEMPTIONS if only_chart is None else
+                  {k: v for k, v in EXEMPTIONS.items() if k[0] == only_chart})
 
     # Collection errors first: a pin we could not even resolve makes any
     # verdict about the rest incomplete, and reporting it is more actionable
@@ -1254,8 +1321,18 @@ def main() -> int:
             print(f"  - {error}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    # ⛔ The one chart a release asked about yielding NOTHING is not a pass: a
+    # chart that stopped pinning da-tools (or whose containers the gate can no
+    # longer see) would be published unchecked.
+    if only_chart is not None and not workloads:
+        print(f"ERROR: --chart {only_chart}: no da-tools / recipe-preview "
+              f"workload found, so nothing was checked (fail-closed — this is "
+              f"NOT a pass)", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
     try:
-        violations, exempted, stale, orphaned = run_check(workloads, EXEMPTIONS)
+        violations, exempted, stale, orphaned = run_check(
+            workloads, exemptions, refuse_exemptions=args.refuse_exemptions)
     except CapabilityError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -1272,7 +1349,23 @@ def main() -> int:
             print(f"  - STALE EXEMPTION {note}")
         for note in orphaned:
             print(f"  - ORPHANED EXEMPTION {note}")
-        if violations:
+        refused = [v for v in violations if v.startswith("REFUSED EXEMPTION ")]
+        if refused:
+            print(
+                "\nRelease blocked (--refuse-exemptions): do NOT delete or "
+                "re-register the exemption to get past this. Publish the "
+                "tools/v* release that ships the entry point first, move the pin "
+                "to it (bump_docs.py --tools), delete the exemption that then "
+                "matches no workload (this gate reports it as orphaned), "
+                "and re-run this release."
+            )
+        if args.refuse_exemptions and len(refused) < len(violations):
+            print(
+                "\nFix (--refuse-exemptions): bump each pin above to a tools/v* "
+                "tag whose tree contains the entry point. An exemption is "
+                "refused here too, so registering one does not help."
+            )
+        elif len(refused) < len(violations):
             print(
                 "\nFix: bump the pin to a tools/v* tag whose tree contains the "
                 "entry point, or — if no released tag does yet — register the "

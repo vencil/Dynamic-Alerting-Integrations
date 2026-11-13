@@ -343,7 +343,7 @@ class TestLookupAndPolicies:
     def test_lookup_kinds(self):
         """#3111 (e)：回傳種類，不是要呼叫端比對字串的 reason。"""
         m = L.load_observed_map()
-        assert L.lookup(m, "mysql_connections") == (L.LookupKind.COMPARED, m["mysql_connections"])
+        assert L.lookup(m, "mysql_connection_usage_percent") == (L.LookupKind.COMPARED, m["mysql_connection_usage_percent"])
         assert L.lookup(m, "container_cpu") == (L.LookupKind.KNOWN_DEFERRED, None)
         # #3658 shipped the mongodb critical tiers; the throughput keys it left
         # out are still a `_critical` no shipped alert compares.

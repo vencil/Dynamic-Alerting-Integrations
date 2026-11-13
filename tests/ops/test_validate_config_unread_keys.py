@@ -19,7 +19,7 @@ import validate_config as vc
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
 
 
 def _tree(root: Path, files: dict[str, str]) -> str:
@@ -78,11 +78,11 @@ def test_a_profile_key_no_reader_reads_is_an_error_on_the_profile(tmp_path):
 
 _PROFILE_KEYS = ("profiles:\n  p1:\n    _unknown_thing: bad\n    _namespaces: [x]\n"
                  "    _profile: p2\n    _metadata: {owner: t}\n    _silent_mode: warning\n"
-                 "  p2:\n    mysql_connections: 70\n")
+                 "  p2:\n    mysql_connection_usage_percent: 70\n")
 
 
 @pytest.mark.parametrize("text", [
-    pytest.param("tenants:\n  ta:\n    mysql_connections: 70\n", id="unbound"),
+    pytest.param("tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n", id="unbound"),
     pytest.param("tenants:\n  ta:\n    _profile: p1\n", id="bound"),
     pytest.param("tenants:\n  ta:\n    _profile: p1\n    _namespaces: [own]\n", id="shadowed"),
 ])
@@ -102,13 +102,13 @@ def test_a_profile_key_is_judged_from_the_profile_layer_bound_or_not(tmp_path, t
         f"_profiles.yaml: error: unread `_profile` (not_read_in_profile) — {who}",
         f"_profiles.yaml: error: unread `_unknown_thing` (unregistered) — {who}",
         # p2 is bound by no tenant: its threshold key is not judged (#3395).
-        "_profiles.yaml: notice: profile_not_judged `mysql_connections` (profile_unbound) — no tenant",
+        "_profiles.yaml: notice: profile_not_judged `mysql_connection_usage_percent` (profile_unbound) — no tenant",
     ], r["details"]
 
 
 def test_a_clean_tree_passes(tmp_path):
     r = vc.check_unread_keys(_tree(tmp_path, {
-        "_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70\n"}))
+        "_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 70\n"}))
     assert r["status"] == vc.PASS
 
 
@@ -177,8 +177,8 @@ def test_a_clean_nested_tree_passes_without_a_flat_read_caveat(tmp_path):
     not something this row skipped, so it is no WARN and no
     `skipped_nested_files`."""
     d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
-                         "sub/_defaults.yaml": "defaults:\n  mysql_connections: 75\n",
-                         "sub/ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n"})
+                         "sub/_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 75\n",
+                         "sub/ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"})
     p = subprocess.run([sys.executable, vc.__file__, "--config-dir", d, "--json"],
                        capture_output=True, encoding="utf-8", timeout=600)
     row = {r["check"]: r for r in json.loads(p.stdout)}["unread_keys"]
@@ -196,7 +196,7 @@ def test_a_rule_naming_a_profile_key_no_tenant_gets_does_not_count(tmp_path):
     r = vc.check_unread_keys(_tree(tmp_path, {
         "_defaults.yaml": defaults,
         "_profiles.yaml": "profiles:\n  p1:\n    _namespaces: [x]\n",
-        "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+        "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"}))
     assert "_profiles.yaml: error: unread `_namespaces` (not_read_in_profile) — no tenant" in r["details"], r
 
 

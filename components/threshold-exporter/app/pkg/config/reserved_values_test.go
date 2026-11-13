@@ -15,7 +15,10 @@ import (
 // derivation must give the same keys before tenant-api reads it instead.
 func TestBatchUnsettableKeys_EqualTheHandlerList(t *testing.T) {
 	t.Parallel()
-	want := []string{"_routing", "_routing_receiver_type"}
+	// Every retired threshold key rides along (#3829), so the list grows with
+	// `retired_keys:` (#3778 registered mysql_connections).
+	want := sortedCopy(append([]string{"_routing", "_routing_receiver_type"},
+		retiredThresholdKeyNames(retiredThresholdKeys)...))
 	if got := BatchUnsettableKeys(); !reflect.DeepEqual(got, want) {
 		t.Errorf("BatchUnsettableKeys() = %v, want %v", got, want)
 	}

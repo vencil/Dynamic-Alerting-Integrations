@@ -3,7 +3,9 @@
 tenants:
   db-b:
     mysql_connection_usage_percent: "85"
-    mysql_threads_running: "45"      # 平台不給預設（#3778），依這台主機的核數給值；不超過 critical tier 建議值 50
+    # mysql_threads_running 不在這裡（#3778）：平台不給預設（arming: operator），而 exporter 只送出
+    # 有底的鍵——租戶單獨寫它不會有 /metrics 列。要啟用，由 operator 依主機核數在自己的
+    # _defaults.yaml 給底值，租戶再覆寫。
     container_memory: "90"
     _state_container_crashloop: "disable"
     # v2.10.0 (#869): db_type opts this tenant into per-tenant exporter liveness

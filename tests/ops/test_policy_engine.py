@@ -32,7 +32,7 @@ from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() 
 def sample_config():
     """典型 tenant 配置。"""
     return {
-        "mysql_connections": "80",
+        "mysql_connection_usage_percent": "80",
         "mysql_threads_running": "70",
         "container_memory": "85",
         "_routing": {
@@ -113,7 +113,7 @@ class TestResolveTarget:
 
     def test_simple_key(self, sample_config):
         """簡單 key 查找成功。"""
-        found, val = pe._resolve_target(sample_config, "mysql_connections")
+        found, val = pe._resolve_target(sample_config, "mysql_connection_usage_percent")
         assert found is True
         assert val == "80"
 
@@ -139,7 +139,7 @@ class TestResolveTarget:
         found, val = pe._resolve_target(sample_config, "mysql_*")
         assert found is True
         assert isinstance(val, dict)
-        assert "mysql_connections" in val
+        assert "mysql_connection_usage_percent" in val
         assert "mysql_threads_running" in val
 
     def test_wildcard_no_match(self, sample_config):
@@ -359,7 +359,7 @@ class TestEvaluateRule:
         """萬用字元匹配部分違規。"""
         rule = make_rule(target="mysql_*", operator="lte", value="50")
         violations = pe.evaluate_rule(rule, "db-a", sample_config)
-        assert len(violations) == 2  # mysql_connections=80, mysql_threads_running=70
+        assert len(violations) == 2  # mysql_connection_usage_percent=80, mysql_threads_running=70
 
     def test_wildcard_required_no_match(self, make_rule, sample_config):
         """萬用字元 required 無匹配 → 違規。"""
@@ -600,15 +600,15 @@ class TestLoadPolicyInputs:
 
     def test_thresholds_are_served_and_reserved_keys_are_written_plus_inherited(self, tmp_path):
         d = _write_tree(tmp_path, {
-            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+            "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
             "tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
-            "team/tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: '70'\n",
+            "team/tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connection_usage_percent: '70'\n",
         })
         inputs = pe.load_policy_inputs(str(d))
         assert sorted(inputs.views) == ["tenant-a", "tenant-b"]   # 子目錄的租戶在
         a, b = inputs.views["tenant-a"], inputs.views["tenant-b"]
-        assert a["mysql_connections"] == pe.ServedThreshold((("00:00", "24:00", 80.0),))
-        assert b["mysql_connections"] == pe.ServedThreshold((("00:00", "24:00", 70.0),))
+        assert a["mysql_connection_usage_percent"] == pe.ServedThreshold((("00:00", "24:00", 80.0),))
+        assert b["mysql_connection_usage_percent"] == pe.ServedThreshold((("00:00", "24:00", 70.0),))
         assert a["_silent_mode"] == "disable"          # 寫法
         # Go 自動補的預設值不算有寫
         assert "_severity_dedup" not in a and "_metadata" not in a and "_silent_mode" not in b
@@ -631,8 +631,8 @@ class TestLoadPolicyInputs:
     def test_flat_and_empty_files_are_not_tenants(self, tmp_path, capsys):
         """行為變更：沒有 `tenants:` 的檔（含空檔）不再以檔名當租戶，stderr 逐檔 WARN。"""
         d = _write_tree(tmp_path, {
-            "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-            "flat-a.yaml": "mysql_connections: '70'\n",
+            "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+            "flat-a.yaml": "mysql_connection_usage_percent: '70'\n",
             "placeholder.yaml": "# tenant placeholder, no keys yet\n",
             "tenant-b.yaml": "tenants:\n  tenant-b: {}\n",
         })
@@ -645,7 +645,7 @@ class TestLoadPolicyInputs:
     def test_routing_is_the_route_generators_resolution(self, tmp_path):
         """`_routing`：`_routing_defaults` 與租戶 `_routing` 合併、`{{tenant}}` 代換後的結果。"""
         d = _write_tree(tmp_path, {
-            "_defaults.yaml": ("defaults:\n  mysql_connections: 80\n_routing_defaults:\n"
+            "_defaults.yaml": ("defaults:\n  mysql_connection_usage_percent: 80\n_routing_defaults:\n"
                                "  receiver:\n    type: webhook\n"
                                "    url: https://hooks.example.com/{{tenant}}\n"
                                "  group_wait: 30s\n"),
@@ -660,10 +660,10 @@ class TestLoadPolicyInputs:
     def test_rules_read_routing(self, make_rule):
         assert pe.rules_read_routing([make_rule(target="_routing.receiver.url")])
         assert pe.rules_read_routing([make_rule(target="_rout*")])
-        assert pe.rules_read_routing([make_rule(target="mysql_connections", operator="lte", value=1,
+        assert pe.rules_read_routing([make_rule(target="mysql_connection_usage_percent", operator="lte", value=1,
                                                 when={"target": "_routing", "operator": "required"})])
         assert not pe.rules_read_routing([make_rule(target="_routing_profile"),
-                                          make_rule(target="mysql_connections")])
+                                          make_rule(target="mysql_connection_usage_percent")])
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -981,10 +981,10 @@ class TestCLI:
         load's message, not an internal error with a traceback."""
         import types
         (tmp_path / "_defaults.yaml").write_text(
-            "_policies:\n  - {name: p, target: mysql_connections, operator: required}\n",
+            "_policies:\n  - {name: p, target: mysql_connection_usage_percent, operator: required}\n",
             encoding="utf-8")
         monkeypatch.setattr(pe, "load_policy_inputs",
-                            lambda *a, **kw: types.SimpleNamespace(views={"t": {"mysql_connections": 1}}))
+                            lambda *a, **kw: types.SimpleNamespace(views={"t": {"mysql_connection_usage_percent": 1}}))
 
         def stale(_keys, **_kw):
             raise pe.ServedValuesError("da-guard key-spellings exited 2 — it is older than this tool",
@@ -1286,16 +1286,16 @@ class TestDocsPolicyExample:
     def test_example_fails_ci_on_a_tree_that_breaks_it(self, path, tmp_path, capsys):
         """一個租戶沒有路由、一個超過上限：兩條規則都要響，error 那條讓 `--ci` 回 1。"""
         (tmp_path / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_connections: 80\n" + _docs_policy_block(path), encoding="utf-8")
+            "defaults:\n  mysql_connection_usage_percent: 80\n" + _docs_policy_block(path), encoding="utf-8")
         (tmp_path / "t-routed.yaml").write_text(
-            "tenants:\n  t-routed:\n    mysql_connections: '900'\n    _routing:\n"
+            "tenants:\n  t-routed:\n    mysql_connection_usage_percent: '99'\n    _routing:\n"
             "      receiver:\n        type: webhook\n        url: https://example.invalid/h\n",
             encoding="utf-8")
         (tmp_path / "t-bare.yaml").write_text(
-            "tenants:\n  t-bare:\n    mysql_connections: '100'\n", encoding="utf-8")
+            "tenants:\n  t-bare:\n    mysql_connection_usage_percent: '80'\n", encoding="utf-8")
         exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--ci", "--json"]))
         doc = json.loads(capsys.readouterr().out)
         fired = sorted((v["tenant"], v["rule_name"], v["severity"]) for v in doc["violations"])
         assert fired == [("t-bare", "require-routing", "error"),
-                         ("t-routed", "max-connections-cap", "warning")]
+                         ("t-routed", "connection-usage-cap", "warning")]
         assert exit_code == 1

@@ -51,8 +51,8 @@ SYMLINK_REASON = ("cannot be read as a config file (not_regular_file): a symlink
 PT_SYMLINK_REASON = "a symlink to a directory the walk does not follow (not_regular_file)"
 # A key a shipped alert compares (#3591): validate-config's `no_alert` row
 # would make a made-up key's tree WARN, not PASS.
-TENANT = 'tenants:\n  t-sym:\n    mysql_connections: "70"\n'
-DEFAULTS = "defaults:\n  mysql_connections: 50\n"
+TENANT = 'tenants:\n  t-sym:\n    mysql_connection_usage_percent: "70"\n'
+DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 50\n"
 
 pytestmark = [
     pytest.mark.skipif(
@@ -176,8 +176,7 @@ def test_validate_config_fails_and_does_not_contradict_itself(nested: Path):
     assert "nothing in it is loaded" not in out, out
 
 
-def test_validate_config_flat_kubelet_layout_still_passes(flat: Path, amtool_accepts):
-    # #2311: without an amtool the routes row is WARN by design.
+def test_validate_config_flat_kubelet_layout_still_passes(flat: Path):
     r = _run(VALIDATE, "--config-dir", flat)
     out = r.stdout + r.stderr
     assert r.returncode == 0, out
@@ -198,7 +197,7 @@ def test_validate_config_alias_still_passes(alias: Path):
 def _source(tmp_path: Path) -> Path:
     src = tmp_path / "src"
     src.mkdir()
-    (src / "o.yaml").write_text('tenants:\n  t-other:\n    mysql_connections: "60"\n',
+    (src / "o.yaml").write_text('tenants:\n  t-other:\n    mysql_connection_usage_percent: "60"\n',
                                 encoding="utf-8")
     return src
 

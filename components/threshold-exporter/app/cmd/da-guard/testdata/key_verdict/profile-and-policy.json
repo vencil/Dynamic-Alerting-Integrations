@@ -15,6 +15,7 @@
         "severity": "error",
         "reason": "not_exporter_key",
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": [
@@ -33,6 +34,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "gold",
@@ -47,13 +49,14 @@
         "severity": "error",
         "reason": "unregistered",
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "x",
         "served": null
       },
       {
-        "key": "mysql_connections",
+        "key": "mysql_connection_usage_percent",
         "layer": "defaults",
         "file": "_defaults.yaml",
         "read_by": [
@@ -63,6 +66,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": 80,
@@ -79,6 +83,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "x",
@@ -95,6 +100,7 @@
         "severity": "error",
         "reason": "not_exporter_key",
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": [
@@ -113,6 +119,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "gold",
@@ -127,13 +134,14 @@
         "severity": "error",
         "reason": "unregistered",
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "x",
         "served": null
       },
       {
-        "key": "mysql_connections",
+        "key": "mysql_connection_usage_percent",
         "layer": "defaults",
         "file": "_defaults.yaml",
         "read_by": [
@@ -143,6 +151,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": 80,
@@ -157,6 +166,7 @@
         "severity": "error",
         "reason": "no_row",
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "x",
@@ -175,6 +185,7 @@
         "db-b"
       ],
       "reason": "not_read_in_profile",
+      "hint": null,
       "base": null,
       "dead_entries": null,
       "blocks": true
@@ -189,6 +200,7 @@
         "db-b"
       ],
       "reason": "unregistered",
+      "hint": null,
       "base": null,
       "dead_entries": null,
       "blocks": true
@@ -202,6 +214,7 @@
         "db-b"
       ],
       "reason": "no_row",
+      "hint": null,
       "base": null,
       "dead_entries": null,
       "blocks": true

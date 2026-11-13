@@ -566,14 +566,19 @@ def test_notes_are_total_over_malformed_fields():
 def test_real_registry_chart_default_set():
     """The chart set is the behavior-preserving 6-key pre-rewire set plus the
     owner-decided pg_connections / pg_replication_lag promotion (#1200 Q3=C /
-    D4 folding, 2026-07-25). A1 / A1.5 changed the fields, not the set."""
+    D4 folding, 2026-07-25). A1 / A1.5 changed the fields, not the set.
+    #3778 then took mysql_threads_running out (arming: operator — a healthy
+    value scales with the host's CPU count) and swapped the absolute
+    mysql_connections for mysql_connection_usage_percent: 8 -> 7."""
     doc = lib.build_registry_doc()
     tagged = {k for k, e in doc["keys"].items() if lib.is_chart_armed(e)}
     # Pin the DECISION, not just the mechanism: the owner-approved pg
     # promotion (#1232) must not silently vanish via an edit that keeps the
     # count intact (CodeRabbit review of #1232).
     assert {"pg_connections", "pg_replication_lag"} <= tagged
-    assert len(tagged) == 8
+    assert "mysql_connection_usage_percent" in tagged
+    assert "mysql_threads_running" not in tagged
+    assert len(tagged) == 7
 
 
 def test_every_real_key_states_its_arming():
@@ -590,12 +595,14 @@ def test_every_real_key_states_its_arming():
 
 
 def test_real_shipped_non_portable_keys_are_the_recorded_exceptions():
-    """The owner kept shipping the two absolute MariaDB values (#3773); the
-    gate admits them only because each records the issue that resolves it."""
+    """The owner kept shipping the two absolute MariaDB values (#3773) under
+    a recorded exception; #3778 resolved both (the count became a share of
+    max_connections, threads_running stopped shipping a value), so no shipped
+    key needs an exception any more."""
     doc = lib.build_registry_doc()
     exceptions = {k: e["default_exception"]["tracking"]
                   for k, e in doc["keys"].items() if "default_exception" in e}
-    assert exceptions == {"mysql_connections": 3778, "mysql_threads_running": 3778}
+    assert exceptions == {}
 
 
 def test_real_validation_candidates_are_derived():
@@ -623,16 +630,18 @@ def test_real_kafka_blockers_point_at_their_issue():
 def test_not_chart_armed_is_the_registry_derivation():
     """A defaults-tier key that is not `default`, and the `_critical` of one.
 
-    The 61 the gate kept by hand before A1 (45, plus #3732's 16 criticals) —
-    pinned so the derivation can only change with the registry, never with
-    a rule edit here."""
+    The 61 the gate kept by hand before A1 (45, plus #3732's 16 criticals),
+    plus #3778's mysql_threads_running and its critical (63) — pinned so the
+    derivation can only change with the registry, never with a rule edit
+    here."""
     doc = lib.build_registry_doc()
     derived = lib.not_chart_armed_keys(doc)
     keys = doc["keys"]
     for key in derived:
         owner = keys[keys[key].get("critical_of") or key]
         assert owner["tier"] == "defaults" and not lib.is_chart_armed(owner), key
-    assert len(derived) == 61
+    assert {"mysql_threads_running", "mysql_threads_running_critical"} <= derived
+    assert len(derived) == 63
     # optional_overrides flat keys belong to the unreachable face, not here
     assert not any(keys[k]["tier"] == "optional_overrides"
                    and not keys[k].get("critical_of") for k in derived)
@@ -791,7 +800,7 @@ def test_real_helm_unarmed_block_matches_the_derivation():
     named = set(re.findall(r"#   ([a-z0-9_]+) 未啟用", text))
     expected = {k for k in lib.not_chart_armed_keys(doc)
                 if not doc["keys"][k].get("critical_of")}
-    assert named == expected and len(named) == 34
+    assert named == expected and len(named) == 35
 
 
 def _synth_optional_doc():
@@ -1262,8 +1271,8 @@ _TENANT_DOC_RELS = (
 )
 _TENANT_DOCS = tuple(REPO_ROOT / rel for rel in _TENANT_DOC_RELS)
 
-# ⛔ EXACT tokens, never substring/`in`: `mysql_connections_critical` contains
-# `mysql_connections`, so a substring test reports "found" for precisely the
+# ⛔ EXACT tokens, never substring/`in`: `mysql_connection_usage_percent_critical` contains
+# `mysql_connection_usage_percent`, so a substring test reports "found" for precisely the
 # stale spellings that most resemble a live key (feedback: 子字串比對會藏住漂移).
 _DOC_CRITICAL_NAME_RE = re.compile(r"`([a-z][a-z0-9_]*_critical)`")
 # glob-shaped family examples in the dormant bullet: `kafka_*_critical`

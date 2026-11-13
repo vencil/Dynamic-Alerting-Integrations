@@ -39,6 +39,9 @@ HOOKS = {
     "forbid-legacy-mysql-cpu-key": "the retired mysql_cpu threshold key (#1231)",
     "forbid-legacy-mysql-cpu-selector": "the retired mysql/cpu user_threshold selector (#1231)",
     "skip-a11y-justification-check": "unjustified `skipA11y: true` in E2E specs",
+    # #1269: its pytest builds throwaway repos; only the Lint line applies it
+    # to this repo's charts (and, on main, to the merged commit).
+    "chart-version-bump": "a git-only chart's packaged content changing without a version bump (#1269)",
 }
 
 

@@ -39,7 +39,7 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 _REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _GEN = os.path.join(_REPO, "scripts", "tools", "ops", "generate_alertmanager_routes.py")
 
-_TENANT = ("tenants:\n  t1:\n    mysql_connections: \"70\"\n"
+_TENANT = ("tenants:\n  t1:\n    mysql_connection_usage_percent: \"70\"\n"
            "    _routing:\n      receiver:\n        type: webhook\n"
            "        url: \"https://t1.example.com/h\"\n")
 
@@ -48,7 +48,7 @@ def _tree(tmp_path, enabled: str) -> str:
     d = tmp_path / "conf.d"
     d.mkdir()
     (d / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_connections: 80\n"
+        "defaults:\n  mysql_connection_usage_percent: 80\n"
         f"_routing_enforced:\n  enabled: {enabled}\n  receiver:\n"
         "    type: webhook\n    url: \"https://noc.example.com/h\"\n",
         encoding="utf-8")
@@ -133,7 +133,7 @@ def test_validate_config_passes_a_boolean(enabled, tmp_path, cli_argv, capsys):
 
 
 def _slack_tenant(channel: str) -> str:
-    return ("tenants:\n  t1:\n    mysql_connections: \"70\"\n"
+    return ("tenants:\n  t1:\n    mysql_connection_usage_percent: \"70\"\n"
             "    _routing:\n      receiver:\n        type: slack\n"
             "        api_url: \"https://hooks.slack.com/services/x\"\n"
             f"        channel: {channel}\n")
@@ -144,7 +144,7 @@ def _slack_tenant(channel: str) -> str:
 def test_validate_config_yaml_quoting_row_fails(channel, tmp_path, cli_argv, capsys):
     d = tmp_path / "conf.d"
     d.mkdir()
-    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                       encoding="utf-8")
     (d / "t1.yaml").write_text(_slack_tenant(channel), encoding="utf-8")
     rc, rows = _vc_rows(str(d), cli_argv, capsys)
@@ -160,7 +160,7 @@ def test_validate_config_yaml_quoting_row_fails(channel, tmp_path, cli_argv, cap
 def test_validate_config_yaml_quoting_row_passes(channel, tmp_path, cli_argv, capsys):
     d = tmp_path / "conf.d"
     d.mkdir()
-    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                       encoding="utf-8")
     (d / "t1.yaml").write_text(_slack_tenant(channel), encoding="utf-8")
     _rc, rows = _vc_rows(str(d), cli_argv, capsys)
@@ -171,10 +171,10 @@ def test_validate_config_yaml_quoting_covers_defaults_routing(tmp_path, cli_argv
     d = tmp_path / "conf.d"
     d.mkdir()
     (d / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_connections: 80\n"
+        "defaults:\n  mysql_connection_usage_percent: 80\n"
         "_routing_defaults:\n  receiver:\n    type: pagerduty\n"
         "    service_key: 123\n", encoding="utf-8")
-    (d / "t1.yaml").write_text("tenants:\n  t1:\n    mysql_connections: \"70\"\n",
+    (d / "t1.yaml").write_text("tenants:\n  t1:\n    mysql_connection_usage_percent: \"70\"\n",
                                encoding="utf-8")
     rc, rows = _vc_rows(str(d), cli_argv, capsys)
     assert rc == 1

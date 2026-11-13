@@ -40,47 +40,48 @@ data:
   mariadb-alert.yml: "groups:\n- name: mariadb-alerts\n  rules:\n  - alert: MariaDBDown\n\
     \    expr: '(mysql_up == 0)\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"\
     maintenance\"} == 1)\n\n      '\n    for: 15s\n    labels:\n      maintenance:\
-    \ mute\n      metric_group: liveness\n      severity: warning\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      description: mysql_up=0 on {{ $labels.instance\
-    \ }} — one replica down in a primary-replica set keeps the service available (warning).\
-    \ Total outage escalates to MariaDBClusterDown (critical); loss of the writable\
-    \ primary to MariaDBNoPrimary (critical).\n      description_zh: '{{ $labels.instance\
-    \ }} 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為 MariaDBClusterDown（critical）；失去可寫\
-    \ primary 則為 MariaDBNoPrimary（critical）。'\n      owner: '{{ with query (printf\
-    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
-    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: MariaDB\
-    \ instance {{ $labels.instance }} is down (tenant {{ $labels.tenant }})\n    \
-    \  summary_zh: MariaDB 實例 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）\n\
-    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: MariaDBClusterDown\n    expr: max by(tenant) (mysql_up{job=\"tenant-exporters\"\
-    }) == 0\n    for: 30s\n    labels:\n      maintenance: page\n      metric_group:\
-    \ liveness\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n \
-    \   annotations:\n      description: No mysqld reports up=1 for tenant {{ $labels.tenant\
-    \ }} — total service outage, not a single-replica failover. For a planned single-instance\
-    \ drain, silence via the Alertmanager Silence API (no maintenance-window opt-out\
-    \ by design; a tenant's silent-critical sentinel still suppresses it).\n     \
-    \ description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mysqld 回報 up=1 — 整體服務中斷，非單一 replica\
-    \ failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical\
-    \ sentinel 仍會壓制此告警）。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ mute\n      metric_group: mariadb_liveness\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: mysql_up=0 on {{\
+    \ $labels.instance }} — one replica down in a primary-replica set keeps the service\
+    \ available (warning). Total outage escalates to MariaDBClusterDown (critical);\
+    \ loss of the writable primary to MariaDBNoPrimary (critical).\n      description_zh:\
+    \ '{{ $labels.instance }} 的 mysql_up=0。primary-replica 架構下單一 replica 停機時服務仍可用（warning）。整體中斷會升級為\
+    \ MariaDBClusterDown（critical）；失去可寫 primary 則為 MariaDBNoPrimary（critical）。'\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: 'MariaDB: ALL instances down for tenant {{ $labels.tenant\
-    \ }}'\n      summary_zh: MariaDB：租戶 {{ $labels.tenant }} 的所有實例皆停機\n      tier:\
+    \ }}'\n      summary: MariaDB instance {{ $labels.instance }} is down (tenant\
+    \ {{ $labels.tenant }})\n      summary_zh: MariaDB 實例 {{ $labels.instance }} 停機（租戶\
+    \ {{ $labels.tenant }}）\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: MariaDBClusterDown\n    expr: max by(tenant) (mysql_up{job=\"tenant-exporters\"\
+    }) == 0\n    for: 30s\n    labels:\n      maintenance: page\n      metric_group:\
+    \ mariadb_liveness\n      severity: critical\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: No mysqld reports up=1 for tenant\
+    \ {{ $labels.tenant }} — total service outage, not a single-replica failover.\
+    \ For a planned single-instance drain, silence via the Alertmanager Silence API\
+    \ (no maintenance-window opt-out by design; a tenant's silent-critical sentinel\
+    \ still suppresses it).\n      description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mysqld\
+    \ 回報 up=1 — 整體服務中斷，非單一 replica failover。若為計畫性單實例維護，請用 Alertmanager Silence API\
+    \ 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。\n      owner: '{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MariaDBNoPrimary\n\
-    \    expr: 'count by(tenant) (mysql_global_variables_read_only{job=\"tenant-exporters\"\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ 'MariaDB: ALL instances down for tenant {{ $labels.tenant }}'\n      summary_zh:\
+    \ MariaDB：租戶 {{ $labels.tenant }} 的所有實例皆停機\n      tier: '{{ with query (printf\
+    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
+    \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MariaDBNoPrimary\n   \
+    \ expr: 'count by(tenant) (mysql_global_variables_read_only{job=\"tenant-exporters\"\
     })\n\n      unless\n\n      count by(tenant) (mysql_global_variables_read_only{job=\"\
     tenant-exporters\"} == 0)\n\n      '\n    for: 2m\n    labels:\n      maintenance:\
-    \ page\n      metric_group: liveness\n      severity: critical\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: All instances are\
-    \ read_only for tenant {{ $labels.tenant }} — no writable primary (failover stuck\
-    \ / primary lost) → writes rejected. Unlike MariaDBClusterDown this fires while\
-    \ replicas are still up.\n      description_zh: 租戶 {{ $labels.tenant }} 的所有實例皆為\
-    \ read_only — 沒有可寫 primary（failover 卡住／primary 遺失）→ 寫入被拒。與 MariaDBClusterDown\
+    \ page\n      metric_group: mariadb_liveness\n      severity: critical\n     \
+    \ tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: All instances\
+    \ are read_only for tenant {{ $labels.tenant }} — no writable primary (failover\
+    \ stuck / primary lost) → writes rejected. Unlike MariaDBClusterDown this fires\
+    \ while replicas are still up.\n      description_zh: 租戶 {{ $labels.tenant }}\
+    \ 的所有實例皆為 read_only — 沒有可寫 primary（failover 卡住／primary 遺失）→ 寫入被拒。與 MariaDBClusterDown\
     \ 不同，此告警在 replica 仍存活時就會觸發。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
@@ -93,12 +94,12 @@ data:
     \"tenant-exporters\\\"} == 1\\n    and on(tenant, instance)\\n    mysql_global_status_rpl_semi_sync_master_status{job=\\\
     \"tenant-exporters\\\"} == 0\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 2m\n    labels:\n      maintenance: mute\n\
-    \      metric_group: liveness\n      severity: warning\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      description: Tenant {{ $labels.tenant }} has semi-sync\
-    \ enabled but it fell back to ASYNC (rpl_semi_sync_master_status=0) — writes continue\
-    \ but the semi-sync durability guarantee is lost (a primary failure now risks\
-    \ data loss). Usually a replica timed out / disconnected. read_only stays 0, so\
-    \ MariaDBNoPrimary cannot see this.\n      description_zh: 租戶 {{ $labels.tenant\
+    \      metric_group: mariadb_liveness\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: Tenant {{ $labels.tenant\
+    \ }} has semi-sync enabled but it fell back to ASYNC (rpl_semi_sync_master_status=0)\
+    \ — writes continue but the semi-sync durability guarantee is lost (a primary\
+    \ failure now risks data loss). Usually a replica timed out / disconnected. read_only\
+    \ stays 0, so MariaDBNoPrimary cannot see this.\n      description_zh: 租戶 {{ $labels.tenant\
     \ }} 啟用了 semi-sync 但已 fallback 到 ASYNC（status=0）— 寫入照常，但失去 semi-sync 持久性保證（此時\
     \ primary 故障有資料遺失風險）。通常是 replica timeout／斷線。read_only 仍為 0，故 MariaDBNoPrimary\
     \ 看不到。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
@@ -112,27 +113,27 @@ data:
     \  - alert: MariaDBSemiSyncReplicasGone\n    expr: \"max by(tenant) (\\n  mysql_global_variables_rpl_semi_sync_master_enabled{job=\\\
     \"tenant-exporters\\\"} == 1\\n  and on(tenant, instance)\\n  mysql_global_status_rpl_semi_sync_master_clients{job=\\\
     \"tenant-exporters\\\"} == 0\\n)\\n\"\n    for: 1m\n    labels:\n      maintenance:\
-    \ page\n      metric_group: liveness\n      severity: critical\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: Tenant {{ $labels.tenant\
-    \ }} has semi-sync enabled but ZERO semi-sync replicas connected (rpl_semi_sync_master_clients=0)\
-    \ — durability redundancy is gone, no self-recovery until a replica reconnects.\
-    \ By the time this pages, the ~10s write-stall (wait_no_slave) has usually auto-recovered\
-    \ to async — the live risk is LOST DURABILITY (a primary failure now risks data\
-    \ loss), so the runbook's first step is to find WHY all replicas disconnected,\
-    \ not to chase the stall.\n      description_zh: 租戶 {{ $labels.tenant }} 啟用了 semi-sync\
-    \ 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica 重連前無法自癒。此告警響起時 ~10s\
-    \ 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時 primary 故障會資料遺失），故\
-    \ runbook 第一步是追查為何所有 replica 斷線、而非修 stall。\n      owner: '{{ with query (printf\
-    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
-    \ 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: MariaDB\
-    \ semi-sync has ZERO connected replicas for tenant {{ $labels.tenant }}\n    \
-    \  summary_zh: MariaDB semi-sync 租戶 {{ $labels.tenant }} 連線的 replica 數為 0\n  \
-    \    tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MariaDBReplicaIOThreadDown\n\
-    \    expr: \"max by(tenant) (\\n  mysql_slave_status_slave_io_running{job=\\\"\
-    tenant-exporters\\\"} == 0\\n  and on(tenant, instance)\\n  mysql_slave_status_master_server_id{job=\\\
+    \ page\n      metric_group: mariadb_liveness\n      severity: critical\n     \
+    \ tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Tenant\
+    \ {{ $labels.tenant }} has semi-sync enabled but ZERO semi-sync replicas connected\
+    \ (rpl_semi_sync_master_clients=0) — durability redundancy is gone, no self-recovery\
+    \ until a replica reconnects. By the time this pages, the ~10s write-stall (wait_no_slave)\
+    \ has usually auto-recovered to async — the live risk is LOST DURABILITY (a primary\
+    \ failure now risks data loss), so the runbook's first step is to find WHY all\
+    \ replicas disconnected, not to chase the stall.\n      description_zh: 租戶 {{\
+    \ $labels.tenant }} 啟用了 semi-sync 但連線的 semi-sync replica 數為 0（clients=0）— 持久性備援歸零、replica\
+    \ 重連前無法自癒。此告警響起時 ~10s 寫入 stall（wait_no_slave）通常已自動 fallback async — 真正風險是失去持久性（此時\
+    \ primary 故障會資料遺失），故 runbook 第一步是追查為何所有 replica 斷線、而非修 stall。\n      owner: '{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ MariaDB semi-sync has ZERO connected replicas for tenant {{ $labels.tenant }}\n\
+    \      summary_zh: MariaDB semi-sync 租戶 {{ $labels.tenant }} 連線的 replica 數為 0\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
+    \  - alert: MariaDBReplicaIOThreadDown\n    expr: \"max by(tenant) (\\n  mysql_slave_status_slave_io_running{job=\\\
+    \"tenant-exporters\\\"} == 0\\n  and on(tenant, instance)\\n  mysql_slave_status_master_server_id{job=\\\
     \"tenant-exporters\\\"} > 0\\n)\\n\"\n    for: 1m\n    labels:\n      maintenance:\
     \ page\n      metric_group: mysql_replication_lag\n      severity: critical\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Replica\

@@ -9,8 +9,8 @@ conf.d with ``t-a.yaml`` and ``t-a2.yaml`` both declaring ``t-a``:
 no-mode routing fragment; ``--output-alertmanager`` here since #1211) /
 ``--output-configmap`` all rc 0.
 
-The contract pinned here (owner decision on #2315 (c)), with amtool NOT on
-PATH so no verdict can be amtool's:
+The contract pinned here (owner decision on #2315 (c)), with an empty PATH
+so nothing installed on this machine decides the verdict:
 
 * two tenant files declaring one id → rc 1 in every mode, with or without
   ``--strict``, naming both files, nothing written;
@@ -51,11 +51,11 @@ _T = "t1"
 
 def _tenant_body(tenant: str, url: str = "https://hooks.example.com/x") -> str:
     return make_tenant_yaml(
-        tenant, keys={"mysql_connections": "70"},
+        tenant, keys={"mysql_connection_usage_percent": "70"},
         routing=make_routing_config(tenant, url=url))
 
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n"
 
 
 def _conf(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -163,9 +163,9 @@ class TestNotADuplicate:
         self._assert_clean(d, tmp_path)
 
     def test_distinct_tenants_in_one_and_in_several_files(self, tmp_path):
-        both = make_tenant_yaml("t2", keys={"mysql_connections": "70"},
+        both = make_tenant_yaml("t2", keys={"mysql_connection_usage_percent": "70"},
                                 routing=make_routing_config("t2"))
-        both += make_tenant_yaml("t3", keys={"mysql_connections": "70"},
+        both += make_tenant_yaml("t3", keys={"mysql_connection_usage_percent": "70"},
                                  routing=make_routing_config("t3")
                                  ).replace("tenants:\n", "", 1)
         d = _conf(tmp_path, {f"{_T}.yaml": _tenant_body(_T), "pair.yaml": both})
@@ -192,7 +192,7 @@ class TestSharedPredicate:
             vc.check_tenant_uniqueness)
 
     @pytest.mark.parametrize("second", [
-        f"tenants:\n  {_T}:\n    mysql_connections: \"70\"\n",
+        f"tenants:\n  {_T}:\n    mysql_connection_usage_percent: \"70\"\n",
         # The exporter cannot decode this file (da-guard exit 3); both tools
         # still count it as a declaration — the line says to fix it first.
         f"tenants:\n  {_T}: [1]\n",

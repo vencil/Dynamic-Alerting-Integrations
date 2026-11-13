@@ -16,7 +16,8 @@
 # `rule_files` demand AND the platform arms must be listed below —
 # rule-pack-mariadb reads mysql_connection_usage_percent / mysql_replication_lag
 # via tenant:alert_threshold:*. mysql_threads_running is demanded too but the
-# platform arms it nowhere (arming: operator, #3778): a tenant supplies it. A demanded key missing here leaves its alert
+# platform arms it nowhere (arming: operator, #3778): an operator who wants it puts
+# a host-sized base here (a tenant line alone reaches no row). A demanded key missing here leaves its alert
 # loaded but unable to fire even with data present (#1200's empty-set silence).
 # The `_critical` tier canNOT be supplied here: resolveCriticalRows scans
 # TENANT OVERRIDES only (app/pkg/config/resolve.go), so a `<key>_critical` line
@@ -39,7 +40,7 @@
 defaults:
   mysql_connection_usage_percent: 80   # % of max_connections; db-demo overrides → drives the headline critical alert
   # mysql_threads_running has no platform value (arming: operator, #3778): a healthy
-  # value scales with the host's CPU count, so db-demo sets its own.
+  # value scales with the host's CPU count, so this demo leaves it unarmed.
   mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); quiet here — the seed pushes no mysql_slave_status_* series (#1200 WS5-P0-a)
   redis_connected_clients: 8000  # cache-demo (sentinel/dedup concept demo). DEMO-ONLY value — the platform default is 200 (threshold-registry.yaml); no redis pack is loaded here anyway
 

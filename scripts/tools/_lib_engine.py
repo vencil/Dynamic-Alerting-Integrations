@@ -293,10 +293,12 @@ def _json_stdout(proc: subprocess.CompletedProcess) -> Any:
         raise NoProof(f"stdout is not JSON: {out[:300]}") from None
 
 
-def _node_babel_parse(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
-    """lint_jsx_babel's driver (``node -e``): rc 0 and exactly one ``{path,
-    ok}`` result per JSX file it was handed (``expect["paths"]``) — the same
-    paths, each once. A missing or doubled path is a file never parsed."""
+def _node_esbuild_parse(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
+    """lint_jsx_syntax's driver (``node -e``, esbuild from the portal's
+    lockfile, #3669): rc 0 and exactly one ``{path, ok}`` result per source
+    file it was handed (``expect["paths"]``) — the same paths, each once. A
+    missing or doubled path is a file never parsed; a non-zero exit (esbuild
+    not installed: rc 3, the remedy on stderr) is no run."""
     if proc.returncode != 0:
         raise NoProof("non-zero exit")
     doc = _json_stdout(proc)
@@ -345,7 +347,7 @@ def _mmdc_render(proc: subprocess.CompletedProcess, expect: dict) -> bool:
 def _promtool_check_rules(proc: subprocess.CompletedProcess, expect: dict) -> bool:
     """``promtool check rules <file>``: exit 0 is the proof. It prints no
     structured output, and its text (``SUCCESS: N rules found``) is not read
-    (#3611 Q2 allows a pinned text signature for amtool only); any other exit
+    (#3611 Q2); any other exit
     — a rule that does not parse, a path that does not exist (both rc 1,
     measured on 3.15.1) — is no verdict here. The caller knows how many rules
     it wrote: it rendered the file."""
@@ -413,7 +415,7 @@ PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess, dict], Any]
     ("helm", "template"): _helm_template,
     ("kube-linter", "lint"): _kube_linter_lint,
     ("mmdc", "render"): _mmdc_render,
-    ("node", "babel-parse"): _node_babel_parse,
+    ("node", "esbuild-parse"): _node_esbuild_parse,
     ("node", "cli-playground"): _node_cli_playground,
     ("pint", "lint"): _pint_lint,
     ("promtool", "check-rules"): _promtool_check_rules,

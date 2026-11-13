@@ -36,6 +36,22 @@ EXIT-LOCKED (same discipline as check_threshold_reachability.KNOWN_UNWIRED):
 a grandfathered pair that gets fixed, or stops being a detected pair, is a
 HARD error — the list can only shrink, so it stays empty.
 
+GROUP NAMESPACE (#3692): severity dedup pairs alerts by `metric_group` within a
+tenant only (`equal: ["metric_group"]`), so a group is one namespace across
+every rule pack a tenant runs. Over T1 (the source packs, one file per pack)
+three more checks, all computed — no list to keep:
+  - GROUP-COLLISION: a value carried by alerts of two rule packs. A tenant
+    running both has one pack's critical mute the other's warning (measured
+    for `liveness` in mariadb + mongodb before #3692).
+  - RESERVED-PREFIX: a literal value starting `slo_`, the prefix the
+    custom-alert compiler gives its SLO alerts (`slo_{{ $labels.name }}`,
+    custom_alert_compile.go). A value templated after that prefix (`slo_{{`)
+    is that compiler's own and is left out of every group check: its value
+    exists per alert instance. Any other templated value is checked as written.
+  - NO-DEDUP-GROUP: a value with no critical member or no warning member in
+    its pack (the dedup inhibit mutes `severity="warning"` only). It suppresses nothing, so it is only a second, unrelated use
+    of the label (a routing handle) — and dedup is what the label is for.
+
 SCOPE NOTE (deliberate non-gate): the WS2a S2 or-masking scan is NOT gated
 here or anywhere — its same-label-set `or` heuristic needs human judgment
 per finding, so it stays a periodic read-only script. Only the two
@@ -117,6 +133,62 @@ def collect_alerts(root: Path = PROJECT_ROOT) -> dict[str, dict]:
     return alerts
 
 
+def collect_groups_by_pack(root: Path = PROJECT_ROOT) -> dict[str, dict[str, list[str]]]:
+    """Return {pack file name: {metric_group: [severity, …]}} over T1, read the
+    way Prometheus' rule loader reads it (#3206). The compiler's templated
+    `slo_{{…}}` is left out (see GROUP NAMESPACE)."""
+    out: dict[str, dict[str, list[str]]] = {}
+    files = T1_SOURCE.files_under(root)
+    results = _lib_consumer_read.prometheus_rule_file_results(files)
+    _lib_consumer_read.require_read(results)
+    for path, rf in zip(files, results):
+        groups = out.setdefault(Path(path).name, {})
+        doc = rf.documents[0] or {}
+        for g in doc.get("groups") or []:
+            for r in g.get("rules") or []:
+                if "alert" not in r:
+                    continue
+                labels = r.get("labels") or {}
+                mg = labels.get("metric_group")
+                if not isinstance(mg, str) or not mg or mg.startswith("slo_{{"):
+                    continue
+                groups.setdefault(mg, []).append(str(labels.get("severity", "")))
+    return out
+
+
+def group_namespace_errors(by_pack: dict[str, dict[str, list[str]]]) -> list[str]:
+    """GROUP-COLLISION / RESERVED-PREFIX / NO-DEDUP-GROUP (see GROUP NAMESPACE)."""
+    errors: list[str] = []
+    owners: dict[str, list[str]] = {}
+    for pack, groups in sorted(by_pack.items()):
+        for mg, severities in sorted(groups.items()):
+            owners.setdefault(mg, []).append(pack)
+            if mg.startswith("slo_"):
+                errors.append(
+                    f"RESERVED-PREFIX: {pack}: metric_group {mg!r} starts with `slo_`, the "
+                    "prefix the custom-alert compiler gives its SLO alerts — a tenant's SLO "
+                    "alert of that name would share its severity-dedup group. Rename it. (#3692)")
+            # The dedup inhibit's target is `severity="warning"` only
+            # (_grar_routes._build_inhibit_rules): an `info` member is never
+            # muted, so it does not make a group do anything.
+            has_crit = "critical" in severities
+            has_base = "warning" in severities
+            if not (has_crit and has_base):
+                errors.append(
+                    f"NO-DEDUP-GROUP: {pack}: metric_group {mg!r} has "
+                    f"{'no critical' if not has_crit else 'no warning'} member "
+                    f"(severities {sorted(severities)}), so severity dedup suppresses "
+                    "nothing through it. Remove the label, or add the alert it pairs with. (#3692)")
+    for mg, packs in sorted(owners.items()):
+        if len(packs) > 1:
+            errors.append(
+                f"GROUP-COLLISION: metric_group {mg!r} is used by {', '.join(packs)} — "
+                "severity dedup pairs by metric_group within a tenant, so for a tenant "
+                "running these packs one pack's critical mutes the other's warning. "
+                "Give each pack its own value (e.g. prefix it with the pack). (#3692)")
+    return errors
+
+
 def detect_pairs(alerts: dict[str, dict]) -> dict[str, str]:
     """Return {base_name: verdict} for every detected upgrade pair.
 
@@ -150,6 +222,7 @@ def detect_pairs(alerts: dict[str, dict]) -> dict[str, str]:
 def run_check(
     alerts: dict[str, dict] | None = None,
     known_ungrouped: dict[str, str] | None = None,
+    groups_by_pack: dict[str, dict[str, list[str]]] | None = None,
 ) -> dict[str, list[str]]:
     """Return {errors, infos}. errors fail --ci; infos are report-only.
 
@@ -159,11 +232,13 @@ def run_check(
         alerts = collect_alerts()
     if known_ungrouped is None:
         known_ungrouped = KNOWN_UNGROUPED
+    if groups_by_pack is None:
+        groups_by_pack = collect_groups_by_pack()
 
     verdicts = detect_pairs(alerts)
     violating = {b: v for b, v in verdicts.items() if v != "PASS"}
 
-    errors: list[str] = []
+    errors: list[str] = group_namespace_errors(groups_by_pack)
     infos: list[str] = []
 
     # NEW violating pairs — a fresh severity-dedup hole.

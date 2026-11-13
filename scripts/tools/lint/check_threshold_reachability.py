@@ -638,7 +638,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +6, generators +28. Red here means RAISE the floor.
+#     tolerate +5, generators +28. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -678,6 +678,14 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      hands a `_` key down — and the subtree levels they retired held one key
 #      more than the new root: total 87 -> 86. A deliberate removal, so the
 #      floor went 75 -> 74 and both figures here stay at +6 / 12.)
+#     (#3778 stopped shipping a value for mysql_threads_running: one key out of
+#      the exporter's conf.d `_defaults.yaml` (the biggest group, 19 -> 18) and
+#      one out of try-local's, total 86 -> 84, and one out of the chart values
+#      generator face, 93 -> 92. A deliberate removal, so the artifact floor
+#      went 74 -> 72 (the full-l0-l3 probe reads 71 against it, one-key margin
+#      kept, DOWN stays 12) and the generator floor 80 -> 79 (+28 / 13 kept).
+#      Because the biggest group shrank too, UP cannot stay at +6 with DOWN at
+#      12: it is +5 from here.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -691,8 +699,8 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 80
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 74
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 79
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 72
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every
@@ -726,7 +734,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
         "Its one `_defaults.yaml` also carries the base of every key the "
         "examples/ tenants write (#3014)."),
     "try-local/seed/conf.d": (
-        1, 3,
+        1, 2,
         "the one-command demo stack a reader runs first; its _defaults.yaml is "
         "the first platform-defaults file most people ever see."),
     "rule-packs/recipes/examples/conf.d": (
@@ -1151,7 +1159,7 @@ _LOADER_READABLE_FLOORS: dict[str, tuple[int, int, str]] = {
         "deleted the `examples/_defaults-multidb.yaml` the loader skipped, so "
         "this floor mirrors its sibling entry."),
     "try-local/seed/conf.d": (
-        1, 3,
+        1, 2,
         "the one-command demo stack. Entirely loader-readable today, so this "
         "floor mirrors its sibling entry."),
     "rule-packs/recipes/examples/conf.d": (

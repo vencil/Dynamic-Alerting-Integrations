@@ -66,9 +66,9 @@ class TestPipelineIntegration:
         conf_dir = work_dir / "conf.d"
         conf_dir.mkdir()
         defaults = conf_dir / "_defaults.yaml"
-        defaults.write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+        defaults.write_text("defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8")
         tenant = conf_dir / "test-db.yaml"
-        tenant.write_text("tenants:\n  test-db:\n    mysql_connections: '70'\n", encoding="utf-8")
+        tenant.write_text("tenants:\n  test-db:\n    mysql_connection_usage_percent: '70'\n", encoding="utf-8")
 
         result = subprocess.run(
             [sys.executable, str(TOOLS_DIR / "ops" / "validate_config.py"),

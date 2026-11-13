@@ -43,11 +43,11 @@ def _as_run(result):
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n"
 _GOOD_TENANT = (
     "tenants:\n"
     "  db-a:\n"
-    "    mysql_connections: \"70\"\n"
+    "    mysql_connection_usage_percent: \"70\"\n"
     "    _routing:\n"
     "      receiver:\n"
     "        type: webhook\n"
@@ -67,11 +67,11 @@ _CORPUS = [
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_connectionz: \"70\"\n"},
      [], False),
     ("receiver-not-an-object", {}, {
-        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: \"70\"\n"
+        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connection_usage_percent: \"70\"\n"
                       "    _routing:\n      receiver: \"not-an-object\"\n")},
      [], False),
     ("webhook-outside-allowlist", {}, {
-        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: \"70\"\n"
+        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connection_usage_percent: \"70\"\n"
                       "    _routing:\n      receiver:\n"
                       "        type: webhook\n"
                       "        url: https://hooks.bad.com/x\n")},
@@ -84,20 +84,20 @@ _CORPUS = [
                            "    target: _routing\n"
                            "    operator: required\n"
                            "    severity: error\n")}, {
-        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"},
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: \"70\"\n"},
      [], False),
     ("unknown-profile", {}, {
-        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: \"70\"\n"
+        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connection_usage_percent: \"70\"\n"
                       "    _profile: no-such-profile\n")},
      [], False),
     ("tenant-declared-twice", {}, {
-        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n",
-        "db-a-copy.yaml": "tenants:\n  db-a:\n    mysql_connections: \"60\"\n"},
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: \"70\"\n",
+        "db-a-copy.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: \"60\"\n"},
      [], False),
     # #2164: a bare number in a string-typed field (tenant thresholds are
     # strings) — the yaml_quoting row.
     ("unquoted-number-in-string-field", {}, {
-        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70\n"},
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 70\n"},
      [], False),
     ("top-level-is-a-list", {}, {
         "db-a.yaml": "- not\n- a\n- mapping\n"},
@@ -111,7 +111,7 @@ _CORPUS = [
         "_defaults.yaml": (_DEFAULTS +
                            "  _routing:\n"
                            "    group_wait: \"30s\"\n")}, {
-        "tenant-x.yaml": "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"},
+        "tenant-x.yaml": "tenants:\n  tenant-x:\n    mysql_connection_usage_percent: \"70\"\n"},
      [], False),
     # #2386: a `defaults:` mapping beside a top-level reserved key — da-guard's
     # defaults_toplevel_ignored (the guard_errors row, #3387), judged at every
@@ -119,7 +119,7 @@ _CORPUS = [
     # (`prod/_defaults.yaml`) must FAIL as well.
     ("defaults-mapping-leaves-top-level-out", {
         "_defaults.yaml": _DEFAULTS + "_severity_dedup: disable\n"}, {
-        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"},
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: \"70\"\n"},
      [], True),
     # #1652 blind review F1: the policies live ONLY in a nested carrier. The
     # root-carrier lookup finds a `_defaults.yaml` with no `_policies`, so
@@ -133,12 +133,12 @@ _CORPUS = [
                            "    target: _routing\n"
                            "    operator: required\n"
                            "    severity: error\n")}, {
-        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: \"70\"\n"},
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: \"70\"\n"},
      [], True),
     # #2708: a null inside a schedule with override windows — da-guard's
     # schedule_null_value (the guard_errors row, #3387), at every level.
     ("null-inside-a-schedule-with-windows", {}, {
-        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connections: {default: \"70\", "
+        "db-a.yaml": ("tenants:\n  db-a:\n    mysql_connection_usage_percent: {default: \"70\", "
                       "overrides: [{window: \"00:00-01:00\", value: null}]}\n")},
      [], False),
 ]
@@ -253,8 +253,7 @@ def test_the_routing_rows_read_a_nested_tenant(tmp_path, cli_argv, capsys):
         assert not hier[n].get("skipped_nested_files"), (n, hier[n])
 
 
-def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
-                                         amtool_accepts):
+def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys):
     """Negative control: no spurious WARN on a tree every reader can see."""
     d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, None)
     rc, rows = _run(d, ["--policy", "{policy}"], tmp_path, cli_argv, capsys)
@@ -264,7 +263,7 @@ def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
     assert rc == 0, rc
 
 
-def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path, amtool_accepts):
+def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
     """The exception is structural, not a list: a check that returns before
     reaching a tenant reader was never told anything by one.
 

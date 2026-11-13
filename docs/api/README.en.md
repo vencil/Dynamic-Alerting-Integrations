@@ -144,7 +144,7 @@ Tenants (1):
 
 Resolved thresholds:
   tenant=tenant-a metric=cpu value=95 severity=warning component=container
-  tenant=tenant-a metric=connections value=70 severity=warning component=mysql
+  tenant=tenant-a metric=connection_usage_percent value=70 severity=warning component=mysql
 ```
 
 A test runs this example: it loads the two yaml files above from an empty directory and compares the output (`api_readme_examples_parity_test.go`).

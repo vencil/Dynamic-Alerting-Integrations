@@ -117,16 +117,16 @@ func TestBatchTenants_PatchKeysRefusedUpFront(t *testing.T) {
 	}
 }
 
-// The unset allow-list is the registry's, and the same keys as before.
+// The unset allow-list is the registry's: `batch.unset` plus every retired key.
 func TestValidateBatchEdit_UnsetAllowList(t *testing.T) {
 	t.Parallel()
-	for _, k := range []string{"_routing", "_routing_receiver_type"} {
-		if v := validateBatchEdit(nil, []string{k}, "operations[0]"); len(v) != 0 {
+	for _, k := range []string{"_routing", "_routing_receiver_type", "mysql_connections", "mysql_connections_critical"} {
+		if v := validateBatchEdit(nil, []string{k}, "operations[0]", nil); len(v) != 0 {
 			t.Errorf("unset %s: %+v", k, v)
 		}
 	}
-	v := validateBatchEdit(nil, []string{"_silent_mode"}, "operations[0]")
-	if len(v) != 1 || v[0].Reason != `unset can only remove "_routing", "_routing_receiver_type"; got "_silent_mode"` {
+	v := validateBatchEdit(nil, []string{"_silent_mode"}, "operations[0]", nil)
+	if len(v) != 1 || v[0].Reason != "unset can only remove "+unsetAllowedList(nil)+`; got "_silent_mode"` {
 		t.Errorf("unset _silent_mode: %+v", v)
 	}
 }

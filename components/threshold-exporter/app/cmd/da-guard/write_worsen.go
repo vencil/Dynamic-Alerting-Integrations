@@ -251,10 +251,14 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 			who = "no tenant"
 		}
 		kind, what := worsenUnread, "would be unread"+why+" — no reader reads it"
-		switch b.Kind {
-		case keyverdict.KindValueUnread:
+		switch {
+		case b.Kind == keyverdict.KindUnread && b.Hint != "":
+			// #3829: a retired threshold key — the exporter may still read
+			// it; the registry retired it. Name what replaces it.
+			what = "would be a retired key — " + b.Hint
+		case b.Kind == keyverdict.KindValueUnread:
 			kind, what = worsenValueUnread, "would have a value its reader does not read"+why+" — fix the value"
-		case keyverdict.KindDeadEntry:
+		case b.Kind == keyverdict.KindDeadEntry:
 			kind, what = worsenDeadEntry, "would have a schedule entry /metrics serves at no minute of the day"+why+
 				" — remove it or reorder the windows (the first window that contains a minute serves it)"
 		}

@@ -66,11 +66,11 @@ _SLACK_RD = ("_routing_defaults:\n  receiver:\n    type: slack\n"
              "    api_url: https://hooks.slack.com/services/T/B/x\n")
 # The key `_tenant` writes, declared at the root: an undeclared threshold key
 # fails --validate on the key verdict (#3016), which is not what these test.
-_DECL = "defaults:\n  mysql_connections: 80\n"
+_DECL = "defaults:\n  mysql_connection_usage_percent: 80\n"
 
 
 def _tenant(tid: str, extra: str = "") -> str:
-    return f"tenants:\n  {tid}:\n    mysql_connections: \"70\"\n{extra}"
+    return f"tenants:\n  {tid}:\n    mysql_connection_usage_percent: \"70\"\n{extra}"
 
 
 def _write(root: Path, files: dict[str, str]) -> Path:
@@ -89,7 +89,7 @@ def _gar(*argv: str) -> subprocess.CompletedProcess:
 
 def _issue_tree(tmp_path: Path) -> Path:
     return _write(tmp_path / "conf.d", {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n" + _EMAIL_RD,
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n" + _EMAIL_RD,
         "roota.yaml": _tenant("roota"),
         "team/nestedb.yaml": _tenant("nestedb"),
     })
@@ -410,7 +410,7 @@ def test_nested_platform_tenants_block_is_named_not_read(tmp_path):
 
 def test_validate_config_schema_row_fails_on_a_tree_error(tmp_path):
     d = _write(tmp_path / "conf.d", {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n" + _EMAIL_RD,
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n" + _EMAIL_RD,
         "team/_defaults.yaml": "_routing_enforced:\n  enabled: true\n",
         "team/t-team.yaml": _tenant("t-team"),
     })
@@ -672,7 +672,7 @@ def test_unread_routing_names_where_each_key_belongs(tmp_path):
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": _EMAIL_RD,
         "_profiles.yaml": "profiles:\n  p-scalar: 5\n  p-map:\n    _routing_x: 1\n",
-        "team/_defaults.yaml": ("defaults:\n  mysql_connections: 60\n"
+        "team/_defaults.yaml": ("defaults:\n  mysql_connection_usage_percent: 60\n"
                                 "  _routing_enforced: {enabled: true}\n"
                                 "  _routing_defaults: {group_wait: 30s}\n"),
         "team/t-team.yaml": _tenant("t-team"),
@@ -696,7 +696,7 @@ def test_unread_routing_names_where_each_key_belongs(tmp_path):
 
 
 @pytest.mark.parametrize("files, field", [
-    ({"team/_defaults.yaml": "defaults:\n  mysql_connections: 60\n  _routing:\n"
+    ({"team/_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 60\n  _routing:\n"
                              "    receiver: {type: webhook, url: https://a.example/h}\n"},
      "defaults._routing"),
     ({"_profiles.yaml": "profiles:\n  p1:\n    _routing_profile: p-x\n"},

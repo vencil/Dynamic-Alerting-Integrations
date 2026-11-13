@@ -1341,3 +1341,99 @@ def test_no_da_crdecode_is_an_error_not_a_pyyaml_reading(tmp_path, monkeypatch):
     assert gate.collect_helm_workloads(errors) == []
     assert any("k8s/" in e and "the way kubectl does" in e for e in errors), errors
     assert any("values.yaml" in e and "the way Helm reads it" in e for e in errors), errors
+
+
+# ── #3228: the release gate — one chart, exemptions refused ─────────────────
+# release-tenant-api runs `--chart helm/tenant-api --refuse-exemptions` before
+# `helm push`: a registered exemption keeps the PR gate green while no
+# capable tools tag exists, but it must never let a chart be PUBLISHED whose
+# default install crash-loops. Scoped to one chart so an exemption that
+# belongs to another chart neither blocks this release nor reads as orphaned.
+_TENANT_API_KEYS = (_GENERATOR_KEY, _RECIPE_PREVIEW_KEY)
+
+
+def _argv(monkeypatch, *args: str) -> None:
+    monkeypatch.setattr(sys, "argv", ["check_image_pin_capability.py", *args])
+
+
+def test_refused_exemptions_turn_every_exempted_workload_into_a_violation(live):
+    workloads, _ = live
+    violations, exempted, stale, orphaned = gate.run_check(
+        workloads, gate.EXEMPTIONS, refuse_exemptions=True)
+    assert exempted == []
+    assert stale == [] and orphaned == []
+    assert len(violations) == len(_KNOWN_KEYS), violations
+    for source, entry, tag in _KNOWN_KEYS:
+        hit = [v for v in violations if f"{source} / {entry} @ {tag}" in v]
+        assert len(hit) == 1, (source, entry, tag, violations)
+        assert "refused" in hit[0]
+        assert f"tools/{tag}" in hit[0]
+
+
+def test_without_the_flag_exemptions_still_license(live):
+    workloads, _ = live
+    violations, exempted, _, _ = gate.run_check(workloads, gate.EXEMPTIONS)
+    assert violations == []
+    assert len(exempted) == len(_KNOWN_KEYS)
+
+
+def test_release_gate_on_tenant_api_fails_naming_each_refused_exemption(monkeypatch, capsys):
+    _argv(monkeypatch, "--chart", "helm/tenant-api", "--refuse-exemptions")
+    assert gate.main() == gate.EXIT_VIOLATION
+    out = capsys.readouterr().out
+    for source, entry, tag in _TENANT_API_KEYS:
+        assert f"REFUSED EXEMPTION {source} / {entry} @ {tag}" in out, out
+    # Scoped: the reconciler's exemption is another chart's business — it is
+    # neither refused here nor reported as orphaned.
+    assert "federation-reconciler" not in out
+    assert "ORPHANED" not in out
+    assert "EXEMPT " not in out
+
+
+@pytest.mark.parametrize("dropped", [(_GENERATOR_KEY,), _TENANT_API_KEYS])
+def test_refuse_mode_never_advises_registering_an_exemption(monkeypatch, capsys, dropped):
+    # Workloads whose exemption is dropped become ordinary violations (one
+    # beside a refused exemption, or all of them with none refused). Under
+    # --refuse-exemptions a new exemption would be refused too, so the advice
+    # must not point there.
+    monkeypatch.setattr(gate, "EXEMPTIONS",
+                        {k: v for k, v in gate.EXEMPTIONS.items() if k not in dropped})
+    _argv(monkeypatch, "--chart", "helm/tenant-api", "--refuse-exemptions")
+    assert gate.main() == gate.EXIT_VIOLATION
+    out = capsys.readouterr().out
+    assert ("REFUSED EXEMPTION" in out) == (len(dropped) < len(_TENANT_API_KEYS)), out
+    assert "register the workload in EXEMPTIONS" not in out, out
+    assert "tools/v*" in out
+
+
+def test_chart_scope_alone_still_honours_exemptions(monkeypatch, capsys):
+    _argv(monkeypatch, "--chart", "helm/tenant-api")
+    assert gate.main() == gate.EXIT_OK
+    out = capsys.readouterr().out
+    assert "federation-reconciler" not in out
+    assert out.count("EXEMPT ") == len(_TENANT_API_KEYS)
+
+
+def test_refusing_exemptions_repo_wide_fails_on_all_of_them(monkeypatch, capsys):
+    _argv(monkeypatch, "--refuse-exemptions")
+    assert gate.main() == gate.EXIT_VIOLATION
+    out = capsys.readouterr().out
+    assert out.count("REFUSED EXEMPTION") == len(_KNOWN_KEYS)
+
+
+@pytest.mark.parametrize("chart", ["helm/no-such-chart", "helm/tenant-api/", "tenant-api"])
+def test_an_unknown_chart_is_a_caller_error(monkeypatch, capsys, chart):
+    _argv(monkeypatch, "--chart", chart)
+    assert gate.main() == gate.EXIT_CALLER_ERROR
+    # Named as a bad scope, not as "nothing to check" — a typo'd release
+    # step must say it is the typo.
+    assert "is not a chart directory" in capsys.readouterr().err
+
+
+def test_a_chart_with_nothing_to_check_is_a_caller_error_not_a_pass(monkeypatch, capsys):
+    """⛔ "0 workloads checked, OK" on the one chart a release asked about is
+    the silent pass this gate exists to remove (a chart that stopped pinning
+    da-tools, or a typo'd scope, would publish unchecked)."""
+    _argv(monkeypatch, "--chart", "helm/da-portal", "--refuse-exemptions")
+    assert gate.main() == gate.EXIT_CALLER_ERROR
+    assert "no da-tools" in capsys.readouterr().err

@@ -198,8 +198,8 @@ func startRealGenerator(t *testing.T, repo, policy string) string {
 func TestRealGenerator_PassCommitsFindingRefuses(t *testing.T) {
 	t.Parallel()
 	repo := seedGitTree(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-		"t-a.yaml":       "tenants:\n  t-a:\n    mysql_connections: \"70\"\n",
+		"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+		"t-a.yaml":       "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n",
 	})
 	policy := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(policy, []byte("allowed_domains:\n  - ok.example.com\n"), 0o644); err != nil {
@@ -212,7 +212,7 @@ func TestRealGenerator_PassCommitsFindingRefuses(t *testing.T) {
 
 	// pass: committed.
 	before := head()
-	w := putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n    _routing:\n      receiver:\n"+
+	w := putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"72\"\n    _routing:\n      receiver:\n"+
 		"        type: webhook\n        url: https://ok.example.com/hook\n", "admins", nil)
 	if w.Code != http.StatusOK {
 		t.Fatalf("pass: status %d body %s", w.Code, w.Body.String())
@@ -224,7 +224,7 @@ func TestRealGenerator_PassCommitsFindingRefuses(t *testing.T) {
 	// findings: a webhook host outside the deployment policy's
 	// allowed_domains — a check only the generator makes.
 	before = head()
-	w = putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"73\"\n    _routing:\n      receiver:\n"+
+	w = putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"73\"\n    _routing:\n      receiver:\n"+
 		"        type: webhook\n        url: https://evil.example.org/hook\n", "admins", nil)
 	m := genEnvelope(t, w)
 	if w.Code != http.StatusUnprocessableEntity || m["code"] != string(errcode.GeneratorFindings) || m["findings_compared_with_base"] != true {
@@ -249,7 +249,7 @@ func TestRealGenerator_PassCommitsFindingRefuses(t *testing.T) {
 	}
 
 	// A batch passes as one judgement.
-	resp := runBatch(t, repo, d, `[{"tenant_id":"t-a","patch":{"mysql_connections":"74"}},{"tenant_id":"t-b","patch":{"mysql_connections":"75"}}]`)
+	resp := runBatch(t, repo, d, `[{"tenant_id":"t-a","patch":{"mysql_connection_usage_percent":"74"}},{"tenant_id":"t-b","patch":{"mysql_connection_usage_percent":"75"}}]`)
 	if resp.Status != "completed" {
 		t.Errorf("batch: %+v", resp)
 	}
@@ -262,7 +262,7 @@ func TestRealGenerator_PassCommitsFindingRefuses(t *testing.T) {
 	}
 	d.Writer.SetValidator(generator.NewGate(generator.NewClient(sock), other))
 	before = head()
-	w = putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"76\"\n", "admins", nil)
+	w = putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"76\"\n", "admins", nil)
 	if m := genEnvelope(t, w); w.Code != http.StatusTooManyRequests || m["reason"] != "mismatch" {
 		t.Errorf("policy mismatch: status %d body %s", w.Code, w.Body.String())
 	}
@@ -279,10 +279,10 @@ func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
 	t.Parallel()
 	const slack = "        type: slack\n        api_url: https://hooks.example.com/x\n"
 	repo := seedGitTree(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
 		"_domain_policy.yaml": "domain_policies:\n  finance:\n    tenants: [t-a]\n" +
 			"    constraints:\n      forbidden_receiver_types: [slack]\n",
-		"t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n",
+		"t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"70\"\n",
 	})
 	policy := filepath.Join(t.TempDir(), "policy.yaml")
 	if err := os.WriteFile(policy, []byte("allowed_domains: []\n"), 0o644); err != nil {
@@ -357,7 +357,7 @@ func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
 	}
 	runGit(t, repo, "add", "_routing_profiles.yaml")
 	runGit(t, repo, "commit", "-qm", "a profile writes a credential out")
-	if w := putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n", "admins", nil); w.Code != http.StatusOK {
+	if w := putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"72\"\n", "admins", nil); w.Code != http.StatusOK {
 		t.Errorf("credential in a file the write does not change: status %d body %s; want 200", w.Code, w.Body.String())
 	}
 	// The repo's policy file unreadable: the generator's finding, refusing
@@ -366,7 +366,7 @@ func TestRealGenerator_RoutingAndPolicyAreTheGenerators(t *testing.T) {
 		t.Fatal(err)
 	}
 	runGit(t, repo, "commit", "-qam", "break the policy file")
-	if got := kinds(putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"71\"\n", "admins", nil)); !got["domain_policy_unusable"] {
+	if got := kinds(putTenantAs(t, d, "t-a", "tenants:\n  t-a:\n    mysql_connection_usage_percent: \"71\"\n", "admins", nil)); !got["domain_policy_unusable"] {
 		t.Errorf("unusable policy file: findings %v, want domain_policy_unusable", got)
 	}
 }

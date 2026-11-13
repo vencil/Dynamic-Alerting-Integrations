@@ -58,8 +58,8 @@ PROFILE = "profiles:\n  p1:\n    container_memory: 50\n"
 
 def _bind_profile(d: Path) -> None:
     _write(d / "_profiles.yaml", PROFILE)
-    _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-         '    mysql_connections: "70"\n    _profile: p1\n')
+    _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+         '    mysql_connection_usage_percent: "70"\n    _profile: p1\n')
 
 
 def _tenant_overlay(d: Path) -> None:
@@ -67,8 +67,8 @@ def _tenant_overlay(d: Path) -> None:
 
 
 def _optional_override_in_use(d: Path) -> None:
-    _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-         '    mysql_connections: "70"\n    oracle_process_count: "100"\n')
+    _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+         '    mysql_connection_usage_percent: "70"\n    oracle_process_count: "100"\n')
 
 
 FINANCE = "examples/_routing_profiles.yaml"
@@ -80,8 +80,8 @@ CASES = [
     ("optional_overrides", "optional_overrides", {SERVED}, _optional_override_in_use,
      lambda d: _sub(d / "_defaults.yaml", "  - oracle_process_count", "  - oracle_process_countx")),
     ("dimensions", "dimensions", {SERVED},
-     lambda d: _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-                    '    mysql_connections: "70"\n    container_cpu{version="v2"}: "60"\n'),
+     lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+                    '    mysql_connection_usage_percent: "70"\n    container_cpu{version="v2"}: "60"\n'),
      lambda d: _sub(d / "_defaults.yaml", "  container_cpu: [version]\n", "  container_cpu: [versionx]\n")),
     ("state_filters.severity", "state_filters", {SERVED}, None,
      lambda d: _sub(d / "_defaults.yaml", 'reasons: ["CrashLoopBackOff"]\n    severity: "critical"',

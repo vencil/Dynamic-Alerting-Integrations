@@ -1,9 +1,8 @@
 """#3689：``--validate`` 與 ``--output-alertmanager`` 對「Alertmanager 收不收」
 給同一個結論，且兩條路都不把租戶寫的值印到終端。
 
-先前 ``--validate`` 只問 amtool；PATH 上沒有 amtool 時，它對 ``--output-*``
-（在 amtool 之後還問 da-read）拒收的 receiver 值印 OK、rc 0。量到 94 個
-receiver 值、33 個欄位位置，其中 15 個型別正確、是 Alertmanager 的跨欄位規則
+兩條路曾經問的不是同一個讀者：``--validate`` 對 ``--output-*`` 拒收的
+receiver 值印 OK、rc 0。量到 94 個 receiver 值、33 個欄位位置，其中 15 個型別正確、是 Alertmanager 的跨欄位規則
 （``oauth2`` 沒有 ``client_id``、``tls_config.cert`` 沒有 key……）。
 
 案例**由 schema 推導**，不是手寫清單：``definitions.receiver.oneOf`` 的每一種
@@ -22,11 +21,11 @@ receiver 而沒有給它一份合法的起點，``test_every_receiver_type_has_a
 * 金絲雀值不出現在兩條路的 stdout / stderr——產生器自己逐項列出的 finding
   （``--findings-json`` 裡那一筆的 message）除外：那些訊息顯示非憑證欄位的值、
   遮罩憑證欄位，是 #1560 ⑤-b 的既定規則（``_lib_validation.MASKED_VALUE``），
-  由它自己的測試釘住。Alertmanager 那道閘門（da-read、amtool）的訊息不是
+  由它自己的測試釘住。Alertmanager 那道閘門（da-read）的訊息不是
   finding，一律不得帶值。
 
-amtool 一律不在 PATH 上（``PATH`` 指向 ``os.devnull``，與
-``_grar_findings_cases.run_gar`` 同），量的正是 #3689 的缺口。產生器在行程內跑
+``PATH`` 指向 ``os.devnull``（與 ``_grar_findings_cases.run_gar`` 同）：PATH
+上裝了什麼都不影響結論。產生器在行程內跑
 （數百次子行程太慢）。
 """
 from __future__ import annotations
@@ -178,15 +177,15 @@ def _run(gar, monkeypatch, capsys, conf_d: Path, argv: list[str], findings: Path
                          ids=[c[0] for c in _CASES])
 def test_validate_and_output_agree_and_never_echo_the_value(
         receiver, am_refuses, tmp_path, monkeypatch, capsys):
-    monkeypatch.setenv("PATH", os.devnull)  # amtool: not found
+    monkeypatch.setenv("PATH", os.devnull)  # nothing on PATH decides the verdict
     gar = importlib.import_module("generate_alertmanager_routes")
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
-    (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+    (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                            encoding="utf-8")
     (conf_d / "t1.yaml").write_text(yaml.safe_dump(
         {"tenants": {"t1": {"_routing": {"receiver": receiver},
-                            "mysql_connections": "70"}}}), encoding="utf-8")
+                            "mysql_connection_usage_percent": "70"}}}), encoding="utf-8")
 
     v_rc, v_text, v_doc = _run(gar, monkeypatch, capsys, conf_d, ["--validate"],
                                tmp_path / "v.json")

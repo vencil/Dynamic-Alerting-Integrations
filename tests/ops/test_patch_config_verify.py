@@ -31,9 +31,9 @@ def _signals_reset():
     pc.SIGNALS.reset()
     assert {s: signal.getsignal(s) for s in was} == was
 FAST = ["--poll-interval", "0.001", "--reload-timeout", "0.05"]
-DEFAULTS = "defaults:\n  mysql_connections: 80\n"
-T_A = "tenants:\n  t-a:\n    mysql_connections: '70'\n"
-T_B = "tenants:\n  t-b:\n    mysql_connections: '60'\n"
+DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n"
+T_A = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '70'\n"
+T_B = "tenants:\n  t-b:\n    mysql_connection_usage_percent: '60'\n"
 
 
 def _run(cluster, *argv):
@@ -60,15 +60,15 @@ def _with(extra):
 class TestApplyVerified:
     def test_success_writes_once_and_exits_0(self, capsys):
         c = FakeCluster(_multi())
-        assert _run(c, "t-a", "mysql_connections", "65") == 0
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == 0
         assert len(c.patches) == 1
         assert yaml.safe_load(c.data["t-a.yaml"])["tenants"]["t-a"] == {
-            "mysql_connections": 65}
+            "mysql_connection_usage_percent": 65}
         assert "Verified on 1 exporter pod" in capsys.readouterr().out
 
     def test_every_pod_is_verified(self):
         c = FakeCluster(_multi(), pods=("p0", "p1"))
-        assert _run(c, "t-a", "mysql_connections", "65") == 0
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == 0
         raw = [x[3] for x in c.calls if x[:3] == ["kubectl", "get", "--raw"]]
         assert {r.split("/pods/")[1].split(":")[0] for r in raw} == {"p0", "p1"}
         assert all(":8080/proxy/" in r for r in raw)  # port name → number
@@ -77,7 +77,7 @@ class TestApplyVerified:
         c = FakeCluster(_multi())
         same = {"data": {"t-a.yaml": T_A}}
         with mock.patch("patch_config.build_patch", return_value=same):
-            assert _run(c, "t-a", "mysql_connections", "65") == 0
+            assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == 0
         assert c.patches == []
         assert not any(x[:3] == ["kubectl", "get", "pods"] for x in c.calls)
         assert "No-op" in capsys.readouterr().err
@@ -85,9 +85,9 @@ class TestApplyVerified:
     def test_other_tenant_change_rolls_back_with_1(self, capsys):
         # #1950 列 9：改 t-a 連帶 t-b（exporter 端的連結 `MIRROR`；anchor 共用
         # 區塊自 ADR-036 §2 起在寫入前就被 parse-tree 確認擋下）。
-        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n"
+        old = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '50'\n"
         c = FakeCluster({"config.yaml": old, **MIRROR})
-        assert _run(c, "t-a", "mysql_connections", "60") == pc.EXIT_VERIFY_FAILED
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "60") == pc.EXIT_VERIFY_FAILED
         assert c.data["config.yaml"] == old          # 回到舊位元組
         assert len(c.patches) == 2
         err = capsys.readouterr().err
@@ -100,7 +100,7 @@ class TestApplyVerified:
         c = FakeCluster(_multi(), identity=False, render=_with(
             lambda d: "" if "65" not in d["t-a.yaml"] else
             'da_config_parse_failure_total{file_basename="t-a.yaml"} 1\n'))
-        assert _run(c, "t-a", "mysql_connections", "65") == pc.EXIT_VERIFY_FAILED
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == pc.EXIT_VERIFY_FAILED
         assert c.data["t-a.yaml"] == T_A
 
     def test_rise_on_the_patched_key_fails_even_if_already_failing(self):
@@ -110,7 +110,7 @@ class TestApplyVerified:
             state["n"] += 1
             return f'da_config_parse_failure_total{{file_basename="t-a.yaml"}} {state["n"]}\n'
         c = FakeCluster(_multi(), identity=False, render=_with(extra))
-        assert _run(c, "t-a", "mysql_connections", "65") == pc.EXIT_VERIFY_FAILED
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == pc.EXIT_VERIFY_FAILED
 
     def test_rise_on_an_already_broken_other_file_only_warns(self, capsys):
         state = {"n": 3}
@@ -119,50 +119,50 @@ class TestApplyVerified:
             state["n"] += 1
             return f'da_config_parse_failure_total{{file_basename="broken.yaml"}} {state["n"]}\n'
         c = FakeCluster(_multi(), identity=False, render=_with(extra))
-        assert _run(c, "t-a", "mysql_connections", "65") == 0
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == 0
         assert len(c.patches) == 1
         assert "was already failing before the write" in capsys.readouterr().err
 
     def test_timeout_rolls_back_with_3(self):
         c = FakeCluster(_multi(), reload=lambda n: False)
-        assert _run(c, "t-a", "mysql_connections", "65") == pc.EXIT_RELOAD_TIMEOUT
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == pc.EXIT_RELOAD_TIMEOUT
         assert c.data["t-a.yaml"] == T_A and len(c.patches) == 2
 
     def test_unreachable_before_the_write_writes_nothing(self):
         c = FakeCluster(_multi(), fail_raw=lambda pod, path, n: True)
-        assert _run(c, "t-a", "mysql_connections", "65") == \
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == \
             pc.EXIT_EXPORTER_UNREACHABLE
         assert c.patches == []
 
     def test_no_pod_is_unreachable(self):
         c = FakeCluster(_multi(), no_pods=True)
-        assert _run(c, "t-a", "mysql_connections", "65") == \
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == \
             pc.EXIT_EXPORTER_UNREACHABLE
         assert c.patches == []
 
     def test_unreachable_after_the_write_rolls_back_with_4(self):
         c = FakeCluster(_multi(), fail_raw=lambda pod, path, n: n == 1)
-        assert _run(c, "t-a", "mysql_connections", "65") == \
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == \
             pc.EXIT_EXPORTER_UNREACHABLE
         assert c.data["t-a.yaml"] == T_A and len(c.patches) == 2
 
     def test_rollback_failure_is_5(self, capsys):
-        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n"
+        old = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '50'\n"
         c = FakeCluster({"config.yaml": old, **MIRROR}, fail_patch={1})
-        assert _run(c, "t-a", "mysql_connections", "60") == pc.EXIT_ROLLBACK_FAILED
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "60") == pc.EXIT_ROLLBACK_FAILED
         assert "still holds the new bytes" in capsys.readouterr().err
 
     def test_rollback_of_a_created_key_removes_it(self):
         c = FakeCluster({"_defaults.yaml": DEFAULTS, "t-b.yaml": T_B},
                         reload=lambda n: False)
-        assert _run(c, "t-new", "mysql_connections", "65") == pc.EXIT_RELOAD_TIMEOUT
+        assert _run(c, "t-new", "mysql_connection_usage_percent", "65") == pc.EXIT_RELOAD_TIMEOUT
         assert c.patches[1] == {"data": {"t-new.yaml": None}}
         assert "t-new.yaml" not in c.data
 
     def test_rollback_waits_for_the_pods_that_reloaded(self):
-        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n"
+        old = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '50'\n"
         c = FakeCluster({"config.yaml": old, **MIRROR})
-        _run(c, "t-a", "mysql_connections", "60")
+        _run(c, "t-a", "mysql_connection_usage_percent", "60")
         assert c.gen["exporter-0"] == 2  # patch + rollback both reloaded
         assert render_thresholds(c.loaded["exporter-0"]) == \
             render_thresholds({"config.yaml": old, **MIRROR})
@@ -175,7 +175,7 @@ class TestVerifyPod:
     def _snap(lines):
         return ("t",) + pc.parse_metrics("\n".join(lines))
 
-    def _problems(self, before, after, key="mysql_connections", tenant="t-a"):
+    def _problems(self, before, after, key="mysql_connection_usage_percent", tenant="t-a"):
         return pc.verify_pod("p", self._snap(before), self._snap(after),
                              tenant, key, "t-a.yaml")[0]
 
@@ -269,7 +269,7 @@ class TestExporterAccessDefaults:
         monkeypatch.setattr(pc, "_CM_NAME", pc.CONFIGMAP)
         c = FakeCluster(_multi())
         code = _run(c, "--namespace", "obs", "--configmap", "foo",
-                    "t-a", "mysql_connections", "65")
+                    "t-a", "mysql_connection_usage_percent", "65")
         assert code == 0
         assert c.patches, "the apply path was not exercised"
         namespaces = {cmd[cmd.index("-n") + 1] for cmd in c.calls if "-n" in cmd}
@@ -283,7 +283,7 @@ class TestExporterAccessDefaults:
         monkeypatch.setattr(pc, "_CM_NAME", pc.CONFIGMAP)
         c = FakeCluster(_multi())
         code = _run(c, "--namespace", "obs", "--exporter-namespace", "pods-ns",
-                    "t-a", "mysql_connections", "65")
+                    "t-a", "mysql_connection_usage_percent", "65")
         assert code == 0
         cm_ns = {cmd[cmd.index("-n") + 1] for cmd in c.calls
                  if "configmap" in cmd and "-n" in cmd}
@@ -302,14 +302,14 @@ def test_diff_does_not_touch_the_exporter():
     c = FakeCluster(_multi())
     with mock.patch("patch_config.run_cmd", side_effect=c), \
             mock.patch("sys.argv", ["patch_config.py", "--diff", "--json",
-                                    "t-a", "mysql_connections", "65"]):
+                                    "t-a", "mysql_connection_usage_percent", "65"]):
         run_main()
     assert [x[:3] for x in c.calls] == [["kubectl", "get", "configmap"]]
 
 
 
 
-SILENT = "tenants:\n  t-a:\n    mysql_connections: '70'\n    _silent_mode: warning\n"
+SILENT = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '70'\n    _silent_mode: warning\n"
 
 
 class TestUnderscoreKeysAndJson:
@@ -324,7 +324,7 @@ class TestUnderscoreKeysAndJson:
         assert 'user_silent_mode{target_severity="warning",tenant="t-a"}: 1 -> (absent)' in err
 
     def test_underscore_key_that_moves_another_tenant_rolls_back(self):
-        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n    _silent_mode: warning\n"
+        old = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '50'\n    _silent_mode: warning\n"
         c = FakeCluster({"config.yaml": old, **MIRROR})
         assert _run(c, "t-a", "_silent_mode", "disable") == pc.EXIT_VERIFY_FAILED
         assert c.data["config.yaml"] == old and len(c.patches) == 2
@@ -341,9 +341,9 @@ class TestUnderscoreKeysAndJson:
             "before": "1", "after": None}]
 
     def test_json_rollback_envelope(self, capsys):
-        old = "tenants:\n  t-a:\n    mysql_connections: '50'\n"
+        old = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '50'\n"
         c = FakeCluster({"config.yaml": old, **MIRROR})
-        assert _run(c, "--json", "t-a", "mysql_connections", "60") == 1
+        assert _run(c, "--json", "t-a", "mysql_connection_usage_percent", "60") == 1
         doc = json.loads(capsys.readouterr().out)
         assert (doc["status"], doc["exit_code"], doc["written"],
                 doc["rolled_back"]) == ("verify-failed-rolled-back", 1, False, True)
@@ -359,7 +359,7 @@ class TestUnderscoreKeysAndJson:
     ], ids=["unreachable", "timeout", "rollback-failed"])
     def test_json_every_failure_is_one_envelope(self, capsys, cluster, status,
                                                 code, written):
-        key = "m" if status == "rollback-failed" else "mysql_connections"
+        key = "m" if status == "rollback-failed" else "mysql_connection_usage_percent"
         assert _run(cluster(), "--json", "t-a", key, "6") == code
         doc = json.loads(capsys.readouterr().out)
         assert (doc["status"], doc["exit_code"], doc["written"]) == (
@@ -368,7 +368,7 @@ class TestUnderscoreKeysAndJson:
 
     def test_json_noop_envelope(self, capsys):
         c = FakeCluster(_multi())
-        assert _run(c, "--json", "t-a", "mysql_connections", "70") == 0
+        assert _run(c, "--json", "t-a", "mysql_connection_usage_percent", "70") == 0
         doc = json.loads(capsys.readouterr().out)
         assert (doc["status"], doc["changed"], doc["pods"]) == ("no-op", False, {})
 
@@ -409,7 +409,7 @@ class TestAfterTheWriteAborts:
             if cmd[:3] == ["kubectl", "get", "--raw"] and c.patches:
                 pc.SIGNALS.pending = signal.SIGTERM  # what the handler records
             return orig(cmd)
-        code, doc = self._json(c, side, "t-a", "mysql_connections", "65",
+        code, doc = self._json(c, side, "t-a", "mysql_connection_usage_percent", "65",
                                capsys=capsys)
         assert code == pc.EXIT_ABORTED_ROLLED_BACK
         assert (doc["status"], doc["exit_code"], doc["rolled_back"],
@@ -426,7 +426,7 @@ class TestAfterTheWriteAborts:
             return orig(cmd)
         with mock.patch("patch_config.run_cmd", side_effect=side), \
                 mock.patch("sys.argv", ["patch_config.py", "t-a",
-                                        "mysql_connections", "65", *FAST]):
+                                        "mysql_connection_usage_percent", "65", *FAST]):
             with pytest.raises(KeyboardInterrupt):
                 run_main()
         assert c.patches == []
@@ -436,21 +436,21 @@ class TestAfterTheWriteAborts:
             "p-pending": ("Pending", None), "p-failed": ("Failed", None),
             "p-gone": ("Running", "2026-01-01T00:00:00Z")},
             fail_raw=lambda pod, path, n: pod != "exporter-0")
-        assert _run(c, "t-a", "mysql_connections", "65") == 0
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == 0
         raw = {x[3].split("/pods/")[1].split(":")[0]
                for x in c.calls if x[:3] == ["kubectl", "get", "--raw"]}
         assert raw == {"exporter-0"}
 
     def test_v2_no_running_pod_is_unreachable(self):
         c = FakeCluster(_multi(), pods=(), not_serving={"p": ("Pending", None)})
-        assert _run(c, "t-a", "mysql_connections", "65") == \
+        assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == \
             pc.EXIT_EXPORTER_UNREACHABLE
         assert c.patches == []
 
     def test_v3_unexpected_error_after_the_write_is_6_not_2(self, capsys):
         c = FakeCluster(_multi())
         with mock.patch("patch_config.verify_pod", side_effect=RuntimeError("bug")):
-            code = _run(c, "--json", "t-a", "mysql_connections", "65")
+            code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         assert code == pc.EXIT_ABORTED_ROLLED_BACK
         assert (doc["status"], doc["rolled_back"]) == ("error-rolled-back", True)
@@ -459,12 +459,12 @@ class TestAfterTheWriteAborts:
     def test_v3_unexpected_error_with_failed_rollback_is_5(self):
         c = FakeCluster(_multi(), fail_patch={1})
         with mock.patch("patch_config.verify_pod", side_effect=RuntimeError("bug")):
-            assert _run(c, "t-a", "mysql_connections", "65") == \
+            assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == \
                 pc.EXIT_ROLLBACK_FAILED
 
     def test_v4_failed_patch_that_landed_is_rolled_back(self, capsys):
         c = FakeCluster(_multi(), fail_patch={0}, patch_lands=True)
-        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["rolled_back"]) == (
             6, "error-rolled-back", True)
@@ -472,7 +472,7 @@ class TestAfterTheWriteAborts:
 
     def test_v4_failed_patch_that_did_not_land_is_2(self, capsys):
         c = FakeCluster(_multi(), fail_patch={0})
-        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         out = capsys.readouterr()
         # #3617: a caller error prints no document; stderr names the cause.
         assert (code, out.out) == (2, "")
@@ -482,7 +482,7 @@ class TestAfterTheWriteAborts:
     def test_v4_failed_patch_and_unreadable_configmap_is_state_unknown(self, capsys):
         c = FakeCluster(_multi(), fail_patch={0}, patch_lands=True,
                         fail_get_cm_after=1)
-        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["written"]) == (
             pc.EXIT_STATE_UNKNOWN, "state-unknown", None)
@@ -502,7 +502,7 @@ class TestRollbackAndEnvelopeEdges:
                 raise OSError(28, "No space left on device")
             return real(*a, **k)
         with mock.patch("patch_config.tempfile.NamedTemporaryFile", side_effect=ntf):
-            code = _run(c, "--json", "t-a", "mysql_connections", "65")
+            code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["written"]) == (
             pc.EXIT_ROLLBACK_FAILED, "rollback-failed", True)
@@ -512,7 +512,7 @@ class TestRollbackAndEnvelopeEdges:
         """#3617: a caller error prints no document (it was an envelope with
         `written: false`); rc 2 and the ConfigMap say nothing was written."""
         c = FakeCluster(_multi(), fail_patch={0})
-        assert _run(c, "--json", "t-a", "mysql_connections", "65") == 2
+        assert _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65") == 2
         out = capsys.readouterr()
         assert out.out == ""
         assert "ERROR: KubectlError: patch refused" in out.err, out.err
@@ -525,12 +525,12 @@ class TestRollbackAndEnvelopeEdges:
         def side(cmd):
             if cmd[:2] == ["kubectl", "patch"] and not c.patches:
                 orig(cmd)
-                c.data["t-a.yaml"] = "tenants:\n  t-a:\n    mysql_connections: '1'\n"
+                c.data["t-a.yaml"] = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '1'\n"
                 raise pc.KubectlError("timed out")
             return orig(cmd)
         with mock.patch("patch_config.run_cmd", side_effect=side), \
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
-                                        "mysql_connections", "65", *FAST]):
+                                        "mysql_connection_usage_percent", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
                 run_main()
         doc = json.loads(capsys.readouterr().out)
@@ -552,7 +552,7 @@ class TestTheGuardDecidesFromTheConfigMap:
             return orig(cmd)
         with mock.patch("patch_config.run_cmd", side_effect=side), \
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
-                                        "mysql_connections", "65", *FAST]):
+                                        "mysql_connection_usage_percent", "65", *FAST]):
             try:
                 run_main()
                 code = 0
@@ -578,7 +578,7 @@ class TestTheGuardDecidesFromTheConfigMap:
                 return base + 'da_config_parse_failure_total{file_basename="x"} 1,0\n'
             return base
         c = FakeCluster(_multi(), render=render)
-        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["rolled_back"]) == (
             1, "verify-failed-rolled-back", True)
@@ -595,7 +595,7 @@ class TestTheGuardDecidesFromTheConfigMap:
                 raise PermissionError(13, "Permission denied", path)
         c = FakeCluster(_multi())
         with mock.patch("patch_config.os.remove", side_effect=rm):
-            code = _run(c, "--json", "t-a", "mysql_connections", "65")
+            code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["written"]) == (0, "applied", True)
 
@@ -617,7 +617,7 @@ class TestTheGuardDecidesFromTheConfigMap:
         with mock.patch("patch_config._say", side_effect=say):
             with mock.patch("patch_config.run_cmd", side_effect=side), \
                     mock.patch("sys.argv", ["patch_config.py", "t-a",
-                                            "mysql_connections", "65", *FAST]):
+                                            "mysql_connection_usage_percent", "65", *FAST]):
                 with pytest.raises(SystemExit):
                     run_main()
         assert events == ["patch", "patch", "say"]
@@ -635,7 +635,7 @@ class TestTheGuardDecidesFromTheConfigMap:
             def fileno(self):
                 raise OSError("no fd")
         with mock.patch("sys.stderr", Broken()):
-            code = _run(c, "--json", "t-a", "mysql_connections", "65")
+            code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         assert code == pc.EXIT_RELOAD_TIMEOUT
         assert c.data["t-a.yaml"] == T_A and len(c.patches) == 2
 
@@ -650,7 +650,7 @@ class TestTheGuardDecidesFromTheConfigMap:
             pass
         before = signal.signal(signal.SIGTERM, mine)
         try:
-            assert _run(c, "t-a", "mysql_connections", "65") == 0
+            assert _run(c, "t-a", "mysql_connection_usage_percent", "65") == 0
             assert signal.getsignal(signal.SIGTERM) == signal.SIG_IGN
             pc.SIGNALS.reset()
             assert signal.getsignal(signal.SIGTERM) is mine
@@ -671,7 +671,7 @@ class _Raises:
         raise self.exc
 
 
-_ANCHOR_CM = {"config.yaml": "tenants:\n  t-a:\n    mysql_connections: '50'\n", **MIRROR}
+_ANCHOR_CM = {"config.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: '50'\n", **MIRROR}
 # (cluster, value, expected rc, ConfigMap holds the new bytes at the end)
 _OUTCOMES = {
     "ok": (lambda: FakeCluster(_multi()), "65", 0, True),
@@ -710,7 +710,7 @@ def test_w1_output_streams_never_change_the_outcome(outcome, as_json, streams):
     key = "config.yaml" if outcome == "verify-fail" else "t-a.yaml"
     old = c.data[key]
     argv = ["patch_config.py", *(["--json"] if as_json else []), "t-a",
-            "mysql_connections", value, *FAST]
+            "mysql_connection_usage_percent", value, *FAST]
     patches = [mock.patch("patch_config.run_cmd", side_effect=c),
                mock.patch("sys.argv", argv)]
     patches += [mock.patch(f"sys.{name}", stream)
@@ -746,14 +746,14 @@ class TestEnvelopeFieldsFollowTheConfigMap:
     ], ids=["rollback-fails-reread-fails", "write-fails-landed-reread-fails"])
     def test_m21_state_unknown_says_written_null(self, capsys, kw):
         c = FakeCluster(_multi(), **kw)
-        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["written"]) == (7, "state-unknown", None)
 
     def test_m4b_rollback_that_raised_but_landed_is_rolled_back(self, capsys):
         c = FakeCluster(_multi(), reload=lambda n: False, fail_patch={1},
                         patch_lands=True)
-        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["written"], doc["rolled_back"]) == (
             pc.EXIT_RELOAD_TIMEOUT, "timeout", False, True)
@@ -764,11 +764,11 @@ def test_m28_a_failed_write_that_landed_and_a_failed_rollback_says_written(capsy
     """V4／M28：寫入呼叫失敗但其實已套用、回滾又沒套用 ⇒ 5，envelope 的
     written 是 true（由觀察到的 ConfigMap 決定，不是由走到哪一段決定）。"""
     c = FakeCluster(_multi(), fail_patch={0, 1}, patch_lands={0})
-    code = _run(c, "--json", "t-a", "mysql_connections", "65")
+    code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
     doc = json.loads(capsys.readouterr().out)
     assert (code, doc["status"], doc["written"], doc["rolled_back"]) == (
         pc.EXIT_ROLLBACK_FAILED, "rollback-failed", True, False)
-    assert "mysql_connections: 65" in c.data["t-a.yaml"]
+    assert "mysql_connection_usage_percent: 65" in c.data["t-a.yaml"]
 
 
 class TestRound6Pins:
@@ -789,7 +789,7 @@ class TestRound6Pins:
         c = FakeCluster(dict(_ANCHOR_CM))
         old = c.data["config.yaml"]
         with mock.patch("patch_config._conclude", side_effect=RuntimeError("bug")):
-            code = self._main(c, "t-a", "mysql_connections", "60")
+            code = self._main(c, "t-a", "mysql_connection_usage_percent", "60")
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["written"]) == (6, "error-rolled-back", False)
         assert c.data["config.yaml"] == old
@@ -808,7 +808,7 @@ class TestRound6Pins:
             if cmd[:3] == ["kubectl", "get", "configmap"] and c.patches:
                 return "<html>502 Bad Gateway</html>"
             return orig(cmd)
-        code = self._main(c, "t-a", "mysql_connections", "60", side=side)
+        code = self._main(c, "t-a", "mysql_connection_usage_percent", "60", side=side)
         doc = json.loads(capsys.readouterr().out)
         assert (code, doc["status"], doc["written"]) == (7, "state-unknown", None)
 
@@ -817,7 +817,7 @@ class TestRound6Pins:
         c = FakeCluster(_multi())
         with mock.patch("patch_config.detect_mode", side_effect=RuntimeError("x")), \
                 mock.patch("patch_config._conclude", side_effect=RuntimeError("bug")):
-            code = self._main(c, "t-a", "mysql_connections", "65")
+            code = self._main(c, "t-a", "mysql_connection_usage_percent", "65")
         assert code == 2 and c.patches == []
         out = capsys.readouterr()
         assert out.out == ""  # #3617: a caller error prints no document
@@ -831,15 +831,15 @@ class TestRound6Pins:
     def test_m16_failing_to_print_success_keeps_a_verified_write(self, capsys):
         c = FakeCluster(_multi())
         with mock.patch("patch_config._say", side_effect=self._fail_on_success):
-            code = self._main(c, "t-a", "mysql_connections", "65")
-        assert code == 0 and len(c.patches) == 1 and "mysql_connections: 65" in c.data["t-a.yaml"]
+            code = self._main(c, "t-a", "mysql_connection_usage_percent", "65")
+        assert code == 0 and len(c.patches) == 1 and "mysql_connection_usage_percent: 65" in c.data["t-a.yaml"]
 
     def test_m17_the_fallback_keeps_a_verified_write(self, capsys):
         c = FakeCluster(_multi())
         with mock.patch("patch_config._say", side_effect=self._fail_on_success), \
                 mock.patch("patch_config._conclude", side_effect=RuntimeError("bug")):
-            code = self._main(c, "t-a", "mysql_connections", "65")
-        assert code == 0 and len(c.patches) == 1 and "mysql_connections: 65" in c.data["t-a.yaml"]
+            code = self._main(c, "t-a", "mysql_connection_usage_percent", "65")
+        assert code == 0 and len(c.patches) == 1 and "mysql_connection_usage_percent: 65" in c.data["t-a.yaml"]
 
 
 @pytest.mark.parametrize("doc", ["docs/cli-reference.md", "docs/cli-reference.en.md"])
@@ -860,11 +860,11 @@ class TestCompareAndSwap:
     """寫入與回滾都帶 metadata.resourceVersion 前置條件（#2063 審查 HIGH）：
     另一個寫者的變更不會被本工具的回滾蓋掉。"""
 
-    T_B2 = "tenants:\n  t-b:\n    mysql_connections: '55'\n"
+    T_B2 = "tenants:\n  t-b:\n    mysql_connection_usage_percent: '55'\n"
 
     @staticmethod
     def _json_run(c, value="65", capsys=None):
-        code = _run(c, "--json", "t-a", "mysql_connections", value)
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", value)
         return code, json.loads(capsys.readouterr().out)
 
     @staticmethod
@@ -873,12 +873,12 @@ class TestCompareAndSwap:
         the counter an older exporter is judged by, and — `_rejects` — the
         parse_failed an exporter with an identity is judged by."""
         extra = ('da_config_parse_failure_total{file_basename="t-a.yaml"} 1\n'
-                 if "mysql_connections: 65" in data.get("t-a.yaml", "") else "")
+                 if "mysql_connection_usage_percent: 65" in data.get("t-a.yaml", "") else "")
         return render_thresholds(data) + extra
 
     @staticmethod
     def _rejects(key, text):
-        return key == "t-a.yaml" and "mysql_connections: 65" in text
+        return key == "t-a.yaml" and "mysql_connection_usage_percent: 65" in text
 
     def test_every_write_carries_the_version_it_is_based_on(self, capsys):
         c = FakeCluster(_multi())
@@ -888,7 +888,7 @@ class TestCompareAndSwap:
     def test_the_write_conflicts_when_the_configmap_changed_since_read(self, capsys):
         c = FakeCluster(_multi(), concurrent=lambda n, cl: n == 0 and
                         cl.other_writer("t-b.yaml", self.T_B2))
-        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         out = capsys.readouterr()
         # #3617: a caller error prints no document; stderr names the cause.
         assert (code, out.out) == (2, "")
@@ -909,7 +909,7 @@ class TestCompareAndSwap:
         assert c.preconditions == ["1", "2", "3"]  # write, conflict, retry
 
     def test_a_rollback_never_overwrites_another_writers_value(self, capsys):
-        theirs = "tenants:\n  t-a:\n    mysql_connections: '99'\n"
+        theirs = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '99'\n"
         c = FakeCluster(_multi(), render=self._verify_fails,
                         rejects=self._rejects,
                         concurrent=lambda n, cl: n == 1 and
@@ -933,7 +933,7 @@ class TestCompareAndSwap:
             return orig(cmd)
         with mock.patch("patch_config.run_cmd", side_effect=side), \
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
-                                        "mysql_connections", "65", *FAST]):
+                                        "mysql_connection_usage_percent", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
                 run_main()
         doc = json.loads(capsys.readouterr().out)
@@ -944,7 +944,7 @@ class TestCompareAndSwap:
     def test_another_value_for_our_key_during_verification_is_not_success(self, capsys):
         """CodeRabbit／#2063 項 2：寫入後、驗收完成前，另一個寫者把同一個 key
         設成別的值——就算看到 reload 也不得回報成功，也不得回滾蓋掉對方。"""
-        theirs = "tenants:\n  t-a:\n    mysql_connections: '99'\n"
+        theirs = "tenants:\n  t-a:\n    mysql_connection_usage_percent: '99'\n"
         c = FakeCluster(_multi())
         orig = c.__call__
 
@@ -955,7 +955,7 @@ class TestCompareAndSwap:
             return orig(cmd)
         with mock.patch("patch_config.run_cmd", side_effect=side), \
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
-                                        "mysql_connections", "65", *FAST]):
+                                        "mysql_connection_usage_percent", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
                 run_main()
         doc = json.loads(capsys.readouterr().out)
@@ -974,7 +974,7 @@ class TestCompareAndSwap:
             return out
         with mock.patch("patch_config.run_cmd", side_effect=side), \
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
-                                        "mysql_connections", "65", *FAST]):
+                                        "mysql_connection_usage_percent", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
                 run_main()
         out = capsys.readouterr()
@@ -997,7 +997,7 @@ class TestRollbackAccounting:
         old = c.data["config.yaml"]
         with mock.patch.object(pc._Signals, "cause",
                                side_effect=RuntimeError("bug after the rollback")):
-            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+            code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "60")
         doc = json.loads(capsys.readouterr().out)
         assert c.data["config.yaml"] == old
         assert len(c.patches) == 2  # the write and ONE rollback
@@ -1011,7 +1011,7 @@ class TestRollbackAccounting:
         old = c.data["config.yaml"]
         with mock.patch.object(pc._Signals, "cause",
                                side_effect=RuntimeError("bug after the rollback")):
-            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+            code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "60")
         doc = json.loads(capsys.readouterr().out)
         assert c.data["config.yaml"] == old
         assert len(c.patches) == 2  # the write and the one rollback that landed
@@ -1024,7 +1024,7 @@ class TestRollbackAccounting:
         old = c.data["config.yaml"]
         with mock.patch.object(pc._Signals, "cause",
                                side_effect=RuntimeError("bug after the rollback")):
-            code = _run(c, "--json", "t-a", "mysql_connections", "60")
+            code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "60")
         doc = json.loads(capsys.readouterr().out)
         assert c.data["config.yaml"] == old
         assert len(c.patches) == 3  # the write, the failed rollback, the resend
@@ -1036,7 +1036,7 @@ class TestRollbackAccounting:
     # row: (where _conclude fails, FakeCluster kwargs, what happens to the key
     #       as it fails, the fallback's first read fails,
     #       -> status, exit code, written, rolled_back, patches sent)
-    _THEIRS = "tenants:\n  t-a: {mysql_connections: '99'}\n"
+    _THEIRS = "tenants:\n  t-a: {mysql_connection_usage_percent: '99'}\n"
     FALLBACK_ROWS = {
         "E1-rollback-sent-first-read-unreadable": (
             "after-rollback", {}, None, True,
@@ -1093,7 +1093,7 @@ class TestRollbackAccounting:
                   else mock.patch("patch_config._conclude", side_effect=fail))
         with target, mock.patch("patch_config.run_cmd", side_effect=side), \
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
-                                        "mysql_connections", "60", *FAST]):
+                                        "mysql_connection_usage_percent", "60", *FAST]):
             try:
                 run_main()
                 code = 0
@@ -1126,12 +1126,12 @@ class TestRollbackAccounting:
         c = FakeCluster(_multi(), render=TestCompareAndSwap._verify_fails,
                         rejects=TestCompareAndSwap._rejects,
                         concurrent=other_key_keeps_changing)
-        code = _run(c, "--json", "t-a", "mysql_connections", "65")
+        code = _run(c, "--json", "t-a", "mysql_connection_usage_percent", "65")
         doc = json.loads(capsys.readouterr().out)
         rollbacks = [p for p in c.patches[1:] if "t-a.yaml" in p["data"]]
         assert len(rollbacks) == pc.ROLLBACK_CONFLICT_ATTEMPTS
         assert len(c.patches) == 1 + pc.ROLLBACK_CONFLICT_ATTEMPTS
-        assert "mysql_connections: 65" in c.data["t-a.yaml"]  # still ours: nothing overwrote it
+        assert "mysql_connection_usage_percent: 65" in c.data["t-a.yaml"]  # still ours: nothing overwrote it
         assert (code, doc["status"], doc["written"]) == (
             pc.EXIT_ROLLBACK_FAILED, "rollback-failed", True)
 
@@ -1163,7 +1163,7 @@ def test_a_da_guard_failing_before_the_write_writes_nothing(tenant, answered, ca
     c = FakeCluster(_multi())
     before = dict(c.data)
     with mock.patch.object(_lib_parse_tree, "classify_names", flaky):
-        code = _run(c, tenant, "mysql_connections", "65")
+        code = _run(c, tenant, "mysql_connection_usage_percent", "65")
     assert code == 2
     assert c.patches == [] and c.data == before, "written before da-guard failed"
     assert len(calls) == answered + 1

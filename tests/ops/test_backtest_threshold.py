@@ -198,7 +198,7 @@ class TestCountThresholdBreaches:
         assert bt.count_threshold_breaches([], 70) == 0
 
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n"
 
 
 def _confd(root, files):
@@ -221,37 +221,37 @@ class TestExtractChangesFromDirs:
     def test_detect_changes(self, tmp_path):
         """應偵測到閾值變更，metric 是門檻 key，不是 `tenants`。"""
         cur = _confd(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS,
-                                        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n"})
+                                        "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 50\n"})
         base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS,
-                                          "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 70\n"})
+                                          "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 70\n"})
         changes = bt.extract_changes_from_dirs(str(cur), str(base))
         # #2750：每筆帶 served-values 給的 /metrics series（矩陣測試逐格比對）。
-        assert [s.metric_key for s in changes[0].pop("series")] == ["mysql_connections"]
-        assert changes == [{"tenant": "db-a", "metric": "mysql_connections",
-                            "old_value": "70", "new_value": "50", "keys": ["mysql_connections"]}]
+        assert [s.metric_key for s in changes[0].pop("series")] == ["mysql_connection_usage_percent"]
+        assert changes == [{"tenant": "db-a", "metric": "mysql_connection_usage_percent",
+                            "old_value": "70", "new_value": "50", "keys": ["mysql_connection_usage_percent"]}]
 
     def test_skip_underscore_keys(self, tmp_path):
         """_ 前綴的 key 不是門檻，改了不算門檻變更。"""
         cur = _confd(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS,
                                         "db-a.yaml": "tenants:\n  db-a:\n    _silent_mode: warning\n"
-                                                     "    mysql_connections: 50\n"})
+                                                     "    mysql_connection_usage_percent: 50\n"})
         base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS,
-                                          "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n"})
+                                          "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 50\n"})
         assert bt.extract_changes_from_dirs(str(cur), str(base)) == []
 
     def test_defaults_file_change_is_a_change(self, tmp_path):
         """`_defaults.yaml` 改了，沒覆寫該 key 的租戶送出的值就變了（#2119；以前略過 `_` 檔）。"""
         tenant = {"db-a.yaml": "tenants:\n  db-a: {}\n"}
-        cur = _confd(tmp_path / "cur", {"_defaults.yaml": "defaults:\n  mysql_connections: 90\n", **tenant})
+        cur = _confd(tmp_path / "cur", {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 90\n", **tenant})
         base = _confd(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, **tenant})
         changes = bt.extract_changes_from_dirs(str(cur), str(base))
         assert [{k: v for k, v in c.items() if k != "series"} for c in changes] == [
-            {"tenant": "db-a", "metric": "mysql_connections", "old_value": "80", "new_value": "90",
-             "keys": ["mysql_connections"]}]
+            {"tenant": "db-a", "metric": "mysql_connection_usage_percent", "old_value": "80", "new_value": "90",
+             "keys": ["mysql_connection_usage_percent"]}]
 
     def test_no_changes(self, tmp_path):
         """相同配置不應有變更。"""
-        files = {"_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: 50\n"}
+        files = {"_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: 50\n"}
         cur, base = _confd(tmp_path / "cur", files), _confd(tmp_path / "base", files)
         assert bt.extract_changes_from_dirs(str(cur), str(base)) == []
 
@@ -683,7 +683,7 @@ class TestJsonEnvelope:
         conf_d = tmp_path / "conf.d"
         conf_d.mkdir()
         (conf_d / "tenant-one.yaml").write_text(
-            "tenants:\n  tenant-one:\n    mysql_connections: 100\n", encoding="utf-8")
+            "tenants:\n  tenant-one:\n    mysql_connection_usage_percent: 100\n", encoding="utf-8")
 
         # 同一個目錄同時當 current 與 baseline ⇒ 必然零變更
         cli_argv("backtest_threshold",
@@ -776,7 +776,7 @@ class TestPrometheusEnvFallback:
         monkeypatch.setattr(bt, "prometheus_available", fake_available)
         # #3059: a change source is required before the Prometheus check, so
         # the bare argv these rows used would exit 2 without asking.
-        cli_argv(*argv, "--tenant", "t", "--metric", "mysql_connections", "--new-value", "1")
+        cli_argv(*argv, "--tenant", "t", "--metric", "mysql_connection_usage_percent", "--new-value", "1")
         with pytest.raises(SystemExit) as ei:
             _main_exit()
         assert ei.value.code == 0
@@ -841,11 +841,11 @@ class TestConfdSpellingParityWithTheExporter:
         cur, base = tmp_path / "cur", tmp_path / "base"
         for where, value in ((cur, 50), (base, 70)):
             where.mkdir()
-            (where / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+            (where / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                                   encoding="utf-8")
             for name, tenant in (("db-a.yaml", "db-a"), ("db-b.yml", "db-b")):
                 (where / name).write_text(
-                    f"tenants:\n  {tenant}:\n    mysql_connections: {value}\n", encoding="utf-8")
+                    f"tenants:\n  {tenant}:\n    mysql_connection_usage_percent: {value}\n", encoding="utf-8")
 
         tenants = {c["tenant"] for c in bt.extract_changes_from_dirs(str(cur), str(base))}
         assert tenants == {"db-a", "db-b"}, (
@@ -858,13 +858,13 @@ class TestConfdSpellingParityWithTheExporter:
         cur, base = tmp_path / "cur", tmp_path / "base"
         for where, value in ((cur, 50), (base, 70)):
             where.mkdir()
-            (where / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+            (where / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                                   encoding="utf-8")
             # CONTROL row proves the fixture can produce a change at all.
             for name, tenant in (("db-a.yaml", "db-a"), ("db-c.json", "db-c"),
                                  ("db-d.yang", "db-d"), ("db-e.txt", "db-e")):
                 (where / name).write_text(
-                    f"tenants:\n  {tenant}:\n    mysql_connections: {value}\n", encoding="utf-8")
+                    f"tenants:\n  {tenant}:\n    mysql_connection_usage_percent: {value}\n", encoding="utf-8")
 
         tenants = {c["tenant"] for c in bt.extract_changes_from_dirs(str(cur), str(base))}
         assert tenants == {"db-a"}
@@ -878,7 +878,7 @@ class TestConfdSpellingParityWithTheExporter:
         a recipe tenant in a `.yml` carrier is a real tenant (#1603); one in a
         `.txt` file is none the exporter loads."""
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
-        files = {name: _tenant_file(t, "    mysql_connections: 70\n")
+        files = {name: _tenant_file(t, "    mysql_connection_usage_percent: 70\n")
                  for name, t in (("acme.yaml", "acme"), ("beta.yml", "beta"),
                                  ("ghost.txt", "ghost"))}
         cur, base = _dirs(tmp_path, {**_D, **files},
@@ -941,13 +941,13 @@ class TestAlertComparison:
         assert r["new_breach_count"] == 1
 
     def test_upper_bound_key_unchanged(self, monkeypatch):
-        r, _ = self._run(monkeypatch, "mysql_connections", [60, 80, 90], "70", "85")
+        r, _ = self._run(monkeypatch, "mysql_connection_usage_percent", [60, 80, 90], "70", "85")
         assert (r["old_breach_count"], r["new_breach_count"]) == (2, 1)
 
     # ── 查詢（#3002）──
     @pytest.mark.parametrize("metric,query", [
-        # 告警比的是 threads_connected，不是 `mysql_connections` 這個 key 名。
-        ("mysql_connections", 'tenant:mysql_threads_connected:max{tenant="t-x"}'),
+        # 告警比的是 threads_connected，不是 `mysql_connection_usage_percent` 這個 key 名。
+        ("mysql_connection_usage_percent", 'tenant:mysql_connection_usage:percent{tenant="t-x"}'),
         # 比的是使用率 ratio，不是連線數。
         ("pg_connections", 'tenant:pg_connection_usage:ratio{tenant="t-x"}'),
         # 退役拼法（`--tenant` 給的是寫法）先過 alias 表。
@@ -965,13 +965,13 @@ class TestAlertComparison:
     ])
     def test_no_data_names_the_one_query(self, monkeypatch, vals, message):
         """只問一次：查不到或全 NaN 都是 no_data，`query` 指出問的是什麼。"""
-        r, asked = self._run(monkeypatch, "mysql_connections", vals, "70", "85")
+        r, asked = self._run(monkeypatch, "mysql_connection_usage_percent", vals, "70", "85")
         assert (r["status"], r["message"]) == ("no_data", message)
-        assert asked == [r["query"]] == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        assert asked == [r["query"]] == ['tenant:mysql_connection_usage:percent{tenant="t-x"}']
 
     @pytest.mark.parametrize("old,new", [("70", "85"), ("70", None), (None, "70")])
     def test_every_analyzed_result_carries_its_query(self, monkeypatch, old, new):
-        r, asked = self._run(monkeypatch, "mysql_connections", [60, 80, 90], old, new)
+        r, asked = self._run(monkeypatch, "mysql_connection_usage_percent", [60, 80, 90], old, new)
         assert r["status"] == "analyzed" and r["query"] == asked[0]
 
     def test_dimensioned_key_resolves_to_its_base(self):
@@ -1033,10 +1033,10 @@ class TestAlertComparison:
         assert r["backtest"].startswith("skipped: rows compared differently")
 
     def test_rows_compared_alike_are_backtested_once(self, monkeypatch):
-        """mysql_connections 與其 _critical 比同一條 series、同方向：照常回測。"""
-        change = self._served("mysql_connections", ("mysql_connections", "warning", False),
-                              ("mysql_connections", "critical", False))
-        assert bt.alert_comparison(change) == ("tenant:mysql_threads_connected:max", "above", None)
+        """mysql_connection_usage_percent 與其 _critical 比同一條 series、同方向：照常回測。"""
+        change = self._served("mysql_connection_usage_percent", ("mysql_connection_usage_percent", "warning", False),
+                              ("mysql_connection_usage_percent", "critical", False))
+        assert bt.alert_comparison(change) == ("tenant:mysql_connection_usage:percent", "above", None)
 
     def test_mongodb_critical_row_has_no_alert(self, monkeypatch):
         """`mongodb_opcounters_rate` 刻意沒有 critical 層（#3658 不補吞吐量鍵），
@@ -1092,9 +1092,9 @@ class TestAlertComparisonCli:
 
     def test_text_and_markdown_show_the_query(self, monkeypatch, capsys, cli_argv, tmp_path):
         md = tmp_path / "out.md"
-        _, out = self._main(monkeypatch, capsys, cli_argv, "mysql_connections", "70", "85",
+        _, out = self._main(monkeypatch, capsys, cli_argv, "mysql_connection_usage_percent", "70", "85",
                             [60, 80, 90], "--markdown-output", str(md))
-        q = 'tenant:mysql_threads_connected:max{tenant="t-x"}'
+        q = 'tenant:mysql_connection_usage:percent{tenant="t-x"}'
         assert f"query: {q}" in out.out
         assert f"| `{q}` |" in md.read_text(encoding="utf-8")
 
@@ -1104,7 +1104,7 @@ class TestObservedMapMissing:
     `--skip-if-unavailable` 也蓋不掉；`--json` 下 stdout 留空、原因只在 stderr（#3617）。"""
 
     def _argv(self, cli_argv, *extra):
-        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connection_usage_percent",
                  "--old-value", "70", "--new-value", "85",
                  "--prometheus", "http://prom:9090", "--skip-if-unavailable", *extra)
 
@@ -1180,14 +1180,14 @@ class TestWrittenValues:
                            "--old-value", old, "--new-value", new])
 
     @pytest.mark.parametrize("key,raw,want", [
-        ("mysql_connections", "70", (70.0, "warning")),
-        ("mysql_connections", " 70 : critical ", (70.0, "critical")),
-        ("mysql_connections", "70:Critical", (70.0, "critical")),
-        ("mysql_connections_critical", "95", (95.0, "critical")),
-        ("mysql_connections", "disable", None),
-        ("mysql_connections", "dİsable", None),
-        ("mysql_connections", None, None),
-        ("mysql_connections", "1e-400", (0.0, "warning")),
+        ("mysql_connection_usage_percent", "70", (70.0, "warning")),
+        ("mysql_connection_usage_percent", " 70 : critical ", (70.0, "critical")),
+        ("mysql_connection_usage_percent", "70:Critical", (70.0, "critical")),
+        ("mysql_connection_usage_percent_critical", "95", (95.0, "critical")),
+        ("mysql_connection_usage_percent", "disable", None),
+        ("mysql_connection_usage_percent", "dİsable", None),
+        ("mysql_connection_usage_percent", None, None),
+        ("mysql_connection_usage_percent", "1e-400", (0.0, "warning")),
     ])
     def test_each_side_is_what_the_exporter_serves(self, key, raw, want):
         """#3140 PR2：每一邊是 exporter 對這個值送的 row（da-guard served-values），
@@ -1196,13 +1196,13 @@ class TestWrittenValues:
 
     @pytest.mark.parametrize("key,raw,want", [
         # base key：exporter 改送平台預設值（:critical 跟著被拒的值走，#2377）。
-        ("mysql_connections", "NaN", (80.0, "warning")),
-        ("mysql_connections", "Inf", (80.0, "warning")),
-        ("mysql_connections", "-inf:critical", (80.0, "warning")),
-        ("mysql_connections", "infinity", (80.0, "warning")),
-        ("mysql_connections", "NaN:critical", (80.0, "warning")),
+        ("mysql_connection_usage_percent", "NaN", (80.0, "warning")),
+        ("mysql_connection_usage_percent", "Inf", (80.0, "warning")),
+        ("mysql_connection_usage_percent", "-inf:critical", (80.0, "warning")),
+        ("mysql_connection_usage_percent", "infinity", (80.0, "warning")),
+        ("mysql_connection_usage_percent", "NaN:critical", (80.0, "warning")),
         # `_critical`／optional_overrides key：沒有預設值可退，不送 row。
-        ("mysql_connections_critical", "+Inf", bt._REFUSED_NO_ROW),
+        ("mysql_connection_usage_percent_critical", "+Inf", bt._REFUSED_NO_ROW),
         ("oracle_process_count", "-Inf", bt._REFUSED_NO_ROW),
     ])
     def test_a_non_finite_number_is_read_from_the_exporters_refusal(self, key, raw, want):
@@ -1212,15 +1212,15 @@ class TestWrittenValues:
 
     @pytest.mark.parametrize("metric,old,new,want", [
         # base key: the exporter serves the platform default (80) instead.
-        ("mysql_connections", "70", "NaN", [("mysql_connections", "70", "80", None)]),
-        ("mysql_connections", "70", "-Inf", [("mysql_connections", "70", "80", None)]),
+        ("mysql_connection_usage_percent", "70", "NaN", [("mysql_connection_usage_percent", "70", "80", None)]),
+        ("mysql_connection_usage_percent", "70", "-Inf", [("mysql_connection_usage_percent", "70", "80", None)]),
         # the `:critical` goes with the refused value (#2377): a warning row.
-        ("mysql_connections", "70", "-inf:critical", [("mysql_connections", "70", "80", None)]),
-        ("mysql_connections", "NaN", "70", [("mysql_connections", "80", "70", None)]),
-        ("mysql_connections", "80", "+Inf", []),
+        ("mysql_connection_usage_percent", "70", "-inf:critical", [("mysql_connection_usage_percent", "70", "80", None)]),
+        ("mysql_connection_usage_percent", "NaN", "70", [("mysql_connection_usage_percent", "80", "70", None)]),
+        ("mysql_connection_usage_percent", "80", "+Inf", []),
         # no default to fall back to: no row, marked refused (judged HIGH).
-        ("mysql_connections_critical", "95", "+Inf",
-         [("mysql_connections_critical", "95", None, "non_finite")]),
+        ("mysql_connection_usage_percent_critical", "95", "+Inf",
+         [("mysql_connection_usage_percent_critical", "95", None, "non_finite")]),
         ("oracle_process_count", "70", "-Inf", [("oracle_process_count", "70", None, "non_finite")]),
         # refused on the OLD side: no row there, nothing marked (a newly served row).
         ("oracle_process_count", "-Inf", "70", [("oracle_process_count", None, "70", None)]),
@@ -1252,13 +1252,13 @@ class TestWrittenValues:
         """#3140：70 → NaN 回測的是 exporter 改送的預設值 80（2/4 點越界），
         不是 NaN（0 點，以前判 HIGH、rc 1）。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                       "mysql_connections", "70", "NaN")
+                                       "mysql_connection_usage_percent", "70", "NaN")
         assert [(r["metric"], r["old_value"], r["new_value"], r["new_breach_count"])
-                for r in rows] == [("mysql_connections", "70", "80", 2)]
+                for r in rows] == [("mysql_connection_usage_percent", "70", "80", 2)]
         assert rc == 0
 
     @pytest.mark.parametrize("metric,raw", [
-        ("mysql_connections_critical", "+Inf"), ("oracle_process_count", "-Inf")])
+        ("mysql_connection_usage_percent_critical", "+Inf"), ("oracle_process_count", "-Inf")])
     def test_a_row_lost_to_a_refused_non_finite_value_is_high(
             self, monkeypatch, capsys, cli_argv, metric, raw):
         """#3140 PR2：`_critical`／宣告 key 寫非有限值，exporter 拒收且不送 row——
@@ -1277,7 +1277,7 @@ class TestWrittenValues:
         Python 自己讀。"""
         monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
-        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connection_usage_percent",
                  "--old-value", "70", "--new-value", "50", "--prometheus", "http://prom:9090", "--json")
         with pytest.raises(SystemExit) as ei:
             _main_exit()
@@ -1288,18 +1288,18 @@ class TestWrittenValues:
     def test_disable_is_still_medium(self, monkeypatch, capsys, cli_argv):
         """對照組：寫 `disable` 是停用（`keys[].reason` "disabled"），維持 MEDIUM、rc 0。"""
         rc, rows, _asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                        "mysql_connections_critical", "70", "disable")
+                                        "mysql_connection_usage_percent_critical", "70", "disable")
         assert [(r["new_value"], r["risk"]) for r in rows] == [(None, "MEDIUM")]
         assert rc == 0
 
     @pytest.mark.parametrize("key,raw", [
-        ("mysql_connections", "7O"),
-        ("mysql_connections", "١٢"), ("mysql_connections_critical", "95:critical"),
-        ("mysql_connections", "+nan"), ("mysql_connections", "-nan:critical"),
-        ("mysql_connections", "1e400"), ("mysql_connections_critical", "-1e400"),
-        ("mysql_connections", "1e999"),
-        ("mysql_connections", "70:info"), ("mysql_connections", "70:"),
-        ("mysql_connections", "disable:critical"), ("mysql_connections", "disable\x1c"),
+        ("mysql_connection_usage_percent", "7O"),
+        ("mysql_connection_usage_percent", "١٢"), ("mysql_connection_usage_percent_critical", "95:critical"),
+        ("mysql_connection_usage_percent", "+nan"), ("mysql_connection_usage_percent", "-nan:critical"),
+        ("mysql_connection_usage_percent", "1e400"), ("mysql_connection_usage_percent_critical", "-1e400"),
+        ("mysql_connection_usage_percent", "1e999"),
+        ("mysql_connection_usage_percent", "70:info"), ("mysql_connection_usage_percent", "70:"),
+        ("mysql_connection_usage_percent", "disable:critical"), ("mysql_connection_usage_percent", "disable\x1c"),
         ("no_such_key", "NaN"),
     ], ids=["typo", "non-ascii-digit", "suffix-on-critical-key",
             "signed-nan", "signed-nan-critical", "overflow", "negative-overflow", "overflow-1e999",
@@ -1317,7 +1317,7 @@ class TestWrittenValues:
         """#3267：`1_000`、`0x1p4` 這類寫法的數字由 exporter 讀（Go 的
         `parseThresholdNumber`，經 served-values），讀得懂就照它送的數字回測，
         Python 不另留一份拼法表。"""
-        assert bt._served_written("mysql_connections", (raw,)) == [(served, "warning")]
+        assert bt._served_written("mysql_connection_usage_percent", (raw,)) == [(served, "warning")]
 
     @pytest.mark.parametrize("raw,served,risk,rc,new_breaches", [
         ("1_000", "1000", "HIGH", 1, 0),  # 3 點 → 0 點（-100%）
@@ -1330,8 +1330,8 @@ class TestWrittenValues:
         （UNKNOWN、rc 0）；現在照 exporter 送的數字回測（`new_value` 是送出的數字），
         rc 依回測結果。"""
         got_rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                           "mysql_connections", "70", raw)
-        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+                                           "mysql_connection_usage_percent", "70", raw)
+        assert asked == ['tenant:mysql_connection_usage:percent{tenant="t-x"}']
         assert [(r["status"], r["risk"], r["new_value"], r["old_breach_count"],
                  r["new_breach_count"]) for r in rows] == [
             ("analyzed", risk, served, 3, new_breaches)]
@@ -1343,7 +1343,7 @@ class TestWrittenValues:
         """對照組：exporter 也拒收的拼法（served-values `refused: unparsed`）維持原本
         的不回測、UNKNOWN、rc 0，不因拿掉拼法表而改送平台預設值回測。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                       "mysql_connections", "70", raw)
+                                       "mysql_connection_usage_percent", "70", raw)
         assert (rc, asked) == (0, [])
         assert [(r["status"], r["risk"]) for r in rows] == [("not_backtested", "UNKNOWN")]
         assert rows[0]["backtest"] == (
@@ -1354,13 +1354,13 @@ class TestWrittenValues:
         失去門檻（3 點不再響、MEDIUM），critical 告警開始比 95（1/4 點、HIGH，rc 1）。
         #3060 R1 把它當成一列照值回測（3 → 1 點）。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                       "mysql_connections", "70", "95:critical")
-        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}'] * 2
+                                       "mysql_connection_usage_percent", "70", "95:critical")
+        assert asked == ['tenant:mysql_connection_usage:percent{tenant="t-x"}'] * 2
         assert [(r["metric"], r["old_value"], r["new_value"], r["risk"]) for r in rows] == [
-            ("mysql_connections", "70", None, "MEDIUM"),
-            ("mysql_connections_critical", None, "95", "HIGH")]
+            ("mysql_connection_usage_percent", "70", None, "MEDIUM"),
+            ("mysql_connection_usage_percent_critical", None, "95", "HIGH")]
         assert all("old_severity" not in r for r in rows)
-        assert rows[1]["keys"] == ["mysql_connections"]
+        assert rows[1]["keys"] == ["mysql_connection_usage_percent"]
         assert rc == 1
 
     def test_a_severity_no_rule_selects_is_unreadable(self, monkeypatch, capsys, cli_argv):
@@ -1368,7 +1368,7 @@ class TestWrittenValues:
         平台預設值——那個值只看寫法看不出來，所以不回測（#3060 R1 曾把它判成靜默、
         MEDIUM、rc 0；exporter 已不再這樣送）。"""
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                       "mysql_connections", "70", "70:high")
+                                       "mysql_connection_usage_percent", "70", "70:high")
         assert (rc, asked) == (0, [])
         assert rows[0]["backtest"] == (
             "skipped: value '70:high': this backtest cannot read it the way the exporter does")
@@ -1376,16 +1376,16 @@ class TestWrittenValues:
     def test_both_critical_compare_the_numbers_on_the_critical_alert(
             self, monkeypatch, capsys, cli_argv):
         rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                       "mysql_connections", "70:critical", "95:critical")
-        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+                                       "mysql_connection_usage_percent", "70:critical", "95:critical")
+        assert asked == ['tenant:mysql_connection_usage:percent{tenant="t-x"}']
         assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (3, 1)
 
     def test_enable_as_critical(self, monkeypatch, capsys, cli_argv):
         """停用 → 啟用：只有一邊有值，severity 取那一邊的。"""
         _, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
-                                      "mysql_connections", "disable", "95:critical")
+                                      "mysql_connection_usage_percent", "disable", "95:critical")
         assert rows[0]["status"] == "analyzed" and rows[0]["new_breach_count"] == 1
-        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        assert asked == ['tenant:mysql_connection_usage:percent{tenant="t-x"}']
 
     def test_critical_value_with_no_critical_alert(self, monkeypatch, capsys, cli_argv):
         """`mongodb_opcounters_rate` 的門檻只正規化 warning（#3658 刻意不補）：
@@ -1403,7 +1403,7 @@ class TestWrittenValues:
     ])
     def test_unreadable_values_are_not_backtested(self, monkeypatch, capsys, cli_argv,
                                                    old, new, why):
-        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv, "mysql_connections", old, new)
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv, "mysql_connection_usage_percent", old, new)
         assert (rc, asked) == (0, [])
         assert rows[0]["backtest"].startswith("skipped: " + why)
 
@@ -1411,16 +1411,16 @@ class TestWrittenValues:
                                                 da_guard_env):
         """`"95:critical"` 不是 0 個越界點；兩棵樹由 exporter 讀，每條 /metrics row
         一列：`70` → `95:critical` 是 warning 那條沒了、critical 那條出現。"""
-        defaults = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  pg_connections: 80\n"}
-        before = "tenants:\n  t-x:\n    mysql_connections: '70:critical'\n    pg_connections: '70'\n"
-        after = "tenants:\n  t-x:\n    mysql_connections: '95:critical'\n    pg_connections: '95:critical'\n"
+        defaults = {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  pg_connections: 80\n"}
+        before = "tenants:\n  t-x:\n    mysql_connection_usage_percent: '70:critical'\n    pg_connections: '70'\n"
+        after = "tenants:\n  t-x:\n    mysql_connection_usage_percent: '95:critical'\n    pg_connections: '95:critical'\n"
         cur, base = _dirs(tmp_path, {**defaults, "t-x.yaml": before}, {**defaults, "t-x.yaml": after})
         rc, rows, asked = self._main(monkeypatch, capsys, cli_argv,
                                      ["--config-dir", cur, "--baseline", base])
         got = {(r["metric"], r["old_value"], r["new_value"]): r for r in rows}
-        crit = got[("mysql_connections_critical", "70", "95")]
+        crit = got[("mysql_connection_usage_percent_critical", "70", "95")]
         assert (crit["old_breach_count"], crit["new_breach_count"]) == (3, 1)
-        assert crit["query"] == 'tenant:mysql_threads_connected:max{tenant="t-x"}'
+        assert crit["query"] == 'tenant:mysql_connection_usage:percent{tenant="t-x"}'
         assert ("pg_connections", "70", None) in got
         assert ("pg_connections_critical", None, "95") in got
         assert all("old_severity" not in r for r in rows)
@@ -1457,31 +1457,31 @@ class TestSpellingIsTheNumber:
     # (key, old 拼法, new 拼法, old 十進位, new 十進位)
     _PAIRS = [
         # 新值側
-        ("mysql_connections", "70", "1_000", "70", "1000"),
-        ("mysql_connections", "70", "0x1p4", "70", "16"),
-        ("mysql_connections", "70", "0X1P4", "70", "16"),
-        ("mysql_connections", "70", "0x1p6", "70", "64"),
-        ("mysql_connections", "70", "0x_1p4", "70", "16"),
-        ("mysql_connections", "70", "0x1.8p5", "70", "48"),
-        ("mysql_connections", "70", "0x2_Bp0", "70", "43"),
-        ("mysql_connections", "70", "1_0e1", "70", "100"),
-        ("mysql_connections", "70", "8_5.5", "70", "85.5"),
-        ("mysql_connections", "70", "0x1p4:critical", "70", "16:critical"),
-        ("mysql_connections", "70", "1_000:critical", "70", "1000:critical"),
-        ("mysql_connections", "70:critical", "0X1P6:critical", "70:critical", "64:critical"),
-        ("mysql_connections_critical", "95", "0x1p6", "95", "64"),
+        ("mysql_connection_usage_percent", "70", "1_000", "70", "1000"),
+        ("mysql_connection_usage_percent", "70", "0x1p4", "70", "16"),
+        ("mysql_connection_usage_percent", "70", "0X1P4", "70", "16"),
+        ("mysql_connection_usage_percent", "70", "0x1p6", "70", "64"),
+        ("mysql_connection_usage_percent", "70", "0x_1p4", "70", "16"),
+        ("mysql_connection_usage_percent", "70", "0x1.8p5", "70", "48"),
+        ("mysql_connection_usage_percent", "70", "0x2_Bp0", "70", "43"),
+        ("mysql_connection_usage_percent", "70", "1_0e1", "70", "100"),
+        ("mysql_connection_usage_percent", "70", "8_5.5", "70", "85.5"),
+        ("mysql_connection_usage_percent", "70", "0x1p4:critical", "70", "16:critical"),
+        ("mysql_connection_usage_percent", "70", "1_000:critical", "70", "1000:critical"),
+        ("mysql_connection_usage_percent", "70:critical", "0X1P6:critical", "70:critical", "64:critical"),
+        ("mysql_connection_usage_percent_critical", "95", "0x1p6", "95", "64"),
         # 舊值側
-        ("mysql_connections", "1_000", "70", "1000", "70"),
-        ("mysql_connections", "0x1p4", "70", "16", "70"),
-        ("mysql_connections", "0X1P-2", "70", "0.25", "70"),
-        ("mysql_connections", "0x5_5p0", "70", "85", "70"),
-        ("mysql_connections", "0x1p4:critical", "70", "16:critical", "70"),
-        ("mysql_connections", "9_5:critical", "70:critical", "95:critical", "70:critical"),
-        ("mysql_connections_critical", "0x1.7cp6", "95", "95", "95"),
+        ("mysql_connection_usage_percent", "1_000", "70", "1000", "70"),
+        ("mysql_connection_usage_percent", "0x1p4", "70", "16", "70"),
+        ("mysql_connection_usage_percent", "0X1P-2", "70", "0.25", "70"),
+        ("mysql_connection_usage_percent", "0x5_5p0", "70", "85", "70"),
+        ("mysql_connection_usage_percent", "0x1p4:critical", "70", "16:critical", "70"),
+        ("mysql_connection_usage_percent", "9_5:critical", "70:critical", "95:critical", "70:critical"),
+        ("mysql_connection_usage_percent_critical", "0x1.7cp6", "95", "95", "95"),
         # 兩側都是
-        ("mysql_connections", "1_000", "0x1p6", "1000", "64"),
-        ("mysql_connections", "70", "7_0", "70", "70"),  # 同一個數字：沒有變更
-        ("mysql_connections", "0x1p4:critical", "1_000:critical", "16:critical", "1000:critical"),
+        ("mysql_connection_usage_percent", "1_000", "0x1p6", "1000", "64"),
+        ("mysql_connection_usage_percent", "70", "7_0", "70", "70"),  # 同一個數字：沒有變更
+        ("mysql_connection_usage_percent", "0x1p4:critical", "1_000:critical", "16:critical", "1000:critical"),
     ]
 
     @pytest.mark.parametrize("as_json", [True, False], ids=["json", "text"])
@@ -1532,7 +1532,7 @@ class TestSpellingRiskBoundaries:
             return [{"values": [(i, str(v)) for i, v in enumerate(vals)]}]
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
         monkeypatch.setattr(bt, "query_range", query_range)
-        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connection_usage_percent",
                  "--old-value", "50", "--new-value=" + new,
                  "--prometheus", "http://prom:9090", "--json")
         with pytest.raises(SystemExit) as ei:
@@ -1545,20 +1545,20 @@ class TestSpellingRiskBoundaries:
 
 class TestMalformedObservedMap:
     def test_malformed_map_exits_2(self, monkeypatch, tmp_path, capsys, cli_argv):
-        """#3017 review：`keys: {mysql_connections: 5}` 以前是 AttributeError
+        """#3017 review：`keys: {mysql_connection_usage_percent: 5}` 以前是 AttributeError
         traceback（rc 1，讀起來像 HIGH）；現在是 rc 2、一行指名 key。"""
         bad = tmp_path / "metric_observed_map.yaml"
-        bad.write_text("keys:\n  mysql_connections: 5\n", encoding="utf-8")
+        bad.write_text("keys:\n  mysql_connection_usage_percent: 5\n", encoding="utf-8")
         monkeypatch.setattr(bt, "_OBSERVED_MAP", None)
         monkeypatch.setattr(bt.observed_map_lib, "DEFAULT_MAP_PATH", str(bad))
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
-        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connection_usage_percent",
                  "--old-value", "70", "--new-value", "85", "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as ei:
             _main_exit()
         assert ei.value.code == 2
         err = capsys.readouterr().err
-        assert "ERROR:" in err and "'mysql_connections'" in err and "not a mapping" in err
+        assert "ERROR:" in err and "'mysql_connection_usage_percent'" in err and "not a mapping" in err
 
 
 # ── 查詢錯誤與空結果分開、rc 2 路徑的 envelope（#3059）──────────────
@@ -1644,10 +1644,10 @@ def fake_prom():
 
 
 def _dirs_for(tmp_path, *tenants):
-    """Two conf.d trees: each tenant's mysql_connections 100 → 50."""
+    """Two conf.d trees: each tenant's mysql_connection_usage_percent 100 → 50."""
     def tree(value):
         return {"_defaults.yaml": _DEFAULTS,
-                **{f"{t}.yaml": f"tenants:\n  {t}:\n    mysql_connections: '{value}'\n"
+                **{f"{t}.yaml": f"tenants:\n  {t}:\n    mysql_connection_usage_percent: '{value}'\n"
                    for t in tenants}}
     return _dirs(tmp_path, tree(100), tree(50))
 
@@ -1671,19 +1671,19 @@ class TestQueryError:
         stderr 點名；`-o` 仍寫出那份報告（逐筆 query_error 的原因在裡面）。"""
         p = fake_prom(errors={"t-bad": code})
         written = tmp_path / "o.json"
-        rc, out = _run_main(cli_argv, capsys, "--tenant", "t-bad", "--metric", "mysql_connections",
+        rc, out = _run_main(cli_argv, capsys, "--tenant", "t-bad", "--metric", "mysql_connection_usage_percent",
                             "--old-value", "70", "--new-value", "50",
                             "--prometheus", p.url, "--json", "-o", str(written))
         assert rc == 2
         assert out.out == ""
-        assert "nothing was answered: t-bad mysql_connections" in out.err, out.err
+        assert "nothing was answered: t-bad mysql_connection_usage_percent" in out.err, out.err
         doc = json.loads(written.read_text(encoding="utf-8"))
         assert (doc["status"], doc["reason"]) == ("partial", "query_error")
         assert doc["query_error"] == 1 and doc["no_data"] == 0
         row = doc["changes"][0]
         assert (row["status"], row["risk"]) == ("query_error", "UNKNOWN")
         assert f"HTTP Error {code}" in row["message"]
-        assert row["query"] == 'tenant:mysql_threads_connected:max{tenant="t-bad"}'
+        assert row["query"] == 'tenant:mysql_connection_usage:percent{tenant="t-bad"}'
         assert "not measured" in out.err
 
     def _git(self, monkeypatch, *tenants):
@@ -1760,7 +1760,7 @@ class TestCallerErrorEnvelopes:
 
     def test_prometheus_unreachable_envelope(self, monkeypatch, cli_argv, capsys):
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
-        rc, out = _run_main(cli_argv, capsys, "--tenant", "t", "--metric", "mysql_connections",
+        rc, out = _run_main(cli_argv, capsys, "--tenant", "t", "--metric", "mysql_connection_usage_percent",
                             "--old-value", "70", "--new-value", "50",
                             "--prometheus", "http://prom:9090", "--json")
         assert rc == 2
@@ -1784,7 +1784,7 @@ class TestCallerErrorEnvelopes:
         `--skip-if-unavailable` Prometheus is unreachable, which used to be rc 0."""
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: not skip)
         monkeypatch.setattr(bt, "query_range", _boom)
-        rc, out = _run_main(cli_argv, capsys, "--tenant", tenant, "--metric", "mysql_connections",
+        rc, out = _run_main(cli_argv, capsys, "--tenant", tenant, "--metric", "mysql_connection_usage_percent",
                             "--old-value", "70", "--new-value", "50",
                             "--prometheus", "http://prom:9090", "--json",
                             *(["--skip-if-unavailable"] if skip else []))
@@ -1797,7 +1797,7 @@ class TestCallerErrorEnvelopes:
         asked = []
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
         monkeypatch.setattr(bt, "query_range", lambda url, q, *a, **kw: asked.append(q) or [])
-        rc, _ = _run_main(cli_argv, capsys, "--tenant", "ok-1", "--metric", "mysql_connections",
+        rc, _ = _run_main(cli_argv, capsys, "--tenant", "ok-1", "--metric", "mysql_connection_usage_percent",
                           "--old-value", "70", "--new-value", "50",
                           "--prometheus", "http://prom:9090", "--json")
         assert rc == 0
@@ -1821,7 +1821,7 @@ def _recipe_confd(root):
     (d / "ta.yaml").write_text(
         "tenants:\n"
         "  ta:\n"
-        "    mysql_connections: 100\n"
+        "    mysql_connection_usage_percent: 100\n"
         "    _custom_alerts:\n"
         '      - {recipe: threshold, name: cpu_hot, metric: node_cpu, op: ">",\n'
         '         window: 5m, threshold: "80:warning"}\n',
@@ -1833,11 +1833,11 @@ def _plain_confd(root):
     d = root / "plain-conf.d"
     d.mkdir()
     (d / "tenant-one.yaml").write_text(
-        "tenants:\n  tenant-one:\n    mysql_connections: 100\n", encoding="utf-8")
+        "tenants:\n  tenant-one:\n    mysql_connection_usage_percent: 100\n", encoding="utf-8")
     return d
 
 
-_TENANT = ("--tenant", "t-x", "--metric", "mysql_connections",
+_TENANT = ("--tenant", "t-x", "--metric", "mysql_connection_usage_percent",
            "--old-value", "100", "--new-value", "50")
 
 
@@ -1851,7 +1851,7 @@ def _path_skip_with_recipe(mp, tmp, prom):
     d = _recipe_confd(tmp)
     base = tmp / "recipe-base"  # the same tenant before its recipe was added
     base.mkdir()
-    (base / "ta.yaml").write_text("tenants:\n  ta:\n    mysql_connections: 100\n",
+    (base / "ta.yaml").write_text("tenants:\n  ta:\n    mysql_connection_usage_percent: 100\n",
                                   encoding="utf-8")
     return ["--config-dir", str(d), "--baseline", str(base),
             "--prometheus", "http://prom:9090", "--skip-if-unavailable"]
@@ -2182,7 +2182,7 @@ def _rows(changes):
     return [{k: v for k, v in c.items() if k != "series"} for c in changes]
 
 
-_CRIT_DEFAULTS = "defaults:\n  mysql_connections: 80\n  mongodb_connections_current: 300\n"
+_CRIT_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mongodb_connections_current: 300\n"
 
 
 @pytest.mark.usefixtures("da_guard_env")
@@ -2198,63 +2198,63 @@ class TestServedSeriesGrouping:
         return bt.extract_changes_from_dirs(str(cur), str(base))
 
     def test_same_series_written_by_another_key_is_no_change(self, tmp_path):
-        """critical 90 由 `mysql_connections` 改由 `mysql_connections_critical` 送：
+        """critical 90 由 `mysql_connection_usage_percent` 改由 `mysql_connection_usage_percent_critical` 送：
         那一條沒變，只報新出現的 warning 列。"""
         changes = self._pair(
             tmp_path,
-            'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
-            'tenants:\n  db-a:\n    mysql_connections: "70"\n'
-            '    mysql_connections_critical: "90"\n')
-        assert [r["metric"] for r in _rows(changes)] == ["mysql_connections"]
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "90:critical"\n',
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "70"\n'
+            '    mysql_connection_usage_percent_critical: "90"\n')
+        assert [r["metric"] for r in _rows(changes)] == ["mysql_connection_usage_percent"]
 
     def test_a_disabled_base_switches_its_critical_tier_off(self, tmp_path):
         """#3046：`disable` + `_critical: 90` 不再送 critical 90，是一列 90 → None。"""
         changes = self._pair(
             tmp_path,
-            'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
-            'tenants:\n  db-a:\n    mysql_connections: disable\n'
-            '    mysql_connections_critical: "90"\n')
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "90:critical"\n',
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: disable\n'
+            '    mysql_connection_usage_percent_critical: "90"\n')
         assert _rows(changes) == [{
-            "tenant": "db-a", "metric": "mysql_connections_critical",
-            "old_value": "90", "new_value": None, "keys": ["mysql_connections"]}]
+            "tenant": "db-a", "metric": "mysql_connection_usage_percent_critical",
+            "old_value": "90", "new_value": None, "keys": ["mysql_connection_usage_percent"]}]
 
     def test_a_real_change_of_that_series_is_still_one_row(self, tmp_path):
         """同一條 critical series 90 → 95：一列，metric 是比它的告警 key，keys 列出供值的 key。"""
         changes = self._pair(
             tmp_path,
-            'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
-            'tenants:\n  db-a:\n    mysql_connections: "70"\n'
-            '    mysql_connections_critical: "95"\n')
-        crit = [r for r in _rows(changes) if r["metric"] == "mysql_connections_critical"]
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "90:critical"\n',
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "70"\n'
+            '    mysql_connection_usage_percent_critical: "95"\n')
+        crit = [r for r in _rows(changes) if r["metric"] == "mysql_connection_usage_percent_critical"]
         assert crit == [{
-            "tenant": "db-a", "metric": "mysql_connections_critical",
+            "tenant": "db-a", "metric": "mysql_connection_usage_percent_critical",
             "old_value": "90", "new_value": "95",
-            "keys": ["mysql_connections", "mysql_connections_critical"]}]
+            "keys": ["mysql_connection_usage_percent", "mysql_connection_usage_percent_critical"]}]
         assert [s.labels["severity"] for s in changes[[r["metric"] for r in _rows(changes)].index(
-            "mysql_connections_critical")]["series"]] == ["critical"]
+            "mysql_connection_usage_percent_critical")]["series"]] == ["critical"]
 
     def test_split_into_two_levels_reports_only_the_new_warning(self, tmp_path):
         """票上的「拆成兩級」：critical 90 → 90 沒變，warning None → 70 新啟用。"""
         changes = self._pair(
             tmp_path,
-            'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
-            'tenants:\n  db-a:\n    mysql_connections: "70"\n'
-            '    mysql_connections_critical: "90"\n')
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "90:critical"\n',
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "70"\n'
+            '    mysql_connection_usage_percent_critical: "90"\n')
         assert _rows(changes) == [{
-            "tenant": "db-a", "metric": "mysql_connections",
-            "old_value": None, "new_value": "70", "keys": ["mysql_connections"]}]
+            "tenant": "db-a", "metric": "mysql_connection_usage_percent",
+            "old_value": None, "new_value": "70", "keys": ["mysql_connection_usage_percent"]}]
 
     def test_severity_move_is_two_series(self, tmp_path):
         """`70` → `70:critical`：warning 那條沒了、critical 那條出現，各一列。"""
         changes = self._pair(
             tmp_path,
-            'tenants:\n  db-a:\n    mysql_connections: "70"\n',
-            'tenants:\n  db-a:\n    mysql_connections: "70:critical"\n')
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "70"\n',
+            'tenants:\n  db-a:\n    mysql_connection_usage_percent: "70:critical"\n')
         assert _rows(changes) == [
-            {"tenant": "db-a", "metric": "mysql_connections",
-             "old_value": "70", "new_value": None, "keys": ["mysql_connections"]},
-            {"tenant": "db-a", "metric": "mysql_connections_critical",
-             "old_value": None, "new_value": "70", "keys": ["mysql_connections"]},
+            {"tenant": "db-a", "metric": "mysql_connection_usage_percent",
+             "old_value": "70", "new_value": None, "keys": ["mysql_connection_usage_percent"]},
+            {"tenant": "db-a", "metric": "mysql_connection_usage_percent_critical",
+             "old_value": None, "new_value": "70", "keys": ["mysql_connection_usage_percent"]},
         ]
 
 
@@ -2332,7 +2332,7 @@ def _dirs(tmp_path, before, after):
 _D = {"_defaults.yaml": _CRIT_DEFAULTS}
 # The dimensional key below is served only with its label declared (#3475);
 # undeclared, the trees serve no row while `--tenant` cannot tell.
-_DD = {"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\n" + _CRIT_DEFAULTS}
+_DD = {"_defaults.yaml": "dimensions:\n  mysql_connection_usage_percent: [db]\n" + _CRIT_DEFAULTS}
 
 
 def _tenant_file(tenant, body):
@@ -2346,7 +2346,7 @@ class TestTenantAndTreesAgree:
     def _rows(self, out, *fields):
         return [tuple(r.get(f) for f in fields) for r in json.loads(out.out)["changes"]]
 
-    @pytest.mark.parametrize("key", ["mysql_connections", 'mysql_connections{db="a"}'])
+    @pytest.mark.parametrize("key", ["mysql_connection_usage_percent", 'mysql_connection_usage_percent{db="a"}'])
     @pytest.mark.parametrize("old,new", [("70", "70:critical"), ("70", "95:critical"),
                                          ("70:critical", "60"), ("70", "60"),
                                          ("70", "disable"), ("disable", "70:critical")])
@@ -2364,10 +2364,10 @@ class TestTenantAndTreesAgree:
         assert tenant == self._rows(out, *fields) and tenant, (tenant, out.out)
 
     @pytest.mark.parametrize("key,old,new,risk", [
-        ("mysql_connections_critical", "95", "+Inf", "HIGH"),
-        ("mysql_connections_critical", "95", "NaN", "HIGH"),
-        ("mysql_connections", "70", "NaN", "MEDIUM"),
-        ("mysql_connections_critical", "95", "disable", "MEDIUM"),
+        ("mysql_connection_usage_percent_critical", "95", "+Inf", "HIGH"),
+        ("mysql_connection_usage_percent_critical", "95", "NaN", "HIGH"),
+        ("mysql_connection_usage_percent", "70", "NaN", "MEDIUM"),
+        ("mysql_connection_usage_percent_critical", "95", "disable", "MEDIUM"),
     ])
     def test_a_refused_value_reads_the_same_from_both(self, tmp_path, cli_argv, capsys, fake_prom,
                                                      key, old, new, risk):
@@ -2409,9 +2409,9 @@ class TestRefusedRowsFromTwoTrees:
     def test_why_the_critical_row_is_gone(self, tmp_path, cli_argv, capsys, fake_prom, new, risk, rc):
         """`.nan` 不加引號：exporter 讀成讀不懂的字串（`value_unparsed`），不是非有限數。"""
         got = self._run(tmp_path, cli_argv, capsys, fake_prom,
-                        "    mysql_connections_critical: '95'\n",
-                        f"    mysql_connections_critical: {new}\n")
-        assert got == (rc, [("mysql_connections_critical", "95", None, risk, None)])
+                        "    mysql_connection_usage_percent_critical: '95'\n",
+                        f"    mysql_connection_usage_percent_critical: {new}\n")
+        assert got == (rc, [("mysql_connection_usage_percent_critical", "95", None, risk, None)])
 
     @pytest.mark.parametrize("root", [".nan", ".inf", "-.inf"])
     def test_a_row_lost_to_a_non_finite_root_default_is_high(
@@ -2421,14 +2421,14 @@ class TestRefusedRowsFromTwoTrees:
         p = fake_prom(values=(60, 80, 90, 100))
         tenant = {"db-a.yaml": _tenant_file("db-a", "    _silent_mode: \"false\"\n")}
         cur, base = _dirs(tmp_path, {**_D, **tenant},
-                          {"_defaults.yaml": _CRIT_DEFAULTS.replace("mysql_connections: 80",
-                                                                    f"mysql_connections: {root}"),
+                          {"_defaults.yaml": _CRIT_DEFAULTS.replace("mysql_connection_usage_percent: 80",
+                                                                    f"mysql_connection_usage_percent: {root}"),
                            **tenant})
         rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
                             "--prometheus", p.url, "--json")
         rows = [(r["metric"], r["old_value"], r["new_value"], r["risk"])
                 for r in json.loads(out.out)["changes"]]
-        assert (rc, rows) == (1, [("mysql_connections", "80", None, "HIGH")]), out.out
+        assert (rc, rows) == (1, [("mysql_connection_usage_percent", "80", None, "HIGH")]), out.out
 
     def test_a_non_finite_root_default_under_a_retired_alias_is_high(
             self, tmp_path, cli_argv, capsys, fake_prom):
@@ -2448,11 +2448,11 @@ class TestRefusedRowsFromTwoTrees:
     def test_a_refusal_in_part_of_the_day_is_high_in_that_window(
             self, tmp_path, cli_argv, capsys, fake_prom):
         """排程裡只有夜間時段寫 NaN：那段的 segment 帶 `value_non_finite`，只有那段判 HIGH。"""
-        sched = ("    mysql_connections_critical:\n      default: \"95\"\n      overrides:\n"
+        sched = ("    mysql_connection_usage_percent_critical:\n      default: \"95\"\n      overrides:\n"
                  "        - window: \"01:00-09:00\"\n          value: \"{night}\"\n")
         got = self._run(tmp_path, cli_argv, capsys, fake_prom,
                         sched.format(night="90"), sched.format(night="NaN"))
-        assert got == (1, [("mysql_connections_critical", "90", None, "HIGH", ["01:00-09:00"])])
+        assert got == (1, [("mysql_connection_usage_percent_critical", "90", None, "HIGH", ["01:00-09:00"])])
 
 
 @pytest.mark.usefixtures("da_guard_env")
@@ -2475,29 +2475,29 @@ class TestTwoTreesCompare:
     def test_spelling_only_change_is_no_change(self, tmp_path, cli_argv, capsys, fake_prom):
         cur, base = _dirs(
             tmp_path,
-            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "90:critical"\n')},
-            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "90.0:critical"\n')})
+            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connection_usage_percent: "90:critical"\n')},
+            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connection_usage_percent: "90.0:critical"\n')})
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
         assert (rc, doc["status"]) == (0, "no_changes"), doc
 
     def test_severity_move_is_two_rows(self, tmp_path, cli_argv, capsys, fake_prom):
         cur, base = _dirs(
-            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "70"\n')},
-            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "70:critical"\n')})
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connection_usage_percent: "70"\n')},
+            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connection_usage_percent: "70:critical"\n')})
         rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
-        assert self._changes(doc) == [("db-a", "mysql_connections", "70", None),
-                                      ("db-a", "mysql_connections_critical", None, "70")]
+        assert self._changes(doc) == [("db-a", "mysql_connection_usage_percent", "70", None),
+                                      ("db-a", "mysql_connection_usage_percent_critical", None, "70")]
 
     def test_tenant_comes_from_tenants_not_the_file_name(self, tmp_path, cli_argv, capsys,
                                                          fake_prom):
         cur, base = _dirs(
-            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 70\n")},
-            {**_D, "renamed.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")})
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connection_usage_percent: 70\n")},
+            {**_D, "renamed.yaml": _tenant_file("db-a", "    mysql_connection_usage_percent: 50\n")})
         rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
-        assert self._changes(doc) == [("db-a", "mysql_connections", "70", "50")]
+        assert self._changes(doc) == [("db-a", "mysql_connection_usage_percent", "70", "50")]
 
     def test_rename_alone_is_no_change(self, tmp_path, cli_argv, capsys, fake_prom):
-        body = _tenant_file("db-a", "    mysql_connections: 70\n")
+        body = _tenant_file("db-a", "    mysql_connection_usage_percent: 70\n")
         cur, base = _dirs(tmp_path, {**_D, "db-a.yaml": body}, {**_D, "sub/moved.yml": body})
         rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
         assert (rc, doc["status"]) == (0, "no_changes")
@@ -2505,27 +2505,27 @@ class TestTwoTreesCompare:
     def test_deleted_added_and_nested_carriers(self, tmp_path, cli_argv, capsys, fake_prom):
         cur, base = _dirs(
             tmp_path,
-            {**_D, "gone.yaml": _tenant_file("t-gone", "    mysql_connections: 70\n"),
-             "deep/er/t.yaml": _tenant_file("t-deep", "    mysql_connections: 70\n")},
-            {**_D, "deep/er/t.yaml": _tenant_file("t-deep", "    mysql_connections: 60\n"),
-             "new/t.yaml": _tenant_file("t-new", "    mysql_connections: 50\n")})
+            {**_D, "gone.yaml": _tenant_file("t-gone", "    mysql_connection_usage_percent: 70\n"),
+             "deep/er/t.yaml": _tenant_file("t-deep", "    mysql_connection_usage_percent: 70\n")},
+            {**_D, "deep/er/t.yaml": _tenant_file("t-deep", "    mysql_connection_usage_percent: 60\n"),
+             "new/t.yaml": _tenant_file("t-new", "    mysql_connection_usage_percent: 50\n")})
         rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
         changes = self._changes(doc)
-        assert ("t-deep", "mysql_connections", "70", "60") in changes
-        assert ("t-gone", "mysql_connections", "70", None) in changes
-        assert ("t-new", "mysql_connections", None, "50") in changes
+        assert ("t-deep", "mysql_connection_usage_percent", "70", "60") in changes
+        assert ("t-gone", "mysql_connection_usage_percent", "70", None) in changes
+        assert ("t-new", "mysql_connection_usage_percent", None, "50") in changes
         assert ("t-new", "mongodb_connections_current", None, "300") in changes
 
     def test_hidden_files_and_directories_are_not_read(self, tmp_path, cli_argv, capsys,
                                                       fake_prom):
         """The exporter skips `.`-prefixed files and directories."""
-        hidden = {".old.yaml": _tenant_file("t-h", "    mysql_connections: 1\n"),
-                  ".archive/x.yaml": _tenant_file("t-h2", "    mysql_connections: 1\n")}
+        hidden = {".old.yaml": _tenant_file("t-h", "    mysql_connection_usage_percent: 1\n"),
+                  ".archive/x.yaml": _tenant_file("t-h2", "    mysql_connection_usage_percent: 1\n")}
         cur, base = _dirs(
-            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 70\n")},
-            {**_D, **hidden, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")})
+            tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connection_usage_percent: 70\n")},
+            {**_D, **hidden, "db-a.yaml": _tenant_file("db-a", "    mysql_connection_usage_percent: 50\n")})
         rc, doc, _ = self._run(cli_argv, capsys, fake_prom, cur, base)
-        assert self._changes(doc) == [("db-a", "mysql_connections", "70", "50")]
+        assert self._changes(doc) == [("db-a", "mysql_connection_usage_percent", "70", "50")]
 
     @pytest.mark.parametrize("side", ["baseline", "current"])
     def test_a_tree_with_no_config_is_rc2_named(self, tmp_path, cli_argv, capsys, fake_prom,
@@ -2534,7 +2534,7 @@ class TestTwoTreesCompare:
         files found"): rc 2, named — a PR that adds the first conf.d/ compares
         against a baseline holding at least a `_defaults.yaml`."""
         empty = {"README.md": "x\n"}
-        full = {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: 50\n")}
+        full = {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connection_usage_percent: 50\n")}
         cur, base = _dirs(tmp_path, empty if side == "baseline" else full,
                           empty if side == "current" else full)
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
@@ -2549,10 +2549,10 @@ class TestTwoTreesCompare:
         only a path."""
         require_file_name(name)
         cur, base = _dirs(
-            tmp_path, {**_D, name: _tenant_file("acme", "    mysql_connections: 80\n")},
-            {**_D, name: _tenant_file("acme", "    mysql_connections: 50\n")})
+            tmp_path, {**_D, name: _tenant_file("acme", "    mysql_connection_usage_percent: 80\n")},
+            {**_D, name: _tenant_file("acme", "    mysql_connection_usage_percent: 50\n")})
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
-        assert self._changes(doc) == [("acme", "mysql_connections", "80", "50")], err
+        assert self._changes(doc) == [("acme", "mysql_connection_usage_percent", "80", "50")], err
 
     def test_a_name_that_is_not_utf8_refuses_the_tree(self, tmp_path, cli_argv, capsys,
                                                        fake_prom):
@@ -2562,8 +2562,8 @@ class TestTwoTreesCompare:
         name = b"legacy-\xff.yaml"
         require_file_name(name)
         cur, base = _dirs(
-            tmp_path, {**_D, name: _tenant_file("acme", "    mysql_connections: 80\n")},
-            {**_D, name: _tenant_file("acme", "    mysql_connections: 50\n")})
+            tmp_path, {**_D, name: _tenant_file("acme", "    mysql_connection_usage_percent: 80\n")},
+            {**_D, name: _tenant_file("acme", "    mysql_connection_usage_percent: 50\n")})
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
         assert (rc, doc) == (2, None), (doc, err)  # #3617: stdout empty
         assert r"legacy-\xff.yaml" in err and "not valid UTF-8" in err
@@ -2595,15 +2595,15 @@ class TestRecipeNoteFromTheWholeTree:
     def test_only_changed_recipe_tenants_are_named(self, monkeypatch, cli_argv, capsys,
                                                    tmp_path):
         same = self._t("db-b", _RECIPE.format(v=150))
-        before = {"db-a.yaml": self._t("db-a", "    mysql_connections: 70\n"),
+        before = {"db-a.yaml": self._t("db-a", "    mysql_connection_usage_percent: 70\n"),
                   "db-b.yaml": same,
                   "chg.yaml": self._t("chg", _RECIPE.format(v=150)),
                   "gone.yaml": self._t("gone", _RECIPE.format(v=150)),
                   "moved.yaml": self._t("moved", _RECIPE.format(v=150))}
-        after = {"db-a.yaml": self._t("db-a", "    mysql_connections: 50\n"),
+        after = {"db-a.yaml": self._t("db-a", "    mysql_connection_usage_percent: 50\n"),
                  "db-b.yaml": same,
                  "chg.yaml": self._t("chg", _RECIPE.format(v=200)),
-                 "gone.yaml": self._t("gone", "    mysql_connections: 70\n"),
+                 "gone.yaml": self._t("gone", "    mysql_connection_usage_percent: 70\n"),
                  "deep/moved.yaml": self._t("moved", _RECIPE.format(v=150)),
                  "team/new.yaml": self._t("new", _RECIPE.format(v=150))}
         _rc, notes, _ = self._note(monkeypatch, cli_argv, capsys, tmp_path, before, after)
@@ -2615,8 +2615,8 @@ class TestRecipeNoteFromTheWholeTree:
         same = {"db-b.yaml": self._t("db-b", _RECIPE.format(v=150))}
         _rc, notes, _ = self._note(
             monkeypatch, cli_argv, capsys, tmp_path,
-            {**same, "db-a.yaml": self._t("db-a", "    mysql_connections: 70\n")},
-            {**same, "db-a.yaml": self._t("db-a", "    mysql_connections: 50\n")})
+            {**same, "db-a.yaml": self._t("db-a", "    mysql_connection_usage_percent: 70\n")},
+            {**same, "db-a.yaml": self._t("db-a", "    mysql_connection_usage_percent: 50\n")})
         assert notes == []
 
     def test_a_tenant_added_or_removed_without_recipes_is_not_named(
@@ -2624,8 +2624,8 @@ class TestRecipeNoteFromTheWholeTree:
         """A tenant on one side only is compared with "no recipes"."""
         _rc, notes, out = self._note(
             monkeypatch, cli_argv, capsys, tmp_path,
-            {"gone.yaml": self._t("gone", "    mysql_connections: 70\n")},
-            {"new.yaml": self._t("new", "    mysql_connections: 70\n")})
+            {"gone.yaml": self._t("gone", "    mysql_connection_usage_percent: 70\n")},
+            {"new.yaml": self._t("new", "    mysql_connection_usage_percent: 70\n")})
         assert notes == [], out.err
 
     def test_a_recipe_in_the_platform_file_is_named(self, monkeypatch, cli_argv, capsys,
@@ -2685,7 +2685,7 @@ class TestRecipeNoteFromTheWholeTree:
         """0bd6f362: only the served rows were compared, so a recipe change
         the exporter refuses whole (it serves no row either side) was not
         named."""
-        base = "    mysql_connections: 70\n"
+        base = "    mysql_connection_usage_percent: 70\n"
         _rc, notes, out = self._note(
             monkeypatch, cli_argv, capsys, tmp_path,
             {"db-a.yaml": self._t("db-a", base + before)},
@@ -2723,7 +2723,7 @@ class TestRecipeNoteFromTheWholeTree:
     def _capped(self, monkeypatch, cli_argv, capsys, tmp_path, before, after):
         # A limit of 1 metric per tenant: r1 is served, any later recipe is cut.
         capped = {"_defaults.yaml": _CRIT_DEFAULTS + "max_metrics_per_tenant: 1\n"}
-        head = "    mysql_connections: '70'\n"
+        head = "    mysql_connection_usage_percent: '70'\n"
         return self._note(monkeypatch, cli_argv, capsys, tmp_path,
                           {**capped, "db-a.yaml": self._t("db-a", head + before)},
                           {**capped, "db-a.yaml": self._t("db-a", head + after)})
@@ -2750,7 +2750,7 @@ class TestRecipeNoteFromTheWholeTree:
         """Documented limit: the compiler reads a `_defaults.yaml`'s top-level
         `_custom_alerts` (root or sub-directory); the exporter serves no row
         for it."""
-        tenant = {"db-a.yaml": self._t("db-a", "    mysql_connections: 70\n")}
+        tenant = {"db-a.yaml": self._t("db-a", "    mysql_connection_usage_percent: 70\n")}
         top = "_custom_alerts:\n" + self._R1.replace("    _custom_alerts:\n", "").replace(
             "\n    ", "\n")[4:]
         _rc, notes, out = self._note(monkeypatch, cli_argv, capsys, tmp_path, tenant,
@@ -2761,7 +2761,7 @@ class TestRecipeNoteFromTheWholeTree:
     def test_an_empty_list_is_no_recipe(self, monkeypatch, cli_argv, capsys, tmp_path, empty):
         """bbf0421d: removing `_custom_alerts: []` named the tenant, though
         neither side serves or compiles a recipe."""
-        head = "    mysql_connections: 70\n"
+        head = "    mysql_connection_usage_percent: 70\n"
         _rc, notes, out = self._note(
             monkeypatch, cli_argv, capsys, tmp_path,
             {"db-a.yaml": self._t("db-a", head + f"    _custom_alerts: {empty}\n")},
@@ -2775,8 +2775,8 @@ class TestRecipeNoteFromTheWholeTree:
         monkeypatch.setattr(bt, "load_served_tree",
                             lambda *a, **kw: calls.append(a) or real(*a, **kw))
         self._note(monkeypatch, cli_argv, capsys, tmp_path,
-                   {"db-a.yaml": self._t("db-a", "    mysql_connections: 70\n")},
-                   {"db-a.yaml": self._t("db-a", "    mysql_connections: 50\n")})
+                   {"db-a.yaml": self._t("db-a", "    mysql_connection_usage_percent: 70\n")},
+                   {"db-a.yaml": self._t("db-a", "    mysql_connection_usage_percent: 50\n")})
         assert len(calls) == 2, calls
 
     @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,
@@ -2787,8 +2787,8 @@ class TestRecipeNoteFromTheWholeTree:
         #3206 the unreadable file is a path da-guard validation names: the
         shared conf.d refusal, the file named on stderr. #3617: under --json
         stdout stays empty (it was a `conf_d_not_servable` document)."""
-        cur, base = _dirs(tmp_path, {**_D, "t.yaml": self._t("t", "    mysql_connections: 1\n")},
-                          {**_D, "t.yaml": self._t("t", "    mysql_connections: 2\n")})
+        cur, base = _dirs(tmp_path, {**_D, "t.yaml": self._t("t", "    mysql_connection_usage_percent: 1\n")},
+                          {**_D, "t.yaml": self._t("t", "    mysql_connection_usage_percent: 2\n")})
         os.chmod(os.path.join(cur, "t.yaml"), 0)
         try:
             rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
@@ -2884,7 +2884,7 @@ class TestBacktestWorkflow:
             elif name.endswith("/"):
                 path.mkdir()
             else:
-                path.write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+                path.write_text("defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8")
         return confd
 
     def _check(self, tmp_path):
@@ -2931,9 +2931,9 @@ class TestBacktestWorkflow:
 
 
 @pytest.mark.parametrize("key,want", [
-    ('mysql_connections{db="a"}', ["db"]),
-    ('mysql_connections{db=~"a|b"}', ["db_re"]),  # a regex matcher serves `<label>_re`
-    ("mysql_connections{env='p', db=~\"a=b,c\"}", ["db_re", "env"]),
+    ('mysql_connection_usage_percent{db="a"}', ["db"]),
+    ('mysql_connection_usage_percent{db=~"a|b"}', ["db_re"]),  # a regex matcher serves `<label>_re`
+    ("mysql_connection_usage_percent{env='p', db=~\"a=b,c\"}", ["db_re", "env"]),
 ])
 def test_written_tree_declares_the_served_label_names(tmp_path, key, want):
     """#3475: `--tenant` declares the dimensional key's labels as the row
@@ -2941,7 +2941,7 @@ def test_written_tree_declares_the_served_label_names(tmp_path, key, want):
     import yaml
     bt._written_tree(str(tmp_path), key, ("70",))
     root = yaml.safe_load((tmp_path / "_defaults.yaml").read_text(encoding="utf-8"))
-    assert root["dimensions"]["mysql_connections"] == want
+    assert root["dimensions"]["mysql_connection_usage_percent"] == want
     assert root["dimensions"]["container_cpu"] == ["version"]  # the shipped declaration rides along
 
 
@@ -3034,7 +3034,7 @@ class TestImpactInTheDocument:
         p = fake_prom(values=(90,) * 10)
         out = tmp_path / "r.json"
         res = subprocess.run(
-            [sys.executable, bt.__file__, "--tenant", "t-x", "--metric", "mysql_connections",
+            [sys.executable, bt.__file__, "--tenant", "t-x", "--metric", "mysql_connection_usage_percent",
              "--old-value", old, "--new-value", new, "--prometheus", p.url,
              "--json", "-o", str(out)],
             capture_output=True, text=True, encoding="utf-8", timeout=120,
@@ -3063,9 +3063,9 @@ def with_nan(results, lookback):
     return report
 bt.generate_report = with_nan
 bt.prometheus_available = lambda url, timeout=5: True
-bt.written_changes = lambda *a: [{"tenant": "t-x", "metric": "mysql_connections",
+bt.written_changes = lambda *a: [{"tenant": "t-x", "metric": "mysql_connection_usage_percent",
                                   "old_value": "70", "new_value": "50"}]
-bt.backtest_change = lambda *a: {"tenant": "t-x", "metric": "mysql_connections",
+bt.backtest_change = lambda *a: {"tenant": "t-x", "metric": "mysql_connection_usage_percent",
                                  "old_value": "70", "new_value": "50", "status": "no_data",
                                  "risk": "UNKNOWN", "message": "x"}
 import _lib_exitcodes
@@ -3094,7 +3094,7 @@ class TestUnserializableDocument:
         out.write_text("stale\n", encoding="utf-8")
         res = subprocess.run(
             [sys.executable, str(wrapper), bt.__file__, "--tenant", "t-x", "--metric",
-             "mysql_connections", "--old-value", "70", "--new-value", "50",
+             "mysql_connection_usage_percent", "--old-value", "70", "--new-value", "50",
              "-o", str(out), *argv],
             capture_output=True, text=True, encoding="utf-8", timeout=120,
             env={**os.environ, "PYTHONIOENCODING": "utf-8"})

@@ -95,77 +95,47 @@ class TestVictoriaLogs:
         assert len(np) == 1, "NetworkPolicy must render by default"
 
     @_needs_helm
-    def test_networkpolicy_locks_to_the_declared_consumer_set(self, repo_root: Path) -> None:
-        """Red-team T2-2 mitigation: the :9428 same-namespace podSelector
-        allowlist must be EXACTLY the declared consumer set — vector (ingest,
-        same-ns debug/pre-#1018 path), chargeback-aggregator (query), grafana
-        (query), federation-gateway (tenant-scoped query, ADR-021 #609) and
-        federation-reconciler (evidence read, ADR-028 D1 / #1234), plus
-        Prometheus (the /metrics scrape on the same port).
+    def test_networkpolicy_is_rendered_from_the_consumer_registry(self, repo_root: Path) -> None:
+        """#1295 PR2: the store's ingress peers are EXACTLY one per
+        `auth.consumers[].from` plus one per `networkPolicy.scrapers`, computed
+        here from values.yaml — not a second hand-written list. Equality: a
+        consumer whose row is dropped is severed, an extra row is an
+        unreviewed widening.
 
-        ⛔ EQUALITY, not `issubset`. The old subset form listed only the first
-        three, so DELETING a later-added row — the reconciler's, added by #1234 —
-        kept this whole suite green while severing the ADR-028 detection plane at
-        the network layer (verified: dropping that row passed all 49 tests in this
-        file). Equality also means ADDING a consumer must come through review
-        here, which is the right friction: every entry reaches a store whose
-        listener is unauthenticated until `auth.mode: enforce` (#1295), and the
-        trust-boundary rule in values.yaml (platform-trusted, or the gateway as
-        the sole tenant-facing authorization plane) has to be re-argued each
-        time.
+        ⛔ This says the manifest matches the registry, NOT that the port is
+        protected: a `podLabels`-only peer matches self-declared labels in the
+        store's namespace (see the template's header). Whether each row really
+        admits its consumer's pods is tests/k8s/test_log_store_connectivity.py."""
+        values = yaml.safe_load((repo_root / "helm/victorialogs/values.yaml").read_text(encoding="utf-8"))
 
-        Cross-namespace peers are a separate mechanism and are pinned by
-        test_networkpolicy_admits_vector_namespace — a consumer running OUTSIDE
-        VictoriaLogs' own namespace is not admitted by any row asserted here.
+        def peer(frm: dict) -> dict:
+            out = {}
+            if frm.get("namespace"):
+                out["namespaceSelector"] = {"matchLabels": {"kubernetes.io/metadata.name": frm["namespace"]}}
+            if frm.get("podLabels"):
+                out["podSelector"] = {"matchLabels": frm["podLabels"]}
+            return out
 
-        ⛔ "locks" in this test's name means the policy admits EXACTLY this
-        set and no more — it is a statement about the rendered manifest, NOT
-        about unbypassability (corrected in #1295). Every row here matches a
-        SELF-DECLARED pod label in VictoriaLogs' own namespace, so a principal
-        able to create a pod there can wear one and be admitted; this suite
-        passing does not mean :9428 is protected from same-namespace pod
-        creation. The cross-namespace rows are the ones that rest on a
-        control-plane-assigned label. Do not cite a green run here as evidence
-        of a boundary."""
+        expected = ([peer(c["from"]) for c in values["auth"]["consumers"]]
+                    + [peer(s) for s in values["networkPolicy"]["scrapers"]])
         docs = _render(repo_root / "helm/victorialogs")
         np = [d for d in docs if d.get("kind") == "NetworkPolicy"][0]
-        peers = np["spec"]["ingress"][0].get("from", [])
-        labels = {tuple(sorted(p["podSelector"]["matchLabels"].items())) for p in peers if "podSelector" in p}
-        expected = {
-            (("app.kubernetes.io/name", "vector"),),
-            (("app.kubernetes.io/name", "chargeback-aggregator"),),
-            (("app", "grafana"),),
-            (("app.kubernetes.io/name", "federation-gateway"),),
-            (("app.kubernetes.io/name", "federation-reconciler"),),
-            # Prometheus scrape of /metrics on the same port. Reviewed: in
-            # enforce an unauthenticated request reaches only /metrics,
-            # /health and /ping; in observe it reaches every path, as every
-            # other row here does (values.yaml prose beside the row).
-            (("app", "prometheus"),),
-        }
-        assert labels == expected, (
-            f"missing consumers: {expected - labels} (a deleted row silently "
-            f"severs that consumer); unreviewed additions: {labels - expected} "
-            "(each new entry is a security-reviewed widening — update this set "
-            "and the values.yaml/networkpolicy.yaml prose together)"
-        )
+        assert len(np["spec"]["ingress"]) == 1, np["spec"]["ingress"]
+        assert np["spec"]["ingress"][0]["from"] == expected
+        assert np["spec"]["ingress"][0]["ports"] == [{"port": values["listenPort"], "protocol": "TCP"}]
 
     @_needs_helm
-    def test_networkpolicy_admits_vector_namespace(self, repo_root: Path) -> None:
+    def test_networkpolicy_admits_vector_by_namespace_and_label(self, repo_root: Path) -> None:
         """#1018 PSS carve-out: Vector ships from its dedicated `vector`
-        namespace, so the default netpol MUST carry a namespaceSelector for
-        it — dropping that row silently severs ingest (Vector -> :9428)."""
+        namespace — dropping the namespace silently severs ingest. Its label
+        rides in the same peer, so another pod in that namespace is not
+        admitted."""
         docs = _render(repo_root / "helm/victorialogs")
         np = [d for d in docs if d.get("kind") == "NetworkPolicy"][0]
-        peers = np["spec"]["ingress"][0].get("from", [])
-        ns_names = {
-            p["namespaceSelector"]["matchLabels"].get("kubernetes.io/metadata.name")
-            for p in peers if "namespaceSelector" in p
-        }
-        assert "vector" in ns_names, (
-            "default allowedNamespaces must admit the dedicated vector ns "
-            f"(got: {ns_names})"
-        )
+        assert {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "vector"}},
+            "podSelector": {"matchLabels": {"app.kubernetes.io/name": "vector"}},
+        } in np["spec"]["ingress"][0]["from"]
 
 
 # ──────────────────────────────────────────────────────────────────────────────

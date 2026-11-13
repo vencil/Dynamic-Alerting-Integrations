@@ -33,20 +33,28 @@ def test_real_repo_has_no_new_drift():
     assert result["errors"] == [], result["errors"]
 
 
-def test_grandfather_list_is_exactly_the_one_orphan_left():
-    """Every KNOWN_ORPHANS record must actually be orphaned on the real repo
-    (else it is a stale exemption). Guards the list against drifting."""
+def test_grandfather_list_is_empty_and_nothing_is_orphaned():
+    """#3778 deleted the last grandfathered orphan
+    (tenant:mysql_connection_usage:ratio), so the list is empty and the real
+    repo reports no orphan at all. Guards the list against regrowing."""
     result = gate.run_check()
-    assert len(result["infos"]) == len(gate.KNOWN_ORPHANS) == 1
+    assert len(result["infos"]) == len(gate.KNOWN_ORPHANS) == 0
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
 
-def test_sanity_anchor_mysql_connection_usage_is_grandfathered_orphan():
-    """WS2a scan anchor: tenant:mysql_connection_usage:ratio IS an orphan and
-    rides the grandfather list (so the scanner actually reaches it)."""
-    assert "tenant:mysql_connection_usage:ratio" in gate.KNOWN_ORPHANS
+def test_sanity_anchor_mysql_connection_usage_percent_is_consumed():
+    """#3778 anchor: the old orphan tenant:mysql_connection_usage:ratio is
+    gone, and its replacement tenant:mysql_connection_usage:percent is a record
+    the MariaDB connection alerts consume (so the scanner reaches it and does
+    not report it)."""
+    records = gate.collect_record_names()
+    consumed = gate.collect_consumed_tokens()
+    assert "tenant:mysql_connection_usage:ratio" not in records
+    assert "tenant:mysql_connection_usage:percent" in records
+    assert "tenant:mysql_connection_usage:percent" in consumed
     result = gate.run_check()
-    assert any("tenant:mysql_connection_usage:ratio" in i for i in result["infos"])
+    assert not any("tenant:mysql_connection_usage:percent" in m
+                   for m in result["infos"] + result["errors"])
 
 
 def test_sanity_anchor_db2_lock_wait_time_is_not_orphan():

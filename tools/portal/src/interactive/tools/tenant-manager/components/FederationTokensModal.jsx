@@ -3,7 +3,8 @@ import { styles } from '../styles.js';
 import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 import { useModalFocusTrap } from '../../_common/hooks/useModalFocusTrap.js';
 import { classifyApiError, apiErrorMessage } from '../../_common/api/classify-error.js';
-import { redirectToSignIn, holdSignIn } from '../../_common/auth/sign-in.js';
+import { holdSignIn, leavingForSignIn, redirectToSignIn } from '../../_common/auth/sign-in.js';
+import { apiFetch } from '../../_common/api/api-fetch.js';
 
 /* ── i18n ──────────────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -48,13 +49,13 @@ function answer(resp) {
 }
 
 const defaultApi = {
-  list: (tenantId) => fetch(`${ENDPOINT}?tenant_id=${encodeURIComponent(tenantId)}`).then(answer),
-  issue: (body) => fetch(ENDPOINT, {
+  list: (tenantId) => apiFetch(`${ENDPOINT}?tenant_id=${encodeURIComponent(tenantId)}`).then(answer),
+  issue: (body) => apiFetch(ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   }).then(answer),
-  revoke: (tokenId) => fetch(`${ENDPOINT}/${encodeURIComponent(tokenId)}`, { method: 'DELETE' }).then(answer),
+  revoke: (tokenId) => apiFetch(`${ENDPOINT}/${encodeURIComponent(tokenId)}`, { method: 'DELETE' }).then(answer),
 };
 
 function failureMessage(res) {
@@ -75,7 +76,7 @@ const noteStyle = { fontSize: 'var(--da-font-size-sm-md)', color: 'var(--da-colo
 const errorStyle = { color: 'var(--da-color-error-text)', fontSize: 'var(--da-font-size-sm-md)', margin: 'var(--da-space-2) 0' };
 
 function FederationTokensModal(props) {
-  const { tenantId: givenTenant, onClose, api = defaultApi, signIn = redirectToSignIn } = props || {};
+  const { tenantId: givenTenant, onClose, api = defaultApi } = props || {};
   const [tenantId, setTenantId] = useState(givenTenant || '');
   const [tenantDraft, setTenantDraft] = useState('');
   const { copy, copied } = useCopyToClipboard();
@@ -124,8 +125,9 @@ function FederationTokensModal(props) {
   requestCloseRef.current = requestClose;
   const modalRef = useModalFocusTrap(true, () => requestCloseRef.current());
 
-  // true when the answer was a 401 (handled here). Returns before leaving
-  // for sign-in while a one-time token is on screen: leaving would lose it.
+  // true when the answer was a 401 (handled here). apiFetch has already sent
+  // the browser to sign in, unless the hold above (a one-time token on
+  // screen: leaving would lose it) or the retry window kept it here.
   const handleUnauthorized = useCallback((res) => {
     if (res.status !== 401) return false;
     if (tokenShown.current) {
@@ -136,12 +138,14 @@ function FederationTokensModal(props) {
       });
       return true;
     }
-    if (!signIn()) {
+    // Not left yet: the 401 may have come while this dialog held sign-in
+    // for an issue request in flight (released by now), so try once more.
+    if (!leavingForSignIn() && !redirectToSignIn()) {
       setError({ remedy: 'permission', text: t('登入後仍被拒絕。', 'Still refused after signing in.') });
       return 'refused';
     }
     return true;
-  }, [signIn]);
+  }, []);
 
   const load = useCallback(async () => {
     if (!tenantId) return;
@@ -200,6 +204,9 @@ function FederationTokensModal(props) {
     }
     let res;
     issuing.current = true;
+    // Its answer may be the one-time token: a 401 from any other request on
+    // the page must not navigate away while it is in flight.
+    const releaseIssueHold = holdSignIn();
     try {
       res = await api.issue({ tenant_id: tenantId, description, capability });
     } catch (_e) {
@@ -207,6 +214,7 @@ function FederationTokensModal(props) {
       return;
     } finally {
       issuing.current = false;
+      releaseIssueHold();
     }
     if (handleUnauthorized(res)) return;
     if (!res.ok || !res.data || typeof res.data.token !== 'string') {

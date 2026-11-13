@@ -173,8 +173,8 @@ def test_critical_key_reachable_when_base_is_supplied():
     """A `_critical` key rides resolveCriticalRows: reachable iff its BASE is in
     supply, even though the `_critical` key itself is not."""
     result = gate.run_check(
-        demand={"mysql_connections_critical"},
-        supply={"mysql_connections"},          # base only
+        demand={"mysql_connection_usage_percent_critical"},
+        supply={"mysql_connection_usage_percent"},          # base only
         deferred=set(),
         known_unwired={},
     )
@@ -183,12 +183,12 @@ def test_critical_key_reachable_when_base_is_supplied():
 
 def test_critical_key_dead_when_base_missing():
     result = gate.run_check(
-        demand={"mysql_connections_critical"},
+        demand={"mysql_connection_usage_percent_critical"},
         supply=set(),                          # base absent
         deferred=set(),
         known_unwired={},
     )
-    assert any("mysql_connections_critical" in e for e in result["errors"])
+    assert any("mysql_connection_usage_percent_critical" in e for e in result["errors"])
 
 
 def test_known_deferred_is_exempt():
@@ -399,7 +399,7 @@ def test_real_not_chart_armed_comes_from_the_registry():
     lib = gate._registry_lib
     expected = gate._not_chart_armed()
     assert expected == lib.not_chart_armed_keys(lib.load_registry())
-    assert len(expected) == 61
+    assert len(expected) == 63  # 61 + #3778's mysql_threads_running and its critical
     assert not hasattr(gate, "NOT_CHART_ARMED")
 
 
@@ -878,7 +878,7 @@ def test_the_reader_supplies_the_path_that_the_parser_does_not(tmp_path):
 
 def test_the_artifact_face_is_derived_not_enumerated(tmp_path, monkeypatch):
     """⛔ The three ways the hardcoded-path version was walked past (blind
-    review, round 3 — each demonstrated by injecting `mysql_connections_critical`
+    review, round 3 — each demonstrated by injecting `mysql_connection_usage_percent_critical`
     and watching this gate exit 0):
 
       1. an `examples/` sibling INSIDE the very conf.d tree the constants named;
@@ -902,7 +902,7 @@ def test_the_artifact_face_is_derived_not_enumerated(tmp_path, monkeypatch):
     sibling = f"{tree}/examples/_defaults-multidb.yaml"
     for rel in (f"{tree}/_defaults.yaml", sibling):
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
-        (tmp_path / rel).write_text("defaults:\n  mysql_connections: 80\n",
+        (tmp_path / rel).write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                     encoding="utf-8")
     with monkeypatch.context() as m:
         m.setattr(gate, "PROJECT_ROOT", tmp_path)
@@ -1018,7 +1018,7 @@ def test_the_two_floors_blame_the_right_cause(monkeypatch):
 _NESTED_DOC = """defaults:
   threshold:
     cpu: 70
-    mysql_connections_critical: 90
+    mysql_connection_usage_percent_critical: 90
   alert_group: baseline
 """
 
@@ -1033,7 +1033,7 @@ def test_the_walk_reaches_every_depth_not_just_the_top():
     reader was silent here.
     """
     keys = gate._defaults_section(_NESTED_DOC)
-    assert "threshold.mysql_connections_critical" in keys, keys
+    assert "threshold.mysql_connection_usage_percent_critical" in keys, keys
 
     top_level_only = set(yaml.safe_load(_NESTED_DOC)["defaults"])
     assert not [k for k in top_level_only if k.endswith("_critical")], (
@@ -1049,8 +1049,8 @@ def test_a_nested_misplacement_is_an_error_end_to_end():
     )
     hits = [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e]
     assert len(hits) == 1, result
-    assert "threshold.mysql_connections_critical" in hits[0], (
-        "the message must name the PATH — 'mysql_connections_critical' alone "
+    assert "threshold.mysql_connection_usage_percent_critical" in hits[0], (
+        "the message must name the PATH — 'mysql_connection_usage_percent_critical' alone "
         "sends the reader to the top level, which is not where it is")
 
 
@@ -1188,7 +1188,7 @@ def test_a_top_level_critical_key_with_a_mapping_value_is_its_own_case():
     and nothing is emitted at all. Measured (round-6 mutation): removing the
     branch left all 88 tests green.
     """
-    face = _nested(**{"mysql_connections_critical": {"a": 1}})
+    face = _nested(**{"mysql_connection_usage_percent_critical": {"a": 1}})
     msg = [e for e in gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
         defaults_faces=({"probe": face}, {}),
@@ -4054,8 +4054,8 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # UP: the largest pure addition that keeps `total - biggest < floor` true.
     up_gen = gate._DEFAULTS_GENERATOR_KEYS_FLOOR - (g_total - g_biggest) - 1
     up_art = gate._DEFAULTS_ARTIFACT_KEYS_FLOOR - (a_total - a_biggest) - 1
-    assert (up_art, up_gen) == (6, 28), (
-        f"the HEADROOM note beside the key floors says artifacts +6 / generators "
+    assert (up_art, up_gen) == (5, 28), (
+        f"the HEADROOM note beside the key floors says artifacts +5 / generators "
         f"+28 upward; measured {up_art} / {up_gen}. Update the note and this "
         "assertion together, and keep the DIRECTION word beside each number.")
 
@@ -6133,7 +6133,7 @@ def test_a_new_defaults_writer_is_reported_not_counted(tmp_path, monkeypatch):
         "def build():\n"
         "    doc = {}\n"
         "    doc['defaults'] = {}\n"
-        "    doc['defaults']['mysql_connections_critical'] = 90\n"
+        "    doc['defaults']['mysql_connection_usage_percent_critical'] = 90\n"
         "    return doc\n",
         encoding="utf-8",
     )
@@ -6262,7 +6262,7 @@ def test_the_two_exempted_writers_really_do_refuse_the_inert_shapes():
         sys.path.insert(0, str(ops_dir))
 
     for rel, bad_key in (
-        ("scripts/tools/dx/generate_tenant_fixture.py", "mysql_connections_critical"),
+        ("scripts/tools/dx/generate_tenant_fixture.py", "mysql_connection_usage_percent_critical"),
         ("scripts/ops/inject_default_key.py", "pg_replication_lag_critical"),
     ):
         assert "refuses" in gate._DEFAULTS_WRITER_EXEMPT[rel]

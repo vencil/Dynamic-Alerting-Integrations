@@ -1401,7 +1401,7 @@ def _http_config_problem(value: Any, rtype: str = "webhook") -> Optional[str]:
     """First problem of an ``http_config`` value, or ``None`` (#2295).
 
     Alertmanager's own rule (prometheus/common HTTPClientConfig / ProxyConfig
-    as amtool 0.34.1 loads them), stricter only where the shared case table
+    as Alertmanager 0.34.1 loads them), stricter only where the shared case table
     says ``strict``:
 
     - null is unset; otherwise a mapping;
@@ -1413,8 +1413,8 @@ def _http_config_problem(value: Any, rtype: str = "webhook") -> Optional[str]:
     - ``proxy_url`` / ``no_proxy``: null and ``""`` are unset; else a string
       (strict for the same reason). Whether a proxy_url
       parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
-      generator's ``--validate`` hands the rendered config to amtool, which
-      runs it;
+      generator's ``--validate`` hands the rendered config to Alertmanager's
+      loader (da-read), which runs it;
     - ``proxy_from_environment`` is a boolean or null (#2906: never a
       string, whatever it says — ``is_bool_or_unset``); true together with a
       non-empty proxy_url or a no_proxy is refused; no_proxy needs a

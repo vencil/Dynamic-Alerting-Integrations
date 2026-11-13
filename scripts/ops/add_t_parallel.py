@@ -147,11 +147,18 @@ def process_file(path: Path) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: add_t_parallel.py <file_or_dir>...", file=sys.stderr)
-        return 2
+    import argparse
+
+    import _lib_paths
+    parser = argparse.ArgumentParser(description='Add t.Parallel() to top-level Go tests in the given *_test.go files and directories.')
+    parser.add_argument("paths", nargs="+", metavar="FILE_OR_DIR")
+    args = parser.parse_args()
+    # #3605: every path is judged before the first one is rewritten, so a
+    # missing one is a named refusal (rc 2) with nothing written.
+    _lib_paths.raise_path_problems(
+        [_lib_paths.classify_path(p, "any", lang="en") for p in args.paths])
     total = 0
-    for arg in sys.argv[1:]:
+    for arg in args.paths:
         p = Path(arg)
         targets = sorted(p.rglob("*_test.go")) if p.is_dir() else [p]
         for f in targets:

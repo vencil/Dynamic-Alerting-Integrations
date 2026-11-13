@@ -26,7 +26,7 @@ def _by_key(verdict, tenant):
     return {v.key: v for v in verdict.keys[tenant]}
 
 
-_ADR_DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
+_ADR_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
 _ADR_TENANT = ("tenants:\n  db-a:\n"
                "    mysql_conections: \"70\"\n"
                "    mysql_slave_lagg: disable\n"
@@ -48,7 +48,7 @@ def test_the_adr_example(tmp_path):
         "redis_memory_critical": (("exporter",), "read", None, None),
         "_namespaces": (("annotation",), "read", None, None),
         # 繼承來的閾值：exporter 有送
-        "mysql_connections": (("exporter",), "read", None, None),
+        "mysql_connection_usage_percent": (("exporter",), "read", None, None),
         "mysql_slave_lag": (("exporter",), "read", None, None),
     }
     # `redis_memory: disable` 連同 `redis_memory_critical` 一起關掉（#3046）：
@@ -67,21 +67,21 @@ def test_a_disable_switches_off_its_whole_family_wherever_it_comes_from(tmp_path
     根 defaults 的維度預設值，#1231 舊拼法亦同）。這些同族鍵 exporter 讀了才關，
     判 read、沒有 finding；/metrics 不送。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "dimensions:\n  mysql_connections: [db]\n  mysql_threads_running: [db]\n"
-                          "defaults:\n  redis_memory: 70\n  mysql_connections: 80\n"
-                          "  mysql_connections{db=\"x\"}: 12\n  pg_conn: 50\n  mysql_threads_running: 50\n",
+        "_defaults.yaml": "dimensions:\n  mysql_connection_usage_percent: [db]\n  mysql_threads_running: [db]\n"
+                          "defaults:\n  redis_memory: 70\n  mysql_connection_usage_percent: 80\n"
+                          "  mysql_connection_usage_percent{db=\"x\"}: 12\n  pg_conn: 50\n  mysql_threads_running: 50\n",
         "_platform.yaml": "tenants:\n  tp:\n    redis_memory_critical: \"95\"\n",
         "team/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",
         "_profiles.yaml": "profiles:\n  p1:\n    pg_conn_critical: 96\n",
         "t.yaml": "tenants:\n  ta:\n    redis_memory: disable\n    redis_memory_critical: \"90\"\n"
-                  "    mysql_connections: disable\n    mysql_connections{db=\"y\"}: \"7\"\n"
+                  "    mysql_connection_usage_percent: disable\n    mysql_connection_usage_percent{db=\"y\"}: \"7\"\n"
                   "  tc:\n    _profile: p1\n    pg_conn: disable\n",
         "team/tb.yaml": "tenants:\n  tb:\n    redis_memory: disable\n",
         "tp.yaml": "tenants:\n  tp:\n    redis_memory: disable\n",
         "own.yaml": "tenants:\n  town:\n    mysql_cpu: disable\n    mysql_cpu_critical: \"90\"\n"
                     "    mysql_cpu{db=\"z\"}: \"4\"\n",
     }))
-    family = {"ta": ("redis_memory_critical", 'mysql_connections{db="y"}'),
+    family = {"ta": ("redis_memory_critical", 'mysql_connection_usage_percent{db="y"}'),
               "tb": ("redis_memory_critical",), "tc": ("pg_conn_critical",), "tp": ("redis_memory_critical",),
               "town": ("mysql_cpu_critical", 'mysql_cpu{db="z"}')}
     for tenant, keys in family.items():
@@ -94,7 +94,7 @@ def test_a_disable_switches_off_its_whole_family_wherever_it_comes_from(tmp_path
     got = {(f.kind, f.key, f.tenants, f.base, f.blocks) for f in t.findings}
     assert got == {
         ("disable_cascade", "redis_memory_critical", ("ta",), "redis_memory", False),
-        ("disable_cascade", 'mysql_connections{db="y"}', ("ta",), "mysql_connections", False),
+        ("disable_cascade", 'mysql_connection_usage_percent{db="y"}', ("ta",), "mysql_connection_usage_percent", False),
         ("disable_cascade", "mysql_cpu_critical", ("town",), "mysql_cpu", False),
         ("disable_cascade", 'mysql_cpu{db="z"}', ("town",), "mysql_cpu", False),
     }, t.findings
@@ -103,7 +103,7 @@ def test_a_disable_switches_off_its_whole_family_wherever_it_comes_from(tmp_path
 def test_a_platform_side_typo_is_one_error_naming_the_file_and_its_tenants(tmp_path):
     """profile 裡的錯字：每個選用它的租戶都讀不到，報成一筆 error，指名 profile 檔
     （#3394：等級描述缺陷，不因寫在平台側而降級；誰被擋看檔，決定 6）。"""
-    files = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+    files = {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
              "_profiles.yaml": "profiles:\n  p1:\n    mysql_conections: 70\n"}
     for t in ("ta", "tb", "tc"):
         files[f"{t}.yaml"] = f"tenants:\n  {t}:\n    _profile: p1\n"
@@ -117,7 +117,7 @@ def test_a_platform_side_typo_is_one_error_naming_the_file_and_its_tenants(tmp_p
 
 
 def test_a_tenant_own_typo_is_one_error_per_tenant(tmp_path):
-    files = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n"}
+    files = {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n"}
     for t in ("ta", "tb"):
         files[f"{t}.yaml"] = f"tenants:\n  {t}:\n    mysql_conections: 70\n"
     t = kv.judge_tree(_tree(tmp_path, files))
@@ -131,9 +131,9 @@ def test_an_unregistered_key_the_root_declares_is_unread(tmp_path):
     所以它和其他沒人讀的鍵一樣是 `unread`、error：寫在租戶自己的檔的算在該租戶；
     只從根 defaults 繼承的報一筆在根 defaults，列出它到達的租戶（#3394）。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _myth: 5\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  _myth: 5\n",
         "ta.yaml": "tenants:\n  ta:\n    _myth: 7\n",
-        "tb.yaml": "tenants:\n  tb:\n    mysql_connections: 60\n"}))
+        "tb.yaml": "tenants:\n  tb:\n    mysql_connection_usage_percent: 60\n"}))
     a, b = _by_key(t, "ta")["_myth"], _by_key(t, "tb")["_myth"]
     assert (a.read_by, a.verdict, a.severity, a.reason, a.file) == (
         (), "unread", "error", "unregistered", "ta.yaml")
@@ -166,7 +166,7 @@ def test_a_root_platform_file_without_thresholds_still_decides(tmp_path):
 @pytest.mark.parametrize("target", ["owner_tag", "owner_tag.sub"])
 def test_a_key_a_policy_rule_names_is_read(tmp_path, target):
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n_policies:\n"
                           f"  - {{name: p, target: '{target}', operator: required, severity: error}}\n",
         "ta.yaml": "tenants:\n  ta:\n    owner_tag: team-a\n    other_tag: x\n"}))
     keys = _by_key(t, "ta")
@@ -178,7 +178,7 @@ def test_a_key_a_policy_rule_names_is_read(tmp_path, target):
 def test_a_wildcard_rule_names_no_key(tmp_path):
     """`mysql_*` 會比到拼錯的 `mysql_conections`；萬用字元不算指名，不替錯字背書。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n_policies:\n"
                           "  - {name: p, target: 'mysql_*', operator: lte, value: 60, severity: error}\n",
         "ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n"}))
     assert _by_key(t, "ta")["mysql_conections"].verdict == "unread"
@@ -186,7 +186,7 @@ def test_a_wildcard_rule_names_no_key(tmp_path):
 
 def test_a_rule_credits_no_tenant_it_excludes_and_no_unregistered_reserved_key(tmp_path):
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n_policies:\n"
                           "  - {name: p, target: owner_tag, operator: required, severity: error,"
                           " exclude_tenants: [tb]}\n"
                           "  - {name: q, target: _typo_reserved, operator: required, severity: error}\n",
@@ -202,13 +202,13 @@ def test_a_reserved_key_a_subtree_writes_is_not_judged_here(tmp_path):
     判決看不到它，改由 da-guard 的 subtree_default_reserved_key error 報。#3341 以前登錄表說
     exporter 讀這一層的 `_state_<f>`、`_severity_dedup`，這裡判成 read。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n"
                           "state_filters:\n  maint: {reasons: [X], severity: critical}\n",
         "team/_defaults.yaml": "defaults:\n  _state_maint: enable\n  _severity_dedup: enable\n"
                                "  _silent_mode: warning\n",
-        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"}))
     keys = _by_key(t, "ta")
-    assert "mysql_connections" in keys  # 不是恆真：這個租戶真的被判了
+    assert "mysql_connection_usage_percent" in keys  # 不是恆真：這個租戶真的被判了
     for k in ("_state_maint", "_severity_dedup", "_silent_mode"):
         assert k not in keys, (k, keys[k])
 
@@ -216,7 +216,7 @@ def test_a_reserved_key_a_subtree_writes_is_not_judged_here(tmp_path):
 def test_an_undeclared_state_filter_is_a_platform_notice(tmp_path):
     """租戶寫了平台沒宣告的 `_state_foo`：缺的是平台的宣告，報成平台側 notice（決定 7）。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "ta.yaml": "tenants:\n  ta:\n    _state_foo: enable\n",
         "tb.yaml": "tenants:\n  tb:\n    _state_foo: enable\n"}))
     v = _by_key(t, "ta")["_state_foo"]
@@ -230,9 +230,9 @@ def test_a_declared_reader_counts_only_in_its_layer(tmp_path):
     `defaults:` 的子目錄 `_defaults.yaml` 頂層的那份不進 effective（#3341；之前判成只有
     exporter 讀），一層一讀取端的對應由下方的合成輸入釘住。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "team/_defaults.yaml": "_severity_dedup: enable\n",
-        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n",
+        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n",
         "tb.yaml": "tenants:\n  tb:\n    _severity_dedup: enable\n"}))
     assert "_severity_dedup" not in _by_key(t, "ta")
     assert _by_key(t, "tb")["_severity_dedup"].read_by == ("exporter", "generator")
@@ -244,7 +244,7 @@ def test_custom_alerts_have_the_same_readers_in_every_layer(tmp_path):
     recipe = ("      - {recipe: threshold, name: n1, metric: m1, op: '>', window: 5m, "
               "threshold: '10:warning'}\n")
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "_profiles.yaml": "profiles:\n  p1:\n    _custom_alerts:\n" + recipe,
         "ta.yaml": "tenants:\n  ta:\n    _profile: p1\n",
         "tb.yaml": "tenants:\n  tb:\n    _custom_alerts:\n" + recipe}))
@@ -263,7 +263,7 @@ def test_custom_alerts_have_the_same_readers_in_every_layer(tmp_path):
 def test_a_rule_names_a_key_in_either_alias_spelling(tmp_path, rule_key, written):
     """Policy-as-Code 以別名表比對規則與 key；共用判決用同一個比法。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n_policies:\n"
                           f"  - {{name: p, target: '{rule_key}', operator: required, severity: error}}\n",
         "ta.yaml": f"tenants:\n  ta:\n    {written}: abc\n"}))
     assert "policy_engine" in _by_key(t, "ta")[written].read_by
@@ -273,9 +273,9 @@ def test_an_inherited_undeclared_state_filter_is_the_root_files_notice(tmp_path)
     """平台檔 `tenants:` 給的 `_state_ghost`（#3341 以前用子目錄 `_defaults.yaml`，那一層
     已不帶保留鍵）：缺的是根目錄的宣告。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "_platform.yaml": "tenants:\n  ta:\n    _state_ghost: enable\n",
-        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
+        "team/ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"}))
     v = _by_key(t, "ta")["_state_ghost"]
     assert (v.verdict, v.severity, v.reason) == ("unread", "notice", "state_filter_undeclared")
     assert [f.file for f in t.findings if f.key == "_state_ghost"] == ["_defaults.yaml"]
@@ -286,7 +286,7 @@ def test_an_inherited_undeclared_state_filter_is_the_root_files_notice(tmp_path)
 _TWO_TENANTS = {
     "_defaults.yaml": _ADR_DEFAULTS,
     "db-a.yaml": _ADR_TENANT,
-    "db-b.yaml": "tenants:\n  db-b:\n    mysql_connections: \"50\"\n    mysql_conections_b: \"1\"\n",
+    "db-b.yaml": "tenants:\n  db-b:\n    mysql_connection_usage_percent: \"50\"\n    mysql_conections_b: \"1\"\n",
 }
 
 
@@ -322,7 +322,7 @@ def test_a_profile_finding_in_a_subset_is_judged_over_the_requested_tenants(tmp_
     notice；只要求 db-a 時看不到 db-b，profile notice 就出現了。這是 ADR-038
     §5 記下的差異，不是「每個租戶跟全樹一樣」的那部分。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n    _namespaces: [a]\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\nprofiles:\n  gold:\n    _namespaces: [a]\n"
                           "_policies:\n  - {name: p, target: _namespaces, operator: required, severity: error,"
                           " exclude_tenants: [db-a]}\n",
         "db-a.yaml": "tenants:\n  db-a:\n    _profile: gold\n",
@@ -340,7 +340,7 @@ def test_rules_policy_engine_refuses_are_judged_by_no_one(tmp_path):
     是 Policy-as-Code 自己的事。`judge_tree` 先用 policy_engine 載入，它拒收的樹
     （`InvalidPolicyRules`）不判——無效的規則從來不執行，不能拿來把鍵算成有人讀。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n"
                           "_policies:\n  - {name: p, target: owner_tag, check: lte, value: 3}\n",
         "ta.yaml": "tenants:\n  ta:\n    owner_tag: x\n"})
     with pytest.raises(ValueError) as e:
@@ -391,8 +391,14 @@ def _da_guard_answering(tmp_path, document: str) -> str:
     ' "reason": null, "disable": null, "switched_off_with": null, "value": "70", "served": 70}]},'
     ' "findings": [], "key_checks": {}, "parse_failed": [], "unreadable": [],'
     ' "blocks": false, "undecidable_blocks": false}',
+    # #3829: before findings carried a retired threshold key's hint.
+    '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {},'
+    ' "findings": [{"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml",'
+    ' "tenants": ["t"], "reason": "no_row", "base": null, "dead_entries": null, "blocks": true}],'
+    ' "key_checks": {}, "parse_failed": [], "unreadable": [], "blocks": true,'
+    ' "undecidable_blocks": false}',
 ], ids=["v1", "v2-without-parse_failed", "v2-without-blocks", "v2-without-undecidable_blocks",
-        "partial-disable", "disable_partial-finding", "v2-without-dead_entries"])
+        "partial-disable", "disable_partial-finding", "v2-without-dead_entries", "v2-without-hint"])
 def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
     """#3489 審查：舊版 da-guard 的文件要說「比這支工具舊」（stale），不是「壞掉」——
     呼叫端與使用者據此知道要升級 da-guard，而不是去查樹。"""
@@ -408,7 +414,7 @@ _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict
         "severity": "error", "reason": "no_row", "disable": None, "switched_off_with": None,
         "dead_entries": [], "value": 1, "served": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
-            "reason": "no_row", "base": None, "dead_entries": None, "blocks": True}
+            "reason": "no_row", "hint": None, "base": None, "dead_entries": None, "blocks": True}
 _DEAD = {"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}
 
 
@@ -437,6 +443,7 @@ def _doc(**over):
     _doc(blocks="yes"),
     _doc(undecidable_blocks=None),
     _doc(findings=[dict(_FINDING, blocks=None)]),
+    _doc(findings=[dict(_FINDING, hint=1)]),  # #3829: a hint is text or null
     # #3502: a dead_entry carries its entries, no other kind does; a reason
     # outside the closed set is not read as one inside it.
     _doc(findings=[dict(_FINDING, kind="dead_entry")]),
@@ -459,7 +466,7 @@ def test_a_value_unread_is_charged_to_the_layer_that_writes_it(tmp_path):
     """#3591：讀不懂的保留鍵值在寫它的那一層判。profile 與根平台檔 `tenants:`
     的錯字是 notice、不擋；只有租戶自己檔裡的才是 error、會擋。"""
     files = {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\nprofiles:\n  gold:\n"
                           "    _silent_mode: purple\n    _metadata: {owner: p, bogus_field: x}\n",
         "_platform.yaml": "tenants:\n  ta:\n    _severity_dedup: maybe\n",
         "ta.yaml": "tenants:\n  ta:\n    _profile: gold\n",
@@ -486,8 +493,8 @@ def test_a_schedule_entry_that_never_serves_is_an_error_on_the_file_that_writes_
     """#3502：排程裡永遠不生效的條目（被前面 window 完全遮住的 window、被 window
     蓋滿整天的 default）在寫它的檔報 error 並擋；部分重疊的 window 照常合法。"""
     files = {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: 70\n",
-        "a.yaml": ("tenants:\n  t1:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  redis_memory: 70\n",
+        "a.yaml": ("tenants:\n  t1:\n    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
                    "        - window: \"22:00-06:00\"\n          value: \"1000\"\n"
                    "        - window: \"01:00-03:00\"\n          value: \"5\"\n"
                    "    redis_memory:\n      default: \"60\"\n      overrides:\n"
@@ -497,14 +504,14 @@ def test_a_schedule_entry_that_never_serves_is_an_error_on_the_file_that_writes_
     verdict = kv.judge_tree(_tree(tmp_path, files), at="2026-07-01T03:00:00Z")
     dead = [f for f in verdict.findings if f.kind == "dead_entry"]
     assert [(f.severity, f.key, f.file, f.tenants, f.blocks) for f in dead] == [
-        ("error", "mysql_connections", "a.yaml", ("t1",), True)]
+        ("error", "mysql_connection_usage_percent", "a.yaml", ("t1",), True)]
     assert dead[0].dead_entries == (tv.DeadEntry("overrides[1]", "01:00-03:00", "5", "window_covered"),)
     assert verdict.blocks
     row = {v.key: v for v in verdict.keys["t1"]}
-    assert row["mysql_connections"].dead_entries == dead[0].dead_entries
+    assert row["mysql_connection_usage_percent"].dead_entries == dead[0].dead_entries
     assert row["redis_memory"].dead_entries == ()
     assert kv.finding_line(dead[0], 5) == (
-        "a.yaml: error: dead_entry `mysql_connections` (never served: overrides[1] `01:00-03:00` → '5': "
+        "a.yaml: error: dead_entry `mysql_connection_usage_percent` (never served: overrides[1] `01:00-03:00` → '5': "
         "window_covered) — tenant(s) t1")
 
 
@@ -513,7 +520,7 @@ def test_a_profile_key_the_platform_does_not_fill_still_reads(tmp_path):
     也要帶 `dead_entries: []`；帶 null 時整份判決讀不進來（validate-config 變成
     verdict incomplete）。"""
     files = {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - kafka_lag\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\noptional_overrides:\n  - kafka_lag\n"
                           "profiles:\n  gold:\n    kafka_lag: \"5\"\n",
         "tx.yaml": "tenants:\n  tx:\n    _profile: gold\n",
     }

@@ -256,6 +256,10 @@ FINDING_KINDS: dict[str, str] = {
     "conflicting_override_matcher":
         "An override with both alertname and metric_group; it is not "
         "rendered.",
+    "unknown_override_metric_group":
+        "An override's metric_group is the group of no shipped rule pack "
+        "alert (#3692); it routes nothing unless the tenant's own rules carry "
+        "that group. Rendered; advisory.",
     "duplicate_override_matcher":
         "An override with the same matcher as an earlier one; the earlier "
         "one catches those alerts first, so it never takes effect.",
@@ -1208,7 +1212,7 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
         return None, warnings
     # #2295: optional values Alertmanager cannot load (non-boolean
     # send_resolved / require_tls, a malformed http_config) — without this the
-    # receiver is written out and only amtool, when it is on PATH, stops it.
+    # receiver is written out and only Alertmanager's loader stops it.
     problem = receiver_optional_problem(rtype, receiver_obj)
     if problem:
         warnings.append(skipped_entry_warning(
@@ -1243,7 +1247,7 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
     # write `to` as a YAML list (one address per line), which is far more readable.
     # Coerce that list into AM's comma-joined string here, at the boundary where we
     # emit AM config: a raw YAML sequence trips Alertmanager's parser with
-    # `cannot unmarshal !!seq into string` at config load (amtool check-config),
+    # `cannot unmarshal !!seq into string` at config load,
     # a failure the dict-only Python validation never surfaces.
     # ⛔ #2906: no boolean is rewritten here. A boolean field that is a string
     # (`"yes"`, `"true"`) was refused above (receiver_optional_problem), and

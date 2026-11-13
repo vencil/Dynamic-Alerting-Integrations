@@ -24,7 +24,10 @@ Usage
     scripts/ops/ci_flake_retry.py -- go test ./... -race -count=1
 
 The `--` separator is conventional but optional; everything after this
-script's own flags is the command to run.
+script's own flags is the command to run. As with GNU `timeout` / `env`,
+options end at the first operand: an option before it that is not this
+script's is refused by name (rc 2), never run as the command; a command
+that cannot be run is a named rc 2 too (#3605).
 
 Local exercising:
     scripts/ops/ci_flake_retry.py --self-test    # runs unit doctests
@@ -168,14 +171,20 @@ def run_command(cmd: list[str], timeout: float = 1800.0) -> tuple[int, str, str]
     test deadlock surfaces with a TimeoutExpired traceback rather than
     consuming the whole CI budget.
     """
-    proc = subprocess.run(
-        cmd,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout,
-    )
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+        )
+    except OSError as exc:  # #3605: not found / not executable — named, not a crash
+        import _lib_exitcodes
+        raise _lib_exitcodes.CallerError(
+            f"ERROR: ci_flake_retry: cannot run {cmd[0]!r}: {exc.strerror or exc}",
+            reason="command_not_runnable") from None
     return proc.returncode, proc.stdout or "", proc.stderr or ""
 
 
@@ -200,7 +209,7 @@ def retry_one_test(
 
 
 _SCRIPT_FLAGS_WITH_VALUE = frozenset({"--registry"})
-_SCRIPT_FLAGS_NO_VALUE = frozenset({"--self-test", "--verbose", "-v"})
+_SCRIPT_FLAGS_NO_VALUE = frozenset({"--self-test", "--verbose", "-v", "-h", "--help"})
 
 
 def split_args(argv: list[str]) -> tuple[list[str], list[str]]:
@@ -210,6 +219,11 @@ def split_args(argv: list[str]) -> tuple[list[str], list[str]]:
     everything after is the command to run. If no `--` present, walk
     argv left-to-right and consume tokens that match this script's own
     known flags (so `ci_flake_retry.py --self-test` works without `--`).
+
+    #3605 (owner, option A — GNU `timeout` / `env`): options end at the first
+    operand. A token before it that starts with `-` but is not ours stays an
+    option, so argparse refuses it by name (rc 2) instead of running it as
+    the command; `-h` / `--help` print the usage (rc 0).
     """
     if "--" in argv:
         i = argv.index("--")
@@ -231,7 +245,7 @@ def split_args(argv: list[str]) -> tuple[list[str], list[str]]:
             else:
                 i += 1
             continue
-        if tok.startswith("--registry="):
+        if tok.startswith("--registry=") or tok.startswith("-"):
             script_args.append(tok)
             i += 1
             continue
@@ -248,6 +262,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(
         description="Run a Go test command with surgical flake retry.",
+        usage="%(prog)s [--registry FILE] [--verbose] [--self-test] [--] COMMAND [ARG ...]",
     )
     parser.add_argument(
         "--registry",

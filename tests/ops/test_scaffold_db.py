@@ -8,7 +8,6 @@
 - Rule pack YAML 檔案遵循三層組結構
 - ConfigMap ↔ Rule Pack 同步漂移偵測
 - N:1 命名空間映射 (relabel snippets)
-- generate_profile() 以供層級式閾值設定檔
 """
 
 import os
@@ -458,8 +457,11 @@ class TestKafkaRabbitMQAlertCompleteness:
         mgs = self._get_metric_groups(data["groups"])
         expected = {
             "kafka_consumer_lag", "kafka_under_replicated_partitions",
-            "kafka_active_controllers", "kafka_broker_count", "kafka_request_rate",
+            "kafka_request_rate",
         }
+        # #3692: a single-member group suppresses nothing, so the two
+        # floor alerts with no critical twin carry none.
+        assert not mgs & {"kafka_active_controllers", "kafka_broker_count"}, mgs
         for mg in expected:
             assert mg in mgs, f"Missing metric_group: {mg}"
 
@@ -587,56 +589,3 @@ class TestRelabelSnippetEdgeCases:
     def test_custom_tenant_label(self):
         result = scaffold_tenant.generate_relabel_snippet("t", "ns1", tenant_label="team")
         assert "team" in result
-
-
-# ── generate_profile() Tests (v1.12.0) ───────────────────────────
-
-
-class TestGenerateProfile:
-    """Tests for scaffold_tenant.generate_profile()."""
-
-    def test_basic_profile_generation(self):
-        """Profile for mariadb 包含 defaults + optional overrides。"""
-        result = scaffold_tenant.generate_profile(
-            "standard-mariadb-prod", ["kubernetes", "mariadb"])
-        assert "profiles" in result
-        profile = result["profiles"]["standard-mariadb-prod"]
-        assert "container_cpu" in profile
-        assert "mysql_connections" in profile
-        assert "mysql_connections_critical" in profile
-
-    def test_staging_tier_relaxed(self):
-        """Staging tier 產生比 prod 寬鬆 20% 的閾值。"""
-        prod = scaffold_tenant.generate_profile("p", ["kubernetes", "mariadb"], tier="prod")
-        staging = scaffold_tenant.generate_profile("s", ["kubernetes", "mariadb"], tier="staging")
-        assert staging["profiles"]["s"]["container_cpu"] > prod["profiles"]["p"]["container_cpu"]
-
-    def test_multi_db_profile(self):
-        """Multiple DBs profile 包含所有 metric key。"""
-        result = scaffold_tenant.generate_profile("multi", ["kubernetes", "mariadb", "redis"])
-        profile = result["profiles"]["multi"]
-        assert "mysql_connections" in profile
-        assert "redis_memory_used_bytes" in profile
-
-    def test_empty_db_list(self):
-        """Empty DB list 仍回傳有效 profile 結構。"""
-        result = scaffold_tenant.generate_profile("empty", [])
-        assert "profiles" in result
-        assert result["profiles"]["empty"] == {}
-
-    def test_generate_profile_cli(self, monkeypatch, cli_argv):
-        """--generate-profile via CLI writes _profiles.yaml."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            cli_argv("scaffold_tenant.py",
-                "--generate-profile", "test-profile",
-                "--db", "mariadb",
-                "-o", tmpdir)
-            with pytest.raises(SystemExit) as exc_info:
-                scaffold_tenant.main()
-            assert exc_info.value.code == 0
-
-            path = os.path.join(tmpdir, "_profiles.yaml")
-            assert os.path.isfile(path)
-            data = _load_yaml(path)
-            assert "profiles" in data
-            assert "test-profile" in data["profiles"]

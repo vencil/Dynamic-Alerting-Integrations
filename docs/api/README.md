@@ -144,7 +144,7 @@ Tenants (1):
 
 Resolved thresholds:
   tenant=tenant-a metric=cpu value=95 severity=warning component=container
-  tenant=tenant-a metric=connections value=70 severity=warning component=mysql
+  tenant=tenant-a metric=connection_usage_percent value=70 severity=warning component=mysql
 ```
 
 這個範例有測試實跑：把上面兩個 yaml 放進空目錄載入，再比對輸出（`api_readme_examples_parity_test.go`）。

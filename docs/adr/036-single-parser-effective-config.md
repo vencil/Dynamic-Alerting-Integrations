@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-11-01
+updated_at: 2026-11-12
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -88,7 +88,7 @@ YAML 有一種「把另一個 mapping 併進來」的寫法，常見的是 `<<:`
 tenants:
   t1:
     _routing:
-      !!merge q: {receiver: {type: slack, api_url: "https://hooks.slack.com/x"}}
+      !!merge q: {receiver: {type: slack, api_url: {secret: {key: slack-api-url}}}}
 ```
 
 - **產生器**照 merge 處理，t1 的 receiver 是 `slack`。如果 domain policy 禁止 slack，產生器會報錯，exit code 為 1。
@@ -266,7 +266,7 @@ tenants:
     _routing:
       receiver:
         type: slack
-        api_url: "https://hooks.slack.com/x"
+        api_url: {secret: {key: slack-api-url}}
         send_resolved: yes
       group_wait: 30s
 ```
@@ -281,7 +281,7 @@ tenants:
         "_routing": {
           "group_wait": {"text": "30s", "tag": "!!str", "value": "30s"},
           "receiver": {
-            "api_url": {"text": "https://hooks.slack.com/x", "tag": "!!str", "value": "https://hooks.slack.com/x"},
+            "api_url": {"secret": {"key": {"text": "slack-api-url", "tag": "!!str", "value": "slack-api-url"}}},
             "send_resolved": {"text": "yes", "tag": "!!str", "value": "yes"},
             "type": {"text": "slack", "tag": "!!str", "value": "slack"}
           }

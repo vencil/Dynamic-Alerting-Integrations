@@ -58,8 +58,8 @@ def _both(*fs):
 
 ENFORCED = ("_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n"
             "    url: \"https://noc.example.com/hook\"\n")
-BIND_P1 = lambda d: _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',  # noqa: E731
-                         '    mysql_connections: "70"\n    _profile: p1\n')
+BIND_P1 = lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',  # noqa: E731
+                         '    mysql_connection_usage_percent: "70"\n    _profile: p1\n')
 NESTED_CARRIER = "examples/_defaults.yaml"
 
 # (id, file, key, setup on both sides, edit on the PR side, exact)
@@ -82,27 +82,27 @@ CASES = [
      _append("_defaults.yaml", "\ntenants:\n  db-a:\n    container_memory: \"60\"\n"),
      lambda d: _sub(d / "_defaults.yaml", 'container_memory: "60"', 'container_memory: "61"'), False),
     ("root-carrier.optional_overrides", "_defaults.yaml", "optional_overrides",
-     lambda d: _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-                    '    mysql_connections: "70"\n    oracle_process_count: "100"\n'),
+     lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+                    '    mysql_connection_usage_percent: "70"\n    oracle_process_count: "100"\n'),
      lambda d: _sub(d / "_defaults.yaml", "  - oracle_process_count", "  - oracle_process_countx"), True),
     ("root-carrier.dimensions", "_defaults.yaml", "dimensions",
-     lambda d: _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-                    '    mysql_connections: "70"\n    container_cpu{version="v2"}: "60"\n'),
+     lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+                    '    mysql_connection_usage_percent: "70"\n    container_cpu{version="v2"}: "60"\n'),
      lambda d: _sub(d / "_defaults.yaml", "  container_cpu: [version]\n", "  container_cpu: [versionx]\n"), True),
     # another root `_` file
     ("root-other.dimensions", "_extra.yaml", "dimensions",
-     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-                          '    mysql_connections: "70"\n    mysql_connections{db="a"}: "60"\n'),
-           _put("_extra.yaml", "dimensions:\n  mysql_connections: [dbx]\n")),
+     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+                          '    mysql_connection_usage_percent: "70"\n    mysql_connection_usage_percent{db="a"}: "60"\n'),
+           _put("_extra.yaml", "dimensions:\n  mysql_connection_usage_percent: [dbx]\n")),
      lambda d: _sub(d / "_extra.yaml", "[dbx]", "[db]"), True),
     ("root-other.optional_overrides", "_extra.yaml", "optional_overrides",
-     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-                          '    mysql_connections: "70"\n    x_opt_2962: "100"\n'),
+     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+                          '    mysql_connection_usage_percent: "70"\n    x_opt_2962: "100"\n'),
            _put("_extra.yaml", "optional_overrides:\n  - x_opt_2962\n")),
      lambda d: _sub(d / "_extra.yaml", "  - x_opt_2962\n", "  - x_opt_2962x\n"), True),
     ("root-routing-profiles.routing_profiles", "_routing_profiles.yaml", "routing_profiles",
-     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-                          '    mysql_connections: "70"\n    _routing_profile: root-p\n'),
+     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+                          '    mysql_connection_usage_percent: "70"\n    _routing_profile: root-p\n'),
            _put("_routing_profiles.yaml", "routing_profiles:\n  root-p:\n    receiver:\n      type: webhook\n"
                                           "      url: \"https://hooks.example.com/rp\"\n")),
      lambda d: _sub(d / "_routing_profiles.yaml", "https://hooks.example.com/rp", "https://hooks.example.com/r2"),
@@ -148,9 +148,9 @@ CASES = [
      _put(NESTED_CARRIER, "defaults:\n  container_memory: 80\noptional_overrides:\n  - x_opt_2962\n"),
      lambda d: _sub(d / NESTED_CARRIER, "  - x_opt_2962\n", "  - x_opt_2962x\n"), True),
     ("nested-carrier.dimensions", NESTED_CARRIER, "dimensions",
-     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connections: "70"\n',
-                          '    mysql_connections: "70"\n    mysql_connections{db="a"}: "60"\n'),
-           _put(NESTED_CARRIER, "defaults:\n  container_memory: 80\ndimensions:\n  mysql_connections: [dbx]\n")),
+     _both(lambda d: _sub(d / "db-a.yaml", '    mysql_connection_usage_percent: "70"\n',
+                          '    mysql_connection_usage_percent: "70"\n    mysql_connection_usage_percent{db="a"}: "60"\n'),
+           _put(NESTED_CARRIER, "defaults:\n  container_memory: 80\ndimensions:\n  mysql_connection_usage_percent: [dbx]\n")),
      lambda d: _sub(d / NESTED_CARRIER, "[dbx]", "[db]"), True),
     ("nested-carrier.profiles", NESTED_CARRIER, "profiles",
      _put(NESTED_CARRIER, "defaults:\n  container_memory: 80\nprofiles:\n  p1:\n    container_memory: 50\n"),
@@ -162,9 +162,9 @@ CASES = [
     # another `_` file below the root
     # (#3014 deleted the real file of this name; the row builds its own)
     ("nested-other.defaults", "examples/_defaults-multidb.yaml", "defaults",
-     _put("examples/_defaults-multidb.yaml", "defaults:\n  mysql_connections: 80\n"),
-     lambda d: _sub(d / "examples/_defaults-multidb.yaml", "  mysql_connections: 80\n",
-                    "  mysql_connections: 81\n"), True),
+     _put("examples/_defaults-multidb.yaml", "defaults:\n  mysql_connection_usage_percent: 80\n"),
+     lambda d: _sub(d / "examples/_defaults-multidb.yaml", "  mysql_connection_usage_percent: 80\n",
+                    "  mysql_connection_usage_percent: 81\n"), True),
     ("nested-other.tenants", "examples/_platform.yaml", "tenants",
      _put("examples/_platform.yaml", "tenants:\n  es-prod:\n    container_memory: \"60\"\n"),
      lambda d: _sub(d / "examples/_platform.yaml", 'container_memory: "60"', 'container_memory: "61"'), True),

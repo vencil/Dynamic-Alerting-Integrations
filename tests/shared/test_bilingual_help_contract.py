@@ -29,7 +29,7 @@ allowlist — there is no silent escape (``test_partition_is_exact``).
 
 * BILINGUAL (derived complement, 37 — all pass; repair queue empty) — the
   behavioral assertions above run per tool.
-* ``ENGLISH_ONLY`` (141) — dx convention: non-customer-facing internal tools
+* ``ENGLISH_ONLY`` (142) — dx convention: non-customer-facing internal tools
   may ship English-only help. RATCHET: shrink-only — the gate runs each one
   under ``DA_LANG=zh`` and turns RED the moment its help gains CJK, forcing
   the entry OUT of the allowlist and INTO the bilingual contract.
@@ -255,13 +255,14 @@ ENGLISH_ONLY: dict[str, str] = {
     "check_undefined_tokens.py": _R_LINT,
     "check_unpinned_deps.py": _R_LINT,
     "check_vmalert_coverage.py": _R_LINT,
+    "check_jsx_linecount.py": _R_LINT,
     "check_window_x_no_fallback.py": _R_LINT,
     "check_workflow_git_push_permissions.py": _R_LINT,
     "check_workload_closure_drift.py": _R_LINT,
     "detect_sed_damage.py": _R_LINT,
     "fix_file_hygiene.py": _R_LINT,
     "lint_html_doc_links.py": _R_LINT,
-    "lint_jsx_babel.py": _R_LINT,
+    "lint_jsx_syntax.py": _R_LINT,
     "lint_tool_consistency.py": _R_LINT,
     "trufflehog_to_sarif.py": _R_LINT,
     "validate_mermaid.py": _R_LINT,

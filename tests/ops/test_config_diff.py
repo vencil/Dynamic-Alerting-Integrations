@@ -150,8 +150,8 @@ class TestClassifyChange:
 class TestComputeDiff:
 
     def test_basic_diff(self):
-        diffs = cd.compute_diff({"db-a": {"mysql_connections": 80, "redis_memory": 1024}},
-                                {"db-a": {"mysql_connections": 50, "redis_memory": 1024}})
+        diffs = cd.compute_diff({"db-a": {"mysql_connection_usage_percent": 80, "redis_memory": 1024}},
+                                {"db-a": {"mysql_connection_usage_percent": 50, "redis_memory": 1024}})
         assert [c["change"] for c in diffs["db-a"]] == ["tighter"]
 
     def test_new_and_removed_tenant(self):
@@ -168,7 +168,7 @@ class TestEstimateAffectedAlerts:
     """欄位內容取自 rule pack，不是 key 拼法的 CamelCase（舊版寫 *MysqlConnections*）。"""
 
     def test_names_come_from_the_rule_packs(self):
-        assert cd.estimate_affected_alerts("mysql_connections") == \
+        assert cd.estimate_affected_alerts("mysql_connection_usage_percent") == \
             "MariaDBHighConnections, MariaDBSystemBottleneck"
 
     def test_a_key_no_alert_reads(self):
@@ -176,7 +176,7 @@ class TestEstimateAffectedAlerts:
 
     def test_unknown_when_the_rule_packs_are_missing(self, monkeypatch):
         monkeypatch.setattr(cd, "alerts_for_key", lambda key: None)
-        assert cd.estimate_affected_alerts("mysql_connections") == "unknown"
+        assert cd.estimate_affected_alerts("mysql_connection_usage_percent") == "unknown"
 
 
 def test_format_value():
@@ -294,9 +294,9 @@ class TestRenderMarkdown:
 
     def test_threshold_table_and_summary(self):
         md = cd.render_markdown(_report(metric={
-            "db-a": [{"key": "mysql_connections", "old": 80, "new": 50, "change": "tighter"}]}))
+            "db-a": [{"key": "mysql_connection_usage_percent", "old": 80, "new": 50, "change": "tighter"}]}))
         assert "## Threshold Changes" in md
-        assert "| mysql_connections | 80 | 50 | tighter |" in md and md.count("| tenant `db-a` |") == 1
+        assert "| mysql_connection_usage_percent | 80 | 50 | tighter |" in md and md.count("| tenant `db-a` |") == 1
         assert md.splitlines()[-1].startswith("Summary: 1 tenant(s) changed, 1 metric change(s)")
 
     def test_summary_counts_each_tenant_once_across_sections(self):
@@ -504,7 +504,7 @@ class TestBuildReport:
         md = cd.render_markdown(_report(views={rd.VIEW_SERVED: bad, rd.VIEW_ROUTES: _OK}))
         assert "\x1b" not in md and "x\\x1b[2J.yaml" in md
         monkeypatch.setattr(cd.rd, "compare", lambda *a, **k: rd.RenderDiff(AT, bad, _OK))
-        _write_tenant(tmp_path / "d", {"mysql_connections": "80"})  # #3693: a PR side
+        _write_tenant(tmp_path / "d", {"mysql_connection_usage_percent": "80"})  # #3693: a PR side
         monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path / "d"),
                                           "--new-dir", str(tmp_path / "d"), "--at", AT])
         with pytest.raises(SystemExit) as exc:
@@ -561,14 +561,14 @@ class TestCLI:
     @pytest.mark.parametrize("at", ["2026-10-10", "2026-10-10 00:00:00Z", "2026-10-10T00:00:00", "now",
                                     "2026-13-45T25:00:00Z"])
     def test_at_that_is_not_rfc3339_is_a_caller_error(self, tmp_path, at):
-        _write_tenant(tmp_path, {"mysql_connections": "80"})
+        _write_tenant(tmp_path, {"mysql_connection_usage_percent": "80"})
         p = _run_cli(tmp_path, tmp_path, at=at)
         assert p.returncode == 2 and "--at" in p.stderr, (p.returncode, p.stderr)
         # Refused as an argument, before anything renders: no report at all.
         assert p.stdout == "" and "is not RFC3339" in p.stderr, (p.stdout, p.stderr)
 
     def test_at_is_printed_and_defaults_to_now(self, tmp_path):
-        _write_tenant(tmp_path, {"mysql_connections": "80"})
+        _write_tenant(tmp_path, {"mysql_connection_usage_percent": "80"})
         assert _json(_run_cli(tmp_path, tmp_path, "--format", "json"))["at"] == AT
         p = _run_cli(tmp_path, tmp_path, "--format", "json", at=None)
         assert p.returncode == 0, p.stderr
@@ -578,7 +578,7 @@ class TestCLI:
     def test_at_is_one_instant_for_both_sides(self, tmp_path):
         """--at 是兩側共用的時間點：同一份設定在靜音到期前後讀出不同的值，但兩側讀同一刻，
         所以都沒有差異；對照組是真的改了到期時間。"""
-        silence = {"mysql_connections": "80",
+        silence = {"mysql_connection_usage_percent": "80",
                    "_silent_mode": {"target": "all", "expires": "2026-10-10T12:00:00Z"}}
         _write_tenant(tmp_path / "a", silence)
         for at in ("2026-10-10T00:00:00Z", "2026-10-11T00:00:00Z"):
@@ -588,7 +588,7 @@ class TestCLI:
         assert _run_cli(tmp_path / "a", tmp_path / "b").returncode == 1
 
     def test_exit_0_no_changes(self, tmp_path):
-        _write_tenant(tmp_path, {"mysql_connections": "80"})
+        _write_tenant(tmp_path, {"mysql_connection_usage_percent": "80"})
         p = _run_cli(tmp_path, tmp_path)
         assert p.returncode == 0, p.stderr
         assert p.stdout.rstrip().endswith("No changes detected.")
@@ -599,26 +599,26 @@ class TestCLI:
         for side in ("old", "new"):
             (tmp_path / side).mkdir()
             (tmp_path / side / "_defaults.yaml").write_text(
-                "defaults:\n  mysql_connections: 80\n", encoding="utf-8", newline="\n")
-        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
-        _write_tenant(tmp_path / "new", {"mysql_connections": "50"})
+                "defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8", newline="\n")
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connection_usage_percent": "50"})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 1, p.stderr
-        assert "| mysql_connections | 80 | 50 | tighter |" in p.stdout
+        assert "| mysql_connection_usage_percent | 80 | 50 | tighter |" in p.stdout
 
     def test_a_change_to_a_key_served_on_neither_side_says_so(self, tmp_path):
         """No `_defaults.yaml`: /metrics serves the key on neither side, and
         the table says so on both values (#3022)."""
-        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
-        _write_tenant(tmp_path / "new", {"mysql_connections": "50"})
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connection_usage_percent": "50"})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 1, p.stderr
-        assert ("| mysql_connections | 80 (not served) | 50 (not served) | tighter |"
+        assert ("| mysql_connection_usage_percent | 80 (not served) | 50 (not served) | tighter |"
                 in p.stdout), p.stdout
 
     def test_old_dir_missing_is_a_first_import(self, tmp_path):
         """base 側沒有 conf.d（第一次匯入）：所有租戶算新增，rc 1，不是呼叫錯誤（ADR-037 決定 4）。"""
-        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connection_usage_percent": "80"})
         p = _run_cli(tmp_path / "nope", tmp_path / "new", "--format", "json")
         assert p.returncode == 1, p.stderr
         assert _json(p)["tenants_added"] == ["db-a"]
@@ -629,7 +629,7 @@ class TestCLI:
         --old-dir on one is no longer read as a first import (rc 1, every new
         tenant added): rc 2, `dir_not_accessible`."""
         from _platform_fs import symlink_or_skip
-        _write_tenant(tmp_path / "d", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "d", {"mysql_connection_usage_percent": "80"})
         loop = tmp_path / "loop"
         symlink_or_skip(loop, loop)
         dirs = {"old": tmp_path / "d", "new": tmp_path / "d", side: loop}
@@ -640,7 +640,7 @@ class TestCLI:
 
     @pytest.mark.parametrize("side", ["old", "new"])
     def test_a_file_given_as_a_directory_is_a_caller_error(self, tmp_path, side):
-        _write_tenant(tmp_path / "d", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "d", {"mysql_connection_usage_percent": "80"})
         f = tmp_path / "file.yaml"
         f.write_text("a: 1\n", encoding="utf-8")
         dirs = {"old": tmp_path / "d", "new": tmp_path / "d", side: f}
@@ -654,8 +654,8 @@ class TestCLI:
         own — rc 1, every tenant added, stderr empty. "Was it there" is read
         (`_lib_input.absent`), and da-guard reading the directory that is
         gone fails closed: rc 2, the side named, no report."""
-        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
-        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connection_usage_percent": "80"})
         real = cd._lib_input.selected
 
         def racing(args, dest, **kw):
@@ -678,7 +678,7 @@ class TestCLI:
         """#3693: a PR side that is not there is the flag's own refusal
         (`dir_not_found`), no report — it was a report whose views were
         "not computed: has no config file"."""
-        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
         p = _run_cli(tmp_path / "old", tmp_path / "nope")
         assert p.returncode == 2 and p.stdout == "", p.stdout
         assert f"--new-dir {tmp_path / 'nope'}: No such file or directory" in p.stderr, p.stderr
@@ -686,7 +686,7 @@ class TestCLI:
     def test_new_dir_with_no_config_file_selects_nothing(self, tmp_path):
         """#3693: a PR side with no config file is refused by its declaration
         (`empty=EMPTY_REFUSED`), in `_lib_input`'s one wording."""
-        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
         (tmp_path / "new").mkdir()
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 2 and p.stdout == "", p.stdout
@@ -703,8 +703,8 @@ class TestCLI:
     def test_pr_side_file_that_does_not_read_is_rc_2_and_named(self, tmp_path, label, write):
         """#1405：PR 側的檔讀不出租戶，不得讀成「閾值被移除」（rc 1）：rc 2，並具名列出那個檔。"""
         for side in ("old", "new"):
-            _write_tenant(tmp_path / side, {"mysql_connections": "80"}, name="db-b")
-        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+            _write_tenant(tmp_path / side, {"mysql_connection_usage_percent": "80"}, name="db-b")
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
         new = tmp_path / "new"
         write(new / "db-a.yaml")
         p = _run_cli(tmp_path / "old", new)
@@ -721,7 +721,7 @@ class TestCLI:
     @pytest.mark.parametrize("text", ["", "# nothing here\n"], ids=["empty", "comment-only"])
     def test_an_empty_tenant_file_is_legal_and_reads_as_removed(self, tmp_path, text):
         """#1405 的對照組：空檔與只有註解的檔是合法的，租戶的閾值確實沒了。"""
-        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
         (tmp_path / "new").mkdir()
         (tmp_path / "new" / "db-a.yaml").write_text(text, encoding="utf-8")
         p = _run_cli(tmp_path / "old", tmp_path / "new", "--format", "json")
@@ -733,21 +733,21 @@ class TestCLI:
         """表格欄位的值來自 PR 的檔案：`|` 會結束欄位、換行會結束表格，後面的字就成了
         PR 留言裡自己的 Markdown（標題、連結）。exporter 不送出、照原文列出的值也一樣。"""
         evil = "70\n\n## Approved | [x](https://e.example)\n"
-        _write_tenant(tmp_path / "old", {"mysql_connections": evil if side == "old" else "70"})
-        _write_tenant(tmp_path / "new", {"mysql_connections": evil if side == "new" else "70"})
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": evil if side == "old" else "70"})
+        _write_tenant(tmp_path / "new", {"mysql_connection_usage_percent": evil if side == "new" else "70"})
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 1, p.stderr
         assert not any(ln.startswith("## Approved") for ln in p.stdout.splitlines()), p.stdout
-        row = next(ln for ln in p.stdout.splitlines() if ln.startswith("| mysql_connections |"))
+        row = next(ln for ln in p.stdout.splitlines() if ln.startswith("| mysql_connection_usage_percent |"))
         # 6 欄（含 Tenants），5 個欄位分隔
         assert "\\|" in row and row.count(" | ") == 5, row
 
     def test_da_guards_own_reason_reaches_the_report(self, tmp_path):
         """da-guard 回 2（同一租戶宣告兩次）時，報告要帶它自己說的原因，不是只有「exited 2」。"""
-        _write_tenant(tmp_path / "old", {"mysql_connections": "80"})
-        _write_tenant(tmp_path / "new", {"mysql_connections": "80"})
+        _write_tenant(tmp_path / "old", {"mysql_connection_usage_percent": "80"})
+        _write_tenant(tmp_path / "new", {"mysql_connection_usage_percent": "80"})
         (tmp_path / "new" / "db-a-copy.yaml").write_text(
-            "tenants:\n  db-a:\n    mysql_connections: '90'\n", encoding="utf-8")
+            "tenants:\n  db-a:\n    mysql_connection_usage_percent: '90'\n", encoding="utf-8")
         p = _run_cli(tmp_path / "old", tmp_path / "new")
         assert p.returncode == 2, p.stderr
         line = next(ln for ln in p.stderr.splitlines() if "Exporter values" in ln)
@@ -756,9 +756,9 @@ class TestCLI:
     def test_base_side_that_does_not_read_is_not_compared_and_does_not_block(self, tmp_path):
         """main 上已經壞了、這個 PR 修好它：rc 1，報告寫出原因，不擋 PR。"""
         old, new = tmp_path / "old", tmp_path / "new"
-        _write_tenant(old, {"mysql_connections": "80"})
+        _write_tenant(old, {"mysql_connection_usage_percent": "80"})
         (old / "zz.yaml").write_text("tenants:\n  - x\n", encoding="utf-8")
-        _write_tenant(new, {"mysql_connections": "80"})
+        _write_tenant(new, {"mysql_connection_usage_percent": "80"})
         p = _run_cli(old, new)
         assert p.returncode == 1, (p.stdout, p.stderr)
         assert "not compared" in p.stdout and "zz.yaml" in p.stderr
@@ -771,7 +771,7 @@ class TestCLI:
         def boom(*a, **k):
             raise RuntimeError("boom")
         monkeypatch.setattr(cd.rd, "compare", boom)
-        _write_tenant(tmp_path / "n", {"mysql_connections": "80"})  # #3693: a PR side
+        _write_tenant(tmp_path / "n", {"mysql_connection_usage_percent": "80"})  # #3693: a PR side
         monkeypatch.setattr(sys, "argv", ["config_diff.py", "--old-dir", str(tmp_path / "o"),
                                           "--new-dir", str(tmp_path / "n")])
         with pytest.raises(SystemExit) as exc:
@@ -786,7 +786,7 @@ class TestAcceptance:
 
     def test_comment_only_change_is_rc_0(self, tmp_path):
         old, new = _sample_pair(tmp_path)
-        _edit(new, '    mysql_connections: "70"', '    mysql_connections: "70"  # reviewed', rel="db-a.yaml")
+        _edit(new, '    mysql_connection_usage_percent: "70"', '    mysql_connection_usage_percent: "70"  # reviewed', rel="db-a.yaml")
         p = _run_cli(old, new)
         assert p.returncode == 0, (p.stdout, p.stderr)
         # 對照：同一個檔真的改值時要響
@@ -826,10 +826,10 @@ class TestAcceptance:
 
     def test_platform_file_profile_binding_is_reported_for_its_tenant(self, tmp_path):
         """#2120：根目錄 `_platform.yaml` 裡改了租戶的 `_profile`，生效門檻變了的租戶要報出來。"""
-        profiles = "profiles:\n  std:\n    mysql_connections: 70\n  strict:\n    mysql_connections: 40\n"
+        profiles = "profiles:\n  std:\n    mysql_connection_usage_percent: 70\n  strict:\n    mysql_connection_usage_percent: 40\n"
         tenants = {"tx.yaml": "tenants:\n  tx:\n    container_cpu: '80'\n",
                    "ty.yaml": "tenants:\n  ty:\n    container_cpu: '80'\n",
-                   "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  container_cpu: 80\n"}
+                   "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  container_cpu: 80\n"}
         old, new = _pair(tmp_path,
                          {**tenants, "_profiles.yaml": profiles,
                           "_platform.yaml": "tenants:\n  tx:\n    _profile: std\n"},
@@ -838,7 +838,7 @@ class TestAcceptance:
         p = _run_cli(old, new, "--format", "json")
         assert p.returncode == 1, p.stderr
         doc = _json(p)
-        assert doc["threshold_changes"] == [{"key": "mysql_connections", "old": 70, "new": 40,
+        assert doc["threshold_changes"] == [{"key": "mysql_connection_usage_percent", "old": 70, "new": 40,
                                              "change": "tighter", "tenants": ["tx"]}]
         assert doc["uncovered_files"] == []
         assert [(r["file"], r["key"], r["status"]) for r in doc["platform_settings"]] == [
@@ -852,7 +852,7 @@ class TestTenantSettingChanges:
     """`_` 開頭的租戶設定改了，要報出來、rc=1（以 exporter 讀到的值比）。"""
 
     BASE = {
-        "mysql_connections": "80",
+        "mysql_connection_usage_percent": "80",
         "_silent_mode": "warning",
         "_state_container_crashloop": "disable",
         "_severity_dedup": "disable",
@@ -904,7 +904,7 @@ _SECRET_NEW = "https://hooks.slack.com/services/T0/B0/newSECRETvalue"
 class TestCredentialsAreNotPrinted:
     """receiver 的憑證欄位改了要報「有變」，但新舊值都不印——報告會貼成 PR comment。"""
 
-    BASE = {"mysql_connections": "80",
+    BASE = {"mysql_connection_usage_percent": "80",
             "_routing": {"receiver": {"type": "slack", "api_url": _SECRET_OLD}, "group_wait": "30s"}}
 
     def _run(self, tmp_path, old_cfg, new_cfg, *extra):
@@ -934,7 +934,7 @@ class TestCredentialsAreNotPrinted:
 
     @pytest.mark.parametrize("direction", ["added", "removed"])
     def test_a_whole_routing_block_is_redacted_inside(self, tmp_path, direction):
-        without = {"mysql_connections": "80"}
+        without = {"mysql_connection_usage_percent": "80"}
         old, new = (without, self.BASE) if direction == "added" else (self.BASE, without)
         p = self._run(tmp_path, old, new)
         assert p.returncode == 1
@@ -1054,7 +1054,7 @@ class TestPlatformSettings:
     鍵寫在讀取端不讀的位置與真的沒效果分不開，要等 #2962。註解、排版、同值換引號
     不是變更（取代逐位元組比對，#1420）。"""
 
-    TENANT = "tenants:\n  db-a:\n    mysql_connections: '70'\n"
+    TENANT = "tenants:\n  db-a:\n    mysql_connection_usage_percent: '70'\n"
     DEFAULTS = ("defaults:\n  cpu: 80\n  mem: 90\n"
                 "state_filters:\n  crash:\n    reasons: []\n    severity: \"critical\"\n")
 
@@ -1401,15 +1401,15 @@ class TestDisableWarnings:
     """PR 新引入的 noop `disable` 列在報告裡；base 已經有的同一件事不重複列。
     base 的 `disable` 連帶關掉同族鍵（#3046），沒有「只關到一部分」。"""
 
-    _DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
+    _DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
 
     def test_a_new_noop_is_listed(self, tmp_path):
         old, new = _pair(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: disable\n",
+            "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: disable\n",
         }, {
             "_defaults.yaml": self._DEFAULTS,
-            "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: disable\n"
+            "db-a.yaml": "tenants:\n  db-a:\n    mysql_connection_usage_percent: disable\n"
                          "    mysql_slave_lag: disable\n"  # 新加、有作用：不列
                          "    mysql_slave_lagg: disable\n"  # 拼錯：沒關到任何東西
                          "    redis_memory: disable\n    redis_memory_critical: \"90\"\n",  # 連帶關掉：effective

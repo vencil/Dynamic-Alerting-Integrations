@@ -17,6 +17,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": null,
@@ -43,6 +44,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "gold",
@@ -60,6 +62,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "maybe",
@@ -76,13 +79,14 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "purple",
         "served": []
       },
       {
-        "key": "mysql_connections",
+        "key": "mysql_connection_usage_percent",
         "layer": "defaults",
         "file": "_defaults.yaml",
         "read_by": [
@@ -92,6 +96,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": 80,
@@ -110,13 +115,14 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": "silver",
         "served": null
       },
       {
-        "key": "mysql_connections",
+        "key": "mysql_connection_usage_percent",
         "layer": "defaults",
         "file": "_defaults.yaml",
         "read_by": [
@@ -126,6 +132,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
         "value": 80,
@@ -143,6 +150,7 @@
         "ta"
       ],
       "reason": "unknown severity_dedup value \"maybe\" (valid: enable, disable)",
+      "hint": null,
       "base": null,
       "dead_entries": null,
       "blocks": true
@@ -156,6 +164,7 @@
         "tb"
       ],
       "reason": "references unknown profile \"silver\"",
+      "hint": null,
       "base": null,
       "dead_entries": null,
       "blocks": true
@@ -169,6 +178,7 @@
         "ta"
       ],
       "reason": "unknown silent mode \"purple\" (valid: warning, critical, all, disable)",
+      "hint": null,
       "base": null,
       "dead_entries": null,
       "blocks": false
@@ -182,6 +192,7 @@
         "ta"
       ],
       "reason": "unknown field(s) bogus_field (known: db_type, domain, environment, groups, owner, region, runbook_url, tags, tier)",
+      "hint": null,
       "base": null,
       "dead_entries": null,
       "blocks": false

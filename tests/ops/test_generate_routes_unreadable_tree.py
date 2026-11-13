@@ -47,11 +47,11 @@ EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR = 0, 1, 2
 
 # The tenants' threshold key, declared at a root platform file: without one
 # --validate fails on the key verdict (#3016), which is not what these test.
-_DECL = "defaults:\n  mysql_connections: 80\n"
+_DECL = "defaults:\n  mysql_connection_usage_percent: 80\n"
 
 # An unterminated quoted scalar — the exact shape in the ticket ("take one
 # quote out of a tenant file").
-_BROKEN_QUOTE = 'tenants:\n  alpha:\n    mysql_connections: "70\n'
+_BROKEN_QUOTE = 'tenants:\n  alpha:\n    mysql_connection_usage_percent: "70\n'
 
 
 def _gar(argv):
@@ -61,7 +61,7 @@ def _gar(argv):
 
 
 def _good_tenant(name: str) -> str:
-    return make_tenant_yaml(name, keys={"mysql_connections": "70"},
+    return make_tenant_yaml(name, keys={"mysql_connection_usage_percent": "70"},
                             routing=make_routing_config(name))
 
 
@@ -141,7 +141,7 @@ class TestTheRecordIsStructural:
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "alpha.yaml").write_text(
-            "tenants:\n  alpha:\n    - not-a-mapping\n  beta:\n    mysql_connections: '70'\n",
+            "tenants:\n  alpha:\n    - not-a-mapping\n  beta:\n    mysql_connection_usage_percent: '70'\n",
             encoding="utf-8")
         tree = load_tenant_tree(str(d))
         assert tree.tenant_file_errors == [] and tree.files_read == 1
