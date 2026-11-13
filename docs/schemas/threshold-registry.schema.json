@@ -4,7 +4,7 @@
   "title": "Threshold registry — threshold-contract SoT shape (TRK-339 WS1a / #1200 D2)",
   "version": "v2.9.0",
   "description": "Shape contract for rule-packs/threshold-registry.yaml, the standalone threshold-contract SoT decided by epic #1200 D2 (standalone YAML registry: language-neutral, schema-validatable). STRICT at every level (additionalProperties:false) — this file is the hand-authored contract (since D-A PR-3), so a typo'd field or a mis-typed value must fail at author/CI time, not surface later as a silently-dropped threshold identity. Enforcement note: it covers all packs/keys, but the enforcement path this registry first serves is the 18-key repair line (#1196 / TRK-337). Validated BEFORE any generation stage by scripts/tools/lint/check_threshold_registry.py (pre-commit + CI).",
-  "$comment": "Cross-entry constraints that JSON Schema cannot express — every keys.<k>.pack must exist under packs, every critical_of must name a key in the same pack, every deprecated_aliases target must name an existing key while its OLD spelling must NOT be an active key — are enforced by check_threshold_registry.py: the document (hand-authored since D-A PR-3) must be a fixed point of projecting it to scaffold's RULE_PACKS shape and extracting it again (fixed_point_problems in _registry_lib.py), which applies every fail-loud rule of build_registry_doc to the authored file. metric_class is an enum on purpose: adding a new class is a deliberate contract change and must touch this schema.",
+  "$comment": "Cross-entry constraints that JSON Schema cannot express — every keys.<k>.pack must exist under packs, every critical_of must name a key in the same pack, every deprecated_aliases target must name an existing key while its OLD spelling must NOT be an active key, every retired_keys entry must be no active key, on neither side of an alias, and replaced by an active key or null — are enforced by check_threshold_registry.py: the document (hand-authored since D-A PR-3) must be a fixed point of projecting it to scaffold's RULE_PACKS shape and extracting it again (fixed_point_problems in _registry_lib.py), which applies every fail-loud rule of build_registry_doc to the authored file. metric_class is an enum on purpose: adding a new class is a deliberate contract change and must touch this schema.",
   "type": "object",
   "additionalProperties": false,
   "required": ["version", "packs", "keys"],
@@ -25,6 +25,33 @@
         }
       },
       "$comment": "Optional and sparse: present only while at least one alias window is open. Authored here (since D-A PR-3; _registry_lib.DEPRECATED_KEY_ALIASES reads this section)."
+    },
+    "retired_keys": {
+      "type": "object",
+      "title": "Threshold keys retired from the contract: no rule pack reads them any more (#3829)",
+      "additionalProperties": false,
+      "patternProperties": {
+        "^[a-z][a-z0-9_]*$": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["replaced_by", "tracking", "hint"],
+          "properties": {
+            "replaced_by": {
+              "type": ["string", "null"],
+              "pattern": "^[a-z][a-z0-9_]*$",
+              "description": "The active key that replaces it; null when nothing does."
+            },
+            "tracking": {"type": "integer", "minimum": 1, "description": "The issue that retired it."},
+            "hint": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\n\\r]+$",
+              "description": "One English sentence for the operator, printed after the generated text that names replaced_by."
+            }
+          }
+        }
+      },
+      "$comment": "The shared key verdict judges a key in this section unread / error / reason retired in every layer, whatever reads it; tenant-api's batch unset admits it. Cross-entry rules (not an active key, on neither side of deprecated_aliases, replaced_by an active key or null, tracking set) are enforced by the fixed-point check (_registry_lib.retired_key_problems). Its `<key>_critical` is retired with it (replaced by `<replaced_by>_critical`, the shape an alias maps), so that tier must not be an active key either. Generated into Go as pkg/config/retired_threshold_keys_gen.go by check_threshold_registry.py --regen. When an alias window closes, the old spelling moves here."
     },
     "packs": {
       "type": "object",
