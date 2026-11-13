@@ -226,6 +226,15 @@ def resolve_binary(explicit: str | None, env: str, name: str) -> str | None:
     return shutil.which(name)
 
 
+def da_read_binary(explicit: str | None = None) -> str | None:
+    """The da-read every reading here runs: *explicit*, else
+    ``$DA_READ_BINARY``, else ``da-read`` on ``$PATH``; None when there is
+    none. ⛔ The one lookup: a caller that only asks whether a da-read is
+    there (the generator service's readiness) asks here, so the binary it
+    reports on is the one the gate runs."""
+    return resolve_binary(explicit, DA_READ_ENV, DA_READ_BINARY_NAME)
+
+
 def _invoke(binary: str | None, name: str, env: str, build_hint: str,
             args: list[str], stdin: bytes | None) -> "tuple[subprocess.CompletedProcess, list[str]]":
     if not binary:
@@ -464,7 +473,7 @@ def _is_refusal(e: ConsumerReadError) -> bool:
 def alertmanager_config(text: str | bytes, binary: str | None = None) -> dict:
     """The Alertmanager config *text* as Alertmanager loads it (``da-read
     alertmanager``), only the keys the text writes."""
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     data = text.encode("utf-8") if isinstance(text, str) else text
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["alertmanager", "-"], data)
@@ -493,7 +502,7 @@ def prometheus_config(source: "str | bytes | os.PathLike[str]", binary: str | No
         data = source.encode("utf-8") if isinstance(source, str) else source
     else:
         raise TypeError(f"prometheus_config takes text or a path, not {type(source).__name__}")
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build", args, data)
     return _one_document(out, "config")
 
@@ -507,7 +516,7 @@ def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None)
     no metric name is judged the way Prometheus evaluates it. Each hit is
     ``{"selector": <Prometheus' spelling>, "start": int, "end": int}`` (byte
     offsets into the expression's UTF-8 encoding)."""
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     data = json.dumps(list(exprs)).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["promql-selectors", series, "-"], data)
@@ -532,7 +541,7 @@ def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[d
     are the labels a ``label_replace`` may copy into *label* whole. Each hit is
     ``{"op": "and"|"unless", "start": int, "end": int, "lhs":
     "kept"|"dropped"|"unknown"}`` (byte offsets into the UTF-8 encoding)."""
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     data = json.dumps({"expressions": list(exprs), "records": dict(records or {}),
                        "aliases": list(aliases)}).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
@@ -631,7 +640,7 @@ def prometheus_rule_file_results(paths: "Iterable[str | os.PathLike[str]]",
     given = [os.fspath(p) for p in paths]
     if not given:
         return []
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     # Absolute paths never start with `-`, so none is read as stdin.
     absolute = [os.path.abspath(p) for p in given]
     proc, lines = _invoke(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",

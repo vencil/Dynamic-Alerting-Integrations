@@ -459,9 +459,9 @@ spec:
           # asks GET /v1/status over the socket and passes on a 200. It runs as
           # the container's uid, which the service's SO_PEERCRED check admits.
           # ⚠️ 200 means the service is up and answering; it does NOT require
-          # status.ready (policy usable, amtool present): an unusable policy
-          # must reject writes with 503 (ADR-036 §5), not take the whole pod —
-          # reads included — out of the Service.
+          # status.ready (policy usable, da-read and da-guard present): an
+          # unusable policy must reject writes with 503 (ADR-036 §5), not take
+          # the whole pod — reads included — out of the Service.
           startupProbe:
             {{- include "tenant-api.generatorProbe" . | nindent 12 }}
             periodSeconds: 2

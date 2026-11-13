@@ -80,6 +80,7 @@ on:
       - "helm/federation-gateway/audit-sidecar/**"
       - "helm/vector/projection-gate/**"
       - "try-local/generator/**"     # try-local generator runtime (#2903); its da-guard stage reads the exporter paths above (#3530)
+      - "components/da-read/**"      # the try-local generator's da-read stage builds this module
       # The repo-root build context's ignore file (#3738): it decides what
       # da-portal, tenant-api, recipe-preview and the other root-context
       # builds receive — e.g. that tools/portal/node_modules stays out of the

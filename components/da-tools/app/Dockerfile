@@ -96,9 +96,9 @@ RUN chmod +x /usr/local/bin/da-read
 
 # ── Bundle amtool (issue 2294) ────────────────────────────────────
 # `explain-route --trace` asks Alertmanager's own routing engine (`amtool
-# config routes test`, #2293), and `generator-service` reports itself
-# unavailable without amtool on PATH (#2901). Whether Alertmanager accepts a
-# config is not amtool's call here: `generate-routes` asks da-read (#3793).
+# config routes test`, #2293). Whether Alertmanager accepts a config is not
+# amtool's call here: `generate-routes` and `generator-service` ask da-read
+# (#3793).
 #
 # ⛔ The ref below must stay byte-identical to the Alertmanager image in
 # k8s/03-monitoring/deployment-alertmanager.yaml (the version SSOT): amtool

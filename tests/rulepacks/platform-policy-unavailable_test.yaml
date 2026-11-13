@@ -33,12 +33,12 @@ tests:
                 every write mode) with 503: POLICY_UNAVAILABLE when the deployment
                 policy file (generator.policy.existingConfigMap) cannot be read or
                 parsed, VALIDATOR_UNAVAILABLE when the container does not answer,
-                has no amtool, or is older than the policy's
+                has no da-read or da-guard, or is older than the policy's
                 min_generator_version. Reads are unaffected. The 503 body's
                 `reason` and the generator container's log say which; GET
                 /v1/status on its socket (the container's probe) shows the
                 policy error. Repair the policy ConfigMap, or fix the container
-                (image with generator-service, amtool), and the alert clears on
+                (image with generator-service, da-read, da-guard), and the alert clears on
                 the next scrape. There is no escape hatch (ADR-036 §5): the
                 previous --policy-unavailable-open is removed, and this gauge no
                 longer reflects a _domain_policy.yaml in conf.d or "its last good
