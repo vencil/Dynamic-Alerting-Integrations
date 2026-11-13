@@ -19,12 +19,24 @@ What it checks, per row of every advisory (draft and published):
       (platform release: git tag v*)                      git tags v<version>
   A name in no such form is a violation: the space is the question, and a
   free-text name cannot answer it.
+* every row has a readable vulnerable range;
 * a non-empty `patched_versions` lists concrete versions (comma-separated, no
-  operators), and each one EXISTS in that space (a leading `v` is ignored on
-  both sides: image tags carry it, chart versions do not);
+  operators), each one EXISTS in that space (a leading `v` is ignored on both
+  sides: image tags carry it, chart versions do not) and lies OUTSIDE the
+  vulnerable range — naming the last affected version is the likeliest slip;
 * an empty `patched_versions` is a violation once the space holds a version
   OUTSIDE the vulnerable range — a fixed version has been published and the
   row still does not name it. While none exists, it is listed, not failed.
+  Pre-releases (`2.9.9-rc1`) never count as that fix.
+
+A git-only chart "has" every version its Chart.yaml carried in any commit of
+HEAD's history — that is what a reader can check out. A chart whose directory
+moved loses the versions it had under the old path (the history is not
+followed across the move).
+
+Advisory states: `draft`, `triage` and `published` are checked; `closed` and
+`withdrawn` make no claim and are skipped; any other value (or none) is rc 2,
+not a silent skip.
 
 ⚠️ Timing — what this does NOT do. It runs at `make pre-tag`, before the tag is
 pushed, so the version a release is about to create does not exist yet and
@@ -126,12 +138,16 @@ def fixed_versions(known: Set[str], vulnerable: str) -> List[str]:
     versions = sorted(known, key=semver_key)
     affected = [v for v in versions if in_range(v, vulnerable)]
     if affected:
-        floor = semver_key(affected[-1])
+        floor, strict = semver_key(affected[-1]), True
     else:
+        # The bound itself can be the fix: `< 2.9.8` with 2.9.8 published.
         bounds = [semver_key(m.group(2)) for p in vulnerable.split(",")
                   if (m := _CONSTRAINT.match(p.strip()))]
-        floor = max(bounds)
-    return [v for v in versions if semver_key(v) > floor and not in_range(v, vulnerable)]
+        floor, strict = max(bounds), False
+    return [v for v in versions
+            if (semver_key(v) > floor if strict else semver_key(v) >= floor)
+            and not in_range(v, vulnerable)
+            and "-" not in v]  # a pre-release is not the fix a reader installs
 
 
 @dataclass(frozen=True)
@@ -254,6 +270,9 @@ def check_row(ghsa: str, row: dict, spaces: Spaces) -> Tuple[Optional[str], Opti
                 f"`(Helm chart, git-only: helm/<dir>)`, `(platform release: git tag v*)`"), None
     vulnerable = (row.get("vulnerable_version_range") or "").strip()
     patched = (row.get("patched_versions") or "").strip()
+    if not vulnerable:
+        return f"{where}: no vulnerable version range — the row says nothing a reader can check", None
+    in_range("0.0.0", vulnerable)  # parse it now: an unreadable range is rc 2 either way
     known = spaces.versions(space)
     if patched:
         missing, bad = [], []
@@ -268,9 +287,11 @@ def check_row(ghsa: str, row: dict, spaces: Spaces) -> Tuple[Optional[str], Opti
         if missing:
             return (f"{where}: patched {missing} does not exist in {space.label} — a reader "
                     f"cannot install it. Fix the version, or publish it first"), None
+        affected = [v for v in (p.strip() for p in patched.split(",")) if in_range(v, vulnerable)]
+        if affected:
+            return (f"{where}: patched {affected} is inside the vulnerable range {vulnerable!r} "
+                    f"— that version is affected, not fixed"), None
         return None, None
-    if not vulnerable:
-        return f"{where}: neither a vulnerable range nor patched versions", None
     fixed = fixed_versions(known, vulnerable)
     if fixed:
         return (f"{where}: patched_versions is empty, but {space.label} already has versions "
@@ -279,38 +300,62 @@ def check_row(ghsa: str, row: dict, spaces: Spaces) -> Tuple[Optional[str], Opti
     return None, f"{where}: not yet patched — no version outside {vulnerable!r} exists in {space.label}"
 
 
+_MAX_PAGES = 100
+
+
+def _split_response(raw: str) -> Tuple[Dict[str, str], str]:
+    """`gh api -i` output → (lower-cased headers, body)."""
+    head, sep, body = raw.replace("\r\n", "\n").partition("\n\n")
+    if not sep:
+        raise CallerError("gh api -i returned no header/body separator")
+    headers = {}
+    for line in head.splitlines()[1:]:
+        k, _, v = line.partition(":")
+        headers[k.strip().lower()] = v.strip()
+    return headers, body
+
+
 def fetch_advisories(runner: Callable = subprocess.run) -> List[dict]:
-    """All advisories, draft and published. Paged by hand: `gh api --paginate`
-    follows a Link to repositories/{id}/…, which some GitHub proxies refuse."""
+    """All advisories, draft and published. This endpoint pages by CURSOR (the
+    `after=` in the Link header) and ignores `page=` (measured: page=1 and
+    page=2 return the same item). The cursor is re-sent on the repos/ path:
+    `gh api --paginate` follows the Link as given, a repositories/{id}/… URL,
+    which some GitHub proxies refuse."""
     out: List[dict] = []
-    page = 1
-    while True:
+    query = "per_page=100"
+    for _ in range(_MAX_PAGES):
         try:
             proc = runner(  # nosec B603 B607 — fixed argv, no shell
-                ["gh", "api", f"repos/{{owner}}/{{repo}}/security-advisories?per_page=100&page={page}"],
+                ["gh", "api", "-i", f"repos/{{owner}}/{{repo}}/security-advisories?{query}"],
                 capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
         except (OSError, subprocess.SubprocessError) as exc:
             raise CallerError(f"gh api failed to run: {exc}") from exc
         if proc.returncode != 0:
             raise CallerError(f"gh api exited {proc.returncode}: {(proc.stderr or '').strip()}")
+        headers, body = _split_response(proc.stdout)
         try:
-            batch = json.loads(proc.stdout)
+            batch = json.loads(body)
         except ValueError as exc:
             raise CallerError(f"gh api returned non-JSON: {exc}") from exc
         if not isinstance(batch, list):
             raise CallerError(f"gh api returned {type(batch).__name__}, not a list")
         out.extend(batch)
-        if len(batch) < 100:
+        m = re.search(r"<[^>]*[?&](after=[^&>]+)[^>]*>;\s*rel=\"next\"", headers.get("link", ""))
+        if not m:
             return out
-        page += 1
+        query = f"per_page=100&{m.group(1)}"
+    raise CallerError(f"more than {_MAX_PAGES} pages of advisories — refusing to guess the rest")
 
 
 def run(advisories: List[dict], spaces: Spaces) -> Tuple[List[str], List[str]]:
     violations, notes = [], []
     for adv in advisories:
         ghsa = adv.get("ghsa_id") or "<no ghsa_id>"
-        if adv.get("state") not in ("draft", "published", "triage"):
-            continue  # closed / withdrawn advisories make no claim
+        state = adv.get("state")
+        if state in ("closed", "withdrawn"):
+            continue  # they make no claim
+        if state not in ("draft", "published", "triage"):
+            raise CallerError(f"{ghsa}: unknown advisory state {state!r}")
         rows = adv.get("vulnerabilities") or []
         if not rows:
             violations.append(f"{ghsa}: no affected-package rows at all")

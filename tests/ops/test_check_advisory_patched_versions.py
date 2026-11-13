@@ -85,6 +85,55 @@ def test_a_patched_version_that_does_not_exist_is_refused(repo, name, vulnerable
     assert len(violations) == 1 and "does not exist in" in violations[0], violations
 
 
+@pytest.mark.parametrize("patched", ["2.9.7", "2.9.8, 2.9.7", "2.4.0"])
+def test_a_patched_version_inside_the_vulnerable_range_is_refused(repo, patched) -> None:
+    """Exists, but is affected — the likeliest slip is naming the last vulnerable version."""
+    registry = {"oci://ghcr.io/vencil/charts/tenant-api": {"2.4.0", "2.9.7", "2.9.8"}}
+    violations, _ = gate.run([_adv(OCI, "< 2.9.8", patched)], _spaces(repo, registry))
+    assert len(violations) == 1 and "inside the vulnerable range" in violations[0], violations
+
+
+def test_a_git_only_patched_equal_to_the_affected_version_is_refused(repo) -> None:
+    violations, _ = gate.run([_adv(GIT_ONLY, "= 0.3.1", "0.3.1")], _spaces(repo))
+    assert violations and "inside the vulnerable range" in violations[0], violations
+
+
+def test_a_row_without_a_vulnerable_range_is_refused(repo) -> None:
+    violations, _ = gate.run([_adv(OCI, "", "2.9.8")], _spaces(repo))
+    assert len(violations) == 1 and "no vulnerable version range" in violations[0], violations
+
+
+@pytest.mark.parametrize("patched", ["2.9.8", "9.9.9", ">= 2.9.8"],
+                         ids=["exists", "does-not-exist", "operator"])
+def test_an_unreadable_range_is_a_caller_error_whatever_patched_says(repo, patched) -> None:
+    """Read before anything else: an unreadable range is 'could not judge'
+    (rc 2), not a violation about the patched field that happened to fire first."""
+    with pytest.raises(gate.CallerError):
+        gate.run([_adv(OCI, "garbage", patched)], _spaces(repo))
+
+
+@pytest.mark.parametrize("state", ["", None, "accepted"], ids=["empty", "missing", "unknown"])
+def test_an_unknown_state_is_a_caller_error(repo, state) -> None:
+    adv = _adv(OCI, "< 2.9.8", "2.9.8")
+    adv["state"] = state
+    with pytest.raises(gate.CallerError, match="unknown advisory state"):
+        gate.run([adv], _spaces(repo))
+
+
+def test_a_pre_release_is_not_the_fix(repo) -> None:
+    registry = {"ghcr.io/vencil/tenant-api": {"v2.9.7", "v2.9.8-rc1"}}
+    violations, notes = gate.run([_adv(IMAGE, "<= 2.9.7", "")], _spaces(repo, registry))
+    assert violations == [] and notes, (violations, notes)
+
+
+def test_the_range_bound_itself_can_be_the_fix(repo) -> None:
+    """`< 2.9.8` with only 2.9.8 published: no affected version is known, and
+    the bound is the fix — an empty row must be refused."""
+    registry = {"ghcr.io/vencil/tenant-api": {"v2.9.8"}}
+    violations, _ = gate.run([_adv(IMAGE, "< 2.9.8", "")], _spaces(repo, registry))
+    assert len(violations) == 1 and "earliest: 2.9.8" in violations[0], violations
+
+
 def test_published_advisories_are_checked_too(repo) -> None:
     violations, _ = gate.run([_adv(OCI, "< 2.9.8", "2.9.9", state="published")], _spaces(repo))
     assert violations, "a published advisory naming an unpublished version passed"
@@ -157,18 +206,35 @@ def test_semver_range_semantics() -> None:
     assert gate.in_range("0.3.1", "= 0.3.1") and not gate.in_range("0.10.0", "= 0.3.1")
 
 
-def test_api_pages_are_followed_by_hand() -> None:
-    """Page 1 full (100) → page 2 asked for; a short page ends it."""
+def _response(items: list, after: str | None) -> str:
+    link = (f'Link: <https://api.github.com/repositories/1/security-advisories?per_page=100&after={after}>; '
+            'rel="next"\r\n') if after else ""
+    return f"HTTP/2.0 200 OK\r\nContent-Type: application/json\r\n{link}\r\n" + json.dumps(items)
+
+
+def test_api_pages_follow_the_cursor_on_the_repos_path() -> None:
+    """The endpoint pages by `after=` cursor (page= is ignored); the cursor is
+    re-sent on repos/{owner}/{repo}/…, not the repositories/{id} Link."""
     calls = []
 
     def runner(argv, **_kw):
         calls.append(argv[-1])
-        n = 100 if len(calls) == 1 else 3
-        return subprocess.CompletedProcess(argv, 0, json.dumps([{}] * n), "")
+        out = _response([{}] * 100, "CUR1") if len(calls) == 1 else _response([{}] * 3, None)
+        return subprocess.CompletedProcess(argv, 0, out, "")
 
     assert len(gate.fetch_advisories(runner)) == 103
-    assert [c.rsplit("page=", 1)[1] for c in calls] == ["1", "2"]
-    assert all(c.startswith("repos/{owner}/{repo}/") for c in calls), calls
+    assert calls == ["repos/{owner}/{repo}/security-advisories?per_page=100",
+                     "repos/{owner}/{repo}/security-advisories?per_page=100&after=CUR1"], calls
+
+
+def test_api_paging_cannot_loop_forever(monkeypatch) -> None:
+    monkeypatch.setattr(gate, "_MAX_PAGES", 3)
+
+    def runner(argv, **_kw):
+        return subprocess.CompletedProcess(argv, 0, _response([{}], "SAME"), "")
+
+    with pytest.raises(gate.CallerError, match="more than 3 pages"):
+        gate.fetch_advisories(runner)
 
 
 def test_an_api_failure_is_a_caller_error() -> None:
