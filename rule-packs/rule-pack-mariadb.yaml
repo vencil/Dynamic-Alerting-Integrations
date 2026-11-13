@@ -48,17 +48,14 @@
 #       seconds — Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below PMM
 #       family 600s — sustained minutes-level lag is a failover data-loss window (#1200 WS5-P0-a)
 #
-# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
-# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
-# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
-# 它讀的是 defaults[base]，base 沒有值就整列丟棄
+# optional_overrides（不在出貨清單裡；base 本身也是 optional_overrides 層）：
+# 下列 `<base>_critical` 的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值
 # （components/threshold-exporter/app/pkg/config/resolve.go）。
-# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：
-# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。
-# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
-# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
-# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
-# 一格裝飾（#1311）。
+# 而 base 屬 optional_overrides 層：沒有任何產生器把它寫進 `defaults:`
+# （出貨的 Helm values、repo 的 dev conf.d 範本、scaffold_tenant 都只把它列進
+# `optional_overrides:` 清單），租戶在自己的 conf.d 填 base 也不算 `defaults[base]`。
+# ⇒ 要讓 critical 覆寫產出 row，部署面必須自己在 `defaults:` 寫 base 的值。
+# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
 #   mysql_threads_running_critical: 50
 #       threads — Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter
 #       'overloaded' (#944); renamed from mysql_cpu_critical (#1231, 2-release alias window)

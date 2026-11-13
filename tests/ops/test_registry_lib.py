@@ -736,7 +736,9 @@ _SHIPPED_MARK = "已出貨在清單裡——平台認得這個 key"
 _BASE_SHIPPED_MARK = "但 base 已出貨——租戶今天就設得動"
 _DEV_ONLY_MARK = "base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨"
 _DORMANT_MARK = "base 也未出貨——documented-but-dormant"
-_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DEV_ONLY_MARK, _DORMANT_MARK)
+_BASE_OPTIONAL_MARK = "base 本身也是 optional_overrides 層"
+_ALL_MARKS = (_SHIPPED_MARK, _BASE_SHIPPED_MARK, _DEV_ONLY_MARK, _DORMANT_MARK,
+              _BASE_OPTIONAL_MARK)
 
 
 def test_the_three_warning_marks_cannot_alias_each_other():
@@ -763,6 +765,10 @@ def _synth_optional_packs():
         "optional_overrides": {
             "gamma_queue": {"value": 50, "unit": "count", "desc": "queue size",
                             "metric_class": "saturation"},
+            # base is itself optional-tier (#3778's mysql_threads_running
+            # shape) -> no generator writes it under defaults:
+            "gamma_queue_critical": {"value": 80, "unit": "count",
+                                     "desc": "queue size critical"},
         },
     }
     # MIXED: flat AND _critical in the same pack — no such pack exists in the
@@ -972,6 +978,8 @@ def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
         _DEV_ONLY_MARK:
             "\n".join(lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES),
         _DORMANT_MARK: "\n".join(lib._OPTIONAL_UNSHIPPED_WARNING_LINES),
+        _BASE_OPTIONAL_MARK:
+            "\n".join(lib._OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES),
     }
     # only the DORMANT body may claim a tenant-set key produces nothing
     for mark, body in bodies.items():
@@ -988,6 +996,12 @@ def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
     dev_only = bodies[_DEV_ONLY_MARK]
     assert "產出一條真的 critical row" in dev_only
     assert "用 chart 部署時，租戶填一個並不會產出任何 row" in dev_only
+    # #3778: an optional-tier base. The dormant body's remedy ("scaffold_tenant's
+    # _defaults.yaml carries the base") is false for it; this body must name
+    # the only remedy and must not repeat that one.
+    base_optional = bodies[_BASE_OPTIONAL_MARK]
+    assert "部署面必須自己在 `defaults:` 寫 base 的值" in base_optional
+    assert "_defaults.yaml 就含 base" not in base_optional
     # every group the renderer can emit is covered above — no fifth body can
     # be added without this test noticing (delta's qsize base is dev-only here)
     monkeypatch.setattr(lib, "DEV_EXAMPLE_PACKS", ("delta",))
@@ -999,7 +1013,23 @@ def test_warning_bodies_make_the_claims_their_headings_promise(monkeypatch):
         lib._OPTIONAL_CRITICAL_BASE_SHIPPED_WARNING_LINES,
         lib._OPTIONAL_CRITICAL_BASE_DEV_ONLY_WARNING_LINES,
         lib._OPTIONAL_UNSHIPPED_WARNING_LINES,
+        lib._OPTIONAL_CRITICAL_BASE_OPTIONAL_WARNING_LINES,
     }
+
+
+def test_critical_of_an_optional_tier_base_gets_its_own_warning():
+    """#3778: `gamma_queue_critical`'s base is optional-tier, so the dormant
+    warning's remedy does not apply; it renders under the base-optional
+    warning, and nothing else does."""
+    doc = _synth_optional_doc()
+    gamma = lib.render_pack_header_lines(doc, "gamma")
+    text = "\n".join(gamma)
+    assert _BASE_OPTIONAL_MARK in text and _DORMANT_MARK not in text
+    head = next(i for i, l in enumerate(gamma) if _BASE_OPTIONAL_MARK in l)
+    assert any("gamma_queue_critical" in l for l in gamma[head:])
+    for pack in ("alpha", "delta"):
+        assert _BASE_OPTIONAL_MARK not in "\n".join(
+            lib.render_pack_header_lines(doc, pack)), pack
 
 
 def test_optional_override_list_is_a_yaml_string_array():
@@ -1154,6 +1184,10 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 expected = _BASE_SHIPPED_MARK
             elif base and base in dev_defaults:
                 expected = _DEV_ONLY_MARK
+            elif base and base in shipped_list:
+                # #3778: the base ships only as an optional_overrides list
+                # entry, never under defaults:
+                expected = _BASE_OPTIONAL_MARK
             else:
                 expected = _DORMANT_MARK
             assert sect == expected, (
