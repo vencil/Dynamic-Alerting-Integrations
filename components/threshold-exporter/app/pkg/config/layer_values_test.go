@@ -243,7 +243,8 @@ func TestLayerValueProblems_CarryNoAuthorText(t *testing.T) {
 	t.Parallel()
 	// Mixed case on purpose: `_silent_mode` and `_severity_dedup` lower-case
 	// what they read, so the comparison is case-insensitive.
-	const canary = "https://u:CaNaRyPw@hooks.example/CaNaRy"
+	// A test canary, not a credential: no real host, user or password.
+	const canary = "https://u:CaNaRyPw@hooks.example/CaNaRy" // trufflehog:ignore
 	const q = `"` + canary + `"`
 	shapes := []string{
 		q,
