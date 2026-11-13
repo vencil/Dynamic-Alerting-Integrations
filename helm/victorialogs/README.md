@@ -45,13 +45,16 @@ After install, the in-cluster URLs are:
 | LogsQL HTTP query | `http://victorialogs.<ns>.svc:9428/select/logsql/query` |
 | `/metrics` (Prometheus scrape) | same port; annotations on the Service |
 
-The NetworkPolicy admits the listed consumers by pod label **in this
-namespace** (Vector by its own namespace), plus `app: prometheus` for the
-scrape. A consumer installed in another namespace (federation-gateway,
-federation-reconciler) needs that namespace in `networkPolicy.allowedNamespaces`;
-its podSelector row alone does not admit it. The connections the documented
-install depends on are evaluated end to end in
-`tests/k8s/test_log_store_connectivity.py`.
+The NetworkPolicy is rendered from `auth.consumers` itself: each consumer's
+`from` (its `namespace`, its `podLabels`, or both) is one row, so who may
+connect and what it may do are one list. `podLabels` alone match pods in this
+namespace only; a consumer installed elsewhere needs `namespace` (Vector has
+both). Prometheus is not a consumer — it scrapes `/metrics` and is admitted by
+`networkPolicy.scrapers` (default `app: prometheus`). Since chart 0.6.0,
+`networkPolicy.allowedPodSelectors` / `allowedNamespaces` fail the render; with
+`helm upgrade --reuse-values` use `--reset-then-reuse-values`. The connections
+the documented install depends on are evaluated end to end, one per consumer,
+in `tests/k8s/test_log_store_connectivity.py`.
 
 ### Consumer authorization (#1295)
 
@@ -92,7 +95,8 @@ done
 helm install victorialogs ./helm/victorialogs -n monitoring \
   --set persistence.size=20Gi \
   --set retentionPeriod=60d \
-  -f my-consumers.yaml   # auth.consumers[].existingSecret: victorialogs-<name>
+  -f my-consumers.yaml   # auth.consumers[] copied from values.yaml (paths + from),
+                         # each with existingSecret: victorialogs-<name>
 ```
 
 For chart smoke-tests / CI you can disable the PVC (and skip the Secrets):

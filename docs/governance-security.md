@@ -233,7 +233,8 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 | Prometheus | monitoring namespace (9090) | tenant ns 9104/8080, Alertmanager 9093, kube-state-metrics, VictoriaLogs 9428（/metrics）, DNS, K8s API 6443 |
 | Alertmanager | Prometheus (9093) | DNS, webhook HTTPS 443（封鎖 cloud metadata 169.254.169.254） |
 | Grafana | monitoring namespace (3000) | Prometheus 9090, VictoriaLogs 9428, 外部 HTTPS 443（grafana.com 外掛安裝；封鎖 cloud metadata 169.254.169.254）, DNS |
-| VictoriaLogs（helm） | 列名的 consumer（Vector 以其 namespace；Grafana、chargeback-aggregator、federation-gateway／reconciler、Prometheus 以同 namespace 的 pod 標籤）9428 | 無 |
+| VictoriaLogs（helm） | 9428，只放行 `auth.consumers` 各項的 `from`（Vector：`vector` namespace 且帶其 pod 標籤；Grafana、chargeback-aggregator、federation-gateway／reconciler：同 namespace 的 pod 標籤）與 `networkPolicy.scrapers`（Prometheus）——與 vmauth 授權同一份清單 | 無 |
+| federation-gateway（helm） | listenPort（`networkPolicy.allowedNamespaces`，空＝全叢集）；audit metrics 埠（Prometheus 所在 namespace） | DNS, upstream 所在 namespace 的 `upstream.port` |
 | chargeback-aggregator（helm） | 無 | DNS, VictoriaLogs 9428 |
 | threshold-exporter | Prometheus (8080) | DNS only |
 | kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
