@@ -450,12 +450,67 @@ _VERDICT = [("DL3007", "error"), ("DL3018", "warning"), ("DL3019", "info"),
             ("DL3026", "error")]
 
 
+_REQUIRE_ENV = "VIBE_REQUIRE_HADOLINT"
+
+
+def hadolint_required(environ=None) -> str | None:
+    """Why this run must have hadolint, or None when a skip is acceptable —
+    one answer for CI and a remote session (as tests/_helm_gate.py for helm)."""
+    environ = os.environ if environ is None else environ
+    if environ.get(_REQUIRE_ENV) == "1":
+        return f"{_REQUIRE_ENV}=1 (the CI Lint job installs the pinned hadolint)"
+    if environ.get("CLAUDE_CODE_REMOTE") == "true":
+        return ("CLAUDE_CODE_REMOTE=true (.claude/hooks/session-start.sh installs hadolint; "
+                "check /tmp/vibe-session-start-hook.ran and rerun it as CLAUDE.md says)")
+    return None
+
+
 def test_hadolint_present_when_required():
-    """A remote session installs the pinned hadolint (session-start.sh,
-    #3627); there the skips below must not pass for green."""
-    if os.environ.get("CLAUDE_CODE_REMOTE") == "true":
-        assert _HADOLINT, ("CLAUDE_CODE_REMOTE=true but `hadolint` is not on PATH: check "
-                           "/tmp/vibe-session-start-hook.ran and rerun the hook as CLAUDE.md says")
+    """Where hadolint is supposed to be installed, the skips below must not
+    pass for green: a run that did not measure the engine fails here."""
+    reason = hadolint_required()
+    if reason:
+        assert _HADOLINT, f"{reason}: but `hadolint` is not on PATH"
+
+
+def test_what_requires_hadolint():
+    assert hadolint_required({}) is None
+    assert hadolint_required({_REQUIRE_ENV: "0"}) is None
+    assert _REQUIRE_ENV in hadolint_required({_REQUIRE_ENV: "1"})
+    assert "CLAUDE_CODE_REMOTE" in hadolint_required({"CLAUDE_CODE_REMOTE": "true"})
+
+
+def test_ci_runs_this_file_against_the_pinned_hadolint_and_requires_it():
+    """The engine tests below skip without hadolint, and "Python Tests" has
+    none: the Lint job, which installs the pinned binary, runs this file with
+    the require variable set, in a step after the install. The job must stay
+    ungated — a path filter would let a hadolint re-pin skip it."""
+    import shlex
+
+    import yaml
+    workflow = yaml.safe_load(
+        (iac.REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    job = workflow["jobs"]["lint"]
+    assert "if" not in job and "needs" not in job, "the Lint job became conditional"
+    this_file = "tests/lint/test_check_iac_vibe_rules.py"
+
+    def runs_this_file(step):
+        script = (step.get("run") or "").replace("\\\n", " ")
+        return any("pytest" in words and this_file in words
+                   for words in (shlex.split(line, comments=True) for line in script.splitlines()))
+
+    steps = job["steps"]
+    installs = [i for i, s in enumerate(steps)
+                if "/usr/local/bin/hadolint" in shlex.split(
+                    (s.get("run") or "").replace("\\\n", " "), comments=True)]
+    tests = [i for i, s in enumerate(steps) if runs_this_file(s)]
+    assert len(installs) == 1 and len(tests) == 1, (installs, tests)
+    assert tests[0] > installs[0], "the tests run before hadolint is installed"
+    step = steps[tests[0]]
+    assert "if" not in step and not step.get("continue-on-error")
+    env = {**(workflow.get("env") or {}), **(job.get("env") or {}), **(step.get("env") or {})}
+    assert env.get(_REQUIRE_ENV) == "1", env
+    assert hadolint_required({k: str(v) for k, v in env.items()})
 
 
 @pytest.fixture

@@ -104,6 +104,8 @@ hadolint 遇到解析不了的設定檔會丟掉整份設定、照預設等級�
 - **同次證明**：每次執行都從 stdin 多送一份金絲雀 Dockerfile。登記表每一列都附一行會觸發該規則的指令，回來的 JSON 必須在 `-` 上以登記的等級各出現恰好一次。金絲雀裡有一個不受信任的 `FROM`，每個受信任 registry 也各有一個 `FROM`，所以 DL3026 恰好一次就代表 registry 有被套用；比對只讀規則碼與等級，不讀行號。不符就是沒有結論，rc 2。金絲雀的發現不計入結果。
 - **哪一列證明什麼**：等級與 hadolint 預設不同的列（DL3007）才是「等級旗標有被套用」的證據；等級等於預設的列（DL3018）只證明規則還會觸發。DL3026 證明的是受信任 registry 有被套用。登記表在 import 時就要求至少有一列非預設等級。
 
+- **真引擎的測試在哪裡跑**：上述性質（金絲雀、環境變數、pragma、設定檔、V4 的拼法）由 `tests/lint/test_check_iac_vibe_rules.py` 對釘版 hadolint 實測，沒有 hadolint 時會 skip。CI 的 `Python Tests` 沒有 hadolint，所以 `Lint` job 在裝完釘版 hadolint 後另跑這個檔，並設 `VIBE_REQUIRE_HADOLINT=1`：找不到 hadolint 就失敗，不是 skip。remote session（`CLAUDE_CODE_REMOTE=true`）走同一個判定。hadolint 升版後多接受一種 pragma 拼法，會在這一步轉紅。
+
 ⚠️ 直接下 `hadolint <Dockerfile>` 套用的是 hadolint 的預設等級，不是 repo 的設定。手動檢查請執行 `python3 scripts/tools/lint/check_iac_vibe_rules.py`。
 
 ## Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）
