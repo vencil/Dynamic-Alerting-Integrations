@@ -73,6 +73,29 @@ class TestDetection:
         root = _tree(tmp_path, sources={_TOOL: "fetch('platform-data.json')\n"})
         assert gate.audit(root)[0] == []
 
+    def test_fetch_page_data_is_a_load_site(self, tmp_path):
+        # The portal fetches its data files through fetchPageData
+        # (_common/api/api-fetch.js); a gate that only reads `fetch(` would
+        # stop seeing every one of them.
+        root = _tree(tmp_path, sources={_TOOL: "fetchPageData('template-data.json')\n"})
+        violations, _ = gate.audit(root)
+        assert len(violations) == 1
+        assert "/assets/template-data.json" in violations[0]
+
+    def test_nested_call_in_the_argument_is_read_whole(self, tmp_path):
+        # The argument ends at the top-level `,` / `)`, not at one inside a
+        # nested call: `pick(a, b)` is one expression, and an unresolvable one.
+        root = _tree(tmp_path, sources={_TOOL: "fetchPageData(pick(a, [b]), {x: 1})\n"})
+        violations, _ = gate.audit(root)
+        assert len(violations) == 1, violations
+        assert "pick(a, [b])" in violations[0]
+
+    def test_api_fetch_is_not_a_load_site(self, tmp_path):
+        # apiFetch refuses any path outside /api/: it cannot load an asset,
+        # so a path it is given never needs resolving or an exemption.
+        root = _tree(tmp_path, sources={_TOOL: "apiFetch('/api/v1/me')\napiFetch(somePath)\n"})
+        assert gate.audit(root)[0] == []
+
     def test_removing_a_copy_line_turns_it_red(self, tmp_path):
         """The counterfactual: same source, one COPY line deleted."""
         stripped = "\n".join(

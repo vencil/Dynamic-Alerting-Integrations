@@ -963,8 +963,7 @@ def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
     anywhere else produces no critical row. Seeded with a value rather than
     commented out because that is what the platform's number is FOR, and it is
     the same position `scaffold_tenant` takes (its prompt offers the registry
-    value as the Enter-default, and `generate_profile` writes the `_critical`
-    twins while deliberately dropping the flat declared keys). The customer
+    value as the Enter-default). The customer
     edits or deletes them in review — they are in the customer's own file,
     which is exactly the tier boundary `defaults:` violated.
     """

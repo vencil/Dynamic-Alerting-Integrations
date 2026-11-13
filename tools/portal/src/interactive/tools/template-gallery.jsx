@@ -16,6 +16,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 // lookup returned undefined and React threw #130 on first render.
 // That global-registration path is gone entirely (TRK-230z).
 import { Loading } from './_common/components/Loading.jsx';
+import { fetchPageData } from './_common/api/api-fetch.js';
 import { useCopyToClipboard } from './_common/hooks/useCopyToClipboard.js';
 import { annotateCounterexamples } from './_common/data/rule-packs.js';
 import { resolveTemplateData } from './template-gallery/placeholders.js';
@@ -103,7 +104,7 @@ export default function TemplateGallery() {
 
   /* ── Load template data from external JSON ── */
   useEffect(() => {
-    fetch('template-data.json')
+    fetchPageData('template-data.json')
       .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
       // Placeholders ({{expires:+24h}}) are resolved HERE, once, before any
       // preview or copy can see the data (#2033). A bad placeholder throws

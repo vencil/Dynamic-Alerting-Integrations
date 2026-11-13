@@ -37,7 +37,7 @@ purpose: |
 
 import { useState, useEffect } from "react";  // TRK-233 ESM import
 import { DEMO_TENANTS, DEMO_GROUPS } from '../fixtures/demo-tenants.js';
-import { redirectToSignIn } from '../../_common/auth/sign-in.js';
+import { apiFetch, fetchPageData, leftForSignIn } from '../../_common/api/api-fetch.js';
 import { operationalModeFromSummary, derivationNoticeFromSearch } from '../utils/operational-mode.js';
 
 function useTenantData({ setApiNotification, t, q = '' }) {
@@ -56,10 +56,10 @@ function useTenantData({ setApiNotification, t, q = '' }) {
         if (apiData && apiData.unauthenticated) {
           // ADR-027 §5: signed out — sign in, never fall back to the
           // offline or demo data (#3306). loading stays true while the page
-          // leaves; when it does not (a 401 right after signing in, see
-          // redirectToSignIn) it shows no tenants, and the /api/v1/me
-          // refusal banner says why.
-          if (!redirectToSignIn()) setLoading(false);
+          // leaves (apiFetch sent it to sign in); when it does not (a 401
+          // right after signing in, see redirectToSignIn) it shows no
+          // tenants, and the /api/v1/me refusal banner says why.
+          if (!apiData.leftForSignIn) setLoading(false);
           return;
         }
         if (apiData) {
@@ -82,7 +82,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
 
       // ---- Step 2: fall back to platform-data.json ----
       try {
-        const response = await fetch('platform-data.json');
+        const response = await fetchPageData('platform-data.json');
         const data = await response.json();
         if (data.tenant_metadata && Object.keys(data.tenant_metadata).length > 0) {
           // #3306: the offline copy is shown as it is — demo tenants are
@@ -148,8 +148,8 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       }
       if (resp && resp.status === 401) {
         // ADR-027 §5: oauth2-proxy answers /api/ without a session with
-        // 401 (--api-route); the caller sends the browser to sign in.
-        return { unauthenticated: true };
+        // 401 (--api-route); apiFetch has sent the browser to sign in.
+        return { unauthenticated: true, leftForSignIn: leftForSignIn(resp) };
       }
       if (!resp || !resp.ok) {
         // Other 4xx (403/404 — no access, or no API on this host):
@@ -205,7 +205,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
     // hung. A second 429 falls through to the caller (which
     // returns null → static fallback path).
     async function fetchWithRateLimitRetry(url) {
-      let resp = await fetch(url);
+      let resp = await apiFetch(url);
       if (resp.status !== 429) return resp;
 
       const retryAfterRaw = resp.headers.get('Retry-After');
@@ -224,7 +224,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       await new Promise(r => setTimeout(r, waitMs));
       // Single retry — if this 429s too, return that response and
       // the caller falls through to static-data path.
-      resp = await fetch(url);
+      resp = await apiFetch(url);
       // Clear the toast on either outcome of the retry.
       setApiNotification(null);
       return resp;
@@ -260,10 +260,10 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       // falls through to the static path below.
       const apiGroups = await fetchGroupsFromAPI();
       if (apiGroups && apiGroups.unauthenticated) {
-        // The session ended between the tenant search and this call: sign
-        // in, never fill in groups from the offline copy (#3306).
+        // The session ended between the tenant search and this call:
+        // apiFetch has sent the browser to sign in; never fill in groups
+        // from the offline copy (#3306).
         setGroups({});
-        redirectToSignIn();
         return;
       }
       if (apiGroups) {
@@ -272,7 +272,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
       }
       // ---- 2 + 3: static platform-data.json, else none ----
       try {
-        const resp = await fetch('platform-data.json');
+        const resp = await fetchPageData('platform-data.json');
         const data = resp.ok ? await resp.json() : null;
         setGroups(data?.custom_groups || {});
       } catch (_e) {
@@ -292,7 +292,7 @@ function useTenantData({ setApiNotification, t, q = '' }) {
     async function fetchGroupsFromAPI() {
       let resp;
       try {
-        resp = await fetch('/api/v1/groups');
+        resp = await apiFetch('/api/v1/groups');
       } catch (_e) {
         return null; // network error / no backend
       }

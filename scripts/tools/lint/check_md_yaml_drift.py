@@ -386,6 +386,16 @@ class MdYamlDriftChecker:
                 out.append((receiver_schema, value["receiver"], f"{kind}:{key}.receiver"))
         return out
 
+    @staticmethod
+    def _credential_issues(unit, fname: str, doc: Dict, entry, rendered) -> List[Dict]:
+        """One issue per (kind, category) the generator's credential judgement
+        (`credential_facts`) finds in *doc*, read as file *fname*."""
+        facts = credential_facts(fname, doc, entry)
+        suffix = f" ({rendered})" if rendered else ""
+        return [{"file": unit.path, "line": unit.line, "kind": fact_kind,
+                 "error": detail + suffix}
+                for fact_kind, detail in dict.fromkeys((f.kind, f.detail) for f in facts)]
+
     def run(self) -> int:
         """Execute the schema-conformance pass over the inventory's conf.d units.
 
@@ -393,9 +403,23 @@ class MdYamlDriftChecker:
         when parse-tree's reading has the shape of one (`inventory.is_confd_example`).
         Each unit is also judged as the route generator judges a file's
         credentials (`_grar_parse.credential_facts`, #1560): a credential
-        written out, or a place it cannot judge, is a violation.
+        written out, or a place it cannot judge, is a violation. So is every
+        conf.d file the chart renders from a `{.helm-values}` unit
+        (`inventory.helm_values_confd`), and a unit with no consumer is judged
+        for credentials (the generator's scan reads a routing block at any
+        depth, #3748).
+
+        ⚠️ Scope (#3748): what is judged is conf.d written as YAML — a
+        ```yaml unit, and the `thresholdConfig` of a `{.helm-values}` unit.
+        A conf.d file a doc writes any other way (printf, curl, a heredoc, a
+        string inside another file) is not read here: a reader who copies one
+        is refused by the generator's own `credential_plaintext`, and a real
+        secret is CI's TruffleHog's to catch. Every encoding is another
+        shape, and no finite set of readers decides them all.
         Every unit of a `{.confd .expect-invalid}` fence must yield at least
-        one violation, and none of its violations is reported; a unit that
+        one schema violation, and none of its schema violations is reported
+        (`.expect-invalid` absorbs schema errors only; the credential
+        judgement is always reported, #3748); a unit that
         yields none is the violation (#3416 review: judged per fence, one wrong
         unit hid every violation of a second, really broken one). A fence
         that documents a correct file beside the counter-example is two fences.
@@ -439,11 +463,16 @@ class MdYamlDriftChecker:
         except _lib_parse_tree.ParseTreeError as e:
             print(f"ERROR: `da-guard parse-tree` did not answer: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
-        # an `.expect-invalid` unit → the violations found in it (on purpose)
+        # an `.expect-invalid` unit → the schema violations found in it (on purpose)
         expected: Dict[Tuple[str, int], List[str]] = {}
         first_line: Dict[Tuple[str, int], str] = {}
-        for unit in inv.judged("confd"):
-            data = unit.documents[0]
+        # (unit, the conf.d content judged, what the report calls it): every
+        # conf.d example, and every conf.d file the chart renders from a
+        # `{.helm-values}` example (#3748).
+        readings = [(u, u.documents[0], None) for u in inv.judged("confd")]
+        readings += [(u, data, f"helm-values thresholdConfig → {fname}")
+                     for u, fname, data in inv.helm_confd()]
+        for unit, data, rendered in readings:
             schema, doc, kind = self._route(data)
             by_kind[kind] = by_kind.get(kind, 0) + 1
             checked += 1
@@ -460,6 +489,8 @@ class MdYamlDriftChecker:
                 checks.append((self.schema, {"tenants": data["tenants"]},
                                "platform+tenants"))
             checks.extend(self._receiver_checks(data, kind))
+            if rendered:
+                checks = [(sch, d, f"{k}, {rendered}") for sch, d, k in checks]
             if unit.expect_invalid:
                 expected.setdefault((unit.path, unit.line), [])
                 first_line[(unit.path, unit.line)] = unit.text.split("\n", 1)[0]
@@ -481,25 +512,28 @@ class MdYamlDriftChecker:
                     return EXIT_CALLER_ERROR
             # #1560: what the route generator refuses (a credential written
             # out, or a place it cannot judge). Kind and category only, never
-            # the value.
+            # the value. #3748: `.expect-invalid` absorbs schema errors only;
+            # the credential judgement is always reported — a schema error on
+            # purpose beside it would hide a credential, and a place it
+            # cannot judge may hold one.
             fname = file_of.get(kind, "tenant.yaml")
-            facts = credential_facts(fname, doc, entries[fname])
-            for fact_kind, detail in dict.fromkeys((f.kind, f.detail) for f in facts):
-                if unit.expect_invalid:
-                    expected[(unit.path, unit.line)].append(
-                        f"{unit.where} ({fact_kind}): {detail}")
-                    continue
-                issues.append({"file": unit.path, "line": unit.line, "kind": fact_kind,
-                               "error": detail})
+            issues.extend(self._credential_issues(unit, fname, doc, entries[fname], rendered))
             if self.verbose:
-                print(f"  OK   {unit.where} ({kind})")
+                print(f"  OK   {unit.where} ({kind}{', ' + rendered if rendered else ''})")
+        # #3748: a block that is no conf.d example by its top two levels
+        # (`finance: {t1: {_routing: …}}`) is still judged as the generator
+        # reads a file: its `_not_walked` scan finds a receiver at any depth.
+        for unit in inv.judged(None):
+            data = unit.documents[0]
+            if isinstance(data, dict):
+                issues.extend(self._credential_issues(
+                    unit, "tenant.yaml", data, entries["tenant.yaml"], None))
         for (path, line), found in sorted(expected.items()):
             if not found:
                 issues.append({
                     "file": path, "line": line, "kind": "expect-invalid",
                     "error": (f"the fence is declared {{.confd .expect-invalid}}, but this "
-                              f"unit ({first_line[(path, line)]!r}) meets its schema and "
-                              "writes no credential out: every "
+                              f"unit ({first_line[(path, line)]!r}) meets its schema: every "
                               "unit of such a fence must be wrong. A correct file shown "
                               "beside the counter-example goes in a fence of its own; a "
                               "block that only shows a reading is "
@@ -513,6 +547,15 @@ class MdYamlDriftChecker:
         print("=" * 60)
         print(f"Config units checked:        {checked}")
         inventory.print_exemptions(inv)
+        # #3748: a refused unit is no reading any check judges: listed as the
+        # exemptions are, so "not judged" is never silent.
+        refused = [u for u in inv.units
+                   if u.how == "declared" and u.expect_refused is not None and not u.errors]
+        if refused:
+            print(f"Units exempted (.expect-refused, refused on purpose): {len(refused)}")
+            for u in refused:
+                print(f"    {u.where} — refused as {u.expect_refused}; "
+                      "--check fences holds the refusal")
         for kind in sorted(by_kind):
             print(f"  {kind:<24} {by_kind[kind]}")
         print(f"Counter-example units (.expect-invalid): {len(expected)}")
@@ -521,6 +564,7 @@ class MdYamlDriftChecker:
                 print(f"    {path}:{line} — {len(found)} violation(s) on purpose")
         print(f"Units not judged here:       {len(not_judged)} "
               "(inventory errors: --check fences)")
+        print(f"No-consumer units judged for credentials: {len(inv.judged(None))}")
         print(f"Schema violations:           {len(issues)}")
         print()
 
@@ -536,7 +580,8 @@ class MdYamlDriftChecker:
         print("is governed by platform-defaults.schema.json, a tenant snippet by")
         print("tenant-config.schema.json. A credential is written as a Secret")
         print("reference ({secret: {key: <key>}}). A counter-example wrong on purpose is")
-        print("declared ```yaml {.confd .expect-invalid}.")
+        print("declared ```yaml {.confd .expect-invalid}; it absorbs schema errors only,")
+        print("the credential judgement is always reported.")
         return EXIT_VIOLATION
 
 

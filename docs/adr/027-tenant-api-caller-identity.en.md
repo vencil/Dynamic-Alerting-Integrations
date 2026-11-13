@@ -18,6 +18,8 @@ Revised 2026-11-05: §10 now records the test result and adopts oauth2-proxy's s
 
 Revised 2026-11-07: the offline check of §7 also lists tenants whose tags cannot be read but that a scope-restricted rule applies to, and a broken file no restricting rule applies to no longer affects its exit code; environment and domain tags are changed by a platform admin restricted on no scope axis, and an admin restricted to some environments or domains can no longer change them; a tenant file whose tags cannot be read is likewise overwritten through the API only by such an admin; tags and the write scope are judged under the writer lock, on the tree the write actually lands on, in both write modes.
 
+Revised 2026-11-13: §Implementation lists the file for each check of §9, and the clauses that have no check yet; "simulate returns the original body" in §5 and §9 item 4 now reads "the same `code` and `error` text", as tenant-api's error responses also carry `request_id`.
+
 The reference check (§9 item 8) is in place: references in the repo that cited this ADR by the draft's IDs have been rewritten and the legacy-reference table deleted.
 
 This ADR replaces an unpublished draft from 2026-07. That draft's direction was "authenticate every hop": each component relaying identity to tenant-api would attach its own workload token, first in audit-only mode, then enforced after a multi-week soak. The code merged under that direction is either audit-only or off by default, and none of it is in any released tenant-api image. This ADR withdraws that direction; see §Context and §Alternatives considered. Fixes completed in that period that do not depend on the direction (an empty `_rbac.yaml` denies access; the middleware that derived the source IP from headers is gone) are kept.
@@ -109,7 +111,7 @@ The whole deployment has a single oauth2-proxy, in tenant-api's pod, routing by 
 - The `/api/` prefix → tenant-api's UDS. Every backend call the portal makes must be under this prefix, including the former `/preview`.
 - Everything else → the portal static-file container in the same pod. That container does not read identity headers and does not forward requests anywhere.
 - Unauthenticated or session-expired requests under `/api/` get 401 instead of a redirect to the IdP; on 401 the portal redirects to login instead of switching to demo data.
-- The "simulate not provided" 501 that da-portal's nginx used to return is now returned by tenant-api, with the same status code and body.
+- The "simulate not provided" 501 that da-portal's nginx used to return is now returned by tenant-api, with the same status code, `code` and `error` text (tenant-api's error responses also carry `request_id`).
 
 Consequent changes:
 
@@ -148,12 +150,12 @@ GitLab groups are matched by full path (`org/subteam`) as-is, without a provider
 
 ### 9. Decisions expressed as tests and lints
 
-This document is explanation; the checks below are the single source of truth for these decisions. Once implemented, §Implementation lists the file for each check.
+This document is explanation; the checks below are the single source of truth for these decisions. §Implementation lists the file for each check.
 
 1. TCP registers only the paths enumerated in §3 (exact match) and returns 404 for the rest; a TCP request carrying any identity header gets 400. (§2, §3)
 2. Architecture test: building identity from headers happens only on the UDS listener's path; rate limiting, the request log and the auth bypass never read identity headers. (§2)
 3. Chart render test: the deployment has exactly one oauth2-proxy, and unauthenticated `/api/` requests get 401; only tenant-api and oauth2-proxy mount the human socket; the UDS always exists; oauth2-proxy and tenant-api mount the same configuration file; oauth2-proxy in a production deployment has no login-skipping condition that covers `/api/` (the development topology of §3 is contained per ADR-022 and is exempt). The nginx configuration the portal container actually loads (whether from the chart or the image) contains no forwarding. (§2, §5)
-4. Every backend path called from the portal source is under the `/api/` prefix; the simulate path returns 501 with the original body. (§5)
+4. Every backend path called from the portal source is under the `/api/` prefix; the simulate path returns 501 with the original `code` and `error` text. (§5)
 5. A scan of helm, k8s manifests and rule packs: no configuration relays identity headers over the network to any component; the chart keys deleted in §6 do not exist; threshold-govern's CronJob, its NetworkPolicy allowance and its alert do not exist. The environment variables deleted in §6 are not in tenant-api's known list. (§4, §5, §6)
 6. tenant-api refuses to start when oauth2-proxy's configuration file does not have the shape in §2, with fixtures covering at least: keeping the client's value, a fixed value, a prefix, the wrong claim, missing email or groups, environment-variable references, and non-canonical field-name spellings; an `_rbac.yaml` with no rules denies all access, and no switch exists that restores open mode; a write by a non-platform-admin that changes a tenant's environment or domain tags, or overwrites a tenant file whose tags cannot be read, is rejected; this check and the write scope are made under the writer lock, on the tree the write lands on. (§7)
 7. `tenant-api config check` lists untagged tenants and tenants whose tags cannot be read per scope axis and exits non-zero, tested against a fixed fixture and checked rule by rule against the server's tenant-list decision; CI runs it against the sample configuration in the repo. (§7)
@@ -238,7 +240,39 @@ Fallback (not adopted, kept for the record): the Ingress routes `/api/` by path 
 
 ## Implementation
 
-Not implemented yet. Once the implementation PRs merge, the file for each check in §9 is listed here.
+The file holding each check in §9. Paths starting with `cmd/` or `internal/` are relative to `components/tenant-api/`; the rest are relative to the repository root. A few clauses of §9 have no check yet; they are listed at the end.
+
+1. TCP plane: `cmd/server/tcp_router_test.go` (`TestTCPRouter_RegistersOnlyTheProbeRoutes`, `TestTCPRouter_EverythingElseIs404`, `TestTCPRouter_IdentityHeaderIs400`).
+2. Identity is built only on the UDS plane:
+   - Identity is built from headers in one place, and identity header names appear only in their owners: `internal/rbac/identity_arch_test.go` (`TestHeaderResolutionOnlyInResolveIdentity`, `TestIdentityHeaderNamesOnlyInTheirOwners`).
+   - That place reads headers only on requests from the UDS listener and ignores them on TCP: `internal/rbac/devbypass_test.go` (`TestResolveIdentity_IgnoresHeadersOnTCP`).
+   - Rate limiting, the request log and the authentication bypass read no header: `internal/rbac/identity_arch_test.go` (`TestRateLimitLogAndBypassReadNoRequestHeader`).
+3. Chart render:
+   - One oauth2-proxy in the whole deployment: `tests/helm/test_identity_single_hop.py` (`test_the_only_oauth2_proxy_is_in_the_tenant_api_pod`, `test_no_raw_manifest_runs_an_oauth2_proxy`).
+   - oauth2-proxy sets `--api-route`, covering exactly the paths §10's example sends to tenant-api, and its arguments carry no flag that skips login: `tests/oauth2-proxy/chart_test.go` (`TestChartConfig`).
+   - The human socket always exists: `tests/helm/test_human_socket_guard.py` (`test_render_without_proxy_fails`, `test_socket_path_is_a_chart_constant`, `test_deployment_wires_the_socket`, `test_render_default_points_upstream_at_socket`); tenant-api does not start without the socket or config file path: `cmd/server/tcp_router_test.go` (`TestCheckIdentityPlaneFlags`). The portal container does not mount it: `tests/helm/test_tenant_api_portal_container.py` (`test_portal_container_mounts_no_identity_or_secret`).
+   - oauth2-proxy and tenant-api mount the same config file: `tests/helm/test_oauth2_proxy_alpha_config.py` (`test_both_containers_read_the_same_file`).
+   - The portal container's nginx config forwards nothing: `tests/helm/test_tenant_api_portal_container.py` (`test_portal_runs_the_charts_config_and_it_forwards_nothing`).
+4. Every portal backend path is under `/api/`: the portal reaches the backend only through `apiFetch` in `tools/portal/src/interactive/tools/_common/api/api-fetch.js`, which refuses, before sending, a path that does not resolve to this origin under `/api/` (`tools/portal/tests/api-fetch.test.ts`); no other source file names `fetch`, `XMLHttpRequest`, `EventSource`, `WebSocket` or `sendBeacon` (`tools/portal/tests/network-calls-only-in-api-fetch.test.ts`, parsed with the TypeScript parser); simulate answers 501: `cmd/server/simulate_route_test.go` (`TestSimulateNotProvided`), with the `code` and `error` text the portal's nginx used to answer, word for word (tenant-api may add `request_id`): `tests/shared/test_portal_simulate_not_provided.py` (`test_tenant_api_answers_the_same_code`, `test_tenant_api_answers_the_same_body`).
+5. No identity relay, and the removed settings are gone:
+   - No configuration relays identity headers over the network: `tests/helm/test_identity_single_hop.py` (`test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header`, `test_no_raw_manifest_or_rule_pack_names_an_identity_header`).
+   - Removed chart keys: `tests/helm/test_tenant_api_machine_identity_removed.py` (machine identity, the human socket and the relay allowances), `tests/helm/test_tenant_api_scope_switches_removed.py` (the scope-axis and open-mode switches).
+   - threshold-govern's CronJob, NetworkPolicy allowance and alert: `tests/shared/test_threshold_govern_write_path_removed.py`.
+   - Removed environment variables are not in the known list, and setting one stops the start: `cmd/server/env_check_test.go` (`TestCheckTAEnv_RefusesSettingsADR027Removed`).
+6. Authorization scope:
+   - An oauth2-proxy config file of the wrong shape is refused: `internal/proxyconfig/proxyconfig_test.go` (`TestLoad_RefusesAmbiguousShapes`, `TestParse_Refusals`), fixtures in `internal/proxyconfig/testdata/`.
+   - An `_rbac.yaml` with no rules denies all access: `internal/rbac/empty_config_mode_test.go`; no switch restores open mode: `tests/helm/test_tenant_api_scope_switches_removed.py` and `TestCheckTAEnv_RefusesSettingsADR027Removed` above.
+   - Tag changes and overwriting a file whose tags cannot be read, judged under the writer lock: `internal/handler/label_guard_test.go`.
+7. `tenant-api config check --kind scope`: `cmd/server/scope_check_test.go`; agreement with the server (the environment and domain axes): `internal/handler/scope_gap_planes_test.go` (`TestScopeGapsMatchEveryPlane`); run in CI on the sample config: the `Scope check on the try-local sample config (ADR-027 §7)` step of `.github/workflows/ci.yml`.
+8. ADR reference check: `scripts/tools/lint/check_adr_section_refs.py` (pre-commit and CI), tested in `tests/lint/test_check_adr_section_refs.py`.
+9. oauth2-proxy config check: CI job `go-tests-oauth2-proxy`. Library side: `tests/oauth2-proxy/chart_test.go` (`TestChartConfig`, which loads the config file the chart generates with the pinned library version and asserts the routing against §10's table), `tests/oauth2-proxy/routing_test.go` (`TestADRSection10Routing`, §10's example itself) and `tests/oauth2-proxy/version_test.go`; image side: `tests/oauth2-proxy/image_config_test.sh` (runs `--config-test` on the file `TestChartConfig` writes).
+
+Clauses with no check yet:
+
+- Item 3, "`/api/` answers 401 without a session": only the `--api-route` setting and the paths it covers are checked; no unauthenticated request is sent to oauth2-proxy.
+- Item 3, "nothing skips login", is checked on the arguments only, not on environment variables; the chart has no setting through which a user could inject oauth2-proxy arguments or environment variables.
+- Item 7's agreement check covers the environment and domain axes; the organization axis is not compared.
+- The start-up wiring that stops on a config file of the wrong shape (`cmd/server/main.go` exits when parsing fails) has no test; the parsing itself is covered by item 6.
 
 ## Related
 
