@@ -183,6 +183,7 @@ func writeRenderOut(t *testing.T, dir string, r rendered) {
 	}
 }
 
+// adr-check: ADR-027/9.3f ADR-027/9.9b
 func TestChartConfig(t *testing.T) {
 	t.Parallel()
 	for _, v := range chartVariants {

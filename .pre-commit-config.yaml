@@ -197,6 +197,14 @@ repos:
         language: python
         pass_filenames: false
 
+      - id: adr-checks-drift
+        name: "ADR check lists match the adr-check markers in the code (gen_adr_checks.py)"
+        entry: python3 -X utf8 scripts/tools/dx/gen_adr_checks.py --check
+        language: python
+        pass_filenames: false
+        # No `files:` filter on purpose: a marker can be added, moved or
+        # deleted in any tracked file, and the check takes well under a second.
+
       # --- ADR-034 mechanical enforcement: no hand-rolled env-to-bool parsers ---
       # ADR-034 forbids a legal value from doubling as the fallback for an
       # unrecognized one WHEN that value decides whether a check runs. Its

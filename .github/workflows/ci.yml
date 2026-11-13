@@ -730,6 +730,7 @@ jobs:
           pre-commit run rule-pack-stats-check --all-files
           pre-commit run byo-rulepack-table-check --all-files
           pre-commit run adr-section-refs --all-files
+          pre-commit run adr-checks-drift --all-files
           # #1495: the documented `docker run` examples are a customer's first
           # contact with the tool. Listed here because this job runs the hooks
           # BY NAME — a hook that is only in .pre-commit-config.yaml has no CI
@@ -2609,6 +2610,7 @@ jobs:
       # operator runs before upgrading, flags and exit code included; a moved
       # tree exits 2 here instead of skipping. try-local/** is in the `go`
       # filter above, so a sample-only change wakes this leg.
+      # adr-check: ADR-027/9.7c
       - name: Scope check on the try-local sample config (ADR-027 §7)
         working-directory: components/tenant-api
         run: go run ./cmd/server config check --kind scope --config-dir ../../try-local/seed/conf.d
@@ -2815,6 +2817,7 @@ jobs:
             sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
           fi
 
+      # adr-check: ADR-027/9.9a
       - name: Run --config-test in the chart's oauth2-proxy image (by digest)
         run: bash tests/oauth2-proxy/image_config_test.sh "$RUNNER_TEMP/oauth2-proxy-render"
 

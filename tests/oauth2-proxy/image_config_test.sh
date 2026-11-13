@@ -19,6 +19,7 @@
 # --api-route to the started one's.
 # Needs docker, curl and python3 with PyYAML. Exit 0 all valid, 1 any invalid,
 # 2 usage or no variant.
+# adr-check: ADR-027/9.9a
 set -euo pipefail
 
 dir="${1:-}"

@@ -63,6 +63,7 @@ def _loaded_config(docs: list[dict]) -> str:
     return cm["data"][conf.name]
 
 
+# adr-check: ADR-027/9.3g
 @_needs_helm
 def test_portal_runs_the_charts_config_and_it_forwards_nothing(render):
     conf = _loaded_config(render)
@@ -74,6 +75,7 @@ def test_portal_runs_the_charts_config_and_it_forwards_nothing(render):
     assert listens == ["127.0.0.1:8081"], f"listen {listens}: the pod's loopback only"
 
 
+# adr-check: ADR-027/9.3c
 @_needs_helm
 def test_portal_container_mounts_no_identity_or_secret(render):
     c = _container(render, "portal")

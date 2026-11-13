@@ -82,6 +82,7 @@ func (c freshScopeCase) run(t *testing.T, f *staleFixture) *httptest.ResponseRec
 	return postTenantBatch(t, f.deps, c.ops)
 }
 
+// adr-check: ADR-027/9.6f
 func TestPRModeScopeAuthoritativeOnFreshBase(t *testing.T) {
 	for _, c := range freshScopeCases() {
 		t.Run(c.name, func(t *testing.T) {
@@ -172,6 +173,7 @@ func (b *sideEffectBody) Read(p []byte) (int, error) {
 // another PR write has the shared working tree on its branch, cut from the
 // latest base; anything that read "the local tree" again at that point would
 // read the base, see nothing to judge, and let the write through.
+// adr-check: ADR-027/9.6f
 func TestPRModeScopeJudgedEvenWhenTheTreeMovedMidRequest(t *testing.T) {
 	local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles, "db-a.yaml": freshScopeProduction}
 	f := newStaleFixture(t, local, map[string]string{"db-a.yaml": freshScopeDev})
@@ -324,6 +326,7 @@ func TestPRModeScopeRejudgeAddsNoOrgCount(t *testing.T) {
 // `_tenant_orgs.yaml` moved db-a out of the caller's organization, or left it
 // unlabeled, while the manager's copy (the local tree) still has it in: both
 // are refused, and the refusal is counted once on org_write.
+// adr-check: ADR-027/9.6f
 func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 	orgsFile := func(org string) string { return "tenant_orgs:\n  db-a: [" + org + "]\n" }
 	run := func(t *testing.T, kind string, originOrgs string) (*staleFixture, *httptest.ResponseRecorder, map[string]int) {

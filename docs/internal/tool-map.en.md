@@ -93,6 +93,7 @@ lang: en
 | `describe_tenant.py` | Describe effective tenant config — as the exporter's resolver answers it. |
 | `diag_pr_ci.py` | PR CI auto-diagnostic CLI (issue #446). |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
+| `gen_adr_checks.py` | an ADR's list of checks, generated from the code. |
 | `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral .agents/ SSOT (TRK-361). |
 | `gen_am_duration_json.py` | Generate am-duration.json from the tenant-config schema (#2711). |
 | `gen_recipe_contract.py` | Generate the recipe copies from the one contract. |

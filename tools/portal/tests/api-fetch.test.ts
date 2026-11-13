@@ -37,6 +37,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); });
 
+// adr-check: ADR-027/9.4a
 describe('apiFetch: the path', () => {
   it.each([
     '/api/v1/me',

@@ -192,6 +192,17 @@ crash 與具名的呼叫端錯誤同為 rc 2，只斷言 `returncode == 2` 的�
   - 墊片只包 `subprocess.Popen`；`os.posix_spawn`、`os.spawn*e`、`os.exec*e` 帶自建 env 時不會補上變數（目前 `tests/`、`scripts/` 都沒有用到）。
   - 工具自己用寬的 `except Exception` 接住例外、再以 `EXIT_CALLER_ERROR` 結束的（例如 `dx/waveform_score.py` 的 `main` 的 `ERR_UNEXPECTED`），不會經過 crash 出口：這類工具的 rc 2 斷言仍分不出「具名錯誤」與「意外例外」，要另外比對 stderr 的具名錯誤。
 
+### ADR 檢查標記：`adr-check:`
+
+把決策寫成「以測試表達」的 ADR（目前是 ADR-027 §9），每個子句有固定編號；實作某個子句的測試、腳本或 CI 步驟，在它上一行加註解標記：
+
+```go
+// adr-check: ADR-027/9.3b
+func TestOAuth2ProxyAnswers401(t *testing.T) {
+```
+
+標記必須獨佔一行、以註解開頭（`//`、`#`、`/*`、`*`、`<!--`、`--` 或 `{{/*`），`adr-check:` 全小寫；一行可列多個子句（以空白或逗號分隔）。寫錯的變形（全形冒號、大寫、接在程式碼後面）會讓檢查失敗，不會被略過。`.md` 檔裡的標記視為範例，一律不讀。該 ADR 的「實作位置」由 `scripts/tools/dx/gen_adr_checks.py --write` 依標記產生，沒有標記的子句列為尚無檢查；pre-commit 與 CI 的 `adr-checks-drift` 在產生結果與 ADR 不一致、或標記指向不存在的 ADR／子句時失敗。標記只證明「有人宣稱這支測試檢查這個子句」，它檢查得對不對仍要 review。
+
 ## 測試檔案對照
 
 要看某支測試檔實際有幾個測試：`pytest <file> --collect-only -q`。

@@ -51,6 +51,7 @@ func TestDevBypassMiddleware_InjectsWhenIdentityAbsent(t *testing.T) {
 // not given the dev identity by a bypass mounted after it either way —
 // the TCP router mounts neither (cmd/server/tcp_router.go). What this pins:
 // a TCP-stamped request's headers never become a principal.
+// adr-check: ADR-027/9.2a
 func TestResolveIdentity_IgnoresHeadersOnTCP(t *testing.T) {
 	var gotEmail, gotGroups string
 	h := ResolveIdentity(HeaderResolver{})(captureHandler(&gotEmail, &gotGroups))
