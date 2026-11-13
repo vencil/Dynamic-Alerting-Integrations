@@ -156,6 +156,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "describe_tenant.py": _R_DX,
     "diag_pr_ci.py": _R_DX,
     "doc_coverage.py": _R_DX,
+    "gen_adr_checks.py": _R_DX,
     "gen_agent_adapters.py": _R_DX,
     "gen_recipe_contract.py": _R_DX,
     "gen_tenant_id_json.py": _R_DX,
@@ -560,8 +561,15 @@ def test_allowlists_shrink_only_count_pin():
     # section that exists. Same class as the `_R_LINT` siblings: a pre-commit
     # gate, never invoked by a customer; its output is path:line plus the
     # section it could not find.
-    assert len(ENGLISH_ONLY) <= 152, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=152). Adding an "
+    # pin 153: bumped from 152 for gen_adr_checks.py (#1040), the generator
+    # that writes an ADR's list of checks from the marker comments in the
+    # tests (docs/internal/test-map.md, "ADR 檢查標記"). Same class
+    # as gen_agent_adapters.py beside it: a dx regen CLI run by the
+    # `adr-checks-drift` pre-commit hook and CI, never by a customer; its
+    # output is the paths it rewrote or would rewrite. ⚠️ Found the same way
+    # as check_pipestatus_errexit.py: this gate turned the PR red.
+    assert len(ENGLISH_ONLY) <= 153, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=153). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

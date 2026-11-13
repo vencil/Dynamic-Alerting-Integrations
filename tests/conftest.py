@@ -650,6 +650,39 @@ def pytest_collection_modifyitems(config, items):
 _SESSION_DA_GUARD_ENV = "VIBE_TEST_DA_GUARD_BINARY"
 _SESSION_DA_GUARD_DIR: "str | None" = None
 
+#: A session that runs no test needing a Go binary declares it with
+#: `VIBE_TEST_GO_BINARIES=skip`: nothing below is built and no `*_BINARY`
+#: variable is set (one inherited from the environment is left alone). A test
+#: that reads the session's binary then fails with the tool's "binary
+#: missing" error; a few resolve one themselves (the `da_guard_binary`
+#: fixture builds it, a tool may find one on PATH, a test may skip), so
+#: `skip` is for jobs that run none of them. The builds are up front,
+#: not lazy, on purpose: tests call these tools under short subprocess
+#: timeouts and the generator calls da-guard under RLIMIT_DATA within a
+#: judgement deadline, so a build inside the first call would fail them.
+#: Cold-cache CI pays minutes for it, so every CI step that runs pytest
+#: declares `build` or `skip` (tests/lint/test_workflow_pytest_declares_go_binaries.py;
+#: behaviour: tests/shared/test_session_go_binaries_opt_out.py).
+_GO_BINARIES_ENV = "VIBE_TEST_GO_BINARIES"
+
+
+def _session_go_binaries_skipped() -> bool:
+    value = os.environ.get(_GO_BINARIES_ENV, "")
+    if value == "" and os.environ.get("GITHUB_ACTIONS") == "true":
+        # In CI the choice is written down. The workflow lint sees the steps
+        # that run pytest themselves; a pytest started by a script it cannot
+        # see (the mutation pilot, the federation E2E driver) is caught here.
+        raise pytest.UsageError(
+            f"{_GO_BINARIES_ENV} is not set: in CI every pytest session declares "
+            "'build' or 'skip' (step, job or workflow env)")
+    if value in ("", "build"):
+        return False
+    if value == "skip":
+        return True
+    raise pytest.UsageError(
+        f"{_GO_BINARIES_ENV}={value!r}: 'build' (or unset / empty) builds the Go "
+        "binaries up front, 'skip' builds none for this session")
+
 
 def _provide_session_da_guard() -> None:
     """ADR-036 步驟 4（#2906）：路由產生器與經它讀 conf.d 的工具（validate-config、
@@ -660,6 +693,8 @@ def _provide_session_da_guard() -> None:
     worker 都繼承）。沒有 go 就不設：要它的測試照樣以 da-guard 缺失失敗，不 skip。
     要量「沒有 da-guard」的測試自己 `monkeypatch.delenv`。"""
     global _SESSION_DA_GUARD_DIR
+    if _session_go_binaries_skipped():
+        return
     built = os.environ.get(_SESSION_DA_GUARD_ENV, "")
     if built and os.path.isfile(built):  # an xdist worker: the controller built it
         os.environ["DA_GUARD_BINARY"] = built
@@ -716,6 +751,8 @@ def _provide_session_consumer_binaries() -> None:
     CGO_ENABLED=0 的理由見該腳本頂部）、
     設進環境變數（子行程與 xdist worker 繼承）；沒有 go 或建不起來就不設，要它的
     測試照樣以缺失失敗、不 skip。要量「沒有它」的測試自己 `monkeypatch.delenv`。"""
+    if _session_go_binaries_skipped():
+        return
     import subprocess
     go = shutil.which("go")
     for name, env, session_env, module, pkg in _SESSION_CONSUMER_BINARIES:
@@ -834,7 +871,8 @@ def _real_crash_exit_code(request, monkeypatch):
 
 
 def pytest_configure(config):
-    """Build the session's da-guard (`_provide_session_da_guard`); move the
+    """Build the session's da-guard (`_provide_session_da_guard`) and the
+    other Go readers, unless `VIBE_TEST_GO_BINARIES=skip`; move the
     crash code off 2 (`_arm_test_crash_exit_code`); make subprocess-invoked
     tools visible to coverage, when coverage is on."""
     _provide_session_da_guard()

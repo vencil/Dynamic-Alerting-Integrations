@@ -73,6 +73,7 @@ export function networkUses(text: string, file = 'x.jsx'): string[] {
   return found;
 }
 
+// adr-check: ADR-027/9.4a
 describe('network calls only in apiFetch', () => {
   const files = SCANNED.flatMap(sources);
 

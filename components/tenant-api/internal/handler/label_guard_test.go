@@ -170,6 +170,7 @@ func lgReadFile(t *testing.T, dir, name string) string {
 
 // ── PUT, direct mode ───────────────────────────────────────────────────────
 
+// adr-check: ADR-027/9.6e
 func TestLabelGuardPutDirect(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
@@ -224,6 +225,7 @@ func TestLabelGuardPutDirect(t *testing.T) {
 }
 
 // Creating a tenant: from no file to labels is a change.
+// adr-check: ADR-027/9.6e
 func TestLabelGuardPutNewTenant(t *testing.T) {
 	t.Parallel()
 	labeled := "tenants:\n  " + lgNewTenant + ":\n    _metadata:\n      environment: production\n    mysql_connections: '80'\n"
@@ -257,6 +259,7 @@ func TestLabelGuardPutNewTenant(t *testing.T) {
 
 // ── Tenant batch, direct mode ──────────────────────────────────────────────
 
+// adr-check: ADR-027/9.6e
 func TestLabelGuardBatchDirect(t *testing.T) {
 	t.Parallel()
 	// op 0 leaves every label alone; op 1 is the case.
@@ -315,6 +318,7 @@ func TestLabelGuardBatchStackedOps(t *testing.T) {
 // synced). A writer's body still says production — no change on the local
 // tree, a change on the tree the PR would rewrite: refused there, nothing
 // left behind.
+// adr-check: ADR-027/9.6f
 func TestLabelGuardPutPRModeBaseDrift(t *testing.T) {
 	staging := lgTenantYAML("      environment: staging\n      domain: finance\n", "80")
 	t.Run("writer reverting the base's label", func(t *testing.T) {
@@ -365,6 +369,7 @@ func TestLabelGuardPutPRModeBaseDrift(t *testing.T) {
 
 // The batch twin: the base moved tenant-beta to devfin; an op setting it back
 // to prodfin is a no-op on the local tree and a change on the base.
+// adr-check: ADR-027/9.6f
 func TestLabelGuardBatchPRModeBaseDrift(t *testing.T) {
 	devBeta := strings.Replace(lgBeta, "prodfin", "devfin", 1)
 	ops := `[{"tenant_id":"` + lgProfiled + `","patch":{"_profile":"prodfin"}}]`
@@ -403,6 +408,7 @@ func TestLabelGuardBatchPRModeBaseDrift(t *testing.T) {
 // it may be removing the ones the file holds. Only a platform administrator
 // writes over such a file (ADR-027 §7, the same treatment as config check's
 // metadata_unknown).
+// adr-check: ADR-027/9.6e
 func TestLabelGuardUnreadableLabelsBefore(t *testing.T) {
 	t.Parallel()
 	undecodable := "tenants:\n  " + lgTenant + ":\n    _metadata:\n      environment: [production]\n      domain: finance\n" +
@@ -464,6 +470,7 @@ func TestLabelGuardUnreadableLabelsBefore(t *testing.T) {
 // writer's body that keeps the local labels is a no-change on the local tree,
 // but on the tree the PR rewrites it may remove labels nobody can read:
 // refused there, nothing left behind.
+// adr-check: ADR-027/9.6e ADR-027/9.6f
 func TestLabelGuardPutPRModeUnreadableBase(t *testing.T) {
 	undecodable := "tenants:\n  " + lgTenant + ":\n    _metadata:\n      environment: [staging]\n      domain: finance\n" +
 		"    mysql_connections: '80'\n"
@@ -508,6 +515,7 @@ func lgLandFirst(t *testing.T, d *Deps, tenantID, body string) {
 // A writer's body keeps tenant-alpha's labels as its gates read them; a
 // platform administrator's relabel lands first. Under the lock the body
 // changes the labels, so it is refused and the relabel stands.
+// adr-check: ADR-027/9.6f
 func TestLabelGuardPutDirectRelabelLandsFirst(t *testing.T) {
 	t.Parallel()
 	staging := lgTenantYAML("      environment: staging\n      domain: finance\n", "80")
@@ -546,6 +554,7 @@ func TestLabelGuardPutDirectRelabelLandsFirst(t *testing.T) {
 // The batch twin: an op setting tenant-beta's profile to the one it has is
 // no change where its gates read it; a move to devfin lands first, so under
 // the lock the op moves it back — refused, nothing of the batch written.
+// adr-check: ADR-027/9.6f
 func TestLabelGuardBatchDirectRelabelLandsFirst(t *testing.T) {
 	t.Parallel()
 	devBeta := strings.Replace(lgBeta, "prodfin", "devfin", 1)
@@ -579,6 +588,7 @@ func TestLabelGuardBatchDirectRelabelLandsFirst(t *testing.T) {
 // passed, is refused there with the gate's own text. (A PUT has no such
 // case of its own: its body restates the labels, so a move that lands first
 // is a label change under the lock — TestLabelGuardPutDirectRelabelLandsFirst.)
+// adr-check: ADR-027/9.6f
 func TestScopeGateDirectRelabelLandsFirst(t *testing.T) {
 	t.Parallel()
 	dev := lgTenantYAML("      environment: dev\n      domain: finance\n", "80")
@@ -600,6 +610,7 @@ func TestScopeGateDirectRelabelLandsFirst(t *testing.T) {
 // The same data refuses alike whatever the order of the ops. The file's
 // labels turned unreadable outside the API (a git change between the gates
 // and the lock: the API refuses such a write).
+// adr-check: ADR-027/9.6f
 func TestScopeGateDirectNoopFirstOpStillJudged(t *testing.T) {
 	t.Parallel()
 	broken := "tenants:\n  " + lgTenant + ":\n    _metadata:\n      environment: [dev]\n      domain: finance\n" +

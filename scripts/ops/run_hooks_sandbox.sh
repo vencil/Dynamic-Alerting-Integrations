@@ -36,13 +36,15 @@
 #
 # Exit codes:
 #   0   All hooks passed
-#   1   At least one hook failed (see log for details)
-#   2   Invalid arguments or environment
+#   2   At least one hook failed (see log for details), or invalid arguments
+#       or environment. Never 1 (#3634): pre-commit ends a hook's finding and
+#       a hook that could not run (exit 2/3/127, a missing executable, a config
+#       error) alike at 1, so "change the content" cannot be claimed.
 #
 # Output (grep-friendly, last line). ⚠️ PASS goes to stdout, every FAIL to
 # stderr — capture both (2>&1) or a FAIL is invisible:
 #   stdout, rc 0:  HOOKS STATUS=PASS FILES=<n> DURATION=<s>s
-#   stderr, rc 1:  HOOKS STATUS=FAIL FILES=<n> DURATION=<s>s LOG=<path>
+#   stderr, rc 2:  HOOKS STATUS=FAIL FILES=<n> DURATION=<s>s LOG=<path>
 #   stderr, rc 2:  HOOKS STATUS=FAIL FILES=0 DURATION=0s REASON=<why>
 #                  (no LOG=: pre-commit never ran)
 
@@ -112,5 +114,5 @@ if [ "$RC" -eq 0 ]; then
     exit 0
 else
     echo "HOOKS STATUS=FAIL FILES=$FILE_COUNT DURATION=${DURATION}s LOG=$LOG_FILE" >&2
-    exit 1
+    exit 2
 fi

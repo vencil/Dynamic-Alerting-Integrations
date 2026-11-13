@@ -98,6 +98,7 @@ func section10(t *testing.T) (yamlBlock string, routes []adrRoute) {
 	return block.String(), routes
 }
 
+// adr-check: ADR-027/9.9b
 func TestADRSection10Routing(t *testing.T) {
 	t.Parallel()
 	block, routes := section10(t)

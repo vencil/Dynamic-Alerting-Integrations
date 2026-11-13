@@ -104,6 +104,7 @@ TENANT_API_ERRCODE = REPO_ROOT / "components/tenant-api/internal/errcode/errcode
 _GO_CODE_RE = re.compile(r'^\s*SimulateNotProvided Code = "([^"]+)"$', re.M)
 
 
+# adr-check: ADR-027/9.4b
 def test_tenant_api_answers_the_same_code():
     """ADR-027 §5：portal 移進 tenant-api 的 pod 後，/api/ 一律到 tenant-api，
     由它回同一個 501 code（handler.SimulateNotProvided）。"""
@@ -117,6 +118,7 @@ TENANT_API_HTTP_EXITS = REPO_ROOT / "components/tenant-api/internal/handler/http
 _GO_MSG_RE = re.compile(r"^const msgSimulateNotProvided = ((?:\"[^\"\n]*\"(?:\s*\+\s*)?)+)$", re.M)
 
 
+# adr-check: ADR-027/9.4b
 def test_tenant_api_answers_the_same_body():
     """ADR-027 §9 第 4 項：simulate 回 501「與原 body」——tenant-api 的
     error 文字與原本 portal nginx 回的逐字相同（widget 會把它顯示給使用者）。"""

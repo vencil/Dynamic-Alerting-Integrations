@@ -49,6 +49,7 @@ def _alert_names(rule_doc):
                 yield rule["alert"]
 
 
+# adr-check: ADR-027/9.5c
 def test_no_threshold_govern_cronjob():
     found = [str(p.relative_to(REPO_ROOT)) for p, d in _k8s_docs()
              if d.get("kind") == "CronJob"
@@ -56,6 +57,7 @@ def test_no_threshold_govern_cronjob():
     assert found == [], found
 
 
+# adr-check: ADR-027/9.5c
 def test_no_network_policy_admits_the_threshold_govern_pod():
     docs = _k8s_docs()
     policies = [(p, d) for p, d in docs if d.get("kind") == "NetworkPolicy"]
@@ -65,6 +67,7 @@ def test_no_network_policy_admits_the_threshold_govern_pod():
     assert found == [], found
 
 
+# adr-check: ADR-027/9.5c
 def test_tenant_api_chart_has_no_threshold_govern_allowance():
     values = yaml.safe_load((REPO_ROOT / "helm" / "tenant-api" / "values.yaml")
                             .read_text(encoding="utf-8"))
@@ -74,6 +77,7 @@ def test_tenant_api_chart_has_no_threshold_govern_allowance():
     assert dict([_LABEL]) not in allow.values(), allow
 
 
+# adr-check: ADR-027/9.5c
 def test_no_threshold_governance_stale_alert():
     packs = [p for p in repo_files(".yaml")
              if p.relative_to(REPO_ROOT).parts[0] == "rule-packs"
@@ -89,3 +93,16 @@ def test_no_threshold_governance_stale_alert():
                 for n in _alert_names(d)}
     assert "CronJobLastRunFailed" in embedded, "positive control: the ConfigMap was not read"
     assert _ALERT not in embedded
+
+
+# adr-check: ADR-027/9.5c
+def test_no_chart_mentions_threshold_govern():
+    """The scans above read k8s/ as YAML; chart templates are Go templates, so
+    a CronJob or alert re-added to a chart would not parse there. Read every
+    file under helm/ as text instead: none names the CronJob or its alert.
+    Broader than a parse on purpose — no chart has a reason to mention it."""
+    files = [p for p in repo_files() if p.relative_to(REPO_ROOT).parts[0] == "helm"]
+    assert files, "no helm/ files enumerated — the scan would pass on nothing"
+    found = [str(p.relative_to(REPO_ROOT)) for p in files
+             if _NAME in (t := p.read_text(encoding="utf-8", errors="replace")) or _ALERT in t]
+    assert found == [], found
