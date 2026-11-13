@@ -618,7 +618,9 @@ def sanitize_std_fds():
     null device opens at the very fd it fills (``dup2`` if not). Read-only
     for all three: reading fd 0 gets EOF, writing fd 1 or 2 fails (EBADF)
     instead of vanishing or landing in a file a later ``open()`` was handed.
-    A ``sys.stdout`` the interpreter left None (fd 1 was closed at start) is
+    A ``sys.stdin`` the interpreter left None (fd 0 was closed at start) is
+    pointed at fd 0, so ``<&-`` reads as empty input, as ``</dev/null`` does
+    (#3602). A ``sys.stdout`` left None (fd 1 was closed at start) is
     pointed at fd 1, so a write fails as any stdout failure does; a None
     ``sys.stderr`` at a writable null device, so a tool's stderr line is
     neither printed on stdout (``print(file=None)``) nor a failure of its own.
@@ -646,6 +648,9 @@ def sanitize_std_fds():
             filled.add(fd)
         except OSError:
             pass
+    if sys.stdin is None and 0 in filled:
+        sys.stdin = sys.__stdin__ = open(  # noqa: SIM115
+            0, "r", encoding="utf-8", errors="surrogateescape", closefd=False)
     if sys.stdout is None and 1 in filled:
         sys.stdout = sys.__stdout__ = open(  # noqa: SIM115
             1, "w", encoding="utf-8", errors="backslashreplace", newline="\n",

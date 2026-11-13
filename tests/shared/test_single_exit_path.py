@@ -1280,6 +1280,56 @@ def test_a_closed_fd_gets_the_null_device_read_only_and_inheritable(tmp_path, cl
     assert seen["child"] != 0, seen
 
 
+# #3602: `<&-` is empty input, as `</dev/null` is — the reads a tool makes.
+_STDIN_READS = {
+    "read": "sys.stdin.read()",
+    "buffer": "sys.stdin.buffer.read()",
+    "lines": "list(sys.stdin)",
+    "input": "input()",
+}
+
+
+@pytest.mark.parametrize("read", sorted(_STDIN_READS))
+@pytest.mark.parametrize("stdin", ["<&-", "</dev/null"])
+def test_a_closed_stdin_reads_as_empty_input(tmp_path, read, stdin):
+    """`tool <&-`: the interpreter left `sys.stdin` None, which crashed every
+    tool that reads it (AttributeError / TypeError / `input()`'s
+    RuntimeError "lost sys.stdin", rc 2). It is bound to the null device
+    sanitize gave fd 0 — the same read as `</dev/null`: empty, or EOFError."""
+    body = _armed(
+        "assert sys.stdin is sys.__stdin__ and sys.stdin.fileno() == 0\n"
+        "try:\n"
+        f"    got = {_STDIN_READS[read]}\n"
+        "except EOFError:\n"
+        "    got = 'EOF'\n"
+        "print(repr(got))\n")
+    proc = _run_with_fds_closed(_script(tmp_path, body), close=stdin)
+    assert proc.returncode == 0, proc.stderr
+    want = {"read": "''", "buffer": "b''", "lines": "[]", "input": "'EOF'"}[read]
+    assert proc.stdout.decode().strip() == want, proc.stderr
+
+
+def test_the_entrypoint_binds_a_closed_stdin_too(tmp_path):
+    """`da-tools <cmd> <&-`: the dispatcher's copy of sanitize binds it as
+    well, before the tool (which may not import _lib_exitcodes) runs."""
+    bash = shutil.which("bash") or pytest.skip("bash is not on PATH")
+    sys.path.insert(0, str(REPO_ROOT / "components" / "da-tools" / "app"))
+    try:
+        import entrypoint  # noqa: E402
+    finally:
+        sys.path.pop(0)
+    opt = tmp_path / "opt"
+    opt.mkdir()
+    shutil.copy(REPO_ROOT / "components" / "da-tools" / "app" / "entrypoint.py", opt / "entrypoint.py")
+    (opt / entrypoint.COMMAND_MAP["validate-config"]).write_text(
+        "import sys\nprint(repr(sys.stdin.read()))\n", encoding="utf-8")
+    proc = subprocess.run([bash, "-c", 'exec "$0" "$1" validate-config <&-', sys.executable,
+                           str(opt / "entrypoint.py")],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, env=_ENV)
+    assert proc.returncode == 0, proc.stderr
+    assert proc.stdout.decode().strip() == "''"
+
+
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 @pytest.mark.parametrize("argv", [["--version"], ["--help"]])
 def test_the_entrypoints_own_output_to_a_closed_stdout_is_rc_2(argv, buffering):
