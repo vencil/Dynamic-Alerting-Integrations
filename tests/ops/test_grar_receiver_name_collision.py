@@ -12,8 +12,8 @@ Separately, ``--output-configmap --base-config`` kept a base receiver and
 DROPPED the generated one of the same name — rc 0, amtool accepting, alerts
 going to the base's stale endpoint.
 
-The contract pinned here (owner decision on #2279), all with amtool NOT on
-PATH so the verdict cannot be amtool's:
+The contract pinned here (owner decision on #2279), all with an empty PATH
+so nothing installed on this machine decides the verdict:
 
 * duplicate generated names → ``--validate`` rc 1 naming BOTH sources;
   ``--output-alertmanager`` / ``--output-configmap`` rc 1 with nothing
@@ -149,7 +149,7 @@ class TestGeneratedNameCollision:
         assert row["status"] == vc.FAIL, row
         assert row["hint"] == vc.RECEIVER_COLLISION_ROUTES_HINT, row
 
-    def test_control_no_collision_is_unaffected(self, tmp_path, amtool_accepts):
+    def test_control_no_collision_is_unaffected(self, tmp_path):
         """Same shape minus the colliding tenant: rc 0, file written, PASS."""
         d = tmp_path / "conf.d"
         d.mkdir()

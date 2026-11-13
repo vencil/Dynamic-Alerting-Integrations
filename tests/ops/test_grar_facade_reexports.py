@@ -113,7 +113,6 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         # #2311 / #3689: Alertmanager verdict statuses, read by
         # validate_config as `gen.…`
         "AM_ACCEPTED",
-        "AM_ACCEPTED_WITHOUT_AMTOOL",
         "AM_REJECTED",
         "AM_UNUSABLE",
         "BaseConfigInputError",  # #1616 supplied-but-unusable --base-config
@@ -127,8 +126,6 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "assemble_configmap",
         "load_base_config",
         "merge_generated",
-        # #2260 --validate NOTICE; moved here with the shared verdict (#2311)
-        "VALIDATE_AMTOOL_NOT_FOUND_NOTICE",
     ),
 }
 

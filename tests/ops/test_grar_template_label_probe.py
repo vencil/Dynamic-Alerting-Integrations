@@ -121,7 +121,7 @@ def test_output_configmap_refuses_the_issue_rule(full, monkeypatch, capsys,
         "inhibit_rules": [_ISSUE_RULE]}), encoding="utf-8")
     out = tmp_path / "out.yaml"
     gar = importlib.import_module("generate_alertmanager_routes")
-    monkeypatch.setenv("PATH", str(tmp_path))          # no amtool on PATH
+    monkeypatch.setenv("PATH", str(tmp_path))          # an empty PATH
     monkeypatch.setattr(sys, "argv", [
         "generate_alertmanager_routes.py", "--config-dir", str(conf),
         "--output-configmap", "--base-config", str(base), "-o", str(out)])

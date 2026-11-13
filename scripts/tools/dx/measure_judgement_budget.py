@@ -8,7 +8,7 @@ With ``--work-dir`` (a directory that does not exist yet) the directory is
 kept: every run's job directory (its ``report.json``, stdout, stderr) and
 ``result.json``, the whole result.
 
-Needs helm, amtool and da-guard (``make da-guard-build``) on this machine.
+Needs helm and da-guard (``make da-guard-build``) on this machine.
 
 WHAT IS MEASURED
 ================
@@ -23,8 +23,8 @@ write when the per-file parse cache is gone, in one judgement process:
    ``--validate --strict --findings-json`` (the argv ``_gsvc_child`` builds;
    ``key_verdict=False``, as there),
    with NO parse cache installed: it reads conf.d through one
-   ``da-guard parse-tree`` tree-mode run, and its ``--validate`` runs
-   ``amtool check-config`` on the generated config;
+   ``da-guard parse-tree`` tree-mode run, and its ``--validate`` has
+   Alertmanager's loader (``da-read alertmanager``) read the generated config;
 3. ``da-guard served-values --tenant <id> ...`` for the tenants the write
    affects (ADR-038 decision 5), its output read and decoded by the
    judgement process.
@@ -79,8 +79,8 @@ A run under a limit that the limit ends — a MemoryError, any program or the
 judgement process itself ended by a signal (every Go program runs with
 ``GOTRACEBACK=crash``, so its out-of-memory is SIGABRT, not exit 2) — is a
 measured result: the memory condition does not hold. A run is complete only
-when the generator gave a verdict (exit 0 or 1), amtool and the tree-mode
-parse-tree ran, and served-values gave a usable document. Anything else is
+when the generator gave a verdict (exit 0 or 1), ``da-read alertmanager`` and
+the tree-mode parse-tree ran, and served-values gave a usable document. Anything else is
 not a measurement (exit 2), never a pass.
 
 HOW PEAK MEMORY IS MEASURED (and its bias)
@@ -119,7 +119,7 @@ judgement) is ended with its whole process group, and the run is not a
 measurement. Its process group is also ended when this tool is interrupted.
 
 Exit codes: 0 measured, both conditions hold; 1 measured, a condition does not
-hold; 2 not measured (no helm / amtool / da-guard / tree, a limit the render
+hold; 2 not measured (no helm / da-guard / tree, a limit the render
 does not give, a judgement that did not complete for a reason other than
 memory).
 """
@@ -483,7 +483,7 @@ def judge(spec: dict) -> dict:
     global _LAUNCH_DIR
     t_ready = time.monotonic()
     _lib_parse_tree.run_under_memory_limit()
-    # Every Go program of the judgement (amtool and served-values included,
+    # Every Go program of the judgement (da-read and served-values included,
     # not only the parse-tree runs _lib_parse_tree starts): an out-of-memory
     # is then a signal, never an exit 2 read as "no verdict" (module docstring).
     os.environ["GOTRACEBACK"] = "crash"
@@ -523,7 +523,7 @@ def judge(spec: dict) -> dict:
         memory = str(exc) or "MemoryError"
     finally:
         _grar_parse.set_git_irregular_entries(None)
-    stages["generator (parse-tree, routes, amtool)"] = time.monotonic() - t
+    stages["generator (parse-tree, routes, da-read)"] = time.monotonic() - t
     sys.stdout.flush()
     findings = None
     try:
@@ -691,8 +691,9 @@ def outcome(run: dict) -> "tuple[str, str | None]":
         return "incomplete", "no parse-tree tree-mode run: this is not the cache-less path"
     if rep["generator_rc"] not in _VERDICTS:
         return "incomplete", f"the generator gave no verdict (exit {rep['generator_rc']})"
-    if "amtool check-config" not in labels:
-        return "incomplete", "amtool check-config did not run: the generator's --validate skipped it"
+    if not any(lb.endswith(" alertmanager") for lb in labels):
+        return "incomplete", ("da-read alertmanager did not run: the generator's --validate "
+                              "did not have Alertmanager's loader read the config")
     if not rep["served_values_ok"]:
         return "incomplete", (f"served-values --tenant gave no usable document (exit "
                               f"{rep.get('served_values_rc')}, absent: {rep['tenants_absent']})")
@@ -807,7 +808,7 @@ def summarise(limits: dict, cpus, per_write: "list[dict]", seen: "dict | None") 
 def main(argv: "list[str] | None" = None) -> int:
     p = argparse.ArgumentParser(
         description="Measure one complete generator-container judgement (git read, "
-                    "parse-tree tree mode, generate-routes --validate --strict with amtool, "
+                    "parse-tree tree mode, generate-routes --validate --strict, "
                     "served-values --tenant), for a tenant-file and a defaults-file write, "
                     "against ADR-036 section 3's budget, with the limits read from the Helm "
                     "chart and generator-service's own parser.")
@@ -848,9 +849,6 @@ def _preflight(a: argparse.Namespace) -> str:
     if not da_guard or not os.access(da_guard, os.X_OK):
         raise NotMeasured("no da-guard (--da-guard-binary, $DA_GUARD_BINARY, PATH); "
                           "`make da-guard-build` builds .build/da-guard")
-    if shutil.which("amtool") is None:
-        raise NotMeasured("amtool is not on PATH: the judgement would not be complete "
-                          "(the container answers VALIDATOR_UNAVAILABLE)")
     # #3276: the shared judgement of a caller-given path — `os.path.isdir`
     # said "not a directory" for one under a parent the caller cannot enter.
     problem = None if a.tree is None else classify_path(a.tree, "dir", lang="en", flag="--tree")

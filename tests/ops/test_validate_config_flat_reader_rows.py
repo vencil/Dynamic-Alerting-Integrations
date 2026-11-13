@@ -253,8 +253,7 @@ def test_the_routing_rows_read_a_nested_tenant(tmp_path, cli_argv, capsys):
         assert not hier[n].get("skipped_nested_files"), (n, hier[n])
 
 
-def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
-                                         amtool_accepts):
+def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys):
     """Negative control: no spurious WARN on a tree every reader can see."""
     d = _tree(tmp_path, {}, {"db-a.yaml": _GOOD_TENANT}, None)
     rc, rows = _run(d, ["--policy", "{policy}"], tmp_path, cli_argv, capsys)
@@ -264,7 +263,7 @@ def test_a_valid_flat_tree_stays_all_pass(tmp_path, cli_argv, capsys,
     assert rc == 0, rc
 
 
-def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path, amtool_accepts):
+def test_a_row_that_consulted_no_reader_keeps_its_pass(tmp_path):
     """The exception is structural, not a list: a check that returns before
     reaching a tenant reader was never told anything by one.
 

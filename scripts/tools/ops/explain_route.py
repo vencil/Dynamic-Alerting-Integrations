@@ -541,7 +541,7 @@ def parse_label_args(raw: list[str] | None) -> dict[str, str]:
 AM_DEFAULT_TIMING = {"group_wait": "30s", "group_interval": "5m",
                      "repeat_interval": "4h"}
 _TIMING_KEYS = tuple(AM_DEFAULT_TIMING)
-AMTOOL_TIMEOUT_S = 60  # same budget as _grar_render._amtool_check
+AMTOOL_TIMEOUT_S = 60  # one `amtool config routes test` run, in seconds
 AMTOOL_MISSING = "Not validated by Alertmanager: amtool not found on PATH"
 _TREE_BRANCHES = ("├── ", "└── ")
 _TREE_PADS = ("│   ", "    ")

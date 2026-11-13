@@ -1,6 +1,0 @@
-route:
-  receiver: r
-receivers:
-- name: r
-templates:
-- bad_syntax.tmpl

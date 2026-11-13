@@ -38,7 +38,7 @@ generator (#2906: a YAML 1.1 boolean word given as a STRING is refused there,
 while the schema's enum still takes it — those rows carry `python_differs`), and http_config
 follows Alertmanager's HTTPClientConfig / ProxyConfig rules — at most one auth
 method (`HTTP_CONFIG_AUTH_FIELDS`), string-only tokens and proxy_url. Whether a
-proxy_url parses as a URL is left to amtool (the generator's --validate gate),
+proxy_url parses as a URL is left to Alertmanager's loader (the generator's --validate gate),
 so those rows carry `python_differs` (the Python verdict and why), as
 tests/shared/routing_policy_parity_matrix.json does. What is nested inside
 http_config (tls_config, oauth2, authorization, basic_auth, the header

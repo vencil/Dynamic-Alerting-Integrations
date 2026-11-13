@@ -354,7 +354,7 @@ NOT_IN_MATRIX: dict[str, str] = {
                                       "not a CLI over a tree",
     "tools/dx/generate_tenant_fixture.py": "writes a synthetic conf.d; reads none",
     "tools/dx/measure_judgement_budget.py": ("a benchmark of the generator container's judgement: "
-                                             "needs helm and amtool, and reads its tree through "
+                                             "needs helm, and reads its tree through "
                                              "the generator and da-guard, which have their own rows"),
     "tools/ops/generate_rule_pack_split.py": "splits rule packs; reads no conf.d",
     # #3572: neither emits AlertmanagerConfig any more, so neither reads a

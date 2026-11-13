@@ -78,7 +78,7 @@ def tenant_dir(tmp_path):
 
 def _main(monkeypatch, tmp_path, *argv) -> int:
     gar = importlib.import_module("generate_alertmanager_routes")
-    monkeypatch.setenv("PATH", str(tmp_path))          # no amtool on PATH
+    monkeypatch.setenv("PATH", str(tmp_path))          # an empty PATH
     monkeypatch.setattr(sys, "argv", ["generate_alertmanager_routes.py", *argv])
     # Only SystemExit (or a normal return) may leave main(): any other
     # exception IS the traceback this change must not produce.

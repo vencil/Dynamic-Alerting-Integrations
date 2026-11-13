@@ -209,7 +209,7 @@ def _stream(gar, config_dir: Path, allowed_domains) -> list[str]:
 def test_clamp_warn_naming_skipping_does_not_block(tmp_path, value):
     d = _write_tree(tmp_path, {"skipping.yaml": _TENANT_HEAD.replace(
         "t1", "skipping") + _RECEIVER + f"      repeat_interval: \"{value}\"\n"})
-    # No amtool on PATH → WARN, not FAIL; the children write UTF-8.
+    # WARN, not FAIL; the children write UTF-8.
     env = {**os.environ, "PATH": str(tmp_path), "PYTHONIOENCODING": "utf-8"}
     vc = subprocess.run(
         [sys.executable, str(OPS_DIR / "validate_config.py"),
@@ -279,7 +279,7 @@ def test_mark_survives_to_every_predicate_caller(tmp_path, mods, monkeypatch,
 
     monkeypatch.setattr(gar, "blocking_generation_errors", spy)
     monkeypatch.setattr(render, "blocking_generation_errors", spy)
-    monkeypatch.setenv("PATH", str(tmp_path))   # no amtool
+    monkeypatch.setenv("PATH", str(tmp_path))   # an empty PATH
     d = _write_tree(tmp_path, files)
     policy = None
     if allowed is not None:

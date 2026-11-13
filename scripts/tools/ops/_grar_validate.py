@@ -787,7 +787,7 @@ class PlatformProbeSetUnverifiable(Exception):
     The default probe set degraded to the built-in fallback, and an
     operator-supplied inhibit rule is tenant-triggered, so whether it silences
     a platform alert outside the fallback is unknown. "Could not verify" is
-    exit 2 (no verdict, like amtool being unusable), not exit 1 (a verdict on
+    exit 2 (no verdict, like no da-read to ask), not exit 1 (a verdict on
     the config) — so this is deliberately NOT a ``ValueError``: every render
     path turns ``ValueError`` from the invariant asserts into rc 1, and a
     subclass would be swallowed there.
@@ -1633,7 +1633,7 @@ ROUTE_ENTRY_KEYS = frozenset({"match", "receiver", "group_by", "group_wait",
 # (tests/ops/test_routing_ignored_keys.py), not the other way round, and
 # tests/shared/routing_ignored_keys_cases.json pins them by example.
 # `http_config` is NOT looked into: it is passed to Alertmanager as written, so
-# a key there is Alertmanager's to refuse (amtool under `--validate`).
+# a key there is Alertmanager's loader's to refuse.
 _TIMING_KEYS = frozenset({"group_wait", "group_interval", "repeat_interval"})
 ROUTING_BLOCK_KEYS = frozenset({"receiver", "group_by", "overrides", "routes"}) | _TIMING_KEYS
 # `routes` is read here only to be refused with its own line (#2245).

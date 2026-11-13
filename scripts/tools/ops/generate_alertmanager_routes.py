@@ -182,11 +182,8 @@ from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E40
 # row (it calls `gen.evaluate_generated_config`). Used, so no F401 marker.
 from _grar_render import evaluate_generated_config  # noqa: E402
 from _grar_render import (  # noqa: E402, F401  (read as `gen.…` by validate_config)
-    AM_ACCEPTED, AM_ACCEPTED_WITHOUT_AMTOOL, AM_REJECTED, AM_UNUSABLE,
+    AM_ACCEPTED, AM_REJECTED, AM_UNUSABLE,
 )
-# Re-exported only (tests and callers read it as `gar.…`); the --validate
-# wording moved into _grar_render with the verdict it belongs to (#2311).
-from _grar_render import VALIDATE_AMTOOL_NOT_FOUND_NOTICE  # noqa: E402, F401
 # #2279: the shared "is this generation result unusable" predicate.
 # validate_config reads it as `gen.blocking_generation_errors`; --validate now
 # reaches it through `evaluate_generated_config` (#2311), so here it is a
@@ -315,8 +312,7 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
         _assembly_failed(ValueError(verdict.assembly_error),
                          "validation cannot pass")
     # #2260 / #3689: Alertmanager, through the write paths' own gate:
-    # rejected → rc 1, no verdict → rc 2, amtool absent → a NOTICE and the rc
-    # is unchanged.
+    # accepted → OK, rejected → rc 1, no verdict → rc 2.
     print(verdict.alertmanager.message, file=sys.stderr)
     if verdict.exit_code is not None:
         sys.exit(verdict.exit_code)
@@ -1313,7 +1309,7 @@ def findings_document(findings: list[str], *, config_dir: str,
     """
     records = [as_finding(f) for f in findings]
     # #2766: a non-zero exit with no finding that blocks in this run's mode
-    # (an amtool rejection, an assembly refusal, "no valid routes", a caller
+    # (an Alertmanager rejection, an assembly refusal, "no valid routes", a caller
     # error) must not read as a pass to a consumer that looks only at the
     # findings — the document is never looser than the run's own exit code.
     in_force = in_force_blocks(validate=validate, strict=strict)

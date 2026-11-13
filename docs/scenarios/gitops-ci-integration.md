@@ -223,7 +223,7 @@ da-tools validate-config --config-dir conf.d/
 
 ### 2.3 Stage 2: Generate
 
-僅在 PR 時執行。產出合併後的 Alertmanager 設定並計算變更影響範圍。⚠️ 下方註解說的「da-tools 映像內含 amtool」不適用於 v2.9.0 映像：它不內含 `amtool`；v2.9.0 映像也還是舊的產生器（不帶模式旗標時輸出片段、`--output-configmap` 整個取代 `route.routes`） <!-- image-caveat: v2.9.0 -->
+僅在 PR 時執行。產出合併後的 Alertmanager 設定並計算變更影響範圍。⚠️ 下方註解說的「da-tools 映像內含 da-read」不適用於 v2.9.0 映像：它沒有 `da-read`；v2.9.0 映像也還是舊的產生器（不帶模式旗標時輸出片段、`--output-configmap` 整個取代 `route.routes`） <!-- image-caveat: v2.9.0 -->
 
 ```bash
 # 把租戶路由合併進你的 Alertmanager base，產出完整 ConfigMap
@@ -236,12 +236,12 @@ da-tools generate-routes --config-dir conf.d/ --output-configmap \
 # 而工具現在會直接拒絕這個組合（結束碼 2；#1650）。要驗證就另外跑一次
 # （--validate 也不讀 --dry-run，同樣結束碼 2）：
 da-tools generate-routes --config-dir conf.d/ --validate
-# ⚠️ --validate 會把設定組進「內建預設 base」交給 Alertmanager（載入器＋amtool，#2260、#3689），不是你的 base；
+# ⚠️ --validate 會把設定組進「內建預設 base」交給 Alertmanager 的設定載入器（da-read，#2260、#3689），不是你的 base；
 #    上面的 --output-configmap --base-config 則驗你自己的 base 組出來的那份（#2219）。
 #    alertmanager-base.yaml 是來源（你自己的設定，進 git），.output/ 是產物；
 #    base 裡你自己的路由與 receiver 原樣保留。別拿產物當 base：含 tenant-*
 #    receiver 會被拒收（結束碼 1）。
-#    da-tools 映像內含 amtool（#2294），在映像裡跑這兩道驗證預設就會執行。
+#    da-tools 映像內含 da-read，在映像裡跑這兩道驗證預設就會執行。
 
 # 計算 blast radius（影響哪些 tenant、哪些 metric）
 # CI 中先把 base branch 的 conf.d/ 取出到 conf.d.base/

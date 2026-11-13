@@ -55,7 +55,7 @@ def tenant_dir(tmp_path):
 
 
 def _gar(argv, tmp_path) -> tuple[int, str]:
-    """Run the CLI with amtool absent from PATH (the gate then only NOTICEs)."""
+    """Run the CLI with an empty PATH."""
     empty = tmp_path / "empty-path"
     empty.mkdir(exist_ok=True)
     r = subprocess.run([sys.executable, "-s", str(_GAR), *argv],
@@ -168,7 +168,6 @@ def _fake_cluster(monkeypatch, root_receiver: dict) -> list[list[str]]:
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
-    monkeypatch.setattr(render.shutil, "which", lambda name: None)
     return calls
 
 

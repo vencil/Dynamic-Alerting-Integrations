@@ -740,9 +740,9 @@ class Service:
     async def _warm(self, commit: str) -> None:
         """#2901 E2: run the generator's conf.d read (``load_tenant_tree`` —
         every parse a judgement makes happens there) on *commit*'s tree, no
-        writes, no verdict, no amtool — only to fill the cache (E1). Ended
-        at once when a request arrives; bounded by --warm-seconds; never on
-        a request's clock."""
+        writes, no verdict, no Alertmanager reading — only to fill the cache
+        (E1). Ended at once when a request arrives; bounded by --warm-seconds;
+        never on a request's clock."""
         outcome = "failed"
         job_dir = None
         try:
@@ -1016,7 +1016,7 @@ class Service:
         out += ["# HELP da_generator_cache_base_coverage_ratio Share of the pinned base tree's blobs with a parse-cache entry.",
                 "# TYPE da_generator_cache_base_coverage_ratio gauge",
                 f"da_generator_cache_base_coverage_ratio {self.store.coverage()}"]
-        out += ["# HELP da_generator_orphans_reaped_total Exited processes left by judgements (amtool and its children) collected by this subreaper.",
+        out += ["# HELP da_generator_orphans_reaped_total Exited processes left by judgements (da-guard, da-read and their children) collected by this subreaper.",
                 "# TYPE da_generator_orphans_reaped_total counter",
                 f"da_generator_orphans_reaped_total {self.metrics.orphans_reaped}",
                 "# HELP da_generator_connections Open client connections (admission slots in use).",
@@ -1045,8 +1045,9 @@ class Service:
 
     def _reap_orphans(self) -> int:
         """#2901 R3: collect the zombies of processes a judgement started
-        (amtool, its children). This process is a child subreaper, so they are
-        re-parented here when the judgement ends — whether or not it is PID 1.
+        (da-guard, da-read, their children). This process is a child
+        subreaper, so they are re-parented here when the judgement ends —
+        whether or not it is PID 1.
 
         ⛔ Only between runs: ``waitpid(-1)`` would also collect the running
         judgement and take its exit status from ``wait4``. At most one direct

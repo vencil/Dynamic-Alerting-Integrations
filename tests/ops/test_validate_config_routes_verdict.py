@@ -3,28 +3,24 @@ share ONE verdict function (`_grar_render.evaluate_generated_config`).
 
 Before this, the row ran only `blocking_generation_errors`, so a generation
 result `--validate` failed — an ADR-025 inhibit tripwire, an invariant
-`assemble_configmap` refuses, an amtool rejection — was a PASS row at exit 0.
-The contract pinned here:
+`assemble_configmap` refuses, an Alertmanager rejection — was a PASS row at
+exit 0. The contract pinned here:
 
 * every verdict `--validate` exits 1 on is a FAIL row, and the two agree
   (parity is asserted per case, not assumed);
-* Alertmanager's loader (da-read) is asked first and always (#3689): its
-  refusal is FAIL at exit 1 without asking amtool; no reading at all is FAIL
-  with ``caller_error`` (exit 2);
-* amtool absent → WARN (never a fourth status, #2301) with a detail line
-  saying only amtool's template parse was not made; exit code unchanged;
-* amtool present but without a verdict → FAIL with ``caller_error`` (exit 2),
-  as `--validate` exits 2;
-* amtool's own "accepted" line is not an issue: a clean tree is still PASS;
+* Alertmanager's loader (da-read) is the one reader (#3689, #3793): its
+  refusal is FAIL at exit 1; no reading at all is FAIL with ``caller_error``
+  (exit 2), as `--validate` exits 2; its acceptance is PASS;
+* its "accepted" line is not an issue: a clean tree is still PASS;
 * the shared function returns its lines instead of printing them.
 
-amtool is faked in-process (`_run_binary` + `shutil.which`), so this runs on
-every platform and never depends on a real amtool being installed.
+The loader's outcome is set in-process (`alertmanager_reading` replaced), so
+the verdict mapping runs on every platform; the tests that let it accept use
+the real da-read.
 """
 from __future__ import annotations
 
 import importlib
-import subprocess
 
 import pytest
 
@@ -69,18 +65,22 @@ def tenant_dir(tmp_path):
     return d
 
 
-def _fake_amtool(monkeypatch, rc: int | None, output: str = "") -> list:
-    """rc None = amtool not on PATH. Returns the list of amtool argvs run."""
+def _loader(monkeypatch, outcome: str = "real") -> list:
+    """Alertmanager's loader as the gate asks it: ``real`` (the real da-read),
+    ``refuse`` (it refuses the text), ``unusable`` (no reading could be had).
+    Returns the list of texts it was asked about."""
     calls: list = []
+    real = render.alertmanager_reading
 
-    def fake(argv, *, timeout, stdin_text=None):
-        calls.append(list(argv))
-        return subprocess.CompletedProcess(argv, rc, stdout=output, stderr="")
+    def reading(text):
+        calls.append(text)
+        if outcome == "refuse":
+            raise render.InputRefused("da-read refused the input", ["fake-2311"])
+        if outcome == "unusable":
+            raise render.ConsumerReadError("da-read was not found")
+        return real(text)
 
-    monkeypatch.setattr(render, "_run_binary", fake)
-    monkeypatch.setattr(render.shutil, "which",
-                        lambda name: "/fake/amtool"
-                        if (name == "amtool" and rc is not None) else None)
+    monkeypatch.setattr(render, "alertmanager_reading", reading)
     return calls
 
 
@@ -111,8 +111,8 @@ def _validate_rc(tenant_dir, monkeypatch, capsys) -> int:
 # ── the shared function itself ──────────────────────────────────────
 class TestEvaluateGeneratedConfig:
 
-    def test_watchdog_tripwire_blocks_before_amtool(self, monkeypatch):
-        calls = _fake_amtool(monkeypatch, 0, "SUCCESS")
+    def test_watchdog_tripwire_blocks_before_alertmanager(self, monkeypatch):
+        calls = _loader(monkeypatch)
         v = render.evaluate_generated_config(_ROUTES, _RECEIVERS,
                                              [_WATCHDOG_RULE], [])
         assert any("Watchdog heartbeat" in e for e in v.errors), v.errors
@@ -120,14 +120,14 @@ class TestEvaluateGeneratedConfig:
         assert v.exit_code == 1
 
     def test_tenant_silence_tripwire(self, monkeypatch):
-        _fake_amtool(monkeypatch, 0, "SUCCESS")
+        _loader(monkeypatch)
         v = render.evaluate_generated_config(_ROUTES, _RECEIVERS,
                                              [_SILENCE_RULE], [])
         assert any("TenantMetricsOverLimit" in e for e in v.errors), v.errors
         assert v.exit_code == 1
 
     def test_extra_errors_block_and_keep_order(self, monkeypatch):
-        calls = _fake_amtool(monkeypatch, 0, "SUCCESS")
+        calls = _loader(monkeypatch)
         # #2489: a dropped-entry line blocks by its type, not its words.
         skipped = importlib.import_module("_grar_validate").skipped_entry_warning
         v = render.evaluate_generated_config(
@@ -138,65 +138,60 @@ class TestEvaluateGeneratedConfig:
         assert calls == []
 
     def test_assembly_value_error_is_returned(self, monkeypatch):
-        calls = _fake_amtool(monkeypatch, 0, "SUCCESS")
+        calls = _loader(monkeypatch)
         _refuse_assembly(monkeypatch)
         v = render.evaluate_generated_config(_ROUTES, _RECEIVERS, [], [])
         assert v.errors == []
         assert v.assembly_error == "fake assembly invariant #2311"
         assert v.alertmanager is None and calls == [] and v.exit_code == 1
 
-    @pytest.mark.parametrize("rc,output,status,exit_code", [
-        (None, "", render.AM_ACCEPTED_WITHOUT_AMTOOL, None),
-        (0, "SUCCESS", render.AM_ACCEPTED, None),
-        (1, "Checking x  FAILED: nope", render.AM_REJECTED, 1),
-        (127, "cannot run", render.AM_UNUSABLE, 2),
-    ], ids=["not_found", "accepted", "rejected", "unusable"])
-    def test_amtool_status(self, monkeypatch, capsys, rc, output, status,
-                           exit_code):
-        _fake_amtool(monkeypatch, rc, output)
+    @pytest.mark.parametrize("outcome,status,exit_code", [
+        ("real", render.AM_ACCEPTED, None),
+        ("refuse", render.AM_REJECTED, 1),
+        ("unusable", render.AM_UNUSABLE, 2),
+    ], ids=["accepted", "rejected", "unusable"])
+    def test_alertmanager_status(self, monkeypatch, capsys, outcome, status,
+                                 exit_code):
+        calls = _loader(monkeypatch, outcome)
         v = render.evaluate_generated_config(_ROUTES, _RECEIVERS, [], [])
         assert v.alertmanager.status == status
         assert v.exit_code == exit_code
+        assert len(calls) == 1
+        assert (v.alertmanager.reading is not None) == (status == render.AM_ACCEPTED)
         # returned, never printed
         cap = capsys.readouterr()
         assert cap.out == "" and cap.err == "", cap
 
-    def test_loader_refusal_is_rejected_before_amtool(self, monkeypatch, capsys):
-        """#3689: Alertmanager's loader refuses a string where http_config
-        wants a bool; amtool, though present and accepting, is never asked."""
-        calls = _fake_amtool(monkeypatch, 0, "SUCCESS")
+    def test_loader_refusal_is_rejected(self, monkeypatch, capsys):
+        """#3689: the real loader refuses a string where http_config wants a
+        bool, without printing the value."""
         receivers = [{"name": "tenant-t1", "webhook_configs": [{
             "url": "https://x.example.com/h",
             "http_config": {"follow_redirects": "CANARY3689"}}]}]
         v = render.evaluate_generated_config(_ROUTES, receivers, [], [])
         assert v.alertmanager.status == render.AM_REJECTED, v.alertmanager
-        assert v.exit_code == 1 and calls == []
+        assert v.exit_code == 1
         assert "config loader refuses" in v.alertmanager.message
         assert "CANARY" not in v.alertmanager.message
         assert capsys.readouterr().err == ""
 
     def test_no_loader_reading_is_unusable(self, monkeypatch):
-        calls = _fake_amtool(monkeypatch, 0, "SUCCESS")
-
-        def no_da_read(_text):
-            raise render.ConsumerReadError("da-read not found")
-        monkeypatch.setattr(render, "alertmanager_reading", no_da_read)
+        _loader(monkeypatch, "unusable")
         v = render.evaluate_generated_config(_ROUTES, _RECEIVERS, [], [])
         assert v.alertmanager.status == render.AM_UNUSABLE
-        assert v.exit_code == 2 and calls == []
+        assert v.exit_code == 2
+        assert "the way Alertmanager does" in v.alertmanager.message
 
 
 # ── validate-config's routes row, and parity with --validate ─────────
 class TestRoutesRowMatchesValidate:
 
     @pytest.mark.parametrize("case", ["watchdog", "silence", "assembly",
-                                      "amtool_rejected"])
+                                      "alertmanager_rejected"])
     def test_fail_row_where_validate_exits_1(self, tenant_dir, monkeypatch,
                                              capsys, case):
-        if case == "amtool_rejected":
-            _fake_amtool(monkeypatch, 1, "Checking x  FAILED: fake-2311")
-        else:
-            _fake_amtool(monkeypatch, 0, "SUCCESS")
+        _loader(monkeypatch,
+                "refuse" if case == "alertmanager_rejected" else "real")
         if case == "watchdog":
             _inject_inhibit(monkeypatch, _WATCHDOG_RULE)
         elif case == "silence":
@@ -208,44 +203,37 @@ class TestRoutesRowMatchesValidate:
         assert row["caller_error"] is False, row
         assert _validate_rc(tenant_dir, monkeypatch, capsys) == 1
 
-    def test_amtool_rejection_is_named_in_details(self, tenant_dir,
-                                                  monkeypatch):
-        _fake_amtool(monkeypatch, 1, "Checking x  FAILED: fake-2311")
+    def test_alertmanager_rejection_is_named_in_details(self, tenant_dir,
+                                                        monkeypatch):
+        _loader(monkeypatch, "refuse")
         row = vc.check_routes(str(tenant_dir))
         assert any("fake-2311" in d for d in row["details"]), row
         assert row["hint"] == vc.AM_REJECTED_ROUTES_HINT
 
-    def test_amtool_unusable_is_a_caller_error(self, tenant_dir, monkeypatch,
-                                               capsys):
-        _fake_amtool(monkeypatch, 2, "panic: runtime error")
+    def test_alertmanager_unusable_is_a_caller_error(self, tenant_dir,
+                                                     monkeypatch, capsys):
+        _loader(monkeypatch, "unusable")
         row = vc.check_routes(str(tenant_dir))
         assert row["status"] == vc.FAIL and row["caller_error"] is True, row
+        assert row["hint"] == vc.AM_UNUSABLE_ROUTES_HINT
         assert _validate_rc(tenant_dir, monkeypatch, capsys) == 2
 
-    def test_no_amtool_is_warn_with_a_not_checked_by_amtool_line(
-            self, tenant_dir, monkeypatch, capsys):
-        _fake_amtool(monkeypatch, None)
-        row = vc.check_routes(str(tenant_dir))
-        assert row["status"] == vc.WARN, row
-        assert row["status"] in (vc.PASS, vc.WARN, vc.FAIL)  # no 4th value
-        assert any(d.startswith("Not checked by amtool")
-                   for d in row["details"]), row
-        assert row["hint"] == vc.AMTOOL_NOT_FOUND_ROUTES_HINT
-        assert _validate_rc(tenant_dir, monkeypatch, capsys) == 0
-
-    def test_accepted_tree_stays_pass(self, tenant_dir, monkeypatch):
-        """amtool's "accepted" line must not be swept into the row as an
+    def test_accepted_tree_is_pass(self, tenant_dir, monkeypatch, capsys):
+        """The loader's "accepted" line must not be swept into the row as an
         issue — the stderr capture in check_routes used to turn anything
-        printed during the row into a WARN."""
-        _fake_amtool(monkeypatch, 0, "SUCCESS")
+        printed during the row into a WARN. #3793: PASS whatever is on PATH;
+        there is no "accepted, but not fully checked" WARN."""
+        _loader(monkeypatch)
         row = vc.check_routes(str(tenant_dir))
         assert row["status"] == vc.PASS, row
         assert row["details"][0].startswith("1 routes"), row
-        assert any("accepted by Alertmanager's parser" in d
+        assert any("Alertmanager's config loader (da-read) accepted" in d
                    for d in row["details"]), row
+        assert _validate_rc(tenant_dir, monkeypatch, capsys) == 0
 
-    def test_nothing_generated_never_asks_amtool(self, tmp_path, monkeypatch):
-        calls = _fake_amtool(monkeypatch, None)
+    def test_nothing_generated_never_asks_alertmanager(self, tmp_path,
+                                                       monkeypatch):
+        calls = _loader(monkeypatch)
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "t1.yaml").write_text(
@@ -253,4 +241,4 @@ class TestRoutesRowMatchesValidate:
             encoding="utf-8")
         row = vc.check_routes(str(d))
         assert calls == []
-        assert not any("Not checked by amtool" in x for x in row["details"]), row
+        assert row["status"] in (vc.PASS, vc.WARN), row

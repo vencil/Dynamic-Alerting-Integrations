@@ -221,9 +221,10 @@ def build_tree(root: Path, fixture: str) -> Path:
 
 def run_gar(confdir: Path, argv: list[str],
             extra: list[str] | None = None) -> subprocess.CompletedProcess:
-    """Run the generator with no ``amtool`` on PATH (deterministic NOTICE)."""
+    """Run the generator with an empty PATH (nothing installed here changes
+    its output; da-guard / da-read / da-crdecode come from their env vars)."""
     env = {k: v for k, v in os.environ.items() if k != "PATH"}
-    env["PATH"] = os.devnull  # nothing resolvable: amtool is "not found"
+    env["PATH"] = os.devnull  # nothing resolvable on PATH
     env["PYTHONIOENCODING"] = "utf-8"
     return subprocess.run(
         [sys.executable, "-s", str(GAR), "--config-dir", str(confdir),

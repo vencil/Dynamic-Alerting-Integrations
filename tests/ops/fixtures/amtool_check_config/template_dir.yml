@@ -1,6 +1,0 @@
-route:
-  receiver: r
-receivers:
-- name: r
-templates:
-- tdir.tmpl

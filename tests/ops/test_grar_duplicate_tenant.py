@@ -9,8 +9,8 @@ conf.d with ``t-a.yaml`` and ``t-a2.yaml`` both declaring ``t-a``:
 no-mode routing fragment; ``--output-alertmanager`` here since #1211) /
 ``--output-configmap`` all rc 0.
 
-The contract pinned here (owner decision on #2315 (c)), with amtool NOT on
-PATH so no verdict can be amtool's:
+The contract pinned here (owner decision on #2315 (c)), with an empty PATH
+so nothing installed on this machine decides the verdict:
 
 * two tenant files declaring one id → rc 1 in every mode, with or without
   ``--strict``, naming both files, nothing written;

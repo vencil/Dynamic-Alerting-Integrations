@@ -250,7 +250,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   -o deploy/alertmanager-configmap.yaml
 ```
 
-The `alertmanager.yml` inside the ConfigMap always goes to Alertmanager's own config loader (`da-read`) first, then, when `amtool` is on PATH, to `amtool`; a rejection by either exits 1 and `-o` is not written. Without `amtool` a NOTICE says so; all that is missing is amtool's parse of the `templates:` template files (#2219, #3689). The da-tools image bundles `amtool` (from the same image as the deployed Alertmanager; #2294), so inside the image this validation runs by default. ⚠️ The v2.9.0 image does not bundle `amtool` <!-- image-caveat: v2.9.0 -->
+The `alertmanager.yml` inside the ConfigMap always goes to Alertmanager's own config loader (`da-read`) first; its rejection exits 1 and `-o` is not written, whether or not `amtool` is on PATH (#2219, #3689, #3793). The da-tools image bundles `da-read`. ⚠️ The v2.9.0 image has no `da-read` <!-- image-caveat: v2.9.0 -->
 
 The resulting YAML can be directly `kubectl apply` or auto-synced by ArgoCD/Flux. Use together with Method A (threshold-config) to achieve complete GitOps closure for threshold-exporter and Alertmanager configuration.
 
