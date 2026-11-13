@@ -269,7 +269,6 @@ groups:
         labels:
           severity: critical
           maintenance: mute
-          metric_group: "jvm_performance"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "JVMPerformanceDegraded on {{ $labels.tenant }}"

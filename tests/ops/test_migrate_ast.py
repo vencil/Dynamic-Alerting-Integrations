@@ -628,8 +628,8 @@ def test_suppress_basic_pairing():
     # v1.2.0: 不再修改 PromQL，只加 metric_group label
     warn_labels = results[0].alert_rules[0]["labels"]
     crit_labels = results[1].alert_rules[0]["labels"]
-    assert warn_labels["metric_group"] == "connections"
-    assert crit_labels["metric_group"] == "connections"
+    assert warn_labels["metric_group"] == "custom_mysql_connections"
+    assert crit_labels["metric_group"] == "custom_mysql_connections"
     # PromQL 不應被修改（仍只有 maintenance unless）
     warn_expr = results[0].alert_rules[0]["expr"]
     assert warn_expr.count("unless on(tenant)") == 1
@@ -706,7 +706,7 @@ def test_suppress_multiple_pairs():
         mg = r.alert_rules[0]["labels"].get("metric_group")
         assert mg is not None, f"{r.alert_name} missing metric_group"
         groups_seen.add(mg)
-    assert groups_seen == {"a", "b"}
+    assert groups_seen == {"custom_metric_a", "custom_metric_b"}
 
 def test_suppress_operator_preserved():
     """測試 < 運算子：metric_group label 與運算子無關，仍應正確配對。"""
@@ -715,7 +715,7 @@ def test_suppress_operator_preserved():
     assert n == 1
     # v1.2.0: 只驗證 metric_group label 被加上
     warn_labels = results[0].alert_rules[0]["labels"]
-    assert warn_labels["metric_group"] == "connections"
+    assert warn_labels["metric_group"] == "custom_mysql_connections"
     # PromQL 仍只有原始的 1 個 unless (maintenance)
     warn_expr = results[0].alert_rules[0]["expr"]
     assert warn_expr.count("unless on(tenant)") == 1
@@ -756,7 +756,7 @@ def test_suppress_write_outputs_with_suppression():
             content = f.read()
 
         # v1.2.0: alert YAML 應包含 metric_group label
-        assert 'metric_group: "connections"' in content   # #3206: always quoted
+        assert 'metric_group: "custom_mysql_connections"' in content   # #3206: always quoted
         # unless 數量: warning(1 maintenance) + critical(1 maintenance) = 2
         assert content.count("unless on(tenant)") == 2
 
@@ -785,4 +785,4 @@ def test_suppress_no_prefix_pairing():
     assert n == 1
     # v1.2.0: 驗證 metric_group label（不再檢查 PromQL 修改）
     warn_labels = results[0].alert_rules[0]["labels"]
-    assert warn_labels["metric_group"] == "connections"
+    assert warn_labels["metric_group"] == "mysql_connections"

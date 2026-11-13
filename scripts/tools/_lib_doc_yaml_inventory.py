@@ -47,19 +47,25 @@ rustdoc's `invalid_codeblock_attributes`:
   kind, is an error. Only parse-tree names a kind; the other consumers'
   readings give a reason without one, so they take no `.expect-refused`.
 * `.expect-invalid` (with `.confd`): a counter-example that reads but is
-  wrong on purpose (rustdoc's `compile_fail`). The schema check (with the
-  route generator's credential judgement) must find at
+  wrong on purpose (rustdoc's `compile_fail`). The schema check must find at
   least one violation in EVERY unit of the fence, and reports none of them; a
   unit with none is an error (a correct file shown beside the counter-example
-  goes in a fence of its own). A block that only shows a reading, and meets
+  goes in a fence of its own). `.expect-invalid` absorbs schema errors
+  only: the route generator's credential judgement is always reported,
+  whatever the fence declares (#3748). A block that only shows a reading, and meets
   the schema, is `.illustrative`. Its values are still read by the
   unit-sanity lint: a reader copies them as they are.
 
 ⛔ Written without braces (```` ```yaml confd ````) is an error: mkdocs does not
 render that as a code block at all. So is a yaml fence spelled any other way
 (``~~~yaml``, ```` ```YAML ````, four backticks, ```` ``` yaml ````,
-```` ```yaml+jinja ````) and any fence left open: fences are found as
-CommonMark finds them, and only ```` ```yaml ```` / ```` ```yml ```` is read. The retired comment marker
+```` ```yaml+jinja ````), a yaml fence inside a blockquote whose `>` starts
+within the line's first 3 columns (``> ```yaml``: no extractor reads past the
+`>`; move it out) and any fence left open. Only ```` ```yaml ```` /
+```` ```yml ```` is read. ⚠️ Fences and blockquotes are found by the patterns
+in this module, not by the site's renderer: a blockquote nested deeper (in a
+list item or an admonition body, 4+ columns in) is neither read nor refused
+(#3814 moves this to the renderer). The retired comment marker
 (`<!-- md-yaml-drift: … -->`) is an error that names the attribute to write.
 
 Which consumer reads a unit:
@@ -75,6 +81,11 @@ Which consumer reads a unit:
   read and not reported. Refused with any other kind: an error that asks the
   author to declare the fence — the refusal says nothing about whether the
   example is right, only that the conf.d reader cannot tell.
+
+A `{.helm-values}` unit's `thresholdConfig` is the conf.d the
+threshold-exporter chart renders from it (`helm_values_confd`, held to the
+chart's template by a test): the schema check judges those files as conf.d
+(#3748).
 
 CLI (`--json`) prints the inventory for a program that is not Python (the Go
 loader test). Exit codes: 0, 2 when a reader could not answer.
@@ -148,6 +159,10 @@ YAMLISH_RE = re.compile(r"^[ \t]*(?:yaml|yml)(?![A-Za-z0-9_])", re.ASCII | re.IG
 #: (#3416 review). An indented `#` is prose too. Mirrored by fileHeaderRe in
 #: the Go loader test.
 FILE_HEADER_RE = re.compile(r"^# ?(?P<path>[\w./-]+\.ya?ml)(?:[ \t]+.*)?$", re.ASCII)
+
+#: A blockquote's markers at the start of a line (any depth, `> >` too), the
+#: first `>` within the first 3 columns only — see the module docstring.
+BLOCKQUOTE_RE = re.compile(r"^[ \t]{0,3}>(?:[ \t]*>)*[ \t]?")
 
 #: The retired exemption marker (`<!-- md-yaml-drift: ignore — … -->`).
 RETIRED_MARKER_RE = re.compile(r"<!--\s*md-yaml-drift\s*:")
@@ -385,6 +400,16 @@ def extract_fences(path: str, content: str,
         stripped = line.strip(FENCE_TRIM)
         if not open_char:
             m = OPEN_RE.match(stripped)
+            q = None if m else BLOCKQUOTE_RE.match(line)
+            if q:
+                # #3748: a yaml fence in a blockquote is read by no gate (this
+                # extractor takes no `>`): refused, never read.
+                mq = OPEN_RE.match(line[q.end():].strip(FENCE_TRIM))
+                if (mq and not (mq.group("fence")[0] == "`" and "`" in mq.group("info"))
+                        and YAMLISH_RE.match(mq.group("info"))):
+                    errors.append((path, i, (
+                        "a yaml fence inside a blockquote: no gate reads it — move it "
+                        "out of the blockquote (a note around it goes above or below)")))
             if not m or (m.group("fence")[0] == "`" and "`" in m.group("info")):
                 continue
             open_char, open_len = m.group("fence")[0], len(m.group("fence"))
@@ -555,6 +580,45 @@ def _judge_refusals(u: Unit) -> None:
                 "declare the block's real consumer")
 
 
+# ── the chart's conf.d (`{.helm-values}`) ───────────────────────────────────
+
+#: helm/threshold-exporter/templates/configmap.yaml: the `thresholdConfig`
+#: keys the chart writes as top-level keys of `_defaults.yaml`, each with when
+#: it is written (`defaults` always; the three others when truthy;
+#: `max_metrics_per_tenant` when not 0). `tenants.<t>` becomes `<t>.yaml`,
+#: `tenants: {<t>: …}`; `existingConfigMap` set renders no ConfigMap at all.
+#: tests/lint/test_doc_yaml_inventory.py reads the template and holds it to
+#: this mapping.
+HELM_DEFAULTS_FILE = "_defaults.yaml"
+HELM_PLATFORM_KEYS = ("defaults", "optional_overrides", "dimensions", "state_filters",
+                      "max_metrics_per_tenant")
+
+
+def helm_values_confd(values: Any) -> "list[tuple[str, dict]]":
+    """The conf.d files the threshold-exporter chart renders from Helm values
+    *values* — (file name, content) — as far as *values* writes them: a key
+    it leaves out is the chart's own `values.yaml`, not the documented
+    example's. Empty when the chart renders no ConfigMap
+    (`thresholdConfig.existingConfigMap`) or *values* has no `thresholdConfig`."""
+    tc = values.get("thresholdConfig") if isinstance(values, dict) else None
+    if not isinstance(tc, dict) or tc.get("existingConfigMap"):
+        return []
+    platform: "dict[str, Any]" = {}
+    for key in HELM_PLATFORM_KEYS:
+        value = tc.get(key)
+        if key == "defaults" and key in tc:
+            platform[key] = value
+        elif key == "max_metrics_per_tenant" and value is not None and value != 0:
+            platform[key] = value
+        elif key not in ("defaults", "max_metrics_per_tenant") and value:
+            platform[key] = value
+    out = [(HELM_DEFAULTS_FILE, platform)] if platform else []
+    tenants = tc.get("tenants")
+    if isinstance(tenants, dict):
+        out.extend((f"{t}.yaml", {"tenants": {t: body}}) for t, body in tenants.items())
+    return out
+
+
 def build(repo_root: "Path | str", *,
           consumers: "Iterable[str] | None" = None) -> "Inventory":
     """The inventory of *repo_root*/docs/**/*.md.
@@ -640,6 +704,12 @@ class Inventory:
 
     def exemptions(self) -> "list[Unit]":
         return [u for u in self.units if u.exemption is not None]
+
+    def helm_confd(self) -> "list[tuple[Unit, str, dict]]":
+        """(unit, file name, content) of every conf.d file the chart renders
+        from a judged `{.helm-values}` unit (`helm_values_confd`)."""
+        return [(u, fname, data) for u in self.judged("helm-values")
+                for doc in u.documents for fname, data in helm_values_confd(doc)]
 
     def judged(self, consumer: "str | None" = ...) -> "list[Unit]":
         """Units with a reading and no error or exemption — what a gate

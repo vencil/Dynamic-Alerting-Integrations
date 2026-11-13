@@ -167,21 +167,20 @@ data:
     \    expr: \"(\\n  tenant:rabbitmq_consumers:max\\n  < on(tenant) group_left\\\
     n  tenant:alert_threshold:rabbitmq_consumers\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 30s\n    labels:\n      maintenance: mute\n\
-    \      metric_group: rabbitmq_consumers\n      severity: warning\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Active consumers:\
-    \ {{ $value | printf \"%.0f\" }} (below minimum threshold)'\n      description_zh:\
-    \ '活躍的消費者: {{ $value | printf \"%.0f\" }} (低於最小閾值)'\n      owner: '{{ with query\
-    \ (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with\
-    \ index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: RabbitMQ consumer count low — consumer health check'\n      platform_summary_zh:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: RabbitMQ 消費者數量過少 — 請檢查消費者狀態'\n      runbook_url: '{{ with query (printf\
-    \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
-    \ 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary: Low RabbitMQ\
-    \ consumer count on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Active consumers: {{ $value | printf \"%.0f\" }} (below minimum\
+    \ threshold)'\n      description_zh: '活躍的消費者: {{ $value | printf \"%.0f\" }} (低於最小閾值)'\n\
+    \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: RabbitMQ consumer count low — consumer health check'\n\
+    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: RabbitMQ 消費者數量過少 — 請檢查消費者狀態'\n      runbook_url: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ Low RabbitMQ consumer count on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
     \ }} 的 RabbitMQ 消費者數量過少'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     \  - alert: RabbitMQHighUnackedMessages\n    expr: \"(\\n  tenant:rabbitmq_unacked_messages:max\\\
