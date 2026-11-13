@@ -61,20 +61,41 @@ func servedValue(k string, sv ScheduledValue) ScheduledValue {
 	return sv
 }
 
+// ScheduledReservedEntry is one `tenants:` / `profiles:` entry of a file
+// whose reserved key the file wrote with a schedule (scheduledReserved): the
+// decode kept only its `default` (#3269).
+type ScheduledReservedEntry struct {
+	// File: the scan key (root-relative slash path) of the file; "" in a
+	// file's own record (ThresholdConfig.ScheduledReservedEntries), which
+	// knows no path.
+	File string
+	// Section: "tenants" or "profiles".
+	Section string
+	// Owner: the tenant id, or the profile name.
+	Owner string
+	// Key: the reserved key, as the file spells it.
+	Key string
+}
+
+// Entry is e as "<section>.<owner>.<key>" (the exporter's WARN names it so).
+func (e ScheduledReservedEntry) Entry() string {
+	return e.Section + "." + e.Owner + "." + e.Key
+}
+
 // stripScheduledReserved replaces, in place, every scheduledReserved value
-// of bodies with its servedValue and returns where it did, as
-// "<section>.<name>.<key>", sorted (nil when nowhere).
-func stripScheduledReserved(section string, bodies map[string]map[string]ScheduledValue) []string {
-	var out []string
+// of bodies with its servedValue and returns where it did, sorted by Entry
+// (nil when nowhere).
+func stripScheduledReserved(section string, bodies map[string]map[string]ScheduledValue) []ScheduledReservedEntry {
+	var out []ScheduledReservedEntry
 	for name, body := range bodies {
 		for k, sv := range body {
 			if scheduledReserved(k, sv) {
 				body[k] = ScheduledValue{Default: sv.Default, structured: sv.structured}
-				out = append(out, section+"."+name+"."+k)
+				out = append(out, ScheduledReservedEntry{Section: section, Owner: name, Key: k})
 			}
 		}
 	}
-	sort.Strings(out)
+	sort.Slice(out, func(i, j int) bool { return out[i].Entry() < out[j].Entry() })
 	return out
 }
 
@@ -84,10 +105,38 @@ func stripScheduledReserved(section string, bodies map[string]map[string]Schedul
 // each one's `default` (#3269). Set by ParseConfigFile only; nil for a
 // merged config.
 func (c *ThresholdConfig) ScheduledReservedEntries() []string {
-	if c.notes == nil {
+	if c.notes == nil || c.notes.scheduledReserved == nil {
 		return nil
 	}
-	return c.notes.scheduledReserved
+	out := make([]string, 0, len(c.notes.scheduledReserved))
+	for _, e := range c.notes.scheduledReserved {
+		out = append(out, e.Entry())
+	}
+	return out
+}
+
+// scheduledReservedOfFiles is, over the files the flat merge read
+// (FlatBuild.FileConfigs), every ScheduledReservedEntry of each, File set,
+// sorted by file then Entry (LoadReport.ScheduledReserved, #3621). nil when
+// none.
+func scheduledReservedOfFiles(files map[string]ThresholdConfig) []ScheduledReservedEntry {
+	var out []ScheduledReservedEntry
+	for file, fc := range files {
+		if fc.notes == nil {
+			continue
+		}
+		for _, e := range fc.notes.scheduledReserved {
+			e.File = file
+			out = append(out, e)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].File != out[j].File {
+			return out[i].File < out[j].File
+		}
+		return out[i].Entry() < out[j].Entry()
+	})
+	return out
 }
 
 // rawServedValue is servedValue for a value of key k as the walker holds it

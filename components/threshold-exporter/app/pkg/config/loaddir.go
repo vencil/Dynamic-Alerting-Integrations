@@ -126,6 +126,14 @@ type LoadReport struct {
 	// value (LayerValueProblems). Set by LoadDirFromScan only — the shared
 	// key verdict's reading; nil from every other load.
 	ValueProblems []LayerValueProblem
+	// ScheduledReserved (#3621): every `tenants:` / `profiles:` entry of the
+	// files the flat merge read (FlatBuild.FileConfigs: the root platform
+	// files and the tenant files) whose reserved key the file wrote with a
+	// schedule — the decode kept only its `default`, which is all the
+	// exporter reads (#3269) — sorted by file then entry. The per-file record
+	// the exporter's WARN reads (ScheduledReservedEntries), with the file
+	// named. Set by LoadDirFromScan only, as ValueProblems; nil when none.
+	ScheduledReserved []ScheduledReservedEntry
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -200,6 +208,7 @@ func LoadDirFromScan(scan *TreeScan, dir string, logger *log.Logger) (cfg *Thres
 		return cfg, rep, nil, err
 	}
 	rep.ValueProblems = LayerValueProblems(scan, built)
+	rep.ScheduledReserved = scheduledReservedOfFiles(built.FileConfigs)
 	return cfg, rep, writtenKeys(scan, built), nil
 }
 

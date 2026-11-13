@@ -310,7 +310,7 @@ type fileNotes struct {
 	// scheduledReserved: the entries whose reserved key the file wrote with
 	// a schedule, which the decode kept only the `default` of
 	// (stripScheduledReserved, #3269).
-	scheduledReserved []string
+	scheduledReserved []ScheduledReservedEntry
 }
 
 // ResolvedThreshold is the final resolved state for one tenant+metric pair.

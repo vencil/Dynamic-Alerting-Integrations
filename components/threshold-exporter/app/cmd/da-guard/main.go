@@ -135,6 +135,13 @@
 // order, {key, canonical, spellings} (config.SpellingsOf), for the Python
 // readers that compare keys across #1231 spellings. It reads no tree. Exit
 // codes: 0 ok, 2 caller error.
+//
+// Subcommand `severity-dedup` (#3621, severity_dedup.go) prints, as JSON,
+// each tenant's `_severity_dedup` mode as the exporter's resolver reads it,
+// the values it does not read (the load's ValueProblems, in the file and
+// layer that write them) and the entries written with a schedule, beside
+// the load's parse_failed / unreadable, for the route generator's static
+// inhibit rules. Same exit codes as served-values.
 package main
 
 import (
@@ -242,6 +249,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --input <file|-> [--dry-run] [--json]\n", programName, writeCmd)
 		fmt.Fprintf(errOut, "       %s %s < values.json\n", programName, thresholdValuesCmd)
 		fmt.Fprintf(errOut, "       %s %s < keys.json\n", programName, keySpellingsCmd)
+		fmt.Fprintf(errOut, "       %s %s --config-dir <dir>\n", programName, severityDedupCmd)
 		fmt.Fprintf(errOut, "Validate a conf.d/ tree against the C-12 Dangling Defaults Guard.\n")
 		fmt.Fprintf(errOut, "'%s' prints the values the exporter's /metrics serves per tenant, as JSON "+
 			"(see '%s %s -h').\n", servedValuesCmd, programName, servedValuesCmd)
@@ -259,7 +267,10 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "'%s' prints how the exporter reads each threshold value text of a JSON array on stdin, "+
 			"as JSON (see '%s %s -h').\n", thresholdValuesCmd, programName, thresholdValuesCmd)
 		fmt.Fprintf(errOut, "'%s' prints every #1231 spelling of each tenant-config key of a JSON array on stdin, "+
-			"canonical first, as JSON (see '%s %s -h').\n\n", keySpellingsCmd, programName, keySpellingsCmd)
+			"canonical first, as JSON (see '%s %s -h').\n", keySpellingsCmd, programName, keySpellingsCmd)
+		fmt.Fprintf(errOut, "'%s' prints each tenant's _severity_dedup mode as the exporter reads it, with the values "+
+			"it does not read and those written with a schedule, as JSON (see '%s %s -h').\n\n",
+			severityDedupCmd, programName, severityDedupCmd)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  clean\n  1  guard found errors\n"+
 			"  2  caller error, or a conf.d path that is not valid UTF-8 (no output can carry it)\n"+
@@ -321,6 +332,9 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	}
 	if len(args) > 0 && args[0] == keySpellingsCmd {
 		return runKeySpellings(args[1:], os.Stdin, stdout, errOut)
+	}
+	if len(args) > 0 && args[0] == severityDedupCmd {
+		return runSeverityDedup(args[1:], stdout, errOut)
 	}
 
 	f, err := parseFlags(args, errOut)
