@@ -12,8 +12,6 @@
 # Run: promtool test rules tests/rulepacks/platform-exporter-replica-collapse_test.yaml
 rule_files:
   - ../../rule-packs/rule-pack-platform.yaml
-  # MassExporterOutage reads tenant:exporter_present, recorded by the liveness pack (#3771).
-  - ../../rule-packs/rule-pack-liveness.yaml
 
 evaluation_interval: 1m
 
@@ -880,7 +878,7 @@ tests:
     - series: up{job="tenant-exporters", tenant="t9", instance="t9:9104"}
       values: 1+0x10
     # #3771: the four live exporters' presence series (TenantExporterAbsent's and
-    # MassExporterOutage's anti-join reads tenant:exporter_present, not up).
+    # MassExporterOutage's anti-join reads each kind's presence metric, not up).
     - series: mysql_up{job="tenant-exporters", tenant="t6", instance="t6:9104"}
       values: 1+0x10
     - series: mysql_up{job="tenant-exporters", tenant="t7", instance="t7:9104"}
@@ -903,7 +901,7 @@ tests:
             More than 5 (tenant, db_type) pairs AND over 10% of the declared
             (tenant, db_type) pairs simultaneously have no exporter of that
             db_type answering under job="tenant-exporters"
-            (tenant:exporter_present absent).
+            (that kind's presence metric absent).
             Both conditions together mean this is almost certainly a SHARED
             failure (node pool drained, network partition, image-pull outage on a
             rolling restart) rather than N independent exporter deaths or a

@@ -237,16 +237,14 @@ curl -s 'http://<your-prometheus>:9090/api/v1/query?query=user_threshold{compone
 | `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 14R + 9A |
 | `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |
 | `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 6A |
-| `prometheus-rules-platform` | `platform-alert.yml` | 0R + 55A |
-| `prometheus-rules-liveness` | `liveness-alert.yml` | 11R + 3A |
+| `prometheus-rules-platform` | `platform-alert.yml` | 0R + 54A |
+| `prometheus-rules-liveness` | `liveness-alert.yml` | 0R + 3A |
 | `prometheus-rules-operational` | `operational-alert.yml` | 0R + 4A |
 <!-- BYO_RULEPACK_TABLE_END -->
 
 > ℹ️ 這張表由 `scripts/tools/dx/generate_byo_rulepack_table.py` 從 `k8s/03-monitoring/deployment-prometheus.yaml` 的 projected volume（ConfigMap 名與檔名）與 Rule Pack 來源 YAML（規則數）產生，**請勿手改**——改了會被 `byo-rulepack-table-check` hook 擋下。新增 Rule Pack 時把它掛進 projected volume，這裡就會自己長出來。
 
 > **你只需掛載與你環境相關的規則包。** 例如只用 MariaDB 和 Redis，就只掛這兩個。未使用的規則包即使掛載，因無對應 metric，evaluation 成本近乎零——但選擇性掛載可保持配置清晰。
-
-> ⚠️ **掛平台包（`prometheus-rules-platform`）就要一併掛 `prometheus-rules-liveness`**（[#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)）：平台包的 `MassExporterOutage` 讀 liveness 包錄下的 `tenant:exporter_present`，並以哨兵 `tenant:exporter_presence_loaded` 守門。只掛平台包時它不響，改由 `ExporterPresenceRulesNotLoaded`（warning）指出 liveness 包沒載入——此時沒有任何租戶的 exporter 缺席會告警。liveness 包的存在判定與告警在同一個檔（`liveness-alert.yml`），請整份掛載，不要拆開。
 
 ### Configuration: Direct ConfigMap Mounting
 

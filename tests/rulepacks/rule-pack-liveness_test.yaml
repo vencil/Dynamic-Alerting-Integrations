@@ -78,8 +78,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant db-a (mariadb)"
               summary_zh: "租戶 db-a (mariadb) 的 exporter 缺席"
-              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"mariadb\"} is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（tenant:exporter_present{db_type=\"mariadb\"} 缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -124,8 +124,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant db-a (mariadb)"
               summary_zh: "租戶 db-a (mariadb) 的 exporter 缺席"
-              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"mariadb\"} is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（tenant:exporter_present{db_type=\"mariadb\"} 缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -179,8 +179,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant db-a (mariadb)"
               summary_zh: "租戶 db-a (mariadb) 的 exporter 缺席"
-              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"mariadb\"} is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（tenant:exporter_present{db_type=\"mariadb\"} 缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""

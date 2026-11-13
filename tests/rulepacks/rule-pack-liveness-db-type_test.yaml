@@ -1,7 +1,7 @@
 # promtool unit test — 存活判定以 (tenant, db_type) 為粒度（#3771）。
 # Run: promtool test rules tests/rulepacks/rule-pack-liveness-db-type_test.yaml
 #
-# 對象：rule-pack-liveness.yaml 的 tenant:exporter_present（生成區塊）、
+# 對象：rule-pack-liveness.yaml 的內嵌存在判定（_lib_exporter_presence.py 生成）、
 # TenantExporterAbsent（Rule A）、TenantExporterReplicaDown（Rule B）、
 # TenantExporterUndeclared（Rule C），以及平台 pack 的 MassExporterOutage。
 #   M1  租戶宣告 [mariadb, redis]；mariadb 唯一副本掛、redis 健康
@@ -14,13 +14,13 @@
 #   M5  rabbitmq 兩種 exporter：只有內建 plugin 的 rabbitmq_identity_info 也算在場 → 不響
 #   U1  未宣告租戶有 DB exporter（存在指標在場）→ Undeclared 響（warning）；宣告過的租戶不響
 #   U4  （併在 U1）未宣告、只有 nginx exporter 的租戶 → 不響（enum 沒有它可宣告的種類）
+#   U5  未宣告租戶的 DB exporter 全掛 → 仍響（左手邊回看 1h），1h 後才解除
 #   U2  沒有任何租戶宣告 db_type、threshold-exporter 活著 → Undeclared 照響
 #       （守門讀 tenant_metadata_info，不是 tenant_expected_exporter；守門改讀後者就轉紅）
 #   U3  threshold-exporter 全掛（tenant_metadata_info、tenant_expected_exporter 都缺席）
 #       → Undeclared 一條都不響（拿掉守門就對每個租戶齊響）
 #   P1  6 個租戶各宣告 [mariadb, redis]、mariadb 全掛 → MassExporterOutage 響，
 #       $value＝6 組 (tenant, db_type)，分母 12 組（舊的 on(tenant) 下 redis 擋住全部、不響）
-#       兩個 pack 都載入 → ExporterPresenceRulesNotLoaded 不響
 #   P2  同形狀只有 5 個租戶 → 5 不 > 5，不響（門檻是「組」）
 # tenant id 用 t-* placeholder（dev-rule：fixture 不寫死真實租戶名）。
 rule_files:
@@ -66,8 +66,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant t-multi (mariadb)"
               summary_zh: "租戶 t-multi (mariadb) 的 exporter 缺席"
-              description: "No mariadb exporter of tenant t-multi has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"mariadb\"} is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 t-multi 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（tenant:exporter_present{db_type=\"mariadb\"} 缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No mariadb exporter of tenant t-multi has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t-multi 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -159,8 +159,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant t-single (mariadb)"
               summary_zh: "租戶 t-single (mariadb) 的 exporter 缺席"
-              description: "No mariadb exporter of tenant t-single has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"mariadb\"} is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 t-single 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（tenant:exporter_present{db_type=\"mariadb\"} 缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No mariadb exporter of tenant t-single has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t-single 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -274,6 +274,30 @@ tests:
         alertname: TenantExporterUndeclared
         exp_alerts: []
 
+  # ── U5 未宣告租戶的 DB exporter 全掛（存在指標在 60m 後消失）→ Undeclared 不自己解除
+  #    （左手邊回看 1h），最後一個樣本（60m）1h 後才解除。左手邊不回看就在 ~65m 解除、轉紅。
+  - interval: 1m
+    name: U5-undeclared-stays-after-exporters-vanish-for-1h
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
+        values: '1x60 _x200'
+      - series: 'tenant_metadata_info{tenant="t-loose", owner="", runbook_url="", tier=""}'
+        values: '1x260'
+    promql_expr_test:
+      - expr: count by(tenant) (ALERTS{alertstate="firing", alertname="TenantExporterUndeclared"})
+        eval_time: 50m
+        exp_samples:
+          - labels: '{tenant="t-loose"}'
+            value: 1
+      - expr: count by(tenant) (ALERTS{alertstate="firing", alertname="TenantExporterUndeclared"})
+        eval_time: 110m
+        exp_samples:
+          - labels: '{tenant="t-loose"}'
+            value: 1
+      - expr: count by(tenant) (ALERTS{alertstate="firing", alertname="TenantExporterUndeclared"})
+        eval_time: 130m
+        exp_samples: []
+
   # ── P1 6 個租戶各宣告 [mariadb, redis]、mariadb 全掛、redis 全健康
   #    → 6 組 down / 12 組 declared = 50%，6 > 5 → MassExporterOutage 響，$value＝6
   - interval: 1m
@@ -328,10 +352,6 @@ tests:
       - series: 'redis_up{job="tenant-exporters", tenant="t-6", instance="t-6-rds"}'
         values: '1x10'
     alert_rule_test:
-      # liveness pack 有載 → 哨兵在場，ExporterPresenceRulesNotLoaded 不響。
-      - eval_time: 15m
-        alertname: ExporterPresenceRulesNotLoaded
-        exp_alerts: []
       - eval_time: 5m
         alertname: MassExporterOutage
         exp_alerts:
@@ -345,7 +365,7 @@ tests:
                 More than 5 (tenant, db_type) pairs AND over 10% of the declared
                 (tenant, db_type) pairs simultaneously have no exporter of that
                 db_type answering under job="tenant-exporters"
-                (tenant:exporter_present absent).
+                (that kind's presence metric absent).
                 Both conditions together mean this is almost certainly a SHARED
                 failure (node pool drained, network partition, image-pull outage on a
                 rolling restart) rather than N independent exporter deaths or a

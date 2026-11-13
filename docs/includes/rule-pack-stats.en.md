@@ -9,14 +9,14 @@
 | jvm | jmx_exporter | 9 | 7 |
 | kafka | kafka_exporter | 13 | 8 |
 | kubernetes | cAdvisor + kube-state-metrics | 30 | 14 |
-| liveness | threshold-exporter heartbeat | 11 | 3 |
+| liveness | threshold-exporter heartbeat | 0 | 3 |
 | mariadb | mysqld_exporter (Percona) | 12 | 17 |
 | mongodb | mongodb_exporter | 10 | 10 |
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter operational mode | 0 | 4 |
 | oracle | oracledb_exporter | 13 | 9 |
-| platform | threshold-exporter self-monitoring | 0 | 55 |
+| platform | threshold-exporter self-monitoring | 0 | 54 |
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 14 | 9 |
 | redis | redis_exporter | 12 | 9 |
-| **Total** | | **182** | **187** |
+| **Total** | | **171** | **186** |

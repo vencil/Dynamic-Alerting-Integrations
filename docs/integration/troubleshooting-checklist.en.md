@@ -1181,9 +1181,7 @@ The alert resolves on its own: once the next run (or the manual one) succeeds, t
 
 **Symptom**: `MassExporterOutage` (critical) fires with summary "Mass exporter outage (N tenant × db_type pairs)", alongside a batch of `TenantExporterAbsent`.
 
-It fires when **both** more than 5 and more than 10% of the declared (tenant, db_type) pairs have no exporter of that kind answering (`tenant:exporter_present` absent). The unit is the pair, not the tenant ([#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)): a tenant declaring `[mariadb, redis]` counts 2 in the denominator, and 1 in the numerator when only its mariadb exporter is gone. Together, those almost always mean a **shared dependency** failed, not N exporters dying independently.
-
-`tenant:exporter_present` is recorded by the liveness pack; where it (with the sentinel `tenant:exporter_presence_loaded`) is not loaded, `MassExporterOutage` and `TenantExporterAbsent` stay silent and `ExporterPresenceRulesNotLoaded` (warning) says so — load the whole liveness pack when you see it.
+It fires when **both** more than 5 and more than 10% of the declared (tenant, db_type) pairs have no exporter of that kind answering (that kind's presence metric, such as `mysql_up`, absent). The unit is the pair, not the tenant ([#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)): a tenant declaring `[mariadb, redis]` counts 2 in the denominator, and 1 in the numerator when only its mariadb exporter is gone. Together, those almost always mean a **shared dependency** failed, not N exporters dying independently.
 
 ```mermaid
 flowchart TD

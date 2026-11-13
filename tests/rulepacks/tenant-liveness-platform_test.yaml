@@ -33,8 +33,6 @@
 #                     so the ratio sentinel is never the sole dependency.
 rule_files:
   - ../../rule-packs/rule-pack-platform.yaml
-  # MassExporterOutage reads tenant:exporter_present, recorded by the liveness pack (#3771).
-  - ../../rule-packs/rule-pack-liveness.yaml
 
 evaluation_interval: 30s
 
@@ -128,7 +126,7 @@ tests:
                 More than 5 (tenant, db_type) pairs AND over 10% of the declared
                 (tenant, db_type) pairs simultaneously have no exporter of that
                 db_type answering under job="tenant-exporters"
-                (tenant:exporter_present absent).
+                (that kind's presence metric absent).
                 Both conditions together mean this is almost certainly a SHARED
                 failure (node pool drained, network partition, image-pull outage on a
                 rolling restart) rather than N independent exporter deaths or a

@@ -482,7 +482,7 @@ func (c *Collector) collectMetadata(ch chan<- prometheus.Metric, metadata []conf
 // This is the LEFT-hand input to the per-tenant liveness anti-join
 // (TenantExporterAbsent in rule-pack-liveness.yaml):
 //
-//	tenant_expected_exporter unless on(tenant, db_type) tenant:exporter_present
+//	tenant_expected_exporter unless on(tenant, db_type) (<presence of each kind>)
 //
 // so each declared (tenant, db_type) for which no live exporter of that kind
 // reports is flagged — a tenant with a dead mariadb exporter and a healthy

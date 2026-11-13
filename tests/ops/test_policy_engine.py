@@ -290,6 +290,28 @@ class TestEvaluateOperator:
 class TestEvaluateWhen:
     """when 條件子句測試。"""
 
+    @pytest.mark.parametrize("when,want", [
+        ({"target": "_metadata.db_type", "operator": "one_of", "value": ["mariadb", "postgresql"]}, True),
+        ({"target": "_metadata.db_type", "operator": "one_of", "value": ["kafka"]}, False),
+        ({"target": "_metadata.db_type", "operator": "matches", "value": "^red"}, True),
+        ({"target": "_metadata.db_type", "operator": "not_equals", "value": "mariadb"}, False),
+    ])
+    def test_when_on_a_list_holds_for_some_element(self, when, want):
+        """#3771 審查：when 問的是「規則適不適用」，多 DB 租戶不能因全稱語意逃過約束；
+        主規則的 one_of／matches 仍要每個元素都成立。"""
+        config = {"_metadata": {"db_type": ["mariadb", "redis"]}}
+        assert pe._evaluate_when(config, when) is want
+        if when["operator"] in ("one_of", "matches"):
+            assert pe._evaluate_operator(when["operator"], ["mariadb", "redis"], when["value"]) is False
+
+    def test_rule_guarded_by_when_one_of_still_applies_to_a_multi_db_tenant(self):
+        rule = pe.PolicyRule(name="r", description="", target="_metadata.owner",
+                             operator="required",
+                             when={"target": "_metadata.db_type", "operator": "one_of",
+                                   "value": ["mariadb", "postgresql"]})
+        config = {"_metadata": {"db_type": ["mariadb", "redis"]}}
+        assert len(pe.evaluate_rule(rule, "t-a", config)) == 1
+
     def test_when_required_true(self, sample_config):
         """when required 條件成立。"""
         when = {"target": "_routing", "operator": "required"}

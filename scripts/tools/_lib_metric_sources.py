@@ -224,17 +224,6 @@ CHART_SERVICEMONITOR_JOBS: dict[str, frozenset] = {
 #: tests/k8s/test_tenant_scrape_contract.py.
 TENANT_EXPORTER_JOB = "tenant-exporters"
 
-#: Recording rules a platform pack reads that another pack records (#3771).
-#: operator_split judges one pack at a time, so it cannot see their rule; each
-#: is recorded by the always-on liveness pack (emitted in operator mode too)
-#: from tenant-exporter metrics selected under ``job="tenant-exporters"``
-#: (TENANT_EXPORTER_JOB — the Operator doc's ServiceMonitor sets that job), so
-#: it has a source wherever the platform pack runs.
-#: tests/rulepacks/test_exporter_presence.py holds each name to a record of
-#: rule-pack-liveness.yaml whose every input selects that job.
-CROSS_PACK_RECORDS: frozenset = frozenset({"tenant:exporter_present",
-                                           "tenant:exporter_presence_loaded"})
-
 #: Series Prometheus itself manufactures (no exporter, no /metrics line):
 #: `up` per scrape target, `ALERTS` per alert. `up` carries the target's job,
 #: so its source is whatever job its selector names.
@@ -299,8 +288,6 @@ def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = Non
             if produced[metric]:
                 reasons.append(f"{metric}: its recording rule is not portable")
             continue
-        if metric in CROSS_PACK_RECORDS:
-            continue
         jobs = _job_matchers(metric, expr)
         if metric == "ALERTS":
             continue
@@ -315,6 +302,12 @@ def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = Non
             continue
         fam = resolve_family(metric)
         if fam is None:
+            # A tenant exporter's own series, read under the tenant-exporters
+            # job (#3771: the liveness alerts read each kind's presence metric
+            # inline): the Operator doc's ServiceMonitor scrapes those targets
+            # as that job (#3720), so they exist in an Operator install too.
+            if jobs and all(job == ("=", TENANT_EXPORTER_JOB) for job in jobs):
+                continue
             reasons.append(f"{metric}: no modelled source (FAMILY_TABLE / FAMILY_EXACT)")
             continue
         _key, kind, spec = fam

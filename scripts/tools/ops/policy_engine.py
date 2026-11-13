@@ -15,8 +15,9 @@ DSL 運算子：
   one_of      — 值必須在指定清單內
   contains    — 字串包含子字串
   （欄位值是 list 時——`_metadata.db_type`（#3771）、`tags`、`groups`——逐元素比：
-   `one_of`／`matches`／`not_equals` 要每個元素都成立，`equals`／`contains` 有一個
-   元素成立即成立；空 list 只滿足 `not_equals`）
+   主規則的 `one_of`／`matches`／`not_equals` 要每個元素都成立，`equals`／`contains`
+   有一個元素成立即成立；`when` 條件裡 `one_of`／`matches` 也是任一元素成立即成立；
+   空 list 只滿足 `not_equals`）
 
 條件式規則：
   when 子句：僅在條件成立時才評估主規則。
@@ -754,13 +755,16 @@ _ELEMENTWISE_OPERATORS = frozenset({"equals", "not_equals", "matches", "one_of",
 _EVERY_ELEMENT_OPERATORS = frozenset({"not_equals", "matches", "one_of"})
 
 
-def _evaluate_operator(operator: str, actual: Any, expected: Any) -> bool:
+def _evaluate_operator(operator: str, actual: Any, expected: Any, *,
+                       condition: bool = False) -> bool:
     """評估單一運算子。
 
     Args:
         operator: 運算子名稱。
         actual: 實際值。
         expected: 規則期望值。
+        condition: True 表示這是 `when` 條件（問「這個租戶是不是那一類」），
+            False 表示主規則的約束（問「它違規了沒」）；只影響 list 欄位，見下。
 
     Returns:
         True 表示「符合規則」（無違規），False 表示「違反規則」。
@@ -787,10 +791,15 @@ def _evaluate_operator(operator: str, actual: Any, expected: Any) -> bool:
     # membership and hold when SOME element does. A one-element list reads as
     # the scalar it replaces (`db_type: mariadb` is served as ["mariadb"]); an
     # empty list satisfies only `not_equals`.
+    # A `when` condition (*condition*) asks whether the rule applies, not
+    # whether it is violated: there `one_of` / `matches` hold when SOME element
+    # does, so a tenant declaring [mariadb, redis] stays under a rule guarded by
+    # `when: one_of [mariadb, postgresql]` instead of escaping it (#3771
+    # review). `not_equals` keeps "no element equals" in both.
     if isinstance(actual, list) and operator in _ELEMENTWISE_OPERATORS:
         if operator == "not_equals":
             return all(_evaluate_operator(operator, a, expected) for a in actual)
-        if operator in _EVERY_ELEMENT_OPERATORS:
+        if operator in _EVERY_ELEMENT_OPERATORS and not condition:
             return bool(actual) and all(_evaluate_operator(operator, a, expected) for a in actual)
         return any(_evaluate_operator(operator, a, expected) for a in actual)
 
@@ -911,7 +920,7 @@ def _holds(operator: str, actual: Any, expected: Any) -> bool:
     if isinstance(actual, ServedThreshold):
         return any(v is not None and _evaluate_threshold(operator, v, expected)
                    for _s, _e, v in actual.segments)
-    return _evaluate_operator(operator, actual, expected)
+    return _evaluate_operator(operator, actual, expected, condition=True)
 
 
 # ---------------------------------------------------------------------------

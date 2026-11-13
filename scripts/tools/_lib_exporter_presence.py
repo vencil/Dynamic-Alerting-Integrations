@@ -6,19 +6,30 @@ threshold-exporter turns each into a ``tenant_expected_exporter{tenant,
 db_type}`` series. ``TenantExporterAbsent`` (rule-packs/rule-pack-liveness.yaml)
 asks, per (tenant, db_type), whether an exporter OF THAT KIND is reporting:
 
-    tenant_expected_exporter unless on(tenant, db_type) tenant:exporter_present
+    tenant_expected_exporter unless on(tenant, db_type) (<presence>)
 
 ``up`` cannot answer that — no label on it says which kind of exporter a
 target is — so the answer is read from a metric only that kind of exporter
 emits, on every scrape it answers, whether or not the database behind it is
 reachable (``mysql_up`` is 0 when MariaDB is down and still present; a target
 that does not answer leaves no series at all). The table below names that
-metric for every kind; :func:`presence_rules` turns it into the
-``tenant:exporter_present{tenant,db_type}`` recording rules (``group by(tenant)``
-over the metric, db_type as the rule's static label), which live in the
-liveness pack (always on) rather than in each DB pack (most are
-``default_on: false`` — a tenant declaring a kind whose pack is not deployed
-would otherwise page forever).
+metric for every kind; :func:`presence_expr` turns it into ``<presence>``:
+one ``label_replace(<metric>{job="tenant-exporters"}, "db_type", "<kind>", "",
+"")`` per kind, joined by ``or``. No aggregation: ``unless on(tenant,
+db_type)`` matches many right-hand series as well as one, and an aggregation
+``by (tenant)`` in MassExporterOutage would read to the platform-alert guard
+(_grar_validate) as an alert that carries a tenant label, which it does not.
+
+The expression is written INTO each alert that needs it — TenantExporterAbsent
+and TenantExporterUndeclared (liveness pack) and MassExporterOutage (platform
+pack) — rather than recorded once and read back (#3771 review). A recording
+rule one alert reads is a second rule that has to be loaded with it, in the
+same Prometheus, before it: a hand-split copy, a pack loaded alone, or the
+federation split (records on the edge, alerts on the central Prometheus,
+which pulls only ``{tenant!=""}`` series) each left the alert reading an
+empty vector — silent, or paging for every declared pair. Inline, each alert
+reads only the raw tenant-labelled series it always read. The presence
+metrics are not in the DB packs either: most are ``default_on: false``.
 
 Why each metric (read from the exporter's own source):
 
@@ -56,9 +67,10 @@ liveness is written for — so a same-named series from elsewhere does not count
 The key set must equal the ``_metadata.db_type`` enum
 (docs/schemas/tenant-config.schema.json ``definitions.dbTypeValue``) in both
 directions; ``tests/rulepacks/test_exporter_presence.py`` holds that, and holds
-the liveness pack's generated block equal to :func:`render_block`.
+the three alerts' ``expr`` equal to :func:`alert_exprs` (``--write`` and the
+check mode compare the parsed ``expr``, not a text block).
 
-Regenerate the block after editing the table::
+Regenerate the three expressions after editing the table or a template::
 
     python3 scripts/tools/_lib_exporter_presence.py --write
 
@@ -93,107 +105,147 @@ EXPORTER_PRESENCE: dict[str, tuple[str, ...]] = {
     "rabbitmq": ("rabbitmq_up", "rabbitmq_identity_info"),
 }
 
-PRESENCE_RECORD = "tenant:exporter_present"
-#: Always 1 wherever the presence rules are loaded: the absence rules (here and
-#: the platform pack's MassExporterOutage) are AND-ed with it, so a Prometheus
-#: that has them without the presence rules stays silent instead of reading
-#: every declared (tenant, db_type) as absent, and the platform pack's
-#: ExporterPresenceRulesNotLoaded names that state.
-SENTINEL_RECORD = "tenant:exporter_presence_loaded"
-#: The group the generated rules sit in — the liveness alerts' own, so the
-#: ConfigMap generator (one key per recording-only / alerting group set) puts
-#: them under the same key as the alerts: one key cannot be projected without
-#: the other.
-LIVENESS_GROUP = "tenant-liveness"
 JOB_SELECTOR = 'job="tenant-exporters"'
-
-BEGIN_MARK = "# >>> GENERATED:exporter-presence"
-END_MARK = "# <<< GENERATED:exporter-presence"
-_INDENT = "      "
+#: How far back TenantExporterUndeclared looks for a database exporter: an
+#: undeclared tenant whose exporters all went down stays named for this long
+#: (a gone exporter is not a fixed declaration), then the alert resolves.
+#: 1h is the longest range the rule-pack CI policy allows
+#: (.github/custom-rule-policy.yaml max_range_duration; only a GENERATED pack
+#: may be granted more).
+UNDECLARED_LOOKBACK = "1h"
 
 LIVENESS_PACK = Path(RULE_PACKS.directory) / RULE_PACKS.file_name("liveness")
+PLATFORM_PACK = Path(RULE_PACKS.directory) / RULE_PACKS.file_name("platform")
+
+_PAD = "  "
 
 
-def presence_expr(db_type: str) -> str:
-    """The recording expression for one db_type (the db_type label is the
-    rule's static label, not part of the expression)."""
-    metrics = EXPORTER_PRESENCE[db_type]
-    inner = " or ".join(f"{m}{{{JOB_SELECTOR}}}" for m in metrics)
-    return f"group by(tenant) ({inner})"
+def _indent(text: str, depth: int) -> str:
+    return "\n".join(_PAD * depth + line for line in text.split("\n"))
 
 
-def presence_rules() -> list[dict]:
-    """One ``{record, expr, labels: {db_type}}`` per db_type, in table order.
-
-    db_type is a static rule label rather than a ``label_replace``: the rules
-    share one record name, and promtool's lint refuses same-named recording
-    rules that no static label tells apart.
-    """
-    return [{"record": PRESENCE_RECORD, "expr": presence_expr(d), "labels": {"db_type": d}}
-            for d in EXPORTER_PRESENCE]
-
-
-def render_block() -> str:
-    """The generated rules, delimiters included, as they sit at the head of
-    the ``tenant-liveness`` group's ``rules:`` (before the alerts that read
-    them: a group is evaluated in order)."""
-    i = _INDENT
-    lines = [
-        f"{i}{BEGIN_MARK} — generated block, DO NOT EDIT"
-        "（改 scripts/tools/_lib_exporter_presence.py 的 EXPORTER_PRESENCE 後跑它的 --write）",
-    ]
-    for d in EXPORTER_PRESENCE:
-        lines.append(f"{i}# db_type={d}: {' / '.join(EXPORTER_PRESENCE[d])}")
-        lines.append(f"{i}- record: {PRESENCE_RECORD}")
-        lines.append(f"{i}  expr: {presence_expr(d)}")
-        lines.append(f"{i}  labels:")
-        lines.append(f"{i}    db_type: {d}")
-    lines.append(f"{i}# 哨兵：存在判定已載入（absence 規則 and on() 它；缺席由平台 pack 的")
-    lines.append(f"{i}# ExporterPresenceRulesNotLoaded 指名）")
-    lines.append(f"{i}- record: {SENTINEL_RECORD}")
-    lines.append(f"{i}  expr: vector(1)")
-    lines.append(f"{i}{END_MARK}")
-    return "\n".join(lines) + "\n"
+def presence_expr() -> str:
+    """Every series of a table metric under the tenant-exporters job, with
+    its kind as ``db_type`` — one ``label_replace`` term per table row,
+    ``or``-ed (the terms differ in metric name and db_type, so ``or`` keeps
+    them all)."""
+    terms = []
+    for db_type, metrics in EXPORTER_PRESENCE.items():
+        inner = " or ".join(f"{m}{{{JOB_SELECTOR}}}" for m in metrics)
+        terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
+    return "\nor ".join(terms)
 
 
-def _split(text: str) -> tuple[str, str, str]:
-    """(before, block, after) around the generated block; ValueError if absent."""
-    start = text.find(f"{_INDENT}{BEGIN_MARK}")
-    end = text.find(f"{_INDENT}{END_MARK}")
-    if start < 0 or end < 0 or end < start or (start and text[start - 1] != "\n"):
-        raise ValueError(f"{LIVENESS_PACK}: generated block markers not found")
-    stop = text.index("\n", end) + 1
-    return text[:start], text[start:stop], text[stop:]
+def any_presence_over_time_expr() -> str:
+    """One series per tenant (labels as the metric's) that some table metric
+    had under the tenant-exporters job within UNDECLARED_LOOKBACK."""
+    metrics = [m for ms in EXPORTER_PRESENCE.values() for m in ms]
+    return "\nor ".join(f"max_over_time({m}{{{JOB_SELECTOR}}}[{UNDECLARED_LOOKBACK}])"
+                        for m in metrics)
 
 
-def committed_block(text: str) -> str:
-    """The generated block as committed in the liveness pack's text."""
-    return _split(text)[1]
+def _absent_pairs() -> str:
+    return ("max without(instance, pod) (tenant_expected_exporter)\n"
+            "unless on(tenant, db_type) (\n" + _indent(presence_expr(), 1) + "\n)")
+
+
+def alert_exprs() -> dict[tuple[Path, str], str]:
+    """(pack, alertname) → the alert's whole ``expr`` (no trailing newline)."""
+    absent = _absent_pairs()
+    mass = "\n".join([
+        "(",
+        "  count without (tenant, db_type) (",
+        _indent(absent, 2),
+        "  ) > 5",
+        "  and",
+        "  (",
+        "    count without (tenant, db_type) (",
+        _indent(absent, 3),
+        "    )",
+        "    /",
+        "    count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter))",
+        "  ) > 0.1",
+        ")",
+        'unless on() absent(up{job="tenant-exporters"})',
+    ])
+    undeclared = "\n".join([
+        "group by(tenant) (",
+        _indent(any_presence_over_time_expr(), 1),
+        ")",
+        "unless on(tenant) tenant_expected_exporter",
+        "and on() tenant_metadata_info",
+        "unless on(tenant)",
+        '(user_state_filter{filter="maintenance"} == 1)',
+    ])
+    return {
+        (LIVENESS_PACK, "TenantExporterAbsent"): absent,
+        (LIVENESS_PACK, "TenantExporterUndeclared"): undeclared,
+        (PLATFORM_PACK, "MassExporterOutage"): mass,
+    }
+
+
+def _expr_span(text: str, alert: str) -> tuple[int, int, str]:
+    """(start, stop, indent) of the ``expr: |`` block scalar body of *alert*;
+    ValueError when the alert or a block-scalar expr is not there."""
+    lines = text.split("\n")
+    offsets, pos = [], 0
+    for line in lines:
+        offsets.append(pos)
+        pos += len(line) + 1
+    heads = [i for i, line in enumerate(lines) if line.strip() == f"- alert: {alert}"]
+    if len(heads) != 1:
+        raise ValueError(f"alert {alert}: found {len(heads)} times, want 1")
+    i = heads[0] + 1
+    key_indent = len(lines[heads[0]]) - len(lines[heads[0]].lstrip()) + 2
+    if lines[i].strip() != "expr: |" or len(lines[i]) - len(lines[i].lstrip()) != key_indent:
+        raise ValueError(f"alert {alert}: the line after it is not `expr: |`")
+    j = i + 1
+    while j < len(lines) and (lines[j].strip() == "" or
+                              len(lines[j]) - len(lines[j].lstrip()) > key_indent):
+        j += 1
+    return offsets[i + 1], offsets[j], " " * (key_indent + 2)
+
+
+def rewrite(text: str, alert: str, expr: str) -> str:
+    """*text* with *alert*'s expr body replaced by *expr*."""
+    start, stop, pad = _expr_span(text, alert)
+    body = "".join(pad + line + "\n" for line in expr.split("\n"))
+    return text[:start] + body + text[stop:]
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--write", action="store_true",
-                        help="rewrite the generated block in the liveness pack")
+                        help="rewrite the three alerts' expr from the table")
     parser.add_argument("--root", default=str(Path(__file__).resolve().parents[2]),
                         help="repository root (default: this tree's)")
     args = parser.parse_args(argv)
-    path = Path(args.root) / LIVENESS_PACK
+    stale = []
+    texts: dict[Path, str] = {}
     try:
-        text = path.read_text(encoding="utf-8")
-        before, block, after = _split(text)
+        for (pack, alert), expr in alert_exprs().items():
+            path = Path(args.root) / pack
+            text = texts.get(path)
+            if text is None:
+                text = path.read_text(encoding="utf-8")
+            new = rewrite(text, alert, expr)
+            if new != text:
+                stale.append(f"{pack}: {alert}")
+            texts[path] = new
     except (OSError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
-    want = render_block()
-    if block == want:
-        print(f"{path}: exporter-presence block up to date")
+    if not stale:
+        print("exporter-presence expressions up to date")
         return 0
     if not args.write:
-        print(f"{path}: exporter-presence block is stale; run with --write", file=sys.stderr)
+        for item in stale:
+            print(f"{item}: expr is stale; run with --write", file=sys.stderr)
         return 1
-    path.write_text(before + want + after, encoding="utf-8", newline="\n")
-    print(f"{path}: exporter-presence block rewritten")
+    for path, text in texts.items():
+        path.write_text(text, encoding="utf-8", newline="\n")
+    for item in stale:
+        print(f"{item}: expr rewritten")
     return 0
 
 

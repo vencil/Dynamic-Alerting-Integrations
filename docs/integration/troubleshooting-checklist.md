@@ -1179,9 +1179,7 @@ kubectl get jobs -n monitoring -w
 
 **Symptom**：`MassExporterOutage`（critical）fire，summary 寫「Mass exporter outage (N tenant × db_type pairs)」，同時有一批 `TenantExporterAbsent`。
 
-條件是**同時**超過 5 組、且超過 10% 的「租戶 × db_type」沒有該種 exporter 在回應（`tenant:exporter_present` 缺席）。計數單位是組而不是租戶（[#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)）：宣告 `[mariadb, redis]` 的租戶在分母算 2 組，只有 mariadb 掛時分子算 1 組。兩個條件一起成立，幾乎一定是**共用依賴**壞了，不是 N 個 exporter 各自掛掉。
-
-`tenant:exporter_present` 由 liveness 包錄下；它（連同哨兵 `tenant:exporter_presence_loaded`）沒載入時 `MassExporterOutage` 與 `TenantExporterAbsent` 都不響，改由 `ExporterPresenceRulesNotLoaded`（warning）指出——看到它就把 liveness 包整份掛上。
+條件是**同時**超過 5 組、且超過 10% 的「租戶 × db_type」沒有該種 exporter 在回應（該種的存在指標缺席，例如 `mysql_up`）。計數單位是組而不是租戶（[#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)）：宣告 `[mariadb, redis]` 的租戶在分母算 2 組，只有 mariadb 掛時分子算 1 組。兩個條件一起成立，幾乎一定是**共用依賴**壞了，不是 N 個 exporter 各自掛掉。
 
 ```mermaid
 flowchart TD
