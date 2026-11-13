@@ -14,9 +14,16 @@ import "os"
 // ConfigMap); that is #1560's.
 //
 // Set with chmod on the written file, never as an open(2) mode: the umask
-// does not narrow it.
+// does not narrow it. A file whose text is unchanged is not written, so a
+// file an earlier version wrote 0600 keeps that mode until its text changes.
 //
 // ⛔ Python's repo-artifact writer has the same rule:
 // scripts/tools/_lib_atomic_write.py `_DEFAULT_MODE`. The two are pinned
 // together by tests/shared/test_confd_file_mode_parity.py.
 const ConfDFileMode os.FileMode = 0o644
+
+// ConfDDirMode is the mode of a directory da-guard makes in a conf.d tree for
+// a file it writes (#3535): readable and enterable by another uid, set with
+// chmod after mkdir so the umask does not narrow it (a 0700 directory would
+// hide the 0644 file inside it).
+const ConfDDirMode os.FileMode = 0o755

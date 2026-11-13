@@ -234,7 +234,7 @@ domain policy 用 `tenants:` 清單指名受約束的租戶。只有檔名是 `_
 
 ## 練習 3：驗證所有配置
 
-之後每個 `docker run` 都帶 `--user $(id -u):$(id -g)`：容器以你的身分執行，寫到你目錄裡的產物（例如 `.output/`）歸你所有。`init` 寫出的 conf.d 檔權限是 `0644`，任何使用者都讀得到。
+之後每個 `docker run` 都帶 `--user $(id -u):$(id -g)`：容器以你的身分執行，寫到你目錄裡的產物（例如 `.output/`）歸你所有。`init` 寫出的 conf.d 檔權限是 `0644`、目錄 `0755`，任何使用者都讀得到。
 
 ```bash
 docker run --rm \

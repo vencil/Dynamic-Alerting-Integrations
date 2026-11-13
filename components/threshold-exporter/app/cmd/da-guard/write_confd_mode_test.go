@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,5 +48,27 @@ func TestWrite_AMoveKeepsTheSourcesMode(t *testing.T) {
 	}
 	if fi, err := os.Stat(filepath.Join(root, "b.yaml")); err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("mode %v (%v), want the source's 0600: a move writes nothing", fi.Mode().Perm(), err)
+	}
+}
+
+// A directory made for a file is config.ConfDDirMode whatever the umask
+// narrowed: the mkdir seam stands in for a umask of 077 (a 0700 directory
+// would hide the 0644 file inside it from another uid).
+func TestEmit_ADirectoryItMakesIsConfDDirMode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX modes")
+	}
+	root := writeTree(t, map[string]string{"x.yaml": "a: \"1\"\n"})
+	var out, errOut bytes.Buffer
+	w := &writer{cmd: writeCmd, jsonOut: true, stdout: &out, errOut: &errOut,
+		mkdir: func(p string, _ os.FileMode) error { return os.Mkdir(p, 0o700) }}
+	target := filepath.Join(root, "a", "b", "t9.yaml")
+	if code, res := commitOne(w, "a/b/t9.yaml", target, []byte("a: \"1\"\n"), nil, config.ConfDFileMode, nil); code != exitOK {
+		t.Fatalf("exit %d %+v (%s)", code, res, errOut.String())
+	}
+	for _, d := range []string{filepath.Join(root, "a"), filepath.Join(root, "a", "b")} {
+		if fi, err := os.Stat(d); err != nil || fi.Mode().Perm() != config.ConfDDirMode {
+			t.Fatalf("%s: mode %v (%v), want config.ConfDDirMode", d, fi.Mode().Perm(), err)
+		}
 	}
 }
