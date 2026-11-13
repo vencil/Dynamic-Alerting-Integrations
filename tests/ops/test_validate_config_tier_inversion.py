@@ -60,14 +60,36 @@ def test_only_the_window_that_inverts_is_named(tmp_path):
     assert len(r["details"]) == 1 and "01:00-03:00" in r["details"][0], r
 
 
-def test_a_dimensional_warning_is_paired_with_the_plain_critical(tmp_path):
-    """The exporter serves the plain critical for every selector of the base."""
+def test_a_dimensional_warning_counts_in_the_tenants_largest_warning(tmp_path):
+    """The shipped threshold rule is `max by(tenant)` over the tier's series,
+    dimensional ones included: a dimensional warning (97) above the plain
+    critical (95) makes the alert's warning 97."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\ndimensions:\n  mysql_connections: [db]\n",
         "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"95\"\n"
                    "    'mysql_connections{db=\"a\"}': \"97\"\n"}))
     assert r["status"] == vc.FAIL, r
-    assert len(r["details"]) == 1 and "db=a" in r["details"][0], r
+    assert "critical 95 is not above warning 97" in r["details"][0], r
+
+
+def test_a_dimensional_critical_under_the_plain_warning_fails(tmp_path):
+    """Review F1: the critical is dimensional (60), the warning the root's
+    default (80): the alert's critical fires at 60, before its warning."""
+    r = vc.check_tier_inversion(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ndimensions:\n  mysql_connections: [db]\n",
+        "tx.yaml": "tenants:\n  tx:\n    'mysql_connections{db=\"a\"}': \"60:critical\"\n"}))
+    assert r["status"] == vc.FAIL, r
+    assert "critical 60 is not above warning 80" in r["details"][0], r
+
+
+def test_a_larger_dimensional_critical_lifts_the_tenants_critical(tmp_path):
+    """Review F2: the alert's critical is max(70, 99) = 99, above the warning
+    (80): no inversion, though the plain critical alone is below it."""
+    r = vc.check_tier_inversion(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\ndimensions:\n  mysql_connections: [db]\n",
+        "tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical: \"70\"\n"
+                   "    'mysql_connections{db=\"a\"}': \"99:critical\"\n"}))
+    assert r["status"] == vc.PASS, r
 
 
 def test_stricter_is_the_shipped_alerts_direction(tmp_path, monkeypatch):

@@ -2348,11 +2348,11 @@ def check_tier_inversion(config_dir: str) -> dict[str, object]:
     (da-guard served-values `--schedules`: every part of the day in which some
     schedule changes), never on one file: check_threshold_unit_sanity's
     TIER-INVERSION judges each file alone, which is what let a profile's
-    critical land under a platform default's warning unseen. Per tenant, a
-    warning series and a critical series of the same `metric_key` and
-    dimensions are paired over the minutes both are served; a dimensional
-    warning with no critical of its own is paired with the plain critical,
-    which the exporter serves for every selector of the base.
+    critical land under a platform default's warning unseen. Per tenant and
+    `metric_key`, the largest warning value served is compared with the
+    largest critical value served, minute range by minute range — what the
+    shipped alert compares, its threshold recording rule being
+    `max by(tenant)` over the tier's series, dimensional ones included.
 
     Which way is stricter is the shipped alert's comparison (`direction` in
     `metric_observed_map.yaml`, generated from the rule packs): `>` needs
@@ -2382,8 +2382,13 @@ def check_tier_inversion(config_dir: str) -> dict[str, object]:
     for tenant, tv in sorted(tree.tenants.items()):
         if tv.schedules is None:
             return not_checked(f"served-values gave no schedules for tenant {tenant!r}")
-        # (metric_key, dimensions) -> severity -> [(start, end, value)]
-        rows: dict[tuple, dict[str, list[tuple[int, int, float]]]] = {}
+        # metric_key -> severity -> [(start, end, value)]. Dimensions are
+        # pooled: every shipped threshold recording rule is
+        # `max by(tenant)(user_threshold{…, severity=…})` (the
+        # `ha-max-threshold-aggregation` pre-commit gate holds them to `max`),
+        # so the alert compares the tenant's largest warning against its
+        # largest critical, whatever selectors they came from.
+        rows: dict[str, dict[str, list[tuple[int, int, float]]]] = {}
         for sched in tv.schedules.values():
             for seg in sched.segments:
                 if seg.value is None or not seg.series:
@@ -2394,36 +2399,43 @@ def check_tier_inversion(config_dir: str) -> dict[str, object]:
                     sev = se.labels.get("severity")
                     if sev not in ("warning", "critical"):
                         continue
-                    dims = (tuple(sorted(se.dimensions.items())),
-                            tuple(sorted(se.dimensions_regex.items())))
-                    rows.setdefault((se.metric_key, dims), {}).setdefault(sev, []).append(
+                    rows.setdefault(se.metric_key, {}).setdefault(sev, []).append(
                         (_hhmm(seg.start), _hhmm(seg.end), seg.value))
-        plain = ((), ())
-        for (metric_key, dims), by_sev in sorted(rows.items()):
-            warnings_ = by_sev.get("warning")
-            crits = by_sev.get("critical") or rows.get((metric_key, plain), {}).get("critical")
+        for metric_key, by_sev in sorted(rows.items()):
+            warnings_, crits = by_sev.get("warning"), by_sev.get("critical")
             if not warnings_ or not crits:
                 continue
             kind, entry = _observed_map_lib.lookup(observed, metric_key)
             direction = (entry or {}).get("direction") if kind is _observed_map_lib.LookupKind.COMPARED else None
             if direction not in (">", "<"):
                 continue
-            for ws, we, wv in warnings_:
-                for cs, ce, cv in crits:
-                    start, end = max(ws, cs), min(we, ce)
-                    if start >= end:
-                        continue
-                    pairs += 1
-                    if (cv <= wv) if direction == ">" else (cv >= wv):
-                        sel = ",".join(f"{k}={v}" for k, v in dims[0]) + ",".join(
-                            f"{k}=~{v}" for k, v in dims[1])
-                        found.append(
-                            f"tier_inversion tenant {tenant!r} `{metric_key}`"
-                            f"{'{' + sel + '}' if sel else ''} "
-                            f"{start // 60:02d}:{start % 60:02d}-{end // 60:02d}:{end % 60:02d} UTC: "
-                            f"critical {cv:g} is not {'above' if direction == '>' else 'below'} "
-                            f"warning {wv:g} (the shipped alert fires when the value is {direction} "
-                            "the threshold)")
+            cuts = sorted({t for s_, e_, _v in warnings_ + crits for t in (s_, e_)})
+            run = None  # (start, end, warning, critical) of the inversion being extended
+            spans = []
+            for a, b in zip(cuts, cuts[1:]):
+                w = [v for s_, e_, v in warnings_ if s_ <= a < e_]
+                c = [v for s_, e_, v in crits if s_ <= a < e_]
+                if not w or not c:
+                    run = None
+                    continue
+                pairs += 1
+                wv, cv = max(w), max(c)
+                if (cv <= wv) if direction == ">" else (cv >= wv):
+                    if run and run[1] == a and run[2:] == (wv, cv):
+                        run = (run[0], b, wv, cv)
+                        spans[-1] = run
+                    else:
+                        run = (a, b, wv, cv)
+                        spans.append(run)
+                else:
+                    run = None
+            for a, b, wv, cv in spans:
+                found.append(
+                    f"tier_inversion tenant {tenant!r} `{metric_key}` "
+                    f"{a // 60:02d}:{a % 60:02d}-{b // 60:02d}:{b % 60:02d} UTC: "
+                    f"critical {cv:g} is not {'above' if direction == '>' else 'below'} "
+                    f"warning {wv:g} (the shipped alert compares the tenant's largest of each "
+                    f"and fires when the value is {direction} the threshold)")
     if not found:
         if not pairs:
             # Nothing compared is not "compared and fine" (#3691).
