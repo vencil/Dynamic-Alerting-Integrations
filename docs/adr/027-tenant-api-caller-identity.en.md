@@ -18,6 +18,8 @@ Revised 2026-11-05: §10 now records the test result and adopts oauth2-proxy's s
 
 Revised 2026-11-07: the offline check of §7 also lists tenants whose tags cannot be read but that a scope-restricted rule applies to, and a broken file no restricting rule applies to no longer affects its exit code; environment and domain tags are changed by a platform admin restricted on no scope axis, and an admin restricted to some environments or domains can no longer change them; a tenant file whose tags cannot be read is likewise overwritten through the API only by such an admin; tags and the write scope are judged under the writer lock, on the tree the write actually lands on, in both write modes.
 
+Revised 2026-11-13: §Implementation lists the file for each check of §9, and the clauses that have no check yet.
+
 The reference check (§9 item 8) is in place: references in the repo that cited this ADR by the draft's IDs have been rewritten and the legacy-reference table deleted.
 
 This ADR replaces an unpublished draft from 2026-07. That draft's direction was "authenticate every hop": each component relaying identity to tenant-api would attach its own workload token, first in audit-only mode, then enforced after a multi-week soak. The code merged under that direction is either audit-only or off by default, and none of it is in any released tenant-api image. This ADR withdraws that direction; see §Context and §Alternatives considered. Fixes completed in that period that do not depend on the direction (an empty `_rbac.yaml` denies access; the middleware that derived the source IP from headers is gone) are kept.
@@ -148,7 +150,7 @@ GitLab groups are matched by full path (`org/subteam`) as-is, without a provider
 
 ### 9. Decisions expressed as tests and lints
 
-This document is explanation; the checks below are the single source of truth for these decisions. Once implemented, §Implementation lists the file for each check.
+This document is explanation; the checks below are the single source of truth for these decisions. §Implementation lists the file for each check.
 
 1. TCP registers only the paths enumerated in §3 (exact match) and returns 404 for the rest; a TCP request carrying any identity header gets 400. (§2, §3)
 2. Architecture test: building identity from headers happens only on the UDS listener's path; rate limiting, the request log and the auth bypass never read identity headers. (§2)
@@ -238,29 +240,39 @@ Fallback (not adopted, kept for the record): the Ingress routes `/api/` by path 
 
 ## Implementation
 
-The file holding each check in §9. Paths starting with `cmd/` or `internal/` are relative to `components/tenant-api/`; the rest are relative to the repository root.
+The file holding each check in §9. Paths starting with `cmd/` or `internal/` are relative to `components/tenant-api/`; the rest are relative to the repository root. A few clauses of §9 have no check yet; they are listed at the end.
 
 1. TCP plane: `cmd/server/tcp_router_test.go` (`TestTCPRouter_RegistersOnlyTheProbeRoutes`, `TestTCPRouter_EverythingElseIs404`, `TestTCPRouter_IdentityHeaderIs400`).
-2. Identity is built only on the UDS plane: `internal/rbac/identity_arch_test.go` (`TestHeaderResolutionOnlyInResolveIdentity`, `TestRateLimitLogAndBypassReadNoRequestHeader`).
+2. Identity is built only on the UDS plane:
+   - Identity is built from headers in one place, and identity header names appear only in their owners: `internal/rbac/identity_arch_test.go` (`TestHeaderResolutionOnlyInResolveIdentity`, `TestIdentityHeaderNamesOnlyInTheirOwners`).
+   - That place reads headers only on requests from the UDS listener and ignores them on TCP: `internal/rbac/devbypass_test.go` (`TestResolveIdentity_IgnoresHeadersOnTCP`).
+   - Rate limiting, the request log and the authentication bypass read no header: `internal/rbac/identity_arch_test.go` (`TestRateLimitLogAndBypassReadNoRequestHeader`).
 3. Chart render:
    - One oauth2-proxy in the whole deployment: `tests/helm/test_identity_single_hop.py` (`test_the_only_oauth2_proxy_is_in_the_tenant_api_pod`, `test_no_raw_manifest_runs_an_oauth2_proxy`).
-   - `/api/` answers 401 without a session, and nothing skips login: `tests/oauth2-proxy/chart_test.go` (`TestChartConfig`).
-   - The human socket always exists and only tenant-api and oauth2-proxy mount it: `tests/helm/test_human_socket_guard.py` (`test_render_without_proxy_fails`, `test_render_default_points_upstream_at_socket`).
+   - oauth2-proxy sets `--api-route`, covering exactly the paths §10's example sends to tenant-api, and its arguments carry no flag that skips login: `tests/oauth2-proxy/chart_test.go` (`TestChartConfig`).
+   - The human socket always exists: `tests/helm/test_human_socket_guard.py` (`test_render_without_proxy_fails`, `test_socket_path_is_a_chart_constant`, `test_deployment_wires_the_socket`, `test_render_default_points_upstream_at_socket`); tenant-api does not start without the socket or config file path: `cmd/server/tcp_router_test.go` (`TestCheckIdentityPlaneFlags`). The portal container does not mount it: `tests/helm/test_tenant_api_portal_container.py` (`test_portal_container_mounts_no_identity_or_secret`).
    - oauth2-proxy and tenant-api mount the same config file: `tests/helm/test_oauth2_proxy_alpha_config.py` (`test_both_containers_read_the_same_file`).
    - The portal container's nginx config forwards nothing: `tests/helm/test_tenant_api_portal_container.py` (`test_portal_runs_the_charts_config_and_it_forwards_nothing`).
-4. Every portal backend path is under `/api/`: `tests/shared/test_portal_backend_paths_under_api.py`; simulate answers 501: `cmd/server/simulate_route_test.go` (`TestSimulateNotProvided`).
+4. Every portal backend path is under `/api/`: `tests/shared/test_portal_backend_paths_under_api.py`; simulate answers 501: `cmd/server/simulate_route_test.go` (`TestSimulateNotProvided`), with the body the portal's nginx used to answer, word for word: `tests/shared/test_portal_simulate_not_provided.py` (`test_tenant_api_answers_the_same_code`, `test_tenant_api_answers_the_same_body`).
 5. No identity relay, and the removed settings are gone:
    - No configuration relays identity headers over the network: `tests/helm/test_identity_single_hop.py` (`test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header`, `test_no_raw_manifest_or_rule_pack_names_an_identity_header`).
-   - Removed chart keys: `tests/helm/test_tenant_api_machine_identity_removed.py`.
+   - Removed chart keys: `tests/helm/test_tenant_api_machine_identity_removed.py` (machine identity, the human socket and the relay allowances), `tests/helm/test_tenant_api_scope_switches_removed.py` (the scope-axis and open-mode switches).
    - threshold-govern's CronJob, NetworkPolicy allowance and alert: `tests/shared/test_threshold_govern_write_path_removed.py`.
-   - Removed environment variables: `cmd/server/env_check_test.go` (`TestCheckTAEnv_RefusesRemovedMachineIdentitySettings`).
+   - Removed environment variables are not in the known list, and setting one stops the start: `cmd/server/env_check_test.go` (`TestCheckTAEnv_RefusesSettingsADR027Removed`).
 6. Authorization scope:
-   - An oauth2-proxy config file of the wrong shape is refused: `internal/proxyconfig/proxyconfig_test.go` (`TestLoad_RefusesAmbiguousShapes`, `TestParse_Refusals`), fixtures in `internal/proxyconfig/testdata/`; refused at start: `cmd/server/tcp_router_test.go` (`TestCheckIdentityPlaneFlags`).
-   - An `_rbac.yaml` with no rules denies all access: `internal/rbac/empty_config_mode_test.go`.
+   - An oauth2-proxy config file of the wrong shape is refused: `internal/proxyconfig/proxyconfig_test.go` (`TestLoad_RefusesAmbiguousShapes`, `TestParse_Refusals`), fixtures in `internal/proxyconfig/testdata/`.
+   - An `_rbac.yaml` with no rules denies all access: `internal/rbac/empty_config_mode_test.go`; no switch restores open mode: `tests/helm/test_tenant_api_scope_switches_removed.py` and `TestCheckTAEnv_RefusesSettingsADR027Removed` above.
    - Tag changes and overwriting a file whose tags cannot be read, judged under the writer lock: `internal/handler/label_guard_test.go`.
-7. `tenant-api config check --kind scope`: `cmd/server/scope_check_test.go`; agreement with the server: `internal/handler/scope_gap_planes_test.go` (`TestScopeGapsMatchEveryPlane`); run in CI on the sample config: the `Scope check on the try-local sample config` step of `.github/workflows/ci.yml`.
+7. `tenant-api config check --kind scope`: `cmd/server/scope_check_test.go`; agreement with the server (the environment and domain axes): `internal/handler/scope_gap_planes_test.go` (`TestScopeGapsMatchEveryPlane`); run in CI on the sample config: the `Scope check on the try-local sample config (ADR-027 §7)` step of `.github/workflows/ci.yml`.
 8. ADR reference check: `scripts/tools/lint/check_adr_section_refs.py` (pre-commit and CI), tested in `tests/lint/test_check_adr_section_refs.py`.
-9. oauth2-proxy config check: CI job `go-tests-oauth2-proxy`; the library side is in `tests/oauth2-proxy/` (`TestADRSection10Routing` in `routing_test.go`, and `version_test.go`), the image side is `tests/oauth2-proxy/image_config_test.sh`.
+9. oauth2-proxy config check: CI job `go-tests-oauth2-proxy`. Library side: `tests/oauth2-proxy/chart_test.go` (`TestChartConfig`, which loads the config file the chart generates with the pinned library version and asserts the routing against §10's table), `routing_test.go` (`TestADRSection10Routing`, §10's example itself) and `version_test.go`; image side: `tests/oauth2-proxy/image_config_test.sh` (runs `--config-test` on the file `TestChartConfig` writes).
+
+Clauses with no check yet:
+
+- Item 3, "`/api/` answers 401 without a session": only the `--api-route` setting and the paths it covers are checked; no unauthenticated request is sent to oauth2-proxy.
+- Item 3, "nothing skips login", is checked on the arguments only, not on environment variables; the chart has no setting through which a user could inject oauth2-proxy arguments or environment variables.
+- Item 7's agreement check covers the environment and domain axes; the organization axis is not compared.
+- The start-up wiring that stops on a config file of the wrong shape (`cmd/server/main.go` exits when parsing fails) has no test; the parsing itself is covered by item 6.
 
 ## Related
 

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: proposed
 domain: tenant-api
 created_at: 2026-07-03
-updated_at: 2026-11-12
+updated_at: 2026-11-13
 ---
 
 # ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分
@@ -23,6 +23,8 @@ updated_at: 2026-11-12
 2026-11-05 修訂：§10 改為實測結果，採用 oauth2-proxy 的結構化設定檔（alpha config）；tenant-api 由同一份設定檔決定信任哪些 header（§2、§7）；§6 的「一次生效」限於會拒絕舊設定的變更。
 
 2026-11-07 修訂：§7 的離線檢查也列出標記讀不到、卻被有範圍限制的規則套到的租戶，沒有限制規則套到的壞檔不再影響結束碼；環境與 domain 標記改由不受任何範圍限制的平台管理員變更，只限部分環境或 domain 的管理員不再能改；標記讀不到的租戶檔也只由這種管理員經 API 覆寫；標記與寫入範圍改在寫入鎖內、對寫入實際落地的那棵樹判定，兩種寫入模式相同。
+
+2026-11-13 修訂：§實作位置 列出 §9 各檢查的檔名，並列出尚無檢查的子句。
 
 引用檢查（§9 第 8 項）已上線：repo 內以草稿編號引用本 ADR 的地方已改寫，舊編號對照表刪除。
 
@@ -154,7 +156,7 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 
 ### 9. 決定以測試與 lint 表達
 
-本文是說明；下列檢查才是這些決定的單一來源。實作完成後，§實作位置 列出各檢查的檔名。
+本文是說明；下列檢查才是這些決定的單一來源。§實作位置 列出各檢查的檔名。
 
 1. TCP 只註冊 §3 列舉的路徑（精確比對），其餘回 404；TCP 上帶任何身分 header 回 400。（§2、§3）
 2. 架構測試：從 header 建立身分只發生在 UDS listener 的路徑上；rate limit、request log 與驗證旁路都不讀身分 header。（§2）
@@ -244,29 +246,39 @@ upstreamConfig:
 
 ## 實作位置
 
-§9 各項檢查所在的檔案。以 `cmd/`、`internal/` 開頭的路徑相對於 `components/tenant-api/`，其餘相對於 repo 根目錄。
+§9 各項檢查所在的檔案。以 `cmd/`、`internal/` 開頭的路徑相對於 `components/tenant-api/`，其餘相對於 repo 根目錄。§9 有幾個子句目前沒有檢查，列在最後。
 
 1. TCP 平面：`cmd/server/tcp_router_test.go`（`TestTCPRouter_RegistersOnlyTheProbeRoutes`、`TestTCPRouter_EverythingElseIs404`、`TestTCPRouter_IdentityHeaderIs400`）。
-2. 身分只在 UDS 平面建立：`internal/rbac/identity_arch_test.go`（`TestHeaderResolutionOnlyInResolveIdentity`、`TestRateLimitLogAndBypassReadNoRequestHeader`）。
+2. 身分只在 UDS 平面建立：
+   - 從 header 建立身分只有一個地方，身分 header 名只出現在它的擁有者：`internal/rbac/identity_arch_test.go`（`TestHeaderResolutionOnlyInResolveIdentity`、`TestIdentityHeaderNamesOnlyInTheirOwners`）。
+   - 那個地方只在 UDS listener 的請求上讀 header，TCP 上忽略：`internal/rbac/devbypass_test.go`（`TestResolveIdentity_IgnoresHeadersOnTCP`）。
+   - rate limit、request log 與驗證旁路不讀 header：`internal/rbac/identity_arch_test.go`（`TestRateLimitLogAndBypassReadNoRequestHeader`）。
 3. chart render：
    - 整個部署只有一個 oauth2-proxy：`tests/helm/test_identity_single_hop.py`（`test_the_only_oauth2_proxy_is_in_the_tenant_api_pod`、`test_no_raw_manifest_runs_an_oauth2_proxy`）。
-   - `/api/` 未登入回 401、沒有任何免登入條件：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`）。
-   - human socket 必定存在、只由 tenant-api 與 oauth2-proxy 掛載：`tests/helm/test_human_socket_guard.py`（`test_render_without_proxy_fails`、`test_render_default_points_upstream_at_socket`）。
+   - oauth2-proxy 設了 `--api-route`，且它涵蓋的正是 §10 範例中送往 tenant-api 的路徑；啟動參數沒有任何免登入旗標：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`）。
+   - human socket 必定存在：`tests/helm/test_human_socket_guard.py`（`test_render_without_proxy_fails`、`test_socket_path_is_a_chart_constant`、`test_deployment_wires_the_socket`、`test_render_default_points_upstream_at_socket`）；tenant-api 缺 socket 或設定檔路徑就不啟動：`cmd/server/tcp_router_test.go`（`TestCheckIdentityPlaneFlags`）。portal 容器不掛載它：`tests/helm/test_tenant_api_portal_container.py`（`test_portal_container_mounts_no_identity_or_secret`）。
    - oauth2-proxy 與 tenant-api 掛載同一份設定檔：`tests/helm/test_oauth2_proxy_alpha_config.py`（`test_both_containers_read_the_same_file`）。
    - portal 容器的 nginx 設定沒有轉送：`tests/helm/test_tenant_api_portal_container.py`（`test_portal_runs_the_charts_config_and_it_forwards_nothing`）。
-4. portal 的後端路徑都在 `/api/` 下：`tests/shared/test_portal_backend_paths_under_api.py`；simulate 回 501：`cmd/server/simulate_route_test.go`（`TestSimulateNotProvided`）。
+4. portal 的後端路徑都在 `/api/` 下：`tests/shared/test_portal_backend_paths_under_api.py`；simulate 回 501：`cmd/server/simulate_route_test.go`（`TestSimulateNotProvided`），body 與原本 portal nginx 回的逐字相同：`tests/shared/test_portal_simulate_not_provided.py`（`test_tenant_api_answers_the_same_code`、`test_tenant_api_answers_the_same_body`）。
 5. 不轉送身分、已刪除的設定不存在：
    - 沒有設定跨網路轉送身分 header：`tests/helm/test_identity_single_hop.py`（`test_no_rendered_object_but_the_oauth2_proxy_config_names_an_identity_header`、`test_no_raw_manifest_or_rule_pack_names_an_identity_header`）。
-   - 刪除的 chart key：`tests/helm/test_tenant_api_machine_identity_removed.py`。
+   - 刪除的 chart key：`tests/helm/test_tenant_api_machine_identity_removed.py`（機器身分、human socket 與轉送放行）、`tests/helm/test_tenant_api_scope_switches_removed.py`（範圍軸與 open mode 的開關）。
    - threshold-govern 的 CronJob、NetworkPolicy 放行與告警：`tests/shared/test_threshold_govern_write_path_removed.py`。
-   - 刪除的環境變數：`cmd/server/env_check_test.go`（`TestCheckTAEnv_RefusesRemovedMachineIdentitySettings`）。
+   - 刪除的環境變數不在已知清單、設定了就拒絕啟動：`cmd/server/env_check_test.go`（`TestCheckTAEnv_RefusesSettingsADR027Removed`）。
 6. 授權範圍：
-   - oauth2-proxy 設定檔形狀不符即拒絕：`internal/proxyconfig/proxyconfig_test.go`（`TestLoad_RefusesAmbiguousShapes`、`TestParse_Refusals`），fixture 在 `internal/proxyconfig/testdata/`；啟動時拒絕：`cmd/server/tcp_router_test.go`（`TestCheckIdentityPlaneFlags`）。
-   - 沒有規則的 `_rbac.yaml` 拒絕所有存取：`internal/rbac/empty_config_mode_test.go`。
+   - oauth2-proxy 設定檔形狀不符即拒絕：`internal/proxyconfig/proxyconfig_test.go`（`TestLoad_RefusesAmbiguousShapes`、`TestParse_Refusals`），fixture 在 `internal/proxyconfig/testdata/`。
+   - 沒有規則的 `_rbac.yaml` 拒絕所有存取：`internal/rbac/empty_config_mode_test.go`；恢復 open mode 的開關不存在：`tests/helm/test_tenant_api_scope_switches_removed.py` 與上面的 `TestCheckTAEnv_RefusesSettingsADR027Removed`。
    - 標記變更與覆寫標記讀不到的檔案、在寫入鎖內判定：`internal/handler/label_guard_test.go`。
-7. `tenant-api config check --kind scope`：`cmd/server/scope_check_test.go`；與 server 判定一致：`internal/handler/scope_gap_planes_test.go`（`TestScopeGapsMatchEveryPlane`）；CI 對範例設定執行：`.github/workflows/ci.yml` 的 `Scope check on the try-local sample config` 步驟。
+7. `tenant-api config check --kind scope`：`cmd/server/scope_check_test.go`；與 server 判定一致（環境與 domain 兩條軸）：`internal/handler/scope_gap_planes_test.go`（`TestScopeGapsMatchEveryPlane`）；CI 對範例設定執行：`.github/workflows/ci.yml` 的 `Scope check on the try-local sample config (ADR-027 §7)` 步驟。
 8. ADR 引用檢查：`scripts/tools/lint/check_adr_section_refs.py`（pre-commit 與 CI），測試在 `tests/lint/test_check_adr_section_refs.py`。
-9. oauth2-proxy 設定檢查：CI job `go-tests-oauth2-proxy`，程式庫端在 `tests/oauth2-proxy/`（`routing_test.go` 的 `TestADRSection10Routing`、`version_test.go`），image 端是 `tests/oauth2-proxy/image_config_test.sh`。
+9. oauth2-proxy 設定檢查：CI job `go-tests-oauth2-proxy`。程式庫端：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`，以釘住的同版本程式庫載入 chart 產生的設定檔，斷言分流與 §10 的表一致）、`routing_test.go`（`TestADRSection10Routing`，§10 的範例本身）、`version_test.go`；image 端：`tests/oauth2-proxy/image_config_test.sh`（對 `TestChartConfig` 寫出的設定檔執行 `--config-test`）。
+
+目前沒有檢查的子句：
+
+- 第 3 項「`/api/` 未登入回 401」：只檢查了 `--api-route` 的設定與它涵蓋的路徑，沒有以未登入的請求實測 oauth2-proxy 的回應。
+- 第 3 項「沒有任何免登入條件」只檢查啟動參數，不檢查環境變數；chart 目前沒有讓使用者注入 oauth2-proxy 參數或環境變數的設定。
+- 第 7 項的一致性比對只涵蓋環境與 domain 兩條軸，組織軸沒有比對。
+- 啟動流程中「設定檔形狀不符就停止」的接線（`cmd/server/main.go` 呼叫解析失敗即結束）沒有測試；解析本身由第 6 項的測試涵蓋。
 
 ## 相關
 
