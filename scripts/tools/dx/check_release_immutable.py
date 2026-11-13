@@ -34,7 +34,13 @@ else the digest the tag already names — what a later step must describe).
 have exactly as it answers a private one, so a repository's first publish is
 told from "cannot see it" only with credentials — $REGISTRY_USERNAME and
 $REGISTRY_PASSWORD (both or neither), sent only after the anonymous attempt
-is refused (see _lib_registry).
+is refused (see _lib_registry). With GITHUB_TOKEN, ghcr.io answers a
+repository it does not have with 404 MANIFEST_UNKNOWN (measured 2026-11-13,
+Actions run 43448765258), so a first publish is recognised.
+
+release.yaml does not call this to gate anything: release_publish.py runs the
+same decision inside the publish. Run alone, it answers "may this be
+published?" without publishing (the playbook's manual-remedy check).
 
 Exit codes
     0  decided (publish=true or publish=false)
@@ -81,6 +87,8 @@ MAX_CONFIG_BYTES = 4 * 1024 * 1024
 MAX_CHART_BYTES = 50 * 1024 * 1024
 #: Unpacked size a chart archive may reach before it is refused as a bomb.
 MAX_UNPACKED_BYTES = 200 * 1024 * 1024
+#: Members a chart archive may hold before it is refused (a real chart has tens).
+MAX_MEMBERS = 10_000
 _COMMIT = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
 
@@ -188,7 +196,9 @@ def chart_files(data: bytes) -> Dict[str, bytes]:
     files: Dict[str, bytes] = {}
     total = 0
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
-        for member in tar:
+        for count, member in enumerate(tar, 1):
+            if count > MAX_MEMBERS:
+                raise ValueError(f"holds more than {MAX_MEMBERS} members")
             if member.isdir():
                 continue
             if member.name in files:
@@ -281,48 +291,67 @@ def _credentials() -> Optional[registry.Credentials]:
     return registry.Credentials(user, password) if user else None
 
 
-def _write_output(decision: Decision, with_digest: bool) -> None:
+def write_output(**fields: str) -> None:
+    """Append `key=value` lines to $GITHUB_OUTPUT (when it is set)."""
     path = os.environ.get("GITHUB_OUTPUT")
     if not path:
         return
-    lines = f"publish={'true' if decision.publish else 'false'}\n"
-    if with_digest:
-        lines += f"digest={decision.digest}\n"
     with open(path, "a", encoding="utf-8", newline="\n") as fh:
-        fh.write(lines)
+        fh.write("".join(f"{k}={v}\n" for k, v in fields.items()))
 
 
-def _repository(ref: str, args: argparse.Namespace) -> tuple:
+def _write_output(decision: Decision, with_digest: bool) -> None:
+    fields = {"publish": "true" if decision.publish else "false"}
+    if with_digest:
+        fields["digest"] = decision.digest
+    write_output(**fields)
+
+
+def repository(ref: str, timeout: float) -> tuple:
+    """(Repository, reference) for *ref*, with $REGISTRY_* credentials."""
     kwargs = {"transport": TRANSPORT} if TRANSPORT is not None else {}
     try:
-        return registry.Repository.of(ref, timeout=args.timeout, credentials=_credentials(), **kwargs)
+        return registry.Repository.of(ref, timeout=timeout, credentials=_credentials(), **kwargs)
     except registry.InvalidRef as exc:
         raise CallerError(str(exc)) from exc
 
 
-def _decide(args: argparse.Namespace) -> Decision:
-    if args.command == "image":
-        if not _COMMIT.fullmatch(args.revision or ""):
-            raise CallerError(f"--revision {args.revision!r} is not a full commit id")
-        if args.candidate_digest and not _DIGEST.fullmatch(args.candidate_digest):
-            raise CallerError(f"--candidate-digest {args.candidate_digest!r} is not sha256:<hex>")
-        if "@" in args.ref:
-            raise CallerError(f"--ref {args.ref!r} must name a tag, not a digest")
-        repo, reference = _repository(args.ref, args)
-        return judge_image(repo, reference, args.revision, args.candidate_digest or "")
+def decide_image(ref: str, revision: str, candidate: str, timeout: float) -> Decision:
+    if not _COMMIT.fullmatch(revision or ""):
+        raise CallerError(f"--revision {revision!r} is not a full commit id")
+    if candidate and not _DIGEST.fullmatch(candidate):
+        raise CallerError(f"candidate digest {candidate!r} is not sha256:<hex>")
+    if "@" in ref:
+        raise CallerError(f"{ref!r} must name a tag, not a digest")
+    repo, reference = repository(ref, timeout)
+    return judge_image(repo, reference, revision, candidate)
+
+
+def load_chart(tgz: str) -> tuple:
+    """(files, Chart.yaml) of a local chart archive; CallerError when unreadable."""
     try:
-        local = chart_files(Path(args.tgz).read_bytes())
-        meta = _chart_yaml(local)
+        local = chart_files(Path(tgz).read_bytes())
+        return local, _chart_yaml(local)
     except ImportError as exc:
         raise CallerError(f"PyYAML is required to compare Chart.yaml: {exc}") from exc
     except (OSError, tarfile.TarError, EOFError, ValueError) as exc:
-        raise CallerError(f"{args.tgz}: not a readable chart archive: {exc}") from exc
-    base = args.registry[len("oci://"):] if args.registry.startswith("oci://") else ""
+        raise CallerError(f"{tgz}: not a readable chart archive: {exc}") from exc
+
+
+def decide_chart(tgz: str, oci_registry: str, timeout: float) -> Decision:
+    local, meta = load_chart(tgz)
+    base = oci_registry[len("oci://"):] if oci_registry.startswith("oci://") else ""
     if not base or "/" not in base or ":" in base.split("/", 1)[1]:
-        raise CallerError(f"--registry {args.registry!r} is not oci://<host>/<path>")
+        raise CallerError(f"--registry {oci_registry!r} is not oci://<host>/<path>")
     reference = str(meta["version"]).replace("+", "_")
-    repo, _ = _repository(f"{base}/{meta['name']}:{reference}", args)
+    repo, _ = repository(f"{base}/{meta['name']}:{reference}", timeout)
     return judge_chart(repo, reference, local)
+
+
+def _decide(args: argparse.Namespace) -> Decision:
+    if args.command == "image":
+        return decide_image(args.ref, args.revision, args.candidate_digest or "", args.timeout)
+    return decide_chart(args.tgz, args.registry, args.timeout)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

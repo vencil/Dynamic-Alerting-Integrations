@@ -245,9 +245,13 @@ def test_a_child_manifest_that_is_not_its_digest_is_no_answer():
 
 # ── authorisation ───────────────────────────────────────────────────────────
 
-def _ghcr_new_repository(reg: Registry, with_token_for_credentials: bool = True):
-    """ghcr.io for a repository that does not exist (measured anonymously):
-    401 + challenge, the token service refuses with 403 DENIED."""
+def _ghcr_new_repository(reg: Registry, with_token_for_credentials: bool = True,
+                         code: str = "MANIFEST_UNKNOWN"):
+    """ghcr.io for a repository that does not exist, as measured 2026-11-13:
+    anonymously 401 + challenge and the token service refuses with 403 DENIED;
+    with GITHUB_TOKEN (Actions run 43448765258, packages: write) the token
+    service answers 200 and the manifest 404 MANIFEST_UNKNOWN — not
+    NAME_UNKNOWN, which the distribution spec would suggest."""
     unauth = (401, _headers(WWW_Authenticate=CHALLENGE), _errors("UNAUTHORIZED"))
 
     def transport(method, url, headers, timeout):
@@ -257,7 +261,7 @@ def _ghcr_new_repository(reg: Registry, with_token_for_credentials: bool = True)
                 return 200, _headers(), json.dumps({"token": "cred-tok"}).encode()
             return 403, _headers(), _errors("DENIED")
         if headers.get("Authorization") == "Bearer cred-tok":
-            return 404, _headers(), _errors("NAME_UNKNOWN")
+            return 404, _headers(), _errors(code)
         return unauth
 
     return transport
@@ -271,9 +275,11 @@ def test_an_anonymous_401_is_no_answer_not_a_first_publish():
         tool.judge_image(repo, "v1.0.0", SHA, CANDIDATE)
 
 
-def test_credentials_tell_a_new_repository_from_a_private_one():
+@pytest.mark.parametrize("code", ["MANIFEST_UNKNOWN", "NAME_UNKNOWN"],
+                         ids=["ghcr-measured", "spec"])
+def test_credentials_tell_a_new_repository_from_a_private_one(code):
     reg = Registry()
-    repo = R.Repository(HOST, "o/x", timeout=5, transport=_ghcr_new_repository(reg),
+    repo = R.Repository(HOST, "o/x", timeout=5, transport=_ghcr_new_repository(reg, code=code),
                         credentials=R.Credentials("actor", "s3cret"))
     assert tool.judge_image(repo, "v1.0.0", SHA, CANDIDATE).publish
     token_asks = [h.get("Authorization", "") for _, u, h in reg.asked
@@ -475,3 +481,10 @@ def test_main_chart(out, monkeypatch, tmp_path, capsys):
     assert tool.main(args) == 2
     assert tool.main(["chart", "--tgz", str(tgz), "--registry", "ghcr.io/o/charts"]) == 2
     capsys.readouterr()
+
+
+def test_an_archive_with_too_many_members_is_refused(monkeypatch):
+    monkeypatch.setattr(tool, "MAX_MEMBERS", 3)
+    with pytest.raises(ValueError, match="more than 3 members"):
+        tool.chart_files(_tgz({f"demo/f{i}": b"" for i in range(4)}))
+    assert len(tool.chart_files(_tgz({f"demo/f{i}": b"" for i in range(3)}))) == 3

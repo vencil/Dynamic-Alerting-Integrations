@@ -101,7 +101,9 @@ def test_the_gate_runs_before_anything_is_published() -> None:
     needs neither, unlike the resolve check, which needs the promoted tag)."""
     steps = _steps()
     (gate_i, _), = _gate_invocations(steps)
-    push = _indices(steps, lambda c: c[:2] == ["helm", "push"])
+    # #3848: `helm push` runs inside release_publish.py chart.
+    push = _indices(steps, lambda c: c[:2] == ["helm", "push"]
+                    or (len(c) > 4 and c[3].endswith("release_publish.py") and c[4] == "chart"))
     assert len(push) == 1, push
     build = [i for i, s in enumerate(steps)
              if str(s.get("uses", "")).startswith("docker/build-push-action@")]

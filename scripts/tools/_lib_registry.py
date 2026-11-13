@@ -41,10 +41,12 @@ that is not X. Its contract is narrower than :func:`resolve`'s:
   registry answers a repository it does not have exactly as it answers a
   private one (ghcr.io: the token service refuses with ``403 DENIED`` either
   way, measured 2026-11-13), and a caller that must tell them apart gives
-  :class:`Credentials`. Those are sent only after the anonymous attempt is
-  refused, only as HTTP Basic to the registry's own token service (a realm on
-  another host is refused, not followed), so a reply that a public repository
-  gives anonymously stays the measured one;
+  :class:`Credentials` (with GITHUB_TOKEN, ghcr.io answers a repository it does
+  not have with token 200 and manifest 404 ``MANIFEST_UNKNOWN`` — measured
+  2026-11-13, Actions run 43448765258). Those are sent only after the
+  anonymous attempt is refused, only as HTTP Basic to the registry's own
+  token service (a realm on another host is refused, not followed), so a
+  reply that a public repository gives anonymously stays the measured one;
 * everything else — a 5xx, a 429, no connection, a body that is not what was
   asked for, bytes whose digest differs — is :class:`NoAnswer`.
 """
@@ -161,14 +163,31 @@ class _HttpsOnlyRedirect(urllib.request.HTTPRedirectHandler):
 
 _OPENER = urllib.request.build_opener(_HttpsOnlyRedirect)
 
+#: No reply body is read past this (the largest thing read here is a chart
+#: archive, capped lower by its caller). A longer body is no answer: the read
+#: stops at the cap + 1 byte, so a hostile or broken server cannot make this
+#: process hold more than that. Callers apply their own, tighter caps
+#: (manifest, token, blob) to what comes back.
+MAX_RESPONSE_BYTES = 64 * 1024 * 1024
+
+#: A token-service reply larger than this is not read (a JWT is a few KiB).
+MAX_TOKEN_BYTES = 64 * 1024
+
+
+def _read_capped(stream) -> bytes:
+    body = stream.read(MAX_RESPONSE_BYTES + 1)
+    if len(body) > MAX_RESPONSE_BYTES:
+        raise ValueError(f"reply body larger than {MAX_RESPONSE_BYTES} bytes; not read")
+    return body
+
 
 def _urllib_transport(method: str, url: str, headers: dict, timeout: float) -> tuple:
     request = urllib.request.Request(url, method=method, headers=headers)
     try:
         with _OPENER.open(request, timeout=timeout) as resp:
-            return resp.status, resp.headers, resp.read() if method != "HEAD" else b""
+            return resp.status, resp.headers, _read_capped(resp) if method != "HEAD" else b""
     except urllib.error.HTTPError as exc:
-        body = b"" if method == "HEAD" else exc.read()
+        body = b"" if method == "HEAD" else _read_capped(exc)
         return exc.code, exc.headers, body
 
 
@@ -206,6 +225,8 @@ def _anonymous_token(challenge: dict, repository: str, timeout: float,
         return None
     if status != 200:
         raise NoAnswer(f"HTTP {status} from the token service {realm}")
+    if len(body) > MAX_TOKEN_BYTES:
+        raise NoAnswer(f"a {len(body)}-byte reply from the token service {realm} is not read")
     payload = json.loads(body)
     token = payload.get("token") or payload.get("access_token") if isinstance(payload, dict) else None
     if not isinstance(token, str) or not token:
@@ -393,6 +414,8 @@ class Repository:
                                          {"Authorization": f"Basic {basic}"}, self.timeout)
         if status != 200:
             raise NoAnswer(f"HTTP {status} from the token service {realm} for the given credentials")
+        if len(body) > MAX_TOKEN_BYTES:
+            raise NoAnswer(f"a {len(body)}-byte reply from the token service {realm} is not read")
         payload = json.loads(body)
         token = payload.get("token") or payload.get("access_token") if isinstance(payload, dict) else None
         if not isinstance(token, str) or not token:

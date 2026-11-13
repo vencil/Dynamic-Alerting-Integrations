@@ -64,7 +64,7 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 
 > **仍是 authoritative-but-incomplete**：pre-tag 是**最低標**，`release.yaml` 才是真 contract。release-only 的步驟（cosign 簽章、helm chart OCI push、digest verification #445 L3）不在 pre-tag——agent 須 audit「pre-tag 涵蓋了什麼 vs release.yaml 實際做什麼」，缺的手動補驗。#474 已把 docker build + Trivy 那段機械化（過去是純 discipline）。
 >
-> ⛔ **release.yaml 的 Trivy 是「發布前」閘門（#1278）**：各 job 先推 `:candidate-<run_id>-<run_attempt>`、掃那個 digest，通過才 promote 成 `:v<ver>`／`:latest` 並簽章／`helm push`／建 Release。所以 `trivy-scan-all` 雖只是 informational，**它報的 fixable HIGH/CRITICAL 到 tag push 時就是一條被擋下、什麼都沒發布的 release 線**——打 tag 前清掉，別指望「先發再補」。被擋時的復原是 patch → 刪 git tag → 重打同名 tag；registry 上的候選 tag 不必清（理由見 playbook §Release-gate 陷阱）。⛔ 這只在該版號**還沒發布任何東西**時成立：正式 tag 或 chart 一旦出現，release.yaml 發布前的 `check_release_immutable.py` 會讓換了 commit 的同名 tag 失敗，只能升版號（#3848，playbook 陷阱表 #14）。
+> ⛔ **release.yaml 的 Trivy 是「發布前」閘門（#1278）**：各 job 先推 `:candidate-<run_id>-<run_attempt>`、掃那個 digest，通過才 promote 成 `:v<ver>`／`:latest` 並簽章／`helm push`／建 Release。所以 `trivy-scan-all` 雖只是 informational，**它報的 fixable HIGH/CRITICAL 到 tag push 時就是一條被擋下、什麼都沒發布的 release 線**——打 tag 前清掉，別指望「先發再補」。被擋時的復原是 patch → 刪 git tag → 重打同名 tag；registry 上的候選 tag 不必清（理由見 playbook §Release-gate 陷阱）。⛔ 這只在該版號**還沒發布任何東西**時成立：正式 tag 或 chart 一旦出現，release.yaml 唯一的發布入口 `release_publish.py` 會先檢查，讓換了 commit 的同名 tag 失敗，只能升版號（#3848，playbook 陷阱表 #14）。
 
 ### 5. 各線 tag push + `gh release create`
 

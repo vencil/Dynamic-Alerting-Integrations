@@ -454,3 +454,42 @@ def test_repository_tags_null_is_empty_and_a_missing_list_is_no_answer():
         _repo(Script(("GET", 200, _headers(), b'{"name":"o/p"}'))).tags()
     with pytest.raises(R.NoAnswer, match="not JSON"):
         _repo(Script(("GET", 200, _headers(), b"<html>"))).tags()
+
+
+# ── read caps (#3848 review F6) ─────────────────────────────────────────────
+
+def test_the_transport_never_reads_past_its_cap(monkeypatch):
+    """A reply longer than the cap is not read whole: read(cap + 1), refuse."""
+    import io
+    monkeypatch.setattr(R, "MAX_RESPONSE_BYTES", 8)
+    sizes = []
+
+    class Stream(io.BytesIO):
+        def read(self, n=-1):
+            sizes.append(n)
+            return super().read(n)
+
+    assert R._read_capped(Stream(b"12345678")) == b"12345678"
+    with pytest.raises(ValueError, match="larger than 8"):
+        R._read_capped(Stream(b"123456789" * 1000))
+    assert sizes == [9, 9]
+    srv = _Server({"/big": (200, {"Content-Type": INDEX}, b"x" * 64)})
+    try:
+        with pytest.raises(ValueError):
+            R._urllib_transport("GET", srv.url + "/big", {}, 5)
+    finally:
+        srv.close()
+
+
+def test_an_oversized_token_reply_is_no_answer(monkeypatch):
+    monkeypatch.setattr(R, "MAX_TOKEN_BYTES", 16)
+    t = Script(("HEAD", 401, _headers(WWW_Authenticate=CHALLENGE), b""),
+               ("GET", 200, _headers(), json.dumps({"token": "t" * 64}).encode()))
+    answer = R.resolve("example.io/o/p:v1", timeout=5, transport=t)
+    assert answer.outcome == R.NO_ANSWER and "is not read" in answer.reason
+
+
+def test_an_oversized_manifest_is_no_answer(monkeypatch):
+    monkeypatch.setattr(R, "MAX_MANIFEST_BYTES", 4)
+    with pytest.raises(R.NoAnswer, match="is not read"):
+        _repo(Script(("GET", 200, _headers(Content_Type=MANIFEST), b'{"a": 1}'))).manifest("v1")

@@ -39,9 +39,9 @@ Scope: charts with no `helm push` site (git-only; push sites from
 `check_chart_ship_surface.discover_pushed_charts`). A chart a release line
 pushes is listed and skipped: its version is set at the release wrap
 (`bump_docs.py`), so a per-PR bump would fight that model.
-Those versions are kept unique at publish time instead: release.yaml runs
-`check_release_immutable.py chart` before every `helm push`, which refuses a
-version already published with other content (#3848).
+Those versions are kept unique at publish time instead: release.yaml pushes
+charts only through `release_publish.py chart`, which refuses a version
+already published with other content before it runs `helm push` (#3848).
 
 Base
 ----

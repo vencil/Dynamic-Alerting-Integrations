@@ -49,7 +49,8 @@ _CALL = re.compile(r'\s*bash scripts/ops/smoke_da_tools_image\.sh "\$\{IMG\}@\$\
 
 _PUBLISH = re.compile(
     r"\bimagetools\s+create\b|\bcosign\s+sign(-blob)?\b|\bsyft\s|"
-    r"\bgh\s+release\s+(create|upload)\b|\bhelm\s+push\b")
+    r"\bgh\s+release\s+(create|upload)\b|\bhelm\s+push\b|"
+    r"release_publish\.py\s+(image|chart|assets)\b")  # #3848: the one publisher
 
 BASH = shutil.which("bash")
 # The script stages files at 0644 and 0600 and the fake reads those modes
@@ -156,7 +157,8 @@ def _move_after_signing(doc: dict) -> None:
     steps = doc["jobs"][JOB]["steps"]
     step = _smoke_step(doc)
     steps.remove(step)
-    sign = next(i for i, s in enumerate(steps) if "cosign sign" in str(s.get("run") or ""))
+    sign = next(i for i, s in enumerate(steps)
+                if "release_publish.py image" in str(s.get("run") or ""))
     steps.insert(sign + 1, step)
 
 
