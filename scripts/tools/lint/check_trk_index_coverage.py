@@ -27,21 +27,29 @@ PR 引用它所實作那張票的 TRK、子票引用親代 TRK 都是正確用�
 TRK 在第 2 欄）。散文裡提到某個 TRK **不算**它被定義了——本工具第一版就是因為
 只讀第 1 欄而少算了 legacy 三段、跑出五個假洞。
 
-掃描面（⚠️ 兩個都可能「量不到」，工具會說出來）
------------------------------------------------
-- ``commits`` —— `git log` 的訊息與 trailer。**shallow clone 只看得到一部分**，
-  這種情況下「沒找到違規」不等於「沒有違規」，報告會標 ``PARTIAL``。
-- ``titles`` —— issue / PR 標題，需要 ``GH_TOKEN``。⛔ 拿不到就 **rc 2**，
-  絕不當成掃過了。（GitHub 的 search API 對本 token 回 403 ⇒ 改用列 issue
-  再本地過濾。）
+掃描面：issue / PR 標題
+-----------------------
+由 ``.github/workflows/trk-index-coverage.yaml`` 跑（#2106）：issue／PR 事件只驗
+觸發它的那一個標題（``--title``，不需 token），``workflow_dispatch`` 才全量掃
+（``--all-titles``，需要 ``GH_TOKEN``；⛔ 拿不到就 **rc 2**，絕不當成掃過了。
+GitHub 的 search API 對本 token 回 403 ⇒ 改用列 issue 再本地過濾）。表本身
+（凍結、解析）每次都驗，不需要任何掃描面。
 
-⛔ **兩個面不可互相取代，而且 commits 面比想像中弱得多**。在本 repo 的 shallow
-clone 上實測（掃描面 = subject + trailer）：把 #1627 的六列拿掉之後，**commits
-面一個都找不到、回綠**；六個全部只由 titles 面看得到（TRK-363←#1545、365←#1558、
-366←#1564、367←#1571、368←#1574、380←#1757）。⇒ **只跑 commits 面的 pre-commit
-hook 對這一類是弱後備，不是偵測器**；titles 面由 ``.github/workflows/trk-index-coverage.yaml``
-跑（#2106）：issue／PR 事件只驗觸發它的那一個標題（``--title``，不需 token），
-``workflow_dispatch`` 才全量掃。
+⛔ **不掃 commit 歷史**——這是刪掉的，不是遺漏。舊版有一個 ``commits`` 面，對本機
+歷史跑 ``git log -n2000 --format=%(trailers:…)``，三個毛病疊在一起：
+
+1. **讀的是衍生物**：main 上的 squash 訊息會被 GitHub 在空行後附加
+   ``Co-authored-by:``，把 trailer 推出 block；`dev-rules.md` §P1（#1741）已規定
+   main 上不以 ``%(trailers)`` 讀。實測它因此在最近 2000 顆 commit 上少讀 15 個 TRK。
+2. **看不到要擋的那一顆**：它只掛在 pre-commit 的 ``pre-commit`` 階段，那時新
+   commit 的訊息還不存在；CI 也沒有跑它。把 #1627 的六列拿掉實測 **0/6、回綠**，
+   六個全部只由標題面看得到（TRK-363←#1545、365←#1558、366←#1564、367←#1571、
+   368←#1574、380←#1757）。
+3. **一次失誤就全 repo 鎖死**：違規一旦進了 main，補列會違反凍結、改寫 main 又
+   被禁止，於是每個人每次 commit 永久紅。
+
+表凍結後新號碼一律是四位數的 issue 號，三位數新號只可能是手配，而手配的號碼會
+出現在 issue／PR 標題上——那一面才是偵測器。
 
 ⛔ 只認**三位數**號碼是刻意的，不是遺漏：表凍結在 TRK-392，新條目改用
 ``TRK-<issue 號>``（ADR-019，#2106），那些號碼本身就指向 issue、不需要登記。所以
@@ -53,14 +61,14 @@ Usage
 -----
 ::
 
-    python3 scripts/tools/lint/check_trk_index_coverage.py                      # commits 面
-    python3 scripts/tools/lint/check_trk_index_coverage.py --surface all --ci   # 全量（需 GH_TOKEN）
+    python3 scripts/tools/lint/check_trk_index_coverage.py --ci                       # 只驗表（凍結、解析）
+    python3 scripts/tools/lint/check_trk_index_coverage.py --ci --title "TRK-393: x"  # 再驗一個標題
+    python3 scripts/tools/lint/check_trk_index_coverage.py --ci --all-titles          # 全部標題（需 GH_TOKEN）
     python3 scripts/tools/lint/check_trk_index_coverage.py --json
-    python3 scripts/tools/lint/check_trk_index_coverage.py --surface titles --ci --title "TRK-393: x"  # 只驗一個標題
 
 Exit codes
 ----------
-- ``0`` — 掃過了，被引用的 TRK 都在表上（**量了沒事**；若 ``PARTIAL`` 另見警告）
+- ``0`` — 掃過了，被引用的 TRK 都在表上（**量了沒事**）
 - ``1`` — 有 TRK 被引用卻不在表上，或表上出現凍結時沒有的號碼（``--ci``）
 - ``2`` — **量不到**：表解析不出來／表是空的／要求了 titles 面卻拿不到。
 """
@@ -70,7 +78,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 import urllib.error
 import urllib.request
@@ -110,40 +117,6 @@ def defined_trks(repo: Path) -> set[str]:
             if m:
                 out.add(m.group(1))
     return out
-
-
-# ⛔ 掃的是 **subject 行 + trailer**，不是整篇 commit body。
-# 票寫的掃描面是「issue／PR 標題與 commit **trailer**」。掃整個 body 會把散文裡
-# 當例子提到的號碼讀成一次引用——實測：本工具自己的 commit 訊息描述 dogfood 時
-# 寫了 `TRK-999`／`TRK-401`（fixture 用的假號），整個 body 掃法把它們判成兩個洞，
-# 於是**守衛擋下了自己的落地 commit**。那是誤紅，不是缺陷。
-# trailer 用 git 原生 parser 取（與 check_planning_status_sync.py 同一理由：
-# RFC-2822 的大小寫、空行分隔、多行值，regex 打不準）。
-_TRAILER_KEYS = ("Refs", "Resolves", "Closes", "Fixes", "Fix", "Related")
-
-
-def commit_trks(repo: Path, limit: int = 2000) -> tuple[dict[str, str], bool]:
-    """commit 的 subject + trailer 裡的 TRK。回傳 (trk -> 短 SHA, 是否完整歷史)。"""
-    shallow = (repo / ".git" / "shallow").exists()
-    keys = ",".join(f"key={k},valueonly=true,unfold=true" for k in _TRAILER_KEYS)
-    fmt = "%h%x00%s%x00%(trailers:" + keys + ")%x1e"
-    proc = subprocess.run(
-        ["git", "-C", str(repo), "log", f"-n{limit}", f"--format={fmt}"],
-        capture_output=True,
-        text=True, encoding="utf-8", errors="replace",
-        timeout=120,
-    )
-    if proc.returncode != 0:
-        return {}, False
-    hits: dict[str, str] = {}
-    for rec in proc.stdout.split("\x1e"):
-        parts = rec.split("\x00")
-        if len(parts) < 3:
-            continue
-        sha, subject, trailers = parts[0].strip(), parts[1], parts[2]
-        for m in _TRK_RE.finditer(subject + "\n" + trailers):
-            hits.setdefault(m.group(1), sha)
-    return hits, not shallow
 
 
 class TitlesTruncated(RuntimeError):
@@ -213,9 +186,9 @@ def main(argv: list[str] | None = None) -> "int | Report":
             "next person collide on it, silently.",
         ),
     )
-    ap.add_argument("--surface", default="commits", choices=["commits", "titles", "all"],
-                    help=i18n_text("掃描面（titles 需要 GH_TOKEN）",
-                                   "scan surface (titles needs GH_TOKEN)"))
+    ap.add_argument("--all-titles", action="store_true",
+                    help=i18n_text("掃全部 issue／PR 標題（需要 GH_TOKEN）",
+                                   "scan every issue/PR title (needs GH_TOKEN)"))
     ap.add_argument("--ci", action="store_true",
                     help=i18n_text("有違規時 exit 1", "exit 1 when violations are found"))
     ap.add_argument("--json", action="store_true",
@@ -232,6 +205,9 @@ def main(argv: list[str] | None = None) -> "int | Report":
     ap.add_argument("--title-ref", default="(--title)",
                     help=i18n_text("--title 的出處（如 #2150），用於報告", "where --title came from, for the report"))
     args = ap.parse_args(argv)
+    if args.title is not None and args.all_titles:
+        ap.error(i18n_text("--title 與 --all-titles 只能擇一",
+                           "--title and --all-titles are mutually exclusive"))
 
     repo = Path(args.repo).resolve()
     if not (repo / _MAPPING).exists():
@@ -249,19 +225,12 @@ def main(argv: list[str] | None = None) -> "int | Report":
 
     used: dict[str, str] = {}
     surfaces: list[str] = []
-    partial = False
-
-    if args.surface in ("commits", "all"):
-        hits, complete = commit_trks(repo)
-        used.update(hits)
-        surfaces.append(f"commits({len(hits)}{'' if complete else ', PARTIAL/shallow'})")
-        partial = partial or not complete
 
     if args.title is not None:
         hits = {m.group(1): args.title_ref for m in _TRK_RE.finditer(args.title)}
         used.update(hits)
         surfaces.append(f"title {args.title_ref}({len(hits)})")
-    elif args.surface in ("titles", "all"):
+    elif args.all_titles:
         token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN")
         if not token:
             print(
@@ -290,15 +259,12 @@ def main(argv: list[str] | None = None) -> "int | Report":
     if args.json:
         return Report(
             {"defined": len(defined), "used": len(used), "surfaces": surfaces,
-             "partial": partial,
              "missing": [{"trk": n, "seen_at": used[n]} for n in missing],
              "past_freeze": past_freeze},
             status)  # #3216: run() encodes it
     else:
-        print(f"[trk-index] 表上定義 {len(defined)} 個 TRK；掃描面：{', '.join(surfaces)}")
-        if partial:
-            print("[trk-index] ⚠️ PARTIAL：shallow clone，commit 面只看得到一部分 —— "
-                  "「沒找到」不等於「沒有」。完整結果請在有完整歷史處或加 --surface all 重跑。")
+        print(f"[trk-index] 表上定義 {len(defined)} 個 TRK；"
+              f"掃描面：{', '.join(surfaces) or '（只驗表）'}")
         for n in past_freeze:
             print(f"  ✗ TRK-{n} 被登記在 {_MAPPING}，但表已凍結（到 TRK-{_FROZEN_MAX}）："
                   "新條目改用 TRK-<issue 號>，不要再加列或補洞")
