@@ -302,22 +302,24 @@ class TestWriteOutputs:
 
     @_skipif_unix_modes
     def test_file_permissions(self):
-        """conf.d 檔由 `da-guard write` 新建：0o600，與本工具一向的權限相同
-        （#3206 10c-3；租戶檔可能含帶 token 的 receiver URL）；既有檔被取代時沿用
-        原檔權限；其他檔仍由本工具以 0o600 寫出。"""
+        """conf.d 檔由 `da-guard write` 寫出，新檔與被取代的檔一律 0o644（#3535：
+        conf.d 屬 repo 生成物，不沿用原檔權限）；報告不是 conf.d 檔，仍由本工具以
+        0o600 寫出。"""
         with tempfile.TemporaryDirectory() as tmpdir:
             defaults = {"defaults": {}}
             tenant = {"tenants": {"db-c": {}}}
             write_outputs(tmpdir, "db-c", defaults, tenant, "report")
-            for fn, want in [("_defaults.yaml", 0o600), ("db-c.yaml", 0o600),
+            for fn, want in [("_defaults.yaml", 0o644), ("db-c.yaml", 0o644),
                              ("scaffold-report.txt", 0o600)]:
                 path = os.path.join(tmpdir, fn)
                 mode = os.stat(path).st_mode & 0o777
                 assert mode == want, f"{fn} permissions {oct(mode)} != {oct(want)}"
-            # A replace keeps the mode the file has.
+            # A replace does not keep the mode the file has (#3535). Another
+            # text: the same text is `unchanged`, and nothing is written.
             os.chmod(os.path.join(tmpdir, "db-c.yaml"), 0o640)
-            write_outputs(tmpdir, "db-c", defaults, tenant, "report")
-            assert os.stat(os.path.join(tmpdir, "db-c.yaml")).st_mode & 0o777 == 0o640
+            write_outputs(tmpdir, "db-c", {"defaults": {"mysql_connections": 80}},
+                          {"tenants": {"db-c": {"mysql_connections": "70"}}}, "report")
+            assert os.stat(os.path.join(tmpdir, "db-c.yaml")).st_mode & 0o777 == 0o644
 
     def test_creates_relabel_file(self):
         """提供 relabel_snippet 時建立 relabel 檔案。"""
@@ -821,7 +823,7 @@ class TestRunNonInteractive:
     @_skipif_unix_modes
     def test_mapping_file_permissions(self):
         """_instance_mapping.yaml is a conf.d file `da-guard write` creates:
-        0o600, the mode this tool always gave it (#3206 10c-3)."""
+        0o644, a repo artifact's mode (#3535)."""
         with tempfile.TemporaryDirectory() as d:
             args = argparse.Namespace(
                 tenant="db-x", db="mariadb", output_dir=d,
@@ -836,7 +838,7 @@ class TestRunNonInteractive:
             run_non_interactive(args)
             mapping_path = os.path.join(d, "_instance_mapping.yaml")
             mode = os.stat(mapping_path).st_mode & 0o777
-            assert mode == 0o600
+            assert mode == 0o644
 
 
 # ---------------------------------------------------------------------------

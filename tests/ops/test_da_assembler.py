@@ -217,17 +217,13 @@ class TestWriteRendered:
         assert sorted(p.name for p in (tmp_path / "test").iterdir()) == ["test.yaml"]
 
     def test_the_file_mode_is_da_guards(self, tmp_path):
-        """新檔是 da-guard write 的 0600、取代的檔保留原權限（先前一律 chmod 0644）。
-
-        ⚠️ 未決（#3206）：exporter 若以不同 uid 讀這個目錄，0600 的新檔它讀不到；
-        要哪一種做法（write 可指定 mode、寫後 chmod、部署同 uid）尚未拍板，這支只釘
-        現況，拍板後隨之改。
-        """
+        """新檔與取代的檔都是 da-guard write 的 0644（#3535：conf.d 屬 repo 生成物，
+        exporter 以不同 uid 讀這個目錄），不沿用原檔權限。"""
         cr = _make_cr(name="test")
         write_rendered(tmp_path, render_entries(cr))
         dest = tmp_path / "test" / "test.yaml"
-        assert dest.stat().st_mode & 0o777 == 0o600
-        os.chmod(dest, 0o644)
+        assert dest.stat().st_mode & 0o777 == 0o644
+        os.chmod(dest, 0o600)
         cr["spec"]["tenants"]["test"]["mysql_connections"] = "71"
         assert write_rendered(tmp_path, render_entries(cr))[0]
         assert dest.stat().st_mode & 0o777 == 0o644
