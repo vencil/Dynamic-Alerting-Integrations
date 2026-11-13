@@ -320,3 +320,27 @@ def test_check_rules_is_proven_by_exit_0_alone():
     assert proof(_cp(0, "  SUCCESS: 0 rules found"), {}) is True
     with pytest.raises(E.NoProof):
         proof(_cp(1, "", "  FAILED:"), {})
+
+
+# ── helm show chart / helm push (#3848) ─────────────────────────────────────
+
+def _proc(rc, out="", err=""):
+    import subprocess as sp
+    return sp.CompletedProcess(["helm"], rc, out, err)
+
+
+def test_helm_show_chart_is_proven_only_by_a_name_and_a_version():
+    proof = E.PROOFS[("helm", "show-chart")]
+    out = "apiVersion: v2\nname: demo\nversion: 1.2.3\n"
+    assert proof(_proc(0, out), {}) == out
+    for bad in (_proc(0, ""), _proc(0, "apiVersion: v2\n"), _proc(0, "  name: x\n  version: 1\n"),
+                _proc(1, out, "Error: file does not exist")):
+        with pytest.raises(E.NoProof):
+            proof(bad, {})
+
+
+def test_helm_push_is_proven_by_its_exit_status_only():
+    proof = E.PROOFS[("helm", "push")]
+    assert "Pushed" in proof(_proc(0, "Pushed: x\n"), {})
+    with pytest.raises(E.NoProof, match="denied"):
+        proof(_proc(1, "", "Error: denied"), {})

@@ -50,7 +50,7 @@
 #   - 映像正式 tag 已存在 → 讀它的 org.opencontainers.image.revision label；
 #     等於 github.sha 就什麼都不寫（`latest` 也不動），不同或沒有 label 就失敗；
 #     要發布時 `latest` 先寫、版號 tag 最後寫，中途失敗時版號不存在、re-run 會補上；
-#   - chart 版號已存在 → 與這次打包的 .tgz 逐檔比對（Chart.yaml 以 YAML 比），
+#   - chart 版號已存在 → 與這次打包的 .tgz 逐檔比對（Chart.yaml 以 `helm show chart` 的輸出比），
 #     相同就不 push，不同就失敗並列出檔案；
 #   - Release 資產絕不覆蓋：全在就不傳、全不在就全傳、只有一部分就失敗。
 #   只有 registry 回「沒有這個 manifest」（404）才算第一次發布；其餘（401/403、
@@ -141,15 +141,6 @@ jobs:
 
       - name: Verify multi-arch manifest (#463)
         run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/threshold-exporter@${{ steps.build.outputs.digest }}
-
-      # release_publish.py chart compares Chart.yaml as YAML (#3848).
-      - name: Set up Python (release immutability check)
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Install PyYAML (release immutability check)
-        run: pip install pyyaml -c requirements/ci-constraints.txt
 
       # --- Helm chart: package + verify now (fail fast, publishes nothing);
       # `helm push` waits until the image digest has passed the scan ---
@@ -680,15 +671,6 @@ jobs:
 
       - name: Verify multi-arch manifest (#463)
         run: bash scripts/ops/verify_multiarch.sh ${{ env.REGISTRY }}/${{ env.IMAGE_OWNER }}/da-portal@${{ steps.build.outputs.digest }}
-
-      # release_publish.py chart compares Chart.yaml as YAML (#3848).
-      - name: Set up Python (release immutability check)
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Install PyYAML (release immutability check)
-        run: pip install pyyaml -c requirements/ci-constraints.txt
 
       # --- Helm chart (#1352 case A) ---
       # ⛔ Added because the customer-facing install path was a lie: this job

@@ -69,6 +69,11 @@ class Commands:
         return [" ".join(c[:4]) for c in self.calls]
 
 
+@pytest.fixture(autouse=True)
+def _fake_helm(monkeypatch):
+    monkeypatch.setattr(rp.immutable, "HELM_SHOW_CHART", fx.fake_helm_show_chart)
+
+
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     out = tmp_path / "github_output"
@@ -200,37 +205,57 @@ def test_a_new_repository_answered_as_measured_on_ghcr_is_a_first_publish(env, m
 
 # ── chart ───────────────────────────────────────────────────────────────────
 
-def _run_chart(monkeypatch, tmp_path, reg, cmds, files):
+class Push:
+    """Fake `helm push`: records the call and, unless *lands* is False,
+    puts the archive into the fake registry the way a real push would."""
+
+    def __init__(self, reg, lands=True):
+        self.reg, self.lands, self.calls = reg, lands, []
+
+    def __call__(self, tgz, oci_registry):
+        self.calls.append([tgz, oci_registry])
+        if self.lands:
+            files = rp.immutable.chart_files(Path(tgz).read_bytes())
+            fx._publish_chart(self.reg, files)
+        return "Pushed\n"
+
+
+def _run_chart(monkeypatch, tmp_path, reg, files, lands=True):
     monkeypatch.setattr(rp.immutable, "TRANSPORT", reg)
-    monkeypatch.setattr(rp, "RUN", cmds)
+    push = Push(reg, lands)
+    monkeypatch.setattr(rp, "HELM_PUSH", push)
     tgz = tmp_path / "demo-1.2.3+build.1.tgz"
     tgz.write_bytes(fx._tgz(files))
-    return rp.main(["chart", "--tgz", str(tgz), "--registry", f"oci://{HOST}/o/charts"]), tgz
+    return rp.main(["chart", "--tgz", str(tgz), "--registry", f"oci://{HOST}/o/charts"]), tgz, push
 
 
-def test_chart_absent_is_pushed(env, monkeypatch, tmp_path, capsys):
-    cmds = Commands()
-    rc, tgz = _run_chart(monkeypatch, tmp_path, fx.Registry("o/charts/demo"), cmds, fx.BASE)
-    assert rc == 0 and cmds.calls == [["helm", "push", str(tgz), f"oci://{HOST}/o/charts"]]
+def test_chart_absent_is_pushed_and_read_back(env, monkeypatch, tmp_path, capsys):
+    rc, tgz, push = _run_chart(monkeypatch, tmp_path, fx.Registry("o/charts/demo"), fx.BASE)
+    assert rc == 0 and push.calls == [[str(tgz), f"oci://{HOST}/o/charts"]]
     assert env.read_text(encoding="utf-8") == "publish=true\n"
+    assert "read back" in capsys.readouterr().out
+
+
+def test_a_push_that_does_not_land_is_rc_2(env, monkeypatch, tmp_path, capsys):
+    """helm exiting 0 is not the proof: the registry must hold the package after."""
+    rc, _, push = _run_chart(monkeypatch, tmp_path, fx.Registry("o/charts/demo"), fx.BASE, lands=False)
+    assert rc == 2 and len(push.calls) == 1 and env.read_text(encoding="utf-8") == ""
     capsys.readouterr()
 
 
 def test_chart_already_published_the_same_is_not_pushed(env, monkeypatch, tmp_path, capsys):
     reg = fx.Registry("o/charts/demo")
     fx._publish_chart(reg, fx.BASE)
-    cmds = Commands()
-    rc, _ = _run_chart(monkeypatch, tmp_path, reg, cmds, fx.BASE)
-    assert rc == 0 and cmds.calls == [] and env.read_text(encoding="utf-8") == "publish=false\n"
+    rc, _, push = _run_chart(monkeypatch, tmp_path, reg, fx.BASE)
+    assert rc == 0 and push.calls == [] and env.read_text(encoding="utf-8") == "publish=false\n"
     capsys.readouterr()
 
 
 def test_chart_already_published_different_is_rc_1_and_not_pushed(env, monkeypatch, tmp_path, capsys):
     reg = fx.Registry("o/charts/demo")
     fx._publish_chart(reg, fx.BASE)
-    cmds = Commands()
-    rc, _ = _run_chart(monkeypatch, tmp_path, reg, cmds, {**fx.BASE, "demo/values.yaml": b"x: 2\n"})
-    assert rc == 1 and cmds.calls == []
+    rc, _, push = _run_chart(monkeypatch, tmp_path, reg, {**fx.BASE, "demo/values.yaml": b"x: 2\n"})
+    assert rc == 1 and push.calls == []
     capsys.readouterr()
 
 

@@ -20,10 +20,13 @@ is published, whether the version is already there, and what it is.
         is the version with `+` written `_` (helm's OCI rule). Absent →
         publish. Present → the published archive (manifest → the
         `application/vnd.cncf.helm.chart.content.v1.tar+gzip` layer → blob) is
-        compared file by file with <packaged.tgz>: every Chart.yaml as YAML
-        (helm re-serialises it, so formatting and comments are not content),
-        every other file byte for byte. Same → do not publish (a re-run is
-        idempotent); different → violation, naming the files.
+        compared file by file with <packaged.tgz>: the chart's own Chart.yaml
+        as helm reads it (`helm show chart` on each archive — helm
+        re-serialises Chart.yaml when packaging, so formatting and comments
+        are not content, and Chart.yaml's reader is helm, not a YAML library:
+        ADR-036 §12), every other file byte for byte. Same → do not publish
+        (a re-run is idempotent); different → violation, naming the files.
+        Needs `helm` on PATH (every release job that packages a chart has it).
 
 The decision is printed and, when $GITHUB_OUTPUT is set, written there as
 `publish=true|false` (image also `digest=`: the candidate's when publishing,
@@ -58,6 +61,7 @@ import os
 import re
 import sys
 import tarfile
+import tempfile
 import zlib
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional
@@ -72,6 +76,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+import _lib_engine  # noqa: E402
 import _lib_registry as registry  # noqa: E402
 
 REVISION_LABEL = "org.opencontainers.image.revision"
@@ -231,48 +236,70 @@ def chart_files(data: bytes) -> Dict[str, bytes]:
     return files
 
 
-def _chart_yaml(files: Dict[str, bytes]) -> dict:
-    import yaml
+#: `name:` / `version:` lines of `helm show chart` output (helm writes them
+#: unindented, unquoted unless needed) — read line-wise, no YAML parser.
+_NAME_LINE = re.compile(r"^name:\s*[\"']?([^\"'\s#]+)", re.M)
+_VERSION_LINE = re.compile(r"^version:\s*[\"']?([^\"'\s#]+)", re.M)
+
+
+def _helm_show_chart(data: bytes) -> str:
+    """`helm show chart` of an archive: Chart.yaml as helm reads it. Run
+    through _lib_engine, whose proof requires the name / version lines."""
+    located = _lib_engine.locate("helm")
+    if isinstance(located, _lib_engine.NoVerdict):
+        raise ValueError(located.message())
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "chart.tgz")
+        with open(path, "wb") as fh:
+            fh.write(data)
+        os.chmod(path, 0o600)
+        result = _lib_engine.run(located, "show-chart", ["show", "chart", path], timeout=120)
+    if isinstance(result, _lib_engine.NoVerdict):
+        raise ValueError(result.message())
+    return result.data
+
+
+#: The seam the tests replace: archive bytes → Chart.yaml as helm reads it.
+HELM_SHOW_CHART = _helm_show_chart
+
+
+def chart_identity(metadata: str) -> tuple:
+    """(name, version) from `helm show chart` output."""
+    name, version = _NAME_LINE.search(metadata), _VERSION_LINE.search(metadata)
+    if not name or not version:
+        raise ValueError("helm show chart printed no name / version")
+    return name.group(1), version.group(1)
+
+
+def _top(files: Dict[str, bytes]) -> str:
     tops = {name.split("/", 1)[0] for name in files}
     if len(tops) != 1:
         raise ValueError(f"not one top-level directory: {sorted(tops)}")
-    top = tops.pop()
-    raw = files.get(f"{top}/Chart.yaml")
-    if raw is None:
-        raise ValueError(f"no {top}/Chart.yaml")
-    try:
-        doc = yaml.safe_load(raw)
-    except yaml.YAMLError as exc:
-        raise ValueError(f"{top}/Chart.yaml is not YAML: {exc}") from exc
-    if not isinstance(doc, dict) or not doc.get("name") or not doc.get("version"):
-        raise ValueError(f"{top}/Chart.yaml has no name / version")
-    return doc
+    return tops.pop()
 
 
-def diff_charts(local: Dict[str, bytes], published: Dict[str, bytes]) -> List[str]:
-    """Files that differ: Chart.yaml compared as YAML, everything else as bytes."""
-    import yaml
+def diff_charts(local: Dict[str, bytes], published: Dict[str, bytes],
+                local_meta: str, published_meta: str) -> List[str]:
+    """Files that differ. The chart's own Chart.yaml is compared as helm reads
+    it (*_meta*, `helm show chart`); every other file, a subchart's
+    Chart.yaml included, byte for byte (no chart here has subcharts; one
+    would fail closed on a formatting-only change)."""
+    own = f"{_top(local)}/Chart.yaml"
     out = []
     for path in sorted(set(local) | set(published)):
         if path not in published:
             out.append(f"{path} (only in the new package)")
         elif path not in local:
             out.append(f"{path} (only in the published package)")
-        elif local[path] == published[path]:
-            continue
-        elif path.rsplit("/", 1)[-1] == "Chart.yaml":
-            try:
-                same = yaml.safe_load(local[path]) == yaml.safe_load(published[path])
-            except yaml.YAMLError:
-                same = False
-            if not same:
+        elif path == own:
+            if local_meta != published_meta:
                 out.append(path)
-        else:
+        elif local[path] != published[path]:
             out.append(path)
     return out
 
 
-def judge_chart(repo: registry.Repository, reference: str, local: Dict[str, bytes]) -> Decision:
+def judge_chart(repo: registry.Repository, reference: str, local_tgz: bytes) -> Decision:
     where = f"oci://{repo.host}/{repo.repository}:{reference}"
     found = repo.manifest(reference)
     if found is None:
@@ -289,7 +316,15 @@ def judge_chart(repo: registry.Repository, reference: str, local: Dict[str, byte
         published = chart_files(blob)
     except (tarfile.TarError, OSError, EOFError, ValueError) as exc:
         raise registry.NoAnswer(f"{where}: the published chart cannot be read: {exc}") from exc
-    differing = diff_charts(local, published)
+    try:
+        published_meta = HELM_SHOW_CHART(blob)
+    except ValueError as exc:
+        raise registry.NoAnswer(f"{where}: helm cannot read the published chart: {exc}") from exc
+    try:
+        local, local_meta = chart_files(local_tgz), HELM_SHOW_CHART(local_tgz)
+    except (tarfile.TarError, OSError, EOFError, ValueError) as exc:
+        raise CallerError(f"the new package cannot be read: {exc}") from exc
+    differing = diff_charts(local, published, local_meta, published_meta)
     if differing:
         raise Violation(
             f"{where} is already published with different content:\n"
@@ -345,24 +380,24 @@ def decide_image(ref: str, revision: str, candidate: str, timeout: float) -> Dec
 
 
 def load_chart(tgz: str) -> tuple:
-    """(files, Chart.yaml) of a local chart archive; CallerError when unreadable."""
+    """(archive bytes, name, version) of a local chart archive, name and
+    version as helm reads them; CallerError when unreadable."""
     try:
-        local = chart_files(Path(tgz).read_bytes())
-        return local, _chart_yaml(local)
-    except ImportError as exc:
-        raise CallerError(f"PyYAML is required to compare Chart.yaml: {exc}") from exc
+        data = Path(tgz).read_bytes()
+        _top(chart_files(data))
+        return (data, *chart_identity(HELM_SHOW_CHART(data)))
     except (OSError, tarfile.TarError, EOFError, ValueError) as exc:
         raise CallerError(f"{tgz}: not a readable chart archive: {exc}") from exc
 
 
 def decide_chart(tgz: str, oci_registry: str, timeout: float) -> Decision:
-    local, meta = load_chart(tgz)
+    data, name, version = load_chart(tgz)
     base = oci_registry[len("oci://"):] if oci_registry.startswith("oci://") else ""
     if not base or "/" not in base or ":" in base.split("/", 1)[1]:
         raise CallerError(f"--registry {oci_registry!r} is not oci://<host>/<path>")
-    reference = str(meta["version"]).replace("+", "_")
-    repo, _ = repository(f"{base}/{meta['name']}:{reference}", timeout)
-    return judge_chart(repo, reference, local)
+    reference = version.replace("+", "_")
+    repo, _ = repository(f"{base}/{name}:{reference}", timeout)
+    return judge_chart(repo, reference, data)
 
 
 def _decide(args: argparse.Namespace) -> Decision:

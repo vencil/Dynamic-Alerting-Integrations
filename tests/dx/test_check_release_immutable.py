@@ -15,6 +15,9 @@ import importlib.util
 import io
 import json
 import sys
+import os
+import shutil
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -341,9 +344,25 @@ def _publish_chart(reg: Registry, files: dict[str, bytes], tag: str = "1.2.3_bui
                       "layers": [{"mediaType": tool.CHART_LAYER, **layer}]}, OCI_MANIFEST, tag)
 
 
+def fake_helm_show_chart(data: bytes) -> str:
+    """Stands in for `helm show chart`: Chart.yaml re-serialised from what it
+    means, so formatting and comments vanish the way helm's own output does.
+    (PyYAML here is the test's stand-in for helm; the tool reads no YAML.)"""
+    import yaml
+    files = tool.chart_files(data)
+    top = {n.split("/", 1)[0] for n in files}.pop()
+    doc = yaml.safe_load(files[f"{top}/Chart.yaml"])
+    return "".join(f"{k}: {doc[k]}\n" for k in sorted(doc))
+
+
+@pytest.fixture(autouse=True)
+def _fake_helm(monkeypatch):
+    monkeypatch.setattr(tool, "HELM_SHOW_CHART", fake_helm_show_chart)
+
+
 def _judge_chart(reg: Registry, local: dict[str, bytes]):
     repo = R.Repository(HOST, reg.repo, timeout=5, transport=reg)
-    return tool.judge_chart(repo, "1.2.3_build.1", tool.chart_files(_tgz(local)))
+    return tool.judge_chart(repo, "1.2.3_build.1", _tgz(local))
 
 
 def test_chart_first_publish_is_a_404():
@@ -531,3 +550,66 @@ def test_a_pax_header_bomb_is_refused_before_tarfile_reads_it(monkeypatch):
 def test_an_archive_that_is_not_one_complete_gzip_stream_is_refused(data):
     with pytest.raises(ValueError):
         tool.chart_files(data)
+
+
+def test_chart_identity_is_read_from_helms_output_without_a_yaml_parser():
+    out = "apiVersion: v2\nappVersion: 2.9.8\ndescription: x\nname: tenant-api\nversion: 2.9.8+b.1\n"
+    assert tool.chart_identity(out) == ("tenant-api", "2.9.8+b.1")
+    # helm sorts the keys: `description` comes first and may say "name:" too
+    tricky = "description: the chart name: wrong, version: 0.0.0\nname: demo\nversion: 1.0.0\n"
+    assert tool.chart_identity(tricky) == ("demo", "1.0.0")
+    with pytest.raises(ValueError):
+        tool.chart_identity("apiVersion: v2\n  name: nested\n")
+
+
+def test_helm_failing_on_the_published_chart_is_no_answer(monkeypatch):
+    reg = Registry("o/charts/demo")
+    _publish_chart(reg, BASE)
+    calls = []
+
+    def show(data):
+        calls.append(data)
+        raise ValueError("helm show chart exited 1")
+
+    monkeypatch.setattr(tool, "HELM_SHOW_CHART", show)
+    with pytest.raises(R.NoAnswer, match="helm cannot read"):
+        _judge_chart(reg, BASE)
+
+
+# ── the real helm ───────────────────────────────────────────────────────────
+
+HELM = shutil.which("helm")
+
+
+def _helm_package(tmp, chart_yaml: str, values: str = "replicas: 1\n") -> bytes:
+    src = tmp / f"src{len(list(tmp.iterdir()))}" / "demo"
+    (src / "templates").mkdir(parents=True)
+    (src / "Chart.yaml").write_text(chart_yaml, encoding="utf-8")
+    (src / "values.yaml").write_text(values, encoding="utf-8")
+    (src / "templates" / "cm.yaml").write_text("kind: ConfigMap\n", encoding="utf-8")
+    out = tmp / f"out{len(list(tmp.iterdir()))}"
+    subprocess.run([HELM, "package", str(src), "-d", str(out)], check=True,
+                   capture_output=True, timeout=120)
+    (tgz,) = out.iterdir()
+    return tgz.read_bytes()
+
+
+@pytest.mark.skipif(HELM is None or os.name == "nt", reason="needs helm on PATH")
+def test_with_real_helm_formatting_is_not_content_but_metadata_is(monkeypatch, tmp_path):
+    """helm, not a YAML library, says what Chart.yaml means: a comment and a
+    reordered, re-quoted file package to the same chart; a changed field does not."""
+    monkeypatch.setattr(tool, "HELM_SHOW_CHART", tool._helm_show_chart)
+    plain = "apiVersion: v2\nname: demo\nversion: 1.2.3\nappVersion: \"1.2.3\"\ndescription: d\n"
+    styled = ("# a comment helm drops\ndescription: 'd'\nappVersion: '1.2.3'\n"
+              "version:    1.2.3\nname: \"demo\"\napiVersion: v2\n")
+    changed = plain.replace("description: d", "description: other")
+    reg = Registry("o/charts/demo")
+    layer = reg.put_blob(_helm_package(tmp_path, plain))
+    reg.put_manifest({"schemaVersion": 2, "config": reg.put_blob(b"{}"),
+                      "layers": [{"mediaType": tool.CHART_LAYER, **layer}]}, OCI_MANIFEST, "1.2.3")
+    repo = R.Repository(HOST, reg.repo, timeout=5, transport=reg)
+    assert not tool.judge_chart(repo, "1.2.3", _helm_package(tmp_path, styled)).publish
+    with pytest.raises(tool.Violation, match="demo/Chart.yaml"):
+        tool.judge_chart(repo, "1.2.3", _helm_package(tmp_path, changed))
+    data = _helm_package(tmp_path, plain)
+    assert tool.chart_identity(tool._helm_show_chart(data)) == ("demo", "1.2.3")

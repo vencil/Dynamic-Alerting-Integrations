@@ -24,7 +24,9 @@ process, and release.yaml calls nothing else that publishes
         tag names after this run: the candidate, or the one already published).
 
     chart --tgz <packaged.tgz> --registry oci://<registry>/<path>
-        check_release_immutable.judge_chart, then `helm push` only when absent.
+        check_release_immutable.judge_chart, then `helm push` only when absent,
+        then the same judgement again: the registry must now hold exactly
+        this package (a read-back, not helm's exit status alone).
 
     assets --tag <git tag> --title <title> FILE...
         The GitHub Release's assets are never replaced (no `--clobber`): a
@@ -66,6 +68,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+import _lib_engine  # noqa: E402
 import check_release_immutable as immutable  # noqa: E402
 
 CallerError, Violation = immutable.CallerError, immutable.Violation
@@ -139,10 +142,31 @@ def publish_image(image: str, digest: str, revision: str, tags: List[str], sign:
 # ── chart ───────────────────────────────────────────────────────────────────
 
 
+def _helm_push(tgz: str, oci_registry: str) -> str:
+    """`helm push`, through _lib_engine (helm is a registered engine)."""
+    located = _lib_engine.locate("helm")
+    if isinstance(located, _lib_engine.NoVerdict):
+        raise CallerError(located.message())
+    result = _lib_engine.run(located, "push", ["push", tgz, oci_registry], timeout=600)
+    if isinstance(result, _lib_engine.NoVerdict):
+        raise CallerError(result.message())
+    return result.data
+
+
+#: The seam the tests replace.
+HELM_PUSH = _helm_push
+
+
 def publish_chart(tgz: str, oci_registry: str, timeout: float) -> immutable.Decision:
     decision = immutable.decide_chart(tgz, oci_registry, timeout)
-    if decision.publish:
-        print(_run(["helm", "push", tgz, oci_registry], timeout=600), end="")
+    if not decision.publish:
+        return decision
+    print(HELM_PUSH(tgz, oci_registry), end="")
+    # Read back: the registry must now hold exactly this package.
+    after = immutable.decide_chart(tgz, oci_registry, timeout)
+    if after.publish:
+        raise CallerError(f"helm push exited 0 but the registry still has no {tgz}")
+    print(f"✓ read back: {after.message}")
     return decision
 
 
