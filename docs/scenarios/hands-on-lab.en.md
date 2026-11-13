@@ -86,7 +86,7 @@ Open any `conf.d/<tenant name>.yaml`: apart from the header comments, it is `ten
 
 ## Exercise 2: Configure Tenant Thresholds
 
-Replace the content of each tenant file with the following (keep or drop the header comments). Every snippet keeps the two outer levels init generated, `tenants:` → `<tenant name>:`. Without them validation finds no tenants and still reports a pass (see the note in Exercise 3).
+Replace the content of each tenant file with the following (keep or drop the header comments). Every snippet keeps the two outer levels init generated, `tenants:` → `<tenant name>:`. Without them validation finds no tenants and the report is FAIL (see the note in Exercise 3).
 
 **conf.d/prod-mariadb.yaml** — E-Commerce database:
 
