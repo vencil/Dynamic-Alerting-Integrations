@@ -36,11 +36,6 @@ version: {version}
 """
 
 
-@pytest.fixture(autouse=True)
-def _no_ambient_base(monkeypatch) -> None:
-    monkeypatch.delenv(gate.BASE_ENV, raising=False)
-
-
 def test_helm_present_when_required() -> None:
     reason = helm_required()
     if reason:
@@ -122,7 +117,7 @@ def test_a_lower_version_is_refused(repo: Path, capsys) -> None:
 def test_an_edit_that_does_not_ship_needs_no_bump(repo: Path, capsys, change) -> None:
     change(repo)
     rc, out = _run(repo, capsys)
-    assert rc == 0 and "1 changed chart(s)" in out, out
+    assert rc == 0 and "1 git-only chart(s) checked" in out, out
 
 
 @needs_helm
@@ -143,43 +138,82 @@ def test_a_chart_a_release_line_pushes_is_skipped_and_said_so(repo: Path, capsys
 
 
 @needs_helm
-def test_a_branch_with_no_commit_of_its_own_compares_with_head(repo: Path, capsys, monkeypatch) -> None:
-    """The merge base IS HEAD (a fresh branch off main): the working tree is
-    compared with HEAD — never HEAD^1, which would excuse an edit on top of a
-    bump the last main commit made (and does not exist in a depth-1 clone)."""
-    _set_version(repo, "0.1.1")
-    _git(repo, "commit", "-qam", "bump on main")
+def test_drift_already_on_the_base_is_caught(repo: Path, capsys) -> None:
+    """A content change committed without a bump (Renovate's image bumps did
+    this) is red on every later run, not only in the PR that made it."""
     (repo / "helm/demo/values.yaml").write_text("replicas: 2\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "drift")
+    rc, out = _run(repo, capsys)
+    assert rc == 1 and "since" in out and "introduced version 0.1.0" in out, out
+
+
+@needs_helm
+def test_a_superseded_main_run_leaves_nothing_unchecked(repo: Path, capsys, monkeypatch) -> None:
+    """Push A changes the chart without a bump, push B only touches docs, and
+    A's CI run is superseded. B's run (base = HEAD on main) still catches A."""
+    (repo / "helm/demo/values.yaml").write_text("replicas: 2\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "A")
+    (repo / "README.md").write_text("docs\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-qm", "B")
     monkeypatch.setattr(gate, "resolve_diff_base_ref",
                         lambda: ("origin/main", _git(repo, "rev-parse", "HEAD")))
     rc = gate.main(["--repo", str(repo)])
     out = capsys.readouterr()
-    assert rc == 1 and "still 0.1.1" in out.err, out
+    assert rc == 1 and "still 0.1.0" in out.err, out
 
 
 @needs_helm
-def test_a_push_compares_with_its_before_commit(repo: Path, capsys, monkeypatch) -> None:
-    """A rebase-merged PR lands two commits: bump, then another edit. Against
-    `before` (main before the push) that is one bumped change — green; HEAD^1
-    would have judged the second commit alone and gone red."""
-    before = _git(repo, "rev-parse", "HEAD")
+def test_a_version_introduced_on_the_branch_may_change_until_merged(repo: Path, capsys) -> None:
+    """Bump, then more edits in later commits of the same PR: the version is
+    new relative to the base, so it does not yet name a package anyone has."""
+    _git(repo, "checkout", "-q", "-b", "pr")
     _set_version(repo, "0.1.1")
-    (repo / "helm/demo/values.yaml").write_text("replicas: 2\n", encoding="utf-8")
-    _git(repo, "commit", "-qam", "bump + edit")
-    (repo / "helm/demo/values.yaml").write_text("replicas: 3\n", encoding="utf-8")
-    _git(repo, "commit", "-qam", "edit again")
-    monkeypatch.setenv(gate.BASE_ENV, before)
-    rc = gate.main(["--repo", str(repo)])
-    out = capsys.readouterr()
-    assert rc == 0 and before[:12] in out.out, out
+    _git(repo, "commit", "-qam", "bump")
+    (repo / "helm/demo/values.yaml").write_text("replicas: 9\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "more")
+    rc, out = _run(repo, capsys)
+    assert rc == 0, out
 
 
 @needs_helm
-def test_an_all_zero_before_is_ignored(repo: Path, capsys, monkeypatch) -> None:
-    monkeypatch.setenv(gate.BASE_ENV, "0" * 40)
-    monkeypatch.setattr(gate, "resolve_diff_base_ref",
-                        lambda: ("origin/main", _git(repo, "rev-parse", "HEAD")))
-    assert gate.main(["--repo", str(repo)]) == 0, capsys.readouterr()
+def test_files_git_does_not_see_are_not_packaged(repo: Path, capsys) -> None:
+    """A __pycache__ a local test run left (gitignored) is not what a clean
+    checkout ships, so it must not read as a change."""
+    (repo / ".gitignore").write_text("__pycache__/\n", encoding="utf-8")
+    _git(repo, "add", ".gitignore")
+    _git(repo, "commit", "-qm", "ignore")
+    cache = repo / "helm/demo/templates/__pycache__"
+    cache.mkdir()
+    (cache / "x.pyc").write_bytes(b"\x00junk")
+    rc, out = _run(repo, capsys)
+    assert rc == 0, out
+
+
+@needs_helm
+def test_a_move_and_change_in_one_commit_is_caught(repo: Path, capsys) -> None:
+    """Renames are followed back to where the version was introduced."""
+    _git(repo, "mv", "helm/demo", "helm/demo-moved")
+    (repo / "helm/demo-moved/values.yaml").write_text("replicas: 2\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "move and change")
+    rc, out = _run(repo, capsys)
+    assert rc == 1 and "helm/demo-moved: the package changed" in out, out
+
+
+@needs_helm
+def test_a_shallow_history_that_hides_the_first_commit_is_a_caller_error(repo: Path, tmp_path_factory, capsys) -> None:
+    (repo / "README.md").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "README.md")
+    _git(repo, "commit", "-qm", "unrelated")
+    (repo / "helm/demo/NOTES.md").write_text("still not shipped\n", encoding="utf-8")
+    _git(repo, "commit", "-qam", "touch the chart, same version")
+    shallow = tmp_path_factory.mktemp("shallow")
+    subprocess.run(["git", "clone", "-q", "--depth=1", "-b", "main", f"file://{repo}", str(shallow)],
+                   check=True, capture_output=True, timeout=60)
+    rc = gate.main(["--repo", str(shallow), "--base", "HEAD"])
+    out = capsys.readouterr()
+    assert rc == 2 and "shallow" in out.err, out
 
 
 @needs_helm
@@ -189,7 +223,7 @@ def test_moving_a_chart_does_not_reset_its_version(repo: Path, capsys) -> None:
     _git(repo, "mv", "helm/demo", "helm/demo-moved")
     (repo / "helm/demo-moved/values.yaml").write_text("replicas: 2\n", encoding="utf-8")
     rc, out = _run(repo, capsys)
-    assert rc == 1 and "helm/demo-moved (was helm/demo)" in out and "still 0.1.0" in out, out
+    assert rc == 1 and "helm/demo-moved: the package changed" in out and "still 0.1.0" in out, out
 
 
 @needs_helm
@@ -200,16 +234,10 @@ def test_renaming_the_chart_makes_it_a_new_one(repo: Path, capsys) -> None:
     assert rc == 0, out
 
 
-def test_ci_passes_the_push_before_commit_to_the_hook() -> None:
-    """The Lint step that runs the hook carries CHART_VERSION_BUMP_BASE = the
-    push's `before` on push events, and nothing on pull_request."""
-    import yaml
-    wf = yaml.safe_load((REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
-    steps = [s for s in wf["jobs"]["lint"]["steps"]
-             if "pre-commit run chart-version-bump --all-files" in (s.get("run") or "")]
-    assert len(steps) == 1, steps
-    value = (steps[0].get("env") or {}).get(gate.BASE_ENV, "")
-    assert value.replace(" ", "") == "${{github.event_name=='push'&&github.event.before||''}}", value
+def test_ci_runs_the_hook_with_no_push_specific_base() -> None:
+    """The check is stateless: no `before` plumbing that a superseded run could drop."""
+    ci = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    assert "CHART_VERSION_BUMP_BASE" not in ci
 
 
 def test_semver_precedence() -> None:

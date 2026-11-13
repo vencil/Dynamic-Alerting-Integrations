@@ -1860,12 +1860,12 @@ repos:
 
       - id: chart-version-bump
         name: "chart version bump — a git-only chart whose packaged content changed must raise `version` (#1269)"
-        # Packages both sides with helm and compares the archives file by file:
-        # a Chart.yaml comment or a .helmignore'd file needs no bump, a changed
-        # default or a deleted template does. Charts a release line pushes are
-        # listed and skipped — NOT checked anywhere yet (see the script).
-        # Base: merge base with origin/$GITHUB_BASE_REF or origin/main; CI on a
-        # push to main passes the push's `before` (CHART_VERSION_BUMP_BASE).
+        # Compares each git-only chart's package with the package at the commit
+        # that first carried its version (helm package on both sides, file by
+        # file): a Chart.yaml comment or a .helmignore'd file needs no bump, a
+        # changed default or a deleted template does. Charts a release line
+        # pushes are listed and skipped — NOT checked anywhere yet (see the
+        # script). Needs history back to each version's first commit.
         entry: python3 -X utf8 scripts/tools/lint/check_chart_version_bump.py
         language: python
         pass_filenames: false
