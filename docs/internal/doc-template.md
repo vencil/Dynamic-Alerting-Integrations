@@ -222,7 +222,7 @@ rate(requests_total[5m]) > 100
   - 憑證判定只看用 YAML 寫成的 conf.d（[#3748](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3748)）：`{.confd}` 與依結構判為 conf.d 的區塊、沒有消費者的 yaml 區塊（routing 區塊在任何深度），以及 `{.helm-values}` 裡依 chart 渲染規則當成 conf.d 的 `thresholdConfig`（`_defaults.yaml` 與每個租戶一份檔）。用 printf、curl、bash heredoc 或另一份檔裡的字串寫出的內容不在判定範圍內；讀者照抄時由產生器的 `credential_plaintext` 拒收，真的密鑰由 CI 的 TruffleHog 抓。所以要示範一份 conf.d 檔，就寫成 ```` ```yaml {.confd} ````，第一行是檔頭註解（`# conf.d/<路徑>.yaml`），並用一句話說存到哪裡。
   - 一個 fence 示範好幾個檔時，在每個檔的第一行寫 column-0 的檔頭註解，**註解以檔名開頭**：`# conf.d/db-a.yaml`、`# conf.d/db-a.yaml (edge tenant)`、`# _defaults.yaml — 模式 A`（檔名之後要嘛換行，要嘛先空一格再寫註）。`# 見 conf.d/_defaults.yaml`、`# 層級 2：conf.d/finance/_defaults.yaml` 這種檔名不在開頭的是散文，不切檔；要當檔頭就改寫成檔名開頭。
   - 重複鍵由宣告的消費者決定：`.confd` 拒收；`.k8s`／`.helm-values` 依 kubectl／Helm 的讀法是後者勝。所以 `.k8s` 區塊的每份文件都必須是帶字串 `apiVersion` 與 `kind` 的物件，否則報錯。
-  - 屬性詞彙是封閉的，寫錯或沒有大括號（```` ```yaml confd ````，mkdocs 不會當成程式碼區塊）都報錯；yaml 區塊只認 ```` ```yaml ````／```` ```yml ```` 這個寫法，`~~~yaml`、大寫、四個反引號、```` ``` yaml ````、```` ```yaml+jinja ````、寫在 blockquote（`> `）裡的 yaml fence（任何檢查都讀不到，請搬到 blockquote 外）與沒關上的 fence 都報錯；舊的 `md-yaml-drift` HTML 註解標記已退役，留著也會報錯。
+  - 屬性詞彙是封閉的，寫錯或沒有大括號（```` ```yaml confd ````，mkdocs 不會當成程式碼區塊）都報錯；yaml 區塊只認 ```` ```yaml ````／```` ```yml ```` 這個寫法，`~~~yaml`、大寫、四個反引號、```` ``` yaml ````、```` ```yaml+jinja ````、寫在 blockquote（`> `）裡的 yaml fence（任何檢查都讀不到，請搬到 blockquote 外）與沒關上的 fence 都報錯——⚠️ 只認 `>` 在行首 3 格內的 blockquote，清單項目或 admonition 內縮排 4 格以上的 blockquote 既不讀也不擋（#3814 改由站台渲染器判）；舊的 `md-yaml-drift` HTML 註解標記已退役，留著也會報錯。
 
 ### 3.3 表格
 

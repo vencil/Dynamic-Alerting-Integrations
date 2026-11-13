@@ -59,9 +59,13 @@ rustdoc's `invalid_codeblock_attributes`:
 ⛔ Written without braces (```` ```yaml confd ````) is an error: mkdocs does not
 render that as a code block at all. So is a yaml fence spelled any other way
 (``~~~yaml``, ```` ```YAML ````, four backticks, ```` ``` yaml ````,
-```` ```yaml+jinja ````), a yaml fence inside a blockquote (``> ```yaml``:
-no extractor reads past the `>`; move it out) and any fence left open: fences are found as
-CommonMark finds them, and only ```` ```yaml ```` / ```` ```yml ```` is read. The retired comment marker
+```` ```yaml+jinja ````), a yaml fence inside a blockquote whose `>` starts
+within the line's first 3 columns (``> ```yaml``: no extractor reads past the
+`>`; move it out) and any fence left open. Only ```` ```yaml ```` /
+```` ```yml ```` is read. ⚠️ Fences and blockquotes are found by the patterns
+in this module, not by the site's renderer: a blockquote nested deeper (in a
+list item or an admonition body, 4+ columns in) is neither read nor refused
+(#3814 moves this to the renderer). The retired comment marker
 (`<!-- md-yaml-drift: … -->`) is an error that names the attribute to write.
 
 Which consumer reads a unit:
@@ -156,7 +160,8 @@ YAMLISH_RE = re.compile(r"^[ \t]*(?:yaml|yml)(?![A-Za-z0-9_])", re.ASCII | re.IG
 #: the Go loader test.
 FILE_HEADER_RE = re.compile(r"^# ?(?P<path>[\w./-]+\.ya?ml)(?:[ \t]+.*)?$", re.ASCII)
 
-#: A blockquote's markers at the start of a line (any depth, `> >` too).
+#: A blockquote's markers at the start of a line (any depth, `> >` too), the
+#: first `>` within the first 3 columns only — see the module docstring.
 BLOCKQUOTE_RE = re.compile(r"^[ \t]{0,3}>(?:[ \t]*>)*[ \t]?")
 
 #: The retired exemption marker (`<!-- md-yaml-drift: ignore — … -->`).
