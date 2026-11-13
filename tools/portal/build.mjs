@@ -30,6 +30,8 @@ import * as esbuild from 'esbuild';
 import { readFile, writeFile, mkdir, readdir, unlink } from 'node:fs/promises';
 import { dirname, resolve, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+// #3669: the strip, loader and JSX settings the syntax lint reads the same way.
+import { stripFrontmatter, loaderFor, TRANSFORM_OPTIONS } from './esbuild-shared.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(__dirname, '..', '..');
@@ -37,12 +39,6 @@ const REPO_ROOT = resolve(__dirname, '..', '..');
 const ENTRIES_DIR = resolve(__dirname, 'entries');
 const DIST_DIR = resolve(REPO_ROOT, 'docs', 'assets', 'dist');
 
-/**
- * esbuild plugin that strips YAML frontmatter at the top of `.jsx`/`.js`
- * files. The legacy jsx-loader.html did this in browser (removed in
- * TD-030z); we keep exactly the same regex (closing `---` anchored to
- * its own line) so files that carry frontmatter still bundle cleanly.
- */
 /**
  * esbuild plugin that virtualizes `lucide-react` imports to read from
  * `window.lucideReact` (loaded by the host jsx-loader page via CDN).
@@ -75,25 +71,21 @@ function lucideReactGlobalsPlugin() {
   };
 }
 
+/**
+ * esbuild plugin that strips YAML frontmatter at the top of `.jsx`/`.js`
+ * files. The legacy jsx-loader.html did this in browser (removed in
+ * TD-030z). The strip and the loader are esbuild-shared.mjs's, which the
+ * JSX syntax lint reads too (#3669).
+ */
 function stripFrontmatterPlugin() {
   return {
     name: 'strip-yaml-frontmatter',
     setup(build) {
       build.onLoad({ filter: /\.(jsx|js|ts|tsx)$/ }, async (args) => {
         const source = await readFile(args.path, 'utf8');
-        const stripped = source.replace(
-          /^---\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/,
-          (match) => '\n'.repeat(match.split('\n').length - 1),
-        );
         return {
-          contents: stripped,
-          loader: args.path.endsWith('.jsx')
-            ? 'jsx'
-            : args.path.endsWith('.tsx')
-              ? 'tsx'
-              : args.path.endsWith('.ts')
-                ? 'ts'
-                : 'js',
+          contents: stripFrontmatter(source),
+          loader: loaderFor(args.path),
         };
       });
     },
@@ -153,14 +145,10 @@ async function main() {
       entries.map((name) => [name, resolve(ENTRIES_DIR, `${name}.entry.jsx`)]),
     ),
     bundle: true,
-    format: 'esm',
-    target: 'es2022',
     outdir: DIST_DIR,
     splitting: true,
     platform: 'browser',
     sourcemap: 'linked',
-    jsx: 'automatic',
-    jsxImportSource: 'react',
     // React + ReactDOM are bundled into each tool's dist (~140KB) so
     // browser pages can `<script type="module" src="dist/X.js">` without
     // an import map or CDN dependency. Per-tool React instance is fine
@@ -202,6 +190,10 @@ async function main() {
     },
     minify: !watch,
     logLevel: 'info',
+    // ⛔ LAST, so no key above can override how a file is parsed: the
+    // lint parses with exactly these (esbuild-shared.mjs, #3669; guarded by
+    // tests/lint/test_lint_jsx_syntax.py).
+    ...TRANSFORM_OPTIONS,
   };
 
   console.log(`[portal-build] Bundling ${entries.length} entries:`);

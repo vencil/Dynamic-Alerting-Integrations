@@ -195,8 +195,8 @@ def _cp(rc, out="", err="", args=("x",)):
     return subprocess.CompletedProcess(list(args), rc, out, err)
 
 
-def test_babel_parse_needs_one_result_per_input():
-    proof = E.PROOFS[("node", "babel-parse")]
+def test_esbuild_parse_needs_one_result_per_input():
+    proof = E.PROOFS[("node", "esbuild-parse")]
     two = '[{"path":"a","ok":true},{"path":"b","ok":false}]'
     assert len(proof(_cp(0, two), {"paths": ["b", "a"]})) == 2
     doubled = '[{"path":"a","ok":true},{"path":"a","ok":true}]'
