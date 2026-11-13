@@ -86,6 +86,11 @@ networkPolicy:
   # (`<svc>` = this release's namespace, `<svc>.<ns>.svc[.cluster.local]` =
   # <ns>); any other host form fails the render rather than guess.
   upstreamNamespace: ""
+  # The upstream POD port the egress rule allows. Empty = the port in
+  # upstream.url (or the scheme's: http 80, https 443). NetworkPolicy matches
+  # the pod port, not the Service's, so set this when the upstream Service maps
+  # one to another (e.g. Service 9090 -> pod 10902).
+  upstreamPort: ""
 
 # Horizontal autoscaling. prom-label-proxy parses PromQL into an AST,
 # injects the matcher, and re-serialises — a CPU-bound operation. On a

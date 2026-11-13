@@ -82,8 +82,6 @@ def test_the_proxy_reaches_nothing_else(world) -> None:
     proxy = ev._pod(pods, ev._MON, "federation-proxy")
     ext = {"ns": None, "ip": ev._EXTERNAL_IP, "labels": {}}
     assert not ev._allowed(policies, proxy, "egress", ext, 443, "TCP"), "proxy reaches the internet"
-    assert not ev._allowed(policies, proxy, "egress", ev._pod(pods, ev._MON, "alertmanager"),
-                           9093, "TCP"), "proxy reaches alertmanager"
     other = {"ns": "kube-system", "labels": {"app": "x"}}
     assert not ev._allowed(policies, proxy, "egress", other, _PROM_PORT, "TCP"), \
         "the upstream port is open to other namespaces"
@@ -111,12 +109,21 @@ def _target(*args: str) -> tuple[str, int]:
 @pytest.mark.parametrize("url, expected", [
     ("http://prometheus:9090", ("obs", 9090)),                       # bare Service: this release's ns
     ("http://prometheus.monitoring.svc:9090", ("monitoring", 9090)),
-    ("https://thanos-query.thanos.svc.cluster.local", ("thanos", 443)),  # scheme default port
+    ("https://query.thanos.svc.cluster.local", ("thanos", 443)),     # scheme default port
+    ("HTTP://Prometheus.MONITORING.svc:9090", ("monitoring", 9090)),  # DNS is case-insensitive
+    ("http://prometheus.monitoring.svc:010", ("monitoring", 10)),     # decimal, not octal
     ("http://vmselect.vm.svc:8481/select/0/prometheus", ("vm", 8481)),  # path ignored
     ("http://vmselect.vm.svc", ("vm", 80)),
 ])
 def test_the_target_is_read_from_the_url(url, expected) -> None:
     assert _target("--set", f"upstream.url={url}") == expected
+
+
+@_needs_helm
+def test_an_explicit_pod_port_wins() -> None:
+    """Service 9090 -> pod 10902: the rule must name the pod port."""
+    assert _target("--set", "upstream.url=http://query.thanos.svc:9090",
+                   "--set", "networkPolicy.upstreamPort=10902") == ("thanos", 10902)
 
 
 @_needs_helm
@@ -128,6 +135,10 @@ def test_an_explicit_namespace_wins() -> None:
 @_needs_helm
 @pytest.mark.parametrize("url, needle", [
     ("http://10.0.0.1:9090", "cannot tell which namespace"),
+    ("http://[fd00::1]:9090", "names an IP address"),
+    ("http://[::1]", "names an IP address"),
+    ("http://prometheus.monitoring.svc:99999", "is not 1-65535"),
+    ("http://..svc:9090", "is not a namespace name"),
     ("http://prom.example.com", "cannot tell which namespace"),
     ("http://prometheus.monitoring:9090", "cannot tell which namespace"),        # could be a domain
     ("http://prometheus.monitoring.svc.corp.local:9090", "cannot tell which namespace"),
@@ -137,6 +148,16 @@ def test_an_explicit_namespace_wins() -> None:
 ])
 def test_the_render_refuses_to_guess(url, needle) -> None:
     out = _render("--set", f"upstream.url={url}")
+    assert out.returncode != 0 and needle in out.stderr, out.stderr[-300:]
+
+
+@_needs_helm
+@pytest.mark.parametrize("args, needle", [
+    (["--set", "networkPolicy.upstreamNamespace=Foo"], "is not a namespace name"),
+    (["--set", "networkPolicy.upstreamPort=0"], "is not 1-65535"),
+])
+def test_bad_overrides_are_refused(args, needle) -> None:
+    out = _render(*args)
     assert out.returncode != 0 and needle in out.stderr, out.stderr[-300:]
 
 

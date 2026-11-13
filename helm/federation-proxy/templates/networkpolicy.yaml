@@ -42,9 +42,10 @@ spec:
   # read path stopped here. What it allows: port 53 on any pod, and the
   # upstream port on ANY pod of the upstream's namespace — those pods' own
   # ingress rules keep the proxy out of the rest.
-  # ⚠️ NetworkPolicy matches the destination POD port: the URL's port is the
-  # Service port, so this holds while the upstream Service's port equals its
-  # targetPort (true for k8s/03-monitoring's Prometheus, 9090 -> 9090).
+  # ⚠️ NetworkPolicy matches the destination POD port, and the URL's port is
+  # the Service port. They are equal for k8s/03-monitoring's Prometheus
+  # (9090 -> 9090); where they differ (a Service 9090 -> pod 10902, as some
+  # Thanos charts ship), set networkPolicy.upstreamPort to the pod port.
   egress:
     - to:
         - namespaceSelector: {}
