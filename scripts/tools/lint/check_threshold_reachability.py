@@ -432,7 +432,7 @@ def _written_faces() -> dict[str, set[str]]:
 # taught this rule; #3014 deleted it), a NESTED `_defaults.yaml` (the loader enters one at every
 # depth — `config_hierarchy.go` — while the constants named depth 0 only), and a
 # whole second conf.d root (`rule-packs/recipes/examples/conf.d/`). All three
-# were demonstrated: inject `mysql_connections_critical` into any of them and
+# were demonstrated: inject `mysql_connection_usage_percent_critical` into any of them and
 # this gate exited 0 without a word.
 #
 # ⛔ SCOPE is `git ls-files`, not a filesystem walk, and that is the second
@@ -1774,7 +1774,7 @@ class KeyInfo(int):
       undetected. Base `2e61b20a` tested `"{" in k` and caught them, so the
       dotted paths introduced here had regressed coverage.
     - `.has_children`: `depth == 0` answers "is it top level", NOT "is it a
-      leaf". `defaults: {mysql_connections_critical: {a: 1}}` is top level AND
+      leaf". `defaults: {mysql_connection_usage_percent_critical: {a: 1}}` is top level AND
       a mapping, so it was reported with the flat consequence ("emits a
       severity=warning series") when the truth is that `Defaults
       map[string]float64` fails to unmarshal and NOTHING is emitted.
@@ -1805,7 +1805,7 @@ def _walk_defaults_keys(node: object, prefix: str = "",
     and `init` faces return byte-identical key sets before and after #1392).
 
     INTERMEDIATE keys are collected too, not just leaves: a misplaced
-    `mysql_connections_critical:` whose value happens to be a mapping is the same
+    `mysql_connection_usage_percent_critical:` whose value happens to be a mapping is the same
     defect wearing a different shape, and a leaves-only walk would step over it.
 
     ⛔ The DEPTH is returned, not re-derived downstream from a dot in the path.

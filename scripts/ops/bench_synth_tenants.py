@@ -48,7 +48,7 @@ def synth_tenant_name(i: int) -> str:
 def synth_thresholds(i: int) -> dict[str, str]:
     """Per-tenant thresholds; values spread so tenants are not identical."""
     return {
-        "mysql_connections": str(50 + i % 100),
+        "mysql_connection_usage_percent": str(50 + i % 50),
         "mysql_threads_running": str(20 + i % 40),
         "container_cpu": str(70 + i % 30),
         "container_memory": str(75 + i % 20),

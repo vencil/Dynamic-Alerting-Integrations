@@ -49,11 +49,11 @@ cp -r conf.d/ conf.d.before/
 ```yaml
 # conf.d/finance/_defaults.yaml — a domain-level platform file
 defaults:
-  mysql_connections: 95   # raised from the finance-domain 90
+  mysql_connection_usage_percent: 95   # raised from the finance-domain 90
 ```
 
-> Thresholds are keyed by the **metric key** (`mysql_connections`), not by alert
-> name: `MariaDBHighConnections` consumes `tenant:alert_threshold:mysql_connections`,
+> Thresholds are keyed by the **metric key** (`mysql_connection_usage_percent`), not by alert
+> name: `MariaDBHighConnections` consumes `tenant:alert_threshold:mysql_connection_usage_percent`,
 > so one key can drive several alerts. Platform values here are unquoted numbers
 > (`map[string]float64`); tenant overrides are quoted strings.
 
@@ -65,7 +65,7 @@ da-tools config-diff --old-dir conf.d.before/ --new-dir conf.d/
 
 Exit code 0 is no change, 1 is a change (or something not compared), 2 is no result (a tool or the PR side failed).
 
-Example output (a tree of three finance tenants, `tenant-fin-003` writing its own `mysql_connections: "98"`; run with `--at 2026-10-22T00:00:00Z`):
+Example output (a tree of three finance tenants, `tenant-fin-003` writing its own `mysql_connection_usage_percent: "98"`; run with `--at 2026-10-22T00:00:00Z`):
 
 ```
 # Config Diff Report
@@ -87,13 +87,13 @@ Rendered at: `2026-10-22T00:00:00Z` (schedules, silences and maintenance windows
 
 | Metric | Before | After | Change | Affected Alerts | Tenants |
 |--------|--------|-------|--------|-----------------|---------|
-| mysql_connections | 90 | 95 | looser | MariaDBHighConnections, MariaDBSystemBottleneck | 2 tenants: `tenant-fin-001`, `tenant-fin-002` |
+| mysql_connection_usage_percent | 90 | 95 | looser | MariaDBHighConnections, MariaDBSystemBottleneck | 2 tenants: `tenant-fin-001`, `tenant-fin-002` |
 
 ---
 Summary: 2 tenant(s) changed, 2 metric change(s)
 ```
 
-Note: a tenant that already overrides `mysql_connections` (`tenant-fin-003` here) is not in the affected list — the override is keyed by the metric key, not the alert name. When routes or receivers change, the report has sections for those too. For a machine-readable result use `--format json`.
+Note: a tenant that already overrides `mysql_connection_usage_percent` (`tenant-fin-003` here) is not in the affected list — the override is keyed by the metric key, not the alert name. When routes or receivers change, the report has sections for those too. For a machine-readable result use `--format json`.
 
 ### D. Submit PR After Confirmation
 
@@ -124,13 +124,13 @@ Example output:
     "finance/_defaults.yaml"
   ],
   "effective_config": {
-    "mysql_connections": 90,
+    "mysql_connection_usage_percent": 90,
     "container_memory": "92"
   }
 }
 ```
 
-`defaults_chain` is the merge order, innermost last. `mysql_connections: 90` is an
+`defaults_chain` is the merge order, innermost last. `mysql_connection_usage_percent: 90` is an
 unquoted number, so it came from a platform `_defaults.yaml` — and the chain shows
 `finance/_defaults.yaml` as the innermost one that sets it, i.e. the **domain**
 layer. (`container_memory` is a quoted string: that one the tenant set itself.)
@@ -139,13 +139,13 @@ platform file's `tenants:` block for this tenant (#2019), not from the chain or 
 tenant file — that list, not the quoting, is the answer for them. Likewise
 `profile_overlay` lists the keys the profile the tenant elects with `_profile`
 filled in (#2117).
-To adjust `mysql_connections` for this tenant only, override it in the tenant file:
+To adjust `mysql_connection_usage_percent` for this tenant only, override it in the tenant file:
 
 ```yaml
 # conf.d/finance/us-east/prod/tenant-fin-042.yaml
 tenants:
   tenant-fin-042:
-    mysql_connections: "120"   # raise for this tenant only; quoted — tenant
+    mysql_connection_usage_percent: "95"    # raise for this tenant only; quoted — tenant
                                # values are ScheduledValue (string | object)
 ```
 
@@ -174,7 +174,7 @@ Example output:
     "pg_replication_lag": "60"
   },
   "different": {
-    "mysql_connections": {"a": "110", "b": "120"}
+    "mysql_connection_usage_percent": {"a": "85", "b": "92"}
   }
 }
 ```

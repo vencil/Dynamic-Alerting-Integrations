@@ -87,7 +87,7 @@ describe('parseYaml — unit', () => {
 
 describe('parseYaml — js-yaml regressions (#2033)', () => {
   it('reports a duplicate key as an error instead of merging it', () => {
-    const { config, errors } = parseYaml('mysql_connections: "70"\nmysql_connections: "80"');
+    const { config, errors } = parseYaml('mysql_connection_usage_percent: "70"\nmysql_connection_usage_percent: "80"');
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/duplicated mapping key/);
     expect(errors[0]).toMatch(/line 2/);
@@ -120,9 +120,9 @@ describe('parseYaml — js-yaml regressions (#2033)', () => {
 
   it('keeps YAML types and models block lists and deep nesting', () => {
     const { config } = parseYaml(
-      'mysql_connections: 80\n_routing:\n  receiver:\n    type: webhook\n  group_by:\n    - alertname\n    - severity',
+      'mysql_connection_usage_percent: 80\n_routing:\n  receiver:\n    type: webhook\n  group_by:\n    - alertname\n    - severity',
     );
-    expect(config.mysql_connections).toBe(80);
+    expect(config.mysql_connection_usage_percent).toBe(80);
     expect(config._routing).toEqual({ receiver: { type: 'webhook' }, group_by: ['alertname', 'severity'] });
   });
 

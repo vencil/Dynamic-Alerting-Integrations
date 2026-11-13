@@ -1382,7 +1382,7 @@ class TestEveryCountIsReadByTheLib:
     @pytest.mark.parametrize("query,check", [
         (bc.THRESHOLD_ROWS_QUERY, "step2_user_threshold_metrics"),
         ('count(count by(__name__) ({__name__=~"tenant:.*"}))', "step3_recording_rules_output"),
-        ("count(tenant:alert_threshold:mysql_connections > 0)", "e2e_vector_matching"),
+        ("count(tenant:alert_threshold:mysql_connection_usage_percent > 0)", "e2e_vector_matching"),
     ], ids=["step2b", "step3b", "e2e"])
     @pytest.mark.parametrize("value", ["NaN", "+Inf"])
     def test_a_count_that_is_not_finite_is_a_caller_error(self, query, check, value):

@@ -8,13 +8,16 @@
 #
 # >>> GENERATED:threshold-registry:pack-mariadb — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
-#   mysql_connections: 80   [chart-default]   # count — Max threads_connected warning
-#       出貨例外（待改比值，#3778）：絕對連線數跨部署沒有意義；可攜的形式是佔 max_connections 的比例（#3778）
-#   mysql_threads_running: 30   [chart-default]
+#   mysql_connection_usage_percent: 80   [chart-default]
+#       % of max_connections — Connection usage warning: threads_connected as a share of
+#       max_connections, per instance, busiest instance per tenant; 80 = PMM "MySQL connections in
+#       use" template / awesome-prometheus-alerts. Replaces the absolute-count key mysql_connections
+#       (#3778: a unit change is a removal plus an addition, no alias)
+#   mysql_threads_running: 30
 #       threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30
 #       = PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the
 #       #944 keep — 2-release alias window, old spelling still resolves)
-#       出貨例外（依部署而定，#3778）：健康的 running threads 數隨主機的 CPU 核數而定
+#       未啟用（依部署而定）：健康的 running threads 數隨主機的 CPU 核數而定
 #   mysql_replication_lag: 30   [chart-default]
 #       seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
 #       APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
@@ -29,21 +32,35 @@
 # conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的
 # critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。
 # ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
-#   mysql_connections_critical: 120   # count — Critical tier (Scenario D)
-#   mysql_threads_running_critical: 50
-#       threads — Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter
-#       'overloaded' (#944); renamed from mysql_cpu_critical (#1231, 2-release alias window)
+#   mysql_connection_usage_percent_critical: 90
+#       % of max_connections — Critical tier connection usage (same tier pair as
+#       pg_connections_critical)
 #   mysql_replication_lag_critical: 120
 #       seconds — Critical tier replication lag; 120 = 4x the APA/mixin 30s trigger, 5x below PMM
 #       family 600s — sustained minutes-level lag is a failover data-loss window (#1200 WS5-P0-a)
+#
+# optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
+# ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
+# 所以走不到 resolveDeclaredRows；`<base>_critical` 的解析走 resolveCriticalRows，
+# 它讀的是 defaults[base]，base 沒有值就整列丟棄
+# （components/threshold-exporter/app/pkg/config/resolve.go）。
+# 而下列每個 key 的 base，出貨的 Helm values 與 repo 的 dev conf.d 範本都沒有供給：
+# 租戶在這兩種拓撲下填一個並不會發射任何 user_threshold。
+# 要能用，部署面必須先供給 base（scaffold_tenant 針對選到
+# 的 pack 產生的 _defaults.yaml 就含 base，operator 也可自行填 Helm values），
+# critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
+# 一格裝飾（#1311）。
+#   mysql_threads_running_critical: 50
+#       threads — Critical tier (running-threads saturation); 120→50 = PMM critical-load / Nichter
+#       'overloaded' (#944); renamed from mysql_cpu_critical (#1231, 2-release alias window)
 # <<< GENERATED:threshold-registry:pack-mariadb
 #
 # Tenant config 範例 (conf.d/db-a.yaml):
 #   tenants:
 #     db-a:
-#       mysql_connections: "70"        # 自訂連線數警告閾值
-#       mysql_connections_critical: "120"  # Critical 閾值
-#       mysql_threads_running: "45"   # 自訂執行緒飽和警告閾值（平台預設 30；#1231 由 mysql_cpu 改名，舊拼法在 2-release 過渡窗內仍可解析）
+#       mysql_connection_usage_percent: "70"           # 連線使用率警告閾值（佔 max_connections 的 %）
+#       mysql_connection_usage_percent_critical: "90"  # Critical 閾值（%）
+#       mysql_threads_running: "45"   # 執行緒飽和警告閾值：平台不給預設（隨 CPU 核數而定，#3778），要自己依主機給值；#1231 由 mysql_cpu 改名，舊拼法在 2-release 過渡窗內仍可解析
 #       mysql_replication_lag: "20"           # 自訂複寫延遲警告閾值 (秒)
 #       mysql_replication_lag_critical: "120" # Critical 閾值 (秒，opt-in)
 # ============================================================
@@ -71,13 +88,18 @@ groups:
       - record: tenant:mysql_threads_running:avg1m
         expr: max by(tenant) (avg_over_time(mysql_global_status_threads_running[1m]))
 
-      - record: tenant:mysql_threads_connected:max
-        expr: max by(tenant) (mysql_global_status_threads_connected)
-
-      - record: tenant:mysql_connection_usage:ratio
+      # Connection usage, % of max_connections (#3778). The ratio is taken PER
+      # INSTANCE first (both series come from the same exporter target, so they
+      # match on every label), then the busiest instance per tenant is kept:
+      # a sum/sum across instances would average one saturated node away
+      # behind idle replicas, and a max/max would divide counts that come from
+      # different nodes. clamp_min keeps a 0 max_connections from yielding +Inf.
+      - record: tenant:mysql_connection_usage:percent
         expr: |
-          sum by(tenant) (mysql_global_status_threads_connected)
-          / sum by(tenant) (mysql_global_variables_max_connections)
+          max by(tenant) (
+            100 * mysql_global_status_threads_connected
+            / clamp_min(mysql_global_variables_max_connections, 1)
+          )
 
       # Additional Percona-inspired normalization
       - record: tenant:mysql_slow_queries:rate5m
@@ -120,8 +142,8 @@ groups:
   - name: mariadb-threshold-normalization
     interval: 15s
     rules:
-      - record: tenant:alert_threshold:mysql_connections
-        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
+      - record: tenant:alert_threshold:mysql_connection_usage_percent
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="warning"})
 
       - record: tenant:alert_threshold:mysql_threads_running
         expr: max by(tenant) (user_threshold{component="mysql", metric="threads_running", severity="warning"})
@@ -130,8 +152,8 @@ groups:
         expr: max by(tenant) (user_threshold{component="mysql", metric="replication_lag", severity="warning"})
 
       # Multi-tier severity (Scenario D)
-      - record: tenant:alert_threshold:mysql_connections_critical
-        expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
+      - record: tenant:alert_threshold:mysql_connection_usage_percent_critical
+        expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="critical"})
 
       - record: tenant:alert_threshold:mysql_threads_running_critical
         expr: max by(tenant) (user_threshold{component="mysql", metric="threads_running", severity="critical"})
@@ -410,7 +432,7 @@ groups:
       # + metadata annotations). Key mysql_replication_lag ENABLED BY
       # DEFAULT (epic #1200 WS5-P0-a Q3 = owner decision C); critical tier is
       # tenant opt-in via mysql_replication_lag_critical (Scenario D, same as
-      # mysql_connections_critical).
+      # mysql_connection_usage_percent_critical).
       # THRESHOLDS (corpus verbatim-verified 2026-07-25 — sources DIVERGE, so
       # the resolution is recorded here, #944 discipline):
       #  - APA MysqlSlaveReplicationLag: (seconds_behind - sql_delay) > 30,
@@ -485,9 +507,9 @@ groups:
       - alert: MariaDBHighConnections
         expr: |
           (
-            tenant:mysql_threads_connected:max
+            tenant:mysql_connection_usage:percent
             > on(tenant) group_left
-            tenant:alert_threshold:mysql_connections
+            tenant:alert_threshold:mysql_connection_usage_percent
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -495,15 +517,15 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: "mysql_connections"
+          metric_group: "mysql_connection_usage_percent"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High connections on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 連線數過高"
           platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定"
-          description: "{{ $value }} threads connected (warning threshold exceeded)"
-          description_zh: "{{ $value }} 個執行緒已連接（超過警告閾值）"
+          description: "{{ $value | printf \"%.0f\" }}% of max_connections in use (warning threshold exceeded)"
+          description_zh: "已使用 max_connections 的 {{ $value | printf \"%.0f\" }}%（超過警告閾值）"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
@@ -512,9 +534,9 @@ groups:
       - alert: MariaDBHighConnectionsCritical
         expr: |
           (
-            tenant:mysql_threads_connected:max
+            tenant:mysql_connection_usage:percent
             > on(tenant) group_left
-            tenant:alert_threshold:mysql_connections_critical
+            tenant:alert_threshold:mysql_connection_usage_percent_critical
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
@@ -522,15 +544,15 @@ groups:
         labels:
           severity: critical
           maintenance: mute
-          metric_group: "mysql_connections"
+          metric_group: "mysql_connection_usage_percent"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Critical connections on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 連線數嚴重過高"
           platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical connection saturation — immediate capacity action needed"
           platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：連線數飽和 — 需立即採取容量擴增行動"
-          description: "{{ $value }} threads connected (critical threshold exceeded)"
-          description_zh: "{{ $value }} 個執行緒已連接（超過嚴重閾值）"
+          description: "{{ $value | printf \"%.0f\" }}% of max_connections in use (critical threshold exceeded)"
+          description_zh: "已使用 max_connections 的 {{ $value | printf \"%.0f\" }}%（超過嚴重閾值）"
 
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
@@ -612,14 +634,16 @@ groups:
           runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
-      # Composite alert: connections AND CPU both exceeded
+      # Composite alert: connection usage AND running-thread saturation both
+      # exceeded. mysql_threads_running ships no default (arming: operator,
+      # #3778), so this alert stays quiet until the operator sets that key.
       - alert: MariaDBSystemBottleneck
         expr: |
           (
             (
-              tenant:mysql_threads_connected:max
+              tenant:mysql_connection_usage:percent
               > on(tenant) group_left
-              tenant:alert_threshold:mysql_connections
+              tenant:alert_threshold:mysql_connection_usage_percent
             )
             and on(tenant)
             (

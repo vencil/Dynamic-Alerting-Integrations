@@ -59,10 +59,10 @@ spec:
 
 #### ❌ 錯誤：使用 `sum`
 ```yaml
-- record: tenant:alert_threshold:mysql_connections
+- record: tenant:alert_threshold:mysql_connection_usage_percent
   expr: |
     sum by(tenant)
-      user_threshold{tenant=~".*", metric="connections"}
+      user_threshold{tenant=~".*", component="mysql", metric="connection_usage_percent"}
 ```
 
 **問題：**
@@ -72,10 +72,10 @@ spec:
 
 #### ✓ 正確：使用 `max`
 ```yaml
-- record: tenant:alert_threshold:mysql_connections
+- record: tenant:alert_threshold:mysql_connection_usage_percent
   expr: |
     max by(tenant)
-      user_threshold{tenant=~".*", metric="connections"}
+      user_threshold{tenant=~".*", component="mysql", metric="connection_usage_percent"}
 ```
 
 **優勢：**

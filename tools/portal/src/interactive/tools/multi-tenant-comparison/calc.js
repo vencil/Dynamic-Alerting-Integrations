@@ -27,11 +27,15 @@ purpose: |
 ---
 
 // mysql_threads_running = running-threads SATURATION warning (threads_running,
-// NOT host CPU%); default 30 = PMM/Nichter "High" tier (#944). Renamed from
-// `mysql_cpu` (#1231 — poisoned name retired, 2-release alias window); the
+// NOT host CPU%); 30 = PMM/Nichter "High" tier (#944). It is this demo's
+// baseline, NOT a platform default: the platform ships none, because a healthy
+// value depends on the host's CPU core count — set it per host (#3778). Renamed
+// from `mysql_cpu` (#1231 — poisoned name retired, 2-release alias window); the
 // alert is MariaDBHighThreadsRunning.
+// mysql_connection_usage_percent = % of max_connections (#3778; replaced the
+// absolute-count key).
 const DEFAULTS = {
-  mysql_connections: 80, mysql_threads_running: 30, container_cpu: 80,
+  mysql_connection_usage_percent: 80, mysql_threads_running: 30, container_cpu: 80,
   container_memory: 85, oracle_sessions_active: 200,
   oracle_tablespace_used_pct: 85, db2_connections_active: 200,
 };

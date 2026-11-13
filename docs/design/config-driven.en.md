@@ -60,10 +60,9 @@ conf.d/
 ```yaml
 # Labels a dimensional key may carry (#3475): an undeclared label is not served. The shipped list is only version on container cpu/memory; this declares a custom one
 dimensions:
-  mysql_connections: [instance, role]
+  mysql_connection_usage_percent: [instance, role]
 defaults:
-  mysql_connections: 80
-  mysql_threads_running: 30
+  mysql_connection_usage_percent: 80
   mysql_replication_lag: 30
   container_cpu: 80
   container_memory: 85
@@ -82,13 +81,13 @@ state_filters:
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "70"          # Override default 80
+    mysql_connection_usage_percent: "70"          # Override default 80
     container_cpu: "70"              # Override default 80
     mysql_replication_lag: "disable" # No replica, disable
-    # mysql_threads_running not specified → use default value 30
+    # mysql_threads_running not specified → the platform ships no default (a healthy value depends on the host's CPU core count, set it per host; #3778), so this alert does not fire
     # Dimensional labels (every label must be declared for its base under dimensions: in _defaults.yaml above, or no metric is served; see the ⚠️ in §2.5)
-    "mysql_connections{instance='db-primary:3306'}": "500"
-    "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
+    "mysql_connection_usage_percent{instance='db-primary:3306'}": "75"
+    "mysql_connection_usage_percent{instance='db-replica:3306', role='replica'}": "95:critical"
 ```
 
 #### Boundary Enforcement Rules
@@ -351,8 +350,8 @@ Support both `_critical` suffix and `"value:severity"` syntax:
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "100"            # warning threshold
-    mysql_connections_critical: "150"   # _critical → auto-generate critical alert
+    mysql_connection_usage_percent: "85"             # warning threshold
+    mysql_connection_usage_percent_critical: "95"    # _critical → auto-generate critical alert
 ```
 
 **Method 2: `"value:severity"` syntax (suitable for dimensional labels)**
@@ -368,8 +367,8 @@ The severity is the part after the last `:` and may only be `warning` or `critic
 
 **Prometheus output:**
 ```
-user_threshold{tenant="db-a", component="mysql", metric="connections", severity="warning"} 100
-user_threshold{tenant="db-a", component="mysql", metric="connections", severity="critical"} 150
+user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percent", severity="warning"} 85
+user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percent", severity="critical"} 95
 ```
 
 #### Auto-Suppression (Severity Dedup via Alertmanager Inhibit)
@@ -383,21 +382,21 @@ Severity dedup is handled at the **Alertmanager inhibit layer**, not in PromQL. 
 ```yaml
 - alert: MariaDBHighConnections          # warning
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections )
+    ( tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m
   labels:
     severity: warning
-    metric_group: "mysql_connections"
+    metric_group: "mysql_connection_usage_percent"
 
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections_critical )
+    ( tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m
   labels:
     severity: critical
-    metric_group: "mysql_connections"
+    metric_group: "mysql_connection_usage_percent"
 ```
 
 **Alertmanager inhibit rule (per-tenant, auto-generated):**
@@ -416,8 +415,8 @@ inhibit_rules:
 ```
 
 **Result:**
-- Connection count ≥ 150 (critical): Both warning and critical alerts fire in Prometheus (TSDB records both). Alertmanager's inhibit rule blocks only the **warning notification**, critical notification sends normally.
-- Connection count 100–150 (warning only): Warning alert fires, critical does not. Warning notification sends.
+- Connection usage above 95% of max_connections (critical): Both warning and critical alerts fire in Prometheus (TSDB records both). Alertmanager's inhibit rule blocks only the **warning notification**, critical notification sends normally.
+- Connection usage between 85% and 95% (warning only): Warning alert fires, critical does not. Warning notification sends.
 - **TSDB completeness:** All alert firings remain in Prometheus TSDB regardless of notification suppression.
 
 ### 2.5 Regex Dimension Thresholds
@@ -456,13 +455,13 @@ Since v0.12.0, thresholds support time-window scheduling, allowing automatic thr
 ```yaml
 tenants:
   db-a:
-    mysql_connections:
-      default: "100"
+    mysql_connection_usage_percent:
+      default: "80"
       overrides:
         - window: "22:00-06:00"    # UTC nighttime window (cross-midnight supported)
-          value: "200"             # Nighttime batch jobs, relax to 200
+          value: "95"              # Nighttime batch jobs, relax to 95%
         - window: "09:00-18:00"
-          value: "80"              # Daytime peak, tighten to 80
+          value: "70"              # Daytime peak, tighten to 70%
 ```
 
 **Technical implementation:**
@@ -664,7 +663,7 @@ v1.2.0 implements per-tenant inhibit rules for optional configuration:
 | `_severity_dedup: "enable"` (default) | ✅ | ✅ | ❌ Intercepted by AM | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "mysql_connections"`. Each per-tenant inhibit rule limits `metric_group=~".+"`, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
+**Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "mysql_connection_usage_percent"`. Each per-tenant inhibit rule limits `metric_group=~".+"`, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
 
 **Tenant Configuration**
 

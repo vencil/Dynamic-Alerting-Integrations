@@ -11,7 +11,7 @@
  * Rounding note: JS Math.round is round-half-UP (toward +∞), but IEEE-754
  * makes ×1.15 subtly non-exact. Two "looks like .5" cases are pinned to show
  * the real behavior: 50×1.15 is 57.4999… (NOT 57.5) → rounds DOWN to 57;
- * 250×1.15 lands at/above 287.5 → 288. So the effective headroom near the .5
+ * 70×1.15 lands at/above 80.5 → 81. So the effective headroom near the .5
  * boundary is float-dependent — see the wave-6 report's flagged suspicious point.
  */
 import { describe, it, expect } from 'vitest';
@@ -22,20 +22,20 @@ import {
   generateYAML,
 } from '../src/interactive/tools/threshold-calculator/calc.js';
 
-describe('suggestThreshold — normal metric (mysql_connections)', () => {
-  const p = METRIC_PROFILES.mysql_connections; // typical p50:50 p90:120 p95:180 p99:250
+describe('suggestThreshold — normal metric (mysql_connection_usage_percent)', () => {
+  const p = METRIC_PROFILES.mysql_connection_usage_percent; // % of max_connections; typical p50:30 p90:50 p95:60 p99:70
 
-  it('p50 base=50 → warning 57 (50×1.15=57.4999… floors DOWN), critical round(70)=70', () => {
-    expect(suggestThreshold(p, 'p50', {})).toEqual({ warning: 57, critical: 70 });
+  it('p50 base=30 → warning round(34.5)=35 (half-up), critical round(42)=42', () => {
+    expect(suggestThreshold(p, 'p50', {})).toEqual({ warning: 35, critical: 42 });
   });
-  it('p90 base=120 → warning round(138)=138, critical round(168)=168', () => {
-    expect(suggestThreshold(p, 'p90', {})).toEqual({ warning: 138, critical: 168 });
+  it('p90 base=50 → warning 57 (50×1.15=57.4999… floors DOWN), critical round(70)=70', () => {
+    expect(suggestThreshold(p, 'p90', {})).toEqual({ warning: 57, critical: 70 });
   });
-  it('p95 base=180 → warning round(207)=207, critical round(252)=252', () => {
-    expect(suggestThreshold(p, 'p95', {})).toEqual({ warning: 207, critical: 252 });
+  it('p95 base=60 → warning round(69)=69, critical round(84)=84', () => {
+    expect(suggestThreshold(p, 'p95', {})).toEqual({ warning: 69, critical: 84 });
   });
-  it('p99 base=250 → warning round(287.5)=288, critical round(350)=350 (half-up)', () => {
-    expect(suggestThreshold(p, 'p99', {})).toEqual({ warning: 288, critical: 350 });
+  it('p99 base=70 → warning round(80.5)=81, critical round(98)=98 (half-up; still ≤ 100%)', () => {
+    expect(suggestThreshold(p, 'p99', {})).toEqual({ warning: 81, critical: 98 });
   });
 });
 
@@ -76,16 +76,16 @@ describe('suggestThreshold — inverted metric (pg_cache_hit_ratio)', () => {
 });
 
 describe('suggestThreshold — customValues override', () => {
-  const p = METRIC_PROFILES.mysql_connections;
+  const p = METRIC_PROFILES.mysql_connection_usage_percent;
 
   it('customValues[percentile] overrides profile.typical for the selected percentile', () => {
-    // base=200 (not typical 120) → warning round(230)=230, critical round(280)=280
-    expect(suggestThreshold(p, 'p90', { p90: 200 })).toEqual({ warning: 230, critical: 280 });
+    // base=40 (not typical 50) → warning round(46)=46, critical round(56)=56
+    expect(suggestThreshold(p, 'p90', { p90: 40 })).toEqual({ warning: 46, critical: 56 });
   });
 
   it('only the SELECTED percentile custom value is read (others ignored)', () => {
-    // selected p90; custom sets p50 only → base falls back to typical.p90 = 120
-    expect(suggestThreshold(p, 'p90', { p50: 9999 })).toEqual({ warning: 138, critical: 168 });
+    // selected p90; custom sets p50 only → base falls back to typical.p90 = 50
+    expect(suggestThreshold(p, 'p90', { p50: 9999 })).toEqual({ warning: 57, critical: 70 });
   });
 
   it('a custom value of 0 is honored (!== undefined), NOT treated as missing', () => {
@@ -100,7 +100,7 @@ describe('suggestThreshold — customValues override', () => {
 });
 
 describe('suggestThreshold — edge cases (documents current, unguarded behavior)', () => {
-  const p = METRIC_PROFILES.mysql_connections;
+  const p = METRIC_PROFILES.mysql_connection_usage_percent;
 
   it('unknown percentile → base undefined → NaN thresholds (no guard)', () => {
     const r = suggestThreshold(p, 'p999', {});
@@ -128,13 +128,13 @@ describe('generateYAML', () => {
   });
 
   it('emits <metric> + <metric>_critical as quoted strings for one selection', () => {
-    const yaml = generateYAML([{ metric: 'mysql_connections', warning: 138, critical: 168 }]);
+    const yaml = generateYAML([{ metric: 'mysql_connection_usage_percent', warning: 57, critical: 70 }]);
     expect(yaml).toBe(
       [
         'tenants:',
         '  my-app:',
-        '    mysql_connections: "138"',
-        '    mysql_connections_critical: "168"',
+        '    mysql_connection_usage_percent: "57"',
+        '    mysql_connection_usage_percent_critical: "70"',
       ].join('\n'),
     );
   });
@@ -158,11 +158,11 @@ describe('generateYAML', () => {
   });
 
   it('round-trips suggestThreshold output into the YAML values', () => {
-    const p = METRIC_PROFILES.mysql_connections;
-    const { warning, critical } = suggestThreshold(p, 'p90', {}); // 138 / 168
-    const yaml = generateYAML([{ metric: 'mysql_connections', warning, critical }]);
-    expect(yaml).toContain('mysql_connections: "138"');
-    expect(yaml).toContain('mysql_connections_critical: "168"');
+    const p = METRIC_PROFILES.mysql_connection_usage_percent;
+    const { warning, critical } = suggestThreshold(p, 'p90', {}); // 57 / 70
+    const yaml = generateYAML([{ metric: 'mysql_connection_usage_percent', warning, critical }]);
+    expect(yaml).toContain('mysql_connection_usage_percent: "57"');
+    expect(yaml).toContain('mysql_connection_usage_percent_critical: "70"');
   });
 });
 

@@ -204,7 +204,7 @@ graph LR
 
 | 檢查 | 工具 | 說明 | 違規時會擋下嗎 |
 |------|------|------|------|
-| YAML Schema | `da-tools validate-config` | 租戶 key 合法性 | **FAIL、exit 1**：沒有讀取端讀的 key 由 `unread_keys` 那列擋，例如 `db-a.yaml: error: unread … (no_row)`；只有 `disable` 沒關到東西（`warning`）這類是 WARN、exit 0（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）。⚠️ 另外，`_` 開頭但不是保留鍵的拼法（`_silense_mode`、租戶層的 `_routing_defaults`）：schema 已關閉 `_` 命名空間，`json_schema` 那列 **FAIL、exit 1**——但只在裝了 Python `jsonschema` 時；da-tools 映像沒裝，該列只印「not checked」的 WARN（#3016）。⛔ **值**只擋 exporter 讀不了的：`mysql_connections: 'not-a-number'` 是 `guard_errors` 那列 **FAIL、exit 1**（da-guard 的 `value_not_served`）；讀得了但不合理的值（例如負數）照樣全綠。da-guard 判為 error 的其他情形也是這一列 **FAIL、exit 1**，例如子目錄 `_defaults.yaml` 寫了根目錄沒宣告的閾值鍵（`subtree_default_undeliverable`；先前 exit 0，[#3387](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3387)）——這份範本不另跑 da-guard，這一列就是它在 Stage 1 的閘門。⚠️ v2.9.0 映像沒有 `guard_errors` 這列，上述都是全綠 <!-- image-caveat: v2.9.0 --> |
+| YAML Schema | `da-tools validate-config` | 租戶 key 合法性 | **FAIL、exit 1**：沒有讀取端讀的 key 由 `unread_keys` 那列擋，例如 `db-a.yaml: error: unread … (no_row)`；只有 `disable` 沒關到東西（`warning`）這類是 WARN、exit 0（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）。⚠️ 另外，`_` 開頭但不是保留鍵的拼法（`_silense_mode`、租戶層的 `_routing_defaults`）：schema 已關閉 `_` 命名空間，`json_schema` 那列 **FAIL、exit 1**——但只在裝了 Python `jsonschema` 時；da-tools 映像沒裝，該列只印「not checked」的 WARN（#3016）。⛔ **值**只擋 exporter 讀不了的：`mysql_connection_usage_percent: 'not-a-number'` 是 `guard_errors` 那列 **FAIL、exit 1**（da-guard 的 `value_not_served`）；讀得了但不合理的值（例如負數）照樣全綠。da-guard 判為 error 的其他情形也是這一列 **FAIL、exit 1**，例如子目錄 `_defaults.yaml` 寫了根目錄沒宣告的閾值鍵（`subtree_default_undeliverable`；先前 exit 0，[#3387](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3387)）——這份範本不另跑 da-guard，這一列就是它在 Stage 1 的閘門。⚠️ v2.9.0 映像沒有 `guard_errors` 這列，上述都是全綠 <!-- image-caveat: v2.9.0 --> |
 | Routing Guardrails | `da-tools validate-config` | group_wait 5s–5m、group_interval 5s–5m、repeat_interval 1m–72h | 超上界／低下界是 **WARN**，且**照常產出**（3 個參數 × 2＝6 種情境 exit 0）；**Alertmanager 讀不了的寫法**（`banana`、`1.5h`、`30m1h`，#2490）在 v2.9.0 之後是 **FAIL、exit 1**——那份設定 Alertmanager 會整份拒收。⚠️ 前提是值寫成加引號的字串：未加引號的數字（如 `repeat_interval: 999999`）會讓 `yaml_quoting` 那列 FAIL、exit 1。⚠️ 替代值分兩種、不是一種：超上界／低下界會 **clamp 成邊界值**，而**無法解析**（如 `repeat_interval: banana`）拿的是**平台預設值**、不是邊界值（`_grar_merge.py` 的 `_apply_timing_params`）。⚠️ v2.9.0 映像對無法解析的值也只有 WARN、exit 0，且把 `1h30m` 當成無法解析、把 `1.5h` 原樣輸出。⚠️ **不要照這句加 `--strict`**：那個旗標是 v2.9.0 之後才進 `validate-config` 的，**你手上這顆映像不接受**——實測 `rc=2`、`unrecognized arguments: --strict`、stdout 零位元組。等到映像有它之後也不影響本列：`--strict` 管的是 domain policy，不改變上述結束碼（原始碼實測） <!-- image-caveat: v2.9.0 --> |
 | Domain Policy | `da-tools evaluate-policy` | 業務域約束（如金融禁止 Slack） | ⚠️ **`da-tools init` 產出的 pre-commit hook 與 CI 都沒有呼叫這支命令**。同一套規則以 `policy_dsl` 的形式內嵌在 `validate-config` 裡，但它需要 `_defaults.yaml` 有 `_policies:` 區段，而 `init` 產出的那份沒有 ⇒ 新 repo 會直接印 `No _policies defined — skipped` |
 | Custom Rule Lint | `da-tools lint` | 自訂規則禁止列表檢查 | ⚠️ 不在 pre-commit hook 裡。產出的 GitHub workflow 有這一步，但它被 `if [ -d "rule-packs/custom" ]` 包住，而 `init` **不建立 `rule-packs/`** ⇒ 在新 repo 是 no-op，直到你自己建立那個目錄為止 |
@@ -359,11 +359,11 @@ kubectl apply -f /tmp/manifests.yaml
 # environments/prod/values.yaml
 thresholdConfig:
   defaults:
-    mysql_connections: 80
+    mysql_connection_usage_percent: 80
     container_cpu: 80
   tenants:
     prod-mariadb:
-      mysql_connections: "70"
+      mysql_connection_usage_percent: "70"
       _routing:
         receiver:
           type: webhook
@@ -483,7 +483,7 @@ repos:
 ```bash
 # 1. 編輯租戶配置
 vi conf.d/prod-mariadb.yaml
-# 將 mysql_connections 從 80 改為 70
+# 將 mysql_connection_usage_percent 從 80 改為 70
 
 # 2. 本機驗證
 da-tools validate-config --config-dir conf.d/

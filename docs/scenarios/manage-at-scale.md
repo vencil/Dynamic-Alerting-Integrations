@@ -49,11 +49,11 @@ cp -r conf.d/ conf.d.before/
 ```yaml
 # conf.d/finance/_defaults.yaml —— domain 層的平台檔
 defaults:
-  mysql_connections: 95   # 從 finance domain 的 90 調高
+  mysql_connection_usage_percent: 95   # 從 finance domain 的 90 調高
 ```
 
-> 閾值以**指標 key**（`mysql_connections`）為鍵，不是以告警名為鍵：
-> `MariaDBHighConnections` 消費的是 `tenant:alert_threshold:mysql_connections`，
+> 閾值以**指標 key**（`mysql_connection_usage_percent`）為鍵，不是以告警名為鍵：
+> `MariaDBHighConnections` 消費的是 `tenant:alert_threshold:mysql_connection_usage_percent`，
 > 所以一個 key 可以驅動多條告警。平台值是不加引號的數字（`map[string]float64`），
 > 租戶覆寫則是加引號的字串。
 
@@ -65,7 +65,7 @@ da-tools config-diff --old-dir conf.d.before/ --new-dir conf.d/
 
 結束碼 0 是沒有變更，1 是有變更（或有沒比對到的東西），2 是沒有結果（工具或 PR 側失敗）。
 
-輸出範例（三個 finance 租戶的樹，`tenant-fin-003` 自己寫了 `mysql_connections: "98"`；加 `--at 2026-10-22T00:00:00Z` 實際跑出）：
+輸出範例（三個 finance 租戶的樹，`tenant-fin-003` 自己寫了 `mysql_connection_usage_percent: "98"`；加 `--at 2026-10-22T00:00:00Z` 實際跑出）：
 
 ```
 # Config Diff Report
@@ -87,13 +87,13 @@ Rendered at: `2026-10-22T00:00:00Z` (schedules, silences and maintenance windows
 
 | Metric | Before | After | Change | Affected Alerts | Tenants |
 |--------|--------|-------|--------|-----------------|---------|
-| mysql_connections | 90 | 95 | looser | MariaDBHighConnections, MariaDBSystemBottleneck | 2 tenants: `tenant-fin-001`, `tenant-fin-002` |
+| mysql_connection_usage_percent | 90 | 95 | looser | MariaDBHighConnections, MariaDBSystemBottleneck | 2 tenants: `tenant-fin-001`, `tenant-fin-002` |
 
 ---
 Summary: 2 tenant(s) changed, 2 metric change(s)
 ```
 
-注意：已自行覆蓋 `mysql_connections` 的租戶（這裡的 `tenant-fin-003`）不在受影響清單中——覆寫的鍵是指標 key，不是告警名。路由或 receiver 有變時，報告另有對應區段。要機器可讀的結果用 `--format json`。
+注意：已自行覆蓋 `mysql_connection_usage_percent` 的租戶（這裡的 `tenant-fin-003`）不在受影響清單中——覆寫的鍵是指標 key，不是告警名。路由或 receiver 有變時，報告另有對應區段。要機器可讀的結果用 `--format json`。
 
 ### D. 確認後提交 PR
 
@@ -124,25 +124,25 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-042 --show-sources --conf-
     "finance/_defaults.yaml"
   ],
   "effective_config": {
-    "mysql_connections": 90,
+    "mysql_connection_usage_percent": 90,
     "container_memory": "92"
   }
 }
 ```
 
-`defaults_chain` 就是合併順序，越內層越後面。`mysql_connections: 90` 是不加引號的
+`defaults_chain` 就是合併順序，越內層越後面。`mysql_connection_usage_percent: 90` 是不加引號的
 數字 ⇒ 來自平台的 `_defaults.yaml`，而鏈上最內層設它的是 `finance/_defaults.yaml`，
 也就是 **domain 層**。（`container_memory` 是加引號的字串，那個是租戶自己設的。）
 若輸出另有 `platform_overlay`，其中列出的鍵來自根目錄平台檔 `tenants:` 區塊給這個租戶的值
 （#2019），既不是 defaults chain 也不是租戶檔——這些鍵的來源以該清單為準，不看引號。
 同理，`profile_overlay` 列出租戶以 `_profile` 選用的 profile 補上的鍵（#2117）。
-若只想為這個租戶調整 `mysql_connections`，在 tenant 檔案中覆蓋即可：
+若只想為這個租戶調整 `mysql_connection_usage_percent`，在 tenant 檔案中覆蓋即可：
 
 ```yaml
 # conf.d/finance/us-east/prod/tenant-fin-042.yaml
 tenants:
   tenant-fin-042:
-    mysql_connections: "120"   # 只對此租戶提高；加引號——租戶值是
+    mysql_connection_usage_percent: "95"    # 只對此租戶提高；加引號——租戶值是
                                # ScheduledValue（字串｜物件）
 ```
 
@@ -171,7 +171,7 @@ python scripts/tools/dx/describe_tenant.py tenant-fin-001 --diff tenant-fin-080 
     "pg_replication_lag": "60"
   },
   "different": {
-    "mysql_connections": {"a": "110", "b": "120"}
+    "mysql_connection_usage_percent": {"a": "85", "b": "92"}
   }
 }
 ```

@@ -188,10 +188,10 @@ conf.d/
 
 | 形式 | 範例 key | 範例 value | 備註 |
 |------|---------|-----------|------|
-| 純量閾值 | `mysql_connections` | `"70"` | 最常見 |
+| 純量閾值 | `mysql_connection_usage_percent` | `"70"` | 最常見 |
 | 維度標籤（精確） | `"redis_connected_clients{instance='redis-orders:6379'}"` | `"500:critical"` | YAML key 必加引號；不繼承 defaults；每個 label 都要在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告，否則不產生 metric（ADR-038 §11）。⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 取租戶最大值，維度鍵改到的是整個租戶的門檻（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)） |
 | 維度標籤（regex） | `"oracle_tablespace_used_percent{tablespace_name=~'SYS.*'}"` | `"95"` | 輸出 `tablespace_name_re` label，交 PromQL `label_replace` 匹配；`dimensions:` 要為該 base 宣告的是 `tablespace_name_re`（送出的名稱），否則不產生 metric |
-| 排程式閾值 | `mysql_connections:` | `default + overrides[]` | UTC `HH:MM-HH:MM` 窗口，多窗口 first-match-wins |
+| 排程式閾值 | `mysql_connection_usage_percent:` | `default + overrides[]` | UTC `HH:MM-HH:MM` 窗口，多窗口 first-match-wins |
 | 租戶 metadata | `_metadata` | `{runbook_url, owner, tier, …}` | 注入 `tenant_metadata_info` |
 | Silent mode | `_silent_mode` | `"warning"` 或 `{target, expires, reason}` | `expires` 自動失效 |
 | Maintenance | `_state_maintenance` | `{target, expires, reason, recurring[]}` | 窗口內抑制狀態告警 |
@@ -277,17 +277,17 @@ da-guard effective --config-dir conf.d/
 子命令 `threshold-values`（[#3267](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3267)）不讀樹：從 stdin 讀一個 JSON 陣列，每筆 `{"key": "<閾值 key>", "text": "<原文>"}`，在 stdout 依同樣順序印出 exporter 怎麼讀每一筆——`number`（共用的 `value[:severity]` 文法讀到的有限數值，讀不到為 `null`）、`non_finite`（數值那半讀成 NaN／±Inf 時為 `"NaN"`／`"+Inf"`／`"-Inf"`，含 `1e999` 這類溢位，否則 `""`）、`severity`（後綴的 severity；沒有後綴為 `warning`，後綴被拒為 `""`）、`refused`（exporter 對這個 key 拒收的原因 `non_finite`／`unparsed`，讀得到或 `disable` 為 `""`；`<key>_critical` 整個值當數字讀，所以只有這欄與 key 有關）。判定全部來自 `pkg/config` 讀閾值的同一組函式（`ReadThresholdText`），`check_threshold_unit_sanity.py` 每次執行把所有值一次送進來。結束碼：0 正常；2 為多了參數、讀不到 stdin，或 stdin 不是這種陣列。
 
 ```bash
-echo '[{"key":"mysql_connections","text":"70:critical"},{"key":"mysql_connections","text":"1e999"}]' | da-guard threshold-values
-# [{"key":"mysql_connections","text":"70:critical","number":70,"non_finite":"","severity":"critical","refused":""},
-#  {"key":"mysql_connections","text":"1e999","number":null,"non_finite":"+Inf","severity":"warning","refused":"unparsed"}]
+echo '[{"key":"mysql_connection_usage_percent","text":"70:critical"},{"key":"mysql_connection_usage_percent","text":"1e999"}]' | da-guard threshold-values
+# [{"key":"mysql_connection_usage_percent","text":"70:critical","number":70,"non_finite":"","severity":"critical","refused":""},
+#  {"key":"mysql_connection_usage_percent","text":"1e999","number":null,"non_finite":"+Inf","severity":"warning","refused":"unparsed"}]
 ```
 
 子命令 `key-spellings`（[#3556](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3556)）不讀樹：從 stdin 讀一個租戶設定鍵的 JSON 字串陣列，在 stdout 依同樣順序印出每個鍵的 `{key, canonical, spellings}`——`canonical` 是 exporter 的現行拼法（退役的 #1231 別名套在鍵的前段上，完全相同或帶 `_critical`，`{…}` 原樣保留），`spellings` 是同一個閾值的所有拼法，現行拼法排第一（沒有別名的鍵為 `[key]`）。判定全部來自 `pkg/config` 的 `SpellingsOf`；Policy-as-Code、`diagnose`、`backtest-threshold`、`threshold-recommend` 都用它比對新舊拼法，Python 不另寫一份。結束碼：0 正常；2 為多了參數、讀不到 stdin，或 stdin 不是字串陣列。
 
 ```bash
-echo '["mysql_threads_running_critical{db=\"a\"}","mysql_connections"]' | da-guard key-spellings
+echo '["mysql_threads_running_critical{db=\"a\"}","mysql_connection_usage_percent"]' | da-guard key-spellings
 # [{"key":"mysql_threads_running_critical{db=\"a\"}","canonical":"mysql_threads_running_critical{db=\"a\"}","spellings":["mysql_threads_running_critical{db=\"a\"}","mysql_cpu_critical{db=\"a\"}"]},
-#  {"key":"mysql_connections","canonical":"mysql_connections","spellings":["mysql_connections"]}]
+#  {"key":"mysql_connection_usage_percent","canonical":"mysql_connection_usage_percent","spellings":["mysql_connection_usage_percent"]}]
 ```
 
 ### `da-parser` — kube-prometheus 規則 → ParseResult JSON

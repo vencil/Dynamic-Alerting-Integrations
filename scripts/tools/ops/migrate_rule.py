@@ -843,7 +843,7 @@ def apply_auto_suppression(results):
             continue
 
         # 從 base_key 推導 metric_group（取最後一段作為 group name）
-        # 例: mysql_connections → connections, container_cpu → cpu
+        # 例: mysql_connection_usage_percent → percent, container_cpu → cpu
         parts = base_key.split("_")
         metric_group = parts[-1] if parts else base_key
 

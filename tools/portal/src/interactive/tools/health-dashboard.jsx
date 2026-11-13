@@ -17,8 +17,8 @@ const MOCK_TENANTS = {
     rulePacks: ['mariadb', 'kubernetes'],
     routing: { type: 'webhook', target: 'https://webhook.example.com/alerts' },
     thresholds: {
-      mysql_connections: { threshold: 70, current: 52, unit: 'conn' },
-      mysql_connections_critical: { threshold: 95, current: 52, unit: 'conn' },
+      mysql_connection_usage_percent: { threshold: 70, current: 52, unit: '%' },
+      mysql_connection_usage_percent_critical: { threshold: 95, current: 52, unit: '%' },
       mysql_threads_running: { threshold: 30, current: 18, unit: 'threads' },
       mysql_slow_queries: { threshold: 10, current: 2.4, unit: '/s' },
     },

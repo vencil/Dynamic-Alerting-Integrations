@@ -10,7 +10,7 @@
 | kafka | kafka_exporter | 13 | 8 |
 | kubernetes | cAdvisor + kube-state-metrics | 30 | 14 |
 | liveness | threshold-exporter 心跳 | 0 | 2 |
-| mariadb | mysqld_exporter (Percona) | 12 | 17 |
+| mariadb | mysqld_exporter (Percona) | 11 | 17 |
 | mongodb | mongodb_exporter | 10 | 10 |
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter 運營模式 | 0 | 4 |
@@ -19,4 +19,4 @@
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 14 | 9 |
 | redis | redis_exporter | 12 | 9 |
-| **合計** | | **171** | **185** |
+| **合計** | | **170** | **185** |

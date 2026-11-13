@@ -29,14 +29,14 @@ design. An empty `violations` set is a pass.
 OPA Input JSON format:
   {
     "tenants": {
-      "tenant-a": { "mysql_connections": "70", "_routing": {...} },
+      "tenant-a": { "mysql_connection_usage_percent": "70", "_routing": {...} },
       ...
     },
     "served": {
-      "tenant-a": { "mysql_connections": 70, "mysql_connections_critical": 95 },
+      "tenant-a": { "mysql_connection_usage_percent": 70, "mysql_connection_usage_percent_critical": 95 },
       ...
     },
-    "defaults": { "defaults": { "mysql_connections": 80 } },
+    "defaults": { "defaults": { "mysql_connection_usage_percent": 80 } },
     "rule_packs": ["mariadb", "kubernetes"],
     "platform_version": "v2.3.0"
   }
@@ -67,7 +67,7 @@ alone has no `_routing` here. `evaluate-policy` reads the resolved routing.
 `defaults` (#2724): the root defaults carrier's top-level keys as written,
 minus the `_`-prefixed ones — NOT unwrapped. The usual carrier writes its
 thresholds under `defaults:`, so a rego reads
-`input.defaults.defaults.mysql_connections`; `state_filters:` and any other
+`input.defaults.defaults.mysql_connection_usage_percent`; `state_filters:` and any other
 top-level key come along beside it. The thresholds a tenant actually gets
 are in `served`.
 

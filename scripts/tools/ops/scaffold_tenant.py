@@ -431,7 +431,7 @@ def generate_profile(profile_name: str, selected_dbs: list[str], tier: str = "pr
         # They look alike in the registry but behave nothing alike. A
         # `<base>_critical` resolves through resolveCriticalRows, which only
         # requires the BASE to be in `defaults:` — true for pg_connections,
-        # mysql_connections and the rest — so a profile supplying it produces a
+        # mysql_connection_usage_percent and the rest — so a profile supplying it produces a
         # real critical-tier row today. Keep them.
         #
         # ⛔ The flat ones (oracle_* / db2_* / clickhouse_*) are the

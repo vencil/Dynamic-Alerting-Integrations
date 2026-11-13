@@ -46,7 +46,7 @@ violations[v] {
 violations[v] {
     tenant := input.tenants[name]
     critical_metrics := {
-        "mysql_connections",
+        "mysql_connection_usage_percent",
         "pg_connections",
         "redis_memory"
     }

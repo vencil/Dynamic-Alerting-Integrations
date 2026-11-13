@@ -68,8 +68,10 @@ tests:
       # mariadb — MariaDBHighConnections；custom-alerts 的 threshold recipe 也讀同一個指標。
       - series: 'mysql_global_status_threads_connected{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="mysql", metric="connections", severity="warning"}'
-        values: '500x60'
+      - series: 'mysql_global_variables_max_connections{tenant="t1"}'
+        values: '1000x60'
+      - series: 'user_threshold{tenant="t1", component="mysql", metric="connection_usage_percent", severity="warning"}'
+        values: '50x60'
 
       # custom-alerts — Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
       - series: 'user_threshold{tenant="t1", component="custom", metric="mysql_global_status_threads_connected", severity="warning", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", name="conns_high", mode="page"}'

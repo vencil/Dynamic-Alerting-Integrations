@@ -253,7 +253,7 @@
       {
         "name": "metric",
         "label": "Metric",
-        "description": "Threshold key (e.g. mysql_connections, container_cpu). One metric at a time keeps the value distribution scale-coherent.",
+        "description": "Threshold key (e.g. mysql_connection_usage_percent, container_cpu). One metric at a time keeps the value distribution scale-coherent.",
         "type": "query",
         "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
         "query": "label_values(user_threshold, metric)",

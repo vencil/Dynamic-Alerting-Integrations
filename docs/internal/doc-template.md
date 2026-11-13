@@ -201,7 +201,7 @@ A：...
 # 配置示例
 tenants:
   db-a:
-    mysql_connections: "800"
+    mysql_connection_usage_percent: "85"
 ```
 
 ```bash

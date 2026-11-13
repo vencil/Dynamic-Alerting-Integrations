@@ -88,8 +88,8 @@ Rule Pack 涵蓋 MySQL、PostgreSQL、Redis、Kafka 等技術棧，每種一包�
 
 # Dynamic Alerting：單一規則覆蓋所有租戶
 - alert: MariaDBHighConnections
-  expr: tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections
-# 租戶只需宣告閾值：db-a: { mysql_connections: "100" }
+  expr: tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent
+# 租戶只需宣告閾值：db-a: { mysql_connection_usage_percent: "85" }
 ```
 
 完整對比範例（含 Alertmanager 路由）見 [Config-Driven 設計](docs/architecture-and-design.md#2-核心設計config-driven-架構)。

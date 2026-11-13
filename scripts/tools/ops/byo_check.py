@@ -463,7 +463,7 @@ def check_prometheus(args):
     # E2E: Vector matching verification (no check appended on query error)
     results, err = query_prometheus(
         prom_url,
-        "count(tenant:alert_threshold:mysql_connections > 0)"
+        "count(tenant:alert_threshold:mysql_connection_usage_percent > 0)"
     )
     checks.append(_judge_e2e_vector_matching(results, err))
 

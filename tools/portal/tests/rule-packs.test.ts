@@ -99,7 +99,7 @@ const EXPECTED_FALLBACK_SATURATION_KEYS = [
   'jvm_threads',
   'kafka_consumer_lag',
   'mongodb_connections_current',
-  'mysql_connections',
+  'mysql_connection_usage_percent',
   'mysql_threads_running',
   'nginx_connections',
   'nginx_waiting',

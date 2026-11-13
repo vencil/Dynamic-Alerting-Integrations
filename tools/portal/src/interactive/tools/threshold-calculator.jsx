@@ -16,7 +16,7 @@ import { METRIC_PROFILES, PERCENTILES, suggestThreshold, generateYAML } from './
 const t = window.__t || ((zh, en) => en);
 
 export default function ThresholdCalculator() {
-  const [selectedMetric, setSelectedMetric] = useState('mysql_connections');
+  const [selectedMetric, setSelectedMetric] = useState('mysql_connection_usage_percent');
   const [selectedPercentile, setSelectedPercentile] = useState('p90');
   const [customValues, setCustomValues] = useState({});
   const [basket, setBasket] = useState([]);

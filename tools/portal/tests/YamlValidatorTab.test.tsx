@@ -32,7 +32,7 @@ const PLATFORM_STUB = {
       label: 'MariaDB/MySQL',
       category: 'database',
       defaults: {
-        mysql_connections: { value: 80, unit: 'count', desc: 'Max connections warning', metricClass: 'saturation' },
+        mysql_connection_usage_percent: { value: 80, unit: '% of max_connections', desc: 'Connection usage warning', metricClass: 'saturation' },
         mysql_threads_running: { value: 30, unit: 'threads', desc: 'Running threads warning', metricClass: 'saturation' },
         // non-saturation key in a SELECTED pack — exercises the metricClass
         // filter itself (distinct from the pack-not-selected exclusion path)
@@ -162,7 +162,7 @@ describe('YamlValidatorTab — saturation _critical hint', () => {
     // js-yaml refuses duplicate keys; parseYaml then returns config = {} and
     // validateConfig({}) has nothing to say — the parse error must be shown.
     const q = await renderTab();
-    setYaml(q, 'mysql_connections: "70"\nmysql_connections: "80"');
+    setYaml(q, 'mysql_connection_usage_percent: "70"\nmysql_connection_usage_percent: "80"');
     fireEvent.click(q.getByText('Validate'));
     expect(q.queryByText('All checks passed')).toBeNull();
     const errorRows = Array.from(document.querySelectorAll('[class*="bg-red-50"]'))

@@ -88,8 +88,8 @@ Rule Packs cover MySQL, PostgreSQL, Redis, Kafka, and other tech stacks, one pac
 
 # Dynamic Alerting: single rule covers all tenants
 - alert: MariaDBHighConnections
-  expr: tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections
-# Tenants just declare thresholds: db-a: { mysql_connections: "100" }
+  expr: tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent
+# Tenants just declare thresholds: db-a: { mysql_connection_usage_percent: "85" }
 ```
 
 Full comparison with Alertmanager routing examples: [Config-Driven Design](docs/architecture-and-design.en.md#2-core-design-config-driven-architecture).

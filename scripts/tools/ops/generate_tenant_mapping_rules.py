@@ -232,7 +232,7 @@ def load_metrics_from_dictionary(dict_path: str) -> list[str]:
     The generated rule selects the raw series by instance
     (``oracle_sessions{instance=...}``, ADR-006), so the names must be ones an
     exporter emits: the dictionary's keys. This used to collect the
-    ``maps_to`` values, which are tenant threshold keys (``mysql_connections``)
+    ``maps_to`` values, which are tenant threshold keys (``mysql_connection_usage_percent``)
     — no series carries that name, so every generated rule was empty — and a
     ``maps_to: null`` entry crashed ``sorted()`` (issue 1196).
     """

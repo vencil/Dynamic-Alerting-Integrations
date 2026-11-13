@@ -28,16 +28,16 @@ Usage: patch_config.py <tenant> <metric_key> <value>
        patch_config.py --diff [--json] <tenant> <metric_key> <value>
 
 Three-state logic (for keys `_defaults.yaml` gives a value to, under `defaults:`):
-  - Custom value:  patch_config.py db-a mysql_connections 50
-  - Default (delete key): patch_config.py db-a mysql_connections default
-  - Disable:       patch_config.py db-a mysql_connections disable
+  - Custom value:  patch_config.py db-a mysql_connection_usage_percent 50
+  - Default (delete key): patch_config.py db-a mysql_connection_usage_percent default
+  - Disable:       patch_config.py db-a mysql_connection_usage_percent disable
 
   ⚠️ For a key `_defaults.yaml` only DECLARES (its `optional_overrides:` list)
   there is no platform value to fall back to, so `default` does not restore one
   — deleting the key means no value and no series at all (#1321).
 
 Diff preview (terraform plan analogy):
-  - patch_config.py --diff db-a mysql_connections 50
+  - patch_config.py --diff db-a mysql_connection_usage_percent 50
   Shows the value to be written and whether apply would write anything,
   without applying. It does not show the current value: that is the
   exporter's to tell, not this tool's (#1950).

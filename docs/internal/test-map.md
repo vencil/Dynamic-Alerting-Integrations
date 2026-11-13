@@ -87,7 +87,7 @@ defer stop()
 writeTestYAML(t, ...)                  // mutate filesystem
 fakeClock.Advance(50 * time.Millisecond) // fire one tick
 if !waitFor(t, 2*time.Second, func() bool {
-    return m.GetConfig().Defaults["mysql_connections"] == 95
+    return m.GetConfig().Defaults["mysql_connection_usage_percent"] == 95
 }) { t.Fatal(...) }
 ```
 

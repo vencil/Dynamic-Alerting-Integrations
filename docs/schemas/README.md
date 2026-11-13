@@ -67,7 +67,7 @@ Example:
 ```yaml
 tenants:
   my-tenant:
-    mysql_connections: "70"      # ← autocomplete suggests threshold values
+    mysql_connection_usage_percent: "70"      # ← autocomplete suggests threshold values
     _silent_mode:                 # ← hover shows documentation
       target: "warning"           # ← schema validates against ["warning", "critical", "all"]
       expires: "2099-03-13T12:00:00Z"  # ← schema enforces RFC3339 (date-time) format
@@ -148,14 +148,14 @@ Schema validates scheduled thresholds with time-window overrides (UTC-only, supp
 tenants:
   my-tenant:
     # Scalar (backward compatible)
-    mysql_connections: "70"
+    mysql_replication_lag: "30"
 
     # Structured (with overrides)
-    mysql_connections_backup:
+    mysql_connection_usage_percent:
       default: "70"
       overrides:
-        - window: "01:00-09:00"     # 1AM–9AM UTC: stricter threshold
-          value: "1000"
+        - window: "01:00-09:00"     # 1AM–9AM UTC: batch window, looser threshold
+          value: "90"
         - window: "22:00-06:00"     # 10PM–6AM UTC (cross-midnight)
           value: "50"
 ```
@@ -220,7 +220,7 @@ Schema validates profile references:
 tenants:
   my-tenant:
     _profile: "standard-db"      # Must exist in _profiles.yaml
-    mysql_connections: "50"      # Override profile value
+    mysql_connection_usage_percent: "50"      # Override profile value
 ```
 
 ### Metadata Injection

@@ -18,7 +18,7 @@ const t = window.__t || ((zh, en) => en);
 
 function RoutingTraceTab() {
   const [yaml, setYaml] = useState('');
-  const [traceMetric, setTraceMetric] = useState('mysql_connections');
+  const [traceMetric, setTraceMetric] = useState('mysql_connection_usage_percent');
   const [traceSeverity, setTraceSeverity] = useState('warning');
   const [result, setResult] = useState(null);
   const { copied, copy } = useCopyToClipboard();
@@ -103,7 +103,7 @@ function RoutingTraceTab() {
             value={traceMetric}
             onChange={(e) => setTraceMetric(e.target.value)}
             className="w-full text-sm px-2 py-1.5 border rounded focus:ring-2 focus:ring-indigo-500"
-            placeholder="mysql_connections"
+            placeholder="mysql_connection_usage_percent"
           />
         </div>
         <div>
