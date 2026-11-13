@@ -7,6 +7,6 @@ package config
 // more: key, the key that replaces it ("" for none), the issue that
 // retired it and the hint. Looked up by retired_threshold_keys.go.
 var retiredThresholdKeys = []retiredThresholdKey{
-	{"kafka_active_controllers", "", 3783, "The declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key; delete the line."},
-	{"kafka_request_rate", "", 3783, "The declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key; delete the line."},
+	{"kafka_active_controllers", "", 3783, "the declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key"},
+	{"kafka_request_rate", "", 3783, "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"},
 }

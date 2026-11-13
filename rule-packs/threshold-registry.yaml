@@ -990,8 +990,8 @@ retired_keys:
   kafka_active_controllers:
     replaced_by: null
     tracking: 3783
-    hint: "The declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key; delete the line."
+    hint: "the declared danielqsj/kafka_exporter does not export an active-controller metric, so no rule reads this key"
   kafka_request_rate:
     replaced_by: null
     tracking: 3783
-    hint: "The declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key; delete the line."
+    hint: "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"
