@@ -169,7 +169,7 @@ _DEFAULTS_NOT_MAPPING = re.compile(
     r"WARN: _routing_defaults in (?P<file>\S+) must be a mapping, got ")
 _ROUTING_NOT_MAPPING = re.compile(
     r"WARN: (?P<tenant>\S+): _routing must be a mapping or a disabling string")
-_INVALID_TENANT_ID = re.compile(r"WARN: tenant id .* is not a valid tenant id")
+_INVALID_TENANT_ID = re.compile(r"WARN: (?:\S+: )?tenant id .* is not a valid tenant id")
 _UNKNOWN_PROFILE = re.compile(
     r"WARN: (?P<tenant>\S+): _routing_profile references unknown profile '(?P<name>[^']*)'")
 # #2325: the require_critical_escalation lines — the non-compliance line

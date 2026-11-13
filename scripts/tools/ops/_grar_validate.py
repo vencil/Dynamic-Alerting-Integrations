@@ -27,7 +27,7 @@ import re
 import sys
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping, NamedTuple
+from typing import Mapping, NamedTuple, Sequence
 from urllib.parse import urlparse
 
 import yaml
@@ -1246,6 +1246,23 @@ def writes_nothing(key: object, value: object) -> bool:
     return value is None or is_null_schedule(value)
 
 
+def _profile_name_to_write(name: object) -> str:
+    """A routing profile's name as a tenant has to WRITE it to reference it
+    (``shown_key``; #3703). The reader hands every mapping key as its text,
+    so a profile keyed ``123`` or ``true`` is listed — and is referenced by
+    the quoted string only: unquoted, ``_routing_profile: 123`` is a number
+    and is refused (routing_profile_invalid). Such a name is listed in
+    double quotes."""
+    shown = shown_key(name)
+    if shown != name:
+        return shown  # not name-like: its length, nothing to copy
+    try:
+        plain = isinstance(yaml.safe_load(shown), str)
+    except yaml.YAMLError:
+        plain = False
+    return shown if plain else f'"{shown}"'
+
+
 def _validate_profile_refs(parsed: dict) -> list[str]:
     """Validate that _routing_profile references point to existing profiles.
 
@@ -1271,7 +1288,7 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
             # not name-like is not printed; what the author can choose from
             # is — the profiles this tenant's chain defines.
             names = sorted(visible, key=str)
-            listed = ", ".join(shown_key(n) for n in names[:WARN_LIMIT]) + (
+            listed = ", ".join(_profile_name_to_write(n) for n in names[:WARN_LIMIT]) + (
                 f" (+{len(names) - WARN_LIMIT} more)" if len(names) > WARN_LIMIT else "")
             available = (f"; available: {listed}" if names
                          else "; no routing profile is defined for this tenant")
@@ -1430,7 +1447,8 @@ def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
     """
     return [
         Finding(  # #2766: the tenant is the subject; several files, so no file
-        f"  {DUPLICATE_TENANT_PREFIX} tenant '{tenant}' is declared in "
+        # #3703: an id two files declare is whatever the author wrote.
+        f"  {DUPLICATE_TENANT_PREFIX} tenant {shown_value(str(tenant))} is declared in "
         f"{len(files)} files: {', '.join(files)}. The threshold-exporter (and "
         "da-guard) reject the WHOLE config dir in this state, so every tenant "
         "loses alerting, not just this one. Which file owns the tenant is "
@@ -1438,7 +1456,7 @@ def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
         "silently): keep the tenant in exactly one file. If one of these "
         "files cannot be decoded by the threshold-exporter (da-guard exit 3), "
         "fix that file first.",
-        kind="duplicate_tenant", blocks="always", tenant=tenant)
+        kind="duplicate_tenant", blocks="always", tenant=tenant_id_field(tenant))
         for tenant, files in sorted(duplicates.items())
     ]
 
@@ -2415,26 +2433,31 @@ def routing_not_mapping_warning(tenant: str, value: object) -> str:
                                   field="_routing"))
 
 
-def invalid_tenant_id_text(tenant: object) -> str:
+def invalid_tenant_id_text(tenant: object, files: "Sequence[str]" = ()) -> str:
     """#2341 R8: a tenant id the routing plane refuses (is_valid_tenant_id).
 
     The id goes through ``shown_value`` (#3703: an id the routing plane
     refuses is whatever the author wrote — a URL included): a name-like one
     is quoted, so an empty one is visible; any other is its length. The rule
     is cited from its one copy (ADR-035: the schema's
-    ``definitions.tenantId.description``), never restated here. ⚠️ Wording
+    ``definitions.tenantId.description``), never restated here. *files*: the
+    tenant files that declare it — the line starts with the first, as the
+    finding's ``file`` names it: an id that is not printed is found by its
+    file, and two such ids of one length are two different lines. ⚠️ Wording
     as ``routing_not_mapping_text``.
     """
-    return (f"tenant id {shown_value(str(tenant))} is not a valid tenant id "
+    where = f"{files[0]}: " if files else ""
+    return (f"{where}tenant id {shown_value(str(tenant))} is not a valid tenant id "
             f"({tenant_id_rule()[1]}) — no route, receiver or inhibit rule is "
             "rendered for it")
 
 
-def invalid_tenant_id_field(tenant: object) -> "str | None":
-    """The ``tenant`` of an ``invalid_tenant_id`` finding (#3703): the id
-    when it is name-like, else None — a structured field is read by a
-    machine and logged, and an id the routing plane refuses is whatever the
-    author wrote. The message says its length (``invalid_tenant_id_text``)."""
+def tenant_id_field(tenant: object) -> "str | None":
+    """The ``tenant`` of a finding about an id no rule has vouched for
+    (``invalid_tenant_id``, ``duplicate_tenant``; #3703): the id when it is
+    name-like, else None — a structured field is read by a machine and
+    logged, and such an id is whatever the author wrote. The message says
+    its length (``shown_value``)."""
     return tenant if isinstance(tenant, str) and shown_key(tenant) == tenant else None
 
 

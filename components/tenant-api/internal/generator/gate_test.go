@@ -564,3 +564,34 @@ func TestValidateWrites_KeyVerdictNotCompletedOrNotReportedRefuses(t *testing.T)
 		}
 	})
 }
+
+// #3703: the generator does not print an invalid tenant id that is not
+// name-like — its finding has no tenant and a message that says only the
+// id's length. Two such ids of one length, in two files, are still two
+// findings: the file is in the key (and in the message), so the one already
+// on the base is not mistaken for the one this write adds.
+func TestFindingKey_SameLengthInvalidIDsInTwoFiles(t *testing.T) {
+	t.Parallel()
+	const dir = "/scratch/conf.d"
+	at := func(file string) Finding {
+		return Finding{Kind: "invalid_tenant_id", File: &file,
+			Message: file + ": tenant id a string of 8 chars is not a valid tenant id"}
+	}
+	a, b := at("a.yaml"), at("b.yaml")
+	if findingKey(a, dir) == findingKey(b, dir) {
+		t.Fatalf("two files' findings share a key: %q", findingKey(a, dir))
+	}
+	// The key is the file's, not only the message's.
+	b.Message = a.Message
+	if findingKey(a, dir) == findingKey(b, dir) {
+		t.Errorf("the file is not in the key: %q", findingKey(a, dir))
+	}
+	findings := []Finding{a, at("b.yaml")}
+	mark(findings, dir, []Finding{at("a.yaml")}, dir)
+	if findings[0].PreExisting == nil || !*findings[0].PreExisting {
+		t.Errorf("a.yaml's finding, on the base too, is not marked pre-existing")
+	}
+	if findings[1].PreExisting == nil || *findings[1].PreExisting {
+		t.Errorf("b.yaml's finding, new in this write, is marked pre-existing")
+	}
+}

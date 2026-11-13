@@ -194,7 +194,7 @@ from _grar_validate import is_receiver_name_collision  # noqa: E402
 # tenant_uniqueness row through `_lib_confd.tenant_declarations`.
 from _grar_validate import duplicate_tenant_errors  # noqa: E402
 # ADR-035 D3: the invalid-tenant-id refusal cites the rule's own words.
-from _grar_validate import invalid_tenant_id_field, invalid_tenant_id_text  # noqa: E402
+from _grar_validate import invalid_tenant_id_text, tenant_id_field  # noqa: E402
 # #1533: a degraded probe set that cannot vouch for an operator-supplied
 # tenant-triggered inhibit rule (rc 2), and the --validate summary line.
 from _grar_validate import (  # noqa: E402
@@ -734,7 +734,7 @@ def _refuse_invalid_tenant_ids(tree: TenantTree,
     config already in the cluster instead. EXIT_VIOLATION like the duplicate
     tenant refusal (#2315): a verdict on the config, not on the invocation.
     """
-    refusal = invalid_tenant_ids_refusal(tree.invalid_tenant_ids)
+    refusal = invalid_tenant_ids_refusal(tree.invalid_tenant_ids, tree.invalid_tenant_id_files)
     if not refusal:
         return
     _sink_extend(sink, refusal)
@@ -743,18 +743,24 @@ def _refuse_invalid_tenant_ids(tree: TenantTree,
     sys.exit(EXIT_VIOLATION)
 
 
-def invalid_tenant_ids_refusal(invalid_ids: list[str]) -> list[str]:
+def invalid_tenant_ids_refusal(invalid_ids: list[str],
+                               files: "dict[str, list[str]] | None" = None) -> list[str]:
     """The stderr lines of the ADR-035 D3 refusal; [] = not refused.
 
     The judgment `_refuse_invalid_tenant_ids` acts on, as data (see
-    `unreadable_tenant_files_refusal`).
+    `unreadable_tenant_files_refusal`). *files*: id → the tenant files
+    declaring it (`TenantTree.invalid_tenant_id_files`); each line and
+    finding names the first (#3703: an id that is not printed is found by
+    its file).
     """
     if not invalid_ids:
         return []
+    files = files or {}
     return [_refusal_line(f"FAIL: {len(invalid_ids)} invalid tenant id(s) — nothing was "
                           "generated, written or applied; rename the tenant(s):"),
-            *(_refusal_line(f"  {safe_label(invalid_tenant_id_text(t))}",
-                            kind="invalid_tenant_id", tenant=invalid_tenant_id_field(t))
+            *(_refusal_line(f"  {safe_label(invalid_tenant_id_text(t, files.get(t, ())))}",
+                            kind="invalid_tenant_id", tenant=tenant_id_field(t),
+                            file=(files.get(t) or [None])[0])
               for t in invalid_ids)]
 
 
@@ -806,6 +812,7 @@ def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
                  routing_tree_problems: list[tuple[str, str, str, str]],
                  invalid_tenant_ids: list[str] | None = None,
                  field_type_errors: list | None = None,
+                 *, invalid_tenant_id_files: "dict[str, list[str]] | None" = None,
                  ) -> tuple[int, list[str]]:
     """What `main()` refuses a scanned tree for: ``(rc, stderr lines)``.
 
@@ -825,7 +832,7 @@ def tree_refusal(files_read: int, tenant_file_errors: list[tuple[str, str]],
             (EXIT_VIOLATION, duplicate_tenants_refusal(duplicates)),
             (EXIT_CALLER_ERROR, routing_tree_errors_refusal(blocking)),
             (EXIT_VIOLATION, invalid_tenant_ids_refusal(
-                sorted(set(invalid_tenant_ids or []), key=str))),
+                sorted(set(invalid_tenant_ids or []), key=str), invalid_tenant_id_files)),
             (EXIT_VIOLATION, field_type_errors_refusal(field_type_errors or []))):
         if lines:
             return rc, lines

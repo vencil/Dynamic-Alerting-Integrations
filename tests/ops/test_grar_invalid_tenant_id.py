@@ -140,8 +140,14 @@ def test_the_tree_skips_it_and_validate_config_lists_it(tmp_path, tid, body):
     assert "t-ok" in tree.routing_configs
     row = vc.check_schema(str(d))
     assert row["status"] == vc.FAIL, row
-    assert any(f"tenant id {shown_value(tid)} is not a valid tenant id" in m and "skipping" in m
+    assert any(f"x.yaml: tenant id {shown_value(tid)} is not a valid tenant id" in m and "skipping" in m
                for m in row.get("details", [])), row
+    # #3703: the finding names the declaring file; its `tenant` is the id
+    # only when the id is name-like (`tenant_id_field`, both branches).
+    found = [w for w in tree.schema_warnings if w.kind == "invalid_tenant_id"]
+    assert found, tree.schema_warnings
+    assert {(w.tenant, w.file) for w in found} == {
+        ("UPPER" if tid == "UPPER" else None, "x.yaml")}, found
 
 
 def test_every_tenant_refused_still_blocks(tmp_path):

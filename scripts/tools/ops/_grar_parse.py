@@ -26,6 +26,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_validation import scalar_text  # noqa: E402  (#1560 ⑤-b: values into messages)
+from _lib_validation import key_segment, shown_value  # noqa: E402  (#3703: ids no rule vouched for)
 from _lib_validation import (  # noqa: E402  (#1560 ⑤-b: the one plaintext judgement)
     NEEDS_REFERENCE, PROXY_CREDENTIAL, URL_USERINFO,
     credential_shape_problems, plaintext_credential_findings, ref_path_text,
@@ -75,7 +76,7 @@ from _grar_validate import (  # noqa: E402
     check_policy_scope,
     group_by_problem_text,
     ignored_routing_keys,
-    invalid_tenant_id_field,
+    tenant_id_field,
     invalid_tenant_id_text,
     unknown_routing_keys,
     override_redundancies,
@@ -1526,9 +1527,11 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
     merged, orphans = overlay_platform_tenants(
         entries, lambda: _declared_ids(config_dir, reader, unknown), platform=platform)
     for fname, tenant in orphans:
-        print(f"  WARN: {safe_label(fname)}: tenants.{safe_label(str(tenant))} "
+        # #3703: an id no tenant file declares is whatever the platform
+        # file's author wrote — shown_value / key_segment, not the text.
+        print(f"  WARN: {safe_label(fname)}: tenants.{key_segment(str(tenant))} "
               f"ignored — no tenant file declares tenant "
-              f"'{safe_label(str(tenant))}'{tenant_set_unknown_note(unknown)}; a platform "
+              f"{shown_value(str(tenant))}{tenant_set_unknown_note(unknown)}; a platform "
               f"file can only provide defaults for a tenant that already exists",
               file=sys.stderr)
     # #2326: where each tenant lives (its tenant file's directory, relative to
@@ -1554,8 +1557,8 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
                                 key=lambda kv: str(kv[0])):
         first, second = declared[tenant][0], declared[tenant][1]
         _tree_problem(
-            result, "duplicate_tenant", second, f"tenants.{tenant}",
-            f"duplicate tenant id '{tenant}': declared in both {first} and "
+            result, "duplicate_tenant", second, f"tenants.{key_segment(str(tenant))}",
+            f"duplicate tenant id {shown_value(str(tenant))}: declared in both {first} and "
             f"{second} — threshold-exporter rejects a tree that declares one "
             f"tenant in two files (DuplicateTenantError), and routes built "
             f"from a blend of both would match neither; keep the tenant in "
@@ -1569,6 +1572,8 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
     for tenant in declared:
         if not is_valid_tenant_id(tenant):
             result.setdefault("invalid_tenant_ids", []).append(tenant)
+            # #3703: where it is declared — the finding's `file`.
+            result.setdefault("invalid_tenant_id_files", {})[tenant] = list(declared[tenant])
     # First-appearance order, as the per-file loop produced it.
     for tenant in dict.fromkeys(t for _f, t, _o in entries):
         if tenant not in merged:
@@ -1691,6 +1696,8 @@ class TenantTree:
     # Nothing is rendered for them here; the generator refuses the whole
     # tree on them in every mode (`_refuse_invalid_tenant_ids`).
     invalid_tenant_ids: list[str] = field(default_factory=list)
+    # #3703: {id: [file, ...]} — the tenant files declaring each of them.
+    invalid_tenant_id_files: dict[str, list[str]] = field(default_factory=dict)
     # #2906: boolean / enum fields of the wrong type or with an unknown
     # value (`_field_type_error` dicts). The generator refuses the whole
     # tree on them in every mode (`_refuse_field_type_errors`).
@@ -1809,10 +1816,13 @@ def load_tenant_tree(
         schema_warnings.append(routing_not_mapping_warning(tenant, refused[tenant]))
     # #2341 R8: a tenant id the routing plane refuses — nothing rendered.
     invalid_ids = sorted(set(parsed.get("invalid_tenant_ids", [])), key=str)
+    id_files = parsed.get("invalid_tenant_id_files", {})
     for tenant in invalid_ids:
-        schema_warnings.append(skipped_entry_warning(f"  WARN: {invalid_tenant_id_text(tenant)}, skipping",
-                                                     kind="invalid_tenant_id",
-                                                     tenant=invalid_tenant_id_field(tenant)))
+        files = id_files.get(tenant, ())
+        schema_warnings.append(skipped_entry_warning(
+            f"  WARN: {invalid_tenant_id_text(tenant, files)}, skipping",
+            kind="invalid_tenant_id", tenant=tenant_id_field(tenant),
+            file=files[0] if files else None))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing.
     # #2326 (d): a policy file below the root applies to the tenants of its
@@ -1865,10 +1875,11 @@ def load_tenant_tree(
         # #2766: the strict twins of classified lines carry the same kind,
         # so a finding's kind never depends on --strict.
         for tenant in invalid_ids:  # #2341 R8
+            files = id_files.get(tenant, ())
             schema_warnings.append(Finding(
-                f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant)}",
+                f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant, files)}",
                 kind="invalid_tenant_id", blocks="strict",
-                tenant=invalid_tenant_id_field(tenant)))
+                tenant=tenant_id_field(tenant), file=files[0] if files else None))
         # #2341 R5: the same two shapes as a blocking ERROR under --strict.
         for tenant in sorted(refused, key=str):
             schema_warnings.append(Finding(
@@ -1917,6 +1928,7 @@ def load_tenant_tree(
         routing_tree_problems=tree_problems,
         duplicate_tenants=dict(parsed.get("duplicate_tenants", {})),
         invalid_tenant_ids=invalid_ids,
+        invalid_tenant_id_files=dict(id_files),
         field_type_errors=field_type_errors,
         unselected_carriers=list(parsed.get("unselected_carriers", [])),
         routing_disabled=frozenset(parsed.get("disabled_tenants", ())),

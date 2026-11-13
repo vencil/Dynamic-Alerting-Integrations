@@ -260,7 +260,59 @@ def test_an_invalid_tenant_id_is_not_printed(tmp_path):
     assert {f["kind"] for f in findings} == {"invalid_tenant_id"} | _REFUSED, findings
     [f] = [f for f in findings if f["kind"] == "invalid_tenant_id"]
     assert "tenant id a string of " in f["message"] and f["tenant"] is None, f
+    # What locates it instead: the file that declares it.
+    assert f["file"] == "t-a.yaml" and f["message"].lstrip().startswith("t-a.yaml: "), f
     _no_canary(text)
+
+
+def test_two_unprinted_tenant_ids_are_two_findings(tmp_path):
+    """兩個長度相同、都不印出來的不合法 id，分在兩個檔：是兩筆分得開的 finding
+    （tenant-api 用 kind／file／message 比對哪一筆是寫入前就有的）。"""
+    files = _files({"cpu_usage_percent": "85"})
+    files["a.yaml"] = {"tenants": {_canary("id-1"): {"cpu_usage_percent": "85"}}}
+    files["b.yaml"] = {"tenants": {_canary("id-2"): {"cpu_usage_percent": "85"}}}
+    findings, text = validate_run(tmp_path, files)
+    found = [f for f in findings if f["kind"] == "invalid_tenant_id"]
+    assert sorted(f["file"] for f in found) == ["a.yaml", "b.yaml"], found
+    assert len({f["message"] for f in found}) == 2, found
+    _no_canary(text)
+
+
+def test_a_duplicate_tenant_id_is_not_printed(tmp_path):
+    """兩個租戶檔宣告同一個 id：那個 id 也是作者寫的。"""
+    files = _files({"cpu_usage_percent": "85"})
+    for name in ("a.yaml", "b.yaml"):
+        files[name] = {"tenants": {_canary("duplicate"): {"cpu_usage_percent": "85"}}}
+    findings, text = validate_run(tmp_path, files)
+    assert {f["kind"] for f in findings} == {"duplicate_tenant"} | _REFUSED, findings
+    [f] = [f for f in findings if f["kind"] == "duplicate_tenant"]
+    assert "tenant a string of " in f["message"] and f["tenant"] is None, f
+    assert "a.yaml, b.yaml" in f["message"], f
+    _no_canary(text)
+
+
+def test_a_platform_entry_for_no_tenant_is_not_printed(tmp_path):
+    """根平台檔 `tenants:` 裡沒有租戶檔宣告的 id：那行 WARN（只在 stderr，不是
+    finding）說它被忽略，不印那個 id。"""
+    files = _files({"cpu_usage_percent": "85"},
+                   {"tenants": {_canary("platform-id"): {"_silent_mode": "purple"}}})
+    _findings, text = validate_run(tmp_path, files)
+    assert ("WARN: _defaults.yaml: tenants.<key> ignored — no tenant file declares tenant "
+            "a string of ") in text, text
+    _no_canary(text)
+
+
+def test_the_available_profiles_are_the_ones_a_tenant_can_name(tmp_path):
+    """`; available:` 列的是「照抄就能用」的寫法：鍵 `123`／`true` 的 profile
+    只能用加引號的字串引用（不加引號是數字／布林，`routing_profile_invalid`），
+    所以帶引號列出。"""
+    receiver = {"receiver": {"type": "webhook", "url": "https://noc.example.com/a"}}
+    files = _files({"cpu_usage_percent": "85", "_routing_profile": "nope"},
+                   **{"_routing_profiles.yaml": {"routing_profiles": {
+                       "p-one": receiver, 123: receiver, True: receiver}}})
+    findings, _text = validate_run(tmp_path, files)
+    [f] = [f for f in findings if f["kind"] == "unknown_routing_profile"]
+    assert f["message"].endswith('; available: "123", p-one, "true"'), f
 
 
 _DEAD_WINDOWS = [{"window": "00:00-12:00", "value": "70"}]
