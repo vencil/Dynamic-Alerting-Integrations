@@ -235,6 +235,7 @@ Default deny-all (Ingress + Egress) + per-component whitelist:
 | Grafana | monitoring namespace (3000) | Prometheus 9090, VictoriaLogs 9428, external HTTPS 443 (grafana.com plugin install; blocks cloud metadata 169.254.169.254), DNS |
 | VictoriaLogs (helm) | the listed consumers on 9428 (Vector by its namespace; Grafana, chargeback-aggregator, federation-gateway/reconciler and Prometheus by pod label in the same namespace) | none |
 | chargeback-aggregator (helm) | none | DNS, VictoriaLogs 9428 |
+| federation-proxy (helm) | listenPort, only from the federation-gateway pod label (`networkPolicy.gatewaySelector` / `gatewayNamespace`) | DNS, the upstream port in the upstream's namespace (default Prometheus 9090) |
 | threshold-exporter | Prometheus (8080) | DNS only |
 | kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
 | tenant-api | 4180 (oauth2-proxy, cluster-wide); **8080 admits a pod-scoped allow-list only**: Prometheus (`app=prometheus` for the raw deployment, `app.kubernetes.io/name=prometheus` for a Prometheus Operator / kube-prometheus-stack one). Port 8080 serves only `/health`, `/ready` and `/metrics`; the API is on a pod-internal Unix socket ([ADR-027](adr/027-tenant-api-caller-identity.en.md) §2, §3). The helm values key `networkPolicy.internalPortAllow` is the source of this list; every entry is admitted by default and cannot be switched off (an empty selector makes `helm template` fail) | Egress opt-in (`networkPolicy.egress.enabled`, default off); when on: DNS + Prometheus 9090 + `extraEgress` (K8s API / git forge) |

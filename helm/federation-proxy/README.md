@@ -98,6 +98,8 @@ enforced by the chart's `kubeVersion` constraint.
 | Key | Default | Notes |
 |---|---|---|
 | `upstream.url` | `http://prometheus.monitoring.svc:9090` | Any Prometheus-API backend (Prometheus / Thanos / VM single-node) |
+| `networkPolicy.restrictEgress` | `true` | Egress only to DNS and the upstream's port in the upstream's namespace. Set `false` only to supply your own egress policy (e.g. an upstream outside the cluster) |
+| `networkPolicy.upstreamNamespace` | `""` | Namespace of the upstream for that egress rule. Empty = read from `upstream.url` (`<svc>` = this release's namespace, `<svc>.<ns>.svc[.cluster.local]` = `<ns>`); any other host form fails the render. The rule matches the upstream's pod port, so its Service port must equal its targetPort |
 | `tenant.label` | `tenant` | Metric label enforced on every selector — must match the platform data-layer label (#505 audit) |
 | `tenant.headerName` | `X-Tenant-Id` | Gateway-set header carrying the verified tenant id |
 | `networkPolicy.enabled` | `true` | Security-critical — see above |
