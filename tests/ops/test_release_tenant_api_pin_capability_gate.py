@@ -12,7 +12,8 @@ Read as structure, not as text: the workflow is parsed as YAML and every
 `run:` as shell words (`shlex`), so a commented-out command or the flag on
 another script does not count. A gate that runs but whose failure does not
 fail the job (`continue-on-error`, a step `if:`, `|| true`, a pipe, `set +e`,
-`echo …`) does not count either. A workflow that does not parse fails the
+`echo …`, `exit 0`, a heredoc) does not count either: the gate's step must
+hold exactly the tag fetch and the gate. A workflow that does not parse fails the
 test — there is no skip path.
 """
 from __future__ import annotations
@@ -150,7 +151,14 @@ def test_a_failing_gate_fails_the_job() -> None:
     for key in ("continue-on-error", "if", "shell"):
         assert key not in step, f"gate step sets {key!r}: {step.get(key)!r}"
     run = step["run"]
-    assert not any(c[:2] == ["set", "+e"] for c in _commands(step)), "set +e in the gate step"
+    # The step is exactly the tag fetch and the gate: nothing that could end
+    # the step early (`exit 0`), skip the gate (`if false; then`), turn off
+    # errexit (`set +e`, `set +o errexit`), or make the gate mere text (a
+    # heredoc) fits in it.
+    cmds = _commands(step)
+    assert len(cmds) == 2, cmds
+    assert cmds[0] == ["git", "fetch", "--quiet", "--tags", "origin"], cmds[0]
+    assert GATE in cmds[1], cmds[1]
     lines = [ln for ln in run.replace("\\\n", " ").splitlines() if GATE in ln]
     assert len(lines) == 1, lines
     lx = shlex.shlex(lines[0], posix=True, punctuation_chars=";&|")

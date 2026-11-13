@@ -1359,7 +1359,13 @@ def main() -> int:
                 "matches no workload (this gate reports it as orphaned), "
                 "and re-run this release."
             )
-        if len(refused) < len(violations):
+        if args.refuse_exemptions and len(refused) < len(violations):
+            print(
+                "\nFix (--refuse-exemptions): bump each pin above to a tools/v* "
+                "tag whose tree contains the entry point. An exemption is "
+                "refused here too, so registering one does not help."
+            )
+        elif len(refused) < len(violations):
             print(
                 "\nFix: bump the pin to a tools/v* tag whose tree contains the "
                 "entry point, or — if no released tag does yet — register the "

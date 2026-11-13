@@ -1390,6 +1390,22 @@ def test_release_gate_on_tenant_api_fails_naming_each_refused_exemption(monkeypa
     assert "EXEMPT " not in out
 
 
+@pytest.mark.parametrize("dropped", [(_GENERATOR_KEY,), _TENANT_API_KEYS])
+def test_refuse_mode_never_advises_registering_an_exemption(monkeypatch, capsys, dropped):
+    # Workloads whose exemption is dropped become ordinary violations (one
+    # beside a refused exemption, or all of them with none refused). Under
+    # --refuse-exemptions a new exemption would be refused too, so the advice
+    # must not point there.
+    monkeypatch.setattr(gate, "EXEMPTIONS",
+                        {k: v for k, v in gate.EXEMPTIONS.items() if k not in dropped})
+    _argv(monkeypatch, "--chart", "helm/tenant-api", "--refuse-exemptions")
+    assert gate.main() == gate.EXIT_VIOLATION
+    out = capsys.readouterr().out
+    assert ("REFUSED EXEMPTION" in out) == (len(dropped) < len(_TENANT_API_KEYS)), out
+    assert "register the workload in EXEMPTIONS" not in out, out
+    assert "tools/v*" in out
+
+
 def test_chart_scope_alone_still_honours_exemptions(monkeypatch, capsys):
     _argv(monkeypatch, "--chart", "helm/tenant-api")
     assert gate.main() == gate.EXIT_OK
