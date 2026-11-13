@@ -133,31 +133,39 @@ READER_BUILD_SOURCES: "dict[str, tuple[str, str, str]]" = {
 }
 
 
-def absolute_reader_binaries(environ: "dict[str, str] | None" = None) -> None:
+def absolute_reader_binaries(environ: "dict[str, str] | None" = None, *,
+                            pin_path_hits: bool = False) -> None:
     """Make each variable of ``READER_BINARY_ENVS`` in *environ* (default:
-    this process's environment) the absolute path of the reader the
-    resolvers find now, from the current working directory.
+    this process's environment) an absolute path, against the current
+    working directory.
 
-    A relative path — in the variable, or a relative ``$PATH`` entry the
-    reader is found under when the variable is not set — means "relative to
-    the directory of the shell that set it": this process's working
-    directory only until the process changes directory, or starts a process
-    with another ``cwd``. Call this before either, so the binary found here
-    is the one that runs wherever it is resolved next. The reader is looked
-    for as the resolvers do (``resolve_binary``: the variable, then
-    ``$PATH``), and what is found is written to the variable, absolute. A
-    variable that is already absolute is left as it is; so is one that is
-    unset or blank when ``$PATH`` has no such reader (blank still means "not
-    set": the resolvers then look on ``$PATH``, and a later call pins a
-    reader that has appeared there)."""
+    A relative path in one of them means "relative to the directory of the
+    shell that set it" — which is this process's working directory only
+    until the process changes directory, or starts a process with another
+    ``cwd``. Call this before either, so the binary the user named is the
+    one that runs wherever it is resolved. A value that is unset, blank or
+    already absolute is left as it is (blank still means "not set": the
+    resolvers then look on ``$PATH``).
+
+    ⛔ Unset stays unset, whatever ``$PATH`` holds: "variable not set" is how
+    the repo's wrappers (``scripts/ops/with_da_*.sh``, the Makefile) know to
+    build the reader from this checkout, and a reader that happens to be on
+    ``$PATH`` must not take that place.
+
+    *pin_path_hits* — the generator service only — also writes a reader
+    found on ``$PATH`` (the variable unset or blank) to its variable,
+    absolute: its judgement process resolves the readers from another
+    directory, where a relative ``$PATH`` entry names another place. Either
+    way the reader is the one ``resolve_binary`` finds."""
     env = os.environ if environ is None else environ
     for var in READER_BINARY_ENVS:
+        if not pin_path_hits and not env.get(var, "").strip():
+            continue
         found = resolve_binary(None, var, READER_BUILD_SOURCES[var][2], env)
         if found and not os.path.isabs(found):
             found = os.path.abspath(found)
         if found and env.get(var) != found:
             env[var] = found
-
 
 class ConsumerReadError(Exception):
     """The consumer's reading could not be had.

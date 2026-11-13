@@ -350,14 +350,15 @@ def _via_flag(flag: Optional[str]) -> str:
 
 def _pin_readers() -> None:
     """Each reader binary found now, written absolute to its variable
-    (``_lib_consumer_read.absolute_reader_binaries``). ⛔ Before every check
+    (``_lib_consumer_read.absolute_reader_binaries``, a ``$PATH`` hit
+    included). ⛔ Before every check
     of one, not only at start: the judgement process inherits the variables
     and resolves the readers from its own job directory, where a relative
     ``$PATH`` entry names another place — so what a check finds must be what
     the judgement runs. A reader that appears on ``$PATH`` after start is
     found, and pinned, by the next check; once pinned, that path is the
     reader until the service restarts."""
-    _lib_consumer_read.absolute_reader_binaries()
+    _lib_consumer_read.absolute_reader_binaries(pin_path_hits=True)
 
 
 def da_guard_problem(flag: Optional[str] = None) -> Optional[str]:
@@ -1448,7 +1449,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     # Absolute: the judgement process runs in its own job directory, and so
     # does every reader binary it runs — da-guard (#2906 review), and the
     # da-read / da-crdecode of the route generator (#3424).
-    _lib_consumer_read.absolute_reader_binaries()
+    _pin_readers()
     for name in ("socket", "repo", "work_dir", "policy"):
         value = getattr(settings, name)
         if value is not None:

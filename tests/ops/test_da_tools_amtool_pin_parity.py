@@ -5,8 +5,9 @@ routes test``, and the da-tools image carries amtool for it. The answer is only
 worth anything if amtool is the SAME Alertmanager the cluster runs: another
 version can route an alert differently, and the trace would show a path
 production does not take. (Whether Alertmanager accepts a config is not
-amtool's call: ``generate-routes`` asks da-read, which the last test here holds
-to the same version.)
+amtool's call: ``generate-routes`` asks da-read, which
+``test_da_read_builds_with_the_amtool_alertmanager_version`` holds to the same
+version.)
 
 The version SSOT is ``k8s/03-monitoring/deployment-alertmanager.yaml``. The
 Dockerfile takes amtool with ``COPY --from=<that image ref>``, and this test
