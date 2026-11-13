@@ -33,7 +33,8 @@ exporter:
 thresholdConfig:
   defaults:
     mysql_connection_usage_percent: 80   # % of max_connections warning（#3778：取代絕對連線數 mysql_connections）
-    # mysql_threads_running 不給預設：健康值隨主機 CPU 核數而定，arming: operator（#3778）
+    # mysql_threads_running 不給預設：健康值隨主機 CPU 核數而定（#3778）。它在 chart 的 optional_overrides
+    # 宣告，租戶單獨寫即生效；要讓所有租戶有底值（含 _critical），在這裡依主機給值。
     mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted) (#1200 WS5-P0-a)
     pg_connections: 80   # % of max_connections warning；pg 兩鍵升 arming: default（#1200 Q3=C / D4 folding）
     pg_replication_lag: 30   # replication lag warning (seconds)（#1200 Q3=C / D4 folding）

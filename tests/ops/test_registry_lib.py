@@ -630,18 +630,20 @@ def test_real_kafka_blockers_point_at_their_issue():
 def test_not_chart_armed_is_the_registry_derivation():
     """A defaults-tier key that is not `default`, and the `_critical` of one.
 
-    The 61 the gate kept by hand before A1 (45, plus #3732's 16 criticals),
-    plus #3778's mysql_threads_running and its critical (63) — pinned so the
-    derivation can only change with the registry, never with a rule edit
-    here."""
+    The 61 the gate kept by hand before A1 (45, plus #3732's 16 criticals) —
+    pinned so the derivation can only change with the registry, never with a
+    rule edit here. #3778's mysql_threads_running is NOT here: it sits in the
+    optional_overrides tier (declared, no value), so a tenant writing it alone
+    is served — the defaults tier with `arming: operator` rendered it on no
+    runtime face and served nothing."""
     doc = lib.build_registry_doc()
     derived = lib.not_chart_armed_keys(doc)
     keys = doc["keys"]
     for key in derived:
         owner = keys[keys[key].get("critical_of") or key]
         assert owner["tier"] == "defaults" and not lib.is_chart_armed(owner), key
-    assert {"mysql_threads_running", "mysql_threads_running_critical"} <= derived
-    assert len(derived) == 63
+    assert not {"mysql_threads_running", "mysql_threads_running_critical"} & derived
+    assert len(derived) == 61
     # optional_overrides flat keys belong to the unreachable face, not here
     assert not any(keys[k]["tier"] == "optional_overrides"
                    and not keys[k].get("critical_of") for k in derived)
@@ -800,7 +802,7 @@ def test_real_helm_unarmed_block_matches_the_derivation():
     named = set(re.findall(r"#   ([a-z0-9_]+) 未啟用", text))
     expected = {k for k in lib.not_chart_armed_keys(doc)
                 if not doc["keys"][k].get("critical_of")}
-    assert named == expected and len(named) == 35
+    assert named == expected and len(named) == 34  # #3778: mysql_threads_running left
 
 
 def _synth_optional_doc():
@@ -987,16 +989,17 @@ def test_optional_override_list_is_a_yaml_string_array():
     assert "delta_conn_critical" not in parsed["optional_overrides"]
 
 
-def test_real_registry_optional_list_is_the_nine_flat_keys():
-    """#1310/#1311 pin: the shipped list is the 9 FLAT keys, never the 44 the
-    tier holds (both asserted below). Most of the tier is `_critical` keys;
+def test_real_registry_optional_list_is_the_flat_keys():
+    """#1310/#1311 pin: the shipped list is the 10 FLAT keys, never the 45 the
+    tier holds (both asserted below; #3778 added mysql_threads_running). Most of the tier is `_critical` keys;
     listing them would make the shipped list mostly decoration."""
     doc = lib.build_registry_doc()
     tier = {k for k, e in doc["keys"].items()
             if e.get("tier") == "optional_overrides"}
     shipped = lib.optional_override_list_keys(doc)
-    assert len(tier) == 44
+    assert len(tier) == 45
     assert shipped == [
+        "mysql_threads_running",
         "oracle_wait_time_rate", "oracle_process_count",
         "oracle_pga_allocated_bytes",
         "db2_log_usage_percent", "db2_deadlock_rate",
@@ -1131,8 +1134,8 @@ def test_every_real_pack_header_critical_claim_is_true_per_key():
                 f"base_in_chart={bool(base) and base in chart_defaults}, "
                 f"base_in_dev={bool(base) and base in dev_defaults}, "
                 f"on_declared_list={key in shipped_list})")
-    assert checked == 44, (
-        f"expected all 44 optional_overrides keys to be covered, saw {checked}")
+    assert checked == 45, (
+        f"expected all 45 optional_overrides keys to be covered, saw {checked}")
 
 
 def test_splice_check_roundtrip_and_staleness():

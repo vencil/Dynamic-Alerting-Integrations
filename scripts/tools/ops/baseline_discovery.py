@@ -102,7 +102,7 @@ DEFAULT_METRICS = {
     # 的分子分母原文（只加上租戶篩選），取租戶內最滿的 instance。
     "connections": {
         "query": ('max(100 * mysql_global_status_threads_connected{{tenant="{tenant}"}} / '
-                  'clamp_min(mysql_global_variables_max_connections{{tenant="{tenant}"}}, 1))'),
+                  '(mysql_global_variables_max_connections{{tenant="{tenant}"}} > 0))'),
         "unit": "% of max_connections",
         "description": "MariaDB connection usage % of max_connections (busiest instance)",
         "config_key": "mysql_connection_usage_percent",

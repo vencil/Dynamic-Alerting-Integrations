@@ -96,7 +96,7 @@ Domain Experts define composite alerting scenarios with clear business semantics
 
 **Enable/disable mechanism**: Tier 2 scenarios are implicitly controlled through existing three-state controls — no additional toggle key is needed:
 
-- **Enable**: As long as all metrics the scenario depends on have valid thresholds (Custom or Default), the scenario is active. ⚠️ The platform ships no default for `mysql_threads_running` (a healthy value depends on the host's CPU core count, so set it per host; #3778), so `MariaDBSystemBottleneck` does not fire until a tenant or the deployment sets that key.
+- **Enable**: As long as all metrics the scenario depends on have valid thresholds (Custom or Default), the scenario is active. ⚠️ The platform ships no default for `mysql_threads_running` (a healthy value depends on the host's CPU core count, so set it per host; #3778); either a tenant file or the deployment's defaults can set it, so `MariaDBSystemBottleneck` does not fire until a tenant or the deployment sets that key.
 - **Disable a single metric**: Set that metric to `"disable"`. The corresponding recording rule produces no value, making the `>` comparison false and the scenario inactive.
 - **Global maintenance mode**: Set `state_filters.maintenance` to `"true"`. The `unless ... user_state_filter{filter="maintenance"}` clause in the scenario expression takes effect, silencing all alerts. A `recurring:` window takes effect through the same clause inside the window ([#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)). The alert must carry the `maintenance: mute` label, which declares that it holds the clause ([#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)).
 

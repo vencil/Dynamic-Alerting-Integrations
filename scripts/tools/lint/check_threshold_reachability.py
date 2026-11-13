@@ -42,7 +42,7 @@ platform-defaults path can SUPPLY, under the exporter's reachability rules:
 
 KNOWN_UNWIRED: the keys already dead at the time this gate landed (18 then;
 the 9 B/C/D/E identity repairs shipped in #1231, 9 A-class
-declared-without-value keys remain).
+declared-without-value keys remain; #3778 added mysql_threads_running as a 10th).
 They are grandfathered as INFO (not errors) with a pointer to the tracking
 issue so the gate could merge without first fixing all of them — the real
 fixes (move / rename / delete per root cause) land per root-cause class in
@@ -174,7 +174,8 @@ class _GateViolation(RuntimeError):
 # root-cause tag; the real fixes are tracked in the TRK-337 follow-ups.
 # Started at 18 when the gate landed; the B/C/D/E identity repairs shipped in
 # #1231 (rename/move/add/delete — 9 keys removed via the exit-lock below),
-# leaving the 9 A-class keys, which are NOT a pending mechanical fix.
+# leaving the 9 A-class keys, which are NOT a pending mechanical fix (#3778
+# added a 10th by the same decision: mysql_threads_running).
 #   A = name-correct, tier `optional_overrides`, and now SHIPPED on the runtime
 #       `optional_overrides:` declared list (#1310) → the tenant sets it and it
 #       fires (`resolveDeclaredRows`); the platform asserts no value on purpose,
@@ -189,7 +190,7 @@ class _GateViolation(RuntimeError):
 #   D = key absent from scaffold entirely → add
 #   E = no alert actually consumes it elsewhere / orphan → delete
 #
-# ⚠️ One shared constant, not nine copies: the tag is what `main()` PRINTS
+# ⚠️ One shared constant, not one copy per key: the tag is what `main()` PRINTS
 # (see the `known-unwired` info below), and it was the printed string — not the
 # comment above it — that kept prescribing "move to defaults" for a full release
 # after the comment had been corrected. A test pins its CONTENT, not just its
@@ -211,7 +212,27 @@ KNOWN_UNWIRED: dict[str, str] = {
     "clickhouse_max_part_count": _A_DECLARED,
     "clickhouse_replication_queue": _A_DECLARED,
     "clickhouse_memory_tracking_bytes": _A_DECLARED,
+    # #3778: a healthy running-thread count scales with the host's CPU count,
+    # so the platform declares the key and asserts no value (the redis-style
+    # "defaults tier, operator-armed" placement served nothing for a tenant
+    # that wrote it alone).
+    "mysql_threads_running": _A_DECLARED,
 }
+
+
+def _declared_only_critical_tag(base: str) -> str:
+    """The info a dead `<base>_critical` gets when its base is a grandfathered
+    A-class key. DERIVED, not listed: it is dead exactly while its base is, and
+    the base's own exit-lock covers the fix. Not a tenant-side posture like the
+    base: the critical row is admitted on `defaults[<base>]` only
+    (`resolveCriticalRows`), so a tenant writing the base alone gets a warning
+    row and no critical one until a defaults carrier holds the base."""
+    return (
+        f"critical tier of declared-only {base}: a tenant's {base} is served "
+        f"(resolveDeclaredRows) but {base}_critical is served only once a "
+        f"defaults carrier holds a {base} value (resolveCriticalRows) — the "
+        "operator supplies that base."
+    )
 
 
 # ── Second supply face: what the SHIPPED chart actually installs ────────────
@@ -638,7 +659,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +5, generators +28. Red here means RAISE the floor.
+#     tolerate +5, generators +27. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -686,6 +707,12 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      kept, DOWN stays 12) and the generator floor 80 -> 79 (+28 / 13 kept).
 #      Because the biggest group shrank too, UP cannot stay at +6 with DOWN at
 #      12: it is +5 from here.)
+#     (#3778 then moved mysql_threads_running to the optional_overrides tier, so
+#      the two generators that render the defaults tier — scaffold and init —
+#      stopped emitting it: 42 -> 41 each, generator total 92 -> 90. A
+#      deliberate removal, so the generator floor went 79 -> 77 and DOWN stays
+#      13; the biggest producer is one of the two that shrank, so UP moves
+#      +28 -> +27. Artifacts unchanged.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
@@ -699,7 +726,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 79
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 77
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 72
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
@@ -3293,8 +3320,15 @@ def run_check(
     errors: list[str] = []
     infos: list[str] = []
 
+    # A dead `<base>_critical` whose base is grandfathered A-class is derived,
+    # not a fresh drift (see `_declared_only_critical_tag`).
+    declared_only_critical = {
+        k for k in dead
+        if k.endswith(_CRITICAL_SUFFIX) and k not in known_unwired
+        and k[: -len(_CRITICAL_SUFFIX)] in known_unwired}
+
     # NEW dead keys (not grandfathered) — a fresh declared-but-unwired drift.
-    for k in sorted(dead - set(known_unwired)):
+    for k in sorted(dead - set(known_unwired) - declared_only_critical):
         errors.append(
             f"UNREACHABLE: alert-demanded threshold key {k!r} is not produced by "
             "generate_defaults() and is not a known-deferred key — this alert can "
@@ -3305,6 +3339,9 @@ def run_check(
     # Grandfathered keys are report-only WHILE still dead...
     for k in sorted(dead & set(known_unwired)):
         infos.append(f"known-unwired {k} — {known_unwired[k]}")
+    for k in sorted(declared_only_critical):
+        infos.append(f"known-unwired-critical {k} — "
+                     f"{_declared_only_critical_tag(k[: -len(_CRITICAL_SUFFIX)])}")
 
     # ...and only while a TENANT can still supply what the platform will not.
     # Declared-list containment (#1310): "the platform asserts no value here"

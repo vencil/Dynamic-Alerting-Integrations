@@ -333,7 +333,9 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090 --json
 ```
 
-The tool automatically checks: tenant label injection → threshold-exporter scrape → user_threshold metrics → Rule Pack loading → recording rules output → vector matching. Displays `PASS` when all items pass.
+The tool automatically checks: tenant label injection → threshold-exporter scrape → user_threshold metrics → Rule Pack loading → recording rules output → vector matching → MariaDB `max_connections`. Displays `PASS` when all items pass.
+
+The last item runs only when `mysql_global_status_threads_connected` exists (otherwise it is a skip): MariaDB connection usage is `threads_connected ÷ max_connections`, and the denominator `mysql_global_variables_max_connections` comes from mysqld_exporter's `global_variables` collector (on by default, `--collect.global_variables`). An instance that lacks it, or reads 0, drops out of the ratio and its `MariaDBHighConnections` / `Critical` never fire, so the item is a warn that names the collector.
 
 > **Manual verification**: If you need step-by-step manual confirmation, the core verification is the vector matching test:
 > ```bash

@@ -475,11 +475,10 @@ RULE_PACK_CATALOG = {
         'label': 'MariaDB / MySQL',
         'critical_seeds': (
             'mysql_connection_usage_percent_critical',
-            # ⛔ #951 added this key "for parity" and put it under `defaults:`,
-            # where it could not do the job the commit message claimed it did.
-            # 30/50 is the saturation pair from #944 (PMM pt-osc, Nichter); it
-            # only ever reaches MariaDBHighThreadsRunningCritical from here.
-            'mysql_threads_running_critical',
+            # No mysql_threads_running_critical (#3778): its base is
+            # declared-only (optional_overrides, no platform value), and a
+            # critical row is admitted on `defaults[<base>]` only — this file
+            # writes no such base, so the seed could never be served.
             'mysql_replication_lag_critical',
         ),
     },

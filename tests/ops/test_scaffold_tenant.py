@@ -41,6 +41,7 @@ from scaffold_tenant import (
     generate_tenant,
     generate_report,
     generate_relabel_snippet,
+    is_shipped_optional_key,
     print_catalog,
     run_non_interactive,
     run_from_onboard,
@@ -174,7 +175,8 @@ class TestGenerateDefaultsDeclaredList:
     def test_supply_face_is_untouched(self):
         """可達性 gate 的供給面只讀 `defaults`；新增 sibling key 不得改變它。"""
         db_packs = [k for k in RULE_PACKS if k != "kubernetes"]
-        assert len(generate_defaults(db_packs)["defaults"]) == 42
+        # 41: #3778 moved mysql_threads_running to the declared (optional_overrides) tier.
+        assert len(generate_defaults(db_packs)["defaults"]) == 41
 
     def test_derivation_is_the_shared_predicate_not_a_fourth_copy(self):
         """清單內容必須逐字等於 chart 那一份的同 pack 子集——同一個 predicate、
@@ -907,11 +909,13 @@ class TestRunFromOnboard:
             for key in RULE_PACKS[db]["defaults"]:
                 assert key in written["defaults"], (db, key)
         oracle_declared = generate_defaults(["kubernetes", "oracle"])["optional_overrides"]
-        assert written["optional_overrides"] == oracle_declared
+        mariadb_declared = generate_defaults(["kubernetes", "mariadb"])["optional_overrides"]
+        assert mariadb_declared == ["mysql_threads_running"]  # #3778
+        assert written["optional_overrides"] == mariadb_declared + oracle_declared
         # Each tenant file lists its OWN packs' declared keys (all in the file
-        # above): db-a chose mariadb, which declares none.
+        # above): db-a chose mariadb, db-b oracle.
         assert [k for k, _ in _stub_key_lines(db_b)] == oracle_declared
-        assert _stub_key_lines(db_a) == []
+        assert [k for k, _ in _stub_key_lines(db_a)] == mariadb_declared
 
     def test_a_tenant_named_twice_is_scaffolded_once(self):
         """迴歸（#3206 10c-3）：hints 的 tenants 重複時，舊版 rc 0（同一檔寫兩次），
@@ -1020,12 +1024,12 @@ class TestRunFromOnboard:
 # 飽和類指標 _critical 教育註解（metric_class == saturation）
 # ============================================================
 
-# 被標 saturation 的 defaults 鍵（真 N=22；同步 CHANGELOG 與 portal 測試常數）
+# 被標 saturation 的 defaults 鍵（真 N=21：#3778 把 mysql_threads_running 移出 defaults 層；同步 CHANGELOG 與 portal 測試常數）
 EXPECTED_SATURATION_KEYS = {
     # kubernetes
     "container_cpu", "container_cpu_throttle", "container_memory",
-    # mariadb
-    "mysql_connection_usage_percent", "mysql_threads_running",
+    # mariadb（mysql_threads_running 自 #3778 在 optional_overrides 層，不在 defaults）
+    "mysql_connection_usage_percent",
     # postgresql
     "pg_connections",
     # redis
@@ -1059,7 +1063,7 @@ class TestSaturationCriticalHead:
     _TEXT = SATURATION_CRITICAL_COMMENT[len("# "):]
 
     def test_saturation_critical_key_gets_the_note(self):
-        at = ("tenants", "db-x", "mysql_threads_running_critical")
+        at = ("tenants", "db-x", "mysql_connection_usage_percent_critical")
         assert saturation_critical_head(at, "50") == self._TEXT
 
     def test_non_saturation_critical_untouched(self):
@@ -1070,21 +1074,21 @@ class TestSaturationCriticalHead:
     def test_base_key_without_critical_suffix_untouched(self):
         """飽和 base 鍵本身（無 _critical 後綴）不插註解。"""
         assert saturation_critical_head(
-            ("tenants", "db-x", "mysql_threads_running"), "30") is None
+            ("tenants", "db-x", "mysql_connection_usage_percent"), "80") is None
 
     def test_a_sequence_item_is_not_a_key(self):
         assert saturation_critical_head(
             ("tenants", "db-x", "_namespaces", "[0]"),
-            "mysql_threads_running_critical") is None
+            "mysql_connection_usage_percent_critical") is None
 
     def test_the_note_lands_on_the_key_in_the_value_sent(self):
         """data_value 把註解掛在那一個鍵上（其他鍵沒有）。"""
         import _lib_confedit
         v = _lib_confedit.data_value({"tenants": {"db-x": {
-            "mysql_threads_running_critical": "50",
+            "mysql_connection_usage_percent_critical": "90",
             "pg_replication_lag_critical": "60"}}}, head=saturation_critical_head)
         rows = v["map"][0][1]["map"][0][1]["map"]
-        assert rows[0] == ["mysql_threads_running_critical", {"str": "50"},
+        assert rows[0] == ["mysql_connection_usage_percent_critical", {"str": "90"},
                            {"head": self._TEXT}]
         assert rows[1] == ["pg_replication_lag_critical", {"str": "60"}]
 
@@ -1093,15 +1097,15 @@ class TestSaturationWriteOutputs:
     """write_outputs() 飽和註解整合測試。"""
 
     def test_tenant_yaml_has_comment_above_saturation_critical(self):
-        """含 mysql_threads_running_critical 的 tenant YAML 註解在該鍵上一行。"""
+        """含 mysql_connection_usage_percent_critical 的 tenant YAML 註解在該鍵上一行。"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            defaults = {"defaults": {"mysql_threads_running": 30}}
-            tenant = {"tenants": {"db-x": {"mysql_threads_running_critical": "50"}}}
+            defaults = {"defaults": {"mysql_connection_usage_percent": 80}}
+            tenant = {"tenants": {"db-x": {"mysql_connection_usage_percent_critical": "90"}}}
             write_outputs(tmpdir, "db-x", defaults, tenant, "report")
             with open(os.path.join(tmpdir, "db-x.yaml"), encoding="utf-8") as f:
                 lines = f.read().split("\n")
             idx = next(i for i, l in enumerate(lines)
-                       if l.strip().startswith("mysql_threads_running_critical:"))
+                       if l.strip().startswith("mysql_connection_usage_percent_critical:"))
             assert lines[idx - 1].strip() == SATURATION_CRITICAL_COMMENT
 
     def test_empty_tenant_noop(self):
@@ -1122,7 +1126,9 @@ class TestSaturationGenerateReport:
     def test_mariadb_report_includes_education_section(self):
         report = generate_report("db-x", ["kubernetes", "mariadb"], "/tmp/out")
         assert "飽和類指標的 critical 層" in report
-        assert "mysql_threads_running_critical" in report
+        # #3778: mysql_threads_running_critical is not offered — its base has
+        # no defaults value, so the critical row cannot be served.
+        assert "mysql_threads_running_critical" not in report
         assert "mysql_connection_usage_percent_critical" in report
         assert "container_cpu_critical" in report
         # #1447: this asserted the repo-relative `docs/…md` path. The report
@@ -1164,18 +1170,24 @@ class TestSaturationRulePacksIntegrity:
 
     def test_saturation_outside_defaults_is_only_a_critical_variant(self):
         """optional_overrides 裡的 saturation 只能是 saturation base 的
-        `_critical`（繼承而來）——不會長出新的 defaults 外飽和鍵。"""
+        `_critical`（繼承而來），或平台宣告、不給值的平鍵（#3778 的
+        mysql_threads_running）與它的 `_critical`——不會長出別的 defaults 外飽和鍵。"""
         bases = saturation_default_keys()
+        declared = {k for pack in RULE_PACKS.values()
+                    for k, info in pack.get("optional_overrides", {}).items()
+                    if is_shipped_optional_key(k) and info.get("metric_class") == "saturation"}
+        assert declared == {"mysql_threads_running"}, declared
         for name, pack in RULE_PACKS.items():
             for key, info in pack.get("optional_overrides", {}).items():
-                if info.get("metric_class") == "saturation":
-                    assert key.endswith("_critical") and key[:-len("_critical")] in bases, \
+                if info.get("metric_class") == "saturation" and key not in declared:
+                    assert key.endswith("_critical") and \
+                        key[:-len("_critical")] in bases | declared, \
                         f"{name}.optional_overrides.{key}"
 
     def test_saturation_set_matches_expected(self):
-        """被標 set == 預期常數（真 N=22）。"""
+        """被標 set == 預期常數（真 N=21）。"""
         assert saturation_default_keys() == EXPECTED_SATURATION_KEYS
-        assert len(EXPECTED_SATURATION_KEYS) == 22
+        assert len(EXPECTED_SATURATION_KEYS) == 21
 
 
 # ---------------------------------------------------------------------------
@@ -1349,16 +1361,16 @@ class TestGenerateTenantInteractiveMetrics:
     def test_optional_overrides_prompted_after_defaults(self):
         """defaults 問完才問 optional_overrides（mariadb 的 _critical tiers）。"""
         # 次序：k8s defaults(3) → k8s optional_overrides(3: container_*_critical)
-        #       → mariadb defaults(3: mysql_connection_usage_percent, mysql_threads_running,
-        #         mysql_replication_lag)
-        #       → mariadb optional_overrides(3: mysql_connection_usage_percent_critical,
-        #         mysql_threads_running_critical, mysql_replication_lag_critical)。
+        #       → mariadb defaults(2: mysql_connection_usage_percent, mysql_replication_lag)
+        #       → mariadb optional_overrides(3: mysql_threads_running（宣告平鍵，#3778）,
+        #         mysql_connection_usage_percent_critical, mysql_replication_lag_critical)。
+        #       mysql_threads_running_critical 不問：它的 base 不在 defaults，寫了也送不出。
         res = _gen_tenant_interactive("db-c", ["kubernetes", "mariadb"], [
             "skip", "skip", "skip",   # k8s 3 defaults
             "skip", "skip", "skip",   # k8s 3 optional_overrides (container_*_critical)
-            "skip", "skip", "skip",   # mariadb 3 defaults
+            "skip", "skip",           # mariadb 2 defaults
+            "skip",                   # mysql_threads_running → 省略
             "100",                    # mysql_connection_usage_percent_critical → 保留
-            "skip",                   # mysql_threads_running_critical → 省略
             "skip",                   # mysql_replication_lag_critical → 省略
             _NEUTRAL_MAINT, _NEUTRAL_SILENT, _NEUTRAL_DEDUP, *_NEUTRAL_ROUTING,
         ])

@@ -264,6 +264,60 @@ def _judge_e2e_vector_matching(results, err):
     }
 
 
+#: Step 3c (#3778): MariaDB instances the connection-usage ratio can read.
+MYSQL_PRESENT_QUERY = "count(mysql_global_status_threads_connected)"
+#: Instances with a connection count but no usable max_connections: the same
+#: label match as the rule's division (rule-pack-mariadb.yaml
+#: `tenant:mysql_connection_usage:percent`), so these drop out of the ratio and
+#: their connection alerts stay silent.
+MYSQL_NO_MAX_CONNECTIONS_QUERY = (
+    "count(mysql_global_status_threads_connected"
+    " unless (mysql_global_variables_max_connections > 0))"
+)
+
+
+def _judge_step3c_mysql_max_connections(present, err, missing, missing_err):
+    """Judge Step 3c (#3778): MariaDBHighConnections divides threads_connected
+    by mysql_global_variables_max_connections, which mysqld_exporter only
+    exports with its global_variables collector (on by default). An instance
+    without it (or reading 0) drops out of the ratio — its connection alerts
+    never fire — so a MariaDB fleet missing it is a warn that names the
+    collector. No MariaDB series at all is a skip (the pack is not in use)."""
+    check = "step3c_mysql_max_connections"
+    if err:
+        return _query_failed(check, err)
+    present_count, failed = (None, None) if not present else _count(check, present)
+    if failed:
+        return failed
+    if not present_count:
+        return {
+            "check": check,
+            "status": "skip",
+            "detail": "No mysql_global_status_threads_connected series — MariaDB pack N/A",
+        }
+    if missing_err:
+        return _query_failed(check, missing_err)
+    missing_count, failed = (0, None) if not missing else _count(check, missing)
+    if failed:
+        return failed
+    if missing_count:
+        return {
+            "check": check,
+            "status": "warn",
+            "detail": f"{missing_count} of {present_count} MariaDB instance(s) have no "
+                      "mysql_global_variables_max_connections above 0 — enable "
+                      "mysqld_exporter's global_variables collector "
+                      "(--collect.global_variables, on by default); without it "
+                      "MariaDBHighConnections / Critical never fire for them.",
+        }
+    return {
+        "check": check,
+        "status": "pass",
+        "detail": f"{present_count} MariaDB instance(s) all export "
+                  "mysql_global_variables_max_connections",
+    }
+
+
 def _judge_step4_disk_recipe_prereq(declaring, err, arriving, arriving_err, running,
                                     running_err=None):
     """Judge Step 4 (disk-recipe prerequisite — kubelet volume-stats).
@@ -466,6 +520,15 @@ def check_prometheus(args):
         "count(tenant:alert_threshold:mysql_connection_usage_percent > 0)"
     )
     checks.append(_judge_e2e_vector_matching(results, err))
+
+    # Step 3c (#3778): the connection-usage ratio's denominator is there. The
+    # follow-up runs only when MariaDB series exist (no mysql → skip).
+    present, present_err = query_prometheus(prom_url, MYSQL_PRESENT_QUERY)
+    missing = missing_err = None
+    if not present_err and present:
+        missing, missing_err = query_prometheus(prom_url, MYSQL_NO_MAX_CONNECTIONS_QUERY)
+    checks.append(_judge_step3c_mysql_max_connections(present, present_err, missing,
+                                                      missing_err))
 
     # Step 4: disk-recipe prerequisite (#692 P0③ W3) — kubelet volume-stats scraped
     # AND tenant-attributed. Only meaningful if a tenant declared a disk-fill custom

@@ -133,7 +133,7 @@ tenants:
 
 **啟停機制**：Tier 2 場景的啟停透過既有三態控制間接實現，不需要額外的開關 key：
 
-- **啟用**：只要場景依賴的各指標閾值均為有效值（Custom 或 Default），場景自動生效。⚠️ `mysql_threads_running` 平台不給預設（健康值隨主機 CPU 核數而定，要依主機給值；#3778），所以 `MariaDBSystemBottleneck` 在租戶或部署方設了這個 key 之前不會觸發。
+- **啟用**：只要場景依賴的各指標閾值均為有效值（Custom 或 Default），場景自動生效。⚠️ `mysql_threads_running` 平台不給預設（健康值隨主機 CPU 核數而定，要依主機給值；#3778）；租戶檔或部署方的 defaults 皆可設定，所以 `MariaDBSystemBottleneck` 在租戶或部署方設了這個 key 之前不會觸發。
 - **停用某一指標**：將該指標設為 `"disable"`，recording rule 不產出值，條件不成立，場景不觸發。
 - **全域維護模式**：透過 `_state_maintenance` 設為 `"enable"`，場景中的 `unless` 子句生效。`recurring:` 週期窗在窗內以同一個子句生效（[#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)）。告警要帶 `maintenance: mute` label，標明它帶有這個子句（[#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)）。
 

@@ -87,16 +87,6 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                                      'removal plus an addition, no '
                                                                      'alias)',
                                                              'metric_class': 'saturation'},
-                          'mysql_threads_running': {'value': 30,
-                                                    'unit': 'threads',
-                                                    'desc': 'threads_running saturation, NOT host '
-                                                            'CPU% — running-threads 1m-avg '
-                                                            "warning; 80→30 = PMM/Nichter 'high' "
-                                                            '(#944); renamed from mysql_cpu (#1231 '
-                                                            'owner-approved reversal of the #944 '
-                                                            'keep — 2-release alias window, old '
-                                                            'spelling still resolves)',
-                                                    'metric_class': 'saturation'},
                           'mysql_replication_lag': {'value': 30,
                                                     'unit': 'seconds',
                                                     'desc': 'Async replication lag warning '
@@ -109,7 +99,21 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                             'Enabled by default (#1200 WS5-P0-a '
                                                             'Q3=C)',
                                                     'metric_class': 'replication'}},
-             'optional_overrides': {'mysql_connection_usage_percent_critical': {'value': 90,
+             'optional_overrides': {'mysql_threads_running': {'value': 30,
+                                                              'unit': 'threads',
+                                                              'desc': 'threads_running saturation, '
+                                                                      'NOT host CPU% — '
+                                                                      'running-threads 1m-avg '
+                                                                      'warning; 30 = PMM/Nichter '
+                                                                      "'high' tier, a reference "
+                                                                      'start to calibrate per host '
+                                                                      '(a healthy count scales '
+                                                                      'with CPU cores); renamed '
+                                                                      'from mysql_cpu (2-release '
+                                                                      'alias window, old spelling '
+                                                                      'still resolves)',
+                                                              'metric_class': 'saturation'},
+                                    'mysql_connection_usage_percent_critical': {'value': 90,
                                                                                 'unit': '% of '
                                                                                         'max_connections',
                                                                                 'desc': 'Critical '

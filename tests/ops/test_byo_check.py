@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -793,6 +794,61 @@ class TestJudgeE2eVectorMatching:
 
     def test_empty_results_warn(self):
         c = bc._judge_e2e_vector_matching([], None)
+        assert c["status"] == "warn"
+
+
+class TestJudgeStep3cMysqlMaxConnections:
+    """#3778: the connection-usage ratio divides by max_connections; an
+    instance without it drops out and its connection alerts never fire."""
+
+    def test_no_mysql_series_skips(self):
+        c = bc._judge_step3c_mysql_max_connections([], None, None, None)
+        assert c["status"] == "skip"
+
+    def test_every_instance_has_max_connections_passes(self):
+        c = bc._judge_step3c_mysql_max_connections(_value("3"), None, [], None)
+        assert c["status"] == "pass"
+        assert "3 MariaDB instance(s)" in c["detail"]
+
+    def test_missing_max_connections_warns_and_names_the_collector(self):
+        c = bc._judge_step3c_mysql_max_connections(_value("3"), None, _value("2"), None)
+        assert c["status"] == "warn"
+        assert "2 of 3" in c["detail"]
+        assert "global_variables" in c["detail"]
+        assert "mysql_global_variables_max_connections" in c["detail"]
+
+    @pytest.mark.parametrize("leg", ["present", "missing"])
+    def test_a_query_not_answered_is_a_caller_error(self, leg):
+        args = ([], "boom", None, None) if leg == "present" else (_value("3"), None, None, "boom")
+        c = bc._judge_step3c_mysql_max_connections(*args)
+        assert (c["status"], c.get("caller_error")) == ("fail", True)
+
+    def test_missing_query_mirrors_the_rule_denominator(self):
+        """The follow-up asks exactly what the rule drops: no max_connections
+        series, or one that reads 0 (rule-pack-mariadb.yaml `> 0`)."""
+        text = (Path(__file__).resolve().parents[2] / "rule-packs"
+                / "rule-pack-mariadb.yaml").read_text(encoding="utf-8")
+        assert "/ (mysql_global_variables_max_connections > 0)" in text
+        assert "unless (mysql_global_variables_max_connections > 0)" in \
+            bc.MYSQL_NO_MAX_CONNECTIONS_QUERY
+
+    def test_orchestrator_warns_when_mysql_lacks_max_connections(self):
+        def _query(prom_url, promql):
+            if promql == bc.MYSQL_PRESENT_QUERY:
+                return _value("2"), None
+            if promql == bc.MYSQL_NO_MAX_CONNECTIONS_QUERY:
+                return _value("2"), None
+            return [], None
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"OK"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+        with patch("urllib.request.urlopen", return_value=mock_resp):
+            with _patch_http(_mock_http_get_json(
+                    {"rules": ({"status": "success", "data": {"groups": []}}, None)})):
+                with patch.object(bc, "query_prometheus", side_effect=_query):
+                    checks = bc.check_prometheus(_args())
+        c = next(c for c in checks if c["check"] == "step3c_mysql_max_connections")
         assert c["status"] == "warn"
 
 

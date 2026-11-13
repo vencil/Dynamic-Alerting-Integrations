@@ -41,7 +41,7 @@ lang: zh
   expr: |
     max by(tenant) (
       100 * mysql_global_status_threads_connected
-      / clamp_min(mysql_global_variables_max_connections, 1)
+      / (mysql_global_variables_max_connections > 0)
     )
 
 - record: tenant:mysql_slow_queries:rate5m

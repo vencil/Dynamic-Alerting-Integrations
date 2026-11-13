@@ -212,10 +212,11 @@ class TestRulePackCatalog:
         # 90 (% of max_connections) since #3778 replaced the absolute 120.
         assert critical['mysql_connection_usage_percent_critical'] == 90
         assert 'mysql_connection_usage_percent_critical' not in mariadb
-        # #1231 rename guard: the canonical spelling, never the retired
-        # mysql_cpu one.
-        assert 'mysql_threads_running' in mariadb
-        assert 'mysql_threads_running_critical' in critical
+        # #3778: mysql_threads_running carries no platform value — it is
+        # declared (optional_overrides), so neither it nor its critical is
+        # seeded. #1231 rename guard: never the retired mysql_cpu spelling.
+        assert 'mysql_threads_running' not in mariadb
+        assert 'mysql_threads_running_critical' not in critical
         assert 'mysql_cpu' not in mariadb
         assert 'mysql_cpu_critical' not in critical
 
@@ -441,9 +442,10 @@ class TestGenDefaultsDeclaredList:
             assert key not in config['defaults']
 
     def test_pack_without_flat_optional_keys_emits_nothing(self):
-        """mariadb's optional tier is `_critical`-only ⇒ no key at all, rather
-        than an empty list (which reads as an accident)."""
-        config = yaml.safe_load(ip._gen_defaults_yaml(['mariadb'], 'monitoring'))
+        """postgresql's optional tier is `_critical`-only ⇒ no key at all,
+        rather than an empty list (which reads as an accident). mariadb was the
+        example until #3778 declared mysql_threads_running."""
+        config = yaml.safe_load(ip._gen_defaults_yaml(['postgresql'], 'monitoring'))
         assert 'optional_overrides' not in config
 
     def test_no_critical_key_is_ever_declared(self):
@@ -759,8 +761,9 @@ class TestGenTenantYamlDeclaredBlock:
         assert 'not an endorsement' in yaml_str
 
     def test_pack_without_declared_keys_gets_no_block(self):
-        """mariadb's optional tier is `_critical`-only ⇒ nothing to say."""
-        yaml_str = ip._gen_tenant_yaml('db-a', ['mariadb'])
+        """postgresql's optional tier is `_critical`-only ⇒ nothing to say.
+        (mariadb was the example until #3778 declared mysql_threads_running.)"""
+        yaml_str = ip._gen_tenant_yaml('db-a', ['postgresql'])
         assert not _stub_key_lines(yaml_str)
         assert 'Declared keys' not in yaml_str
 
@@ -977,7 +980,8 @@ class TestCriticalTierPlacement:
                 assert base in defaults, (
                     f'{name}: {key} has no base {base!r} under `defaults`')
                 checked += 1
-        assert checked >= 11, checked
+        # 10: #3778 dropped mysql_threads_running_critical (its base has no value).
+        assert checked >= 10, checked
 
     def test_generated_defaults_never_carry_a_critical_key(self):
         """Over every pack individually AND the full selection — a per-pack loop
@@ -1011,7 +1015,7 @@ class TestCriticalTierPlacement:
         stub = yaml.safe_load(ip._gen_tenant_yaml('db-a', packs))['tenants']['db-a']
         catalog_critical = {k for p in packs
                             for k in _pack_critical_keys(ip.RULE_PACK_CATALOG[p])}
-        assert len(catalog_critical) >= 11
+        assert len(catalog_critical) >= 10  # #3778: mysql_threads_running_critical dropped
         assert catalog_critical <= set(stub)
 
     def test_stub_header_count_matches_what_it_actually_seeded(self):
@@ -1472,7 +1476,7 @@ class TestCriticalTierPlacement:
 
         seeded = ip._catalog_critical(['mariadb'])
         assert 'mysql_connection_usage_percent_critical' not in seeded
-        assert 'mysql_threads_running_critical' in seeded
+        assert 'mysql_replication_lag_critical' in seeded
 
 
 # ============================================================
@@ -6077,7 +6081,9 @@ class TestTheSummaryDoesNotContradictItself:
                 encoding='utf-8')
         keys = [ln.split(':')[0] for ln in body.splitlines()
                 if ln and not ln.startswith((' ', '#'))]
-        assert keys == ['defaults', 'state_filters', '_routing_defaults'], keys
+        # optional_overrides: mariadb declares mysql_threads_running (#3778).
+        assert keys == ['defaults', 'optional_overrides', 'state_filters',
+                        '_routing_defaults'], keys
         # 反空洞：這個順序必須**不是**字母序，否則 sort_keys 開不開都一樣、
         # 這條測試等於沒有鑑別力。
         assert keys != sorted(keys), keys

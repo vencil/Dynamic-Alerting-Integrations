@@ -221,7 +221,7 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 - 被判為讀不了的檔，exporter 沿用今天同類檔語法錯誤時的處置，log 與 metric 另外帶上 `kind`：
   - 租戶檔：這份檔宣告的租戶不服務，同一棵樹的其他租戶不受影響；記一行 WARN log，`da_config_parse_failure_total` 加一。
   - `_defaults` 鏈裡的檔與其他 `_` 開頭的平台檔：整份略過，記一行 ERROR log（「entire block dropped」），`da_config_parse_failure_total` 加一；合併 defaults 鏈時把它當成空檔，`da-guard effective` 在 `chain_parse_failed` 列出它。依賴它的租戶仍照常載入，只是少了這份檔提供的預設值：只靠這份檔的預設值才送出的閾值不再送出。
-  - 實測（2026-10-21，head 上的 da-guard）：根目錄 `_defaults.yaml` 語法錯時，`served-values` 的 `parse_failed` 列出它，租戶 `t1` 仍在，但原本由它提供預設值的 `mysql_connections` 不再送出，`effective` 的 `chain_parse_failed` 是 `["_defaults.yaml"]`；租戶檔 `t2.yaml` 語法錯時，`t2` 不在 `tenants` 裡，`t1` 照常。兩種情況 da-guard 都回 exit 3。
+  - 實測（2026-10-21，head 上的 da-guard）：根目錄 `_defaults.yaml` 語法錯時，`served-values` 的 `parse_failed` 列出它，租戶 `t1` 仍在，但原本由它提供預設值的 `mysql_connection_usage_percent` 不再送出，`effective` 的 `chain_parse_failed` 是 `["_defaults.yaml"]`；租戶檔 `t2.yaml` 語法錯時，`t2` 不在 `tenants` 裡，`t1` 照常。兩種情況 da-guard 都回 exit 3。
 - tenant-api 的讀取面（`/effective`、租戶列表等經 `pkg/config` 讀 conf.d 的端點）與 exporter 同一步改經這份判定。tenant-api 的寫入沒有自己的形狀規則：本文被判為讀不了時回 400，與其他本文驗證失敗相同，錯誤文字寫出 `kind` 與行號，不引用 `parse-tree` 的說明（說明會引用被拒的鍵或值，而批次 patch 驗證的是可能由多個租戶共用的整份檔）。整檔寫入要取代的原檔被判為讀不了時，視同無法解析的原檔：須有全租戶的寫入權限才能取代。
 - da-guard 對這些檔回 exit 3（§9）。
 - 所以同一份檔不會出現「exporter 照讀、產生器拒收」：產生器、exporter、da-guard、tenant-api 拒收的是同一批檔。
@@ -232,11 +232,11 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 # t1.yaml
 tenants:
   t1:
-    mysql_connections: "80"
+    mysql_connection_usage_percent: "80"
 ---
 tenants:
   t2:
-    mysql_connections: "90"
+    mysql_connection_usage_percent: "90"
 ```
 
 - 修訂時（2026-10-21）的 main：`parse-tree` 把這份檔判為 `multiple_documents`（「a second document starts at line 4; only one document per file is read」），exporter 照讀第一份文件，服務 `t1`，`t2` 被靜默丟掉（`da-guard served-values` 的 `tenants` 只有 `t1`）；單獨執行的 da-guard 回 exit 4，把這份檔列為產生器才判的證據。

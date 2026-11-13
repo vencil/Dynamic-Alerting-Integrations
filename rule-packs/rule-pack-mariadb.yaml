@@ -13,15 +13,24 @@
 #       max_connections, per instance, busiest instance per tenant; 80 = PMM "MySQL connections in
 #       use" template / awesome-prometheus-alerts. Replaces the absolute-count key mysql_connections
 #       (#3778: a unit change is a removal plus an addition, no alias)
-#   mysql_threads_running: 30
-#       threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 80→30
-#       = PMM/Nichter 'high' (#944); renamed from mysql_cpu (#1231 owner-approved reversal of the
-#       #944 keep — 2-release alias window, old spelling still resolves)
-#       未啟用（依部署而定）：健康的 running threads 數隨主機的 CPU 核數而定
 #   mysql_replication_lag: 30   [chart-default]
 #       seconds — Async replication lag warning (seconds behind primary, sql_delay-adjusted); 30 =
 #       APA/mysqld-mixin consensus trigger (they page critical at 30s; demoted to warning — PMM's
 #       lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)
+#
+# optional_overrides（已出貨在清單裡——平台認得這個 key，但不主張它的值）：
+# 下列 key 由平台出貨在 _defaults.yaml / Helm values 的 `optional_overrides:`
+# 清單中，租戶可直接在自己的 conf.d 填值並生效（resolveDeclaredRows 走宣告集，
+# 只在租戶給了值時發射；components/threshold-exporter/app/pkg/config/resolve.go）。
+# 平台不主張值 ⇒ 沒有平台回退：租戶不填就是靜默，那正是這一格的用意。
+# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
+# 已測到反例的那幾個，反例逐條標在該 key 下（registry `value_counterexample`）。
+#   mysql_threads_running: 30
+#       threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 =
+#       PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales
+#       with CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still
+#       resolves)
+#       未啟用（依部署而定）：健康的 running threads 數隨主機的 CPU 核數而定
 #
 # optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：
 # 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。
@@ -93,12 +102,16 @@ groups:
       # match on every label), then the busiest instance per tenant is kept:
       # a sum/sum across instances would average one saturated node away
       # behind idle replicas, and a max/max would divide counts that come from
-      # different nodes. clamp_min keeps a 0 max_connections from yielding +Inf.
+      # different nodes. `> 0` drops an instance whose max_connections reads 0
+      # (dividing by it would be +Inf, and clamping it to 1 would turn 5
+      # connections into 500 % and page critical). An instance whose exporter
+      # cannot read the variable has no max_connections series at all, so it
+      # drops out of the ratio the same way.
       - record: tenant:mysql_connection_usage:percent
         expr: |
           max by(tenant) (
             100 * mysql_global_status_threads_connected
-            / clamp_min(mysql_global_variables_max_connections, 1)
+            / (mysql_global_variables_max_connections > 0)
           )
 
       # Additional Percona-inspired normalization

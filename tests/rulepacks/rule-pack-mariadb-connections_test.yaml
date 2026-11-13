@@ -14,8 +14,12 @@
 #     of the threshold).
 #   - t-warn: 81 % → warning only (critical 90 not reached).
 #   - t-maint: 95 % but in maintenance → suppressed.
-#   - t-zero: max_connections reads 0 (exporter cannot read the variable) →
-#     clamp_min keeps the ratio finite (0 connections → 0 %), no +Inf alert.
+#   - t-zero: 5 connections against a max_connections that reads 0 → the
+#     `> 0` filter drops the instance: no ratio sample, no alert. Clamping the
+#     denominator to 1 instead would read 500 % and page critical — this tenant
+#     is what turns the test red if the denominator goes back to clamp_min.
+#     (An exporter that cannot read the variable sends no max_connections
+#     series at all; the instance drops out of the ratio the same way.)
 rule_files:
   - ../../rule-packs/rule-pack-mariadb.yaml
 
@@ -63,11 +67,13 @@ tests:
         values: '1x20'
 
       - series: 'mysql_global_status_threads_connected{tenant="t-zero", instance="db-0"}'
-        values: '0x20'
+        values: '5x20'
       - series: 'mysql_global_variables_max_connections{tenant="t-zero", instance="db-0"}'
         values: '0x20'
       - series: 'user_threshold{tenant="t-zero", component="mysql", metric="connection_usage_percent", severity="warning"}'
         values: '80x20'
+      - series: 'user_threshold{tenant="t-zero", component="mysql", metric="connection_usage_percent", severity="critical"}'
+        values: '90x20'
 
     promql_expr_test:
       - expr: tenant:mysql_connection_usage:percent
@@ -81,8 +87,6 @@ tests:
             value: 81
           - labels: 'tenant:mysql_connection_usage:percent{tenant="t-maint"}'
             value: 95
-          - labels: 'tenant:mysql_connection_usage:percent{tenant="t-zero"}'
-            value: 0
 
       # for: 30s → firing by 2m. Only the tenants above their tier fire.
       - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname=~"MariaDBHighConnections|MariaDBHighConnectionsCritical"})

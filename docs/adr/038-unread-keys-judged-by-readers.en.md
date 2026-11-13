@@ -289,20 +289,20 @@ For example, a tenant file with a misspelt key:
 ```yaml
 # _defaults.yaml
 defaults:
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
 # db-a.yaml
 tenants:
   db-a:
-    mysql_conections: "70"
+    mysql_conection_usage_percent: "70"
 ```
 
 `da-guard key-verdict --config-dir conf.d` prints this entry for the key, and this finding:
 
 ```json
-{"key": "mysql_conections", "layer": "tenant", "file": "db-a.yaml", "read_by": [],
+{"key": "mysql_conection_usage_percent", "layer": "tenant", "file": "db-a.yaml", "read_by": [],
  "verdict": "unread", "severity": "error", "reason": "no_row", "disable": null,
  "value": "70", "served": null}
-{"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "db-a.yaml",
+{"severity": "error", "kind": "unread", "key": "mysql_conection_usage_percent", "file": "db-a.yaml",
  "tenants": ["db-a"], "reason": "no_row", "blocks": true}
 ```
 

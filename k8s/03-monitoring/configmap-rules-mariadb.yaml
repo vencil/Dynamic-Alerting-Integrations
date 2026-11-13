@@ -17,15 +17,14 @@ data:
     \  rules:\n  - record: tenant:mysql_threads_running:avg1m\n    expr: max by(tenant)\
     \ (avg_over_time(mysql_global_status_threads_running[1m]))\n  - record: tenant:mysql_connection_usage:percent\n\
     \    expr: \"max by(tenant) (\\n  100 * mysql_global_status_threads_connected\\\
-    n  / clamp_min(mysql_global_variables_max_connections, 1)\\n)\\n\"\n  - record:\
-    \ tenant:mysql_slow_queries:rate5m\n    expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))\n\
-    \  - record: tenant:mysql_aborted_connections:rate5m\n    expr: sum by(tenant)\
-    \ (rate(mysql_global_status_aborted_connects[5m]))\n  - record: tenant:mysql_replication_lag:max\n\
-    \    expr: \"max by(tenant) (\\n  mysql_slave_status_seconds_behind_master\\n\
-    \  - (mysql_slave_status_sql_delay or 0 * mysql_slave_status_seconds_behind_master)\\\
-    n)\\n\"\n- name: mariadb-threshold-normalization\n  interval: 15s\n  rules:\n\
-    \  - record: tenant:alert_threshold:mysql_connection_usage_percent\n    expr:\
-    \ max by(tenant) (user_threshold{component=\"mysql\", metric=\"connection_usage_percent\"\
+    n  / (mysql_global_variables_max_connections > 0)\\n)\\n\"\n  - record: tenant:mysql_slow_queries:rate5m\n\
+    \    expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))\n  - record:\
+    \ tenant:mysql_aborted_connections:rate5m\n    expr: sum by(tenant) (rate(mysql_global_status_aborted_connects[5m]))\n\
+    \  - record: tenant:mysql_replication_lag:max\n    expr: \"max by(tenant) (\\\
+    n  mysql_slave_status_seconds_behind_master\\n  - (mysql_slave_status_sql_delay\
+    \ or 0 * mysql_slave_status_seconds_behind_master)\\n)\\n\"\n- name: mariadb-threshold-normalization\n\
+    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:mysql_connection_usage_percent\n\
+    \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"connection_usage_percent\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:mysql_threads_running\n\
     \    expr: max by(tenant) (user_threshold{component=\"mysql\", metric=\"threads_running\"\
     , severity=\"warning\"})\n  - record: tenant:alert_threshold:mysql_replication_lag\n\

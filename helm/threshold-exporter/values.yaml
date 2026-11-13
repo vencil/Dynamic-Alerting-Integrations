@@ -128,8 +128,6 @@ thresholdConfig:
     # 下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了
     # thresholdConfig.existingConfigMap 時 chart 不讀這裡，要在那個 ConfigMap 的來源補值（其 <key>_critical 也要先有 base
     # 值）。原因取自 threshold-registry 的 arming、portability 與 blocker 欄位。
-    # ── mariadb ──
-    #   mysql_threads_running 未啟用（依部署而定）：健康的 running threads 數隨主機的 CPU 核數而定
     # ── redis ──
     #   redis_memory_used_bytes 未啟用（待改比值）：絕對位元組跨部署沒有意義；可攜的形式是佔 maxmemory
     #     的比例（redis_memory_max_bytes），待 #1320
@@ -200,6 +198,12 @@ thresholdConfig:
   # 改內容走 scaffold_tenant.RULE_PACKS ＋ check_threshold_registry.py --regen。
   optional_overrides:
     # >>> GENERATED:threshold-registry:helm-optional — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+    # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
+    - mysql_threads_running
+      # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 =
+      # PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales
+      # with CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still
+      # resolves)
     # ── oracle：Oracle Database (oracledb_exporter) ──
     - oracle_wait_time_rate   # s/s — Wait time rate (5m)
     - oracle_process_count   # count — Active processes warning

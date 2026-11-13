@@ -277,3 +277,55 @@ def test_an_unbound_profiles_threshold_key_is_a_notice_not_a_failure(tmp_path):
         "db-a.yaml": "tenants:\n  db-a:\n    _profile: gold\n"}))
     assert r["status"] == vc.WARN, r
     assert any("notice: profile_not_judged `redis_evictd` (profile_unbound)" in d for d in r["details"]), r
+
+
+# ── #3778: a declared-only key a tenant writes alone is served ─────────────
+#
+# mysql_threads_running carries no platform value (a healthy running-thread
+# count scales with the host's CPU count). It used to sit in the registry's
+# defaults tier with `arming: operator`, which renders it in NO runtime face:
+# a tenant writing it alone got no /metrics row (served-values `no_row`,
+# validate-config rc 1) and the alert went silent on upgrade. The
+# optional_overrides tier puts it on the shipped declared list instead. These
+# run against the REAL dev `_defaults.yaml` (generated from the registry), so
+# moving the key back to the defaults tier and regenerating turns them red.
+_DEV_DEFAULTS = (Path(__file__).resolve().parents[2] / "components" / "threshold-exporter"
+                 / "config" / "conf.d" / "_defaults.yaml")
+
+
+def _served(confd: str, tenant: str) -> dict:
+    import os
+    p = subprocess.run([os.environ["DA_GUARD_BINARY"], "served-values", "--config-dir", confd,
+                        "--tenant", tenant], capture_output=True, encoding="utf-8", timeout=600)
+    assert p.returncode == 0, p.stderr
+    return json.loads(p.stdout)["tenants"][tenant]
+
+
+def test_a_tenant_writing_mysql_threads_running_alone_is_served(tmp_path):
+    d = _tree(tmp_path, {
+        "_defaults.yaml": _DEV_DEFAULTS.read_text(encoding="utf-8"),
+        "db-x.yaml": "tenants:\n  db-x:\n    mysql_threads_running: \"40\"\n"})
+    t = _served(d, "db-x")
+    assert t["keys"]["mysql_threads_running"] == {"exporter": True}, t["keys"]
+    assert t["values"]["mysql_threads_running"] == 40
+    assert {"component": "mysql", "metric": "threads_running", "severity": "warning",
+            "tenant": "db-x"} in [s["labels"] for s in t["series"]["mysql_threads_running"]]
+    r = vc.check_unread_keys(d)
+    assert r["status"] == vc.PASS, r["details"]
+
+
+def test_its_critical_tier_needs_a_base_in_the_defaults(tmp_path):
+    """The critical row is admitted on `defaults[<base>]` only: a tenant base
+    alone serves the warning row, not the critical one, until a defaults
+    carrier holds a base value (what the docs and changelog say)."""
+    defaults = _DEV_DEFAULTS.read_text(encoding="utf-8")
+    tenant = ("tenants:\n  db-x:\n    mysql_threads_running: \"40\"\n"
+              "    mysql_threads_running_critical: \"50\"\n")
+    alone = _served(_tree(tmp_path / "alone", {"_defaults.yaml": defaults, "db-x.yaml": tenant}),
+                    "db-x")
+    assert alone["keys"]["mysql_threads_running_critical"] == {
+        "exporter": False, "reason": "no_row"}, alone["keys"]
+    based = _served(_tree(tmp_path / "based", {
+        "_defaults.yaml": defaults.replace("\ndefaults:\n", "\ndefaults:\n  mysql_threads_running: 30\n", 1),
+        "db-x.yaml": tenant}), "db-x")
+    assert based["keys"]["mysql_threads_running_critical"] == {"exporter": True}, based["keys"]

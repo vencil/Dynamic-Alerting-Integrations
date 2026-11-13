@@ -227,12 +227,13 @@ keys:
     portability: portable
   mysql_threads_running:
     pack: mariadb
-    tier: defaults
+    tier: optional_overrides
     value: 30
     unit: threads
     desc: 'threads_running saturation, NOT host CPU% — running-threads 1m-avg warning;
-      80→30 = PMM/Nichter ''high'' (#944); renamed from mysql_cpu (#1231 owner-approved
-      reversal of the #944 keep — 2-release alias window, old spelling still resolves)'
+      30 = PMM/Nichter ''high'' tier, a reference start to calibrate per host (a healthy
+      count scales with CPU cores); renamed from mysql_cpu (2-release alias window,
+      old spelling still resolves)'
     metric_class: saturation
     arming: operator
     portability: site_specific

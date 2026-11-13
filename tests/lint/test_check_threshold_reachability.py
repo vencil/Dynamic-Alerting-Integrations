@@ -52,7 +52,7 @@ def test_grandfather_list_is_exactly_the_remaining_dead_keys():
     # Scoped by prefix since P1-C added a second info class (not-chart-armed) —
     # counting all infos would silently couple this pin to that ledger's size.
     unwired_infos = [m for m in result["infos"] if m.startswith("known-unwired ")]
-    assert len(unwired_infos) == len(gate.KNOWN_UNWIRED) == 9
+    assert len(unwired_infos) == len(gate.KNOWN_UNWIRED) == 10  # 9 + #3778's mysql_threads_running
     assert all(tag.startswith("A:") for tag in gate.KNOWN_UNWIRED.values())
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
@@ -399,7 +399,9 @@ def test_real_not_chart_armed_comes_from_the_registry():
     lib = gate._registry_lib
     expected = gate._not_chart_armed()
     assert expected == lib.not_chart_armed_keys(lib.load_registry())
-    assert len(expected) == 63  # 61 + #3778's mysql_threads_running and its critical
+    # 61: #3778 moved mysql_threads_running to the optional_overrides tier, so it and
+    # its critical are declared-only (KNOWN_UNWIRED), not defaults-tier-but-unshipped.
+    assert len(expected) == 61
     assert not hasattr(gate, "NOT_CHART_ARMED")
 
 
@@ -501,7 +503,7 @@ def test_a_reachable_grandfathered_key_is_not_double_reported():
 
 
 def test_real_repo_declares_every_grandfathered_key_on_every_face():
-    """Live-repo pin (#1310). The 9 A-class keys are a deliberate posture ONLY
+    """Live-repo pin (#1310). The A-class keys are a deliberate posture ONLY
     because the platform ships their names — on every surface a tenant is
     validated against. Drop one anywhere and the posture silently becomes
     'this alert cannot fire and nobody can fix it'."""
@@ -4054,9 +4056,9 @@ def test_the_headroom_note_states_both_directions_and_both_are_current():
     # UP: the largest pure addition that keeps `total - biggest < floor` true.
     up_gen = gate._DEFAULTS_GENERATOR_KEYS_FLOOR - (g_total - g_biggest) - 1
     up_art = gate._DEFAULTS_ARTIFACT_KEYS_FLOOR - (a_total - a_biggest) - 1
-    assert (up_art, up_gen) == (5, 28), (
+    assert (up_art, up_gen) == (5, 27), (
         f"the HEADROOM note beside the key floors says artifacts +5 / generators "
-        f"+28 upward; measured {up_art} / {up_gen}. Update the note and this "
+        f"+27 upward; measured {up_art} / {up_gen}. Update the note and this "
         "assertion together, and keep the DIRECTION word beside each number.")
 
     # DOWN: how many keys may disappear before the floor itself speaks.

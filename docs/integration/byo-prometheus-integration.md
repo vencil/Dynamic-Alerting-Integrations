@@ -333,7 +333,9 @@ da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090
 da-tools byo-check prometheus --prometheus http://<your-prometheus>:9090 --json
 ```
 
-工具自動檢查：tenant 標籤注入 → threshold-exporter scrape → user_threshold metrics → Rule Pack 載入 → recording rules 輸出 → 向量匹配。所有項目均通過後顯示 `PASS`。
+工具自動檢查：tenant 標籤注入 → threshold-exporter scrape → user_threshold metrics → Rule Pack 載入 → recording rules 輸出 → 向量匹配 → MariaDB 的 `max_connections`。所有項目均通過後顯示 `PASS`。
+
+最後一項只在有 `mysql_global_status_threads_connected` 時檢查（沒有就 skip）：MariaDB 連線使用率是 `threads_connected ÷ max_connections`，分母 `mysql_global_variables_max_connections` 來自 mysqld_exporter 的 `global_variables` collector（預設開啟，`--collect.global_variables`）。缺這個指標或讀到 0 的 instance 會從比值裡消失，它的 `MariaDBHighConnections`／`Critical` 永遠不會響，所以這項列為 warn 並點名 collector。
 
 > **手動驗證**：若需逐步手動確認，核心驗證為向量匹配測試：
 > ```bash
