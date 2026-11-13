@@ -1121,7 +1121,7 @@ lint-e2e: ## Playwright 專用 lint（test.fixme/skip guard，A-13 enforcement�
 	@bash scripts/tools/lint/e2e_spec_lint.sh
 
 .PHONY: lint-portal
-lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / jsx-i18n / babel parse / registry-jsx parity
+lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / jsx-i18n / esbuild parse / line-count / registry-jsx parity
 	@# Bundle of every lint that protects the docs/interactive/ tree.
 	@# Each script exits 0 on success / 1 on findings. Run from repo
 	@# root; designed for CI + local pre-tag verification.
@@ -1131,8 +1131,10 @@ lint-portal: ## da-portal 整套 lint：jsx-loader-compat / undefined-tokens / j
 	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/check_undefined_tokens.py
 	@echo "==> jsx i18n cross-check"
 	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/check_jsx_i18n.py
-	@echo "==> jsx babel parse + line-count (strict)"
-	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/lint_jsx_babel.py --ci --strict-linecount
+	@echo "==> portal jsx/js parse (the build's esbuild)"
+	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/lint_jsx_syntax.py --ci
+	@echo "==> jsx line-count caps (strict)"
+	@PYTHONIOENCODING=utf-8 python3 scripts/tools/lint/check_jsx_linecount.py --ci --strict
 	@echo "==> tool-registry.yaml ↔ jsx parity"
 	@python3 scripts/tools/lint/check_tool_registry_jsx_parity.py
 	@echo "==> Hub UI badge drift (no hardcoded counts)"

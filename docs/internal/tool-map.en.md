@@ -185,6 +185,7 @@ lang: en
 | `check_includes_sync.py` | Check that Chinese and English include snippets stay in sync. |
 | `check_init_chart_pin_published.py` | Init chart-pin gate — the chart `da-tools init` pins must be the chart in the tree. |
 | `check_jsx_i18n.py` | JSX 工具 i18n 完整性 lint |
+| `check_jsx_linecount.py` | Flag portal JSX files grown too large to audit (issue #152). |
 | `check_jsx_loader_compat.py` | Detect JSX-loader-incompatible module syntax (named exports / non-allowlist imports / require() calls). |
 | `check_k8s_manifests.py` | Container/k8s IaC SAST, Layer 4 (raw k8s manifests). |
 | `check_ksm_version_allowlist.py` | KSM version-allowlist invariant lint (ADR-024 partial-misconfig defense). |
@@ -235,7 +236,7 @@ lang: en
 | `detect_sed_damage.py` | Detect sed -i damage on staged files. |
 | `fix_file_hygiene.py` | Fix file hygiene issues: strip null bytes and ensure EOF newline. |
 | `lint_html_doc_links.py` | Raw HTML doc-link validator for MkDocs output. |
-| `lint_jsx_babel.py` | Validate JSX files parse correctly via Babel standalone. |
+| `lint_jsx_syntax.py` | Parse every portal source file the way the portal build does. |
 | `lint_tool_consistency.py` | 互動工具一致性驗證 |
 | `trufflehog_to_sarif.py` | convert trufflehog JSON findings to SARIF 2.1.0 |
 | `validate_docs_versions.py` | 文件版號與計數一致性檢查 |
