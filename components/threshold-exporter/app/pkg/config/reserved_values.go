@@ -102,9 +102,10 @@ func PatchableAsString(k string) (ok bool, reason string) {
 
 // BatchUnsettable reports whether a batch op's `unset` may remove k: the
 // registry's `batch.unset` keys and every retired key — the reserved
-// registry's and the threshold registry's `retired_keys:` (#3829), whose
-// dimensional `<key>{…}` spellings too: while one is on disk the key verdict
-// refuses it, so the tenant must be able to remove it through the API.
+// registry's and the threshold registry's `retired_keys:` (#3829), with
+// their `_critical` and dimensional `<key>{…}` spellings: while one is on
+// disk the key verdict refuses it, so the tenant must be able to remove it
+// through the API.
 func BatchUnsettable(k string) bool {
 	return batchUnsettableIn(batchUnsettableKeys, retiredThresholdKeys, k)
 }

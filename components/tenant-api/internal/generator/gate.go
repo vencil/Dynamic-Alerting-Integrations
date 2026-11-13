@@ -220,7 +220,8 @@ func keyVerdict(kv *KeyVerdict) *gitops.KeyVerdict {
 		Findings: make([]gitops.KeyFinding, len(kv.Findings))}
 	for i, f := range kv.Findings {
 		out.Findings[i] = gitops.KeyFinding{Severity: f.Severity, Kind: f.Kind, Key: f.Key,
-			File: deref(f.File), Tenants: f.Tenants, Reason: deref(f.Reason), Blocks: f.Blocks != nil && *f.Blocks}
+			File: deref(f.File), Tenants: f.Tenants, Reason: deref(f.Reason), Hint: deref(f.Hint),
+			Blocks: f.Blocks != nil && *f.Blocks}
 	}
 	return out
 }

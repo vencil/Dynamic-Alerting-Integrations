@@ -438,6 +438,19 @@ def test_an_inconsistent_retired_key_is_reported(tmp_path, name, entry_for, need
     assert any(e.startswith("inconsistent:") and needle in e for e in errors), (name, errors)
 
 
+def test_a_retired_base_with_an_active_critical_tier_is_reported():
+    """#3829 review: the Go lookup retires `<old>_critical` with `<old>` (as
+    an alias canonicalizes it), so retiring a base whose critical tier is
+    still an active key is a contradiction."""
+    keys = {"aaa_new": {}, "aaa_old_critical": {}}
+    problems = lib.retired_key_problems(
+        {"aaa_old": {"replaced_by": "aaa_new", **_OK_ENTRY}}, keys, {})
+    assert any("still has an ACTIVE critical tier 'aaa_old_critical'" in p for p in problems), problems
+    # Without the critical tier the same entry is consistent.
+    assert lib.retired_key_problems(
+        {"aaa_old": {"replaced_by": "aaa_new", **_OK_ENTRY}}, {"aaa_new": {}}, {}) == []
+
+
 def test_a_missing_tracking_is_also_a_schema_error(tmp_path):
     path = _write_registry_variant(tmp_path, _retire(
         lambda d: {"fixture_retired": {"replaced_by": None, "hint": "fixture hint"}}))

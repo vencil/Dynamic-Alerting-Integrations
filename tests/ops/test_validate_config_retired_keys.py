@@ -100,3 +100,28 @@ def test_served_values_carries_the_hint_and_keeps_the_measurement(tmp_path, reti
     key = json.loads(p.stdout)["tenants"]["ta"]["keys"][_OLD]
     assert key["exporter"] is True, key
     assert "`mysql_connections`" in key["hint"], key
+
+
+def _write(da_guard: str, conf_d: str, key: str) -> subprocess.CompletedProcess:
+    """`da-guard write --json` setting tenant tb's *key* to "70"."""
+    batch = {"files": [{"path": "tb.yaml", "ops": [
+        {"op": "set", "path": ["tenants", "tb", key], "value": {"str": "70"}}]}]}
+    return subprocess.run([da_guard, "write", "--config-dir", conf_d, "--input", "-", "--json"],
+                          input=json.dumps(batch), capture_output=True, text=True, encoding="utf-8",
+                          timeout=120, check=False)
+
+
+def test_da_guard_write_refuses_a_newly_written_retired_key_naming_its_replacement(
+        tmp_path, retired_da_guard):
+    """`da-guard write` 新寫入退役鍵：拒絕、點名替代鍵、不說「沒有讀取端讀它」（exporter 其實讀），
+    檔案不變；同一筆寫成替代鍵則通過。"""
+    conf_d = _tree(tmp_path, f"defaults:\n  {_NEW}: 80\n")
+    before = (tmp_path / "tb.yaml").read_text(encoding="utf-8")
+    p = _write(retired_da_guard, conf_d, _OLD)
+    assert p.returncode == 1, (p.returncode, p.stdout, p.stderr)
+    out = p.stdout + p.stderr
+    assert "write `mysql_connections` instead" in out and _OLD in out, out
+    assert "no reader reads it" not in out, out
+    assert (tmp_path / "tb.yaml").read_text(encoding="utf-8") == before
+    p = _write(retired_da_guard, conf_d, _NEW)
+    assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)

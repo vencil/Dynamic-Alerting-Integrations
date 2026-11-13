@@ -68,6 +68,9 @@ type KeyFinding struct {
 	File     string
 	Tenants  []string
 	Reason   string
+	// Hint (#3829): a retired threshold key's hint, naming the key that
+	// replaces it; "" for any other finding.
+	Hint string
 	// Blocks: the shared verdict says this finding refuses a write
 	// (keyverdict.Blocking, #3016) — the one answer keyVerdictRefusal reads.
 	Blocks bool
@@ -373,6 +376,11 @@ func verdictLine(f KeyFinding, tenants []string) string {
 	what := verdictKinds[f.Kind]
 	if what == "" {
 		what = "is reported as " + f.Kind
+	}
+	if f.Hint != "" {
+		// #3829: a retired threshold key — the exporter may still read it,
+		// so not "read by no reader"; the hint names what replaces it.
+		what = "is a retired key: " + f.Hint
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s: %s: key %s", msgVerdictPrefix, f.Severity, f.Key)

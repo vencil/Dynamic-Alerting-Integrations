@@ -21,7 +21,9 @@ func TestRetiredThresholdIn_MatchesTheHeadExactly(t *testing.T) {
 	for key, want := range map[string]bool{
 		"fixture_old_conns":                        true,
 		`fixture_old_conns{db="a"}`:                true,
-		"fixture_old_conns_critical":               false, // its own registry entry, never derived
+		"fixture_old_conns_critical":               true, // derived, as aliasHead derives it
+		`fixture_old_conns_critical{d="a"}`:        true,
+		"fixture_old_conns_critical_x":             false,
 		"fixture_old_conns_x":                      false,
 		"fixture_old":                              false,
 		"fixture_new_conns":                        false,
@@ -29,6 +31,41 @@ func TestRetiredThresholdIn_MatchesTheHeadExactly(t *testing.T) {
 	} {
 		if _, got := retiredThresholdIn(retiredFixtureTable, key); got != want {
 			t.Errorf("%q: retired=%v, want %v", key, got, want)
+		}
+	}
+}
+
+// #3829 review: closing an alias window moves `<old>` here; `<old>_critical`,
+// which the alias canonicalized as aliasHead does, must be retired with it —
+// naming `<replaced_by>_critical`, or nothing when nothing replaces the base.
+// An entry for the `_critical` key itself wins.
+func TestRetiredThresholdIn_CarriesABaseToItsCriticalTier(t *testing.T) {
+	t.Parallel()
+	r, ok := retiredThresholdIn(retiredFixtureTable, "fixture_old_conns_critical")
+	if !ok || r.key != "fixture_old_conns_critical" || r.replacedBy != "fixture_new_conns_critical" {
+		t.Fatalf("derived %+v %v", r, ok)
+	}
+	if r, ok := retiredThresholdIn(retiredFixtureTable, "fixture_gone_critical"); !ok || r.replacedBy != "" {
+		t.Fatalf("derived without replacement %+v %v", r, ok)
+	}
+	own := append([]retiredThresholdKey{{"fixture_old_conns_critical", "other_key", 7, "own"}}, retiredFixtureTable...)
+	if r, _ := retiredThresholdIn(own, "fixture_old_conns_critical"); r.replacedBy != "other_key" || r.tracking != 7 {
+		t.Fatalf("own entry lost to the derived one: %+v", r)
+	}
+	// Every alias shape canonicalKeyFor maps is a shape this lookup retires
+	// once the alias's old spelling moves here, naming the alias's target.
+	for legacy, canon := range deprecatedKeyAliases {
+		table := []retiredThresholdKey{{legacy, canon, 1, "h"}}
+		for _, k := range []string{legacy, legacy + criticalSuffix, legacy + `{a="b"}`, legacy + criticalSuffix + `{a="b"}`} {
+			c, aliased := canonicalKeyFor(k)
+			r, ok := retiredThresholdIn(table, k)
+			if !aliased || !ok {
+				t.Errorf("%q: aliased=%v retired=%v", k, aliased, ok)
+				continue
+			}
+			if head, _ := splitKeyHead(c); r.replacedBy != head {
+				t.Errorf("%q: replaced by %q, the alias maps it to %q", k, r.replacedBy, head)
+			}
 		}
 	}
 }
@@ -57,7 +94,8 @@ func TestBatchUnsettable_AdmitsEveryRetiredThresholdKey(t *testing.T) {
 		`fixture_old_conns{db="a"}`:  true,
 		"fixture_gone":               true,
 		"fixture_new_conns":          false,
-		"fixture_old_conns_critical": false,
+		"fixture_old_conns_critical": true,
+		"fixture_new_conns_critical": false,
 	} {
 		if got := batchUnsettableIn(reserved, retiredFixtureTable, key); got != want {
 			t.Errorf("%q: unsettable=%v, want %v", key, got, want)

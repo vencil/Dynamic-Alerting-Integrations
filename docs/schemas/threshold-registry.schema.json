@@ -51,7 +51,7 @@
           }
         }
       },
-      "$comment": "The shared key verdict judges a key in this section unread / error / reason retired in every layer, whatever reads it; tenant-api's batch unset admits it. Cross-entry rules (not an active key, on neither side of deprecated_aliases, replaced_by an active key or null, tracking set) are enforced by the fixed-point check (_registry_lib.retired_key_problems). Generated into Go as pkg/config/retired_threshold_keys_gen.go by check_threshold_registry.py --regen. When an alias window closes, the old spelling moves here."
+      "$comment": "The shared key verdict judges a key in this section unread / error / reason retired in every layer, whatever reads it; tenant-api's batch unset admits it. Cross-entry rules (not an active key, on neither side of deprecated_aliases, replaced_by an active key or null, tracking set) are enforced by the fixed-point check (_registry_lib.retired_key_problems). Its `<key>_critical` is retired with it (replaced by `<replaced_by>_critical`, the shape an alias maps), so that tier must not be an active key either. Generated into Go as pkg/config/retired_threshold_keys_gen.go by check_threshold_registry.py --regen. When an alias window closes, the old spelling moves here."
     },
     "packs": {
       "type": "object",

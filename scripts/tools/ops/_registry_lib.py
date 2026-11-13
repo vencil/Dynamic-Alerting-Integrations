@@ -417,7 +417,10 @@ def retired_key_problems(retired: dict, keys: dict, aliases: dict[str, str]) -> 
     two would say opposite things about one spelling; when an alias window
     closes, its old spelling moves here and leaves `deprecated_aliases`), its
     ``replaced_by`` is null or an active key (a hint naming no key would send
-    the operator nowhere), and it names the issue that retired it."""
+    the operator nowhere), and it names the issue that retired it. Its
+    `_critical` tier is retired with it (the Go lookup derives
+    `<old>_critical` -> `<replaced_by>_critical`, as an alias does), so that
+    tier must not be an active key either."""
     problems: list[str] = []
     alias_sides = set(aliases) | set(aliases.values())
     for old, entry in retired.items():
@@ -432,6 +435,13 @@ def retired_key_problems(retired: dict, keys: dict, aliases: dict[str, str]) -> 
             problems.append(
                 f"retired key {old!r} is also in deprecated_aliases — a spelling "
                 "is either still honored (alias) or retired, not both")
+        if old + CRITICAL_SUFFIX in keys:
+            # The lookup (pkg/config/retired_threshold_keys.go) retires
+            # `<old>_critical` with its base, as aliasHead canonicalizes it.
+            problems.append(
+                f"retired key {old!r} still has an ACTIVE critical tier "
+                f"{old + CRITICAL_SUFFIX!r} — the critical tier is retired with "
+                "its base; retire both")
         repl = entry.get("replaced_by")
         if repl is not None and repl not in keys:
             problems.append(

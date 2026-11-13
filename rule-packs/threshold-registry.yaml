@@ -52,7 +52,8 @@
 # deprecated_aliases 移到這裡。--regen 生成 Go 表
 # components/threshold-exporter/app/pkg/config/retired_threshold_keys_gen.go（stale＝--ci 紅）。
 # 一致性（--ci）：不得是現役 key、不得在 deprecated_aliases 任一側、replaced_by 須為
-# 現役 key 或 null、tracking 必填。
+# 現役 key 或 null、tracking 必填。<old>_critical 隨 base 一併退役（判成以
+# <replaced_by>_critical 替代，同 alias 的推導），所以 <old>_critical 也不得是現役 key。
 version: 1
 packs:
   kubernetes:

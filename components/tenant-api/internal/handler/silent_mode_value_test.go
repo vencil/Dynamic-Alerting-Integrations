@@ -121,11 +121,11 @@ func TestBatchTenants_PatchKeysRefusedUpFront(t *testing.T) {
 func TestValidateBatchEdit_UnsetAllowList(t *testing.T) {
 	t.Parallel()
 	for _, k := range []string{"_routing", "_routing_receiver_type"} {
-		if v := validateBatchEdit(nil, []string{k}, "operations[0]"); len(v) != 0 {
+		if v := validateBatchEdit(nil, []string{k}, "operations[0]", nil); len(v) != 0 {
 			t.Errorf("unset %s: %+v", k, v)
 		}
 	}
-	v := validateBatchEdit(nil, []string{"_silent_mode"}, "operations[0]")
+	v := validateBatchEdit(nil, []string{"_silent_mode"}, "operations[0]", nil)
 	if len(v) != 1 || v[0].Reason != `unset can only remove "_routing", "_routing_receiver_type"; got "_silent_mode"` {
 		t.Errorf("unset _silent_mode: %+v", v)
 	}

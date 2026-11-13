@@ -27,6 +27,9 @@ type Block struct {
 	File   string // the finding's file; "" when it has none
 	Tenant string
 	Reason string
+	// Hint (#3829): a retired threshold key's hint, naming the key that
+	// replaces it (Finding's); "" for any other block.
+	Hint string
 	// Own: File is where the tenant's own entry writes Key (its tenant file,
 	// or its entry under a root platform file's `tenants:`) — not a profile
 	// or a defaults file it inherits Key from.
@@ -64,7 +67,8 @@ func Blocks(t Tree) []Block {
 		if !f.Blocks {
 			continue
 		}
-		b := Block{Kind: f.Kind, Key: f.Key, File: deref(f.File), Reason: deref(f.Reason), reading: f.reading}
+		b := Block{Kind: f.Kind, Key: f.Key, File: deref(f.File), Reason: deref(f.Reason), Hint: deref(f.Hint),
+			reading: f.reading}
 		if len(f.Tenants) == 0 {
 			out = append(out, b)
 			continue

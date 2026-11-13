@@ -17,9 +17,13 @@ package config
 // see). The registry is what knows the key was retired, so the shared key
 // verdict refuses it from this table, in every layer, whatever reads it.
 //
-// Lookup contract: the key's head (the part before `{`) EXACTLY. A retired
-// `_critical` key is its own registry entry, as every `_critical` key is a
-// registry key of its own; nothing is derived from a prefix.
+// Lookup contract: the key's head (the part before `{`), exactly or with a
+// `_critical` suffix — the two shapes aliasHead maps for a deprecated alias,
+// so closing an alias window (moving `mysql_cpu` here) also retires
+// `mysql_cpu_critical`, which the alias canonicalized while it was open. A
+// derived `<old>_critical` names `<replaced_by>_critical` as its replacement.
+// An entry written for the `_critical` key itself wins over the derived one.
+// ⛔ Never a prefix match: `<old>_x` is not retired.
 
 import (
 	"fmt"
@@ -71,9 +75,27 @@ func parseRetiredFixture(s string) []retiredThresholdKey {
 	return out
 }
 
-// retiredThresholdIn is table's entry for key's head, if any.
+// retiredThresholdIn is table's entry for key's head, if any: the head's
+// own entry, else — for a `<base>_critical` head — base's entry carried to
+// the critical tier (the file comment's lookup contract).
 func retiredThresholdIn(table []retiredThresholdKey, key string) (retiredThresholdKey, bool) {
 	head, _ := splitKeyHead(key)
+	if r, ok := retiredExact(table, head); ok {
+		return r, true
+	}
+	if base, found := strings.CutSuffix(head, criticalSuffix); found {
+		if r, ok := retiredExact(table, base); ok {
+			r.key = head
+			if r.replacedBy != "" {
+				r.replacedBy += criticalSuffix
+			}
+			return r, true
+		}
+	}
+	return retiredThresholdKey{}, false
+}
+
+func retiredExact(table []retiredThresholdKey, head string) (retiredThresholdKey, bool) {
 	for _, r := range table {
 		if r.key == head {
 			return r, true
