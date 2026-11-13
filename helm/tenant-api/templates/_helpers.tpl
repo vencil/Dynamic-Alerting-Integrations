@@ -226,7 +226,8 @@ from a second copy.
 {{- define "tenant-api.generatorPolicyDir" -}}/etc/da-generator-policy{{- end }}
 {{- define "tenant-api.generatorPolicyPath" -}}{{ include "tenant-api.generatorPolicyDir" . }}/policy.yaml{{- end }}
 {{- /* The generator's /tmp emptyDir. It holds what one judgement hands
-     amtool (the generated Alertmanager config) and nothing else long-lived;
+     da-read as files (the shipped platform rule files) and nothing else
+     long-lived;
      the conf.d tree is in workDir. Exceeding it evicts the pod. */ -}}
 {{- define "tenant-api.generatorTmpSizeLimit" -}}256Mi{{- end }}
 

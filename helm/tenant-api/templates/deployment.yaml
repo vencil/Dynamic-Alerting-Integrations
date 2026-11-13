@@ -432,11 +432,11 @@ spec:
               readOnly: true
             - name: generator-work
               mountPath: {{ include "tenant-api.generatorWorkDir" . }}
-            # Python's tempfile (the amtool check writes its config there)
-            # needs a writable /tmp; the root filesystem is read-only. A volume
-            # of its own, not a subPath of generator-work: kubelet creates a
-            # missing subPath directory itself, possibly root-owned and not
-            # writable by the pod's uid.
+            # Python's tempfile (a judgement writes the shipped platform rule
+            # files there for da-read to load) needs a writable /tmp; the root
+            # filesystem is read-only. A volume of its own, not a subPath of
+            # generator-work: kubelet creates a missing subPath directory
+            # itself, possibly root-owned and not writable by the pod's uid.
             - name: generator-tmp
               mountPath: /tmp
             {{- if .Values.generator.policy.existingConfigMap }}

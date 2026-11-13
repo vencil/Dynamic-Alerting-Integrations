@@ -135,21 +135,28 @@ READER_BUILD_SOURCES: "dict[str, tuple[str, str, str]]" = {
 
 def absolute_reader_binaries(environ: "dict[str, str] | None" = None) -> None:
     """Make each variable of ``READER_BINARY_ENVS`` in *environ* (default:
-    this process's environment) an absolute path, against the current
-    working directory.
+    this process's environment) the absolute path of the reader the
+    resolvers find now, from the current working directory.
 
-    A relative path in one of them means "relative to the directory of the
-    shell that set it" — which is this process's working directory only
-    until the process changes directory, or starts a process with another
-    ``cwd``. Call this before either, so the binary the user named is the
-    one that runs wherever it is resolved. A value that is unset, blank or
-    already absolute is left as it is (blank still means "not set": the
-    resolvers then look on ``$PATH``)."""
+    A relative path — in the variable, or a relative ``$PATH`` entry the
+    reader is found under when the variable is not set — means "relative to
+    the directory of the shell that set it": this process's working
+    directory only until the process changes directory, or starts a process
+    with another ``cwd``. Call this before either, so the binary found here
+    is the one that runs wherever it is resolved next. The reader is looked
+    for as the resolvers do (``resolve_binary``: the variable, then
+    ``$PATH``), and what is found is written to the variable, absolute. A
+    variable that is already absolute is left as it is; so is one that is
+    unset or blank when ``$PATH`` has no such reader (blank still means "not
+    set": the resolvers then look on ``$PATH``, and a later call pins a
+    reader that has appeared there)."""
     env = os.environ if environ is None else environ
-    for name in READER_BINARY_ENVS:
-        value = env.get(name, "")
-        if value.strip() and not os.path.isabs(value):
-            env[name] = os.path.abspath(value)
+    for var in READER_BINARY_ENVS:
+        found = resolve_binary(None, var, READER_BUILD_SOURCES[var][2], env)
+        if found and not os.path.isabs(found):
+            found = os.path.abspath(found)
+        if found and env.get(var) != found:
+            env[var] = found
 
 
 class ConsumerReadError(Exception):
@@ -215,15 +222,22 @@ def _stderr_lines(raw: bytes | None) -> list[str]:
     return [ln.rstrip() for ln in text.split("\n") if ln.strip()]
 
 
-def resolve_binary(explicit: str | None, env: str, name: str) -> str | None:
+def resolve_binary(explicit: str | None, env: str, name: str,
+                   environ: "dict[str, str] | None" = None) -> str | None:
     """*explicit* when given, else ``$env`` when set (non-blank), else *name*
-    on ``$PATH``; None when there is none."""
+    on ``$PATH``; None when there is none. The variable and ``$PATH`` are
+    read from *environ* (default: this process's environment)."""
     if explicit:
         return explicit
-    from_env = os.environ.get(env, "")
+    if environ is None:
+        environ = os.environ
+    from_env = environ.get(env, "")
     if from_env.strip():
         return from_env
-    return shutil.which(name)
+    # This process's own $PATH is shutil.which's default (os.defpath when
+    # unset); another mapping's is searched as given, and none means none.
+    return shutil.which(name, path=None if environ is os.environ
+                        else environ.get("PATH", ""))
 
 
 def da_read_binary(explicit: str | None = None) -> str | None:

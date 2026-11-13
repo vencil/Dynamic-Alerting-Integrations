@@ -109,6 +109,26 @@ def test_unset_blank_or_absolute_is_left_as_it_is(tmp_path, monkeypatch, value) 
     assert env == before
 
 
+@pytest.mark.parametrize("value", [None, "", " "])
+def test_a_reader_found_on_path_is_pinned_absolute(tmp_path, monkeypatch, value) -> None:
+    """#3839 review: with the variable not set the resolvers look on $PATH,
+    and a relative entry there names another place after a directory change
+    — so what is found is written to the variable, absolute."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "rbin").mkdir()
+    for _module, _package, name in cr.READER_BUILD_SOURCES.values():
+        exe = tmp_path / "rbin" / name
+        exe.write_text("#!/bin/sh\n", encoding="utf-8")
+        exe.chmod(0o755)
+    env = {"PATH": "rbin"}
+    if value is not None:
+        env.update({name: value for name in cr.READER_BINARY_ENVS})
+    cr.absolute_reader_binaries(env)
+    for var, (_module, _package, name) in cr.READER_BUILD_SOURCES.items():
+        assert env[var] == str(tmp_path / "rbin" / name), var
+    assert env["PATH"] == "rbin"
+
+
 def test_without_an_argument_it_changes_this_process_environment(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     for name in cr.READER_BINARY_ENVS:

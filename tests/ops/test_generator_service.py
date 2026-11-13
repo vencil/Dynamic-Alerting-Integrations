@@ -728,6 +728,63 @@ def test_da_read_missing_is_503(tmp_path, world, how):
         assert m["da_generator_judgement_deadline_ratio"] == 0
 
 
+_READERS = {"da-guard": "DA_GUARD_BINARY", "da-read": "DA_READ_BINARY",
+            "da-crdecode": "DA_CRDECODE_BINARY"}
+
+
+def _relative_path_service(tmp_path, world, on_relative_path: tuple[str, ...],
+                           unset: tuple[str, ...]):
+    """The service started in a directory whose ``rbin/`` is on $PATH as the
+    relative entry ``rbin``: the readers of *on_relative_path* are there,
+    those of *unset* have no variable, the rest are named by absolute
+    variables. Returns (service, rbin)."""
+    cwd = tmp_path / "cwd"
+    rbin = cwd / "rbin"
+    rbin.mkdir(parents=True)
+    env = {"PATH": "rbin"}
+    for name, var in _READERS.items():
+        if name in on_relative_path:
+            shutil.copy2(os.environ[var], rbin / name)
+        env[var] = "" if name in unset else os.environ[var]
+    # The harness puts its own da-guard copy in bin_dir: one that is not on
+    # this service's $PATH.
+    return h.Service(tmp_path / "s", world["repo"], bin_dir=tmp_path / "unused-bin",
+                     env=env, cwd=cwd), rbin
+
+
+@pytest.mark.parametrize("reader", sorted(_READERS))
+def test_a_reader_on_a_relative_path_entry_is_the_one_the_judgement_runs(
+        tmp_path, world, reader):
+    """#3839 review: readiness looked the reader up from the service's
+    directory, the judgement process from its job directory — a relative
+    $PATH entry named a reader for the first and nothing for the second, so
+    /v1/status said ready while every write came back without a verdict.
+    What a check finds is pinned, absolute, into the reader's variable, so
+    status and judgement run one binary."""
+    svc, _rbin = _relative_path_service(tmp_path, world, (reader,), (reader,))
+    with svc:
+        _s, st = svc.call("GET", "/v1/status")
+        status, doc = svc.validate(world["commits"]["clean"])
+    assert st["ready"] is True, st
+    assert status == 200 and doc["result"] == "pass", doc
+
+
+def test_a_da_read_that_appears_on_path_later_is_found_and_judges(tmp_path, world):
+    """A reader not there at start is looked for again at every check; the
+    check that finds it pins it, so the judgement that follows runs it."""
+    svc, rbin = _relative_path_service(tmp_path, world, (), ("da-read",))
+    with svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 503 and doc["reason"] == "da_read_missing", doc
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_read_available"] is False and st["ready"] is False, st
+        shutil.copy2(os.environ["DA_READ_BINARY"], rbin / "da-read")
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_read_available"] is True and st["ready"] is True, st
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 200 and doc["result"] == "pass", doc
+
+
 def test_ready_without_amtool(world):
     """amtool is not asked for a verdict, so a container without one judges:
     nothing on the service's PATH is called amtool, and it is ready."""

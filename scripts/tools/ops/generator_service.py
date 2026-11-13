@@ -348,6 +348,18 @@ def _via_flag(flag: Optional[str]) -> str:
     return f" (--da-guard-binary {flag!r})" if _given(flag) else ""
 
 
+def _pin_readers() -> None:
+    """Each reader binary found now, written absolute to its variable
+    (``_lib_consumer_read.absolute_reader_binaries``). ⛔ Before every check
+    of one, not only at start: the judgement process inherits the variables
+    and resolves the readers from its own job directory, where a relative
+    ``$PATH`` entry names another place — so what a check finds must be what
+    the judgement runs. A reader that appears on ``$PATH`` after start is
+    found, and pinned, by the next check; once pinned, that path is the
+    reader until the service restarts."""
+    _lib_consumer_read.absolute_reader_binaries()
+
+
 def da_guard_problem(flag: Optional[str] = None) -> Optional[str]:
     """Why the judgement process cannot run da-guard — the one it resolves
     ($DA_GUARD_BINARY, then PATH) is missing, not executable, or does not
@@ -356,6 +368,7 @@ def da_guard_problem(flag: Optional[str] = None) -> Optional[str]:
     without it the key verdict (ADR-038 §5) cannot be given. The run is
     repeated only when the file changes; its result, good or bad, is kept."""
     import guard_dispatch
+    _pin_readers()
     exe = guard_dispatch.DISPATCHER.resolve_binary(None)
     if exe is None:
         return (f"da-guard is not found ({_da_guard_named(flag)}): without it "
@@ -384,6 +397,7 @@ def da_read_problem() -> Optional[str]:
     file — or None. Checked before every judgement (ADR-036 §3): without it
     Alertmanager's loader cannot be asked whether it accepts the rendered
     config, so no verdict is given."""
+    _pin_readers()
     exe = _lib_consumer_read.da_read_binary()
     if exe is None:
         return ("da-read is not found ($DA_READ_BINARY, then PATH): without it "
