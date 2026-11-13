@@ -84,8 +84,10 @@ ALLOWLIST: dict[str, str] = {
         "registry↔filesystem parity (YAML SSOT vs .jsx existence), not a JS lint",
     "check_jsx_loader_compat.py":
         "validates against the custom JSX loader allowlist + babel; toolchain-coupled",
-    "lint_jsx_babel.py":
-        "already invokes @babel/node to validate parse-ability; IS the toolchain",
+    "lint_jsx_syntax.py":
+        "runs the portal's own esbuild (lockfile) to parse every source as the build does; IS the toolchain",
+    "check_jsx_linecount.py":
+        "line-count caps over the .jsx tree (#152); a file-size guard, not a JS rule",
     "lint_tool_consistency.py":
         "cross-checks tool-registry.yaml ↔ JSX ↔ markdown; registry-graph lint, not single-file JS",
     "check_portal_asset_shipping.py":

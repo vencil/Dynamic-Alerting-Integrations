@@ -18,7 +18,9 @@
 #                                  missing fetch.
 #   3. tests/e2e/node_modules    → `playwright-lint` fails; the message even
 #      absent (gitignored)         explains it passes in the main checkout and
-#                                  fails in a fresh tree.
+#                                  fails in a fresh tree. tools/portal/node_modules
+#                                  likewise: `jsx-syntax-check` parses with its
+#                                  esbuild and exits 2 without it (#3669).
 #   4. pytest & friends missing  → every tests/**/*.py suite is uncollectable
 #                                  (ModuleNotFoundError), so "no failures" is
 #                                  indistinguishable from "nothing ran".
@@ -296,6 +298,7 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; } \
+  && { [ ! -f tools/portal/package.json ] || [ -d tools/portal/node_modules ]; } \
   && at_pin helm "$HELM_VERSION" && at_pin golangci-lint "$GOLANGCI_LINT_VERSION" \
   && at_pin hadolint "$HADOLINT_VERSION" \
   && at_pin kube-linter "$KUBE_LINTER_VERSION" && at_pin pint "$PINT_VERSION" \
@@ -446,6 +449,17 @@ if [ -f tests/e2e/package.json ]; then
   else
     say "  npm ci failed (lockfile out of sync?) — playwright-lint will fail until fixed"
     note "e2e-deps=FAILED"
+  fi
+fi
+# The portal's lockfile esbuild: `jsx-syntax-check` parses every portal source
+# with it, as build.mjs bundles (#3669). Same `npm ci` rule as above.
+if [ -f tools/portal/package.json ]; then
+  say "installing tools/portal deps (jsx-syntax-check's esbuild)"
+  if npm ci --prefix tools/portal --no-audit --no-fund --silent; then
+    note "portal-deps=ok"
+  else
+    say "  npm ci failed (lockfile out of sync?) — jsx-syntax-check will exit 2 until fixed"
+    note "portal-deps=FAILED"
   fi
 fi
 
