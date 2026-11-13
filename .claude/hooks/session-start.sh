@@ -288,7 +288,10 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 # reuses the SAME container, where everything below is already in place). Doing
 # the work again is not free: `npm ci` DELETES tests/e2e/node_modules and
 # reinstalls it every time. So no-op when the last run ended in RESULT=ok, the
-# guards are in place, the e2e deps that run installed are still there, and
+# guards are in place, the e2e deps that run installed are still there, the
+# portal deps are as fresh as package-lock.json (the `make portal-deps`
+# predicate: a lockfile bump on another branch must reinstall — its esbuild
+# version is checked by jsx-syntax-check, #3669), and
 # `pre-commit install` succeeds, and helm, golangci-lint and hadolint are still
 # at their pins. Anything else runs the whole script again.
 # ⛔ The commit hook is reinstalled, not inspected (#2790): one that exists may
@@ -298,7 +301,8 @@ bash scripts/ops/install_prepush_hook.sh || guards_failed=1
 if [ -z "$guards_failed" ] && [ -f "$MARKER" ] && grep -q '^RESULT=ok$' "$MARKER" 2>/dev/null \
   && command -v pre-commit >/dev/null 2>&1 \
   && { [ ! -f tests/e2e/package.json ] || [ -d tests/e2e/node_modules ]; } \
-  && { [ ! -f tools/portal/package.json ] || [ -d tools/portal/node_modules ]; } \
+  && { [ ! -f tools/portal/package.json ] || { [ -f tools/portal/node_modules/.package-lock.json ] \
+       && ! [ tools/portal/package-lock.json -nt tools/portal/node_modules/.package-lock.json ]; }; } \
   && at_pin helm "$HELM_VERSION" && at_pin golangci-lint "$GOLANGCI_LINT_VERSION" \
   && at_pin hadolint "$HADOLINT_VERSION" \
   && at_pin kube-linter "$KUBE_LINTER_VERSION" && at_pin pint "$PINT_VERSION" \
