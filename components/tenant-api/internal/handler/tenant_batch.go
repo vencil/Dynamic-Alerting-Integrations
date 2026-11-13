@@ -205,7 +205,7 @@ func BatchTenants(d *Deps) http.HandlerFunc {
 		violations := ValidateStructTags(&req)
 		for i, op := range req.Operations {
 			fieldPrefix := fmt.Sprintf("operations[%d]", i)
-			violations = append(violations, validateBatchEdit(op.Patch, op.Unset, fieldPrefix)...)
+			violations = append(violations, validateBatchEdit(op.Patch, op.Unset, fieldPrefix, d.RetiredThresholdKeys)...)
 		}
 		if len(violations) > 0 {
 			WriteValidationErrors(rw, r, violations)

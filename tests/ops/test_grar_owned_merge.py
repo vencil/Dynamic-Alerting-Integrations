@@ -492,7 +492,6 @@ def _fake_cluster(monkeypatch, am_yml: str, base_yml: str | None = None) -> list
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
-    monkeypatch.setattr(render.shutil, "which", lambda name: None)
     return calls
 
 

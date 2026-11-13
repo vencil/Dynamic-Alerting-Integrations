@@ -400,6 +400,109 @@ def test_build_rejects_bad_alias_entries():
     assert doc["deprecated_aliases"] == {"aaa_zzz": "aaa_bbb"}
 
 
+# ── retired_keys (#3829) ──────────────────────────────────────────────────
+
+def _retire(entry_for):
+    """A registry mutation adding one `retired_keys:` entry, built from the doc."""
+    def mutate(doc):
+        doc["retired_keys"] = dict(entry_for(doc))
+    return mutate
+
+
+def _live_key(doc):
+    return next(iter(doc["keys"]))
+
+
+_OK_ENTRY = {"tracking": 3829, "hint": "fixture hint"}
+
+
+@pytest.mark.parametrize("name, entry_for, needle", [
+    ("an active key",
+     lambda d: {_live_key(d): {"replaced_by": None, **_OK_ENTRY}}, "still an ACTIVE registry key"),
+    ("an alias's old spelling",
+     lambda d: {next(iter(d["deprecated_aliases"])): {"replaced_by": None, **_OK_ENTRY}},
+     "also in deprecated_aliases"),
+    ("an alias's target",
+     lambda d: {next(iter(d["deprecated_aliases"].values())): {"replaced_by": None, **_OK_ENTRY}},
+     "also in deprecated_aliases"),
+    ("replaced by no key",
+     lambda d: {"fixture_retired": {"replaced_by": "no_such_key", **_OK_ENTRY}},
+     "not an active registry key"),
+    ("no tracking",
+     lambda d: {"fixture_retired": {"replaced_by": None, "hint": "fixture hint"}}, "needs tracking"),
+])
+def test_an_inconsistent_retired_key_is_reported(tmp_path, name, entry_for, needle):
+    """The four consistency rules of `retired_keys:`, one counter-example each."""
+    path = _write_registry_variant(tmp_path, _retire(entry_for))
+    errors = gate.run_check(registry_path=path)["errors"]
+    assert any(e.startswith("inconsistent:") and needle in e for e in errors), (name, errors)
+
+
+def test_a_retired_base_with_an_active_critical_tier_is_reported():
+    """#3829 review: the Go lookup retires `<old>_critical` with `<old>` (as
+    an alias canonicalizes it), so retiring a base whose critical tier is
+    still an active key is a contradiction."""
+    keys = {"aaa_new": {}, "aaa_old_critical": {}}
+    problems = lib.retired_key_problems(
+        {"aaa_old": {"replaced_by": "aaa_new", **_OK_ENTRY}}, keys, {})
+    assert any("still has an ACTIVE critical tier 'aaa_old_critical'" in p for p in problems), problems
+    # Without the critical tier the same entry is consistent.
+    assert lib.retired_key_problems(
+        {"aaa_old": {"replaced_by": "aaa_new", **_OK_ENTRY}},
+        {"aaa_new": {}, "aaa_new_critical": {}}, {}) == []
+
+
+def test_a_derived_critical_replacement_must_be_a_registry_key():
+    """#3829 second review: `<old>_critical` is derived to `<repl>_critical`.
+    When repl has no critical tier that hint would name no key, so the
+    critical spelling needs its own entry — which then wins over the
+    derivation."""
+    entry = {"replaced_by": "aaa_new", **_OK_ENTRY}
+    problems = lib.retired_key_problems({"aaa_old": entry}, {"aaa_new": {}}, {})
+    assert any("'aaa_new_critical', not a registry key" in p for p in problems), problems
+    own = {"replaced_by": None, **_OK_ENTRY}
+    assert lib.retired_key_problems(
+        {"aaa_old": entry, "aaa_old_critical": own}, {"aaa_new": {}}, {}) == []
+    # A null replacement derives no critical key, so nothing to check.
+    assert lib.retired_key_problems(
+        {"aaa_old": {"replaced_by": None, **_OK_ENTRY}}, {"aaa_new": {}}, {}) == []
+
+
+def test_a_missing_tracking_is_also_a_schema_error(tmp_path):
+    path = _write_registry_variant(tmp_path, _retire(
+        lambda d: {"fixture_retired": {"replaced_by": None, "hint": "fixture hint"}}))
+    errors = gate.run_check(registry_path=path)["errors"]
+    assert any(e.startswith("schema: retired_keys/fixture_retired") and "tracking" in e for e in errors), errors
+
+
+def test_a_retired_key_without_regen_leaves_the_go_table_stale(tmp_path):
+    """A consistent entry is no violation of the contract — but the Go table the
+    key verdict reads must follow it (--regen), or --ci is red."""
+    path = _write_registry_variant(tmp_path, _retire(
+        lambda d: {"fixture_retired": {"replaced_by": _live_key(d), **_OK_ENTRY}}))
+    errors = gate.run_check(registry_path=path)["errors"]
+    assert not [e for e in errors if e.startswith(("inconsistent:", "schema:"))], errors
+    assert any(e.startswith("stale-surface:") and lib.RETIRED_KEYS_GO_ID in e for e in errors), errors
+
+
+def test_the_go_table_renders_every_entry_and_names_the_replacement(tmp_path):
+    """The generated Go table for a doc with entries: one line per key, sorted,
+    the replacement ("" for null), the issue and the hint; and a fresh copy
+    passes the freshness check while a copy missing one entry does not."""
+    doc = {"retired_keys": {
+        "zz_old": {"replaced_by": None, "tracking": 2, "hint": "gone"},
+        "aa_old": {"replaced_by": "aa_new", "tracking": 1, "hint": "use the \"new\" one"},
+    }}
+    text = lib.render_retired_keys_go(doc)
+    assert ('\t{"aa_old", "aa_new", 1, "use the \\"new\\" one"},\n'
+            '\t{"zz_old", "", 2, "gone"},\n}\n') in text, text
+    go = tmp_path / "gen.go"
+    go.write_text(text, encoding="utf-8")
+    assert lib.check_retired_keys_go(doc, str(go)) is None
+    go.write_text(text.replace('\t{"zz_old", "", 2, "gone"},\n', ""), encoding="utf-8")
+    assert lib.RETIRED_KEYS_GO_ID in (lib.check_retired_keys_go(doc, str(go)) or "")
+
+
 # ── value_counterexample (#1176) ──────────────────────────────────────────
 #
 # The field records that ADR-030's reference library produced a case a shipped
