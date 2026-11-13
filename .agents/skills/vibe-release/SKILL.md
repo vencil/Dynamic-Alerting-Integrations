@@ -51,6 +51,8 @@ issue triage 每天動、docs 月級更新——靜態 issue list 幾天就說�
 
 有 draft 就對照它的觸發條件決定是否**隨這次 release 一併發布**——通常還要回填 `patched_versions`（advisory 常在「fix 已合入、尚未發版」狀態下建立，那個欄位當時只能留空）。
 
+`make pre-tag` 的 `advisory-patched-check`（#1269）不受 `ADVISORY_ACK` 影響：patched 填了不存在的版本、或修正版已發布卻沒回填，都會中止。它在帶修正的那次發版**擋不住**（新版本 pre-tag 時還不存在）——發布後回填 patched 是本 SOP 的一步，漏了會在下一次 pre-tag 被擋。
+
 **為什麼放在這裡**：draft advisory **不出現在任何維護者會例行掃的清單**——它不在 issue 列表、不在 PR 列表，GitHub 也沒有到期提醒或陳舊警示（查遍官方文件無此機制）。因此「等發版再發」這個決定沒有任何東西會叫醒你，除非把檢查掛在**發版本身**這個必然會發生的事件上。若該 advisory 的 affected package 是 dependency-graph 不支援的 ecosystem（如 `other`），它更不會進全域 Advisory Database、不觸發任何人的 Dependabot——**發布是唯一的觸達管道，漏掉就等於沒發生**。首例：[#1269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1269)（TRK-354）。
 
 ### 4. `make pre-tag`（硬性閘門，Rule 1）

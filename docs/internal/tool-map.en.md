@@ -26,6 +26,7 @@ lang: en
 | `blind_spot_discovery.py` | Scan Prometheus targets and cross-reference tenant configs |
 | `byo_check.py` | BYO Prometheus & Alertmanager integration verification. |
 | `cardinality_forecasting.py` | 基數預測工具（§5.8）。 |
+| `check_advisory_patched_versions.py` | every advisory's `patched_versions` names a version that exists (#1269). |
 | `check_alert.py` | Check Prometheus alert state for a specific tenant. |
 | `config_diff.py` | What a conf.d change does, for GitOps PR review (ADR-037). |
 | `config_history.py` | Config Snapshot & History tracker. |
