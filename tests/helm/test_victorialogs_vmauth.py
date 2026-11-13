@@ -38,9 +38,7 @@ TWO_CONSUMERS = ('auth.consumers=[{"name":"vector","paths":["/insert/.*"],'
                  '{"name":"federation-gateway","paths":["/select/.*"],'
                  '"from":{"podLabels":{"app.kubernetes.io/name":"federation-gateway"}}}]')
 TWO_SECRETS = 'auth.existingSecrets={"vector":"vl-vector","federation-gateway":"vl-gw"}'
-# Rendered WITHOUT the baseline: its existingSecrets names all five consumers,
-# and a null in --set cannot delete a key another -f file supplied (Helm drops
-# nulls only against chart defaults) — the three extra keys would be unknown.
+# Rendered WITHOUT the baseline, so the Secrets are exactly these two.
 TWO = ("--set-json", TWO_CONSUMERS, "--set-json", TWO_SECRETS)
 
 
@@ -210,10 +208,26 @@ def test_observe_skips_consumers_without_a_secret() -> None:
                     '"from":{"namespace":"vector"}}]'], "auth.consumers[vector].existingSecret was removed"),
     (["--set-json", 'auth.existingSecrets={"vector":{"name":"s"}}'], "auth.existingSecrets.vector must be a Secret name"),
     (["--set-json", 'auth.existingSecrets=["s"]'], "auth.existingSecrets must be a map"),
+    # #3847: `default` must not turn a wrongly typed 0 / false into "missing"
+    (["--set", "auth.mode=observe", "--set", "auth.existingSecrets.vector=0"],
+     "auth.existingSecrets.vector must be a Secret name"),
+    (["--set", "auth.existingSecrets.vector=false"], "auth.existingSecrets.vector must be a Secret name"),
 ])
 def test_render_refuses(args: list[str], needle: str) -> None:
     out = _helm(*args)
     assert out.returncode != 0 and needle in out.stderr, (out.returncode, out.stderr[-400:])
+
+
+def test_a_later_values_file_can_drop_secrets_with_null(tmp_path: Path) -> None:
+    """Layered values: the baseline names all five Secrets, a later file keeps
+    two consumers. Helm keeps its `~` keys as null (it deletes nulls only
+    against chart defaults), so the unknown-key check must read null as "no
+    Secret" — otherwise the only way out is editing the earlier file (#3847)."""
+    drop = tmp_path / "drop.yaml"
+    drop.write_text("auth:\n  existingSecrets:\n    grafana: ~\n    chargeback-aggregator: ~\n"
+                    "    federation-reconciler: \"\"\n", encoding="utf-8")
+    users = _auth(_render("-f", str(drop), "--set-json", TWO_CONSUMERS))["users"]
+    assert sorted(u["username"] for u in users) == ["federation-gateway", "vector"], users
 
 
 def test_unauthenticated_traffic_is_not_capped_below_the_global_limit() -> None:
@@ -288,6 +302,8 @@ def test_upgrade_checks_named_secrets_exist_before_recreating_the_pod() -> None:
         r'\(dict "consumers" \$out "secrets" \$found\) -\}\}\n'
         r'\{\{- if \$broken -\}\}\n\{\{- fail ', block)
     assert gate, "the upgrade gate must look up every mounted Secret and fail on any problem"
+    assert '(printf "auth.existingSecrets names Secrets this namespace' in block[gate.end():], (
+        "the upgrade error must point at auth.existingSecrets, where the Secrets are named (#3847)")
     assert _values()["auth"]["checkSecretsOnUpgrade"] is True, "the check must be on by default"
     assert _helm().returncode == 0, "offline render must not treat an unreachable cluster as missing Secrets"
 

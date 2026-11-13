@@ -179,7 +179,10 @@ auth:
   #     existingSecrets:
   #       vector: victorialogs-vector
   #       grafana: victorialogs-grafana
-  # Every key must be a consumer below; an unknown key fails the render.
+  # Give it with `-f` or `--set auth.existingSecrets.<name>=...`: those merge
+  # per key, while `--set-json auth.existingSecrets=...` replaces the whole map.
+  # Every key must be a consumer below; an unknown key fails the render. A key
+  # set to null (`~`) or "" names no Secret, so a later values file can drop one.
   existingSecrets: {}
   consumers:
     # Ingest. The ONLY writer: ADR-028's evidence rows must not be writable by

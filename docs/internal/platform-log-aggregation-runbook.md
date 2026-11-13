@@ -188,8 +188,10 @@ render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費�
 - **從 0.4.0（預設 observe）升級**：在 values 明寫 `auth.mode: observe` 再
   升級，照步驟 1–2 接上並確認，最後拿掉這個覆寫，回到預設 enforce。
   - 一個 Secret 都沒指名就升級：render 失敗、升級中止。
-  - 已照 0.4.0 的步驟 1 在 store 側指名了 Secret：render 會**通過並直接
-    進 enforce**，沒接上的消費端立刻 401。
+  - 已照 0.4.0 的步驟 1 在 store 側指名了 Secret：那是寫在
+    `auth.consumers[].existingSecret`，0.7.0 起 render 會失敗並指出要搬去
+    `auth.existingSecrets.<消費端>`。搬過去之後 render 會**通過並直接進
+    enforce**，沒接上的消費端立刻 401。
   - 用 `helm upgrade --reuse-values` 升到 0.6.0 以上會 render 失敗：
     上一版的 values 帶著已移除的 `networkPolicy.allowedPodSelectors`／
     `allowedNamespaces`，0.7.0 以上還會帶著 `auth.consumers[].existingSecret`。

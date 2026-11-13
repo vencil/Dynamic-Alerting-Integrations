@@ -74,10 +74,14 @@ those rows would otherwise be ignored without a word. */ -}}
 {{- if not .paths -}}
 {{- fail (printf "auth.consumers[%s].paths is empty: a consumer with no paths can reach nothing" .name) -}}
 {{- end -}}
-{{- $secret := index $secrets (toString .name) | default "" -}}
-{{- if not (kindIs "string" $secret) -}}
-{{- fail (printf "auth.existingSecrets.%s must be a Secret name (got %v) (#3847)" .name $secret) -}}
+{{- /* Type before `default`: `default` would turn 0 / false into "" and
+report a wrongly typed value as a missing one. Only null (a key removed with
+`~` in a later values file, which Helm keeps as null) counts as unset. */ -}}
+{{- $raw := index $secrets (toString .name) -}}
+{{- if not (or (kindIs "invalid" $raw) (kindIs "string" $raw)) -}}
+{{- fail (printf "auth.existingSecrets.%s must be a Secret name (got %v) (#3847)" .name $raw) -}}
 {{- end -}}
+{{- $secret := $raw | default "" -}}
 {{- if and (eq $mode "enforce") (not $secret) -}}
 {{- $missing = append $missing (toString .name) -}}
 {{- end -}}
@@ -89,8 +93,10 @@ those rows would otherwise be ignored without a word. */ -}}
 way the Secret it names is never used, and the consumer it was meant for is
 not configured. */ -}}
 {{- $unknown := list -}}
-{{- range $name, $_ := $secrets -}}
-{{- if not (hasKey $seen $name) -}}
+{{- range $name, $v := $secrets -}}
+{{- /* null or "" names no Secret: that is how a later values file removes a
+key it cannot delete (Helm drops null keys only against chart defaults). */ -}}
+{{- if and (not (hasKey $seen $name)) (not (kindIs "invalid" $v)) (ne (toString $v) "") -}}
 {{- $unknown = append $unknown $name -}}
 {{- end -}}
 {{- end -}}
@@ -119,7 +125,7 @@ feed it lookup results without a cluster. */ -}}
 {{- end -}}
 {{- $broken := include "victorialogs.secretProblems" (dict "consumers" $out "secrets" $found) -}}
 {{- if $broken -}}
-{{- fail (printf "auth.consumers name Secrets this namespace (%s) cannot serve — %s. The Deployment uses Recreate, so upgrading now would delete the running store pod and leave the new one unable to start. Create the Secret(s) with key `password` first, then re-run. See docs/internal/platform-log-aggregation-runbook.md §1.2 (#1295)" $.Release.Namespace $broken) -}}
+{{- fail (printf "auth.existingSecrets names Secrets this namespace (%s) cannot serve — %s. The Deployment uses Recreate, so upgrading now would delete the running store pod and leave the new one unable to start. Create the Secret(s) with key `password` first, then re-run. See docs/internal/platform-log-aggregation-runbook.md §1.2 (#1295)" $.Release.Namespace $broken) -}}
 {{- end -}}
 {{- end -}}
 {{- toYaml $out -}}
