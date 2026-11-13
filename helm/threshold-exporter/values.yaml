@@ -163,11 +163,6 @@ thresholdConfig:
     #   kafka_consumer_lag 未啟用（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
     #   kafka_under_replicated_partitions 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
     #   kafka_broker_count 未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
-    #   kafka_active_controllers 未啟用（沒有資料源，#3783）：宣告的 danielqsj/kafka_exporter 不輸出
-    #     kafka_controller_active_controller_count
-    #   kafka_request_rate 未啟用（沒有資料源，#3783）：kafka_server_brokertopicmetrics_messagesin_total 是 JMX
-    #     指標，宣告的 danielqsj/kafka_exporter 不輸出
-    #   kafka_request_rate 未啟用（依部署而定）：訊息量是工作負載而非故障，任何數字都只適用於特定部署
     # ── rabbitmq ──
     #   rabbitmq_queue_messages 未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
     #   rabbitmq_node_mem_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨

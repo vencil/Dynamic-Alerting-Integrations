@@ -252,14 +252,14 @@ def test_collect_ungoverned_isolates_lower_bound():
                 reason="no observed-load mapping for this key — not in observed-map (skipped)"),
         ]),
         _report("db-b", [
-            _kr("kafka_active_controllers", "1",
+            _kr("kafka_broker_count", "1",
                 reason="skipped: lower-bound (<) metric — P95-upper recommendation "
                        "not applicable (#916)"),
         ]),
     ]
     ung = tg.collect_ungoverned_lower_bound(reports)
     assert [(u.tenant, u.key) for u in ung] == [
-        ("db-a", "db2_hit_ratio"), ("db-b", "kafka_active_controllers"),
+        ("db-a", "db2_hit_ratio"), ("db-b", "kafka_broker_count"),
     ]
 
 
@@ -377,7 +377,7 @@ def test_collect_not_applicable_isolates_by_design():
     reports = [
         _report("db-a", [
             _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH),
-            _kr("kafka_active_controllers", "1",
+            _kr("kafka_broker_count", "1",
                 reason="skipped: by-design not-applicable (#916) — no percentile recommendation"),
         ]),
         _report("db-b", [
@@ -387,7 +387,7 @@ def test_collect_not_applicable_isolates_by_design():
     ]
     na = tg.collect_not_applicable(reports)
     assert [(u.tenant, u.key) for u in na] == [
-        ("db-a", "kafka_active_controllers"), ("db-b", "rabbitmq_consumers")]
+        ("db-a", "kafka_broker_count"), ("db-b", "rabbitmq_consumers")]
     # and by-design N/A keys must NOT be caught by the ungoverned `<` detector
     assert tg.collect_ungoverned_lower_bound(reports) == []
 
@@ -406,13 +406,13 @@ def test_collect_force_manual_isolates_flagged_keys():
 def test_run_surfaces_not_applicable_and_force_manual(monkeypatch):
     reports = [_report("db-a", [
         _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0),
-        _kr("kafka_active_controllers", "1",
+        _kr("kafka_broker_count", "1",
             reason="skipped: by-design not-applicable (#916) — no percentile recommendation"),
         _fm("db2_bufferpool_hit_ratio", "would relax the floor (lower it)", delta=40.0),
     ])]
     monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
     res = tg.run(_args())
-    assert [(u.tenant, u.key) for u in res.not_applicable] == [("db-a", "kafka_active_controllers")]
+    assert [(u.tenant, u.key) for u in res.not_applicable] == [("db-a", "kafka_broker_count")]
     assert [(u.tenant, u.key) for u in res.force_manual] == [("db-a", "db2_bufferpool_hit_ratio")]
     assert res.ungoverned == []                       # N/A left the ⚠ list
     # force_manual / N/A never enter the plan
@@ -422,7 +422,7 @@ def test_run_surfaces_not_applicable_and_force_manual(monkeypatch):
 def test_text_report_shows_force_manual_section_and_na_info():
     fm = [tg.ForceManualKey("db-a", "db2_bufferpool_hit_ratio",
                             "would relax the floor (lower it)", 40.0)]
-    na = [tg.NotApplicableKey("db-b", "kafka_active_controllers", "by-design ...")]
+    na = [tg.NotApplicableKey("db-b", "kafka_broker_count", "by-design ...")]
     out = tg.format_text_report([], force_manual=fm, not_applicable=na)
     # force_manual: a ⚠ manual-review detail line with the guardrail reason + miss delta
     assert "db-a / db2_bufferpool_hit_ratio" in out
@@ -448,13 +448,13 @@ def test_text_report_force_manual_count_folded_into_summary():
 
 def test_json_report_includes_na_and_force_manual():
     fm = [tg.ForceManualKey("db-a", "db2_bufferpool_hit_ratio", "relax", 40.0)]
-    na = [tg.NotApplicableKey("db-b", "kafka_active_controllers", "by-design ...")]
+    na = [tg.NotApplicableKey("db-b", "kafka_broker_count", "by-design ...")]
     out = tg.json_document([],
                            not_applicable=na, force_manual=fm)
     assert out["summary"]["force_manual"] == 1
     assert out["summary"]["not_applicable"] == 1
     assert out["force_manual"][0]["key"] == "db2_bufferpool_hit_ratio"
-    assert out["not_applicable"][0]["key"] == "kafka_active_controllers"
+    assert out["not_applicable"][0]["key"] == "kafka_broker_count"
 
 
 def test_not_applicable_marker_bound_to_lib_constant():

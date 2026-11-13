@@ -158,7 +158,8 @@ type unsetValidationCase struct {
 	many                      bool
 }
 
-// unsetValidationCases: field is relative to the op ("unset[0]", "patch").
+// unsetValidationCases: field is relative to the op ("unset[0]", "patch"). The
+// allow-list names the registry's retired threshold keys too (#3783's two Kafka keys).
 func unsetValidationCases() []unsetValidationCase {
 	tooMany := make([]string, 1001)
 	for i := range tooMany {

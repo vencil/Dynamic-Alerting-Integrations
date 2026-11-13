@@ -12,7 +12,7 @@ lang: en
 
 ## Status
 
-🟡 **Proposed** (rewritten 2026-11-04; on the same day the owner settled the three formerly open items: the browser entry point, threshold-govern, and shadow mode for scope axes). Moves to Accepted once the owner approves the full text.
+✅ **Accepted** (2026-11-13, approved by the owner). Every clause of §9 has a check; see §Implementation. The text was rewritten on 2026-11-04, when the owner also settled the browser entry point, threshold-govern, and shadow mode for scope axes.
 
 Revised 2026-11-05: §10 now records the test result and adopts oauth2-proxy's structured configuration file (alpha config); tenant-api decides which headers to trust from that same file (§2, §7); the "one-shot" of §6 is limited to the changes that reject old configuration.
 

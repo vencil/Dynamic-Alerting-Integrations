@@ -290,6 +290,16 @@ echo '["mysql_threads_running_critical{db=\"a\"}","mysql_connection_usage_percen
 #  {"key":"mysql_connection_usage_percent","canonical":"mysql_connection_usage_percent","spellings":["mysql_connection_usage_percent"]}]
 ```
 
+子命令 `severity-dedup`（[#3621](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3621)）以 JSON 印出每個租戶的 `_severity_dedup` 模式（`enable`／`disable`），取自 exporter 自己的載入（合併各層）與 `ResolveSeverityDedupLogf`（collector 用的同一個 resolver），另列 exporter 讀不懂的值（`problems`，在寫出它的檔與層判，與 key verdict 的 value_unread 同一個來源）與寫成排程的值（`schedules`：reserved key 沒有排程，exporter 只讀 `default`）。路由產生器據此決定每個租戶的靜態 inhibit rule，Python 不另有詞表。結束碼同 `served-values`：0 正常；2 為呼叫錯誤或 exporter 拒收的樹（同一租戶重複宣告、沒有設定檔）；3 為有檔被 exporter 丟掉，JSON 照寫並在 `parse_failed`／`unreadable` 點名。
+
+```bash
+da-guard severity-dedup --config-dir conf.d/
+# {"schema": "da-guard.severity-dedup/v1", "tenants": {"tenant-a": {"mode": "disable"}, ...},
+#  "problems": [{"file": "tenant-b.yaml", "layer": "tenant", "owner": "tenant-b",
+#                "problem": "unknown severity_dedup value \"no\" (valid: enable, disable)", "value": "no"}],
+#  "schedules": [], "parse_failed": [], "unreadable": []}
+```
+
 ### `da-parser` — kube-prometheus 規則 → ParseResult JSON
 
 導入既有 PrometheusRule 的第一步：解析、dialect 分類（標準 PromQL / VictoriaMetrics-only）、可選 portability gate。

@@ -387,8 +387,8 @@
       "category": "messaging",
       "exporter": "kafka_exporter",
       "configMap": "prometheus-rules-kafka",
-      "recordingRules": 13,
-      "alertRules": 8,
+      "recordingRules": 8,
+      "alertRules": 5,
       "required": false,
       "defaults": {
         "kafka_consumer_lag": {
@@ -408,18 +408,6 @@
           "unit": "count",
           "desc": "Minimum broker count warning",
           "metricClass": "state"
-        },
-        "kafka_active_controllers": {
-          "value": 1,
-          "unit": "count",
-          "desc": "Minimum active controllers (should be 1)",
-          "metricClass": "state"
-        },
-        "kafka_request_rate": {
-          "value": 10000,
-          "unit": "msg/s",
-          "desc": "Message rate warning (5m)",
-          "metricClass": "throughput"
         }
       },
       "metrics": [

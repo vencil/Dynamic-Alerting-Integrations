@@ -659,7 +659,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +5, generators +27. Red here means RAISE the floor.
+#     tolerate +5, generators +28. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -701,32 +701,32 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      floor went 75 -> 74 and both figures here stay at +6 / 12.)
 #     (#3778 stopped shipping a value for mysql_threads_running: one key out of
 #      the exporter's conf.d `_defaults.yaml` (the biggest group, 19 -> 18) and
-#      one out of try-local's, total 86 -> 84, and one out of the chart values
-#      generator face, 93 -> 92. A deliberate removal, so the artifact floor
-#      went 74 -> 72 (the full-l0-l3 probe reads 71 against it, one-key margin
-#      kept, DOWN stays 12) and the generator floor 80 -> 79 (+28 / 13 kept).
+#      one out of try-local's, total 86 -> 84 (its generator side is in DOWN
+#      below). A deliberate removal, so the artifact floor went 74 -> 72 (the
+#      full-l0-l3 probe reads 71 against it, one-key margin kept, DOWN stays 12).
 #      Because the biggest group shrank too, UP cannot stay at +6 with DOWN at
 #      12: it is +5 from here.)
-#     (#3778 then moved mysql_threads_running to the optional_overrides tier, so
-#      the two generators that render the defaults tier — scaffold and init —
-#      stopped emitting it: 42 -> 41 each, generator total 92 -> 90. A
-#      deliberate removal, so the generator floor went 79 -> 77 and DOWN stays
-#      13; the biggest producer is one of the two that shrank, so UP moves
-#      +28 -> +27. Artifacts unchanged.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
 #   DOWN (removal) — the floor itself fires when its class drops below it, which
 #     is the floor doing its job. Today the slack is total − floor: artifacts 12
-#     keys, generators 13 (was 22 until issue 1196 retired init's 9 surplus
+#     keys, generators 10 (was 22 until issue 1196 retired init's 9 surplus
 #     keys — dead ones, so no floor edit). Red here means REPAIR THE PRODUCER — and only if keys
 #     were removed on purpose (a fixture retired) does it mean LOWER the floor,
-#     in the same commit, naming what went.
+#     in the same commit, naming what went. Two deliberate removals took the
+#     generators from 93 keys (biggest group 42, floor 80) to 86 (biggest 39):
+#     #3778 stopped the chart shipping mysql_threads_running (chart -1) and then
+#     moved it to the optional_overrides tier, so scaffold and init stopped
+#     rendering it under `defaults:` (-1 each); #3783 removed two defaults-tier
+#     kafka keys (kafka_active_controllers, kafka_request_rate) from scaffold and
+#     init (-4). The floor follows the biggest group so UP stays +28: 80 -> 76,
+#     and DOWN is 10.
 #
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 77
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 76
 _DEFAULTS_ARTIFACT_KEYS_FLOOR = 72
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class

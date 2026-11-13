@@ -19,8 +19,10 @@ type GroupBatchRequest struct {
 	// key → value to set on every member (e.g., "_silent_mode": "warning");
 	// at most 1000 entries. May be empty only when unset names a key (else 400).
 	Patch map[string]string `json:"patch" validate:"max=1000"`
-	// keys to remove from every member's config block; at most 1000 entries. Only "_routing" and
-	// "_routing_receiver_type" are accepted: removing `_routing` resets the member to
+	// keys to remove from every member's config block; at most 1000 entries. Only "_routing",
+	// "_routing_receiver_type" and the threshold registry's retired keys (with their
+	// `_critical` twins; removing one drops a line nothing reads, #3829) are accepted:
+	// removing `_routing` resets the member to
 	// `_routing_defaults` and its routing profile, which turns routing back on for a member a
 	// disabling `_routing` turned off (the route generator judges the result, as every
 	// write); removing `_routing_receiver_type` drops the flat key tenant-api used to write,
@@ -70,7 +72,7 @@ type GroupBatchResponse struct {
 // @Summary     Batch operation on group members
 // @Description Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch
 // @Description (one operation per member): patch keys are checked against the reserved-key registry (400: a mapping / list key such as _metadata; a key no reader reads is refused by the shared key verdict as that member, 422), a reserved value such as _silent_mode is judged per member by the write's validation (#3227: refused as that member, 422), and each member is checked for write permission; the route generator container judges the tree with every member's change applied (#2903).
-// @Description unset removes keys from every member (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for members a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400).
+// @Description unset removes keys from every member (only "_routing", "_routing_receiver_type" and the threshold registry's retired keys): unset ["_routing"] turns routing back on for members a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400).
 // @Description All or nothing, in one commit, as POST /api/v1/tenants/batch: when any member is refused nothing is written (422, status rejected, the refused members with status error, the others not_applied);
 // @Description otherwise every changed member file is in one commit (direct mode) or one PR/MR with one commit (PR write-back mode). A rejected async run ends the task as failed with the same results.
 // @Description Results and summary list only the members the caller may read; a refusal of a member the caller cannot read still rejects the batch.

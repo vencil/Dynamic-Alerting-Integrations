@@ -343,7 +343,7 @@ SHIPPED_METRIC_GROUPS: frozenset[str] = frozenset({
     "container_memory", "container_oom_killed", "db2_connections_active",
     "db2_lock_wait_time", "es_disk_usage_percent", "es_heap_usage_percent",
     "es_pending_tasks", "es_search_latency_ms", "jvm_gc_pause", "jvm_memory",
-    "jvm_threads", "kafka_consumer_lag", "kafka_request_rate",
+    "jvm_threads", "kafka_consumer_lag",
     "kafka_under_replicated_partitions", "mariadb_liveness",
     "mongodb_connections_current", "mongodb_liveness", "mongodb_replication_lag",
     "mysql_connection_usage_percent", "mysql_replication_lag", "mysql_threads_running",
@@ -1334,7 +1334,7 @@ def _build_inhibit_rules(tenant: str) -> dict:
     }
 
 
-def generate_inhibit_rules(dedup_configs: dict[str, str]) -> tuple[list[dict], list[str]]:
+def generate_inhibit_rules(dedup_configs: "dict[str, str | None]") -> tuple[list[dict], list[str]]:
     """Generate per-tenant severity dedup inhibit rules.
 
     Iterates over all tenants and builds inhibit rules for those with
@@ -1347,7 +1347,9 @@ def generate_inhibit_rules(dedup_configs: dict[str, str]) -> tuple[list[dict], l
       preserving critical visibility. Implemented via Alertmanager inhibit_rules.
 
     Args:
-        dedup_configs: {tenant_name: "enable"|"disable"} for all tenants.
+        dedup_configs: {tenant_name: "enable"|"disable"} for all tenants;
+            None (#3621) where no mode was read — a refused tree — lists no
+            rule for that tenant.
 
     Returns:
         (inhibit_rules_list, warnings_list) where:
@@ -1359,6 +1361,12 @@ def generate_inhibit_rules(dedup_configs: dict[str, str]) -> tuple[list[dict], l
 
     for tenant in sorted(dedup_configs.keys()):
         mode = dedup_configs[tenant]
+        if mode is None:
+            # #3621: no mode was read — the tree was refused before
+            # `da-guard severity-dedup` could answer for it, and that refusal
+            # is the run's message. Rendering it as enable would list an
+            # inhibit rule nobody judged.
+            continue
         if mode == "disable":
             all_warnings.append(unclassified(
                 f"  INFO: {tenant}: severity_dedup disabled, skipping inhibit rule",

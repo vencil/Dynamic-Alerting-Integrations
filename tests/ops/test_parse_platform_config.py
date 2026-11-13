@@ -318,22 +318,17 @@ class TestParseTenantOverrides:
             "db-a", {"_routing_profile": ""}, result)
         assert "db-a" not in result["tenant_profile_refs"]
 
-    def test_dedup_default_enable(self):
+    @pytest.mark.parametrize("overrides", [
+        {"cpu": "80"}, {"_severity_dedup": "disable"}, {"_severity_dedup": "no"}])
+    def test_dedup_mode_is_not_judged_here(self, overrides):
+        """#3621: parsing a tenant only joins it to the dedup tenant set; its
+        mode is the exporter's reading (`da-guard severity-dedup`), filled in
+        once the whole tree is read (TestSeverityDedupFromGo below), so no
+        value, valid or not, is judged or reported at this step."""
         result = _empty_result()
-        _parse_tenant_overrides("db-a", {"cpu": "80"}, result)
-        assert result["dedup_configs"]["db-a"] == "enable"
-
-    def test_dedup_explicit_disable(self):
-        result = _empty_result()
-        _parse_tenant_overrides(
-            "db-a", {"_severity_dedup": "disable"}, result)
-        assert result["dedup_configs"]["db-a"] == "disable"
-
-    def test_dedup_explicit_enable(self):
-        result = _empty_result()
-        _parse_tenant_overrides(
-            "db-a", {"_severity_dedup": "enable"}, result)
-        assert result["dedup_configs"]["db-a"] == "enable"
+        _parse_tenant_overrides("db-a", overrides, result)
+        assert result["dedup_configs"] == {"db-a": None}
+        assert not result.get("field_type_errors")
 
     @pytest.mark.parametrize("metadata", [{"owner": "team-x"}, "bad"])
     def test_metadata_is_not_read(self, metadata):
@@ -375,8 +370,7 @@ class TestParseTenantOverrides:
         }, result)
         assert result["tenant_profile_refs"]["db-a"] == "p1"
         assert result["tenant_profile_refs"]["db-b"] == "p2"
-        assert result["dedup_configs"]["db-a"] == "disable"
-        assert result["dedup_configs"]["db-b"] == "enable"
+        assert result["dedup_configs"] == {"db-a": None, "db-b": None}
         assert "db-a" not in result["explicit_routing"]
         assert "db-b" in result["explicit_routing"]
 

@@ -175,8 +175,9 @@ class TestGenerateDefaultsDeclaredList:
     def test_supply_face_is_untouched(self):
         """可達性 gate 的供給面只讀 `defaults`；新增 sibling key 不得改變它。"""
         db_packs = [k for k in RULE_PACKS if k != "kubernetes"]
-        # 41: #3778 moved mysql_threads_running to the declared (optional_overrides) tier.
-        assert len(generate_defaults(db_packs)["defaults"]) == 41
+        # 42 → 39：#3783 移除 kafka_active_controllers / kafka_request_rate；#3778 把
+        # mysql_threads_running 移到宣告層（optional_overrides）。
+        assert len(generate_defaults(db_packs)["defaults"]) == 39
 
     def test_derivation_is_the_shared_predicate_not_a_fourth_copy(self):
         """清單內容必須逐字等於 chart 那一份的同 pack 子集——同一個 predicate、

@@ -136,20 +136,26 @@ class TestTheRecordIsStructural:
         """Per-ENTRY, not per-file: the other tenants in the file are fine
         to the generator, so it does not refuse the file — but the entry used
         to vanish silently. The exporter drops the whole file (beta's
-        thresholds too), so the key verdict on it is not given, and since
-        #3016 that fails `--validate` (rc 1), naming the dropped file."""
+        thresholds too), so it loads no beta whose `_severity_dedup` the
+        generator could read (#3621): the tenant sets differ, and every mode
+        stops with exit 2 naming the dropped file and the tenant only the
+        generator loads — before the key verdict that used to fail
+        `--validate` on it (#3016)."""
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "alpha.yaml").write_text(
             "tenants:\n  alpha:\n    - not-a-mapping\n  beta:\n    mysql_connection_usage_percent: '70'\n",
             encoding="utf-8")
-        tree = load_tenant_tree(str(d))
-        assert tree.tenant_file_errors == [] and tree.files_read == 1
-        assert "beta" in tree.dedup_configs and "alpha" not in tree.dedup_configs
-        r = _gar(["--config-dir", str(d), "--validate"])
-        assert r.returncode == 1, (r.stdout, r.stderr)
-        assert "alpha.yaml: tenant 'alpha' must be a mapping" in r.stderr, r.stderr
-        assert "key verdict incomplete" in r.stderr and "alpha.yaml" in r.stderr, r.stderr
+        with pytest.raises(SystemExit) as exc:
+            load_tenant_tree(str(d))
+        assert exc.value.code == 2
+        for mode in (["--validate"], ["--output-alertmanager", "--dry-run"]):
+            r = _gar(["--config-dir", str(d), *mode])
+            assert r.returncode == 2, (mode, r.stdout, r.stderr)
+            assert "alpha.yaml: tenant 'alpha' must be a mapping" in r.stderr, r.stderr
+            assert ("the exporter's load drops alpha.yaml, so it does not load the tenants the "
+                    "route generator does (only the generator: beta; only the exporter: none)"
+                    ) in r.stderr, r.stderr
 
 
 # ── --validate ────────────────────────────────────────────────────────

@@ -12,7 +12,8 @@ import (
 
 // The lists tenant-api keeps by hand today (tenant-api internal/handler/body_validator.go
 // unsetAllowedKeys, internal/handler/batch_common.go scopeMetadataKeys); the registry's
-// derivation must give the same keys before tenant-api reads it instead.
+// derivation must give the same keys before tenant-api reads it instead, plus
+// the registry's retired threshold keys (#3783), listed by their base spelling.
 func TestBatchUnsettableKeys_EqualTheHandlerList(t *testing.T) {
 	t.Parallel()
 	// Every retired threshold key rides along (#3829), so the list grows with
@@ -22,7 +23,7 @@ func TestBatchUnsettableKeys_EqualTheHandlerList(t *testing.T) {
 	if got := BatchUnsettableKeys(); !reflect.DeepEqual(got, want) {
 		t.Errorf("BatchUnsettableKeys() = %v, want %v", got, want)
 	}
-	for _, k := range want {
+	for _, k := range append(want, "kafka_request_rate_critical") {
 		if !BatchUnsettable(k) {
 			t.Errorf("BatchUnsettable(%q) = false", k)
 		}

@@ -141,7 +141,6 @@ tenants:
     kafka_consumer_lag: "50000"
     kafka_consumer_lag_critical: "200000"
     kafka_broker_count: "3"
-    kafka_active_controllers: "1"
     kafka_under_replicated_partitions: "0"
     jvm_gc_pause: "0.8"
     jvm_memory: "85"
