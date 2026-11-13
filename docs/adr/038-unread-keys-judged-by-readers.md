@@ -394,8 +394,10 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 值在寫它的那一份檔、那一層判，不在合併後的值上判。合併後的租戶設定已經帶著 profile 與根平台檔 `tenants:` 填進來的值；在那上面判，profile 裡一個錯字會算到每個選用它的租戶頭上，擋下它們與這個值無關的寫入，而它們沒辦法在自己的檔裡修。例如 profile `gold` 寫了 `_silent_mode: purple`，選用它的 `ta`、`tb` 只得到一筆掛在 profile 檔上的 notice，列出這兩個租戶：
 
 ```
-_defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode "purple" (valid: warning, critical, all, disable)) — tenant(s) ta, tb
+_defaults.yaml: notice: value_unread `_silent_mode` (unknown silent mode (valid: warning, critical, all, disable)) — tenant(s) ta, tb
 ```
+
+括號裡那句理由只由固定的字組成，不帶作者寫的值、欄位名或解析器的錯誤訊息（那些會把值原樣帶出來）；最多帶一個索引或個數，例如 `recurring[2]`、`1 unknown field(s)`。要找是哪一行，看這筆 finding 的檔、鍵與租戶。
 
 對 repo 的範例 conf.d 實測，`no_alert` 報 3 個鍵：`mongodb_connections_current_critical`、`mongodb_replication_lag_critical`、`redis_memory_used_bytes_critical`。mongodb 與 redis 規則包只比較 `severity="warning"` 的門檻，沒有 critical 層，所以這幾個 critical 門檻送出了也沒有告警用到（[#3658](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3658)）。它們列在測試裡一份帶 issue 的已知清單，清單只准縮小：範例樹多出一個就紅，修好一個沒從清單拿掉也紅。背景一節的維度鍵如今不再送出（決定 11），由判決報 unread，不在這裡。這項檢查問「送出的值有沒有告警比較」，現有的「告警所需的閾值是否送得到」檢查問「告警要的值有沒有送出」，兩者方向相反、互相補足。
 

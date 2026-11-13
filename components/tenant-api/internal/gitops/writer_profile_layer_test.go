@@ -68,8 +68,8 @@ func TestProfileLayerTenantElectsAProfile(t *testing.T) {
 	}{
 		{"defined in _profiles.yaml", "_profiles.yaml", "profiles:\n  strict:\n    mysql_connections: \"55\"\n", profileLayerTenant, ""},
 		{"defined in the root carrier", "_defaults.yaml", platformLayerDefaults + "profiles:\n  strict:\n    mysql_connections: \"55\"\n", profileLayerTenant, ""},
-		{"defined nowhere", "", "", profileLayerTenant, `WARN: tenant=tx: _profile references unknown profile "strict"`},
-		{"only in a nested file", "sub/_profiles.yaml", "profiles:\n  strict:\n    mysql_connections: \"55\"\n", profileLayerTenant, `WARN: tenant=tx: _profile references unknown profile "strict"`},
+		{"defined nowhere", "", "", profileLayerTenant, `WARN: tenant=tx: _profile "strict" references a profile that is not defined under the root profiles:`},
+		{"only in a nested file", "sub/_profiles.yaml", "profiles:\n  strict:\n    mysql_connections: \"55\"\n", profileLayerTenant, `WARN: tenant=tx: _profile "strict" references a profile that is not defined under the root profiles:`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			files := map[string]string{"_defaults.yaml": platformLayerDefaults, "tx.yaml": platformLayerTenant}

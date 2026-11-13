@@ -75,6 +75,7 @@ from _grar_validate import (  # noqa: E402
     check_policy_scope,
     group_by_problem_text,
     ignored_routing_keys,
+    invalid_tenant_id_field,
     invalid_tenant_id_text,
     unknown_routing_keys,
     override_redundancies,
@@ -1810,7 +1811,8 @@ def load_tenant_tree(
     invalid_ids = sorted(set(parsed.get("invalid_tenant_ids", [])), key=str)
     for tenant in invalid_ids:
         schema_warnings.append(skipped_entry_warning(f"  WARN: {invalid_tenant_id_text(tenant)}, skipping",
-                                                     kind="invalid_tenant_id", tenant=tenant))
+                                                     kind="invalid_tenant_id",
+                                                     tenant=invalid_tenant_id_field(tenant)))
 
     # v2.1.0 ADR-007: Validate domain policies against resolved routing.
     # #2326 (d): a policy file below the root applies to the tenants of its
@@ -1865,7 +1867,8 @@ def load_tenant_tree(
         for tenant in invalid_ids:  # #2341 R8
             schema_warnings.append(Finding(
                 f"  {POLICY_ERROR_PREFIX} {invalid_tenant_id_text(tenant)}",
-                kind="invalid_tenant_id", blocks="strict", tenant=tenant))
+                kind="invalid_tenant_id", blocks="strict",
+                tenant=invalid_tenant_id_field(tenant)))
         # #2341 R5: the same two shapes as a blocking ERROR under --strict.
         for tenant in sorted(refused, key=str):
             schema_warnings.append(Finding(

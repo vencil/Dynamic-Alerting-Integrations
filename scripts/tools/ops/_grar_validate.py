@@ -46,6 +46,7 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
     TENANT_ROUTING_KEYS,
 )
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
+from _lib_confd import WARN_LIMIT  # noqa: E402  (#3703: the profile names a line lists)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
@@ -1266,9 +1267,17 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
                      f"is not on this tenant's directory chain — a profile is "
                      f"visible only to tenants at its own level or below)"
                      if where else "")
+            # #3703: the name goes through shown_value, so a name that is
+            # not name-like is not printed; what the author can choose from
+            # is — the profiles this tenant's chain defines.
+            names = sorted(visible, key=str)
+            listed = ", ".join(shown_key(n) for n in names[:WARN_LIMIT]) + (
+                f" (+{len(names) - WARN_LIMIT} more)" if len(names) > WARN_LIMIT else "")
+            available = (f"; available: {listed}" if names
+                         else "; no routing profile is defined for this tenant")
             warnings.append(Finding(
                 f"  WARN: {tenant}: _routing_profile references unknown "
-                f"profile {scalar_text(profile_name)}{extra}",
+                f"profile {scalar_text(profile_name)}{extra}{available}",
                 kind="unknown_routing_profile", blocks="never", tenant=tenant,
                 field="_routing_profile"))
     return warnings
@@ -2409,14 +2418,24 @@ def routing_not_mapping_warning(tenant: str, value: object) -> str:
 def invalid_tenant_id_text(tenant: object) -> str:
     """#2341 R8: a tenant id the routing plane refuses (is_valid_tenant_id).
 
-    The id is shown as a repr so an empty or blank one is visible. The rule
+    The id goes through ``shown_value`` (#3703: an id the routing plane
+    refuses is whatever the author wrote — a URL included): a name-like one
+    is quoted, so an empty one is visible; any other is its length. The rule
     is cited from its one copy (ADR-035: the schema's
     ``definitions.tenantId.description``), never restated here. ⚠️ Wording
     as ``routing_not_mapping_text``.
     """
-    return (f"tenant id {str(tenant)!r} is not a valid tenant id "
+    return (f"tenant id {shown_value(str(tenant))} is not a valid tenant id "
             f"({tenant_id_rule()[1]}) — no route, receiver or inhibit rule is "
             "rendered for it")
+
+
+def invalid_tenant_id_field(tenant: object) -> "str | None":
+    """The ``tenant`` of an ``invalid_tenant_id`` finding (#3703): the id
+    when it is name-like, else None — a structured field is read by a
+    machine and logged, and an id the routing plane refuses is whatever the
+    author wrote. The message says its length (``invalid_tenant_id_text``)."""
+    return tenant if isinstance(tenant, str) and shown_key(tenant) == tenant else None
 
 
 def routing_defaults_not_mapping_text(fname: str, value: object) -> str:

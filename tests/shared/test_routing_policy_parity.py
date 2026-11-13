@@ -73,7 +73,6 @@ that: every tenant's `python_differs.refused` is `tenant_file_unreadable`.
 """
 from __future__ import annotations
 
-import ast
 import contextlib
 import io
 import json
@@ -170,8 +169,7 @@ _DEFAULTS_NOT_MAPPING = re.compile(
     r"WARN: _routing_defaults in (?P<file>\S+) must be a mapping, got ")
 _ROUTING_NOT_MAPPING = re.compile(
     r"WARN: (?P<tenant>\S+): _routing must be a mapping or a disabling string")
-_INVALID_TENANT_ID = re.compile(
-    r"WARN: tenant id (?P<repr>'(?:[^'\\]|\\.)*'|\"(?:[^\"\\]|\\.)*\") is not a valid tenant id")
+_INVALID_TENANT_ID = re.compile(r"WARN: tenant id .* is not a valid tenant id")
 _UNKNOWN_PROFILE = re.compile(
     r"WARN: (?P<tenant>\S+): _routing_profile references unknown profile '(?P<name>[^']*)'")
 # #2325: the require_critical_escalation lines — the non-compliance line
@@ -468,8 +466,11 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     unknown = {m["tenant"]: m["name"] for m in map(_UNKNOWN_PROFILE.search, got.schema_warnings) if m}
     refused = {m["tenant"]: "routing_not_mapping"
                for m in map(_ROUTING_NOT_MAPPING.search, got.schema_warnings) if m}
-    refused.update({ast.literal_eval(m["repr"]): "invalid_tenant_id"
-                    for m in map(_INVALID_TENANT_ID.search, got.schema_warnings) if m})
+    # #3703: the line names an id through shown_value (not every id is
+    # printed), so the ids are read from the tree and the lines counted.
+    refused.update(dict.fromkeys(got.invalid_tenant_ids, "invalid_tenant_id"))
+    assert (sum(1 for w in got.schema_warnings if _INVALID_TENANT_ID.search(w))
+            == len(set(got.invalid_tenant_ids))), (tree["name"], got.schema_warnings)
     assert set(refused) <= set(tree["expect"]), (tree["name"], refused)
     # A tenant file the generator cannot read refuses the whole tree (#1460,
     # rc 1, nothing rendered) — a reader difference (#2713) that only

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -82,7 +83,7 @@ func TestLayerValueProblems_JudgedWhereWritten(t *testing.T) {
 		t.Errorf("ValueProblems =\n%v\nwant\n%v", got, want)
 	}
 	for _, p := range rep.ValueProblems {
-		if p.Key == "_profile" && p.Problem != `references unknown profile "silver"` {
+		if p.Key == "_profile" && p.Problem != `references a profile that is not defined under the root profiles:` {
 			t.Errorf("_profile problem = %q", p.Problem)
 		}
 	}
@@ -229,4 +230,76 @@ func TestMetadataSchemaPropertiesMatchReader(t *testing.T) {
 // (ScheduledValue.UnmarshalYAML).
 func yamlUnmarshalForTest(s string, out *map[string]ScheduledValue) error {
 	return yaml.Unmarshal([]byte(s), out)
+}
+
+// #3703: LayerValueProblem.Problem is the key verdict's `reason`, which the
+// CI readers print as it is — so every sentence a value check gives is built
+// from constants (an index or a count at most), never from the value, a
+// field name the author wrote, or a parser's error. Every check the registry
+// binds (a key's or a prefix's) and `_profile` is fed a canary in each place
+// a value can hold one; a check that is added without a shape here that it
+// refuses fails the "judged" half.
+func TestLayerValueProblems_CarryNoAuthorText(t *testing.T) {
+	t.Parallel()
+	// Mixed case on purpose: `_silent_mode` and `_severity_dedup` lower-case
+	// what they read, so the comparison is case-insensitive.
+	const canary = "https://u:CaNaRyPw@hooks.example/CaNaRy"
+	const q = `"` + canary + `"`
+	shapes := []string{
+		q,
+		"[" + q + "]",
+		"{" + q + ": x}",
+		"{owner: [" + q + "]}",
+		"{owner: {" + q + ": 1}}",
+		"{target: " + q + "}",
+		"{target: [" + q + "]}",
+		"{target: all, expires: " + q + "}",
+		"{target: enable, expires: " + q + "}",
+		"{target: enable, expires: [" + q + "]}",
+		"{target: enable, enabled: " + q + "}",
+		"{target: " + q + ", enabled: true}",
+		"{target: enable, reason: [" + q + "]}",
+		"{recurring: " + q + "}",
+		"{recurring: [" + q + "]}",
+		"{recurring: [{" + q + ": 1}]}",
+		"{recurring: [{weekdays: [" + q + "], window: \"02:00-06:00\"}]}",
+		"{recurring: [{weekdays: [sun], window: " + q + "}]}",
+		"{recurring: [{weekdays: [sun], window: \"02:00-06:00\", reason: [" + q + "]}]}",
+	}
+	// The keys: every key and prefix the registry gives a check (the prefix
+	// as its structured filter and as any other), and `_profile`.
+	keys := map[string]string{"_profile": "_profile"} // key → the check (or `_profile`) it proves
+	for k, name := range reservedValueChecks {
+		keys[k] = name
+	}
+	for p, name := range reservedPrefixValueChecks {
+		keys[p+maintenanceFilterName] = name
+		keys[p+"anyfilter"] = name
+	}
+	judged := map[string]bool{}
+	for key, check := range keys {
+		for _, shape := range shapes {
+			var m map[string]ScheduledValue
+			if err := yamlUnmarshalForTest(key+": "+shape, &m); err != nil {
+				t.Fatalf("%s: %s: %v", key, shape, err)
+			}
+			values := map[string]ScheduledValue{key: m[key]}
+			p := layerValueProblem(ValueLayerTenant, key, m[key], values, nil)
+			if p == "" {
+				continue
+			}
+			judged[check] = true
+			if strings.Contains(strings.ToLower(p), strings.ToLower("CaNaRy")) {
+				t.Errorf("%s: %s: the problem carries the author's text: %q", key, shape, p)
+			}
+		}
+	}
+	for name := range valueChecks {
+		if !judged[name] {
+			t.Errorf("check %q refused none of the shapes: it is not measured here", name)
+		}
+	}
+	if !judged["_profile"] {
+		t.Error("`_profile` naming no profile gave no problem")
+	}
 }

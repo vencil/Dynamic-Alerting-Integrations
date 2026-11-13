@@ -194,7 +194,7 @@ from _grar_validate import is_receiver_name_collision  # noqa: E402
 # tenant_uniqueness row through `_lib_confd.tenant_declarations`.
 from _grar_validate import duplicate_tenant_errors  # noqa: E402
 # ADR-035 D3: the invalid-tenant-id refusal cites the rule's own words.
-from _grar_validate import invalid_tenant_id_text  # noqa: E402
+from _grar_validate import invalid_tenant_id_field, invalid_tenant_id_text  # noqa: E402
 # #1533: a degraded probe set that cannot vouch for an operator-supplied
 # tenant-triggered inhibit rule (rc 2), and the --validate summary line.
 from _grar_validate import (  # noqa: E402
@@ -754,7 +754,7 @@ def invalid_tenant_ids_refusal(invalid_ids: list[str]) -> list[str]:
     return [_refusal_line(f"FAIL: {len(invalid_ids)} invalid tenant id(s) — nothing was "
                           "generated, written or applied; rename the tenant(s):"),
             *(_refusal_line(f"  {safe_label(invalid_tenant_id_text(t))}",
-                            kind="invalid_tenant_id", tenant=t)
+                            kind="invalid_tenant_id", tenant=invalid_tenant_id_field(t))
               for t in invalid_ids)]
 
 

@@ -44,6 +44,15 @@ type LayerValueProblem struct {
 	Key string
 	// Problem: the reader's tenant-free reason (CheckReservedValue, or
 	// unknownProfileProblem for `_profile`).
+	//
+	// ⛔ CONSTANTS ONLY (#3703). It is the key verdict's `reason`, which the
+	// CI readers print as it is (the route generator's `--validate` and
+	// `--findings-json`, validate-config): a sentence built from the
+	// platform's own words, an index or a count — never the value, a field
+	// name the author wrote, or a parser's error (which quotes them). The
+	// finding names the file, the layer, the owner and the key; Reading
+	// carries the value for the machine.
+	// TestLayerValueProblems_CarryNoAuthorText guards it.
 	Problem string
 	// Reading: the value as the reader reads it (ValueReading) — two values
 	// whose readings are equal are the same unread value, so a write that

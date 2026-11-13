@@ -10,6 +10,7 @@ package config
 // TestMetadataSchemaPropertiesMatchReader — never generated from it.
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 	"sort"
@@ -86,21 +87,27 @@ func unknownMetadataFields(sv ScheduledValue) []string {
 
 // metadataProblem is the `metadata` check's problem: "" when the exporter
 // reads all of the value — a null or empty value (no metadata), or one that
-// decodes into TenantMetadata with no field it does not know.
+// decodes into TenantMetadata with no field it does not know. Constants and
+// a count only (#3703): never a field name the author wrote, nor the
+// decoder's error, which quotes the value.
 func metadataProblem(_ string, sv ScheduledValue) string {
 	if sv.deleted || sv.Default == "" {
 		return ""
 	}
 	if _, err := decodeTenantMetadata(sv); err != nil {
-		return "it does not decode into tenant metadata, so every field reads empty: " +
-			strings.Join(strings.Fields(err.Error()), " ")
+		if errors.Is(err, errMetadataString) {
+			return metadataUndecodedProblem + ": " + errMetadataString.Error()
+		}
+		return metadataUndecodedProblem
 	}
 	if unknown := unknownMetadataFields(sv); len(unknown) > 0 {
-		return fmt.Sprintf("unknown field(s) %s (known: %s)",
-			strings.Join(unknown, ", "), strings.Join(TenantMetadataFields(), ", "))
+		return fmt.Sprintf("%d unknown field(s) (known: %s)",
+			len(unknown), strings.Join(TenantMetadataFields(), ", "))
 	}
 	return ""
 }
+
+const metadataUndecodedProblem = "it does not decode into tenant metadata, so every field reads empty"
 
 // metadataReading is the `metadata` check's reading: the fields as decoded,
 // and for a value with a part the exporter does not read the text itself —

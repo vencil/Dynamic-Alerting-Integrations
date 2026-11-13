@@ -77,7 +77,7 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 	// a9's value is a scalar whose text is not YAML: the state-value WARN,
 	// once per scrape (#2426). #3638: a scalar is never parsed as YAML, so it
 	// is named as the scalar it is.
-	const maintenanceParseWarn = `_state_maintenance for tenant=a9: value "expires: [" is not read: "expires: [" is neither "enable"`
+	const maintenanceParseWarn = `_state_maintenance for tenant=a9: value "expires: [" is not read: it is neither "enable"`
 	tenants := map[string]string{
 		"a9.yaml": "tenants:\n  a9:\n    _state_maintenance: \"expires: [\"\n",
 		"a1.yaml": "tenants:\n  a1:\n    _silent_mode: \"bogus\"\n",

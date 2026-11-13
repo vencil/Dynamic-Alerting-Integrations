@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 )
@@ -63,7 +62,8 @@ func (w maintenanceWindow) contains(now time.Time) bool {
 }
 
 // recurringWindowsOf reads the `recurring` field (its generic decode): the
-// windows, or why the field is not read.
+// windows, or why the field is not read — a sentence of constants and the
+// entry's index, never a field name or a value the author wrote (#3703).
 func recurringWindowsOf(generic any) ([]maintenanceWindow, string) {
 	if generic == nil {
 		return nil, ""
@@ -83,16 +83,15 @@ func recurringWindowsOf(generic any) ([]maintenanceWindow, string) {
 		if !ok {
 			return nil, fmt.Sprintf("recurring[%d] must be a mapping with weekdays and window", i)
 		}
-		var unknown []string
+		unknown := 0
 		for k := range m {
 			if !containsString(recurringFields, k) {
-				unknown = append(unknown, k)
+				unknown++
 			}
 		}
-		if len(unknown) > 0 {
-			sort.Strings(unknown)
-			return nil, fmt.Sprintf("recurring[%d] has unknown field(s) %s (valid: %s)",
-				i, strings.Join(unknown, ", "), strings.Join(recurringFields, ", "))
+		if unknown > 0 {
+			return nil, fmt.Sprintf("recurring[%d] has %d unknown field(s) (valid: %s)",
+				i, unknown, strings.Join(recurringFields, ", "))
 		}
 		var w maintenanceWindow
 		days, _ := m["weekdays"].([]any)
@@ -109,22 +108,21 @@ func recurringWindowsOf(generic any) ([]maintenanceWindow, string) {
 				}
 			}
 			if idx < 0 {
-				return nil, fmt.Sprintf("recurring[%d] weekday %v is not one of %s",
-					i, d, strings.Join(weekdayNames[:], ", "))
+				return nil, fmt.Sprintf("recurring[%d] has a weekday that is not one of %s",
+					i, strings.Join(weekdayNames[:], ", "))
 			}
 			if w.days[idx] {
 				// The schema's uniqueItems: the reader refuses what the
 				// schema refuses, so the write gate and a schema check of
 				// the same file never disagree.
-				return nil, fmt.Sprintf("recurring[%d] lists weekday %s more than once", i, name)
+				return nil, fmt.Sprintf("recurring[%d] lists weekday %s more than once", i, weekdayNames[idx])
 			}
 			w.days[idx] = true
 		}
 		text, _ := m["window"].(string)
 		start, end, ok := parseTimeWindow(text, nil)
 		if !ok || !isCanonicalWindow(text) {
-			return nil, fmt.Sprintf("recurring[%d] window %v is not a UTC \"HH:MM-HH:MM\" window with start != end",
-				i, m["window"])
+			return nil, fmt.Sprintf("recurring[%d] window is not a UTC \"HH:MM-HH:MM\" window with start != end", i)
 		}
 		if r, ok := m["reason"]; ok {
 			s, isString := r.(string)
