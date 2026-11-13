@@ -740,3 +740,19 @@ def test_main_names_a_values_file_helm_cannot_read_and_exits_2(tmp_path, monkeyp
     assert gate.main(["--ci"]) == gate.EXIT_CALLER_ERROR
     err = capsys.readouterr().err
     assert "helm/threshold-exporter/values.yaml" in err and "refuses it" in err
+
+
+def test_main_names_a_renderer_that_cannot_be_had_and_exits_2(tmp_path, monkeypatch, capsys):
+    """#3814: the docs' examples are found by the site's renderer. When it
+    cannot be had (a package missing), main names it and exits 2 — its own
+    branch, not the generic "crashed" one."""
+    _write(tmp_path, "docs/x.md", "```yaml\na: 1\n```\n")
+
+    def no_renderer(root):
+        raise gate.doc_inventory.RendererError("simulated: no pygments")
+
+    monkeypatch.setattr(gate.doc_inventory, "Renderer", no_renderer)
+    assert _main_rc(tmp_path, monkeypatch, {}) == gate.EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    assert "site's renderer, which cannot be had: simulated: no pygments" in err, err
+    assert "crashed" not in err, err

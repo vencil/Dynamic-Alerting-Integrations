@@ -222,6 +222,52 @@ def test_a_crlf_keeps_its_cr_in_the_unit_and_its_line(tmp_path):
     assert (f.line, f.body) == (3, ["a: 1\r", "b: 2\r"])
 
 
+def test_a_bom_is_not_text_and_a_fence_on_line_1_is_a_unit(tmp_path):
+    """mkdocs decodes a page as ``utf-8-sig`` (`File.content_string`): a
+    leading BOM is dropped, so a fence on line 1 renders. Decoded as plain
+    utf-8 the BOM sits before the fence and the site's block went unseen."""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "x.md").write_bytes(b"\xef\xbb\xbf```yaml\na: 1\n```\n")
+    (rel, text), = inv.iter_markdown(tmp_path)
+    f, = inv.yaml_fences(rel, text, _renderer())
+    assert (f.line, f.body) == (1, ["a: 1"])
+
+
+@pytest.mark.parametrize("module", ["markdown", "pymdownx", "mkdocs", "pygments"])
+def test_a_renderer_package_missing_is_a_renderer_error(tmp_path, monkeypatch, module):
+    """#3814: no package of the renderer, no inventory — `RendererError`
+    (the CLI's and the lints' exit 2 naming it), never an ImportError."""
+    for name in list(sys.modules):
+        if name == module or name.startswith(module + "."):
+            monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setitem(sys.modules, module, None)
+    monkeypatch.setattr(inv, "_YAML_LANGUAGE", {})
+    with pytest.raises(inv.RendererError, match="renderer is not installed"):
+        inv.build(_docs(tmp_path, "```yaml\na: 1\n```\n"))
+    if module == "pygments":
+        # The lexer lookup itself, for a caller that never built a Renderer.
+        with pytest.raises(inv.RendererError, match="renderer is not installed"):
+            inv.is_yaml_language("yaml")
+
+
+def test_cli_without_pygments_exits_2_naming_the_renderer(tmp_path):
+    """The CLI the Go loader test runs: pygments absent → rc 2 and the
+    renderer named, no traceback."""
+    stub = tmp_path / "stub" / "pygments"
+    stub.mkdir(parents=True)
+    (stub / "__init__.py").write_text('raise ImportError("simulated missing pygments")\n',
+                                      encoding="utf-8")
+    root = _docs(tmp_path, "```yaml\na: 1\n```\n")
+    r = subprocess.run(  # noqa: S603
+        [sys.executable, "-X", "utf8", str(TOOLS / "_lib_doc_yaml_inventory.py"), "--json",
+         "--repo-root", str(root)],
+        capture_output=True, text=True, encoding="utf-8", timeout=120,
+        env={**os.environ, "PYTHONPATH": str(stub.parent)})
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "renderer is not installed" in r.stderr and "simulated missing pygments" in r.stderr, r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+
+
 def test_attributed_and_indented_fences_keep_their_text():
     """A list item's indentation stays in the body (the text the inventory
     has always given); an empty fence is no unit."""

@@ -683,6 +683,11 @@ def main(argv: list[str] | None = None) -> "int | Report":
         print(f"ERROR: cannot read the Helm values / manifests the way Helm and kubectl "
               f"do: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    except doc_inventory.RendererError as exc:
+        # #3814: the documented examples are found by the site's renderer.
+        print(f"ERROR: the docs' code blocks are found by the site's renderer, which "
+              f"cannot be had: {exc}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: unit-sanity check crashed: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

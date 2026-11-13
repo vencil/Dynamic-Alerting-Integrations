@@ -1,0 +1,29 @@
+# The Python a Go job needs when its tests run the docs' YAML inventory
+# (scripts/tools/_lib_doc_yaml_inventory.py) as a child process (#3814):
+# pkg/config's docs tests (threshold-exporter) read the inventory's JSON, and
+# the inventory finds the code blocks with the site's renderer — markdown,
+# pymdown-extensions and mkdocs, with pygments deciding which language is
+# yaml. pyyaml for the readers it shares with the lints (and for
+# ci_flake_retry.py where a job wraps go test in it).
+#
+# ⛔ One list for every Go job that runs those tests (ci.yml's threshold-
+# exporter leg, nightly-race, nightly-mutation-pilot's Go pilot): pygments is
+# not a dependency of the other four, so a job that lists them by hand and
+# forgets it fails only when the Go tests exec the inventory.
+#
+# setup-python first, so the pip install lands in the python3 the tests exec
+# (the runner's system python is externally managed). Versions are
+# requirements/ci-constraints.txt's, the repo's Python SSOT.
+name: Docs inventory Python
+description: Set up Python and install the docs YAML inventory's dependencies at ci-constraints' pins.
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version-file: .python-version
+
+    - name: Install the docs inventory's Python deps
+      shell: bash
+      run: pip install pyyaml markdown pymdown-extensions mkdocs pygments -c requirements/ci-constraints.txt

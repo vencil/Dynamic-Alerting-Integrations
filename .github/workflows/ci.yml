@@ -236,6 +236,8 @@ jobs:
               #     markdown_extensions (#3814).
               - "requirements/ci-constraints.txt"
               - "mkdocs.yml"
+              #   - the composite action that installs it (the pip line).
+              - ".github/actions/docs-inventory-python/**"
               #   - the #1399 read check the Go legs run after their tests,
               #     and the glob matcher it shares with the static scanners.
               - "scripts/ops/go_testlog_exec.sh"
@@ -407,6 +409,9 @@ jobs:
               - ".dockerignore"
               - ".devcontainer/**"
               - ".github/workflows/**"
+              # Local composite actions: test_renovate_config's SHA-pin
+              # guard scans them with the workflows (#3814 added the first).
+              - ".github/actions/**"
               - "environments/**"
               - "tools/portal/tests/**"
               # ⛔ portal SOURCE, not just its tests. #1176's coverage gate is a
@@ -2484,17 +2489,10 @@ jobs:
       # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml,
       # and pkg/config's docs tests run the docs' YAML inventory
       # (scripts/tools/_lib_doc_yaml_inventory.py), which finds the code
-      # blocks with the site's renderer (#3814): markdown, pymdown-extensions
-      # and mkdocs, at ci-constraints' versions. setup-python, so the pip
-      # install lands in the python3 the tests exec (the runner's system
-      # python is externally managed).
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version-file: .python-version
-
-      - name: Install the flake-retry wrapper's and the docs inventory's Python deps
-        run: pip install pyyaml markdown pymdown-extensions mkdocs -c requirements/ci-constraints.txt
+      # blocks with the site's renderer (#3814). The one list of what that
+      # takes, shared with nightly-race and the Go mutation pilot.
+      - name: Set up Python with the docs inventory's deps
+        uses: ./.github/actions/docs-inventory-python
 
       - name: Run threshold-exporter tests with race detector
         working-directory: components/threshold-exporter/app

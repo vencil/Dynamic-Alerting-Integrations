@@ -300,9 +300,12 @@ def is_yaml_language(language: "str | None") -> bool:
     if not language:
         return False
     if language not in _YAML_LANGUAGE:
-        from pygments.lexers import get_lexer_by_name
-        from pygments.lexers.data import YamlLexer
-        from pygments.util import ClassNotFound
+        try:
+            from pygments.lexers import get_lexer_by_name
+            from pygments.lexers.data import YamlLexer
+            from pygments.util import ClassNotFound
+        except ImportError as e:
+            raise RendererError(_not_installed(e)) from e
         try:
             _YAML_LANGUAGE[language] = type(get_lexer_by_name(language)) is YamlLexer
         except ClassNotFound:
@@ -313,6 +316,11 @@ def is_yaml_language(language: "str | None") -> bool:
 class RendererError(Exception):
     """The site's renderer cannot be had (a package missing, a mkdocs.yml
     the inventory cannot read): nothing is inventoried then."""
+
+
+def _not_installed(e: ImportError) -> str:
+    return (f"the site's renderer is not installed ({e}): install markdown, "
+            "pymdown-extensions, mkdocs and pygments with -c requirements/ci-constraints.txt")
 
 
 class Renderer:
@@ -332,10 +340,11 @@ class Renderer:
             from mkdocs.config.config_options import MarkdownExtensions
             from mkdocs.utils.yaml import yaml_load
             from pymdownx import superfences
+            # The highlighter's lexers decide what is yaml (`is_yaml_language`):
+            # asked here, so a missing pygments is this error before any file.
+            import pygments.lexers  # noqa: F401
         except ImportError as e:
-            raise RendererError(
-                f"the site's renderer is not installed ({e}): install markdown, "
-                "pymdown-extensions and mkdocs with -c requirements/ci-constraints.txt") from e
+            raise RendererError(_not_installed(e)) from e
 
         config_path = Path(repo_root) / MKDOCS_YML
         if not config_path.is_file():
@@ -643,11 +652,13 @@ def iter_markdown(repo_root: Path) -> "Iterator[tuple[str, str]]":
     """(repo path, text) of every docs/**/*.md, sorted. Read as bytes and
     decoded, never with `read_text`: its universal newlines would turn a lone
     CR into a line break, and the line numbers would no longer be the file's
-    (lines are split on ``\\n`` only)."""
+    (lines are split on ``\\n`` only). Decoded as mkdocs decodes a page
+    (`File.content_string`: ``utf-8-sig``), so a leading BOM is not text and
+    a fence on line 1 is still a fence."""
     docs = repo_root / "docs"
     for md in sorted(docs.rglob("*.md")):
         rel = md.relative_to(repo_root).as_posix()
-        yield rel, md.read_bytes().decode("utf-8", errors="replace")
+        yield rel, md.read_bytes().decode("utf-8-sig", errors="replace")
 
 
 # ── reading ─────────────────────────────────────────────────────────────────
