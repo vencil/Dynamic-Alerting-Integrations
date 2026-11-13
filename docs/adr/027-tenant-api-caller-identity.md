@@ -286,11 +286,11 @@ upstreamConfig:
 - **2a**：`components/tenant-api/internal/rbac/devbypass_test.go`（`TestResolveIdentity_IgnoresHeadersOnTCP`）；`components/tenant-api/internal/rbac/identity_arch_test.go`（`TestHeaderResolutionOnlyInResolveIdentity`、`TestIdentityHeaderNamesOnlyInTheirOwners`）
 - **2b**：`components/tenant-api/internal/rbac/identity_arch_test.go`（`TestRateLimitLogAndBypassReadNoRequestHeader`）
 - **3a**：`tests/helm/test_identity_single_hop.py`（`test_no_raw_manifest_runs_an_oauth2_proxy`、`test_the_only_oauth2_proxy_is_in_the_tenant_api_pod`）
-- **3b**：尚無檢查
+- **3b**：`tests/oauth2-proxy/chart_test.go`（`TestChartAPIRouteIsTheSameInEveryVariant`）；`tests/oauth2-proxy/image_config_test.sh`
 - **3c**：`tests/helm/test_human_socket_guard.py`（`test_render_default_points_upstream_at_socket`）；`tests/helm/test_tenant_api_portal_container.py`（`test_portal_container_mounts_no_identity_or_secret`）
 - **3d**：`components/tenant-api/cmd/server/tcp_router_test.go`（`TestCheckIdentityPlaneFlags`）；`tests/helm/test_human_socket_guard.py`（`test_deployment_wires_the_socket`、`test_render_default_points_upstream_at_socket`、`test_render_without_proxy_fails`、`test_socket_path_is_a_chart_constant`）
 - **3e**：`tests/helm/test_oauth2_proxy_alpha_config.py`（`test_both_containers_read_the_same_file`）
-- **3f**：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`）
+- **3f**：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`、`TestChartOAuth2ProxyEnvIsAllowlisted`）
 - **3g**：`tests/helm/test_tenant_api_portal_container.py`（`test_portal_runs_the_charts_config_and_it_forwards_nothing`）
 - **4a**：`tools/portal/tests/api-fetch.test.ts`（`apiFetch: the path`）；`tools/portal/tests/network-calls-only-in-api-fetch.test.ts`（`network calls only in apiFetch`）
 - **4b**：`components/tenant-api/cmd/server/simulate_route_test.go`（`TestSimulateNotProvided`）；`tests/shared/test_portal_simulate_not_provided.py`（`test_tenant_api_answers_the_same_body`、`test_tenant_api_answers_the_same_code`）
@@ -298,7 +298,7 @@ upstreamConfig:
 - **5b**：`tests/helm/test_tenant_api_machine_identity_removed.py`（`test_a_removed_key_fails_the_render`、`test_values_yaml_carries_no_removed_key`）；`tests/helm/test_tenant_api_scope_switches_removed.py`（`test_a_removed_key_fails_the_render`、`test_values_yaml_carries_no_removed_key`）
 - **5c**：`tests/shared/test_threshold_govern_write_path_removed.py`（`test_no_chart_mentions_threshold_govern`、`test_no_network_policy_admits_the_threshold_govern_pod`、`test_no_threshold_govern_cronjob`、`test_no_threshold_governance_stale_alert`、`test_tenant_api_chart_has_no_threshold_govern_allowance`）
 - **5d**：`components/tenant-api/cmd/server/env_check_test.go`（`TestCheckTAEnv_RefusesSettingsADR027Removed`）
-- **6a**：尚無檢查
+- **6a**：`components/tenant-api/cmd/server/identity_config_startup_test.go`（`TestMainRefusesAnAmbiguousOAuth2ProxyConfig`）
 - **6b**：`components/tenant-api/internal/proxyconfig/proxyconfig_test.go`（`TestLoad_RefusesAmbiguousShapes`、`TestParse_Refusals`）
 - **6c**：`components/tenant-api/internal/rbac/empty_config_mode_test.go`（`TestEmptyRuleSet_EveryEntryPointDenies`、`TestEmptyRuleSet_LegacyShimsDeny`）
 - **6d**：`components/tenant-api/cmd/server/env_check_test.go`（`TestCheckTAEnv_RefusesSettingsADR027Removed`）；`tests/helm/test_tenant_api_scope_switches_removed.py`（`test_a_removed_key_fails_the_render`、`test_the_default_render_sets_no_removed_variable`、`test_values_yaml_carries_no_removed_key`）
