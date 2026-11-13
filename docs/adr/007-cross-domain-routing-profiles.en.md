@@ -67,10 +67,11 @@ routing_profiles:
 
 ```yaml
 # db-a.yaml — tenant configuration
-db-a:
-  _routing_profile: team-sre-apac   # reference profile, no duplication
-  cpu_usage_percent: "80"
-  memory_usage_percent: "85"
+tenants:
+  db-a:
+    _routing_profile: team-sre-apac   # reference profile, no duplication
+    cpu_usage_percent: "80"
+    memory_usage_percent: "85"
 ```
 
 **Merge Semantics**: `_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced` (NOC override, immutable). Later layers override earlier ones, but `_routing_enforced` always takes final precedence.

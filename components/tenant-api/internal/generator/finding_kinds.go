@@ -6,6 +6,7 @@ package generator
 // container's text.
 var findingKinds = map[string]bool{
 	"conflicting_override_matcher":        true,
+	"unknown_override_metric_group":       true,
 	"conflicting_receiver_field":          true,
 	"credential_plaintext":                true,
 	"credential_unjudged":                 true,

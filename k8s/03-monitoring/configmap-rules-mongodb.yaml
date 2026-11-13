@@ -37,10 +37,10 @@ data:
   mongodb-alert.yml: "groups:\n- name: mongodb-alerts\n  rules:\n  - alert: MongoDBDown\n\
     \    expr: '(mongodb_up == 0)\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"\
     maintenance\"} == 1)\n\n      '\n    for: 15s\n    labels:\n      maintenance:\
-    \ mute\n      metric_group: liveness\n      severity: warning\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      description: mongodb_up=0 on {{\
-    \ $labels.instance }} — one member of an HA replica set being down keeps the set\
-    \ available (warning). Total outage escalates to MongoDBClusterDown (critical);\
+    \ mute\n      metric_group: mongodb_liveness\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: mongodb_up=0 on\
+    \ {{ $labels.instance }} — one member of an HA replica set being down keeps the\
+    \ set available (warning). Total outage escalates to MongoDBClusterDown (critical);\
     \ loss of PRIMARY to MongoDBNoPrimary (critical).\n      description_zh: '{{ $labels.instance\
     \ }} 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去\
     \ PRIMARY 則為 MongoDBNoPrimary（critical）。'\n      owner: '{{ with query (printf\
@@ -53,8 +53,8 @@ data:
     \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: MongoDBClusterDown\n\
     \    expr: max by(tenant) (mongodb_up{job=\"tenant-exporters\"}) == 0\n    for:\
-    \ 30s\n    labels:\n      maintenance: page\n      metric_group: liveness\n  \
-    \    severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \ 30s\n    labels:\n      maintenance: page\n      metric_group: mongodb_liveness\n\
+    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: No mongod reports up=1 for tenant {{ $labels.tenant }} — total\
     \ service outage, not a single-member failover. For a planned single-instance\
     \ drain, silence via the Alertmanager Silence API (no maintenance-window opt-out\
@@ -72,11 +72,11 @@ data:
     \    expr: 'count by(tenant) (mongodb_mongod_replset_member_state{job=\"tenant-exporters\"\
     })\n\n      unless\n\n      count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
     tenant-exporters\"} == 1)\n\n      '\n    for: 2m\n    labels:\n      maintenance:\
-    \ page\n      metric_group: liveness\n      severity: critical\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: Replica-set members\
-    \ are reachable but none is PRIMARY for tenant {{ $labels.tenant }} — elections\
-    \ failing / quorum lost → writes rejected. Unlike MongoDBClusterDown this fires\
-    \ while secondaries are still up.\n      description_zh: 租戶 {{ $labels.tenant\
+    \ page\n      metric_group: mongodb_liveness\n      severity: critical\n     \
+    \ tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Replica-set\
+    \ members are reachable but none is PRIMARY for tenant {{ $labels.tenant }} —\
+    \ elections failing / quorum lost → writes rejected. Unlike MongoDBClusterDown\
+    \ this fires while secondaries are still up.\n      description_zh: 租戶 {{ $labels.tenant\
     \ }} 的 replica set 成員可連線但沒有 PRIMARY — 選舉失敗／失去 quorum → 寫入被拒。與 MongoDBClusterDown\
     \ 不同，此告警在 secondary 仍存活時就會觸發。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
