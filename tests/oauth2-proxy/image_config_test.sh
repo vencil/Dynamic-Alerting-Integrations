@@ -66,18 +66,23 @@ probe_unauthenticated() {
     docker rm -f "$cid" >/dev/null 2>&1 || true
     return 1
   fi
-  for i in $(seq 1 30); do
-    if curl -fsS -o /dev/null "http://127.0.0.1:$port/ping" 2>/dev/null; then break; fi
-    if [ "$i" -eq 30 ]; then
-      echo "::error::$image: no /ping answer after 30s" >&2
+  # Every request is bounded (--max-time) and readiness has one overall
+  # deadline, so a container that accepts a connection but never answers
+  # fails this check instead of hanging it.
+  deadline=$((SECONDS + 30))
+  while :; do
+    if curl -fsS --connect-timeout 2 --max-time 3 -o /dev/null "http://127.0.0.1:$port/ping" 2>/dev/null; then break; fi
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "::error::$image: no /ping answer within 30s" >&2
       docker logs "$cid" >&2 || true
       docker rm -f "$cid" >/dev/null 2>&1 || true
       return 1
     fi
     sleep 1
   done
-  code_api="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/v1/me")"
-  code_root="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/")"
+  # A timeout leaves curl's 000 in the code, which fails the checks below.
+  code_api="$(curl -sS --connect-timeout 2 --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/api/v1/me")" || true
+  code_root="$(curl -sS --connect-timeout 2 --max-time 10 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$port/")" || true
   docker rm -f "$cid" >/dev/null 2>&1 || true
   echo "   unauthenticated: GET /api/v1/me -> $code_api, GET / -> $code_root"
   if [ "$code_api" != "401" ]; then
