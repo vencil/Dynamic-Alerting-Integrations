@@ -33,11 +33,18 @@ Usage
 Exit codes
 ----------
   0 — commit landed (either via normal path or plumbing fallback)
-  1 — the normal path's `git commit` refused it (a hook, or nothing to
-      commit): a change to the content is needed
-  2 — could not commit: not in a repo, a file or the message missing, a git
-      plumbing step failed, or commit-tree succeeded but the ref write failed
-      (new SHA in stderr for recovery) — scripts/tools/_lib_exitcodes.py (#3577)
+  2 — no commit: the normal path's `git commit` failed (a hook failed — a
+      finding or a hook that could not run, which git and pre-commit both end
+      at 1 and the tool cannot tell apart — or nothing to commit; read the
+      output it passes through), the pre-commit hook is not installed or
+      cannot start pre-commit, not in a repo, a file or the message missing, a
+      git plumbing step failed, or commit-tree succeeded but the ref write
+      failed (new SHA in stderr for recovery) — scripts/tools/_lib_exitcodes.py
+
+  Never 1 (#3634, owner ruling 2026-11-13): 1 means "change the content",
+  and the tool cannot prove a hook failure is a finding rather than a check
+  that never ran. The only documented caller, `make fuse-commit`, ends any
+  failure at 2 anyway.
 
 Design notes
 ------------
@@ -89,6 +96,7 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
             result.returncode,
             f"cmd failed ({result.returncode}): {' '.join(cmd)}\n"
             f"stderr: {result.stderr.strip()}"
+            + (f"\nstdout: {result.stdout.strip()}" if result.stdout.strip() else "")
         )
     return result.stdout.strip()
 
@@ -213,12 +221,45 @@ def plumbing_commit(
             pass
 
 
-class CommitRefused(RuntimeError):
-    """The normal path's `git commit` refused the commit — a hook's refusal,
-    or nothing to commit, which git ends at 1: the content needs a change
-    (exit 1). git's fatal errors (no identity, signing failed, a held
-    index.lock) end at 128 and stay "could not commit" (exit 2), like a
-    failed plumbing step."""
+def require_pre_commit_hook() -> None:
+    """The normal path runs the checks through git's pre-commit hook: refuse
+    (RuntimeError → exit 2) when it would not run them, instead of committing
+    unchecked with exit 0 (#3634). The hook git would run is the one
+    `git rev-parse --git-path hooks/pre-commit` names (it follows
+    `core.hooksPath`). It must be an executable file; a pre-commit framework
+    shim must also be able to start pre-commit — its INSTALL_PYTHON with
+    pre_commit importable, else `pre-commit` on PATH, as the shim itself
+    tries — or it fails every commit without running a hook. The path is
+    asked for absolute: plain `--git-path` is relative to the current
+    directory, not the repository root."""
+    hook = pathlib.Path(_run(["git", "rev-parse", "--path-format=absolute",
+                              "--git-path", "hooks/pre-commit"]))
+    if not hook.is_file() or not os.access(hook, os.X_OK):
+        raise RuntimeError(
+            f"no executable pre-commit hook at {hook}: the checks would not run; "
+            "install it (`pre-commit install`, or the session-start hook) and retry")
+    text = hook.read_text(encoding="utf-8", errors="replace")
+    if "INSTALL_PYTHON=" not in text:
+        return  # not pre-commit's shim: git runs it as it is
+    python = ""
+    for line in text.splitlines():
+        if line.startswith("INSTALL_PYTHON="):
+            python = line.split("=", 1)[1].strip().strip("'\"")
+    candidates = []
+    if python and os.access(python, os.X_OK):
+        candidates.append([python, "-m", "pre_commit", "--version"])
+    if shutil.which("pre-commit"):
+        candidates.append(["pre-commit", "--version"])
+    for cmd in candidates:
+        try:
+            if subprocess.run(cmd, capture_output=True, check=False, timeout=60).returncode == 0:
+                return
+        except (OSError, subprocess.TimeoutExpired):
+            continue  # cannot start it (a directory, no permission, hangs): not runnable
+    raise RuntimeError(
+        f"the pre-commit hook at {hook} cannot start pre-commit (INSTALL_PYTHON "
+        f"{python or '(none)'} has no pre_commit, and no pre-commit on PATH): "
+        "every commit would fail without running a check; reinstall pre-commit")
 
 
 def normal_commit(
@@ -228,7 +269,11 @@ def normal_commit(
     *,
     amend: bool = False,
 ) -> str:
-    """Commit via normal git path (hooks run)."""
+    """Commit via normal git path (hooks run). Any failure is a RuntimeError
+    (exit 2): git ends a hook failure at 1 whether the hook found something
+    or could not run (pre-commit flattens both to 1), so it is never claimed
+    to be a finding (#3634)."""
+    require_pre_commit_hook()
     for rel in files:
         _run(["git", "add", rel])
     cmd = ["git", "commit", "-m", message]
@@ -237,9 +282,10 @@ def normal_commit(
     try:
         _run(cmd)
     except CommandFailed as exc:
-        if exc.returncode == 1:
-            raise CommitRefused(str(exc)) from exc
-        raise
+        raise RuntimeError(
+            f"{exc}\n`git commit` failed (rc {exc.returncode}): a hook failed — "
+            "a finding, or a check that could not run — or there was nothing to "
+            "commit; the output above says which") from exc
     return _run(["git", "rev-parse", "HEAD"])
 
 
@@ -328,9 +374,6 @@ def main(argv: list[str] | None = None) -> int:
             sha = plumbing_commit(repo_root, message, args.files, amend=args.amend)
         else:
             sha = normal_commit(repo_root, message, args.files, amend=args.amend)
-    except CommitRefused as exc:
-        print(f"error: {exc}", file=sys.stderr)
-        return 1
     except (RuntimeError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2  # a plumbing step or a missing file: a caller error (#3577)

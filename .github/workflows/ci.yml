@@ -229,6 +229,15 @@ jobs:
               - "helm/tenant-api/values.schema.json"
               - "scripts/ops/ci_flake_retry.py"
               - "flaky-tests.yaml"
+              #   - requirements/ci-constraints.txt + mkdocs.yml — the threshold-
+              #     exporter leg pip-installs the docs inventory's renderer at
+              #     those pins, and pkg/config's docs tests run the inventory
+              #     (a child process), which renders docs/ with mkdocs.yml's
+              #     markdown_extensions (#3814).
+              - "requirements/ci-constraints.txt"
+              - "mkdocs.yml"
+              #   - the composite action that installs it (the pip line).
+              - ".github/actions/docs-inventory-python/**"
               #   - the #1399 read check the Go legs run after their tests,
               #     and the glob matcher it shares with the static scanners.
               - "scripts/ops/go_testlog_exec.sh"
@@ -400,6 +409,9 @@ jobs:
               - ".dockerignore"
               - ".devcontainer/**"
               - ".github/workflows/**"
+              # Local composite actions: test_renovate_config's SHA-pin
+              # guard scans them with the workflows (#3814 added the first).
+              - ".github/actions/**"
               - "environments/**"
               - "tools/portal/tests/**"
               # ⛔ portal SOURCE, not just its tests. #1176's coverage gate is a
@@ -1795,6 +1807,11 @@ jobs:
         # jsonschema: waveform_compile.py (ADR-030 fault-waveform packs) —
         # without it tests/dx/test_waveform_compile.py importorskips and the
         # governance-gate negative tests silently drop out of CI.
+        # markdown + pymdown-extensions + mkdocs: the docs' YAML inventory
+        # (scripts/tools/_lib_doc_yaml_inventory.py) finds the code blocks with
+        # the site's renderer, mkdocs.yml's extensions read as mkdocs reads
+        # them (#3814); tests/lint/test_doc_yaml_inventory.py and every test
+        # that builds the inventory need all three.
         # check-jsonschema: ships the vendored GitLab CI schema that
         # tests/ops/test_generated_ci_artifacts.py validates the generated
         # .gitlab-ci.yml against (#1347). It installs a CLI, and the test finds
@@ -1809,7 +1826,7 @@ jobs:
         # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
+        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pymdown-extensions mkdocs -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's
@@ -2192,6 +2209,11 @@ jobs:
         # jsonschema: waveform_compile.py (ADR-030 fault-waveform packs) —
         # without it tests/dx/test_waveform_compile.py importorskips and the
         # governance-gate negative tests silently drop out of CI.
+        # markdown + pymdown-extensions + mkdocs: the docs' YAML inventory
+        # (scripts/tools/_lib_doc_yaml_inventory.py) finds the code blocks with
+        # the site's renderer, mkdocs.yml's extensions read as mkdocs reads
+        # them (#3814); tests/lint/test_doc_yaml_inventory.py and every test
+        # that builds the inventory need all three.
         # check-jsonschema: ships the vendored GitLab CI schema that
         # tests/ops/test_generated_ci_artifacts.py validates the generated
         # .gitlab-ci.yml against (#1347). It installs a CLI, and the test finds
@@ -2206,7 +2228,7 @@ jobs:
         # already installs it, but this job did not, and the wiring assertions live
         # here. VIBE_REQUIRE_PRE_COMMIT above makes its absence a failure
         # rather than a silent skip.
-        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown -c requirements/ci-constraints.txt
+        run: pip install pyyaml pytest pytest-cov pytest-timeout pytest-xdist promql-parser hypothesis pathspec jsonschema check-jsonschema pre-commit markdown pymdown-extensions mkdocs -c requirements/ci-constraints.txt
 
       # There is deliberately NO separate collect-only step before the real
       # run: it collected the same tree a second time (~30s of the job's
@@ -2464,15 +2486,13 @@ jobs:
             ${{ runner.os }}-go-threshold-exporter-
             ${{ runner.os }}-go-
 
-      # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
-      # ubuntu-latest ships python3 but not always pyyaml; install only
-      # if missing (no-op on most runners since python3-yaml is widely
-      # pre-installed). Apt is faster than pip for this single dep.
-      - name: Install pyyaml for flake-retry wrapper
-        run: |
-          if ! python3 -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
-          fi
+      # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml,
+      # and pkg/config's docs tests run the docs' YAML inventory
+      # (scripts/tools/_lib_doc_yaml_inventory.py), which finds the code
+      # blocks with the site's renderer (#3814). The one list of what that
+      # takes, shared with nightly-race and the Go mutation pilot.
+      - name: Set up Python with the docs inventory's deps
+        uses: ./.github/actions/docs-inventory-python
 
       - name: Run threshold-exporter tests with race detector
         working-directory: components/threshold-exporter/app

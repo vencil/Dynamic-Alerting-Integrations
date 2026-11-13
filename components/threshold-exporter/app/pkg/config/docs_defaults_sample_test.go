@@ -54,134 +54,21 @@ package config
 // `defaults:` breaks decode, which is exactly how it shipped broken.
 
 import (
-	"regexp"
 	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
 )
 
-// docYAMLBlock is one fenced ```yaml block lifted out of a Markdown file.
+// docYAMLBlock is one documented file of a ```yaml block in docs/: a unit of
+// the docs' YAML inventory (scripts/tools/_lib_doc_yaml_inventory.py). Which
+// blocks exist, where they are and how a block is cut into files is the
+// inventory's one answer (#3814: it asks the site's renderer); this package
+// reads only its JSON.
 type docYAMLBlock struct {
 	file string // repo-relative, forward slashes
-	line int    // 1-indexed line of the opening fence
-	info string // what follows ```yaml on the fence line, trimmed ("{.confd}"; "" for none)
+	line int    // 1-indexed first line of the unit
 	body string
-}
-
-// yamlFenceRe matches the opening line of a yaml fence (trimmed): exactly
-// ```yaml or ```yml, then nothing, or what follows after a blank or `{` — the
-// fence attributes (```yaml {.confd}, #3416). Mirrors FENCE_RE in
-// scripts/tools/_lib_doc_yaml_inventory.py; TestDocsYAMLInventoryParity holds
-// the two extractors to the same units. Any other spelling of a yaml fence is
-// the inventory's error, so docs/ holds none for this extractor to miss.
-var yamlFenceRe = regexp.MustCompile("^```(?:yaml|yml)(?:[ \\t{].*)?$")
-
-// anyFenceRe matches the opening line of any fence (CommonMark): three or
-// more backticks or tildes, then the info string.
-var anyFenceRe = regexp.MustCompile("^(`{3,}|~{3,})(.*)$")
-
-// fenceTrim is what a fence line is compared without: ASCII blanks only, as
-// the inventory (FENCE_TRIM) — strings.TrimSpace would also take U+3000 away.
-const fenceTrim = " \t\r"
-
-// extractYAMLBlocks pulls fenced ```yaml / ```yml blocks out of Markdown,
-// attributes and all: a fence that declares what it is (```yaml {.k8s}) is
-// still a yaml fence. Every fence is tracked as CommonMark tracks it (the
-// closing fence is the same character, at least as long, with nothing after
-// it), so a ``` line inside another fence is that fence's text. Whether its
-// attributes are ones the inventory knows is the inventory's to say, not this
-// extractor's.
-func extractYAMLBlocks(file, content string) []docYAMLBlock {
-	var out []docYAMLBlock
-	var buf []string
-	openChar, openLen, start, info, isYAML := "", 0, 0, "", false
-
-	for i, line := range strings.Split(content, "\n") {
-		trimmed := strings.Trim(line, fenceTrim)
-		if openChar == "" {
-			m := anyFenceRe.FindStringSubmatch(trimmed)
-			if m == nil || (m[1][0] == '`' && strings.Contains(m[2], "`")) {
-				continue
-			}
-			openChar, openLen, start, buf = m[1][:1], len(m[1]), i+1, nil
-			isYAML = yamlFenceRe.MatchString(trimmed)
-			info = ""
-			if isYAML {
-				rest := strings.TrimPrefix(trimmed, "```")
-				if strings.HasPrefix(rest, "yaml") {
-					rest = strings.TrimPrefix(rest, "yaml")
-				} else {
-					rest = strings.TrimPrefix(rest, "yml")
-				}
-				info = strings.Trim(rest, fenceTrim)
-			}
-			continue
-		}
-		if trimmed != "" && strings.Trim(trimmed, openChar) == "" && len(trimmed) >= openLen {
-			if isYAML && len(buf) > 0 {
-				out = append(out, docYAMLBlock{file: file, line: start, info: info, body: strings.Join(buf, "\n")})
-			}
-			openChar, isYAML = "", false
-			continue
-		}
-		if isYAML {
-			buf = append(buf, line)
-		}
-	}
-	return out
-}
-
-// fileHeaderRe matches a comment line that STARTS with a YAML file's name,
-// then the end of the line or a blank and any note, e.g.
-// `# conf.d/_defaults.yaml (central)` or `# _defaults.yaml — Mode A`. A
-// comment that only mentions a file (`# see conf.d/_defaults.yaml`) is prose:
-// cutting there split one file in two, and a key repeated across the cut was
-// read by nobody (#3416 review). Mirrors FILE_HEADER_RE in
-// scripts/tools/_lib_doc_yaml_inventory.py.
-//
-// ⚠️ Anchored at column 0 on purpose, and that anchor is load-bearing. With a
-// leading `\s*` this also matches an INDENTED comment that merely mentions a
-// filename in passing — `    # 其他項目省略，會用 _defaults.yaml 的預設`, which
-// sits inside a `tenants:` block in for-domain-experts.md. Treating that as a
-// file header severs a block mid-mapping: the tail is then validated as its own
-// document, and the head silently loses the entries below it. A real file header
-// in these illustrations always starts at column 0; an indented `#` is prose.
-var fileHeaderRe = regexp.MustCompile(`^# ?([\w./-]+\.ya?ml)(?:[ \t]+.*)?$`)
-
-// splitConcatenatedFiles divides a block that illustrates SEVERAL files in one
-// fence (each introduced by a `# path/to/file.yaml` comment) into one segment
-// per file. Without this, a perfectly correct three-file illustration fails to
-// decode for a bogus reason — `defaults:`/`tenants:` legitimately appear once
-// per file, which yaml.v3 reports as a duplicate mapping key.
-//
-// Splitting rather than skipping is deliberate: it makes the gate check MORE,
-// not less. Every segment is still held to the loader contract on its own.
-// Each segment carries its own line offset (0-based, relative to the first line
-// INSIDE the fence) so a failure points at the offending file, not at the fence.
-func splitConcatenatedFiles(body string) []struct {
-	offset int
-	text   string
-} {
-	type seg = struct {
-		offset int
-		text   string
-	}
-	lines := strings.Split(body, "\n")
-	var segments []seg
-	var cur []string
-	start := 0
-	for i, line := range lines {
-		if fileHeaderRe.MatchString(line) && len(cur) > 0 {
-			segments = append(segments, seg{offset: start, text: strings.Join(cur, "\n")})
-			cur, start = nil, i
-		}
-		cur = append(cur, line)
-	}
-	if len(cur) > 0 {
-		segments = append(segments, seg{offset: start, text: strings.Join(cur, "\n")})
-	}
-	return segments
 }
 
 // collectDocDefaultsSamples returns every `_defaults.yaml` sample in docs/:

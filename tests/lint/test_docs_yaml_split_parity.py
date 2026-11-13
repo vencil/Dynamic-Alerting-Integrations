@@ -1,22 +1,13 @@
-"""Python half of the Go<->Python doc-block splitting parity pin.
+"""The rule that cuts a documented ```yaml block into the files it documents.
 
-Both gates that read docs/**/*.md must cut a fenced block into the same units:
+scripts/tools/_lib_doc_yaml_inventory.py (`split_documented_files`) is the one
+implementation: the drift lint's three checks, the unit-sanity lint and the Go
+loader test all read its units (#3416). The Go test kept a second,
+hand-written copy of the rule (and a Go half of this test) until #3814; it
+now reads the inventory's JSON, so there is no second copy to hold to it.
 
-  * Go     pkg/config/docs_defaults_sample_test.go  (loader oracle)
-  * Python scripts/tools/_lib_doc_yaml_inventory.py (the inventory every
-    Python gate reads, #3416: the drift lint's three checks and the
-    unit-sanity lint)
-
-Neither asserts the other. Both assert tests/shared/docs_yaml_split_matrix.json,
-which makes their agreement transitive rather than claimed — the same shape as
-the optional-overrides membership matrix in the same directory. (Named only in
-prose deliberately: verify_diff.build_map cannot tell a docstring mention from a
-real read, so spelling the filename here would fabricate a dependency edge from
-that matrix to this test.)
-
-The Go half lives in TestDocsYamlSplitMatrix in that same test file; if you
-change the rule, both halves fail until the matrix and both implementations
-agree again. That is the point.
+The cases live in tests/shared/docs_yaml_split_matrix.json, a case matrix
+that states the RULE rather than a snapshot of the live docs.
 """
 
 from __future__ import annotations

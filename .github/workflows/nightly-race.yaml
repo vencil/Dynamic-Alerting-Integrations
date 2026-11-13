@@ -142,6 +142,14 @@ jobs:
         with:
           go-version-file: ${{ matrix.workdir }}/go.mod
 
+      # threshold-exporter's pkg/config docs tests run the docs' YAML
+      # inventory, a Python child process that finds the code blocks with the
+      # site's renderer (#3814); without its packages they fail, not skip.
+      # Every leg, not only threshold-exporter's: the shards' package lists
+      # are planned at run time, and the install is seconds.
+      - name: Set up Python with the docs inventory's deps
+        uses: ./.github/actions/docs-inventory-python
+
       # Module cache AND build cache: without the latter every leg recompiles
       # its module's -race dependency graph. One entry per module per run — the
       # build cache is content-addressed, so whichever shard saves it serves

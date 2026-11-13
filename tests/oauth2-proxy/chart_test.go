@@ -61,6 +61,10 @@ type rendered struct {
 	Config string   // the oauth2-proxy config file
 	Image  string   // the oauth2-proxy container image
 	Args   []string // the oauth2-proxy container args
+	// EnvNames are the names of the oauth2-proxy container's env entries;
+	// EnvFrom counts its envFrom sources.
+	EnvNames []string
+	EnvFrom  int
 }
 
 func renderChart(t *testing.T, v chartVariant) rendered {
@@ -99,6 +103,10 @@ func renderChart(t *testing.T, v chartVariant) rendered {
 							Name  string   `yaml:"name"`
 							Image string   `yaml:"image"`
 							Args  []string `yaml:"args"`
+							Env   []struct {
+								Name string `yaml:"name"`
+							} `yaml:"env"`
+							EnvFrom []map[string]interface{} `yaml:"envFrom"`
 						} `yaml:"containers"`
 					} `yaml:"spec"`
 				} `yaml:"template"`
@@ -114,6 +122,10 @@ func renderChart(t *testing.T, v chartVariant) rendered {
 			for _, c := range doc.Spec.Template.Spec.Containers {
 				if c.Name == "oauth2-proxy" {
 					out.Image, out.Args = c.Image, c.Args
+					for _, e := range c.Env {
+						out.EnvNames = append(out.EnvNames, e.Name)
+					}
+					out.EnvFrom = len(c.EnvFrom)
 				}
 			}
 		}
@@ -306,5 +318,57 @@ func TestChartConfig(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// oauth2ProxyEnvAllowed is every environment variable the production chart may
+// give the oauth2-proxy container. oauth2-proxy reads any OAUTH2_PROXY_* name
+// as a flag, so an extra one could open a route without login
+// (OAUTH2_PROXY_SKIP_AUTH_ROUTES, OAUTH2_PROXY_TRUSTED_IPS, ...) where the
+// args check in TestChartConfig never looks. A new entry here is a decision.
+var oauth2ProxyEnvAllowed = []string{"OAUTH2_PROXY_COOKIE_SECRET"}
+
+// adr-check: ADR-027/9.3f
+func TestChartOAuth2ProxyEnvIsAllowlisted(t *testing.T) {
+	t.Parallel()
+	for _, v := range chartVariants {
+		t.Run(v.Name, func(t *testing.T) {
+			t.Parallel()
+			r := renderChart(t, v)
+			if r.EnvFrom != 0 {
+				t.Errorf("oauth2-proxy container has %d envFrom source(s): every variable it gets must be named here", r.EnvFrom)
+			}
+			if !reflect.DeepEqual(r.EnvNames, oauth2ProxyEnvAllowed) {
+				t.Errorf("oauth2-proxy container env = %v, want exactly %v (ADR-027 §2: nothing may skip login)", r.EnvNames, oauth2ProxyEnvAllowed)
+			}
+		})
+	}
+}
+
+// The image probe (image_config_test.sh) starts only the variants whose
+// provider needs no IdP discovery; this is what lets its 401 stand for every
+// variant: --api-route does not depend on the provider.
+//
+// adr-check: ADR-027/9.3b
+func TestChartAPIRouteIsTheSameInEveryVariant(t *testing.T) {
+	t.Parallel()
+	routes := map[string]string{}
+	for _, v := range chartVariants {
+		var got []string
+		for _, a := range renderChart(t, v).Args {
+			if strings.HasPrefix(a, "--api-route=") {
+				got = append(got, strings.TrimPrefix(a, "--api-route="))
+			}
+		}
+		if len(got) != 1 {
+			t.Fatalf("%s: --api-route args %v, want exactly one", v.Name, got)
+		}
+		routes[v.Name] = got[0]
+	}
+	first := routes[chartVariants[0].Name]
+	for name, r := range routes {
+		if r != first {
+			t.Errorf("--api-route differs by variant: %v (%s has %q)", routes, name, r)
+		}
 	}
 }
