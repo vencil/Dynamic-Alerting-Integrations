@@ -1610,7 +1610,7 @@ class TestWatchdogInhibitImmunity:
         assert routes[3]["receiver"] == "sentinel-sinkhole"
         assert routes[3]["continue"] is False
         # synthetic-receiver / sentinel-sinkhole must be DEFINED in the committed
-        # base (route → defined receiver; else amtool rejects the raw file).
+        # base (route → defined receiver; else Alertmanager rejects the raw file).
         assert any(r["name"] == "synthetic-receiver" for r in am["receivers"])
         assert any(r["name"] == "sentinel-sinkhole" for r in am["receivers"])
 

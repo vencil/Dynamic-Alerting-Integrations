@@ -347,7 +347,7 @@ def _mmdc_render(proc: subprocess.CompletedProcess, expect: dict) -> bool:
 def _promtool_check_rules(proc: subprocess.CompletedProcess, expect: dict) -> bool:
     """``promtool check rules <file>``: exit 0 is the proof. It prints no
     structured output, and its text (``SUCCESS: N rules found``) is not read
-    (#3611 Q2 allows a pinned text signature for amtool only); any other exit
+    (#3611 Q2); any other exit
     — a rule that does not parse, a path that does not exist (both rc 1,
     measured on 3.15.1) — is no verdict here. The caller knows how many rules
     it wrote: it rendered the file."""

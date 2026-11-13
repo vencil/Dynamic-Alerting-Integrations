@@ -975,7 +975,7 @@
         "proxy_url": {
           "type": ["string", "null"],
           "title": "Proxy URL",
-          "description": "HTTP proxy URL. Alertmanager refuses the whole config when Go's net/url cannot parse it; that parser is not expressible as a pattern here. The route generator leaves it to its amtool gate (da-guard no longer judges routing, ADR-036 §9)."
+          "description": "HTTP proxy URL. Alertmanager refuses the whole config when Go's net/url cannot parse it; that parser is not expressible as a pattern here. The route generator leaves it to Alertmanager's config loader, da-read (da-guard no longer judges routing, ADR-036 §9)."
         },
         "no_proxy": { "type": ["string", "null"], "title": "No Proxy", "description": "Comma-separated hosts, IPs or CIDRs that bypass proxy_url. Needs proxy_url; not together with proxy_from_environment: true." },
         "proxy_from_environment": { "$ref": "#/definitions/yamlBool", "title": "Proxy From Environment", "description": "Use the proxy from HTTP_PROXY / HTTPS_PROXY / NO_PROXY. Not together with a non-empty proxy_url or a no_proxy." },
