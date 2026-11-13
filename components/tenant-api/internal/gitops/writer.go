@@ -1795,7 +1795,7 @@ func (w *Writer) commitFileChange(filePath, commitTag, authorEmail string, conte
 	if err := w.writePublishMarker("", []string{idxPath}, true); err != nil {
 		return fmt.Errorf("record the write: %w", err)
 	}
-	if err := writeFileAtomic(filePath, content, 0644); err != nil {
+	if err := writeFileAtomic(filePath, content, cfg.ConfDFileMode); err != nil {
 		// writeFileAtomic renames into place last: the file is untouched.
 		w.removePublishMarker()
 		return fmt.Errorf("write file: %w", err)
