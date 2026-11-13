@@ -159,7 +159,7 @@ func GroupBatch(d *Deps) http.HandlerFunc {
 		// validation. #2339: the patch values get the same range check as
 		// /tenants/batch. B2: so do the unset keys.
 		violations := ValidateStructTags(&req)
-		violations = append(violations, validateBatchEdit(req.Patch, req.Unset, "")...)
+		violations = append(violations, validateBatchEdit(req.Patch, req.Unset, "", d.RetiredThresholdKeys)...)
 		if len(violations) > 0 {
 			WriteValidationErrors(w, r, violations)
 			return

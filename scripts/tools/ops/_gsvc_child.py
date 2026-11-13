@@ -672,7 +672,8 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                                   "key(s) cannot be judged")
         kept, truncated = kept_findings(verdict.findings)
         findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
-                     "tenants": list(f.tenants), "reason": f.reason, "blocks": f.blocks}
+                     "tenants": list(f.tenants), "reason": f.reason, "hint": f.hint,
+                     "blocks": f.blocks}
                     for f in kept]
         return report("complete", tenants=len(tenants), findings=findings, truncated=truncated)
     except _VerdictDeadline:

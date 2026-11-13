@@ -141,6 +141,10 @@ type KeyFinding struct {
 	File     *string  `json:"file"`
 	Tenants  []string `json:"tenants"`
 	Reason   *string  `json:"reason"`
+	// Hint (#3829): a retired threshold key's hint, naming the key that
+	// replaces it; nil for any other finding, and from a generator image
+	// before it sent one.
+	Hint *string `json:"hint"`
 	// Blocks is the shared verdict's own answer to whether this finding
 	// refuses a write (da-guard key-verdict's `blocks`, #3016); nil from a
 	// generator image before it sent one.

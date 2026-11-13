@@ -24,6 +24,12 @@ import (
 type registryDoc struct {
 	DeprecatedAliases map[string]string `yaml:"deprecated_aliases"`
 	Keys              map[string]any    `yaml:"keys"`
+	// RetiredKeys (#3829): retired_threshold_keys_test.go's pin.
+	RetiredKeys map[string]struct {
+		ReplacedBy *string `yaml:"replaced_by"`
+		Tracking   int     `yaml:"tracking"`
+		Hint       string  `yaml:"hint"`
+	} `yaml:"retired_keys"`
 }
 
 // findRepoRootForRegistry walks up from the test working directory until it
