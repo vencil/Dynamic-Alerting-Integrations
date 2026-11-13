@@ -76,6 +76,21 @@ networkPolicy:
     app.kubernetes.io/name: federation-gateway
   # Namespace the gateway runs in. Empty = same namespace as the proxy.
   gatewayNamespace: ""
+  # Egress (#3807): DNS plus TCP to the upstream's port in the upstream's
+  # namespace, nothing else. On by default — a namespace that defaults to deny
+  # (as k8s/03-monitoring does) otherwise leaves the proxy no egress at all, and
+  # every federated query fails. Set false only to supply your own egress
+  # policy (e.g. an upstream outside the cluster); unset counts as on.
+  restrictEgress: true
+  # The upstream's namespace. Empty = read it from upstream.url
+  # (`<svc>` = this release's namespace, `<svc>.<ns>.svc[.cluster.local]` =
+  # <ns>); any other host form fails the render rather than guess.
+  upstreamNamespace: ""
+  # The upstream POD port the egress rule allows. Empty = the port in
+  # upstream.url (or the scheme's: http 80, https 443). NetworkPolicy matches
+  # the pod port, not the Service's, so set this when the upstream Service maps
+  # one to another (e.g. Service 9090 -> pod 10902).
+  upstreamPort: ""
 
 # Horizontal autoscaling. prom-label-proxy parses PromQL into an AST,
 # injects the matcher, and re-serialises — a CPU-bound operation. On a

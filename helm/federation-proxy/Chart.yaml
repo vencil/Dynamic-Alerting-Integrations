@@ -10,7 +10,8 @@ type: application
 #         v0.14.0 -> v0.15.1 -> v0.16.2 (tag + digest; #2329, #3784) without a version
 #         bump, so "0.1.3" named three packages; appVersion catches up to v0.16.2.
 #         No value keys change
-version: 0.1.4
+# 0.2.0 — #3807: the NetworkPolicy also restricts egress, to DNS and the upstream's port in the upstream's namespace (`networkPolicy.upstreamNamespace`, else read from upstream.url `<svc>.<ns>.svc`). Before, the proxy had no egress at all in a namespace that defaults to deny, as k8s/03-monitoring does, so every federated query failed at the proxy. ⚠️ BREAKING: an upstream.url host that is not a Service name (external FQDN, IP) fails the render until upstreamNamespace is set or `networkPolicy.restrictEgress: false`; the rule matches the destination POD port: where the upstream Service maps ports, set `networkPolicy.upstreamPort`
+version: 0.2.0
 # appVersion: pinned prom-label-proxy release
 appVersion: "v0.16.2"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

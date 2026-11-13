@@ -121,7 +121,7 @@ class TestRouteCheck:
             result = vc.check_routes(d)
             assert result["status"] in (vc.PASS, vc.WARN)
 
-    def test_no_routing_passes(self, amtool_accepts):
+    def test_no_routing_passes(self):
         """Config with no routing should pass (no routes generated)."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
@@ -3357,8 +3357,8 @@ class TestJsonSchemaRow:
 
     def test_without_jsonschema_the_row_says_it_did_not_check(
             self, tmp_path, monkeypatch, capsys, cli_argv):
-        """WARN, not a caller error — `routes` without amtool is the
-        precedent. The exit code stays what the other rows make it."""
+        """WARN, not a caller error: every other row still gave its
+        verdict. The exit code stays what the other rows make it."""
         monkeypatch.setitem(sys.modules, "jsonschema", None)
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,

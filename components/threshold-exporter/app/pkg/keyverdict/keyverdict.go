@@ -38,6 +38,11 @@
 // that bind the profile — it replaces the finding the tenants' keys would
 // give (#3042).
 //
+// A threshold key the threshold registry retired (`retired_keys:`, #3829)
+// is unread at error, reason `retired`, whatever reads it and in whichever
+// layer it is written — a root `defaults:` included, where the exporter
+// still serves a row for it; its Hint names the key that replaces it.
+//
 // A tenant file's top-level key other than `tenants`
 // (config.TenantFileTopLevelKey) is no tenant's key and no reader reads it:
 // ONE error on that file, naming no tenant (#3671).
@@ -113,7 +118,9 @@ const (
 	// switches its base off there (#3046) — read, by the phase that
 	// switches it off.
 	ReasonBaseDisabled = "base_disabled"
-	// ReasonRetired: a retired reserved key.
+	// ReasonRetired: a retired reserved key, or a retired threshold key (the
+	// threshold registry's `retired_keys:`, #3829) — the latter an error in
+	// every layer whatever reads it, with a Hint naming its replacement.
 	ReasonRetired = "retired"
 	// ReasonUnregistered: a `_` key the registry does not list.
 	ReasonUnregistered = "unregistered"
@@ -223,6 +230,9 @@ type Input struct {
 	// the file spells them (parse-tree's content), for the tenant files the
 	// caller judges. nil: none judged.
 	TenantFiles map[string][]string
+	// Retired (#3829): the hint for a retired threshold key, "" for any other
+	// key. nil: config.RetiredThresholdHint (the registry's `retired_keys:`).
+	Retired func(key string) string
 	// Whole: Served and Effective hold every tenant of the tree (no
 	// `--tenant` subset, no file the load dropped, no tenant set aside) —
 	// only then is a profile no tenant binds known to be one
@@ -247,6 +257,9 @@ type KeyVerdict struct {
 	Severity *string  `json:"severity"`
 	Reason   *string  `json:"reason"`
 	Disable  *string  `json:"disable"`
+	// Hint (#3829): for a retired threshold key, what replaces it; nil
+	// otherwise.
+	Hint *string `json:"hint"`
 	// SwitchedOffWith: the base whose `disable` switches this key off in
 	// some part of the day (#3046); nil for none.
 	SwitchedOffWith *string `json:"switched_off_with"`
@@ -271,6 +284,9 @@ type Finding struct {
 	// file's top-level key, which is no tenant's.
 	Tenants []string `json:"tenants"`
 	Reason  *string  `json:"reason"`
+	// Hint (#3829): a retired threshold key's hint, naming what replaces
+	// it; nil for any other finding.
+	Hint *string `json:"hint"`
 	// Base: a disable_cascade's base, whose `disable` switches the key off;
 	// nil for any other kind.
 	Base *string `json:"base"`
@@ -341,6 +357,10 @@ func Judge(in Input) Tree {
 	// names a key — one rule for both (#3556).
 	canon := canonicalSpelling
 	policy := canonicalSpelling
+	retired := in.Retired
+	if retired == nil {
+		retired = config.RetiredThresholdHint
+	}
 	keys := map[string][]KeyVerdict{}
 	rootDefaults := map[string]string{}
 	tenants := map[string]bool{}
@@ -386,7 +406,7 @@ func Judge(in Input) Tree {
 				value = ef.Config[key]
 			}
 			rows = append(rows, judgeKey(tenant, key, sk, hasSk, src, hasSrc, value, servedValue, hasRows,
-				in.Heads, in.Undecidable, policy))
+				in.Heads, in.Undecidable, policy, retired))
 		}
 		rows = append(rows, profileNotFilled(tenant, ef.NotServed, all)...)
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
@@ -417,7 +437,7 @@ func Judge(in Input) Tree {
 // judgeKey is the verdict on one key (the module doc's rules).
 func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource, hasSrc bool,
 	value, servedValue any, hasRows bool, heads []PolicyHead, undecidable bool,
-	policy func(string) string) KeyVerdict {
+	policy func(string) string, retired func(string) string) KeyVerdict {
 	layer := ""
 	if hasSrc {
 		layer = src.Layer
@@ -482,8 +502,19 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		readBy["policy_engine"] = true
 	}
 
+	// #3829: a threshold key the registry retired is refused whatever reads
+	// it and wherever it is written — the exporter still serves a row for a
+	// retired key a `defaults:` declares, and only the registry knows no
+	// rule pack reads it any more.
+	hint := ""
+	if !reserved {
+		hint = retired(key)
+	}
+
 	verdict, severity := "", ""
 	switch {
+	case hint != "":
+		verdict, severity, reason = Unread, SeverityError, ReasonRetired
 	case len(readBy) > 0:
 		verdict, reason = Read, ""
 	case undecidable && !reserved:
@@ -514,7 +545,7 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 	return KeyVerdict{
 		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc),
 		ReadBy: sortedKeys(readBy), Verdict: verdict, Severity: optional(severity), Reason: optional(reason),
-		Disable: optional(disable), SwitchedOffWith: optional(sk.SwitchedOffWith),
+		Disable: optional(disable), Hint: optional(hint), SwitchedOffWith: optional(sk.SwitchedOffWith),
 		DeadEntries: nonNilEntries(sk.DeadEntries), Value: value, Served: servedValue,
 	}
 }
@@ -644,6 +675,9 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 		}
 		f := Finding{Severity: sev, Kind: g.gk.kind, Key: g.gk.key, File: g.gk.file,
 			Tenants: sortedKeys(tenantSet), Reason: g.vs[0].Reason}
+		if g.gk.kind == KindUnread {
+			f.Hint = g.vs[0].Hint
+		}
 		switch g.gk.kind {
 		case KindDisableCascade:
 			reason := ReasonBaseDisabled

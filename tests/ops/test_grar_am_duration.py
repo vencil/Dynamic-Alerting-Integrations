@@ -52,7 +52,7 @@ def _generate(d: Path):
 
 
 def _cli(tool: str, d: Path, tmp_path: Path, *flags: str):
-    # No amtool on PATH: the verdict is the Python checks'.
+    # An empty PATH: the readers come from their $DA_*_BINARY variables.
     env = {**os.environ, "PATH": str(tmp_path), "PYTHONIOENCODING": "utf-8"}
     return subprocess.run(
         [sys.executable, str(OPS_DIR / tool), "--config-dir", str(d), *flags],

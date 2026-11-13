@@ -218,6 +218,7 @@ def build_registry_doc(
     strict_metric_class: Optional[bool] = None,
     strict_arming: Optional[bool] = None,
     deprecated_aliases: Optional[dict[str, str]] = None,
+    retired_keys: Optional[dict[str, dict]] = None,
 ) -> dict:
     """The registry document of *rule_packs* — or, with none, the committed one.
 
@@ -249,6 +250,12 @@ def build_registry_doc(
     NOT be an active key (it is retired), the target MUST be an active key
     (an alias onto nothing would silently accept configs that resolve to no
     threshold), and old != new.
+
+    ``retired_keys`` (#3829) rides along the same way: a threshold key no rule
+    pack reads any more -> ``{replaced_by, tracking, hint}``. Fail-loud
+    contract (`retired_key_problems`): the retired key is not an active key and
+    is on neither side of ``deprecated_aliases``, ``replaced_by`` is null or an
+    active key, ``tracking`` is an issue number, ``hint`` one line.
     """
     if rule_packs is None:
         # The real registry: since D-A PR-3 the committed file IS the source,
@@ -258,6 +265,7 @@ def build_registry_doc(
     arming = arming or {}
     strict_metric_class = bool(strict_metric_class)
     deprecated_aliases = deprecated_aliases or {}
+    retired_keys = retired_keys or {}
 
     packs: dict[str, Any] = {}
     keys: dict[str, Any] = {}
@@ -379,6 +387,10 @@ def build_registry_doc(
                 "registry key — the alias would resolve to no threshold"
             )
 
+    problems = retired_key_problems(retired_keys, keys, deprecated_aliases)
+    if problems:
+        raise ValueError("; ".join(problems))
+
     # canonical field order (stable YAML emission).
     keys = {
         k: {f: e[f] for f in _FIELD_ORDER if f in e} for k, e in keys.items()
@@ -386,7 +398,75 @@ def build_registry_doc(
     doc: dict[str, Any] = {"version": 1, "packs": packs, "keys": keys}
     if deprecated_aliases:
         doc["deprecated_aliases"] = dict(sorted(deprecated_aliases.items()))
+    if retired_keys:
+        doc["retired_keys"] = {
+            k: {f: e[f] for f in RETIRED_KEY_FIELDS if f in e}
+            for k, e in sorted(retired_keys.items())}
     return doc
+
+
+#: The fields of one `retired_keys:` entry, in emission order.
+RETIRED_KEY_FIELDS = ("replaced_by", "tracking", "hint")
+
+
+def retired_key_problems(retired: dict, keys: dict, aliases: dict[str, str]) -> list[str]:
+    """What breaks the `retired_keys:` contract (#3829), one message per rule.
+
+    A retired key must have left the contract (not an active key), must not
+    be an alias spelling either way (an alias is a key still honored — the
+    two would say opposite things about one spelling; when an alias window
+    closes, its old spelling moves here and leaves `deprecated_aliases`), its
+    ``replaced_by`` is null or an active key (a hint naming no key would send
+    the operator nowhere), and it names the issue that retired it. Its
+    `_critical` tier is retired with it (the Go lookup derives
+    `<old>_critical` -> `<replaced_by>_critical`, as an alias does), so that
+    tier must not be an active key either."""
+    problems: list[str] = []
+    alias_sides = set(aliases) | set(aliases.values())
+    for old, entry in retired.items():
+        if not isinstance(entry, dict):
+            problems.append(f"retired key {old!r} must be a mapping of {list(RETIRED_KEY_FIELDS)}")
+            continue
+        if old in keys:
+            problems.append(
+                f"retired key {old!r} is still an ACTIVE registry key — retire it "
+                "by removing it from `keys:`, or drop the retired entry")
+        if old in alias_sides:
+            problems.append(
+                f"retired key {old!r} is also in deprecated_aliases — a spelling "
+                "is either still honored (alias) or retired, not both")
+        if old + CRITICAL_SUFFIX in keys:
+            # The lookup (pkg/config/retired_threshold_keys.go) retires
+            # `<old>_critical` with its base, as aliasHead canonicalizes it.
+            problems.append(
+                f"retired key {old!r} still has an ACTIVE critical tier "
+                f"{old + CRITICAL_SUFFIX!r} — the critical tier is retired with "
+                "its base; retire both")
+        repl = entry.get("replaced_by")
+        if repl is not None and repl not in keys:
+            problems.append(
+                f"retired key {old!r} is replaced_by {repl!r}, which is not an "
+                "active registry key — name the live key, or null for none")
+        elif (repl is not None and repl + CRITICAL_SUFFIX not in keys
+              and old + CRITICAL_SUFFIX not in retired):
+            # The lookup derives `<old>_critical` -> `<repl>_critical`; when
+            # repl has no critical tier that hint would name a key that does
+            # not exist, so the critical spelling needs its own entry.
+            problems.append(
+                f"retired key {old!r} is replaced_by {repl!r}, which has no critical "
+                f"tier, so the derived hint for {old + CRITICAL_SUFFIX!r} would name "
+                f"{repl + CRITICAL_SUFFIX!r}, not a registry key — add a retired entry "
+                f"for {old + CRITICAL_SUFFIX!r} (replaced_by: null)")
+        if "tracking" not in entry:
+            problems.append(f"retired key {old!r} needs tracking: <issue>")
+        else:
+            msg = _tracking_problem(old, "retired_keys", entry["tracking"])
+            if msg:
+                problems.append(msg)
+        msg = _one_line_problem(old, "hint", entry.get("hint"))
+        if msg:
+            problems.append(f"retired key {msg}")
+    return problems
 
 
 def _one_line_problem(key: str, field: str, value: Any) -> Optional[str]:
@@ -649,6 +729,7 @@ def fixed_point_problems(doc: dict) -> list[str]:
             strict_metric_class=True,
             strict_arming=True,
             deprecated_aliases=dict(doc.get("deprecated_aliases") or {}),
+            retired_keys=dict(doc.get("retired_keys") or {}),
         )
     except (ValueError, KeyError, TypeError, AttributeError) as exc:
         # The file is hand-authored: an entry that is not a mapping (or a
@@ -704,6 +785,62 @@ def check_rule_packs_module(doc: dict, path: Optional[str] = None) -> Optional[s
     return None
 
 
+#: The Go table of `retired_keys:` (#3829), generated whole: the key verdict
+#: (pkg/keyverdict), served-values' hint and tenant-api's batch `unset` read
+#: it through pkg/config/retired_threshold_keys.go.
+RETIRED_KEYS_GO_PATH = _in_repo(
+    "components", "threshold-exporter", "app", "pkg", "config",
+    "retired_threshold_keys_gen.go")
+RETIRED_KEYS_GO_ID = "retired-keys-go"
+
+
+def _go_str(s: str) -> str:
+    import json
+    return json.dumps(s, ensure_ascii=False)
+
+
+def render_retired_keys_go(doc: dict) -> str:
+    """The exact text of the generated Go table for *doc*'s `retired_keys:`.
+
+    Rendered for the freshness check even when the section breaks its
+    contract (reported beside it by the schema and fixed-point checks), so a
+    malformed entry renders as best it can instead of raising."""
+    def field(e: Any, name: str) -> Any:
+        return e.get(name) if isinstance(e, dict) else None
+
+    def tracking(e: Any) -> int:
+        t = field(e, "tracking")
+        return t if isinstance(t, int) and not isinstance(t, bool) else 0
+
+    entries = "".join(
+        f"\t{{{_go_str(str(k))}, {_go_str(str(field(e, 'replaced_by') or ''))}, "
+        f"{tracking(e)}, {_go_str(str(field(e, 'hint') or ''))}}},\n"
+        for k, e in sorted((doc.get("retired_keys") or {}).items(), key=lambda kv: str(kv[0])))
+    return (
+        "// Code generated by scripts/tools/lint/check_threshold_registry.py --regen; DO NOT EDIT.\n"
+        "// Source: rule-packs/threshold-registry.yaml `retired_keys:` (#3829).\n"
+        "\n"
+        "package config\n"
+        "\n"
+        "// retiredThresholdKeys are the threshold keys no rule pack reads any\n"
+        "// more: key, the key that replaces it (\"\" for none), the issue that\n"
+        "// retired it and the hint. Looked up by retired_threshold_keys.go.\n"
+        "var retiredThresholdKeys = []retiredThresholdKey{"
+        + (f"\n{entries}" if entries else "") + "}\n")
+
+
+def check_retired_keys_go(doc: dict, path: Optional[str] = None) -> Optional[str]:
+    """None when the generated Go table is fresh, else what is wrong with it."""
+    p = path or RETIRED_KEYS_GO_PATH
+    if p is None or not os.path.isfile(p):
+        return f"{p} (surface {RETIRED_KEYS_GO_ID!r}) does not exist"
+    with open(p, encoding="utf-8") as fh:
+        if fh.read() != render_retired_keys_go(doc):
+            return (f"{p} (surface {RETIRED_KEYS_GO_ID!r}) is not what the "
+                    "registry generates")
+    return None
+
+
 def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     """``--regen``: every generated surface from the committed registry.
 
@@ -713,7 +850,8 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     write`` dry run of the batches that will write it (`plan_surfaces`) —
     all before anything is written. Only then are the changed surfaces
     written (the conf.d ones first, through ``da-guard write``) and the
-    generated RULE_PACKS module last; a refusal (ConfdWriteRefused,
+    generated RULE_PACKS module and the retired-keys Go table (#3829)
+    last; a refusal (ConfdWriteRefused,
     ValueError, `_lib_parse_tree.ParseTreeError`) leaves every file as it
     was; a write that stops part-way is SurfaceWriteStopped
     (ConfdWriteStopped for a conf.d batch), naming the files already
@@ -727,10 +865,15 @@ def regen(path: Optional[str] = None) -> tuple[dict, list[str]]:
     doc = committed_registry_doc(src)
     planned = plan_surfaces(doc)
     module_text = render_rule_packs_module(doc)
+    go_text = render_retired_keys_go(doc)
+    go_path = _repo_path_or_raise(RETIRED_KEYS_GO_PATH, "the retired-keys Go table")
     touched = write_planned(planned)
     if check_rule_packs_module(doc) is not None:
         _write_or_stop(RULE_PACKS_MODULE_PATH, module_text, touched, write_text_secure)
         touched.append(RULE_PACKS_MODULE_PATH)
+    if check_retired_keys_go(doc, go_path) is not None:
+        _write_or_stop(go_path, go_text, touched, write_text_secure)
+        touched.append(go_path)
     return {"path": src, "packs": len(doc["packs"]), "keys": len(doc["keys"])}, touched
 
 
@@ -863,6 +1006,17 @@ def diff_docs(committed: dict, fresh: dict) -> list[str]:
                 f"deprecated_alias {old!r}: registry={c_alias[old]!r} vs "
                 f"derived={f_alias[old]!r}"
             )
+
+    # retired_keys (#3829): same treatment, a missing section is empty.
+    c_ret = committed.get("retired_keys", {}) or {}
+    f_ret = fresh.get("retired_keys", {}) or {}
+    for old in sorted(set(c_ret) ^ set(f_ret)):
+        diffs.append(f"retired_key {old!r}: in only one of registry / derived")
+    for old in sorted(set(c_ret) & set(f_ret)):
+        if c_ret[old] != f_ret[old]:
+            diffs.append(
+                f"retired_key {old!r}: registry={c_ret[old]!r} vs "
+                f"derived={f_ret[old]!r}")
 
     if committed.get("version") != fresh.get("version"):
         diffs.append(
