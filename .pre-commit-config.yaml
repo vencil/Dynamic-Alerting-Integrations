@@ -1719,12 +1719,13 @@ repos:
         # header threshold sections / helm values thresholdConfig.defaults /
         # dev conf.d _defaults.yaml / the optional_overrides declared-key LIST
         # on all THREE surfaces that ship it — the two runtime ones (#1310)
-        # plus the try-local seed, #1176) + header-prose key membership (F6).
+        # plus the try-local seed, #1176 / the Go retired_keys table, #3829)
+        # + header-prose key membership (F6).
         # Fix: edit the registry, then `check_threshold_registry.py --regen`
         # + commit.
         # (check_threshold_reachability.py is in the filter because its
         # KNOWN_UNWIRED list feeds the membership universe.)
-        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml)$
+        files: ^(rule-packs/(threshold-registry\.yaml|rule-pack-.*\.ya?ml)|docs/schemas/threshold-registry\.schema\.json|scripts/tools/ops/(scaffold_tenant|_registry_lib|_rule_packs_generated)\.py|scripts/tools/lint/check_threshold_(registry|reachability)\.py|helm/threshold-exporter/values\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/_defaults\.yaml|components/threshold-exporter/app/pkg/config/retired_threshold_keys_gen\.go)$
 
       - id: threshold-unit-sanity-check
         name: "threshold unit sanity — declared units match the registry + values lie in their dimension (#992 promise / #1217 follow-up)"
@@ -1857,6 +1858,19 @@ repos:
         # check. Measured at 0.36s on the full tree, which is cheaper than
         # enumerating carriers and being wrong about one.
         files: .
+
+      - id: chart-version-bump
+        name: "chart version bump — a git-only chart whose packaged content changed must raise `version` (#1269)"
+        # Compares each git-only chart's package with the package at the commit
+        # that first carried its version (helm package on both sides, file by
+        # file): a Chart.yaml comment or a .helmignore'd file needs no bump, a
+        # changed default or a deleted template does. Charts a release line
+        # pushes are listed and skipped — NOT checked anywhere yet (see the
+        # script). Needs history back to each version's first commit.
+        entry: python3 -X utf8 scripts/tools/lint/check_chart_version_bump.py
+        language: python
+        pass_filenames: false
+        files: ^(helm/|scripts/tools/lint/check_chart_(version_bump|package_contents|ship_surface)\.py$)
 
       - id: devcontainer-dep-parity
         name: "dev container must declare every Python dep CI installs (#1254)"

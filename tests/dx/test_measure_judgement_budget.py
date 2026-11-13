@@ -1,6 +1,6 @@
 """Tests for measure_judgement_budget.py (#3206, ADR-036 §3 "快取的去留").
 
-The measurement itself (helm, amtool, a 5000-tenant judgement) never runs
+The measurement itself (helm, a 5000-tenant judgement) never runs
 here. What is pinned is the part that turns runs into an answer, because a
 wrong answer there is silent:
 
@@ -49,7 +49,7 @@ def _child(label: str, exit_: int = 0, kib: int = 50 * 1024) -> dict:
 def _run(limit=LIMIT, *, gen_rc=0, children=None, sv_ok=True, memory_error=None,
          report=True, exit_=0, wall=5.0, self_kib=60 * 1024) -> dict:
     if children is None:
-        children = [_child("da-guard parse-tree (tree)"), _child("amtool check-config"),
+        children = [_child("da-guard parse-tree (tree)"), _child("da-read alertmanager"),
                     _child("da-guard served-values")]
     rep = None
     if report:
@@ -72,10 +72,10 @@ def test_a_whole_judgement_is_complete():
     assert _run(gen_rc=1)["outcome"] == "complete"  # findings that block are a verdict
 
 
-@pytest.mark.parametrize("label", ["da-guard parse-tree (tree)", "amtool check-config",
+@pytest.mark.parametrize("label", ["da-guard parse-tree (tree)", "da-read alertmanager",
                                    "da-guard served-values", "git cat-file"])
 def test_any_program_ended_by_a_signal_under_the_limit_is_memory(label):
-    children = [_child("da-guard parse-tree (tree)"), _child("amtool check-config"),
+    children = [_child("da-guard parse-tree (tree)"), _child("da-read alertmanager"),
                 _child("da-guard served-values"), _child("git cat-file")]
     for c in children:
         if c["label"] == label:
@@ -93,22 +93,29 @@ def test_the_same_signal_with_no_limit_is_not_a_memory_result():
 def test_a_launcher_killed_without_figures_is_incomplete_not_memory():
     # No side file: the launcher itself was ended (e.g. its timeout), not the
     # program under the limit.
-    amtool = _child("amtool check-config", -signal.SIGKILL)
-    amtool["launched"] = False
-    children = [_child("da-guard parse-tree (tree)"), amtool, _child("da-guard served-values")]
+    reader = _child("da-read alertmanager", -signal.SIGKILL)
+    reader["launched"] = False
+    children = [_child("da-guard parse-tree (tree)"), reader, _child("da-guard served-values")]
     r = _run(children=children)
     assert r["outcome"] == "incomplete", r
-    assert "amtool check-config" in r["why"]
+    assert "da-read alertmanager" in r["why"]
 
 
 def test_a_go_child_out_of_memory_read_as_exit_2_is_no_verdict_not_a_pass():
-    # amtool (or any Go program) without GOTRACEBACK=crash exits 2 on OOM; the
+    # da-read (or any Go program) without GOTRACEBACK=crash exits 2 on OOM; the
     # generator then exits 2. That is no verdict: never complete.
-    children = [_child("da-guard parse-tree (tree)"), _child("amtool check-config", 2),
+    children = [_child("da-guard parse-tree (tree)"), _child("da-read alertmanager", 2),
                 _child("da-guard served-values")]
     r = _run(gen_rc=2, children=children)
     assert r["outcome"] == "incomplete"
     assert "no verdict" in r["why"]
+
+
+def test_a_judgement_without_alertmanagers_loader_is_not_complete():
+    children = [_child("da-guard parse-tree (tree)"), _child("da-guard served-values")]
+    r = _run(children=children)
+    assert r["outcome"] == "incomplete", r
+    assert "da-read alertmanager" in r["why"]
 
 
 def test_served_values_without_a_document_is_not_complete():
@@ -126,7 +133,7 @@ def test_a_dead_judgement_process_is_memory_under_the_limit():
 
 
 def test_no_tree_mode_parse_tree_is_not_the_cache_less_path():
-    children = [_child("da-guard parse-tree (file)"), _child("amtool check-config"),
+    children = [_child("da-guard parse-tree (file)"), _child("da-read alertmanager"),
                 _child("da-guard served-values")]
     assert _run(children=children)["outcome"] == "incomplete"
 
@@ -195,15 +202,6 @@ def test_exit_2_on_a_go_child_oom_read_as_no_verdict(staged, tmp_path, capsys):
     staged["run"] = lambda lim: _run(lim, gen_rc=2)
     assert mjb.main(["--work-dir", str(tmp_path / "work")]) == mjb.EXIT_NOT_MEASURED
     assert "no verdict" in capsys.readouterr().err
-
-
-def test_missing_amtool_is_exit_2_and_creates_nothing(monkeypatch, tmp_path, capsys):
-    monkeypatch.setattr(mjb.shutil, "which", lambda name: None)
-    work = tmp_path / "work"
-    rc = mjb.main(["--da-guard-binary", sys.executable, "--work-dir", str(work)])
-    assert rc == mjb.EXIT_NOT_MEASURED
-    assert "amtool" in capsys.readouterr().err
-    assert not work.exists()
 
 
 def test_missing_tree_is_exit_2_and_creates_nothing(monkeypatch, tmp_path, capsys):

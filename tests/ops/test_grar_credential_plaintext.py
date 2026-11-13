@@ -341,9 +341,8 @@ def test_migrate_credentials_lists_what_it_cannot_judge(tmp_path):
 # 就是那一列時印 `<masked>`。每一列放三種寫錯的值（不合格式的字串、壞掉的
 # 參照、該放 mapping／list 的地方放字串），跑 `--validate --strict
 # --findings-json`，stdout、stderr、findings 都不得出現 canary。
-# ⚠️ PATH 裡不放 amtool：amtool 自己的錯誤訊息照原文轉印，是另一條通道
-# （本判定擋下的樹不會交給 amtool；它放行的樹若被 amtool 拒收，amtool 的
-# 原文可能引用值），不在這個 helper 的範圍。
+# Alertmanager 閘門（da-read）的拒收訊息不帶值，由
+# test_generate_routes_validate_parity.py 釘住，不在這個 helper 的範圍。
 
 from _lib_python import RECEIVER_TYPES  # noqa: E402
 from _lib_validation import CREDENTIAL_PLAINTEXT_SITES, CREDENTIAL_REF_SITES  # noqa: E402
