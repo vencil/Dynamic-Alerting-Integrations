@@ -28,7 +28,8 @@ if [ -z "$dir" ] || [ ! -d "$dir" ]; then
 fi
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+probe_cids=""
+trap 'for c in $probe_cids; do docker rm -f "$c" >/dev/null 2>&1 || true; done; rm -rf "$tmp"' EXIT
 printf 'placeholder-client-secret' > "$tmp/client-secret"
 chmod 0644 "$tmp/client-secret"
 
@@ -50,12 +51,21 @@ probe_unauthenticated() {
   local image="$1" cfg_host="$2" cfg_path="$3" secret_path="$4"
   shift 4
   local cid port code_api code_root i rc=0
-  cid="$(docker run -d --rm -p 127.0.0.1::4180 \
+  # No --rm: a container that exits at once must keep its logs for the
+  # error below; it is removed at the end (and by the EXIT trap).
+  cid="$(docker run -d -p 127.0.0.1::4180 \
     -e OAUTH2_PROXY_COOKIE_SECRET=0123456789abcdef0123456789abcdef \
     -v "$cfg_host:$cfg_path:ro" \
     -v "$tmp/client-secret:$secret_path:ro" \
-    "$image" "$@")"
+    "$image" "$@")" || { echo "::error::$image: docker run failed" >&2; return 1; }
+  probe_cids="$probe_cids $cid"
   port="$(docker port "$cid" 4180/tcp | head -n 1 | sed 's/.*://')"
+  if [ -z "$port" ]; then
+    echo "::error::$image: no published port for 4180 (container exited?)" >&2
+    docker logs "$cid" >&2 || true
+    docker rm -f "$cid" >/dev/null 2>&1 || true
+    return 1
+  fi
   for i in $(seq 1 30); do
     if curl -fsS -o /dev/null "http://127.0.0.1:$port/ping" 2>/dev/null; then break; fi
     if [ "$i" -eq 30 ]; then

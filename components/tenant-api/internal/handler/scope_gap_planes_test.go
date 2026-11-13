@@ -125,11 +125,13 @@ func TestScopeGapsMatchEveryPlane(t *testing.T) {
 				}
 				continue
 			}
+			// As tenant_list.go does: the org axis from the tenant's org list.
+			rowOrgs, _ := orgs.OrgsForTenant(r.ID)
 			var listAllowed bool
 			if r.MetadataUnknown() {
-				listAllowed = mgr.ScopeAllowedUnknownMetadata(p, r.ID, tenantOrgs[r.ID])
+				listAllowed = mgr.ScopeAllowedUnknownMetadata(p, r.ID, rowOrgs)
 			} else {
-				listAllowed = mgr.ScopeAllowed(p, r.ID, r.Environment, r.Domain, tenantOrgs[r.ID])
+				listAllowed = mgr.ScopeAllowed(p, r.ID, r.Environment, r.Domain, rowOrgs)
 			}
 			writeAllowed := OrgAllowed(mgr, orgs, p, r.ID, rbac.PermWrite, WriteScopeMeta(dir))
 			g := gap[key{rule.Name, r.ID}]

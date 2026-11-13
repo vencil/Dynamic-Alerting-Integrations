@@ -82,6 +82,14 @@ func TestMainRefusesAnAmbiguousOAuth2ProxyConfig(t *testing.T) {
 	if !strings.Contains(out, "FATAL: --oauth2-proxy-config:") {
 		t.Errorf("the refusal does not name --oauth2-proxy-config. Output:\n%s", out)
 	}
+	// It must STOP there: a refusal that only logs and carries on would reach
+	// the identity line and RBAC init (which the malformed _rbac.yaml then
+	// stops, hiding the bug behind a non-zero exit).
+	for _, later := range []string{"identity headers from", "rbac"} {
+		if strings.Contains(strings.ToLower(out), strings.ToLower(later)) {
+			t.Errorf("main went on past the refused config (output names %q). Output:\n%s", later, out)
+		}
+	}
 	if _, err := os.Stat(sock); err == nil {
 		t.Errorf("the API socket %s exists: main opened the listener before refusing the config", sock)
 	}
