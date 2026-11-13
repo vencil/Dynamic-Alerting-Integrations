@@ -1194,14 +1194,15 @@ class TestMainCLI:
 
     @pytest.mark.parametrize("argv", [
         ["--generate-profile", "p", "--db", "mariadb"],
-        ["--tier", "staging", "--tenant", "db-x", "--db", "mariadb"],
+        ["--tier", "staging", "--tenant", "db-x", "--db", "mariadb", "--non-interactive"],
     ])
-    def test_profile_generator_flags_are_gone(self, argv, capsys):
+    def test_profile_generator_flags_are_gone(self, argv, capsys, tmp_path):
         """#3691: a generated profile froze a copy of every value it wrote (a
         profile is expanded into each bound tenant's overrides), and staging's
         x1.2 inverted tiers. Both flags are refused as unknown (rc 2)."""
         import scaffold_tenant
-        with mock.patch("sys.argv", ["scaffold_tenant.py", *argv]):
+        # -o: were the flags back, a run must not write into the cwd.
+        with mock.patch("sys.argv", ["scaffold_tenant.py", *argv, "-o", str(tmp_path)]):
             with pytest.raises(SystemExit) as exc_info:
                 scaffold_tenant.main()
         assert exc_info.value.code == EXIT_CALLER_ERROR
