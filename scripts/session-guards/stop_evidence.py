@@ -379,7 +379,15 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.message_stdin:
-        message = sys.stdin.read()
+        try:
+            message = gl.read_stdin_text()  # UTF-8 whatever the locale (#3598)
+        except UnicodeDecodeError as exc:
+            raise _lib_exitcodes.CallerError(
+                f"--message-stdin: stdin is not UTF-8 ({exc})", reason="stdin_not_utf8") from None
+        if message is None:  # no stdin, or a terminal: no message was read — not "ok"
+            raise _lib_exitcodes.CallerError(
+                "--message-stdin: no message on stdin (it is closed or a terminal); "
+                "pipe the message in", reason="stdin_absent")
         executed = executed_commands(args.transcript, args.prompt_id) if args.transcript else None
         ok, reasons = verdict(message, executed)
         print(json.dumps({"ok": ok, "reasons": reasons,

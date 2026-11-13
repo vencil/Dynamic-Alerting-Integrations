@@ -3,8 +3,14 @@
 Three guards (skill_usage / paths_map / stop_evidence — agent 指引改善計畫
 PR-D) need the same four things: read the harness payload from stdin, resolve a
 per-user cache log path, append one JSON line, and find a per-session state
-directory. `session-init.py` predates this module and keeps its own copies on
-purpose (its tests pin them); nothing here is imported by it.
+directory. `session-init.py` predates this module and keeps its own copies of
+the other helpers on purpose (its tests pin them); it reads its payload here.
+
+⛔ This module is the one reader of stdin in this directory (#3598): the
+payload is UTF-8 JSON, and `sys.stdin.read()` decodes with the locale's
+encoding — cp950 on a zh-TW Windows host, where a command or path in Chinese
+failed to decode and the guard silently did nothing. Gate:
+tests/dx/test_guard_stdin.py.
 
 Every helper is exception-free by contract: a guard that raises on a helper
 would block a tool call on a hook bug, and "never block on a hook bug" is the
@@ -19,25 +25,47 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import Callable
 
 
-def read_payload() -> dict | None:
+def read_stdin_text() -> str | None:
+    """All of stdin, decoded as UTF-8 whatever the locale (#3598; a leading
+    BOM is dropped); None for no stdin or a TTY (a manual run must not block
+    on `read()`). Raises UnicodeDecodeError for bytes that are not UTF-8. A text stream with no
+    bytes beneath it (a test's StringIO) is already decoded: read as it is."""
+    stdin = sys.stdin
+    if stdin is None or stdin.isatty():
+        return None
+    buffer = getattr(stdin, "buffer", None)
+    if buffer is None:
+        return stdin.read()
+    return buffer.read().decode("utf-8-sig")
+
+
+def read_payload(warn: "Callable[[str], None] | None" = None) -> dict | None:
     """The hook's JSON payload from stdin, or None when absent / unparsable.
 
     Manual invocation (a TTY, or an empty pipe) yields None so callers can
-    take their `--stats` / `--help` path instead of the hook path.
+    take their `--stats` / `--help` path instead of the hook path. A payload
+    that is there but cannot be read (not UTF-8, not JSON, not an object) is
+    None too — never block on a hook bug — and *warn*, if given, is told why.
     """
     try:
-        stdin = sys.stdin
-        if stdin is None or stdin.isatty():
-            return None
-        raw = stdin.read()
+        raw = read_stdin_text()
         if not raw or not raw.strip():
             return None
         payload = json.loads(raw)
-        return payload if isinstance(payload, dict) else None
-    except Exception:  # noqa: BLE001 — never block on a hook bug
-        return None
+        if isinstance(payload, dict):
+            return payload
+        why = f"payload is a JSON {type(payload).__name__}, not an object"
+    except Exception as exc:  # noqa: BLE001 — never block on a hook bug
+        why = f"unreadable payload ({type(exc).__name__}: {exc})"
+    if warn is not None:
+        try:
+            warn(why)
+        except Exception:  # noqa: BLE001 — the warning is best effort
+            pass
+    return None
 
 
 def resolve_log_path(os_name: str, env: dict, home: Path, env_var: str,
