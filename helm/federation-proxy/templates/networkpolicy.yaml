@@ -1,4 +1,6 @@
 {{- if .Values.networkPolicy.enabled }}
+{{- /* Unset counts as on: `--reuse-values` from 0.1.x carries no such key. */}}
+{{- $restrictEgress := ne (toString .Values.networkPolicy.restrictEgress) "false" }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -12,6 +14,9 @@ spec:
       {{- include "federation-proxy.selectorLabels" . | nindent 6 }}
   policyTypes:
     - Ingress
+    {{- if $restrictEgress }}
+    - Egress
+    {{- end }}
   ingress:
     # Only the federation API gateway (IV-2b / #507) may reach the proxy
     # port. prom-label-proxy trusts the tenant header; that trust is only
@@ -29,4 +34,32 @@ spec:
       ports:
         - port: {{ .Values.listenPort }}
           protocol: TCP
+  {{- if $restrictEgress }}
+  {{- $up := include "federation-proxy.upstreamTarget" . | fromJson }}
+  # Egress (#3807): DNS and the upstream — prom-label-proxy has no other
+  # off-pod dependency. Without it the proxy had no egress at all wherever its
+  # namespace defaults to deny, as k8s/03-monitoring does, and the federation
+  # read path stopped here. What it allows: port 53 on any pod, and the
+  # upstream port on ANY pod of the upstream's namespace — those pods' own
+  # ingress rules keep the proxy out of the rest.
+  # ⚠️ NetworkPolicy matches the destination POD port, and the URL's port is
+  # the Service port. They are equal for k8s/03-monitoring's Prometheus
+  # (9090 -> 9090); where they differ (a Service 9090 -> pod 10902, as some
+  # Thanos charts ship), set networkPolicy.upstreamPort to the pod port.
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ $up.namespace | quote }}
+      ports:
+        - protocol: TCP
+          port: {{ $up.port }}
+  {{- end }}
 {{- end }}

@@ -126,12 +126,6 @@ hooks:
     workflow: .github/workflows/docs-ci.yaml
     job: head-blob-hygiene
     note: Runs the same check_head_blob_hygiene.py --ci; no job `if:`.
-- id: trk-index-coverage
-  category: b
-  evidence:
-    pytest:
-    - tests/lint/test_check_trk_index_coverage.py
-    - tests/dx/test_tool_in_process_entrypoints.py
 - id: cli-coverage-check
   category: b
   evidence:
