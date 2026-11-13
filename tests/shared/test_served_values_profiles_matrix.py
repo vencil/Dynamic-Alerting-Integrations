@@ -310,7 +310,8 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     `da-guard effective` 的 stderr 自 #2115 C 起就帶原因，補跑已拿掉。量測：profiles
     列 FAIL、明細有 exporter 的原因行，而 da-guard 只被呼叫 `effective`（以計數 wrapper
     記錄子命令；ADR-036 步驟 4 起另有讀樹的一次 `parse-tree`，#3387 起另有 guard_errors
-    的一次 da-guard 檢查）——沒有 served-values。"""
+    的一次 da-guard 檢查）——沒有 served-values（#3621 起 schema／routes 兩列載入路由樹時各問
+    一次 `severity-dedup` 取 `_severity_dedup`，在 effective 之前，不是為了借原因）。"""
     require_shebang_scripts()  # the counting wrapper is a `#!` script
     conf_d = tmp_path / "conf.d"
     conf_d.mkdir()
@@ -338,7 +339,10 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     # ADR-036 step 4 (#2906): one parse-tree read of the tree, then effective
     # (no served-values to borrow the reason from), then da-guard's check,
     # then the unread_keys row's own `key-verdict` (#3489: it reads the
-    # verdict from da-guard, and says it is incomplete on this tree).
-    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "effective", "--config-dir",
-                                                       "key-verdict"]
+    # verdict from da-guard, and says it is incomplete on this tree). #3621:
+    # the two rows that load the routing tree (schema, routes) each ask
+    # `severity-dedup` for the tenants' `_severity_dedup` — before effective,
+    # so never to borrow the profiles row's reason.
+    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "severity-dedup", "severity-dedup",
+                                                       "effective", "--config-dir", "key-verdict"]
     assert rows["unread_keys"]["details"][0].startswith("verdict incomplete: "), rows["unread_keys"]
