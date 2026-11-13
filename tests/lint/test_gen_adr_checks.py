@@ -77,7 +77,7 @@ def test_a_duplicate_clause_id_is_an_error() -> None:
         ("t.py", "# adr-check: ADR-042/9.1a\n@pytest.mark.parametrize('x', [1])\ndef test_x(x):\n", "test_x"),
         ("t.test.ts", "// adr-check: ADR-042/9.1a\ndescribe('apiFetch: the path', () => {\n", "apiFetch: the path"),
         ("t.test.ts", "// adr-check: ADR-042/9.1a\n  it.each([1])('refuses %s', () => {\n", "refuses %s"),
-        ("ci.yml", "      # adr-check: ADR-042/9.1a\n      - name: \"Scope check (x)\"\n", "Scope check (x)"),
+        (".github/workflows/ci.yml", "      # adr-check: ADR-042/9.1a\n      - name: \"Scope check (x)\"\n", "Scope check (x)"),
         ("run.sh", "#!/bin/bash\n# adr-check: ADR-042/9.1a\nset -e\n", None),
     ],
 )
@@ -145,7 +145,7 @@ def test_check_reports_drift(tmp_path) -> None:
 @pytest.mark.parametrize("marker, needle", [
     ("ADR-042/9.9z", "9.9z"),   # no such clause
     ("ADR-043/9.1a", "ADR-043"),  # no such ADR
-    ("ADR-042/10.1a", "10"),    # section 10 declares no clauses
+    ("ADR-042/10.1a", "section=10"),  # the ADR has no block for section 10
 ])
 def test_a_marker_naming_nothing_is_an_error(tmp_path, marker, needle) -> None:
     root = _adr_tree(tmp_path, {"t_test.go": f"// adr-check: {marker}\nfunc TestX() {{}}\n"})
@@ -169,3 +169,72 @@ def test_a_malformed_marker_is_an_error(tmp_path) -> None:
 
 def test_the_repository_is_in_sync() -> None:
     assert gen.main(["--check"]) == 0
+
+
+@pytest.mark.parametrize("variant", [
+    "   * **1c** star bullet.",
+    "   - **1c**: colon after the id.",
+    "   - **1c**：fullwidth colon.",
+    "   - **1C** capital letter.",
+])
+def test_a_clause_written_off_format_is_an_error_not_a_silent_drop(variant) -> None:
+    text = ADR_ZH.replace("   - **2a** 沒有轉送。", "   - **2a** 沒有轉送。\n" + variant)
+    with pytest.raises(gen.AdrChecksError, match="clause"):
+        gen.parse_clauses(text, "9")
+
+
+def test_a_code_fence_inside_the_section_neither_ends_it_nor_adds_clauses() -> None:
+    text = ADR_ZH.replace("2. 其他：", "```sh\n# a comment, not a heading\n- **9z** not a clause\n```\n2. 其他：")
+    assert gen.parse_clauses(text, "9") == ["1a", "1b", "2a"]
+
+
+def test_the_languages_must_declare_the_same_clauses(tmp_path) -> None:
+    root = _adr_tree(tmp_path, {})
+    p = root / "docs/adr/042-example.en.md"
+    p.write_text(p.read_text(encoding="utf-8").replace("   - **1b** 其餘回 404。\n", ""), encoding="utf-8")
+    with pytest.raises(gen.AdrChecksError, match="1b"):
+        gen.run(root, [], write=False)
+
+
+def test_two_blocks_for_one_section_are_an_error(tmp_path) -> None:
+    root = _adr_tree(tmp_path, {})
+    p = root / "docs/adr/042-example.md"
+    p.write_text(p.read_text(encoding="utf-8") + f"\n{BEGIN}\n{END}\n", encoding="utf-8")
+    with pytest.raises(gen.AdrChecksError, match="twice"):
+        gen.run(root, [], write=False)
+
+
+@pytest.mark.parametrize("line", [
+    "// adr-check：ADR-042/9.1a",      # fullwidth colon
+    "// adr-check : ADR-042/9.1a",     # space before the colon
+    "// ADR-CHECK: ADR-042/9.1a",      # upper case
+    "// adr_check: ADR-042/9.1a",      # underscore
+    "x := 1 // adr-check: ADR-042/9.1a",  # trailing a statement
+])
+def test_a_near_miss_marker_is_an_error_not_ignored(tmp_path, line) -> None:
+    root = _tree(tmp_path, {"t_test.go": line + "\nfunc TestX() {}\n"})
+    with pytest.raises(gen.AdrChecksError, match="t_test.go:1"):
+        gen.collect_markers(root, ["t_test.go"])
+
+
+@pytest.mark.parametrize("rel, line", [
+    ("q.sql", "-- adr-check: ADR-042/9.1a"),
+    ("t.tpl", "{{/* adr-check: ADR-042/9.1a */}}"),
+    ("x_test.go", "/// adr-check: ADR-042/9.1a"),
+])
+def test_other_comment_styles_are_read(tmp_path, rel, line) -> None:
+    root = _tree(tmp_path, {rel: line + "\n"})
+    (m,) = gen.collect_markers(root, [rel])
+    assert m.clause == "1a"
+
+
+def test_a_blank_line_ends_the_search_for_the_name(tmp_path) -> None:
+    root = _tree(tmp_path, {"x_test.go": "// adr-check: ADR-042/9.1a\n\nfunc helper() {}\n"})
+    (m,) = gen.collect_markers(root, ["x_test.go"])
+    assert m.name is None
+
+
+def test_a_yaml_name_key_outside_ci_is_not_a_step_name(tmp_path) -> None:
+    root = _tree(tmp_path, {"helm/x/Chart.yaml": "# adr-check: ADR-042/9.1a\nname: chart\n"})
+    (m,) = gen.collect_markers(root, ["helm/x/Chart.yaml"])
+    assert m.name is None

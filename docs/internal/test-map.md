@@ -201,7 +201,7 @@ crash 與具名的呼叫端錯誤同為 rc 2，只斷言 `returncode == 2` 的�
 func TestOAuth2ProxyAnswers401(t *testing.T) {
 ```
 
-一行可列多個子句（以空白分隔）。該 ADR 的「實作位置」由 `scripts/tools/dx/gen_adr_checks.py --write` 依標記產生，沒有標記的子句列為尚無檢查；pre-commit 與 CI 的 `adr-checks-drift` 在產生結果與 ADR 不一致、或標記指向不存在的 ADR／子句時失敗。標記只證明「有人宣稱這支測試檢查這個子句」，它檢查得對不對仍要 review。
+標記必須獨佔一行、以註解開頭（`//`、`#`、`/*`、`*`、`<!--`、`--` 或 `{{/*`），`adr-check:` 全小寫；一行可列多個子句（以空白或逗號分隔）。寫錯的變形（全形冒號、大寫、接在程式碼後面）會讓檢查失敗，不會被略過。`.md` 檔裡的標記視為範例，一律不讀。該 ADR 的「實作位置」由 `scripts/tools/dx/gen_adr_checks.py --write` 依標記產生，沒有標記的子句列為尚無檢查；pre-commit 與 CI 的 `adr-checks-drift` 在產生結果與 ADR 不一致、或標記指向不存在的 ADR／子句時失敗。標記只證明「有人宣稱這支測試檢查這個子句」，它檢查得對不對仍要 review。
 
 ## 測試檔案對照
 

@@ -470,7 +470,7 @@ func TestLabelGuardUnreadableLabelsBefore(t *testing.T) {
 // writer's body that keeps the local labels is a no-change on the local tree,
 // but on the tree the PR rewrites it may remove labels nobody can read:
 // refused there, nothing left behind.
-// adr-check: ADR-027/9.6e
+// adr-check: ADR-027/9.6e ADR-027/9.6f
 func TestLabelGuardPutPRModeUnreadableBase(t *testing.T) {
 	undecodable := "tenants:\n  " + lgTenant + ":\n    _metadata:\n      environment: [staging]\n      domain: finance\n" +
 		"    mysql_connections: '80'\n"
@@ -610,6 +610,7 @@ func TestScopeGateDirectRelabelLandsFirst(t *testing.T) {
 // The same data refuses alike whatever the order of the ops. The file's
 // labels turned unreadable outside the API (a git change between the gates
 // and the lock: the API refuses such a write).
+// adr-check: ADR-027/9.6f
 func TestScopeGateDirectNoopFirstOpStillJudged(t *testing.T) {
 	t.Parallel()
 	broken := "tenants:\n  " + lgTenant + ":\n    _metadata:\n      environment: [dev]\n      domain: finance\n" +

@@ -176,10 +176,10 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 4. portal（§5）：
    - **4a** portal 原始碼呼叫的每個後端路徑都在 `/api/` 前綴下。
    - **4b** simulate 路徑回 501，`code` 與 `error` 文字與原本相同。
-5. 掃描 helm、k8s manifest 與 rule-pack（§4、§5、§6）：
-   - **5a** 沒有任何設定把身分 header 跨網路轉送給任何元件。
-   - **5b** §6 刪除的 chart key 不存在。
-   - **5c** threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。
+5. 不轉送身分、刪除的設定不存在（§4、§5、§6）：
+   - **5a** 掃描 helm、k8s manifest 與 rule-pack：沒有任何設定把身分 header 跨網路轉送給任何元件。
+   - **5b** 同一掃描中，§6 刪除的 chart key 不存在。
+   - **5c** 同一掃描中，threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。
    - **5d** §6 刪除的環境變數不在 tenant-api 的已知清單裡。
 6. 授權範圍（§7）：
    - **6a** oauth2-proxy 設定檔不符合 §2 的形狀時，tenant-api 拒絕啟動。
@@ -197,7 +197,7 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
    - **8b** `ADR-027` 後接 2026-07 草稿的小節編號（`D2-B`、`LD-6 P4b`、`MED-8` 之類，完整清單在檢查本身）一律失敗。
 9. oauth2-proxy 設定檢查（§10）：
    - **9a** CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`）。
-   - **9b** 以同版本的 oauth2-proxy 程式庫斷言分流結果與 §10 的範例一致。
+   - **9b** CI 以同版本的 oauth2-proxy 程式庫斷言分流結果與 §10 的範例一致。
 
 ### 10. oauth2-proxy 的分流設定
 
@@ -303,14 +303,14 @@ upstreamConfig:
 - **6c**：`components/tenant-api/internal/rbac/empty_config_mode_test.go`（`TestEmptyRuleSet_EveryEntryPointDenies`、`TestEmptyRuleSet_LegacyShimsDeny`）
 - **6d**：`components/tenant-api/cmd/server/env_check_test.go`（`TestCheckTAEnv_RefusesSettingsADR027Removed`）；`tests/helm/test_tenant_api_scope_switches_removed.py`（`test_a_removed_key_fails_the_render`、`test_the_default_render_sets_no_removed_variable`、`test_values_yaml_carries_no_removed_key`）
 - **6e**：`components/tenant-api/internal/handler/label_guard_test.go`（`TestLabelGuardBatchDirect`、`TestLabelGuardPutDirect`、`TestLabelGuardPutNewTenant`、`TestLabelGuardPutPRModeUnreadableBase`、`TestLabelGuardUnreadableLabelsBefore`）
-- **6f**：`components/tenant-api/internal/handler/label_guard_test.go`（`TestLabelGuardBatchDirectRelabelLandsFirst`、`TestLabelGuardBatchPRModeBaseDrift`、`TestLabelGuardPutDirectRelabelLandsFirst`、`TestLabelGuardPutPRModeBaseDrift`、`TestScopeGateDirectRelabelLandsFirst`）
+- **6f**：`components/tenant-api/internal/handler/fresh_base_scope_test.go`（`TestPRModeOrgScopeJudgedOnFreshBase`、`TestPRModeScopeAuthoritativeOnFreshBase`、`TestPRModeScopeJudgedEvenWhenTheTreeMovedMidRequest`）；`components/tenant-api/internal/handler/label_guard_test.go`（`TestLabelGuardBatchDirectRelabelLandsFirst`、`TestLabelGuardBatchPRModeBaseDrift`、`TestLabelGuardPutDirectRelabelLandsFirst`、`TestLabelGuardPutPRModeBaseDrift`、`TestLabelGuardPutPRModeUnreadableBase`、`TestScopeGateDirectNoopFirstOpStillJudged`、`TestScopeGateDirectRelabelLandsFirst`）
 - **7a**：`components/tenant-api/cmd/server/scope_check_test.go`（`TestConfigCheckScope_Fixture`）
 - **7b**：`components/tenant-api/internal/handler/scope_gap_planes_test.go`（`TestScopeGapsMatchEveryPlane`）
 - **7c**：`.github/workflows/ci.yml`（`Scope check on the try-local sample config (ADR-027 §7)`）
 - **8a**：`tests/lint/test_check_adr_section_refs.py`（`test_existing_sections_pass`、`test_missing_sections_fail`、`test_the_repository_is_clean`）
 - **8b**：`tests/lint/test_check_adr_section_refs.py`（`test_draft_code_needs_adr_027_before_it`、`test_withdrawn_draft_codes_fail`）
-- **9a**：`.github/workflows/ci.yml`（`Run --config-test in the chart's oauth2-proxy image (by digest)`）；`tests/oauth2-proxy/image_config_test.sh`；`tests/oauth2-proxy/version_test.go`（`TestLibraryVersionIsTheChartImage`）
-- **9b**：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`）；`tests/oauth2-proxy/routing_test.go`（`TestADRSection10Routing`）
+- **9a**：`.github/workflows/ci.yml`（`Run --config-test in the chart's oauth2-proxy image (by digest)`）；`tests/oauth2-proxy/image_config_test.sh`
+- **9b**：`tests/oauth2-proxy/chart_test.go`（`TestChartConfig`）；`tests/oauth2-proxy/routing_test.go`（`TestADRSection10Routing`）；`tests/oauth2-proxy/version_test.go`（`TestLibraryVersionIsTheChartImage`）
 <!-- END GENERATED: adr-checks -->
 
 ## 相關

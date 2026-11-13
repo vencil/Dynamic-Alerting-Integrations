@@ -57,10 +57,14 @@ SKIP_PATHS = {
     "tests/lint/test_gen_adr_checks.py": "this generator's fixtures",
 }
 
-# A marker is a comment line: //, #, /*, * or <!-- then `adr-check:`.
-_MARKER_LINE = re.compile(r"^\s*(?://|#|/\*|\*|<!--)\s*adr-check:(.*)$")
+# A marker is a comment line on its own — //, ///, #, /*, *, <!--, -- or a
+# template comment {{/* — then exactly `adr-check:`.
+_MARKER_LINE = re.compile(r"^\s*(?:/{2,}|#+|/\*+|\*|<!--|--|\{\{-?\s*/\*)\s*adr-check:(.*)$")
+# Anything that looks like a marker but is not one is an error, never skipped:
+# a typo would otherwise leave the clause silently unlisted.
+_NEAR_MARKER = re.compile(r"(?i)adr[-_ ]?check\s*[:：]")
 _ID = r"ADR-(\d{3})/(\d+)\.(\d+[a-z])"
-_IDS = re.compile(r"^\s*(" + _ID + r"(?:[\s,]+" + _ID + r")*)\s*(?:\*/|-->)?\s*$")
+_IDS = re.compile(r"^\s*(" + _ID + r"(?:[\s,]+" + _ID + r")*)\s*(?:\*/\s*-?\}\}|\*/|-->)?\s*$")
 _ONE_ID = re.compile(_ID)
 
 # What follows a marker: the first of these names it.
@@ -68,12 +72,18 @@ _NAMES = (
     re.compile(r"^func\s+(?:\([^)]*\)\s*)?(\w+)"),                         # Go
     re.compile(r"^\s*(?:async\s+)?def\s+(\w+)"),                            # Python
     re.compile(r"^\s*(?:it|test|describe)(?:\.\w+(?:\(.*?\))?)?\(\s*(['\"`])(.+?)\1"),  # Vitest
-    re.compile(r"^\s*-?\s*name:\s*[\"']?(.+?)[\"']?\s*$"),                  # CI step
 )
-_SKIPPABLE = re.compile(r"^\s*(?:$|//|#|@|/\*|\*)")
+# A CI step's name, read only in workflow files: elsewhere `name:` is data.
+_STEP_NAME = re.compile(r"^\s*-?\s*name:\s*[\"']?(.+?)[\"']?\s*$")
+# Lines that may sit between a marker and what it marks (a blank line may not).
+_SKIPPABLE = re.compile(r"^\s*(?://|#|@|/\*|\*|--)")
 _LOOKAHEAD = 8
 
 _CLAUSE = re.compile(r"^\s*-\s+\*\*(\d+[a-z])\*\*\s")
+# Written like a clause but not in the clause's exact form: an error, so a
+# clause cannot drop out of the list by being spelt differently.
+_CLAUSE_LIKE = re.compile(r"^\s*(?:[-*+]|\d+\.)\s+\*\*\d+[A-Za-z]\*\*")
+_FENCE = re.compile(r"^\s*(?:```|~~~)")
 _HEADING = re.compile(r"^(#{2,4})\s+(\d+)\.\s")
 
 _GAP = {"zh": "尚無檢查", "en": "no check yet"}
@@ -101,7 +111,13 @@ def parse_clauses(text: str, section: str) -> list[str]:
     same or a higher level), in order."""
     out: list[str] = []
     level = None
+    in_fence = False
     for line in text.splitlines():
+        if _FENCE.match(line):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
         h = _HEADING.match(line)
         if h or re.match(r"^#{1,4}\s", line):
             depth = len(line) - len(line.lstrip("#"))
@@ -117,16 +133,20 @@ def parse_clauses(text: str, section: str) -> list[str]:
             if c.group(1) in out:
                 raise AdrChecksError(f"section {section}: clause {c.group(1)} is declared twice")
             out.append(c.group(1))
+        elif _CLAUSE_LIKE.match(line):
+            raise AdrChecksError(
+                f"section {section}: written like a clause but not as `- **1a** text`: {line.strip()}")
     return out
 
 
-def _name_after(lines: list[str], i: int) -> str | None:
+def _name_after(lines: list[str], i: int, rel: str) -> str | None:
+    pats = _NAMES + ((_STEP_NAME,) if rel.startswith(".github/workflows/") else ())
     for line in lines[i + 1:i + 1 + _LOOKAHEAD]:
-        for pat in _NAMES:
+        for pat in pats:
             m = pat.match(line)
             if m:
                 return m.group(m.lastindex)
-        if not _SKIPPABLE.match(line):
+        if not line.strip() or not _SKIPPABLE.match(line):
             return None
     return None
 
@@ -142,18 +162,19 @@ def collect_markers(root: Path, paths: list[str]) -> list[Marker]:
             text = (root / rel).read_text(encoding="utf-8")
         except (UnicodeDecodeError, IsADirectoryError, FileNotFoundError):
             continue
-        if "adr-check:" not in text:
+        if not _NEAR_MARKER.search(text):
             continue
         lines = text.splitlines()
         for i, line in enumerate(lines):
-            m = _MARKER_LINE.match(line)
-            if not m:
+            if not _NEAR_MARKER.search(line):
                 continue
-            ids = _IDS.match(m.group(1))
+            m = _MARKER_LINE.match(line)
+            ids = _IDS.match(m.group(1)) if m else None
             if not ids:
                 raise AdrChecksError(
-                    f"{rel}:{i + 1}: malformed marker (want `adr-check: ADR-NNN/S.C`): {line.strip()}")
-            name = _name_after(lines, i)
+                    f"{rel}:{i + 1}: malformed marker (want a comment line "
+                    f"`adr-check: ADR-NNN/S.C`): {line.strip()}")
+            name = _name_after(lines, i, rel)
             for adr, section, clause in _ONE_ID.findall(ids.group(1)):
                 out.append(Marker(adr, section, clause, rel, name))
     return out
@@ -201,6 +222,7 @@ def run(root: Path, paths: list[str], write: bool) -> list[str]:
 
     changed: list[str] = []
     seen_blocks: set[tuple[str, str]] = set()
+    declared: dict[tuple[str, str], tuple[str, list[str]]] = {}
     for adr, files in adrs.items():
         for path in files:
             text = path.read_text(encoding="utf-8")
@@ -209,7 +231,14 @@ def run(root: Path, paths: list[str], write: bool) -> list[str]:
             new = text
             for b in list(_BEGIN.finditer(text)):
                 section = b.group(1)
+                if (rel, section) in seen_blocks:
+                    raise AdrChecksError(f"{rel}: block for section {section} appears twice")
                 clauses = parse_clauses(text, section)
+                first = declared.setdefault((adr, section), (rel, clauses))
+                if first[1] != clauses:
+                    raise AdrChecksError(
+                        f"{rel} and {first[0]} declare different clauses for section {section}: "
+                        f"{', '.join(clauses)} vs {', '.join(first[1])}")
                 if not clauses:
                     raise AdrChecksError(f"{rel}: block for section {section}, which declares no clause")
                 for m in marked.get((adr, section), []):

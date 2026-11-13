@@ -12,7 +12,7 @@ import (
 // TestLibraryVersionIsTheChartImage: the library these tests load configs
 // with is the oauth2-proxy version the tenant-api chart deploys. The CI step
 // beside this module runs the chart's image, by digest, on the same files.
-// adr-check: ADR-027/9.9a
+// adr-check: ADR-027/9.9b
 func TestLibraryVersionIsTheChartImage(t *testing.T) {
 	t.Parallel()
 	// A test binary's build info lists no dependencies, so go.mod is read.
