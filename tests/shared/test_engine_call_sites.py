@@ -65,6 +65,8 @@ NOT_ENGINES: dict[str, str] = {
     "npm": "package installer, not a verdict engine (lint_jsx_babel installed "
            "@babel/standalone with it until #3669; no caller left)",
     "openssl": "key generation (federation_keygen), not a lint verdict",
+    "pre-commit": "fuse_plumbing_commit only probes `--version` to know git's hook can "
+                  "start; the hooks' output is never parsed and any failure is 2 (#3634)",
     "notify-send": "desktop notification (validate_all --notify)",
     "osascript": "desktop notification (validate_all --notify)",
     "powershell": "desktop notification (validate_all --notify)",
