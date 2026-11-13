@@ -20,7 +20,8 @@ every other copy is GENERATED from it:
              and recipe-status.json (imported by recipe-builder)
   - Python : the block between the GENERATED markers in
              scripts/tools/_lib_constants.py (the forecast's longest
-             lookback, the pattern of a threshold number)
+             lookback, the pattern of a threshold number, the characters
+             trimmed around one)
   - Policy : the compiled pack's forecast `max_range_duration` (the longest
              lookback a compiled forecast reads) in
              .github/custom-rule-policy.yaml and its copy in
@@ -35,8 +36,9 @@ The rest of a threshold value's grammar is not the recipe contract's: the
 severity pair, the characters trimmed around each half and the disable words
 (with the characters Go lower-cases into each of their letters) are read from
 the header of tests/shared/threshold_value_matrix.json, which Go writes from
-the exporter's own readers. The portal gets the severities and the trim set;
-the schema's thresholdScalar pattern is composed from all of it.
+the exporter's own readers. The portal and the Python constants get the
+severities and the trim set; the schema's thresholdScalar pattern is composed
+from all of it.
 
 Usage:
   gen_recipe_contract.py [--root DIR] [--check | --update]
@@ -394,12 +396,14 @@ def _py_str(s):
     return json.dumps(s)
 
 
-def render_constants(c):
+def render_constants(c, g):
     return "\n".join([
         f"{PY_BEGIN} — scripts/tools/dx/gen_recipe_contract.py --update writes this",
         f"# block from {CONTRACT_REL}. DO NOT EDIT.",
         f'FORECAST_MAX_LOOKBACK: Final[str] = "{forecast_max_lookback(c)}"',
         f'THRESHOLD_NUMBER_PATTERN: Final[str] = {_py_str(c["patterns"]["thresholdNumber"])}',
+        "THRESHOLD_TRIM_CODE_POINTS: Final[frozenset[int]] = frozenset(("
+        + ", ".join(f"0x{cp:X}" for cp in sorted(set(g["trim_code_points"]))) + "))",
         PY_END,
     ]) + "\n"
 
@@ -509,7 +513,7 @@ def targets(root, c, g):
         (SCHEMA_REL, lambda t: render_schema(t, c, g)),
         (PORTAL_ENUMS_REL, lambda _t: render_portal_enums(c, g)),
         (PORTAL_STATUS_REL, lambda _t: render_portal_status(c)),
-        (CONSTANTS_REL, lambda t: splice_python(t, render_constants(c), CONSTANTS_REL)),
+        (CONSTANTS_REL, lambda t: splice_python(t, render_constants(c, g), CONSTANTS_REL)),
     ]
     for rel in (POLICY_REL, *GOVERNANCE_DOC_RELS):
         out.append((rel, lambda t, rel=rel: render_max_lookback(t, c, rel)))

@@ -37,11 +37,19 @@ type Row = {
   row_disabled: boolean;
 };
 
+// ⛔ Each path is one literal that climbs to the repo root: that is the shape
+// tests/ops/test_ci_path_filter_coverage.py reads to hold ci.yml's `portal`
+// path filter to the files this test opens. A repo-root constant joined with
+// 'tests/…' is a shape it does not see.
 const here = dirname(fileURLToPath(import.meta.url));
-const repo = resolve(here, '../../..');
-const matrix = JSON.parse(readFileSync(resolve(repo, 'tests/shared/threshold_value_matrix.json'), 'utf8'));
+const matrix = JSON.parse(readFileSync(
+  resolve(here, '../../../tests/shared/threshold_value_matrix.json'), 'utf8',
+));
 const contract = JSON.parse(readFileSync(
-  resolve(repo, 'components/threshold-exporter/app/pkg/config/recipe_contract.json'), 'utf8',
+  resolve(here, '../../../components/threshold-exporter/app/pkg/config/recipe_contract.json'), 'utf8',
+));
+const schema = JSON.parse(readFileSync(
+  resolve(here, '../../../docs/schemas/tenant-config.schema.json'), 'utf8',
 ));
 const rows: Row[] = matrix.rows;
 const label = (r: Row) => JSON.stringify(r.value.length > 60 ? `${r.value.slice(0, 30)}…(${r.value.length})` : r.value);
@@ -107,6 +115,23 @@ describe('threshold value matrix ↔ RecipeBuilder', () => {
       expect(back.ok && back.number !== null).toBe(false);
     },
   );
+});
+
+describe('the patterns compile in every ECMAScript mode', () => {
+  // `v` (unicodeSets) is the mode an HTML `pattern=` attribute compiles in;
+  // a character class such as `[-+]` is a syntax error there.
+  const sources: Array<[string, string]> = [
+    ['patterns.thresholdNumber', contract.patterns.thresholdNumber],
+    ['thresholdScalar.pattern', schema.definitions.thresholdScalar.pattern],
+  ];
+  const samples = rows.flatMap((r) => [r.value, r.value_part ?? '']);
+  it.each(sources)('%s reads alike with no flag, `u` and `v`', (_name, source) => {
+    const plain = samples.map((s) => new RegExp(source).test(s));
+    expect(plain.includes(true) && plain.includes(false)).toBe(true);
+    for (const flag of ['u', 'v']) {
+      expect(samples.map((s) => new RegExp(source, flag).test(s)), `flag ${flag}`).toEqual(plain);
+    }
+  });
 });
 
 describe('the pattern the form reads is the grammar, not Number()', () => {

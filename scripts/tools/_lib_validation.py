@@ -28,6 +28,7 @@ from _lib_constants import (
     PLATFORM_DEFAULTS,
     RECEIVER_TYPES,
     THRESHOLD_NUMBER_PATTERN,
+    THRESHOLD_TRIM_CODE_POINTS,
 )
 
 
@@ -311,6 +312,46 @@ THRESHOLD_SEVERITIES = ("warning", "critical")
 # pattern has not matched. re.ASCII and fullmatch: `$` alone also matches
 # before a trailing newline.
 _THRESHOLD_NUMBER = re.compile(THRESHOLD_NUMBER_PATTERN, re.ASCII)
+
+
+def threshold_trim(text: str) -> str:
+    """*text* without the characters the exporter trims around a threshold
+    value (Go's strings.TrimSpace, generated into THRESHOLD_TRIM_CODE_POINTS
+    from the threshold value matrix's header).
+
+    ⛔ Not `str.strip()`: that one also takes U+001C to U+001F, which the
+    exporter keeps — `"70\\x1f"` is not a number to it."""
+    start, end = 0, len(text)
+    while start < end and ord(text[start]) in THRESHOLD_TRIM_CODE_POINTS:
+        start += 1
+    while end > start and ord(text[end - 1]) in THRESHOLD_TRIM_CODE_POINTS:
+        end -= 1
+    return text[start:end]
+
+
+def written_threshold_number(value: Any) -> Optional[float]:
+    """The number of a threshold a tool holds — as a file wrote it, or as a
+    reader already decoded it — or None when it is not one.
+
+    * a `str` is the text a file wrote: trimmed as the exporter trims
+      (`threshold_trim`), it must be a number the exporter reads
+      (`threshold_number`). `1_000`, `0x1F`, a value with a `:severity`,
+      `disable`, `inf` are None — never what `float()` would make of them;
+    * an `int` / `float` is a number a reader already decoded (a served
+      value, a YAML number the exporter's decode kept): itself as a float,
+      NaN and ±Inf included (the caller decides what those mean); an int past
+      float64 is None;
+    * a `bool` and anything else is None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except OverflowError:
+            return None
+    if isinstance(value, str):
+        return threshold_number(threshold_trim(value))
+    return None
 
 
 def is_threshold_number_text(text: Any) -> bool:

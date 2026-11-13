@@ -9,6 +9,8 @@ package config
 import (
 	"errors"
 	"math"
+
+	"gopkg.in/yaml.v3"
 	"math/rand"
 	"strconv"
 	"strings"
@@ -284,5 +286,40 @@ tenants:
 	// A float whose YAML spelling is in the grammar keeps that spelling.
 	if sv, _ := scheduledValueFromRaw(0.5); sv.Default != "0.5" {
 		t.Errorf("a subtree default of 0.5 is carried as %q, want the YAML spelling", sv.Default)
+	}
+	if sv, _ := scheduledValueFromRaw(1e6); sv.Default != "1e+06" {
+		t.Errorf("a subtree default of 1e6 is carried as %q, want the YAML spelling", sv.Default)
+	}
+}
+
+// The scheduled form of a subtree default carries its numbers the same way:
+// the default and every window's value are served as written, where the
+// tenant file writing the same mapping would be.
+func TestAScheduledSubtreeDefault_CarriesItsFloats(t *testing.T) {
+	t.Parallel()
+	const want = 1.2345678901234567e-4
+	var raw any
+	if err := yaml.Unmarshal([]byte(
+		"default: 1.2345678901234567e-4\n"+
+			"overrides:\n  - {window: \"01:00-02:00\", value: 1.2345678901234567e-4}\n"+
+			"  - {window: \"03:00-04:00\", value: 0.5}\n"+
+			"  - {window: \"05:00-06:00\", value: \"70:critical\"}\n"), &raw); err != nil {
+		t.Fatal(err)
+	}
+	sv, ok := scheduledValueFromRaw(raw)
+	if !ok || len(sv.Overrides) != 3 {
+		t.Fatalf("scheduledValueFromRaw = %+v, %v", sv, ok)
+	}
+	for where, text := range map[string]string{"default": sv.Default, "the first window": sv.Overrides[0].Value} {
+		if v, _, read := parseThresholdValue(text); !read || v != want {
+			t.Errorf("%s is carried as %q, read as (%v, %v), want %v", where, text, v, read, want)
+		}
+	}
+	if sv.Overrides[1].Value != "0.5" || sv.Overrides[2].Value != "70:critical" {
+		t.Errorf("the other windows are carried as %q and %q, want them as written",
+			sv.Overrides[1].Value, sv.Overrides[2].Value)
+	}
+	if !thresholdScalar(sv.Default) || !thresholdScalar(sv.Overrides[0].Value) {
+		t.Error("the overlay's shape filter refuses the carried number")
 	}
 }

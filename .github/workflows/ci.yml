@@ -508,6 +508,11 @@ jobs:
               # #2711: parseDuration.test.ts holds the portal's parser to the
               # verdicts Go writes into this table (pytest holds Python to it).
               - "tests/shared/am_duration_matrix.json"
+              # #3457: threshold-value-matrix.test.ts holds the RecipeBuilder's
+              # reader of a threshold value to the verdicts Go writes into
+              # this table, and its pattern to the recipe contract's.
+              - "tests/shared/threshold_value_matrix.json"
+              - "components/threshold-exporter/app/pkg/config/recipe_contract.json"
               # #2833: api-fixture.ts validates every tenant-api response
               # fixture against these definitions, so a swagger regen alone
               # must re-run the Portal leg.

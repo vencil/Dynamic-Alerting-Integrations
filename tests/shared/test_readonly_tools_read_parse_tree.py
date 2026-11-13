@@ -429,14 +429,17 @@ def _us_errors(root):
 
 
 def test_unit_sanity_reads_a_threshold_as_the_exporter(tmp_path):
-    """`0x1F4` is the text the exporter's float parse refuses — no value is
-    served from it — not PyYAML's int 500 (OUT-OF-DOMAIN for a `%`); `300`
-    is still out of domain."""
+    """`0x1F4` is the text the exporter refuses — no value is served from it —
+    not PyYAML's int 500 (OUT-OF-DOMAIN for a `%`): it is reported as a value
+    no number was read from (NOT-A-NUMBER, #3457), never judged as 500 and
+    never passed over; `300` is still out of domain."""
     _write(tmp_path, {f"{_US_CONFD}/_defaults.yaml": "defaults:\n  k: 0x1F4\n",
                       f"{_US_CONFD}/t.yaml": "tenants:\n  t:\n    k: 300\n"})
     errors = _us_errors(tmp_path)
-    assert len(errors) == 1 and errors[0].startswith(
-        f"OUT-OF-DOMAIN: {_US_CONFD}/t.yaml: k = 300"), errors
+    assert len(errors) == 2, errors
+    assert errors[0].startswith(f"NOT-A-NUMBER: {_US_CONFD}/_defaults.yaml: k = '0x1F4'"), errors
+    assert errors[1].startswith(f"OUT-OF-DOMAIN: {_US_CONFD}/t.yaml: k = 300"), errors
+    assert not any("500" in e for e in errors), errors
 
 
 def test_unit_sanity_parses_no_yaml(tmp_path, no_yaml_parse):

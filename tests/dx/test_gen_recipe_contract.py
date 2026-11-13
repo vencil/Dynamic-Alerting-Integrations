@@ -327,10 +327,14 @@ def test_the_matrix_header_reaches_the_schema_and_the_portal(tmp_path):
     _matrix_edit(root, edit)
     r = _cli(root, "--check")
     assert r.returncode == 1, r.stdout + r.stderr
-    assert f"STALE: {gen.SCHEMA_REL}" in r.stdout and f"STALE: {gen.PORTAL_ENUMS_REL}" in r.stdout
+    for rel in (gen.SCHEMA_REL, gen.PORTAL_ENUMS_REL, gen.CONSTANTS_REL):
+        assert f"STALE: {rel}" in r.stdout, rel
     assert _cli(root, "--update").returncode == 0
     pattern = _threshold_scalar(root)
     assert chr(0x85) not in pattern and "|[Nn][Oo])" in pattern
+    (trim_line,) = [ln for ln in (root / gen.CONSTANTS_REL).read_text(encoding="utf-8").split("\n")
+                    if ln.startswith("THRESHOLD_TRIM_CODE_POINTS")]
+    assert "0x85" not in trim_line and "0xA0" in trim_line and "0x3000" in trim_line, trim_line
     assert 0x85 not in json.loads((root / gen.PORTAL_ENUMS_REL).read_text(encoding="utf-8"))["thresholdTrim"]
 
 

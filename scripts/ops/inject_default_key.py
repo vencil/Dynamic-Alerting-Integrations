@@ -13,8 +13,11 @@ re-runs against an already-staged tree).
 Behavior:
     * Re-run safe: if `<key>:` is already in the file, exits 0 without
       writing.
-    * Numeric guard: refuses non-numeric values to align with the
-      `_defaults.yaml` parser contract (`cycle-6` RCA, archive §S#37d).
+    * Numeric guard: refuses a value the exporter does not serve as a
+      default — anything but a finite decimal number of at most 20 digits
+      with an optional exponent (#3457; so not `1_000`, `0x1F`, `nan`,
+      `inf`), to align with the `_defaults.yaml` parser contract
+      (`cycle-6` RCA, archive §S#37d).
     * Format-preserving: appends a single line under the existing
       `defaults:` block; does NOT round-trip the entire YAML through
       a parser/dumper (avoids comment loss).
@@ -42,23 +45,15 @@ sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.par
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "tools" / "ops"))
 from _registry_lib import is_shipped_optional_key  # noqa: E402
+from _lib_validation import threshold_number, threshold_trim  # noqa: E402  (#3457)
 
 
 def _is_numeric_str(s: str) -> bool:
-    """Return True if `s` parses as int or float."""
-    s = s.strip()
-    if not s:
-        return False
-    try:
-        int(s)
-        return True
-    except ValueError:
-        pass
-    try:
-        float(s)
-        return True
-    except ValueError:
-        return False
+    """Whether `s` is a number the exporter serves as a root default (#3457):
+    trimmed as the exporter trims, it is in the grammar of a threshold number
+    and finite. `int()` / `float()` also read `1_000`, `nan` and `inf`, for
+    which the exporter serves no default."""
+    return threshold_number(threshold_trim(s)) is not None
 
 
 def inject(path: Path, key: str, value: str) -> int:
@@ -107,12 +102,12 @@ def inject(path: Path, key: str, value: str) -> int:
         for line in lines:
             out.append(line)
             if not inserted and line.rstrip() == "defaults:":
-                out.append(f"  {key}: {value.strip()}")
+                out.append(f"  {key}: {threshold_trim(value)}")
                 inserted = True
         if not inserted:
             # No `defaults:` block found — prepend a fresh one. Preserves
             # existing content.
-            out = ["defaults:", f"  {key}: {value.strip()}", ""] + out
+            out = ["defaults:", f"  {key}: {threshold_trim(value)}", ""] + out
         path.write_text("\n".join(out) + "\n", encoding="utf-8", newline="\n")
         print(
             f"[inject_default_key] registered {key}={value} in {path}"
@@ -122,7 +117,7 @@ def inject(path: Path, key: str, value: str) -> int:
     # File doesn't exist — create a minimal one.
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        f"defaults:\n  {key}: {value.strip()}\n",
+        f"defaults:\n  {key}: {threshold_trim(value)}\n",
         encoding="utf-8", newline="\n",
     )
     print(

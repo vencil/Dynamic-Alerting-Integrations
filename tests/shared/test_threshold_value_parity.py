@@ -162,6 +162,12 @@ def test_contract_pattern_is_portable():
         assert construct not in pattern, construct
     assert not re.search(r"\\[0-9]", pattern), "a backreference"
     assert "[0-9]" in pattern
+    # ECMAScript's `v` mode (an HTML `pattern=` attribute) refuses a class
+    # with a bare `-` in it (`[-+]`): a sign is written `(?:\+|-)`. The
+    # portal's Vitest compiles the pattern with `u` and `v`; this keeps the
+    # shape out of the source.
+    for cls in re.findall(r"\[[^\]]*\]", pattern):
+        assert re.fullmatch(r"\[(?:[A-Za-z0-9]|[A-Za-z0-9]-[A-Za-z0-9])+\]", cls), cls
 
 
 @pytest.mark.parametrize("row", [r for r in _rows() if r["ok"]], ids=lambda r: repr(r["value"]))
@@ -175,6 +181,30 @@ def test_python_reads_a_threshold_number_as_the_matrix_says(row):
     assert (got is not None) == row["float_ok"], row
     if got is not None:
         assert math.isfinite(got) and got == float(part), row
+
+
+@pytest.mark.parametrize("row", [r for r in _rows() if r["ok"]], ids=lambda r: repr(r["value"]))
+def test_python_trims_as_the_matrix_says(row):
+    """#3457: `threshold_trim` is the exporter's trim (the matrix header's
+    `trim_code_points`, generated into _lib_constants), not `str.strip()`:
+    split at the last `:` and trimmed, the value half is Go's `value_part`,
+    and a value with no `:` is a number exactly when the row is one."""
+    value = row["value"]
+    whole = _lib_validation.threshold_trim(value)
+    head = whole.rpartition(":")[0] if ":" in whole else whole
+    assert _lib_validation.threshold_trim(head) == row["value_part"], row
+    if ":" not in value:
+        assert (_lib_validation.written_threshold_number(value) is not None) == row["float_ok"], row
+
+
+def test_python_trim_set_is_the_matrix_header():
+    import _lib_constants
+    assert _lib_constants.THRESHOLD_TRIM_CODE_POINTS == frozenset(_matrix()["trim_code_points"])
+    for text, want in (("\x1c70\x1f", "\x1c70\x1f"), ("\ufeff70", "\ufeff70"), ("\u008570　", "70"),
+                       (" \t70\r\n", "70"), ("", ""), ("   ", "")):
+        assert _lib_validation.threshold_trim(text) == want, ascii(text)
+    # str.strip() disagrees on exactly these, which is why it is not used.
+    assert "\x1c70".strip() == "70" and "\u008570".strip() == "70"
 
 
 def test_python_number_reader_takes_no_text_float_alone_would():

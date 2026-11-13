@@ -86,6 +86,7 @@ from _lib_exitcodes import (  # noqa: E402
 import _lib_input  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
+from _lib_validation import threshold_trim, written_threshold_number  # noqa: E402  (#3457)
 
 _LANG = detect_cli_lang()
 
@@ -373,12 +374,14 @@ def _decimals(current_value: Any) -> int:
     → 3, ``"1.5e2"`` → 2 (a '.' means the author wrote a decimal), and a
     non-string such as the float ``80.0`` or ``Decimal("1E+3")`` → 2.
     Judged on the value, not on a '.' alone: ``"1e-3"`` has none and is not
-    a whole number. Callers pass a finite value ``float()`` accepted, which
-    ``Decimal`` accepts too."""
+    a whole number. Callers pass a finite value ``written_threshold_number``
+    read (#3457: the exporter's grammar, so no ``1_000``), which ``Decimal``
+    accepts too."""
     if isinstance(current_value, int):
         return 0
-    text = str(current_value).strip()
-    if isinstance(current_value, str) and '.' not in text and float(text).is_integer():
+    text = threshold_trim(str(current_value))
+    if (isinstance(current_value, str) and '.' not in text
+            and written_threshold_number(current_value).is_integer()):
         return 0
     exp = Decimal(text).as_tuple().exponent
     return max(2, -exp) if isinstance(exp, int) else 2
@@ -435,10 +438,12 @@ def recommend_threshold(
     """
     confidence = grade_confidence(sample_count, min_samples)
 
-    # Try to parse current value as float
-    try:
-        current_float = float(current_value)
-    except (TypeError, ValueError):
+    # The current threshold as the exporter reads it (#3457): `float()` also
+    # reads `1_000`, ` ١٢٣ ` and `inf`, none of which the exporter serves —
+    # a recommendation computed from one would be relative to a threshold
+    # that is not in force.
+    current_float = written_threshold_number(current_value)
+    if current_float is None:
         return KeyRecommendation(
             key=key,
             current_value=current_value,
@@ -652,9 +657,8 @@ def recommend_threshold_lower(
     """
     # guard 0 — non-numeric current (e.g. "disable"): reuse the upper-bound early
     # exit, but as force_manual so it surfaces in the govern manual-review section.
-    try:
-        current_float = float(current_value)
-    except (TypeError, ValueError):
+    current_float = written_threshold_number(current_value)  # the exporter's reading (#3457)
+    if current_float is None:
         return _force_manual(
             key, current_value,
             "non-numeric current threshold (e.g. 'disable') — manual review",

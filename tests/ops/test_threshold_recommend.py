@@ -881,7 +881,10 @@ class TestRecommendThresholdLowerGuard0:
     """guard 0 (domain, first): non-numeric / out-of-(0,1) current all force_manual,
     never export, never crash (esp. current==1.0 → no divide-by-zero)."""
 
-    @pytest.mark.parametrize("cur", ["1", "1.0", "disable", "95", "0", "1.2"])
+    @pytest.mark.parametrize("cur", ["1", "1.0", "disable", "95", "0", "1.2",
+                                     # #3457: `float()` reads each of these as 0.5 or
+                                     # 0.95; the exporter reads none of them.
+                                     "0x1p-1", "0_.95", "0.9_5", "٠.٩٥", "0.95\x1f", "0.95:critical"])
     def test_domain_guard_force_manual_no_export(self, cur):
         rec = tr.recommend_threshold_lower("db2_bufferpool_hit_ratio", cur,
                                            _floor_samples(0.97), 100)
@@ -1694,14 +1697,41 @@ class TestUpperBoundFloor2964:
         assert tr._format_threshold_value(value) == text
 
     # ── a non-finite current (YAML .inf / .nan) ────────────────────────
-    @pytest.mark.parametrize("current", [float("inf"), float("-inf"), float("nan"),
-                                         "inf", "nan"])
+    @pytest.mark.parametrize("current", [float("inf"), float("-inf"), float("nan")])
     def test_non_finite_current_is_manual_review(self, current):
         values = _gauss()
         rec = tr.recommend_threshold("k", current, tr.compute_percentiles(values),
                                      len(values), 100, values=values)
         assert rec.recommended is None and rec.delta_pct is None
         assert rec.reason == "non-finite current value — manual review needed"
+
+    # ── a current the exporter does not read as a number (#3457) ────────
+    @pytest.mark.parametrize("current", [
+        "1_000", "0x1p4", "0x1F", "١٢٣", "123456789012345678901", "\x1c85", "85\x1f",
+        "inf", "nan", "Infinity", "85:critical", "disable", "", "abc", True, None, [85]])
+    def test_a_current_the_exporter_does_not_read_is_manual_review(self, current):
+        """The current threshold is read by the exporter's grammar. `float()`
+        reads `1_000` as 1000 and the Arabic-Indic digits as 123; the exporter
+        serves neither, so a recommendation computed from them would be
+        relative to a threshold that is not in force."""
+        values = _gauss()
+        rec = tr.recommend_threshold("k", current, tr.compute_percentiles(values),
+                                     len(values), 100, values=values)
+        assert rec.recommended is None and rec.delta_pct is None
+        assert rec.reason == "non-numeric current value, manual review needed"
+        assert rec.current_value == current
+
+    @pytest.mark.parametrize("current, same_as", [
+        (" 85 ", "85"), ("\t85\u0085", "85"), ("+85", "85"), ("85.", "85.0"), ("8.5e1", "85.0"), (85, "85")])
+    def test_a_current_the_exporter_reads_is_recommended_from_its_number(self, current, same_as):
+        """The exporter trims its own set of characters (U+0085 among them,
+        U+001C to U+001F not) and reads every decimal spelling: so does this."""
+        values = _gauss()
+        pcts = tr.compute_percentiles(values)
+        got = tr.recommend_threshold("k", current, pcts, len(values), 100, values=values)
+        want = tr.recommend_threshold("k", same_as, pcts, len(values), 100, values=values)
+        assert got.recommended is not None and want.recommended is not None
+        assert (got.recommended, got.delta_pct) == (want.recommended, want.delta_pct)
 
     # ── defences: unreachable today, so a broken rounding helper stands in ──
     def test_defence_relax_never_comes_out_as_a_decrease(self, monkeypatch):

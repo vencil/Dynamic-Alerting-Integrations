@@ -55,7 +55,8 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-from _lib_validation import threshold_number  # noqa: E402  (#3457)
+from _lib_validation import (  # noqa: E402  (#3457)
+    is_threshold_number_text, threshold_number, threshold_trim)
 
 # ⛔ The predicate that decides whether a key can live under `defaults:` at all,
 # imported from the module that owns it rather than respelled here (#1412). A
@@ -129,6 +130,15 @@ ROUTING_PROFILES = ["default", "high-priority", "noc-escalation", "silent-hours"
 def _seed_rng(seed: int) -> random.Random:
     """Create a seeded RNG for reproducible fixtures."""
     return random.Random(seed)
+
+
+def _written_number_text(value: "int | float") -> str:
+    """The text the conf.d writer spells *value* with under `defaults:`
+    (`_lib_confedit.number_value`: canonical decimal). Raises ValueError for
+    a number the edit contract cannot carry."""
+    import _lib_confedit  # noqa: PLC0415
+    (text,) = _lib_confedit.number_value(value).values()
+    return text
 
 
 def _gen_threshold_value(rng: random.Random) -> int | str:
@@ -726,9 +736,13 @@ def main() -> None:
             "Repeat for multiple keys (e.g. --extra-defaults bench_trigger=50). "
             "v2.8.0 Phase B Track A A6: replaces the inline-YAML rewrite "
             "that bench_e2e_run.sh did post-staging (cycle-3 RCA). A value "
-            "must be a number the exporter reads as a threshold: finite, "
-            "decimal, at most 20 digits, with an optional exponent (so not "
-            "1_000, 0x1F, nan or inf); anything else is an error."
+            "must be a number the exporter reads as a threshold (finite, "
+            "decimal, at most 20 digits; so not 1_000, 0x1F, nan or inf) "
+            "AND one this tool can write: the file spells a number in plain "
+            "decimal, with no exponent, and that spelling must have at most "
+            "20 digits too. 1e3 is fine (written 1000.0); 1e20, 1e-25 and "
+            "99999999999999999999 are refused (exit 2), since the exporter "
+            "would serve no default for what would be written."
         ),
     )
     args = parser.parse_args()
@@ -739,7 +753,9 @@ def main() -> None:
             parser.error(f"--extra-defaults expects KEY=NUMERIC, got {spec!r}")
         key, raw = spec.split("=", 1)
         key = key.strip()
-        raw = raw.strip()
+        # Trimmed as the exporter trims a threshold (#3457): str.strip() also
+        # takes U+001C to U+001F, which the exporter keeps.
+        raw = threshold_trim(raw)
         if not key:
             parser.error(f"--extra-defaults key is empty in {spec!r}")
         # The exporter's own grammar of a threshold number (#3457): int() and
@@ -754,7 +770,22 @@ def main() -> None:
             )
         # An integer stays an int (the identity the _defaults parser most
         # often expects); `1.5`, `1e3` and the like are floats.
-        extra_defaults[key] = int(raw) if raw.lstrip("+-").isdecimal() and raw.isascii() else number
+        value = int(raw) if raw.lstrip("+-").isdecimal() and raw.isascii() else number
+        # What the writer will spell it as must be a threshold number too: the
+        # edit contract writes plain decimal (no exponent), an int past 18
+        # characters as the float it rounds to.
+        try:
+            written = _written_number_text(value)
+        except ValueError as e:
+            parser.error(f"--extra-defaults {spec!r}: {e}")
+        if not is_threshold_number_text(written):
+            parser.error(
+                f"--extra-defaults {spec!r}: {raw} would be written to _defaults.yaml as "
+                f"{written}, {sum(ch.isdigit() for ch in written)} digits (this tool writes a "
+                f"number in plain decimal, with no exponent); a threshold number has at most "
+                f"20 digits, so the exporter would serve no default for {key}"
+            )
+        extra_defaults[key] = value
 
     if args.output:
         output_dir = Path(args.output)
