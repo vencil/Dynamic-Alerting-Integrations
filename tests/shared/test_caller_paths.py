@@ -302,7 +302,7 @@ DX_SITES = [
     # Not rows — the locked case does not reach their check; each is pinned
     # below by a path whose stat fails with ENAMETOOLONG (not "nothing
     # there"), which the old checks raised on or called missing:
-    # * measure-judgement-budget --tree: amtool and da-guard are asked first;
+    # * measure-judgement-budget --tree: da-guard is asked first;
     # * describe-tenant --replaces: the file is inside the scanned conf.d;
     # * generate-rule-pack-readme's k8s tree: derived, after the rule packs;
     # * list-subprocess-only-modules --coverage-data: after the population,

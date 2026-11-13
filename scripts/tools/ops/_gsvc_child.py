@@ -4,7 +4,8 @@
 forked, and never returns. In order:
 
 1. ``os.setsid()`` — its own process group, so the service can end it and
-   everything it started (amtool) with one ``killpg``; then ``RLIMIT_DATA``.
+   everything it started (git, da-guard, da-read) with one ``killpg``; then
+   ``RLIMIT_DATA``.
 2. Take the conf.d files of the base commit from git objects — ``git ls-tree
    -r -z`` and one ``git cat-file --batch`` — never from a working tree and
    never with ``git archive`` (it applies ``.gitattributes`` export rules).
@@ -97,7 +98,8 @@ class ChildJob:
     max_transfer: int
     #: #2901 E2: a warming run — the generator's conf.d read only
     #: (``load_tenant_tree``, where every parse of the judgement happens),
-    #: no writes, no verdict, no amtool: it exists to fill the cache.
+    #: no writes, no verdict, no Alertmanager reading: it exists to fill the
+    #: cache.
     warm: bool = False
     #: The judgement deadline (``time.monotonic()``, which the service's
     #: event loop clock is; the fork shares it): where the service ends this
@@ -670,7 +672,8 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                                   "key(s) cannot be judged")
         kept, truncated = kept_findings(verdict.findings)
         findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
-                     "tenants": list(f.tenants), "reason": f.reason, "blocks": f.blocks}
+                     "tenants": list(f.tenants), "reason": f.reason, "hint": f.hint,
+                     "blocks": f.blocks}
                     for f in kept]
         return report("complete", tenants=len(tenants), findings=findings, truncated=truncated)
     except _VerdictDeadline:

@@ -29,7 +29,7 @@ created: 2026-09-26T15:40:00+08:00
 - ⛔ **修改還沒發布的功能，要改它原本的片段檔，不要另外新增一份。** 發版的 release note 描述的是「相對上一版的淨變化」，讀者不需要知道它在開發期間被改過幾次。組裝時同一個 issue 出現多份片段會印出提醒。
 - 已經發布過的功能再修改，才新增一份片段（通常是 `Changed` 或 `Fixed`）。
 - 連到 `docs/` 以外的連結用絕對 GitHub URL（與 `CHANGELOG.md` 同一條規則）。
-- rule pack 告警的 alertname 改名或移除：舊規則直接刪除、不留 deprecation shim，寫 `Removed` 片段並標 ⚠️ breaking，附外部 Alertmanager matcher 的遷移說明（[#3682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3682)：「下一個 release 移除」沒有機制在守，shim 期間同一次停機會 page 兩次）。只限 alertname；閾值 key 改名照舊走 threshold registry 的 `deprecated_aliases`（2 個 release 過渡窗）。
+- rule pack 告警的 alertname 改名或移除：舊規則直接刪除、不留 deprecation shim，寫 `Removed` 片段並標 ⚠️ breaking，附外部 Alertmanager matcher 的遷移說明（[#3682](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3682)：「下一個 release 移除」沒有機制在守，shim 期間同一次停機會 page 兩次）。只限 alertname；閾值 key 改名照舊走 threshold registry 的 `deprecated_aliases`（2 個 release 過渡窗）。窗口關閉、或閾值 key 直接退役（改名、改單位後舊 key 不再讀）時，把舊 key 登記到 registry 的 `retired_keys`（[#3829](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3829)），它在每一層都會被判為 error 並點名替代 key。
 
 ## 工具
 

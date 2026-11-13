@@ -1,7 +1,9 @@
 name: TRK Index Coverage
 
-# #2106: the titles surface of check_trk_index_coverage.py, which pre-commit
-# (commits surface only) cannot see. New tracking items are numbered
+# #2106: check_trk_index_coverage.py's only scan surface, issue/PR titles (the
+# commit-history surface and its pre-commit hook were removed: they read main's
+# squash-mangled trailers and could not see the commit being made — see the
+# tool's docstring). New tracking items are numbered
 # TRK-<issue number> (ADR-019) and never need a table row; the tool only reads
 # three-digit numbers, so a red here means someone hand-allocated a new
 # three-digit TRK instead.
@@ -60,8 +62,8 @@ jobs:
           set -euo pipefail
           tool=scripts/tools/lint/check_trk_index_coverage.py
           if [ "$EVENT" = "workflow_dispatch" ]; then
-            python3 -X utf8 "$tool" --surface titles --ci \
+            python3 -X utf8 "$tool" --all-titles --ci \
               --owner "${GITHUB_REPOSITORY%%/*}" --gh-repo "${GITHUB_REPOSITORY#*/}"
           else
-            python3 -X utf8 "$tool" --surface titles --ci --title="$TITLE" --title-ref="$REF"
+            python3 -X utf8 "$tool" --ci --title="$TITLE" --title-ref="$REF"
           fi
