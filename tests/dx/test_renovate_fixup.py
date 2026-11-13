@@ -35,18 +35,34 @@ def _load_test_module(rel: str):
 
 # ── binding to the guards ───────────────────────────────────────────────────
 
-def test_federation_mirror_set_and_values_are_the_guards():
+@pytest.fixture(scope="module")
+def deployed() -> dict[str, str]:
+    return fx.deployed_tags(_REPO)
+
+
+def test_every_federation_mirror_the_guard_checks_is_planned_from_the_deploy_refs(deployed):
+    """For each service the guard binds, the fixup's deploy reading gives the
+    guard's own expected ref — so a fixup run leaves that guard green."""
     guard = _load_test_module("tests/ops/test_federation_e2e_mirrors_deploy_sot.py")
-    ours = fx.federation_e2e_expected(_REPO)
-    assert set(ours) == set(guard.MIRRORED), (
-        "renovate_fixup.federation_e2e_expected() and the guard's MIRRORED disagree on "
-        "which compose services mirror a deployed image")
-    assert ours == {svc: read() for svc, read in guard.MIRRORED.items()}
+    for svc, read in guard.MIRRORED.items():
+        image, _, tag = read().rpartition(":")
+        assert deployed.get(image) == tag, (
+            f"{svc}: the guard expects {image}:{tag}; renovate_fixup reads "
+            f"{image}:{deployed.get(image)} from the deploy refs")
 
 
-def test_proxy_tag_is_what_the_go_guard_reads():
-    values = yaml.safe_load((_REPO / fx.PROXY_CHART_VALUES).read_text(encoding="utf-8"))
-    assert fx.proxy_chart_tag(_REPO) == values["oauth2Proxy"]["image"]["tag"]
+def test_federation_plan_moves_every_service_the_guard_checks(deployed):
+    guard = _load_test_module("tests/ops/test_federation_e2e_mirrors_deploy_sot.py")
+    compose = {"services": {svc: {"image": read().rpartition(":")[0] + ":v0-stale"}
+                            for svc, read in guard.MIRRORED.items()}}
+    assert set(fx.federation_plan(compose, deployed)) == set(guard.MIRRORED)
+
+
+def test_proxy_tag_is_what_the_go_guard_reads(deployed):
+    values = yaml.safe_load((_REPO / "helm/tenant-api/values.yaml").read_text(encoding="utf-8"))
+    image = values["oauth2Proxy"]["image"]
+    assert image["repository"] == fx.PROXY_IMAGE_REPO
+    assert fx.proxy_chart_tag(deployed) == image["tag"]
 
 
 def test_trylocal_rule_is_the_guards():
@@ -55,20 +71,25 @@ def test_trylocal_rule_is_the_guards():
     assert fx.TRY_LOCAL_COMPOSE == guard.TRY_LOCAL_COMPOSE.relative_to(_REPO).as_posix()
 
 
-def test_the_repo_needs_no_fixup():
+def test_the_repo_needs_no_fixup(deployed):
     """On a tree whose guards are green, every planner is a no-op."""
-    compose = (_REPO / fx.FEDERATION_COMPOSE).read_text(encoding="utf-8")
-    for svc, image in fx.federation_e2e_expected(_REPO).items():
-        _, old = fx.set_compose_image(compose, svc, image)
-        assert old == image, svc
+    fed = yaml.safe_load((_REPO / fx.FEDERATION_COMPOSE).read_text(encoding="utf-8"))
+    assert fx.federation_plan(fed, deployed) == {}
     go_mod = (_REPO / fx.PROXY_LIB_TESTS_DIR / "go.mod").read_text(encoding="utf-8")
-    assert fx.proxy_library_version(go_mod) == fx.proxy_chart_tag(_REPO)
+    assert fx.proxy_library_version(go_mod) == fx.proxy_chart_tag(deployed)
     trylocal = yaml.safe_load((_REPO / fx.TRY_LOCAL_COMPOSE).read_text(encoding="utf-8"))
     workflow = yaml.safe_load((_REPO / fx.SCAN_WORKFLOW).read_text(encoding="utf-8"))
     assert fx.trylocal_plan(trylocal, fx.scan_matrix_tags(workflow)) == {}
     images = json.loads((_REPO / fx.PLATFORM_DATA).read_text(encoding="utf-8"))["images"]
     _, changed = fx.set_image_mirror((_REPO / fx.IMAGES_JS).read_text(encoding="utf-8"), images)
     assert changed == {}
+
+
+def test_federation_plan_leaves_images_the_platform_does_not_deploy():
+    compose = {"services": {"double": {"image": "nginx:1.27-alpine"},
+                            "prom": {"image": "prom/prometheus:v3.15.1"}}}
+    assert fx.federation_plan(compose, {"prom/prometheus": "v3.16.0"}) == {
+        "prom": ("prom/prometheus:v3.15.1", "prom/prometheus:v3.16.0")}
 
 
 # ── set_compose_image ───────────────────────────────────────────────────────
