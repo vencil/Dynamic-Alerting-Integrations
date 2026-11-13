@@ -84,6 +84,7 @@ lang: zh
 | `bench_verdict.py` | Turn a benchstat comparison into the bench gate's verdict (shared core). |
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
+| `check_advisory_patched_versions.py` | every advisory's `patched_versions` names a version that exists (#1269). |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
 | `compile_custom_alerts.py` | Compile Custom Alert recipes → rule-packs/rule-pack-custom-alerts.yaml. |
 | `converge_status.py` | Judge whether a multi-round fix chain is converging, from its ROUNDS.jsonl ledger. |
@@ -92,6 +93,7 @@ lang: zh
 | `describe_tenant.py` | Describe effective tenant config — as the exporter's resolver answers it. |
 | `diag_pr_ci.py` | PR CI auto-diagnostic CLI (issue #446). |
 | `doc_coverage.py` | 文件覆蓋率 Dashboard |
+| `gen_adr_checks.py` | an ADR's list of checks, generated from the code. |
 | `gen_agent_adapters.py` | Generate the per-vendor agent adapters from the neutral .agents/ SSOT (TRK-361). |
 | `gen_am_duration_json.py` | Generate am-duration.json from the tenant-config schema (#2711). |
 | `gen_recipe_contract.py` | Generate the recipe copies from the one contract. |
@@ -150,6 +152,7 @@ lang: zh
 | `check_chart_package_contents.py` | assert what a packaged Helm chart .tgz actually contains (#1755). |
 | `check_chart_pull_surface.py` | Every chart we TELL customers to pull must be a chart we actually push. |
 | `check_chart_ship_surface.py` | a shipping chart's root files must be declared SHIP or .helmignore'd (#1755). |
+| `check_chart_version_bump.py` | a git-only chart's version must name one package (#1269). |
 | `check_cli_contract.py` | 文件裡教人抄的 da-tools 命令 ↔ 活的 argparse 契約（#1379 / TRK-370）。 |
 | `check_cli_coverage.py` | CLI 命令覆蓋率檢查 |
 | `check_cli_default_drift.py` | cli-reference 的「預設值」欄 vs argparse 的實際 default。 |
@@ -251,7 +254,7 @@ lang: zh
 - `scripts/tools/_lib_confedit.py`：a Python tool's change to conf.d files, made by Go (ADR-036 §2).
 - `scripts/tools/_lib_constants.py`：Domain constants for Dynamic Alerting platform.
 - `scripts/tools/_lib_consumer_read.py`：A file outside conf.d, read the way its consumer reads it (ADR-036 §12, #3206).
-- `scripts/tools/_lib_doc_yaml_inventory.py`：The one inventory of the YAML fences in docs/**/*.md (ADR-036 §12, #3416).
+- `scripts/tools/_lib_doc_yaml_inventory.py`：The one inventory of the YAML code blocks in docs/**/*.md (ADR-036 §12, #3416).
 - `scripts/tools/_lib_engine.py`：Engine detection layer: did the external engine actually give a verdict? (#3611)
 - `scripts/tools/_lib_exitcodes.py`：Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.

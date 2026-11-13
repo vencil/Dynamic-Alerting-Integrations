@@ -29,6 +29,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -249,8 +250,11 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 // is on disk, makes the write gate refuse every other write to the tenant
 // (#2983). Admitting `_metadata` or `_profile` would also have to widen
 // touchesScopeMetadata, which judges only the patch.
-func unsetAllowedList() string {
+//
+// extra is Deps.RetiredThresholdKeys (the test seam; nil in production).
+func unsetAllowedList(extra []string) string {
 	keys := cfg.BatchUnsettableKeys()
+	keys = append(keys, extra...)
 	for i, k := range keys {
 		keys[i] = strconv.Quote(k)
 	}
@@ -261,11 +265,12 @@ func unsetAllowedList() string {
 // validatePatchMap on the patch (field `<prefix>.patch[...]`), then each
 // unset key (field `<prefix>.unset[i]`) — cfg.BatchUnsettable, not repeated,
 // not also in the patch. prefix is "operations[i]" for /tenants/batch and ""
-// for /groups/{id}/batch. Returns every violation, like validatePatchMap.
+// for /groups/{id}/batch; extra is Deps.RetiredThresholdKeys. Returns every
+// violation, like validatePatchMap.
 // An op with neither patch nor unset is NOT refused here: /tenants/batch
 // keeps its pre-B2 no-op for it, and /groups/{id}/batch keeps its own
 // earlier 400.
-func validateBatchEdit(patch map[string]string, unset []string, prefix string) []Violation {
+func validateBatchEdit(patch map[string]string, unset []string, prefix string, extra []string) []Violation {
 	field := func(name string) string {
 		if prefix == "" {
 			return name
@@ -281,9 +286,9 @@ func validateBatchEdit(patch map[string]string, unset []string, prefix string) [
 				Reason: fmt.Sprintf("key length must not exceed %d characters; got %d", maxPatchKeyLen, len(k))})
 			continue
 		}
-		if !cfg.BatchUnsettable(k) {
+		if !cfg.BatchUnsettable(k) && !slices.Contains(extra, k) {
 			violations = append(violations, Violation{Field: at,
-				Reason: fmt.Sprintf("unset can only remove %s; got %q", unsetAllowedList(), k)})
+				Reason: fmt.Sprintf("unset can only remove %s; got %q", unsetAllowedList(extra), k)})
 			continue
 		}
 		if j, dup := seen[k]; dup {

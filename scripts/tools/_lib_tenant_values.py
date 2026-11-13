@@ -1044,7 +1044,8 @@ def _run_da_guard(
 # names the binary as older than this tool (#3489, #3016).
 _FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",),
                        ("undecidable_blocks",), ("switched_off_with",), ("base",),
-                       ("dead_entries",))  # #3502: key-verdict's rows and findings
+                       ("dead_entries",),  # #3502: key-verdict's rows and findings
+                       ("hint",))  # #3829: key-verdict's findings (a retired threshold key)
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:
