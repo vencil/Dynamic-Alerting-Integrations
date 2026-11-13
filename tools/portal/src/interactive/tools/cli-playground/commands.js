@@ -175,11 +175,9 @@ Next steps:
 [PASS] yaml_syntax
        3 files parsed successfully
 
-[PASS] schema
-       No schema warnings
-
 [PASS] routes
-       2 routes, 2 receivers, 2 inhibit_rules
+       Validation: 2 route(s), 2 receiver(s), 2 inhibit rule(s)
+       OK: all configs valid
 
 [PASS] profiles
        2 tenants scanned, 0 profile refs, 0 profiles defined in _profiles.yaml
@@ -191,7 +189,7 @@ Next steps:
        2 tenant(s), each declared in exactly one file
 
 ------------------------------------------------------------
-  Total: 6 checks | 6 pass | 0 warn | 0 fail
+  Total: 5 checks | 5 pass | 0 warn | 0 fail
 ------------------------------------------------------------
   Result: PASS`,
     args: [],

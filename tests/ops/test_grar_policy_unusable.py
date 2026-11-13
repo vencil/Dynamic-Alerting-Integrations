@@ -353,8 +353,8 @@ def test_tree_refusal_refuses_it_for_every_consumer(tmp_path, name):
 
 @pytest.mark.parametrize("name", ["tenants-scalar", "max-repeat-banana", "file-syntax-error",
                                   "misplaced-in-tenant-file"])
-def test_validate_config_schema_row_fails(tmp_path, name):
-    row = vc.check_schema(str(_write(tmp_path, CASES[name][0])))
+def test_validate_config_routes_row_fails(tmp_path, name):
+    row = vc.check_routes(str(_write(tmp_path, CASES[name][0])))
     assert row["status"] == vc.FAIL, row
     assert any("ERROR (field type):" in m for m in row["details"]), row
 

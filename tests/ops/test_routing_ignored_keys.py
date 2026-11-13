@@ -185,9 +185,9 @@ def test_validate_config_rows_fail(tmp_path, capsys, cli_argv):
     with pytest.raises(SystemExit) as exc:
         _as_run(vc.main())
     rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
-    assert rows["schema"]["status"] == "fail", rows["schema"]
+    assert rows["routes"]["status"] == "fail", rows["routes"]
     assert any("'continue' is not read by the route generator" in x
-               for x in rows["schema"]["details"]), rows["schema"]
+               for x in rows["routes"]["details"]), rows["routes"]
     assert exc.value.code == 1
 
 

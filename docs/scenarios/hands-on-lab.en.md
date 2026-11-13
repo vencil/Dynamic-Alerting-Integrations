@@ -258,11 +258,11 @@ Expected output (measured after doing Exercises 1 and 2 as written):
 [PASS] yaml_syntax
        8 files parsed successfully
 
-[PASS] schema
-       No schema warnings
-
 [PASS] routes
-       5 routes, 5 receivers, 5 inhibit_rules
+       ...
+       Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+       ...
+       OK: all configs valid
 
 [PASS] profiles
        5 tenants scanned, 0 profile refs, 0 profiles defined in _profiles.yaml
@@ -274,14 +274,14 @@ Expected output (measured after doing Exercises 1 and 2 as written):
        5 tenant(s), each declared in exactly one file
 
 ------------------------------------------------------------
-  Total: 6 checks | 6 pass | 0 warn | 0 fail
+  Total: 5 checks | 5 pass | 0 warn | 0 fail
 ------------------------------------------------------------
   Result: PASS
 ```
 
 The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WARN does not fail the run — so CI can call it as-is, no extra flag needed.
 
-- The `schema` row also checks `_routing_profile` references and domain policies: without `_routing_profiles.yaml` it shows `_routing_profile references unknown profile`; without `_domain_policy.yaml` the finance constraints simply do not exist, and nothing says so.
+- The `routes` row is `generate-routes --validate`, so it also checks `_routing_profile` references and domain policies: without `_routing_profiles.yaml` it shows `_routing_profile references unknown profile`; without `_domain_policy.yaml` the finance constraints simply do not exist, and nothing says so.
 - The `profiles` row is about threshold profiles (`_profiles.yaml` and a tenant's `_profile`), not routing profiles, so it still reads `0 profiles defined in _profiles.yaml` after Exercise 2.
 
 ⚠️ If `tenant_uniqueness` says `0 tenant(s)` and `routes` says `0 routes`, you dropped the two outer levels (`tenants:` and `<tenant name>:`) when pasting the Exercise 2 snippets. Every check then reads PASS while nothing was validated.

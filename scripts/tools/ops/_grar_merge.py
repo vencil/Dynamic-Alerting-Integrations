@@ -64,7 +64,7 @@ from _lib_validation import (  # noqa: E402  (#1560 Secret references)
 # * ``severity`` — the SARIF level: ``error`` / ``warning`` / ``note``.
 # * ``blocks`` — when it makes the generator fail: ``always`` (every mode),
 #   ``strict`` (under ``--strict``), ``validate`` (under ``--validate``; the
-#   same lines validate-config's schema / routes rows fail on), ``never``.
+#   same lines validate-config's routes row fails on), ``never``.
 #   It restates the rule the predicates already apply (``_policy_errors``,
 #   ``blocking_generation_errors``, the refusals) — it decides nothing: those
 #   predicates still read the type and the prefix, unchanged.

@@ -309,7 +309,8 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     """`_with_exporter_reasons` 曾在 effective 失敗後補跑 served-values 借原因文字；
     `da-guard effective` 的 stderr 自 #2115 C 起就帶原因，補跑已拿掉。量測：profiles
     列 FAIL、明細有 exporter 的原因行，而 da-guard 只被呼叫 `effective`（以計數 wrapper
-    記錄子命令；ADR-036 步驟 4 起另有讀樹的一次 `parse-tree`，#3387 起另有 guard_errors
+    記錄子命令；ADR-036 步驟 4 起另有讀樹的一次 `parse-tree`，#3788 起 routes 列另有一次
+    `key-verdict` 與一次 `served-values`，#3387 起另有 guard_errors
     的一次 da-guard 檢查）——沒有 served-values。"""
     require_shebang_scripts()  # the counting wrapper is a `#!` script
     conf_d = tmp_path / "conf.d"
@@ -335,7 +336,10 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     row = rows["guard_errors"]
     assert row["status"] == vc.FAIL and row["caller_error"] is False, row
     assert any(d.startswith("da-guard (exit 3): ") for d in row["details"]), row
-    # ADR-036 step 4 (#2906): one parse-tree read of the tree, then effective
+    # ADR-036 step 4 (#2906): one parse-tree read of the tree, then the routes
+    # row's `key-verdict` and `served-values` (#3788: the row is
+    # `generate-routes --validate`, which reports the shared key verdict and
+    # reads the served custom alerts), then effective
     # (no served-values to borrow the reason from), then da-guard's check,
     # then the unread_keys row's own `key-verdict` (#3489: it reads the
     # verdict from da-guard, and says it is incomplete on this tree), then
@@ -343,6 +347,7 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     # served tiers, last of the rows). A profiles row that borrowed its
     # reason from served-values again would call it right after effective,
     # so the whole ordered list still catches that.
-    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "effective", "--config-dir",
+    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "key-verdict", "served-values",
+                                                       "effective", "--config-dir",
                                                        "key-verdict", "served-values"]
     assert rows["unread_keys"]["details"][0].startswith("verdict incomplete: "), rows["unread_keys"]

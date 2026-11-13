@@ -191,8 +191,8 @@ python3 scripts/ops/configmap_assemble.py \
   the ConfigMap (a ConfigMap key plane cannot express a subdirectory). Tenants
   under `examples/` or any hierarchical subdirectory (`region-eu/` and the
   like) do **not** ship. The `WARN` on stderr **names the first 5 and counts
-  the rest as `(+N more)`** — the full list is the `skipped_nested_files` field
-  of the `schema` row in `validate_config --json` (see
+  the rest as `(+N more)`** — `validate_config --json` lists them as `skipped_nested_files`
+  on a row whose flat read skipped files in subdirectories (see
   [cli-reference](../cli-reference.en.md#hierarchical-confd)). The exporter reads the tree recursively in-cluster
   (ADR-016/017), so the two views disagree.
 - **A tree with a path nothing can be read from is refused whole**: every
