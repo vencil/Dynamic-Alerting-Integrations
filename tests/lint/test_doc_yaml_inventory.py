@@ -2,18 +2,20 @@
 
 What these pin:
 
+* which code blocks are units is the site's renderer's answer (#3814): a
+  yaml block wherever the site renders one (a blockquote, a list item, an
+  admonition, ``~~~yaml``, ``{.yaml}``, ```` ```YAML ````) is a unit, another
+  lexer or no code block on the site is none, and a block the inventory
+  cannot place on a line is an error, never a guess;
 * the fence attribute vocabulary is closed — every form the module docstring
   names is read, anything else is an error (rustdoc's
-  `invalid_codeblock_attributes`), and so is the brace-less spelling mkdocs
-  does not render as a code block;
+  `invalid_codeblock_attributes`);
 * the two blocks both lints let through before the inventory: a repeated key
   in a block of registry keys only, and a repeated key under a tenant name
   with no marker key — now each is an error of `--check fences`;
-* a fence with attributes stays in every gate (the drift checks' own tests,
-  the unit-sanity tests and the Go parity below carry the rest of that);
-* the Go loader test agrees with the inventory unit for unit
-  (`TestDocsYAMLInventoryParity`, run from here so a change to this module
-  alone runs it — the Go leg wakes on docs/ and Go, this leg on scripts/).
+* the Go loader test reads its samples from the inventory's JSON
+  (run from here so a change to this module alone runs it — the Go leg wakes
+  on docs/ and Go, this leg on scripts/).
 
 The readers are the real ones (conftest builds da-guard / da-crdecode /
 da-read from this checkout for the session).
@@ -52,6 +54,25 @@ def _fences(root: Path) -> subprocess.CompletedProcess:
 
 # ── vocabulary ───────────────────────────────────────────────────────────────
 
+_RENDERER: "list[inv.Renderer]" = []
+
+
+def _renderer() -> "inv.Renderer":
+    if not _RENDERER:
+        _RENDERER.append(inv.Renderer(REPO))
+    return _RENDERER[0]
+
+
+def _yaml_fences(md: str, errors: "list | None" = None) -> "list[inv.Fence]":
+    return list(inv.yaml_fences("x.md", md, _renderer(), errors))
+
+
+def _declaration(info: str) -> "inv.Declaration | None":
+    """The declaration of ```` ```yaml <info> ````, as the renderer reads it."""
+    f, = _yaml_fences(f"```yaml {info}\na: 1\n```\n")
+    return inv.parse_declaration(f.block, f.info)
+
+
 @pytest.mark.parametrize("info, consumer, reason, refused, invalid", [
     ("{.confd}", "confd", None, None, False),
     ("{.k8s}", "k8s", None, None, False),
@@ -64,27 +85,32 @@ def _fences(root: Path) -> subprocess.CompletedProcess:
     ("{.expect-refused=duplicate_key .confd}", "confd", None, "duplicate_key", False),
     ("{.confd .expect-invalid}", "confd", None, None, True),
     ("{ .confd }", "confd", None, None, False),
+    ('{.confd title="x"}', "confd", None, None, False),   # the highlighter's option
 ])
 def test_every_known_form_is_read(info, consumer, reason, refused, invalid):
-    d = inv.parse_declaration(info)
+    d = _declaration(info)
     assert d.errors == [], d.errors
     assert (d.consumer, d.illustrative, d.expect_refused, d.expect_invalid) == (
         consumer, reason, refused, invalid)
 
 
+@pytest.mark.parametrize("info", ["", 'title="x"', 'hl_lines="1"'])
+def test_the_highlighters_options_declare_nothing(info):
+    """#3814: `title` / `hl_lines` / `linenums` are pymdownx.highlight's own
+    options, which the renderer takes off before the attributes."""
+    assert _declaration(info) is None
+
+
 @pytest.mark.parametrize("info, needle", [
-    ("confd", "not an attribute list"),
-    (".confd", "not an attribute list"),
-    ('title="x"', "not an attribute list"),
     ("{.conf-d}", "unknown attribute '.conf-d'"),
-    ("{#an-id}", "cannot read attribute text"),
+    ("{#an-id}", "unknown attribute '#an-id'"),
     ("{.confd=1}", "unknown attribute '.confd=1'"),
     ("{.illustrative}", "needs a non-empty reason"),
     ('{.illustrative reason=""}', "needs a non-empty reason"),
     ('{.illustrative reason="  "}', "needs a non-empty reason"),
     ('{.illustrative .confd reason="r"}', "takes no other attribute"),
     ('{.confd reason="r"}', "only for .illustrative"),
-    ("{.confd title=x}", "unknown attribute title="),
+    ("{.confd owner=x}", "unknown attribute owner="),
     ("{.confd .k8s}", "more than one consumer"),
     ("{.expect-refused=duplicate_key}", "needs .confd"),
     ("{.k8s .expect-refused=x}", "needs .confd"),
@@ -93,55 +119,76 @@ def test_every_known_form_is_read(info, consumer, reason, refused, invalid):
     ("{.confd .expect-invalid .expect-refused=duplicate_key}", "exclude each other"),
 ])
 def test_anything_else_is_an_error(info, needle):
-    d = inv.parse_declaration(info)
+    d = _declaration(info)
     assert any(needle in e for e in d.errors), d.errors
 
 
-def test_bare_word_fence_is_extracted_and_refused(tmp_path):
-    """```` ```yaml confd ```` is still a fence to the extractor (so nothing
-    inside it is read as another fence), and an error: mkdocs renders it as
-    inline code, not as a code block."""
-    root = _docs(tmp_path, "```yaml confd\ndefaults:\n  a: 1\n```\n")
-    r = _fences(root)
-    assert r.returncode == 1, r.stdout
-    assert "[FENCE] docs/x.md:2" in r.stdout and "not an attribute list" in r.stdout
+@pytest.mark.parametrize("info", ["confd", ".confd"])
+def test_an_info_the_site_renders_as_no_code_block_is_no_unit(tmp_path, info):
+    """#3814: ```` ```yaml confd ```` is no code block on the site (the
+    renderer's fence takes no bare word), so it is no unit either — the
+    inventory no longer second-guesses the renderer with an error of its own."""
+    i = inv.build(_docs(tmp_path, f"```yaml {info}\ndefaults:\n  a: 1\n```\n"))
+    assert (i.units, i.file_errors) == ([], [])
 
 
-@pytest.mark.parametrize("opening", [
-    "~~~yaml", "```YAML", "```Yml", "````yaml", "``` yaml", "```yaml+jinja", "~~~ YAML {.confd}",
-])
-def test_a_yaml_fence_spelled_another_way_is_an_error(tmp_path, opening):
-    """#3416 review: every one of these used to fall out of every gate in
-    silence. Fences are found as CommonMark finds them; a yaml fence that is
-    not ```yaml / ```yml is an error naming the standard spelling."""
-    close = opening[:4] if opening.startswith("````") else opening[:3]
-    root = _docs(tmp_path, f"{opening}\ntenants:\n  t: {{a: '1'}}\n  t: {{a: '2'}}\n{close}\n")
-    i = inv.build(root)
-    assert i.units == []
-    assert [(p, ln) for p, ln, _e in i.file_errors] == [("docs/x.md", 1)], i.file_errors
-    assert "write it as ```yaml" in i.file_errors[0][2]
+# ── which blocks are units: the renderer's answer (#3814) ───────────────────
+
+_DUPLICATE = "tenants:\n  t: {a: '1'}\n  t: {a: '2'}\n"
 
 
 @pytest.mark.parametrize("opening, close", [
-    ("> ```yaml {.confd}", "> ```"),
-    ("> ```yaml", "> ```"),
-    ("> ~~~yaml", "> ~~~"),
-    ("> > ```yml", "> > ```"),
-], ids=["declared", "undeclared", "tilde", "nested"])
-def test_a_yaml_fence_in_a_blockquote_is_an_error(tmp_path, opening, close):
-    """#3748: no extractor reads past a blockquote's `>`, so such a fence
-    left every gate in silence. Refused, not read: move it out."""
-    prefix = close[:-3]
-    body = (f"{opening}\n{prefix}tenants:\n{prefix}  t1:\n{prefix}    _routing:\n"
-            f"{prefix}      receiver: {{type: slack, api_url: https://h.example/s3cr3t}}\n{close}\n")
-    root = _docs(tmp_path, body)
-    i = inv.build(root)
-    assert i.units == []
-    assert [(p, ln) for p, ln, _e in i.file_errors] == [("docs/x.md", 1)], i.file_errors
-    assert "move it out of the blockquote" in i.file_errors[0][2]
-    r = _fences(root)
-    assert r.returncode == 1, r.stdout + r.stderr
-    assert "[FENCE] docs/x.md:1" in r.stdout, r.stdout
+    ("~~~yaml", "~~~"), ("```YAML", "```"), ("```Yml", "```"), ("````yaml", "````"),
+    ("``` {.yaml}", "```"), ("~~~ {.YAML}", "~~~"),
+])
+def test_a_yaml_fence_spelled_any_way_the_highlighter_reads_is_a_unit(tmp_path, opening, close):
+    """#3416 refused these as "a yaml fence written another way"; the
+    renderer renders each as a YAML code block, so each is a unit, judged:
+    here its repeated key is refused by parse-tree."""
+    i = inv.build(_docs(tmp_path, f"{opening}\n{_DUPLICATE}{close}\n"))
+    u, = i.units
+    assert (u.line, i.file_errors) == (2, []), i.file_errors
+    assert "duplicate_key" in u.errors[0], u.errors
+
+
+@pytest.mark.parametrize("opening", ["```yaml+jinja", "```jinja", "```text", "```"])
+def test_another_lexer_is_not_yaml(tmp_path, opening):
+    """What counts as YAML is pygments' YAML lexer: `yaml+jinja` is another
+    lexer, not refused and not read; an untyped fence is not YAML."""
+    i = inv.build(_docs(tmp_path, f"{opening}\n{_DUPLICATE}```\n"))
+    assert (i.units, i.file_errors) == ([], [])
+
+
+_QUOTED = ("tenants:\n  t1:\n    _routing:\n"
+           "      receiver: {type: slack, api_url: https://h.example/s3cr3t}\n")
+
+
+@pytest.mark.parametrize("doc, line", [
+    ("> ```yaml {.confd}\n" + "".join(f"> {ln}\n" for ln in _QUOTED.splitlines()) + "> ```\n", 2),
+    ("> > ```yml\n" + "".join(f"> > {ln}\n" for ln in _QUOTED.splitlines()) + "> > ```\n", 2),
+    # #3814's shape: a blockquote in a list item, indented 4 — the old
+    # patterns took the `>` only within the first 3 columns, so this block
+    # was neither read nor refused
+    ("- item\n\n    > note\n    >\n    > ```yaml\n"
+     + "".join(f"    > {ln}\n" for ln in _QUOTED.splitlines()) + "    > ```\n", 6),
+    # an admonition body, and a blockquote in it
+    ("!!! note\n\n    ```yaml\n" + "".join(f"    {ln}\n" for ln in _QUOTED.splitlines())
+     + "    ```\n", 4),
+    ("!!! note\n\n    > ```yaml\n" + "".join(f"    > {ln}\n" for ln in _QUOTED.splitlines())
+     + "    > ```\n", 4),
+], ids=["blockquote", "nested-blockquote", "list-blockquote-indent-4", "admonition",
+        "admonition-blockquote"])
+def test_a_yaml_block_wherever_the_site_renders_it_is_a_unit(tmp_path, doc, line):
+    """#3748 refused a yaml fence in a blockquote (no extractor read past the
+    `>`), and missed one nested deeper. Read by the renderer, each is a unit
+    at its first line, its text without the `>`, and judged: the schema
+    check reads its credential (here the conf.d reading)."""
+    i = inv.build(_docs(tmp_path, doc))
+    assert i.file_errors == [], i.file_errors
+    u, = i.units
+    assert (u.line, u.errors, u.consumer) == (line, [], "confd"), (u.line, u.errors)
+    assert u.documents[0]["tenants"]["t1"]["_routing"]["receiver"]["type"] == "slack"
+    assert ">" not in u.text.split("\n")[0]
 
 
 def test_another_language_in_a_blockquote_is_left_alone(tmp_path):
@@ -151,55 +198,101 @@ def test_another_language_in_a_blockquote_is_left_alone(tmp_path):
     assert _fences(root).returncode == 0
 
 
-@pytest.mark.parametrize("body", [
-    "```yaml\na: 1\n",                          # a yaml fence never closed
-    "```bash\necho\n\n```yaml\na: 1\n",          # a bash fence never closed
-    "````yaml\na: 1\n```\n",                     # ``` does not close ````
-])
-def test_an_unclosed_fence_is_an_error(tmp_path, body):
-    i = inv.build(_docs(tmp_path, body))
-    assert any("never closed" in e for _p, _l, e in i.file_errors), i.file_errors
-
-
-def test_fences_are_tracked_as_commonmark_tracks_them():
+def test_fences_are_tracked_as_the_renderer_tracks_them():
     """A ``` line inside another fence is that fence's text, and a longer or
-    tilde fence is closed only by its own kind (#3416 review)."""
+    tilde fence is closed only by its own kind. (pymdownx.superfences closes a
+    fence only with one of the same length: ```` does not close ``` — the
+    renderer's rule, not CommonMark's, and the one the site shows.)"""
     md = ("````markdown\n```yaml\nhidden: 1\n```\n````\n"
-          "```yaml\na: 1\n````\n"                  # ```` closes ``` (longer is fine)
+          "```yaml\na: 1\n```\n"
           "~~~text\n```yaml\n~~~\n"
-          "```yaml\nb: 2\n```\n")
-    got = [(f.line, f.body) for f in inv.extract_fences("x.md", md)]
-    assert got == [(6, ["a: 1"]), (12, ["b: 2"])]
+          "```yaml\nb: 2\n````\nc: 3\n```\n")
+    errors: list = []
+    got = [(f.line, f.body) for f in _yaml_fences(md, errors)]
+    assert (got, errors) == ([(6, ["a: 1"]), (12, ["b: 2", "````", "c: 3"])], [])
 
 
-@pytest.mark.parametrize("blank", ["\u3000", "\x1c", "\u00a0"])
-def test_only_ascii_blanks_are_trimmed_from_a_fence_line(blank):
-    """#3416 review: `str.strip()` also takes U+3000 / \\x1c away, Go's side
-    does not — the two extractors would cut different units. Both trim only
-    ' \\t\\r'; a line starting with another blank is no fence."""
-    md = f"{blank}```yaml\na: 1\n```\n"
-    assert list(inv.extract_fences("x.md", md)) == []
-
-
-def test_crlf_and_a_lone_cr_keep_go_lines(tmp_path):
-    """#3416 review (CodeRabbit): the file is read as bytes, so a lone CR is
-    no line break and a CRLF's CR stays in the body line — as Go's
-    os.ReadFile + strings.Split("\\n") sees it; line numbers agree."""
+def test_a_crlf_keeps_its_cr_in_the_unit_and_its_line(tmp_path):
+    """The file is read as bytes and split on LF: a CRLF's CR stays in the
+    body line, and line numbers are the file's."""
     (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "x.md").write_bytes(
-        b"prose\rmore prose\r\n\r\n```yaml\r\na: 1\r\nb: 2\r\n```\r\n")
+    (tmp_path / "docs" / "x.md").write_bytes(b"prose\r\n\r\n```yaml\r\na: 1\r\nb: 2\r\n```\r\n")
     (rel, text), = inv.iter_markdown(tmp_path)
-    f, = inv.extract_fences(rel, text)
+    f, = inv.yaml_fences(rel, text, _renderer())
     assert (f.line, f.body) == (3, ["a: 1\r", "b: 2\r"])
 
 
-def test_extractor_takes_attributed_and_indented_fences():
-    md = ("```yaml {.confd}\na: 1\n```\n"
-          "  ```yml {.k8s}\n  b: 2\n  ```\n"
-          "```yamlx\nc: 3\n```\n"
+def test_attributed_and_indented_fences_keep_their_text():
+    """A list item's indentation stays in the body (the text the inventory
+    has always given); an empty fence is no unit."""
+    md = ("```yaml {.confd}\na: 1\n```\n\n"
+          "- item\n\n    ```yml {.k8s}\n    b: 2\n    ```\n\n"
+          "```yamlx\nc: 3\n```\n\n"
           "```yaml\n```\n")
-    got = [(f.line, f.info, f.body) for f in inv.extract_fences("x.md", md)]
-    assert got == [(1, "{.confd}", ["a: 1"]), (4, "{.k8s}", ["  b: 2"])]
+    got = [(f.line, f.info, f.body) for f in _yaml_fences(md)]
+    assert got == [(1, "{.confd}", ["a: 1"]), (7, "{.k8s}", ["    b: 2"])]
+
+
+# ── locating a rendered block fails closed (#3814) ──────────────────────────
+
+def test_a_text_at_more_places_than_the_site_renders_it_is_an_error(tmp_path):
+    """The block shown inside a ````markdown example has the same text, between
+    fence lines, as the rendered one: the inventory cannot tell which line is
+    the rendered block, so it says so instead of guessing."""
+    root = _docs(tmp_path, ("````markdown\n```yaml\ndefaults:\n  a: 1\n```\n````\n\n"
+                            "```yaml\ndefaults:\n  a: 1\n```\n"))
+    i = inv.build(root)
+    assert i.units == []
+    (p, ln, e), = i.file_errors
+    assert (p, ln) == ("docs/x.md", 3) and "lines 3, 9" in e and "renders 1" in e, e
+    r = _fences(root)
+    assert r.returncode == 1 and "[FENCE] docs/x.md:3" in r.stdout, r.stdout
+
+
+def test_identical_text_under_different_fence_info_is_an_error(tmp_path):
+    i = inv.build(_docs(tmp_path, "```yaml\na: 1\n```\n\n```text\na: 1\n```\n"))
+    assert i.units == []
+    (p, ln, e), = i.file_errors
+    assert (p, ln) == ("docs/x.md", 2) and "different fence info" in e, e
+
+
+def test_identical_blocks_are_located_as_a_multiset(tmp_path):
+    """Two identical rendered blocks take the two places of their text."""
+    i = inv.build(_docs(tmp_path, "```yaml\ndefaults:\n  a: 1\n```\n\n"
+                                  "```yaml\ndefaults:\n  a: 1\n```\n"))
+    assert ([u.line for u in i.units], i.file_errors) == ([2, 7], [])
+
+
+def test_a_block_found_nowhere_is_an_error(tmp_path):
+    """A lone CR is a line break to the renderer and none to the file's
+    lines: the rendered block's lines are nowhere in the file — an error,
+    never a block that drops out of every gate in silence."""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "x.md").write_bytes(b"```yaml\na: 1\rb: 2\n```\n")
+    i = inv.build(tmp_path)
+    assert i.units == []
+    (p, _ln, e), = i.file_errors
+    assert p == "docs/x.md" and "found nowhere" in e, e
+
+
+@pytest.mark.parametrize("lang, yaml", [
+    ("yaml", True), ("yml", True), ("YAML", True), ("Yml", True),
+    ("yaml+jinja", False), ("text", False), ("no-such-lexer", False), (None, False),
+])
+def test_what_counts_as_yaml_is_the_highlighters_yaml_lexer(lang, yaml):
+    assert inv.is_yaml_language(lang) is yaml
+
+
+def test_snippets_are_not_expanded(tmp_path):
+    """The one deliberate difference from the site's build: an included file
+    is inventoried on its own, not again in every page that includes it."""
+    (tmp_path / "docs" / "includes").mkdir(parents=True)
+    (tmp_path / "docs" / "includes" / "inc.md").write_text(
+        "```yaml\ndefaults:\n  a: 1\n```\n", encoding="utf-8")
+    (tmp_path / "docs" / "page.md").write_text('--8<-- "includes/inc.md"\n', encoding="utf-8")
+    i = inv.build(tmp_path)
+    assert [u.path for u in i.units] == ["docs/includes/inc.md"]
+    assert "pymdownx.snippets" not in [type(e).__module__ for e in _renderer().md.registeredExtensions]
 
 
 # ── consumers and refusals ───────────────────────────────────────────────────
@@ -363,20 +456,18 @@ def test_a_header_with_a_trailing_note_still_cuts(tmp_path):
 # ── Go parity ────────────────────────────────────────────────────────────────
 
 @pytest.mark.timeout(960)  # CI runs pytest with --timeout=300; the go build + test can take longer
-def test_go_loader_test_agrees_with_the_inventory():
-    """Runs the Go half (pkg/config TestDocsYAMLInventoryParity and the loader
-    tests that take their samples from the inventory) against this checkout.
-    No go is a failure, not a skip: the parity is the point."""
+def test_go_loader_test_reads_the_inventory():
+    """Runs the Go loader tests that take their samples from the inventory's
+    JSON (pkg/config TestDocsDefaults*) against this checkout. No go is a
+    failure, not a skip: Go reading the inventory is the point."""
     go = shutil.which("go")
     if go is None:
-        pytest.fail("`go` is not on PATH: the Go half of the inventory parity cannot run")
+        pytest.fail("`go` is not on PATH: the Go reader of the inventory cannot run")
     env = {**os.environ, "CI": "1"}  # 測試自建的 da-guard 經 go_build.sh（#3425）
     if os.environ.get("DA_GUARD_BINARY"):
         env["DA_GUARD_BINARY"] = os.path.abspath(os.environ["DA_GUARD_BINARY"])
     proc = subprocess.run(  # noqa: S603
-        [go, "test", "-count=1", "-run",
-         "^(TestDocsYAMLInventoryParity|TestExtractYAMLBlocks.*|"
-         "TestDocsDefaults.*|TestDocsYamlSplit.*)$", "./pkg/config/"],
+        [go, "test", "-count=1", "-run", "^TestDocsDefaults.*$", "./pkg/config/"],
         cwd=REPO / "components" / "threshold-exporter" / "app",
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=900, env=env, check=False)

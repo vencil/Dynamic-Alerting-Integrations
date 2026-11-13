@@ -3566,6 +3566,7 @@ GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # about what the gated-job half can vouch for, per filter.
     "ci.yml": {
         ("go", "scripts/ops/ci_flake_retry.py"),
+        ("go", "requirements/ci-constraints.txt"),   # #3814: the docs inventory's renderer
         ("go", "tests/contract/**"),
         ("go", "scripts/ops/go_test_reads.py"),
         # go-tests-oauth2-proxy runs tests/oauth2-proxy/image_config_test.sh.
