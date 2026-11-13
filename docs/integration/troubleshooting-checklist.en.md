@@ -1185,7 +1185,7 @@ It fires when **both** more than 5 tenants have a declared kind with no exporter
 
 ```mermaid
 flowchart TD
-    A[One kind of a tenant's exporters is not answering] --> B{Whole tenant-exporters job absent?}
+    A[One db_type of a tenant has no exporter answering] --> B{Whole tenant-exporters job absent?}
     B -- yes --> J[TenantExporterJobAbsent<br/>this alert stays silent]
     B -- no --> C{More than 5 AND more than 10%?}
     C -- yes --> M[MassExporterOutage:<br/>treat as ONE incident, find the common cause]
