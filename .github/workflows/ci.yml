@@ -904,6 +904,11 @@ jobs:
           # is why the gate lives here rather than only in local pre-commit.
           # Fail-closed: an unfetched tag is exit 2, never a silent pass.
           pre-commit run image-pin-capability-check --all-files
+          # #1269: a git-only chart whose PACKAGED content changed must raise
+          # `version` (helm package on both sides, compared file by file). On a
+          # push to main it compares with HEAD^1, which is the one place two PRs
+          # that each bumped to the same version are seen together.
+          pre-commit run chart-version-bump --all-files
           # The same image carrier, from the source side (#1503): build.sh ↔
           # COMMAND_MAP, the shipped set's transitive imports / data files, and
           # the layout-depth rule (a shipped tool must not locate repo files by
