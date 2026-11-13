@@ -175,6 +175,9 @@ ENGLISH_ONLY: dict[str, str] = {
     "pair_bench_ratio.py": _R_DX,
     "paired_trend_watch.py": _R_DX,
     "render_soak_diff.py": _R_DX,
+    # #3799: maintainer runs it on a Renovate PR branch; output is file paths,
+    # image refs and the go/make commands it runs.
+    "renovate_fixup.py": _R_DX,
     "reword_chain.py": _R_DX,
     "run_chaos_soak.py": _R_DX,
     "scaffold_lint.py": _R_DX,
