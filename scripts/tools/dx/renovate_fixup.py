@@ -53,9 +53,9 @@ import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 
 DA_READ_DIR = "components/da-read"
-OAUTH2_TESTS_DIR = "tests/oauth2-proxy"
-OAUTH2_MODULE = "github.com/oauth2-proxy/oauth2-proxy/v7"
-OAUTH2_CHART_VALUES = "helm/tenant-api/values.yaml"
+PROXY_LIB_TESTS_DIR = "tests/oauth2-proxy"
+PROXY_LIB_MODULE = "github.com/oauth2-proxy/oauth2-proxy/v7"
+PROXY_CHART_VALUES = "helm/tenant-api/values.yaml"
 FEDERATION_COMPOSE = "tests/federation-e2e/docker-compose.yml"
 TRY_LOCAL_COMPOSE = "try-local/docker-compose.yaml"
 SCAN_WORKFLOW = ".github/workflows/nightly-image-scan.yaml"
@@ -72,8 +72,8 @@ _GO_TIMEOUT_S = 600
 # run `npm ci`.
 _MAKE_TIMEOUT_S = 1800
 
-_OAUTH2_REQUIRE = re.compile(
-    r"(?m)^(?:require\s+|\t)" + re.escape(OAUTH2_MODULE) + r" (v\S+)$")
+_PROXY_LIB_REQUIRE = re.compile(
+    r"(?m)^(?:require\s+|\t)" + re.escape(PROXY_LIB_MODULE) + r" (v\S+)$")
 
 
 class FixupError(Exception):
@@ -144,17 +144,17 @@ def federation_e2e_expected(repo: Path) -> dict[str, str]:
     }
 
 
-def oauth2_chart_tag(repo: Path) -> str:
+def proxy_chart_tag(repo: Path) -> str:
     """The oauth2-proxy image tag the tenant-api chart deploys."""
-    image = _chart_image(repo, OAUTH2_CHART_VALUES, "oauth2Proxy")
+    image = _chart_image(repo, PROXY_CHART_VALUES, "oauth2Proxy")
     return image.rsplit(":", 1)[1]
 
 
-def oauth2_library_version(go_mod: str) -> str:
+def proxy_library_version(go_mod: str) -> str:
     """The oauth2-proxy version tests/oauth2-proxy/go.mod requires directly."""
-    m = _OAUTH2_REQUIRE.search(go_mod)
+    m = _PROXY_LIB_REQUIRE.search(go_mod)
     if m is None:
-        raise FixupError(f"{OAUTH2_TESTS_DIR}/go.mod: no direct require of {OAUTH2_MODULE}")
+        raise FixupError(f"{PROXY_LIB_TESTS_DIR}/go.mod: no direct require of {PROXY_LIB_MODULE}")
     return m.group(1)
 
 
@@ -289,16 +289,16 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def fix_oauth2_library(repo: Path, dry_run: bool) -> None:
-    want = oauth2_chart_tag(repo)
-    have = oauth2_library_version(_read(repo / OAUTH2_TESTS_DIR / "go.mod"))
+def fix_proxy_library(repo: Path, dry_run: bool) -> None:
+    want = proxy_chart_tag(repo)
+    have = proxy_library_version(_read(repo / PROXY_LIB_TESTS_DIR / "go.mod"))
     if have == want:
-        print(f"OK:   {OAUTH2_TESTS_DIR}: {OAUTH2_MODULE} {have} is the chart's tag")
+        print(f"OK:   {PROXY_LIB_TESTS_DIR}: {PROXY_LIB_MODULE} {have} is the chart's tag")
         return
-    print(f"PLAN: {OAUTH2_TESTS_DIR}: {OAUTH2_MODULE} {have} -> {want}")
+    print(f"PLAN: {PROXY_LIB_TESTS_DIR}: {PROXY_LIB_MODULE} {have} -> {want}")
     if not dry_run:
-        _run(["go", "get", f"{OAUTH2_MODULE}@{want}"], repo / OAUTH2_TESTS_DIR, _GO_TIMEOUT_S)
-        _run(["go", "mod", "tidy"], repo / OAUTH2_TESTS_DIR, _GO_TIMEOUT_S)
+        _run(["go", "get", f"{PROXY_LIB_MODULE}@{want}"], repo / PROXY_LIB_TESTS_DIR, _GO_TIMEOUT_S)
+        _run(["go", "mod", "tidy"], repo / PROXY_LIB_TESTS_DIR, _GO_TIMEOUT_S)
 
 
 def fix_federation_compose(repo: Path, dry_run: bool) -> None:
@@ -360,7 +360,7 @@ def main() -> int:
         if not args.dry_run:
             _run(["go", "mod", "tidy"], repo / DA_READ_DIR, _GO_TIMEOUT_S)
         print("STEP 2/5: oauth2-proxy library = tenant-api chart image")
-        fix_oauth2_library(repo, args.dry_run)
+        fix_proxy_library(repo, args.dry_run)
         print("STEP 3/5: federation-e2e compose = deployed images; try-local = scan matrix tags")
         fix_federation_compose(repo, args.dry_run)
         fix_trylocal_compose(repo, args.dry_run)

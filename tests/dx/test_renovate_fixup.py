@@ -44,9 +44,9 @@ def test_federation_mirror_set_and_values_are_the_guards():
     assert ours == {svc: read() for svc, read in guard.MIRRORED.items()}
 
 
-def test_oauth2_tag_is_what_the_go_guard_reads():
-    values = yaml.safe_load((_REPO / fx.OAUTH2_CHART_VALUES).read_text(encoding="utf-8"))
-    assert fx.oauth2_chart_tag(_REPO) == values["oauth2Proxy"]["image"]["tag"]
+def test_proxy_tag_is_what_the_go_guard_reads():
+    values = yaml.safe_load((_REPO / fx.PROXY_CHART_VALUES).read_text(encoding="utf-8"))
+    assert fx.proxy_chart_tag(_REPO) == values["oauth2Proxy"]["image"]["tag"]
 
 
 def test_trylocal_rule_is_the_guards():
@@ -61,8 +61,8 @@ def test_the_repo_needs_no_fixup():
     for svc, image in fx.federation_e2e_expected(_REPO).items():
         _, old = fx.set_compose_image(compose, svc, image)
         assert old == image, svc
-    go_mod = (_REPO / fx.OAUTH2_TESTS_DIR / "go.mod").read_text(encoding="utf-8")
-    assert fx.oauth2_library_version(go_mod) == fx.oauth2_chart_tag(_REPO)
+    go_mod = (_REPO / fx.PROXY_LIB_TESTS_DIR / "go.mod").read_text(encoding="utf-8")
+    assert fx.proxy_library_version(go_mod) == fx.proxy_chart_tag(_REPO)
     trylocal = yaml.safe_load((_REPO / fx.TRY_LOCAL_COMPOSE).read_text(encoding="utf-8"))
     workflow = yaml.safe_load((_REPO / fx.SCAN_WORKFLOW).read_text(encoding="utf-8"))
     assert fx.trylocal_plan(trylocal, fx.scan_matrix_tags(workflow)) == {}
@@ -165,11 +165,11 @@ def test_mirror_rewrite_refuses_a_key_set_change(images):
         fx.set_image_mirror(_JS, images)
 
 
-def test_oauth2_library_version_reads_only_a_direct_require():
-    assert fx.oauth2_library_version(
+def test_proxy_library_version_reads_only_a_direct_require():
+    assert fx.proxy_library_version(
         "require (\n\tgithub.com/oauth2-proxy/oauth2-proxy/v7 v7.15.6\n)\n") == "v7.15.6"
     with pytest.raises(fx.FixupError):
-        fx.oauth2_library_version(
+        fx.proxy_library_version(
             "require (\n\tgithub.com/oauth2-proxy/oauth2-proxy/v7 v7.15.6 // indirect\n)\n")
 
 
@@ -177,7 +177,7 @@ def test_dry_run_writes_nothing(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", ["renovate_fixup.py", "--dry-run"])
     before = {rel: (_REPO / rel).read_bytes() for rel in (
         fx.FEDERATION_COMPOSE, fx.TRY_LOCAL_COMPOSE, fx.IMAGES_JS,
-        f"{fx.OAUTH2_TESTS_DIR}/go.mod", f"{fx.DA_READ_DIR}/go.sum")}
+        f"{fx.PROXY_LIB_TESTS_DIR}/go.mod", f"{fx.DA_READ_DIR}/go.sum")}
     assert fx.main() == 0
     assert "nothing was written" in capsys.readouterr().out
     assert before == {rel: (_REPO / rel).read_bytes() for rel in before}
