@@ -233,7 +233,7 @@ Load pre-written Recording Rules + Alert Rules into your Prometheus to enable dy
 | `prometheus-rules-db2` | `db2-recording.yml`, `db2-alert.yml` | 15R + 10A |
 | `prometheus-rules-clickhouse` | `clickhouse-recording.yml`, `clickhouse-alert.yml` | 12R + 7A |
 | `prometheus-rules-postgresql` | `postgresql-recording.yml`, `postgresql-alert.yml` | 8R + 8A |
-| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 13R + 8A |
+| `prometheus-rules-kafka` | `kafka-recording.yml`, `kafka-alert.yml` | 8R + 5A |
 | `prometheus-rules-rabbitmq` | `rabbitmq-recording.yml`, `rabbitmq-alert.yml` | 14R + 9A |
 | `prometheus-rules-jvm` | `jvm-recording.yml`, `jvm-alert.yml` | 9R + 7A |
 | `prometheus-rules-nginx` | `nginx-recording.yml`, `nginx-alert.yml` | 9R + 6A |

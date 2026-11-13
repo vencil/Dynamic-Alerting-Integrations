@@ -160,7 +160,6 @@ MODE_FIELD = "recommendation_mode"
 #       it, so after a rule-pack rename the mode is not applied and the
 #       drift-guard fails, naming the stale pick (#3017).
 NOT_APPLICABLE_KEYS: dict[str, str] = {
-    "kafka_active_controllers": "期望值==1 不變量",
     "kafka_broker_count": "拓撲下限",
     "rabbitmq_consumers": "整數 count 下限",
 }

@@ -360,9 +360,9 @@ class TestLookupAndPolicies:
             L.LookupKind.KNOWN_DEFERRED, None)
 
     def test_backtest_policy_on_committed_lower_bound_keys(self):
-        """#3017 的 4 個下界 key 全都能回測，且方向是 below。"""
+        """#3017 的下界 key（#3783 後剩 3 個）全都能回測，且方向是 below。"""
         m = L.load_observed_map()
-        for k in ("db2_bufferpool_hit_ratio", "kafka_active_controllers",
+        for k in ("db2_bufferpool_hit_ratio",
                   "kafka_broker_count", "rabbitmq_consumers"):
             series, direction, why = L.usable_for_backtest(m[k])
             assert (direction, why) == ("below", None) and series, k
@@ -833,19 +833,19 @@ class TestStringSafety:
 # #916 Item A — lower-bound (<) three-state classification
 # ---------------------------------------------------------------------------
 
-# A ``<`` alert on a NOT_APPLICABLE_KEYS key (kafka_active_controllers).
+# A ``<`` alert on a NOT_APPLICABLE_KEYS key (kafka_broker_count).
 PACK_NA_KEY = """
 groups:
   - name: g
     rules:
-      - record: tenant:kafka_active_controllers:max
-        expr: max by(tenant) (kafka_active_controllers)
-      - record: tenant:alert_threshold:kafka_active_controllers
-        expr: max by(tenant) (user_threshold{metric="kafka_active_controllers"})
-      - alert: KafkaControllersLow
+      - record: tenant:kafka_broker_count:max
+        expr: max by(tenant) (kafka_brokers)
+      - record: tenant:alert_threshold:kafka_broker_count
+        expr: max by(tenant) (user_threshold{metric="kafka_broker_count"})
+      - alert: KafkaBrokersLow
         expr: |
-          tenant:kafka_active_controllers:max
-          < on(tenant) group_left tenant:alert_threshold:kafka_active_controllers
+          tenant:kafka_broker_count:max
+          < on(tenant) group_left tenant:alert_threshold:kafka_broker_count
 """
 
 # A ``<`` alert on the LOWER_BOUND_RESOLVED key with the dict-specified series.
@@ -941,19 +941,19 @@ class TestLowerBoundGateOnAmbiguousAlerts:
 class TestLowerBoundClassification:
     def test_not_applicable_key_gets_mode_and_keeps_fields(self, tmp_path):
         m = L.build_map([_write_pack(tmp_path, "rule-pack-kafka.yaml", PACK_NA_KEY)])
-        e = m["kafka_active_controllers"]
+        e = m["kafka_broker_count"]
         assert e[L.MODE_FIELD] == "not-applicable"
         assert not e.get("needs_review")
         assert e["direction"] == "<"                    # direction kept
         # #3017: the compared series is a fact (backtest replays it); the mode
         # is recommender policy only. observed_series XOR candidates.
-        assert e["observed_series"] == "tenant:kafka_active_controllers:max"
+        assert e["observed_series"] == "tenant:kafka_broker_count:max"
         assert "candidates" not in e
         assert L._NOT_APPLICABLE_MARKER in e["reason"]
         assert "lower-bound (<)" not in e["reason"]      # must not collide with T3 marker
         series, why = L.usable_for_recommend(e)
         assert series is None and L._NOT_APPLICABLE_MARKER in why
-        assert L.usable_for_backtest(e) == ("tenant:kafka_active_controllers:max", "below", None)
+        assert L.usable_for_backtest(e) == ("tenant:kafka_broker_count:max", "below", None)
 
     def test_resolved_key_gets_series_and_percentile_lower(self, tmp_path):
         m = L.build_map([_write_pack(tmp_path, "rule-pack-db2.yaml", PACK_RESOLVED_KEY)])
@@ -982,19 +982,19 @@ class TestLowerBoundClassification:
     def test_not_applicable_key_without_its_mode_is_error(self, tmp_path):
         p = _write_pack(tmp_path, "rule-pack-kafka.yaml", PACK_NA_KEY)
         m = L.build_map([p])
-        del m["kafka_active_controllers"][L.MODE_FIELD]
+        del m["kafka_broker_count"][L.MODE_FIELD]
         errs = L.check_consistency(m, [p])["errors"]
         assert any("NOT_APPLICABLE_KEYS but recommendation_mode" in x for x in errs), errs
 
     def test_committed_map_classification_pin(self):
-        # DATA-PIN: the committed map's four `<` entries carry exactly the #916
+        # DATA-PIN: the committed map's three `<` entries carry exactly the #916
         # classification (regen output pinned so a silent drift fails here).
         m = L.load_observed_map()  # raises when absent (#3017): never a skip
         db2 = m["db2_bufferpool_hit_ratio"]
         assert db2[L.MODE_FIELD] == "percentile-lower"
         assert db2["observed_series"] == "tenant:db2_bufferpool_hit_ratio:min"
         assert not db2.get("needs_review")
-        for na in ("kafka_active_controllers", "kafka_broker_count", "rabbitmq_consumers"):
+        for na in ("kafka_broker_count", "rabbitmq_consumers"):
             e = m[na]
             assert e[L.MODE_FIELD] == "not-applicable", na
             assert not e.get("needs_review"), na
@@ -1007,7 +1007,7 @@ class TestLowerBoundClassification:
         committed = L.load_observed_map()  # raises when absent (#3017): never a skip
         fresh = L.build_map(L.default_pack_paths())
         merged, _w, _s = L.merge_maps(committed, fresh)
-        for k in ("db2_bufferpool_hit_ratio", "kafka_active_controllers",
+        for k in ("db2_bufferpool_hit_ratio",
                   "kafka_broker_count", "rabbitmq_consumers"):
             assert merged[k] == committed[k], f"{k} not idempotent"
 

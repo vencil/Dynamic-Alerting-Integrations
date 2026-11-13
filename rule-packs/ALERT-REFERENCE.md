@@ -88,10 +88,7 @@ lang: zh
 | KafkaHighConsumerLagCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical consumer lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_consumer_lag:max |
 | KafkaUnderReplicatedPartitions | warning | 靜音 | [tier] {{ $labels.tenant }}: under-replicated partitions  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:sum |
 | KafkaUnderReplicatedPartitionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical under-replication  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_under_replicated_partitions:sum |
-| KafkaNoActiveController | critical | 靜音 | [tier] {{ $labels.tenant }}: no active Kafka controller  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_active_controllers:max |
 | KafkaLowBrokerCount | warning | 靜音 | [tier] {{ $labels.tenant }}: broker count below minimum  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_broker_count:max |
-| KafkaHighRequestRate | warning | 靜音 | [tier] {{ $labels.tenant }}: message rate threshold exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_request_rate:sum |
-| KafkaHighRequestRateCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical message rate  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:kafka_request_rate:sum |
 
 ---
 

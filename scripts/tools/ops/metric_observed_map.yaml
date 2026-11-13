@@ -168,13 +168,6 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:jvm_threads:current
-  kafka_active_controllers:
-    pack: rule-pack-kafka.yaml
-    scope: tenant
-    direction: <
-    observed_series: tenant:kafka_active_controllers:max
-    recommendation_mode: not-applicable
-    reason: by-design not-applicable — 期望值==1 不變量 (#916)
   kafka_broker_count:
     pack: rule-pack-kafka.yaml
     scope: tenant
@@ -192,16 +185,6 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:kafka_consumer_lag:max
-  kafka_request_rate:
-    pack: rule-pack-kafka.yaml
-    scope: tenant
-    direction: '>'
-    observed_series: tenant:kafka_request_rate:sum
-  kafka_request_rate_critical:
-    pack: rule-pack-kafka.yaml
-    scope: tenant
-    direction: '>'
-    observed_series: tenant:kafka_request_rate:sum
   kafka_under_replicated_partitions:
     pack: rule-pack-kafka.yaml
     scope: tenant

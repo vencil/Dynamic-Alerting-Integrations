@@ -937,7 +937,7 @@ class TestAlertComparison:
         assert (r["risk"], r["old_breach_count"]) == ("MEDIUM", 2)
 
     def test_lower_bound_enable_counts_new_below(self, monkeypatch):
-        r, _ = self._run(monkeypatch, "kafka_active_controllers", [0, 1, 1, 1], None, "1")
+        r, _ = self._run(monkeypatch, "kafka_broker_count", [2, 3, 3, 3], None, "3")
         assert r["new_breach_count"] == 1
 
     def test_upper_bound_key_unchanged(self, monkeypatch):
