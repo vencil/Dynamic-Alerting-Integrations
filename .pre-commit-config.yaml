@@ -1866,6 +1866,19 @@ repos:
         # enumerating carriers and being wrong about one.
         files: .
 
+      - id: chart-version-bump
+        name: "chart version bump — a git-only chart whose packaged content changed must raise `version` (#1269)"
+        # Compares each git-only chart's package with the package at the commit
+        # that first carried its version (helm package on both sides, file by
+        # file): a Chart.yaml comment or a .helmignore'd file needs no bump, a
+        # changed default or a deleted template does. Charts a release line
+        # pushes are listed and skipped — NOT checked anywhere yet (see the
+        # script). Needs history back to each version's first commit.
+        entry: python3 -X utf8 scripts/tools/lint/check_chart_version_bump.py
+        language: python
+        pass_filenames: false
+        files: ^(helm/|scripts/tools/lint/check_chart_(version_bump|package_contents|ship_surface)\.py$)
+
       - id: devcontainer-dep-parity
         name: "dev container must declare every Python dep CI installs (#1254)"
         entry: python3 -X utf8 scripts/tools/lint/check_devcontainer_dep_parity.py
