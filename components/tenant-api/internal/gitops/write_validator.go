@@ -32,6 +32,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // ProposedFile is one file a write is about to commit: Path relative to
@@ -292,7 +294,7 @@ func (w *Writer) restoreFromHEAD(filePath string) error {
 	if err != nil {
 		return errors.Join(fmt.Errorf("read HEAD's blob: %w", err), rerr)
 	}
-	if err := writeFileAtomic(filePath, blob, 0644); err != nil {
+	if err := writeFileAtomic(filePath, blob, cfg.ConfDFileMode); err != nil {
 		return errors.Join(err, rerr)
 	}
 	return rerr

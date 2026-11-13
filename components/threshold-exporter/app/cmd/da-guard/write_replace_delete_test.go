@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 const tenantsT3 = `{"map":[["tenants",{"map":[["t3",{"map":[["cpu",{"int":"5"}]]}]]}]]}`
@@ -27,7 +29,7 @@ func seenAsRead(abs string) ([]byte, os.FileInfo, bool, error) {
 	return d, fi, regular, err
 }
 
-func TestWrite_ReplaceWritesTheWholeTextAndKeepsTheMode(t *testing.T) {
+func TestWrite_ReplaceWritesTheWholeTextInConfDFileMode(t *testing.T) {
 	old := "# old header\r\ntenants:\r\n  t3:\r\n    cpu: 1 # old\r\n    mem: 2\r\n"
 	root := writeTree(t, map[string]string{"t.yaml": old})
 	abs := filepath.Join(root, "t.yaml")
@@ -49,8 +51,8 @@ func TestWrite_ReplaceWritesTheWholeTextAndKeepsTheMode(t *testing.T) {
 	if got := snapshot(t, root); len(got) != 1 || got["t.yaml"] != want {
 		t.Fatalf("tree %q", got)
 	}
-	if fi, err := os.Stat(abs); err != nil || fi.Mode().Perm() != 0o640 {
-		t.Fatalf("mode %v %v, want the original's 0640", fi, err)
+	if fi, err := os.Stat(abs); err != nil || fi.Mode().Perm() != config.ConfDFileMode {
+		t.Fatalf("mode %v %v, want config.ConfDFileMode, not the original's 0640 (#3535)", fi, err)
 	}
 	// The same text again is unchanged: nothing written, the file as it is.
 	before, _ := os.Stat(abs)
@@ -73,8 +75,8 @@ func TestWrite_ReplaceOfAMissingPathIsACreate(t *testing.T) {
 	if got := snapshot(t, root)["new/t.yaml"]; got != "tenants:\n  t3:\n    cpu: 5\n" {
 		t.Fatalf("written %q", got)
 	}
-	if fi, err := os.Stat(filepath.Join(root, "new", "t.yaml")); err != nil || fi.Mode().Perm() != 0o600 {
-		t.Fatalf("mode %v %v, want a create's 0600", fi, err)
+	if fi, err := os.Stat(filepath.Join(root, "new", "t.yaml")); err != nil || fi.Mode().Perm() != config.ConfDFileMode {
+		t.Fatalf("mode %v %v, want a create's config.ConfDFileMode (#3535)", fi, err)
 	}
 }
 
