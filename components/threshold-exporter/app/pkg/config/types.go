@@ -119,7 +119,7 @@ type TenantMetadata struct {
 	Environment string   `yaml:"environment"` // v2.5.0: production | staging | development
 	Region      string   `yaml:"region"`      // v2.5.0: cloud region (e.g., ap-northeast-1)
 	Domain      string   `yaml:"domain"`      // v2.5.0: business domain (e.g., finance, cache)
-	DBType      string   `yaml:"db_type"`     // v2.5.0: database type (e.g., mariadb, postgresql)
+	DBType      DBTypes  `yaml:"db_type"`     // v2.5.0: database type(s); #3771: a string or a list (db_types.go)
 	Tags        []string `yaml:"tags"`        // v2.5.0: free-form tags for ad-hoc filtering
 	Groups      []string `yaml:"groups"`      // v2.5.0: group memberships (references _groups.yaml)
 }
@@ -134,7 +134,7 @@ type ResolvedMetadata struct {
 	Environment string
 	Region      string
 	Domain      string
-	DBType      string
+	DBType      DBTypes // #3771: every declared kind; nil = not declared
 	Tags        []string
 	Groups      []string
 }

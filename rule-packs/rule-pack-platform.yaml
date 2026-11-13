@@ -2017,8 +2017,8 @@ groups:
       # --- Mass exporter outage: page-storm sentinel (#869, scale guard) ---
       # When a shared dependency (node pool, network partition, registry
       # outage on a rolling restart) knocks out MANY tenants' exporters at
-      # once, TenantExporterAbsent fans out into one critical PER tenant — a
-      # page storm. This single sentinel collapses that into ONE actionable
+      # once, TenantExporterAbsent fans out into one critical PER (tenant,
+      # db_type) — a page storm. This single sentinel collapses that into ONE actionable
       # page. It mirrors the DefaultsTruncationStorm idiom (above): aggregate
       # the RAW anti-join expression (NOT the alertname — `count(...)(Foo)` is
       # not valid PromQL, and there is no ALERTS{} idiom in this repo), and use
@@ -2029,7 +2029,14 @@ groups:
       # would split each count PER db_type and the ratio below would degrade into
       # per-db_type ratios. Dropping db_type too yields one mixed-DB count / one
       # mixed-DB total. Counting the raw expression (not ALERTS) also means it
-      # fires WITHOUT waiting for TenantExporterAbsent's for:3m per tenant. The
+      # fires WITHOUT waiting for TenantExporterAbsent's for:3m per tenant.
+      # UNIT (#3771): the anti-join is TenantExporterAbsent's own —
+      # `unless on(tenant, db_type) tenant:exporter_present` (the presence
+      # recording rules live in rule-pack-liveness.yaml) — so both counts are
+      # of (tenant, db_type) PAIRS, not tenants: a tenant declaring
+      # [mariadb, redis] adds 2 to the denominator, and 1 to the numerator when
+      # only its mariadb exporter is gone. The floor (> 5) and ratio (> 0.1)
+      # below are therefore pairs, and the summary says so. The
       # `without(...)` form + no tenant label is exactly why this cannot live in
       # rule-packs/ (lint_custom_rules denies `without(tenant)` and mandates a
       # tenant label).
@@ -2072,10 +2079,10 @@ groups:
       - alert: MassExporterOutage
         expr: |
           (
-            count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant) (up{job="tenant-exporters"} == 1)) > 5
+            count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant, db_type) tenant:exporter_present) > 5
             and
             (
-              count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant) (up{job="tenant-exporters"} == 1))
+              count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant, db_type) tenant:exporter_present)
               /
               count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter))
             ) > 0.1
@@ -2086,10 +2093,12 @@ groups:
           severity: critical
           alert_source: platform
         annotations:
-          summary: "Mass exporter outage ({{ $value }} tenants) — shared-dependency failure suspected"
+          summary: "Mass exporter outage ({{ $value }} tenant × db_type pairs) — shared-dependency failure suspected"
           description: |
-            More than 5 tenants AND over 10% of the expected-exporter fleet
-            simultaneously have no healthy up{job="tenant-exporters"}==1 target.
+            More than 5 (tenant, db_type) pairs AND over 10% of the declared
+            (tenant, db_type) pairs simultaneously have no exporter of that
+            db_type answering under job="tenant-exporters"
+            (tenant:exporter_present absent).
             Both conditions together mean this is almost certainly a SHARED
             failure (node pool drained, network partition, image-pull outage on a
             rolling restart) rather than N independent exporter deaths or a

@@ -26,16 +26,19 @@ type TenantSummary struct {
 	// Raw `_silent_mode` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.
 	SilentMode string `json:"silent_mode,omitempty"`
 	// Raw `_state_maintenance` value from the tenant's own config file, not the tenant's state (see config_derived); omitted when config_derived cannot be derived.
-	Maintenance string   `json:"maintenance,omitempty"`
-	Profile     string   `json:"profile,omitempty"`
-	Environment string   `json:"environment,omitempty"`
-	Region      string   `json:"region,omitempty"`
-	Tier        string   `json:"tier,omitempty"`
-	Domain      string   `json:"domain,omitempty"`
-	DBType      string   `json:"db_type,omitempty"`
-	Owner       string   `json:"owner,omitempty"`
-	Tags        []string `json:"tags,omitempty"`
-	Groups      []string `json:"groups,omitempty"`
+	Maintenance string `json:"maintenance,omitempty"`
+	Profile     string `json:"profile,omitempty"`
+	Environment string `json:"environment,omitempty"`
+	Region      string `json:"region,omitempty"`
+	Tier        string `json:"tier,omitempty"`
+	Domain      string `json:"domain,omitempty"`
+	// Every database kind the tenant declares in `_metadata.db_type`, in the
+	// order written (#3771: the config takes a string or a list; a string is
+	// one kind). Omitted when none is declared.
+	DBType []string `json:"db_type,omitempty"`
+	Owner  string   `json:"owner,omitempty"`
+	Tags   []string `json:"tags,omitempty"`
+	Groups []string `json:"groups,omitempty"`
 
 	// ConfigError is set on a DEGRADED row (#1680): the tenant's conf.d file
 	// exists but is not usable, so every other field except ID is empty —
@@ -444,7 +447,9 @@ func setMetadata(summary *TenantSummary, meta cfg.ResolvedMetadata) {
 	summary.Region = meta.Region
 	summary.Tier = meta.Tier
 	summary.Domain = meta.Domain
-	summary.DBType = meta.DBType
+	if len(meta.DBType) > 0 {
+		summary.DBType = meta.DBType
+	}
 	summary.Owner = meta.Owner
 	if len(meta.Tags) > 0 {
 		summary.Tags = meta.Tags

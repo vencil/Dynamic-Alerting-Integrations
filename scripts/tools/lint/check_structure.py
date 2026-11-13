@@ -68,6 +68,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_confedit.py",  # #3206: a tool's change of an existing conf.d file, sent to `da-guard write` (ADR-036 §2)
     "_lib_consumer_read.py",  # #3206: a manifest / Alertmanager config read the consumer's way (da-crdecode / da-read, ADR-036 §12)
     "_lib_metric_sources.py",  # #1595 D1b: metric family → source table; operator-generate's portability derivation
+    "_lib_exporter_presence.py",  # #3771: db_type → exporter presence metric table; liveness pack generated block
     "_lib_doc_yaml_inventory.py",  # #3416: the one inventory of the docs' ```yaml examples (drift / unit-sanity lints, Go loader test)
     "metric-dictionary.yaml",
     "validate_all.py",

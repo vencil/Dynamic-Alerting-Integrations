@@ -248,6 +248,28 @@ class TestEvaluateOperator:
         """非數值比較回傳 False。"""
         assert pe._evaluate_operator("gte", "abc", "def") is False
 
+    @pytest.mark.parametrize("op,expected_val,want_one,want_two", [
+        ("equals", "mariadb", True, True),
+        ("equals", "redis", False, True),
+        ("not_equals", "mariadb", False, False),
+        ("not_equals", "redis", True, False),
+        ("matches", "^red", False, True),
+        ("one_of", ["redis", "kafka"], False, True),
+        ("contains", "maria", True, True),
+    ])
+    def test_list_value_is_read_element_by_element(self, op, expected_val, want_one, want_two):
+        """#3771：db_type 以 list 送出；一元素 list 等同原本的純量，多元素逐元素比
+        （not_equals 要每個元素都不等，其餘任一元素成立即成立）。"""
+        assert pe._evaluate_operator(op, ["mariadb"], expected_val) is want_one
+        assert pe._evaluate_operator(op, ["mariadb", "redis"], expected_val) is want_two
+        # 一元素 list 與原本的純量同讀
+        assert pe._evaluate_operator(op, "mariadb", expected_val) is want_one
+
+    def test_empty_list_value(self):
+        """空 list：沒有元素成立；not_equals 恆成立。"""
+        assert pe._evaluate_operator("equals", [], "x") is False
+        assert pe._evaluate_operator("not_equals", [], "x") is True
+
 
 # ═══════════════════════════════════════════════════════════════════
 # TestEvaluateWhen

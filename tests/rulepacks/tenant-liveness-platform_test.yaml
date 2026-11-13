@@ -33,6 +33,8 @@
 #                     so the ratio sentinel is never the sole dependency.
 rule_files:
   - ../../rule-packs/rule-pack-platform.yaml
+  # MassExporterOutage reads tenant:exporter_present, recorded by the liveness pack (#3771).
+  - ../../rule-packs/rule-pack-liveness.yaml
 
 evaluation_interval: 30s
 
@@ -123,8 +125,10 @@ tests:
               alert_source: platform
             exp_annotations:
               description: |
-                More than 5 tenants AND over 10% of the expected-exporter fleet
-                simultaneously have no healthy up{job="tenant-exporters"}==1 target.
+                More than 5 (tenant, db_type) pairs AND over 10% of the declared
+                (tenant, db_type) pairs simultaneously have no exporter of that
+                db_type answering under job="tenant-exporters"
+                (tenant:exporter_present absent).
                 Both conditions together mean this is almost certainly a SHARED
                 failure (node pool drained, network partition, image-pull outage on a
                 rolling restart) rather than N independent exporter deaths or a
@@ -134,7 +138,7 @@ tests:
                 the fanned-out TenantExporterAbsent alerts. If instead the WHOLE
                 tenant-exporters job is gone, TenantExporterJobAbsent fires instead.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage"
-              summary: "Mass exporter outage (8 tenants) — shared-dependency failure suspected"
+              summary: "Mass exporter outage (8 tenant × db_type pairs) — shared-dependency failure suspected"
 
   - interval: 30s
     name: mass-job-absent-8-expected-silent-jobabsent-fires
@@ -206,9 +210,18 @@ tests:
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="f01", instance="f01:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="f01", instance="f01:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="f02", instance="f02:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="f02", instance="f02:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="f03", instance="f03:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="f03", instance="f03:9104"}'
         values: '1x12'
     alert_rule_test:
       - eval_time: 4m
@@ -345,113 +358,278 @@ tests:
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r007", instance="r007:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r007", instance="r007:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r008", instance="r008:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r008", instance="r008:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r009", instance="r009:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r009", instance="r009:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r010", instance="r010:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r010", instance="r010:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r011", instance="r011:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r011", instance="r011:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r012", instance="r012:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r012", instance="r012:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r013", instance="r013:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r013", instance="r013:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r014", instance="r014:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r014", instance="r014:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r015", instance="r015:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r015", instance="r015:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r016", instance="r016:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r016", instance="r016:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r017", instance="r017:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r017", instance="r017:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r018", instance="r018:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r018", instance="r018:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r019", instance="r019:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r019", instance="r019:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r020", instance="r020:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r020", instance="r020:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r021", instance="r021:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r021", instance="r021:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r022", instance="r022:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r022", instance="r022:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r023", instance="r023:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r023", instance="r023:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r024", instance="r024:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r024", instance="r024:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r025", instance="r025:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r025", instance="r025:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r026", instance="r026:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r026", instance="r026:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r027", instance="r027:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r027", instance="r027:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r028", instance="r028:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r028", instance="r028:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r029", instance="r029:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r029", instance="r029:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r030", instance="r030:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r030", instance="r030:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r031", instance="r031:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r031", instance="r031:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r032", instance="r032:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r032", instance="r032:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r033", instance="r033:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r033", instance="r033:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r034", instance="r034:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r034", instance="r034:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r035", instance="r035:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r035", instance="r035:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r036", instance="r036:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r036", instance="r036:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r037", instance="r037:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r037", instance="r037:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r038", instance="r038:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r038", instance="r038:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r039", instance="r039:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r039", instance="r039:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r040", instance="r040:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r040", instance="r040:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r041", instance="r041:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r041", instance="r041:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r042", instance="r042:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r042", instance="r042:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r043", instance="r043:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r043", instance="r043:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r044", instance="r044:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r044", instance="r044:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r045", instance="r045:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r045", instance="r045:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r046", instance="r046:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r046", instance="r046:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r047", instance="r047:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r047", instance="r047:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r048", instance="r048:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r048", instance="r048:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r049", instance="r049:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r049", instance="r049:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r050", instance="r050:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r050", instance="r050:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r051", instance="r051:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r051", instance="r051:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r052", instance="r052:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r052", instance="r052:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r053", instance="r053:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r053", instance="r053:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r054", instance="r054:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r054", instance="r054:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r055", instance="r055:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r055", instance="r055:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r056", instance="r056:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r056", instance="r056:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r057", instance="r057:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r057", instance="r057:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r058", instance="r058:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r058", instance="r058:9104"}'
         values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r059", instance="r059:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r059", instance="r059:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r060", instance="r060:9104"}'
         values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r060", instance="r060:9104"}'
+        values: '1x12'
       - series: 'up{job="tenant-exporters", tenant="r061", instance="r061:9104"}'
+        values: '1x12'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="r061", instance="r061:9104"}'
         values: '1x12'
     alert_rule_test:
       - eval_time: 4m

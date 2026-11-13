@@ -13,20 +13,43 @@ metadata:
     app: prometheus
     rule-pack: liveness
 data:
+  liveness-recording.yml: "groups:\n- name: tenant-liveness-presence\n  rules:\n \
+    \ - record: tenant:exporter_present\n    expr: group by(tenant) (mysql_up{job=\"\
+    tenant-exporters\"})\n    labels:\n      db_type: mariadb\n  - record: tenant:exporter_present\n\
+    \    expr: group by(tenant) (pg_up{job=\"tenant-exporters\"})\n    labels:\n \
+    \     db_type: postgresql\n  - record: tenant:exporter_present\n    expr: group\
+    \ by(tenant) (redis_up{job=\"tenant-exporters\"})\n    labels:\n      db_type:\
+    \ redis\n  - record: tenant:exporter_present\n    expr: group by(tenant) (mongodb_up{job=\"\
+    tenant-exporters\"})\n    labels:\n      db_type: mongodb\n  - record: tenant:exporter_present\n\
+    \    expr: group by(tenant) (elasticsearch_exporter_build_info{job=\"tenant-exporters\"\
+    })\n    labels:\n      db_type: elasticsearch\n  - record: tenant:exporter_present\n\
+    \    expr: group by(tenant) (oracledb_up{job=\"tenant-exporters\"})\n    labels:\n\
+    \      db_type: oracle\n  - record: tenant:exporter_present\n    expr: group by(tenant)\
+    \ (db2_up{job=\"tenant-exporters\"})\n    labels:\n      db_type: db2\n  - record:\
+    \ tenant:exporter_present\n    expr: group by(tenant) (ClickHouseMetrics_TCPConnection{job=\"\
+    tenant-exporters\"})\n    labels:\n      db_type: clickhouse\n  - record: tenant:exporter_present\n\
+    \    expr: group by(tenant) (kafka_brokers{job=\"tenant-exporters\"})\n    labels:\n\
+    \      db_type: kafka\n  - record: tenant:exporter_present\n    expr: group by(tenant)\
+    \ (rabbitmq_up{job=\"tenant-exporters\"} or rabbitmq_identity_info{job=\"tenant-exporters\"\
+    })\n    labels:\n      db_type: rabbitmq\n"
   liveness-alert.yml: "groups:\n- name: tenant-liveness\n  rules:\n  - alert: TenantExporterAbsent\n\
-    \    expr: max without(instance, pod) (tenant_expected_exporter) unless on(tenant)\
-    \ (up{job=\"tenant-exporters\"} == 1)\n    for: 3m\n    labels:\n      maintenance:\
+    \    expr: max without(instance, pod) (tenant_expected_exporter) unless on(tenant,\
+    \ db_type) tenant:exporter_present\n    for: 3m\n    labels:\n      maintenance:\
     \ page\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: No healthy up{job=\"tenant-exporters\"}==1 target for tenant\
-    \ {{ $labels.tenant }} (db_type={{ $labels.db_type }}) for 3m. Either the exporter\
-    \ pod is down (up=0, Service alive) or the tenant's scrape target was removed\
-    \ (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata\
-    \ was removed too (otherwise this is a stale-config false positive).\n      description_zh:\
-    \ 租戶 {{ $labels.tenant }} (db_type={{ $labels.db_type }}) 已 3 分鐘沒有健康的 up{job=\"\
-    tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target\
-    \ 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。\n     \
-    \ owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
+    \      description: No {{ $labels.db_type }} exporter of tenant {{ $labels.tenant\
+    \ }} has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"\
+    {{ $labels.db_type }}\"} is absent; other exporter kinds of the tenant may still\
+    \ be up). Either the exporter pod is down (up=0, Service alive) or the tenant's\
+    \ scrape target was removed (series absent). If the tenant no longer runs {{ $labels.db_type\
+    \ }}, remove it from _metadata.db_type; if the tenant was de-provisioned, remove\
+    \ its conf.d _metadata too (otherwise this is a stale-config false positive).\n\
+    \      description_zh: 租戶 {{ $labels.tenant }} 的 {{ $labels.db_type }} exporter\
+    \ 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（tenant:exporter_present{db_type=\"\
+    {{ $labels.db_type }}\"} 缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service\
+    \ 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 {{ $labels.db_type }}，請從 _metadata.db_type\
+    \ 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。\n      owner: '{{ with\
+    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
+    \ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
     \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
     \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
     \ Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.db_type }})\n  \
@@ -34,24 +57,28 @@ data:
     \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
     \  - alert: TenantExporterReplicaDown\n    expr: '(up{job=\"tenant-exporters\"\
-    } == 0) and on(tenant) (up{job=\"tenant-exporters\"} == 1)\n\n      unless on(tenant)\n\
-    \n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for:\
-    \ 10m\n    labels:\n      maintenance: mute\n      severity: warning\n      tenant:\
+    } == 0) and on(tenant) (up{job=\"tenant-exporters\"} == 1)\n\n      and on(tenant)\
+    \ group by(tenant) (tenant_expected_exporter)\n\n      unless on(tenant)\n\n \
+    \     (user_state_filter{filter=\"maintenance\"} == 1)\n\n      '\n    for: 10m\n\
+    \    labels:\n      maintenance: mute\n      severity: warning\n      tenant:\
     \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Target {{ $labels.instance\
     \ }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tenant\
     \ }} has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"\
     } target of the same tenant reads up=1. That target may belong to a different\
     \ Service: if {{ with $labels.service }}Service {{ . }}{{ else }}its Service{{\
-    \ end }} has no other replica, its metrics are no longer scraped at all, and TenantExporterAbsent\
-    \ stays silent while another Service of the tenant is up (multi-Service gap: #3771).\
-    \ If every target of the tenant goes down, this alert resolves; TenantExporterAbsent\
-    \ (critical) takes over only for tenants that declare db_type in _metadata, otherwise\
-    \ nothing fires.'\n      description_zh: '租戶 {{ $labels.tenant }} 的 target {{\
-    \ $labels.instance }}{{ with $labels.pod }}（pod {{ . }}）{{ end }}已 10 分鐘 up=0，同時同租戶仍有至少一個\
-    \ up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若{{ with\
-    \ $labels.service }} Service {{ . }} {{ else }}該 Service {{ end }}沒有其他副本，它的指標已完全沒被抓取，而只要租戶的另一個\
-    \ Service 還是 up，TenantExporterAbsent 也不會響（多 Service 的缺口見 #3771）。若租戶所有 target 都掛，本告警會解除；只有在\
-    \ _metadata 宣告了 db_type 的租戶才會改由 TenantExporterAbsent（critical）接手，沒宣告的租戶此時沒有任何告警。'\n\
+    \ end }} has no other replica, its metrics are no longer scraped at all. When\
+    \ it was the only exporter of one of the tenant''s declared db_types, TenantExporterAbsent\
+    \ (critical) fires for that db_type as well; when another Service of the same\
+    \ db_type is still up, this warning is the only signal. If every target of the\
+    \ tenant goes down, this alert resolves and TenantExporterAbsent takes over. Only\
+    \ tenants that declare db_type in _metadata get this alert; an undeclared tenant\
+    \ gets TenantExporterUndeclared instead.'\n      description_zh: 租戶 {{ $labels.tenant\
+    \ }} 的 target {{ $labels.instance }}{{ with $labels.pod }}（pod {{ . }}）{{ end\
+    \ }}已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target\
+    \ 可能屬於別的 Service：若{{ with $labels.service }} Service {{ . }} {{ else }}該 Service\
+    \ {{ end }}沒有其他副本，它的指標已完全沒被抓取。它若是租戶宣告的某個 db_type 唯一的 exporter，TenantExporterAbsent（critical）也會對那個\
+    \ db_type 響；同一個 db_type 若還有別的 Service 是 up，本告警就是唯一的訊號。若租戶所有 target 都掛，本告警會解除，改由\
+    \ TenantExporterAbsent 接手。只有在 _metadata 宣告了 db_type 的租戶才會收到本告警；沒宣告的租戶改收 TenantExporterUndeclared。\n\
     \      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
@@ -61,4 +88,25 @@ data:
     \    summary_zh: 租戶 {{ $labels.tenant }} 的 exporter target {{ $labels.instance\
     \ }} 停機（同租戶仍有其他 tenant-exporters target 為 up）\n      tier: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
-    \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
+    \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: TenantExporterUndeclared\n\
+    \    expr: 'group by(tenant) (up{job=\"tenant-exporters\"})\n\n      unless on(tenant)\
+    \ tenant_expected_exporter\n\n      and on() tenant_metadata_info\n\n      unless\
+    \ on(tenant)\n\n      (user_state_filter{filter=\"maintenance\"} == 1)\n\n   \
+    \   '\n    for: 15m\n    labels:\n      maintenance: mute\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Tenant\
+    \ {{ $labels.tenant }} has been scraped under job=\"tenant-exporters\" for 15m\
+    \ but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent,\
+    \ TenantExporterReplicaDown) do not cover it: if its exporters stop answering,\
+    \ nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a\
+    \ string, or a list such as [mariadb, redis]).'\n      description_zh: 租戶 {{ $labels.tenant\
+    \ }} 已 15 分鐘在 job=\"tenant-exporters\" 下被 scrape，但 _metadata 沒有宣告 db_type，所以 exporter\
+    \ 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在\
+    \ _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。\n      owner: '{{\
+    \ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      runbook_url:\
+    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
+    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ Tenant {{ $labels.tenant }} has tenant-exporters targets but declares no db_type\n\
+    \      summary_zh: 租戶 {{ $labels.tenant }} 有 tenant-exporters target，但沒有宣告 db_type\n\
+    \      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"

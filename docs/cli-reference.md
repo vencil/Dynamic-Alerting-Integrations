@@ -2809,6 +2809,8 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 
 `required`、`forbidden`、`equals`、`not_equals`、`gte`、`lte`、`gt`、`lt`、`matches`、`one_of`、`contains`
 
+欄位值是 list 時（`_metadata.db_type`、`tags`、`groups`）逐元素比：`not_equals` 要每個元素都不等於 `value`，`equals`／`matches`／`one_of`／`contains` 有一個元素成立即成立。`db_type` 自 [#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771) 起以 list 送出（寫成字串的也是一元素 list），所以既有的 `db_type` 規則讀法不變；宣告 `[mariadb, redis]` 的租戶符合 `equals: redis`，也違反 `not_equals: mariadb`。
+
 **哪些寫法會被拒**（[#2987](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2987)；主規則與 `when` 同一套，任一條命中即結束碼 `2`、不評估任何規則，訊息指名第幾條規則、哪個欄位、為什麼）：
 
 - `required`／`forbidden` 只看有沒有值，不收 `value`（沒寫 `operator` 時缺省為 `required`，`value` 會被默默忽略）。

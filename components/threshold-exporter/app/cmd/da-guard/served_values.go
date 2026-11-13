@@ -1007,7 +1007,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 			"environment": m.Environment,
 			"region":      m.Region,
 			"domain":      m.Domain,
-			"db_type":     m.DBType,
+			"db_type":     nonNilStrings(m.DBType),
 			"tags":        nonNilStrings(m.Tags),
 			"groups":      nonNilStrings(m.Groups),
 		}

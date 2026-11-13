@@ -41,6 +41,7 @@ purpose: |
 // `styles` may be undefined when this module evaluates.
 // Import the canonical export instead. See tenant-manager/styles.js.
 import { styles } from '../styles.js';
+import { dbTypesOf } from '../utils/db-types.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -120,7 +121,7 @@ function TenantMetadataRows({ data, modeColors }) {
 
       <div style={styles.row}>
         <span style={styles.rowLabel}>{t('數據庫類型', 'DB Type')}</span>
-        <span style={styles.rowValue}>{data.db_type}</span>
+        <span style={styles.rowValue}>{dbTypesOf(data.db_type).join(', ')}</span>
       </div>
 
       <div style={styles.row}>

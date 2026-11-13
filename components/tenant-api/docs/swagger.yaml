@@ -1568,7 +1568,13 @@ definitions:
         - invalid_config
         type: string
       db_type:
-        type: string
+        description: |-
+          Every database kind the tenant declares in `_metadata.db_type`, in the
+          order written (#3771: the config takes a string or a list; a string is
+          one kind). Omitted when none is declared.
+        items:
+          type: string
+        type: array
       domain:
         type: string
       environment:
@@ -3535,7 +3541,8 @@ paths:
         in: query
         name: domain
         type: string
-      - description: Exact db_type
+      - description: A db_type the tenant declares (exact match against any one of
+          its kinds)
         in: query
         name: db_type
         type: string

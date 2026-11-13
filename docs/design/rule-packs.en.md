@@ -34,10 +34,10 @@ parent: architecture-and-design.en.md
 | JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 6 |
 | Kubernetes | `prometheus-rules-kubernetes` | 30 | 14 |
-| Exporter Liveness | `prometheus-rules-liveness` | 0 | 2 |
+| Exporter Liveness | `prometheus-rules-liveness` | 10 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **Total** | | **171** | **185** (= **356** rules) |
+| **Total** | | **181** | **186** (= **367** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)

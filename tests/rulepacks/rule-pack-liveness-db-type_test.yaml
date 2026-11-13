@@ -1,0 +1,386 @@
+# promtool unit test — 存活判定以 (tenant, db_type) 為粒度（#3771）。
+# Run: promtool test rules tests/rulepacks/rule-pack-liveness-db-type_test.yaml
+#
+# 對象：rule-pack-liveness.yaml 的 tenant:exporter_present（生成區塊）、
+# TenantExporterAbsent（Rule A）、TenantExporterReplicaDown（Rule B）、
+# TenantExporterUndeclared（Rule C），以及平台 pack 的 MassExporterOutage。
+#   M1  租戶宣告 [mariadb, redis]；mariadb 唯一副本掛、redis 健康
+#       → Absent{db_type=mariadb} critical 響、redis 不響；Rule B 也響（warning）
+#       （把 on(tenant, db_type) 改回 on(tenant) 就轉紅：redis 的存在會擋住 mariadb）
+#   M2  單值宣告（[mariadb]）、exporter 活著但 DB 連不上（mysql_up=0）→ 不響
+#       （存在判定看 exporter 有沒有回應，DB 停機是 MariaDBDown 的事）
+#   M3  兩種都健康 → 不響
+#   M4  存在指標只認 job="tenant-exporters"：別的 job 的 mysql_up 不算 → 響
+#   M5  rabbitmq 兩種 exporter：只有內建 plugin 的 rabbitmq_identity_info 也算在場 → 不響
+#   U1  未宣告租戶有 target → Undeclared 響（warning）；宣告過的租戶不響
+#   U2  沒有任何租戶宣告 db_type、threshold-exporter 活著 → Undeclared 照響
+#       （守門讀 tenant_metadata_info，不是 tenant_expected_exporter；守門改讀後者就轉紅）
+#   U3  threshold-exporter 全掛（tenant_metadata_info、tenant_expected_exporter 都缺席）
+#       → Undeclared 一條都不響（拿掉守門就對每個租戶齊響）
+#   P1  6 個租戶各宣告 [mariadb, redis]、mariadb 全掛 → MassExporterOutage 響，
+#       $value＝6 組 (tenant, db_type)，分母 12 組（舊的 on(tenant) 下 redis 擋住全部、不響）
+#   P2  同形狀只有 5 個租戶 → 5 不 > 5，不響（門檻是「組」）
+# tenant id 用 t-* placeholder（dev-rule：fixture 不寫死真實租戶名）。
+rule_files:
+  - ../../rule-packs/rule-pack-liveness.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # ── M1 #3771 情境：mariadb 唯一副本掛、同租戶 redis 健康
+  - interval: 1m
+    name: M1-mariadb-down-redis-up-absent-fires-for-mariadb
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t-multi", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", instance="10.0.0.9:8080", pod="te-0", tenant="t-multi", db_type="redis"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-multi", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1 0x19'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-multi", instance="10.1.0.1:9104", pod="mdb-0", service="mdb"}'
+        values: '1 stale'
+      - series: 'up{job="tenant-exporters", tenant="t-multi", instance="10.1.0.5:9121", pod="rds-0", service="rds"}'
+        values: '1x20'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-multi", instance="10.1.0.5:9121", pod="rds-0", service="rds"}'
+        values: '1x20'
+      - series: 'tenant_metadata_info{job="threshold-exporter", tenant="t-multi", owner="", runbook_url="", tier=""}'
+        values: '1x20'
+    alert_rule_test:
+      # 1m 起缺席；for:3m → 3m 還在 pending。斷言放在 5m：存在判定是另一個 group 的
+      # recording rule，評估順序可能讓 pending 晚一步起算，5m 兩種順序都已 firing。
+      - eval_time: 3m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: t-multi
+              db_type: mariadb
+              job: threshold-exporter
+            exp_annotations:
+              summary: "Exporter absent for tenant t-multi (mariadb)"
+              summary_zh: "租戶 t-multi (mariadb) 的 exporter 缺席"
+              description: "No mariadb exporter of tenant t-multi has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"mariadb\"} is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t-multi 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（tenant:exporter_present{db_type=\"mariadb\"} 缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      # Rule B（副本級）同時響：同租戶 redis 的 up==1 是它的右側。
+      - eval_time: 12m
+        alertname: TenantExporterReplicaDown
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              job: tenant-exporters
+              tenant: t-multi
+              instance: "10.1.0.1:9104"
+              pod: mdb-0
+              service: mdb
+            exp_annotations:
+              summary: "Exporter target 10.1.0.1:9104 down for tenant t-multi (another tenant-exporters target of the tenant is up)"
+              summary_zh: "租戶 t-multi 的 exporter target 10.1.0.1:9104 停機（同租戶仍有其他 tenant-exporters target 為 up）"
+              description: "Target 10.1.0.1:9104 (pod mdb-0) of tenant t-multi has read up=0 for 10m while at least one other up{job=\"tenant-exporters\"} target of the same tenant reads up=1. That target may belong to a different Service: if Service mdb has no other replica, its metrics are no longer scraped at all. When it was the only exporter of one of the tenant's declared db_types, TenantExporterAbsent (critical) fires for that db_type as well; when another Service of the same db_type is still up, this warning is the only signal. If every target of the tenant goes down, this alert resolves and TenantExporterAbsent takes over. Only tenants that declare db_type in _metadata get this alert; an undeclared tenant gets TenantExporterUndeclared instead."
+              description_zh: "租戶 t-multi 的 target 10.1.0.1:9104（pod mdb-0）已 10 分鐘 up=0，同時同租戶仍有至少一個 up{job=\"tenant-exporters\"} target 為 up=1。那個 target 可能屬於別的 Service：若 Service mdb 沒有其他副本，它的指標已完全沒被抓取。它若是租戶宣告的某個 db_type 唯一的 exporter，TenantExporterAbsent（critical）也會對那個 db_type 響；同一個 db_type 若還有別的 Service 是 up，本告警就是唯一的訊號。若租戶所有 target 都掛，本告警會解除，改由 TenantExporterAbsent 接手。只有在 _metadata 宣告了 db_type 的租戶才會收到本告警；沒宣告的租戶改收 TenantExporterUndeclared。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+      - eval_time: 12m
+        alertname: TenantExporterUndeclared
+        exp_alerts: []
+
+  # ── M2 單值宣告、exporter 活著但 DB 連不上（mysql_up=0 仍在場）→ Absent 不響
+  - interval: 1m
+    name: M2-single-declaration-exporter-alive-db-down-no-absent
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-single", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-single", instance="10.2.0.1:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-single", instance="10.2.0.1:9104"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── M3 兩種都健康 → 什麼都不響
+  - interval: 1m
+    name: M3-both-kinds-healthy-nothing-fires
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-multi", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-multi", db_type="redis"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-multi", instance="10.1.0.1:9104"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-multi", instance="10.1.0.1:9104"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-multi", instance="10.1.0.5:9121"}'
+        values: '1x20'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-multi", instance="10.1.0.5:9121"}'
+        values: '1x20'
+      - series: 'tenant_metadata_info{tenant="t-multi", owner="", runbook_url="", tier=""}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: TenantExporterReplicaDown
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: TenantExporterUndeclared
+        exp_alerts: []
+
+  # ── M4 存在指標只認 job="tenant-exporters"：別的 job 的 mysql_up 不算在場 → 響
+  - interval: 1m
+    name: M4-presence-from-another-job-does-not-count
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-single", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="other-scrape", tenant="t-single", instance="10.9.0.1:9104"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TenantExporterAbsent
+        exp_alerts:
+          - exp_labels:
+              maintenance: page
+              severity: critical
+              tenant: t-single
+              db_type: mariadb
+            exp_annotations:
+              summary: "Exporter absent for tenant t-single (mariadb)"
+              summary_zh: "租戶 t-single (mariadb) 的 exporter 缺席"
+              description: "No mariadb exporter of tenant t-single has answered a scrape under job=\"tenant-exporters\" for 3m (tenant:exporter_present{db_type=\"mariadb\"} is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 t-single 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（tenant:exporter_present{db_type=\"mariadb\"} 缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── M5 rabbitmq 內建 plugin（rabbitmq_identity_info，沒有 rabbitmq_up）也算在場
+  - interval: 1m
+    name: M5-rabbitmq-builtin-plugin-counts-as-present
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-mq", db_type="rabbitmq"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-mq", instance="10.3.0.1:15692"}'
+        values: '1x20'
+      - series: 'rabbitmq_identity_info{job="tenant-exporters", tenant="t-mq", instance="10.3.0.1:15692", rabbitmq_node="rabbit@mq-0", rabbitmq_cluster="mq"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: TenantExporterAbsent
+        exp_alerts: []
+
+  # ── U1 未宣告租戶有 target → Undeclared 響（for:15m）；宣告過的租戶不響
+  - interval: 1m
+    name: U1-undeclared-tenant-fires-declared-does-not
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-declared", db_type="mariadb"}'
+        values: '1x30'
+      - series: 'up{job="tenant-exporters", tenant="t-declared", instance="10.4.0.1:9104"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-declared", instance="10.4.0.1:9104"}'
+        values: '1x30'
+      - series: 'tenant_metadata_info{tenant="t-declared", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+      # 未宣告：target 是否 up 不影響（up=0 也是「被 scrape」）。
+      - series: 'up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
+        values: '1x30'
+      - series: 'up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.3:9104"}'
+        values: '0x30'
+      - series: 'tenant_metadata_info{tenant="t-loose", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 14m
+        alertname: TenantExporterUndeclared
+        exp_alerts: []
+      - eval_time: 15m
+        alertname: TenantExporterUndeclared
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              tenant: t-loose
+            exp_annotations:
+              summary: "Tenant t-loose has tenant-exporters targets but declares no db_type"
+              summary_zh: "租戶 t-loose 有 tenant-exporters target，但沒有宣告 db_type"
+              description: "Tenant t-loose has been scraped under job=\"tenant-exporters\" for 15m but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a string, or a list such as [mariadb, redis])."
+              description_zh: "租戶 t-loose 已 15 分鐘在 job=\"tenant-exporters\" 下被 scrape，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── U2 沒有任何租戶宣告 db_type（導入期），threshold-exporter 活著 → Undeclared 照響
+  - interval: 1m
+    name: U2-nobody-declared-yet-still-fires
+    input_series:
+      - series: 'up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
+        values: '1x30'
+      - series: 'tenant_metadata_info{tenant="t-loose", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 16m
+        alertname: TenantExporterUndeclared
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              maintenance: mute
+              tenant: t-loose
+            exp_annotations:
+              summary: "Tenant t-loose has tenant-exporters targets but declares no db_type"
+              summary_zh: "租戶 t-loose 有 tenant-exporters target，但沒有宣告 db_type"
+              description: "Tenant t-loose has been scraped under job=\"tenant-exporters\" for 15m but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a string, or a list such as [mariadb, redis])."
+              description_zh: "租戶 t-loose 已 15 分鐘在 job=\"tenant-exporters\" 下被 scrape，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── U3 threshold-exporter 全掛：它發的 tenant_metadata_info、tenant_expected_exporter
+  #    都缺席 → Undeclared 一條都不響（拿掉守門就對兩個租戶齊響）
+  - interval: 1m
+    name: U3-threshold-exporter-down-undeclared-silent
+    input_series:
+      - series: 'up{job="tenant-exporters", tenant="t-declared", instance="10.4.0.1:9104"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-declared", instance="10.4.0.1:9104"}'
+        values: '1x30'
+      - series: 'up{job="tenant-exporters", tenant="t-loose", instance="10.4.0.2:9104"}'
+        values: '1x30'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantExporterUndeclared
+        exp_alerts: []
+
+  # ── P1 6 個租戶各宣告 [mariadb, redis]、mariadb 全掛、redis 全健康
+  #    → 6 組 down / 12 組 declared = 50%，6 > 5 → MassExporterOutage 響，$value＝6
+  - interval: 1m
+    name: P1-mass-outage-counts-tenant-db-type-pairs
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-1", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-1", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-2", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-2", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-3", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-3", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-4", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-4", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-5", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-5", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-6", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-6", db_type="redis"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="t-1-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-1", instance="t-1-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-2", instance="t-2-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-2", instance="t-2-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-3", instance="t-3-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-3", instance="t-3-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-4", instance="t-4-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-4", instance="t-4-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-5", instance="t-5-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-5", instance="t-5-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-6", instance="t-6-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-6", instance="t-6-rds"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: MassExporterOutage
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              alert_source: platform
+              job: threshold-exporter
+            exp_annotations:
+              summary: "Mass exporter outage (6 tenant × db_type pairs) — shared-dependency failure suspected"
+              description: |
+                More than 5 (tenant, db_type) pairs AND over 10% of the declared
+                (tenant, db_type) pairs simultaneously have no exporter of that
+                db_type answering under job="tenant-exporters"
+                (tenant:exporter_present absent).
+                Both conditions together mean this is almost certainly a SHARED
+                failure (node pool drained, network partition, image-pull outage on a
+                rolling restart) rather than N independent exporter deaths or a
+                routine single-node blip. Treat as ONE incident: inspect node health
+                / network / recent cluster-wide changes FIRST — remediating tenants
+                one by one will not address the common cause. Per-tenant detail is in
+                the fanned-out TenantExporterAbsent alerts. If instead the WHOLE
+                tenant-exporters job is gone, TenantExporterJobAbsent fires instead.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage"
+
+  # ── P2 同形狀只有 5 個租戶 → 5 組不 > 5 → 不響（門檻以組計）
+  - interval: 1m
+    name: P2-five-pairs-below-floor-silent
+    input_series:
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-1", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-1", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-2", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-2", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-3", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-3", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-4", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-4", db_type="redis"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-5", db_type="mariadb"}'
+        values: '1x10'
+      - series: 'tenant_expected_exporter{job="threshold-exporter", tenant="t-5", db_type="redis"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-1", instance="t-1-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-1", instance="t-1-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-2", instance="t-2-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-2", instance="t-2-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-3", instance="t-3-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-3", instance="t-3-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-4", instance="t-4-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-4", instance="t-4-rds"}'
+        values: '1x10'
+      - series: 'up{job="tenant-exporters", tenant="t-5", instance="t-5-rds"}'
+        values: '1x10'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-5", instance="t-5-rds"}'
+        values: '1x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MassExporterOutage
+        exp_alerts: []

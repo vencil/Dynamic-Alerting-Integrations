@@ -2826,6 +2826,8 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 
 `required`, `forbidden`, `equals`, `not_equals`, `gte`, `lte`, `gt`, `lt`, `matches`, `one_of`, `contains`
 
+A list-valued field (`_metadata.db_type`, `tags`, `groups`) is compared element by element: `not_equals` holds when no element equals the `value`; `equals` / `matches` / `one_of` / `contains` hold when some element does. Since [#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771) `db_type` is served as a list (one written as a string is a one-element list), so an existing `db_type` rule reads as before; a tenant declaring `[mariadb, redis]` satisfies `equals: redis` and violates `not_equals: mariadb`.
+
 **Which rules are refused** ([#2987](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2987); the rule and its `when` alike — any one of them exits `2` with nothing evaluated, and the message names the rule, the field and why):
 
 - `required` / `forbidden` test presence only and take no `value` (with no `operator` the rule defaults to `required`, and the `value` would be ignored in silence).

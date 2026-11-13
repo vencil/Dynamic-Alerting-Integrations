@@ -22,6 +22,12 @@
   },
   "additionalProperties": false,
   "definitions": {
+    "dbTypeValue": {
+      "type": "string",
+      "title": "Database Type",
+      "description": "One database type (see _metadata.db_type).",
+      "enum": ["mariadb", "postgresql", "redis", "mongodb", "elasticsearch", "oracle", "db2", "clickhouse", "kafka", "rabbitmq"]
+    },
     "tenantId": {
       "type": "string",
       "pattern": "^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$",
@@ -251,12 +257,19 @@
           "examples": ["finance", "ecommerce", "infrastructure"]
         },
         "db_type": {
-          "type": "string",
-          "title": "Database Type",
-          "description": "Primary database type for this tenant. Used for dimension-based grouping AND (since #869) to opt the tenant into per-tenant exporter liveness: the exporter emits tenant_expected_exporter{tenant,db_type} ONLY when db_type is set — the LHS of the TenantExporterAbsent anti-join. A typo'd KEY (e.g. dbType / db_typ) is caught by this object's additionalProperties:false; a typo'd VALUE is caught by this enum. Either typo previously dropped db_type silently to \"\", removing the tenant from liveness with no signal (#880 Day-3 hardening).",
-          "$comment": "enum SSOT = the database rule-packs in PACK_ORDER (scripts/tools/dx/generate_platform_data.py) minus the app/platform packs (jvm/nginx/kubernetes/operational/platform/custom-alerts/liveness). Extend this list when adding a new DB exporter rule-pack.",
-          "enum": ["mariadb", "postgresql", "redis", "mongodb", "elasticsearch", "oracle", "db2", "clickhouse", "kafka", "rabbitmq"],
-          "examples": ["postgresql", "mariadb", "mongodb", "redis"]
+          "title": "Database Type(s)",
+          "description": "Database type(s) this tenant runs: one string, or a non-empty list of distinct strings when the tenant has more than one kind of exporter (e.g. [mariadb, redis]); a string is the same as a one-element list (#3771). Used for dimension-based grouping AND (since #869) to opt the tenant into per-tenant exporter liveness: the exporter emits one tenant_expected_exporter{tenant,db_type} series per declared kind — the LHS of the TenantExporterAbsent anti-join, which then pages per (tenant, db_type) when no exporter of that kind is up. A tenant that is scraped under job=tenant-exporters without declaring db_type raises TenantExporterUndeclared. A typo'd KEY (e.g. dbType / db_typ) is caught by this object's additionalProperties:false; a typo'd VALUE is caught by the enum. Either typo previously dropped db_type silently to \"\", removing the tenant from liveness with no signal (#880 Day-3 hardening). Across layers the tenant file's db_type replaces a platform layer's whole; lists are not unioned.",
+          "$comment": "enum SSOT = the database rule-packs in PACK_ORDER (scripts/tools/dx/generate_platform_data.py) minus the app/platform packs (jvm/nginx/kubernetes/operational/platform/custom-alerts/liveness). Extend this list when adding a new DB exporter rule-pack. #3771: the enum lives once in definitions.dbTypeValue; the db_type → exporter-presence-metric table (scripts/tools/_lib_exporter_presence.py) must name exactly these values (check_exporter_presence.py).",
+          "oneOf": [
+            { "$ref": "#/definitions/dbTypeValue" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/definitions/dbTypeValue" },
+              "minItems": 1,
+              "uniqueItems": true
+            }
+          ],
+          "examples": ["postgresql", "mariadb", ["mariadb", "redis"]]
         },
         "tags": {
           "type": "array",

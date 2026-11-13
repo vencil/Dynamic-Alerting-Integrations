@@ -476,54 +476,55 @@ func (c *Collector) collectMetadata(ch chan<- prometheus.Metric, metadata []conf
 }
 
 // collectTenantExpectedExporter emits tenant_expected_exporter{tenant, db_type}=1
-// for every tenant that DECLARES a db_type in its _metadata block (#869).
+// for every db_type a tenant DECLARES in its _metadata block (#869) — one
+// series per declared kind (#3771: `db_type` may be a list).
 //
 // This is the LEFT-hand input to the per-tenant liveness anti-join
 // (TenantExporterAbsent in rule-pack-liveness.yaml):
 //
-//	tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
+//	tenant_expected_exporter unless on(tenant, db_type) tenant:exporter_present
 //
-// so each declaring tenant for which no live exporter target reports up==1 is
-// flagged — fixing the global `absent(<db>_up)` false-negative where one live
-// tenant masked another tenant's total exporter outage.
+// so each declared (tenant, db_type) for which no live exporter of that kind
+// reports is flagged — a tenant with a dead mariadb exporter and a healthy
+// redis exporter fires for mariadb (#3771), where the pre-#3771 `on(tenant)`
+// join let the redis target mask it.
 //
-// Opt-in contract — db_type guard is LOAD-BEARING, not cosmetic:
+// Opt-in contract — the empty-list guard is LOAD-BEARING, not cosmetic:
 // the metadata slice (from ResolveMetadata, shared with collectMetadata) holds
-// EVERY tenant unconditionally, and a tenant with no _metadata resolves to
-// DBType=="" (see ResolveMetadata in pkg/config/resolve.go). Emitting db_type=""
-// for such tenants would put a left-hand series into the anti-join for a tenant
-// that has no corresponding `<db>_up` series at all → the rule would fire a permanent
-// false-positive critical against it. So we emit ONLY for tenants that declared a
-// db_type: liveness coverage is OPT-IN via declaring db_type. (Hence "1 series per
-// tenant that declares db_type", not "1 per tenant" — see #869 design note.)
+// EVERY tenant unconditionally, and a tenant with no _metadata resolves to an
+// empty DBType (see ResolveMetadata in pkg/config/resolve.go). Emitting
+// db_type="" for such tenants would put a left-hand series into the anti-join
+// for a tenant that has no matching exporter at all → a permanent
+// false-positive critical. So liveness coverage is OPT-IN via declaring
+// db_type; a tenant that scrapes exporters without declaring is surfaced by
+// TenantExporterUndeclared instead. DBType is already deduplicated
+// (config.NormalizeDBTypes), so no series is emitted twice.
 //
 // Deliberately a NEW, SEPARATE metric — db_type is intentionally NOT added to
-// tenant_metadata_info. types.go:102-103 records the v2.5.0 decision that db_type
+// tenant_metadata_info. types.go records the v2.5.0 decision that db_type
 // is NOT a Prometheus label (cardinality concern); tenant_metadata_info is also a
 // load-bearing 1-series-per-tenant info metric that every rule-pack alert's
 // metadata annotations query (#3483; it was joined into alerts before), so
-// widening its label set is forbidden. This is a SCOPED reversal of types.go:102
-// limited to the narrow, low-cardinality (1 series/declaring tenant) liveness need.
+// widening its label set is forbidden. This is a SCOPED reversal limited to
+// the narrow, low-cardinality (1 series per declared kind) liveness need.
 func (c *Collector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, metadata []config.ResolvedMetadata) {
 	expectedDesc := prometheus.NewDesc(
 		"tenant_expected_exporter",
-		"Liveness expectation (always 1) for each tenant that declares a db_type in _metadata. "+
-			"LHS of the TenantExporterAbsent anti-join (#869). One series per declaring tenant.",
+		"Liveness expectation (always 1) for each db_type a tenant declares in _metadata. "+
+			"LHS of the TenantExporterAbsent anti-join (#869, #3771). One series per declared (tenant, db_type).",
 		[]string{"tenant", "db_type"},
 		nil,
 	)
 	for _, md := range metadata {
-		// Opt-in: only tenants that declared a db_type are expected to have a
-		// live exporter. Skipping db_type="" avoids a false-positive TenantExporterAbsent.
-		if md.DBType == "" {
-			continue
+		// Opt-in: only declared kinds are expected to have a live exporter.
+		for _, dbType := range md.DBType {
+			m, err := prometheus.NewConstMetric(expectedDesc, prometheus.GaugeValue, 1.0,
+				md.Tenant, dbType)
+			if err != nil {
+				c.logf("WARN: failed to create tenant_expected_exporter metric for tenant=%s db_type=%s: %v", md.Tenant, dbType, err)
+				continue
+			}
+			ch <- m
 		}
-		m, err := prometheus.NewConstMetric(expectedDesc, prometheus.GaugeValue, 1.0,
-			md.Tenant, md.DBType)
-		if err != nil {
-			c.logf("WARN: failed to create tenant_expected_exporter metric for tenant=%s: %v", md.Tenant, err)
-			continue
-		}
-		ch <- m
 	}
 }

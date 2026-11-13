@@ -27,7 +27,7 @@ type listedMetadata struct {
 }
 
 func metadataOf(s TenantSummary) listedMetadata {
-	return listedMetadata{Environment: s.Environment, Domain: s.Domain, DBType: s.DBType,
+	return listedMetadata{Environment: s.Environment, Domain: s.Domain, DBType: strings.Join(s.DBType, ","),
 		Owner: s.Owner, Tier: s.Tier, Tags: s.Tags}
 }
 
