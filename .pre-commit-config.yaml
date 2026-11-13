@@ -2069,7 +2069,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_unpinned_deps.py --ci
         language: python
         pass_filenames: false
-        files: ^(\.github/workflows/.*\.ya?ml|Makefile|\.devcontainer/devcontainer\.json|(.*/)?Dockerfile|requirements/ci-constraints\.txt|scripts/tools/lint/check_unpinned_deps\.py)$
+        files: ^(\.github/workflows/.*\.ya?ml|\.github/actions/[^/]+/action\.ya?ml|Makefile|\.devcontainer/devcontainer\.json|(.*/)?Dockerfile|requirements/ci-constraints\.txt|scripts/tools/lint/check_unpinned_deps\.py)$
         # #1158 root-solve: `pip install <pkg>` / `go install <mod>@latest`
         # with no version tracks *latest* on every CI run — the schemathesis
         # `filter_too_much` seed-flake was one instance of ~24. CI Python deps
