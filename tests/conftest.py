@@ -684,20 +684,21 @@ _SESSION_DA_GUARD_DIR: "str | None" = None
 #: not lazy, on purpose: tests call these tools under short subprocess
 #: timeouts and the generator calls da-guard under RLIMIT_DATA within a
 #: judgement deadline, so a build inside the first call would fail them.
-#: Cold-cache CI pays minutes for it — the light jobs opt out
-#: (tests/shared/test_session_go_binaries_opt_out.py).
+#: Cold-cache CI pays minutes for it, so every CI step that runs pytest
+#: declares `build` or `skip` (tests/lint/test_workflow_pytest_declares_go_binaries.py;
+#: behaviour: tests/shared/test_session_go_binaries_opt_out.py).
 _GO_BINARIES_ENV = "VIBE_TEST_GO_BINARIES"
 
 
 def _session_go_binaries_skipped() -> bool:
     value = os.environ.get(_GO_BINARIES_ENV, "")
-    if value == "":
+    if value in ("", "build"):
         return False
     if value == "skip":
         return True
     raise pytest.UsageError(
-        f"{_GO_BINARIES_ENV}={value!r}: the only value is 'skip' (build no Go "
-        "binary for this session); unset or empty builds them")
+        f"{_GO_BINARIES_ENV}={value!r}: 'build' (or unset / empty) builds the Go "
+        "binaries up front, 'skip' builds none for this session")
 
 
 def _provide_session_da_guard() -> None:

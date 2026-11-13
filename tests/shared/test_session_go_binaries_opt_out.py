@@ -97,7 +97,10 @@ def test_any_other_value_is_a_usage_error(tmp_path: Path, value: str) -> None:
     assert calls == []
 
 
-def test_empty_means_build(tmp_path: Path) -> None:
-    proc, calls = _run(tmp_path, "")
+@pytest.mark.parametrize("value", ["", "build"])
+def test_build_and_empty_mean_build(tmp_path: Path, value: str) -> None:
+    # `build` is what a CI job declares (test_workflow_pytest_declares_go_binaries);
+    # empty behaves like unset, for a local shell.
+    proc, calls = _run(tmp_path, value)
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert calls, "an empty value must behave like unset (build)"
+    assert calls, f"{value!r} must build"
