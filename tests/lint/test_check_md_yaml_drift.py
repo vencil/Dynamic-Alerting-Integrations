@@ -437,6 +437,32 @@ def test_helm_values_thresholdconfig_is_judged_as_the_conf_d_it_renders(tmp_path
     assert "platform                 1" in r.stdout and "tenant-file              1" in r.stdout
 
 
+_F4 = {
+    "deep": "finance:\n  t1:\n    _routing:\n      receiver: {{type: slack, api_url: {v}}}\n",
+    "type-typo": "tenants:\n  t1:\n    _routing:\n      receiver: {{type: slakc, api_url: {v}}}\n",
+    "nested-routes": ("tenants:\n  t1:\n    _routing:\n      receiver: {{type: webhook, url: "
+                      "{{secret: {{key: w}}}}}}\n      routes:\n        - match: {{a: b}}\n"
+                      "          routes:\n            - receiver: {{type: slack, api_url: {v}}}\n"),
+    "routing-list": "tenants:\n  t1:\n    _routing:\n      - receiver: {{type: slack, api_url: {v}}}\n",
+}
+
+
+@pytest.mark.parametrize("value", [_SECRET_VALUE, "{secret: {key: slack-api-url}}"],
+                         ids=["plaintext", "secret-ref"])
+@pytest.mark.parametrize("shape", sorted(_F4))
+def test_expect_invalid_does_not_absorb_an_unjudged_place(tmp_path: Path, shape: str,
+                                                          value: str) -> None:
+    """#3748 (blind review F4): `.expect-invalid` absorbs schema errors only.
+    A receiver the generator cannot judge — at a place its walk does not
+    read, or of an unknown type — is reported whatever it holds: it is
+    where a credential goes unjudged."""
+    body = "```yaml {.confd .expect-invalid}\n" + _F4[shape].format(v=value) + "```\n"
+    r = _run(_mkrepo(tmp_path, "u.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert "[SCHEMA] docs/u.md:2 (credential_unjudged)" in r.stdout, r.stdout
+    assert "s3cr3t" not in r.stdout + r.stderr
+
+
 def _profiles(api_url: str) -> str:
     return ("```yaml\n# _routing_profiles.yaml\nrouting_profiles:\n  team-a:\n"
             f"    receiver:\n      type: slack\n      api_url: {api_url}\n```\n")

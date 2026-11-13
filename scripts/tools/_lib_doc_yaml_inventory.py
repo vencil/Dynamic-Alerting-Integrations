@@ -50,16 +50,17 @@ rustdoc's `invalid_codeblock_attributes`:
   wrong on purpose (rustdoc's `compile_fail`). The schema check must find at
   least one violation in EVERY unit of the fence, and reports none of them; a
   unit with none is an error (a correct file shown beside the counter-example
-  goes in a fence of its own). A credential written out is never one of
-  them: the route generator's credential judgement reports it whatever the
-  fence declares (#3748). A block that only shows a reading, and meets
+  goes in a fence of its own). `.expect-invalid` absorbs schema errors
+  only: the route generator's credential judgement is always reported,
+  whatever the fence declares (#3748). A block that only shows a reading, and meets
   the schema, is `.illustrative`. Its values are still read by the
   unit-sanity lint: a reader copies them as they are.
 
 ⛔ Written without braces (```` ```yaml confd ````) is an error: mkdocs does not
 render that as a code block at all. So is a yaml fence spelled any other way
 (``~~~yaml``, ```` ```YAML ````, four backticks, ```` ``` yaml ````,
-```` ```yaml+jinja ````) and any fence left open: fences are found as
+```` ```yaml+jinja ````), a yaml fence inside a blockquote (``> ```yaml``:
+no extractor reads past the `>`; move it out) and any fence left open: fences are found as
 CommonMark finds them, and only ```` ```yaml ```` / ```` ```yml ```` is read. The retired comment marker
 (`<!-- md-yaml-drift: … -->`) is an error that names the attribute to write.
 
@@ -154,6 +155,9 @@ YAMLISH_RE = re.compile(r"^[ \t]*(?:yaml|yml)(?![A-Za-z0-9_])", re.ASCII | re.IG
 #: (#3416 review). An indented `#` is prose too. Mirrored by fileHeaderRe in
 #: the Go loader test.
 FILE_HEADER_RE = re.compile(r"^# ?(?P<path>[\w./-]+\.ya?ml)(?:[ \t]+.*)?$", re.ASCII)
+
+#: A blockquote's markers at the start of a line (any depth, `> >` too).
+BLOCKQUOTE_RE = re.compile(r"^[ \t]{0,3}>(?:[ \t]*>)*[ \t]?")
 
 #: The retired exemption marker (`<!-- md-yaml-drift: ignore — … -->`).
 RETIRED_MARKER_RE = re.compile(r"<!--\s*md-yaml-drift\s*:")
@@ -391,6 +395,16 @@ def extract_fences(path: str, content: str,
         stripped = line.strip(FENCE_TRIM)
         if not open_char:
             m = OPEN_RE.match(stripped)
+            q = None if m else BLOCKQUOTE_RE.match(line)
+            if q:
+                # #3748: a yaml fence in a blockquote is read by no gate (this
+                # extractor takes no `>`): refused, never read.
+                mq = OPEN_RE.match(line[q.end():].strip(FENCE_TRIM))
+                if (mq and not (mq.group("fence")[0] == "`" and "`" in mq.group("info"))
+                        and YAMLISH_RE.match(mq.group("info"))):
+                    errors.append((path, i, (
+                        "a yaml fence inside a blockquote: no gate reads it — move it "
+                        "out of the blockquote (a note around it goes above or below)")))
             if not m or (m.group("fence")[0] == "`" and "`" in m.group("info")):
                 continue
             open_char, open_len = m.group("fence")[0], len(m.group("fence"))

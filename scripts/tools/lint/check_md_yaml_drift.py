@@ -418,7 +418,8 @@ class MdYamlDriftChecker:
         shape, and no finite set of readers decides them all.
         Every unit of a `{.confd .expect-invalid}` fence must yield at least
         one schema violation, and none of its schema violations is reported
-        (a credential written out always is, #3748); a unit that
+        (`.expect-invalid` absorbs schema errors only; the credential
+        judgement is always reported, #3748); a unit that
         yields none is the violation (#3416 review: judged per fence, one wrong
         unit hid every violation of a second, really broken one). A fence
         that documents a correct file beside the counter-example is two fences.
@@ -511,19 +512,12 @@ class MdYamlDriftChecker:
                     return EXIT_CALLER_ERROR
             # #1560: what the route generator refuses (a credential written
             # out, or a place it cannot judge). Kind and category only, never
-            # the value. #3748: a credential written out is never one of an
-            # `.expect-invalid` unit's expected violations — a schema error
-            # on purpose beside it would hide it, and no docs fence shows one
-            # on purpose. A place it cannot judge (a receiver that is no
-            # mapping, …) is a shape the schema refuses too: a counter-example
-            # may show it.
+            # the value. #3748: `.expect-invalid` absorbs schema errors only;
+            # the credential judgement is always reported — a schema error on
+            # purpose beside it would hide a credential, and a place it
+            # cannot judge may hold one.
             fname = file_of.get(kind, "tenant.yaml")
-            for issue in self._credential_issues(unit, fname, doc, entries[fname], rendered):
-                if unit.expect_invalid and issue["kind"] != "credential_plaintext":
-                    expected[(unit.path, unit.line)].append(
-                        f"{unit.where} ({issue['kind']}): {issue['error']}")
-                else:
-                    issues.append(issue)
+            issues.extend(self._credential_issues(unit, fname, doc, entries[fname], rendered))
             if self.verbose:
                 print(f"  OK   {unit.where} ({kind}{', ' + rendered if rendered else ''})")
         # #3748: a block that is no conf.d example by its top two levels
@@ -586,8 +580,8 @@ class MdYamlDriftChecker:
         print("is governed by platform-defaults.schema.json, a tenant snippet by")
         print("tenant-config.schema.json. A credential is written as a Secret")
         print("reference ({secret: {key: <key>}}). A counter-example wrong on purpose is")
-        print("declared ```yaml {.confd .expect-invalid}; a credential written out is")
-        print("never one of its expected violations.")
+        print("declared ```yaml {.confd .expect-invalid}; it absorbs schema errors only,")
+        print("the credential judgement is always reported.")
         return EXIT_VIOLATION
 
 
