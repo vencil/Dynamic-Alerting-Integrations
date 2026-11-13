@@ -165,7 +165,7 @@ Next steps:
     popular: true,
     // issue 1380: validate-config has no --ci flag (argparse rc=2). Its exit
     // code is already CI-shaped — 0 unless a check fails (1) — so the preview
-    // is the bare call, and the output below is a real run's, not a mock-up.
+    // is the bare call; the output below is an abridged illustration.
     preview: `$ da-tools validate-config --config-dir conf.d/
 
 ============================================================

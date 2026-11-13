@@ -248,7 +248,7 @@ docker run --rm \
   validate-config --config-dir /data/conf.d
 ```
 
-Expected output (measured after doing Exercises 1 and 2 as written):
+Expected output (an abridged illustration; the real report has more check rows):
 
 ```
 ============================================================
@@ -279,12 +279,12 @@ Expected output (measured after doing Exercises 1 and 2 as written):
   Result: PASS
 ```
 
-The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WARN does not fail the run — so CI can call it as-is, no extra flag needed.
+The exit code is `0`: it is non-zero only when a check is `fail` (`1`; `2` for a caller error or a tree whose shape the routing plane cannot use as input), and a WARN does not fail the run — so CI can call it as-is, no extra flag needed.
 
 - The `routes` row is `generate-routes --validate`, so it also checks `_routing_profile` references and domain policies: without `_routing_profiles.yaml` it shows `_routing_profile references unknown profile`; without `_domain_policy.yaml` the finance constraints simply do not exist, and nothing says so.
 - The `profiles` row is about threshold profiles (`_profiles.yaml` and a tenant's `_profile`), not routing profiles, so it still reads `0 profiles defined in _profiles.yaml` after Exercise 2.
 
-⚠️ If `tenant_uniqueness` says `0 tenant(s)` and `routes` says `0 routes`, you dropped the two outer levels (`tenants:` and `<tenant name>:`) when pasting the Exercise 2 snippets. Every check then reads PASS while nothing was validated.
+⚠️ If `tenant_uniqueness` says `0 tenant(s)`, you dropped the two outer levels (`tenants:` and `<tenant name>:`) when pasting the Exercise 2 snippets. The report is then FAIL: the `routes` and `unread_keys` rows name those keys as `unread … (tenant_file_top_level)`.
 
 **Checkpoint**: Can you explain why `group_wait: "2s"` produces a WARN under `routes`, and why the value that takes effect is 5s? (Hint: the guardrail range is 5s–5m; a value below the floor is clamped to 5s — a warning, not a failure)
 

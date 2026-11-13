@@ -243,7 +243,7 @@ docker run --rm \
   validate-config --config-dir /data/conf.d
 ```
 
-預期輸出（照練習 1、2 做完之後的實測結果）：
+預期輸出（節錄示意；實際的報告有更多檢查列）：
 
 ```
 ============================================================
@@ -274,12 +274,12 @@ docker run --rm \
   Result: PASS
 ```
 
-結束碼是 `0`：只有任一檢查項為 `fail` 時才會非零（`1`），WARN 不會讓它失敗，所以 CI 直接呼叫即可，不需要另加旗標。
+結束碼是 `0`：只有任一檢查項為 `fail` 時才會非零（`1`；呼叫端錯誤、或路由面無法當作輸入的樹形是 `2`），WARN 不會讓它失敗，所以 CI 直接呼叫即可，不需要另加旗標。
 
 - `routes` 這一列就是 `generate-routes --validate`，所以也檢查 `_routing_profile` 的引用與 domain policy：少了 `_routing_profiles.yaml`，這裡會出現 `_routing_profile references unknown profile`；少了 `_domain_policy.yaml`，finance 的約束就不存在，不會有任何提示。
 - `profiles` 這一列管的是閾值 profile（`_profiles.yaml` 與租戶檔的 `_profile`），不是 routing profile，所以練習 2 做完它仍是 `0 profiles defined in _profiles.yaml`。
 
-⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`、`routes` 顯示 `0 routes`，代表你把練習 2 的片段貼成檔案時漏掉了 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時每一項都是 PASS，但其實什麼都沒驗到。
+⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`，代表你把練習 2 的片段貼成檔案時漏掉了 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時報告是 FAIL：`routes` 與 `unread_keys` 兩列點名那些鍵 `unread … (tenant_file_top_level)`。
 
 **檢查點**：你能解釋為什麼 `group_wait: "2s"` 會在 `routes` 出現 WARN，而且實際生效的是 5s 嗎？（提示：guardrail 範圍是 5s–5m，低於下限的值會被夾到 5s，只警告、不失敗）
 
