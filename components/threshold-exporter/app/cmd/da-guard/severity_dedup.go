@@ -19,8 +19,11 @@ package main
 //     does not read, judged in the file and layer that writes it) — the one
 //     source of key-verdict's value_unread for the key;
 //   - schedules: the load's LoadReport.ScheduledReserved whose key is
-//     `_severity_dedup`: each entry written with a time window or expires,
-//     of which the exporter reads the `default` alone (#3269);
+//     `_severity_dedup`, in a `tenants:` section: each entry written with a
+//     time window or expires, of which the exporter reads the `default`
+//     alone (#3269). A `profiles:` entry is left out, as it is of problems:
+//     the exporter does not apply a profile's `_severity_dedup` at all, not
+//     even its default (#2914);
 //   - parse_failed / unreadable: the files the load drops, as served-values
 //     names them.
 //
@@ -93,9 +96,10 @@ type severityDedupProblem struct {
 // severityDedupSchedule is one config.ScheduledReservedEntry of the key.
 type severityDedupSchedule struct {
 	File string `json:"file"`
-	// Section: "tenants" or "profiles".
+	// Section: "tenants" (a profiles: entry is not listed: the exporter
+	// does not apply a profile's _severity_dedup).
 	Section string `json:"section"`
-	// Owner: the tenant id, or the profile name.
+	// Owner: the tenant id.
 	Owner string `json:"owner"`
 }
 
@@ -110,8 +114,9 @@ func severityDedupUsage(errOut io.Writer, fs *flag.FlagSet) func() {
 			"mode is the exporter's resolver's (a value it does not read is enable, as /metrics serves it);\n"+
 			"problems are the values it does not read, judged in the file and layer that write them (layer\n"+
 			"tenant, platform_tenants or profile; owner the tenant id or profile name); schedules are the\n"+
-			"tenants:/profiles: entries written with overrides:/expires:/reason:, of which the exporter\n"+
-			"reads the default alone (a reserved key has no schedule).\n\n", severityDedupSchema)
+			"tenants: entries written with overrides:/expires:/reason:, of which the exporter reads the\n"+
+			"default alone (a reserved key has no schedule); a profiles: entry is not listed, as the\n"+
+			"exporter does not apply a profile's _severity_dedup at all.\n\n", severityDedupSchema)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n"+
 			"  2  caller error, or a tree the exporter's load rejects (e.g. a tenant declared twice, no\n"+
@@ -213,7 +218,7 @@ func severityDedupOf(dir string, logger *log.Logger, errOut io.Writer) (severity
 		}
 	}
 	for _, e := range rep.ScheduledReserved {
-		if e.Key == severityDedupKey {
+		if e.Key == severityDedupKey && e.Section == "tenants" {
 			doc.Schedules = append(doc.Schedules, severityDedupSchedule{File: e.File, Section: e.Section,
 				Owner: e.Owner})
 		}

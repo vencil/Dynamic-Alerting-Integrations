@@ -240,3 +240,34 @@ def test_one_severity_dedup_run_per_load(tmp_path, monkeypatch):
     load_tenant_tree(str(_write(tmp_path, {})))
     assert len(calls) == 1
     assert _grar_parse._lib_tenant_values is tv
+
+
+def test_a_profile_schedule_is_not_this_readers_either(tmp_path):
+    """A profile's `_severity_dedup` is not applied at all — not even its
+    default — so, as for a value the exporter does not read there, a schedule
+    there refuses nothing here (severity-dedup lists no `profiles:` entry);
+    the profile's own WARN (#2914) is the one that names it."""
+    d = _write(tmp_path, {"_defaults.yaml": _DEFAULTS + "profiles:\n  p1:\n    _severity_dedup:\n"
+                          "      default: disable\n      expires: \"2099-01-01T00:00:00Z\"\n",
+                          "t-a.yaml": _tenant("t-a", "    _profile: p1\n")})
+    tree = load_tenant_tree(str(d))
+    assert tree.field_type_errors == [] and tree.dedup_configs == {"t-a": "enable", "t-b": "enable"}
+
+
+def test_an_unknown_mode_lists_no_inhibit_rule():
+    """None — no mode was read, the tree being refused (its refusal is the
+    run's message) — is not enable: no rule is listed for it (#3621)."""
+    from _grar_routes import generate_inhibit_rules
+    rules, _notes = generate_inhibit_rules({"t-a": None, "t-b": "disable", "t-c": "enable"})
+    assert [r["source_matchers"][-1] for r in rules] == ['tenant="t-c"'], rules
+
+
+def test_a_null_body_given_a_mapping_by_a_platform_entry_is_compared(tmp_path):
+    """A tenant file's null body is excused from the comparison only when this
+    reader did not load the tenant: here a platform `tenants:` entry gives it a
+    mapping, both sides load it, and its mode is Go's."""
+    d = _write(tmp_path, {"_defaults.yaml": _DEFAULTS + "tenants:\n  t-a:\n    _severity_dedup: disable\n",
+                          "t-a.yaml": "tenants:\n  t-a: ~\n"})
+    tree = load_tenant_tree(str(d))
+    assert tree.dedup_configs.get("t-a") == "disable", tree.dedup_configs
+

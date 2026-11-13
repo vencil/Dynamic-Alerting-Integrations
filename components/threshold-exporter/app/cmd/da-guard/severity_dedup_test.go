@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -131,8 +132,10 @@ func TestSeverityDedup_Layers(t *testing.T) {
 }
 
 // A value written with a time window or expires: the exporter reads its
-// `default` alone; every such entry is named, in a tenant file, a platform
-// `tenants:` entry and a profile alike. `{default: x}` alone is no schedule.
+// `default` alone; every such `tenants:` entry is named, in a tenant file and
+// a platform `tenants:` entry alike. A profile's is not: the exporter does not
+// apply a profile's `_severity_dedup` at all (#2914), as no problem is
+// reported of it either. `{default: x}` alone is no schedule.
 func TestSeverityDedup_Schedules(t *testing.T) {
 	t.Parallel()
 	code, doc, errOut := runSD(t, map[string]string{
@@ -150,7 +153,6 @@ func TestSeverityDedup_Schedules(t *testing.T) {
 		t.Errorf("modes %v, want %v", got, want)
 	}
 	want := []severityDedupSchedule{
-		{File: "_defaults.yaml", Section: "profiles", Owner: "p1"},
 		{File: "_defaults.yaml", Section: "tenants", Owner: "tb"},
 		{File: "ta.yaml", Section: "tenants", Owner: "ta"},
 	}
@@ -241,5 +243,57 @@ func TestSeverityDedup_ExitCodes(t *testing.T) {
 	}
 	if code := run([]string{severityDedupCmd}, &o, &e); code != exitCallerErr {
 		t.Errorf("no --config-dir: exit %d", code)
+	}
+}
+
+// The document's wire names, read as raw JSON: encoding/json matches keys
+// case-insensitively, so a decode into severityDedupDoc cannot pin them, nor
+// tell an empty list from null. The Python reader relies on both.
+func TestSeverityDedup_WireNames(t *testing.T) {
+	t.Parallel()
+	dir := writeTree(t, map[string]string{
+		"_defaults.yaml": sdRoot,
+		"ta.yaml":        "tenants:\n  ta:\n    _severity_dedup: \"no\"\n",
+		"tb.yaml":        "tenants:\n  tb:\n    _severity_dedup: {default: disable, expires: \"2099-01-01T00:00:00Z\"}\n",
+	})
+	var out, errOut bytes.Buffer
+	if code := run([]string{severityDedupCmd, "--config-dir", dir}, &out, &errOut); code != exitOK {
+		t.Fatalf("exit %d, stderr %q", code, errOut.String())
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(out.Bytes(), &raw); err != nil {
+		t.Fatal(err)
+	}
+	keys := func(m map[string]json.RawMessage) []string {
+		var ks []string
+		for k := range m {
+			ks = append(ks, k)
+		}
+		sort.Strings(ks)
+		return ks
+	}
+	if got, want := keys(raw), []string{"parse_failed", "problems", "schedules", "schema", "tenants", "unreadable"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("top-level keys %v, want %v", got, want)
+	}
+	for _, k := range []string{"parse_failed", "unreadable"} {
+		if string(raw[k]) != "[]" {
+			t.Errorf("%s = %s, want [] (never null)", k, raw[k])
+		}
+	}
+	var problems, schedules []map[string]json.RawMessage
+	var tenants map[string]map[string]json.RawMessage
+	for k, v := range map[string]any{"problems": &problems, "schedules": &schedules, "tenants": &tenants} {
+		if err := json.Unmarshal(raw[k], v); err != nil {
+			t.Fatalf("%s: %v", k, err)
+		}
+	}
+	if len(problems) != 1 || !reflect.DeepEqual(keys(problems[0]), []string{"file", "layer", "owner", "problem", "value"}) {
+		t.Errorf("problems %s", raw["problems"])
+	}
+	if len(schedules) != 1 || !reflect.DeepEqual(keys(schedules[0]), []string{"file", "owner", "section"}) {
+		t.Errorf("schedules %s", raw["schedules"])
+	}
+	if !reflect.DeepEqual(keys(tenants["ta"]), []string{"mode"}) {
+		t.Errorf("tenants %s", raw["tenants"])
 	}
 }
