@@ -664,7 +664,9 @@ v1.2.0 implements per-tenant inhibit rules for optional configuration:
 | `_severity_dedup: "enable"` (default) | ✅ | ✅ | ❌ Intercepted by AM | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "mysql_connections"`. Each per-tenant inhibit rule limits `metric_group=~".+"`, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
+**Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "mysql_connections"`. Each per-tenant inhibit rule limits `metric_group=~".+"`, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: mariadb_liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) (MongoDB's alike carry `mongodb_liveness`), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
+
+**Group names are one namespace per tenant:** the inhibit compares `metric_group` only, not the rule pack, so two packs using one value would let a tenant running both have one pack's critical inhibit the other's warning. `check_metric_group_pairs.py` therefore requires that each value belongs to one rule pack, that each group has a critical and a warning member (the inhibit mutes `severity="warning"` only; otherwise it inhibits nothing), and that `slo_` stays the custom-alert compiler's prefix ([#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)). The groups `migrate_rule` writes are the whole threshold key.
 
 **Tenant Configuration**
 
@@ -763,7 +765,7 @@ tenants:
           receiver:
             type: pagerduty
             service_key: {secret: {key: pagerduty-service-key}}
-        - metric_group: "redis"
+        - metric_group: "redis_memory_used_bytes"
           receiver:
             type: webhook
             url: "https://oncall.example.com/redis"

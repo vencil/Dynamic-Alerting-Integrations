@@ -14,7 +14,7 @@
   profile、根層 `_routing_enforced`）的每個鍵，各塞兩種值：一個裝著帶 canary
   的 receiver 的 mapping，與一個帶 userinfo 的 canary URL 字串。
 * 跑 `--validate --strict --findings-json`：stdout、stderr、findings 都不得出現
-  canary。PATH 裡不放 amtool：amtool 的原文轉印是另一條通道（另開票）。
+  canary。
 * 每格還要證明那個位置真的被讀了：沒有判到東西的 run 也沒有 canary 可漏。
 """
 from __future__ import annotations
@@ -250,6 +250,10 @@ def _expected_kinds(where: str, key: str, kind: str) -> set[str]:
         out.add("redundant_override_receiver")
     if where.endswith("_dup") and where.startswith("override_entry"):
         out.add("duplicate_override_matcher")  # two identical entries
+        if key == "metric_group" and kind == "url_string":
+            # a string canary is the group of no shipped rule pack (#3692);
+            # a mapping is no group at all (routing_value_not_string)
+            out.add("unknown_override_metric_group")
     if override and key == "metric_group" and not where.endswith("_dup"):
         out.add("conflicting_override_matcher")  # beside the entry's alertname
     if kind == "receiver_mapping" or (kind == "url_string" and key in ("receiver", "overrides", "routes")):

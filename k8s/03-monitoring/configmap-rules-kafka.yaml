@@ -115,20 +115,19 @@ data:
     \    expr: \"(\\n  tenant:kafka_broker_count:max\\n  < on(tenant) group_left\\\
     n  tenant:alert_threshold:kafka_broker_count\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 30s\n    labels:\n      maintenance: mute\n\
-    \      metric_group: kafka_broker_count\n      severity: warning\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Active brokers:\
-    \ {{ $value | printf \"%.0f\" }} (below minimum threshold)'\n      description_zh:\
-    \ '活躍的 broker: {{ $value | printf \"%.0f\" }} (低於最小閾值)'\n      owner: '{{ with\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Active brokers: {{ $value | printf \"%.0f\" }} (below minimum\
+    \ threshold)'\n      description_zh: '活躍的 broker: {{ $value | printf \"%.0f\"\
+    \ }} (低於最小閾值)'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
+    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: broker count below minimum — cluster availability at risk'\n\
+    \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
+    \ {{ $labels.tenant }}: broker 數量低於最小值 — 叢集可用性有風險'\n      runbook_url: '{{ with\
     \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: broker count below minimum — cluster availability at risk'\n      platform_summary_zh:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: broker 數量低於最小值 — 叢集可用性有風險'\n      runbook_url: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
-    \ }}{{ end }}{{ end }}'\n      summary: Low Kafka broker count on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Kafka broker 數量過少'\n      tier:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
+    \ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
+    \ Low Kafka broker count on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Kafka broker 數量過少'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"

@@ -202,5 +202,5 @@ class TestCli:
     def test_quoted_values_pass_strict(self, tmp_path):
         d = _tree(tmp_path, _override('alertname: "true"'))
         r = _gar(d, "--validate", "--strict")
-        assert r.returncode in (0, 2), r.stdout + r.stderr  # 2 only if amtool is unusable
+        assert r.returncode in (0, 2), r.stdout + r.stderr  # 2 only if da-read is unusable
         assert "must be a string" not in r.stderr

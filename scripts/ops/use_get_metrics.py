@@ -58,11 +58,18 @@ def process_file(path: Path) -> int:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print("usage: use_get_metrics.py <file>...", file=sys.stderr)
-        return 2
+    import argparse
+
+    import _lib_paths
+    parser = argparse.ArgumentParser(description='Replace m.metrics field access with m.getMetrics() in the given Go files.')
+    parser.add_argument("paths", nargs="+", metavar="FILE")
+    args = parser.parse_args()
+    # #3605: every path is judged before the first one is rewritten, so a
+    # missing one is a named refusal (rc 2) with nothing written.
+    _lib_paths.raise_path_problems(
+        [_lib_paths.classify_path(p, "file", lang="en") for p in args.paths])
     total = 0
-    for arg in sys.argv[1:]:
+    for arg in args.paths:
         n = process_file(Path(arg))
         if n:
             print(f"{arg}: +{n} m.metrics → m.getMetrics()")

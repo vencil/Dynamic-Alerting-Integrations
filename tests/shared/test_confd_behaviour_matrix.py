@@ -313,9 +313,6 @@ TOOLS: dict[str, Tool] = {
     "onboard_platform --alertmanager-config": Tool((_PY, _T + "ops/onboard_platform.py",
                                                     "--alertmanager-config", "{cell}/am.yaml",
                                                     "-o", "{conf}"), prep=_am_config),
-    "scaffold_tenant --generate-profile": Tool((_PY, _T + "ops/scaffold_tenant.py",
-                                                "--generate-profile", "newp", "--db", "mariadb",
-                                                "-o", "{conf}")),
     "scaffold_tenant --from-onboard": Tool((_PY, _T + "ops/scaffold_tenant.py", "--from-onboard",
                                             "{cell}/onboard-hints.json", "-o", "{conf}"),
                                            prep=_onboard_hints),
@@ -357,7 +354,7 @@ NOT_IN_MATRIX: dict[str, str] = {
                                       "not a CLI over a tree",
     "tools/dx/generate_tenant_fixture.py": "writes a synthetic conf.d; reads none",
     "tools/dx/measure_judgement_budget.py": ("a benchmark of the generator container's judgement: "
-                                             "needs helm and amtool, and reads its tree through "
+                                             "needs helm, and reads its tree through "
                                              "the generator and da-guard, which have their own rows"),
     "tools/ops/generate_rule_pack_split.py": "splits rule packs; reads no conf.d",
     # #3572: neither emits AlertmanagerConfig any more, so neither reads a

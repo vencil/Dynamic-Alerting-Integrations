@@ -425,6 +425,11 @@ jobs:
               # tests/lint/test_portal_dist_not_tracked.py reads build.mjs's
               # DIST_DIR to bind its dist path to where the build writes (#3738).
               - "tools/portal/build.mjs"
+              # tests/lint/test_lint_jsx_syntax.py parses with the transform
+              # esbuild-shared.mjs defines and pins the esbuild version the
+              # lockfile names (#3669).
+              - "tools/portal/esbuild-shared.mjs"
+              - "tools/portal/package-lock.json"
             # Portal Tests: Vitest + esbuild build verification + bundle-size
             # budget + the RBAC wizard drift byte-clamp. Runs when portal
             # source changes (dist is build output, not in git — #3738), AND when the wizard testdata
@@ -603,12 +608,17 @@ jobs:
           python-version-file: .python-version
 
       - name: 'Set up Node.js (node-backed lint engines, #3611)'
-        # lint_jsx_babel and check_cli_contract need node and exit 2 without
+        # lint_jsx_syntax and check_cli_contract need node and exit 2 without
         # it (#3611 Q1). Pinned to the devcontainer major, as every other
         # setup-node here, instead of the runner image's floating node.
         uses: actions/setup-node@v6
         with:
           node-version: '24'
+
+      - name: 'Install portal deps (jsx-syntax-check parses with their esbuild, #3669)'
+        # The lockfile's esbuild, the one build.mjs bundles with: without it
+        # jsx-syntax-check exits 2 (no verdict), never a skip.
+        run: npm ci --prefix tools/portal --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000
 
       - name: Cache pip packages
         uses: actions/cache@v5
@@ -865,9 +875,10 @@ jobs:
           pre-commit run admin-config-schema-check --all-files
           pre-commit run bilingual-content-check --all-files
           pre-commit run bilingual-annotations-check --all-files
-          # JSX Babel parse + line-count gate (one hook since #3611 B2):
-          # locks in PR-2d (#153) line-count progress — 0 soft-cap warnings.
-          pre-commit run jsx-babel-check --all-files
+          # Portal sources parsed with the build's esbuild (#3669), and the
+          # line-count caps — 0 soft-cap files since PR-2d (#153).
+          pre-commit run jsx-syntax-check --all-files
+          pre-commit run jsx-linecount-check --all-files
           # Container SAST Layer 1 (#448 / TRK-311): hadolint + Vibe wrapper
           # over all Dockerfiles. BLOCK findings fail the Lint job; WARN/INFO
           # are recorded in docs/internal/iac-lint-baseline.md. hadolint binary
@@ -904,6 +915,11 @@ jobs:
           # is why the gate lives here rather than only in local pre-commit.
           # Fail-closed: an unfetched tag is exit 2, never a silent pass.
           pre-commit run image-pin-capability-check --all-files
+          # #1269: a git-only chart's version must name one package — its
+          # packaged content must equal the commit that first carried that
+          # version. Stateless, so a main run superseded by a later push leaves
+          # nothing unchecked: the next run still compares with that commit.
+          pre-commit run chart-version-bump --all-files
           # The same image carrier, from the source side (#1503): build.sh ↔
           # COMMAND_MAP, the shipped set's transitive imports / data files, and
           # the layout-depth rule (a shipped tool must not locate repo files by
@@ -1569,6 +1585,10 @@ jobs:
       # the model alone; this var turns the skip into a failure.
       VIBE_REQUIRE_PICOMATCH: "1"
       PICOMATCH_DIR: /tmp/vibe-picomatch/node_modules/picomatch
+      # #3669: tests/lint/test_lint_jsx_syntax.py parses with the portal's own
+      # esbuild (tools/portal/node_modules, installed below); without it those
+      # tests skip — this var turns the skip into a failure.
+      VIBE_REQUIRE_PORTAL_ESBUILD: "1"
       # #1950: tests/ops/test_patch_config_exporter.py builds the real
       # threshold-exporter and runs patch-config's post-write verification and
       # rollback against it. Gated on `go` (shutil.which); this job sets Go up
@@ -1743,6 +1763,12 @@ jobs:
         run: |
           npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000 picomatch@4.0.5
           test -f "$PICOMATCH_DIR/package.json"
+
+      # The portal's lockfile esbuild for the JSX syntax lint's tests (#3669).
+      - name: Install portal deps (JSX syntax lint tests)
+        run: |
+          npm ci --prefix tools/portal --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000
+          test -f tools/portal/node_modules/esbuild/package.json
 
       - name: Cache pip packages
         uses: actions/cache@v5
@@ -1964,6 +1990,10 @@ jobs:
       # the model alone; this var turns the skip into a failure.
       VIBE_REQUIRE_PICOMATCH: "1"
       PICOMATCH_DIR: /tmp/vibe-picomatch/node_modules/picomatch
+      # #3669: tests/lint/test_lint_jsx_syntax.py parses with the portal's own
+      # esbuild (tools/portal/node_modules, installed below); without it those
+      # tests skip — this var turns the skip into a failure.
+      VIBE_REQUIRE_PORTAL_ESBUILD: "1"
       # #1950: tests/ops/test_patch_config_exporter.py builds the real
       # threshold-exporter and runs patch-config's post-write verification and
       # rollback against it. Gated on `go` (shutil.which); this job sets Go up
@@ -2130,6 +2160,12 @@ jobs:
         run: |
           npm install --prefix=/tmp/vibe-picomatch --no-save --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000 picomatch@4.0.5
           test -f "$PICOMATCH_DIR/package.json"
+
+      # The portal's lockfile esbuild for the JSX syntax lint's tests (#3669).
+      - name: Install portal deps (JSX syntax lint tests)
+        run: |
+          npm ci --prefix tools/portal --no-audit --no-fund --fetch-retries=5 --fetch-retry-mintimeout=5000
+          test -f tools/portal/node_modules/esbuild/package.json
 
       - name: Cache pip packages
         uses: actions/cache@v5

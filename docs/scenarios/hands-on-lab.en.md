@@ -238,7 +238,7 @@ A domain policy names the tenants it constrains in its `tenants:` list. The bloc
 
 ## Exercise 3: Validate All Configs
 
-Every `docker run` from here on passes `--user $(id -u):$(id -g)`: the conf.d files `init` wrote are mode 0600 and owned by you, so the image's default user cannot read them (`validate-config` reports them as unreadable files).
+Every `docker run` from here on passes `--user $(id -u):$(id -g)`: the container runs as you, so what it writes into your directory (such as `.output/`) is yours. The conf.d files `init` wrote are mode `0644` and its directories `0755`, readable by any user.
 
 ```bash
 docker run --rm \

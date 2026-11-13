@@ -219,7 +219,6 @@ groups:
         labels:
           severity: warning
           maintenance: mute
-          metric_group: "kafka_broker_count"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Low Kafka broker count on {{ $labels.tenant }}"

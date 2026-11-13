@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-03-16
-updated_at: 2026-10-16
+updated_at: 2026-11-12
 ---
 # ADR-007: 跨域路由設定檔與域策略
 
@@ -72,10 +72,11 @@ routing_profiles:
 
 ```yaml
 # db-a.yaml — 租戶配置
-db-a:
-  _routing_profile: team-sre-apac   # 引用 profile，無需重複
-  cpu_usage_percent: "80"
-  memory_usage_percent: "85"
+tenants:
+  db-a:
+    _routing_profile: team-sre-apac   # 引用 profile，無需重複
+    cpu_usage_percent: "80"
+    memory_usage_percent: "85"
 ```
 
 **合併語意**：`_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`（NOC 覆蓋，不可變）。後者覆蓋前者，但 `_routing_enforced` 永遠最終覆蓋。

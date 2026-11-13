@@ -1330,6 +1330,11 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # GAINED by #3738 PR2: tests/lint/test_portal_dist_not_tracked.py reads
     # build.mjs's DIST_DIR to bind its dist path to where the build writes.
     "tools/portal/build.mjs",
+    # GAINED by #3669: tests/lint/test_lint_jsx_syntax.py parses with the
+    # transform esbuild-shared.mjs defines and reads the esbuild version
+    # package-lock.json pins.
+    "tools/portal/esbuild-shared.mjs",
+    "tools/portal/package-lock.json",
 }
 
 
