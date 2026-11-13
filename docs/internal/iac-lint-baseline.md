@@ -86,13 +86,24 @@ INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12`、`com
 
 ## 引擎缺席或沒跑成：一律 rc 2（#3611）
 
-L1／L2／L4 與 pint 都經 `scripts/tools/_lib_engine.py` 定位並執行引擎。只有引擎的輸出**證明**它真的檢查了輸入，才算有結論：hadolint 印出 JSON 陣列、helm 算繪出非空內容、kube-linter 印出含 `Reports`／`Summary` 的報告、pint 的日誌有 `entries=N`。
+L1／L2／L4 與 pint 都經 `scripts/tools/_lib_engine.py` 定位並執行引擎。只有引擎的輸出**證明**它真的檢查了輸入，才算有結論：hadolint 印出 JSON 陣列且金絲雀以登記的等級出現（見下方 #3643 一節）、helm 算繪出非空內容、kube-linter 印出含 `Reports`／`Summary` 的報告、pint 的日誌有 `entries=N`。
 
 引擎不在、起不來、逾時，或輸出不符上述證明（例如 docker daemon 沒開、kube-linter 找不到任何 object），結束碼一律是 **2**（沒得到結論），**帶不帶 `--ci` 都一樣**。`--ci` 只決定有發現時要不要回 1。
 
 要跳過某個 hook，用 pre-commit 自己的 `SKIP=<hook id>`。畫面上會顯示 Skipped，不會顯示 Passed。
 
 哪些呼叫點還沒經過 `_lib_engine`，由 `tests/shared/test_engine_call_sites.py` 從 AST 算出來，清單只准縮小。
+
+### hadolint 的等級設定：登記表＋同次金絲雀（#3643）
+
+hadolint 遇到解析不了的設定檔會丟掉整份設定、照預設等級跑完並回 0；鍵拼錯、規則碼不存在時連訊息都沒有。`HADOLINT_*` 環境變數會壓過命令列旗標，Dockerfile 裡一行 `# hadolint ignore=` 就能讓發現消失。這些情況的輸出都是格式正確的 JSON 陣列，所以「有跑」不代表「照 repo 的等級跑」。
+
+- **唯一來源**：等級與受信任 registry 登記在 `check_iac_vibe_rules.py` 的 `HADOLINT_RULES`／`HADOLINT_TRUSTED_REGISTRIES`，wrapper 由它產生 `--error`／`--warning`／`--trusted-registry` 旗標。repo 沒有 `.hadolint.yaml`，放回一個也不會被讀。
+- **隔離**：wrapper 給 hadolint 一個內容為 `{}` 的設定檔（擋掉自動探索）、清掉所有 `HADOLINT_*` 環境變數，並一律加 `--disable-ignore-pragma`。⚠️ 因此 inline pragma 不是豁免管道；合法例外走 PR body 的 `bypass-lint: iac-vibe-rules`。
+- **同次證明**：每次執行都從 stdin 多送一份金絲雀 Dockerfile。登記表每一列都附一行會觸發該規則的指令，回來的 JSON 必須在 `-` 上以登記的等級各出現一次；DL3026 只能出現在不受信任的那個 `FROM` 上。不符就是沒有結論，rc 2。金絲雀的發現不計入結果。
+- **哪一列證明什麼**：等級與 hadolint 預設不同的列（DL3007）才是「等級旗標有被套用」的證據；等級等於預設的列（DL3018）只證明規則還會觸發。DL3026 證明的是受信任 registry 有被套用。登記表在 import 時就要求至少有一列非預設等級。
+
+⚠️ 直接下 `hadolint <Dockerfile>` 套用的是 hadolint 的預設等級，不是 repo 的設定。手動檢查請執行 `python3 scripts/tools/lint/check_iac_vibe_rules.py`。
 
 ## Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）
 
@@ -201,4 +212,4 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 - [epic #448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) — Container/k8s SAST 4-layer
 - [`lint-policy.md`](lint-policy.md) — lint class / bypass / allowlist 治理
 - [`dev-rules.md` §安全紀律](dev-rules.md) — IaC SAST 起手 pointer
-- `.hadolint.yaml`（repo root）— Layer 1 engine config
+- `scripts/tools/lint/check_iac_vibe_rules.py` 的 `HADOLINT_RULES`／`HADOLINT_TRUSTED_REGISTRIES` — Layer 1 引擎等級與受信任 registry 的唯一來源（repo 沒有 `.hadolint.yaml`，[#3643](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3643)）

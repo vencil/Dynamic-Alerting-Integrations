@@ -678,7 +678,8 @@ jobs:
       # image pull on the runner). Pin matches HADOLINT_VERSION and
       # HADOLINT_SHA256 in scripts/tools/lint/check_iac_vibe_rules.py (the SSOT,
       # which .claude/hooks/session-start.sh reads; bound by
-      # tests/shared/test_toolchain_pin_parity.py) and .hadolint.yaml.
+      # tests/shared/test_toolchain_pin_parity.py). The rule levels live in
+      # the same file (HADOLINT_RULES); there is no .hadolint.yaml (#3643).
       #
       # Download-cache pattern (CI-ROI wave, shared by every pinned-binary
       # install in this workflow): the artifact is stored in a cache dir

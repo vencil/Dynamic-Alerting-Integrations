@@ -120,7 +120,10 @@ repos:
       # every Dockerfile, applies the epic #448 severity->action mapping
       # (error=BLOCK / warning=baseline-WARN), and adds project rules:
       # HEALTHCHECK-or-rationale, no over-broad COPY, and .dockerignore
-      # baseline at each build-context root. BLOCK findings fail the commit;
+      # baseline at each build-context root. hadolint's levels and trusted
+      # registries are the wrapper's HADOLINT_RULES registry, passed as flags
+      # and proven per run by a canary — there is no .hadolint.yaml (#3643).
+      # BLOCK findings fail the commit;
       # WARN/INFO are recorded in docs/internal/iac-lint-baseline.md.
       # Layers 2-4 (Helm template / values / k8s manifest) land via TRK-312
       # ~ TRK-314. CI wires this in .github/workflows/ci.yml (Lint job).
@@ -129,7 +132,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_iac_vibe_rules.py --ci
         language: python
         pass_filenames: false
-        files: '(^|/)Dockerfile$|(^|/)\.dockerignore$|^\.hadolint\.yaml$|^scripts/tools/lint/check_iac_vibe_rules\.py$'
+        files: '(^|/)Dockerfile$|(^|/)\.dockerignore$|^scripts/tools/(lint/check_iac_vibe_rules|_lib_engine)\.py$'
         additional_dependencies: ['pathspec']
 
       # --- Container/k8s IaC SAST Layer 2 (#448 / TRK-312) ---

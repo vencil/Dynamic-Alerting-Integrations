@@ -60,6 +60,18 @@ is not an array of findings — is the engine not having run: exit 2 (a
 caller error: no verdict; #3577, #3611), its
 stderr shown. It was read as "no finding", rc 0.
 
+⛔ #3643: a run counts only when it also shows that it ran with this repo's
+levels. hadolint's levels and trusted registries live in one place, the
+``HADOLINT_RULES`` / ``HADOLINT_TRUSTED_REGISTRIES`` registry below; there
+is no ``.hadolint.yaml`` (hadolint drops a config it cannot parse, or a key
+it does not know, and exits 0 at its default levels — a BLOCK became a
+WARN). The registry is passed as flags; hadolint gets an explicit ``{}``
+config (so it discovers none), no ``HADOLINT_*`` variable, and
+``--disable-ignore-pragma`` (an inline ``# hadolint ignore=`` does not waive
+a finding; the bypass below is the waiver). The same run lints a canary
+Dockerfile on stdin: every registered rule must come back on it at its
+registered level, DL3026 on the untrusted FROM only. Anything else is exit 2.
+
 Usage:
     python3 scripts/tools/lint/check_iac_vibe_rules.py [--ci]
     python3 scripts/tools/lint/check_iac_vibe_rules.py --list
@@ -67,8 +79,9 @@ Usage:
 Exit codes:
     0  no BLOCK findings (WARN / INFO may be present), or bypass matched
     1  BLOCK findings present (only when --ci)
-    2  no verdict: hadolint unavailable (no binary, no docker) or did not
-       run (non-zero exit, no JSON array on stdout; see above)
+    2  no verdict: hadolint unavailable (no binary, no docker), did not
+       run (non-zero exit, no JSON array on stdout; see above), or did not
+       report the canary at the registered levels (#3643)
 
 Bypass (docs/internal/lint-policy.md §4): a BLOCK finding judged a
 legitimate exception can be waived from the PR body:
@@ -81,6 +94,8 @@ import argparse
 import os
 import re
 import sys
+import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 # Make stdout tolerate non-ASCII on Windows shells (cp950, cp1252).
@@ -112,6 +127,88 @@ HADOLINT_SHA256 = "56de6d5e5ec427e17b74fa48d51271c7fc0d61244bf5c90e828aab8362d55
 HADOLINT_DIGEST = "sha256:30a8fd2e785ab6176eed53f74769e04f125afb2f74a6c52aef7d463583b6d45e"
 HADOLINT_IMAGE = f"hadolint/hadolint:{HADOLINT_VERSION}@{HADOLINT_DIGEST}"
 BYPASS_NAME = "iac-vibe-rules"
+
+_HADOLINT_LEVELS = ("error", "warning", "info", "style")
+
+
+@dataclass(frozen=True)
+class HadolintRule:
+    """One row of the level registry.
+
+    ``level`` is what this repo gives the rule; ``default`` is hadolint's own
+    level for it at HADOLINT_VERSION (re-measured against the engine by
+    tests/lint/test_check_iac_vibe_rules.py); ``canary`` is one Dockerfile
+    instruction that trips the rule exactly once — the proof that the level
+    reached the engine in this very run (``hadolint_canary``)."""
+    level: str
+    default: str
+    canary: str
+
+
+# ⛔ The only source of hadolint's levels and trusted registries (#3643).
+# There is no `.hadolint.yaml`: hadolint drops a config file it cannot parse,
+# and a key or rule code it does not know, without failing — so the wrapper
+# passes these as command-line flags (`hadolint_flags`) and checks in the
+# same run that they were applied (`hadolint_canary`). Running `hadolint
+# <Dockerfile>` by hand therefore shows hadolint's defaults, not this table;
+# run this script instead.
+#
+# AC1's rule set (DL3007 / DL3008 / DL3009 / DL3018 / DL3019 / DL3025) is ON
+# by hadolint default and none of it is silenced; rows here only set a level.
+#
+# ⚠️ Which canary proves what. A row whose level differs from hadolint's
+# default (DL3007) is the evidence that the level flags were applied: without
+# them it comes back at the default. A row at its default level (DL3018,
+# DL3026) proves no such thing: it comes back the same with or without its
+# flag, and only shows that the rule still fires on its instruction (drift
+# from a hadolint bump). DL3026 proves the trusted-registry flags instead: with none
+# applied it never fires, and with one missing it fires on that registry's
+# FROM in the canary as well (a second hit).
+HADOLINT_RULES: dict[str, HadolintRule] = {
+    # :latest (or untagged) base images are a reproducibility + supply-chain
+    # risk -> error, so the wrapper treats it as Critical (BLOCK).
+    "DL3007": HadolintRule(level="error", default="warning",
+                           canary="FROM docker.io/library/alpine:latest"),
+    # apk version pinning. The platform deliberately uses `apk --no-cache` +
+    # monthly rebuild + Trivy CRITICAL/HIGH gate instead of brittle Alpine
+    # version pins (Alpine drops old package versions from the repo quickly,
+    # which turns a pinned `apk add pkg=x.y.z` into a hard build break). Kept
+    # at warning => baseline High (non-blocking), recorded in
+    # docs/internal/iac-lint-baseline.md. Rationale mirrors the comment in
+    # components/da-portal/Dockerfile.
+    "DL3018": HadolintRule(level="warning", default="warning",
+                           canary="RUN apk add --no-cache curl"),
+    # Only allowed registries in FROM (see HADOLINT_TRUSTED_REGISTRIES).
+    "DL3026": HadolintRule(level="error", default="error",
+                           canary="FROM untrusted.invalid/canary:1.0"),
+}
+
+# Base-image registries we publish from / pull bases from. Keeps DL3026
+# meaningful without flagging our own bases.
+HADOLINT_TRUSTED_REGISTRIES: tuple[str, ...] = ("docker.io", "gcr.io", "ghcr.io")
+
+
+def _check_hadolint_registry() -> None:
+    """Import-time: every row carries a usable canary, and the registry as a
+    whole can prove that it was applied."""
+    for code, rule in HADOLINT_RULES.items():
+        if rule.level not in _HADOLINT_LEVELS or rule.default not in _HADOLINT_LEVELS:
+            raise ValueError(f"HADOLINT_RULES[{code}]: level must be one of {_HADOLINT_LEVELS}")
+        line = rule.canary
+        if not line.strip() or "\n" in line or line.lstrip().startswith("#"):
+            raise ValueError(f"HADOLINT_RULES[{code}]: canary must be one Dockerfile "
+                             "instruction on one line")
+    if not any(r.level != r.default for r in HADOLINT_RULES.values()):
+        raise ValueError("HADOLINT_RULES: no row differs from hadolint's default level, "
+                         "so no canary can show the level flags were applied")
+    if not HADOLINT_TRUSTED_REGISTRIES or "DL3026" not in HADOLINT_RULES:
+        raise ValueError("HADOLINT_TRUSTED_REGISTRIES needs at least one registry and a "
+                         "DL3026 row: its canary is what shows the registries were applied")
+    if "-" in HADOLINT_RULES:
+        raise ValueError("HADOLINT_RULES: `-` is not a rule code")
+
+
+_check_hadolint_registry()
 
 # Dockerfile (repo-relative, posix) -> build-context root (repo-relative).
 # The context root is where `docker build` reads .dockerignore from. Verified
@@ -284,28 +381,82 @@ def locate_engine() -> "_lib_engine.Located | _lib_engine.NoVerdict":
     return _lib_engine.locate("hadolint", docker_image=HADOLINT_IMAGE)
 
 
+def hadolint_flags() -> list[str]:
+    """The level and trusted-registry flags, generated from the registry."""
+    flags: list[str] = []
+    for code, rule in HADOLINT_RULES.items():
+        flags += [f"--{rule.level}", code]
+    for registry in HADOLINT_TRUSTED_REGISTRIES:
+        flags += ["--trusted-registry", registry]
+    return flags
+
+
+def hadolint_canary() -> str:
+    """The canary Dockerfile sent on stdin with every run (#3643): one FROM
+    per trusted registry (DL3026 must stay quiet on each), then every
+    registered rule's ``canary`` instruction — each under an inline ignore
+    pragma for its own code, and the whole file under a global one, so a run
+    in which pragmas were honoured loses the findings the proof looks for."""
+    lines = [f"# hadolint global ignore={','.join(HADOLINT_RULES)}"]
+    lines += [f"FROM {registry}/canary/trusted:1.0"
+              for registry in HADOLINT_TRUSTED_REGISTRIES]
+    for code, rule in HADOLINT_RULES.items():
+        lines += [f"# hadolint ignore={code}", rule.canary]
+    return "\n".join(lines) + "\n"
+
+
+def hadolint_canary_expectation() -> dict[str, list[str]]:
+    """Rule code -> the levels the canary must come back with: each rule's
+    instruction trips it once, at the registered level."""
+    return {code: [rule.level] for code, rule in HADOLINT_RULES.items()}
+
+
+def hadolint_env() -> dict[str, str]:
+    """This process's environment without any ``HADOLINT_*`` variable: they
+    override the command line (measured, v2.12.0: ``HADOLINT_IGNORE``,
+    ``HADOLINT_OVERRIDE_ERROR`` and ``HADOLINT_TRUSTED_REGISTRIES`` each beat
+    the matching flag)."""
+    return {k: v for k, v in os.environ.items()
+            if not k.upper().startswith("HADOLINT_")}
+
+
 def run_hadolint(dockerfiles: list[str]) -> "_lib_engine.Result":
     """Run hadolint over the given repo-relative Dockerfiles: a Ran whose
     ``data`` is the findings, or a NoVerdict — the caller's exit 2 — when
-    the engine is unavailable or the run does not show that it ran (#3439,
-    see the module docstring and ``_lib_engine._hadolint``).
+    the engine is unavailable, the run does not show that it ran (#3439), or
+    the canary sent on stdin did not come back at the registered levels
+    (#3643; see the module docstring and ``_lib_engine._hadolint``).
     """
     if not dockerfiles:
-        # hadolint with no file args reads stdin and would block until the
-        # subprocess timeout; nothing to lint is an empty, real answer.
+        # Nothing to lint is an empty, real answer; no engine run to prove.
         return _lib_engine.Ran([], None)
+    if "-" in dockerfiles:   # hadolint's name for stdin: the canary's slot
+        raise ValueError("`-` is not a Dockerfile path")
     located = locate_engine()
     if isinstance(located, _lib_engine.NoVerdict):
         return located
-    # --no-fail: exit 0 means "ran", never "found nothing at the threshold";
-    # what a finding is worth is classify_level's answer, not hadolint's.
-    flags = ["--no-fail", "--format", "json"]
-    cfg = str(REPO_ROOT / ".hadolint.yaml") if located.mode == "binary" else ".hadolint.yaml"
-    return _lib_engine.run(
-        located, "lint", ["--config", cfg, *flags, *dockerfiles], timeout=180,
-        cwd=str(REPO_ROOT) if located.mode == "binary" else None,
-        docker_run=["-v", f"{REPO_ROOT.as_posix()}:/repo", "-w", "/repo"],
-        entrypoint="hadolint")
+    binary = located.mode == "binary"
+    with tempfile.TemporaryDirectory(prefix="hadolint-config-") as td:
+        # An explicit --config stops hadolint from discovering one (cwd, XDG,
+        # home). ⛔ It must be a file holding `{}`: an empty file or /dev/null
+        # is a parse error, which v2.12.0 answers by dropping the config and
+        # carrying on (the #3643 path).
+        Path(td, "hadolint.yaml").write_text("{}\n", encoding="utf-8", newline="\n")
+        config = f"{td}/hadolint.yaml" if binary else "/hadolint-config/hadolint.yaml"
+        # --no-fail: exit 0 means "ran", never "found nothing at the threshold";
+        # what a finding is worth is classify_level's answer, not hadolint's.
+        args = ["--config", config, "--disable-ignore-pragma", "--no-fail",
+                "--format", "json", *hadolint_flags(), *dockerfiles, "-"]
+        return _lib_engine.run(
+            located, "lint", args, timeout=180,
+            cwd=str(REPO_ROOT) if binary else None,
+            # -i: without it the container's stdin is closed and the canary
+            # never arrives (which the proof then reads as no verdict).
+            docker_run=["-i", "-v", f"{td}:/hadolint-config:ro",
+                        "-v", f"{REPO_ROOT.as_posix()}:/repo", "-w", "/repo"],
+            entrypoint="hadolint", stdin_text=hadolint_canary(),
+            env=hadolint_env(),
+            expect={"canary": hadolint_canary_expectation()})
 
 
 # ---------------------------------------------------------------------------
@@ -343,9 +494,10 @@ def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
     if isinstance(hl, _lib_engine.NoVerdict):
         print(f"ERROR: {hl.message()}", file=sys.stderr)
         findings["BLOCK"].append(
-            "[engine] hadolint unavailable or did not run (the ERROR line "
-            "above says why) — install the hadolint binary, or Docker with a "
-            "running daemon (see check_iac_vibe_rules.py)"
+            "[engine] hadolint unavailable, did not run, or did not run at "
+            "the registered levels (the ERROR line above says which) — "
+            "install the hadolint binary, or Docker with a running daemon; "
+            "for a canary mismatch see HADOLINT_RULES in check_iac_vibe_rules.py"
         )
         # Signal hard error to caller via a sentinel.
         findings["__engine_error__"] = ["1"]
