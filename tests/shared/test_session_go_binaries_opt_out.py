@@ -34,7 +34,9 @@ TESTS = REPO_ROOT / "tests"
 # has its own values, which the child must not inherit.
 _BUILD_ENV = ("DA_GUARD_BINARY", "DA_CRDECODE_BINARY", "DA_READ_BINARY",
               "VIBE_TEST_DA_GUARD_BINARY", "VIBE_TEST_DA_CRDECODE_BINARY",
-              "VIBE_TEST_DA_READ_BINARY", "VIBE_TEST_GO_BINARIES")
+              "VIBE_TEST_DA_READ_BINARY", "VIBE_TEST_GO_BINARIES",
+              # In CI an undeclared session is refused; the child decides.
+              "GITHUB_ACTIONS")
 
 _PROBE = '''
 import os
@@ -44,7 +46,8 @@ def test_probe():
 '''
 
 
-def _run(tmp_path: Path, value: "str | None") -> "tuple[subprocess.CompletedProcess[str], list[str]]":
+def _run(tmp_path: Path, value: "str | None",
+         extra_env: "dict[str, str] | None" = None) -> "tuple[subprocess.CompletedProcess[str], list[str]]":
     bindir = tmp_path / "bin"
     bindir.mkdir()
     log = tmp_path / "go-calls.log"
@@ -59,6 +62,7 @@ def _run(tmp_path: Path, value: "str | None") -> "tuple[subprocess.CompletedProc
     env["PYTHONPATH"] = str(TESTS)
     if value is not None:
         env["VIBE_TEST_GO_BINARIES"] = value
+    env.update(extra_env or {})
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-p", "conftest", "-p", "no:cacheprovider",
          "-q", "-s", "--rootdir", str(tmp_path), str(probe)],
@@ -104,3 +108,21 @@ def test_build_and_empty_mean_build(tmp_path: Path, value: str) -> None:
     proc, calls = _run(tmp_path, value)
     assert proc.returncode == 0, proc.stdout + proc.stderr
     assert calls, f"{value!r} must build"
+
+
+# In GitHub Actions the value must be written down: a pytest session started
+# by a step the workflow lint cannot see (a script that runs pytest) would
+# otherwise build silently. tests/lint/test_workflow_pytest_declares_go_binaries.py
+# checks the steps that run pytest themselves; this catches everything else
+# when it runs.
+def test_in_ci_an_undeclared_session_is_a_usage_error(tmp_path: Path) -> None:
+    proc, calls = _run(tmp_path, None, {"GITHUB_ACTIONS": "true"})
+    assert proc.returncode == 4, (proc.returncode, proc.stdout + proc.stderr)
+    assert "VIBE_TEST_GO_BINARIES" in proc.stderr + proc.stdout
+    assert calls == []
+
+
+@pytest.mark.parametrize("value", ["build", "skip"])
+def test_in_ci_a_declared_session_runs(tmp_path: Path, value: str) -> None:
+    proc, _ = _run(tmp_path, value, {"GITHUB_ACTIONS": "true"})
+    assert proc.returncode == 0, proc.stdout + proc.stderr

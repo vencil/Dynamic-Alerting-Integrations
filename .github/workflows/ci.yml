@@ -3441,6 +3441,10 @@ jobs:
   federation-e2e:
     name: Federation E2E (ADR-020 IV-2j)
     runs-on: ubuntu-24.04
+    env:
+      # pytest is started by a script here (the lint cannot see it); conftest
+      # refuses an undeclared session in CI. Builds as before.
+      VIBE_TEST_GO_BINARIES: build
     # Dedicated job — the docker-compose federation request-path E2E
     # (#516). Runs parallel to the lint/unit jobs; it is NOT part of
     # `make test` / pre-commit and is excluded from the coverage gate.

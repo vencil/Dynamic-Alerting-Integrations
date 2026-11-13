@@ -12,8 +12,10 @@ fails with the tool's "binary missing" error.
 "Runs pytest" is decided on the shell commands of `run:`, not by searching
 for the word: `pip install pytest` installs it, `pytest …`, `python -m pytest
 …` and `timeout 600 pytest …` run it. A workflow file that does not parse
-fails here rather than being skipped. Not covered: pytest started indirectly
-(a `make` target, a script) — no workflow does that today.
+fails here rather than being skipped. A pytest started indirectly (a script
+that runs it: the mutation pilot, the federation E2E driver) is not visible
+here; tests/conftest.py refuses an undeclared session when GITHUB_ACTIONS is
+true, which catches those when they run.
 """
 from __future__ import annotations
 
@@ -29,9 +31,12 @@ _WORKFLOWS = _REPO / ".github" / "workflows"
 _ENV = "VIBE_TEST_GO_BINARIES"
 _VALUES = {"build", "skip"}
 
-# Words that may precede the command itself.
-_WRAPPERS = {"timeout", "env", "time", "nice", "exec", "xvfb-run"}
+# Words that may precede the command itself: wrappers, and the shell keywords
+# that open a compound command.
+_WRAPPERS = {"timeout", "env", "time", "nice", "exec", "xvfb-run", "sudo",
+             "xargs", "then", "do", "else", "elif", "!", "{"}
 _ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+_SHELLS = {"bash", "sh", "dash", "zsh"}
 
 
 def _commands(script: str) -> list[list[str]]:
@@ -52,21 +57,29 @@ def _commands(script: str) -> list[list[str]]:
     return out
 
 
+def _runs_pytest(words: list[str]) -> bool:
+    i = 0
+    while i < len(words) and (_ASSIGNMENT.match(words[i]) or words[i] in _WRAPPERS
+                              or words[i].startswith("-") or words[i].isdigit()):
+        i += 1
+    rest = words[i:]
+    if not rest:
+        return False
+    cmd = rest[0].rsplit("/", 1)[-1]
+    if cmd in {"pytest", "py.test"}:
+        return True
+    if cmd == "uv" and rest[1:2] == ["run"]:
+        return _runs_pytest(rest[2:])
+    if cmd in _SHELLS and "-c" in rest[1:]:
+        j = rest.index("-c", 1)
+        return j + 1 < len(rest) and runs_pytest(rest[j + 1])
+    # `python -m pytest`, with interpreter flags before it (`-X dev`, `-u`),
+    # `coverage run -m pytest`, an interpreter named by an expression.
+    return any(rest[k:k + 2] == ["-m", "pytest"] for k in range(1, len(rest) - 1))
+
+
 def runs_pytest(script: str) -> bool:
-    for words in _commands(script):
-        i = 0
-        while i < len(words) and (_ASSIGNMENT.match(words[i]) or words[i] in _WRAPPERS
-                                  or words[i].startswith("-") or words[i].isdigit()):
-            i += 1
-        rest = words[i:]
-        if not rest:
-            continue
-        cmd = rest[0].rsplit("/", 1)[-1]
-        if cmd == "pytest":
-            return True
-        if re.fullmatch(r"python3?(\.\d+)?", cmd) and rest[1:3] == ["-m", "pytest"]:
-            return True
-    return False
+    return any(_runs_pytest(words) for words in _commands(script))
 
 
 def _workflow_files() -> list[Path]:
@@ -119,6 +132,19 @@ def test_every_pytest_step_declares_whether_it_builds_go_binaries(path: Path) ->
     "cd tools && pytest",
     "pip install x \\\n  && pytest -q",
     "set -e\nout=$(pytest -q)",
+    "uv run pytest -q",
+    "python -X dev -m pytest",
+    "python -u -m pytest tests/",
+    "coverage run -m pytest",
+    "bash -c 'pytest -q'",
+    "sudo pytest",
+    "xargs pytest",
+    "py.test tests/",
+    "if true; then pytest; fi",
+    "for f in a b; do pytest $f; done",
+    "{ pytest; }",
+    "! pytest",
+    "${{ matrix.py }} -m pytest",
 ])
 def test_these_run_pytest(script: str) -> None:
     assert runs_pytest(script)
@@ -131,6 +157,9 @@ def test_these_run_pytest(script: str) -> None:
     "# pytest tests/",
     "pre-commit run tool-map-check --all-files",
     "npx playwright test",
+    "python -m pip install pytest pytest-xdist",
+    "uv pip install pytest",
+    "bash -c 'echo pytest'",
 ])
 def test_these_do_not(script: str) -> None:
     assert not runs_pytest(script)

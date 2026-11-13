@@ -679,8 +679,11 @@ _SESSION_DA_GUARD_DIR: "str | None" = None
 
 #: A session that runs no test needing a Go binary declares it with
 #: `VIBE_TEST_GO_BINARIES=skip`: nothing below is built and no `*_BINARY`
-#: variable is set, so a test that does need one fails with the tool's
-#: "binary missing" error instead of being skipped. The builds are up front,
+#: variable is set (one inherited from the environment is left alone). A test
+#: that reads the session's binary then fails with the tool's "binary
+#: missing" error; a few resolve one themselves (the `da_guard_binary`
+#: fixture builds it, a tool may find one on PATH, a test may skip), so
+#: `skip` is for jobs that run none of them. The builds are up front,
 #: not lazy, on purpose: tests call these tools under short subprocess
 #: timeouts and the generator calls da-guard under RLIMIT_DATA within a
 #: judgement deadline, so a build inside the first call would fail them.
@@ -692,6 +695,13 @@ _GO_BINARIES_ENV = "VIBE_TEST_GO_BINARIES"
 
 def _session_go_binaries_skipped() -> bool:
     value = os.environ.get(_GO_BINARIES_ENV, "")
+    if value == "" and os.environ.get("GITHUB_ACTIONS") == "true":
+        # In CI the choice is written down. The workflow lint sees the steps
+        # that run pytest themselves; a pytest started by a script it cannot
+        # see (the mutation pilot, the federation E2E driver) is caught here.
+        raise pytest.UsageError(
+            f"{_GO_BINARIES_ENV} is not set: in CI every pytest session declares "
+            "'build' or 'skip' (step, job or workflow env)")
     if value in ("", "build"):
         return False
     if value == "skip":
