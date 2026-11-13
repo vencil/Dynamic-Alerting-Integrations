@@ -2106,6 +2106,29 @@ class TestTheRoutesRowAdvisesOnWhatBlockedIt:
         assert _generic_routes_hint() not in out, out
         assert vc.POLICY_ONLY_WARN_HINT in out, out
 
+    def test_a_misspelt_key_is_named_by_the_key_verdict_only(self, tmp_path,
+                                                             capsys, cli_argv):
+        """ADR-038 §11 (#3016): a misspelt key is the shared key verdict's.
+        The retired `unknown key … not in defaults` wording does not come
+        back; the routes row, which is `generate-routes --validate`, FAILs
+        with the verdict's `unread … (no_row)` line, as unread_keys does."""
+        d = self._tree(
+            tmp_path,
+            "domain_policies:\n  fin:\n    tenants: [db-a]\n")
+        (pathlib.Path(d) / "db-b.yaml").write_text(
+            "tenants:\n  db-b:\n    mysql_thredas_running: 90\n",
+            encoding="utf-8")
+        cli_argv("validate_config", "--config-dir", d)
+        with pytest.raises(SystemExit) as exc:
+            _as_run(vc.main())
+        out = capsys.readouterr().out
+        assert exc.value.code == 1, out
+        assert "not in defaults" not in out, out
+        row = _report_row(out, "routes")
+        assert row.startswith("[FAIL] routes"), row
+        assert "key verdict: db-b.yaml: error: unread `mysql_thredas_running` (no_row)" in row, row
+        assert "[FAIL] unread_keys" in out, out
+
 
 class TestTenantUniqueness:
     """Check 9 (#1577): one tenant id declared by two files.
