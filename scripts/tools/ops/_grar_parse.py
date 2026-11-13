@@ -734,7 +734,9 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
 
     Each is a ``WARN … skipping`` line (blocking under ``--validate``, as the
     #2326 F3 shape of this kind is) and a routing-tree record for the parity
-    matrix. Keys in name order, profiles in name order.
+    matrix. Keys in name order, profiles in name order. A profile name and a
+    key are the author's text (#3703): ``key_segment`` in the field,
+    ``shown_key`` in the message.
     """
     # A `_routing*` key at the TOP level of a `_` file — a carrier with no
     # `defaults:` mapping included — is routing_key_ignored instead (#2983,
@@ -744,7 +746,7 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
         block = data.get("defaults")
         if isinstance(block, dict):
             found.extend(
-                (f"defaults.{k}", k,
+                (f"defaults.{key_segment(k)}", k,
                  "a defaults block is merged into every tenant's effective "
                  "config, but the route generator never reads routing from it")
                 for k in sorted(k for k in block if _is_routing_key(k)))
@@ -755,9 +757,9 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
             if not isinstance(body, dict):
                 continue
             found.extend(
-                (f"profiles.{name}.{k}", k,
+                (f"profiles.{key_segment(name)}.{key_segment(k)}", k,
                  f"a threshold profile fills its keys into the tenants on "
-                 f"`_profile: {name}`, but the route generator never reads "
+                 f"`_profile: {shown_key(name)}`, but the route generator never reads "
                  f"routing or severity dedup from it, and the exporter does "
                  f"not apply it either (#2914)")
                 for k in sorted(k for k in body if _is_routing_layer_key(k)))
@@ -767,13 +769,13 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
     if is_carrier and isinstance(data.get("defaults"), dict):
         unread.append(("defaults.", data["defaults"], _is_routing_key))
     if isinstance(profiles, dict):
-        unread.extend((f"profiles.{n}.", profiles[n], _is_routing_layer_key)
+        unread.extend((f"profiles.{key_segment(n)}.", profiles[n], _is_routing_layer_key)
                       for n in sorted(n for n in profiles if isinstance(n, str))
                       if isinstance(profiles[n], dict))
     for prefix, holder, is_key in unread:
         for k in sorted(k for k in holder if is_key(k)):
-            _record_file_reference_errors(result, holder[k], where=f"{prefix}{k}",
-                                          field_prefix=f"{prefix}{k}.", file=fname)
+            _record_file_reference_errors(result, holder[k], where=f"{prefix}{key_segment(k)}",
+                                          field_prefix=f"{prefix}{key_segment(k)}.", file=fname)
     for fld, key, why in found:
         text = f"{fname}: {fld} is not rendered — {why}; {_unread_routing_fix(key)}"
         result.setdefault("routing_defaults_errors", []).append(
@@ -1547,7 +1549,7 @@ def _resolve_severity_dedup(config_dir: str, result: dict,
             f"{p.file}: {layer_text.get(p.layer, p.layer)} '{shown_key(p.owner)}': "
             f"_severity_dedup {_dedup_value_shown(p)} — the exporter serves enable for it "
             f"(da-guard severity-dedup); write enable or disable",
-            file=p.file, tenant=p.owner if p.layer != "profile" else None,
+            file=p.file, tenant=tenant_id_field(p.owner) if p.layer != "profile" else None,
             field="_severity_dedup")
     for e in tree.schedules:
         _field_type_error(
@@ -1556,7 +1558,7 @@ def _resolve_severity_dedup(config_dir: str, result: dict,
             f"window or expires (`overrides:` / `expires:` / `reason:`) — a reserved key takes "
             f"no schedule: the exporter reads its `default` alone and ignores the rest "
             f"(#3269; da-guard severity-dedup); write the value alone",
-            file=e.file, tenant=e.owner if e.section == "tenants" else None,
+            file=e.file, tenant=tenant_id_field(e.owner) if e.section == "tenants" else None,
             field="_severity_dedup")
 
 

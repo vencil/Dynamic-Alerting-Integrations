@@ -302,6 +302,37 @@ def test_a_platform_entry_for_no_tenant_is_not_printed(tmp_path):
     _no_canary(text)
 
 
+@pytest.mark.parametrize("value", [
+    "maybe",                                                   # a value the exporter does not read
+    {"default": "enable", "expires": "2099-01-01T00:00:00Z"},  # a schedule on a reserved key
+], ids=["unread_value", "schedule"])
+def test_a_severity_dedup_finding_does_not_carry_an_unvouched_id(tmp_path, value):
+    """`_severity_dedup` 由 Go 判（da-guard severity-dedup），在寫它的那一層判——
+    根平台檔 `tenants:` 裡沒有租戶檔宣告的 id 也判。那個 id 是作者寫的：不進訊息，
+    也不進 finding 的 `tenant`。"""
+    files = _files({"cpu_usage_percent": "85"},
+                   {"tenants": {_canary("dedup-owner"): {"_severity_dedup": value}}})
+    findings, text = validate_run(tmp_path, files)
+    assert {f["kind"] for f in findings} == {"severity_dedup_invalid"} | _REFUSED, findings
+    [f] = [f for f in findings if f["kind"] == "severity_dedup_invalid"]
+    assert (f["tenant"], f["file"], f["field"]) == (None, "_defaults.yaml", "_severity_dedup"), f
+    assert "a string of " in f["message"], f
+    _no_canary(text)
+
+
+def test_a_threshold_profile_name_is_not_printed(tmp_path):
+    """threshold profile 的名字是作者寫的鍵：profile 裡寫了 routing 層的鍵時，那行
+    「不會被 render」的訊息與 `field` 都不帶名字。"""
+    name = _canary("profile")
+    files = _files({"cpu_usage_percent": "85", "_profile": name},
+                   **{"_profiles.yaml": {"profiles": {name: {"_severity_dedup": "disable"}}}})
+    findings, text = validate_run(tmp_path, files)
+    [f] = [f for f in findings if f["kind"] == "routing_in_unread_location"]
+    assert f["field"] == "profiles.<key>._severity_dedup", f
+    assert "`_profile: a string of " in f["message"], f
+    _no_canary(text)
+
+
 def test_the_available_profiles_are_the_ones_a_tenant_can_name(tmp_path):
     """`; available:` 列的是「照抄就能用」的寫法：鍵 `123`／`true` 的 profile
     只能用加引號的字串引用（不加引號是數字／布林，`routing_profile_invalid`），
