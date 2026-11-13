@@ -9,7 +9,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useDebouncedValue } from './_common/hooks/useDebouncedValue.js';
 import ENUMS from './_common/data/recipe-enums.json';
 import { Loading } from './_common/components/Loading.jsx';
-import { redirectToSignIn } from './_common/auth/sign-in.js';
+import { apiFetch } from './_common/api/api-fetch.js';
 import {
   recipeStatus,
   formSupported,
@@ -50,7 +50,7 @@ const t = window.__t || ((zh, en) => en);
 /* ── default live S6a fetcher (overridable for tests / tenant-manager) ─ */
 function defaultFetchMetrics(tenantId, q, signal) {
   const qs = q ? `?q=${encodeURIComponent(q)}` : '';
-  return fetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}/metrics${qs}`, { signal })
+  return apiFetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}/metrics${qs}`, { signal })
     .then((r) => { if (!r.ok) throw new Error(`discovery HTTP ${r.status}`); return r.json(); })
     .then((j) => (Array.isArray(j.metrics) ? j.metrics : []));
 }
@@ -62,16 +62,15 @@ function defaultFetchMetrics(tenantId, q, signal) {
  * the browser never reaches that container. Returns the verdict object
  * verbatim; the panel renders it as-is (dumb handoff — the backend owns the
  * firing contract). A refusal throws with the server's text and status; a
- * 401 also sends the browser to sign in. */
-function defaultPreviewFetch(tenantId, recipeObj, scenario, signal, signIn = redirectToSignIn) {
-  return fetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}/recipe-preview`, {
+ * 401 also sends the browser to sign in (apiFetch). */
+function defaultPreviewFetch(tenantId, recipeObj, scenario, signal) {
+  return apiFetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}/recipe-preview`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ recipe: recipeObj, scenario }),
     signal,
   }).then(async (r) => {
     if (!r.ok) {
-      if (r.status === 401) signIn();
       let detail = r.statusText || `HTTP ${r.status}`;
       try { const b = await r.json(); if (b && typeof b.error === 'string') detail = b.error; } catch (_) { /* keep detail */ }
       const e = new Error(detail); e.status = r.status; throw e;

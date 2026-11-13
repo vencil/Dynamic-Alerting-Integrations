@@ -67,6 +67,8 @@ purpose: |
 
 import { useState, useEffect, useCallback, useRef } from "react";  // TRK-233 ESM import
 
+import { apiFetch } from '../../_common/api/api-fetch.js';
+
 const VIEWS_ENDPOINT = '/api/v1/views';
 
 function useSavedViews(onError) {
@@ -93,7 +95,7 @@ function useSavedViews(onError) {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      const resp = await fetch(VIEWS_ENDPOINT);
+      const resp = await apiFetch(VIEWS_ENDPOINT);
       if (resp.status === 404 || resp.status === 403) {
         // 404: endpoint not deployed (likely demo mode / static-docs).
         // 403: the caller may not read saved views (#3160 — an
@@ -157,7 +159,7 @@ function useSavedViews(onError) {
         return false;
       }
       try {
-        const resp = await fetch(`${VIEWS_ENDPOINT}/${encodeURIComponent(id)}`, {
+        const resp = await apiFetch(`${VIEWS_ENDPOINT}/${encodeURIComponent(id)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -188,7 +190,7 @@ function useSavedViews(onError) {
   const remove = useCallback(
     async (id) => {
       try {
-        const resp = await fetch(`${VIEWS_ENDPOINT}/${encodeURIComponent(id)}`, {
+        const resp = await apiFetch(`${VIEWS_ENDPOINT}/${encodeURIComponent(id)}`, {
           method: 'DELETE',
         });
         if (!resp.ok) {

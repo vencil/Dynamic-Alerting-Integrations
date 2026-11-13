@@ -42,7 +42,8 @@ Scan surfaces
         `/interactive/`, which is why the Hub writes `'../assets/flows.json'`
         for the very same file the components call `'flows.json'`.
 
-Recognised load sites: `fetch(…)`, `XHR.open(method, …)`, `.src = …`
+Recognised load sites: `fetch(…)` and the portal's request helpers
+`fetchPageData(…)` / `apiFetch(…)`, `XHR.open(method, …)`, `.src = …`
 assignments, and static `<link>` / `<script>` / `<img>` tags in any of the
 three HTML attribute-value forms (`"…"`, `'…'`, unquoted). `.href = …` is
 deliberately NOT a load site: every occurrence in this tree is navigation
@@ -141,6 +142,14 @@ EXEMPTIONS: dict[str, str] = {
         "apiCall(url, options) wrapper — url is a function PARAMETER; both "
         "call sites (lines 427/449) pass a /api/v1/groups/… template, never "
         "an asset",
+    "tools/portal/src/interactive/tools/_common/api/api-fetch.js::path":
+        "apiFetch's own fetch(path) — it throws before the request unless path "
+        "is a string starting with /api/ that resolves under /api/; never an "
+        "asset",
+    "tools/portal/src/interactive/tools/_common/api/api-fetch.js::name":
+        "fetchPageData's own fetch(name) — every fetchPageData(…) call site is "
+        "itself a load site read here, so the data file it names is checked "
+        "there",
     "docs/assets/jsx-loader.html::local.react":
         "offline-vendor probe — member of the `local` map whose values are all "
         "`vendorBase + …` under /assets/vendor/, copied wholesale (line 84)",
@@ -153,7 +162,11 @@ class DockerfileParseError(RuntimeError):
 
 # ── Reference extraction ────────────────────────────────────────────
 
-_FETCH_RE = re.compile(r"\bfetch\s*\(")
+# `fetchPageData(` / `apiFetch(` are the portal's request helpers
+# (tools/portal/src/interactive/tools/_common/api/api-fetch.js): every data
+# file the portal loads goes through fetchPageData, so a gate that only read
+# `fetch(` would see none of them.
+_FETCH_RE = re.compile(r"\b(?:fetch|fetchPageData|apiFetch)\s*\(")
 _XHR_OPEN_RE = re.compile(
     r"\.open\s*\(\s*['\"](?:GET|POST|HEAD|PUT|DELETE|PATCH)['\"]\s*,\s*", re.I
 )

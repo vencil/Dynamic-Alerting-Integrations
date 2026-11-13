@@ -3,6 +3,7 @@ import RecipeBuilder from '../../recipe-builder.jsx';
 import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 import { useModalFocusTrap } from '../../_common/hooks/useModalFocusTrap.js';
 import { ERROR_CODES, classifyApiError, apiErrorMessage } from '../../_common/api/classify-error.js';
+import { apiFetch } from '../../_common/api/api-fetch.js';
 
 /* ── i18n ──────────────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -42,12 +43,12 @@ const t = window.__t || ((zh, en) => en);
  * ─────────────────────────────────────────────────────────────────── */
 
 function defaultFetchTenant(tenantId) {
-  return fetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}`)
+  return apiFetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}`)
     .then((r) => { if (!r.ok) throw new Error(`load failed: HTTP ${r.status}`); return r.json(); });
 }
 
 function defaultSaveCustomAlerts(tenantId, payload) {
-  return fetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}/custom-alerts`, {
+  return apiFetch(`/api/v1/tenants/${encodeURIComponent(tenantId)}/custom-alerts`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),

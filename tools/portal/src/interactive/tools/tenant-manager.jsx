@@ -40,7 +40,7 @@ import { DEMO_TENANTS, DEMO_GROUPS } from './tenant-manager/fixtures/demo-tenant
 import { styles } from './tenant-manager/styles.js';
 import { generateMaintenanceYaml, generateSilentModeYaml } from './tenant-manager/utils/yaml-generators.js';
 import { useTenantData } from './tenant-manager/hooks/useTenantData.js';
-import { redirectToSignIn } from './_common/auth/sign-in.js';
+import { apiFetch, ApiPathError } from './_common/api/api-fetch.js';
 import { useSavedViews } from './tenant-manager/hooks/useSavedViews.js';
 import { GroupSidebar } from './tenant-manager/components/GroupSidebar.jsx';
 import { ApiNotificationToast } from './tenant-manager/components/ApiNotificationToast.jsx';
@@ -215,7 +215,7 @@ export default function TenantManager() {
   useEffect(() => {
     const fetchMe = async () => {
       try {
-        const resp = await fetch('/api/v1/me');
+        const resp = await apiFetch('/api/v1/me');
         if (resp.ok) {
           const data = await resp.json();
           setAuthUser(data);
@@ -234,12 +234,12 @@ export default function TenantManager() {
           setAuthState('forbidden');
         } else if (resp.status === 401) {
           // ADR-027 §5: oauth2-proxy answers /api/ without a session with
-          // 401 (--api-route) — sign in, coming back here.
+          // 401 (--api-route); apiFetch has sent the browser to sign in,
+          // coming back here — unless it was a 401 right after signing in,
+          // when the page stays and shows the refusal banner instead of
+          // looping through the IdP.
           setCanWrite(false);
           setAuthState('unauthenticated');
-          // false: a 401 right after signing in — stay and show the
-          // refusal banner instead of looping through the IdP.
-          redirectToSignIn();
         }
         // Any other non-ok status: leave demo defaults untouched (fail-soft).
       } catch (e) {
@@ -279,7 +279,7 @@ export default function TenantManager() {
   useEffect(() => {
     const fetchPRs = async () => {
       try {
-        const resp = await fetch('/api/v1/prs');
+        const resp = await apiFetch('/api/v1/prs');
         if (resp.ok) {
           const data = await resp.json();
           setPendingPRs(data.pending_prs || []);
@@ -425,7 +425,7 @@ export default function TenantManager() {
   // Helper: call tenant-api with error handling (409 conflict, 403 forbidden, etc.)
   const apiCall = async (url, options = {}) => {
     try {
-      const resp = await fetch(url, {
+      const resp = await apiFetch(url, {
         headers: { 'Content-Type': 'application/json', ...options.headers },
         ...options,
       });
@@ -443,6 +443,12 @@ export default function TenantManager() {
       showNotification('error', apiErrorMessage(classified, body && body.error));
       return { ok: false, status: resp.status, error: body.error, remedy: classified.remedy };
     } catch (e) {
+      // A refused path is a bug, not a missing API: never report it as a
+      // local-only success.
+      if (e instanceof ApiPathError) {
+        showNotification('error', e.message);
+        return { ok: false, error: e.message };
+      }
       // Network error or no API available — fall through to local-only mode
       return { ok: true, localOnly: true };
     }

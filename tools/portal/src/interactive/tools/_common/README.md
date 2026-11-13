@@ -26,7 +26,8 @@ to author files *in this directory*.
 ```text
 _common/
 ├── README.md          ← you are here
-├── api/              ← tenant-api answer handling
+├── api/              ← tenant-api requests and answers
+│   ├── api-fetch.js       ← the only place that sends a request: apiFetch (under /api/, 401 → sign in) and fetchPageData (a data file next to the page); ADR-027 §9 item 4
 │   └── classify-error.js  ← error code → remedy + UI message (#3202; reads data/tenant-api-errors.json)
 ├── hooks/             ← reusable React hooks
 │   ├── useCopyToClipboard.js
