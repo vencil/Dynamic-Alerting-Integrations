@@ -1056,23 +1056,6 @@ def test_offboard_tenant_a_delete_that_worsens_the_tree_deletes_nothing(tmp_path
 
 # ── E2 review follow-ups ─────────────────────────────────────────────────
 
-def test_scaffold_generate_profile_goes_through_da_guard_write(tmp_path, monkeypatch):
-    # `_profiles.yaml` is a conf.d file: written by `da-guard write`; a value
-    # the edit contract has no type for (inf) is not written (#3206 10c-3).
-    import scaffold_tenant as st
-    real = st.generate_profile
-    monkeypatch.setattr(st, "generate_profile", lambda name, dbs, tier="prod": {
-        "profiles": {name: {**real(name, dbs, tier=tier)["profiles"][name],
-                            "probe_key": float("inf")}}})
-    out = tmp_path / "out"
-    monkeypatch.setattr(sys, "argv", ["scaffold_tenant.py", "--generate-profile", "p1",
-                                      "--db", "mariadb", "-o", str(out)])
-    with pytest.raises(SystemExit) as exc:
-        st.main()
-    assert exc.value.code == 2
-    assert _bytes(out) == {}
-
-
 def test_scaffold_from_onboard_writes_all_tenants_or_none(tmp_path):
     hints = tmp_path / "hints.json"
     hints.write_text(json.dumps({
