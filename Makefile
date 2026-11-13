@@ -957,6 +957,10 @@ byo-rulepack-table: $(DA_READ_PREREQ) ## 重新產生 BYO Prometheus 文件內�
 platform-data: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 產生 docs/assets/platform-data.json（含嵌入的 Tenant Metadata；需要 da-guard：DA_GUARD_BINARY，未設就建 .build/da-guard；規則檔經 da-read：DA_READ_BINARY，未設就建 .build/da-read（DA_READ_PREREQ／DA_READ_ENV 已含 da-crdecode）；Helm／k8s 檔經 da-crdecode：DA_CRDECODE_BINARY，未設就建 .build/da-crdecode）
 	@$(DA_GUARD_ENV) $(DA_READ_ENV) python3 ./scripts/tools/dx/generate_platform_data.py
 
+.PHONY: renovate-fixup
+renovate-fixup: $(DA_CRDECODE_PREREQ) ## 在 Renovate「third-party container images」PR 分支上補齊它寫不到的連動修改（da-read go.sum、oauth2-proxy 測試函式庫、federation-e2e／try-local compose、platform-data＋portal IMAGE_MIRROR＋dist；#3799）。需要 go 與 make；剩下的紅燈是上游 API 變更，要人修
+	@$(DA_CRDECODE_ENV) python3 ./scripts/tools/dx/renovate_fixup.py
+
 .PHONY: rulepack-configmaps
 rulepack-configmaps: $(DA_READ_PREREQ) ## 從 rule-packs/ 重生 k8s/03-monitoring/configmap-rules-*.yaml（ADR-024 PR3-pre-2）
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/generate_rulepack_configmaps.py
@@ -1203,7 +1207,7 @@ coverage: ## 測試覆蓋率報告 (使用: make coverage ARGS="--html" 產生 H
 	@$(if $(findstring --html,$(ARGS)),echo "✓ HTML 報告: .build/htmlcov/index.html")
 
 .PHONY: test-e2e
-# #3738：E2E 伺服的 docs/ 含 docs/assets/dist/，先從 source 重建，不測 commit 進 repo 的那份。
+# #3738：E2E 伺服的 docs/ 含 docs/assets/dist/，那是 build 產物、不在 git 裡，先從 source 建出來。
 test-e2e: portal-build ## Portal E2E 煙霧測試 (Playwright, 需 Node.js 24，與 CI 同版，排除 @visual)
 	@cd tests/e2e && npm test -- $(ARGS)
 

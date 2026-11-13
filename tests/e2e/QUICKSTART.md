@@ -5,6 +5,7 @@ Get started with smoke tests in 3 minutes.
 ## 1. Install Dependencies
 
 ```bash
+make portal-build              # from the repo root: docs/assets/dist/ is not in git (#3738); without it every tool page 404s
 cd tests/e2e
 npm install
 npx playwright install chromium

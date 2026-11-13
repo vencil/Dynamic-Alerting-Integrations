@@ -1164,10 +1164,12 @@ repos:
 
       - id: playwright-e2e
         name: Playwright Portal E2E smoke tests
-        entry: bash -c 'cd tests/e2e && npx playwright test'
+        # docs/assets/dist/ is build output and not in git (#3738): build it
+        # first, or every tool page the local server serves 404s its bundle.
+        entry: bash -c 'make portal-build && cd tests/e2e && npx playwright test'
         language: system
         pass_filenames: false
-        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|dist/|platform-data|template-data|recommendation-data))
+        files: ^(docs/interactive/|tests/e2e/|tools/portal/|docs/assets/(tool-registry|jsx-loader|flows|platform-data|template-data|recommendation-data))
         stages: [manual]
 
       - id: playwright-lint
@@ -1526,7 +1528,7 @@ repos:
         name: "#1231: forbid re-introducing the retired mysql_cpu threshold key as a live value"
         entry: '\bmysql_[c]pu(_critical)?["'']?\s*:\s*(["'']?[0-9.]|["'']?disable|\{|\s*$)|tenant:alert_threshold:mysql_[c]pu'
         language: pygrep
-        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py|components/threshold-exporter/app/cmd/da-guard/served_values_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_test\.go|tests/shared/test_lib_tenant_values\.py|tests/ops/test_policy_opa_bridge\.py|components/threshold-exporter/app/cmd/da-guard/effective_test\.go|components/threshold-exporter/app/pkg/config/keyed_threshold_test\.go|components/threshold-exporter/app/pkg/config/platform_alias_layer_test\.go|components/threshold-exporter/app/pkg/config/effective_view_test\.go|components/threshold-exporter/app/cmd/da-guard/effective_view_gate_test\.go|components/threshold-exporter/app/config_platform_alias_test\.go|components/threshold-exporter/app/cmd/da-guard/platform_alias_guard_test\.go|tests/shared/platform_tenant_overlay_matrix\.json|tests/shared/test_threshold_ownership_matrix\.py|components/threshold-exporter/app/pkg/config/key_refs_test\.go|components/threshold-exporter/app/cmd/da-guard/key_refs_test\.go|tests/ops/test_deprecate_rule_exporter_precheck\.py|components/threshold-exporter/app/pkg/config/merge_tenant_profile_test\.go|tests/shared/test_key_verdict\.py|tests/ops/test_backtest_threshold\.py|components/threshold-exporter/app/pkg/config/loaddir_undeliverable_test\.go|components/threshold-exporter/app/pkg/config/dimensions_test\.go)$
+        exclude: ^(CHANGELOG\.md|changelog\.d/.*\.md|components/threshold-exporter/app/pkg/config/aliases_test\.go|components/threshold-exporter/app/config_alias_collector_test\.go|components/threshold-exporter/app/config_subtree_alias_test\.go|components/tenant-api/internal/handler/tenant_deprecation_test\.go|components/tenant-api/internal/gitops/writer_deprecation_test\.go|tools/portal/tests/playground-validation\.test\.ts|tests/ops/test_generate_alertmanager_routes\.py|tests/lint/test_check_threshold_registry\.py|components/threshold-exporter/app/cmd/da-guard/served_values_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_test\.go|components/threshold-exporter/app/cmd/da-guard/served_schedules_differential_test\.go|tests/shared/test_lib_tenant_values\.py|tests/ops/test_policy_opa_bridge\.py|components/threshold-exporter/app/cmd/da-guard/effective_test\.go|components/threshold-exporter/app/pkg/config/keyed_threshold_test\.go|components/threshold-exporter/app/pkg/config/platform_alias_layer_test\.go|components/threshold-exporter/app/pkg/config/effective_view_test\.go|components/threshold-exporter/app/cmd/da-guard/effective_view_gate_test\.go|components/threshold-exporter/app/config_platform_alias_test\.go|components/threshold-exporter/app/cmd/da-guard/platform_alias_guard_test\.go|tests/shared/platform_tenant_overlay_matrix\.json|tests/shared/test_threshold_ownership_matrix\.py|components/threshold-exporter/app/pkg/config/key_refs_test\.go|components/threshold-exporter/app/cmd/da-guard/key_refs_test\.go|tests/ops/test_deprecate_rule_exporter_precheck\.py|components/threshold-exporter/app/pkg/config/merge_tenant_profile_test\.go|tests/shared/test_key_verdict\.py|tests/ops/test_backtest_threshold\.py|components/threshold-exporter/app/pkg/config/loaddir_undeliverable_test\.go|components/threshold-exporter/app/pkg/config/dimensions_test\.go)$
         # #1231 renamed mysql_cpu → mysql_threads_running (the metric never
         # measured host CPU%). Prose mentions ("renamed from mysql_cpu") and the
         # alias SSOT (`mysql_cpu: mysql_threads_running` — value is an
@@ -1997,19 +1999,6 @@ repos:
         # showed 0 violations (TRK-233/034 cleared all instances). Per-line
         # escape via `<!-- window-x-no-fallback: ignore -->` for legitimate
         # exceptions (illustrative comments only).
-
-      - id: dist-source-consistency-check
-        name: "Catch portal dist commits without matching source change (testing-playbook §LL v2.8.0 §2, TRK-239)"
-        entry: python3 -X utf8 scripts/tools/lint/check_dist_source_consistency.py
-        language: python
-        pass_filenames: false
-        always_run: true
-        # Auto-stage, FATAL on findings. Triggers when staged files include
-        # docs/assets/dist/*.js but no matching source-of-rebuild signal
-        # (entries / build.mjs / manifest / shims / tools/portal/src/**).
-        # Codifies the PR-E (#269) regression pattern: dist drift hidden
-        # behind a single visible source change. Escape: BYPASS_DIST_CHECK=1
-        # for legitimate dist-only commits (e.g. CI bot regen).
 
       - id: skip-a11y-justification-check
         name: "Require TD-ticket justification for `skipA11y: true` (testing-playbook §LL v2.8.0 §5, TRK-239)"

@@ -42,7 +42,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-a
               job: tenant-exporters
               instance: db-a-0:9104
@@ -93,7 +93,7 @@ tests:
           - exp_labels:
               maintenance: page
               severity: critical
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-a
             exp_annotations:
               summary: "MariaDB: ALL instances down for tenant db-a"
@@ -129,7 +129,7 @@ tests:
           - exp_labels:
               maintenance: page
               severity: critical
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-a
             exp_annotations:
               summary: "MariaDB: no writable primary for tenant db-a"
@@ -210,7 +210,7 @@ tests:
           - exp_labels:
               maintenance: mute
               severity: warning
-              metric_group: liveness
+              metric_group: mariadb_liveness
               tenant: db-b
               job: tenant-exporters
               instance: db-b-0:9104

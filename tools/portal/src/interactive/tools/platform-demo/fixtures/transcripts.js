@@ -82,7 +82,7 @@ tenants:
 #     custom_mysql_global_status_threads_connected_critical: "200"
 
 # --- From: MySQLTooManyConnections (severity: warning) ---
-# 📖 Severity Dedup: 已配對 critical (MySQLTooManyConnectionsCritical)，metric_group="connected"。Alertmanager inhibit 預設壓制 warning 通知 (tenant 可設 _severity_dedup: "disable" 取消)
+# 📖 Severity Dedup: 已配對 critical (MySQLTooManyConnectionsCritical)，metric_group="custom_mysql_global_status_threads_connected"。Alertmanager inhibit 預設壓制 warning 通知 (tenant 可設 _severity_dedup: "disable" 取消)
 custom_mysql_global_status_threads_connected: "150"
 
 # --- From: MySQLHighSlowQueries (severity: warning) ---

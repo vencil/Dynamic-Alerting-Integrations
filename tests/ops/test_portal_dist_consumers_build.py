@@ -9,8 +9,9 @@ on main even though CI had compared it on the PR's merge ref: branch
 protection is not strict, so main moved between that check and the merge
 (#3723 + #3729 → a bundle importing a chunk that no longer existed), and the
 broken copy was deployed to Pages. Any "is the committed copy current?" check
-has the same window. The fix is that nothing consumes the committed copy: each
-consumer builds it. The committed copy itself leaves git in a follow-up PR.
+has the same window. The fix is that nothing consumes a committed copy: each
+consumer builds it, and the directory is no longer in git at all
+(``tests/lint/test_portal_dist_not_tracked.py`` guards that half).
 
 WHAT THIS PINS (one test per consumer, plus the deploy trigger)
 ---------------------------------------------------------------
@@ -32,7 +33,7 @@ WHAT THIS PINS (one test per consumer, plus the deploy trigger)
   stage — never from the build context's ``docs/assets/dist/``, neither by
   naming it nor by a later directory COPY whose destination contains
   ``/assets/dist`` (``COPY docs/assets/ …/assets/`` would overwrite the
-  stage's bundles with the committed ones). Single-file COPYs into
+  stage's bundles with a host-built copy). Single-file COPYs into
   ``/assets/`` stay allowed.
 
 WHAT THIS DOES NOT PIN
@@ -274,14 +275,14 @@ def test_da_portal_image_builds_its_bundles() -> None:
     bad = [l for l in into_dist if "--from=portal-build" not in l]
     assert not bad, (
         "the image's bundles must come from the portal-build stage, not the build "
-        "context's committed docs/assets/dist/:\n  " + "\n  ".join(bad))
+        "context's docs/assets/dist/ (a host build, if any):\n  " + "\n  ".join(bad))
     ctx = [l for l in copies if "--from=" not in l and re.search(r"\sdocs/assets/dist\b", l)]
     assert not ctx, "the final stage still COPYs docs/assets/dist from the context:\n  " + "\n  ".join(ctx)
     over = [l for l in copies if "--from=portal-build" not in l and _overwrites_dist(l)]
     assert not over, (
         "a COPY not from portal-build lands a directory over /assets/dist — it "
         "would replace the stage's bundles with whatever the source holds (the "
-        "context's committed docs/assets/dist/):\n  " + "\n  ".join(over))
+        "context's docs/assets/dist/, a host build if any):\n  " + "\n  ".join(over))
 
 
 _DIST_DEST = "/usr/share/nginx/html/assets/dist/"

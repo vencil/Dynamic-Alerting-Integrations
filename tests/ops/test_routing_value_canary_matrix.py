@@ -250,6 +250,10 @@ def _expected_kinds(where: str, key: str, kind: str) -> set[str]:
         out.add("redundant_override_receiver")
     if where.endswith("_dup") and where.startswith("override_entry"):
         out.add("duplicate_override_matcher")  # two identical entries
+        if key == "metric_group" and kind == "url_string":
+            # a string canary is the group of no shipped rule pack (#3692);
+            # a mapping is no group at all (routing_value_not_string)
+            out.add("unknown_override_metric_group")
     if override and key == "metric_group" and not where.endswith("_dup"):
         out.add("conflicting_override_matcher")  # beside the entry's alertname
     if kind == "receiver_mapping" or (kind == "url_string" and key in ("receiver", "overrides", "routes")):

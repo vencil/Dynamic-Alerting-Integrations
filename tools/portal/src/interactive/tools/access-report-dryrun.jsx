@@ -16,6 +16,7 @@ import {
   isEmptyDiff,
 } from './access-report-dryrun/diff-view.js';
 import { ERROR_CODES } from './_common/api/classify-error.js';
+import { apiFetch } from './_common/api/api-fetch.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -50,7 +51,7 @@ async function runDryRun(tenantId, rbacYaml, view, includeOrgValues) {
   const url = `/api/v1/audit/tenants/${encodeURIComponent(tenantId)}/access-report/dry-run${query}`;
   let resp;
   try {
-    resp = await fetch(url, {
+    resp = await apiFetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       // rbac_yaml is sent VERBATIM — de-indenting client-side would change the
