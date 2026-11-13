@@ -3,7 +3,7 @@
 
 Epic #448 / TRK-311. **Hybrid policy** (open-source engine + Vibe wrapper):
 hadolint is the engine; this wrapper aggregates hadolint's JSON output,
-applies the epic's severity->action reduction, and adds three
+applies the epic's severity->action reduction, and adds four
 project-specific rules that hadolint cannot express:
 
   V1  HEALTHCHECK-or-rationale — every Dockerfile must declare a HEALTHCHECK
@@ -33,12 +33,24 @@ project-specific rules that hadolint cannot express:
       ``pathspec`` gitwildmatch parser so equivalent globs (``.git`` ==
       ``.git/`` == ``**/.git``) and comment lines are handled correctly.
 
+  V4  No lint directive hadolint has no switch for (#3643) — a
+      ``# hadolint shell=<x>`` comment, and a ``# shellcheck ...``
+      comment. ``--disable-ignore-pragma`` turns off ``ignore=`` only: the
+      shell pragma still makes hadolint skip ShellCheck for every RUN after
+      it (an error-level SC finding disappears), and inside a heredoc RUN a
+      comment that starts with ``shellcheck`` (even ``# shellchecked``) is
+      read by ShellCheck as its own directive, ``disable=`` included
+      (measured, v2.12.0). The spellings flagged are a superset of the ones hadolint
+      acts on. A ``SHELL [...]`` instruction and a heredoc's ``#!`` line
+      change what the image runs, not only what the linter reads, and are
+      not flagged.
+
 Engine (hadolint) finding -> action, by ``level``:
   error    -> BLOCK  (Critical)
   warning  -> WARN   (High; recorded in docs/internal/iac-lint-baseline.md)
   info     -> INFO
   style    -> INFO
-Vibe rule violations (V1/V2/V3) and unregistered Dockerfiles -> BLOCK.
+Vibe rule violations (V1/V2/V3/V4) and unregistered Dockerfiles -> BLOCK.
 
 The unified Critical/High/Medium/Low -> BLOCK/WARN/INFO table is finalised
 across all four layers in TRK-314; Layer 1 uses the BLOCK/WARN reduction
@@ -68,9 +80,12 @@ it does not know, and exits 0 at its default levels — a BLOCK became a
 WARN). The registry is passed as flags; hadolint gets an explicit ``{}``
 config (so it discovers none), no ``HADOLINT_*`` variable, and
 ``--disable-ignore-pragma`` (an inline ``# hadolint ignore=`` does not waive
-a finding; the bypass below is the waiver). The same run lints a canary
-Dockerfile on stdin: every registered rule must come back on it at its
-registered level, DL3026 on the untrusted FROM only. Anything else is exit 2.
+a finding; the bypass below is the waiver). The directives that flag does
+not reach are V4's, a BLOCK finding. The same run lints a canary Dockerfile
+on stdin: every registered rule must come back on it exactly once, at its
+registered level (the canary holds one untrusted FROM and one FROM per
+trusted registry, so DL3026 once means the registries were applied; only
+code and level are read, not the line). Anything else is exit 2.
 
 Usage:
     python3 scripts/tools/lint/check_iac_vibe_rules.py [--ci]
@@ -331,6 +346,34 @@ def over_broad_copy_lines(content: str) -> list[tuple[int, str]]:
     return out
 
 
+# V4. Horizontal whitespace only between the parts, any case, anywhere on a
+# line: wider than what hadolint v2.12.0 acts on (lower case, a comment line
+# of its own), so that no spelling it does act on gets through — the real
+# engine is asked in tests/lint/test_check_iac_vibe_rules.py.
+_H = r"[^\S\r\n]"
+_LINT_DIRECTIVES: tuple[tuple[str, "re.Pattern[str]", str], ...] = (
+    ("hadolint shell pragma",
+     re.compile(rf"#{_H}*hadolint{_H}+shell{_H}*=", re.IGNORECASE),
+     "hadolint skips ShellCheck for the RUNs after it; if the image's shell "
+     "really differs, say so with a SHELL [...] instruction"),
+    ("shellcheck directive",
+     re.compile(rf"#{_H}*shellcheck", re.IGNORECASE),
+     "inside a heredoc RUN ShellCheck reads it as its own directive; fix the "
+     "finding, or word the comment without a leading `shellcheck`"),
+)
+
+
+def lint_directive_lines(content: str) -> list[tuple[int, str, str]]:
+    """V4: ``(line, what, why)`` for each line carrying a lint directive that
+    hadolint has no flag to turn off."""
+    out: list[tuple[int, str, str]] = []
+    for i, line in enumerate(content.splitlines(), 1):
+        for what, pattern, why in _LINT_DIRECTIVES:
+            if pattern.search(line):
+                out.append((i, what, why))
+    return out
+
+
 def dockerignore_baseline_gaps(dockerignore_text: str) -> list[str]:
     """Return baseline labels NOT covered by the given .dockerignore content.
 
@@ -393,7 +436,8 @@ def hadolint_flags() -> list[str]:
 
 def hadolint_canary() -> str:
     """The canary Dockerfile sent on stdin with every run (#3643): one FROM
-    per trusted registry (DL3026 must stay quiet on each), then every
+    per trusted registry (a DL3026 hit on one would be a second hit, which
+    the proof's count catches), then every
     registered rule's ``canary`` instruction — each under an inline ignore
     pragma for its own code, and the whole file under a global one, so a run
     in which pragmas were honoured loses the findings the proof looks for."""
@@ -438,9 +482,10 @@ def run_hadolint(dockerfiles: list[str]) -> "_lib_engine.Result":
     binary = located.mode == "binary"
     with tempfile.TemporaryDirectory(prefix="hadolint-config-") as td:
         # An explicit --config stops hadolint from discovering one (cwd, XDG,
-        # home). ⛔ It must be a file holding `{}`: an empty file or /dev/null
-        # is a parse error, which v2.12.0 answers by dropping the config and
-        # carrying on (the #3643 path).
+        # home). It holds `{}` rather than nothing: an empty file or /dev/null
+        # is a parse error to v2.12.0 — measured, it then prints the error on
+        # every run, still applies the flags and still discovers no config,
+        # but that is what it happens to do after failing, not a contract.
         Path(td, "hadolint.yaml").write_text("{}\n", encoding="utf-8", newline="\n")
         config = f"{td}/hadolint.yaml" if binary else "/hadolint-config/hadolint.yaml"
         # --no-fail: exit 0 means "ran", never "found nothing at the threshold";
@@ -521,6 +566,10 @@ def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
         for ln, snippet in over_broad_copy_lines(content):
             findings["BLOCK"].append(
                 f"{df}:{ln} [V2 broad-copy] over-broad COPY/ADD source: {snippet}"
+            )
+        for ln, what, why in lint_directive_lines(content):
+            findings["BLOCK"].append(
+                f"{df}:{ln} [V4 lint-directive] {what}: {why}"
             )
 
     # Vibe rule V3 — the ignore file each build actually reads. BuildKit reads
@@ -615,7 +664,7 @@ def main() -> int:
         f"\nFAIL Container SAST Layer 1 — {n_block} BLOCK / {n_warn} WARN / "
         f"{n_info} INFO.\n"
         f"   容器 SAST 第 1 層失敗：{n_block} 個阻擋項（Critical）須修。\n"
-        f"   修法：補 HEALTHCHECK 或 `# rationale:` 註解 / 收斂過寬 COPY / "
+        f"   修法：補 HEALTHCHECK 或 `# rationale:` 註解 / 收斂過寬 COPY / 移除 lint 指令註解 / "
         f"補齊 build-context 的 .dockerignore baseline / 修 hadolint error。\n"
         f"   合法例外請於 PR description 加：\n"
         f"     bypass-lint: {BYPASS_NAME}\n"
