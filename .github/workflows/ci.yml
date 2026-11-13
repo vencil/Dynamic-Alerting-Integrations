@@ -995,6 +995,11 @@ jobs:
     # required checks to lock it in.
     name: Lint Rule Packs
     runs-on: ubuntu-24.04
+    env:
+      # The pytest session builds da-guard / da-crdecode / da-read up front
+      # (tests/conftest.py); declared per job, see
+      # tests/lint/test_workflow_pytest_declares_go_binaries.py.
+      VIBE_TEST_GO_BINARIES: build
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -1521,6 +1526,10 @@ jobs:
         shard: [1, 2, 3]
       fail-fast: false
     env:
+      # The pytest session builds da-guard / da-crdecode / da-read up front
+      # (tests/conftest.py); declared per job, see
+      # tests/lint/test_workflow_pytest_declares_go_binaries.py.
+      VIBE_TEST_GO_BINARIES: build
       # Same fail-closed pattern for docker-gated tests (amtool routing
       # tests, in-flight on a sibling branch): ubuntu-latest ships docker,
       # so if docker is missing at pytest time the runner image regressed —
@@ -1931,6 +1940,10 @@ jobs:
         shard: [1, 2, 3]
       fail-fast: false
     env:
+      # The pytest session builds da-guard / da-crdecode / da-read up front
+      # (tests/conftest.py); declared per job, see
+      # tests/lint/test_workflow_pytest_declares_go_binaries.py.
+      VIBE_TEST_GO_BINARIES: build
       # Same fail-closed pattern for docker-gated tests (amtool routing
       # tests, in-flight on a sibling branch): ubuntu-latest ships docker,
       # so if docker is missing at pytest time the runner image regressed —
@@ -3448,6 +3461,10 @@ jobs:
   federation-e2e:
     name: Federation E2E (ADR-020 IV-2j)
     runs-on: ubuntu-24.04
+    env:
+      # pytest is started by a script here (the lint cannot see it); conftest
+      # refuses an undeclared session in CI. Builds as before.
+      VIBE_TEST_GO_BINARIES: build
     # Dedicated job — the docker-compose federation request-path E2E
     # (#516). Runs parallel to the lint/unit jobs; it is NOT part of
     # `make test` / pre-commit and is excluded from the coverage gate.

@@ -63,6 +63,10 @@ jobs:
   python-pilot:
     name: Python Mutation Pilot
     runs-on: ubuntu-24.04
+    env:
+      # pytest is started by a script here (the lint cannot see it); conftest
+      # refuses an undeclared session in CI. Builds as before.
+      VIBE_TEST_GO_BINARIES: build
     timeout-minutes: 45
     steps:
       - name: Checkout
