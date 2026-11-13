@@ -122,7 +122,7 @@ The *In maintenance* column is each alert's `maintenance` label: `muted` means t
 |---|---|---|---|---|---|
 | TenantExporterAbsent | critical | fires | No {{ $labels.db_type }} exporter of tenant {{ $labels.tenant }} has answered a scrape under job="te | Verify component is running and configured correctly; check component logs | tenant_expected_exporter |
 | TenantExporterReplicaDown | warning | muted | Target {{ $labels.instance }}{{ with $labels.pod }} (pod {{ . }}){{ end }} of tenant {{ $labels.tena | Immediately check server status and network connectivity; review system logs | up |
-| TenantExporterUndeclared | warning | muted | A database exporter of tenant {{ $labels.tenant }} (one of the kinds _metadata.db_type accepts) has  | Check alert metrics and review related logs; contact platform team for assistance if needed | mysql_up |
+| TenantExporterUndeclared | warning | muted | A {{ $labels.db_type }} exporter of tenant {{ $labels.tenant }} has answered under job="tenant-expor | Check alert metrics and review related logs; contact platform team for assistance if needed | mysql_up |
 
 ---
 

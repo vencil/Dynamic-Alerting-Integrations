@@ -2033,11 +2033,13 @@ groups:
       # UNIT (#3771): the anti-join is TenantExporterAbsent's own —
       # `unless on(tenant, db_type) (<presence>)`, the presence expression
       # generated from scripts/tools/_lib_exporter_presence.py and written into
-      # this expr (its --write; do not edit the expr by hand) — so both counts are
-      # of (tenant, db_type) PAIRS, not tenants: a tenant declaring
-      # [mariadb, redis] adds 2 to the denominator, and 1 to the numerator when
-      # only its mariadb exporter is gone. The floor (> 5) and ratio (> 0.1)
-      # below are therefore pairs, and the summary says so.
+      # this expr (its --write; do not edit the expr by hand). The FLOOR (> 5)
+      # counts TENANTS with at least one absent pair
+      # (`count without (tenant) (count without (db_type) (...))`): one tenant
+      # declaring seven kinds, all down, is seven pairs but no shared failure
+      # (#3771 review; promtool R5). The RATIO (> 0.1) is of (tenant, db_type)
+      # PAIRS: a tenant declaring [mariadb, redis] adds 2 to the denominator,
+      # and 1 to the numerator when only its mariadb exporter is gone.
       # INLINE, NOT A RECORDING RULE (#3771 review): reading a record the
       # liveness pack writes made this rule depend on that pack being loaded in
       # the same Prometheus — loaded alone it read every declared pair as
@@ -2058,7 +2060,8 @@ groups:
       #                                          fleet down ⇒ systemic, not N
       #                                          independent deaths.
       # `$value` is clause (a) (the down COUNT) because it is the LHS of the
-      # top-level `and`, so the "{{ $value }} tenants" summary stays a count.
+      # top-level `and`, so the "{{ $value }} tenants" summary stays a count
+      # (of tenants, since #3771's review).
       # JOB-PRESENCE GATE (`unless on() absent(...)`): when the ENTIRE
       # tenant-exporters job is absent (all up series gone — SD / scrape-config
       # regression), every expected tenant looks "down", the ratio is 1.0, and
@@ -2084,7 +2087,7 @@ groups:
       - alert: MassExporterOutage
         expr: |
           (
-            count without (tenant, db_type) (
+            count without (tenant) (count without (db_type) (
               max without(instance, pod) (tenant_expected_exporter)
               unless on(tenant, db_type) (
                 label_replace(mysql_up{job="tenant-exporters"}, "db_type", "mariadb", "", "")
@@ -2098,7 +2101,7 @@ groups:
                 or label_replace(kafka_brokers{job="tenant-exporters"}, "db_type", "kafka", "", "")
                 or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "db_type", "rabbitmq", "", "")
               )
-            ) > 5
+            )) > 5
             and
             (
               count without (tenant, db_type) (
@@ -2126,10 +2129,10 @@ groups:
           severity: critical
           alert_source: platform
         annotations:
-          summary: "Mass exporter outage ({{ $value }} tenant × db_type pairs) — shared-dependency failure suspected"
+          summary: "Mass exporter outage ({{ $value }} tenants) — shared-dependency failure suspected"
           description: |
-            More than 5 (tenant, db_type) pairs AND over 10% of the declared
-            (tenant, db_type) pairs simultaneously have no exporter of that
+            More than 5 tenants AND over 10% of the declared (tenant, db_type)
+            pairs simultaneously have no exporter of that
             db_type answering under job="tenant-exporters"
             (that kind's presence metric absent).
             Both conditions together mean this is almost certainly a SHARED

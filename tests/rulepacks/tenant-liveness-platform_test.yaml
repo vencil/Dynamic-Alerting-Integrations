@@ -123,8 +123,8 @@ tests:
               alert_source: platform
             exp_annotations:
               description: |
-                More than 5 (tenant, db_type) pairs AND over 10% of the declared
-                (tenant, db_type) pairs simultaneously have no exporter of that
+                More than 5 tenants AND over 10% of the declared (tenant, db_type)
+                pairs simultaneously have no exporter of that
                 db_type answering under job="tenant-exporters"
                 (that kind's presence metric absent).
                 Both conditions together mean this is almost certainly a SHARED
@@ -136,7 +136,7 @@ tests:
                 the fanned-out TenantExporterAbsent alerts. If instead the WHOLE
                 tenant-exporters job is gone, TenantExporterJobAbsent fires instead.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage"
-              summary: "Mass exporter outage (8 tenant × db_type pairs) — shared-dependency failure suspected"
+              summary: "Mass exporter outage (8 tenants) — shared-dependency failure suspected"
 
   - interval: 30s
     name: mass-job-absent-8-expected-silent-jobabsent-fires

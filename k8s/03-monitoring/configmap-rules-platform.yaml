@@ -680,9 +680,9 @@ data:
     \ job\n\n        and the threshold-exporter Deployment.\n\n        '\n      runbook_url:\
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/federation-integration.md\n\
     \      summary: Entire tenant-exporters scrape job is absent — per-tenant liveness\
-    \ is BLIND\n  - alert: MassExporterOutage\n    expr: \"(\\n  count without (tenant,\
-    \ db_type) (\\n    max without(instance, pod) (tenant_expected_exporter)\\n  \
-    \  unless on(tenant, db_type) (\\n      label_replace(mysql_up{job=\\\"tenant-exporters\\\
+    \ is BLIND\n  - alert: MassExporterOutage\n    expr: \"(\\n  count without (tenant)\
+    \ (count without (db_type) (\\n    max without(instance, pod) (tenant_expected_exporter)\\\
+    n    unless on(tenant, db_type) (\\n      label_replace(mysql_up{job=\\\"tenant-exporters\\\
     \"}, \\\"db_type\\\", \\\"mariadb\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(pg_up{job=\\\
     \"tenant-exporters\\\"}, \\\"db_type\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\
     \")\\n      or label_replace(redis_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\
@@ -697,7 +697,7 @@ data:
     \")\\n      or label_replace(kafka_brokers{job=\\\"tenant-exporters\\\"}, \\\"\
     db_type\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n      or label_replace(rabbitmq_up{job=\\\
     \"tenant-exporters\\\"} or rabbitmq_identity_info{job=\\\"tenant-exporters\\\"\
-    }, \\\"db_type\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n    )\\n  ) > 5\\\
+    }, \\\"db_type\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\")\\n    )\\n  )) > 5\\\
     n  and\\n  (\\n    count without (tenant, db_type) (\\n      max without(instance,\
     \ pod) (tenant_expected_exporter)\\n      unless on(tenant, db_type) (\\n    \
     \    label_replace(mysql_up{job=\\\"tenant-exporters\\\"}, \\\"db_type\\\", \\\
@@ -718,20 +718,20 @@ data:
     )\\n      )\\n    )\\n    /\\n    count without (tenant, db_type) (max without\
     \ (instance, pod) (tenant_expected_exporter))\\n  ) > 0.1\\n)\\nunless on() absent(up{job=\\\
     \"tenant-exporters\\\"})\\n\"\n    for: 3m\n    labels:\n      alert_source: platform\n\
-    \      severity: critical\n    annotations:\n      description: 'More than 5 (tenant,\
-    \ db_type) pairs AND over 10% of the declared\n\n        (tenant, db_type) pairs\
-    \ simultaneously have no exporter of that\n\n        db_type answering under job=\"\
-    tenant-exporters\"\n\n        (that kind''s presence metric absent).\n\n     \
-    \   Both conditions together mean this is almost certainly a SHARED\n\n      \
-    \  failure (node pool drained, network partition, image-pull outage on a\n\n \
-    \       rolling restart) rather than N independent exporter deaths or a\n\n  \
-    \      routine single-node blip. Treat as ONE incident: inspect node health\n\n\
-    \        / network / recent cluster-wide changes FIRST — remediating tenants\n\
-    \n        one by one will not address the common cause. Per-tenant detail is in\n\
-    \n        the fanned-out TenantExporterAbsent alerts. If instead the WHOLE\n\n\
-    \        tenant-exporters job is gone, TenantExporterJobAbsent fires instead.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage\n\
-    \      summary: Mass exporter outage ({{ $value }} tenant × db_type pairs) — shared-dependency\
+    \      severity: critical\n    annotations:\n      description: 'More than 5 tenants\
+    \ AND over 10% of the declared (tenant, db_type)\n\n        pairs simultaneously\
+    \ have no exporter of that\n\n        db_type answering under job=\"tenant-exporters\"\
+    \n\n        (that kind''s presence metric absent).\n\n        Both conditions\
+    \ together mean this is almost certainly a SHARED\n\n        failure (node pool\
+    \ drained, network partition, image-pull outage on a\n\n        rolling restart)\
+    \ rather than N independent exporter deaths or a\n\n        routine single-node\
+    \ blip. Treat as ONE incident: inspect node health\n\n        / network / recent\
+    \ cluster-wide changes FIRST — remediating tenants\n\n        one by one will\
+    \ not address the common cause. Per-tenant detail is in\n\n        the fanned-out\
+    \ TenantExporterAbsent alerts. If instead the WHOLE\n\n        tenant-exporters\
+    \ job is gone, TenantExporterJobAbsent fires instead.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage\n\
+    \      summary: Mass exporter outage ({{ $value }} tenants) — shared-dependency\
     \ failure suspected\n- name: federation-audit\n  rules:\n  - alert: FederationRejectionRateAnomaly\n\
     \    expr: \"(\\n  sum by (tenant) (\\n    rate(tenant_federation_requests_total{status=~\\\
     \"rate_limited|auth_failed|bad_request\\\"}[10m])\\n  )\\n  /\\n  sum by (tenant)\

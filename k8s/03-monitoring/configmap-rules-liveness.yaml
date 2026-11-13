@@ -83,33 +83,41 @@ data:
     \ }} 停機（同租戶仍有其他 tenant-exporters target 為 up）\n      tier: '{{ with query (printf\
     \ `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index .\
     \ 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: TenantExporterUndeclared\n\
-    \    expr: \"group by(tenant) (\\n  max_over_time(mysql_up{job=\\\"tenant-exporters\\\
-    \"}[1h])\\n  or max_over_time(pg_up{job=\\\"tenant-exporters\\\"}[1h])\\n  or\
-    \ max_over_time(redis_up{job=\\\"tenant-exporters\\\"}[1h])\\n  or max_over_time(mongodb_up{job=\\\
-    \"tenant-exporters\\\"}[1h])\\n  or max_over_time(elasticsearch_exporter_build_info{job=\\\
-    \"tenant-exporters\\\"}[1h])\\n  or max_over_time(oracledb_up{job=\\\"tenant-exporters\\\
-    \"}[1h])\\n  or max_over_time(db2_up{job=\\\"tenant-exporters\\\"}[1h])\\n  or\
-    \ max_over_time(ClickHouseMetrics_TCPConnection{job=\\\"tenant-exporters\\\"}[1h])\\\
-    n  or max_over_time(kafka_brokers{job=\\\"tenant-exporters\\\"}[1h])\\n  or max_over_time(rabbitmq_up{job=\\\
-    \"tenant-exporters\\\"}[1h])\\n  or max_over_time(rabbitmq_identity_info{job=\\\
-    \"tenant-exporters\\\"}[1h])\\n)\\nunless on(tenant) tenant_expected_exporter\\\
-    nand on() tenant_metadata_info\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 15m\n    labels:\n      maintenance: mute\n\
-    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: 'A database exporter of tenant {{ $labels.tenant }} (one of\
-    \ the kinds _metadata.db_type accepts) has answered under job=\"tenant-exporters\"\
-    \ for 15m but its _metadata declares no db_type, so the exporter liveness alerts\
-    \ (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters\
-    \ stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type\
-    \ (a string, or a list such as [mariadb, redis]).'\n      description_zh: 租戶 {{\
-    \ $labels.tenant }} 有資料庫 exporter（_metadata.db_type 可宣告的種類之一）已 15 分鐘在 job=\"tenant-exporters\"\
-    \ 下回應，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的\
-    \ exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis]\
-    \ 這樣的列表）。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \    expr: \"group by(tenant, db_type) (\\n  label_replace(max_over_time(mysql_up{job=\\\
+    \"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"mariadb\\\", \\\"\\\", \\\"\
+    \\\")\\n  or label_replace(max_over_time(pg_up{job=\\\"tenant-exporters\\\"}[1h]),\
+    \ \\\"db_type\\\", \\\"postgresql\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(redis_up{job=\\\
+    \"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"redis\\\", \\\"\\\", \\\"\\\
+    \")\\n  or label_replace(max_over_time(mongodb_up{job=\\\"tenant-exporters\\\"\
+    }[1h]), \\\"db_type\\\", \\\"mongodb\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(elasticsearch_exporter_build_info{job=\\\
+    \"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"elasticsearch\\\", \\\"\\\"\
+    , \\\"\\\")\\n  or label_replace(max_over_time(oracledb_up{job=\\\"tenant-exporters\\\
+    \"}[1h]), \\\"db_type\\\", \\\"oracle\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(db2_up{job=\\\
+    \"tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"db2\\\", \\\"\\\", \\\"\\\"\
+    )\\n  or label_replace(max_over_time(ClickHouseMetrics_TCPConnection{job=\\\"\
+    tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"clickhouse\\\", \\\"\\\", \\\"\
+    \\\")\\n  or label_replace(max_over_time(kafka_brokers{job=\\\"tenant-exporters\\\
+    \"}[1h]), \\\"db_type\\\", \\\"kafka\\\", \\\"\\\", \\\"\\\")\\n  or label_replace(max_over_time(rabbitmq_up{job=\\\
+    \"tenant-exporters\\\"}[1h]) or max_over_time(rabbitmq_identity_info{job=\\\"\
+    tenant-exporters\\\"}[1h]), \\\"db_type\\\", \\\"rabbitmq\\\", \\\"\\\", \\\"\\\
+    \")\\n)\\nunless on(tenant, db_type) tenant_expected_exporter\\nand on(tenant)\
+    \ tenant_metadata_info\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n\"\n    for: 15m\n    labels:\n      maintenance: mute\n      severity:\
+    \ warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description:\
+    \ 'A {{ $labels.db_type }} exporter of tenant {{ $labels.tenant }} has answered\
+    \ under job=\"tenant-exporters\" within the last hour, but its _metadata.db_type\
+    \ does not list {{ $labels.db_type }}, so TenantExporterAbsent does not cover\
+    \ that exporter: if it stops answering, nothing pages. Add {{ $labels.db_type\
+    \ }} to _metadata.db_type (a string, or a list such as [mariadb, redis]).'\n \
+    \     description_zh: 租戶 {{ $labels.tenant }} 的 {{ $labels.db_type }} exporter\
+    \ 最近一小時內在 job=\"tenant-exporters\" 下回應過，但 _metadata.db_type 沒有列出 {{ $labels.db_type\
+    \ }}，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 {{ $labels.db_type }} 加進 _metadata.db_type（字串，或像\
+    \ [mariadb, redis] 這樣的列表）。\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: Tenant {{ $labels.tenant }} runs a database exporter but\
-    \ declares no db_type\n      summary_zh: 租戶 {{ $labels.tenant }} 有資料庫 exporter\
-    \ 在回應，但沒有宣告 db_type\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ }}'\n      summary: Tenant {{ $labels.tenant }} runs a {{ $labels.db_type }}\
+    \ exporter but does not declare db_type {{ $labels.db_type }}\n      summary_zh:\
+    \ 租戶 {{ $labels.tenant }} 有 {{ $labels.db_type }} exporter 在回應，但沒有宣告 db_type {{\
+    \ $labels.db_type }}\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"

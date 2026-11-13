@@ -87,7 +87,7 @@ def test_presence_reads_every_table_metric_on_the_tenant_exporters_job():
         for metric in metrics:
             assert f'{metric}{{job="tenant-exporters"}}' in expr
             assert f'max_over_time({metric}{{job="tenant-exporters"}}[1h])' in (
-                presence.any_presence_over_time_expr())
+                presence.presence_over_time_expr())
 
 
 def test_no_rule_reads_a_record_another_rule_must_load_first():

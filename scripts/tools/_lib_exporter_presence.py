@@ -136,12 +136,16 @@ def presence_expr() -> str:
     return "\nor ".join(terms)
 
 
-def any_presence_over_time_expr() -> str:
-    """One series per tenant (labels as the metric's) that some table metric
-    had under the tenant-exporters job within UNDECLARED_LOOKBACK."""
-    metrics = [m for ms in EXPORTER_PRESENCE.values() for m in ms]
-    return "\nor ".join(f"max_over_time({m}{{{JOB_SELECTOR}}}[{UNDECLARED_LOOKBACK}])"
-                        for m in metrics)
+def presence_over_time_expr() -> str:
+    """:func:`presence_expr` remembered for UNDECLARED_LOOKBACK: every series a
+    table metric had under the tenant-exporters job within that window, with
+    its kind as ``db_type``."""
+    terms = []
+    for db_type, metrics in EXPORTER_PRESENCE.items():
+        inner = " or ".join(f"max_over_time({m}{{{JOB_SELECTOR}}}[{UNDECLARED_LOOKBACK}])"
+                            for m in metrics)
+        terms.append(f'label_replace({inner}, "db_type", "{db_type}", "", "")')
+    return "\nor ".join(terms)
 
 
 def _absent_pairs() -> str:
@@ -152,11 +156,15 @@ def _absent_pairs() -> str:
 def alert_exprs() -> dict[tuple[Path, str], str]:
     """(pack, alertname) → the alert's whole ``expr`` (no trailing newline)."""
     absent = _absent_pairs()
+    # The floor counts TENANTS (#3771 review): one tenant declaring seven kinds,
+    # all down, is seven pairs but no shared failure. `count without` both
+    # times — a `by (tenant)` would read to the platform-alert guard
+    # (_grar_validate) as an alert carrying a tenant label.
     mass = "\n".join([
         "(",
-        "  count without (tenant, db_type) (",
+        "  count without (tenant) (count without (db_type) (",
         _indent(absent, 2),
-        "  ) > 5",
+        "  )) > 5",
         "  and",
         "  (",
         "    count without (tenant, db_type) (",
@@ -168,12 +176,17 @@ def alert_exprs() -> dict[tuple[Path, str], str]:
         ")",
         'unless on() absent(up{job="tenant-exporters"})',
     ])
+    # Per (tenant, db_type) (#3771 review): a tenant declaring [mariadb] while
+    # it also runs a redis exporter is named for redis. The guard joins on
+    # tenant: threshold-exporter down (no tenant_metadata_info at all) and a
+    # de-provisioned tenant (its config gone, the lookback's memory of its
+    # exporter not yet) both stay silent.
     undeclared = "\n".join([
-        "group by(tenant) (",
-        _indent(any_presence_over_time_expr(), 1),
+        "group by(tenant, db_type) (",
+        _indent(presence_over_time_expr(), 1),
         ")",
-        "unless on(tenant) tenant_expected_exporter",
-        "and on() tenant_metadata_info",
+        "unless on(tenant, db_type) tenant_expected_exporter",
+        "and on(tenant) tenant_metadata_info",
         "unless on(tenant)",
         '(user_state_filter{filter="maintenance"} == 1)',
     ])

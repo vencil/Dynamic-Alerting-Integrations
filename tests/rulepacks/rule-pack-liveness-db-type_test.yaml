@@ -19,9 +19,14 @@
 #       （守門讀 tenant_metadata_info，不是 tenant_expected_exporter；守門改讀後者就轉紅）
 #   U3  threshold-exporter 全掛（tenant_metadata_info、tenant_expected_exporter 都缺席）
 #       → Undeclared 一條都不響（拿掉守門就對每個租戶齊響）
+#   U6  宣告 [mariadb]、同時跑 redis exporter → Undeclared{db_type=redis} 響、mariadb 不響
+#       （整租戶 unless on(tenant) 會漏掉 redis）
+#   U7  退租：conf.d 與 exporter 一起移除（tenant_metadata_info 不再有該租戶，其他租戶
+#       仍有）→ Undeclared 不響（守門改回 on() 就在回看期間誤報）
 #   P1  6 個租戶各宣告 [mariadb, redis]、mariadb 全掛 → MassExporterOutage 響，
-#       $value＝6 組 (tenant, db_type)，分母 12 組（舊的 on(tenant) 下 redis 擋住全部、不響）
-#   P2  同形狀只有 5 個租戶 → 5 不 > 5，不響（門檻是「組」）
+#       $value＝6 個租戶，比例 6/12 組（舊的 on(tenant) 下 redis 擋住全部、不響）
+#   P2  同形狀只有 5 個租戶 → 5 不 > 5，不響
+#   P3  1 個租戶宣告 7 種全掛 + 49 個健康租戶 → 不響（7 組但只 1 個租戶；比例 7/56＞10%）
 # tenant id 用 t-* placeholder（dev-rule：fixture 不寫死真實租戶名）。
 rule_files:
   - ../../rule-packs/rule-pack-liveness.yaml
@@ -49,8 +54,8 @@ tests:
       - series: 'tenant_metadata_info{job="threshold-exporter", tenant="t-multi", owner="", runbook_url="", tier=""}'
         values: '1x20'
     alert_rule_test:
-      # 1m 起缺席；for:3m → 3m 還在 pending。斷言放在 5m：存在判定是另一個 group 的
-      # recording rule，評估順序可能讓 pending 晚一步起算，5m 兩種順序都已 firing。
+      # 1m 起缺席；for:3m → 3m 還在 pending，5m 已 firing（存在判定內嵌在 expr 裡，
+      # 不依賴其他規則的評估順序）。
       - eval_time: 3m
         alertname: TenantExporterAbsent
         exp_alerts: []
@@ -220,11 +225,12 @@ tests:
               severity: warning
               maintenance: mute
               tenant: t-loose
+              db_type: mariadb
             exp_annotations:
-              summary: "Tenant t-loose runs a database exporter but declares no db_type"
-              summary_zh: "租戶 t-loose 有資料庫 exporter 在回應，但沒有宣告 db_type"
-              description: "A database exporter of tenant t-loose (one of the kinds _metadata.db_type accepts) has answered under job=\"tenant-exporters\" for 15m but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a string, or a list such as [mariadb, redis])."
-              description_zh: "租戶 t-loose 有資料庫 exporter（_metadata.db_type 可宣告的種類之一）已 15 分鐘在 job=\"tenant-exporters\" 下回應，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。"
+              summary: "Tenant t-loose runs a mariadb exporter but does not declare db_type mariadb"
+              summary_zh: "租戶 t-loose 有 mariadb exporter 在回應，但沒有宣告 db_type mariadb"
+              description: "A mariadb exporter of tenant t-loose has answered under job=\"tenant-exporters\" within the last hour, but its _metadata.db_type does not list mariadb, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. Add mariadb to _metadata.db_type (a string, or a list such as [mariadb, redis])."
+              description_zh: "租戶 t-loose 的 mariadb exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但 _metadata.db_type 沒有列出 mariadb，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 mariadb 加進 _metadata.db_type（字串，或像 [mariadb, redis] 這樣的列表）。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -247,11 +253,12 @@ tests:
               severity: warning
               maintenance: mute
               tenant: t-loose
+              db_type: mariadb
             exp_annotations:
-              summary: "Tenant t-loose runs a database exporter but declares no db_type"
-              summary_zh: "租戶 t-loose 有資料庫 exporter 在回應，但沒有宣告 db_type"
-              description: "A database exporter of tenant t-loose (one of the kinds _metadata.db_type accepts) has answered under job=\"tenant-exporters\" for 15m but its _metadata declares no db_type, so the exporter liveness alerts (TenantExporterAbsent, TenantExporterReplicaDown) do not cover it: if its exporters stop answering, nothing fires. Declare the database kind(s) it runs in _metadata.db_type (a string, or a list such as [mariadb, redis])."
-              description_zh: "租戶 t-loose 有資料庫 exporter（_metadata.db_type 可宣告的種類之一）已 15 分鐘在 job=\"tenant-exporters\" 下回應，但 _metadata 沒有宣告 db_type，所以 exporter 存活告警（TenantExporterAbsent、TenantExporterReplicaDown）不涵蓋它：它的 exporter 停止回應時不會有任何告警。請在 _metadata.db_type 宣告它使用的資料庫種類（字串，或像 [mariadb, redis] 這樣的列表）。"
+              summary: "Tenant t-loose runs a mariadb exporter but does not declare db_type mariadb"
+              summary_zh: "租戶 t-loose 有 mariadb exporter 在回應，但沒有宣告 db_type mariadb"
+              description: "A mariadb exporter of tenant t-loose has answered under job=\"tenant-exporters\" within the last hour, but its _metadata.db_type does not list mariadb, so TenantExporterAbsent does not cover that exporter: if it stops answering, nothing pages. Add mariadb to _metadata.db_type (a string, or a list such as [mariadb, redis])."
+              description_zh: "租戶 t-loose 的 mariadb exporter 最近一小時內在 job=\"tenant-exporters\" 下回應過，但 _metadata.db_type 沒有列出 mariadb，所以 TenantExporterAbsent 不涵蓋它：它停止回應時不會有任何告警。請把 mariadb 加進 _metadata.db_type（字串，或像 [mariadb, redis] 這樣的列表）。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -297,6 +304,264 @@ tests:
       - expr: count by(tenant) (ALERTS{alertstate="firing", alertname="TenantExporterUndeclared"})
         eval_time: 130m
         exp_samples: []
+
+  # ── U6 宣告 [mariadb]、同時跑 redis exporter → 只對 redis 響
+  - interval: 1m
+    name: U6-declared-mariadb-runs-redis-fires-for-redis
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-part", db_type="mariadb"}'
+        values: '1x30'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-part", instance="10.4.1.1:9104"}'
+        values: '1x30'
+      - series: 'redis_up{job="tenant-exporters", tenant="t-part", instance="10.4.1.2:9121"}'
+        values: '1x30'
+      - series: 'tenant_metadata_info{tenant="t-part", owner="", runbook_url="", tier=""}'
+        values: '1x30'
+    promql_expr_test:
+      - expr: count by(tenant, db_type) (ALERTS{alertstate="firing", alertname="TenantExporterUndeclared"})
+        eval_time: 20m
+        exp_samples:
+          - labels: '{tenant="t-part", db_type="redis"}'
+            value: 1
+
+  # ── U7 退租：t-gone 的 conf.d 與 exporter 在 10m 一起移除；t-stay 仍在（threshold-exporter 活著）
+  - interval: 1m
+    name: U7-deprovisioned-tenant-not-undeclared
+    input_series:
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-gone", instance="10.4.2.1:9104"}'
+        values: '1x10 _x60'
+      - series: 'tenant_expected_exporter{tenant="t-gone", db_type="mariadb"}'
+        values: '1x10 _x60'
+      - series: 'tenant_metadata_info{tenant="t-gone", owner="", runbook_url="", tier=""}'
+        values: '1x10 _x60'
+      - series: 'tenant_metadata_info{tenant="t-stay", owner="", runbook_url="", tier=""}'
+        values: '1x70'
+    promql_expr_test:
+      - expr: count (ALERTS{alertname="TenantExporterUndeclared"})
+        eval_time: 40m
+        exp_samples: []
+
+  # ── P3 一個租戶宣告 7 種全掛（target 在、up=0）、49 個租戶 mariadb 健康 → Mass 不響
+  #    門檻數的是租戶：7 組只算 1 個租戶。改回數組（count without(tenant, db_type)）就轉紅。
+  - interval: 1m
+    name: P3-one-tenant-seven-kinds-down-not-mass
+    input_series:
+      - series: 'tenant_expected_exporter{tenant="t-big", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-big", db_type="postgresql"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-big", db_type="redis"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-big", db_type="mongodb"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-big", db_type="oracle"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-big", db_type="db2"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-big", db_type="kafka"}'
+        values: '1x20'
+      - series: 'up{job="tenant-exporters", tenant="t-big", instance="10.8.0.1:9104"}'
+        values: '0x20'
+      - series: 'tenant_expected_exporter{tenant="t-h0", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h0", instance="10.9.0.0:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h1", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h1", instance="10.9.0.1:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h2", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h2", instance="10.9.0.2:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h3", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h3", instance="10.9.0.3:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h4", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h4", instance="10.9.0.4:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h5", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h5", instance="10.9.0.5:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h6", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h6", instance="10.9.0.6:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h7", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h7", instance="10.9.0.7:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h8", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h8", instance="10.9.0.8:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h9", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h9", instance="10.9.0.9:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h10", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h10", instance="10.9.0.10:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h11", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h11", instance="10.9.0.11:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h12", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h12", instance="10.9.0.12:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h13", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h13", instance="10.9.0.13:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h14", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h14", instance="10.9.0.14:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h15", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h15", instance="10.9.0.15:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h16", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h16", instance="10.9.0.16:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h17", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h17", instance="10.9.0.17:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h18", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h18", instance="10.9.0.18:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h19", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h19", instance="10.9.0.19:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h20", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h20", instance="10.9.0.20:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h21", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h21", instance="10.9.0.21:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h22", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h22", instance="10.9.0.22:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h23", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h23", instance="10.9.0.23:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h24", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h24", instance="10.9.0.24:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h25", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h25", instance="10.9.0.25:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h26", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h26", instance="10.9.0.26:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h27", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h27", instance="10.9.0.27:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h28", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h28", instance="10.9.0.28:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h29", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h29", instance="10.9.0.29:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h30", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h30", instance="10.9.0.30:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h31", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h31", instance="10.9.0.31:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h32", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h32", instance="10.9.0.32:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h33", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h33", instance="10.9.0.33:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h34", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h34", instance="10.9.0.34:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h35", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h35", instance="10.9.0.35:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h36", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h36", instance="10.9.0.36:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h37", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h37", instance="10.9.0.37:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h38", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h38", instance="10.9.0.38:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h39", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h39", instance="10.9.0.39:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h40", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h40", instance="10.9.0.40:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h41", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h41", instance="10.9.0.41:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h42", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h42", instance="10.9.0.42:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h43", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h43", instance="10.9.0.43:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h44", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h44", instance="10.9.0.44:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h45", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h45", instance="10.9.0.45:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h46", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h46", instance="10.9.0.46:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h47", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h47", instance="10.9.0.47:9104"}'
+        values: '1x20'
+      - series: 'tenant_expected_exporter{tenant="t-h48", db_type="mariadb"}'
+        values: '1x20'
+      - series: 'mysql_up{job="tenant-exporters", tenant="t-h48", instance="10.9.0.48:9104"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: MassExporterOutage
+        exp_alerts: []
 
   # ── P1 6 個租戶各宣告 [mariadb, redis]、mariadb 全掛、redis 全健康
   #    → 6 組 down / 12 組 declared = 50%，6 > 5 → MassExporterOutage 響，$value＝6
@@ -360,10 +625,10 @@ tests:
               alert_source: platform
               job: threshold-exporter
             exp_annotations:
-              summary: "Mass exporter outage (6 tenant × db_type pairs) — shared-dependency failure suspected"
+              summary: "Mass exporter outage (6 tenants) — shared-dependency failure suspected"
               description: |
-                More than 5 (tenant, db_type) pairs AND over 10% of the declared
-                (tenant, db_type) pairs simultaneously have no exporter of that
+                More than 5 tenants AND over 10% of the declared (tenant, db_type)
+                pairs simultaneously have no exporter of that
                 db_type answering under job="tenant-exporters"
                 (that kind's presence metric absent).
                 Both conditions together mean this is almost certainly a SHARED

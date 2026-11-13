@@ -896,10 +896,10 @@ tests:
           alert_source: platform
           job: threshold-exporter
         exp_annotations:
-          summary: Mass exporter outage (6 tenant × db_type pairs) — shared-dependency failure suspected
+          summary: Mass exporter outage (6 tenants) — shared-dependency failure suspected
           description: |
-            More than 5 (tenant, db_type) pairs AND over 10% of the declared
-            (tenant, db_type) pairs simultaneously have no exporter of that
+            More than 5 tenants AND over 10% of the declared (tenant, db_type)
+            pairs simultaneously have no exporter of that
             db_type answering under job="tenant-exporters"
             (that kind's presence metric absent).
             Both conditions together mean this is almost certainly a SHARED
