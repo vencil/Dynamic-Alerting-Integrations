@@ -6,7 +6,7 @@ from half old, half new values: the rows they held are now each consumer's
 `auth.consumers[].from` (#1295 PR2). */}}
 {{- range $legacy := list "allowedPodSelectors" "allowedNamespaces" }}
 {{- if hasKey $np $legacy }}
-{{- fail (printf "networkPolicy.%s was removed in chart 0.6.0: who may reach the store is now each auth.consumers[].from, and the Prometheus scrape is networkPolicy.scrapers. Move any custom rows there and drop the key; with `helm upgrade --reuse-values`, use `--reset-then-reuse-values` instead so the new defaults apply (#1295)" $legacy) }}
+{{- fail (printf "networkPolicy.%s was removed in chart 0.6.0: who may reach the store is now each auth.consumers[].from, and the Prometheus scrape is networkPolicy.scrapers. Move any custom rows there and drop the key. With `helm upgrade --reuse-values`, upgrade with your values file instead, or `--reset-then-reuse-values` (Helm >= 3.14); either way, a values file that restates auth.consumers must give every consumer a `from` — copy it from the chart's values.yaml (#1295)" $legacy) }}
 {{- end }}
 {{- end }}
 {{- /* The registry's own checks (names, duplicates, Secrets) first, so an

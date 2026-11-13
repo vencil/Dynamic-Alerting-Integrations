@@ -95,7 +95,8 @@ done
 helm install victorialogs ./helm/victorialogs -n monitoring \
   --set persistence.size=20Gi \
   --set retentionPeriod=60d \
-  -f my-consumers.yaml   # auth.consumers[].existingSecret: victorialogs-<name>
+  -f my-consumers.yaml   # auth.consumers[] copied from values.yaml (paths + from),
+                         # each with existingSecret: victorialogs-<name>
 ```
 
 For chart smoke-tests / CI you can disable the PVC (and skip the Secrets):

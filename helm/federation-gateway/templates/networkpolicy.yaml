@@ -52,7 +52,10 @@ spec:
   # Egress (#1295 PR2): DNS and the one upstream — Envoy has no other off-pod
   # dependency (JWKS and the revoked set are mounted files). Without this the
   # gateway had no egress at all wherever its namespace defaults to deny, as
-  # k8s/03-monitoring does; with it a compromised gateway reaches nothing else.
+  # k8s/03-monitoring does. What it allows is wider than "the upstream": port 53
+  # on any pod, and upstream.port on ANY pod of the upstream's namespace (in
+  # the default install, every :8080 there) — those pods' own ingress rules
+  # are what keep the gateway out of them.
   # ⚠️ NetworkPolicy matches the destination POD port: upstream.port is the
   # Service port, so this holds while the upstream's Service port equals its
   # targetPort (true for federation-proxy and victorialogs by default).

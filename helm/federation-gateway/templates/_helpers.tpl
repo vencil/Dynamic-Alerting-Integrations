@@ -171,8 +171,9 @@ which is this consumer's name in helm/victorialogs auth.consumers
 {{/*
 federation-gateway (#1295 PR2). The namespace the upstream runs in, for the
 egress rule: `networkPolicy.upstreamNamespace` when set, else read from
-`upstream.host` — `name` is this release's namespace, `name.ns.svc[...]` is
-`ns`. Anything else (an external FQDN, an IP, a bare `name.ns`, which could
+`upstream.host` — `name` is this release's namespace, `name.ns.svc` or
+`name.ns.svc.cluster.local` is `ns`. Anything else (an external FQDN, an IP,
+a custom cluster domain, a bare `name.ns`, which could
 just as well be a domain) fails: the egress rule must not be a guess.
 */}}
 {{- define "federation-gateway.upstreamNamespace" -}}
@@ -183,10 +184,10 @@ just as well be a domain) fails: the egress rule must not be a guess.
 {{- $parts := splitList "." (toString .Values.upstream.host) -}}
 {{- if eq (len $parts) 1 -}}
 {{- .Release.Namespace -}}
-{{- else if and (ge (len $parts) 3) (eq (index $parts 2) "svc") -}}
+{{- else if and (ge (len $parts) 3) (eq (index $parts 2) "svc") (or (eq (len $parts) 3) (eq (join "." (slice $parts 3)) "cluster.local")) -}}
 {{- index $parts 1 -}}
 {{- else -}}
-{{- fail (printf "federation-gateway: cannot tell which namespace upstream.host %q is in, and the NetworkPolicy allows egress only to it. Use the Service form `<svc>.<namespace>.svc`, or set networkPolicy.upstreamNamespace; for an upstream outside the cluster set networkPolicy.restrictEgress=false and allow that egress yourself (#1295)" (toString .Values.upstream.host)) -}}
+{{- fail (printf "federation-gateway: cannot tell which namespace upstream.host %q is in, and the NetworkPolicy allows egress only to it. Use the Service form `<svc>.<namespace>.svc` (or `.svc.cluster.local`), or set networkPolicy.upstreamNamespace (a custom cluster domain needs it too); for an upstream outside the cluster set networkPolicy.restrictEgress=false and allow that egress yourself (#1295)" (toString .Values.upstream.host)) -}}
 {{- end -}}
 {{- end -}}
 {{- end }}

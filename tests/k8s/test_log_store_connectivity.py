@@ -209,6 +209,9 @@ def _match_labels(selector: dict | None, labels: dict) -> bool:
     return all(labels.get(k) == v for k, v in (selector.get("matchLabels") or {}).items())
 
 
+_NS_NAME = "kubernetes.io/metadata.name"
+
+
 def _ns_labels(ns: str) -> dict:
     return {"kubernetes.io/metadata.name": ns}
 
@@ -224,6 +227,11 @@ def _peer_matches(peer: dict, policy_ns: str, other: dict) -> bool:
     if other["ns"] is None:
         return False
     if "namespaceSelector" in peer:
+        keys = set((peer["namespaceSelector"] or {}).get("matchLabels") or {})
+        if keys - {_NS_NAME}:
+            # Only the name label is known here; any other would read as
+            # "no match" and turn every deny assertion vacuous.
+            raise Unmodelled(f"namespace label(s) {sorted(keys - {_NS_NAME})} in {peer}")
         if not _match_labels(peer["namespaceSelector"], _ns_labels(other["ns"])):
             return False
     elif other["ns"] != policy_ns:
@@ -371,6 +379,9 @@ def test_evaluator_refuses_what_it_does_not_model() -> None:
         _port_matches({"ports": [{"port": "http"}]}, 80, "TCP")
     with pytest.raises(Unmodelled):
         _port_matches({"ports": [{"port": 80, "endPort": 443}]}, 443, "TCP")
+    with pytest.raises(Unmodelled):
+        _peer_matches({"namespaceSelector": {"matchLabels": {"team": "obs"}}}, "monitoring",
+                      {"ns": "obs", "labels": {}})
 
 
 @_needs_helm

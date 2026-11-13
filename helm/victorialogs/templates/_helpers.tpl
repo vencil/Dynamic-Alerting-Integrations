@@ -150,7 +150,10 @@ would admit every pod beside the store.
 {{- fail (printf "%s: unknown key %q in `from` — only `namespace` and `podLabels` (#1295)" $.who $k) -}}
 {{- end -}}
 {{- end -}}
-{{- $ns := toString ($from.namespace | default "") -}}
+{{- if and (hasKey $from "namespace") (not (kindIs "string" $from.namespace)) -}}
+{{- fail (printf "%s: `from.namespace` must be a string (got %v) — quote it: a bare `no`/`on`/`123` is not read as a name (#1295)" .who $from.namespace) -}}
+{{- end -}}
+{{- $ns := $from.namespace | default "" -}}
 {{- $labels := $from.podLabels | default dict -}}
 {{- if not (kindIs "map" $labels) -}}
 {{- fail (printf "%s: `from.podLabels` must be a map of label: value (#1295)" .who) -}}

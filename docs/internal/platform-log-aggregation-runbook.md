@@ -44,11 +44,13 @@ stdout、delivery → shipper。log-store 掛掉時 federation gateway 不能
 kubectl apply -f k8s/00-namespaces/namespace-vector.yaml
 
 # 1) Store first — Vector 啟動時會嘗試握手 sink。victorialogs 續留
-#    monitoring；chart ≥0.3.0 的 netpol 預設放行 vector ns（ingest）。
+#    monitoring；netpol 放行 vector ns 裡帶 Vector pod label 的 pod（ingest）。
 #    chart 0.5.0 起預設 auth.mode=enforce：先建每個消費端的 Secret 並在
 #    auth.consumers[].existingSecret 指名，否則 render 失敗（§1.2）。
-#    my-consumers.yaml 列出 auth.consumers 全部（含 paths），各帶
-#    existingSecret: victorialogs-<name>；不跑的消費端從清單移除。
+#    my-consumers.yaml 列出 auth.consumers 全部（含 paths 與 from——
+#    chart 0.6.0 起 NetworkPolicy 由 from 渲染，從 chart 的 values.yaml
+#    照抄），各帶 existingSecret: victorialogs-<name>；不跑的消費端從
+#    清單移除。
 for c in vector grafana chargeback-aggregator federation-gateway federation-reconciler; do
   kubectl -n monitoring create secret generic "victorialogs-$c" \
     --from-literal=password="$(openssl rand -hex 32)"
@@ -114,7 +116,7 @@ error 裝不起來。
 # 1) 前置 wiring（都先於搬遷，否則新 Vector 起來就斷線）：
 kubectl apply -f k8s/00-namespaces/namespace-vector.yaml       # ns + PSS labels
 helm upgrade victorialogs ./helm/victorialogs -n monitoring \
-  --reuse-values                                               # chart ≥0.3.0：netpol 放行 vector ns
+  -f my-consumers.yaml                                         # 消費端清單含 from；netpol 放行 vector ns 的 Vector
 kubectl apply -f k8s/03-monitoring/configmap-prometheus.yaml   # SD 加 vector ns
 kubectl rollout restart -n monitoring deploy/prometheus        # 讓 SD 生效
 # （多租戶）在 vector ns 重建 registry ConfigMap —— ConfigMap 掛載
@@ -186,9 +188,11 @@ render**，錯誤訊息會一次列出缺 Secret 的消費端。不跑的消費�
   - 一個 Secret 都沒指名就升級：render 失敗、升級中止。
   - 已照 0.4.0 的步驟 1 在 store 側指名了 Secret：render 會**通過並直接
     進 enforce**，沒接上的消費端立刻 401。
-  - 用 `helm upgrade --reuse-values`：Helm 沿用上一版的 values（含當時的
-    預設 `mode: observe`），**不會**變成 enforce；要切換得明寫
-    `--set auth.mode=enforce`。
+  - 用 `helm upgrade --reuse-values` 升到 0.6.0 以上會 render 失敗：
+    上一版的 values 帶著已移除的 `networkPolicy.allowedPodSelectors`／
+    `allowedNamespaces`。改用 `-f my-consumers.yaml`（每個消費端帶
+    `from`），或 `--reset-then-reuse-values`（Helm ≥3.14）；後者若
+    values 裡重寫過 `auth.consumers`，同樣要補上 `from`。
 
 **遷移步驟**
 

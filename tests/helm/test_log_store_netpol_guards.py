@@ -50,6 +50,8 @@ def _one_consumer(frm: str) -> list[str]:
     # the whole store namespace
     (_one_consumer('{"namespace":"monitoring"}'), "admits every pod in the store's own namespace"),
     (_one_consumer('"grafana"'), "`from` must be a map"),
+    # YAML 1.1: a bare `no` is false; `default ""` would silently drop the namespace
+    (_one_consumer('{"namespace":false,"podLabels":{"app":"x"}}'), "`from.namespace` must be a string"),
     (_one_consumer('{"podLabels":"app=x"}'), "`from.podLabels` must be a map"),
     # an empty `from` list admits every source
     (["--set", "auth.mode=observe", "--set-json", "auth.consumers=[]",
@@ -115,7 +117,11 @@ def test_gateway_explicit_upstream_namespace_wins() -> None:
     assert _upstream_ns(egress) == "vm"
 
 
-@pytest.mark.parametrize("host", ["vmselect.corp", "vmselect.corp.example", "10.0.0.1"])
+@pytest.mark.parametrize("host", ["vmselect.corp", "vmselect.corp.example", "10.0.0.1",
+                                  # an external FQDN whose third label happens to be `svc`
+                                  "api.prod.svc.example.com",
+                                  # a custom cluster domain cannot be told from the above
+                                  "federation-proxy.monitoring.svc.corp.local", "a.b"])
 def test_gateway_refuses_a_host_it_cannot_place(host: str) -> None:
     out = _helm(GATEWAY, "--set", f"upstream.host={host}")
     assert out.returncode != 0 and "cannot tell which namespace" in out.stderr, out.stderr[-400:]
