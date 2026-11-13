@@ -15,7 +15,7 @@ tenant-api pod, behind tenant-api's oauth2-proxy, which routes `/api/` to
 tenant-api and everything else to the portal container
 ([ADR-027 §5](../../docs/adr/027-tenant-api-caller-identity.md)). Install
 [`helm/tenant-api`](../tenant-api/) for that, with its `ingress.enabled=true`
-and `oauth2Proxy.enabled=true`: its Ingress is the only way in. That
+(its oauth2-proxy is always on): its Ingress is the only way in. That
 deployment then has one oauth2-proxy, one Ingress and one session cookie.
 
 ```
