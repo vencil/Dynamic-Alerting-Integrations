@@ -18,7 +18,7 @@ Revised 2026-11-05: §10 now records the test result and adopts oauth2-proxy's s
 
 Revised 2026-11-07: the offline check of §7 also lists tenants whose tags cannot be read but that a scope-restricted rule applies to, and a broken file no restricting rule applies to no longer affects its exit code; environment and domain tags are changed by a platform admin restricted on no scope axis, and an admin restricted to some environments or domains can no longer change them; a tenant file whose tags cannot be read is likewise overwritten through the API only by such an admin; tags and the write scope are judged under the writer lock, on the tree the write actually lands on, in both write modes.
 
-Revised 2026-11-13: §Implementation lists the file for each check of §9, and the clauses that have no check yet.
+Revised 2026-11-13: §Implementation lists the file for each check of §9, and the clauses that have no check yet; "simulate returns the original body" in §5 and §9 item 4 now reads "the same `code` and `error` text", as tenant-api's error responses also carry `request_id`.
 
 The reference check (§9 item 8) is in place: references in the repo that cited this ADR by the draft's IDs have been rewritten and the legacy-reference table deleted.
 
@@ -111,7 +111,7 @@ The whole deployment has a single oauth2-proxy, in tenant-api's pod, routing by 
 - The `/api/` prefix → tenant-api's UDS. Every backend call the portal makes must be under this prefix, including the former `/preview`.
 - Everything else → the portal static-file container in the same pod. That container does not read identity headers and does not forward requests anywhere.
 - Unauthenticated or session-expired requests under `/api/` get 401 instead of a redirect to the IdP; on 401 the portal redirects to login instead of switching to demo data.
-- The "simulate not provided" 501 that da-portal's nginx used to return is now returned by tenant-api, with the same status code and body.
+- The "simulate not provided" 501 that da-portal's nginx used to return is now returned by tenant-api, with the same status code, `code` and `error` text (tenant-api's error responses also carry `request_id`).
 
 Consequent changes:
 
@@ -155,7 +155,7 @@ This document is explanation; the checks below are the single source of truth fo
 1. TCP registers only the paths enumerated in §3 (exact match) and returns 404 for the rest; a TCP request carrying any identity header gets 400. (§2, §3)
 2. Architecture test: building identity from headers happens only on the UDS listener's path; rate limiting, the request log and the auth bypass never read identity headers. (§2)
 3. Chart render test: the deployment has exactly one oauth2-proxy, and unauthenticated `/api/` requests get 401; only tenant-api and oauth2-proxy mount the human socket; the UDS always exists; oauth2-proxy and tenant-api mount the same configuration file; oauth2-proxy in a production deployment has no login-skipping condition that covers `/api/` (the development topology of §3 is contained per ADR-022 and is exempt). The nginx configuration the portal container actually loads (whether from the chart or the image) contains no forwarding. (§2, §5)
-4. Every backend path called from the portal source is under the `/api/` prefix; the simulate path returns 501 with the original body. (§5)
+4. Every backend path called from the portal source is under the `/api/` prefix; the simulate path returns 501 with the original `code` and `error` text. (§5)
 5. A scan of helm, k8s manifests and rule packs: no configuration relays identity headers over the network to any component; the chart keys deleted in §6 do not exist; threshold-govern's CronJob, its NetworkPolicy allowance and its alert do not exist. The environment variables deleted in §6 are not in tenant-api's known list. (§4, §5, §6)
 6. tenant-api refuses to start when oauth2-proxy's configuration file does not have the shape in §2, with fixtures covering at least: keeping the client's value, a fixed value, a prefix, the wrong claim, missing email or groups, environment-variable references, and non-canonical field-name spellings; an `_rbac.yaml` with no rules denies all access, and no switch exists that restores open mode; a write by a non-platform-admin that changes a tenant's environment or domain tags, or overwrites a tenant file whose tags cannot be read, is rejected; this check and the write scope are made under the writer lock, on the tree the write lands on. (§7)
 7. `tenant-api config check` lists untagged tenants and tenants whose tags cannot be read per scope axis and exits non-zero, tested against a fixed fixture and checked rule by rule against the server's tenant-list decision; CI runs it against the sample configuration in the repo. (§7)

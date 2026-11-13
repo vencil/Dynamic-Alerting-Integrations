@@ -24,7 +24,7 @@ updated_at: 2026-11-13
 
 2026-11-07 修訂：§7 的離線檢查也列出標記讀不到、卻被有範圍限制的規則套到的租戶，沒有限制規則套到的壞檔不再影響結束碼；環境與 domain 標記改由不受任何範圍限制的平台管理員變更，只限部分環境或 domain 的管理員不再能改；標記讀不到的租戶檔也只由這種管理員經 API 覆寫；標記與寫入範圍改在寫入鎖內、對寫入實際落地的那棵樹判定，兩種寫入模式相同。
 
-2026-11-13 修訂：§實作位置 列出 §9 各檢查的檔名，並列出尚無檢查的子句。
+2026-11-13 修訂：§實作位置 列出 §9 各檢查的檔名，並列出尚無檢查的子句；§5 與 §9 第 4 項的「simulate 回原 body」改為如實的「`code` 與 `error` 文字不變」，因 tenant-api 的錯誤回應另帶 `request_id`。
 
 引用檢查（§9 第 8 項）已上線：repo 內以草稿編號引用本 ADR 的地方已改寫，舊編號對照表刪除。
 
@@ -117,7 +117,7 @@ tenant-api 唯一接受的身分來源，是同一個 pod 裡的 oauth2-proxy �
 - `/api/` 前綴 → tenant-api 的 UDS。portal 對後端的每一個呼叫都必須在這個前綴下，包括原本的 `/preview`。
 - 其餘路徑 → 同一個 pod 裡的 portal 靜態檔容器。這個容器不讀身分 header，也不把請求轉送到任何地方。
 - `/api/` 下未登入或 session 過期的請求回 401，不轉址到 IdP；portal 收到 401 時導去登入，不改顯示示範資料。
-- 原本由 da-portal nginx 回的「simulate 未提供」501，改由 tenant-api 回，狀態碼與 body 不變。
+- 原本由 da-portal nginx 回的「simulate 未提供」501，改由 tenant-api 回，狀態碼、`code` 與 `error` 文字不變（tenant-api 的錯誤回應另帶 `request_id`）。
 
 連帶的變更：
 
@@ -161,7 +161,7 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 1. TCP 只註冊 §3 列舉的路徑（精確比對），其餘回 404；TCP 上帶任何身分 header 回 400。（§2、§3）
 2. 架構測試：從 header 建立身分只發生在 UDS listener 的路徑上；rate limit、request log 與驗證旁路都不讀身分 header。（§2）
 3. chart render 測試：整個部署只有一個 oauth2-proxy，且 `/api/` 未登入回 401；只有 tenant-api 與 oauth2-proxy 掛載 human socket；UDS 必定存在；oauth2-proxy 與 tenant-api 掛載同一份設定檔；正式部署的 oauth2-proxy 沒有任何涵蓋 `/api/` 的免登入條件（§3 的開發拓撲依 ADR-022 隔離，不在此限）。portal 容器實際載入的 nginx 設定（不論來自 chart 或 image）沒有任何轉送。（§2、§5）
-4. portal 原始碼呼叫的每個後端路徑都在 `/api/` 前綴下；simulate 路徑回 501 與原 body。（§5）
+4. portal 原始碼呼叫的每個後端路徑都在 `/api/` 前綴下；simulate 路徑回 501，`code` 與 `error` 文字與原本相同。（§5）
 5. 掃描 helm、k8s manifest 與 rule-pack：沒有任何設定把身分 header 跨網路轉送給任何元件；§6 刪除的 chart key 不存在；threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。§6 刪除的環境變數不在 tenant-api 的已知清單裡。（§4、§5、§6）
 6. oauth2-proxy 設定檔不符合 §2 的形狀時 tenant-api 拒絕啟動，fixture 至少涵蓋：保留 client 值、固定值、前綴、claim 對錯、缺 email 或 group、環境變數參照、非標準拼法的欄位名稱；沒有規則的 `_rbac.yaml` 拒絕所有存取，且不存在恢復 open mode 的開關；非平台管理員的寫入若變更租戶的環境或 domain 標記、或覆寫標記讀不到的租戶檔，即被拒絕；這項判定與寫入範圍都在寫入鎖內、對寫入落地的那棵樹進行。（§7）
 7. `tenant-api config check` 對每條範圍軸列出未標記與標記讀不到的租戶並非零退出，以固定 fixture 測試，並逐條規則比對它與 server 租戶清單的判定一致；CI 對 repo 內的範例設定執行它。（§7）
