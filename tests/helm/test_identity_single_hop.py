@@ -43,7 +43,7 @@ _OWNER_CHART = "tenant-api"
 #: they need a value to install at all, so their ci/ sets are the only view.
 #: Any other default-render failure fails the fixture.
 _REFUSES_DEFAULTS = {
-    "victorialogs": "needs auth.consumers[].existingSecret",
+    "victorialogs": "needs a Secret for every consumer in auth.existingSecrets",
 }
 #: One more tenant-api render: an OIDC provider with an extra claim header, so
 #: the configured-header list below is shown to come from the config file

@@ -88,8 +88,8 @@ extraArgs: []
 #
 # `consumers` is the single list of who may talk to the store and on which
 # paths. The username is the consumer's `name`; its password is key
-# `password` of `existingSecret`, a Secret in THIS namespace that the operator
-# creates (the chart never generates one: `helm template` / Argo CD cannot keep
+# `password` of the Secret `existingSecrets.<name>` names — a Secret in THIS
+# namespace that the operator creates (the chart never generates one: `helm template` / Argo CD cannot keep
 # a generated value stable across renders). Each consumer sends the same
 # password from its own namespace: the consumer charts through
 # `victorialogs.auth.{username,existingSecret}`, Grafana through its
@@ -107,13 +107,14 @@ extraArgs: []
 #   observe  — consumers that present credentials are held to their paths;
 #              requests WITHOUT credentials (or with wrong ones) still reach
 #              every path, so an install whose consumers are not wired yet
-#              keeps working. A consumer with an empty existingSecret is not
-#              rendered. Use this to roll the credentials out.
+#              keeps working. A consumer with no Secret in existingSecrets is
+#              not rendered. Use this to roll the credentials out.
 #   enforce  — (default) only /health, /ping and /metrics pass without
-#              credentials, and every consumer must name its existingSecret:
-#              the render fails, listing every consumer that has none.
+#              credentials, and every consumer must have a Secret in
+#              existingSecrets: the render fails, listing every one that has none.
 # ⛔ The default is enforce, so a plain `helm install` refuses to render until
-#   the Secrets are named here. Remove consumers you do not run from the list.
+#   the Secrets are named in `existingSecrets`. Consumers you do not run must be
+#   removed from `consumers` (restate the list without them).
 # ⚠️ The render checks THIS side only: a consumer whose own chart sends no
 #   credential still renders fine and is refused (401) from then on — and
 #   Vector drops a refused batch without retrying (alert
@@ -171,12 +172,20 @@ auth:
   # in another namespace needs `namespace` set, or its connections are dropped
   # (the reconciler fails loud; Vector ingest fails silent — alert
   # VectorStoreSinkDroppingEvents).
+  # Which Secret holds each consumer's password: <consumer name>: <Secret>.
+  # A map, not a field on each consumer, so naming the Secrets does not mean
+  # restating `consumers` (Helm replaces lists wholesale, merges maps per key):
+  #   auth:
+  #     existingSecrets:
+  #       vector: victorialogs-vector
+  #       grafana: victorialogs-grafana
+  # Every key must be a consumer below; an unknown key fails the render.
+  existingSecrets: {}
   consumers:
     # Ingest. The ONLY writer: ADR-028's evidence rows must not be writable by
     # anything but the shipper.
     - name: vector
       paths: ["/insert/.*"]
-      existingSecret: ""
       from:
         namespace: vector
         podLabels:
@@ -184,13 +193,11 @@ auth:
     # Query only.
     - name: grafana
       paths: ["/select/.*"]
-      existingSecret: ""
       from:
         podLabels:
           app: grafana
     - name: chargeback-aggregator
       paths: ["/select/.*"]
-      existingSecret: ""
       from:
         podLabels:
           app.kubernetes.io/name: chargeback-aggregator
@@ -199,14 +206,12 @@ auth:
     # reader — never list a pod a tenant can reach with an arbitrary AccountID.
     - name: federation-gateway
       paths: ["/select/.*"]
-      existingSecret: ""
       from:
         podLabels:
           app.kubernetes.io/name: federation-gateway
     # Reads the evidence stream (ADR-028).
     - name: federation-reconciler
       paths: ["/select/.*"]
-      existingSecret: ""
       from:
         podLabels:
           app.kubernetes.io/name: federation-reconciler

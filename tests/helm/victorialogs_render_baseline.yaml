@@ -1,41 +1,15 @@
 # Render baseline for helm/victorialogs in tests and lints that are not about
 # its consumer registry. The chart's default is auth.mode=enforce, which
-# refuses to render until every consumer names its Secret (#1295); this file
-# names one per consumer, so they judge what an operator deploys — enforce,
-# with the Secret-backed env vars — not the observe migration step.
-# Helm replaces a list wholesale, so the registry is restated here:
-# tests/helm/test_victorialogs_vmauth.py holds it equal to values.yaml.
-# Tests about the registry itself are in test_victorialogs_vmauth.py.
+# refuses to render until every consumer has a Secret (#1295); this file names
+# one per consumer, so they judge what an operator deploys — enforce, with the
+# Secret-backed env vars — not the observe migration step.
+# Only the Secrets: `auth.existingSecrets` is a map, so the registry
+# (`auth.consumers`) is NOT restated here (#3847).
+# tests/helm/test_victorialogs_vmauth.py holds the keys equal to the registry.
 auth:
-  consumers:
-    - name: vector
-      paths: [/insert/.*]
-      existingSecret: victorialogs-vector
-      from:
-        namespace: vector
-        podLabels:
-          app.kubernetes.io/name: vector
-    - name: grafana
-      paths: [/select/.*]
-      existingSecret: victorialogs-grafana
-      from:
-        podLabels:
-          app: grafana
-    - name: chargeback-aggregator
-      paths: [/select/.*]
-      existingSecret: victorialogs-chargeback-aggregator
-      from:
-        podLabels:
-          app.kubernetes.io/name: chargeback-aggregator
-    - name: federation-gateway
-      paths: [/select/.*]
-      existingSecret: victorialogs-federation-gateway
-      from:
-        podLabels:
-          app.kubernetes.io/name: federation-gateway
-    - name: federation-reconciler
-      paths: [/select/.*]
-      existingSecret: victorialogs-federation-reconciler
-      from:
-        podLabels:
-          app.kubernetes.io/name: federation-reconciler
+  existingSecrets:
+    vector: victorialogs-vector
+    grafana: victorialogs-grafana
+    chargeback-aggregator: victorialogs-chargeback-aggregator
+    federation-gateway: victorialogs-federation-gateway
+    federation-reconciler: victorialogs-federation-reconciler
