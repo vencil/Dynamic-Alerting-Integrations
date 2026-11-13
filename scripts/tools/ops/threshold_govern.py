@@ -129,7 +129,7 @@ class UngovernedKey:
 @dataclass
 class NotApplicableKey:
     """A ``<`` threshold classified by-design not-applicable (#916 Item A —
-    kafka active-controllers / broker-count / integer-count floors).
+    kafka broker-count / integer-count floors).
 
     An expected-value invariant or a topology floor: no percentile recommendation
     is ever meaningful, so it is reported as an INFO count (governance is complete

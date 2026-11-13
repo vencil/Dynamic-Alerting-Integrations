@@ -1,9 +1,10 @@
 """validate-config 對退役閾值鍵（registry `retired_keys:`，#3829）的判決。
 
-判決是 Go 的（`pkg/keyverdict`，經 `da-guard key-verdict`），Python 不留退役表：
-提交的 registry 目前沒有退役鍵，所以這裡建一支以 `-ldflags -X` 加入測試條目的
-da-guard（`config.retiredThresholdKeysFixture`，只有測試建置會設），量的是工具真正
-跑的那條路。租戶 id 與退役鍵名都是 fixture 名（CLAUDE.md #9）。
+判決是 Go 的（`pkg/keyverdict`，經 `da-guard key-verdict`），Python 不留退役表。
+「有替代鍵」這個形狀提交的 registry 沒有條目，所以這裡建一支以 `-ldflags -X` 加入測試
+條目的 da-guard（`config.retiredThresholdKeysFixture`，只有測試建置會設），量的是工具
+真正跑的那條路；「沒有替代鍵」則直接量提交的 registry 條目（#3783 的 Kafka 鍵）。
+租戶 id 都是 fixture 名（CLAUDE.md #9）。
 """
 from __future__ import annotations
 
@@ -125,3 +126,35 @@ def test_da_guard_write_refuses_a_newly_written_retired_key_naming_its_replaceme
     assert (tmp_path / "tb.yaml").read_text(encoding="utf-8") == before
     p = _write(retired_da_guard, conf_d, _NEW)
     assert p.returncode == 0, (p.returncode, p.stdout, p.stderr)
+
+
+# #3783: the committed registry retires these with `replaced_by: null`; the
+# `_critical` twin is retired by derivation, not by an entry of its own.
+_KAFKA_RETIRED = ("kafka_request_rate", "kafka_active_controllers", "kafka_request_rate_critical")
+
+
+def test_the_committed_kafka_retirements_fail_wherever_written_and_name_no_replacement(
+        tmp_path, da_guard_binary):
+    """提交的 registry（#3783）：部署方 root `_defaults.yaml` 寫 `kafka_request_rate`、租戶各寫
+    `kafka_active_controllers`／`kafka_request_rate_critical`——rc 1，三筆都是 unread／error／
+    retired，說明沒有替代鍵、要刪掉；`_critical` 沒有自己的條目，靠 base 推導。"""
+    files = {
+        "_defaults.yaml": "defaults:\n  kafka_request_rate: 10000\n",
+        "ta.yaml": "tenants:\n  ta:\n    kafka_active_controllers: \"1\"\n",
+        "tb.yaml": "tenants:\n  tb:\n    kafka_request_rate_critical: \"20000\"\n",
+    }
+    for rel, text in files.items():
+        (tmp_path / rel).write_text(text, encoding="utf-8")
+    rc, rows = _validate(str(tmp_path), da_guard_binary)
+    assert rc == 1, rows
+    row = rows["unread_keys"]
+    assert row["status"] == vc.FAIL, row
+    where = {"kafka_request_rate": "_defaults.yaml", "kafka_active_controllers": "ta.yaml",
+             "kafka_request_rate_critical": "tb.yaml"}
+    for key in _KAFKA_RETIRED:
+        lines = [d for d in row["details"] if f"unread `{key}`" in d]
+        assert len(lines) == 1, (key, row["details"])
+        d = lines[0]
+        assert d.startswith(f"{where[key]}: error: unread"), d
+        assert "(retired: retired threshold key (#3783) with no replacement: remove it;" in d, d
+        assert "instead" not in d, d

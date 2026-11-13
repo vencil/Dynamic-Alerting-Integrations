@@ -33,7 +33,7 @@ parent: architecture-and-design.md
 | Oracle | `prometheus-rules-oracle` | 13 | 9 |
 | DB2 | `prometheus-rules-db2` | 15 | 10 |
 | ClickHouse | `prometheus-rules-clickhouse` | 12 | 7 |
-| Kafka | `prometheus-rules-kafka` | 13 | 8 |
+| Kafka | `prometheus-rules-kafka` | 8 | 5 |
 | RabbitMQ | `prometheus-rules-rabbitmq` | 14 | 9 |
 | JVM | `prometheus-rules-jvm` | 9 | 7 |
 | Nginx | `prometheus-rules-nginx` | 9 | 6 |
@@ -41,7 +41,7 @@ parent: architecture-and-design.md
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **總計** | | **171** | **186** (= **357** rules) |
+| **總計** | | **166** | **183** (= **349** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）

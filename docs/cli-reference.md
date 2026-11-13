@@ -3320,7 +3320,7 @@ da-tools threshold-recommend --generate-observed-map
 >
 > **#916 下界 (`<`) 三態**：下界閾值（hit-ratio / 可用度**下限**，腐敗＝下修 floor）不再一律 skip，而由 code-level allowlist 分三態：
 > - **`percentile-lower`**（可推薦）：opt-in 的下限 key（如 `db2_bufferpool_hit_ratio`）走專屬 **P5 floor 引擎**——完整 UTC 日分桶取 daily-P5，`min(daily-median, pooled)` 抗污染；4dp `ROUND_FLOOR`（floor 防捨入偷放鬆）；以 **miss-rate（互補空間 `1-value`）** 度量腐敗。護欄依序：**放鬆（下修 floor）一律 `force_manual` 交人（無幅度豁免）** → clamp（不把容忍 miss-rate 收到現值的 25% 以下）→ 收緊 within-10%-miss-margin 視為無變更。樣本不足 / current 或 candidate 超出 (0,1) 亦 `force_manual`。
-> - **`not-applicable`**（by-design 跳過）：期望值不變量 / 拓撲下限 / 整數 count 下限（如 `kafka_active_controllers` / `kafka_broker_count` / `rabbitmq_consumers`）——百分位推薦無意義，治理視為完成、列 INFO。
+> - **`not-applicable`**（by-design 跳過）：期望值不變量 / 拓撲下限 / 整數 count 下限（如 `kafka_broker_count` / `rabbitmq_consumers`）——百分位推薦無意義，治理視為完成、列 INFO。
 > - **`needs_review`**（未分類）：不在任何 allowlist 的 `<` key，fail-loud 待人工分類。
 >
 > mode 權威由 drift-guard 把關：手編 map 對非 allowlist key 冒充 `percentile-lower` / `not-applicable` 是 CI 硬錯。**下界 delta 為 miss-rate**，export-patch / 治理表格以 `+X% miss` 標示，避免誤讀方向。此外估計量發散閘（pooled-P5 的 miss-rate ≥ 1.5× daily-median-P5）會擋下「週期低谷坐在現值之上」的假自動收緊（否則每週對低谷誤鳴）——交人工。

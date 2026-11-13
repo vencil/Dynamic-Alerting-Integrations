@@ -17,10 +17,7 @@ data:
     \  - record: tenant:kafka_consumer_lag:max\n    expr: max by(tenant) (kafka_consumergroup_lag_sum)\n\
     \  - record: tenant:kafka_under_replicated_partitions:sum\n    expr: \"sum by(tenant)\
     \ (\\n  max by(tenant, topic, partition) (kafka_topic_partition_under_replicated_partition)\\\
-    n)\\n\"\n  - record: tenant:kafka_active_controllers:max\n    expr: max by(tenant)\
-    \ (kafka_controller_active_controller_count)\n  - record: tenant:kafka_broker_count:max\n\
-    \    expr: max by(tenant) (kafka_brokers)\n  - record: tenant:kafka_request_rate:sum\n\
-    \    expr: sum by(tenant) (rate(kafka_server_brokertopicmetrics_messagesin_total[5m]))\n\
+    n)\\n\"\n  - record: tenant:kafka_broker_count:max\n    expr: max by(tenant) (kafka_brokers)\n\
     - name: kafka-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
     \ tenant:alert_threshold:kafka_consumer_lag\n    expr: max by(tenant) (user_threshold{component=\"\
     kafka\", metric=\"consumer_lag\", severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_consumer_lag_critical\n\
@@ -31,13 +28,7 @@ data:
     \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"under_replicated_partitions\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:kafka_broker_count\n\
     \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"broker_count\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_active_controllers\n\
-    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"active_controllers\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_request_rate\n\
-    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"request_rate\"\
-    , severity=\"warning\"})\n  - record: tenant:alert_threshold:kafka_request_rate_critical\n\
-    \    expr: max by(tenant) (user_threshold{component=\"kafka\", metric=\"request_rate\"\
-    , severity=\"critical\"})\n"
+    , severity=\"warning\"})\n"
   kafka-alert.yml: "groups:\n- name: kafka-alerts\n  rules:\n  - alert: KafkaHighConsumerLag\n\
     \    expr: \"(\\n  tenant:kafka_consumer_lag:max\\n  > on(tenant) group_left\\\
     n  tenant:alert_threshold:kafka_consumer_lag\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
@@ -120,82 +111,23 @@ data:
     \ }}'\n      summary: Critical under-replicated partitions on {{ $labels.tenant\
     \ }}\n      summary_zh: '{{ $labels.tenant }} 的複製不足分割區情況嚴重'\n      tier: '{{ with\
     \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: KafkaNoActiveController\n\
-    \    expr: \"(\\n  tenant:kafka_active_controllers:max\\n  < on(tenant) group_left\\\
-    n  tenant:alert_threshold:kafka_active_controllers\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
+    \ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: KafkaLowBrokerCount\n\
+    \    expr: \"(\\n  tenant:kafka_broker_count:max\\n  < on(tenant) group_left\\\
+    n  tenant:alert_threshold:kafka_broker_count\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\\n\"\n    for: 30s\n    labels:\n      maintenance: mute\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: 'Active controllers: {{ $value | printf \"%.0f\" }} (expected\
-    \ at least 1)'\n      description_zh: '活躍的 controller: {{ $value | printf \"%.0f\"\
-    \ }} (預期至少 1 個)'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
+    \      description: 'Active brokers: {{ $value | printf \"%.0f\" }} (below minimum\
+    \ threshold)'\n      description_zh: '活躍的 broker: {{ $value | printf \"%.0f\"\
+    \ }} (低於最小閾值)'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
     \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: no active Kafka controller — cluster leadership lost,\
-    \ escalate'\n      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: 沒有活躍的 Kafka controller — 叢集領導已遺失，請上報'\n      runbook_url:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ No active Kafka controller on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 上沒有活躍的 Kafka controller'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n\
-    \  - alert: KafkaLowBrokerCount\n    expr: \"(\\n  tenant:kafka_broker_count:max\\\
-    n  < on(tenant) group_left\\n  tenant:alert_threshold:kafka_broker_count\\n)\\\
-    nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n\"\
-    \n    for: 30s\n    labels:\n      maintenance: mute\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: 'Active\
-    \ brokers: {{ $value | printf \"%.0f\" }} (below minimum threshold)'\n      description_zh:\
-    \ '活躍的 broker: {{ $value | printf \"%.0f\" }} (低於最小閾值)'\n      owner: '{{ with\
-    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: broker count below minimum — cluster availability at risk'\n      platform_summary_zh:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: broker 數量低於最小值 — 叢集可用性有風險'\n      runbook_url: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url\
-    \ }}{{ end }}{{ end }}'\n      summary: Low Kafka broker count on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 Kafka broker 數量過少'\n      tier:\
-    \ '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n  - alert: KafkaHighRequestRate\n\
-    \    expr: \"(\\n  tenant:kafka_request_rate:sum\\n  > on(tenant) group_left\\\
-    n  tenant:alert_threshold:kafka_request_rate\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
-    \"maintenance\\\"} == 1)\\n\"\n    for: 30s\n    labels:\n      maintenance: mute\n\
-    \      metric_group: kafka_request_rate\n      severity: warning\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Message rate:\
-    \ {{ $value | printf \"%.1f\" }} msg/s (warning threshold exceeded)'\n      description_zh:\
-    \ '訊息速率: {{ $value | printf \"%.1f\" }} 訊息/秒 (超過警告閾值)'\n      owner: '{{ with\
-    \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
-    \ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n      platform_summary:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: message rate threshold exceeded — throughput review'\n      platform_summary_zh:\
-    \ '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant)\
-    \ }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant\
-    \ }}: 訊息率超過閾值 — 請檢查吞吐量'\n      runbook_url: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end\
-    \ }}'\n      summary: High Kafka request rate on {{ $labels.tenant }}\n      summary_zh:\
-    \ '{{ $labels.tenant }} 的 Kafka 請求率過高'\n      tier: '{{ with query (printf `topk(1,\
-    \ tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier\
-    \ }}{{ end }}{{ end }}'\n  - alert: KafkaHighRequestRateCritical\n    expr: \"\
-    (\\n  tenant:kafka_request_rate:sum\\n  > on(tenant) group_left\\n  tenant:alert_threshold:kafka_request_rate_critical\\\
-    n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 30s\n    labels:\n      maintenance: mute\n      metric_group: kafka_request_rate\n\
-    \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      description: 'Message rate: {{ $value | printf \"%.1f\" }} msg/s (critical\
-    \ threshold exceeded)'\n      description_zh: '訊息速率: {{ $value | printf \"%.1f\"\
-    \ }} 訊息/秒 (超過嚴重閾值)'\n      owner: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}'\n\
-    \      platform_summary: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
-    \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: critical message rate — broker saturation risk, escalate'\n\
+    \ {{ $labels.tenant }}: broker count below minimum — cluster availability at risk'\n\
     \      platform_summary_zh: '[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}]\
-    \ {{ $labels.tenant }}: 訊息率嚴重過高 — broker 飽和風險，請上報'\n      runbook_url: '{{ with\
+    \ {{ $labels.tenant }}: broker 數量低於最小值 — 叢集可用性有風險'\n      runbook_url: '{{ with\
     \ query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{\
     \ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}'\n      summary:\
-    \ Critical Kafka request rate on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 的 Kafka 請求率嚴重過高'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
+    \ Low Kafka broker count on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
+    \ }} 的 Kafka broker 數量過少'\n      tier: '{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`\
     \ $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}'\n"
