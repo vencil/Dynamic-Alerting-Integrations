@@ -25,6 +25,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "tools"))
 
 import _lib_exporter_presence as presence  # noqa: E402
+import _lib_metric_sources as ms  # noqa: E402
 
 SCHEMA = ROOT / "docs" / "schemas" / "tenant-config.schema.json"
 LIVENESS = ROOT / presence.LIVENESS_PACK
@@ -109,3 +110,19 @@ def test_absence_joins_on_tenant_and_db_type(path, alert):
     assert joins, f"{alert} does not anti-join tenant:exporter_present"
     for j in joins:
         assert sorted(x.strip() for x in j.split(",")) == ["db_type", "tenant"], (alert, j)
+
+
+def test_cross_pack_records_are_liveness_records_on_the_tenant_exporters_job():
+    """Operator mode keeps a platform rule that reads a CROSS_PACK_RECORDS name
+    (MassExporterOutage reads tenant:exporter_present). That holds only while
+    the liveness pack records it, and every input of its rules selects the
+    tenant-exporters job the Operator doc's ServiceMonitor sets."""
+    rules = [r for r in _rules(LIVENESS) if "record" in r]
+    for name in ms.CROSS_PACK_RECORDS:
+        mine = [r for r in rules if r["record"] == name]
+        assert mine, f"{name}: not recorded by {LIVENESS.name}"
+        for rule in mine:
+            for metric in ms.extract_metrics(rule["expr"]):
+                jobs = ms._job_matchers(metric, rule["expr"])
+                assert jobs and all(j == ("=", ms.TENANT_EXPORTER_JOB) for j in jobs), (
+                    name, metric, jobs)

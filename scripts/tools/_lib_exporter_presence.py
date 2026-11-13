@@ -76,6 +76,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import _lib_exitcodes  # noqa: E402  (the one exit path: tests/shared/test_single_exit_path.py)
+from _lib_consumer_read import RULE_PACKS  # noqa: E402  (#3471: the rule-pack file names)
 
 #: db_type → the metric(s) whose presence under job="tenant-exporters" means an
 #: exporter of that kind is answering. Several metrics: any one counts.
@@ -99,7 +100,7 @@ JOB_SELECTOR = 'job="tenant-exporters"'
 BEGIN_MARK = "# >>> GENERATED:exporter-presence"
 END_MARK = "# <<< GENERATED:exporter-presence"
 
-LIVENESS_PACK = Path("rule-packs") / "rule-pack-liveness.yaml"
+LIVENESS_PACK = Path(RULE_PACKS.directory) / RULE_PACKS.file_name("liveness")
 
 
 def presence_expr(db_type: str) -> str:
