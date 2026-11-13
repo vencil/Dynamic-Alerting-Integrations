@@ -763,11 +763,18 @@ def test_da_read_prometheus_versioning_reads_the_module_as_the_image_version():
 # ---------------------------------------------------------------------------
 
 def _git_only_charts() -> set[str]:
+    """Chart DIRECTORIES whose chart NAME no release line pushes — the guard
+    keys on the name (discover_pushed_charts), a rule on the directory."""
     import sys
-    sys.path[:0] = [str(REPO / "scripts" / "tools" / "lint"), str(REPO / "scripts" / "tools")]
+    import yaml
+    for path in (REPO / "scripts" / "tools" / "lint", REPO / "scripts" / "tools"):
+        if str(path) not in sys.path:
+            sys.path.insert(0, str(path))
     from check_chart_ship_surface import discover_pushed_charts
     pushed = set(discover_pushed_charts(REPO))
-    return {c.parent.name for c in (REPO / "helm").glob("*/Chart.yaml")} - pushed
+    names = {c.parent.name: yaml.safe_load(c.read_text(encoding="utf-8"))["name"]
+             for c in (REPO / "helm").glob("*/Chart.yaml")}
+    return {d for d, name in names.items() if name not in pushed}
 
 
 def _bump_rules(cfg: dict) -> dict[str, dict]:
@@ -797,12 +804,20 @@ def test_bump_rules_cover_exactly_the_git_only_charts():
 
 
 def test_each_bump_rule_raises_its_own_charts_version():
-    """The rule is scoped to the manager that edits the chart and to that
-    chart's files, and bumps that chart's Chart.yaml `version` — matched once,
-    on the real key (not appVersion, not a history comment)."""
+    """The rule is scoped by PATH only (any manager editing the chart — the
+    custom.regex values pins and the dockerfile manager's bundled Dockerfiles
+    both change the package) and carries nothing but the bump and its rebase
+    policy: an extra key (enabled, groupName, matchDatasources…) would change
+    or silently cancel what the chart's updates do. It bumps that chart's
+    Chart.yaml `version` — matched once, on the real key (not appVersion, not
+    a history comment)."""
     import yaml
     for chart, rule in _bump_rules(_load_config()).items():
-        assert rule.get("matchManagers") == ["custom.regex"], (chart, rule.get("matchManagers"))
+        assert set(rule) == {"description", "matchFileNames", "bumpVersions", "rebaseWhen"}, (
+            chart, sorted(rule))
+        # A second PR bumping the same chart off the same base would land the
+        # same version twice; rebasing when behind makes the next run bump anew.
+        assert rule["rebaseWhen"] == "behind-base-branch", chart
         assert len(rule["bumpVersions"]) == 1, chart
         bump = rule["bumpVersions"][0]
         assert bump.get("filePatterns") == [f"helm/{chart}/Chart.yaml"], (chart, bump.get("filePatterns"))
@@ -820,6 +835,11 @@ def test_every_renovate_edit_in_a_git_only_chart_is_under_its_bump_rule():
     cfg = _load_config()
     rules = _bump_rules(cfg)
     edited = {d["file"] for mgr in cfg["customManagers"] for d in _extract(mgr)}
+    # The dockerfile manager's default file names (Renovate 44
+    # lib/modules/manager/dockerfile): bundled Dockerfiles ship in the chart.
+    dockerfile = re.compile(r"(^|/|\.)([Dd]ocker|[Cc]ontainer)file$|(^|/)([Dd]ocker|[Cc]ontainer)file[^/]*$")
+    edited |= {f.relative_to(REPO).as_posix() for f in (REPO / "helm").rglob("*")
+               if f.is_file() and dockerfile.search(f.relative_to(REPO).as_posix())}
     for path in sorted(edited):
         parts = path.split("/")
         if parts[0] != "helm" or parts[1] not in rules:
@@ -835,20 +855,23 @@ def fnmatch_path(path: str, glob: str) -> bool:
     return path.startswith(glob[:-2])
 
 
-@pytest.mark.parametrize("file,chart", [
-    ("helm/vector/values.yaml", "vector"),
-    ("helm/mariadb-instance/values.yaml", "mariadb-instance"),
-    ("helm/federation-gateway/values.yaml", "federation-gateway"),
+@pytest.mark.parametrize("manager,dep,datasource,dep_type", [
+    ("custom.regex", "busybox", "docker", None),
+    ("dockerfile", "alpine", "docker", "final"),
 ])
-def test_an_image_bump_in_a_git_only_chart_carries_that_charts_bump(file, chart):
-    """Resolved the way Renovate applies packageRules: the chart rule adds its
-    bump and changes nothing else (group, enabled, approval stay as before)."""
+def test_an_image_bump_in_a_git_only_chart_carries_that_charts_bump(manager, dep, datasource, dep_type):
+    """Resolved the way Renovate applies packageRules, for every git-only
+    chart: the chart rule adds its bump and changes nothing else (group,
+    enabled, approval stay as before)."""
     cfg = _load_config()
-    case = {"manager": "custom.regex", "dep": "busybox", "datasource": "docker", "update": "patch"}
-    with_file = _resolve(cfg, **case, file=file)
+    case = {"manager": manager, "dep": dep, "datasource": datasource, "update": "patch",
+            "dep_type": dep_type}
     without = _resolve(cfg, **case)
-    assert [b["name"] for b in with_file.get("bumpVersions", [])] == [f"chart-{chart}"], with_file
-    assert {k: v for k, v in with_file.items() if k != "bumpVersions"} == without
+    for chart in sorted(_git_only_charts()):
+        with_file = _resolve(cfg, **case, file=f"helm/{chart}/values.yaml")
+        assert [b["name"] for b in with_file.get("bumpVersions", [])] == [f"chart-{chart}"], with_file
+        rest = {k: v for k, v in with_file.items() if k not in ("bumpVersions", "rebaseWhen")}
+        assert rest == without, chart
 
 
 def test_a_pushed_chart_gets_no_bump():
