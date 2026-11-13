@@ -319,18 +319,6 @@ Generator guard (#2902). Renders nothing; fails the render on a
 configuration the generator container cannot run in. The container is
 required since #2903, so this always applies.
 */}}
-{{- /*
-ADR-027 §2: tenant-api refuses to start without the oauth2-proxy config file
-(TA_OAUTH2_PROXY_CONFIG), so a render without it would be a pod that never
-starts. Fail here. (The API's Unix socket is always rendered: its path is
-tenant-api.humanSocketPath, not a value.)
-*/ -}}
-{{- define "tenant-api.identityPlaneGuard" -}}
-{{- if not .Values.oauth2Proxy.enabled -}}
-{{- fail "oauth2Proxy.enabled=false is no longer supported: the API is reachable only through the oauth2-proxy sidecar, and tenant-api refuses to start without its config file (ADR-027 §2). Remove the override." -}}
-{{- end -}}
-{{- end -}}
-
 {{- define "tenant-api.generatorGuard" -}}
 {{- $g := .Values.generator -}}
 {{- /* ADR-036 §3: git refuses a repository another uid owns ("dubious
