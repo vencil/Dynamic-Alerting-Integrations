@@ -49,10 +49,8 @@ tools build a separate parser per help language (alert_quality declares
 ``--min-score`` once in each), and one language would leave the other's
 declaration unexercised.
 
-Environment is pinned where it would change a verdict: a fake ``amtool``
-that accepts every config is first on PATH (``amtool_accepts``), because
-validate_config's routes row is WARN without amtool, PASS or FAIL with one —
-and the CI Python Tests jobs install a real one.
+Environment is pinned where it would change a verdict: ``PROMETHEUS_URL`` is
+removed from every run's environment.
 
 SCOPE — WHICH FLAGS
 -------------------
@@ -660,8 +658,8 @@ RECIPES: list[Recipe] = [
       boundary_base=lambda t, s: ["--config-dir",
                                   _confd_with_policy(t, "pagerduty")],
       note="forbidden slack receiver: WARN -> FAIL; no violation stays 0. "
-           "With amtool accepting, the boundary tree has no WARN at all, so "
-           "a --strict that escalated every WARN would still pass here"),
+           "The boundary tree has no WARN at all, so a --strict that "
+           "escalated every WARN would still pass here"),
 
     # --min-score is read only under --ci (it gates the same line as BAD
     # alerts). The stub's tenant scores 75 with no BAD alert: 80 fails it,
@@ -1104,10 +1102,10 @@ LANGS = ("zh", "en")
 @pytest.mark.parametrize("lang", LANGS)
 @pytest.mark.parametrize("recipe", [pytest.param(r, id=r.id) for r in RECIPES])
 def test_verdict_flag_changes_the_result(recipe: Recipe, lang: str, tmp_path: Path,
-                                         stub_url: str, amtool_accepts: Path):
+                                         stub_url: str):
     cwd = tmp_path / "cwd"
     cwd.mkdir()
-    env = dict(os.environ)   # PATH already starts with amtool_accepts
+    env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     env["DA_LANG"] = lang
     env.pop("PROMETHEUS_URL", None)
