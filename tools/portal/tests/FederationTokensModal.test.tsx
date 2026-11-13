@@ -9,6 +9,7 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { apiFixture } from './helpers/api-fixture';
 import { FederationTokensModal } from '../src/interactive/tools/tenant-manager/components/FederationTokensModal.jsx';
 import { signInHeld, SIGN_IN_ATTEMPT_KEY } from '../src/interactive/tools/_common/auth/sign-in.js';
+import { apiFetch } from '../src/interactive/tools/_common/api/api-fetch.js';
 
 type Answer = { ok: boolean; status: number; data: any; retryAfter?: string | null };
 
@@ -249,6 +250,38 @@ describe('FederationTokensModal — revoke', () => {
 });
 
 describe('FederationTokensModal — the one-time token is never dropped silently', () => {
+  it('a 401 elsewhere on the page while the issue request is in flight does not leave', async () => {
+    let answerIssue: (v: any) => void = () => {};
+    const wire = (status: number, data: any) => ({ ok: status < 300, status, headers: new Headers(), json: () => Promise.resolve(data) });
+    vi.stubGlobal('fetch', vi.fn((url: string, init?: RequestInit) => {
+      if (init && init.method === 'POST') return new Promise((r) => { answerIssue = r; });
+      if (String(url).startsWith('/api/v1/prs')) return Promise.resolve(wire(401, { error: 'unauthorized' }));
+      return Promise.resolve(wire(200, [record()]));
+    }));
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect((fetch as any).mock.calls.some((c: any[]) => c[1] && c[1].method === 'POST')).toBe(true));
+    // the page's background poll, answered 401 while the token is on its way
+    await apiFetch('/api/v1/prs');
+    expect(assign).not.toHaveBeenCalled();
+    answerIssue(wire(201, TOKEN_ANSWER()));
+    await waitFor(() => expect(screen.getByTestId('fed-new-token').textContent).toContain('eyJ.signed.jwt'));
+    expect(assign).not.toHaveBeenCalled();
+  });
+
+  it('a 401 on the issue request itself still sends the browser to sign in', async () => {
+    liveFetch({
+      GET: [{ status: 200, data: [record()] }],
+      POST: [{ status: 401, data: { error: 'unauthorized' } }],
+    });
+    render(<FederationTokensModal tenantId="tenant-x" onClose={() => {}} />);
+    await waitFor(() => expect(screen.getByTestId('fed-issue')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('fed-issue'));
+    await waitFor(() => expect(assign).toHaveBeenCalledTimes(1));
+    expect(screen.queryByTestId('fed-error')).toBeNull();
+  });
+
   async function issueOne(a = api()) {
     const onClose = vi.fn();
     render(<FederationTokensModal tenantId="tenant-x" onClose={onClose} api={a} />);
@@ -304,7 +337,8 @@ describe('FederationTokensModal — the one-time token is never dropped silently
 
 describe('FederationTokensModal — other states', () => {
   it('a list 401 right after signing in shows the refusal, not "Loading…" forever', async () => {
-    open(api({ list: vi.fn(() => Promise.resolve(fail(401, { error: 'unauthorized' }))) }), vi.fn(() => false));
+    window.sessionStorage.setItem(SIGN_IN_ATTEMPT_KEY, String(Date.now()));
+    open(api({ list: vi.fn(() => Promise.resolve(fail(401, { error: 'unauthorized' }))) }));
     await waitFor(() => expect(screen.getByTestId('fed-error')).toBeInTheDocument());
     expect(screen.queryByText('Loading…')).toBeNull();
   });

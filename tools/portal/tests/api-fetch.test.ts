@@ -21,6 +21,8 @@ import {
 } from '../src/interactive/tools/_common/api/api-fetch.js';
 import { holdSignIn, SIGN_IN_ATTEMPT_KEY } from '../src/interactive/tools/_common/auth/sign-in.js';
 
+const takePathRefusals = () => (globalThis as any).takePathRefusals() as Error[];
+
 function stubFetch(status = 200) {
   const f = vi.fn(() => Promise.resolve({ ok: status >= 200 && status < 300, status } as any));
   vi.stubGlobal('fetch', f);
@@ -62,10 +64,19 @@ describe('apiFetch: the path', () => {
     ['backslash protocol-relative', '/\\evil.example/api/v1/me'],
     ['this origin, absolute', 'http://localhost:3000/api/v1/me'],
     ['empty', ''],
-  ])('refuses %s (%s) before any request', async (_why, path) => {
+  ])('refuses %s (%s) before any request, and reports it', async (_why, path) => {
     const f = stubFetch();
     await expect(apiFetch(path)).rejects.toBeInstanceOf(ApiPathError);
     expect(f).not.toHaveBeenCalled();
+    expect(takePathRefusals()).toHaveLength(1);
+  });
+
+  it('a refusal the caller swallows still reaches the refusal handler', async () => {
+    stubFetch();
+    await apiFetch('/preview').catch(() => null); // what most callers do
+    const [err] = takePathRefusals();
+    expect(err).toBeInstanceOf(ApiPathError);
+    expect(err.message).toContain('/preview');
   });
 
   it.each([
@@ -76,6 +87,7 @@ describe('apiFetch: the path', () => {
     const f = stubFetch();
     await expect(apiFetch(path as any)).rejects.toBeInstanceOf(ApiPathError);
     expect(f).not.toHaveBeenCalled();
+    takePathRefusals();
   });
 
   it('refuses when the document base URL is another origin (<base href>)', async () => {
@@ -89,6 +101,7 @@ describe('apiFetch: the path', () => {
       base.remove();
     }
     expect(f).not.toHaveBeenCalled();
+    takePathRefusals();
   });
 
   it('a network failure is not a path refusal', async () => {
@@ -134,6 +147,14 @@ describe('apiFetch: a 401', () => {
     expect(leftForSignIn(resp)).toBe(false);
   });
 
+  it('a second 401 while the page is already leaving is not a refusal', async () => {
+    stubFetch(401);
+    const [a, b] = await Promise.all([apiFetch('/api/v1/prs'), apiFetch('/api/v1/me')]);
+    expect(assign).toHaveBeenCalledTimes(1);
+    expect(leftForSignIn(a)).toBe(true);
+    expect(leftForSignIn(b)).toBe(true);
+  });
+
   it('leftForSignIn is false for anything apiFetch did not return', () => {
     expect(leftForSignIn({ status: 401 } as any)).toBe(false);
     expect(leftForSignIn(null as any)).toBe(false);
@@ -156,6 +177,7 @@ describe('fetchPageData', () => {
     const f = stubFetch();
     await expect(fetchPageData(name)).rejects.toBeInstanceOf(ApiPathError);
     expect(f).not.toHaveBeenCalled();
+    expect(takePathRefusals()).toHaveLength(1);
   });
 
   it('refuses a data file that would resolve under /api/ (a page served from there)', async () => {
@@ -170,5 +192,6 @@ describe('fetchPageData', () => {
       base.remove();
     }
     expect(f).not.toHaveBeenCalled();
+    takePathRefusals();
   });
 });

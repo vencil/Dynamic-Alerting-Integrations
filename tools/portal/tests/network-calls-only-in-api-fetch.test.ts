@@ -9,7 +9,9 @@
  * exactly one of NETWORK_NAMES — calls, references, aliases (`const f =
  * fetch`), member access (`window.fetch`, `navigator.sendBeacon`) and
  * computed access (`window['fetch']`) alike. It does not try to decide which
- * uses are harmless: write the request with apiFetch or fetchPageData.
+ * uses are harmless: write the request with apiFetch or fetchPageData. A
+ * name assembled at run time (`window['fe' + 'tch']`) is not seen: this
+ * guards against mistakes, not against code written to get past it.
  *
  * A file the parser cannot read fails the check too, rather than being
  * skipped.
@@ -20,13 +22,14 @@ import { join, relative, resolve, sep } from 'node:path';
 import ts from 'typescript';
 
 const ROOT = resolve(__dirname, '..');
-const SRC = join(ROOT, 'src');
+// Everything esbuild bundles: the tools and their entry points (build.mjs).
+const SCANNED = [join(ROOT, 'src'), join(ROOT, 'entries')];
 const HELPER = join('src', 'interactive', 'tools', '_common', 'api', 'api-fetch.js');
 
 /** Ways a page can send a request. */
 export const NETWORK_NAMES = new Set(['fetch', 'XMLHttpRequest', 'EventSource', 'WebSocket', 'sendBeacon']);
 
-const SOURCE = /\.(?:m?js|jsx|ts|tsx)$/;
+const SOURCE = /\.(?:[mc]?js|jsx|[mc]?ts|tsx)$/;
 // Same as vitest.config.ts / build.mjs: the YAML preamble is not JS.
 const FRONTMATTER = /^---\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/;
 
@@ -40,7 +43,7 @@ function sources(dir: string): string[] {
 
 function kindFor(file: string): ts.ScriptKind {
   if (file.endsWith('.tsx')) return ts.ScriptKind.TSX;
-  if (file.endsWith('.ts')) return ts.ScriptKind.TS;
+  if (/\.[mc]?ts$/.test(file)) return ts.ScriptKind.TS;
   return ts.ScriptKind.JSX; // .js / .mjs / .jsx: JSX is a superset here
 }
 
@@ -71,11 +74,12 @@ export function networkUses(text: string, file = 'x.jsx'): string[] {
 }
 
 describe('network calls only in apiFetch', () => {
-  const files = sources(SRC);
+  const files = SCANNED.flatMap(sources);
 
   it('reads the source tree, the helper included', () => {
     const rel = files.map((f) => relative(ROOT, f));
     expect(rel).toContain(HELPER);
+    expect(rel.some((f) => f.startsWith('entries' + sep))).toBe(true);
     expect(files.length).toBeGreaterThan(50);
     // The helper itself must register: a scan that sees no fetch there
     // would see none anywhere.

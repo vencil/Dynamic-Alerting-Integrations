@@ -3,8 +3,8 @@ import { styles } from '../styles.js';
 import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 import { useModalFocusTrap } from '../../_common/hooks/useModalFocusTrap.js';
 import { classifyApiError, apiErrorMessage } from '../../_common/api/classify-error.js';
-import { holdSignIn } from '../../_common/auth/sign-in.js';
-import { apiFetch, leftForSignIn } from '../../_common/api/api-fetch.js';
+import { holdSignIn, leavingForSignIn, redirectToSignIn } from '../../_common/auth/sign-in.js';
+import { apiFetch } from '../../_common/api/api-fetch.js';
 
 /* ── i18n ──────────────────────────────────────────────────────────── */
 const t = window.__t || ((zh, en) => en);
@@ -45,9 +45,6 @@ function answer(resp) {
     status: resp.status,
     data,
     retryAfter: resp.headers && resp.headers.get ? resp.headers.get('Retry-After') : null,
-    // A 401 already sent the browser to sign in unless a hold or the retry
-    // window kept it here (apiFetch).
-    leftForSignIn: leftForSignIn(resp),
   }));
 }
 
@@ -141,7 +138,9 @@ function FederationTokensModal(props) {
       });
       return true;
     }
-    if (!res.leftForSignIn) {
+    // Not left yet: the 401 may have come while this dialog held sign-in
+    // for an issue request in flight (released by now), so try once more.
+    if (!leavingForSignIn() && !redirectToSignIn()) {
       setError({ remedy: 'permission', text: t('登入後仍被拒絕。', 'Still refused after signing in.') });
       return 'refused';
     }
@@ -205,6 +204,9 @@ function FederationTokensModal(props) {
     }
     let res;
     issuing.current = true;
+    // Its answer may be the one-time token: a 401 from any other request on
+    // the page must not navigate away while it is in flight.
+    const releaseIssueHold = holdSignIn();
     try {
       res = await api.issue({ tenant_id: tenantId, description, capability });
     } catch (_e) {
@@ -212,6 +214,7 @@ function FederationTokensModal(props) {
       return;
     } finally {
       issuing.current = false;
+      releaseIssueHold();
     }
     if (handleUnauthorized(res)) return;
     if (!res.ok || !res.data || typeof res.data.token !== 'string') {

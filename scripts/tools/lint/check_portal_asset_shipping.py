@@ -42,8 +42,8 @@ Scan surfaces
         `/interactive/`, which is why the Hub writes `'../assets/flows.json'`
         for the very same file the components call `'flows.json'`.
 
-Recognised load sites: `fetch(…)` and the portal's request helpers
-`fetchPageData(…)` / `apiFetch(…)`, `XHR.open(method, …)`, `.src = …`
+Recognised load sites: `fetch(…)` and the portal's data-file helper
+`fetchPageData(…)`, `XHR.open(method, …)`, `.src = …`
 assignments, and static `<link>` / `<script>` / `<img>` tags in any of the
 three HTML attribute-value forms (`"…"`, `'…'`, unquoted). `.href = …` is
 deliberately NOT a load site: every occurrence in this tree is navigation
@@ -138,10 +138,6 @@ ASSETS_URL = "/assets/"
 # — stable under line moves, and invalidated the moment the expression itself
 # changes. Each MUST carry a reason establishing it is not an /assets/ path.
 EXEMPTIONS: dict[str, str] = {
-    "tools/portal/src/interactive/tools/tenant-manager.jsx::url":
-        "apiCall(url, options) wrapper — url is a function PARAMETER; both "
-        "call sites (lines 427/449) pass a /api/v1/groups/… template, never "
-        "an asset",
     "tools/portal/src/interactive/tools/_common/api/api-fetch.js::path":
         "apiFetch's own fetch(path) — it throws before the request unless path "
         "is a string starting with /api/ that resolves under /api/; never an "
@@ -162,11 +158,12 @@ class DockerfileParseError(RuntimeError):
 
 # ── Reference extraction ────────────────────────────────────────────
 
-# `fetchPageData(` / `apiFetch(` are the portal's request helpers
-# (tools/portal/src/interactive/tools/_common/api/api-fetch.js): every data
-# file the portal loads goes through fetchPageData, so a gate that only read
-# `fetch(` would see none of them.
-_FETCH_RE = re.compile(r"\b(?:fetch|fetchPageData|apiFetch)\s*\(")
+# `fetchPageData(` is the portal's way to load a data file
+# (tools/portal/src/interactive/tools/_common/api/api-fetch.js): a gate that
+# only read `fetch(` would see none of them. `apiFetch(` is deliberately not
+# a load site: it refuses any path outside /api/, so it can never load an
+# asset.
+_FETCH_RE = re.compile(r"\b(?:fetch|fetchPageData)\s*\(")
 _XHR_OPEN_RE = re.compile(
     r"\.open\s*\(\s*['\"](?:GET|POST|HEAD|PUT|DELETE|PATCH)['\"]\s*,\s*", re.I
 )

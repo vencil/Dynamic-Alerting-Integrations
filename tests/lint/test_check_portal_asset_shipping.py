@@ -82,11 +82,11 @@ class TestDetection:
         assert len(violations) == 1
         assert "/assets/template-data.json" in violations[0]
 
-    def test_api_fetch_is_a_load_site_but_api_paths_are_not_assets(self, tmp_path):
+    def test_api_fetch_is_not_a_load_site(self, tmp_path):
+        # apiFetch refuses any path outside /api/: it cannot load an asset,
+        # so a path it is given never needs resolving or an exemption.
         root = _tree(tmp_path, sources={_TOOL: "apiFetch('/api/v1/me')\napiFetch(somePath)\n"})
-        violations, _ = gate.audit(root)
-        assert len(violations) == 1, violations
-        assert "somePath" in violations[0]
+        assert gate.audit(root)[0] == []
 
     def test_removing_a_copy_line_turns_it_red(self, tmp_path):
         """The counterfactual: same source, one COPY line deleted."""
