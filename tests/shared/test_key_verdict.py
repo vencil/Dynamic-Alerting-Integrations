@@ -197,10 +197,10 @@ def test_a_rule_credits_no_tenant_it_excludes_and_no_unregistered_reserved_key(t
     assert _by_key(t, "ta")["_typo_reserved"].verdict == "unread"
 
 
-def test_a_reserved_key_a_subtree_writes_is_not_judged_here(tmp_path):
-    """子目錄 `_defaults.yaml` 不帶保留鍵（#3341）：exporter 不套用、effective 不顯示，所以共用
-    判決看不到它，改由 da-guard 的 subtree_default_reserved_key error 報。#3341 以前登錄表說
-    exporter 讀這一層的 `_state_<f>`、`_severity_dedup`，這裡判成 read。"""
+def test_a_reserved_key_a_subtree_writes_is_a_finding_on_the_file_not_a_tenant_row(tmp_path):
+    """子目錄 `_defaults.yaml` 不帶保留鍵（#3341）：exporter 不套用、effective 不顯示，所以它不在
+    任何租戶的判決列裡。共用判決改以檔案為單位報 unread（原因 subtree_not_applied，#3881），
+    與 da-guard 主檢查的 subtree_default_reserved_key 是同一組（租戶、鍵）。"""
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n"
                           "state_filters:\n  maint: {reasons: [X], severity: critical}\n",
@@ -211,6 +211,9 @@ def test_a_reserved_key_a_subtree_writes_is_not_judged_here(tmp_path):
     assert "mysql_connection_usage_percent" in keys  # 不是恆真：這個租戶真的被判了
     for k in ("_state_maint", "_severity_dedup", "_silent_mode"):
         assert k not in keys, (k, keys[k])
+    got = sorted((f.kind, f.severity, f.key, f.file, f.tenants, f.reason, f.blocks) for f in t.findings)
+    assert got == [("unread", "error", k, "team/_defaults.yaml", ("ta",), "subtree_not_applied", True)
+                   for k in ("_severity_dedup", "_silent_mode", "_state_maint")], t.findings
 
 
 def test_an_undeclared_state_filter_is_a_platform_notice(tmp_path):

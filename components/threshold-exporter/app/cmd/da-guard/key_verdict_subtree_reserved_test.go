@@ -3,8 +3,9 @@ package main
 // #3881: a reserved key a SUBTREE `_defaults.yaml` writes is applied to no
 // tenant (#3341). The main check has reported it since #2388
 // (subtree_default_reserved_key); the shared key verdict gave no finding, so
-// `da-guard write`, `generate-routes --validate` and tenant-api — which read
-// the verdict, not the main check — said nothing.
+// `generate-routes --validate` and validate-config's `routes` row — which
+// read the verdict, not the main check — said nothing. (`da-guard write` runs
+// the main check too, and refused such a write before this.)
 //
 // The property: over the same tree the two gates name the same (tenant, key)
 // set, because both read config.SubtreeReservedReported — on every tree the
