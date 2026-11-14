@@ -823,3 +823,110 @@ def test_main_names_a_renderer_that_cannot_be_had_and_exits_2(tmp_path, monkeypa
     err = capsys.readouterr().err
     assert "site's renderer, which cannot be had: simulated: no pygments" in err, err
     assert "crashed" not in err, err
+
+
+# ---------------------------- owner ruling on #3457: null, registry, docs JSON
+
+_CONFD_FILE = "components/threshold-exporter/config/conf.d/_defaults.yaml"
+
+
+@pytest.mark.parametrize("written", ["~", "", "null", "Null", "NULL"])
+def test_a_yaml_null_in_a_tenant_tree_is_a_key_not_written(tmp_path, written):
+    """`key: ~` and `key:` write nothing: the exporter reads the key as not
+    written and da-guard passes the tree, so this lint does too. Told by the
+    scalar's `!!null` tag — the structure — not by its text."""
+    _write(tmp_path, _CONFD_FILE, f"tenants:\n  t:\n    pct: {written}\n")
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+@pytest.mark.parametrize("written", ['""', "''", '"~"', '"null"', "!!str ~"])
+def test_a_string_that_only_looks_like_a_null_is_reported(tmp_path, written):
+    """An empty string, or the text `~` / `null` as a string, is a value the
+    exporter is given and reads no number from."""
+    _write(tmp_path, _CONFD_FILE, f"tenants:\n  t:\n    pct: {written}\n")
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert [e.split(":")[0] for e in errs] == ["NOT-A-NUMBER"], errs
+
+
+def test_a_null_default_of_a_scheduled_value_is_not_reported(tmp_path):
+    _write(tmp_path, _CONFD_FILE,
+           'tenants:\n  t:\n    pct: {default: ~, overrides: [{window: "09:00-18:00", value: "0x1F"}]}\n')
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert len(errs) == 1 and ": pct = '0x1F'" in errs[0], errs
+
+
+_REGISTRY_FILE = "rule-packs/threshold-registry.yaml"
+
+
+@pytest.mark.parametrize("written, shown", [("0x1p10", "'0x1p10'"), ("1_000", "'1_000'"), ('"abc"', "'abc'"),
+                                            ("~", "null"), ("true", "true"), ("[80]", "a list of 1 item(s)")])
+def test_a_registry_value_that_is_no_number_is_reported(tmp_path, written, shown):
+    """The registry writes a key's threshold in its `value` field: that is a
+    place a value must be written, so anything but a number there — a null
+    too — is reported. (PyYAML reads `1_000` as the int 1000; the registry's
+    loader is PyYAML, so that one is judged as 1000.)"""
+    _write(tmp_path, _REGISTRY_FILE,
+           f'version: 1\npacks:\n  t:\n    pct: {{value: {written}, unit: "%", tier: defaults}}\n')
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    if written == "1_000":
+        assert len(errs) == 1 and errs[0].startswith(f"OUT-OF-DOMAIN: {_REGISTRY_FILE}: pct = 1000"), errs
+        return
+    assert len(errs) == 1 and errs[0].startswith(
+        f"NOT-A-NUMBER: {_REGISTRY_FILE}: pct = {shown} "), errs
+
+
+def test_a_registry_value_that_is_a_number_is_judged(tmp_path):
+    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 300, unit: "%", tier: defaults}\n')
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert len(errs) == 1 and errs[0].startswith(f"OUT-OF-DOMAIN: {_REGISTRY_FILE}: pct = 300"), errs
+    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 80, unit: "%", tier: defaults}\n')
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+def test_a_nested_value_in_a_tenant_tree_is_not_a_threshold_place(tmp_path):
+    """Only the registry's own shape makes `value` a place a threshold is
+    written; `pct: {value: …}` in a tenant tree is not the scheduled form."""
+    _write(tmp_path, _CONFD_FILE, 'tenants:\n  t:\n    pct: {value: "0x1F"}\n')
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+@pytest.mark.parametrize("value, shown", [(True, "true"), (False, "false"), (None, "null"),
+                                          ([50], "a list of 1 item(s)"), ({"a": 1}, "a mapping of 1 key(s)")])
+def test_a_docs_json_value_that_is_no_literal_is_reported(tmp_path, value, shown):
+    """A docs/assets field that is there holds a number: a JSON true, null,
+    list or object is not one, and was passed over as "no literal"."""
+    _write(tmp_path, "docs/assets/recommendation-data.json",
+           json.dumps({"recommendations": {"pct": {"p50": 50, "recommended": value, "unit": "%"}}}))
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert errs == [e for e in errs if e.startswith(
+        f"NOT-A-NUMBER: docs/assets/recommendation-data.json[recommended]: pct = {shown} ")] and len(errs) == 1, errs
+    _write(tmp_path, "docs/assets/recommendation-data.json", "{}")
+    _write(tmp_path, "docs/assets/platform-data.json",
+           json.dumps({"rulePacks": {"p": {"defaults": {"pct": {"value": value, "unit": "%"}}}}}))
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any(e.startswith(f"NOT-A-NUMBER: docs/assets/platform-data.json: pct = {shown} ") for e in errs), errs
+
+
+def test_a_docs_json_field_that_is_absent_writes_nothing(tmp_path):
+    _write(tmp_path, "docs/assets/recommendation-data.json",
+           json.dumps({"recommendations": {"pct": {"p50": 50, "unit": "%"}}}))
+    _write(tmp_path, "docs/assets/platform-data.json",
+           json.dumps({"rulePacks": {"p": {"defaults": {"pct": {"unit": "%"}}}}}))
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+def test_the_shipped_docs_json_holds_no_null_where_a_value_is_written():
+    """The premise of reporting a JSON null: no shipped docs/assets field
+    uses one to mean "no value". If one ever does, this says so before the
+    lint starts failing on it."""
+    for rel, fields in (("docs/assets/platform-data.json", ("value",)),
+                        ("docs/assets/recommendation-data.json", ("p50", "p95", "p99", "recommended"))):
+        with io.open(os.path.join(gate.PROJECT_ROOT, rel), encoding="utf-8") as fh:
+            doc = json.load(fh)
+        metas = ([m for pack in doc["rulePacks"].values() for m in (pack.get("defaults") or {}).values()]
+                 if "rulePacks" in doc else list(doc["recommendations"].values()))
+        assert metas, rel
+        for meta in metas:
+            for field in fields:
+                if field in meta:
+                    assert isinstance(meta[field], (int, float)) and not isinstance(meta[field], bool), (rel, meta)

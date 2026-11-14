@@ -42,11 +42,15 @@ invariants across every structured artifact that carries threshold values:
      forever, and never fires.
 
 A value written where a threshold is written (a key's scalar, a scheduled
-value's `default` or a window's `value`, platform-data's `value`,
-recommendation-data's percentiles) that the exporter reads no number from and
-does not read as `disable` either — `1_000`, `0x1p10`, `abc`, `70:high` — is
-a NOT-A-NUMBER violation (#3457): neither invariant could be checked on it,
-and for a source that is not a conf.d tree no other gate names it.
+value's `default` or a window's `value`, the registry's `value`,
+platform-data's `value`, recommendation-data's percentiles) that the exporter
+reads no number from and does not read as `disable` either — `1_000`,
+`0x1p10`, `abc`, `70:high` — is a NOT-A-NUMBER violation (#3457): neither
+invariant could be checked on it, and for a source that is not a conf.d tree
+no other gate names it. So is a JSON `true`, `null`, list or object in a
+docs/assets field or a null registry `value`. A YAML null in a tenant tree
+(`key: ~`, `key:`) is not: it writes nothing, the exporter reads the key as
+not written and da-guard passes it.
 
 Unbounded dimensions (count / duration / rate) get only a `> 0` floor: their
 right magnitude is workload-dependent and no static rule can know it. Saying so
@@ -253,10 +257,17 @@ def _judged(pending: list, not_numbers: "list | None" = None) -> list:
 
     One it reads no number from, written where a threshold value is written
     (`at_value`) and refused by the exporter — so not a `disable` — is
-    appended to *not_numbers* as `(surface, key, text)` (#3457): `1_000`,
+    appended to *not_numbers* as `(surface, key, shown)` (#3457): `1_000`,
     `0x1p10`, `abc`, `70:high`, `+nan`. Nothing else names it for a source
     that is not a conf.d tree (docs/assets JSON, a values file, a docs
-    example), and "not judged" must not read as "judged clean"."""
+    example), and "not judged" must not read as "judged clean".
+
+    So is a value there that is no text at all (`_not_a_literal`): a YAML
+    `true`, and — where a value must be written (`_AT_VALUE_STRICT`: the
+    registry's `value`, a docs/assets JSON field) — a null, a list or a
+    mapping. A YAML null anywhere else is NOT one: `key: ~` and `key:` write
+    nothing, the exporter reads the key as not written and da-guard passes
+    it (owner ruling on #3457)."""
     texts = [(p[1], _value_text(p[2])) for p in pending]
     asked = [(i, kt) for i, kt in enumerate(texts) if kt[1] is not None]
     readings = dict(zip((i for i, _ in asked), _readings([kt for _, kt in asked])))
@@ -264,13 +275,47 @@ def _judged(pending: list, not_numbers: "list | None" = None) -> list:
     for i, p in enumerate(pending):
         reading = readings.get(i)
         if reading is None:
+            if not_numbers is not None and _not_a_literal(p[2], p[-1]):
+                not_numbers.append((p[0], str(p[1]), _shown_non_literal(p[2])))
             continue
         number = _reading_number(reading)
         if number is not None:
             out.append((*p[:2], number, *p[3:-1]))
         elif p[-1] and reading.refused and not_numbers is not None:
-            not_numbers.append((p[0], str(p[1]), texts[i][1]))
+            not_numbers.append((p[0], str(p[1]), shown_value(texts[i][1])))
     return out
+
+
+#: `at_value` of a place where a value MUST be written: the registry's
+#: `value` field and the docs/assets JSON fields. A null there is a missing
+#: number; a YAML null in a tenant tree is a key not written.
+_AT_VALUE_STRICT = "strict"
+
+
+def _not_a_literal(raw, at_value) -> bool:
+    """Whether *raw* — a value `_value_text` gives no text for — is a
+    NOT-A-NUMBER finding at a place of kind *at_value* (False, True or
+    `_AT_VALUE_STRICT`).
+
+    Nowhere but where a threshold value is written. There: a `True` (a
+    reader typed the scalar a boolean; the exporter reads the text `true`,
+    which is no number) and a string UTF-8 cannot carry, always; a null, a
+    list, a mapping and a `False` only where a value must be written.
+    `False` elsewhere is not one: the exporter reads the text `false` as
+    `disable`. A YAML null elsewhere is a key not written."""
+    if not at_value:
+        return False
+    if raw is True or isinstance(raw, str):
+        return True
+    return at_value == _AT_VALUE_STRICT
+
+
+def _shown_non_literal(raw) -> str:
+    if raw is None:
+        return "null"
+    if isinstance(raw, bool):
+        return "true" if raw else "false"
+    return shown_value(raw)
 
 
 # ------------------------------------------------------------------ scanning
@@ -334,11 +379,16 @@ def _is_value_path(path: tuple) -> bool:
                 and path[2] == "value"))
 
 
-def _walk_literals(node, key_of_interest: str | None = None, _path: tuple = ()):
+def _walk_literals(node, key_of_interest: str | None = None, _path: tuple = (),
+                   required_at: tuple = ()):
     """Yield (registry_key, raw literal, at_value) for every scalar reachable
     in `node` beneath a registry key — the candidates `_numbers` reads;
     `at_value` says the scalar sits where a threshold value is written
-    (`_is_value_path`).
+    (`_is_value_path`), or — `_AT_VALUE_STRICT` — at one of the paths of
+    *required_at*, where the document's own shape requires a value (the
+    registry's `value` field, `_REGISTRY_VALUE_PATHS`). That is the caller's
+    to say, per document: a nested `value` in a tenant tree is not a place a
+    threshold is written.
 
     A registry key's value may be a scalar (`mysql_threads_running: "30"`) or a
     nested block (the scheduled form
@@ -348,25 +398,36 @@ def _walk_literals(node, key_of_interest: str | None = None, _path: tuple = ()):
     scalar leaf beneath it — except the registry's own metadata blocks, whose
     numbers describe the key rather than threshold it (`_REGISTRY_METADATA_FIELDS`).
     """
-    if isinstance(node, dict):
+    if key_of_interest is not None and _path in required_at and isinstance(node, (dict, list)):
+        # A list or a mapping where a value must be written is that value,
+        # not something to look for numbers in.
+        yield key_of_interest, node, _AT_VALUE_STRICT
+    elif isinstance(node, dict):
         for k, v in node.items():
             if key_of_interest is None and isinstance(k, str):
                 base = k.split("{", 1)[0]  # dimensional key: container_cpu{version="v2"}
                 if base in _REGISTRY_KEYS:
-                    yield from _walk_literals(v, base if base == k else _DimensionalKey(base))
+                    yield from _walk_literals(v, base if base == k else _DimensionalKey(base),
+                                              required_at=required_at)
                     continue
             if key_of_interest is not None and k in _REGISTRY_METADATA_FIELDS:
                 continue
             yield from _walk_literals(
-                v, key_of_interest, (*_path, k) if key_of_interest is not None else ())
+                v, key_of_interest, (*_path, k) if key_of_interest is not None else (), required_at)
     elif isinstance(node, list):
         for i, item in enumerate(node):
             yield from _walk_literals(
-                item, key_of_interest, (*_path, i) if key_of_interest is not None else ())
-    elif isinstance(key_of_interest, _DimensionalKey):
-        yield _dimensional(str(key_of_interest), node), node, _is_value_path(_path)
+                item, key_of_interest, (*_path, i) if key_of_interest is not None else (), required_at)
     elif key_of_interest is not None:
-        yield key_of_interest, node, _is_value_path(_path)
+        at_value = _AT_VALUE_STRICT if _path in required_at else _is_value_path(_path)
+        if isinstance(key_of_interest, _DimensionalKey):
+            yield _dimensional(str(key_of_interest), node), node, at_value
+        else:
+            yield key_of_interest, node, at_value
+
+
+#: Where the registry writes a key's threshold: `<key>: {value: …, tier: …}`.
+_REGISTRY_VALUE_PATHS = (("value",),)
 
 
 _REGISTRY_KEYS: set[str] = set()
@@ -404,6 +465,11 @@ def _as_source_text(node):
     `"70:critical"` and `0x46` are the texts `70`, `70:critical`, `0x46`,
     and `_numbers` has the exporter read each."""
     if _lib_parse_tree.is_scalar(node):
+        # A null is no text: `key: ~` and `key:` write nothing, and the
+        # exporter reads the key as not written. Told by yaml.v3's tag, the
+        # structure — never by the text (`~`, ``, `null`, `Null` …).
+        if node.get("tag") == "!!null":
+            return None
         return _lib_parse_tree.scalar_text(node)
     if isinstance(node, dict):
         return {k: _as_source_text(v) for k, v in node.items()}
@@ -524,8 +590,9 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
                 continue  # unparseable YAML is another gate's job
         else:
             docs = read[path]
+        required_at = _REGISTRY_VALUE_PATHS if rel == _REGISTRY_REL else ()
         for doc in docs:
-            for key, raw, at_value in _walk_literals(doc):
+            for key, raw, at_value in _walk_literals(doc, required_at=required_at):
                 pending.append((rel, key, raw, True, at_value))
 
     # docs/assets JSON: platform-data (value+unit), recommendation-data
@@ -534,8 +601,12 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
     if os.path.isfile(pd):
         for pack in (json.loads(_read(pd)).get("rulePacks") or {}).values():
             for key, meta in (pack.get("defaults") or {}).items():
-                if key in _REGISTRY_KEYS and isinstance(meta, dict):
-                    pending.append(("docs/assets/platform-data.json", key, meta.get("value"), True, True))
+                # A field that is there must hold a number: a JSON null, true,
+                # list or object is not one (`_AT_VALUE_STRICT`). A field that
+                # is absent writes nothing.
+                if key in _REGISTRY_KEYS and isinstance(meta, dict) and "value" in meta:
+                    pending.append(("docs/assets/platform-data.json", key, meta["value"], True,
+                                    _AT_VALUE_STRICT))
 
     rd = os.path.join(root, "docs/assets/recommendation-data.json")
     if os.path.isfile(rd):
@@ -543,12 +614,14 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
             if key not in _REGISTRY_KEYS or not isinstance(meta, dict):
                 continue
             for field in ("p50", "p95", "p99", "recommended"):
+                if field not in meta:
+                    continue
                 # Percentiles are OBSERVATIONS of the metric, not thresholds:
                 # they share the same unit (so the domain check applies) but a
                 # `_critical` key legitimately carries the same observed
                 # distribution as its base, so they must not feed tier ordering.
                 pending.append((f"docs/assets/recommendation-data.json[{field}]",
-                                key, meta.get(field), field == "recommended", True))
+                                key, meta[field], field == "recommended", _AT_VALUE_STRICT))
 
     # template-data's `yaml` strings are tenant conf.d text: read as conf.d
     # is read (parse-tree, #3416). One parse-tree refuses is an UNREADABLE
@@ -653,9 +726,9 @@ def run_check(
     for surface, why in unreadable:
         errors.append(f"UNREADABLE: {surface}: conf.d's reader (da-guard parse-tree) "
                       f"refuses it ({why}), so its threshold values were not checked")
-    for surface, key, text in not_numbers:
+    for surface, key, shown in not_numbers:
         errors.append(
-            f"NOT-A-NUMBER: {surface}: {key} = {shown_value(text)} — not a number the exporter "
+            f"NOT-A-NUMBER: {surface}: {key} = {shown} — not a number the exporter "
             "reads (decimal, at most 20 digits, an optional exponent, optionally followed by "
             "`:warning` or `:critical`; so not `1_000`, `0x1F` or `70:high`) and not `disable`. "
             "The exporter serves no such threshold, so its unit and tier were not checked.")

@@ -128,7 +128,7 @@ class TestValidateDir:
         _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    mysql_connections: "{value}"\n')
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert len(viol) == 1, viol
-        assert "decimal number of at most 20 digits" in viol[0], viol
+        assert "decimal number with a mantissa of at most 20 digits" in viol[0], viol
         assert "[0-9]" not in viol[0] and "does not match" not in viol[0]
 
     @pytest.mark.parametrize("value", ["70", "70:Critical", " 70 : warning ", "disable", "+5", ".5", "1e3",
