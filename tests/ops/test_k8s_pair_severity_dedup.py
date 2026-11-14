@@ -82,7 +82,7 @@ def alerts() -> dict[str, dict]:
 @pytest.fixture(scope="module")
 def rules() -> list[dict]:
     out, _ = generate_inhibit_rules({TENANT: "enable", OTHER_TENANT: "enable"})
-    assert len(out) == 2
+    assert len(out) == 1  # #3899: one rule for every tenant
     return out
 
 

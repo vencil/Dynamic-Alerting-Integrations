@@ -30,7 +30,7 @@ v1.7.0–v2.0.0 新增大量企業功能，其測試覆蓋集中在 unit/integra
 | 功能域 | 企業防護需求 | 覆蓋範圍 |
 |--------|-------------|----------|
 | **Silent Mode** | 靜音通知但保留 TSDB 紀錄 | sentinel metric emit、inhibit rule 產出、三態交互 |
-| **Severity Dedup** | warning/critical 去重 | per-tenant inhibit rules、metric_group 配對、sentinel metric |
+| **Severity Dedup** | warning/critical 去重 | 單一 inhibit rule 與排除清單（產生器輸出交給 Alertmanager matcher 判：`tests/alertmanager-inhibit`）、base 裡 dedup 規則拒收、metric_group 配對、sentinel metric |
 | **Config-driven Routing** | 6 種 receiver + guardrails | receiver 結構驗證、timing clamp、domain allowlist |
 | **Per-rule Overrides** | 特定 alert 走不同 receiver | expand_routing_overrides、子路由產出、驗證互斥 |
 | **Platform Enforced Routing** | NOC 必收 + tenant 也收 | `_routing_enforced` 合併、`continue: true` 插入 |

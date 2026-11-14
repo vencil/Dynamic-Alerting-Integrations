@@ -207,8 +207,13 @@ TOOL_FILES=(
     _lib_compat.py
     _lib_prometheus.py
     # #3207/#3210 — the one cluster reader (kubectl get -o json) of
-    # ops/operator_check.py. Stdlib + _lib_exitcodes.
+    # ops/operator_check.py; #3539 — the one place kubectl is started, for
+    # the writes too (grafana_import, cutover_tenant, _grar_render).
+    # Stdlib + _lib_exitcodes + _lib_engine.
     _lib_kubectl.py
+    # #3611 / #3539 — stdlib only: locates and runs an external engine and
+    # says whether it ran at all. Imported by _lib_kubectl (above).
+    _lib_engine.py
     # #3276 — stdlib only: safe_label (re-exported by _lib_io) and the
     # one judgement of a caller-given path (_lib_paths imports _lib_label).
     _lib_label.py

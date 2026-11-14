@@ -38,8 +38,9 @@ inhibit_rules:
     equal: ['tenant']
   # Severity Dedup: when a critical fires, suppress the paired warning for the
   # same tenant + metric_group — the direct critical→warning form the platform
-  # actually deploys (docs/design/config-driven.md §2.8; k8s renders one such
-  # rule PER TENANT via generate_alertmanager_routes.py).
+  # actually deploys (docs/design/config-driven.md §2.8; k8s renders ONE such
+  # rule for every tenant via generate_alertmanager_routes.py, #3899 — this one,
+  # plus a tenant!~ list of the tenants set to "disable").
   #
   # NOT the TenantSeverityDedupEnabled sentinel: a sentinel source can only say
   # "dedup is enabled for this tenant", never "a critical fired" — it cannot
@@ -50,11 +51,12 @@ inhibit_rules:
   # on (e.g. TenantConfigEvent). The metric_group=~".+" gate on both sides now
   # keeps metric_group-less alerts out of this rule entirely.
   #
-  # Deliberate divergence from k8s: the generated per-tenant rules honour
-  # _severity_dedup: "disable" by emitting no rule for that tenant. This static
-  # rule never consults _severity_dedup — dedup always applies. Both demo
-  # tenants use the default ("enable") so the demo matches prod, but a
-  # hand-edited "disable" would NOT take effect here.
+  # Deliberate divergence from k8s: the generated rule honours
+  # _severity_dedup: "disable" by naming that tenant in its target's
+  # tenant!~"<list>" matcher. try-local does not run the generator, so this
+  # static rule has no such list and never consults _severity_dedup — dedup
+  # always applies. Both demo tenants use the default ("enable") so the demo
+  # matches prod, but a hand-edited "disable" would NOT take effect here.
   - source_matchers: ['severity = "critical"', 'metric_group =~ ".+"', 'tenant =~ ".+"']
     target_matchers: ['severity = "warning"', 'metric_group =~ ".+"', 'tenant =~ ".+"']
     equal: ['tenant', 'metric_group']
