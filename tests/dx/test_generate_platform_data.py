@@ -548,3 +548,221 @@ class TestChartAppVersionIsHelmsReading:
         monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-da-crdecode"))
         with pytest.raises(mod.WizardImagesUnreadable, match="the way Helm does"):
             mod._chart_app_version("x")
+
+
+class TestWizardChartVersions:
+    """#2947: the Deployment Wizard pins `helm upgrade --install --version` to
+    each chart's own Chart.yaml `version`, carried by top-level `charts`."""
+
+    _WIZARD = (_REPO_ROOT / "tools" / "portal" / "src" / "interactive" / "tools"
+               / "deployment-wizard" / "utils" / "generators.js")
+
+    def _chart(self, tmp_path, monkeypatch, version_line):
+        mod = _load_module()
+        chart = tmp_path / "helm" / "x"
+        chart.mkdir(parents=True)
+        (chart / "Chart.yaml").write_text(
+            f"apiVersion: v2\nname: x\n{version_line}\nappVersion: \"1.0.0\"\n",
+            encoding="utf-8")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        return mod
+
+    @pytest.mark.usefixtures("da_crdecode_env")
+    def test_each_chart_is_at_its_own_chart_yaml_version(self):
+        mod = _load_module()
+        charts = mod.build_wizard_charts()
+        assert charts, "anti-vacuity: no wizard chart"
+        for name, version in charts.items():
+            want = yaml.safe_load(
+                (_REPO_ROOT / "helm" / name / "Chart.yaml").read_text(encoding="utf-8"))["version"]
+            assert version == want, name
+
+    def test_the_charts_are_the_ones_the_wizard_emits_a_release_for(self):
+        """A chart the wizard installs but this block lacks throws in the
+        browser; one this block carries that the wizard never installs is a
+        dead entry the mirror would still have to track."""
+        import re
+        emitted = set(re.findall(r"\brelease\('([a-z0-9-]+)'", self._WIZARD.read_text(encoding="utf-8")))
+        assert emitted, "anti-vacuity: no release('<chart>', …) call found in the wizard"
+        assert set(_load_module().WIZARD_CHARTS) == emitted
+
+    @pytest.mark.usefixtures("da_crdecode_env")
+    def test_the_release_derivation_reads_version_not_app_version(self, tmp_path, monkeypatch):
+        mod = _load_module()
+        chart = tmp_path / "helm" / "x"
+        chart.mkdir(parents=True)
+        (chart / "Chart.yaml").write_text(
+            'apiVersion: v2\nname: x\nversion: "1.2.3"\nappVersion: "9.9.9"\n', encoding="utf-8")
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(mod, "WIZARD_CHARTS", ("x",))
+        assert mod.build_wizard_charts() == {"x": "1.2.3"}
+
+    # ── An ordinary run carries the published pins; it does not follow the tree ──
+
+    def _file(self, tmp_path, monkeypatch, charts):
+        mod = _load_module()
+        out = tmp_path / "platform-data.json"
+        if charts is not None:
+            out.write_text(charts if isinstance(charts, str) else
+                           __import__("json").dumps({"charts": charts}), encoding="utf-8")
+        monkeypatch.setattr(mod, "OUTPUT_PATH", out)
+        return mod
+
+    def test_the_real_file_names_the_wizard_charts_at_exact_versions(self):
+        mod = _load_module()
+        on_disk = yaml.safe_load(
+            (_REPO_ROOT / "docs" / "assets" / "platform-data.json").read_text(encoding="utf-8"))
+        assert on_disk["charts"] == mod.carried_wizard_charts()
+        assert set(on_disk["charts"]) == set(mod.WIZARD_CHARTS)
+
+    def test_an_ordinary_build_carries_the_block_and_never_reads_chart_yaml(
+            self, tmp_path, monkeypatch):
+        """The regression this guards: a tenant-api PR bumps Chart.yaml to a
+        version no registry holds, `make platform-data` runs, and the wizard
+        starts handing out `--version <unpublished>`."""
+        mod = self._file(tmp_path, monkeypatch, {"threshold-exporter": "1.0.0", "tenant-api": "1.0.1"})
+
+        def _boom():
+            raise AssertionError("an ordinary run derived charts from Chart.yaml")
+        monkeypatch.setattr(mod, "build_wizard_charts", _boom)
+        monkeypatch.setattr(mod, "build_wizard_images", lambda: {})
+        monkeypatch.setattr(mod, "_load_tenant_metadata", lambda at: ({}, {}))
+        data = mod.build_platform_data(at="2026-01-01T00:00:00Z")
+        assert data["charts"] == {"threshold-exporter": "1.0.0", "tenant-api": "1.0.1"}
+
+    def test_a_release_build_takes_the_block_from_chart_yaml(self, tmp_path, monkeypatch):
+        mod = self._file(tmp_path, monkeypatch, {"threshold-exporter": "1.0.0", "tenant-api": "1.0.1"})
+        monkeypatch.setattr(mod, "build_wizard_charts", lambda: {"threshold-exporter": "3.0.0", "tenant-api": "3.0.0"})
+        monkeypatch.setattr(mod, "build_wizard_images", lambda: {})
+        monkeypatch.setattr(mod, "_load_tenant_metadata", lambda at: ({}, {}))
+        data = mod.build_platform_data(at="2026-01-01T00:00:00Z", release_charts=True)
+        assert data["charts"] == {"threshold-exporter": "3.0.0", "tenant-api": "3.0.0"}
+
+    @pytest.mark.parametrize("charts, match", [
+        (None, "does not exist"),
+        ({"threshold-exporter": "1.0.0"}, "must name exactly"),
+        ({"threshold-exporter": "1.0.0", "tenant-api": "1.0.1", "extra": "1.0.0"}, "must name exactly"),
+        ({"threshold-exporter": "1.0.0", "tenant-api": "^1.0.1"}, "not one exact"),
+        ({"threshold-exporter": "1.0.0", "tenant-api": 1.0}, "not one exact"),
+        ("[]", "must name exactly"),
+    ])
+    def test_a_block_that_cannot_be_carried_is_a_finding(self, tmp_path, monkeypatch, charts, match):
+        mod = self._file(tmp_path, monkeypatch, charts)
+        with pytest.raises(mod.WizardImagesInconsistent, match=match):
+            mod.carried_wizard_charts()
+
+    def test_a_file_that_is_not_json_is_no_verdict(self, tmp_path, monkeypatch):
+        mod = self._file(tmp_path, monkeypatch, "{not json")
+        with pytest.raises(mod.WizardImagesUnreadable, match="cannot read"):
+            mod.carried_wizard_charts()
+
+    # ── pre-tag: a pin must be the tree's chart or a chart with a tag ──
+
+    _TREE = {"threshold-exporter": "3.0.0", "tenant-api": "3.0.0"}
+
+    def test_pins_equal_to_the_tree_pass_without_asking_git(self, monkeypatch):
+        mod = _load_module()
+        monkeypatch.setattr(mod, "_tag_exists", lambda tag: pytest.fail(f"asked git for {tag}"))
+        assert mod.unpublishable_chart_pins(dict(self._TREE), self._TREE) == ([], [])
+
+    def test_a_pin_behind_the_tree_with_a_tag_is_a_note_naming_the_line_tag(self, monkeypatch):
+        mod = _load_module()
+        asked = []
+        monkeypatch.setattr(mod, "_tag_exists", lambda tag: asked.append(tag) or True)
+        bad, notes = mod.unpublishable_chart_pins(
+            {"threshold-exporter": "2.9.0", "tenant-api": "2.9.8"}, self._TREE)
+        assert bad == [] and len(notes) == 2
+        assert asked == ["exporter/v2.9.0", "tenant-api/v2.9.8"]
+
+    @pytest.mark.parametrize("pin", ["2.9.25", None, "^2.9.0", 2.9])
+    def test_a_pin_with_no_tag_that_is_not_the_tree_is_refused(self, monkeypatch, pin):
+        mod = _load_module()
+        monkeypatch.setattr(mod, "_tag_exists", lambda tag: False)
+        bad, _notes = mod.unpublishable_chart_pins(
+            {"threshold-exporter": "3.0.0", "tenant-api": pin}, self._TREE)
+        assert len(bad) == 1 and bad[0].startswith("tenant-api:")
+
+    def test_a_malformed_pin_is_refused_even_if_git_would_say_yes(self, monkeypatch):
+        mod = _load_module()
+        monkeypatch.setattr(mod, "_tag_exists", lambda tag: True)
+        bad, _notes = mod.unpublishable_chart_pins(
+            {"threshold-exporter": "3.0.0", "tenant-api": "^2.9.0"}, self._TREE)
+        assert len(bad) == 1
+
+    def test_tag_exists_reads_this_checkouts_tags(self, tmp_path, monkeypatch):
+        import subprocess
+        mod = _load_module()
+        env = {"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_SYSTEM": "/dev/null",
+               "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid",
+               "PATH": __import__("os").environ["PATH"]}
+        for cmd in (["init", "-q"], ["commit", "-q", "--allow-empty", "-m", "x"],
+                    ["tag", "tenant-api/v1.2.3"]):
+            subprocess.run(["git", "-C", str(tmp_path), *cmd], check=True, env=env, timeout=60)
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
+        assert mod._tag_exists("tenant-api/v1.2.3") is True
+        assert mod._tag_exists("tenant-api/v1.2.4") is False
+        monkeypatch.setattr(mod, "REPO_ROOT", tmp_path / "not-a-repo")
+        assert mod._tag_exists("tenant-api/v1.2.3") is False
+
+    @pytest.mark.usefixtures("da_crdecode_env")
+    @pytest.mark.parametrize("pins, tags, rc", [
+        ("tree", False, 0), ("behind", True, 0), ("behind", False, 1)])
+    def test_check_release_charts_is_the_pre_tag_verdict(
+            self, monkeypatch, capsys, cli_argv, pins, tags, rc):
+        """End to end through main(): the real file, with its `charts` swapped."""
+        import json
+        mod = _load_module()
+        real = json.loads(mod.OUTPUT_PATH.read_text(encoding="utf-8"))
+        tree = mod.build_wizard_charts()
+        real["charts"] = tree if pins == "tree" else {n: "0.0.1" for n in tree}
+        text = json.dumps(real)
+        orig = Path.read_text
+        monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: (
+            text if self == mod.OUTPUT_PATH else orig(self, *a, **k)))
+        monkeypatch.setattr(mod, "_tag_exists", lambda tag: tags)
+        cli_argv("generate_platform_data", "--check", "--release-charts")
+        if rc:
+            with pytest.raises(SystemExit) as ei:
+                mod.main()
+            assert ei.value.code == rc
+            assert "nothing publishes" in capsys.readouterr().out
+        else:
+            mod.main()
+            out = capsys.readouterr().out
+            assert "is up to date" in out
+            assert ("NOTE: wizard chart pin" in out) == (pins == "behind")
+
+    @pytest.mark.usefixtures("da_crdecode_env")
+    @pytest.mark.parametrize("line, match", [
+        ("version: 2.9", "not a string"),          # Helm reads the number 2.9
+        ('version: "2.9"', "one exact X.Y.Z"),
+        ('version: "v2.9.0"', "one exact X.Y.Z"),
+        ('version: "^2.9.0"', "one exact X.Y.Z"),
+        ('version: "2.9.0 "', "one exact X.Y.Z"),
+        ("name2: y", "one exact X.Y.Z"),            # no version at all
+    ])
+    def test_a_version_helm_would_not_take_as_one_release_is_refused(
+            self, tmp_path, monkeypatch, line, match):
+        mod = self._chart(tmp_path, monkeypatch, line)
+        with pytest.raises(mod.WizardImagesInconsistent, match=match):
+            mod._chart_version("x")
+
+    @pytest.mark.usefixtures("da_crdecode_env")
+    @pytest.mark.parametrize("line, want", [
+        ('version: "2.9.25"', "2.9.25"), ("version: 2.10.0-rc.1", "2.10.0-rc.1")])
+    def test_an_exact_version_is_read(self, tmp_path, monkeypatch, line, want):
+        mod = self._chart(tmp_path, monkeypatch, line)
+        assert mod._chart_version("x") == want
+
+    def test_a_chart_error_exits_through_mains_rc_mapping(self, monkeypatch, capsys, cli_argv):
+        mod = _load_module()
+
+        def _boom():
+            raise mod.WizardImagesInconsistent("ERROR: synthetic chart")
+        monkeypatch.setattr(mod, "carried_wizard_charts", _boom)
+        cli_argv("generate_platform_data", "--dry-run")
+        with pytest.raises(SystemExit) as ei:
+            mod.main()
+        assert ei.value.code == 1
+        assert "ERROR: synthetic chart" in capsys.readouterr().err
