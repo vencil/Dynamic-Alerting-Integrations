@@ -74,7 +74,7 @@ def bypass_groups(compose: dict) -> "dict[str, list[str]]":
     found = {}
     for name, service in (compose.get("services") or {}).items():
         env = _env(service or {})
-        if env.get(BYPASS_SWITCH, "") not in GO_TRUE:
+        if env.get(BYPASS_SWITCH, "").strip() not in GO_TRUE:  # parseEnvBool trims
             continue
         raw = env.get(BYPASS_GROUPS)
         found[name] = None if raw is None else [g.strip() for g in raw.split(",") if g.strip()]
@@ -202,7 +202,8 @@ def test_one_good_rule_among_bad_ones_is_enough() -> None:
     ({"TA_DEV_BYPASS_AUTH": "true"}, None),
     ({"TA_DEV_BYPASS_AUTH": "1", "TA_DEV_BYPASS_GROUPS": "a"}, ["a"]),
     ({"TA_DEV_BYPASS_AUTH": True, "TA_DEV_BYPASS_GROUPS": "a"}, ["a"]),
-], ids=["mapping-split", "list-form", "unset", "go-true-1", "yaml-bool"])
+    ({"TA_DEV_BYPASS_AUTH": " true ", "TA_DEV_BYPASS_GROUPS": "a"}, ["a"]),
+], ids=["mapping-split", "list-form", "unset", "go-true-1", "yaml-bool", "padded"])
 def test_bypass_groups_reads_both_compose_shapes(env, want) -> None:
     assert bypass_groups({"services": {"s": {"environment": env}}}) == {"s": want}
 

@@ -84,22 +84,25 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 ## Session 生命週期與撤權延遲
 
-群組在**登入時**解析並存入 session cookie。**設了 `cookieRefresh` 時**，session 每過該間隔會**重新向 GitLab 驗證帳號並覆寫群組**（gitlab provider 的 `RefreshSession` 行為）——故群組/帳號撤權延遲**被 `cookieRefresh` 綁住（非 `cookieExpire`）**：設短 `cookieRefresh`（例如 1h）即收緊，被移出群組或停用的使用者於下次 refresh 失效。**未設 `cookieRefresh`** 則群組凍結在登入當下、直到 `cookieExpire` 到期。
+群組在**登入時**解析並存入 session cookie。**設了 `cookieRefresh` 時**，session 每過該間隔會用 refresh token 向 GitLab 換新 token，但**只有回應帶了新的 ID token，群組才會改用它的 `groups` claim**；回應沒有新的 ID token 時，群組維持原值（chart 釘的 oauth2-proxy v7.15.6：gitlab provider 的 `RefreshSession` 走 OIDC 的 refresh，不重讀 userinfo）。**未設 `cookieRefresh`**（chart 預設）則群組凍結在登入當下、直到 `cookieExpire` 到期。
 
-這是 oauth2-proxy session 的本質，平台把它列為**已接受的限制**（[ADR-027](../adr/027-tenant-api-caller-identity.md) §8）：撤權延遲的上限是 `cookieRefresh`，不是即時撤權。要收緊就調短 `cookieRefresh`，代價是更頻繁地向 GitLab 重新驗證。
+這是 oauth2-proxy session 的本質，平台把它列為**已接受的限制**（[ADR-027](../adr/027-tenant-api-caller-identity.md) §8），不是即時撤權：撤權延遲的上限，在 refresh 會換新群組的前提下是 `cookieRefresh`，否則是 `cookieExpire`。要收緊就調短 `cookieRefresh`（代價是更頻繁地向 GitLab 換 token）；上線前在 staging 把測試帳號移出一個群組，等過一個 `cookieRefresh` 確認權限真的消失，不要只靠設定值推論。
 
 ## 身分信任與 production 前提
 
 tenant-api 只採信 oauth2-proxy 送來的身分：API 只在 pod 內的 Unix socket 上，前面是 oauth2-proxy，client 自己帶的同名 header 會被 oauth2-proxy 清掉；TCP 8080 只有 `/health`、`/ready`、`/metrics`，帶身分 header 一律回 400（[ADR-027](../adr/027-tenant-api-caller-identity.md) §2、§3）。
 
-**production 需部署含 ADR-027 的 tenant-api**（版號於該版發布時補上）。舊版 tenant-api 直接採信請求帶的 `X-Forwarded-Groups`：能繞過 oauth2-proxy 連到它的人，可以自稱任何群組。確認叢集裡跑的是哪一種：chart 的 NetworkPolicy 只讓 Prometheus（舊版 chart 另含 threshold-govern）連 8080，從其他 pod 打會被丟掉，所以經 `kubectl port-forward`（不受 NetworkPolicy 約束）在本機打：
+**production 需部署含 ADR-027 的 tenant-api**（版號於該版發布時補上）。舊版 tenant-api 直接採信請求帶的 `X-Forwarded-Groups`：能繞過 oauth2-proxy 連到它的人，可以自稱任何群組。chart 的 NetworkPolicy 只讓 Prometheus（舊版 chart 另含 threshold-govern）連 8080，但**只有 CNI 執行 NetworkPolicy 時才有效**：CNI 不執行時 8080 對整個叢集開放，在舊版 tenant-api 下等於叢集裡任何 pod 都能自稱任何群組。升級前先依 chart 的 `NOTES.txt` 確認 CNI 會執行它。
+
+確認叢集裡跑的是哪一種：經 `kubectl port-forward`（不受 NetworkPolicy 約束）在本機打。chart 固定單一副本、以 `Recreate` 更新（ADR-023），rollout 完成後只有一個 pod，打到的就是它。
 
 ```bash
-kubectl -n <namespace> port-forward svc/<tenant-api service> 8080:8080 & PF=$!; sleep 2
-# 帶身分 header 打 /health：400 = 含 ADR-027；200 = 舊版；000 = 沒連上（檢查 port-forward）
-curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
-  -H 'X-Forwarded-Email: probe@example.com' http://localhost:8080/health
-kill $PF
+kubectl -n <namespace> port-forward svc/<tenant-api service> 18080:8080 & PF=$!; sleep 2
+# port-forward 沒起來（例如本機 18080 已被佔用）時不打，以免讀到別的程式的回應
+# 帶身分 header 打 /health：400 = 含 ADR-027；200 = 舊版；000 = 沒連上
+kill -0 $PF && curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
+  -H 'X-Forwarded-Email: probe@example.com' http://localhost:18080/health
+kill $PF 2>/dev/null
 ```
 
 ## 疑難排解
