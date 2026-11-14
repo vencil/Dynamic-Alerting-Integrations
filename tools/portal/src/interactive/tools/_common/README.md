@@ -50,7 +50,7 @@ _common/
 └── validation/        ← YAML parsing + shared constants
     ├── constants.js
     ├── threshold-value.js  ← the one reader of a threshold value (#3865); never parseFloat / Number()
-    └── yaml-parser.js
+    └── yaml-parser.js      ← parseYaml (typed values); parseTenantYaml for a page that reads thresholds (#3919)
 ```
 
 ---
@@ -68,6 +68,13 @@ import { parseYaml } from './_common/validation/yaml-parser.js';
 import { RULE_PACK_DATA } from './_common/data/rule-packs.js';
 import ENUMS from './_common/data/recipe-enums.json';   // JSON imports directly
 ```
+
+A page that hands YAML to `sim/alert-engine.js` (Alert Preview, YAML
+Validator) imports `parseTenantYaml` instead of `parseYaml`: the exporter reads a
+threshold scalar's text, and `parseYaml` has already made `0x1F` the number
+31 (#3919). Every other use keeps `parseYaml` — Routing Trace included,
+which reads a threshold with its own `parseFloat` and is not held to the
+exporter's grammar.
 
 Use the symbol like any local binding. esbuild orders chunks so an
 import target always evaluates before its importer — there is nothing to
