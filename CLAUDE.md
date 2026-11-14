@@ -15,8 +15,11 @@ lang: zh
 > ⛔ **反過來也成立：本檔裡凡是還留著的數字，都是有機制的，動它會弄紅閘門。** 目前只有兩個，各自在原地標註了守它的是誰。要判斷某個數字屬哪一類，別用 grep 找那個數字——機制是「算出來再比對」而不是把數字寫死。權威清單在 `bump_docs.py` 的 `_build_count_rules()`：
 >
 > ```bash
-> python3 scripts/tools/dx/bump_docs.py --sync-counts --check   # 對帳；DEAD 規則會 fail-closed
+> make version-check   # 對帳（版號＋計數）；DEAD 規則會 fail-closed
+> make sync-counts     # 計數漂了才跑：寫回與來源一致的數字
 > ```
+>
+> ⚠️ 別直接跑 `bump_docs.py --sync-counts`：它要 da-read，乾淨樹上沒有 `.build/` 也沒設 `DA_READ_BINARY` 時會 exit 2（`da-read was not found`）。兩個 make 目標缺件時會先建（冷建約 3 分鐘，#3857）。
 
 ## ⛔ 起手式：先確認閘門在不在
 
@@ -106,7 +109,7 @@ CLAUDE_CODE_REMOTE=true CLAUDE_PROJECT_DIR="$PWD" bash .claude/hooks/session-sta
 
 122 auto-run + 6 manual-stage hooks，清單見 [`.pre-commit-config.yaml`](.pre-commit-config.yaml)。
 
-⛔ 上面那組數字由 `bump_docs.py --sync-counts` 自動同步——**改寫這個句型會讓同步規則變 DEAD、`Version Consistency` 轉紅**（它 fail-closed 在「規則撈不到東西」而不是靜默放行）。要改句型請一併改 `_build_count_rules()` 的 `pattern`。
+⛔ 上面那組數字由 `bump_docs.py --sync-counts` 自動同步（入口是 `make sync-counts`）——**改寫這個句型會讓同步規則變 DEAD、`Version Consistency` 轉紅**（它 fail-closed 在「規則撈不到東西」而不是靜默放行）。要改句型請一併改 `_build_count_rules()` 的 `pattern`。
 
 手動觸發：
 
