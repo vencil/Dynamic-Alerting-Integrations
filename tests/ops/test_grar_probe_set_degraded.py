@@ -27,6 +27,7 @@ import pytest
 import yaml
 
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION
+from _kubectl_fake import run_from_argv as kubectl_from_argv  # noqa: E402  (#3539)
 
 _VALIDATE = importlib.import_module("_grar_validate")
 
@@ -180,6 +181,7 @@ def _apply(monkeypatch, tmp_path, config_dir, rules):
         return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
+    monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
     rc = _main(monkeypatch, tmp_path, "--config-dir", str(config_dir),
                "--apply", "--yes")
     return rc, calls

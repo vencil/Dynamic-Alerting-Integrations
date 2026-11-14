@@ -49,6 +49,7 @@ import _grar_render as render  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
 from _grar_routes import generate_inhibit_rules, generate_routes  # noqa: E402
 from test_alertmanager_amtool_validity import _AM_IMAGE, _DOCKER, ensure_am_image  # noqa: E402
+from _kubectl_fake import run_from_argv as kubectl_from_argv  # noqa: E402  (#3539)
 
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
         / "generate_alertmanager_routes.py")
@@ -492,6 +493,7 @@ def _fake_cluster(monkeypatch, am_yml: str, base_yml: str | None = None) -> list
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
+    monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
     return calls
 
 

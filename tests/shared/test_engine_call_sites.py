@@ -125,6 +125,16 @@ MIGRATED: dict[Key, int] = {
     # #3839: the generator service's readiness asks for da-read, the binary
     # that gate runs — its two `which("amtool")` are gone
     ("scripts/tools/ops/generator_service.py", "amtool"): 2,
+    # #3539: kubectl is started in one place — `_lib_kubectl.kubectl_run`,
+    # which locates and runs it here (a proof per verb) — for reads and
+    # writes alike. patch_config's sites are the ones left.
+    ("scripts/tools/_lib_kubectl.py", "kubectl"): 2,
+    ("scripts/ops/bench_synth_tenants.py", "kubectl"): 1,
+    ("scripts/ops/configmap_assemble.py", "kubectl"): 1,
+    ("scripts/tools/ops/_grar_render.py", "kubectl"): 3,
+    ("scripts/tools/ops/cutover_tenant.py", "kubectl"): 1,
+    ("scripts/tools/ops/drift_detect.py", "kubectl"): 1,
+    ("scripts/tools/ops/grafana_import.py", "kubectl"): 4,
 }
 
 #: Baseline sites the scanner counts that are not engine calls. They stay in
