@@ -10,9 +10,7 @@ Deliberately synthetic (each case builds its own tiny docs/ tree under
 ``tmp_path``) rather than asserting against the live repo. The live tree is
 already guarded by the `md-yaml-fence-check` pre-commit hook, which runs in
 ci.yml's always-on Lint job; these tests exist to pin the CHECKER's behaviour,
-so they keep working when docs/ legitimately changes — and so they still run
-even though the `python` CI filter carries only ``docs/glossary*.md``, not
-``docs/**``.
+so they keep working when docs/ legitimately changes.
 """
 
 from __future__ import annotations

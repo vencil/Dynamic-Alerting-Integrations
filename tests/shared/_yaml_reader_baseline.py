@@ -56,12 +56,8 @@ ALLOWED = {
         (1, 'the flaky-test registry, a repo data file read only by CI scripts'),
     ('scripts/ops/required_checks_drift.py', 'main'):
         (1, '.github/required-checks.yaml, the required-check list; read by CI scripts and tests only, no Go consumer'),
-    ('scripts/ops/go_test_reads.py', 'leg_gate_patterns'):
-        (2, 'a GitHub workflow and its dorny path filters; read by GitHub Actions, no Go consumer'),
     ('scripts/ops/workflow_path_filter.py', 'parse_workflow'):
         (1, 'a GitHub workflow; read by GitHub Actions, no Go consumer'),
-    ('scripts/ops/workflow_path_filter.py', 'pattern_lists'):
-        (1, "a workflow's dorny path filters (a YAML string inside the workflow); no Go consumer"),
     ('scripts/tools/dx/_waveform_lib.py', 'load_pack'):
         (1, "a waveform pack, the repo's own test-signal input read only by the waveform tools"),
     ('scripts/tools/dx/bump_docs.py', '_count_precommit_hook_stages'):

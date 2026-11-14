@@ -2,9 +2,9 @@
 #
 # Runs on every PR. Catches issues before merge.
 #
-# The workflow itself triggers on EVERY pull_request to main (no top-level
-# `paths:` filter) — only individual jobs are gated, via the detect-changes
-# job's `validate_changed` output. Reason: all 3 job NAMES below (Go Lint,
+# The workflow triggers on EVERY pull_request to main (no top-level `paths:`
+# filter) and no job in it is path-gated (#3756): every PR runs all three.
+# Reason for the first half: all 3 job NAMES below (Go Lint,
 # Validate Tenant Config & Routes, Version Consistency) are enrolled in
 # main's branch protection
 # required_status_checks. A workflow suppressed entirely by a top-level
@@ -14,16 +14,16 @@
 # green. This is the exact same bug class docs-ci.yaml hit (see that
 # workflow's banner comment): a tenant-api-only PR pre-#216, then a
 # helm/**/docs/** PR surfaced by #972/GHSA-3g2h-rf85-5rrv, both "fixed" by
-# adding more paths to the filter list (see the filter's own comments below)
-# — which only delays the next PR shape that isn't on the list from hitting
-# the same wall. A job that runs and is skipped via its own `if:`, by
-# contrast, reports `skipped` — which also satisfies the requirement, and
-# that is the opposite problem: when detect-changes itself fails, every
-# job below skips and the PR merges having validated nothing (#1398). So
-# the required NAMES belong to the `*-gate` jobs at the end of this file,
-# which always run and fail unless their leg succeeded or was skipped
-# because detect-changes said it was not needed; the legs themselves are
-# named `… — run`. See detect-changes below.
+# adding more paths to the filter list — which only delayed the next PR
+# shape that wasn't on the list from hitting the same wall. Reason for the
+# second half: a job skipped via its own `if:` reports `skipped`, which also
+# satisfies the requirement, so a job-level path filter that missed one
+# input skipped the check that would have caught the break. That filter was
+# a hand-kept list too, and it is gone.
+#
+# The required NAMES belong to the `*-gate` jobs at the end of this file
+# (#1398), which always run and fail unless their leg concluded `success`;
+# the legs themselves are named `… — run`.
 #
 # DEDUP (CI-ROI wave): the former `python-tests` ("Python Tests") and
 # `go-tests` ("Go Tests") jobs of this workflow were strict SUBSETS of
@@ -68,178 +68,11 @@ on:
     branches: [main]
 
 # Explicit least-privilege grant (repo default is read-only; every sibling
-# workflow declares this block too). pull-requests:read is specifically for
-# detect-changes' dorny/paths-filter@v3 REST-API mode below.
+# workflow declares this block too).
 permissions:
   contents: read
-  pull-requests: read
 
 jobs:
-  detect-changes:
-    name: Detect Validate Path Changes
-    runs-on: ubuntu-24.04
-    outputs:
-      validate_changed: ${{ steps.filter.outputs.validate }}
-    steps:
-      # No actions/checkout here: dorny/paths-filter's default REST-API mode
-      # for pull_request events queries the changed-files list via the
-      # GitHub API and doesn't need a local clone (see its README's "For
-      # pull requests it's not necessary to checkout the code").
-      - name: Filter changed paths
-        id: filter
-        uses: dorny/paths-filter@0e4a8c6effa4802afeda77dc8d303f8176d7dfad # v3.0.4
-        with:
-          filters: |
-            validate:
-              - "components/threshold-exporter/config/**"
-              # #2315: the try-local seed is the second conf.d validate-config
-              # routes (the "Validate alertmanager routes" step below loops over
-              # both; the amtool step renders only the dev tree). Without
-              # it here a seed-only PR skips the required check, and a routing
-              # defect in the showcase tree reaches main unvalidated — da-guard
-              # does not catch it either: guard-defaults-impact fires only on a
-              # `_`-prefixed platform file, never on a tenant file.
-              - "try-local/seed/conf.d/**"
-              - "components/threshold-exporter/app/**"
-              # tenant-api: branch-protection on `main` requires this
-              # workflow's jobs (today: Go Lint, Validate Tenant Config &
-              # Routes, Version Consistency — the Python/Go test jobs moved
-              # to ci.yml, see the DEDUP banner). Pre-PR-216 the path
-              # filter excluded `components/tenant-api/**`, so any tenant-api-
-              # only PR couldn't satisfy the required-checks contract and
-              # merging fell back to admin override / artificial cross-touch
-              # in CHANGELOG. Go Lint DOES lint tenant-api; the other jobs
-              # are cheap to run and the symmetry with threshold-exporter
-              # PRs is the cleanest fix.
-              - "components/tenant-api/**"
-              # #3206: the da-read module, which Go Lint lints (its own step).
-              - "components/da-read/**"
-              - "rule-packs/**"
-              - "scripts/tools/**"
-              # `scripts/tools/**` above does NOT reach scripts/ops/. Go Lint
-              # runs this checksum verifier on both halves of its golangci-lint
-              # download (install script + binary), so it is the supply-chain
-              # control for that job — yet without the entry below, a PR editing
-              # ONLY the verifier would match no `validate` path, so the Go Lint
-              # run leg would be skipped and its always-run gate would report
-              # success. Not yet
-              # burned, and for a stronger reason than luck: as of #1368 the
-              # file's only commit was 91bae528 (#849), which PREDATES
-              # `go-lint` entering this workflow (ae0cd4fc, #912) — at that
-              # point only ci.yml referenced it, and it had not been edited
-              # since Go Lint started running it. The reachability is what
-              # matters; the next edit has nothing protecting it. File-level on purpose: the only
-              # other scripts/ops/ file a validate step reads is the floor probe
-              # below, and `scripts/ops/**` would pull
-              # three required checks into every host-side escape-hatch edit.
-              # (Widening this to `scripts/ops/_verify_*.sh` would RED the
-              # coverage guard in tests/ops/test_ci_path_filter_coverage.py
-              # — its `_covers` models `*.ext`, not `prefix_*.ext`. Extend that
-              # alphabet first.)
-              - "scripts/ops/_verify_download.sh"
-              # The Linter floor step copies this probe into each module (#1877).
-              # ⚠️ Found by hand: that guard's step-input scan does not read
-              # `cp` arguments, so dropping this line keeps it green.
-              - "scripts/ops/golangci_floor_probe.go.txt"
-              # validate-config builds its da-guard through the Go build flags'
-              # one source (#3425).
-              - "scripts/ops/go_build.sh"
-              # The pin SSOT validate-config and version-check INSTALL FROM
-              # (`pip install pyyaml -c requirements/ci-constraints.txt`,
-              # #1158) — the suite's ENVIRONMENT, not an input any check reads,
-              # which is why no "does a test read it?" review ever caught it.
-              # Same skip-as-green trap, on jobs this file's own banner calls
-              # branch-protection required checks.
-              #
-              # Accepted cost: `validate` is ONE filter gating three jobs, so
-              # each entry also pulls in the jobs that do not need it — the
-              # verifier entry pulls in two (only go-lint runs it), the
-              # requirements entry pulls in one (validate-config and
-              # version-check both install from it; go-lint does not).
-              # Conservative by the banner's own rule — recorded here so it is
-              # a choice, not a surprise.
-              # Both entries enforced by
-              # tests/ops/test_ci_path_filter_coverage.py.
-              - "requirements/**"
-              - "tests/**"
-              - ".github/custom-rule-policy.yaml"
-              - ".github/deployment-policy.yaml"
-              - ".github/workflows/validate.yaml"
-              # .pre-commit-config.yaml is the source-of-truth for the pre-commit
-              # hook count that the "Count consistency" step (bump_docs
-              # --sync-counts --check) enforces against CLAUDE.md. Without it here,
-              # a hook add/remove/stage-flip touching ONLY this file skips
-              # version-check → the hook-count drift the step exists to catch slips
-              # through (the silent 84→86 drift happened exactly this way).
-              - ".pre-commit-config.yaml"
-              # ⛔ version-check's OTHER inputs, same shape as the entry above
-              # and found the same way it should have been found: the two
-              # commands that job runs (`bump_docs.py --check` and
-              # `--sync-counts --check`) were replayed under an open()/read_text
-              # recorder. RE-MEASURED after #1407 repointed the JSX front-matter
-              # glob at `tools/portal/src/interactive/tools/**` and added the
-              # da-portal QUICKSTART rule: 393 tracked files, of which 115 were
-              # uncovered — 113 under `tools/portal/**`, plus QUICKSTART.md.
-              # Those two entries are below for that reason.
-              # ⛔ Root CHANGELOG.md is listed too, and the reason it was NOT
-              # listed at first was wrong: `docs/CHANGELOG.md` is a SYMLINK to
-              # `../CHANGELOG.md`, so a contributor editing the root file
-              # produces the changed path `CHANGELOG.md`, `docs/**` never
-              # matches, and the job is skipped — while the front-matter rule
-              # reaches that content through the symlink and does report DRIFT
-              # (measured: rc=1 on a checkout where the symlink RESOLVES —
-              # Linux CI and any `core.symlinks=true` clone). ⚠️ On a Windows
-              # checkout with `core.symlinks=false` the path is a 15-byte text
-              # file holding the link target, the front-matter rule never sees
-              # the content, and the same probe measures rc=0 — so this entry
-              # protects CI but is NOT a local backstop there.
-              # Every dev-rule-#4 PR touches this file, so
-              # this widens the job's trigger by design.
-              # ⚠️ This list is maintained BY MEASUREMENT: re-run the recorder
-              # whenever a rule table gains a path, because nothing here fails
-              # when it goes stale — it just goes quiet. Reading the script would not
-              # have produced this list — the paths are assembled across several
-              # tables — which is the point: an indirect read through a script a
-              # job merely invokes is the class the coverage guard in
-              # tests/ops/test_ci_path_filter_coverage.py documents it
-              # CANNOT see, so this group is maintained by measurement.
-              # Editing any one of them ALONE skips all three required checks,
-              # and the version/count drift they exist to catch then lands on
-              # main's own push run instead of on the PR that caused it.
-              - "README.md"
-              - "README.en.md"
-              - "CLAUDE.md"
-              - "mkdocs.yml"
-              - "components/da-portal/README.md"
-              - "components/da-tools/README.md"
-              - "components/da-tools/app/VERSION"
-              - "components/threshold-exporter/README.md"
-              # ⛔ #1407 repointed the JSX front-matter glob here (46 of these
-              # files sat at v2.7.0 while the SSOT said 2.9.0 and every gate
-              # reported green). Without this pattern a portal-only PR skips
-              # version-check → required-but-skipped counts as satisfied, and
-              # the drift this branch exists to catch lands on main instead.
-              - "tools/portal/**"
-              - "components/da-portal/QUICKSTART.md"
-              - "CHANGELOG.md"
-              # helm/** and docs/** PRs (chart hardening, governance docs) hit the SAME
-              # required-checks-contract gap the tenant-api note above describes: main's
-              # branch protection requires this workflow's jobs, but the path filter
-              # excluded these trees, so a helm-only / docs-only PR could not satisfy the
-              # contract and fell back to admin override. Included for the same reason —
-              # the jobs are cheap and Version Consistency (bump_docs --check) is in fact
-              # relevant to docs changes. Surfaced by GHSA-3g2h-rf85-5rrv hardening (#972).
-              - "helm/**"
-              - "docs/**"
-              # k8s manifests: the "Validate rendered Alertmanager config (amtool)"
-              # step extracts configmap-alertmanager.yaml as the base and runs the
-              # generator --strict (the #1132 equal-label-gated fail-closed guard).
-              # Without k8s/** here, a configmap-only edit that un-gates an inhibit
-              # rule would skip that step (the python-tests regression guard in
-              # ci.yml still backstops it, but this makes the amtool --strict step
-              # fire where it is meant to).
-              - "k8s/**"
-
   # (python-tests / go-tests jobs removed — see the DEDUP + OWNER RUNBOOK
   # banner at the top of this file. ci.yml's "Python Tests" and
   # "Go Tests" are the required checks now.)
@@ -247,8 +80,6 @@ jobs:
   go-lint:
     name: Go Lint — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.validate_changed == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -512,8 +343,6 @@ jobs:
   validate-config:
     name: Validate Tenant Config & Routes — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.validate_changed == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -621,8 +450,6 @@ jobs:
   version-check:
     name: Version Consistency — run
     runs-on: ubuntu-24.04
-    needs: detect-changes
-    if: needs.detect-changes.outputs.validate_changed == 'true'
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -656,29 +483,19 @@ jobs:
     name: Go Lint
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, go-lint]
-    # The REQUIRED check (#1398). `go-lint` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [go-lint]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `go-lint`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify go lint succeeded (or was path-skipped as not needed)
+      - name: Verify go lint succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          VALIDATE_CHANGED: ${{ needs.detect-changes.outputs.validate_changed }}
           RUN_RESULT: ${{ needs.go-lint.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (validate_changed=$VALIDATE_CHANGED)"
           echo "go-lint: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$VALIDATE_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::go-lint did not succeed (result=$RUN_RESULT)"
@@ -688,29 +505,19 @@ jobs:
     name: Validate Tenant Config & Routes
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, validate-config]
-    # The REQUIRED check (#1398). `validate-config` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [validate-config]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `validate-config`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify tenant config validation succeeded (or was path-skipped as not needed)
+      - name: Verify tenant config validation succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          VALIDATE_CHANGED: ${{ needs.detect-changes.outputs.validate_changed }}
           RUN_RESULT: ${{ needs.validate-config.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (validate_changed=$VALIDATE_CHANGED)"
           echo "validate-config: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$VALIDATE_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::validate-config did not succeed (result=$RUN_RESULT)"
@@ -720,29 +527,19 @@ jobs:
     name: Version Consistency
     runs-on: ubuntu-24.04
     permissions: {}
-    needs: [detect-changes, version-check]
-    # The REQUIRED check (#1398). `version-check` is path-gated, and a skipped
-    # required check reports Success — including when detect-changes itself
-    # failed and skipped everything below it. This job always runs and says
-    # which of those it was.
+    needs: [version-check]
+    # The REQUIRED check (#1398). A job whose dependency failed or was
+    # skipped is itself skipped, and a skipped required check reports
+    # Success — so this job always runs and passes only when `version-check`
+    # concluded `success` (#3756: no result is forgiven).
     if: always()
     steps:
-      - name: Verify the version check succeeded (or was path-skipped as not needed)
+      - name: Verify the version check succeeded
         env:
-          DETECT_RESULT: ${{ needs.detect-changes.result }}
-          VALIDATE_CHANGED: ${{ needs.detect-changes.outputs.validate_changed }}
           RUN_RESULT: ${{ needs.version-check.result }}
         run: |
-          echo "detect-changes: $DETECT_RESULT (validate_changed=$VALIDATE_CHANGED)"
           echo "version-check: $RUN_RESULT"
-          if [ "$DETECT_RESULT" != "success" ]; then
-            echo "::error::detect-changes did not succeed — refusing to treat a skipped check as green"
-            exit 1
-          fi
           if [ "$RUN_RESULT" = "success" ]; then
-            exit 0
-          fi
-          if [ "$RUN_RESULT" = "skipped" ] && [ "$VALIDATE_CHANGED" != "true" ]; then
             exit 0
           fi
           echo "::error::version-check did not succeed (result=$RUN_RESULT)"
