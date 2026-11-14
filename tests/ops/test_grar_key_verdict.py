@@ -90,6 +90,28 @@ def test_validate_fails_on_the_shared_verdicts_errors(tmp_path, files):
     assert doc["exit_code"] == 1
 
 
+def test_a_reserved_keys_schedule_fails_validate(tmp_path):
+    """#3834: a reserved key written with a time window in the tenant's own
+    file is read as its `default` alone (#3269) — before this, `--validate`
+    passed it (`OK: all configs valid`). Now the verdict's schedule_unread
+    error fails the run; the same window on a threshold key is read and
+    passes."""
+    window = "      default: disable\n      overrides:\n        - {window: \"01:00-02:00\", value: all}\n"
+    res, doc = _cli(tmp_path, {"_defaults.yaml": DEFAULTS,
+                               "t-a.yaml": "tenants:\n  t-a:\n    _silent_mode:\n" + window},
+                    "--validate")
+    assert res.returncode == 1, res.stderr
+    assert [(r["kind"], r["blocks"], r["severity"], r["field"]) for r in _key_records(doc)] == [
+        ("key_schedule_unread", "validate", "error", "_silent_mode")], doc
+    res, doc = _cli(tmp_path / "threshold", {
+        "_defaults.yaml": DEFAULTS,
+        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent:\n      default: \"70\"\n"
+                    "      overrides:\n        - {window: \"01:00-02:00\", value: \"90\"}\n"},
+        "--validate")
+    assert res.returncode == 0, res.stderr
+    assert _key_records(doc) == [], doc
+
+
 def test_a_warning_alone_does_not_fail_validate(tmp_path):
     """A `disable` that switches nothing off is a warning (decision 8): it is
     reported, `blocks: never`, and the run passes."""

@@ -70,6 +70,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import http.client
 import json
 import signal
 import sys
@@ -90,6 +91,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_prometheus import transport_error_text  # noqa: E402
 from _lib_io import (  # noqa: E402  (#1789; #3276)
     OutputWriteError, exit_on_output_write_error, output_write, safe_label)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
@@ -162,7 +164,15 @@ def parse_metrics(text: str) -> dict[str, float]:
 
 
 def fetch_metrics(target_url: str, timeout_sec: float = 5.0) -> dict[str, float] | None:
-    """GET <target>/metrics and parse. Returns None on network error."""
+    """GET <target>/metrics and parse. Returns None on network error.
+
+    A reply that is not HTTP (``http.client.HTTPException``) is NOT a
+    network error here and is raised: the first probe in ``main`` names it
+    and ends the run at exit 2; a poll in the middle of a soak lets it end
+    the run (#3519 — on purpose: caught here it would be one more blank row
+    of a soak that exits 0, which is what a closed connection or a timeout
+    in the middle of a soak already is).
+    """
     url = target_url.rstrip("/") + "/metrics"
     if urllib.parse.urlparse(url).scheme not in ("http", "https"):
         print(f"[error] /metrics fetch rejected: non-http(s) scheme in {url!r}", file=sys.stderr)
@@ -298,7 +308,11 @@ def main() -> int:
     run_config_path = out / "run-config.json"
 
     # First-probe check: target must be reachable before we commit to a long run
-    initial = fetch_metrics(args.target_url)
+    try:
+        initial = fetch_metrics(args.target_url)
+    except http.client.HTTPException as exc:   # #3519: the reply is not HTTP
+        print(f"[warn] /metrics fetch failed: {transport_error_text(exc)}", file=sys.stderr)
+        initial = None
     if initial is None:
         print(f"[error] cannot reach {args.target_url}/metrics — aborting before soak start",
               file=sys.stderr)

@@ -143,8 +143,8 @@ def scrape_metrics_endpoint(endpoint: str,
     Returns (raw_text, None) on success, (None, error) on failure.
     """
     import urllib.request
-    import urllib.error
     from _lib_python import _validate_url_scheme
+    from _lib_prometheus import TRANSPORT_ERRORS, transport_error_text
 
     err = _validate_url_scheme(endpoint)
     if err:
@@ -154,8 +154,8 @@ def scrape_metrics_endpoint(endpoint: str,
         req.add_header("Accept", "text/plain")
         with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
             return resp.read().decode("utf-8", errors="replace"), None
-    except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
-        return None, str(exc)
+    except TRANSPORT_ERRORS as exc:  # #3519: a reply that is not HTTP too
+        return None, transport_error_text(exc)
 
 
 def query_prometheus_label_values(
