@@ -342,10 +342,10 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     # `generate-routes --validate`, which reports the shared key verdict and
     # reads the served custom alerts), then effective
     # (no served-values to borrow the reason from), then da-guard's check,
-    # then the unread_keys row's own `key-verdict` (#3489: it reads the
-    # verdict from da-guard, and says it is incomplete on this tree), then
-    # the tier_inversion row's own served-values (#3691: it compares the
-    # served tiers, last of the rows). The routes row is `generate-routes
+    # then the tier_inversion row's own served-values (#3691: it compares the
+    # served tiers, last of the rows). No second `key-verdict` (#3873): the
+    # no_alert row reads the routes row's verdict, which says it is
+    # incomplete on this tree. The routes row is `generate-routes
     # --validate` itself: loading the routing tree asks `severity-dedup` for
     # the tenants' `_severity_dedup`, and its key verdict runs `key-verdict`
     # and `served-values` — all before effective, so never to borrow the
@@ -357,6 +357,9 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     # tier_inversion's read.
     assert log.read_text(encoding="utf-8").split() == ["parse-tree", "severity-dedup", "key-verdict",
                                                        "served-values", "effective", "--config-dir",
-                                                       "key-verdict", "key-spellings", "served-values",
-                                                       "served-values"]
-    assert rows["unread_keys"]["details"][0].startswith("verdict incomplete: "), rows["unread_keys"]
+                                                       "key-spellings", "served-values", "served-values"]
+    assert any(d.startswith("  ERROR: key verdict incomplete: ") for d in rows["routes"]["details"]), \
+        rows["routes"]
+    assert rows["no_alert"]["details"] == [
+        "not checked: whether a shipped alert compares each served key was not judged "
+        "(the routes row gave no key verdict; its line says why)"], rows["no_alert"]

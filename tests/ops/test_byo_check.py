@@ -1247,7 +1247,8 @@ class TestCheckAlertmanagerInhibitSemantics:
                   "    equal: ['tenant']\n")
         sem = self._run(config, [])["alertmanager_inhibit_semantics"]
         assert sem["status"] == "warn"
-        assert "no route" in sem["detail"]
+        # #3703: da-read's fixed sentence, not the loader's reason.
+        assert "refused by Alertmanager's config loader (its reason is not printed" in sem["detail"]
 
     def test_inhibit_rules_are_alertmanagers_reading(self):
         """#3206: a matcher Alertmanager normalizes (spaces, quotes) is judged

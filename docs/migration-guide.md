@@ -249,7 +249,7 @@ tenants:
 | **Rate 指標** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`：`sum by(tenant) (rate(...))` | 無租戶 key（見下方 ⚠️） | Sum 用於「叢集總量」 |
 | **比值計算** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`：逐 instance 相除再 `max by(tenant) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"`（佔 max_connections 的 %） | 比值在 Recording Rule 算好（乘 100，單位是 %）；逐 instance 相除再取最滿的一台，先 `sum` 再除會被閒置 replica 的餘裕稀釋（#3778） |
 
-> ⚠️ Rate 這一列，平台 MariaDB Rule Pack 目前只有 recording rule，沒有租戶可設的閾值 key：`MariaDBHighSlowQueries` 以固定的 `> 1` 判斷慢查詢速率。要讓租戶調這類閾值，平台要先宣告 key 並補上閾值正規化 recording rule，做法見 [Domain Expert 快速入門](getting-started/for-domain-experts.md)「新增指標到現有 Rule Pack」。沒有宣告就寫進租戶檔的 key 不會發射，validate-config 的 `unread_keys` 那列會報 `unread … (no_row)`。
+> ⚠️ Rate 這一列，平台 MariaDB Rule Pack 目前只有 recording rule，沒有租戶可設的閾值 key：`MariaDBHighSlowQueries` 以固定的 `> 1` 判斷慢查詢速率。要讓租戶調這類閾值，平台要先宣告 key 並補上閾值正規化 recording rule，做法見 [Domain Expert 快速入門](getting-started/for-domain-experts.md)「新增指標到現有 Rule Pack」。沒有宣告就寫進租戶檔的 key 不會發射，validate-config 的 `routes` 那列會報 `unread … (no_row)`。
 
 > 場景 2–5 套用場景 1 的三件套模板，改指標名與 Tenant Config 的 key；平台側 Alert Rule 結構始終如一。前提是那個 key 已經在平台宣告（見上方 ⚠️）。Rule Pack 設計與三件套契約：[design/rule-packs.md](design/rule-packs.md)。實際黃金規則告警列表：[Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md)。
 

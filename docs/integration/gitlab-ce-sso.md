@@ -84,7 +84,40 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 ## Session 生命週期與撤權延遲
 
-群組在**登入時**解析並存入 session cookie。**設了 `cookieRefresh` 時**，session 每過該間隔會**重新向 GitLab 驗證帳號並覆寫群組**（gitlab provider 的 `RefreshSession` 行為）——故群組/帳號撤權延遲**被 `cookieRefresh` 綁住（非 `cookieExpire`）**：設短 `cookieRefresh`（例如 1h）即收緊，被移出群組或停用的使用者於下次 refresh 失效。**未設 `cookieRefresh`** 則群組凍結在登入當下、直到 `cookieExpire` 到期。無論如何這都是**緩解、非即時撤權**——後端仍盲信 `X-Forwarded-Groups`，真正的即時撤權要等身份硬化（後端不再信未驗 header，見平台安全路線）落地，故 **production cutover 待其完成**。
+群組在**登入時**解析並存入 session cookie。以下依 chart 釘的 oauth2-proxy v7.15.6：
+
+- **未設 `cookieRefresh`**（chart 預設）：不做 refresh，群組凍結在登入當下，cookie 在 `cookieExpire` 到期，到期即須重新登入。
+- **設了 `cookieRefresh`**：session 每過該間隔用 refresh token 向 GitLab 換新 token。refresh 成功會重設 session 的建立時間並重新簽發 cookie，所以 cookie 的有效期隨每次成功的 refresh 往後延。回應帶新的 ID token 時，群組改用它的 `groups` claim；**沒有時群組維持原值**（gitlab provider 的 `RefreshSession` 走 OIDC 的 refresh，不重讀 userinfo）。只有 refresh token 被撤銷這類致命錯誤（GitLab 回 `invalid_grant`）會清除 session；網路錯誤、逾時等暫時性失敗不會。
+
+這是 oauth2-proxy session 的本質，平台把它列為**已接受的限制**（[ADR-027](../adr/027-tenant-api-caller-identity.md) §8），不是即時撤權：
+
+- 未設 `cookieRefresh`：被移出群組的權限最多保留到 `cookieExpire`。
+- 設了 `cookieRefresh` 且 GitLab 的 refresh 回應帶新的 ID token：最多保留一個 `cookieRefresh`。
+- 設了 `cookieRefresh` 但回應不帶新的 ID token：**沒有時間上限**，舊群組會隨每次成功的 refresh 一直延續，直到 refresh token 被撤銷為止。
+
+所以設 `cookieRefresh` 之前，先在 staging 把測試帳號移出一個群組，等過一個 `cookieRefresh` 確認權限真的消失。權限沒有消失，就不要設 `cookieRefresh`，讓 `cookieExpire` 成為硬上限。
+
+## 身分信任與 production 前提
+
+tenant-api 只採信 oauth2-proxy 送來的身分：API 只在 pod 內的 Unix socket 上，前面是 oauth2-proxy，client 自己帶的同名 header 會被 oauth2-proxy 清掉；TCP 8080 只有 `/health`、`/ready`、`/metrics`，帶身分 header 一律回 400（[ADR-027](../adr/027-tenant-api-caller-identity.md) §2、§3）。
+
+**production 需部署含 ADR-027 的 tenant-api**（版號於該版發布時補上）。舊版 tenant-api 直接採信請求帶的 `X-Forwarded-Groups`：能繞過 oauth2-proxy 連到它的人，可以自稱任何群組。chart 的 NetworkPolicy 只讓 Prometheus（舊版 chart 另含 threshold-govern）連 8080，但**只有 CNI 執行 NetworkPolicy 時才有效**：CNI 不執行時 8080 對整個叢集開放，在舊版 tenant-api 下等於叢集裡任何 pod 都能自稱任何群組。升級前先依 chart 的 `NOTES.txt` 確認 CNI 會執行它。
+
+確認叢集裡跑的是哪一種：經 `kubectl port-forward`（不受 NetworkPolicy 約束）在本機打。chart 固定單一副本、以 `Recreate` 更新（ADR-023），rollout 完成後只有一個 pod，打到的就是它。
+
+```bash
+# 本機埠交給系統指派（:8080），等 kubectl 印出綁定的埠才打；10 秒內沒綁上就不打、改印 kubectl 的輸出，
+# 以免讀到本機別的程式的回應
+LOG=$(mktemp); PORT=
+kubectl -n <namespace> port-forward --address 127.0.0.1 svc/<tenant-api service> :8080 >"$LOG" 2>&1 & PF=$!
+for i in $(seq 10); do
+  PORT=$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$LOG"); [ -n "$PORT" ] && break; sleep 1
+done
+# 帶身分 header 打 /health：400 = 含 ADR-027；200 = 舊版；000 = 沒連上
+[ -n "$PORT" ] && curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
+  -H 'X-Forwarded-Email: probe@example.com' "http://127.0.0.1:$PORT/health" || cat "$LOG"
+kill $PF 2>/dev/null
+```
 
 ## 疑難排解
 
