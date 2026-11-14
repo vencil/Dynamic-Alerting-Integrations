@@ -28,6 +28,17 @@ This module therefore asserts two things the old one could not:
     workflow that reports a required check runs a path-filter action. Both are
     read off the parsed YAML, never grepped.
 
+And two things that keep those rules from being satisfied by looking away:
+
+  * every job in a workflow that reports a required check is accounted for —
+    it is a gate, or in a gate's decision path, or reports a `kind: job`
+    required check itself, or is a row of `JOBS_NO_REQUIRED_CHECK_WAITS_FOR`
+    with the reason. Dropping a leg out of its gate (`needs:`, the env
+    binding and the loop together) leaves a job in none of the four;
+  * no job in a decision path is a reusable-workflow call (job-level
+    `uses:`). Its steps live in another file, so every rule here that reads
+    steps and conditions would pass over it having read nothing.
+
 ⚠️ What this module does NOT cover.
 
 It cannot check that these names are actually configured as required checks
@@ -54,6 +65,14 @@ a decision path is not seen either: a leg whose test step wraps itself in a
 shell `if git diff --name-only … | grep -q …; then` skips its own work and
 exits 0. The two rules above close the shapes this repo actually used; they
 are not a proof that no leg can decline to run its tests.
+
+⚠️ The path-filter ACTION rule is a closed list of names
+(`PATH_FILTER_ACTIONS` in scripts/ops/workflow_path_filter.py — one list,
+read by that tool and by this module). A fork under another name, a local
+composite action and a hand-written `git diff --name-only >> $GITHUB_OUTPUT`
+step are not on it. That is accepted rather than patched with a heuristic:
+such a step changes what runs only once an `if:` reads its output, and the
+`if:` rule above does not depend on any name.
 
 ⛔ What a green run does NOT prove, stated because a green guard is read as a
 guarantee. It does not prove the gate script runs as bash at all beyond the
@@ -113,6 +132,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -130,6 +150,14 @@ CI_WORKFLOW = ROOT / ".github/workflows/ci.yml"
 _ALSO_SCANNED = (ROOT / ".github/workflows/docs-ci.yaml",
                  ROOT / ".github/workflows/validate.yaml")
 WORKFLOW_DIR = ROOT / ".github/workflows"
+
+# The path-filter action list lives in the tool that refuses those actions in
+# every workflow; this module reads it instead of keeping a second copy (the
+# two had already drifted: one knew `tj-actions/changed-files`, the other was
+# case-sensitive). One literal path string, for verify_diff's text_map.
+_WPF_SOURCE = ROOT / "scripts/ops/workflow_path_filter.py"
+sys.path.append(str(_WPF_SOURCE.parent))
+import workflow_path_filter as _WPF  # noqa: E402  (scripts/ops, appended above)
 
 BASH = shutil.which("bash")
 # ⛔ Per-test, never `pytestmark`: everything except the three bash-backed
@@ -415,27 +443,43 @@ def _needs(job: dict) -> list[str]:
 # spelling location is privileged.
 _READS_A_RESULT = re.compile(r"needs\.[\w-]+\.result")
 
-# Actions whose whole purpose is "which paths did this PR change", lower-case.
-# ⚠️ A closed list of names is the weaker half of this guard — a hand-rolled
-# `git diff --name-only` step is not on it and cannot be. What it buys is
-# exactly what #3756 asked for: the mechanism this repo actually used cannot
-# be re-added to a required-check workflow by restoring the old step. The
-# half that does not depend on a name is `_conditional_jobs_in_decision_paths`.
-_PATH_FILTER_ACTIONS = ("dorny/paths-filter", "tj-actions/changed-files")
-
-
 def _path_filter_steps(path: Path) -> list[str]:
     """Steps in one workflow that run a path-filter action. PURE over a path,
-    so a synthetic workflow can prove it says YES."""
-    hits = []
-    for job_id, job in (_load(path).get("jobs") or {}).items():
-        for index, step in enumerate(job.get("steps") or []):
-            uses = str(step.get("uses", ""))
-            if any(action in uses.lower() for action in _PATH_FILTER_ACTIONS):
-                hits.append(
-                    f"{path.name}::{job_id} step "
-                    f"{step.get('name', index)!r} uses `{uses}`")
-    return hits
+    so a synthetic workflow can prove it says YES.
+
+    ⛔ WHICH actions those are is not decided here: the list and the matching
+    are `workflow_path_filter.path_filter_steps`, the same function
+    `workflow_path_filter.py generate --check` refuses a workflow with. A
+    closed list of names is the weaker half of this guard — what it does not
+    see, and why that is accepted, is written at the list and in this
+    module's docstring. The half that does not depend on a name is
+    `_conditional_jobs_in_decision_paths`.
+    """
+    return [f"{path.name}::{job_id} step {step!r} uses `{uses}`"
+            for job_id, step, uses in _WPF.path_filter_steps(_load(path))]
+
+
+def _reusable_calls_in_decision_paths(path: Path,
+                                      gates: tuple["Gate", ...]) -> list[str]:
+    """Jobs in some gate's decision path that call a reusable workflow
+    (job-level `uses:`). PURE over a path.
+
+    ⛔ Refused rather than followed. Such a job has no `steps:` here — they
+    are in the called file, with their own `if:`, `continue-on-error` and
+    path-filter steps. Every rule in this module that walks a decision path
+    reads `jobs[job_id]` of THIS file, finds nothing to object to, and
+    passes: a leg moved into a callee would carry any condition it liked.
+    Following the call is possible for a local `./.github/workflows/x.yml`
+    and impossible for `owner/repo/.github/workflows/x.yml@ref`; no leg
+    needs either today, so the shape is closed instead of half-modelled.
+    """
+    jobs = _load(path)["jobs"]
+    return [
+        f"{path.name}::{job_id} (decision path of {gate}) calls the reusable "
+        f"workflow `{jobs[job_id]['uses']}`"
+        for gate in gates
+        for job_id in sorted(_decision_path(jobs, gate))
+        if "uses" in jobs[job_id]]
 
 
 def _decision_path(jobs: dict, gate: "Gate") -> set[str]:
@@ -504,6 +548,94 @@ def _conditional_jobs_in_decision_paths(path: Path,
 # ticket. Asserted as an exact set, so a new one cannot join a silent majority
 # and a fixed one cannot leave a stale excuse behind.
 UNMODELLED_GATE_SHAPED_JOBS: dict[tuple[str, str], str] = {}
+
+
+# ⛔ Jobs in a workflow that reports a required check which NO required check
+# waits for: (workflow file, job id) -> why its verdict may be ignored. Red
+# on such a job is visible on the PR and blocks nothing.
+#
+# Everything else in those workflows is placed by derivation — see
+# `_job_roles` — so this is the only hand-kept part, and it is checked in
+# both directions: a job in none of the derived roles must be a row here, and
+# a row must name a job that exists and is in none of them (a row for a job
+# some gate DOES wait for is a stale excuse, and it would hide the day that
+# job is dropped from its gate again).
+JOBS_NO_REQUIRED_CHECK_WAITS_FOR: dict[tuple[str, str], str] = {
+    ("ci.yml", "python-coverage"):
+        "the advisory coverage leg (owner decision 2026-09-19, recorded on the "
+        "job): the same tests as python-tests-run under the tracer, kept off "
+        "the required leg's critical path. `Python Coverage` is under "
+        "`advisory:` in .github/required-checks.yaml. Reviewed for #3756.",
+    ("ci.yml", "python-coverage-combine"):
+        "merges the python-coverage shards and applies fail_under; it reports "
+        "`Python Coverage`, which is under `advisory:` in "
+        ".github/required-checks.yaml, and waits only for the advisory "
+        "python-coverage leg. Reviewed for #3756.",
+    ("ci.yml", "federation-e2e"):
+        "the docker-compose federation request-path E2E (#516), a dedicated "
+        "job that was never part of an aggregate and whose name is not a "
+        "required check; whether it should be required is the owner's call, "
+        "not something to settle by adding it to a gate here.",
+    ("docs-ci.yaml", "i4-runbook-smoke-test"):
+        "runs hand-pasted copies of the troubleshooting checklist's snippets "
+        "against fixtures (#2142); `I-4 Runbook Smoke Test` is under "
+        "`advisory:` in .github/required-checks.yaml. It runs on every PR "
+        "since #3756 and still backs no required check.",
+}
+
+
+def _job_roles(path: Path, gates: tuple["Gate", ...],
+               required_names: frozenset[str]) -> dict[str, str | None]:
+    """job id -> how a required check accounts for it, or None. PURE over a
+    path.
+
+      "gate"      it reports a verdict over other jobs' results;
+      "leg"       it is in some gate's decision path;
+      "required"  its own `name:` is a required check (`kind: job`).
+
+    None is the answer this function exists for: a job that can fail, or
+    never run, with no required check noticing.
+    """
+    jobs = _load(path)["jobs"]
+    gate_ids = {gate.job_id for gate in gates}
+    awaited: set[str] = set()
+    for gate in gates:
+        awaited |= _decision_path(jobs, gate)
+    roles: dict[str, str | None] = {}
+    for job_id, job in jobs.items():
+        if job_id in gate_ids:
+            roles[job_id] = "gate"
+        elif job_id in awaited:
+            roles[job_id] = "leg"
+        elif set(_rendered_names(job_id, job) or ()) & required_names:
+            roles[job_id] = "required"
+        else:
+            roles[job_id] = None
+    return roles
+
+
+def _unwaited_job_problems(roles: dict[tuple[str, str], str | None],
+                           ledger: dict[tuple[str, str], str]) -> list[str]:
+    """PURE. `roles` against the ledger, both directions."""
+    problems = []
+    for key in sorted(k for k, role in roles.items() if role is None):
+        if key not in ledger:
+            problems.append(
+                f"{key[0]}::{key[1]} is waited for by no required check: it "
+                "is not a gate, not in any gate's decision path, and its "
+                "name is not a required check.")
+    for key in sorted(ledger):
+        if key not in roles:
+            problems.append(
+                f"JOBS_NO_REQUIRED_CHECK_WAITS_FOR row {key!r} names a job "
+                "that does not exist in a workflow reporting a required "
+                "check — delete or fix the row.")
+        elif roles[key] is not None:
+            problems.append(
+                f"JOBS_NO_REQUIRED_CHECK_WAITS_FOR row {key!r} is stale: the "
+                f"job is accounted for as a {roles[key]!r}. Delete the row, "
+                "or it will excuse the job the day it is dropped again.")
+    return problems
 
 
 # ── the exit-code contract ─────────────────────────────────────────────────
@@ -955,6 +1087,66 @@ def test_no_required_check_workflow_runs_a_path_filter_action() -> None:
           "genuinely too expensive to run on every PR, that is a decision "
           "about whether it should be REQUIRED — take it there, not by "
           "filtering it.")
+
+
+def test_no_job_in_a_gate_decision_path_is_a_reusable_workflow_call() -> None:
+    """A leg whose steps are in another file is a leg nothing here has read.
+
+    See `_reusable_calls_in_decision_paths`: the `if:`, `continue-on-error`
+    and path-filter rules all read the steps of the workflow that holds the
+    gate, so a called workflow is outside every one of them.
+    """
+    gates = _gates_or_fail()
+    problems: list[str] = []
+    for path in _gate_workflows():
+        problems += _reusable_calls_in_decision_paths(
+            path, tuple(g for g in gates if g.workflow == path.name))
+    assert not problems, (
+        "a job a required check waits for is a reusable-workflow call:\n  "
+        + "\n  ".join(problems)
+        + "\nThe rules that keep a required leg from being skipped or "
+          "switched off read the leg's `if:` and its steps. A job-level "
+          "`uses:` has neither in this file — they are in the called "
+          "workflow, where nothing in this module looks — so the leg would "
+          "pass every rule unread. ⛔ Inline the steps. If a shared workflow "
+          "is really wanted, teach `_decision_path` to follow local calls "
+          "and apply every rule to the callee first; do not ledger it.")
+
+
+def test_every_job_in_a_required_check_workflow_is_accounted_for() -> None:
+    """A leg cannot leave its gate quietly (#3756).
+
+    Removing a leg from an aggregate COMPLETELY — `needs:`, the env binding
+    and the loop — satisfies every other assertion here: the gate still
+    weighs exactly what it waits for. The leg keeps running, its red blocks
+    nothing, and the required check reads green. While the legs were
+    path-gated the retired `test_every_path_gated_leg_is_watched_by_a_gate`
+    held this through the `if:`; with no `if:` left, it is held by placing
+    EVERY job, so there is no list of legs to forget to extend.
+
+    Scope: every workflow that reports a required check of either kind.
+    """
+    gates = _gates_or_fail()
+    workflows = _required_check_workflows()
+    assert workflows, (
+        "no workflow reports any required check by a literal name, so this "
+        "assertion would examine nothing.")
+    roles = {
+        (path.name, job_id): role
+        for path in workflows
+        for job_id, role in _job_roles(
+            path, tuple(g for g in gates if g.workflow == path.name),
+            _ALL_REQUIRED_NAMES).items()}
+    problems = _unwaited_job_problems(roles, JOBS_NO_REQUIRED_CHECK_WAITS_FOR)
+    assert not problems, (
+        "\n  ".join([""] + problems)
+        + "\n⛔ If the job is a test leg: put it back in its gate — `needs:`, "
+          "an env binding of its `.result`, and the loop. A leg outside every "
+          "gate can fail on every PR with the required check green.\nIf its "
+          "verdict is really meant to block nothing, record that in "
+          "JOBS_NO_REQUIRED_CHECK_WAITS_FOR with the reason; a Go test leg "
+          "cannot take that exit "
+          "(tests/ops/test_go_modules_have_a_test_leg.py).")
 
 
 _EXPRESSION = re.compile(r"\$\{\{\s*(.*?)\s*\}\}")
@@ -1795,6 +1987,8 @@ def test_every_ledger_row_states_a_reason_and_a_ticket() -> None:
     prose."""
     rows = [(f"UNMODELLED_GATE_SHAPED_JOBS[{key!r}]", reason)
             for key, reason in UNMODELLED_GATE_SHAPED_JOBS.items()]
+    rows += [(f"JOBS_NO_REQUIRED_CHECK_WAITS_FOR[{key!r}]", reason)
+             for key, reason in JOBS_NO_REQUIRED_CHECK_WAITS_FOR.items()]
     problems = _ledger_row_problems(rows)
     assert not problems, "\n  ".join([""] + problems)
 
@@ -2002,6 +2196,144 @@ def test_the_path_gate_guards_can_actually_fail(tmp_path: Path) -> None:
         }}), encoding="utf-8", newline="\n")
         hits = _path_filter_steps(path)
         assert len(hits) == 1 and "zq-detect" in hits[0], (uses, hits)
+
+
+def test_the_path_filter_list_is_the_tools_and_not_a_copy(tmp_path: Path) -> None:
+    """One list of path-filter actions, read from the tool (#3756).
+
+    This module used to keep its own, and the two disagreed: a
+    `tj-actions/changed-files` step was red here and rc 0 for
+    `workflow_path_filter.py generate --check`; `Dorny/Paths-Filter` — which
+    GitHub runs — was red here and rc 0 there. A second list reintroduced in
+    this file fails the first assertion; the loop holds that the two callers
+    reach one conclusion per spelling, hits and misses alike.
+    """
+    assert "_PATH_FILTER_ACTIONS" not in globals(), (
+        "this module has its own path-filter action list again; read "
+        "`workflow_path_filter.PATH_FILTER_ACTIONS` through "
+        "`_WPF.path_filter_steps` instead")
+    assert _WPF.PATH_FILTER_ACTIONS, "the tool's list is empty"
+    spellings = [f"{action}@v1" for action in _WPF.PATH_FILTER_ACTIONS]
+    spellings += [s.upper() for s in spellings]
+    spellings += [f"docker://ghcr.io/{_WPF.PATH_FILTER_ACTIONS[0]}:v3",
+                  "actions/checkout@v6", "zq/paths-filter-not@v1", ""]
+    for index, uses in enumerate(spellings):
+        directory = tmp_path / f"spelling{index}"
+        directory.mkdir()
+        path = directory / "zq.yml"
+        step = {"name": "zq-step", "run": "true"}
+        if uses:
+            step = {"name": "zq-step", "uses": uses}
+        path.write_text(yaml.safe_dump({"jobs": {"zq-job": {"steps": [step]}}}),
+                        encoding="utf-8", newline="\n")
+        tool = _WPF.path_filter_steps(_load(path))
+        assert bool(_path_filter_steps(path)) == bool(tool), (uses, tool)
+        expected = any(a in uses.lower() for a in _WPF.PATH_FILTER_ACTIONS)
+        assert bool(tool) == expected, (uses, tool)
+    # Both outcomes occurred, or the loop compared nothing with nothing.
+    assert sum(any(a in s.lower() for a in _WPF.PATH_FILTER_ACTIONS)
+               for s in spellings) >= 4
+    assert "actions/checkout@v6" in spellings
+
+
+def test_the_accounting_and_reusable_call_guards_can_actually_fail(
+        tmp_path: Path) -> None:
+    """`_job_roles`, `_unwaited_job_problems` and
+    `_reusable_calls_in_decision_paths`, each given the input it must refuse
+    and the one it must leave alone."""
+    names = frozenset({"ZQ Required"})
+    doc = yaml.safe_load(_synthetic_workflow(
+        tmp_path / "base", leg_env="ZQ_LEG",
+        upstream={"steps": [{"run": "true"}]}).read_text(encoding="utf-8"))
+    doc["jobs"]["zq-direct"] = {"name": "ZQ Required",
+                                "steps": [{"run": "true"}]}
+    doc["jobs"]["zq-matrix"] = {
+        "name": "ZQ ${{ matrix.word }}",
+        "strategy": {"matrix": {"word": ["Required"]}},
+        "steps": [{"run": "true"}]}
+    doc["jobs"]["zq-stray"] = {"steps": [{"run": "true"}]}
+    directory = tmp_path / "roles"
+    directory.mkdir()
+    path = directory / "zq.yml"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8",
+                    newline="\n")
+    found = _job_roles(path, _gates(path), names)
+    assert found == {"zq-leg": "leg", "zq-upstream": "leg", "zq-gate": "gate",
+                     "zq-direct": "required", "zq-matrix": "required",
+                     "zq-stray": None}, found
+
+    roles = {("zq.yml", job_id): role for job_id, role in found.items()}
+    stray = ("zq.yml", "zq-stray")
+    assert _unwaited_job_problems(roles, {stray: "zwhy"}) == []
+    # An unaccounted job with no row.
+    missing = _unwaited_job_problems(roles, {})
+    assert len(missing) == 1 and "zq-stray" in missing[0], missing
+    # A row for a job a gate waits for, and a row for a job that is not there.
+    for extra in (("zq.yml", "zq-leg"), ("zq.yml", "zq-gone"),
+                  ("zq.yaml", "zq-stray")):
+        found_extra = _unwaited_job_problems(roles, {stray: "zwhy",
+                                                     extra: "zwhy"})
+        assert len(found_extra) == 1 and repr(extra) in found_extra[0], (
+            extra, found_extra)
+    # ⛔ The edit this exists for: a leg taken out of its gate entirely. Every
+    # job is still there, the gate still weighs all it waits for — and the
+    # dropped leg has no role.
+    doc["jobs"]["zq-second"] = {"steps": [{"run": "true"}]}
+    doc["jobs"]["zq-gate"]["needs"] = ["zq-leg", "zq-second"]
+    doc["jobs"]["zq-gate"]["steps"][0]["env"]["ZQ_SECOND"] = (
+        "${{ needs.zq-second.result }}")
+    for label, drop in (("kept", False), ("dropped", True)):
+        if drop:
+            doc["jobs"]["zq-gate"]["needs"] = ["zq-leg"]
+            del doc["jobs"]["zq-gate"]["steps"][0]["env"]["ZQ_SECOND"]
+        directory = tmp_path / f"second-{label}"
+        directory.mkdir()
+        path = directory / "zq.yml"
+        path.write_text(yaml.safe_dump(doc, sort_keys=False),
+                        encoding="utf-8", newline="\n")
+        role = _job_roles(path, _gates(path), names)["zq-second"]
+        assert role == (None if drop else "leg"), (label, role)
+
+    # ── reusable-workflow calls in a decision path
+    clean = _synthetic_workflow(tmp_path / "clean", leg_env="ZQ_LEG")
+    assert _reusable_calls_in_decision_paths(clean, _gates(clean)) == []
+    for index, (where, uses) in enumerate((
+            ("leg", "./.github/workflows/zq-callee.yaml"),
+            ("leg", "zq-owner/zq-repo/.github/workflows/zq.yml@v1"),
+            ("upstream", "./.github/workflows/zq-callee.yaml"))):
+        if where == "leg":
+            called = _synthetic_workflow(tmp_path / f"call{index}",
+                                         leg_env="ZQ_LEG")
+            doc = yaml.safe_load(called.read_text(encoding="utf-8"))
+            doc["jobs"]["zq-leg"] = {"uses": uses}
+            expect = "zq-leg"
+        else:
+            called = _synthetic_workflow(tmp_path / f"call{index}",
+                                         leg_env="ZQ_LEG",
+                                         upstream={"uses": uses})
+            doc = yaml.safe_load(called.read_text(encoding="utf-8"))
+            expect = "zq-upstream"
+        directory = tmp_path / f"called{index}"
+        directory.mkdir()
+        path = directory / "zq.yml"
+        path.write_text(yaml.safe_dump(doc, sort_keys=False),
+                        encoding="utf-8", newline="\n")
+        found_calls = _reusable_calls_in_decision_paths(path, _gates(path))
+        assert len(found_calls) == 1 and expect in found_calls[0], found_calls
+        assert uses in found_calls[0], found_calls
+    # A call OUTSIDE every decision path is not this rule's business, and a
+    # STEP-level `uses:` (an action) is not a reusable-workflow call.
+    aside = _synthetic_workflow(
+        tmp_path / "aside-call", leg_env="ZQ_LEG",
+        leg_extra={"steps": [{"uses": "actions/checkout@v6"}]})
+    doc = yaml.safe_load(aside.read_text(encoding="utf-8"))
+    doc["jobs"]["zq-aside"] = {"uses": "./.github/workflows/zq-callee.yaml"}
+    directory = tmp_path / "aside-call2"
+    directory.mkdir()
+    path = directory / "zq.yml"
+    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8",
+                    newline="\n")
+    assert _reusable_calls_in_decision_paths(path, _gates(path)) == []
 
 
 def test_the_ledger_row_rules_can_actually_fail() -> None:

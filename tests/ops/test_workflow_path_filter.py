@@ -816,6 +816,41 @@ def test_a_dorny_job_gate_is_refused_not_left_unchecked(repo: Path, capsys,
         assert "ztalk.yaml" not in err
 
 
+@pytest.mark.parametrize("uses", [
+    "Dorny/Paths-Filter@v3",
+    "DORNY/PATHS-FILTER@0e4a8c6effa4802afeda77dc8d303f8176d7dfad",
+    "tj-actions/changed-files@v45",
+    "docker://ghcr.io/dorny/paths-filter:v3",
+])
+def test_a_path_filter_action_is_refused_in_every_spelling(
+        repo: Path, capsys, uses: str) -> None:
+    """GitHub resolves `owner/repo` case-insensitively, so `Dorny/Paths-Filter`
+    is the same action; a case-sensitive match reported it as nothing (rc 0).
+    `tj-actions/changed-files` is on the list because the required-check
+    contract test refuses it — one list, read by both."""
+    (repo / ".github/workflows/zfilter.yaml").write_text(
+        "on: [pull_request]\njobs:\n  zdetect:\n    runs-on: x\n    steps:\n"
+        f"      - uses: {uses}\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    assert _main(repo, "generate", "--check") == 1
+    err = capsys.readouterr().err
+    assert f"UNMODELLED  zfilter.yaml: a job uses {uses} (zdetect)" in err, err
+
+
+def test_path_filter_steps_reads_steps_not_mentions() -> None:
+    workflow = {"jobs": {
+        "zq-a": {"steps": [{"name": "zq-f", "uses": "Dorny/Paths-Filter@v3"},
+                           {"run": "echo dorny/paths-filter"},
+                           {"uses": "actions/checkout@v6"}]},
+        "zq-b": {"uses": "./.github/workflows/dorny/paths-filter.yaml"},
+        "zq-c": {"steps": [{"uses": "tj-actions/changed-files@v45"}]}}}
+    assert wpf.path_filter_steps(workflow) == [
+        ("zq-a", "zq-f", "Dorny/Paths-Filter@v3"),
+        ("zq-c", 0, "tj-actions/changed-files@v45")]
+    assert wpf.path_filter_steps({}) == []
+    assert wpf.path_filter_steps({"jobs": None}) == []
+
+
 def test_an_unparseable_workflow_is_no_answer(repo: Path) -> None:
     (repo / ".github/workflows/zbroken.yaml").write_text("on: [pull_request\n",
                                                          encoding="utf-8")

@@ -6,6 +6,14 @@ tested modules plus `UNTESTED_GO_MODULES` must be every tracked go.mod — that
 equality, not a count, is what stops a new module from landing with no leg
 running its tests while `Go Tests` reports green.
 
+"A leg tests it" only means something if the leg's verdict reaches a required
+check, so the second assertion here is that every job `go_test_legs` finds is
+in the decision path of an aggregate gate (derived from the gates' own
+`needs.*.result` bindings by tests/ops/test_ci_aggregate_gate_contract.py —
+no list of leg ids). A Go leg dropped from the `go-tests` aggregate keeps
+running and keeps this module's first assertion green; the second is what
+turns red.
+
 Until #3756 this module also checked that each leg's path filter covered the
 files the leg compiles (#1399). The Go legs are not path-gated any more, so
 there is no filter for a compile input to be missing from; the module-coverage
@@ -15,6 +23,7 @@ from __future__ import annotations
 
 import posixpath
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -24,6 +33,14 @@ from _vendored_go import VENDORED_GO_MODULES
 
 ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / ".github" / "workflows" / "ci.yml"
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Which jobs a required check waits for is already derived there; a second
+# derivation here would be a second answer to the same question.
+from test_ci_aggregate_gate_contract import (  # noqa: E402
+    _decision_path,
+    _gates,
+)
 
 # Go modules no ci.yml leg tests, with the reason. Vendored modules are
 # compiled by the legs that `replace` them in, but their own upstream tests
@@ -97,6 +114,42 @@ def test_every_tracked_go_module_has_a_test_leg_or_a_reason() -> None:
         "green without running them. Add a leg (and to the go-tests "
         "aggregate), or record why in UNTESTED_GO_MODULES:\n  "
         + "\n  ".join(problems))
+
+
+def unweighed_go_legs(legs: dict[str, str], awaited: set[str]) -> list[str]:
+    """Go test legs no aggregate gate waits for. PURE."""
+    return sorted(job for job in legs if job not in awaited)
+
+
+def test_every_go_test_leg_is_weighed_by_an_aggregate_gate() -> None:
+    """A Go leg outside every aggregate fails without `Go Tests` noticing.
+
+    ⛔ No ledger, unlike the general accounting in the contract module
+    (`JOBS_NO_REQUIRED_CHECK_WAITS_FOR`): the assertion above counts a module
+    as tested BECAUSE one of these legs runs its tests, so a leg whose result
+    nothing weighs would make that count a claim about nothing.
+    """
+    workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
+    legs = go_test_legs(workflow)
+    assert legs, "no ci.yml job runs `go test`; this assertion examined nothing"
+    gates = _gates(CI)
+    assert gates, "no aggregate gate was discovered in ci.yml"
+    awaited: set[str] = set()
+    for gate in gates:
+        awaited |= _decision_path(workflow["jobs"], gate)
+    stray = unweighed_go_legs(legs, awaited)
+    assert not stray, (
+        f"these ci.yml jobs run `go test` but no aggregate gate waits for "
+        f"them: {stray}. They can fail on every PR while the required "
+        "`Go Tests` check is green. Add each to the go-tests aggregate — "
+        "`needs:`, an env binding of its `.result`, and the loop.")
+
+
+def test_the_unweighed_leg_finder_can_fail() -> None:
+    legs = {"zq-a": "zmod", "zq-b": "zlib"}
+    assert unweighed_go_legs(legs, {"zq-a", "zq-b", "zq-other"}) == []
+    assert unweighed_go_legs(legs, {"zq-a"}) == ["zq-b"]
+    assert unweighed_go_legs(legs, set()) == ["zq-a", "zq-b"]
 
 
 @pytest.mark.parametrize("case", [

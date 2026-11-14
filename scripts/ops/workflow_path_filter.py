@@ -53,10 +53,11 @@ The list is now measured, not chased. Three pieces, one file each:
   * every workflow that gates on paths for a pull request
     (`on.pull_request.paths`) either carries
     the generated regions or is named in NOT_YET_TRACED, with the reason;
-  * no workflow gates a JOB on paths with dorny/paths-filter. ci.yml,
-    docs-ci.yaml and validate.yaml did until #3756 retired those gates, and
-    with them the modelling of a dorny filter here; a new one is reported as
-    UNMODELLED rather than left unchecked.
+  * no workflow gates a JOB on paths with a path-filter action
+    (PATH_FILTER_ACTIONS: dorny/paths-filter and its like, in any letter
+    case). ci.yml, docs-ci.yaml and validate.yaml did until #3756 retired
+    those gates, and with them the modelling of a dorny filter here; a new
+    one is reported as UNMODELLED rather than left unchecked.
 
 Why a new import cannot slip past once a list has converged: it is written in a
 file that is already listed, so the PR adding it starts the workflow, and
@@ -343,11 +344,36 @@ def _steps(job: object) -> list[dict]:
     return [s for s in steps if isinstance(s, dict)] if isinstance(steps, list) else []
 
 
-def uses_dorny(workflow: dict) -> bool:
+# Actions whose whole purpose is "which paths did this PR change", lower-case.
+# The ONE list: tests/ops/test_ci_aggregate_gate_contract.py reads the steps
+# it refuses in a required-check workflow from `path_filter_steps` below, so
+# this tool and that guard cannot disagree about what a path-filter step is.
+#
+# ⚠️ A closed list of names, and so the weaker half of the guard. Not on it,
+# and not addable: a fork of one of these published under another name, a
+# local composite action (`uses: ./.github/actions/…`), a hand-written
+# `git diff --name-only … >> "$GITHUB_OUTPUT"` step. Accepted, because such a
+# step only changes what runs once its output is read by an `if:`, and that
+# is refused without reference to any name — on every job and step a required
+# check waits for, by the contract test above. No heuristic is added for the
+# unnamed spellings: it would be a second list with no last member.
+PATH_FILTER_ACTIONS = ("dorny/paths-filter", "tj-actions/changed-files")
+
+
+def path_filter_steps(workflow: dict) -> list[tuple[str, object, str]]:
+    """(job id, step name or index, `uses:` as written) of every step that
+    runs one of PATH_FILTER_ACTIONS.
+
+    Compared lower-cased: GitHub resolves `owner/repo` without regard to
+    case, so `Dorny/Paths-Filter@v3` runs the same action."""
     jobs = workflow.get("jobs")
-    return any("dorny/paths-filter" in str(step.get("uses", ""))
-               for job in (jobs.values() if isinstance(jobs, dict) else ())
-               for step in _steps(job))
+    hits: list[tuple[str, object, str]] = []
+    for job_id, job in (jobs.items() if isinstance(jobs, dict) else ()):
+        for index, step in enumerate(_steps(job)):
+            uses = str(step.get("uses", ""))
+            if any(action in uses.lower() for action in PATH_FILTER_ACTIONS):
+                hits.append((str(job_id), step.get("name", index), uses))
+    return hits
 
 
 # ── the generated regions (text, never a YAML round-trip) ───────────────────
@@ -1063,9 +1089,9 @@ def cmd_generate(args: argparse.Namespace) -> int:
         workflow = load_workflow(path)
         if _gate_or_caller_error(workflow, path.name) is not None:
             gated.add(path.name)
-        if uses_dorny(workflow):
+        for job_id, _step, uses in path_filter_steps(workflow):
             findings.append(
-                f"UNMODELLED  {path.name}: a job uses dorny/paths-filter. A "
+                f"UNMODELLED  {path.name}: a job uses {uses} ({job_id}). A "
                 "job-level path gate is not modelled here since #3756 retired "
                 "the last of them (its patterns are not checked for dead "
                 "entries and what the gated jobs load is not traced). Gate "
