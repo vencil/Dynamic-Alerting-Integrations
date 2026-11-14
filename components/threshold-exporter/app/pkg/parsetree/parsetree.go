@@ -114,12 +114,20 @@ var kinds = [...]Kind{
 }
 
 // Unreadable is why a file cannot be read.
+//
+// message is unexported so that no other package can build an Unreadable
+// with text of its own: outside this package an Unreadable comes only from
+// Parse or Judge, and its text only from fail. Message reads it.
 type Unreadable struct {
 	Kind    Kind
-	Message string
+	message string
 }
 
-func (u *Unreadable) Error() string { return string(u.Kind) + ": " + u.Message }
+// Message is the refusal's text: one of this package's constant sentences
+// with its %d verbs filled by integers (see sentence).
+func (u *Unreadable) Message() string { return u.message }
+
+func (u *Unreadable) Error() string { return string(u.Kind) + ": " + u.message }
 
 // sentence is the fixed text of one refusal: a compile-time constant of this
 // package, whose only verbs are %d (filled by fail with integers — a line, a
@@ -135,18 +143,20 @@ func (u *Unreadable) Error() string { return string(u.Kind) + ": " + u.Message }
 // sentences quote the text they refuse, so they are never carried either —
 // only a line number read from their fixed prefix (lineOf).
 // TestNoAuthorTextInAnyMessage holds every Kind to it with a canary, and
-// TestSentencesAreConstants holds that no conversion makes a sentence out of
-// a computed string.
+// TestSentencesAreConstants holds it by the package's syntax: the name
+// sentence appears only in its own declaration and in function signatures
+// (so nothing converts a computed string to one, by any spelling or alias),
+// the one Unreadable literal is fail's, and nothing assigns a message.
 type sentence string
 
-// fail is the one constructor of a refusal: Message is s with its %d verbs
-// filled by ints, in order.
+// fail is the one constructor of a refusal: its message is s with its %d
+// verbs filled by ints, in order.
 func fail(k Kind, s sentence, ints ...int) *Unreadable {
 	args := make([]any, len(ints))
 	for i, n := range ints {
 		args[i] = n
 	}
-	return &Unreadable{Kind: k, Message: fmt.Sprintf(string(s), args...)}
+	return &Unreadable{Kind: k, message: fmt.Sprintf(string(s), args...)}
 }
 
 // failYAML is fail for an error of yaml.v3's: lined (the line in front) when

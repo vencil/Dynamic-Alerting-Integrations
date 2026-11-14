@@ -195,7 +195,7 @@ func TestMessageDoesNotGrowWithTheRefusedText(t *testing.T) {
 		k := strings.Repeat(unit, (1<<20)/len(unit))
 		data := []byte("x: 1\n? " + k + "\n: 1\n? " + k + "\n: 2\n")
 		_, bad := Parse(data)
-		if bad == nil || bad.Kind != KindDuplicateKey || bad.Message != want {
+		if bad == nil || bad.Kind != KindDuplicateKey || bad.Message() != want {
 			t.Fatalf("%q: %.120v, want duplicate_key %q", unit, bad, want)
 		}
 		if j := Judge(data); j == nil || *j != *bad {

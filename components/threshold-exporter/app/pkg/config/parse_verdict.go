@@ -59,7 +59,7 @@ func judgeConfFile(data []byte) error {
 // line, never the file's text, #3703), so every interface carries the same
 // text.
 func unreadableFileError(bad *parsetree.Unreadable) *UnreadableFileError {
-	return &UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
+	return &UnreadableFileError{Kind: bad.Kind, Message: bad.Message()}
 }
 
 // verdictCache keeps verdicts by content SHA-256 (a nil value: the file can

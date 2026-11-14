@@ -116,7 +116,7 @@ func TestVerdictCache_LongMessageIsParseTreesOwn(t *testing.T) {
 	_, public := ParseTenantFile(data)
 	for name, err := range map[string]error{"miss": miss, "hit": hit, "ParseTenantFile": public} {
 		var ue *UnreadableFileError
-		if !errors.As(err, &ue) || ue.Kind != bad.Kind || ue.Message != bad.Message {
+		if !errors.As(err, &ue) || ue.Kind != bad.Kind || ue.Message != bad.Message() {
 			t.Errorf("%s: %v; want parse-tree's %s with its message as is", name, err, bad.Kind)
 		}
 	}
