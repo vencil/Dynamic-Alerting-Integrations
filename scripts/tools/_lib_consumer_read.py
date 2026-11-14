@@ -279,9 +279,16 @@ def _invoke(binary: str | None, name: str, env: str, build_hint: str,
             f"{name} was not found: set ${env} to its path or put it on $PATH "
             f"(the da-tools image ships it; in this repo `{build_hint}` builds "
             f".build/{name})")
+    # Lazy: _lib_parse_tree imports this module. Under the judgement's
+    # memory limit (`run_under_memory_limit`) the program runs with
+    # GOTRACEBACK=crash, as da-guard does: the Go runtime's own out of memory
+    # ends it by a signal, not exit 2.
+    import _lib_parse_tree
+    limited = _lib_parse_tree.memory_limited()
     try:
         proc = subprocess.run([binary, *args], input=stdin, capture_output=True,
-                              check=False, timeout=TIMEOUT_SECONDS)
+                              check=False, timeout=TIMEOUT_SECONDS,
+                              env=_lib_parse_tree.da_guard_env())
     except subprocess.TimeoutExpired as e:
         _fault(name, args, "timed_out")
         raise ConsumerReadError(f"{name} did not finish within {TIMEOUT_SECONDS}s",
@@ -289,12 +296,20 @@ def _invoke(binary: str | None, name: str, env: str, build_hint: str,
     except OSError as e:
         _fault(name, args, _lib_tool_fault.os_error_reason(e, binary))
         raise ConsumerReadError(f"cannot run {name} ({binary}): {e}") from e
-    if proc.returncode < 0:
-        # #3862: as da-guard's (`_lib_tool_fault.signal_reason`): a Go runtime
-        # that ended itself under the judgement's memory limit is that
-        # write's memory, any other signal a fault.
-        _fault(name, args, _lib_tool_fault.signal_reason(proc.returncode))
-    return proc, _stderr_lines(proc.stderr)
+    # #3862: as da-guard's (`_lib_tool_fault.end_reason`): a Go runtime that
+    # ended itself under the judgement's memory limit is that write's memory,
+    # any other signal a fault.
+    end = _lib_tool_fault.end_reason(proc.returncode, proc.stderr, limited)
+    if end is not None:
+        _fault(name, args, end)
+    lines = _stderr_lines(proc.stderr)
+    if end is not None and proc.returncode >= 0:
+        # Exit 2 with the runtime's own out-of-memory line, under that limit
+        # (it failed before it read GOTRACEBACK): no answer about the input,
+        # and not a program that does not run — nothing below reads it.
+        raise ConsumerReadError(f"{name} ran out of memory (exit {proc.returncode}) under "
+                                "this process's memory limit (RLIMIT_DATA)", lines)
+    return proc, lines
 
 
 def _json(proc: subprocess.CompletedProcess, name: str, lines: list[str],

@@ -22,15 +22,19 @@ path, and a reason from :data:`REASONS`, never its stderr — what reaches a
 tenant-api caller must not carry the container's paths or a program's
 prose.
 
-One reason is not a fault: :data:`MEMORY_SIGNAL`, a program ended by one of
-the signals the Go runtime ends itself with when it runs out of memory
-(:data:`MEMORY_SIGNALS`; every program inherits the judgement's
-RLIMIT_DATA). That is the size of the write, not a broken program: the
-service rejects that write as ``memory`` and stays ready, where a fault
-makes it answer 503 and not ready. It is recorded all the same, because a
-verdict reached without that program is no verdict either: the judgement
-process reports ``memory`` for it, never ``ran``. :func:`signal_reason` is
-the one place that tells the two apart, for all three run functions.
+One reason is not a fault: :data:`MEMORY_END`, a program the Go runtime
+ended because it could not get memory, while this process runs under a
+memory limit (RLIMIT_DATA, which every program inherits): ended by one of
+the signals the runtime ends itself with (:data:`MEMORY_SIGNALS`), or —
+when it fails before it has read ``GOTRACEBACK``, at its start — exit 2
+with one of its own out-of-memory lines on stderr
+(:data:`GO_OUT_OF_MEMORY`). That is the size of the write, not a broken
+program: the service rejects that write as ``memory`` and leaves its
+readiness as it was, where a fault makes it answer 503 and not ready. It
+is recorded all the same, because a verdict reached without that program
+is no verdict either: the judgement process reports ``memory`` for it,
+never ``ran``. :func:`end_reason` is the one place that tells the two
+apart, for all three run functions.
 
 Standard library only.
 """
@@ -45,9 +49,10 @@ from typing import NamedTuple
 #: The programs whose failure is recorded.
 BINARIES = ("da-guard", "da-read", "da-crdecode")
 
-#: The reason of a program ended by one of :data:`MEMORY_SIGNALS`: the
-#: judgement's memory, not a fault (see the module docstring).
-MEMORY_SIGNAL = "memory_signal"
+#: The reason of a program the Go runtime ended for want of memory under
+#: the memory limit (:func:`end_reason`): the judgement's memory, not a
+#: fault (see the module docstring).
+MEMORY_END = "memory_end"
 
 #: Why a program did not run, a closed set.
 REASONS = (
@@ -59,16 +64,40 @@ REASONS = (
     "unexpected_exit",  # an exit code its subcommand never uses
     "bad_output",       # its output is not the document it writes
     "stale",            # older than this tool (a subcommand, flag or field it lacks)
-    MEMORY_SIGNAL,      # ended by one of MEMORY_SIGNALS: not a fault
+    MEMORY_END,         # the Go runtime's own end for want of memory: not a fault
 )
 
-#: The reasons that are a fault of the program: every one but MEMORY_SIGNAL.
-FAULT_REASONS = tuple(r for r in REASONS if r != MEMORY_SIGNAL)
+#: The reasons that are a fault of the program: every one but MEMORY_END.
+FAULT_REASONS = tuple(r for r in REASONS if r != MEMORY_END)
 
 #: The signals the Go runtime ends itself with under ``GOTRACEBACK=crash``
 #: (a fatal error, an out-of-memory, an allocation failure that faults
 #: inside the runtime): under the judgement's memory limit, its memory.
 MEMORY_SIGNALS = frozenset({signal.SIGABRT, signal.SIGSEGV, signal.SIGBUS})
+
+#: The messages of the Go runtime's own ``throw`` when it cannot get memory
+#: (every one in src/runtime of go1.26: ``grep -rhoE 'throw\("[^"]*(out of
+#: memory|cannot allocate)[^"]*"\)'``). ``throw`` writes each as one stderr
+#: line ``fatal error: <message>`` and exits 2 — unless ``GOTRACEBACK=crash``
+#: has been read, which a runtime that fails while it starts (``heap arena
+#: map`` at a small limit) has not.
+GO_OUT_OF_MEMORY = frozenset({
+    "out of memory",
+    "out of memory (stackalloc)",
+    "out of memory allocating allArenas",
+    "out of memory allocating checkmarks bitmap",
+    "out of memory allocating heap arena map",
+    "out of memory allocating heap arena metadata",
+    "pageAlloc: out of memory",
+    "runtime: cannot allocate memory",
+    "runtime: out of memory",
+    "trace: out of memory",
+    "traceRegion: out of memory",
+    "heapdump: out of memory",
+})
+
+#: The exit code of a Go runtime's ``throw``.
+_GO_THROW_EXIT = 2
 
 #: At most this many records are kept (the first ones): a judgement needs
 #: only to know that one exists, and a tool that keeps running after a
@@ -111,20 +140,46 @@ def records() -> "list[ToolFault]":
 
 
 def faults() -> "list[ToolFault]":
-    """The records that are a program's fault (not :data:`MEMORY_SIGNAL`)."""
-    return [r for r in records() if r.reason != MEMORY_SIGNAL]
+    """The records that are a program's fault (not :data:`MEMORY_END`)."""
+    return [r for r in records() if r.reason != MEMORY_END]
 
 
 def memory_ends() -> "list[ToolFault]":
-    """The records of a program ended by one of :data:`MEMORY_SIGNALS`."""
-    return [r for r in records() if r.reason == MEMORY_SIGNAL]
+    """The records of a program that ended as :data:`MEMORY_END`."""
+    return [r for r in records() if r.reason == MEMORY_END]
 
 
-def signal_reason(returncode: int) -> str:
-    """The reason of a program that exited *returncode* (< 0: ended by
-    signal ``-returncode``): :data:`MEMORY_SIGNAL` for one of
-    :data:`MEMORY_SIGNALS`, else ``signalled`` (a SIGKILL from outside, …)."""
-    return MEMORY_SIGNAL if -returncode in MEMORY_SIGNALS else "signalled"
+def go_out_of_memory(stderr: "bytes | str | None") -> bool:
+    """Whether *stderr* holds the Go runtime's own out-of-memory line: a
+    line that is exactly ``fatal error: `` and one of
+    :data:`GO_OUT_OF_MEMORY`."""
+    if not stderr:
+        return False
+    if isinstance(stderr, bytes):
+        stderr = stderr.decode("utf-8", errors="replace")
+    prefix = "fatal error: "
+    return any(line.startswith(prefix) and line[len(prefix):] in GO_OUT_OF_MEMORY
+               for line in (ln.rstrip("\r") for ln in stderr.split("\n")))
+
+
+def end_reason(returncode: int, stderr: "bytes | str | None",
+               memory_limited: bool) -> "str | None":
+    """The reason to record for a program that ended *returncode* (< 0:
+    ended by signal ``-returncode``) with *stderr*, when that end is not an
+    exit its caller reads; None when it is.
+
+    * a signal: :data:`MEMORY_END` for one of :data:`MEMORY_SIGNALS`, else
+      ``signalled`` (a SIGKILL from outside, …);
+    * exit 2 with the Go runtime's own out-of-memory line
+      (:func:`go_out_of_memory`), only while *memory_limited* (this process
+      runs under its RLIMIT_DATA): :data:`MEMORY_END`. Without a limit that
+      exit is read as before — a command-line tool does not change;
+    * anything else: None."""
+    if returncode < 0:
+        return MEMORY_END if -returncode in MEMORY_SIGNALS else "signalled"
+    if memory_limited and returncode == _GO_THROW_EXIT and go_out_of_memory(stderr):
+        return MEMORY_END
+    return None
 
 
 def clear() -> None:

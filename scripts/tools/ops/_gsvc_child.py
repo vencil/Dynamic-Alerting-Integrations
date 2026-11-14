@@ -26,9 +26,10 @@ forked, and never returns. In order:
    not there, could not be executed, timed out, ended by a signal, an exit
    code or output it never gives, older than this tool), the result is
    ``tool_fault`` with those records — whatever the generator concluded
-   without it, rc 0 included (#3862). One the Go runtime ended under the
-   memory limit (``_lib_tool_fault.MEMORY_SIGNALS``) while the generator
-   ran is that write's ``memory`` instead — never ``ran``, whatever the
+   without it, rc 0 included (#3862). One the Go runtime ended for want of
+   memory under the memory limit (``_lib_tool_fault.end_reason``: one of its
+   crash signals, or exit 2 with its own out-of-memory line) while the
+   judgement ran is that write's ``memory`` instead — never ``ran``, whatever the
    generator concluded without it; a fault in the same judgement wins. In
    the key verdict that end is the verdict's own ``memory`` (ADR-038
    decision 5: a verdict not completed, with its reason).
@@ -433,6 +434,13 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
         print(f"generator-service: da-guard could not classify the base tree's "
               f"path names: {msg}", file=sys.stderr)
         return {"outcome": "da_guard", "message": msg}
+    except MemoryError:
+        # Names mode ended by a signal, or out of memory, under RLIMIT_DATA
+        # (this process's own allocation too): `_lib_parse_tree` recorded
+        # which (#3862). Answered as the generator's run is: `run_child`
+        # reports a recorded fault (a SIGKILL: `signalled`) as tool_fault
+        # first; otherwise it is this write's memory.
+        return {"outcome": "memory"}
     # #2901 E2: the base tree's files, as soon as they are known — the
     # long-running process pins them even if this process is killed. By the
     # cache's own key (SHA-256 of the path below conf.d and the content,
@@ -702,8 +710,10 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
             _lib_tool_fault.record("da-guard", "key-verdict",
                                    "stale" if exc.stale else "bad_output")
         # A da-guard ended by a signal under RLIMIT_DATA (GOTRACEBACK=crash:
-        # the Go runtime's own out-of-memory too) is its memory limit.
-        reason = "memory" if (exc.returncode or 0) < 0 else "error"
+        # the Go runtime's own out-of-memory too) is its memory limit; so is
+        # one that exited 2 out of memory before it read GOTRACEBACK
+        # (`memory_end`, #3862).
+        reason = "memory" if (exc.returncode or 0) < 0 or exc.memory_end else "error"
         return report("not_completed", reason=reason, tenants=len(tenants),
                       message=" ".join(str(exc).split())[:300])
     except BaseException as exc:  # noqa: BLE001 — reported as not completed, with its reason

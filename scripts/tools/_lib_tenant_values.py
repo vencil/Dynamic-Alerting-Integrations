@@ -826,6 +826,11 @@ class DaGuardError(RuntimeError):
         #: #3862: whether `_lib_tool_fault` has been asked about this error
         #: (recorded, or decided to be the tree's).
         self.fault_judged = False
+        #: #3862: the Go runtime ended it for want of memory under this
+        #: process's memory limit with exit 2 and its own out-of-memory line
+        #: (`_lib_tool_fault.end_reason`); one ended by a signal has a
+        #: negative `returncode` instead.
+        self.memory_end = False
         detail = stderr.strip()
         super().__init__(f"{message}: {detail}" if detail else message)
 
@@ -1039,6 +1044,20 @@ def _run_da_guard(
                     broken=True) from e
 
     stderr = _stderr_text(proc.stderr)
+    # #3862: a signal, or exit 2 with the Go runtime's own out-of-memory line
+    # under the judgement's memory limit (it failed before it read
+    # GOTRACEBACK): `_lib_tool_fault.end_reason`, the one judge of the three
+    # run functions. Without a limit, exit 2 is read below as always.
+    end = _lib_tool_fault.end_reason(proc.returncode, proc.stderr,
+                                     _lib_parse_tree.memory_limited())
+    if end is not None and proc.returncode >= 0:
+        # Its memory, not the tree's answer nor a da-guard older than this
+        # tool: never asked of the binary (`_accepts`).
+        _fault(subcommand, end)
+        exc = error(f"da-guard {subcommand} ran out of memory (exit {proc.returncode}) under "
+                    "this process's memory limit (RLIMIT_DATA)", proc.returncode, stderr)
+        exc.memory_end = True
+        raise exc
     if proc.returncode == _EXIT_CALLER_ERR:
         # Exit 2 is da-guard's caller error AND a tree the exporter's load
         # rejects (no config file, a tenant declared twice, …). Which one is
@@ -1062,7 +1081,7 @@ def _run_da_guard(
         # limitation; such a row is still advised as the tree's). #3862: but
         # it did not run, so it is recorded — the Go runtime's own end under
         # the judgement's memory limit as that write's memory, not a fault.
-        _fault(subcommand, _lib_tool_fault.signal_reason(proc.returncode))
+        _fault(subcommand, end)
         raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
     if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
         _fault(subcommand, "unexpected_exit")
@@ -1282,11 +1301,12 @@ def load_served_tree(
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
                           _subset_absent(doc, requested), doc.get("root_defaults_refused", _MISSING)),
         reads_unreadable=True, dropped_ok=partial)
+    _check_tenant_map(tenants, returncode, stderr)
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
-        severities = dict(tv["severities"])
-        values = dict(tv["values"])
         try:
+            severities = dict(tv["severities"])
+            values = dict(tv["values"])
             for key in severities:
                 values[key] = _threshold(values[key])
             for row in values.get("_custom_alerts") or []:
@@ -1327,6 +1347,10 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no keys — this da-guard is "
                 "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+        if not isinstance(tv.get("custom_alerts") or [], list):
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries custom_alerts that are not a list",
+                returncode, stderr, broken=True)
         if ("custom_alerts" in tv and "custom_alerts_finding" not in tv) or any(
                 isinstance(e, dict) and "finding" not in e for e in tv.get("custom_alerts") or ()):
             raise ServedValuesError(
@@ -1371,13 +1395,36 @@ def load_served_tree(
                 raise ServedValuesError(
                     f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
                     returncode, stderr, broken=True) from e
-        out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
-                                     {k: list(v) for k, v in tv["dropped"].items()}, days, series,
+        try:
+            unserved = dict(tv["unserved"])
+            dropped_keys = {k: list(v) for k, v in tv["dropped"].items()}
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries unserved or dropped keys that are not of their shape ({e!r})",
+                returncode, stderr, broken=True) from e
+        out[tenant_id] = TenantValues(tenant_id, values, severities, unserved,
+                                     dropped_keys, days, series,
                                      state_filters, time_boxes, routing, keys, alert_rows,
                                      custom_alerts, custom_alerts_error, custom_alerts_finding,
                                      key_checks)
     return ServedTree(out, skipped, _nonempty_lines(stderr), *dropped, absent,
                       _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
+
+
+def _check_tenant_map(tenants: Any, returncode: int, stderr: str) -> None:
+    """served-values' `tenants`, checked before it is read: an object of
+    objects. Anything else is not its document (#3862: raised as broken
+    output, so `_records_output_faults` records it — never an
+    AttributeError a caller takes for a reading it may skip)."""
+    if not isinstance(tenants, dict):
+        raise ServedValuesError(
+            f"da-guard {SUBCOMMAND}: tenants is a {type(tenants).__name__}, not an object",
+            returncode, stderr, broken=True)
+    for tenant_id, tv in tenants.items():
+        if not isinstance(tv, dict):
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} is a {type(tv).__name__}, "
+                "not an object", returncode, stderr, broken=True)
 
 
 @_records_output_faults(SUBCOMMAND)
@@ -1407,6 +1454,7 @@ def load_served_schedules(
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
                           _subset_absent(doc, requested)),
         reads_unreadable=True, dropped_ok=partial)
+    _check_tenant_map(days, returncode, stderr)
     out: dict[str, dict[str, KeySchedule]] = {}
     for tenant_id, tv in days.items():
         try:

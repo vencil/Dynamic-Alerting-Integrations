@@ -201,16 +201,25 @@ _MEMORY_LIMITED = False
 
 def run_under_memory_limit() -> None:
     """Declare that this process runs under a memory limit (RLIMIT_DATA) that
-    every da-guard it starts inherits. From then on each da-guard runs with
+    every Go program it starts inherits. From then on each da-guard (and
+    da-read and da-crdecode, `_lib_consumer_read`) runs with
     ``GOTRACEBACK=crash``, so a Go runtime that fails — out of memory, an
     allocation failure that faults inside the runtime (SIGSEGV), a thread it
     cannot create — ends by a signal (SIGABRT) instead of exiting 2; and a
     da-guard ended by a signal is this process's memory limit, raised as
-    ``MemoryError`` naming the signal. Judged by the process status, not by
-    its words. Without this call a da-guard ended by a signal stays a
-    ``ParseTreeError``. The caller sets RLIMIT_CORE to 0: no core file."""
+    ``MemoryError`` naming the signal. A runtime that runs out of memory
+    while it starts, before it has read ``GOTRACEBACK``, still exits 2: that
+    exit with the runtime's own out-of-memory line is this process's memory
+    limit too (`_lib_tool_fault.end_reason`). Without this call a da-guard
+    ended by a signal stays a ``ParseTreeError``, and exit 2 is read as
+    always. The caller sets RLIMIT_CORE to 0: no core file."""
     global _MEMORY_LIMITED
     _MEMORY_LIMITED = True
+
+
+def memory_limited() -> bool:
+    """Whether :func:`run_under_memory_limit` was called in this process."""
+    return _MEMORY_LIMITED
 
 
 def _fault(subcommand: str, reason: str) -> None:
@@ -312,11 +321,12 @@ def file_document(raw: bytes) -> dict:
 
 
 def da_guard_env() -> "dict[str, str] | None":
-    """The environment of a da-guard this process starts: with
+    """The environment of a Go program this process starts: with
     ``GOTRACEBACK=crash`` under :func:`run_under_memory_limit`, so the Go
     runtime's own out-of-memory ends it by a signal; else None (inherit).
-    Every da-guard run of the judgement takes it (parse-tree here,
-    served-values and effective in ``_lib_tenant_values``)."""
+    Every program run of the judgement takes it (da-guard's parse-tree here,
+    served-values and effective in ``_lib_tenant_values``; da-read and
+    da-crdecode in ``_lib_consumer_read``)."""
     return {**os.environ, "GOTRACEBACK": "crash"} if _MEMORY_LIMITED else None
 
 
@@ -368,10 +378,11 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
         _fault(sub, _lib_tool_fault.os_error_reason(e, exe))
         raise ParseTreeError(f"da-guard could not be run ({exe}): {e}") from e
     stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
-    if proc.returncode < 0:
-        # #3862: the Go runtime's own memory end is recorded as such (the
-        # judgement rejects that write as memory); any other signal is a fault.
-        _fault(sub, _lib_tool_fault.signal_reason(proc.returncode))
+    # #3862: the Go runtime's own memory end is recorded as such (the
+    # judgement rejects that write as memory); any other signal is a fault.
+    end = _lib_tool_fault.end_reason(proc.returncode, proc.stderr, _MEMORY_LIMITED)
+    if end is not None:
+        _fault(sub, end)
     if _MEMORY_LIMITED and proc.returncode < 0:
         # Ended by a signal under the memory limit it inherited (the
         # generator container's RLIMIT_DATA of a judgement, ADR-036 §3):
@@ -379,6 +390,12 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
         raise MemoryError(f"da-guard {what} was ended by "
                           f"{_signal_name(-proc.returncode)} under this process's "
                           f"memory limit (RLIMIT_DATA)")
+    if end == _lib_tool_fault.MEMORY_END and proc.returncode >= 0:
+        # Exit 2 with the runtime's own out-of-memory line, under that limit
+        # (it failed before it read GOTRACEBACK): the same memory limit —
+        # never asked of the binary as a da-guard older than this tool.
+        raise MemoryError(f"da-guard {what} ran out of memory (exit {proc.returncode}) "
+                          f"under this process's memory limit (RLIMIT_DATA)")
     if proc.returncode != 0 and not (proc.returncode in accept and proc.stdout.strip()):
         older = ""
         if proc.returncode == 2 and not _accepts(cmd, timeout):

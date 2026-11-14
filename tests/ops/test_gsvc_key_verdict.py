@@ -235,12 +235,20 @@ def test_the_verdicts_parses_are_not_streamed(monkeypatch, tmp_path):
     assert cache.on_store is not None, "the generator's streaming is not restored"
 
 
+def _memory_end(exc: "tv.DaGuardError") -> "tv.DaGuardError":
+    exc.memory_end = True
+    return exc
+
+
 @pytest.mark.parametrize("exc,reason", [
     (MemoryError("cannot allocate"), "memory"),
     (SystemExit(3), "error"),
     (KeyboardInterrupt(), "error"),
     (tv.ServedValuesError("da-guard served-values exited -6", -6, ""), "memory"),
     (tv.EffectiveError("da-guard effective exited 2", 2, ""), "error"),
+    # #3862: exit 2 with the Go runtime's own out-of-memory line under the
+    # memory limit (it failed before it read GOTRACEBACK): memory too.
+    (_memory_end(tv.EffectiveError("da-guard effective ran out of memory", 2, "")), "memory"),
     (ValueError("anything else"), "error"),
 ])
 def test_a_verdict_that_fails_is_not_completed_never_raised(monkeypatch, tmp_path, exc, reason):

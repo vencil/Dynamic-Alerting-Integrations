@@ -30,10 +30,15 @@
      problem——da-read prometheus-rules 的讀法逐項檢查的那些）、
      ``rc3``（rc 3：da-read／da-crdecode 與 parse-tree 契約外；served-values
      等是「有檔被略過」卻沒有輸出）、``rc7``（三支程式都不用的結束碼）、
-     ``realrc3``（真程式的輸出、結束碼改成 3：沒有點名任何被略過的檔）
-     ⇒ 503，reason 屬該模式允許的集合（``_MODE_REASONS``；
+     ``realrc3``（真程式的輸出、結束碼改成 3：沒有點名任何被略過的檔）、
+     ``gofatal``（rc 2 加上不是記憶體不足的 Go ``fatal error``：在記憶體上限下
+     仍是故障）、``tenants-list``（served-values 文件外層合法、``tenants``
+     卻是 list）⇒ 503，reason 屬該模式允許的集合（``_MODE_REASONS``；
      哪一個取決於讀那份輸出的程式碼走到哪個分支）；
-   - ``sigsegv``（Go 執行期在記憶體上限下自己結束的訊號之一）⇒ **不是**
+   - ``sigsegv``（Go 執行期在記憶體上限下自己結束的訊號之一）、``oomexit``
+     （rc 2 加上 Go 執行期自己的 out-of-memory 行，不在第一行）、以及真程式
+     在小的 RLIMIT_DATA 下結束（shim 只對被打的那一格降上限；各檔位怎麼結束
+     先在本機量過，訊號與 rc 2 兩種都要出現）⇒ **不是**
      503、``pass``、``findings``：200 ``rejected`` reason ``memory``，且
      ``/v1/status`` 的 ``ready`` 與 ``tool_fault`` 不變。例外是判定在 key
      verdict 階段被打到：ADR-038 決定 5 規定 key verdict 記憶體用完回「判決
@@ -45,7 +50,10 @@
 3. 每次 503 都斷言 ``VALIDATOR_UNAVAILABLE``／``tool_fault``、訊息與
    ``/v1/status`` 的 ``tool_fault`` 點名那支程式；故障後 ``ready`` 為 false，
    換回好的 binary 再判一次後回 true。
-4. 清除條件：故障標記只在 outcome ``ran`` 的判定之後清掉；``git_read``、
+4. base 樹含 symlink 時，寫出樹的當下就跑 ``parse-tree --names``：那裡
+   被 SIGKILL 是 503 ``signalled``，記憶體類結束是 ``rejected``／``memory``，
+   不是「判定程序沒給完整結果」（``test_names_mode_of_a_base_tree_with_a_symlink_struck``）。
+5. 清除條件：故障標記只在 outcome ``ran`` 的判定之後清掉；``git_read``、
    ``bad_request`` 等沒跑過工具的結果不清（``test_only_a_judgement_that_ran_clears``）。
 
 未涵蓋：逾時（``timed_out``）——每打一格要等滿一個程式的時間上限，太慢；
@@ -58,6 +66,7 @@ Tenant ids are fixture names (CLAUDE.md #9).
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -66,6 +75,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import _grar_findings_cases as cases  # noqa: E402
 import _gsvc_harness as h  # noqa: E402
+import _lib_tool_fault  # noqa: E402
+from _lib_tenant_values import SERVED_VALUES_SCHEMA as _SERVED_VALUES_SCHEMA  # noqa: E402
 
 pytestmark = pytest.mark.skipif(sys.platform != "linux",
                                 reason="fork + pidfd + /proc: Linux only")
@@ -124,6 +135,10 @@ if [ -s '{ctl}' ]; then
       "{name} $a rc7") exit 7;;
       "{name} $a realrc3") '{real}' "$@"; exit 3;;
       "{name} $a files-"*) files "${{c##* files-}}" "$@"; exit 0;;
+      "{name} $a gofatal") echo 'fatal error: concurrent map writes' >&2; exit 2;;
+      "{name} $a oomexit") printf '%s\\n' 'runtime: out of memory: cannot allocate 4194304-byte block (8 in use)' 'fatal error: out of memory' >&2; exit 2;;
+      "{name} $a tenants-list") printf '{{"schema": "{sv_schema}", "at": "x", "parse_failed": [], "skipped": [], "unreadable": [], "root_defaults_refused": [], "tenants": []}}\\n'; exit 0;;
+      "{name} $a ulimit "*) ulimit -d "${{c##* ulimit }}" || exit 99; exec '{real}' "$@";;
     esac
   done
   exec 3<&-
@@ -152,6 +167,13 @@ _MODE_REASONS = {
     "files-refused": {"bad_output", "stale"},
     "rc3": {"unexpected_exit", "bad_output"},
     "rc7": {"unexpected_exit"},
+    # Exit 2 with a Go runtime fatal error that is not its out-of-memory,
+    # under the judgement's memory limit: a program that does not run, never
+    # the write's memory (da-guard's `-h` probe is struck too: stale).
+    "gofatal": {"unexpected_exit", "stale"},
+    # served-values' document with `tenants` a list: well-formed outside,
+    # wrong inside (any other cell: a document it does not write).
+    "tenants-list": {"bad_output", "stale"},
     # The real program's output, then exit 3: da-guard's "a file was
     # skipped" with none named.
     "realrc3": {"unexpected_exit", "bad_output"},
@@ -173,7 +195,8 @@ class _Rig:
             if not real:
                 pytest.skip(f"needs ${var} (the session build sets it)")
             path = self.shims / name
-            path.write_text(_SHIM.format(name=name, log=self.log, ctl=self.ctl, real=real),
+            path.write_text(_SHIM.format(name=name, log=self.log, ctl=self.ctl, real=real,
+                                         sv_schema=_SERVED_VALUES_SCHEMA),
                             encoding="utf-8")
             path.chmod(0o755)
             self.good[name] = path.read_bytes()
@@ -275,27 +298,95 @@ def test_every_cell_struck_answers_503(rig, cells, fault):
     rig.assert_recovers()
 
 
-def test_every_cell_ended_by_a_memory_signal_is_rejected_as_memory(rig, cells):
-    """A program ended by SIGSEGV (one of the Go runtime's own crash signals
-    under the judgement's memory limit): that write's memory — never a 503,
-    and never a verdict (pass / findings) reached without that program. The
-    service stays ready."""
+def _assert_memory(rig, where: str) -> None:
+    """The judgement under *where*'s fault: that write's memory — never a
+    503, and never a verdict (pass / findings) reached without that
+    program. The service stays ready."""
+    rig.ctl.write_text(where, encoding="utf-8")
+    status, doc, st, _ran = rig.judge()
+    assert status == 200, (where, doc)
+    assert st["ready"] is True and st["tool_fault"] is None, (where, st)
+    if doc["result"] == "pass":
+        # ADR-038 decision 5: the key verdict's own memory is reported as
+        # a verdict not completed (tenant-api refuses the write on it).
+        kv = doc.get("key_verdict") or {}
+        assert (kv.get("status"), kv.get("reason")) == ("not_completed", "memory"), \
+            (where, doc)
+    else:
+        assert (doc["result"], doc["reason"]) == ("rejected", "memory"), (where, doc)
+
+
+@pytest.mark.parametrize("fault", ["sigsegv", "oomexit"])
+def test_every_cell_ended_by_the_go_runtime_out_of_memory_is_rejected_as_memory(
+        rig, cells, fault):
+    """A program the Go runtime ended for want of memory under the
+    judgement's memory limit — by SIGSEGV (one of its crash signals), or by
+    exit 2 with its own out-of-memory line (``oomexit``: what a runtime
+    that fails before it reads GOTRACEBACK writes, the line not first):
+    that write's memory, never a 503; the service stays ready."""
     rig.assert_recovers()
     for binary, cell in cells:
-        where = f"{binary} {cell} sigsegv"
-        rig.ctl.write_text(where, encoding="utf-8")
-        status, doc, st, _ran = rig.judge()
-        assert status == 200, (where, doc)
-        assert st["ready"] is True and st["tool_fault"] is None, (where, st)
-        if doc["result"] == "pass":
-            # ADR-038 decision 5: the key verdict's own memory is reported as
-            # a verdict not completed (tenant-api refuses the write on it).
-            kv = doc.get("key_verdict") or {}
-            assert (kv.get("status"), kv.get("reason")) == ("not_completed", "memory"), \
-                (where, doc)
-        else:
-            assert (doc["result"], doc["reason"]) == ("rejected", "memory"), (where, doc)
+        _assert_memory(rig, f"{binary} {cell} {fault}")
     rig.ctl.write_text("", encoding="utf-8")
+
+
+#: RLIMIT_DATA levels (KiB) that end the real programs while their Go
+#: runtime starts: measured, the smallest by SIGSEGV (no handler yet), the
+#: larger by exit 2 with ``fatal error: out of memory allocating heap arena
+#: map`` / ``runtime: out of memory`` — before the runtime has read
+#: GOTRACEBACK, so not a signal. Which level ends which way is measured
+#: again on this machine (`_real_end`), not assumed.
+_SMALL_LIMITS_KIB = (20000, 50000, 70000)
+
+
+def _real_end(binary: str, kib: int) -> str:
+    """How the real *binary* ends under RLIMIT_DATA *kib* with
+    GOTRACEBACK=crash (the judgement's environment): ``signal`` (one of the
+    Go runtime's crash signals), ``exit`` (exit 2 with its own
+    out-of-memory line), or ``ran``."""
+    import resource
+    import subprocess
+
+    def limit() -> None:
+        resource.setrlimit(resource.RLIMIT_DATA, (kib * 1024, kib * 1024))
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+    proc = subprocess.run([os.environ[BINARIES[binary]], "-h"], capture_output=True,
+                          stdin=subprocess.DEVNULL, preexec_fn=limit, timeout=60,
+                          env={**os.environ, "GOTRACEBACK": "crash"})
+    if proc.returncode < 0 and -proc.returncode in _lib_tool_fault.MEMORY_SIGNALS:
+        return "signal"
+    # Read here on its own, not by the predicate under test.
+    if proc.returncode == 2 and re.search(rb"^fatal error: .*(out of memory|cannot allocate memory)",
+                                          proc.stderr, re.M):
+        return "exit"
+    return "ran"
+
+
+def test_every_cell_out_of_memory_under_a_small_limit_is_rejected_as_memory(rig, cells):
+    """The real programs under a small RLIMIT_DATA (the shim lowers it for
+    the struck cell alone): each level that ends the program — by signal or
+    by exit 2 out of memory — is that write's memory, never a 503, and the
+    service stays ready. Both ways must be among the levels for every
+    program, or the test says it measured nothing."""
+    if not hasattr(os, "fork"):
+        pytest.skip("needs RLIMIT_DATA in a child (POSIX)")
+    ends = {(b, kib): _real_end(b, kib) for b in BINARIES for kib in _SMALL_LIMITS_KIB}
+    for binary in BINARIES:
+        seen = {ends[(binary, kib)] for kib in _SMALL_LIMITS_KIB}
+        if not {"signal", "exit"} <= seen:
+            pytest.skip(f"{binary} under RLIMIT_DATA {_SMALL_LIMITS_KIB} KiB ends {ends}: "
+                        "this platform's Go runtime does not end both ways at these levels")
+    rig.assert_recovers()
+    struck = 0
+    for binary, cell in cells:
+        for kib in _SMALL_LIMITS_KIB:
+            if ends[(binary, kib)] == "ran":
+                continue
+            _assert_memory(rig, f"{binary} {cell} ulimit {kib}")
+            struck += 1
+    rig.ctl.write_text("", encoding="utf-8")
+    assert struck >= 2 * len(cells), (struck, ends)
+    rig.assert_recovers()
 
 
 def test_a_fault_wins_over_a_memory_end(rig, cells):
@@ -310,10 +401,62 @@ def test_a_fault_wins_over_a_memory_end(rig, cells):
         status, _doc, st, ran = rig.judge()
         assert status == 503 and {("da-guard", "served-values"),
                                   ("da-read", "alertmanager")} <= ran, ran
-        assert all(f["reason"] != "memory_signal" for f in st["tool_fault"]), st
+        assert all(f["reason"] != _lib_tool_fault.MEMORY_END for f in st["tool_fault"]), st
     finally:
         rig.ctl.write_text("", encoding="utf-8")
     rig.assert_recovers()
+
+
+def test_names_mode_of_a_base_tree_with_a_symlink_struck(rig, cells, tmp_path):
+    """A base tree with a symlink runs ``parse-tree --names`` while the tree
+    is written out, before the generator: a SIGKILL there is a 503 naming
+    it (``signalled``) and the service not ready; the Go runtime's own
+    out-of-memory there (SIGSEGV, or exit 2 with its line) is that write's
+    memory, the readiness as it was — not a judgement that ended without a
+    result. A service of its own: a write, no delete, so names mode runs
+    only there."""
+    from _platform_fs import symlink_or_skip  # noqa: PLC0415
+
+    repo = h.init_repo(tmp_path / "repo")
+    base = dict(cases.FIXTURES["clean"])
+    h.commit_tree(repo, base)
+    symlink_or_skip("alpha.yaml", repo / "conf.d" / "link.yml")
+    h.run_git(repo, "add", "-A")
+    h.run_git(repo, "commit", "-q", "-m", "link")
+    commit = h.run_git(repo, "rev-parse", "HEAD")
+    writes = [{"path": "beta.yaml", "content_b64": h.b64(base["beta.yaml"] + "# edited\n")}]
+    svc = h.Service(tmp_path / "svc", repo, bin_dir=tmp_path / "bin",
+                    args=("--max-cache-transfer-bytes", "0"),
+                    env={var: str(rig.shims / n) for n, var in BINARIES.items()})
+
+    def judge(fault: str) -> "tuple[int, dict, dict]":
+        rig.ctl.write_text(f"da-guard parse-tree --names {fault}" if fault else "",
+                           encoding="utf-8")
+        status, doc = svc.validate(commit, writes)
+        _s, st = svc.call("GET", "/v1/status")
+        return status, doc, st
+
+    try:
+        status, doc, st = judge("")
+        # The symlink is judged not a regular file: a verdict, findings.
+        assert status == 200 and doc["result"] in ("pass", "findings"), doc
+        assert st["ready"] is True and st["tool_fault"] is None, st
+        for fault, reason in (("sigkill", "signalled"), ("usage", "stale")):
+            status, doc, st = judge(fault)
+            assert status == 503 and doc["reason"] == "tool_fault", (fault, doc)
+            assert st["ready"] is False, (fault, st)
+            assert {(f["binary"], f["subcommand"], f["reason"]) for f in st["tool_fault"]} \
+                == {("da-guard", "parse-tree", reason)}, (fault, st)
+            status, doc, st = judge("")
+            assert status == 200 and st["ready"] is True and st["tool_fault"] is None, st
+        for fault in ("sigsegv", "oomexit"):
+            status, doc, st = judge(fault)
+            assert status == 200, (fault, doc)
+            assert (doc["result"], doc["reason"]) == ("rejected", "memory"), (fault, doc)
+            assert st["ready"] is True and st["tool_fault"] is None, (fault, st)
+    finally:
+        rig.ctl.write_text("", encoding="utf-8")
+        svc.stop()
 
 
 @pytest.mark.parametrize("fault,reason", [("missing", "not_found"),

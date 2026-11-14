@@ -115,6 +115,30 @@ def test_a_signal_under_the_memory_limit_is_memory(tmp_path, monkeypatch) -> Non
         lpt.run(root, str(fake), 60)
 
 
+def test_exit_2_out_of_memory_is_memory_only_under_the_limit(tmp_path, monkeypatch) -> None:
+    """#3862: a Go runtime that cannot get memory as it starts (before it
+    reads GOTRACEBACK) exits 2 with its own line. Under the memory limit
+    that is the judgement's memory — never asked of the binary (`-h`) as a
+    da-guard older than this tool; without the limit, exit 2 is read as
+    always."""
+    root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
+    probed = tmp_path / "probed"
+    fake = tmp_path / "fake-da-guard"
+    fake.write_text(f"#!/bin/sh\ncase \"$*\" in *' -h') : > '{probed}';; esac\n"
+                    "echo 'fatal error: out of memory allocating heap arena map' >&2\nexit 2\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", True)
+    with pytest.raises(MemoryError, match="ran out of memory"):
+        lpt.run(root, str(fake), 60)
+    assert not probed.exists()
+    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", False)
+    with pytest.raises(lpt.ParseTreeError, match="exited 2") as e:
+        lpt.run(root, str(fake), 60)
+    assert not isinstance(e.value, MemoryError)
+    assert probed.exists()  # without the limit, exit 2 is asked of the binary as before
+
+
 @pytest.mark.parametrize("node, scalar", [
     ({"text": "80", "tag": "!!int", "value": "80"}, True),
     ({"text": "x", "tag": "!!str", "value": None}, True),

@@ -121,6 +121,34 @@ def test_each_run_function_runs_its_program_and_records_its_faults() -> None:
         assert key in fns, f"{key}: the run function is gone; update this guard"
         assert _runs_subprocess(fns[key]), key
         assert _calls(fns[key], "_fault"), f"{key} no longer records a program that did not run"
+        # One judge of a program's end for all three (a signal, or the Go
+        # runtime's own out of memory under the memory limit): not a copy each.
+        assert _calls(fns[key], "end_reason"), \
+            f"{key} no longer asks `_lib_tool_fault.end_reason` how its program ended"
+
+
+def test_end_reason_tells_the_go_runtime_out_of_memory_from_a_fault() -> None:
+    """#3862: under the memory limit, exit 2 with the Go runtime's own
+    out-of-memory line (anywhere in stderr, the line whole) is a memory end;
+    without the limit, or with any other exit 2, it is not this function's
+    to decide (None: the caller reads that exit as always)."""
+    import _lib_tool_fault as tf
+    oom = (b"runtime: out of memory: cannot allocate 4194304-byte block (8 in use)\n"
+           b"fatal error: out of memory\n\ngoroutine 1 [running]:\n")
+    arena = b"fatal error: out of memory allocating heap arena map\n"
+    assert tf.end_reason(2, oom, memory_limited=True) == tf.MEMORY_END
+    assert tf.end_reason(2, arena.decode(), memory_limited=True) == tf.MEMORY_END
+    assert tf.end_reason(2, oom, memory_limited=False) is None  # a command-line tool: unchanged
+    for other in (b"fatal error: concurrent map writes\n", b"panic: boom\n",
+                  b"SIGSEGV: segmentation violation\n",
+                  b"da-read: x.yaml: fatal error: out of memory\n",  # not the line whole
+                  b"fatal error: out of memory, said the file\n", b""):
+        assert tf.end_reason(2, other, memory_limited=True) is None, other
+    assert tf.end_reason(1, oom, memory_limited=True) is None  # throw exits 2
+    assert tf.end_reason(0, oom, memory_limited=True) is None
+    assert tf.end_reason(-6, b"", memory_limited=False) == tf.MEMORY_END  # SIGABRT
+    assert tf.end_reason(-9, oom, memory_limited=True) == "signalled"  # SIGKILL: from outside
+    assert tf.MEMORY_END in tf.REASONS and tf.MEMORY_END not in tf.FAULT_REASONS
 
 
 def test_the_predicate_sees_a_direct_run() -> None:
