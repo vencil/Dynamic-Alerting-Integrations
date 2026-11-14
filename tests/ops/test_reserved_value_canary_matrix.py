@@ -340,18 +340,6 @@ def test_a_threshold_profile_name_is_not_printed(tmp_path):
     _no_canary(text)
 
 
-def test_the_available_profiles_are_listed_through_shown_key(tmp_path):
-    """`; available:` 的每個名字只走 `shown_key`，沒有別的加工：名稱形的照印
-    （鍵 `123`、`true` 也是——reader 把鍵都當文字交出來），其他的印替身。"""
-    receiver = {"receiver": {"type": "webhook", "url": "https://noc.example.com/a"}}
-    files = _files({"cpu_usage_percent": "85", "_routing_profile": "nope"},
-                   **{"_routing_profiles.yaml": {"routing_profiles": {
-                       "p-one": receiver, 123: receiver, True: receiver, "Gold tier": receiver}}})
-    findings, _text = validate_run(tmp_path, files)
-    [f] = [f for f in findings if f["kind"] == "unknown_routing_profile"]
-    assert f["message"].endswith(f"; available: 123, {shown_key('Gold tier')}, p-one, true"), f
-
-
 def test_the_id_of_a_tenant_body_that_is_not_loaded_is_not_printed(tmp_path):
     """`tenants:` 底下 body 是 null 的那一筆不會被載入；那行 WARN（只在 stderr）
     說是哪個檔、什麼形狀，不印它的 id。"""
@@ -394,6 +382,28 @@ def _key(f: dict) -> tuple:
     """tenant-api's `findingKey` (internal/generator/gate.go): what decides
     whether a finding was there before the write."""
     return tuple(f.get(k) for k in ("kind", "tenant", "policy", "file", "field", "message"))
+
+
+def test_an_unknown_profile_finding_does_not_change_with_the_other_profiles(tmp_path):
+    """`unknown_routing_profile` 的訊息只說這筆自己的事：被引用的名字。它不列出別的
+    profile——那會讓一次不相干的新增改掉這筆既有 finding 的訊息，tenant-api 的
+    `findingKey` 就把它當成這次寫入新增的（#3703 第 3 輪）。"""
+    receiver = {"receiver": {"type": "webhook", "url": "https://noc.example.com/a"}}
+
+    def run(sub: str, profiles: dict) -> dict:
+        files = _files({"cpu_usage_percent": "85", "_routing_profile": "nope"},
+                       **{"_routing_profiles.yaml": {"routing_profiles": profiles}})
+        d = tmp_path / sub
+        d.mkdir()
+        findings, _text = validate_run(d, files)
+        [f] = [f for f in findings if f["kind"] == "unknown_routing_profile"]
+        return f
+
+    base = run("base", {"p-one": receiver})
+    new = run("new", {"p-one": receiver, "p-two": receiver, "Gold tier": receiver})
+    assert "references unknown profile 'nope'" in base["message"], base
+    assert "p-one" not in base["message"] and "p-two" not in new["message"], (base, new)
+    assert _key(base) == _key(new), (base, new)
 
 
 def _base_and_new(tmp_path: Path, kind: str, base: dict, new: dict) -> tuple[list, list]:

@@ -46,7 +46,6 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
     TENANT_ROUTING_KEYS,
 )
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
-from _lib_confd import WARN_LIMIT  # noqa: E402  (#3703: the profile names a line lists)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
@@ -1267,17 +1266,9 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
                      f"is not on this tenant's directory chain — a profile is "
                      f"visible only to tenants at its own level or below)"
                      if where else "")
-            # #3703: the name goes through shown_key, so a name that is
-            # not name-like is not printed; what the author can choose from
-            # is — the profiles this tenant's chain defines.
-            names = sorted(visible, key=str)
-            listed = ", ".join(shown_key(n) for n in names[:WARN_LIMIT]) + (
-                f" (+{len(names) - WARN_LIMIT} more)" if len(names) > WARN_LIMIT else "")
-            available = (f"; available: {listed}" if names
-                         else "; no routing profile is defined for this tenant")
             warnings.append(Finding(
                 f"  WARN: {tenant}: _routing_profile references unknown "
-                f"profile '{shown_key(profile_name)}'{extra}{available}",
+                f"profile '{shown_key(profile_name)}'{extra}",
                 kind="unknown_routing_profile", blocks="never", tenant=tenant,
                 field="_routing_profile"))
     return warnings
