@@ -455,7 +455,7 @@ PR-A 的第一版把三態紀律寫進了 Python 端，卻在**輸入邊界**留
 
 **因此監測器需要第三條出口：「已歸因、已接受」（ACCEPTED）。** 它與 CLEAR 的差別是**沒有宣稱比值回到 1.000**；與 FINDINGS 的差別是**不要求任何人再做什麼**；與 INCONCLUSIVE 的差別是**這一夜量得很清楚**——被接受的是結論，不是量不到。
 
-「標記放在哪」與「標記的粒度」兩題已由 [ADR-039](039-bench-acceptance-ledger.md) 決定：repo 內的接受帳本，粒度是「benchmark × 指標 × 上限」，由逐 PR、逐 commit 的兩道 bench 閘門讀取。配對監測不再有關票路徑（§待決 6），所以這條出口只存在於那兩道閘門。換參考版本時帳本怎麼處理、雙峰而量不穩的測試（例如 `BenchmarkIncrementalLoad_1000_OneFileChanged`，見 [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)）要不要獨立一類，兩題列在 ADR-039 §尚未決定。
+「標記放在哪」與「標記的粒度」兩題已由 [ADR-039](039-bench-acceptance-ledger.md) 決定：repo 內的接受帳本，粒度是「benchmark × 指標 × 上限」，由逐 PR、逐 commit 的兩道 bench 閘門讀取。配對監測不再有關票路徑（§待決 6），所以這條出口只存在於那兩道閘門。換參考版本時帳本怎麼處理、雙峰而量不穩的測試（例如 `BenchmarkIncrementalLoad_1000_OneFileChanged`；專門量測三輪判不出，見 [#1497](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1497)）要不要獨立一類，兩題列在 ADR-039 §尚未決定，後者等 bench 閘門以 `timing-replicated` 標出它時決定。
 
 ⚠️ 本節的問題陳述來自 [#1439 的 2026-08-20 歸因紀錄](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1439#issuecomment-5356110529)；上面那組行數與 commit 數即出自該次歸因，不是本節新量的。
 
