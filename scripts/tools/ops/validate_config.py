@@ -2214,19 +2214,24 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
 
     * the root platform file carries one of its keys, under `defaults:` or
       `optional_overrides:`, in any #1231 spelling (the exporter's rule,
-      asked of da-guard). A tenant's or a profile's key adds nothing: one
-      the root file does not declare is already `unread (no_row)`.
+      asked of da-guard), or a retired key whose replacement is one of its
+      keys (#3829; the old key shows the pack, it does not supply the new
+      one). A tenant's or a profile's key adds nothing: one the root file
+      does not declare is already `unread (no_row)`.
     * a tenant's `_metadata.db_type`, as /metrics serves it (served-values:
       a root platform file's `tenants:` entry counts), names it.
 
     The root platform file is the one parse-tree says the root's chain
     selects (`_defaults.yaml` / `_defaults.yml`): a key only a subtree
-    carrier declares reaches no tenant (#1976).
+    carrier declares reaches no tenant (#1976). A tree with no root platform
+    file supplies nothing: a pack a `db_type` shows deployed is named whole.
 
     Advisory only: WARN or PASS, never FAIL — the registry read is this
     tool's, and the rule packs a deployment runs are another release line.
-    A served reading or spelling answer that cannot be had is a WARN saying
-    nothing was checked.
+    A root file that does not read, a served reading or spelling answer that
+    cannot be had, and a file the exporter's load drops (a tenant file: its
+    tenants' `db_type` is not served; the root file: nothing in it is
+    supplied) are each a WARN saying nothing was checked.
     """
     import _registry_lib  # ops/: the registry as the generated module carries it
 
@@ -2234,41 +2239,61 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
         return _make_result("unsupplied_defaults", WARN, [
             f"not checked: whether every default-armed threshold is supplied was not judged ({why})"],
             hint=_UNSUPPLIED_DEFAULTS_NOT_CHECKED_HINT)
-    carrier = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
-    if carrier is None:
-        return _make_result("unsupplied_defaults", PASS,
-                            ["no root _defaults.yaml — nothing to check"])
-    raw = load_confd_file(config_dir, str(carrier), default={})
-    block = raw.get("defaults") if isinstance(raw, dict) else None
-    listed = raw.get("optional_overrides") if isinstance(raw, dict) else None
-    written = sorted({str(k).partition("{")[0] for k in (block if isinstance(block, dict) else {})}
-                     | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
+    # This tool's own data: a failure here is a defect, not a "not checked".
+    registry = _registry_lib.registry_keys(_registry_lib.packaged_registry_doc())
+    armed = _registry_lib.packaged_default_armed()
+    retired = _registry_lib.packaged_retired_key_packs()
     try:
+        carrier = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
+        raw = load_confd_file(config_dir, str(carrier), default={}) if carrier is not None else {}
+        block = raw.get("defaults") if isinstance(raw, dict) else None
+        listed = raw.get("optional_overrides") if isinstance(raw, dict) else None
+        written = sorted(
+            {str(k).partition("{")[0] for k in (block if isinstance(block, dict) else {})}
+            | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
         spell = tv_key_spellings(written)
         served = load_served_tree(config_dir, partial=True)
-        registry = _registry_lib.registry_keys(_registry_lib.packaged_registry_doc())
-        armed = _registry_lib.packaged_default_armed()
-    except (DaGuardError, DaGuardNotFoundError, OSError, YamlFileError, ValueError, KeyError) as exc:
+    except (DaGuardError, DaGuardNotFoundError, OSError, YamlFileError, ParseTreeError,
+            *_INPUT_ERRORS) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
+    dropped = [*served.parse_failed, *(u.file for u in served.unreadable)]
+    if dropped:
+        # A tenant of a dropped file is not served, so its db_type is not
+        # read — a PASS would read as "every tenant checked".
+        return not_checked(f"the exporter's load drops {', '.join(sorted(dropped))}; "
+                           "their tenants are not served")
+    where = carrier.name if carrier is not None else None
     supplied = {spell.canonical(k): k for k in written}
+
+    def pack_of(canonical: str) -> "str | None":
+        """The pack a root-file key shows deployed: its own, or — for a
+        retired key (and its `_critical`) — the pack of its replacement."""
+        if canonical in registry:
+            return registry[canonical]["pack"]
+        base = canonical[:-len("_critical")] if canonical.endswith("_critical") else canonical
+        return retired.get(base)
     # pack -> what shows it is deployed: (root keys as written, tenants)
     seen: dict[str, tuple[set[str], set[str]]] = {}
     for canonical, as_written in supplied.items():
-        pack = registry.get(canonical, {}).get("pack")
+        pack = pack_of(canonical)
         if pack in armed:
             seen.setdefault(pack, (set(), set()))[0].add(as_written)
     for tenant, tv in served.tenants.items():
         meta = tv.values.get("_metadata")
         kinds = meta.get("db_type") if isinstance(meta, dict) else None
         for kind in ([kinds] if isinstance(kinds, str) else kinds if isinstance(kinds, list) else []):
-            if kind in armed:
+            if isinstance(kind, str) and kind in armed:
                 seen.setdefault(kind, (set(), set()))[1].add(tenant)
     judged = [(pack, key) for pack in sorted(seen) for key in armed[pack]]
     missing = [(pack, key) for pack, key in judged if key not in supplied]
     if not missing:
+        if where is None:
+            return _make_result("unsupplied_defaults", PASS, [
+                "no root _defaults.yaml, and no tenant declares a db_type whose pack ships "
+                "an armed threshold — nothing to check"])
         return _make_result("unsupplied_defaults", PASS, [
             f"{len(judged)} default-armed threshold(s) of {len(seen)} deployed pack(s): "
-            f"each is set or listed in {carrier.name}"])
+            f"each is set or listed in {where}"])
 
     def capped(names: "set[str]") -> str:
         ordered = sorted(names)
@@ -2278,14 +2303,15 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
     for pack, key in missing:
         keys, tenants = seen[pack]
         why = "; ".join(
-            ([f"{carrier.name} carries {capped(keys)}"] if keys else [])
+            ([f"{where} carries {capped(keys)}"] if keys else [])
             + ([f"db_type of tenant(s) {capped(tenants)}"] if tenants else []))
         entry = registry[key]
-        details.append(
-            f"unsupplied `{key}` — the {pack} pack ships it armed "
-            f"(platform value {entry['value']} {entry.get('unit', '')}".rstrip()
-            + f"), but {carrier.name} neither sets it under `defaults:` nor lists it "
-            f"under `optional_overrides:` — {pack} is deployed here: {why}")
+        value = f"{entry['value']} {entry.get('unit', '')}".rstrip()
+        lacks = (f"{where} neither sets it under `defaults:` nor lists it under "
+                 "`optional_overrides:`" if where is not None
+                 else "this tree has no root _defaults.yaml to set it in")
+        details.append(f"unsupplied `{key}` — the {pack} pack ships it armed (platform value "
+                       f"{value}), but {lacks} — {pack} is deployed here: {why}")
     return _make_result("unsupplied_defaults", WARN, details)
 
 

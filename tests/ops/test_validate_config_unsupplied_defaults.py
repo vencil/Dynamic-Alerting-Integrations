@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -44,6 +45,17 @@ def _defaults(keys, listed=()) -> str:
     if listed:
         text += "optional_overrides:\n" + "".join(f"  - {k}\n" for k in listed)
     return text or "defaults: {}\n"
+
+
+def _cli_row(tree: str) -> dict:
+    """The row as the whole tool reports it (`--json`): a tree with a file
+    that does not read is judged through `main`'s reader, not a bare call."""
+    r = subprocess.run([sys.executable, str(_REPO / "scripts/tools/ops/validate_config.py"),
+                        "--config-dir", tree, "--json"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+    rows = [c for c in json.loads(r.stdout) if c["check"] == "unsupplied_defaults"]
+    assert len(rows) == 1, r.stdout + r.stderr
+    return rows[0]
 
 
 def _named(result) -> list[str]:
@@ -127,7 +139,9 @@ def test_a_db_type_a_root_platform_file_writes_for_the_tenant_counts(tmp_path):
 
 
 def test_a_db_type_with_no_armed_key_names_nothing(tmp_path):
-    kind = next(k for k in sorted(EXPORTER_PRESENCE) if k not in _ARMED)
+    kind = next((k for k in sorted(EXPORTER_PRESENCE) if k not in _ARMED), None)
+    if kind is None:
+        pytest.skip("every db_type's pack ships an armed key")
     r = vc.check_unsupplied_defaults(_tree(tmp_path, {
         "_defaults.yaml": "defaults: {}\n",
         "ta.yaml": f"tenants:\n  ta:\n    _metadata:\n      db_type: {kind}\n"}))
@@ -137,8 +151,10 @@ def test_a_db_type_with_no_armed_key_names_nothing(tmp_path):
 def test_a_retired_spelling_in_the_root_file_is_evidence_of_its_pack(tmp_path):
     """root 只剩舊拼法（#1231 的別名）：照 exporter 的正規拼法歸 pack（問 da-guard），
     該 pack 算有部署。"""
-    old, new = next((o, n) for o, n in lib.DEPRECATED_KEY_ALIASES.items()
-                    if _KEYS[n]["pack"] in _ARMED)
+    old, new = next(((o, n) for o, n in lib.DEPRECATED_KEY_ALIASES.items()
+                     if _KEYS[n]["pack"] in _ARMED), (None, None))
+    if old is None:
+        pytest.skip("the registry has no deprecated alias onto a pack with an armed key")
     pack = _KEYS[new]["pack"]
     r = vc.check_unsupplied_defaults(_tree(tmp_path, {
         "_defaults.yaml": f"optional_overrides:\n  - {old}\n"}))
@@ -173,10 +189,63 @@ def test_a_key_only_a_subtree_carrier_declares_does_not_supply_it(tmp_path):
     assert _named(r) == [first], r
 
 
-def test_no_root_platform_file_is_nothing_to_check(tmp_path):
+def test_no_root_platform_file_and_no_db_type_is_nothing_to_check(tmp_path):
     r = vc.check_unsupplied_defaults(_tree(tmp_path, {"ta.yaml": "tenants:\n  ta: {}\n"}))
     assert r["status"] == vc.PASS, r
-    assert r["details"] == ["no root _defaults.yaml — nothing to check"]
+    assert r["details"] == ["no root _defaults.yaml, and no tenant declares a db_type whose "
+                            "pack ships an armed threshold — nothing to check"]
+
+
+@pytest.mark.parametrize("files", [{}, {"team/_defaults.yaml": "defaults: {}\n"}],
+                         ids=["no-carrier", "subtree-carrier-only"])
+def test_no_root_platform_file_supplies_nothing_to_a_declared_pack(tmp_path, files):
+    """沒有 root 平台檔、租戶宣告了 db_type：該 pack 的鍵一個都沒供給，全數點名，不是 PASS。"""
+    pack = _DB_PACKS[0]
+    r = vc.check_unsupplied_defaults(_tree(tmp_path, {
+        **files, "ta.yaml": f"tenants:\n  ta:\n    _metadata:\n      db_type: {pack}\n"}))
+    assert r["status"] == vc.WARN, r
+    assert _named(r) == _ARMED[pack], r
+    assert all("this tree has no root _defaults.yaml to set it in" in d for d in r["details"])
+
+
+def test_a_retired_key_in_the_root_file_is_evidence_of_its_replacements_pack(tmp_path):
+    """root 只剩退役的鍵（#3829）：它顯示該 pack 有部署，但不算供給了替代鍵（單位可能不同）。"""
+    retired = lib.retired_key_packs(_DOC)
+    old, pack = next(((o, p) for o, p in retired.items() if p in _ARMED), (None, None))
+    if old is None:
+        pytest.skip("the registry has no retired key replaced by a key of an armed pack")
+    for written in (old, old + "_critical"):
+        r = vc.check_unsupplied_defaults(_tree(tmp_path / written, {
+            "_defaults.yaml": f"optional_overrides:\n  - {written}\n"}))
+        assert _named(r) == _ARMED[pack], (written, r)
+        assert f"_defaults.yaml carries {written}" in r["details"][0]
+
+
+@pytest.mark.parametrize("root", ["defaults: [unclosed\n", "- a\n- b\n", "defaults:\n  k: 1\n  k: 2\n"],
+                         ids=["syntax", "top-level-list", "duplicate-key"])
+def test_a_root_file_that_does_not_read_is_not_checked_never_a_fail(tmp_path, root):
+    """root 平台檔讀不了：這一列說沒判（WARN），不是 FAIL——讀不了是 yaml_syntax 那列的事。"""
+    pack = _DB_PACKS[0]
+    tree = _tree(tmp_path, {"_defaults.yaml": root,
+                            "ta.yaml": f"tenants:\n  ta:\n    _metadata:\n      db_type: {pack}\n"})
+    r = _cli_row(tree)
+    assert r["status"] == vc.WARN, r
+    assert r["details"][0].startswith("not checked: "), r
+
+
+@pytest.mark.parametrize("files", [
+    {"_defaults.yaml": "defaults: {}\n", "ta.yaml": "tenants:\n  ta: {}\n",
+     "tb.yaml": "tenants:\n  tb:\n    _metadata:\n      db_type: %s\n    x: [unclosed\n"},
+    {"_defaults.yaml": "defaults: 5\n",
+     "ta.yaml": "tenants:\n  ta:\n    _metadata:\n      db_type: %s\n"},
+], ids=["tenant-file", "root-file"])
+def test_a_file_the_load_drops_is_not_checked_not_a_pass(tmp_path, files):
+    """exporter 載入時丟掉的檔：租戶檔的 db_type 讀不到、root 檔則什麼都沒供給 → 說沒判。"""
+    pack = _DB_PACKS[0]
+    r = _cli_row(_tree(tmp_path, {
+        rel: (text % pack if "%s" in text else text) for rel, text in files.items()}))
+    assert r["status"] == vc.WARN, r
+    assert r["details"][0].startswith("not checked: ") and "load drops" in r["details"][0], r
 
 
 def test_a_da_guard_that_cannot_answer_is_not_checked_never_a_pass(tmp_path, monkeypatch):
@@ -192,11 +261,20 @@ def test_a_da_guard_that_cannot_answer_is_not_checked_never_a_pass(tmp_path, mon
     assert r["hint"] == vc._UNSUPPLIED_DEFAULTS_NOT_CHECKED_HINT
 
 
-def test_a_defect_of_this_tool_is_not_swallowed(tmp_path, monkeypatch):
+@pytest.mark.parametrize("where,exc", [
+    ("load_served_tree", AttributeError("a bug")),
+    ("_registry", KeyError("DEFAULT_ARMED_KEYS")),
+    ("_registry", ValueError("a broken generated module")),
+])
+def test_a_defect_of_this_tool_is_not_swallowed(tmp_path, monkeypatch, where, exc):
+    """這支工具自己的缺陷（生成模組壞了、程式錯）不包成「not checked」：那句 hint 會叫人去修 da-guard。"""
     def defect(*_a, **_k):
-        raise AttributeError("a bug")
-    monkeypatch.setattr(vc, "load_served_tree", defect)
-    with pytest.raises(AttributeError):
+        raise exc
+    if where == "_registry":
+        monkeypatch.setattr(lib, "packaged_default_armed", defect)
+    else:
+        monkeypatch.setattr(vc, where, defect)
+    with pytest.raises(type(exc)):
         vc.check_unsupplied_defaults(_tree(tmp_path, {"_defaults.yaml": _defaults(_ARMED[_MULTI[0]])}))
 
 
@@ -220,6 +298,10 @@ def test_the_generated_table_is_the_registrys_armed_set():
     assert lib.packaged_default_armed() == {p: tuple(k) for p, k in _ARMED.items()}
     assert sorted(k for keys in _ARMED.values() for k in keys) == sorted(
         k for k, e in _KEYS.items() if lib.is_chart_armed(e))
+    assert lib.packaged_retired_key_packs() == lib.retired_key_packs(_DOC)
+    assert lib.retired_key_packs(_DOC) == {
+        old: _KEYS[e["replaced_by"]]["pack"] for old, e in _DOC["retired_keys"].items()
+        if e.get("replaced_by")}
 
 
 def test_every_db_type_is_a_registry_pack():

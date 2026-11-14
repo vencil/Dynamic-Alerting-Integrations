@@ -759,7 +759,27 @@ def render_rule_packs_module(doc: dict) -> str:
     armed = pprint.pformat(default_armed_by_pack(doc), indent=1, width=100,
                            sort_dicts=False)
     return (_RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
-            + _DEFAULT_ARMED_COMMENT + "DEFAULT_ARMED_KEYS = " + armed + "\n")
+            + _DEFAULT_ARMED_COMMENT + "DEFAULT_ARMED_KEYS = " + armed + "\n"
+            + _RETIRED_PACKS_COMMENT + "RETIRED_KEY_PACKS = "
+            + pprint.pformat(retired_key_packs(doc), indent=1, width=100, sort_dicts=False)
+            + "\n")
+
+
+#: Above the second generated constant (#3830).
+_RETIRED_PACKS_COMMENT = (
+    "\n# Retired threshold key -> the pack of the key that replaces it (a key\n"
+    "# retired with no replacement is absent; `<old>_critical` follows its\n"
+    "# base). A tree still carrying the old key deploys that pack (#3830).\n")
+
+
+def retired_key_packs(doc: dict) -> dict[str, str]:
+    """Each `retired_keys` entry that names a replacement → the pack of that
+    replacement — DERIVED, never authored. `<old>_critical` is not listed:
+    it follows its base, as the retirement itself does."""
+    keys = registry_keys(doc)
+    return {old: keys[entry["replaced_by"]]["pack"]
+            for old, entry in (doc.get("retired_keys") or {}).items()
+            if entry.get("replaced_by") in keys}
 
 
 #: Above the generated constant: RULE_PACKS has no arming field, and the
@@ -786,6 +806,12 @@ def packaged_default_armed() -> dict[str, tuple[str, ...]]:
     import runpy  # noqa: PLC0415  (a data module)
     armed = runpy.run_path(RULE_PACKS_MODULE_PATH)["DEFAULT_ARMED_KEYS"]
     return {pack: tuple(keys) for pack, keys in armed.items()}
+
+
+def packaged_retired_key_packs() -> dict[str, str]:
+    """`retired_key_packs` as the generated module carries it."""
+    import runpy  # noqa: PLC0415  (a data module)
+    return dict(runpy.run_path(RULE_PACKS_MODULE_PATH)["RETIRED_KEY_PACKS"])
 
 
 def packaged_registry_doc() -> dict:
