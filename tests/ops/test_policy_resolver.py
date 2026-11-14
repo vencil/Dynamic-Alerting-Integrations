@@ -47,7 +47,7 @@ def _tree(tmp_path, routing):
     conf = tmp_path / "conf.d"
     conf.mkdir()
     write_yaml(str(conf), "t1.yaml", make_tenant_yaml(
-        "t1", keys={"mysql_connections": 5}, routing=routing))
+        "t1", keys={"mysql_connection_usage_percent": 5}, routing=routing))
     return conf
 
 
