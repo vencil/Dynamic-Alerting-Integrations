@@ -315,11 +315,11 @@ def test_release_checks_the_chart_defaults_before_pushing_it() -> None:
     import yaml
     wf = yaml.safe_load((_REPO / ".github/workflows/release.yaml").read_text(encoding="utf-8"))
     runs = [step.get("run") or "" for step in wf["jobs"]["release-tenant-api"]["steps"]]
-    names = [step.get("name") or "" for step in wf["jobs"]["release-tenant-api"]["steps"]]
     check = [i for i, r in enumerate(runs)
              if "check_image_refs_resolve.py --scope rendered --chart helm/tenant-api" in r]
-    push = [i for i, r in enumerate(runs) if "helm push" in r]
-    promote = [i for i, n in enumerate(names) if n.startswith("Promote scanned digest")]
+    # #3848: promotion and `helm push` run inside release_publish.py.
+    push = [i for i, r in enumerate(runs) if "release_publish.py chart" in r]
+    promote = [i for i, r in enumerate(runs) if "release_publish.py image" in r]
     assert len(check) == 1 and len(push) == 1 and len(promote) == 1, (check, push, promote)
     assert promote[0] < check[0] < push[0]
     assert "with_da_crdecode.sh" in runs[check[0]]

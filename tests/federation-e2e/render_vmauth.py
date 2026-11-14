@@ -43,8 +43,8 @@ def main(chart: Path, out: Path) -> None:
     values = yaml.safe_load((chart / "values.yaml").read_text(encoding="utf-8"))
     consumers = values["auth"]["consumers"]
     # Secret names are only references here; the env vars carry the values.
-    override = {"auth": {"mode": "enforce", "consumers": [
-        {**c, "existingSecret": f"e2e-{c['name']}"} for c in consumers]}}
+    override = {"auth": {"mode": "enforce", "existingSecrets": {
+        c["name"]: f"e2e-{c['name']}" for c in consumers}}}
     override_file = out / "victorialogs-values.yaml"
     override_file.write_text(yaml.safe_dump(override), encoding="utf-8")
     rendered = subprocess.run(

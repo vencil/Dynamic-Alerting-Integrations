@@ -28,7 +28,8 @@ type: application
 # 0.11.0 — #1595: metrics.enabled now defaults to TRUE (renders internal_metrics + prometheus_exporter, the -metrics Service and the pod port), so the Vector alerts can fire out of the box. New `tenant_eligible` filter between demux and tenant_project: non-federation_audit rows are dropped there, so tenant_project's discard counter carries only audit rows it could not project (intentional) or VRL runtime errors (unintentional). tenant_project's own non-audit abort stays as defense in depth. ⚠️ BEHAVIOUR CHANGE: installs that relied on the old default now expose :9598 and render the vector-metrics Service; set metrics.enabled=false to opt out (and lose the Vector alerts)
 # 0.12.0 — #1295: victorialogs.auth {username, existingSecret}. With a Secret named, both store sinks (0:0 and every tenant projection) send HTTP basic auth to the store's vmauth; the password is a Secret-backed env var interpolated into the sink config. No Secret = no change (the default config still contains no `$`).
 # 0.12.1 — #3715: projectionGate.image.tag 0.1.1 -> 0.1.2 (projection-gate/Dockerfile FROM alpine 3.23.6 -> 3.24.4). With no digest set an unchanged tag means no rollout. PATCH: no new value keys. ⚠️ REQUIRES ACTION when tenantProjections is set: rebuild projection-gate/Dockerfile and push it as 0.1.2 BEFORE upgrading, or the gate init-container cannot pull and Vector does not start on that node
-version: 0.12.1
+# 0.12.2 — #3847: README only (it ships in the package): the store-side Secret is now named in VictoriaLogs' `auth.existingSecrets.vector`. No template or value change
+version: 0.12.2
 # appVersion: pinned Vector release — MUST equal values.yaml `image.tag`'s
 # release component (the tag adds a `-distroless-libc` variant suffix) and the
 # CLI pinned in ci.yml / .devcontainer/install-vector.sh. Bound by
