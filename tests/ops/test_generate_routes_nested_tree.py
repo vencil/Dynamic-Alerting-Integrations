@@ -408,7 +408,7 @@ def test_nested_platform_tenants_block_is_named_not_read(tmp_path):
 # ── the other readers of the same tree ──────────────────────────────────
 
 
-def test_validate_config_schema_row_fails_on_a_tree_error(tmp_path):
+def test_validate_config_routes_row_fails_on_a_tree_error(tmp_path):
     d = _write(tmp_path / "conf.d", {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n" + _EMAIL_RD,
         "team/_defaults.yaml": "_routing_enforced:\n  enabled: true\n",
@@ -416,8 +416,9 @@ def test_validate_config_schema_row_fails_on_a_tree_error(tmp_path):
     })
     res = subprocess.run([sys.executable, "-s", str(_VC), "--config-dir", str(d)],
                          capture_output=True, text=True, encoding="utf-8", timeout=300)
-    assert res.returncode == EXIT_VIOLATION, (res.stdout, res.stderr)
-    assert "ERROR (routing tree): team/_defaults.yaml: _routing_enforced" in res.stdout
+    # The routes row is `--validate`, which refuses the tree's shape at rc 2.
+    assert res.returncode == EXIT_CALLER_ERROR, (res.stdout, res.stderr)
+    assert "team/_defaults.yaml: _routing_enforced is read only at the conf.d root" in res.stdout
 
 
 def test_routing_profiles_lint_reads_the_tree(tmp_path):

@@ -15,7 +15,7 @@ ADR-036 步驟 4 讓產生器改讀 yaml.v3（`da-guard parse-tree`）之後，�
   tests/shared/test_severity_dedup_vocabulary_parity.py）。
 * 拒收＝所有模式（`--output-alertmanager`（含 `-o`、stdout、`--dry-run`）、`--output-configmap`、`--apply`、`--validate`、
   `--strict`）rc 1、不寫出、不套用，走 `tree_refusal` 那一條路；validate-config 的
-  schema 列 FAIL。
+  routes 列 FAIL。
 * 租戶的 `_routing_profile` 只收 profile 名稱（字串）或 null（#3269）：mapping（例如帶時間窗
   的 `{default: p1, overrides: [...]}`）、數字、布林、list 一律拒收；過去整個值被靜默略過，
   租戶落回預設路由。
@@ -295,9 +295,9 @@ def test_tree_refusal_refuses_it_for_every_consumer(tmp_path, name):
 
 
 @pytest.mark.parametrize("name", sorted(_QUOTED))
-def test_validate_config_schema_row_fails(tmp_path, name):
+def test_validate_config_routes_row_fails(tmp_path, name):
     d = _write(tmp_path, FIELDS[name][0](_QUOTED[name]))
-    row = vc.check_schema(str(d))
+    row = vc.check_routes(str(d))
     assert row["status"] == vc.FAIL, row
     assert any("ERROR (field type):" in m for m in row["details"]), row
 

@@ -591,9 +591,8 @@ def nested_yaml_warning(
     # tenant_uniqueness recursively in the same run that prints this for its
     # routing reader — so a sentence about the whole output was false there.
     # ⛔ No "run a recursive reader (e.g. validate_config)" advice (#1652):
-    # validate_config's schema / routes / policy / policy_dsl rows go through
-    # flat readers themselves, so that pointer sent the operator from one
-    # flat read to another. Naming which rows ARE recursive here would be a
+    # validate_config has had rows that go through flat readers themselves,
+    # so that pointer sent the operator from one flat read to another. Naming which rows ARE recursive here would be a
     # second copy of a fact that lives in validate_config and drifts.
     # ⛔ Self-contained on purpose (#1714): this sentence used to end with a
     # ticket number that belongs to an unrelated topic, so an operator who
