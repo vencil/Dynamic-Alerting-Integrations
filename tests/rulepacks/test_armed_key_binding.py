@@ -40,6 +40,8 @@ _FIRING = 'count by(alertname, tenant) (ALERTS{{alertstate="firing", alertname="
 _PENDING = 'count by(alertname, tenant) (ALERTS{{alertstate="pending", alertname="{alert}"}})'
 _DURATION = re.compile(r"(\d+)([smh])")
 _UNIT = {"s": 1, "m": 60, "h": 3600}
+#: The tenant a series belongs to; Prometheus accepts spaces around `=`.
+_TENANT_LABEL = re.compile(r'(?:tenant|namespace)\s*=\s*"([^"]*)"')
 #: A threshold no observed value crosses, in either direction.
 _FAR = 1e18
 
@@ -121,6 +123,15 @@ def _promtool(path: Path) -> subprocess.CompletedProcess:
                           encoding="utf-8", errors="replace", timeout=120)
 
 
+def _is_expectation_mismatch(output: str, alert: str) -> bool:
+    """promtool's report of an unmet expectation on *alert*'s `ALERTS` query —
+    not a file it could not parse, nor a rule file it did not find."""
+    if "no file match pattern" in output:
+        return False
+    return re.search(r'expr: .*ALERTS\{[^\n]*alertname=\\"' + re.escape(alert)
+                     + r'\\"[^\n]*\n\s+exp: [^\n]*\n\s+got: ', output) is not None
+
+
 def _with_threshold(key: str, value: float, tmp_path: Path) -> Path:
     """This key's test with its one threshold series set to *value* throughout."""
     doc = yaml.safe_load(_path(key).read_text(encoding="utf-8"))
@@ -155,7 +166,7 @@ def test_the_file_loads_the_real_pack_for_one_tenant(key):
     assert doc["rule_files"] == [f"../../{pack}"], doc["rule_files"]
     assert len(doc["tests"]) == 1, "one test group: the same tenant, below then above"
     tenants = {t for s in doc["tests"][0]["input_series"]
-               for t in re.findall(r'(?:tenant|namespace)="([^"]*)"', s["series"])}
+               for t in _TENANT_LABEL.findall(s["series"])}
     assert len(tenants) == 1, f"every input series belongs to one tenant, found {sorted(tenants)}"
 
 
@@ -206,8 +217,37 @@ def test_moving_the_threshold_turns_it_red(key, far, tmp_path):
     另一個讓它從頭就響（打掉「門檻下方不響」的期望）。哪個極端是哪一邊取決於告警的比較
     方向，這裡不需要知道——兩邊都得紅。"""
     r = _promtool(_with_threshold(key, far, tmp_path))
-    # A failed expectation, not a file promtool could not load.
-    assert r.returncode == 0 or "FAILED" in r.stdout + r.stderr, r.stdout + r.stderr
+    # A failed expectation on the bound alert — promtool prints `FAILED:` for
+    # a file it cannot parse or a rule file it cannot find as well, so the
+    # evidence is the alert's own `expr … exp: … got: …` block.
+    out = r.stdout + r.stderr
+    group = yaml.safe_load(_path(key).read_text(encoding="utf-8"))["tests"][0]
+    alert, _ = _bound_alert(key, group)
+    assert r.returncode == 0 or _is_expectation_mismatch(out, alert), out
     assert r.returncode != 0, (
         f"{_path(key).name} still passes with the {key} threshold at {far}: one of its "
         "expectations (firing, or silent below the threshold) does not depend on the threshold")
+
+
+def test_a_load_error_is_not_an_expectation_mismatch(tmp_path):
+    """重播的失敗要是「期望不符」：promtool 對解析不了的檔、找不到的規則檔也印 `FAILED:`。"""
+    key = _ARMED[0]
+    alert, _ = _bound_alert(key, yaml.safe_load(_path(key).read_text(encoding="utf-8"))["tests"][0])
+    replay = _with_threshold(key, _FAR, tmp_path)
+    assert _is_expectation_mismatch((lambda r: r.stdout + r.stderr)(_promtool(replay)), alert)
+    broken = tmp_path / "broken_test.yaml"
+    broken.write_text("rule_files:\n  - x.yaml\ntests: [\n", encoding="utf-8")
+    r = _promtool(broken)
+    assert r.returncode != 0 and not _is_expectation_mismatch(r.stdout + r.stderr, alert)
+    doc = yaml.safe_load(replay.read_text(encoding="utf-8"))
+    doc["rule_files"] = [str(tmp_path / "no-such-pack.yaml")]
+    norule = tmp_path / "norule_test.yaml"
+    norule.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
+    r = _promtool(norule)
+    assert r.returncode != 0 and not _is_expectation_mismatch(r.stdout + r.stderr, alert)
+
+
+def test_a_tenant_label_written_with_spaces_is_still_a_tenant():
+    """`tenant = "other"` 是合法的 selector 寫法：單一 tenant 的檢查要認得。"""
+    series = ['m{tenant="t-armed"}', 'm{tenant = "other", instance="db-1"}', 'm{namespace= "db-x"}']
+    assert {t for s in series for t in _TENANT_LABEL.findall(s)} == {"t-armed", "other", "db-x"}

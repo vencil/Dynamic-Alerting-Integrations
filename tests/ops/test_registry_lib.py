@@ -1687,9 +1687,9 @@ def test_tenant_declared_foot_is_the_stub_block_as_comment_text() -> None:
 
 # ── D-A A2a: validation (what a shipped value rests on) ─────────────────────
 
-def _entry(value=80, **validation):
+def _entry(value=80, unit="%", **validation):
     return {"arming": "default", "portability": "portable", "tier": "defaults",
-            "value": value, "validation": validation or _vendor(value)}
+            "value": value, "unit": unit, "validation": validation or _vendor(value)}
 
 
 def _src(org, value, **extra):
@@ -1851,3 +1851,23 @@ def test_the_schema_and_the_gate_refuse_the_same_shapes(name, validation):
     doc["keys"][key]["validation"] = validation
     assert list(jsonschema.Draft7Validator(schema).iter_errors(doc)), name
     assert _problems(_entry(80, **validation)), name
+
+
+@pytest.mark.parametrize("unit,quote,ok", [
+    ("%", "> 0.3", True),
+    ("% of max_connections", "> .3", True),
+    ("seconds", "lag > 0.3 seconds", False),
+    ("count", "> 0.3", False),
+    ("seconds", "lag > 30", True),
+    ("seconds", "lag > -30", False),
+    ("seconds", "lag > 3e1", True),
+    ("seconds", "window[5m] - 30", True),
+    ("seconds", "(lag)-30 > 0", True),
+    ("seconds", "lag > 300", False),
+], ids=["percent-ratio", "percent-of-ratio", "seconds-not-a-ratio", "count-not-a-ratio",
+        "plain", "negative-is-not-the-value", "exponent", "minus-between-operands",
+        "minus-after-paren", "longer-number"])
+def test_a_quote_states_the_value_in_the_keys_own_unit(unit, quote, ok):
+    """比值（`0.3` 對 30）只在百分比單位成立；帶號與指數是同一個數的一部分。"""
+    entry = _entry(30, unit, basis="vendor", sources=[{**_src("a", 30), "quote": quote}])
+    assert (_problems(entry) == []) is ok, _problems(entry)

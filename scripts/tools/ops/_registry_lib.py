@@ -615,14 +615,22 @@ def _number(v: Any) -> bool:
 
 
 _URL_RE = re.compile(r"https://\S+")
-_NUMBER_TOKEN_RE = re.compile(r"\d*\.?\d+")
+#: A whole number as a source writes it: its sign (unless the `-` is a minus
+#: between two operands, `a-30` / `)-30`) and its exponent stay part of it,
+#: so `> -30` is -30 and `3e1` is 30 — neither states a plain 30 by accident.
+_NUMBER_TOKEN_RE = re.compile(r"(?<![\w)\].])[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 
 
-def _quote_states(value: float, quote: str) -> bool:
-    """Whether *quote* carries *value*: the number itself, or — for a source
-    that writes a percentage as a ratio (`> 0.8`, `> .95`) — a hundredth of it."""
+def _quote_states(value: float, quote: str, unit: Any = None) -> bool:
+    """Whether *quote* carries *value*: the number itself, or — for a
+    percentage key only, where a source may write the ratio (`> 0.8`,
+    `> .95`) — a hundredth of it. A seconds key is never read as a ratio:
+    `lag > 0.3` does not state 30."""
     numbers = {float(t) for t in _NUMBER_TOKEN_RE.findall(quote)}
-    return any(abs(n - c) < 1e-9 for n in numbers for c in (value, value / 100))
+    wanted = [value]
+    if isinstance(unit, str) and unit.strip().startswith("%"):
+        wanted.append(value / 100)
+    return any(abs(n - c) < 1e-9 for n in numbers for c in wanted)
 
 
 def _same_page(url: str) -> str:
@@ -638,7 +646,7 @@ def validation_problems(key: str, entry: dict) -> list[str]:
     - every source is ``{org, url, quote, value}`` (+ optional ``tier``, the
       severity the source alerts at): an https url, a one-line quote, a
       finite number in this key's unit, and the quote carries that number
-      (as written, or as a ratio: `> 0.8` for 80);
+      (as written, or — for a `%` key only — as a ratio: `> 0.8` for 80);
     - ``vendor``: one source, and its value IS the registry value;
     - ``consensus``: two or more sources, no organisation or url twice, and
       the registry value lies between the smallest and the largest source
@@ -680,7 +688,8 @@ def validation_problems(key: str, entry: dict) -> list[str]:
                        "key's unit")
         else:
             values.append(float(s["value"]))
-            if isinstance(s["quote"], str) and not _quote_states(float(s["value"]), s["quote"]):
+            if isinstance(s["quote"], str) and not _quote_states(
+                    float(s["value"]), s["quote"], entry.get("unit")):
                 out.append(
                     f"{key!r} {where}.quote does not carry its value "
                     f"{s['value']} — quote the line that states the number")
