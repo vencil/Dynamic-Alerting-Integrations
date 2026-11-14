@@ -360,7 +360,7 @@ class RuntimeAuditor:
         return declared
 
     def _load_runtime(self) -> Optional[dict]:
-        if self.args.runtime_json:
+        if self.args.runtime_json is not None:  # '' is given: refused, named (#3797)
             # #3415 / #3445: the path and the content judged by the lib —
             # never cut, the flag and the path named (content that was not
             # UTF-8 was a traceback).

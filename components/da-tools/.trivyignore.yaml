@@ -1,0 +1,43 @@
+# Trivy waiver register — bundled amtool binary only.
+#
+# da-tools ships `amtool`, copied verbatim from the Alertmanager release image
+# pinned in app/Dockerfile (`COPY --from=prom/alertmanager:...@sha256:...`).
+# A finding in that binary cannot be cleared by a first-party dependency bump —
+# only by moving the Alertmanager pin (tests/ops/test_da_tools_amtool_pin_parity.py
+# keeps it equal to the deployed Alertmanager). First-party Go in this image
+# (da-guard, da-crdecode, da-read, ...) is NOT covered: every entry is scoped
+# with `paths:` to usr/local/bin/amtool, so the same CVE in any other binary
+# still fails the gate.
+#
+# EVIDENCE and GOVERNANCE rules are the ones written in
+# components/recipe-preview/.trivyignore.yaml (two independent kinds of
+# evidence, weakest justification the evidence supports, no pre-emptive
+# entries, re-validate when the pin moves or an entry expires) — they are not
+# repeated here. Required fields are enforced by
+# tests/ops/test_nightly_scan_matrix_drift.py.
+#
+# Evidence (1), govulncheck binary mode against the pinned binary, is committed
+# alongside as ./amtool.openvex.json. Regenerate after any Alertmanager re-pin:
+#   cid=$(docker create <the COPY --from ref in app/Dockerfile>)
+#   docker cp "$cid:/bin/amtool" /tmp/amtool
+#   docker rm "$cid"
+#   govulncheck -mode binary -format openvex /tmp/amtool \
+#     > components/da-tools/amtool.openvex.json
+# Evidence (2), symbol presence in the same binary:
+#   go tool nm /tmp/amtool | grep -c '<vulnerable package path>'
+#   rm /tmp/amtool
+
+vulnerabilities:
+  - id: CVE-2026-78661
+    paths:
+      - usr/local/bin/amtool
+    statement: >-
+      golang.org/x/net/html (GO-2026-6860). amtool from Alertmanager v0.34.2
+      links x/net v0.60.0 but none of x/net/html: govulncheck binary mode
+      reports not_affected (amtool.openvex.json) and `go tool nm` finds 0
+      golang.org/x/net/html symbols, on both linux/amd64 and linux/arm64.
+      Alertmanager v0.35.0 still ships x/net v0.61.0, so a re-pin does not
+      clear it. Lever at expiry: re-pin once upstream ships x/net >= 0.62.0,
+      else re-run both checks before extending.
+    justification: vulnerable_code_not_present
+    expired_at: 2027-02-12

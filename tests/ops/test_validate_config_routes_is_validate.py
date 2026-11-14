@@ -80,6 +80,15 @@ CASES = {
         {"_defaults.yaml": _DEFAULTS,
          "t-a.yaml": _TENANT + "    cpu_usage_precent: \"85\"\n" + _WEBHOOK},
         None, "key verdict:", 1, 1),
+    # #3873: the key verdict's own cases, now that no other row reports it —
+    # a warning alone passes, a key no root platform file lets it judge fails.
+    "key-warning-only": (
+        {"_defaults.yaml": _DEFAULTS,
+         "t-a.yaml": _TENANT + "    cpu_usage_precent: disable\n" + _WEBHOOK},
+        None, "WARN: key verdict:", 0, 0),
+    "key-undecidable": (
+        {"t-a.yaml": _TENANT + _WEBHOOK},
+        None, "cannot be judged (undecidable)", 1, 1),
     "unreadable-tenant-file": (
         {"_defaults.yaml": _DEFAULTS, "t-a.yaml": _TENANT + _WEBHOOK,
          "t-b.yaml": "tenants:\n  t-b: [1\n"},
@@ -118,6 +127,13 @@ def test_routes_row_is_generate_routes_validate(tmp_path, case, strict):
 
     gen = _run(_GENERATE, "--config-dir", str(conf), "--validate", *flags)
     vc = _run(_VALIDATE, "--config-dir", str(conf), "--json", *flags)
+    if case == "policy-unusable":
+        # #3797: --policy is judged before any row runs, in both tools, by the
+        # one resolver: the same rc 2 and the same line, no routes row (#3617).
+        assert gen.returncode == vc.returncode == 2, (gen.stderr, vc.stdout, vc.stderr)
+        assert vc.stdout == ""
+        assert expected in gen.stdout + gen.stderr and expected in vc.stderr
+        return
     (row,) = [r for r in json.loads(vc.stdout) if r["check"] == "routes"]
     where = (gen.returncode, gen.stdout, gen.stderr, row)
 
@@ -128,10 +144,8 @@ def test_routes_row_is_generate_routes_validate(tmp_path, case, strict):
     # Both sides judged this tree: the line the case is about is in each.
     assert expected in gen.stdout + gen.stderr, where
     assert any(expected in d for d in row["details"]), where
-    # The row is that run. An unusable --policy is the one row written from
-    # the error itself (the caller-error row names the flag's value once).
-    if case != "policy-unusable":
-        assert sorted(d.rstrip() for d in row["details"]) == _lines(gen.stdout + gen.stderr), where
+    # The row is that run.
+    assert sorted(d.rstrip() for d in row["details"]) == _lines(gen.stdout + gen.stderr), where
     # validate-config can only be at 0 when the row is not FAIL.
     assert vc.returncode != 0 or row["status"] != "fail", where
 

@@ -174,7 +174,7 @@ da-guard 新增子命令 `parse-tree`，輸入一個 conf.d 目錄，輸出一�
 {"path": "team/t2.yaml", "depth": 1, "class": "tenant", "tenant_named": "t2", "defaults_document": false, "config_extension": true, "readers": ["exporter", "generator"], "not_read": null, "role": "config", "problem": null, "verdict": null}
 ```
 
-整棵樹模式對同一棵樹給出同樣的三筆，只有 `team/t2.yaml` 多了 `"problem": {"kind": "syntax_error", "message": "yaml: line 2: did not find expected node content"}`，`verdict` 為 `"unservable"`，另外帶 `files` 與 `rendered_by`。`gone.yaml` 與一份權限不足、stat 失敗的檔 `problem` 相同，只有 `role` 分得出前者不是檔。
+整棵樹模式對同一棵樹給出同樣的三筆，只有 `team/t2.yaml` 多了 `"problem": {"kind": "syntax_error", "message": "line 2: yaml.v3 cannot parse the text into a document"}`，`verdict` 為 `"unservable"`，另外帶 `files` 與 `rendered_by`。`gone.yaml` 與一份權限不足、stat 失敗的檔 `problem` 相同，只有 `role` 分得出前者不是檔。
 
 **選了哪些檔**：`readers` 標出每個讀取端實際會讀的檔。
 

@@ -11,11 +11,17 @@
 //
 // Usage:
 //
-//	da-read alertmanager <file|->
+//	da-read alertmanager [--show-loader-reason] <file|->
 //	da-read prometheus <file|->
 //	da-read prometheus-rules <file|->...
 //	da-read promql-selectors <series> -
 //	da-read promql-label-flow <label> -
+//
+// When Alertmanager's loader refuses a file, `alertmanager` prints a fixed
+// sentence, not the loader's reason: that text is Alertmanager's own prose
+// and quotes the file's values (#3703). --show-loader-reason prints the
+// reason too — for a person reading their own file, never a caller that
+// relays the message further.
 //
 // `alertmanager` reads the file with Alertmanager's own config loader
 // (github.com/prometheus/alertmanager/config.Load, the version of the amtool
@@ -95,7 +101,7 @@ func say(stderr io.Writer, format string, args ...interface{}) {
 }
 
 func usage(stderr io.Writer) int {
-	say(stderr, "usage: %s alertmanager <file|->\n", programName)
+	say(stderr, "usage: %s alertmanager [%s] <file|->\n", programName, showLoaderReasonFlag)
 	say(stderr, "       %s prometheus <file|->\n", programName)
 	say(stderr, "       %s prometheus-rules <file|->...\n", programName)
 	say(stderr, "       %s promql-selectors <series> -\n", programName)
@@ -107,13 +113,15 @@ func usage(stderr io.Writer) int {
 		"(at most once). promql-selectors reads a JSON array of PromQL expressions on "+
 		"standard input and prints, per expression, the selectors that could select "+
 		"<series>; promql-label-flow reads {\"expressions\", \"records\", \"aliases\"} and prints, per expression, whether the left side of "+
-		"each `and`/`unless on(<label>)` keeps <label>. Exit 2 when a file is refused.\n")
+		"each `and`/`unless on(<label>)` keeps <label>. Exit 2 when a file is refused; "+
+		"a refusal by Alertmanager's loader leaves the loader's reason out (it can quote the "+
+		"file's values) unless "+showLoaderReasonFlag+" is given.\n")
 	return exitCallerErr
 }
 
 // readers are the single-file subcommands.
 var readers = map[string]func([]byte) ([]byte, error){
-	"alertmanager": readAlertmanager,
+	"alertmanager": func(d []byte) ([]byte, error) { return readAlertmanager(d, false) },
 	"prometheus":   readPrometheus,
 }
 
@@ -166,6 +174,13 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		return write(stdout, stderr, append(out, '\n'), exitOK)
 	}
 	read, ok := readers[args[0]]
+	if args[0] == "alertmanager" && args[1] == showLoaderReasonFlag {
+		if len(args) != 3 {
+			return usage(stderr)
+		}
+		read = func(d []byte) ([]byte, error) { return readAlertmanager(d, true) }
+		args = []string{args[0], args[2]}
+	}
 	if !ok || len(args) != 2 {
 		return usage(stderr)
 	}

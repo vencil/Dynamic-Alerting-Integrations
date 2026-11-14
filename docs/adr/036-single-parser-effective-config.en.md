@@ -168,7 +168,7 @@ Example: a tree holds `t1.yaml`, `_defaults.yaml` and `_defaults.yml`, `team/t2.
 {"path": "team/t2.yaml", "depth": 1, "class": "tenant", "tenant_named": "t2", "defaults_document": false, "config_extension": true, "readers": ["exporter", "generator"], "not_read": null, "role": "config", "problem": null, "verdict": null}
 ```
 
-The whole-tree mode gives the same three entries for the same tree, except that `team/t2.yaml` also has `"problem": {"kind": "syntax_error", "message": "yaml: line 2: did not find expected node content"}` and `"verdict": "unservable"`; it adds `files` and `rendered_by`. `gone.yaml` has the same `problem` as a file whose stat a permission refuses; only `role` tells that it is not a file.
+The whole-tree mode gives the same three entries for the same tree, except that `team/t2.yaml` also has `"problem": {"kind": "syntax_error", "message": "line 2: yaml.v3 cannot parse the text into a document"}` and `"verdict": "unservable"`; it adds `files` and `rendered_by`. `gone.yaml` has the same `problem` as a file whose stat a permission refuses; only `role` tells that it is not a file.
 
 **Which files were selected**: `readers` marks every file some reader actually reads.
 

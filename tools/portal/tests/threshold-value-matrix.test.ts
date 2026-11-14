@@ -22,6 +22,7 @@ import {
   readThreshold,
   parseThresholdValue,
   composeThreshold,
+  initialFormState,
   isFieldValid,
   allRequiredValid,
 } from '../src/interactive/tools/recipe-builder/engine.js';
@@ -111,6 +112,53 @@ describe('threshold value matrix ↔ RecipeBuilder', () => {
       expect(back.ok && back.number !== null).toBe(false);
     },
   );
+});
+
+describe('opening the form on a stored threshold (#3826)', () => {
+  // A stored recipe has `threshold: "<value>:<severity>"` and no `severity`
+  // member. Opening the form on it and saving it untouched must write back
+  // the alert that was stored: the same value half, the same severity.
+  it.each(rows.filter((r) => r.ok).map((r) => [label(r), r] as const))(
+    '%s opens as its two halves and is emitted as the same reading', (_l, r) => {
+      const state = initialFormState({ recipe: 'threshold', threshold: r.value });
+      // A value half with a ':' of its own ('70:warning:critical') stays whole.
+      expect(state.threshold).toBe(r.value_part!.includes(':') ? r.value : r.value_part);
+      expect(state.severity).toBe(r.severity);
+      const back = readThreshold(composeThreshold(state));
+      expect(back.ok).toBe(true);
+      expect(back.valuePart).toBe(r.value_part);
+      expect(back.severity).toBe(r.severity);
+    },
+  );
+
+  it.each(rows.filter((r) => !r.ok).map((r) => [label(r), r] as const))(
+    'the unreadable %s stays whole in the value field and is emitted refused', (_l, r) => {
+      const state = initialFormState({ recipe: 'threshold', threshold: r.value });
+      expect(state.threshold).toBe(r.value);
+      expect(state.severity).toBe(ENUMS.severityDefault);
+      const back = readThreshold(composeThreshold(state));
+      expect(back.ok && back.number !== null).toBe(false);
+    },
+  );
+
+  it('the table has stored thresholds of every severity, with and without a suffix', () => {
+    const okRows = rows.filter((r) => r.ok);
+    expect(new Set(okRows.map((r) => r.severity))).toEqual(new Set(ENUMS.severity));
+    expect(okRows.some((r) => r.severity !== ENUMS.severityDefault && r.float_ok)).toBe(true);
+    expect(okRows.some((r) => !r.value.includes(':'))).toBe(true);
+    expect(okRows.some((r) => r.value_part!.includes(':'))).toBe(true);
+  });
+
+  it('a severity the caller names is kept only when the stored text has no suffix', () => {
+    expect(initialFormState({ threshold: '70', severity: 'critical' })).toMatchObject({ threshold: '70', severity: 'critical' });
+    expect(initialFormState({ threshold: '70:critical', severity: 'warning' })).toMatchObject({ threshold: '70', severity: 'critical' });
+  });
+
+  it('a new alert opens on the defaults; other members of the stored recipe are kept', () => {
+    expect(initialFormState(null)).toMatchObject({ threshold: '', severity: ENUMS.severityDefault, op: ENUMS.opDefault });
+    expect(initialFormState({ name: 'a', metric: 'm', for: '10m', threshold: 70 }))
+      .toMatchObject({ name: 'a', metric: 'm', for: '10m', threshold: '70', severity: ENUMS.severityDefault });
+  });
 });
 
 describe('the patterns compile in every ECMAScript mode', () => {

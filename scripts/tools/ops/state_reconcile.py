@@ -260,16 +260,24 @@ def read_old_manifest(manifest_path: Path) -> dict | None:
         return None
     if problem is not None:
         raise CallerError(f"{problem.message}; not overwritten", "manifest_unreadable")
-    if manifest_path.stat().st_size == 0:
+    # #3797: read ONCE; what follows judges these bytes. A second look (a
+    # `stat()` for the size) at a manifest gone since the judgement above
+    # was a traceback; gone (or unreadable) now is a refusal, nothing written.
+    try:
+        with manifest_path.open("rb") as fh:
+            raw = fh.read()
+    except OSError as exc:
+        raise CallerError(f"--manifest-path {manifest_path}: cannot read: "
+                          f"{exc.strerror or exc}; not overwritten",
+                          "manifest_unreadable") from exc
+    if not raw:
         # Never written that way here (the write is atomic): an empty one
-        # holds nothing to lose and is rebuilt like a missing one.
+        # holds nothing to lose and is rebuilt like a missing one (#3392,
+        # owner ruling).
         print(f"WARNING: --manifest-path {manifest_path} is empty; taken for no manifest",
               file=sys.stderr)
         return None
-    try:
-        data, err = read_state(manifest_path)
-    except UnicodeDecodeError as exc:
-        data, err = None, f"not UTF-8: {exc}"
+    data, err = _decode_state(raw)
     if err is None and not isinstance(data, dict):
         err = f"not a JSON object ({type(data).__name__})"
     elif err is None and not isinstance(data.get("states", []), list):

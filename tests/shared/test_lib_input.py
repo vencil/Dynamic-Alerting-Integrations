@@ -759,3 +759,63 @@ def test_a_library_reader_does_not_judge_a_declared_tree_again(tmp_path, monkeyp
                                     lang="en")
     _grar_parse.load_tenant_tree(str(conf))
     assert seen == [str(undeclared)], "the declared tree was judged a second time"
+
+
+# ── #3797: `-` is standard input for a `stdin=True` document ──────────────
+
+def _stdin_args(argv, *, second=False):
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--s", decode=_lib_input.Document("json", dict), stdin=True)
+    if second:
+        _lib_input.add_input(p, "--t", decode=_lib_input.Document("json", dict), stdin=True)
+    return p.parse_args(argv)
+
+
+class _Stdin:
+    def __init__(self, data):
+        import io
+        self.buffer = io.BytesIO(data)
+
+
+def test_dash_is_standard_input_when_declared(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", _Stdin(b'{"a": 1}'))
+    events = []
+    monkeypatch.setattr(_lib_input, "judged", lambda flag, path: events.append((flag, path)))
+    assert _lib_input.document(_stdin_args(["--s", "-"]), "s", lang="en") == {"a": 1}
+    assert events == [("--s", "-")]
+
+
+def test_standard_input_is_judged_as_a_file_is(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", _Stdin(b"{bad"))
+    with pytest.raises(CallerError, match=r"^--s -: ") as exc:
+        _lib_input.document(_stdin_args(["--s", "-"]), "s", lang="en")
+    assert exc.value.reason == "file_unreadable"
+
+
+def test_two_flags_cannot_both_read_standard_input(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", _Stdin(b"{}"))
+    args = _stdin_args(["--s", "-", "--t", "-"], second=True)
+    with pytest.raises(CallerError, match=r"^--s -: standard input can be read by one flag "
+                                          r"only \(also --t\)"):
+        _lib_input.document(args, "s", lang="en")
+
+
+def test_closed_standard_input_is_refused_named(monkeypatch):
+    monkeypatch.setattr(sys, "stdin", None)
+    with pytest.raises(CallerError, match=r"^--s -: standard input cannot be read"):
+        _lib_input.document(_stdin_args(["--s", "-"]), "s", lang="en")
+
+
+def test_dash_is_a_path_unless_declared(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--f", decode=_lib_input.Document("json", dict))
+    with pytest.raises(CallerError) as exc:
+        _lib_input.document(p.parse_args(["--f", "-"]), "f", lang="en")
+    assert exc.value.reason == "file_not_found"
+
+
+def test_a_directory_is_never_standard_input():
+    with pytest.raises(ValueError, match="stdin= / remedy= are for a decode= input only"):
+        _lib_input.add_input(argparse.ArgumentParser(), "--d",
+                             select=_lib_input.TopLevel("*"), stdin=True)

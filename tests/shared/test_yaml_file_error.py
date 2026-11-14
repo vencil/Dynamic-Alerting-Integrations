@@ -395,14 +395,12 @@ _ROW_IDS = [r[0] for r in _ROWS]
 # #2116: threshold_recommend reads served-values (then effective) too.
 # ADR-036 step 4 (#2906): rows whose conf.d read is `da-guard parse-tree`'s.
 _PARSE_TREE_ROWS = {"check_routing_profiles", "policy_engine _defaults",
-                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant",
-                    # #2906 F2: the single file through parse-tree's file mode
-                    "analyze_gaps --tenant-config"}
+                    "gen_tenant_mapping mapping", "gen_tenant_mapping tenant"}
 #: #3206 (ADR-036 §12): the Alertmanager config is read by its consumer's
 #: loader (da-crdecode, then `da-read alertmanager`), not by Python: no Python
 #: cause class, but the reader's own reason — the byte that is not UTF-8 —
 #: reaches the operator.
-_CONSUMER_READ_ROWS = {"onboard --alertmanager-config"}
+_CONSUMER_READ_ROWS: set = set()  # (#3797: onboard's config is a declared document)
 _SERVED_VALUES_ROWS = {"blind_spot_discovery", "policy_engine tenant", "config_diff",
                        "policy_opa_bridge --dry-run", "policy_opa_bridge _defaults",
                        "threshold_recommend"}
@@ -422,7 +420,10 @@ assert _REFUSED_ROWS <= set(_ROW_IDS), _REFUSED_ROWS - set(_ROW_IDS)
 #: #3445: a file input declared with `_lib_input.add_input(decode=...)` is read
 #: by `_lib_input.document`: one line naming the flag and the path, the
 #: reason in words ("not valid UTF-8 (byte N)") instead of a cause class.
-_DOCUMENT_ROWS = {"analyze_gaps --metric-dictionary"}
+#: #3797: --tenant-config and --alertmanager-config are declared text
+#: documents — strict UTF-8 is the declaration's, before parse-tree / da-read.
+_DOCUMENT_ROWS = {"analyze_gaps --metric-dictionary", "analyze_gaps --tenant-config",
+                  "onboard --alertmanager-config"}
 assert _DOCUMENT_ROWS <= set(_ROW_IDS), _DOCUMENT_ROWS - set(_ROW_IDS)
 
 def _expected_bad_rc(script: Path) -> int:
@@ -528,7 +529,7 @@ def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cw
      lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "conf_d_not_servable"),
     ("onboard --json", OPS / "onboard_platform.py",
      lambda f: ["--alertmanager-config", str(f["files"] / "alertmanager.bad.yaml"),
-                "--dry-run", "--json"], "yaml_file_unreadable"),
+                "--dry-run", "--json"], "file_unreadable"),
     ("policy_opa_bridge --json", OPS / "policy_opa_bridge.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "conf_d_not_servable"),
 ], ids=["analyze_gaps", "onboard", "policy_opa_bridge"])
@@ -539,7 +540,9 @@ def test_decorated_tools_end_at_rc_2_with_one_line_under_json(fx, label, script,
     p = _run(script, argv(fx))
     assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
     assert p.stdout == "", p.stdout
-    head = "ERROR: cannot read" if reason != "conf_d_not_servable" else "ERROR: the conf.d at "
+    head = {"conf_d_not_servable": "ERROR: the conf.d at ",
+            # #3797: the declared document's refusal, naming the flag
+            "file_unreadable": "ERROR: --alertmanager-config "}.get(reason, "ERROR: cannot read")
     assert any(ln.startswith(head) for ln in p.stderr.splitlines()), p.stderr[-500:]
     assert "Traceback" not in p.stderr
 

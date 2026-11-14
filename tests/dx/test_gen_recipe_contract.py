@@ -335,7 +335,12 @@ def test_the_matrix_header_reaches_the_schema_and_the_portal(tmp_path):
     (trim_line,) = [ln for ln in (root / gen.CONSTANTS_REL).read_text(encoding="utf-8").split("\n")
                     if ln.startswith("THRESHOLD_TRIM_CODE_POINTS")]
     assert "0x85" not in trim_line and "0xA0" in trim_line and "0x3000" in trim_line, trim_line
-    assert 0x85 not in json.loads((root / gen.PORTAL_ENUMS_REL).read_text(encoding="utf-8"))["thresholdTrim"]
+    enums = json.loads((root / gen.PORTAL_ENUMS_REL).read_text(encoding="utf-8"))
+    assert 0x85 not in enums["thresholdTrim"]
+    # The simulators read the disable words from this copy (#3865).
+    matrix = json.loads((root / gen.SEVERITY_REL).read_text(encoding="utf-8"))
+    assert enums["thresholdDisable"] == {"words": matrix["disable_words"], "letters": matrix["disable_letters"]}
+    assert "no" in enums["thresholdDisable"]["words"] and enums["thresholdDisable"]["letters"]["n"] == [78, 110]
 
 
 def test_the_threshold_scalar_pattern_is_written_ascii_escaped():

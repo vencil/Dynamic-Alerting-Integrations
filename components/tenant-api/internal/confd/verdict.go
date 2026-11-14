@@ -36,7 +36,7 @@ import (
 // is bounded by TA_MAX_TENANT_DOC_BYTES before either runs.
 func Judge(data []byte) error {
 	if bad := parsetree.Judge(data); bad != nil {
-		return &cfg.UnreadableFileError{Kind: bad.Kind, Message: bad.Message}
+		return &cfg.UnreadableFileError{Kind: bad.Kind, Message: bad.Message()}
 	}
 	return nil
 }

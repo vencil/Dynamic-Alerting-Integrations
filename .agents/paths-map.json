@@ -155,7 +155,7 @@
       "read": [
         {"file": "docs/internal/commit-convention.md", "section": "After a rebase or a merge from `main`"}
       ],
-      "note": "完成後跑 `python3 scripts/tools/dx/bump_docs.py --sync-counts --check`：兩支各自調過同一個計數的 PR 會乾淨地 rebase 成錯的數字。生成物衝突先問是誰生的，取一側後重生，不手併。"
+      "note": "完成後跑 `make version-check`（計數漂了用 `make sync-counts` 寫回）：兩支各自調過同一個計數的 PR 會乾淨地 rebase 成錯的數字。生成物衝突先問是誰生的，取一側後重生，不手併。"
     },
     {
       "id": "branch-delete",

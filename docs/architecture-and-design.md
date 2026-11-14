@@ -391,6 +391,7 @@ spec:
 | ADR-037 | [config-diff 改為比較渲染結果](adr/037-config-diff-compares-rendered-output.md) | ✅ Accepted | — |
 | ADR-038 | [沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告](adr/038-unread-keys-judged-by-readers.md) | ✅ Accepted | — |
 | ADR-039 | [刻意付出的效能成本寫進 repo 裡的接受帳本，由 bench 閘門核對實測](adr/039-bench-acceptance-ledger.md) | ✅ Accepted | — |
+| ADR-040 | [平台預設值內建在讀取端，客戶的 _defaults.yaml 只放覆寫與退出](adr/040-platform-defaults-builtin-layer.md) | 🟡 Proposed | — |
 
 <!-- ADR_INDEX_END -->
 

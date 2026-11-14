@@ -7,6 +7,7 @@ its loop is time-bound and best exercised end-to-end).
 """
 from __future__ import annotations
 
+import http.client
 import os
 import sys
 import urllib.error
@@ -328,6 +329,39 @@ class TestMainCallerErrors:
         assert rcs.main() == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "cannot reach" in err
+
+    def test_first_probe_that_gets_a_non_http_reply_is_named_exit_2(
+            self, monkeypatch, tmp_path, capsys, cli_argv):
+        """#3519: the first probe ends the run at exit 2 on the "cannot
+        reach" path — no traceback, and the peer's bytes one cleaned line."""
+        config_dir = tmp_path / "conf"
+        config_dir.mkdir()
+
+        def not_http(*a, **kw):
+            raise http.client.BadStatusLine("\x1b[31mEVIL\x07\r\nline2 " + "A" * 5000)
+
+        monkeypatch.setattr(rcs.urllib.request, "urlopen", not_http)
+        cli_argv("run_chaos_soak.py",
+            "--target-url", "http://localhost:8080",
+            "--config-dir", str(config_dir),
+            "--output-dir", str(tmp_path / "out"),
+            "--duration-min", "1")
+        assert rcs.main() == EXIT_CALLER_ERROR
+        err = capsys.readouterr().err
+        assert "cannot reach http://localhost:8080/metrics" in err
+        assert "BadStatusLine: ?[31mEVIL???line2 AAAA" in err
+        assert "\x1b" not in err and "\x07" not in err and "A" * 300 not in err
+
+    def test_a_poll_that_gets_a_non_http_reply_is_not_a_blank_row(self, monkeypatch):
+        """#3519: fetch_metrics does not turn a non-HTTP reply into None. In
+        the middle of a soak None is a blank CSV row of a run that exits 0;
+        the reply must end the run instead (non-zero), as it always did."""
+        def not_http(*a, **kw):
+            raise http.client.BadStatusLine("GARBAGE NOT HTTP")
+
+        monkeypatch.setattr(rcs.urllib.request, "urlopen", not_http)
+        with pytest.raises(http.client.HTTPException):
+            rcs.fetch_metrics("http://localhost:8080")
 
     def test_zero_duration_completes_with_empty_metrics(self, monkeypatch, tmp_path, cli_argv):
         # Empty initial metrics is a WARN, not a hard error. Pair it with

@@ -159,7 +159,8 @@ ALLOWED = {
     ('scripts/tools/ops/alert_correlate.py', 'main'):
         (1, "the alerts file (--input), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/analyze_rule_pack_gaps.py', '_main'):
-        (1, "a metric-dictionary.yaml given with --metric-dictionary, the repo's own metric catalogue read only by Python tools"),
+        (2, "a metric-dictionary.yaml given with --metric-dictionary, the repo's own metric catalogue read only by Python tools; "
+            "and --tenant-config, read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-guard parse-tree reads it"),
     ('scripts/tools/ops/cutover_tenant.py', 'main'):
         (1, "cutover-readiness.json (--readiness-json), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/federation_keygen.py', 'main'):
@@ -176,6 +177,27 @@ ALLOWED = {
         (1, "onboard-hints.json (--from-onboard), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
     ('scripts/tools/ops/shadow_verify.py', 'judge_inputs'):
         (1, 'the prefix-mapping file (YAML), the readiness JSON and the report CSV (text), migration inputs read only by Python tools'),
+    # #3797: the G1 `file` / Python-read `reader` inputs, declared documents now.
+    ('scripts/tools/_lib_tenant_state.py', 'load_state'):
+        (1, "`tenant-api state show` JSON (--state), read through _lib_input.document as text (#3797): no YAML is parsed in Python, then json.loads"),
+    ('scripts/tools/ops/_grar_render.py', 'load_base_config_file'):
+        (1, "the base Alertmanager config by path (a library caller's), read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-read alertmanager reads it"),
+    ('scripts/tools/ops/explain_keys.py', '_main'):
+        (1, "the expected verdicts (--assert), read through _lib_input.document as JSON (#3797): no YAML is parsed"),
+    ('scripts/tools/ops/explain_route.py', 'main'):
+        (1, "the base Alertmanager config (--base-config), read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-read alertmanager reads it"),
+    ('scripts/tools/ops/generate_alertmanager_routes.py', '_run'):
+        (1, "the base Alertmanager config (--base-config), read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-read alertmanager reads it"),
+    ('scripts/tools/ops/generate_alertmanager_routes.py', 'resolve_policy'):
+        (1, 'the deployment policy (--policy); its reader is the generator itself (Python), tenant-api only hashes it'),
+    ('scripts/tools/ops/onboard_platform.py', 'main'):
+        (2, "--alertmanager-config and --scrape-config, read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-crdecode and da-read read them"),
+    ('scripts/tools/ops/operator_check.py', 'load_mount_list'):
+        (1, "generate-routes --secret-mounts-out's list (--secret-mounts), read through _lib_input.document as JSON (#3797): no YAML is parsed"),
+    ('scripts/tools/ops/policy_engine.py', '_main'):
+        (1, "a standalone policy file (--policy), read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-guard parse-tree reads it"),
+    ('scripts/tools/ops/validate_config.py', '_main'):
+        (1, "a standalone policy file (--policy-dsl), read through _lib_input.document as text (#3797): no YAML is parsed in Python, da-guard parse-tree reads it"),
     ('scripts/tools/ops/silencer_drift_check.py', 'main'):
         (1, "an amtool silence dump (--silences-file), read through _lib_input.document as JSON (#3445): the scan reads names, no YAML is parsed"),
 }

@@ -161,7 +161,7 @@ Migrating from "instance-based dispatch" to "tenant-based dispatch": use `tenant
 
 ```bash
 da-tools generate-routes --config-dir conf.d/ --validate \
-                         --policy .github/custom-rule-policy.yaml
+                         --policy .github/deployment-policy.yaml
 # BYO Alertmanager outside K8s: merge into your own alertmanager.yml
 da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
                          --base-config alertmanager.yml -o alertmanager.new.yml
@@ -249,7 +249,7 @@ tenants:
 | **Rate metric** | `rate(mysql_global_status_slow_queries[5m])` | `tenant:mysql_slow_queries:rate5m`: `sum by(tenant) (rate(...))` | No tenant key (see ⚠️ below) | Sum reflects cluster-wide load |
 | **Ratio** | `threads_connected / max_connections` | `tenant:mysql_connection_usage:percent`: divided per instance, then `max by(tenant) (100 * ... / (max_connections > 0))` | `mysql_connection_usage_percent: "80"` (% of max_connections) | Ratio computed in the Recording Rule (multiplied by 100, unit is %); dividing per instance and taking the fullest one, because a `sum` before dividing is diluted by idle replicas' headroom (#3778) |
 
-> ⚠️ For the rate row, the platform MariaDB Rule Pack currently has only the recording rule and no tenant-settable threshold key: `MariaDBHighSlowQueries` judges the slow-query rate against a fixed `> 1`. To let tenants tune this kind of threshold, the platform must first declare the key and add a threshold-normalization recording rule; see "Add a metric to an existing Rule Pack" in the [Domain Expert Quick Start](getting-started/for-domain-experts.en.md). A key written into a tenant file without that declaration is not emitted, and validate-config's `unread_keys` row reports `unread … (no_row)`.
+> ⚠️ For the rate row, the platform MariaDB Rule Pack currently has only the recording rule and no tenant-settable threshold key: `MariaDBHighSlowQueries` judges the slow-query rate against a fixed `> 1`. To let tenants tune this kind of threshold, the platform must first declare the key and add a threshold-normalization recording rule; see "Add a metric to an existing Rule Pack" in the [Domain Expert Quick Start](getting-started/for-domain-experts.en.md). A key written into a tenant file without that declaration is not emitted, and validate-config's `routes` row reports `unread … (no_row)`.
 
 > Scenarios 2–5 reuse the Scenario 1 three-piece template — only the metric name and Tenant Config key change; the platform-side Alert Rule structure is always identical. This assumes the key is already declared by the platform (see ⚠️ above). Rule Pack design + three-piece contract: [design/rule-packs.en.md](design/rule-packs.en.md). Actual golden alert listings: [Rule Packs ALERT-REFERENCE](rule-packs/ALERT-REFERENCE.md).
 

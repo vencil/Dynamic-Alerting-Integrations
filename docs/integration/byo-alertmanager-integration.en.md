@@ -146,7 +146,7 @@ tenants:
 da-tools generate-routes --config-dir conf.d/ --validate --strict
 
 # Validate + webhook domain allowlist check
-da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .github/custom-rule-policy.yaml
+da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .github/deployment-policy.yaml
 ```
 
 `--validate` writes nothing. The generator's output is always the **complete merged Alertmanager config**; there is no "emit a fragment and paste it yourself" mode: a run without a mode flag (only `-o`, only `--dry-run`) is exit 2. ⚠️ The v2.9.0 image still prints a fragment when no mode flag is given <!-- image-caveat: v2.9.0 -->
@@ -605,7 +605,7 @@ Mode A creates a single shared platform route; Mode B creates N per-tenant route
 da-tools validate-config --config-dir conf.d/
 
 # CI pipeline with JSON output + policy check
-da-tools validate-config --config-dir conf.d/ --policy .github/custom-rule-policy.yaml --json
+da-tools validate-config --config-dir conf.d/ --policy .github/deployment-policy.yaml --json
 ```
 
 Recommended to run `validate-config` before `generate-routes --apply` to ensure configuration is complete and correct.

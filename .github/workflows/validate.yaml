@@ -399,7 +399,7 @@ jobs:
               --config-dir "$confd" \
               --validate \
               --strict \
-              --policy .github/custom-rule-policy.yaml
+              --policy .github/deployment-policy.yaml
             echo "::endgroup::"
           done
 

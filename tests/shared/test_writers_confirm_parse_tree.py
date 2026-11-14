@@ -1445,10 +1445,13 @@ def test_onboard_platform_writes_a_number_like_string_as_a_string(tmp_path):
 
 def test_onboard_platform_refuses_what_alertmanager_refuses(tmp_path):
     # '1e3' is not a duration to Alertmanager's loader, so the config is
-    # refused, named, and nothing is written.
+    # refused, named, and nothing is written. #3703: da-read's fixed
+    # sentence, not the loader's reason (which quotes the value).
     r, out = _onb(tmp_path, "'1e3'")
     assert r.returncode == 2, r.stdout + r.stderr
-    assert 'unknown unit "e" in duration "1e3"' in r.stdout + r.stderr
+    text = r.stdout + r.stderr
+    assert "refused by Alertmanager's config loader (its reason is not printed" in text, text
+    assert '"1e3"' not in text, text
     assert not out.exists()
 
 

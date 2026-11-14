@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jonboulle/clockwork"
 	"github.com/vencil/tenant-api/internal/gitops"
 	"github.com/vencil/tenant-api/internal/testutil"
 )
@@ -35,12 +36,14 @@ func fastGate(t *testing.T, fake *testutil.FakeGenerator, policyPath string) *Ga
 }
 
 // The "too little time left" cases: the fake answers when windowLeft of the
-// request's time is left — under windowJudge, so the gate does not ask again —
-// and the call itself still has windowLeft of slack before the deadline.
+// request's time is left on the gate's clock — under windowJudge, so the gate
+// does not ask again. The time passes on a fake clock, not by sleeping: the
+// ctx's real deadline (windowCtx) is far off, so a stalled test process does
+// not make the call miss it (#3846).
 const (
 	windowJudge = time.Second
 	windowLeft  = windowJudge / 2
-	windowCtx   = 2 * time.Second
+	windowCtx   = 20 * time.Second
 )
 
 func windowGate(t *testing.T, fake *testutil.FakeGenerator) *Gate {
@@ -50,10 +53,24 @@ func windowGate(t *testing.T, fake *testutil.FakeGenerator) *Gate {
 	return g
 }
 
-func answerLeaving(req testutil.FakeValidateRequest) {
+// answerLeaving moves clock on until windowLeft of req's time is left.
+func answerLeaving(clock *clockwork.FakeClock, req testutil.FakeValidateRequest) {
 	if d := time.Duration(req.DeadlineMS)*time.Millisecond - windowLeft; d > 0 {
-		time.Sleep(d)
+		clock.Advance(d)
 	}
+}
+
+// clockedCtx is a ctx whose deadline is d away, with g reading a fake clock
+// set exactly d before that deadline: the time g sees left is d, and moves
+// only when the test moves the clock. The ctx still ends at its real
+// deadline.
+func clockedCtx(t *testing.T, g *Gate, d time.Duration) (context.Context, *clockwork.FakeClock) {
+	t.Helper()
+	ctx := ctxFor(t, d)
+	deadline, _ := ctx.Deadline()
+	clock := clockwork.NewFakeClockAt(deadline.Add(-d))
+	g.now = clock.Now
+	return ctx, clock
 }
 
 func ctxFor(t *testing.T, d time.Duration) context.Context {
@@ -67,7 +84,8 @@ func TestValidateWrites_PassSendsBaseWritesAndRemainingTime(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
 	g := fastGate(t, fake, "")
-	if err := errOf(g.ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())); err != nil {
+	ctx, _ := clockedCtx(t, g, 20*time.Second)
+	if err := errOf(g.ValidateWrites(ctx, testBase, testFiles())); err != nil {
 		t.Fatalf("pass: %v", err)
 	}
 	reqs := fake.Requests()
@@ -79,9 +97,9 @@ func TestValidateWrites_PassSendsBaseWritesAndRemainingTime(t *testing.T) {
 		string(r.Writes[0].Content) != "tenants:\n  db-a: {}\n" {
 		t.Errorf("request = %+v", r)
 	}
-	// deadline_ms is what is left of the ctx: under 20 s, well over 19 s.
-	if r.DeadlineMS > 20000 || r.DeadlineMS < 19000 {
-		t.Errorf("deadline_ms = %d, want the ~20 s left", r.DeadlineMS)
+	// deadline_ms is what is left of the ctx on the gate's clock: 20 s.
+	if r.DeadlineMS != 20000 {
+		t.Errorf("deadline_ms = %d, want 20000", r.DeadlineMS)
 	}
 }
 
@@ -150,13 +168,15 @@ func TestValidateWrites_MismatchJudgedAgainOnce(t *testing.T) {
 func TestValidateWrites_NoTimeToJudgeAgain(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
+	g := windowGate(t, fake)
+	ctx, clock := clockedCtx(t, g, windowCtx)
 	fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
-		answerLeaving(req)
+		answerLeaving(clock, req)
 		v := testutil.PassVerdict(req, nil)
 		v["validated"].(map[string]any)["base_commit"] = strings.Repeat("cd", 20)
 		return 200, v
 	})
-	err := errOf(windowGate(t, fake).ValidateWrites(ctxFor(t, windowCtx), testBase, testFiles()))
+	err := errOf(g.ValidateWrites(ctx, testBase, testFiles()))
 	var rej *RejectedError
 	if !errors.As(err, &rej) || rej.Reason != ReasonNoTime {
 		t.Fatalf("err = %v, want no_time", err)
@@ -278,11 +298,13 @@ func TestValidateWrites_FindingsOrderedAndCompared(t *testing.T) {
 func TestValidateWrites_FindingsNotCompared(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
+	g := windowGate(t, fake)
+	ctx, clock := clockedCtx(t, g, windowCtx)
 	fake.SetValidate(func(n int, req testutil.FakeValidateRequest) (int, any) {
-		answerLeaving(req)
+		answerLeaving(clock, req)
 		return 200, testutil.FindingsVerdict(req, "/w", testutil.Finding("x", "db-a", "", "m"))
 	})
-	err := errOf(windowGate(t, fake).ValidateWrites(ctxFor(t, windowCtx), testBase, testFiles()))
+	err := errOf(g.ValidateWrites(ctx, testBase, testFiles()))
 	var fe *FindingsError
 	if !errors.As(err, &fe) || fe.ComparedWithBase || fe.Findings[0].PreExisting != nil || !fe.Findings[0].Related {
 		t.Fatalf("err = %v (%+v)", err, fe)
@@ -412,7 +434,11 @@ func TestValidateWrites_NoAnswerBeforeDeadline(t *testing.T) {
 		time.Sleep(time.Second)
 		return 200, map[string]any{}
 	})
-	err := errOf(fastGate(t, fake, "").ValidateWrites(ctxFor(t, 400*time.Millisecond), testBase, testFiles()))
+	// The gate's clock stands still, so it asks however long the test
+	// process stalls first; only the ctx's real deadline ends the call.
+	g := fastGate(t, fake, "")
+	ctx, _ := clockedCtx(t, g, 400*time.Millisecond)
+	err := errOf(g.ValidateWrites(ctx, testBase, testFiles()))
 	var u *UnavailableError
 	if !errors.As(err, &u) || u.Reason != ReasonUnreachable {
 		t.Fatalf("err = %v, want VALIDATOR_UNAVAILABLE unreachable", err)
@@ -440,11 +466,15 @@ func TestValidateWrites_Cancelled(t *testing.T) {
 func TestValidateWrites_NoDeadlineUsesFallback(t *testing.T) {
 	t.Parallel()
 	fake := testutil.StartFakeGenerator(t)
-	if err := errOf(fastGate(t, fake, "").ValidateWrites(context.Background(), testBase, testFiles())); err != nil {
+	g := fastGate(t, fake, "")
+	// The fallback is read against the gate's clock too: a clock that
+	// stands still gives exactly FallbackDeadline.
+	g.now = clockwork.NewFakeClock().Now
+	if err := errOf(g.ValidateWrites(context.Background(), testBase, testFiles())); err != nil {
 		t.Fatal(err)
 	}
-	if ms := fake.Requests()[0].DeadlineMS; ms > FallbackDeadline.Milliseconds() || ms < FallbackDeadline.Milliseconds()-1000 {
-		t.Errorf("deadline_ms = %d, want ~%v", ms, FallbackDeadline)
+	if ms := fake.Requests()[0].DeadlineMS; ms != FallbackDeadline.Milliseconds() {
+		t.Errorf("deadline_ms = %d, want %d", ms, FallbackDeadline.Milliseconds())
 	}
 }
 

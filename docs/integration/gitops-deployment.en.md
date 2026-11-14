@@ -55,7 +55,7 @@ Each PR triggers `.github/workflows/validate.yaml`, which runs the following che
 | Python tests | `pytest tests/` | Toolchain regression |
 | Go tests | `go test ./...` | Exporter regression |
 | Tenant key validity | `generate_alertmanager_routes.py --validate` | Unknown key / typo warnings |
-| Webhook URL compliance | `--policy .github/custom-rule-policy.yaml` | URL not in allowed_domains |
+| Webhook URL compliance | `--policy .github/deployment-policy.yaml` | URL not in allowed_domains |
 | Custom rule deny-list | `lint_custom_rules.py --ci` | Forbidden functions / tenant isolation violations |
 | Version consistency | `bump_docs.py --check` | Cross-file version mismatch |
 | **Configuration change blast radius** | `config-diff --old-dir <base> --new-dir <pr>` | PR comment shows affected tenants/metrics  |

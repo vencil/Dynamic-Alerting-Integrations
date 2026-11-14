@@ -52,6 +52,8 @@ from generate_alertmanager_routes import (  # noqa: E402
     add_policy_argument,
     generate_inhibit_rules,
     generate_routes,
+    BASE_CONFIG_DOCUMENT,
+    BASE_CONFIG_REMEDY,
     load_base_config,
     is_policy_refusal,
     merge_routing_with_defaults,
@@ -1407,8 +1409,9 @@ def main(argv: list[str] | None = None) -> int | Report:
                         action=_StoreTraceInput, help=_h("severity"))
     parser.add_argument("--label", action="append", dest="labels",
                         metavar="KEY=VALUE", help=_h("label"))
-    parser.add_argument("--base-config", default=None, metavar="PATH",
-                        help=_h("base_config"))
+    # #3797: a declared document, read once (with --trace).
+    _lib_input.add_input(parser, "--base-config", decode=BASE_CONFIG_DOCUMENT,
+                         remedy=BASE_CONFIG_REMEDY, metavar="PATH", help=_h("base_config"))
     parser.add_argument("--json", action="store_true", help=_h("json"))
     add_policy_argument(parser, lang=lang)  # #3142: the generator's own flag
 
@@ -1439,7 +1442,7 @@ def main(argv: list[str] | None = None) -> int | Report:
     # #3142: the deployment policy, read by the generator's own resolver —
     # an unusable file or an unmet min_generator_version is rc 2.
     try:
-        policy = resolve_policy(args.policy)
+        policy = resolve_policy(args, lang=lang)
     except PolicyInputError as exc:
         raise CallerError(str(exc), reason="policy_unusable") from None
     # --show-profile-expansion lists profiles, not receivers: nothing there is
@@ -1514,7 +1517,8 @@ def main(argv: list[str] | None = None) -> int | Report:
             print("ERROR: --trace requires --tenant", file=sys.stderr)
             return EXIT_CALLER_ERROR
         try:
-            base_config = load_base_config(args.base_config)
+            base_config = load_base_config(
+                _lib_input.document(args, "base_config", lang="en"), args.base_config)
         except BaseIsAnOutputError as exc:
             # #1211 gap 2. explain-route has no verdict exit (#2958): an
             # output passed as the base is a wrong invocation here (rc 2).

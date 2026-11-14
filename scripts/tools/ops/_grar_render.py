@@ -6,7 +6,7 @@ from generate_alertmanager_routes for backwards-compatible test imports.
 
 Functions:
   Output rendering:
-    load_base_config(path)       → base AM YAML; defaults ONLY when the flag was
+    load_base_config(text, path) → base AM YAML; defaults ONLY when the flag was
                                    omitted — a supplied-but-unusable value
                                    raises BaseConfigInputError (#1616)
     merge_generated(base, ...)   → the ONE merge every output mode uses (#1211):
@@ -64,7 +64,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
 from _lib_confd import WARN_LIMIT  # noqa: E402  (#1211: the alert names a line lists)
 from _grar_merge import Finding  # noqa: E402  (#1211: the undelivered-custom-alert finding)
-from _lib_paths import classify_path  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3797: --base-config is a declared document)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Alertmanager / Kubernetes readings)
 from _lib_consumer_read import ConsumerReadError, InputRefused  # noqa: E402, F401  (re-exported)
 from _grar_validate import (  # noqa: E402
@@ -447,12 +447,28 @@ def emitted_alertmanager_yml(cm_yaml: str) -> str:
     return inner
 
 
-def alertmanager_reading(text: str) -> dict:
+def alertmanager_reading(text: str, *, show_loader_reason: bool = False) -> dict:
     """*text* as Alertmanager loads it (``da-read alertmanager``, ADR-036
     §12): only the keys the text writes, each value Alertmanager's reading of
     it. Raises :class:`ConsumerReadError` — ``stderr_lines`` empty when there
-    was no da-read to ask, else the loader's refusal."""
-    return _lib_consumer_read.alertmanager_config(text)
+    was no da-read to ask, else da-read's refusal: its fixed sentence, and
+    the loader's own reason only with *show_loader_reason* (#3703)."""
+    return _lib_consumer_read.alertmanager_config(text, show_loader_reason=show_loader_reason)
+
+
+#: The generator's opt-in to Alertmanager's own reason for a refusal
+#: (``--show-loader-reason``, passed on to da-read). Off by default: the
+#: reason is Alertmanager's prose and quotes conf.d values (#3703).
+SHOW_LOADER_REASON_FLAG = _lib_consumer_read.SHOW_LOADER_REASON_FLAG
+#: What a refusal says when the reason was not asked for (da-read's own
+#: sentence before it says why the reason is left out).
+LOADER_REASON_HINT = f"generate-routes {SHOW_LOADER_REASON_FLAG} prints the loader's reason"
+
+
+def _reason_hint(show_loader_reason: bool) -> str:
+    """The tail of a refusal by Alertmanager's loader: the flag that prints
+    its reason, unless it was given."""
+    return "" if show_loader_reason else f" — {LOADER_REASON_HINT}"
 
 
 def consumer_read_message(exc: ConsumerReadError) -> str:
@@ -460,23 +476,55 @@ def consumer_read_message(exc: ConsumerReadError) -> str:
     return exc.detail()
 
 
-def load_base_config(path: str | None) -> dict:
-    """Load the base Alertmanager config that generated routes merge into.
+#: --base-config as a declared input reads it (#3797): the file's text,
+#: strict UTF-8, read once by `_lib_input.document`; `load_base_config`
+#: hands it to Alertmanager's own loader.
+BASE_CONFIG_DOCUMENT = _lib_input.Document("text", str)
+
+#: The line after every refusal of the --base-config FILE itself (#3797).
+BASE_CONFIG_REMEDY = (
+    "--base-config takes a PATH to a base Alertmanager YAML (global / route / "
+    "receivers / inhibit_rules). Do not drop the flag to clear this error: that "
+    "substitutes the built-in placeholder `global:` for yours, which is the exact "
+    "silent failure this error exists to stop.")
+
+
+def load_base_config_file(path: str, *, show_loader_reason: bool = False) -> dict:
+    """``load_base_config`` of the file at *path*, read through the same
+    declaration (``BASE_CONFIG_DOCUMENT``) — a library caller's; a tool's
+    ``--base-config`` is the declared document it reads. A file that cannot
+    be judged or read raises BaseConfigInputError."""
+    import argparse  # noqa: PLC0415
+    from _lib_exitcodes import CallerError  # noqa: PLC0415
+    parser = argparse.ArgumentParser(add_help=False)
+    _lib_input.add_input(parser, "--base-config", decode=BASE_CONFIG_DOCUMENT,
+                         remedy=BASE_CONFIG_REMEDY)
+    try:  # `--base-config=<path>`: a path that starts with "-" is the value
+        text = _lib_input.document(parser.parse_args([f"--base-config={path}"]),
+                                   "base_config", lang="en")
+    except CallerError as exc:
+        raise BaseConfigInputError(str(exc)) from exc
+    return load_base_config(text, path, show_loader_reason=show_loader_reason)
+
+
+def load_base_config(raw_text: str | None, path: str | None = None, *,
+                     show_loader_reason: bool = False) -> dict:
+    """The base Alertmanager config that generated routes merge into, from
+    *raw_text* — what `_lib_input.document` read from the ``--base-config``
+    file at *path* (``BASE_CONFIG_DOCUMENT``), None when the flag was not
+    given.
 
     Two outcomes, and they must stay distinguishable (#1616):
 
-    * the flag was OMITTED — ``path is None`` — the built-in defaults apply;
+    * the flag was OMITTED — ``raw_text is None`` — the built-in defaults apply;
     * the flag was SUPPLIED with a value that cannot serve as a base config —
-      raise, and the caller exits 2 (dev-rules #13 / ``_lib_exitcodes``).
+      the declaration refuses a path that is no readable UTF-8 file (rc 2
+      naming the flag), and this raises for content Alertmanager's loader
+      refuses; the caller exits 2 (dev-rules #13 / ``_lib_exitcodes``).
 
-    ⛔ "Supplied" is ``path is None``, NOT ``not path``. An empty string is
-    supplied — it is what an unset shell variable expands to — and a falsy test
-    routes it into the omitted branch, which is the whole defect.
-
-    Everything past the omitted branch reduces to two re-derivable predicates —
-    *the value names a file*, and *Alertmanager's loader accepts it*
-    (``da-read alertmanager``, ADR-036 §12) — so no shape is enumerated and an
-    unanticipated spelling lands on an existing branch.
+    ⛔ "Supplied" is ``is None``, NOT falsiness: an empty string is supplied
+    — what an unset shell variable expands to — and the declaration refuses
+    it; an empty FILE is content, refused by the loader below.
 
     ⚠️ NOT closed: the CONTENT axis (``--policy`` closed its own in #1649;
     this one stays open). A file that IS a mapping but whose ``global:`` is empty or
@@ -486,44 +534,26 @@ def load_base_config(path: str | None) -> dict:
     or ``inhibit_rules:`` is legitimate (they fall back per key); one without
     ``route:`` is not — Alertmanager refuses it (#3206).
     """
-    if path is None:
+    if raw_text is None:
         return copy.deepcopy(_DEFAULT_BASE_CONFIG)
-    base_config_problem = classify_path(path, "file", lang="en", flag="--base-config")  # #3276
-    if base_config_problem is not None:
-        raise BaseConfigInputError(
-            f"{base_config_problem.message}\n"
-            "  --base-config takes a PATH to a base Alertmanager YAML "
-            "(global / route / receivers / inhibit_rules).\n"
-            "  ⛔ Do not drop the flag to clear this error — that substitutes "
-            "the built-in placeholder `global:` for yours, which is the exact "
-            "silent failure this error exists to stop.")
-    try:
-        with open(path, "rb") as fh:
-            raw = fh.read()
-        raw_text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
-        raise BaseConfigInputError(
-            f"--base-config: {path!r} is not valid UTF-8: {exc}") from exc
-    except OSError as exc:
-        raise BaseConfigInputError(
-            f"--base-config: cannot read {path!r}: {exc}") from exc
+    raw = raw_text.encode("utf-8")
     # ADR-036 §12 (#3206): the base is an Alertmanager config, so it is read
     # the way Alertmanager loads it (da-read alertmanager), not with PyYAML.
     # ⛔ That makes the base a WHOLE config Alertmanager accepts on its own:
     # `route` (and the receivers it names) must be there — Alertmanager's
     # loader refuses a config without them, and so does this. `global` and
     # `inhibit_rules` may still be left out and fall back below. An empty
-    # file, a top-level list or scalar, an unknown key: the loader's refusal,
-    # in its own words.
+    # file, a top-level list or scalar, an unknown key: the loader's refusal
+    # (its words only with --show-loader-reason, #3703).
     try:
-        data = alertmanager_reading(raw)
+        data = alertmanager_reading(raw, show_loader_reason=show_loader_reason)
     except ConsumerReadError as exc:
         if not isinstance(exc, InputRefused):
             raise BaseConfigInputError(
                 f"--base-config: cannot read {path!r} the way Alertmanager does: {exc}") from exc
         raise BaseConfigInputError(
             f"--base-config: Alertmanager's config loader refuses {path!r}: "
-            f"{consumer_read_message(exc)}\n"
+            f"{consumer_read_message(exc)}{_reason_hint(show_loader_reason)}\n"
             "  --base-config takes a complete Alertmanager config (at least `route:` and "
             "the `receivers:` it names); `global:` / `inhibit_rules:` may be left out.") from exc
     # #1211 gap 2: an output fed back as the source (BaseIsAnOutputError, rc 1).
@@ -945,8 +975,9 @@ def _run_binary(argv: list[str], *, timeout: int,
 # from there, so parsing them on this machine would judge other files (or, for
 # a relative glob, none at all).
 #
-# A refusal is printed without the value yaml.v2 quotes (it may be a
-# credential): da-read leaves it out.
+# A refusal is da-read's fixed sentence, not the loader's reason: that is
+# Alertmanager's prose and quotes conf.d values (#3703). Only a person who
+# asks (`--show-loader-reason`, never the generator service) gets it.
 
 
 # `AlertmanagerCheck.status` values. ⛔ Three: a reader that could not give a
@@ -974,8 +1005,8 @@ class AlertmanagerCheck:
     reading: dict | None = None
 
 
-def alertmanager_check(am_yml: str, *, what: str, refusing: str
-                       ) -> AlertmanagerCheck:
+def alertmanager_check(am_yml: str, *, what: str, refusing: str,
+                       show_loader_reason: bool = False) -> AlertmanagerCheck:
     """Does Alertmanager accept *am_yml*? The ONE gate every mode asks
     (``--validate``, ``--output-*``, ``--apply``; #3689) — returned, never
     printed (#2311: validate-config reports it in a row).
@@ -989,16 +1020,18 @@ def alertmanager_check(am_yml: str, *, what: str, refusing: str
 
     *what* names the text for the operator; *refusing* is what the caller will
     NOT do because of a failure ("write it to …", "apply it …").
+    *show_loader_reason*: a refusal carries the loader's own reason; without
+    it the message names the flag that does (#3703).
     """
     try:
-        reading = alertmanager_reading(am_yml)
+        reading = alertmanager_reading(am_yml, show_loader_reason=show_loader_reason)
     except ConsumerReadError as exc:
         reason = safe_label(consumer_read_message(exc))
         if isinstance(exc, InputRefused):
             return AlertmanagerCheck(
                 AM_REJECTED, EXIT_VIOLATION,
                 f"FAIL: Alertmanager's config loader refuses {what} — refusing "
-                f"to {refusing}: {reason}")
+                f"to {refusing}: {reason}{_reason_hint(show_loader_reason)}")
         return AlertmanagerCheck(
             AM_UNUSABLE, EXIT_CALLER_ERROR,
             f"ERROR: cannot read {what} the way Alertmanager does — refusing "
@@ -1056,7 +1089,8 @@ class GeneratedConfigVerdict:
 
 def evaluate_generated_config(routes: list[dict], receivers: list[dict],
                               inhibit_rules: list[dict], warnings: list[str],
-                              *, extra_errors: "list[str] | tuple" = ()
+                              *, extra_errors: "list[str] | tuple" = (),
+                              show_loader_reason: bool = False
                               ) -> GeneratedConfigVerdict:
     """Every ``--validate`` verdict on a generation result, returned — never
     printed, never ``sys.exit``-ed (#2311).
@@ -1073,7 +1107,7 @@ def evaluate_generated_config(routes: list[dict], receivers: list[dict],
     4. ``assemble_configmap`` on the built-in base — a ``ValueError`` is a
        verdict on the config (#2260 / #2279);
     5. :func:`alertmanager_check` on that assembly — the same gate, in the
-       same order, as the write paths (#3689).
+       same order, as the write paths (#3689); *show_loader_reason* is its.
     """
     errors = blocking_generation_errors(warnings)
     errors.extend(extra_errors)
@@ -1117,7 +1151,7 @@ def evaluate_generated_config(routes: list[dict], receivers: list[dict],
         return verdict
     verdict.alertmanager = alertmanager_check(
         am_yml, what=VALIDATE_WHAT,
-        refusing="report the config as valid")
+        refusing="report the config as valid", show_loader_reason=show_loader_reason)
     return verdict
 
 
@@ -1144,7 +1178,8 @@ class AlertmanagerConfigInvariantViolated(ValueError):
     the apply path could raise."""
 
 
-def _read_existing_configmap(namespace: str, configmap_name: str
+def _read_existing_configmap(namespace: str, configmap_name: str, *,
+                             show_loader_reason: bool = False
                              ) -> tuple[dict | None, list[str], str | None]:
     """Read the SOURCE config ``--apply`` merges into from the cluster's
     Alertmanager ConfigMap (#1211 gap 2, owner decision S): its
@@ -1225,10 +1260,11 @@ def _read_existing_configmap(namespace: str, configmap_name: str
 
     # ADR-036 §12 (#3206): the cluster's config as Alertmanager loads it
     # (da-read alertmanager). A text its loader refuses — not YAML, empty,
-    # comments only, no route — is refused here in the loader's words; the
+    # comments only, no route — is refused here (in the loader's words only
+    # with --show-loader-reason, #3703); the
     # cluster's Alertmanager is not running it either.
     try:
-        existing = alertmanager_reading(existing_yml)
+        existing = alertmanager_reading(existing_yml, show_loader_reason=show_loader_reason)
     except ConsumerReadError as exc:
         if not isinstance(exc, InputRefused):
             warnings.append(
@@ -1244,7 +1280,7 @@ def _read_existing_configmap(namespace: str, configmap_name: str
                 "whitespace only)") if looks_empty else ""
         warnings.append(
             f"ERROR: Alertmanager's config loader refuses ConfigMap key "
-            f"'{key}'{hint}: {consumer_read_message(exc)}")
+            f"'{key}'{hint}: {consumer_read_message(exc)}{_reason_hint(show_loader_reason)}")
         return None, warnings, None
     return existing, warnings, existing_yml
 
@@ -1313,7 +1349,8 @@ def _reload_alertmanager(namespace: str) -> bool:
 
 
 def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str, strict: bool = False,
-                       judge_merged: Callable[[dict], list[str]] | None = None) -> bool:
+                       judge_merged: Callable[[dict], list[str]] | None = None, *,
+                       show_loader_reason: bool = False) -> bool:
     """Merge generated routing config into existing Alertmanager ConfigMap and reload.
 
     Applies tenant routing configuration directly to a running Alertmanager cluster.
@@ -1343,6 +1380,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         judge_merged: #1211 — called with the merged config as Alertmanager
             reads it, before anything is applied; it returns the reasons to
             refuse it (rc 1), an empty list to go on.
+        show_loader_reason: #3703 — a refusal by Alertmanager's loader (of the
+            cluster's config or the merged one) carries the loader's reason.
 
     Returns:
         True if merge, apply and reload all succeeded, False otherwise.
@@ -1357,7 +1396,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         nothing was sent to the cluster. #1533.
     """
     # 1. Read existing ConfigMap
-    existing, read_warnings, source_yml = _read_existing_configmap(namespace, configmap_name)
+    existing, read_warnings, source_yml = _read_existing_configmap(
+        namespace, configmap_name, show_loader_reason=show_loader_reason)
     if existing is None:
         for w in read_warnings:
             print(w, file=sys.stderr)
@@ -1386,7 +1426,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     check = alertmanager_check(
         merged_yml,
         what=f"the merged alertmanager.yml for {namespace}/{configmap_name}",
-        refusing="apply it to the cluster (nothing was applied)")
+        refusing="apply it to the cluster (nothing was applied)",
+        show_loader_reason=show_loader_reason)
     print(check.message, file=sys.stderr)
     if check.exit_code is not None:
         raise AlertmanagerConfigRejected(check.exit_code)
