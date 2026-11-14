@@ -27,6 +27,7 @@ from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#31
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_validation import scalar_text, shown_key, shown_value  # noqa: E402  (#1560 ⑤-b: values into messages)
 from _lib_validation import key_segment  # noqa: E402  (#3703: ids no rule vouched for)
+from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
 from _lib_validation import (  # noqa: E402  (#1560 ⑤-b: the one plaintext judgement)
     NEEDS_REFERENCE, PROXY_CREDENTIAL, URL_USERINFO,
     credential_shape_problems, plaintext_credential_findings, ref_path_text,
@@ -132,9 +133,10 @@ def unreadable_reason(e: FileUnreadable) -> str:
 
 
 def unreadable_remedy(e: FileUnreadable, fname: str) -> str:
-    """What the author does about it, by kind."""
+    """What the author does about it, by kind (#3703: the file named
+    through ``shown_file``)."""
     return _UNREADABLE_REMEDY.get(
-        e.kind, "rewrite {f} so da-guard parse-tree can read it").format(f=fname)
+        e.kind, "rewrite {f} so da-guard parse-tree can read it").format(f=shown_file(fname))
 
 
 def parse_tree_failure_exit(e: ParseTreeError, config_dir: str) -> "None":
@@ -252,7 +254,7 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
     # #2326: `fname` is the path relative to the conf.d root (a policy file
     # may sit in a subdirectory), so the NAME is what decides the kind.
     if os.path.basename(fname) in _POLICY_FILENAMES:
-        detail = f"{fname}: {reason} — fix: {remedy}"
+        detail = f"{shown_file(fname)}: {reason} — fix: {remedy}"
         # setdefault, matching the sibling below: this helper is also
         # reachable from _parse_platform_config, which tests call with a
         # hand-built result dict.
@@ -271,7 +273,7 @@ def _drop_unusable_policy(fname: str, reason: str, remedy: str, result: dict,
     # #1538: escape at the PRINT, not in `detail` above — `detail` lands in
     # result["policy_file_errors"] -> schema_warnings -> validate-config
     # --json, whose bytes must not change (json.dumps already escapes).
-    print(safe_label(warning or f"  WARN: skip {fname}: {reason}"),
+    print(safe_label(warning or f"  WARN: skip {shown_file(fname)}: {reason}"),
           file=sys.stderr)
 
 
@@ -342,7 +344,8 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
     is_carrier = cls == "defaults"
     # #1538: display-only alias. `fname` itself stays raw — it is used for
     # lookups (_POLICY_FILENAMES) and stored into `result`, which feeds --json.
-    _f = safe_label(fname)
+    # #3703: through `shown_file`, the one exit of a conf.d path.
+    _f = shown_file(fname)
     if is_defaults_file:
         _record_unknown_routing_keys(result, data, layer="platform", where="top level", file=fname)
 
@@ -417,7 +420,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
                     field_prefix="_routing_defaults.", file=fname)
                 rd = {k: v for k, v in rd.items() if k != "routes"}
                 result.setdefault("routing_defaults_errors", []).append(
-                    skipped_entry_warning(f"  WARN: _routing_defaults in {fname}: 'routes' is not "
+                    skipped_entry_warning(f"  WARN: _routing_defaults in {_f}: 'routes' is not "
                                           "supported here (define it in a routing profile or the "
                                           "tenant's _routing), skipping",
                                           kind="routing_defaults_routes_ignored", file=fname,
@@ -457,7 +460,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
                 # file's block stays, and --validate fails on the line.
                 result.setdefault("enforced_errors", []).append(
                     skipped_entry_warning(
-                        "  WARN: " + enforced_match_invalid_text(f" in {fname}", raw["match"]),
+                        "  WARN: " + enforced_match_invalid_text(f" in {_f}", raw["match"]),
                         kind="routing_enforced_match_invalid",
                         file=fname, field="_routing_enforced.match"))
             elif isinstance(raw, dict) and enabled is True:
@@ -467,7 +470,7 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
             elif isinstance(raw, dict):
                 _field_type_error(
                     result, "routing_enforced_enabled_invalid",
-                    f"_routing_enforced in {fname}: 'enabled' must be a boolean "
+                    f"_routing_enforced in {_f}: 'enabled' must be a boolean "
                     f"(true / false, unquoted), got {value_type_text(enabled)}",
                     file=fname, field="_routing_enforced.enabled")
             else:
@@ -543,14 +546,14 @@ def _record_receiver_bool_errors(result: dict, obj: object, *, block: str,
             *routing_block_file_reference_errors(
                 obj, block=block, where=where, field_prefix=field_prefix)]:
         _field_type_error(result, "invalid_receiver_field",
-                          f"{file}: {message}" if file else message,
+                          f"{shown_file(file)}: {message}" if file else message,
                           file=file, tenant=tenant, field=fld)
     # #3284: a `group_by` that is not a list (`group_by: alertname`) used to
     # render no group_by at all, rc 0 in every mode; refused the same way.
     for fld, message in routing_block_group_by_type_errors(
             obj, block=block, where=where, field_prefix=field_prefix):
         _field_type_error(result, "routing_group_by_invalid",
-                          f"{file}: {message}" if file else message,
+                          f"{shown_file(file)}: {message}" if file else message,
                           file=file, tenant=tenant, field=fld)
 
 
@@ -561,7 +564,7 @@ def _record_file_reference_errors(result: dict, obj: object, *, where: str,
     threshold profile): rendered nowhere today, refused like everywhere else."""
     for fld, message in routing_block_file_reference_errors(
             obj, block="unread", where=where, field_prefix=field_prefix):
-        _field_type_error(result, "invalid_receiver_field", f"{file}: {message}",
+        _field_type_error(result, "invalid_receiver_field", f"{shown_file(file)}: {message}",
                           file=file, field=fld)
 
 
@@ -632,8 +635,8 @@ def _record_profiles(fname: str, level: str, profiles: dict,
             _tree_problem(
                 result, "routing_profile_duplicate", fname,
                 f"routing_profiles.{key_segment(name)}",
-                f"routing profile '{shown_key(name)}' is defined in both {first} and "
-                f"{fname} — a profile name must be unique across the whole "
+                f"routing profile '{shown_key(name)}' is defined in both {shown_file(first)} and "
+                f"{shown_file(fname)} — a profile name must be unique across the whole "
                 f"conf.d tree (ADR-007 amendment 2026-09-28); rename or "
                 f"remove one of them")
             continue
@@ -649,7 +652,7 @@ def _refuse_nested_enforced(fname: str, result: dict) -> None:
     """#2326 (b): `_routing_enforced` in a file below the root is blocking."""
     _tree_problem(
         result, "routing_enforced_below_root", fname, "_routing_enforced",
-        f"{fname}: _routing_enforced is read only at the conf.d root — a "
+        f"{shown_file(fname)}: _routing_enforced is read only at the conf.d root — a "
         f"NOC route scoped to one subtree is not supported (ADR-017 "
         f"Decision 9); move it to a root platform file or "
         f"delete it")
@@ -666,9 +669,9 @@ def _unselected_carrier(fname: str, chosen: str, level: str,
     the verdict (before #2906 a `_routing_enforced` in one below the root
     was read out of it and refused as `routing_enforced_below_root`)."""
     where = ("the conf.d root" if level == ROOT_LEVEL
-             else f"directory {level}/")
+             else f"directory {shown_file(level)}/")
     result.setdefault("unselected_carriers", []).append(skipped_entry_warning(
-        f"  WARN: {fname} is not read: {where} has more than one defaults "
+        f"  WARN: {shown_file(fname)} is not read: {where} has more than one defaults "
         f"carrier and only {chosen} is read, on every plane (#1674); merge "
         f"them into one file, skipping",
         kind="unselected_defaults_carrier", file=fname))
@@ -777,7 +780,7 @@ def _unread_routing(data: dict, fname: str, *, is_carrier: bool,
             _record_file_reference_errors(result, holder[k], where=f"{prefix}{key_segment(k)}",
                                           field_prefix=f"{prefix}{key_segment(k)}.", file=fname)
     for fld, key, why in found:
-        text = f"{fname}: {fld} is not rendered — {why}; {_unread_routing_fix(key)}"
+        text = f"{shown_file(fname)}: {fld} is not rendered — {why}; {_unread_routing_fix(key)}"
         result.setdefault("routing_defaults_errors", []).append(
             skipped_entry_warning(f"  WARN: {text}, skipping",
                                   kind="routing_in_unread_location", file=fname,
@@ -806,7 +809,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
     *reserved*: whether the file is a platform (`_`) file — the entry's Go
     class (the read loop passes it), else the name's (`classify_names`).
     """
-    _f = safe_label(fname)
+    _f = shown_file(fname)  # #3703: the one exit of a conf.d path
     if reserved is None:
         reserved = _name_class(fname) in RESERVED_CLASSES
     if reserved:
@@ -825,7 +828,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
             # `routing_in_unread_location`: a `WARN … skipping`
             # line, blocking under `--validate` like `_routing_defaults.routes`.
             result.setdefault("routing_defaults_errors", []).append(
-                skipped_entry_warning(f"  WARN: _routing_defaults in {fname} is not read: below the "
+                skipped_entry_warning(f"  WARN: _routing_defaults in {_f} is not read: below the "
                                       f"conf.d root only the directory's defaults carrier "
                                       f"(_defaults.yaml / _defaults.yml) carries it — move it there, "
                                       f"skipping",
@@ -834,7 +837,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
             _tree_problem(
                 result, "routing_in_unread_location", fname,
                 "_routing_defaults",
-                f"{fname}: _routing_defaults is not read below the root "
+                f"{_f}: _routing_defaults is not read below the root "
                 f"outside the directory's defaults carrier")
         elif not is_level_carrier:
             print(f"  WARN: _routing_defaults in {_f} ignored (below the "
@@ -852,7 +855,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                     field_prefix="_routing_defaults.", file=fname)
                 rd = {k: v for k, v in rd.items() if k != "routes"}
                 result.setdefault("routing_defaults_errors", []).append(
-                    skipped_entry_warning(f"  WARN: _routing_defaults in {fname}: 'routes' is not "
+                    skipped_entry_warning(f"  WARN: _routing_defaults in {_f}: 'routes' is not "
                                           "supported here (define it in a routing profile or the "
                                           "tenant's _routing), skipping",
                                           kind="routing_defaults_routes_ignored", file=fname,
@@ -865,9 +868,9 @@ def _parse_nested_config(data: dict, fname: str, level: str,
                     _tree_problem(
                         result, "routing_defaults_null_below_root", fname,
                         f"_routing_defaults.{key}",
-                        f"{fname}: _routing_defaults.{key} is null — below "
+                        f"{_f}: _routing_defaults.{key} is null — below "
                         f"the conf.d root that takes the {key} away from "
-                        f"every tenant under {level}/ that does not set its "
+                        f"every tenant under {shown_file(level)}/ that does not set its "
                         f"own, and their alerts fall silently to the "
                         f"catch-all (ADR-017 Decision 9); set "
                         f"a value or remove the key")
@@ -901,7 +904,7 @@ def _record_policy_problems(fname: str, policies: dict, result: dict) -> None:
         for fld, message in domain_policy_problems(policy):
             _field_type_error(
                 result, "domain_policy_unusable",
-                f"{fname}: domain_policy '{shown_key(name)}': {message}",
+                f"{shown_file(fname)}: domain_policy '{shown_key(name)}': {message}",
                 file=fname, policy=key_segment(name), field=fld)
 
 
@@ -914,7 +917,7 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
     `_domain_policy.yaml` / `.yml`. Below the root they are scoped to the
     subtree they sit in (#2326 (c), (d)).
     """
-    _f = safe_label(fname)
+    _f = shown_file(fname)  # #3703: the one exit of a conf.d path
     base = os.path.basename(fname)
 
     # v2.1.0 ADR-007: Extract routing_profiles (only from _routing_profiles.yaml)
@@ -934,7 +937,7 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                 # #2904: a finding (routing_profiles_unusable, warn), not a
                 # bare stderr print. Never blocking.
                 result.setdefault("routing_profiles_errors", []).append(Finding(
-                    f"  WARN: routing_profiles in {fname} must be a mapping of "
+                    f"  WARN: routing_profiles in {_f} must be a mapping of "
                     f"profile name to routing, got {type(profiles).__name__} — "
                     f"no routing profile in this file is applied, ignoring",
                     kind="routing_profiles_unusable", blocks="never",
@@ -942,7 +945,7 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                 _tree_problem(
                     result, "routing_profiles_unusable", fname,
                     "routing_profiles",
-                    f"{fname}: routing_profiles must be a mapping, got "
+                    f"{_f}: routing_profiles must be a mapping, got "
                     f"{type(profiles).__name__}; no profile in it is applied")
         else:
             print(f"  WARN: routing_profiles in {_f} ignored "
@@ -982,7 +985,7 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
                     f"policy, got {type(policies).__name__} — the whole block "
                     f"is ignored",
                     f"indent each domain under `domain_policies:` in "
-                    f"{dp_fname}",
+                    f"{_f}",
                     result,
                     warning=f"  WARN: domain_policies in {_f} must be a "
                             f"dict, ignoring",
@@ -995,10 +998,10 @@ def _parse_profiles_and_policies(data: dict, fname: str, level: str,
             # --strict-only ERROR, so a lenient run rendered at rc 0 with the
             # policy silently off. The KEY decides, not its value: nothing in
             # this file is ever read as a policy, an empty block included.
-            target = str(PurePosixPath(fname).parent / "_domain_policy.yaml")
+            target = shown_file(str(PurePosixPath(fname).parent / "_domain_policy.yaml"))
             _field_type_error(
                 result, "domain_policy_unusable",
-                f"{fname}: a domain_policies block is not read from this "
+                f"{_f}: a domain_policies block is not read from this "
                 f"file — domain policies are read only from "
                 f"_domain_policy.yaml / _domain_policy.yml (the conf.d root, "
                 f"or a subdirectory for its subtree), so no policy in it is "
@@ -1224,13 +1227,13 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         rel = _rel(bad)
         _drop_unreadable_file(
             rel, unusable_reason(bad, listing.listing),
-            f"remove {rel} or replace it with a readable YAML file",
+            f"remove {shown_file(rel)} or replace it with a readable YAML file",
             result)
     # #2981: entries the generator service read from git as not regular files.
     for rel, mode in sorted(_GIT_IRREGULAR.items()):
         _drop_unreadable_file(
             rel, git_irregular_reason(mode),
-            f"commit {rel} as a regular file (its content in place of the "
+            f"commit {shown_file(rel)} as a regular file (its content in place of the "
             f"link), or remove it",
             result)
 
@@ -1263,7 +1266,8 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
                 continue
             chosen = reader.carrier(d)
             for p in sorted(skipped_here, key=_rel):
-                _unselected_carrier(_rel(p), _rel(chosen) if chosen is not None
+                # #3703: *chosen* is message text — its path through shown_file.
+                _unselected_carrier(_rel(p), shown_file(_rel(chosen)) if chosen is not None
                                     else "another carrier",
                                     PurePosixPath(_rel(p)).parent.as_posix(), result)
     except ParseTreeError as e:
@@ -1348,7 +1352,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         # it, and so does this reader now that it opens the file.
         if level != ROOT_LEVEL and is_reserved:
             if data.get("tenants"):
-                print(f"  WARN: {safe_label(fname)}: 'tenants:' block ignored "
+                print(f"  WARN: {shown_file(fname)}: 'tenants:' block ignored "
                       f"— a platform file below the conf.d root supplies no "
                       f"per-tenant values on any plane (only root platform "
                       f"files do); set the keys in the tenant's own file",
@@ -1370,7 +1374,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
             # it" produce byte-identical files, and the sibling branch
             # below already warns for a wrong-shaped `tenants:`. Before
             # this, only the null spelling was silent.
-            print(f"  WARN: {safe_label(fname)}: 'tenants:' is declared but empty — no "
+            print(f"  WARN: {shown_file(fname)}: 'tenants:' is declared but empty — no "
                   f"tenant is loaded from this file", file=sys.stderr)
             continue
         tenants = raw_tenants
@@ -1401,7 +1405,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
                 f"— no tenant in this file is loaded here, and the Go "
                 f"exporter drops the WHOLE file on it (including its "
                 f"`defaults:`)",
-                f"make `tenants:` in {fname} a mapping of "
+                f"make `tenants:` in {shown_file(fname)} a mapping of "
                 f"<tenant>: {{<key>: <value>}}",
                 result)
             continue
@@ -1430,7 +1434,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
                     result.setdefault("unloaded_tenants", set()).add(tenant)
                 # #3703: the id of a body that is not loaded is whatever
                 # the author wrote — shown_key, not the text.
-                print(f"  WARN: {safe_label(fname)}: tenant "
+                print(f"  WARN: {shown_file(fname)}: tenant "
                       f"'{shown_key(str(tenant))}' must be a mapping, got "
                       f"{type(overrides).__name__} — that tenant is not "
                       f"loaded", file=sys.stderr)
@@ -1536,7 +1540,7 @@ def _resolve_severity_dedup(config_dir: str, result: dict,
         sides = (f"only the generator: {names(ours - theirs)}; only the exporter: "
                  f"{names(theirs - ours)}")
         severity_dedup_failure_exit(
-            (f"the exporter's load drops {', '.join(safe_label(f) for f in dropped)}, so it "
+            (f"the exporter's load drops {', '.join(shown_file(f) for f in dropped)}, so it "
              f"does not load the tenants the route generator does ({sides}) — fix the file(s)"
              if dropped else
              f"internal error: the route generator and the exporter do not load the same "
@@ -1548,7 +1552,7 @@ def _resolve_severity_dedup(config_dir: str, result: dict,
     for p in tree.problems:
         _field_type_error(
             result, "severity_dedup_invalid",
-            f"{p.file}: {layer_text.get(p.layer, p.layer)} '{shown_key(p.owner)}': "
+            f"{shown_file(p.file)}: {layer_text.get(p.layer, p.layer)} '{shown_key(p.owner)}': "
             f"_severity_dedup {_dedup_value_shown(p)} — the exporter serves enable for it "
             f"(da-guard severity-dedup); write enable or disable",
             file=p.file, tenant=tenant_id_field(p.owner) if p.layer != "profile" else None,
@@ -1556,7 +1560,7 @@ def _resolve_severity_dedup(config_dir: str, result: dict,
     for e in tree.schedules:
         _field_type_error(
             result, "severity_dedup_invalid",
-            f"{e.file}: {e.section}.{shown_key(e.owner)}._severity_dedup is written with a time "
+            f"{shown_file(e.file)}: {e.section}.{shown_key(e.owner)}._severity_dedup is written with a time "
             f"window or expires (`overrides:` / `expires:` / `reason:`) — a reserved key takes "
             f"no schedule: the exporter reads its `default` alone and ignores the rest "
             f"(#3269; da-guard severity-dedup); write the value alone",
@@ -1609,7 +1613,7 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
     for fname, tenant in orphans:
         # #3703: an id no tenant file declares is whatever the platform
         # file's author wrote — shown_key / key_segment, not the text.
-        print(f"  WARN: {safe_label(fname)}: tenants.{key_segment(str(tenant))} "
+        print(f"  WARN: {shown_file(fname)}: tenants.{key_segment(str(tenant))} "
               f"ignored — no tenant file declares tenant "
               f"'{shown_key(str(tenant))}'{tenant_set_unknown_note(unknown)}; a platform "
               f"file can only provide defaults for a tenant that already exists",
@@ -1638,11 +1642,11 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
         first, second = declared[tenant][0], declared[tenant][1]
         _tree_problem(
             result, "duplicate_tenant", second, f"tenants.{key_segment(str(tenant))}",
-            f"duplicate tenant id '{shown_key(str(tenant))}': declared in both {first} and "
-            f"{second} — threshold-exporter rejects a tree that declares one "
-            f"tenant in two files (DuplicateTenantError), and routes built "
-            f"from a blend of both would match neither; keep the tenant in "
-            f"one file ({', '.join(files)})")
+            f"duplicate tenant id '{shown_key(str(tenant))}': declared in both "
+            f"{shown_file(first)} and {shown_file(second)} — threshold-exporter rejects a "
+            f"tree that declares one tenant in two files (DuplicateTenantError), and routes "
+            f"built from a blend of both would match neither; keep the tenant in "
+            f"one file ({', '.join(shown_file(f) for f in files)})")
     # ADR-035 D3: an invalid id is judged on the DECLARATIONS — every key a
     # tenant file puts under `tenants:`, a body that is not a mapping (null,
     # a scalar) included — not on the loaded set: such a body is never
@@ -1800,7 +1804,8 @@ def policy_level_source(parsed: dict, level: str) -> str:
     as ``check_policy_scope`` names them (#2326 (d))."""
     origin = parsed.get("domain_policy_origin", {})
     files = sorted({origin[(lv, n)] for (lv, n) in origin if lv == level})
-    return " / ".join(files) or f"{level}/"
+    # #3703: message text — each path through shown_file.
+    return " / ".join(shown_file(f) for f in files) or f"{shown_file(level)}/"
 
 
 def load_tenant_tree(
@@ -1935,7 +1940,7 @@ def load_tenant_tree(
                 "domain_policy_out_of_scope", origin.get((level, domain), source),
                 f"domain_policies.{key_segment(domain)}.tenants",
                 f"domain policy '{shown_key(domain)}' names tenant '{tenant}' outside "
-                f"{level}/"))
+                f"{shown_file(level)}/"))
         schema_warnings.extend(
             check_domain_policies(reachable, policies, strict=strict_policies))
 
@@ -2463,11 +2468,11 @@ def credential_findings(tree: "TenantTree", *, scope: "frozenset[str] | None" = 
                 "tenant-config.schema.json says")
         if scope is None or fact.file in scope:
             out.append(credential_refusal(
-                f"  ERROR (credential): {fact.file}: {where} {text}",
+                f"  ERROR (credential): {shown_file(fact.file)}: {where} {text}",
                 kind=fact.kind, tenant=fact.tenant, file=fact.file, field=where))
         else:
             out.append(Finding(
-                f"  NOTICE (credential): {fact.file}: {where} {text} (not refused "
+                f"  NOTICE (credential): {shown_file(fact.file)}: {where} {text} (not refused "
                 "here: this write does not change that file)",
                 kind=fact.kind, blocks="never", tenant=fact.tenant, file=fact.file,
                 field=where))

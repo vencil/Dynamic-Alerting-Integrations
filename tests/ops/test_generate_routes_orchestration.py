@@ -66,6 +66,8 @@ from generate_alertmanager_routes import (
 )
 
 import generate_alertmanager_routes as gar
+from _kubectl_fake import install as install_kubectl  # noqa: E402  (#3539)
+from _kubectl_fake import run_from_argv as kubectl_from_argv  # noqa: E402  (#3539)
 
 
 # ============================================================
@@ -637,6 +639,7 @@ class TestOutputAndClusterExitCodes:
             return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
         monkeypatch.setattr(render, "_run_binary", fake)
+        monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
         # #3703: asked for, so a loader refusal carries the loader's reason.
         assert render.apply_to_configmap([], [], [], "monitoring", "cm",
                                          show_loader_reason=True) is False
@@ -658,6 +661,7 @@ class TestOutputAndClusterExitCodes:
             return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
         monkeypatch.setattr(render, "_run_binary", fake)
+        monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
         assert render.apply_to_configmap([], [], [], "monitoring", "cm") is True
 
     def test_every_apply_failure_shape_is_still_covered(self):
@@ -686,6 +690,7 @@ class TestOutputAndClusterExitCodes:
                 out = json.dumps(payload) if argv[:2] == ["kubectl", "get"] else ""
                 return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
             monkeypatch.setattr(render, "_run_binary", fake)
+            monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
             assert render.apply_to_configmap([], [], [], "monitoring", "cm") is False
             return capsys.readouterr().err
 
@@ -712,6 +717,7 @@ class TestOutputAndClusterExitCodes:
                 out = _o if argv[:2] == ["kubectl", "get"] else ""
                 return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
             monkeypatch.setattr(render, "_run_binary", fake)
+            monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
             assert render.apply_to_configmap([], [], [], "monitoring", "cm") is False
             assert capsys.readouterr().err.strip(), (
                 f"[{case}] returned False with an empty stderr — exit 2 and "
@@ -734,6 +740,7 @@ class TestOutputAndClusterExitCodes:
                     if argv[:2] == ["kubectl", "get"] else ""
                 return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
             monkeypatch.setattr(render, "_run_binary", fake)
+            monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
             render.apply_to_configmap([], [], [], "monitoring", "cm")
             return capsys.readouterr().err
 
@@ -3314,7 +3321,9 @@ class TestApplyToConfigmap:
 
             return result
 
-        monkeypatch.setattr(subprocess, "run", mock_run)
+        # #3539: kubectl is started by `_lib_kubectl.kubectl_run` (located,
+        # its output read from files) — curl still by `_run_binary`.
+        install_kubectl(monkeypatch, mock_run)
         return calls
 
     def test_successful_apply(self, monkeypatch):
@@ -3337,6 +3346,67 @@ class TestApplyToConfigmap:
         self._mock_subprocess(monkeypatch, "", kubectl_get_rc=1)
         result = apply_to_configmap([], [], [], "monitoring", "am-config")
         assert result is False
+
+    # ── #3539: kubectl gives no exit status (not startable, out of time) ──
+
+    @staticmethod
+    def _kubectl_dies_at(monkeypatch, stage):
+        """`kubectl_run` as `_grar_render` calls it: KubectlError at *stage*
+        (what `_lib_kubectl` raises for a kubectl that cannot be started),
+        rc 0 before it. Returns the verbs run."""
+        import _grar_render as render
+        from _lib_kubectl import KubectlError
+        verbs = []
+
+        def kubectl_run(verb, args, **_kw):
+            verbs.append(verb)
+            if verb == stage:
+                raise KubectlError(f"`kubectl {verb}`: cannot run kubectl: "
+                                   "[Errno 13] Permission denied: '/bin/kubectl' (rc 127)")
+            return subprocess.CompletedProcess([verb, *args], 0, "kind: ConfigMap\n", "")
+        monkeypatch.setattr(render, "kubectl_run", kubectl_run)
+        return verbs
+
+    def test_the_apply_is_handed_the_manifest_the_create_printed(self, monkeypatch, capsys):
+        """`kubectl apply -f -` reads the manifest from stdin: the one
+        `create --dry-run=client -o yaml` printed, whole. Without it the
+        apply would read this tool's own stdin."""
+        import _grar_render as render
+        seen = {}
+        manifest = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: am-config\n"
+
+        def kubectl_run(verb, args, **kw):
+            seen[verb] = (list(args), kw.get("stdin_text"))
+            return subprocess.CompletedProcess([verb, *args], 0,
+                                               manifest if verb == "create" else "", "")
+        monkeypatch.setattr(render, "kubectl_run", kubectl_run)
+        assert render._apply_merged_configmap("route: {}\n", "monitoring", "am-config") is True
+        assert seen["apply"] == (["-f", "-"], manifest)
+        assert seen["create"][1] is None
+        assert "ConfigMap monitoring/am-config updated" in capsys.readouterr().out
+
+    def test_a_read_kubectl_could_not_start_is_explained_not_empty(self, monkeypatch):
+        import _grar_render as render
+        self._kubectl_dies_at(monkeypatch, "get")
+        cfg, warnings, source = render._read_existing_configmap("monitoring", "am-config")
+        assert cfg is None and source is None
+        assert len(warnings) == 1 and "cannot run kubectl" in warnings[0]
+        assert "Failed to read ConfigMap am-config" in warnings[0]
+
+    @pytest.mark.parametrize("stage, ran", [("create", ["create"]),
+                                            ("apply", ["create", "apply"])])
+    def test_a_write_kubectl_could_not_start_is_never_an_update(self, monkeypatch, capsys,
+                                                               stage, ran):
+        """Part-way: the manifest was generated (`create --dry-run=client`
+        exits 0) and the `apply` cannot be started — False, the reason on
+        stderr, and no "updated" line."""
+        import _grar_render as render
+        verbs = self._kubectl_dies_at(monkeypatch, stage)
+        assert render._apply_merged_configmap("route: {}\n", "monitoring", "am-config") is False
+        out, err = capsys.readouterr()
+        assert verbs == ran
+        assert "updated" not in out + err
+        assert "cannot run kubectl" in err
 
     def test_empty_configmap_data(self, monkeypatch):
         existing_cm = {"data": {}}

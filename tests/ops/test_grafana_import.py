@@ -22,7 +22,7 @@ sys.path.insert(0, _TOOLS_DIR)
 import grafana_import as gi  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 import _lib_kubectl  # noqa: E402
-from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
+from _kubectl_fake import install as install_kubectl  # noqa: E402  (#3349)
 from _lib_kubectl import KubectlError  # noqa: E402
 from _lib_exitcodes import emit_result, exit_on_crash  # noqa: E402  (#3216: in-process main() → exit status)
 
@@ -63,52 +63,71 @@ class TestAutoName:
 
 
 # ---------------------------------------------------------------------------
-# run_cmd — subprocess wrapper
+# run_kubectl — every kubectl of an import, through _lib_kubectl (#3539)
 # ---------------------------------------------------------------------------
-class TestRunCmd:
+def _kubectl(monkeypatch, answers=None):
+    """Every kubectl the import starts answers by verb: *answers* maps a verb
+    to `(rc, stdout, stderr)`, to an exception to raise at its start, or to a
+    callable taking the argv; a verb not named answers rc 0 with a manifest
+    on stdout. Returns the recorded argvs (each starts with `kubectl`)."""
+    answers = answers or {}
+    calls = []
+
+    def fake(cmd, **kw):
+        calls.append(cmd)
+        answer = answers.get(cmd[1], (0, "kind: ConfigMap\n", ""))
+        if isinstance(answer, BaseException):
+            raise answer
+        if callable(answer):
+            answer = answer(cmd, **kw)
+        return subprocess.CompletedProcess(cmd, *answer)
+    install_kubectl(monkeypatch, fake)
+    return calls
+
+
+#: What starting kubectl can raise, and the words `_lib_engine` names it by.
+_NO_EXIT_STATUS = [
+    (PermissionError(errno.EACCES, "Permission denied", "kubectl"), "cannot run kubectl"),
+    (OSError(errno.ENOEXEC, "Exec format error", "kubectl"), "cannot run kubectl"),
+    (FileNotFoundError(errno.ENOENT, "No such file or directory", "kubectl"), "cannot run kubectl"),
+    (subprocess.TimeoutExpired("kubectl", 120), "did not finish within 120s"),
+]
+_NO_EXIT_IDS = ["eacces", "enoexec", "enoent", "timeout"]
+
+
+class TestRunKubectl:
     def test_rejects_string_argument(self):
         with pytest.raises(TypeError, match="list argument"):
-            gi.run_cmd("kubectl get pods")
+            gi.run_kubectl("get", "pods")
 
-    def test_dry_run_returns_sentinel_without_executing(self, capsys):
+    def test_dry_run_prints_the_command_without_executing(self, monkeypatch, capsys):
         # #1112: the echoed command is progress prose → stderr, so that
         # `--dry-run --json` leaves stdout holding exactly one JSON document.
-        result = gi.run_cmd(["kubectl", "get", "pods"], dry_run=True)
-        assert result == "[dry-run]"
+        calls = _kubectl(monkeypatch)
+        assert gi.run_kubectl("get", ["pods"], dry_run=True) is None
         captured = capsys.readouterr()
         assert "[DRY RUN]" in captured.err
         assert "kubectl get pods" in captured.err
         assert captured.out == ""
+        assert calls == []
 
-    def test_success_returns_stripped_stdout(self, monkeypatch):
-        monkeypatch.setattr(
-            gi.subprocess, "check_output",
-            lambda *a, **kw: "  result-line\n",
-        )
-        assert gi.run_cmd(["kubectl", "get"]) == "result-line"
+    def test_an_exit_status_is_returned_for_the_caller_to_read(self, monkeypatch):
+        _kubectl(monkeypatch, {"get": (1, "  out\n", "err\n")})
+        proc = gi.run_kubectl("get", ["pods"])
+        assert (proc.returncode, proc.stdout, proc.stderr) == (1, "  out\n", "err\n")
 
-    def test_failure_returns_none(self, monkeypatch):
-        def boom(*args, **kwargs):
-            raise subprocess.CalledProcessError(1, "kubectl", stderr="err")
-        monkeypatch.setattr(gi.subprocess, "check_output", boom)
-        assert gi.run_cmd(["kubectl", "get"]) is None
-
-    @pytest.mark.parametrize("raised, why", [
-        (FileNotFoundError(errno.ENOENT, "No such file or directory", "kubectl"),
-         "kubectl is not on PATH"),
-        (subprocess.TimeoutExpired("kubectl", 120), "no answer within 120s"),
-    ], ids=["not-on-path", "timeout"])
-    def test_no_kubectl_or_no_answer_is_kubectl_error(self, monkeypatch, raised, why):
-        """#3349: the environment, named (rc 2, reason kubectl_error) — these
-        escaped as a traceback before; a kubectl that answered non-zero is
-        still None (the caller's own fail row)."""
-        def boom(*args, **kwargs):
-            raise raised
-        monkeypatch.setattr(gi.subprocess, "check_output", boom)
+    @pytest.mark.parametrize("raised, why", _NO_EXIT_STATUS, ids=_NO_EXIT_IDS)
+    def test_no_exit_status_is_kubectl_error(self, monkeypatch, raised, why):
+        """#3349 / #3539: the environment, named (rc 2, reason kubectl_error)
+        — not on PATH and out of time were named here already; no execute
+        permission and ENOEXEC escaped as a traceback (`unexpected internal
+        error`). A kubectl that answered non-zero is still the caller's own
+        fail row."""
+        _kubectl(monkeypatch, {"create": raised})
         with pytest.raises(KubectlError, match=why) as exc:
-            gi.run_cmd(["kubectl", "create", "configmap", "x"])
+            gi.run_kubectl("create", ["configmap", "x"])
         assert exc.value.reason == "kubectl_error"
-        assert "kubectl create configmap" in str(exc.value)
+        assert "kubectl create configmap x" in str(exc.value)
 
 
 # ---------------------------------------------------------------------------
@@ -135,9 +154,7 @@ class TestImportDashboard:
         d.mkdir()
         for name in ("a.json", "b.json"):
             (d / name).write_text('{"title": "T"}', encoding="utf-8")
-        calls = []
-        monkeypatch.setattr(gi.subprocess, "check_output", lambda cmd, **_k: calls.append(cmd))
-        monkeypatch.setattr(gi.subprocess, "run", lambda *a, **_k: calls.append(a))
+        calls = _kubectl(monkeypatch)
         real = gi._lib_input.selected
 
         def selected_then_gone(*a, **k):
@@ -160,16 +177,14 @@ class TestImportDashboard:
         f.write_bytes(raw)
         seen = {}
 
-        def check_output(cmd, **_kw):
+        def create(cmd, **_kw):
             for a in cmd:
-                if a.startswith("--from-file="):  # the create (the label run has none)
+                if a.startswith("--from-file="):
                     source = a.split("=", 2)[2]
                     seen["source"], seen["bytes"] = source, Path(source).read_bytes()
-            return "kind: ConfigMap"
+            return (0, "kind: ConfigMap", "")
 
-        monkeypatch.setattr(gi.subprocess, "check_output", check_output)
-        monkeypatch.setattr(gi.subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(
-            a, 0, "", ""))
+        _kubectl(monkeypatch, {"create": create})
         gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
         assert seen["source"] != str(f) and seen["bytes"] == raw, seen
 
@@ -189,11 +204,10 @@ class TestImportDashboard:
         assert "Invalid JSON" in results[0]["detail"]
 
     def test_dry_run_does_not_execute_kubectl(self, tmp_path, monkeypatch, capsys):
-        # Real subprocess.check_output should NEVER be called in dry-run.
+        # kubectl should NEVER be started in dry-run.
         def fail_if_called(*args, **kwargs):
             raise AssertionError("subprocess invoked in dry-run mode")
-        monkeypatch.setattr(gi.subprocess, "check_output", fail_if_called)
-        monkeypatch.setattr(gi.subprocess, "run", fail_if_called)
+        install_kubectl(monkeypatch, fail_if_called)
 
         f = tmp_path / "dash.json"
         f.write_text(json.dumps({"title": "Test Dashboard"}), encoding="utf-8")
@@ -207,11 +221,10 @@ class TestImportDashboard:
         f = tmp_path / "dash.json"
         f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
 
-        def boom(*args, **kwargs):
-            raise subprocess.CalledProcessError(1, "kubectl")
-        monkeypatch.setattr(gi.subprocess, "check_output", boom)
+        calls = _kubectl(monkeypatch, {"create": (1, "", "error: bad name")})
         results = gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
-        # Only the create failure is recorded; label step is skipped.
+        # Only the create failure is recorded; apply and label are skipped.
+        assert [c[1] for c in calls] == ["create"]
         assert len(results) == 1
         assert results[0]["action"] == "create_configmap"
         assert results[0]["status"] == "fail"
@@ -220,16 +233,18 @@ class TestImportDashboard:
         f = tmp_path / "dash.json"
         f.write_text(json.dumps({"title": "Happy"}), encoding="utf-8")
 
-        # First check_output (generate YAML) succeeds; second (label) succeeds.
-        monkeypatch.setattr(gi.subprocess, "check_output",
-                            lambda *a, **kw: "kind: ConfigMap\n")
-        # subprocess.run for `kubectl apply -f -` succeeds.
-        proc = MagicMock()
-        proc.returncode = 0
-        proc.stderr = ""
-        monkeypatch.setattr(gi.subprocess, "run", lambda *a, **kw: proc)
+        # create (generate YAML), apply and label all exit 0; apply is
+        # handed the manifest create printed.
+        applied = {}
+
+        def apply(cmd, **kw):
+            applied["stdin"] = kw.get("input")
+            return (0, "configmap/cm created\n", "")
+        calls = _kubectl(monkeypatch, {"apply": apply})
 
         results = gi.import_dashboard(str(f), "cm", "monitoring", raw=f.read_bytes())
+        assert [c[1] for c in calls] == ["create", "apply", "label"]
+        assert applied["stdin"] == b"kind: ConfigMap"
         actions = [r["action"] for r in results]
         statuses = [r["status"] for r in results]
         assert "create_configmap" in actions
@@ -240,18 +255,84 @@ class TestImportDashboard:
         f = tmp_path / "dash.json"
         f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
 
-        monkeypatch.setattr(gi.subprocess, "check_output",
-                            lambda *a, **kw: "kind: ConfigMap\n")
-        proc = MagicMock()
-        proc.returncode = 1
-        proc.stderr = "apply error"
-        monkeypatch.setattr(gi.subprocess, "run", lambda *a, **kw: proc)
+        calls = _kubectl(monkeypatch, {"apply": (1, "", "apply error")})
 
         results = gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
         # Apply fails, label should not be attempted.
+        assert [c[1] for c in calls] == ["create", "apply"]
         assert len(results) == 1
         assert results[0]["status"] == "fail"
         assert "apply" in results[0]["detail"].lower()
+
+    # ── #3539: a kubectl that gives no exit status, at each of the three ──
+
+    @pytest.mark.parametrize("raised, why", _NO_EXIT_STATUS, ids=_NO_EXIT_IDS)
+    def test_create_without_an_exit_status_ends_the_import(self, tmp_path, monkeypatch,
+                                                           raised, why):
+        """Nothing is in the cluster yet: KubectlError (rc 2 at run()'s exit),
+        and neither apply nor label is started."""
+        f = tmp_path / "dash.json"
+        f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
+        calls = _kubectl(monkeypatch, {"create": raised})
+        with pytest.raises(KubectlError, match=why):
+            gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        assert [c[1] for c in calls] == ["create"]
+
+    @pytest.mark.parametrize("raised, why", _NO_EXIT_STATUS, ids=_NO_EXIT_IDS)
+    def test_apply_without_an_exit_status_is_a_caller_error_row(self, tmp_path, monkeypatch,
+                                                                raised, why):
+        f = tmp_path / "dash.json"
+        f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
+        calls = _kubectl(monkeypatch, {"apply": raised})
+        # No exit status: the rows come on the exception, which stops `main`
+        # from attempting the dashboards after this one.
+        with pytest.raises(gi._NoExitStatus) as stop:
+            gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        results = stop.value.rows
+        assert [c[1] for c in calls] == ["create", "apply"]      # no label
+        assert [(r["action"], r["status"], r.get("caller_error")) for r in results] == [
+            ("create_configmap", "fail", True)]
+        assert why in results[0]["detail"] and "kubectl apply" in results[0]["detail"]
+
+    @pytest.mark.parametrize("raised, why", _NO_EXIT_STATUS, ids=_NO_EXIT_IDS)
+    def test_label_without_an_exit_status_after_the_apply_is_never_a_pass(
+            self, tmp_path, monkeypatch, raised, why):
+        """Part-way: the ConfigMap is applied, the label that makes Grafana's
+        sidecar load it is not. The report keeps the applied row and adds a
+        caller-error row that says so — it was a traceback for EACCES /
+        ENOEXEC, and one ERROR line that dropped the applied row for the
+        other two."""
+        f = tmp_path / "dash.json"
+        f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
+        _kubectl(monkeypatch, {"label": raised})
+        with pytest.raises(gi._NoExitStatus) as stop:
+            gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        results = stop.value.rows
+        assert [(r["action"], r["status"], r.get("caller_error")) for r in results] == [
+            ("create_configmap", "pass", None), ("label_configmap", "fail", True)]
+        assert "its label is NOT confirmed" in results[1]["detail"] and why in results[1]["detail"]
+
+    @pytest.mark.parametrize("flags", [[], ["--json"]], ids=["text", "json"])
+    def test_the_cli_exits_2_and_says_fail_when_the_label_cannot_be_started(
+            self, tmp_path, monkeypatch, capsys, flags):
+        import _lib_exitcodes
+        f = tmp_path / "dash.json"
+        f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
+        _kubectl(monkeypatch, {"label": PermissionError(errno.EACCES, "Permission denied")})
+        monkeypatch.setattr(sys, "argv", ["grafana_import.py", "--dashboard", str(f), *flags])
+        try:
+            rc = _lib_exitcodes.emit_result(gi.main())
+        except SystemExit as exc:
+            rc = exc.code
+        out = capsys.readouterr().out
+        assert rc == 2
+        if flags:
+            doc = json.loads(out)
+            assert doc["status"] == "fail"
+            assert [a["status"] for a in doc["actions"]] == ["pass", "fail"]
+        else:
+            assert "Overall: FAIL" in out and "Overall: PASS" not in out
+            assert "its label is NOT confirmed" in out
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +346,7 @@ def _kubectl_lists(monkeypatch, rc=0, stdout="", stderr=""):
     def fake(cmd, **kw):
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, rc, stdout, stderr)
-    monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(fake))
+    install_kubectl(monkeypatch, fake)
     return calls
 
 
@@ -462,7 +543,7 @@ class TestVerifyWithoutAnAnswer:
         assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
         assert "Traceback" not in r.stderr
         assert r.stdout == "", r.stdout  # #3558: a caller error carries no document
-        assert "kubectl is not on PATH" in r.stderr, r.stderr
+        assert "kubectl is not available" in r.stderr, r.stderr
 
 
 def test_json_document_is_utf8_not_ascii_escaped(tmp_path):
