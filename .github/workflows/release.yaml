@@ -39,7 +39,13 @@
 #   所以掃到可修的 HIGH/CRITICAL 時，客戶拉得到的東西（正式 tag、chart、簽章、
 #   Release）一件都不會出現。候選 tag 不刻意清理——理由見
 #   docs/internal/github-release-playbook.md §Release-gate 陷阱。
-#   順序由 tests/ops/test_release_scan_before_publish.py 解析本檔守住。
+#   順序由 tests/ops/test_release_scan_before_publish.py 解析本檔守住；同一支
+#   也守「掃描擋得住」（#3870）：Trivy 步驟只准 name/uses/with（無 if、
+#   continue-on-error、env），exit-code 字面 1，severity／ignore-unfixed 取
+#   tests/_trivy_contract.py（三個掃描共用的單一來源），trivyignores 只准該
+#   映像自己的 components/<image>/.trivyignore.yaml，掃描之後的步驟 if 不得
+#   呼叫狀態函式，任何層級的 env 不得設 TRIVY_*，repo 根目錄不得有 Trivy 預設
+#   會讀的 trivy.yaml／trivy-secret.yaml。
 #   da-tools 另在 Trivy 之後、簽章與 promote 之前，對同一個 digest 實際執行映像
 #   （scripts/ops/smoke_da_tools_image.sh，#3258）；不過就不發布。位置由
 #   tests/ops/test_release_da_tools_smoke.py 守住。
