@@ -28,16 +28,33 @@ purpose: |
   simulateAlerts(config, metricValues)
     Given current metric readings, compute which alerts fire and at what
     severity (strict `>`, via isFiring). The `_critical` companion key
-    escalates the same reading. Returns array of {metric, current,
-    threshold, critical_threshold, firing, critical_firing, severity, ...}.
+    escalates the same reading, and so does a `:critical` suffix on the
+    base key. Returns array of {metric, current, threshold,
+    critical_threshold, firing, critical_firing, severity, ...}.
+    Thresholds are read by ../validation/threshold-value.js, as the
+    exporter reads them (#3865): a value it serves no number for is a row
+    with its text in `raw` and threshold null (the platform default the
+    exporter falls back to is not simulated), severity 'unreadable' unless
+    its critical tier fires; the `_critical` companion is read whole (no
+    `:severity`), and an unreadable one puts its text in
+    `critical_unreadable`. A map or a list (a scheduled value) has no row.
 
   simulateWithDedup(config, metrics, dedupEnabled, alertDefs)
     Alert-simulator model: each config key is an independent alert whose
     definition comes from alertDefs (the ALERT_DEFS map, injected by the
-    caller — shape adapter). Buckets into {firing, suppressed, ok};
+    caller — shape adapter). Buckets into {firing, suppressed, ok,
+    unreadable}; `unreadable` lists {key, def, raw} for each value the
+    exporter does not read (#3865), which is in no other bucket. Only the
+    NUMBER is read the exporter's way: the severity is the def's (a
+    `:critical` suffix is not applied) and a disabled base does not switch
+    its `_critical` key off — its one page has number fields only;
     honours inverted defs (via isFiring) and severity-dedup (a firing
     critical suppresses its matching warning). Behaviour relocated verbatim
     from alert-simulator.jsx so it is shared + unit-tested.
+
+  unreadableThresholdMessage(raw, tier = 'base')
+    The sentence (window.__t) the pages show for such a value. It says what
+    the exporter does instead, which differs for a `_critical` key.
 
   resolveRoutingLayers(config)
     Apply the four-layer routing model (ADR-007): L1 platform
@@ -63,6 +80,7 @@ import {
 import { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES } from '../data/routing-profiles.js';
 import { RECEIVER_TYPES, TIMING_GUARDRAILS } from '../validation/constants.js';
 import { parseDuration } from '../validation/yaml-parser.js';
+import { readThresholdRow, isCriticalKey } from '../validation/threshold-value.js';
 
 function generateSampleYaml(selectedPacks, withProfile) {
   const t = window.__t || ((zh, en) => en);
@@ -137,6 +155,24 @@ function generateSampleYaml(selectedPacks, withProfile) {
   return lines.join('\n');
 }
 
+// The sentence for a threshold value the exporter does not read (#3865),
+// shared by validateConfig and the pages that render a simulation. What the
+// exporter does next depends on the key, and the sentence says which:
+//   - tier 'base': resolveBaseRows falls back to the platform default; a key
+//     with none (a declared key) is not served.
+//   - tier 'critical' (`<base>_critical`): the whole value must be the
+//     number, and resolveCriticalRows drops that key's row otherwise.
+function unreadableThresholdMessage(raw, tier = 'base') {
+  const t = window.__t || ((zh, en) => en);
+  const shown = JSON.stringify(String(raw));
+  if (tier === 'critical') {
+    return t(`exporter 不會讀這個值：${shown} 不是 _critical key 接受的寫法（十進位數字，不帶 :severity），這個 _critical key 不會生效`,
+      `The exporter will not read this value: ${shown} is not what a _critical key accepts (a decimal number, with no :severity), so this _critical key is not served`);
+  }
+  return t(`exporter 不會讀這個值：${shown} 不是它接受的閾值寫法（十進位數字，可加 :warning／:critical）。exporter 會改用平台預設值，沒有預設值的 key 則沒有閾值；這裡不模擬`,
+    `The exporter will not read this value: ${shown} is not a threshold it accepts (a decimal number, optionally with :warning / :critical). The exporter falls back to the platform default, and a key with no default has no threshold; not simulated here`);
+}
+
 function validateConfig(config, selectedPacks) {
   const t = window.__t || ((zh, en) => en);
 
@@ -147,13 +183,23 @@ function validateConfig(config, selectedPacks) {
 
   for (const [key, val] of Object.entries(config)) {
     if (key.startsWith('_')) continue;
-    if (val === 'disable') {
+    // The value is read as the exporter reads it (#3865), never with
+    // parseFloat: that reads `1_000` as 1 and `0x1F` as 0, and the page then
+    // judges a number the exporter never serves.
+    // A `<base>_critical` key is read by its own rule (the whole value is
+    // the number).
+    const tier = isCriticalKey(key) ? 'critical' : 'base';
+    const row = readThresholdRow(val, tier);
+    if (row.kind === 'disabled') {
       info.push({ level: 'info', field: key,
         msg: t('已禁用此指標', 'Metric disabled') });
       continue;
     }
-    const numVal = parseFloat(val);
-    if (!isNaN(numVal)) {
+    if (row.kind === 'unreadable') {
+      issues.push({ level: 'error', field: key, msg: unreadableThresholdMessage(row.raw, tier) });
+    }
+    if (row.kind === 'number') {
+      const numVal = row.number;
       const LARGE_VALUE_PATTERNS = ['bytes', 'connections', 'lag', 'rate', 'messages',
         'threads', 'count', 'queue', 'consumers', 'controllers', 'broker', 'sessions',
         'partitions', 'queries', 'waiting'];
@@ -290,33 +336,56 @@ function simulateAlerts(config, metricValues) {
     const threshold = config[metric];
     // parseYaml keeps YAML types (#2033): an unquoted `0` is the number 0,
     // which is a real threshold — test for absence, not falsiness.
-    if (threshold === undefined || threshold === null || threshold === '' || threshold === 'disable') {
+    const row = readThresholdRow(threshold);
+    if (row.kind === 'absent' || row.kind === 'disabled') {
       alerts.push({
         metric, current: val.current, threshold: null, critical_threshold: null,
-        firing: false, critical_firing: false, severity: threshold === 'disable' ? 'disabled' : 'no-threshold',
+        firing: false, critical_firing: false, severity: row.kind === 'disabled' ? 'disabled' : 'no-threshold',
         unit: val.unit, packLabel: val.packLabel,
       });
       continue;
     }
-
-    const thresholdNum = parseFloat(threshold);
-    if (isNaN(thresholdNum)) continue;
+    // A scheduled value (a map): no schedule is modelled here.
+    if (row.kind === 'structured') continue;
 
     const currentVal = val.current;
-    const firing = isFiring(currentVal, thresholdNum);
+    // The `_critical` companion key: the whole value is the number. One the
+    // exporter cannot read gives no critical tier; `critical_unreadable`
+    // carries its text so the page can say so. An unreadable base does not
+    // switch the tier off; a disabled one does (handled above).
+    // ⚠️ Not modelled: a base key the tenant did not write at all. The
+    // exporter serves its platform default and the `_critical` tier; this
+    // function has no defaults and reports 'no-threshold' (as it always did).
+    const crit = readThresholdRow(config[`${metric}_critical`], 'critical');
+    const critThreshold = crit.kind === 'number' ? crit.number : null;
+    const critTierFiring = critThreshold !== null && isFiring(currentVal, critThreshold);
 
-    const critKey = `${metric}_critical`;
-    const critRaw = config[critKey];
-    const critParsed = critRaw === undefined || critRaw === null || critRaw === '' ? NaN : parseFloat(critRaw);
-    const critThreshold = isNaN(critParsed) ? null : critParsed;
-    const critFiring = critThreshold !== null && isFiring(currentVal, critThreshold);
-
-    alerts.push({
-      metric, current: currentVal, threshold: thresholdNum,
-      critical_threshold: critThreshold, firing, critical_firing: critFiring,
-      severity: critFiring ? 'critical' : (firing ? 'warning' : 'ok'),
-      unit: val.unit, packLabel: val.packLabel,
-    });
+    let alert;
+    if (row.kind === 'unreadable') {
+      // A base value the exporter does not read (#3865) is a row that says
+      // so — never a number cut out of the text, and never a dropped row.
+      // The exporter serves the platform default in its place; that is not
+      // simulated (threshold null), the critical tier is.
+      alert = {
+        metric, current: currentVal, threshold: null, critical_threshold: critThreshold,
+        firing: false, critical_firing: critTierFiring,
+        severity: critTierFiring ? 'critical' : 'unreadable', raw: row.raw,
+        unit: val.unit, packLabel: val.packLabel,
+      };
+    } else {
+      const thresholdNum = row.number;
+      const firing = isFiring(currentVal, thresholdNum);
+      // `80:critical` on the base key is a critical-severity row at 80.
+      const critFiring = critTierFiring || (firing && row.severity === 'critical');
+      alert = {
+        metric, current: currentVal, threshold: thresholdNum,
+        critical_threshold: critThreshold, firing, critical_firing: critFiring,
+        severity: critFiring ? 'critical' : (firing ? 'warning' : 'ok'),
+        unit: val.unit, packLabel: val.packLabel,
+      };
+    }
+    if (crit.kind === 'unreadable') alert.critical_unreadable = crit.raw;
+    alerts.push(alert);
   }
 
   return alerts;
@@ -332,12 +401,17 @@ function simulateWithDedup(config, metrics, dedupEnabled, alertDefs) {
   const firing = [];
   const suppressed = [];
   const ok = [];
+  const unreadable = [];
 
   Object.entries(config).forEach(([key, thresholdStr]) => {
     const def = defs[key];
     if (!def) return;
-    const threshold = parseFloat(thresholdStr);
-    if (isNaN(threshold)) return;
+    // Read as the exporter reads it (#3865). A value it serves no number for
+    // is listed as such; absent, disabled and scheduled values have no row.
+    const row = readThresholdRow(thresholdStr, isCriticalKey(key) ? 'critical' : 'base');
+    if (row.kind === 'unreadable') { unreadable.push({ key, def, raw: row.raw }); return; }
+    if (row.kind !== 'number') return;
+    const threshold = row.number;
     const current = metrics[key];
     if (current === undefined || current === '') return;
     const val = parseFloat(current);
@@ -363,10 +437,11 @@ function simulateWithDedup(config, metrics, dedupEnabled, alertDefs) {
       firing: firing.filter(f => !suppressedKeys.has(f.key)),
       suppressed,
       ok,
+      unreadable,
     };
   }
 
-  return { firing, suppressed: [], ok };
+  return { firing, suppressed: [], ok, unreadable };
 }
 
 function resolveRoutingLayers(config) {
@@ -428,4 +503,7 @@ function resolveRoutingLayers(config) {
   return { layers, resolved: L3 };
 }
 
-export { generateSampleYaml, validateConfig, isFiring, simulateAlerts, simulateWithDedup, resolveRoutingLayers };
+export {
+  generateSampleYaml, validateConfig, isFiring, simulateAlerts, simulateWithDedup, resolveRoutingLayers,
+  unreadableThresholdMessage,
+};
