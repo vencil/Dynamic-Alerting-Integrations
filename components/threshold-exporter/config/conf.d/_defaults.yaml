@@ -55,9 +55,6 @@ defaults:
   # % — Tablespace usage warning（critical 加嚴 opt-in：oracle_tablespace_used_percent_critical，registry
   # 建議 95）
   oracle_tablespace_used_percent: 85
-  # ── jvm：JVM (jmx_exporter / Micrometer) ──
-  # % — Heap memory usage warning（critical 加嚴 opt-in：jvm_memory_critical，registry 建議 95）
-  jvm_memory: 80
   # <<< GENERATED:threshold-registry:dev-defaults
   # 以下是 examples/ 子目錄租戶所用 pack 的 defaults（#3014）。不放在
   # examples/ 自己的 _defaults.yaml：只有子樹 carrier 宣告的 key 送不上 /metrics（#1976）。

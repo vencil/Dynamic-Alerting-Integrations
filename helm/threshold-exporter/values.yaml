@@ -138,9 +138,6 @@ thresholdConfig:
     # % — Tablespace usage warning（critical 加嚴
     # opt-in：oracle_tablespace_used_percent_critical，registry 建議 95）
     oracle_tablespace_used_percent: 85
-    # ── jvm：JVM (jmx_exporter / Micrometer) ──
-    # % — Heap memory usage warning（critical 加嚴 opt-in：jvm_memory_critical，registry 建議 95）
-    jvm_memory: 80
     # <<< GENERATED:threshold-registry:helm-defaults
     # >>> GENERATED:threshold-registry:helm-unarmed — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
     # 下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了
@@ -181,7 +178,7 @@ thresholdConfig:
     #   kafka_broker_count 未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
     # ── rabbitmq ──
     #   rabbitmq_queue_messages 未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
-    #   rabbitmq_node_mem_percent 未啟用（尚未量測，#1200）：沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana
+    #   rabbitmq_node_mem_percent 未啟用（值有爭議，#3929）：沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana
     #     rabbitmq-mixin、awesome-prometheus-alerts）都在 90 告警。
     #   rabbitmq_connections 未啟用（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available
     #     是候選分母，但它由檔案描述符推得，由 #1320 決定
@@ -189,6 +186,8 @@ thresholdConfig:
     #   rabbitmq_unacked_messages 未啟用（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
     # ── jvm ──
     #   jvm_gc_pause 未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
+    #   jvm_memory 未啟用（聚合錯誤，#3928）：規則逐 series 相除，Micrometer 的 JVM（每個 heap pool 一條 series）會因最滿的那個
+    #     pool 就響；80 的依據量的是整體 heap。
     #   jvm_threads 未啟用（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
     # ── nginx ──
     #   nginx_connections 未啟用（依部署而定）：絕對連線數取決於流量，worker_connections 沒有匯出可當分母

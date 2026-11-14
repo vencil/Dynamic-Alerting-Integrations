@@ -2296,8 +2296,12 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
         return retired.get(base)
     # pack -> what shows it is deployed: (root keys as written, tenants)
     seen: dict[str, tuple[set[str], set[str]]] = {}
-    for canonical, as_written in supplied.items():
-        pack = pack_of(canonical) if as_written in valued else None
+    # Each valued key on its own spelling: two spellings of one key (a retired
+    # alias under `defaults:`, its canonical name in the listed-only
+    # `optional_overrides:`) must not let the listed one stand in for the
+    # valued one.
+    for as_written in sorted(valued):
+        pack = pack_of(spell.canonical(as_written))
         if pack in armed:
             seen.setdefault(pack, (set(), set()))[0].add(as_written)
     for tenant, tv in served.tenants.items():

@@ -173,6 +173,19 @@ def test_a_retired_spelling_in_the_root_file_is_evidence_of_its_pack(tmp_path):
     assert f"_defaults.yaml sets {old}" in r["details"][0]
 
 
+def test_a_listed_spelling_does_not_hide_a_valued_one(tmp_path):
+    """同一個鍵的兩種拼法：舊拼法在 `defaults:` 有值、正規拼法只列在 `optional_overrides:`
+    （出貨的清單就列了它）。有值的那個仍然是該 pack 的證據。"""
+    old, new = next(((o, n) for o, n in lib.DEPRECATED_KEY_ALIASES.items()
+                     if _KEYS[n]["pack"] in _ARMED), (None, None))
+    if old is None:
+        pytest.skip("the registry has no deprecated alias onto a pack with an armed key")
+    pack = _KEYS[new]["pack"]
+    r = vc.check_unsupplied_defaults(_tree(tmp_path, {
+        "_defaults.yaml": f"defaults:\n  {old}: 1\noptional_overrides:\n  - {new}\n"}))
+    assert _named(r) == _ARMED[pack], r
+
+
 def test_a_dimension_key_supplies_its_base(tmp_path):
     """`defaults:` 的維度鍵（`key{label="v"}`）算有供給該鍵。"""
     pack = _MULTI[0]

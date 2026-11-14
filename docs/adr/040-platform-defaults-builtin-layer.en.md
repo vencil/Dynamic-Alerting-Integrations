@@ -19,7 +19,7 @@ lang: en
 ## Terms
 
 - **Threshold registry**: `rule-packs/threshold-registry.yaml`, the single source of every platform threshold key. Each key records its rule pack, the platform's value, and `arming`: `default` means the platform ships it armed, `operator` means the platform asserts no value and the deployer must calibrate one.
-- **Default-armed key**: a registry key with `arming: default`. Seven today: `container_cpu`, `container_cpu_throttle`, `container_memory`, `pg_connections`, `pg_replication_lag`, `mysql_connection_usage_percent`, `mysql_replication_lag`.
+- **Default-armed key**: a registry key with `arming: default`. Ten today: `container_cpu`, `container_cpu_throttle`, `container_memory`, `pg_connections`, `pg_replication_lag`, `mysql_connection_usage_percent`, `mysql_replication_lag`, `es_disk_usage_percent`, `es_heap_usage_percent`, `oracle_tablespace_used_percent`.
 - **Reader**: a program that reads conf.d and computes each tenant's config: threshold-exporter, da-guard (the conf.d checker), tenant-api. All three compile in the same Go library; `da-tools validate-config` gets its answers through da-guard.
 - **Root layer**: `_defaults.yaml` at the conf.d root. Its `defaults:` gives numbers; `optional_overrides:` is a list of key names that declares "the platform recognises this key but asserts no value for it", served only when a tenant writes one.
 - **Row**: one `user_threshold` series the exporter serves on `/metrics` for one threshold of one tenant. `da-guard served-values` prints the same answer.
@@ -35,7 +35,7 @@ When `da-tools init` creates a project it writes the registry's values, numbers 
 Measured today:
 
 - No reader uses the registry's values as a bottom layer. With `pg_connections` absent from the root layer and a tenant writing a value, da-guard's key verdict is `unread` / `error` / `no_row`, and `/metrics` does not serve the row.
-- With every rule pack selected, init writes 39 keys into the root `defaults:`; only 7 are default-armed keys, the other 32 are keys the registry marks `operator`. With only `mariadb,kubernetes` it writes 5.
+- With every rule pack selected, init writes 39 keys into the root `defaults:`; only 10 are default-armed keys, the other 29 are keys the registry marks `operator`. With only `mariadb,kubernetes` it writes 5.
 - The tenant file init generates carries copies too: the first rule pack's base values are written as tenant overrides (for example `mysql_connection_usage_percent: "80"`, the same as the platform value).
 - `da-tools validate-config` has an `unsupplied_defaults` row that names keys "the platform ships armed but the tree does not supply" and advises adding the key to `defaults:`, or listing it under `optional_overrides:` to leave it off on purpose. It is visible only where someone runs the tool, and its first piece of advice is to make another copy.
 
@@ -71,7 +71,7 @@ The state of the root-layer file decides whether the built-in layer gives values
 | Absent, or present with an empty `defaults:` | Gives values. This is a legal tree, and the key verdict no longer answers "cannot be judged" because there is no root-layer file (revises ADR-038 decision 7) |
 | Unreadable (for example a YAML syntax error) | Gives no value, keeping current behaviour: the whole tree serves no threshold row, da-guard exit code 3. When the root layer cannot be read, the overrides and opt-outs written in it cannot be read either; serving platform values then would switch on alerts the customer opted out of |
 
-The built-in layer applies to every tenant, whether or not the deployment has the matching rule pack. One more row is not one more alert: an alert also needs the rule pack deployed and the metric present. The Helm path already works this way: the chart gives all 7 keys to every tenant.
+The built-in layer applies to every tenant, whether or not the deployment has the matching rule pack. One more row is not one more alert: an alert also needs the rule pack deployed and the metric present. The Helm path already works this way: the chart gives all 10 keys to every tenant.
 
 ### 2. Merge order and source labels
 
@@ -230,7 +230,7 @@ redis_connected_clients        1000  warning    ← root layer
 
 ## Consequences and known limits
 
-- **Omitting a key means something else.** After upgrading, an existing tree gains at most 7 base rows per tenant, plus the rows served because the base now has a value: a tenant's `_critical`, and the expired `disable` of the next item. Measured on the trees in this repo:
+- **Omitting a key means something else.** After upgrading, an existing tree gains at most 10 base rows per tenant, plus the rows served because the base now has a value: a tenant's `_critical`, and the expired `disable` of the next item. Measured on the trees in this repo:
 
   | Tree | Tenants | Rows before → after |
   |:--|:--|:--|
@@ -239,7 +239,7 @@ redis_connected_clients        1000  warning    ← root layer
   | init with `mariadb,kubernetes` | 1 | 10 → 12 |
   | init with every rule pack | 2 | 98 → 98 |
   | init with `redis` only | 2 | 8 → 22 |
-  | The example above | 1 | 1 → 7 |
+  | The example above | 1 | 1 → 10 |
 
 - **An expired `disable` starts to lapse.** For a key with no root-layer value, the `expires:` of a `"disable"` is not looked at today, so it is off for good (ADR-038 decision 8). Once the built-in layer gives the key a value it behaves like a key with a root-layer value: the `disable` lapses on expiry, and the base row and its dimensional rows come back.
 - **A platform value change alters alerting with no diff on the customer's side.** That is the purpose of this decision and its cost. The guards are the BREAKING entry of decision 5 and the pre-upgrade comparison of decision 8; a customer who does not accept it writes the number in the root layer, which pins it.
@@ -267,9 +267,9 @@ redis_connected_clients        1000  warning    ← root layer
 1. **The opt-out spelling** (decisions 3 and 4). With either option a root-layer `null` falls to the built-in layer, so adopting either accepts the behaviour change of decision 4.
    - **Reuse `optional_overrides:` (as written here, recommended)**: no new syntax, consistent with the existing hint. Cost: when a listed key is later promoted to default-armed, existing trees silently read it as opted out, and only the `platform_defaults` row and the release notes make it visible.
    - **Add a list that holds only opt-outs**: the silent case above does not exist; for the cost see "Alternatives considered". If keys of the `optional_overrides:` tier are expected to be promoted to default-armed, this option is the better one.
-2. **What init does with the 32 `operator` keys.** With every rule pack selected, init today writes them with values into the root layer, so the conf.d path arms 39 keys and the Helm path 7.
+2. **What init does with the 29 `operator` keys.** With every rule pack selected, init today writes them with values into the root layer, so the conf.d path arms 39 keys and the Helm path 10.
    - **Keep writing them (recommended)**: the platform has no default for these keys, so the numbers in the customer's file cannot go stale against a platform value, and they are not the problem this decision solves; keeping them also avoids stacking another behaviour change into the same release. When one of these keys is later promoted to default-armed, the number the customer wrote is a visible override; if it were turned into a listing, the promotion would meet the silent opt-out of item 1. The comment changes to say plainly "these are your values, the platform ships none". Cost: the two paths stay inconsistent, and values for which the registry records a measured counter-example (for example `oracle_sessions_active`) keep being armed by init.
-   - **Stop arming them**: the key names go under `optional_overrides:` and the reference values become comments. The two paths agree, but a new project has 32 fewer keys armed by default; a project that selects only `redis` has no Redis threshold alert until it calibrates its own.
+   - **Stop arming them**: the key names go under `optional_overrides:` and the reference values become comments. The two paths agree, but a new project has 29 fewer keys armed by default; a project that selects only `redis` has no Redis threshold alert until it calibrates its own.
    - Trigger to revisit: when these keys move to a ratio form or pass validation and become default-armed, they enter the built-in layer by themselves.
 
 ## Implementation order
@@ -280,7 +280,7 @@ Every step needs an acceptance check that fails when the fix is reverted.
 |:--|:--|:--|
 | 1 | This ADR approved | — |
 | 2 | The specification of the run-time signals and the `platform_defaults` row updated per decision 8 | — |
-| 3 | The readers' built-in layer: generated table, bottom of the merge chain, `key_sources`, key verdict | A tree with no root-layer file, and a tree whose root `defaults:` is empty, both serve 7 rows with source `builtin`; removing the built-in layer removes 7 rows; the check fails when the registry changed without regeneration; the check fails when the table differs and there is no Breaking fragment. Controls: a tenant override wins, a key under `optional_overrides:` has no row, a key with both a root-layer number and a listing is served, a tenant `"disable"` has no row, the critical is served, an unreadable root layer serves no row |
+| 3 | The readers' built-in layer: generated table, bottom of the merge chain, `key_sources`, key verdict | A tree with no root-layer file, and a tree whose root `defaults:` is empty, both serve 10 rows with source `builtin`; removing the built-in layer removes 10 rows; the check fails when the registry changed without regeneration; the check fails when the table differs and there is no Breaking fragment. Controls: a tenant override wins, a key under `optional_overrides:` has no row, a key with both a root-layer number and a listing is served, a tenant `"disable"` has no row, the critical is served, an unreadable root layer serves no row |
 | 4 | The Helm chart's `defaultsOptOut` | `helm template` output comparison; with it unset the output is the same as before the change; a key listed there has no row |
 | 5 | init | In the generated tree's `served-values`, the rows of default-armed keys are the same as before the change |
 | 6 | Migration command and the da-guard note | A key with a different value is kept; an `operator` key with an equal value is kept; a key that is also listed is kept; a write is refused when digests differ |

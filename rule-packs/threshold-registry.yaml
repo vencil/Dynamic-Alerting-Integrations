@@ -953,8 +953,8 @@ keys:
     arming: operator
     portability: portable
     blocker:
-      kind: unmeasured
-      tracking: 1200
+      kind: value_disputed
+      tracking: 3929
       reason: No vendor or upstream source uses 80; the two found for this measure (Grafana rabbitmq-mixin, awesome-prometheus-alerts) both warn at 90.
       reason_zh: 沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana rabbitmq-mixin、awesome-prometheus-alerts）都在 90 告警。
   rabbitmq_connections:
@@ -1040,21 +1040,13 @@ keys:
     unit: '%'
     desc: Heap memory usage warning
     metric_class: saturation
-    arming: default
+    arming: operator
     portability: portable
-    validation:
-      basis: consensus
-      sources:
-      - org: "Grafana jsonnet-libs"
-        url: https://raw.githubusercontent.com/grafana/jsonnet-libs/master/jvm-mixin/config.libsonnet
-        quote: "alertHeapWarning: 80,  // %"
-        value: 80
-        tier: warning
-      - org: "awesome-prometheus-alerts"
-        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
-        quote: "query: '(sum by (instance)(jvm_memory_used_bytes{area=\"heap\"}) / sum by (instance)(jvm_memory_max_bytes{area=\"heap\"})) * 100 > 80 and sum by (instance)(jvm_memory_max_bytes{area=\"heap\"}) > 0'"
-        value: 80
-        tier: warning
+    blocker:
+      kind: aggregation_bug
+      tracking: 3928
+      reason: The rule divides per series, so a Micrometer JVM (one series per heap pool) fires on its fullest pool; the sources for 80 measure the whole heap.
+      reason_zh: 規則逐 series 相除，Micrometer 的 JVM（每個 heap pool 一條 series）會因最滿的那個 pool 就響；80 的依據量的是整體 heap。
   jvm_threads:
     pack: jvm
     tier: defaults

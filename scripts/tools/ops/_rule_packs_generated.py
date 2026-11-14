@@ -640,8 +640,7 @@ DEFAULT_ARMED_KEYS = {'kubernetes': ['container_cpu', 'container_cpu_throttle', 
  'postgresql': ['pg_connections', 'pg_replication_lag'],
  'mariadb': ['mysql_connection_usage_percent', 'mysql_replication_lag'],
  'elasticsearch': ['es_heap_usage_percent', 'es_disk_usage_percent'],
- 'oracle': ['oracle_tablespace_used_percent'],
- 'jvm': ['jvm_memory']}
+ 'oracle': ['oracle_tablespace_used_percent']}
 
 # Retired threshold key -> the pack of the key that replaces it (a key
 # retired with no replacement is absent; `<old>_critical` follows its
