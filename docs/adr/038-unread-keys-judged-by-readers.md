@@ -392,7 +392,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 | 整份沒有讀取端讀的檔（租戶區沒有 `tenants:` 的檔、子目錄沒被選上的 `_defaults` 檔） | 沿用 served-values 現有的 `skipped`／`unread_keys` | notice：新建、還沒寫 `tenants:` 的檔不能凍結寫入 |
 | `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準，判決報 `value_unread`；schema 的 `_metadata` 欄位表以 Go 測試與它雙向釘住 | 租戶檔：error；平台檔與 profile：notice |
 | 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_profile` 指到不存在的 profile） | 由讀取它的程式判：登錄表 `value.check` 把鍵綁到 exporter 的讀取函式，判決報 `value_unread`。兩個讀取端都讀的 `_severity_dedup`，產生器的接受字由測試釘成與 exporter 一致。只有產生器讀的 `_routing_profile` 由產生器自己擋 | 租戶檔：error；平台檔與 profile：notice |
-| 保留鍵寫成排程（`overrides:` 時窗，或 `{default: …, expires: …}` 形式的 `expires:`／`reason:`） | 讀取端只讀 `default`，時窗與到期時間都不生效。判決報 `schedule_unread`，判在寫它的檔與層，規則與 `value_unread` 相同；涵蓋那一層有任何讀取端讀的鍵，不只 exporter 讀的（annotation 讀的 `_namespaces` 也只讀 `default`；產生器讀的 `_routing_profile` 寫成 mapping 時，產生器整棵樹拒收，`routing_profile_invalid`）；那一層沒有讀取端讀的鍵（例如 profile 裡的 `_severity_dedup`）只報那個鍵本身沒人讀。寫入閘門以寫下的原樣比對新舊，挪動時窗算新的；tenant-api 不因它另外拒收，沿用決定 12 的寫入檢查 | 租戶檔：error；平台檔與 profile：notice |
+| 保留鍵寫成排程（`overrides:` 時窗，或 `{default: …, expires: …}` 形式的 `expires:`／`reason:`） | exporter 與 annotation 這些讀取端只讀 `default`，時窗與到期時間都不生效。判決報 `schedule_unread`，判在寫它的檔與層，規則與 `value_unread` 相同；涵蓋那一層有任何讀取端讀的鍵，不只 exporter 讀的（annotation 讀的 `_namespaces` 也只讀 `default`；產生器讀的 `_routing_profile` 寫成 mapping 時，產生器整棵樹拒收，`routing_profile_invalid`）；那一層沒有讀取端讀的鍵（例如 profile 裡的 `_severity_dedup`）只報那個鍵本身沒人讀。寫入閘門以寫下的原樣比對新舊，挪動時窗算新的；tenant-api 不因它另外拒收，沿用決定 12 的寫入檢查 | 租戶檔：error；平台檔與 profile：notice |
 
 值在寫它的那一份檔、那一層判，不在合併後的值上判。合併後的租戶設定已經帶著 profile 與根平台檔 `tenants:` 填進來的值；在那上面判，profile 裡一個錯字會算到每個選用它的租戶頭上，擋下它們與這個值無關的寫入，而它們沒辦法在自己的檔裡修。例如 profile `gold` 寫了 `_silent_mode: purple`，選用它的 `ta`、`tb` 只得到一筆掛在 profile 檔上的 notice，列出這兩個租戶：
 
