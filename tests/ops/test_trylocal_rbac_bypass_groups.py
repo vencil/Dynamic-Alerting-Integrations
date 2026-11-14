@@ -15,11 +15,12 @@ A comment cannot go red. This module is the tie instead.
 What the demo needs from the bypass identity is the platform-admin gate
 (`rbac.Manager.PlatformAdminUnrestricted`, `internal/rbac/reverse.go`): at
 least one rule that matches the group, lists the literal tenant `"*"`, grants
-`admin`, and carries no `org-scope` / `environments` / `domains`. Without it
-the Tenant Manager lists nothing (`/api/v1/tenants` is RBAC-filtered — the
-nightly smoke wants both seed tenants) and the platform-level portal views are
-refused. One typo in either file is enough, and nothing else fails until the
-nightly runs the whole stack.
+`admin`, and carries no `org-scope` / `environments` / `domains` — the
+platform-level views (`handler/group.go`, `label_guard.go`) refuse anything
+less. A group with no rule at all (one typo in either file) is worse: the
+RBAC-filtered `/api/v1/tenants` lists nothing, so the Tenant Manager is blank
+and the nightly smoke's "two seed tenants" check fails — but nothing fails
+before the nightly runs the whole stack.
 
 ⛔ SCOPE — what a green run does NOT say:
 

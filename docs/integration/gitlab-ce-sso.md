@@ -92,12 +92,13 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 tenant-api 只採信 oauth2-proxy 送來的身分：API 只在 pod 內的 Unix socket 上，前面是 oauth2-proxy，client 自己帶的同名 header 會被 oauth2-proxy 清掉；TCP 8080 只有 `/health`、`/ready`、`/metrics`，帶身分 header 一律回 400（[ADR-027](../adr/027-tenant-api-caller-identity.md) §2、§3）。
 
-**production 需部署含 ADR-027 的 tenant-api**（版號於該版發布時補上）。舊版 tenant-api 直接採信請求帶的 `X-Forwarded-Groups`：能繞過 oauth2-proxy 連到它的人，可以自稱任何群組。確認叢集裡跑的是哪一種：
+**production 需部署含 ADR-027 的 tenant-api**（版號於該版發布時補上）。舊版 tenant-api 直接採信請求帶的 `X-Forwarded-Groups`：能繞過 oauth2-proxy 連到它的人，可以自稱任何群組。確認叢集裡跑的是哪一種：chart 的 NetworkPolicy 只讓 Prometheus 連 8080，從一般 pod 打會被丟掉，所以經 `kubectl port-forward`（不受 NetworkPolicy 約束）在本機打：
 
 ```bash
-# 在叢集內對 tenant-api 的 8080 帶身分 header 打 /health：400 = 含 ADR-027；舊版回 200
-curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Forwarded-Email: probe@example.com' \
-  http://<tenant-api service>:8080/health
+kubectl -n <namespace> port-forward svc/<tenant-api service> 8080:8080 &
+# 帶身分 header 打 /health：400 = 含 ADR-027；200 = 舊版；000 = 沒連上（檢查 port-forward）
+curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
+  -H 'X-Forwarded-Email: probe@example.com' http://localhost:8080/health
 ```
 
 ## 疑難排解

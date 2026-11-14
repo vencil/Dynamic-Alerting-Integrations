@@ -3,10 +3,10 @@
 # There is no login here: tenant-api's local-dev auth bypass hands it an
 # identity whose groups come from TA_DEV_BYPASS_GROUPS in
 # try-local/docker-compose.yaml (ADR-027 §3). Group names match by exact
-# string, so every group listed there needs a rule below that makes it a
-# platform admin — tenants:["*"] (the literal "*"), admin, and no
-# org-scope / environments / domains. Without it the Tenant Manager lists
-# nothing and the platform-level portal views are refused.
+# string: a group with no rule here (a typo in either file) sees no tenant
+# at all. Every group listed there also needs to be a platform admin —
+# tenants:["*"] (the literal "*"), admin, and no org-scope / environments /
+# domains — or the platform-level views (groups, tenant labels) are refused.
 #
 # tests/ops/test_trylocal_rbac_bypass_groups.py holds the two files together;
 # rename a group in one and that test names the other.

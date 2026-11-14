@@ -142,7 +142,7 @@ tenant-api 自己的 port（`EXPOSE_API_PROBE_PORT`，預設 8083）只有 `/hea
 
 > ⚠️ 這個 flag 嚴禁進 production：在 Kubernetes 內啟動會直接 panic，且 SAST 禁止它出現在任何部署 manifest。細節見 ADR-022。
 
-`demo-admins` 在 `seed/conf.d/_rbac.yaml` 對應 `tenants: ["*"]` 與 `admin`，也就是平台管理員（Tenant Manager 的租戶清單與平台層級的 portal 畫面都需要；`docker-compose.yaml` 的 `TA_DEV_BYPASS_GROUPS` 與這份檔案由 `tests/ops/test_trylocal_rbac_bypass_groups.py` 綁在一起）。因此 `/api/v1/me` 回的 `accessible_tenants` 是 `["*"]`；想看到 2 個租戶清單請打 `GET /api/v1/tenants`（這也是 portal Tenant Manager 顯示的來源）。
+`demo-admins` 在 `seed/conf.d/_rbac.yaml` 對應 `tenants: ["*"]` 與 `admin`，也就是平台管理員（群組名在兩邊對不上時 Tenant Manager 看不到任何租戶；群組、租戶標記這類平台層級畫面還要求管理員；`docker-compose.yaml` 的 `TA_DEV_BYPASS_GROUPS` 與這份檔案由 `tests/ops/test_trylocal_rbac_bypass_groups.py` 綁在一起）。因此 `/api/v1/me` 回的 `accessible_tenants` 是 `["*"]`；想看到 2 個租戶清單請打 `GET /api/v1/tenants`（這也是 portal Tenant Manager 顯示的來源）。
 
 ## Port 衝突
 
