@@ -30,7 +30,7 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 from _grar_parse import load_tenant_tree  # noqa: E402
-from _lib_validation import shown_value  # noqa: E402  (#3703: how a message names the id)
+from _lib_validation import shown_key  # noqa: E402  (#3703: how a message names the id)
 import validate_config as vc  # noqa: E402
 
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
@@ -106,7 +106,7 @@ def test_every_mode_refuses_and_writes_nothing(tmp_path, tid, body):
         p = _gar(d, *argv, path=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}")
         assert p.returncode == 1, (mode, p.returncode, p.stderr)
         assert _REFUSAL in p.stderr, (mode, p.stderr)
-        assert f"tenant id {shown_value(tid)} is not a valid tenant id" in p.stderr, (mode, p.stderr)
+        assert f"tenant id '{shown_key(tid)}' is not a valid tenant id" in p.stderr, (mode, p.stderr)
         assert "DNS-1123" in p.stderr, (mode, p.stderr)  # cites the rule's description
         assert not out.exists(), f"{mode} wrote {out}"
         # Nothing rendered to stdout either, not even the valid tenant's route.
@@ -139,7 +139,7 @@ def test_the_tree_skips_it_and_validate_config_lists_it(tmp_path, tid, body):
     assert "t-ok" in tree.routing_configs
     row = vc.check_routes(str(d))
     assert row["status"] == vc.FAIL, row
-    assert any(f"x.yaml: tenant id {shown_value(tid)} is not a valid tenant id" in m
+    assert any(f"x.yaml: tenant id '{shown_key(tid)}' is not a valid tenant id" in m
                for m in row.get("details", [])), row
     # #3703: the finding names the declaring file; its `tenant` is the id
     # only when the id is name-like (`tenant_id_field`, both branches).

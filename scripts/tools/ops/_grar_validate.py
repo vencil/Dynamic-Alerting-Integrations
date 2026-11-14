@@ -1267,7 +1267,7 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
                      f"is not on this tenant's directory chain — a profile is "
                      f"visible only to tenants at its own level or below)"
                      if where else "")
-            # #3703: the name goes through shown_value, so a name that is
+            # #3703: the name goes through shown_key, so a name that is
             # not name-like is not printed; what the author can choose from
             # is — the profiles this tenant's chain defines.
             names = sorted(visible, key=str)
@@ -1277,7 +1277,7 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
                          else "; no routing profile is defined for this tenant")
             warnings.append(Finding(
                 f"  WARN: {tenant}: _routing_profile references unknown "
-                f"profile {scalar_text(profile_name)}{extra}{available}",
+                f"profile '{shown_key(profile_name)}'{extra}{available}",
                 kind="unknown_routing_profile", blocks="never", tenant=tenant,
                 field="_routing_profile"))
     return warnings
@@ -1431,7 +1431,7 @@ def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
     return [
         Finding(  # #2766: the tenant is the subject; several files, so no file
         # #3703: an id two files declare is whatever the author wrote.
-        f"  {DUPLICATE_TENANT_PREFIX} tenant {shown_value(str(tenant))} is declared in "
+        f"  {DUPLICATE_TENANT_PREFIX} tenant '{shown_key(str(tenant))}' is declared in "
         f"{len(files)} files: {', '.join(files)}. The threshold-exporter (and "
         "da-guard) reject the WHOLE config dir in this state, so every tenant "
         "loses alerting, not just this one. Which file owns the tenant is "
@@ -2419,18 +2419,17 @@ def routing_not_mapping_warning(tenant: str, value: object) -> str:
 def invalid_tenant_id_text(tenant: object, files: "Sequence[str]" = ()) -> str:
     """#2341 R8: a tenant id the routing plane refuses (is_valid_tenant_id).
 
-    The id goes through ``shown_value`` (#3703: an id the routing plane
+    The id goes through ``shown_key`` (#3703: an id the routing plane
     refuses is whatever the author wrote — a URL included): a name-like one
-    is quoted, so an empty one is visible; any other is its length. The rule
+    is itself, any other its digest stand-in, quoted either way. The rule
     is cited from its one copy (ADR-035: the schema's
     ``definitions.tenantId.description``), never restated here. *files*: the
     tenant files that declare it — the line starts with the first, as the
     finding's ``file`` names it: an id that is not printed is found by its
-    file, and two such ids of one length are two different lines. ⚠️ Wording
-    as ``routing_not_mapping_text``.
+    file and its stand-in. ⚠️ Wording as ``routing_not_mapping_text``.
     """
     where = f"{files[0]}: " if files else ""
-    return (f"{where}tenant id {shown_value(str(tenant))} is not a valid tenant id "
+    return (f"{where}tenant id '{shown_key(str(tenant))}' is not a valid tenant id "
             f"({tenant_id_rule()[1]}) — no route, receiver or inhibit rule is "
             "rendered for it")
 
@@ -2439,8 +2438,8 @@ def tenant_id_field(tenant: object) -> "str | None":
     """The ``tenant`` of a finding about an id no rule has vouched for
     (``invalid_tenant_id``, ``duplicate_tenant``; #3703): the id when it is
     name-like, else None — a structured field is read by a machine and
-    logged, and such an id is whatever the author wrote. The message says
-    its length (``shown_value``)."""
+    logged, and such an id is whatever the author wrote. The message names
+    it by its stand-in (``shown_key``)."""
     return tenant if isinstance(tenant, str) and shown_key(tenant) == tenant else None
 
 

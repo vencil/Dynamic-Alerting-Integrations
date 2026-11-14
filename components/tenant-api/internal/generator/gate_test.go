@@ -575,7 +575,7 @@ func TestFindingKey_SameLengthInvalidIDsInTwoFiles(t *testing.T) {
 	const dir = "/scratch/conf.d"
 	at := func(file string) Finding {
 		return Finding{Kind: "invalid_tenant_id", File: &file,
-			Message: file + ": tenant id a string of 8 chars is not a valid tenant id"}
+			Message: file + ": tenant id '<key:3f9a1c>' is not a valid tenant id"}
 	}
 	a, b := at("a.yaml"), at("b.yaml")
 	if findingKey(a, dir) == findingKey(b, dir) {
@@ -593,5 +593,37 @@ func TestFindingKey_SameLengthInvalidIDsInTwoFiles(t *testing.T) {
 	}
 	if findings[1].PreExisting == nil || *findings[1].PreExisting {
 		t.Errorf("b.yaml's finding, new in this write, is marked pre-existing")
+	}
+}
+
+// TestFindingKey_StandInsOfTwoNamesInOneFile: the generator prints a name it
+// does not disclose as a stand-in carrying a digest (`<key:3f9a1c>`, #3703),
+// so two such names in one file — same kind, tenant, policy and file — differ
+// in the message or the field alone; that is enough for two keys, and the
+// name the base already had keeps its finding pre-existing.
+func TestFindingKey_StandInsOfTwoNamesInOneFile(t *testing.T) {
+	t.Parallel()
+	const dir = "/scratch/conf.d"
+	file := "x.yaml"
+	byMessage := func(standIn string) Finding {
+		return Finding{Kind: "invalid_tenant_id", File: &file,
+			Message: file + ": tenant id '" + standIn + "' is not a valid tenant id"}
+	}
+	byField := func(standIn string) Finding {
+		field := "profiles." + standIn + "._severity_dedup"
+		return Finding{Kind: "routing_in_unread_location", File: &file, Field: &field,
+			Message: "a threshold profile's routing key is not rendered"}
+	}
+	for name, at := range map[string]func(string) Finding{"message": byMessage, "field": byField} {
+		old, added := at("<key:3f9a1c>"), at("<key:b70e42>")
+		if findingKey(old, dir) == findingKey(added, dir) {
+			t.Fatalf("%s: two stand-ins share a key: %q", name, findingKey(old, dir))
+		}
+		findings := []Finding{old, added}
+		mark(findings, dir, []Finding{at("<key:3f9a1c>")}, dir)
+		if !*findings[0].PreExisting || *findings[1].PreExisting {
+			t.Errorf("%s: pre-existing = %v, %v; want true, false", name,
+				*findings[0].PreExisting, *findings[1].PreExisting)
+		}
 	}
 }

@@ -6,6 +6,7 @@ Import via _lib_python.py facade for backward compatibility.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -1333,24 +1334,29 @@ def shown_value(value: Any, *, rtype: Any = _NO_RTYPE, path: tuple = (),
 
 
 def shown_key(key: Any) -> str:
-    """A key the config author wrote (a mapping key: a routing key, a policy
-    or profile name, a header name) as a message names it:
-    ``shown_value(key, bare=True)`` — keys are content too (#1560 ⑤-b
-    round 5)."""
-    return shown_value(key, bare=True)
+    """⛔ THE one exit of a name the config author wrote that LOCATES
+    something (a mapping key, a tenant id, a profile or policy name) into a
+    message or a structured path — keys are content too (#1560 ⑤-b round 5).
 
-
-#: What a structured path (``Finding.field`` / ``policy``) holds in place of
-#: a key that is not name-like.
-KEY_PLACEHOLDER = "<key>"
+    A name-like string (``_NAME_LIKE_RE``) is itself. Anything else — the
+    empty string and a key that is not a string included — is
+    ``<key:xxxxxx>``: the first 6 hex chars of SHA-256 of its UTF-8 text
+    (``str()`` of a non-string). Not the text, and not only its length
+    (#3703): the same name is the same stand-in wherever it stands, two
+    names almost never share one, so two findings about two such names
+    stay two findings (tenant-api's ``findingKey``)."""
+    if isinstance(key, str) and _NAME_LIKE_RE.fullmatch(key):
+        return key
+    text = key if isinstance(key, str) else str(key)
+    digest = hashlib.sha256(text.encode("utf-8", "surrogatepass")).hexdigest()
+    return f"<key:{digest[:6]}>"
 
 
 def key_segment(key: Any) -> str:
     """One segment of a structured path (``Finding.field``, ``policy``) that
-    the config author wrote: the key when it is name-like
-    (``_NAME_LIKE_RE``), else ``KEY_PLACEHOLDER`` — a path never carries a
-    URL a key may be (#1560 ⑤-b round 5)."""
-    return key if isinstance(key, str) and _NAME_LIKE_RE.fullmatch(key) else KEY_PLACEHOLDER
+    the config author wrote: ``shown_key`` — a path never carries a URL a
+    key may be (#1560 ⑤-b round 5)."""
+    return shown_key(key)
 
 
 def receiver_value_repr(rtype: Any, path: tuple, value: Any) -> str:

@@ -631,8 +631,8 @@ def _record_profiles(fname: str, level: str, profiles: dict,
         if first is not None:
             _tree_problem(
                 result, "routing_profile_duplicate", fname,
-                f"routing_profiles.{name}",
-                f"routing profile '{name}' is defined in both {first} and "
+                f"routing_profiles.{key_segment(name)}",
+                f"routing profile '{shown_key(name)}' is defined in both {first} and "
                 f"{fname} — a profile name must be unique across the whole "
                 f"conf.d tree (ADR-007 amendment 2026-09-28); rename or "
                 f"remove one of them")
@@ -641,8 +641,8 @@ def _record_profiles(fname: str, level: str, profiles: dict,
         by_dir.setdefault(level, {})[name] = cfg
         flat[name] = cfg
         _record_ignored_keys(result, cfg, block="routing",
-                             where=f"routing profile '{name}'",
-                             field_prefix=f"routing_profiles.{name}.", file=fname)
+                             where=f"routing profile '{shown_key(name)}'",
+                             field_prefix=f"routing_profiles.{key_segment(name)}.", file=fname)
 
 
 def _refuse_nested_enforced(fname: str, result: dict) -> None:
@@ -901,8 +901,8 @@ def _record_policy_problems(fname: str, policies: dict, result: dict) -> None:
         for fld, message in domain_policy_problems(policy):
             _field_type_error(
                 result, "domain_policy_unusable",
-                f"{fname}: domain_policy '{name}': {message}",
-                file=fname, policy=str(name), field=fld)
+                f"{fname}: domain_policy '{shown_key(name)}': {message}",
+                file=fname, policy=key_segment(name), field=fld)
 
 
 def _parse_profiles_and_policies(data: dict, fname: str, level: str,
@@ -1429,9 +1429,9 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
                 if not is_reserved:
                     result.setdefault("unloaded_tenants", set()).add(tenant)
                 # #3703: the id of a body that is not loaded is whatever
-                # the author wrote — shown_value, not the text.
+                # the author wrote — shown_key, not the text.
                 print(f"  WARN: {safe_label(fname)}: tenant "
-                      f"{shown_value(str(tenant))} must be a mapping, got "
+                      f"'{shown_key(str(tenant))}' must be a mapping, got "
                       f"{type(overrides).__name__} — that tenant is not "
                       f"loaded", file=sys.stderr)
                 continue
@@ -1608,10 +1608,10 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
         entries, lambda: _declared_ids(config_dir, reader, unknown), platform=platform)
     for fname, tenant in orphans:
         # #3703: an id no tenant file declares is whatever the platform
-        # file's author wrote — shown_value / key_segment, not the text.
+        # file's author wrote — shown_key / key_segment, not the text.
         print(f"  WARN: {safe_label(fname)}: tenants.{key_segment(str(tenant))} "
               f"ignored — no tenant file declares tenant "
-              f"{shown_value(str(tenant))}{tenant_set_unknown_note(unknown)}; a platform "
+              f"'{shown_key(str(tenant))}'{tenant_set_unknown_note(unknown)}; a platform "
               f"file can only provide defaults for a tenant that already exists",
               file=sys.stderr)
     # #2326: where each tenant lives (its tenant file's directory, relative to
@@ -1638,7 +1638,7 @@ def _apply_tenant_entries(config_dir: str, entries: list, result: dict,
         first, second = declared[tenant][0], declared[tenant][1]
         _tree_problem(
             result, "duplicate_tenant", second, f"tenants.{key_segment(str(tenant))}",
-            f"duplicate tenant id {shown_value(str(tenant))}: declared in both {first} and "
+            f"duplicate tenant id '{shown_key(str(tenant))}': declared in both {first} and "
             f"{second} — threshold-exporter rejects a tree that declares one "
             f"tenant in two files (DuplicateTenantError), and routes built "
             f"from a blend of both would match neither; keep the tenant in "
@@ -1933,8 +1933,8 @@ def load_tenant_tree(
         for domain, tenant in rows:
             tree_problems.append((
                 "domain_policy_out_of_scope", origin.get((level, domain), source),
-                f"domain_policies.{domain}.tenants",
-                f"domain policy '{domain}' names tenant '{tenant}' outside "
+                f"domain_policies.{key_segment(domain)}.tenants",
+                f"domain policy '{shown_key(domain)}' names tenant '{tenant}' outside "
                 f"{level}/"))
         schema_warnings.extend(
             check_domain_policies(reachable, policies, strict=strict_policies))

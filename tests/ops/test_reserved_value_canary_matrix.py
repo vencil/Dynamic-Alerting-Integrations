@@ -25,7 +25,9 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -38,6 +40,7 @@ pytestmark = pytest.mark.usefixtures("judging_run")
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_routing_value_canary_matrix import _GAR, validate_run  # noqa: E402
+from _lib_validation import key_segment, shown_key  # noqa: E402
 
 _REGISTRY = json.loads((REPO / "components" / "threshold-exporter" / "app" / "pkg" / "config"
                         / "reserved_keys.json").read_text(encoding="utf-8"))
@@ -261,7 +264,8 @@ def test_an_invalid_tenant_id_is_not_printed(tmp_path):
     findings, text = validate_run(tmp_path, files)
     assert {f["kind"] for f in findings} == {"invalid_tenant_id"} | _REFUSED, findings
     [f] = [f for f in findings if f["kind"] == "invalid_tenant_id"]
-    assert "tenant id a string of " in f["message"] and f["tenant"] is None, f
+    assert f"tenant id '{shown_key(_canary('tenant-id'))}'" in f["message"], f
+    assert f["tenant"] is None, f
     # What locates it instead: the file that declares it.
     assert f["file"] == "t-a.yaml" and f["message"].lstrip().startswith("t-a.yaml: "), f
     _no_canary(text)
@@ -288,7 +292,7 @@ def test_a_duplicate_tenant_id_is_not_printed(tmp_path):
     findings, text = validate_run(tmp_path, files)
     assert {f["kind"] for f in findings} == {"duplicate_tenant"} | _REFUSED, findings
     [f] = [f for f in findings if f["kind"] == "duplicate_tenant"]
-    assert "tenant a string of " in f["message"] and f["tenant"] is None, f
+    assert f"tenant '{shown_key(_canary('duplicate'))}'" in f["message"] and f["tenant"] is None, f
     assert "a.yaml, b.yaml" in f["message"], f
     _no_canary(text)
 
@@ -299,8 +303,9 @@ def test_a_platform_entry_for_no_tenant_is_not_printed(tmp_path):
     files = _files({"cpu_usage_percent": "85"},
                    {"tenants": {_canary("platform-id"): {"_silent_mode": "purple"}}})
     _findings, text = validate_run(tmp_path, files)
-    assert ("WARN: _defaults.yaml: tenants.<key> ignored — no tenant file declares tenant "
-            "a string of ") in text, text
+    shown = shown_key(_canary("platform-id"))
+    assert (f"WARN: _defaults.yaml: tenants.{shown} ignored — no tenant file declares tenant "
+            f"'{shown}'") in text, text
     _no_canary(text)
 
 
@@ -318,7 +323,7 @@ def test_a_severity_dedup_finding_does_not_carry_an_unvouched_id(tmp_path, value
     assert {f["kind"] for f in findings} == {"severity_dedup_invalid"} | _REFUSED, findings
     [f] = [f for f in findings if f["kind"] == "severity_dedup_invalid"]
     assert (f["tenant"], f["file"], f["field"]) == (None, "_defaults.yaml", "_severity_dedup"), f
-    assert "a string of " in f["message"], f
+    assert shown_key(_canary("dedup-owner")) in f["message"], f
     _no_canary(text)
 
 
@@ -330,21 +335,21 @@ def test_a_threshold_profile_name_is_not_printed(tmp_path):
                    **{"_profiles.yaml": {"profiles": {name: {"_severity_dedup": "disable"}}}})
     findings, text = validate_run(tmp_path, files)
     [f] = [f for f in findings if f["kind"] == "routing_in_unread_location"]
-    assert f["field"] == "profiles.<key>._severity_dedup", f
-    assert "`_profile: a string of " in f["message"], f
+    assert f["field"] == f"profiles.{key_segment(name)}._severity_dedup", f
+    assert f"`_profile: {shown_key(name)}`" in f["message"], f
     _no_canary(text)
 
 
 def test_the_available_profiles_are_listed_through_shown_key(tmp_path):
     """`; available:` 的每個名字只走 `shown_key`，沒有別的加工：名稱形的照印
-    （鍵 `123`、`true` 也是——reader 把鍵都當文字交出來），其他的只說長度。"""
+    （鍵 `123`、`true` 也是——reader 把鍵都當文字交出來），其他的印替身。"""
     receiver = {"receiver": {"type": "webhook", "url": "https://noc.example.com/a"}}
     files = _files({"cpu_usage_percent": "85", "_routing_profile": "nope"},
                    **{"_routing_profiles.yaml": {"routing_profiles": {
                        "p-one": receiver, 123: receiver, True: receiver, "Gold tier": receiver}}})
     findings, _text = validate_run(tmp_path, files)
     [f] = [f for f in findings if f["kind"] == "unknown_routing_profile"]
-    assert f["message"].endswith("; available: 123, a string of 9 chars, p-one, true"), f
+    assert f["message"].endswith(f"; available: 123, {shown_key('Gold tier')}, p-one, true"), f
 
 
 def test_the_id_of_a_tenant_body_that_is_not_loaded_is_not_printed(tmp_path):
@@ -353,7 +358,7 @@ def test_the_id_of_a_tenant_body_that_is_not_loaded_is_not_printed(tmp_path):
     files = _files({"cpu_usage_percent": "85"})
     files["t-a.yaml"]["tenants"][_canary("unloaded")] = None
     _findings, text = validate_run(tmp_path, files)
-    assert ("WARN: t-a.yaml: tenant a string of " in text
+    assert (f"WARN: t-a.yaml: tenant '{shown_key(_canary('unloaded'))}'" in text
             and " must be a mapping, got NoneType — that tenant is not loaded" in text), text
     _no_canary(text)
 
@@ -371,6 +376,119 @@ def test_the_id_of_a_list_body_is_not_printed_before_the_run_stops(tmp_path):
                        capture_output=True, text=True, encoding="utf-8", timeout=300)
     text = p.stdout + p.stderr
     assert p.returncode == 2 and "Traceback" not in text, (p.returncode, text)
-    assert ("WARN: t-a.yaml: tenant a string of " in text
+    assert (f"WARN: t-a.yaml: tenant '{shown_key(_canary('unloaded'))}'" in text
             and " must be a mapping, got list — that tenant is not loaded" in text), text
     _no_canary(text)
+
+
+# ── #3703 決策 A：被遮住的「定位用」名字印成摘要替身，兩個名字是兩筆 finding ──
+
+_STAND_IN = re.compile(r"<key:[0-9a-f]{6}>")
+#: Two names that are not name-like and have the same length: what used to
+#: print as the same `a string of N chars`.
+_TWINS = (_canary("one"), _canary("two"))
+assert len(_TWINS[0]) == len(_TWINS[1])
+
+
+def _key(f: dict) -> tuple:
+    """tenant-api's `findingKey` (internal/generator/gate.go): what decides
+    whether a finding was there before the write."""
+    return tuple(f.get(k) for k in ("kind", "tenant", "policy", "file", "field", "message"))
+
+
+def _base_and_new(tmp_path: Path, kind: str, base: dict, new: dict) -> tuple[list, list]:
+    """The *kind* findings of the base tree and of the tree a write makes; no
+    canary in either run."""
+    out = []
+    for label, files in (("base", base), ("new", new)):
+        (tmp_path / label).mkdir()
+        findings, text = validate_run(tmp_path / label, files)
+        _no_canary(text)
+        out.append([f for f in findings if f["kind"] == kind])
+    return out[0], out[1]
+
+
+def _two_findings_one_kept(base: list, new: list) -> None:
+    """The new tree's two findings are two keys, each naming its name by a
+    stand-in; the base tree's one is still one of them, unchanged."""
+    assert len(base) == 1 and len(new) == 2, (base, new)
+    assert len({_key(f) for f in new}) == 2, new
+    for f in new:
+        assert _STAND_IN.search(f["message"]), f
+    assert _key(base[0]) in {_key(f) for f in new}, (base, new)
+
+
+def test_two_unprinted_profile_names_are_two_findings(tmp_path):
+    """重現 1：`profiles:` 裡兩個不是名稱形、長度相同的 threshold profile 名字。"""
+    body = {"_severity_dedup": "disable"}
+    base, new = _base_and_new(
+        tmp_path, "routing_in_unread_location",
+        _files({"cpu_usage_percent": "85"}, {"profiles": {_TWINS[0]: body}}),
+        _files({"cpu_usage_percent": "85"}, {"profiles": {_TWINS[0]: body, _TWINS[1]: body}}))
+    _two_findings_one_kept(base, new)
+    assert {f["field"] for f in new} == {f"profiles.{key_segment(n)}._severity_dedup" for n in _TWINS}
+
+
+def test_two_unprinted_duplicate_tenant_ids_are_two_findings(tmp_path):
+    """重現 2：`a.yaml`、`b.yaml` 都宣告同一個不合法 id；寫入再讓兩檔都宣告第二個。"""
+    t = {"cpu_usage_percent": "85"}
+    base_files = _files(t, **{n: {"tenants": {_TWINS[0]: t}} for n in ("a.yaml", "b.yaml")})
+    new_files = _files(t, **{n: {"tenants": {_TWINS[0]: t, _TWINS[1]: t}}
+                             for n in ("a.yaml", "b.yaml")})
+    base, new = _base_and_new(tmp_path, "duplicate_tenant", base_files, new_files)
+    _two_findings_one_kept(base, new)
+    assert all(f["tenant"] is None for f in new), new
+
+
+def test_two_unprinted_tenant_ids_in_one_file_are_two_findings(tmp_path):
+    """重現 3：同一個檔裡兩個不合法、長度相同的 id——檔名分不開它們，替身分得開。"""
+    t = {"cpu_usage_percent": "85"}
+    base_files = _files(t, **{"x.yaml": {"tenants": {_TWINS[0]: t}}})
+    new_files = _files(t, **{"x.yaml": {"tenants": {_TWINS[0]: t, _TWINS[1]: t}}})
+    base, new = _base_and_new(tmp_path, "invalid_tenant_id", base_files, new_files)
+    _two_findings_one_kept(base, new)
+    assert {f["file"] for f in new} == {"x.yaml"}, new
+
+
+@pytest.mark.parametrize("files,kind", [
+    ({"_routing_profiles.yaml": {"routing_profiles": {
+        _C: {"receiver": {"type": "webhook", "url": "https://noc.example.com/a"}}}},
+      "sub/_routing_profiles.yaml": {"routing_profiles": {
+          _C: {"receiver": {"type": "webhook", "url": "https://noc.example.com/a"}}}}},
+     "routing_profile_duplicate"),
+    ({"_domain_policy.yaml": {"domain_policies": {_C: {"tenants": 5}}}},
+     "domain_policy_unusable"),
+], ids=["routing_profile_duplicate", "domain_policy_unusable"])
+def test_a_routing_profile_or_domain_policy_name_is_not_printed(tmp_path, files, kind):
+    """routing profile 與 domain policy 的名字也是作者寫的、拿來定位的鍵：訊息、
+    `field`、`policy` 都只帶替身。重複的 routing profile 讓整棵樹以 rc 2 停下
+    （不是判決，所以不經 `validate_run`），findings 檔照寫。"""
+    d = tmp_path / "conf.d"
+    for name, body in _files({"cpu_usage_percent": "85"}, **files).items():
+        (d / name).parent.mkdir(parents=True, exist_ok=True)
+        (d / name).write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
+    out = tmp_path / "f.json"
+    p = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d), "--validate", "--strict",
+                        "--findings-json", str(out)],
+                       capture_output=True, text=True, encoding="utf-8", timeout=300)
+    assert p.returncode in (1, 2) and "Traceback" not in p.stderr, (p.returncode, p.stderr)
+    written = out.read_text(encoding="utf-8")
+    text = p.stdout + p.stderr + written
+    [f] = [f for f in json.loads(written)["findings"] if f["kind"] == kind]
+    assert shown_key(_C) in f["message"], f
+    _no_canary(text)
+
+
+def test_shown_key_stand_in():
+    """替身的規則：名稱形的字串照印；其餘（空字串、非字串的鍵）是其文字
+    （非字串取 `str()`）UTF-8 的 SHA-256 前 6 個十六進位字。同名同替身。"""
+    def digest(text: str) -> str:
+        return f"<key:{hashlib.sha256(text.encode('utf-8')).hexdigest()[:6]}>"
+
+    assert shown_key("p-one") == key_segment("p-one") == "p-one"
+    for name in ("Gold tier", "", "x" * 65, "ünï", _C):
+        assert shown_key(name) == key_segment(name) == digest(name), name
+        assert _STAND_IN.fullmatch(shown_key(name)), name
+    assert shown_key("Gold tier") != shown_key("Iron tier")
+    assert shown_key(1) == digest("1") and shown_key(True) == digest("True")
+    assert shown_key(b"password_file") == digest("b'password_file'")

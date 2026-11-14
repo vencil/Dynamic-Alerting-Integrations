@@ -95,7 +95,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 from _grar_merge import FINDING_KINDS  # noqa: E402
 from _grar_parse import BLOCKING_TREE_KINDS, _parse_config_files, load_tenant_tree  # noqa: E402
 from _grar_validate import list_tenant_subroutes, route_entry_matchers  # noqa: E402
-from _lib_validation import is_valid_tenant_id  # noqa: E402
+from _lib_validation import is_valid_tenant_id, shown_key  # noqa: E402
 import generate_alertmanager_routes as gar  # noqa: E402
 
 MATRIX = json.loads((Path(__file__).parent / "routing_policy_parity_matrix.json")
@@ -466,7 +466,7 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
     unknown = {m["tenant"]: m["name"] for m in map(_UNKNOWN_PROFILE.search, got.schema_warnings) if m}
     refused = {m["tenant"]: "routing_not_mapping"
                for m in map(_ROUTING_NOT_MAPPING.search, got.schema_warnings) if m}
-    # #3703: the line names an id through shown_value (not every id is
+    # #3703: the line names an id through shown_key (not every id is
     # printed), so the ids are read from the tree and the lines counted.
     refused.update(dict.fromkeys(got.invalid_tenant_ids, "invalid_tenant_id"))
     assert (sum(1 for w in got.schema_warnings if _INVALID_TENANT_ID.search(w))
@@ -493,7 +493,10 @@ def test_python_reader_matches_the_table(tree, tmp_path: Path) -> None:
         assert group_by == _want(want, "group_by_invalid"), (where, group_by)
         mine = sorted((d, r, c) for t, d, r, c in rows if t == tenant)
         assert mine == sorted(tuple(p) for p in _want(want, "policy")), (where, mine)
-        assert unknown.get(tenant) == want["unknown_profile"], (where, unknown)
+        # #3703: the line names the profile through shown_key (an empty
+        # name is its stand-in); the table holds the name.
+        assert unknown.get(tenant) == (None if want["unknown_profile"] is None
+                                       else shown_key(want["unknown_profile"])), (where, unknown)
         assert refused.get(tenant) == _want(want, "refused"), (where, refused)
         esc = _escalation(tenant, rc, _requiring_domains(policies, tenant), got.schema_warnings)
         assert esc == want["escalation"], (where, esc)
