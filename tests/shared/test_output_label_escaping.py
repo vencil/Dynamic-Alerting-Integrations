@@ -457,14 +457,19 @@ def test_the_unmeasurable_set_is_named(variant: str, hostile_dirs, tmp_path):
 # invalid-tenant-id line; that line now names an id through `shown_value`
 # (a name-like id as it is, any other by its length), so the hostile name
 # is not printed at all. tests/ops/test_reserved_value_canary_matrix.py
-# measures that. Their ("malformed", …) pairs still exercise the escaping.
+# measures that. Their ("malformed", …) pairs still exercise the escaping —
+# except ("malformed", "generate_alertmanager_routes.py"), which left too: what
+# reached its output from the malformed tree was the hostile FILE names in the
+# unreadable-file refusal, and a conf.d path now leaves the generator through
+# `shown_file`, which prints a name that is not a legal file name (a newline,
+# an ESC, a NEL included) as its `<key:…>` stand-in, so no hostile name is
+# printed there. tests/ops/test_confd_filename_canary_matrix.py measures that.
 MEASURED: set[tuple[str, str]] = {
     ("malformed", "check_confd_schema.py"),
     ("malformed", "compile_custom_alerts.py"),
     ("malformed", "deprecate_rule.py"),
     ("malformed", "diagnose.py"),
     ("malformed", "explain_route.py"),
-    ("malformed", "generate_alertmanager_routes.py"),
     ("malformed", "generate_tenant_metadata.py"),
     ("malformed", "migrate_to_operator.py"),
     ("malformed", "offboard_tenant.py"),
