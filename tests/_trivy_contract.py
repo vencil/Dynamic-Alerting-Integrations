@@ -8,9 +8,10 @@ as a finding, or the nightly early warning and the PR-time output stop
 predicting what will block a release.
 
 So the filter lives here, once, and each consumer's guard imports it:
-tests/ops/test_release_scan_before_publish.py, tests/ops/
-test_nightly_scan_matrix_drift.py and tests/shared/test_trivy_scan_contract.py
-(which asserts every trivy-action step in every workflow carries it).
+  - tests/ops/test_release_scan_before_publish.py
+  - tests/ops/test_nightly_scan_matrix_drift.py
+  - tests/shared/test_trivy_scan_contract.py (asserts every trivy-action step
+    in every workflow carries it).
 
 ⛔ `ignore-unfixed: true` is a stance, not a default: the release gate blocks
 on what a rebuild or a bump can fix. A finding with no fixed version is the
