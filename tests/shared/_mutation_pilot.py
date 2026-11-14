@@ -847,6 +847,10 @@ MUTATIONS: list[Mutation] = [
 ]
 
 
+#: A cold Go cache built all three in 338 s on a dev container (#3871).
+PREBUILD_TIMEOUT_S = 900
+
+
 class PrebuildError(Exception):
     """A Go binary the kill suites' sessions need could not be built."""
 
@@ -875,14 +879,22 @@ def prebuild_go_binaries(dest: Path) -> dict[str, str]:
     env: dict[str, str] = {}
     for var, (module, pkg, name) in READER_BUILD_SOURCES.items():
         out = str(Path(dest) / name)
-        proc = subprocess.run(
-            go_build_argv(str(REPO_ROOT / module), pkg, out),
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            check=False, timeout=900)
+        try:
+            proc = subprocess.run(
+                go_build_argv(str(REPO_ROOT / module), pkg, out),
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                check=False, timeout=PREBUILD_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            raise PrebuildError(
+                f"building {name} ({module} {pkg}) ran past {PREBUILD_TIMEOUT_S}s") from None
         if proc.returncode != 0 or not os.path.isfile(out):
             raise PrebuildError(
                 f"building {name} ({module} {pkg}) failed, rc={proc.returncode}:\n"
                 f"{proc.stdout}{proc.stderr}")
+        # As conftest does (#3178): a kill suite that drops to `nobody` must
+        # still be able to execute the binary; read + execute, never write.
+        os.chmod(dest, 0o755)
+        os.chmod(out, 0o755)
         env[var] = out
         env["VIBE_TEST_" + var] = out
     return env
@@ -890,7 +902,7 @@ def prebuild_go_binaries(dest: Path) -> dict[str, str]:
 
 #: One mutant's kill suite. Generous for the suites themselves (seconds when
 #: the Go binaries are prebuilt); a session past it is that mutant's
-#: SETUP-FAIL, and the run goes on to the next.
+#: TIMEOUT, and the run goes on to the next.
 SESSION_TIMEOUT_S = 120
 
 
@@ -915,7 +927,7 @@ def run_tests(test_target: str, extra_env: dict[str, str]) -> tuple[int | None, 
 
 def verdict(rc: int | None, tail: str) -> str:
     if rc is None:
-        return (f"SETUP-FAIL: test runner timed out after {SESSION_TIMEOUT_S}s — "
+        return (f"TIMEOUT: test runner ran past {SESSION_TIMEOUT_S}s — "
                 f"kill suite did not finish :: {tail[:160]}")
     if rc == 0:
         return f"SURVIVED (rc=0) :: {tail[:160]}"
@@ -989,11 +1001,12 @@ def _run(selected: list[Mutation], build_dir: str) -> int:
     equivalent = [(m, v) for m, v in survivors if m.known_equivalent]
     new_survivors = [(m, v) for m, v in survivors if not m.known_equivalent]
     setup_fails = [(m, v) for m, v in results if v.startswith("SETUP-FAIL")]
+    timeouts = [(m, v) for m, v in results if v.startswith("TIMEOUT")]
     print(
         f"\n=== SUMMARY: {caught}/{len(results)} caught, "
         f"{len(survivors)} survived "
         f"({len(equivalent)} known-equivalent, {len(new_survivors)} NEW), "
-        f"{len(setup_fails)} setup-failures ===\n"
+        f"{len(setup_fails)} setup-failures, {len(timeouts)} timeouts ===\n"
     )
 
     if equivalent:
@@ -1010,11 +1023,18 @@ def _run(selected: list[Mutation], build_dir: str) -> int:
               "to the current source, or re-point a stale test reference):")
         for m, v in setup_fails:
             print(f"  - {m.fn_name}: {m.label}\n      {v}")
+    if timeouts:
+        print(f"TIMEOUTS (the kill suite did not finish in {SESSION_TIMEOUT_S}s, so "
+              "there is no verdict — a slow runner or a hung test, not catalog "
+              "rot; rerun the entry with --target and see where it stalls):")
+        for m, v in timeouts:
+            print(f"  - {m.fn_name}: {m.label}\n      {v}")
 
     # Exit contract (actionable-red): non-zero ONLY on a real signal — a NEW
-    # (non-equivalent) survivor or catalog rot. Known equivalents keep the
-    # nightly green so red always deserves investigation.
-    if new_survivors or setup_fails:
+    # (non-equivalent) survivor, catalog rot, or a suite that never reached
+    # a verdict. Known equivalents keep the nightly green so red always
+    # deserves investigation.
+    if new_survivors or setup_fails or timeouts:
         return 1
     return 0
 

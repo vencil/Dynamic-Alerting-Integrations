@@ -90,6 +90,9 @@ def test_the_pilot_builds_every_binary_once_and_names_each_for_reuse(
         assert os.path.isfile(path) and Path(path).name == name
         # conftest's reuse branch reads `VIBE_TEST_<VAR>`.
         assert env["VIBE_TEST_" + var] == path
+        # #3178: a suite that drops to `nobody` must be able to run it.
+        assert os.stat(path).st_mode & 0o777 == 0o755
+    assert os.stat(out).st_mode & 0o777 == 0o755
 
 
 def test_a_session_given_the_prebuilt_paths_calls_go_zero_times(
@@ -154,15 +157,44 @@ def test_every_session_gets_the_prebuilt_environment(monkeypatch: pytest.MonkeyP
     assert seen[0]["PATH"] == os.environ["PATH"], "the rest of the environment is inherited"
 
 
-def test_a_session_that_times_out_is_one_setup_fail(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("output", [b"collected 3\npartial line\n", "collected 3\npartial line\n", None])
+def test_a_session_that_times_out_is_one_timeout(monkeypatch: pytest.MonkeyPatch, output) -> None:
+    # A real TimeoutExpired carries bytes even under text=True.
     def fake_run(cmd, **kw):
-        raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 0), output="partial line\n")
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 0), output=output)
 
     monkeypatch.setattr(pilot.subprocess, "run", fake_run)
     rc, tail = pilot.run_tests("tests/x.py", {})
     assert rc is None
-    assert pilot.verdict(rc, tail).startswith("SETUP-FAIL")
-    assert "timed out" in pilot.verdict(rc, tail)
+    assert pilot.verdict(rc, tail).startswith("TIMEOUT")
+    if output:
+        assert "partial line" in tail
+
+
+def test_a_timeout_is_reported_apart_from_catalog_rot_and_turns_the_run_red(
+        monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    m = pilot.MUTATIONS[0]
+    monkeypatch.setattr(pilot, "prebuild_go_binaries", lambda dest: {})
+    monkeypatch.setattr(pilot, "run_tests", lambda target, env: (None, "stalled"))
+    monkeypatch.setattr(pilot.Mutation, "apply", lambda self: None)
+    monkeypatch.setattr(pilot.Mutation, "revert", lambda self, original: None)
+    assert pilot._run([m], "/nonexistent") == 1
+    out = capsys.readouterr().out
+    assert "0 setup-failures, 1 timeouts" in out
+    assert "TIMEOUTS (" in out and "SETUP FAILURES" not in out
+
+
+def test_a_build_past_its_timeout_is_a_prebuild_error(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("VIBE_TEST_GO_BINARIES", raising=False)
+    monkeypatch.setattr(pilot.shutil, "which", lambda name: "/usr/bin/" + name)
+
+    def fake_run(cmd, **kw):
+        raise subprocess.TimeoutExpired(cmd, kw.get("timeout", 0))
+
+    monkeypatch.setattr(pilot.subprocess, "run", fake_run)
+    with pytest.raises(pilot.PrebuildError, match="ran past"):
+        pilot.prebuild_go_binaries(tmp_path)
 
 
 @pytest.mark.parametrize("rc,prefix", [(0, "SURVIVED"), (1, "CAUGHT"),
