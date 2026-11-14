@@ -31,6 +31,9 @@ before the nightly runs the whole stack.
 * `TA_DEV_BYPASS_GROUPS` must be set in the compose file. tenant-api has a
   built-in default for it (`cmd/server/main.go`), and a group that only
   exists as that default is invisible to anyone reading the compose file.
+* Only the environment is read. tenant-api's `--dev-bypass-*` flags override
+  it, so a service whose `command:` mentions `dev-bypass` is refused outright
+  rather than half-modelled.
 * Whether tenant-api actually loads this `_rbac.yaml` (the volume mount, the
   file name) is the nightly smoke's job, not this module's.
 """
@@ -49,6 +52,9 @@ RBAC = REPO_ROOT / "try-local" / "seed" / "conf.d" / "_rbac.yaml"
 BYPASS_SWITCH = "TA_DEV_BYPASS_AUTH"
 BYPASS_GROUPS = "TA_DEV_BYPASS_GROUPS"
 SCOPE_AXES = ("org-scope", "environments", "domains")
+# parseEnvBool's true spellings (cmd/server/main.go envBool); anything else it
+# accepts is false, anything it does not accept refuses to start.
+GO_TRUE = {"1", "t", "T", "TRUE", "true", "True"}
 
 
 def _env(service: dict) -> dict:
@@ -68,7 +74,7 @@ def bypass_groups(compose: dict) -> "dict[str, list[str]]":
     found = {}
     for name, service in (compose.get("services") or {}).items():
         env = _env(service or {})
-        if env.get(BYPASS_SWITCH, "").lower() != "true":
+        if env.get(BYPASS_SWITCH, "") not in GO_TRUE:
             continue
         raw = env.get(BYPASS_GROUPS)
         found[name] = None if raw is None else [g.strip() for g in raw.split(",") if g.strip()]
@@ -96,6 +102,17 @@ def platform_admin_problems(rbac: dict, group: str) -> "list[str]":
     return problems
 
 
+def services_with_bypass_flags(compose: dict) -> "list[str]":
+    """Services whose `command:` passes a --dev-bypass-* flag (which overrides the env)."""
+    out = []
+    for name, service in (compose.get("services") or {}).items():
+        cmd = (service or {}).get("command") or ""
+        text = " ".join(map(str, cmd)) if isinstance(cmd, list) else str(cmd)
+        if "dev-bypass" in text:
+            out.append(name)
+    return out
+
+
 @pytest.fixture(scope="module")
 def compose() -> dict:
     return yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))
@@ -109,6 +126,15 @@ def rbac() -> dict:
 def test_the_bypass_is_on_somewhere(compose) -> None:
     # Without this an empty result would pass every check below.
     assert bypass_groups(compose), f"no service in {COMPOSE.name} sets {BYPASS_SWITCH}=true"
+
+
+def test_no_service_sets_the_bypass_by_flag(compose) -> None:
+    flagged = services_with_bypass_flags(compose)
+    assert not flagged, (
+        f"{', '.join(flagged)}: `command:` passes a --dev-bypass-* flag, which overrides "
+        f"{BYPASS_SWITCH}/{BYPASS_GROUPS}; this guard reads only the environment — "
+        "set the bypass there instead, or extend the guard"
+    )
 
 
 def test_every_bypass_service_names_its_groups(compose) -> None:
@@ -174,9 +200,18 @@ def test_one_good_rule_among_bad_ones_is_enough() -> None:
     ({"TA_DEV_BYPASS_AUTH": "true", "TA_DEV_BYPASS_GROUPS": " a, b ,,"}, ["a", "b"]),
     (["TA_DEV_BYPASS_AUTH=true", "TA_DEV_BYPASS_GROUPS=a"], ["a"]),
     ({"TA_DEV_BYPASS_AUTH": "true"}, None),
-], ids=["mapping-split", "list-form", "unset"])
+    ({"TA_DEV_BYPASS_AUTH": "1", "TA_DEV_BYPASS_GROUPS": "a"}, ["a"]),
+    ({"TA_DEV_BYPASS_AUTH": True, "TA_DEV_BYPASS_GROUPS": "a"}, ["a"]),
+], ids=["mapping-split", "list-form", "unset", "go-true-1", "yaml-bool"])
 def test_bypass_groups_reads_both_compose_shapes(env, want) -> None:
     assert bypass_groups({"services": {"s": {"environment": env}}}) == {"s": want}
+
+
+@pytest.mark.parametrize("cmd", [
+    ["tenant-api", "--dev-bypass-groups=x"], "tenant-api --dev-bypass-auth",
+], ids=["list", "string"])
+def test_a_bypass_flag_in_command_is_caught(cmd) -> None:
+    assert services_with_bypass_flags({"services": {"s": {"command": cmd}}}) == ["s"]
 
 
 def test_a_service_without_the_bypass_is_ignored() -> None:
