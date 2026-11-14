@@ -10,20 +10,24 @@
 情境與接線都不靠人挑，兩道守衛各抓一種漏：
 
 1. **語料由既有案例推導（抓「沒接出口」）**：`_grar_findings_cases.CASES`
-   （加上它的 `UNITEMISED`）的每個案例照原樣建樹、再機械地改名建一次——每個目錄、每個不以 `_` 開頭的
-   `.yaml`／`.yml` 檔換成帶序號的不合法名字（含空白與 `@`，副檔名保留；`_`
-   開頭的檔名決定它的角色，不改，所在目錄照改）——同一模式各跑一次，斷言
-   (a) rc 與 findings 的 kind 多重集合相同：改名沒改變被判到的東西；(b)
-   改名那次的輸出裡沒有 canary。案例集新增案例自動被涵蓋。
+   （加上它的 `UNITEMISED`）的每個案例照原樣建樹、再機械地改名建一次——每個
+   目錄、每個 `.yaml`／`.yml` 檔換成帶序號的不合法名字（含空白與 `@`，副檔名
+   與開頭的 `_` 保留）——同一模式各跑一次，斷言 (a) rc 與 findings 的 kind
+   多重集合相同：改名沒改變被判到的東西；(b) 改名那次的輸出裡沒有 canary。
+   `_` 開頭的檔名可能就是它的角色（`_defaults.yaml`、`_domain_policy.yaml`）：
+   哪些是，不靠名單——單獨改它一個名字、四個模式的 rc 與 kind 有任何一個變
+   了，就是名字決定角色，不改（所在目錄照改）。案例集新增案例自動被涵蓋。
 2. **每個出口呼叫點都要被走到（抓「接了但沒人守」）**：以 AST 列出產生器
    各模組裡每個 `shown_file(` 呼叫點；上面那些改名的跑法在子行程裡以
    in-process 方式執行產生器（`runpy`，與 CLI 同一條路），`shown_file` 換成
-   記錄用的包裝（呼叫者的檔案、行、欄；這次是否真的印了替身）。每個呼叫點
-   至少要被一個情境走到**且印過替身**；走不到的只能列在 `_UNREACHED`（附理
-   由），列了卻被走到、或呼叫點已不存在，都紅。
+   記錄用的包裝，把替身換成**該呼叫點專屬**的 `<key:…>`（仍是替身，產生器
+   照常往下跑）。每個呼叫點至少要在一個情境裡印出替身、**且它專屬的那個替
+   身出現在該次的輸出裡**——只被呼叫、結果沒印出來的不算（先存成別名、只在
+   沒走到的分支裡印），別的呼叫點印了同一個名字也不算；做不到的只能列在
+   `_UNREACHED`（附理由），列了卻做到了、或呼叫點已不存在，都紅。
 
-改名做不出來的條目形狀（symlink、FIFO、非 UTF-8 的名字、`_` 開頭但不是載體
-名的檔）另列在 `_ENTRY_SHAPES`，它們的跑法也算進第 2 道的涵蓋。
+改名做不出來的條目形狀（symlink、FIFO、非 UTF-8 的名字）另列在
+`_ENTRY_SHAPES`，它們的跑法也算進第 2 道的涵蓋。
 """
 from __future__ import annotations
 
@@ -66,12 +70,13 @@ _SITE_FILES = (_GAR, *sorted(OPS.glob("_grar_*.py")), TOOLS / "_lib_key_verdict.
 
 # ── the rename (guard 1's corpus) ─────────────────────────────────────────
 
-def canary_names(files: "dict[str, str]") -> "dict[str, str]":
+def canary_names(files: "dict[str, str]",
+                 keep: "frozenset[str]" = frozenset()) -> "dict[str, str]":
     """Each relative path of *files* → the same path with every directory and
-    every config file that does not start with `_` renamed to a numbered name
-    that is not a legal file name (a space and `@`; the extension kept). A
-    `_` file keeps its name — it names the file's role (`_defaults.yaml`,
-    `_domain_policy.yaml`, …) — but its directory is renamed."""
+    every config file renamed to a numbered name that is not a legal file name
+    (a space and `@`; the extension and a leading `_` kept). A path in *keep*
+    keeps its own name (its role is its name, `_role_names`); its directory
+    is renamed all the same."""
     dirs = sorted({"/".join(rel.split("/")[:i]) for rel in files
                    for i in range(1, rel.count("/") + 1)})
     new_dir = {"": ""}
@@ -81,10 +86,10 @@ def canary_names(files: "dict[str, str]") -> "dict[str, str]":
     out, n = {}, 0
     for rel in sorted(files):
         parent, _, base = rel.rpartition("/")
-        stem, dot, ext = base.rpartition(".")
-        if not base.startswith("_") and f".{ext}" in _YAML and dot:
+        _stem, dot, ext = base.rpartition(".")
+        if rel not in keep and f".{ext}" in _YAML and dot:
             n += 1
-            base = f"ZqX F{n}@c.{ext}"
+            base = f"{'_' if base.startswith('_') else ''}ZqX F{n}@c.{ext}"
         out[rel] = (new_dir[parent] + "/" if parent else "") + base
     return out
 
@@ -99,7 +104,7 @@ def _referenced_names(files: "dict[str, str]") -> "list[str]":
         if rel == new:
             continue
         base = rel.rpartition("/")[2]
-        if not base.startswith("_"):
+        if base != new.rpartition("/")[2]:
             said.add(base)
         said.update(seg + "/" for seg in rel.split("/")[:-1])
     return sorted(s for s in said for body in files.values() if s in body)
@@ -109,12 +114,16 @@ def _referenced_names(files: "dict[str, str]") -> "list[str]":
 
 #: Runs the generator as its CLI does (`runpy`, `__main__`) with
 #: `_lib_validation.shown_file` replaced, before any module binds it, by a
-#: wrapper that appends [caller file, line, column, printed a stand-in] for
-#: every call. argv: tools dir, generator, hits file, the generator's argv.
+#: wrapper that appends [caller file, line, column, printed a stand-in, what
+#: it returned] for every call. With *tag* "1" a stand-in segment it returns
+#: is the CALL SITE's own `<key:…>` (`_site_tag`) rather than the name's, so
+#: the output shows which call printed it — still a stand-in (`shown_file`
+#: keeps it as it is), so the run goes on as it would. argv: tools dir,
+#: generator, hits file, tag, the generator's argv.
 _DRIVER = r"""
-import json, runpy, sys
-tools, gar, hits = sys.argv[1:4]
-sys.argv = [gar, *sys.argv[4:]]
+import hashlib, json, os, runpy, sys
+tools, gar, hits, tag = sys.argv[1:5]
+sys.argv = [gar, *sys.argv[5:]]
 sys.path.insert(0, tools)
 import _lib_validation
 _shown_file = _lib_validation.shown_file
@@ -123,9 +132,14 @@ def shown_file(path):
     caller = sys._getframe(1)
     code = caller.f_code
     line, _end, col, _endcol = list(code.co_positions())[caller.f_lasti // 2]
+    if tag == "1" and path is not None and out != str(path):
+        site = f"{os.path.basename(code.co_filename)}:{line}:{col}"
+        mark = "<key:" + hashlib.sha256(site.encode()).hexdigest()[:6] + ">"
+        out = "/".join(seg if seg == old else mark
+                       for seg, old in zip(out.split("/"), str(path).split("/")))
     with open(hits, "a", encoding="utf-8") as fh:
         fh.write(json.dumps([code.co_filename, line, col,
-                             path is not None and out != str(path)]) + "\n")
+                             path is not None and out != str(path), out]) + "\n")
     return out
 _lib_validation.shown_file = shown_file
 runpy.run_path(gar, run_name="__main__")
@@ -136,10 +150,17 @@ class Outcome(NamedTuple):
     rc: int
     kinds: "tuple[tuple[str, int], ...]"   # sorted Counter items
     text: str                               # stdout + stderr + the findings file
-    hits: "tuple[tuple[str, int, int, bool], ...]"
+    findings: "tuple[tuple, ...]"           # (kind, field, tenant, policy, message)
+    hits: "tuple[tuple[str, int, int, bool, str | None], ...]"
 
 
-def _drive(conf: Path, argv: "list[str]") -> Outcome:
+def _site_tag(path: "str | Path", line: int, col: int) -> str:
+    """The `<key:…>` a tagged run prints for a stand-in made at that call."""
+    site = f"{os.path.basename(str(path))}:{line}:{col}"
+    return "<key:" + hashlib.sha256(site.encode()).hexdigest()[:6] + ">"
+
+
+def _drive(conf: Path, argv: "list[str]", tag: bool = False) -> Outcome:
     work = conf.parent
     out, hits = work / "findings.json", work / "hits.jsonl"
     for p in (out, hits):
@@ -149,31 +170,85 @@ def _drive(conf: Path, argv: "list[str]") -> Outcome:
     env["PATH"] = os.devnull  # nothing resolvable on PATH, as cases.run_gar
     env["PYTHONIOENCODING"] = "utf-8"
     p = subprocess.run(
-        [sys.executable, "-s", "-c", _DRIVER, str(TOOLS), str(_GAR), str(hits),
+        [sys.executable, "-s", "-c", _DRIVER, str(TOOLS), str(_GAR), str(hits), "01"[tag],
          "--config-dir", str(conf), *argv, "--findings-json", str(out)],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=300, env=env)
     assert "Traceback" not in p.stderr, p.stderr
     assert out.exists(), p.stderr
     written = out.read_text(encoding="utf-8", errors="replace")
-    kinds = Counter(f["kind"] for f in json.loads(written)["findings"])
+    records = json.loads(written)["findings"]
+    kinds = Counter(f["kind"] for f in records)
     rows = (tuple(json.loads(line)) for line in
             (hits.read_text(encoding="utf-8").splitlines() if hits.exists() else ()))
     return Outcome(p.returncode, tuple(sorted(kinds.items())),
-                   p.stdout + p.stderr + written, tuple(rows))
+                   p.stdout + p.stderr + written,
+                   tuple((f["kind"], f["field"], f["tenant"], f["policy"],
+                          f["message"].replace(str(conf), "<CONFDIR>"))
+                         for f in records), tuple(rows))
 
 
 @functools.lru_cache(maxsize=None)
-def _case(fixture: str, mode: str, renamed: bool) -> Outcome:
-    files = _TREES[fixture]
-    names = canary_names(files) if renamed else {rel: rel for rel in files}
+def _run(fixture: str, mode: str, names: "tuple[tuple[str, str], ...]",
+         tag: bool = False) -> Outcome:
+    files, where = _TREES[fixture], dict(names)
     with tempfile.TemporaryDirectory() as tmp:
         conf = Path(tmp) / "conf.d"
         for rel, body in files.items():
-            p = conf / names[rel]
+            p = conf / where[rel]
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(body, encoding="utf-8")
-        return _drive(conf, cases.MODES[mode])
+        return _drive(conf, cases.MODES[mode], tag)
+
+
+def _judged(o: Outcome, paths: "list[str]") -> tuple:
+    """What a run judged, its file names aside: the rc and every finding's
+    kind, field, tenant, policy and message, each of *paths* (the tree's,
+    as `shown_file` prints them) in a message written `<F>`."""
+    shown = sorted({shown_file(p) for p in paths}, key=len, reverse=True)
+
+    def bare(message: str) -> str:
+        for s in shown:
+            message = message.replace(s, "<F>")
+        return message
+    return o.rc, tuple(sorted((k, fld, tn, pol, bare(msg))
+                              for k, fld, tn, pol, msg in o.findings))
+
+
+@functools.lru_cache(maxsize=None)
+def _role_names(fixture: str) -> "frozenset[str]":
+    """The `_` files of *fixture* whose name is their role: renaming that
+    file alone (its directory kept) changes what a run judges (`_judged`:
+    the same kind in another sentence counts — a `_domain_policy.yaml`
+    renamed is still `domain_policy_unusable`, for another reason). Measured
+    under `--validate --strict` and the render, not listed."""
+    files = _TREES[fixture]
+    plain = tuple((rel, rel) for rel in sorted(files))
+    full = canary_names(files)
+
+    def alone(rel: str) -> "tuple[tuple[str, str], ...]":
+        new = rel.rpartition("/")[0] + "/" if "/" in rel else ""
+        return tuple((r, new + full[r].rpartition("/")[2] if r == rel else r)
+                     for r in sorted(files))
+
+    probes = [rel for rel in sorted(files)
+              if rel.rpartition("/")[2].startswith("_") and full[rel] != rel]
+    jobs = [(rel, m) for rel in probes for m in ("validate_strict", "output-alertmanager")]
+
+    def changes(job):
+        rel, mode = job
+        probe = alone(rel)
+        return rel, (_judged(_run(fixture, mode, probe), [new for _r, new in probe])
+                     != _judged(_run(fixture, mode, plain), list(files)))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        return frozenset(rel for rel, changed in pool.map(changes, jobs) if changed)
+
+
+def _case(fixture: str, mode: str, renamed: bool, tag: bool = False) -> Outcome:
+    files = _TREES[fixture]
+    names = (canary_names(files, _role_names(fixture)) if renamed
+             else {rel: rel for rel in files})
+    return _run(fixture, mode, tuple(sorted(names.items())), tag)
 
 
 #: Fixtures whose finding kinds depend on a file's NAME, so the rename may
@@ -190,7 +265,7 @@ def test_the_rename_needs_no_text_change():
 
 def test_every_canary_name_is_one_shown_file_replaces():
     for files in _TREES.values():
-        for rel, new in canary_names(files).items():
+        for rel, new in canary_names(files).items():  # every name renamed
             for old_seg, seg in zip(rel.split("/"), new.split("/")):
                 if old_seg != seg:
                     assert _CANARY in seg.lower() and shown_file(seg) != seg, seg
@@ -224,22 +299,6 @@ _ENTRY_SHAPES: "dict[str, tuple[dict[str, str], tuple[str, str], tuple[str, ...]
                  "@symlink:ZqX LINK@x.yaml": "nowhere-zqx.yaml",
                  "@fifo:ZqX FIFO@x.yaml": ""},
                 ("kind", "tenant_file_unreadable"), ("ZqX LINK@x.yaml", "ZqX FIFO@x.yaml")),
-    # A `_` file whose name is not a carrier's: the rename keeps `_` names.
-    "platform": ({"_defaults.yaml": _ROOT, "db-ok.yaml": _tenant("db-ok"),
-                  "_ZqX PLAT@x.yaml": "_routing_defaults:\n  receiver: 1\n",
-                  "ZqX NOTE@x.txt": "hello\n"},
-                 ("kind", "missing_receiver_field"), ("_ZqX PLAT@x.yaml",)),
-    "policy_misplaced": ({"_defaults.yaml": _ROOT, "db-ok.yaml": _tenant("db-ok"),
-                          "_ZqX POL@x.yaml": "domain_policies:\n  d: {tenants: [db-ok]}\n"},
-                         ("kind", "domain_policy_unusable"), ("_ZqX POL@x.yaml",)),
-    "orphan_platform": ({"_defaults.yaml": _ROOT, "db-ok.yaml": _tenant("db-ok"),
-                         "_ZqX PLAT@x.yaml": "tenants:\n  db-zz:\n    cpu_usage_percent: '1'\n"},
-                        ("text", "ignored — no tenant file declares tenant 'db-zz'"),
-                        ("_ZqX PLAT@x.yaml",)),
-    "enforced_below_root": ({"_defaults.yaml": _ROOT, "db-ok.yaml": _tenant("db-ok"),
-                             "ZqX DIR@y/_ZqX E@x.yaml": "_routing_enforced:\n  enabled: true\n"},
-                            ("kind", "routing_enforced_below_root"),
-                            ("ZqX DIR@y/_ZqX E@x.yaml",)),
     # A name that is not valid UTF-8: da-guard refuses the whole tree, and
     # the generator's rc-2 line repeats da-guard's stderr, which quotes the
     # name. Known: see `_KNOWN`.
@@ -290,13 +349,13 @@ def _build(d: Path, files: "dict[str, str]") -> None:
             pytest.skip(f"this platform cannot make {kind or 'file'} {rel!r}: {e}")
 
 
-def _shape(name: str, argv: "tuple[str, ...]") -> Outcome:
+def _shape(name: str, argv: "tuple[str, ...]", tag: bool = False) -> Outcome:
     files = _ENTRY_SHAPES[name][0]
     with tempfile.TemporaryDirectory() as tmp:
         conf = Path(tmp) / "conf.d"
         conf.mkdir()
         _build(conf, files)
-        res = _drive(conf, list(argv))
+        res = _drive(conf, list(argv), tag)
     # A tree da-guard refuses whole is the run's caller error (rc 2,
     # `run_failed`): that is what `not_utf8_name` measures; anywhere else a
     # run that judged nothing has no canary to find.
@@ -358,8 +417,8 @@ def _call_sites() -> "dict[str, tuple[str, int, int]]":
     return sites
 
 
-#: Call sites no run of the corpus reaches with a name it replaces, each with
-#: why. Keep it empty: a case that reaches one belongs in `CASES`.
+#: Call sites no run of the corpus makes print a stand-in, each with why.
+#: Keep it short: a case that reaches one belongs in `CASES`.
 _UNREACHED: "dict[str, str]" = {
     "_grar_parse.py:_parse_config_files#2":
         "#2981: `_GIT_IRREGULAR` holds the entries the generator service read "
@@ -367,41 +426,65 @@ _UNREACHED: "dict[str, str]" = {
     "_grar_parse.py:credential_findings#2":
         "the NOTICE for a credential in a file the write does not change: only "
         "the generator service's write passes `credential_scope`; the CLI never does",
+    # A `routing_tree_problems` record of a kind that does not block: the
+    # generator prints only the blocking ones (`BLOCKING_TREE_KINDS`); the
+    # record's text is validate-config's / explain_route's to print, and their
+    # output is not this guard's. The generator's own line for the same fact
+    # is another call (`duplicate_tenant_errors`, `check_policy_scope`).
+    **{f"_grar_parse.py:_apply_tenant_entries#{n}":
+       "the `duplicate_tenant` record's text (#2315 refuses the tree first, "
+       "with `duplicate_tenant_errors`' line); see the note above" for n in (2, 3, 4)},
+    "_grar_parse.py:load_tenant_tree#1":
+        "the `domain_policy_out_of_scope` record's text (the printed line is "
+        "`check_policy_scope`'s); see the note above",
+    "_grar_parse.py:policy_level_source#2":
+        "the source of a subtree whose `domain_policies` names no policy: it is "
+        "printed only in a row of `check_policy_scope`, and a row needs a policy, "
+        "whose file is always in `domain_policy_origin` (the first branch)",
 }
 
 
 def _corpus() -> "list[Outcome]":
-    jobs = [functools.partial(_case, f, m, True) for f, m in _RUNS]
-    jobs += [functools.partial(_shape, n, ("--validate", "--strict"))
+    jobs = [functools.partial(_case, f, m, True, True) for f, m in _RUNS]
+    jobs += [functools.partial(_shape, n, ("--validate", "--strict"), True)
              for n in _ENTRY_SHAPES if n not in _KNOWN]
     with ThreadPoolExecutor(max_workers=4) as pool:
         return list(pool.map(lambda job: job(), jobs))
 
 
-def test_every_shown_file_call_site_is_reached_with_a_name_it_replaces():
+def test_every_shown_file_call_site_prints_a_stand_in():
     sites = _call_sites()
     assert len(sites) >= 40, sorted(sites)  # the derivation did not collapse
     where = {loc: key for key, loc in sites.items()}
+    # A site's own stand-in is no name's: else its presence proves nothing.
+    tags = {_site_tag(*loc) for loc in sites.values()}
+    assert len(tags) == len(sites)
+    names = {shown_file(seg) for files in _TREES.values()
+             for new in canary_names(files).values() for seg in new.split("/")}
+    assert not tags & names, tags & names
     targets = {str(p) for p in _SITE_FILES}
     replaced, unknown = set(), set()
     for res in _corpus():
-        for file, line, col, stood in res.hits:
+        for file, line, col, stood, out in res.hits:
             key = where.get((os.path.realpath(file), line, col)) or where.get((file, line, col))
             if key is None:
                 if os.path.realpath(file) in targets:
                     unknown.add((file, line, col))
                 continue
-            if stood:
+            # This call's own stand-in in this run's output: called and
+            # returned is not enough (an alias printed only on a branch no
+            # case takes), nor is the same name printed by another call.
+            if stood and _site_tag(file, line, col) in res.text:
                 replaced.add(key)
     missing = sorted(set(sites) - replaced - set(_UNREACHED))
     stale = sorted(set(_UNREACHED) & replaced)
     gone = sorted(set(_UNREACHED) - set(sites))
     assert not unknown, f"calls the AST walk does not list (the mapping broke): {sorted(unknown)}"
     assert not missing, (
-        f"`shown_file(` call sites no case reaches with an illegal name: {missing}. "
+        f"`shown_file(` call sites no case makes print a stand-in: {missing}. "
         "Add a case to tests/ops/_grar_findings_cases.py that reaches each, or a "
         "reason to _UNREACHED")
-    assert not stale, f"_UNREACHED entries a case now reaches (delete them): {stale}"
+    assert not stale, f"_UNREACHED entries a case now prints (delete them): {stale}"
     assert not gone, f"_UNREACHED entries whose call site is gone: {gone}"
 
 
@@ -427,7 +510,7 @@ def test_legal_names_are_printed_as_written(tmp_path):
     assert got == {"db-x": "db-x.yaml", "db-y": "team-a/db-y.yaml",
                    _LONG_A: f"{_LONG_A}.yaml", _LONG_B: f"team-a/{_LONG_B}.yml"}, findings
     assert "<key:" not in res.text, res.text
-    assert not any(stood for *_, stood in res.hits), res.hits
+    assert not any(hit[3] for hit in res.hits), res.hits
 
 
 # ── shown_file itself ───────────────────────────────────────────────────

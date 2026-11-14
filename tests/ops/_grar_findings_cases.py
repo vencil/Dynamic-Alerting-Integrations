@@ -200,14 +200,16 @@ FIXTURES: dict[str, dict[str, str]] = {
     # #3703: findings that name a file below the root — a profile defined in
     # another directory, a level's defaults the generator does not use, a
     # subtree policy naming a tenant of a sibling subtree, a subtree with an
-    # empty policy block, an empty `tenants:`.
+    # empty policy block, an empty `tenants:`, a platform entry for a tenant
+    # no tenant file declares, a `_routing…` key a platform file may not set.
     "subtree": {
         "_defaults.yaml": _DEFAULTS,
         "_enforced.yaml": (
             "_routing_enforced:\n"
             "  enabled: true\n"
             "  receiver: {type: webhook, url: 'https://noc.example.com/x'}\n"
-            "  match: {severity: critical}\n"),
+            "  match: {severity: critical}\n"
+            "_routing_bogus: 1\n"),
         "alpha.yaml": _tenant("alpha") + "    _routing_profile: p\n",
         "team/_routing_profiles.yaml": (
             "routing_profiles:\n"
@@ -237,6 +239,7 @@ FIXTURES: dict[str, dict[str, str]] = {
             "      receiver: {type: webhook, url: 'https://hooks.example.com/r'}\n"),
         "fourth/_routing_profiles.yaml": "routing_profiles: [1]\n",
         "delta.yaml": "tenants:\n",
+        "_platform.yaml": "tenants:\n  ghost:\n    mysql_connection_usage_percent: 1\n",
     },
     # #3703: the same below the root, each refusing the whole tree in every
     # mode — a subtree policy that cannot be used, a policy block in a file
