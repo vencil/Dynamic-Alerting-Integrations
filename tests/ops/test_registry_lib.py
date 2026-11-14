@@ -1712,7 +1712,7 @@ def test_an_operator_key_may_carry_validation_and_is_held_to_it():
     """升級前可以先登記依據；登記了就照同一套規則檢查。"""
     op = {**_entry(), "arming": "operator"}
     assert _problems(op) == []
-    op["validation"]["sources"][0]["value"] = 81
+    op["validation"]["sources"][0].update(value=81, quote="expr: metric > 81")
     assert any("vendor source uses 81" in p for p in _problems(op))
     plain = {"arming": "operator", "portability": "portable", "tier": "defaults", "value": 80}
     assert _problems(plain) == []
@@ -1756,12 +1756,23 @@ def test_a_consensus_brackets_the_value_with_different_organisations():
     ({"basis": "vendor", "sources": [{**_src("a", 80), "url": "https://example.com/a b"}]}, "https://"),
     ({"basis": "vendor", "sources": [{**_src("a", 80), "quote": "two\nlines"}]}, "one line"),
     ({"basis": "vendor", "sources": [{**_src("a", 80), "quote": "  "}]}, "non-blank"),
-    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": "80"}]}, "must be a number"),
-    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": True}]}, "must be a number"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": "80"}]}, "finite number"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": True}]}, "finite number"),
     ({"basis": "vendor", "sources": [_src("a", 80, tier="page")]}, "tier"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "url": "https://"}]}, "https://"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "org": "  "}]}, "non-blank"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "org": "two\nlines"}]}, "one line"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": float("inf")}]}, "finite number"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": float("nan")}]}, "finite number"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "quote": "alert: 'HighMemory'"}]},
+     "does not carry its value"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "quote": "expr: metric > 85"}]},
+     "does not carry its value"),
 ], ids=["no-sources", "extra-field", "corpus-basis", "empty-sources", "source-without-quote",
         "authored-relation", "http-url", "url-with-space", "two-line-quote", "blank-quote",
-        "string-value", "bool-value", "unknown-tier"])
+        "string-value", "bool-value", "unknown-tier", "bare-scheme-url", "blank-org",
+        "two-line-org", "infinite-value", "nan-value", "quote-without-a-number",
+        "quote-with-another-number"])
 def test_a_malformed_validation_is_reported(validation, needle):
     problems = _problems(_entry(80, **validation))
     assert any(needle in p for p in problems), problems
@@ -1786,3 +1797,57 @@ def test_every_real_shipped_key_has_a_validation_and_no_counterexample():
     shipped = {k: e for k, e in lib.registry_keys(doc).items() if lib.is_chart_armed(e)}
     assert shipped
     assert all("validation" in e and "value_counterexample" not in e for e in shipped.values())
+
+
+@pytest.mark.parametrize("quote", ["> 80", "warn: 80,  // percentage", "> 0.8", "> .8",
+                                   "> ( 80 / 100 )", "(70) : (80)", '"warning": 0.80'])
+def test_a_quote_may_state_a_percentage_as_a_ratio(quote):
+    """quote 要帶得出 value：數字本身，或把百分比寫成比值的那個數（`> 0.8` 對 80）。"""
+    entry = _entry(80, basis="vendor", sources=[{**_src("a", 80), "quote": quote}])
+    assert _problems(entry) == []
+
+
+def test_two_spellings_of_one_page_are_one_source():
+    """同一頁換個寫法（結尾斜線、fragment、大小寫）不算第二個來源。"""
+    for other in ("https://example.com/a.yaml/", "https://example.com/a.yaml#L10",
+                  "https://EXAMPLE.com/a.yaml"):
+        sources = [_src("a", 80), {**_src("b", 90), "url": other}]
+        assert any("repeat url" in p for p in _problems(
+            _entry(85, basis="consensus", sources=sources))), other
+
+
+@pytest.mark.parametrize("value", ["85", None, True, float("inf")])
+def test_a_value_that_is_no_number_cannot_be_held_against_its_sources(value):
+    """registry 的 value 不是有限數時，不能悄悄略過與來源的比較。"""
+    entry = _entry(85, basis="consensus", sources=[_src("a", 80), _src("b", 90)])
+    entry["value"] = value
+    assert any("is not a number to hold the sources against" in p for p in _problems(entry))
+
+
+_SCHEMA_CASES = [
+    ("extra-field", {"basis": "vendor", "sources": [_src("a", 80)], "note": "x"}),
+    ("corpus-basis", {"basis": "corpus", "sources": [_src("a", 80)]}),
+    ("empty-sources", {"basis": "vendor", "sources": []}),
+    ("source-without-quote", {"basis": "vendor", "sources": [
+        {"org": "a", "url": "https://example.com/a", "value": 80}]}),
+    ("authored-relation", {"basis": "vendor", "sources": [_src("a", 80, relation="equal")]}),
+    ("http-url", {"basis": "vendor", "sources": [{**_src("a", 80), "url": "http://example.com/a"}]}),
+    ("bare-scheme-url", {"basis": "vendor", "sources": [{**_src("a", 80), "url": "https://"}]}),
+    ("two-line-quote", {"basis": "vendor", "sources": [{**_src("a", 80), "quote": "two\nlines"}]}),
+    ("string-value", {"basis": "vendor", "sources": [{**_src("a", 80), "value": "80"}]}),
+    ("unknown-tier", {"basis": "vendor", "sources": [_src("a", 80, tier="page")]}),
+]
+
+
+@pytest.mark.parametrize("name,validation", _SCHEMA_CASES, ids=[c[0] for c in _SCHEMA_CASES])
+def test_the_schema_and_the_gate_refuse_the_same_shapes(name, validation):
+    """形狀上的錯，JSON Schema 與 Python 閘門都要擋：只有一邊擋，另一邊的讀者就會收下。"""
+    jsonschema = pytest.importorskip("jsonschema")
+    import json
+    schema = json.loads(Path(lib.SCHEMA_PATH).read_text(encoding="utf-8"))
+    doc = copy.deepcopy(lib.committed_registry_doc())
+    key = next(k for k, e in doc["keys"].items() if lib.is_chart_armed(e))
+    assert not list(jsonschema.Draft7Validator(schema).iter_errors(doc))
+    doc["keys"][key]["validation"] = validation
+    assert list(jsonschema.Draft7Validator(schema).iter_errors(doc)), name
+    assert _problems(_entry(80, **validation)), name

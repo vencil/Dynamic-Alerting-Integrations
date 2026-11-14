@@ -27,12 +27,12 @@ tests:
         exp_samples: []
       # Above it, `for:` not yet served — pending, not firing.
       - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="PodContainerHighCPU"})
-        eval_time: 12m
+        eval_time: 12m30s
         exp_samples:
           - labels: '{alertname="PodContainerHighCPU", tenant="db-armed"}'
             value: 1
       - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PodContainerHighCPU"})
-        eval_time: 12m
+        eval_time: 12m30s
         exp_samples: []
       # `for:` served — firing.
       - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PodContainerHighCPU"})

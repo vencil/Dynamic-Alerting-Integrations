@@ -4,8 +4,9 @@
 pack 檔與告警都從 registry／規則包取。這支測試替每個鍵檢查：
 
 1. 檔案存在，`rule_files` 只載入該鍵的真 pack。
-2. 只有一個測試群組、一個 tenant；`user_threshold` 只有一條、是 warning、整段是常數，
-   而且等於 registry 的值。
+2. 只有一個測試群組、一個 tenant；`user_threshold` 只有一條（不論寫成 `name{…}` 或
+   `{__name__="name",…}`）、帶 pack 讀這個鍵用的 `component`／`metric`、是 warning、
+   整段是常數，而且等於 registry 的值。
 3. 對一個讀這個鍵的告警，有四種期望：門檻下方且已過 `for:` 仍不響；越過門檻後先
    pending；pending 的那一刻不 firing；之後 firing。
 4. promtool 跑過。
@@ -74,8 +75,30 @@ def _pack_rules(key: str) -> dict[str, dict]:
     return {r["alert"]: r for g in doc["groups"] for r in g["rules"] if "alert" in r}
 
 
+def _metric_name(series: str) -> str:
+    """The metric a promtool input series feeds, however it is spelled:
+    `name{...}` or `{__name__="name", ...}`."""
+    m = re.search(r'__name__\s*=\s*"([^"]*)"', series)
+    return m.group(1) if m else series.partition("{")[0].strip()
+
+
 def _threshold_series(group: dict) -> list[dict]:
-    return [s for s in group["input_series"] if s["series"].startswith("user_threshold{")]
+    return [s for s in group["input_series"] if _metric_name(s["series"]) == "user_threshold"]
+
+
+def _threshold_selector(key: str) -> dict[str, str]:
+    """The `component` / `metric` labels this key's threshold is read under:
+    what the pack's `…:alert_threshold:<key>` recording rule selects."""
+    pack = _REPO / _DOC["packs"][_KEYS[key]["pack"]]["rule_pack_file"]
+    doc = yaml.safe_load(pack.read_text(encoding="utf-8"))
+    exprs = [r["expr"] for g in doc["groups"] for r in g["rules"]
+             if str(r.get("record", "")).endswith(f":alert_threshold:{key}")]
+    assert len(exprs) == 1, f"{pack.name} has {len(exprs)} `…:alert_threshold:{key}` recording rules"
+    m = re.search(r"user_threshold\{([^}]*)\}", exprs[0])
+    assert m, exprs[0]
+    labels = dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', m.group(1)))
+    assert {"component", "metric"} <= set(labels), labels
+    return {"component": labels["component"], "metric": labels["metric"]}
 
 
 def _bound_alert(key: str, group: dict) -> tuple[str, int]:
@@ -142,7 +165,10 @@ def test_the_fixture_threshold_is_the_registry_value(key):
     group = yaml.safe_load(_path(key).read_text(encoding="utf-8"))["tests"][0]
     series = _threshold_series(group)
     assert len(series) == 1, [s["series"] for s in series]
-    assert 'severity="warning"' in series[0]["series"], series[0]["series"]
+    # …and it is THIS key's threshold: the labels the pack reads it under.
+    labels = dict(re.findall(r'(\w+)\s*=\s*"([^"]*)"', series[0]["series"]))
+    want = {**_threshold_selector(key), "severity": "warning"}
+    assert {k: labels.get(k) for k in want} == want, (series[0]["series"], want)
     values = set(_expanded(series[0]["values"]))
     assert values == {float(_KEYS[key]["value"])}, (
         f"{_path(key).name} tests threshold {sorted(values)}, the registry ships "
@@ -180,6 +206,8 @@ def test_moving_the_threshold_turns_it_red(key, far, tmp_path):
     另一個讓它從頭就響（打掉「門檻下方不響」的期望）。哪個極端是哪一邊取決於告警的比較
     方向，這裡不需要知道——兩邊都得紅。"""
     r = _promtool(_with_threshold(key, far, tmp_path))
+    # A failed expectation, not a file promtool could not load.
+    assert r.returncode == 0 or "FAILED" in r.stdout + r.stderr, r.stdout + r.stderr
     assert r.returncode != 0, (
         f"{_path(key).name} still passes with the {key} threshold at {far}: one of its "
         "expectations (firing, or silent below the threshold) does not depend on the threshold")

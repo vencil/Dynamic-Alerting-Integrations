@@ -46,7 +46,8 @@
 #   basis    vendor（恰好一個來源，來源的值就是本檔的值）| consensus（至少兩個來源，
 #            組織與網址都不重複，本檔的值落在來源值的最小與最大之間，含兩端）。
 #   sources  每個 {org, url, quote, value}，選填 tier（來源在哪個嚴重度響：info｜
-#            warning｜critical）。url 用 https；quote 是從該頁抄下來、寫出數字的那一行；
+#            warning｜critical）。url 用 https；quote 是從該頁逐字抄下來、寫出數字的那一行
+#            （閘門檢查 quote 裡有 value，或把百分比寫成比值的那個數，例如 80 對 0.8）；
 #            value 換成本 key 的單位。
 # 來源比本檔嚴或鬆不手寫：那是來源的值對本檔的值，改了值規則就自己不成立。兩個組織是否
 # 互相獨立由審查的人判斷。語料（ADR-030）不當依據，只當否決：帶 value_counterexample
@@ -205,10 +206,6 @@ keys:
         quote: "warn: $this > (($status >= $WARNING)  ? (80) : (90))"
         value: 90
         tier: warning
-      - org: "Microsoft Azure"
-        url: https://raw.githubusercontent.com/Azure/prometheus-collector/main/AddonBicepTemplate/recommendedMetricAlerts.bicep
-        quote: "alert: 'KubeContainerAverageMemoryHigh'"
-        value: 95
     dimensions:
     - version
   container_cpu_critical:
@@ -249,17 +246,17 @@ keys:
       sources:
       - org: "Percona PMM"
         url: https://raw.githubusercontent.com/percona/pmm/main/managed/data/alerting-templates/postgresql_too_many_connections.yml
-        quote: "sum by(node_name, service_name) (pg_stat_activity_count{datname!~\"template.*|postgres\"}) / on(node_name, service_name) pg_settings_max_connections * 100 — threshold value: 80"
+        quote: "value: 80"
         value: 80
         tier: warning
       - org: "Grafana jsonnet-libs"
         url: https://raw.githubusercontent.com/grafana/jsonnet-libs/master/postgres-observ-lib/config.libsonnet
-        quote: "connectionUtilization: { warn: 80,  // percentage"
+        quote: "warn: 80,  // percentage"
         value: 80
         tier: warning
       - org: "Datadog"
         url: https://raw.githubusercontent.com/DataDog/integrations-core/master/postgres/assets/monitors/percent_usage_connections.json
-        quote: "avg(last_15m):avg:postgresql.percent_usage_connections{*} > 0.9 — thresholds critical 0.9, warning 0.8"
+        quote: "\"warning\": 0.8"
         value: 80
         tier: warning
   pg_replication_lag:
@@ -276,7 +273,7 @@ keys:
       sources:
       - org: "Grafana jsonnet-libs"
         url: https://raw.githubusercontent.com/grafana/jsonnet-libs/master/postgres-observ-lib/config.libsonnet
-        quote: "replicationLag: { warn: 30,  // seconds"
+        quote: "warn: 30,  // seconds"
         value: 30
         tier: warning
   pg_connections_critical:
@@ -312,7 +309,7 @@ keys:
       sources:
       - org: "Percona PMM"
         url: https://raw.githubusercontent.com/percona/pmm/main/managed/data/alerting-templates/mysql_too_many_connections.yml
-        quote: "max_over_time(mysql_global_status_threads_connected[5m]) / ignoring (job) mysql_global_variables_max_connections * 100 > bool [[ .threshold ]] — threshold value: 80"
+        quote: "value: 80"
         value: 80
         tier: warning
       - org: "awesome-prometheus-alerts"
@@ -351,7 +348,7 @@ keys:
       sources:
       - org: "Prometheus mysqld_exporter mixin"
         url: https://raw.githubusercontent.com/prometheus/mysqld_exporter/main/mysqld-mixin/alerts/galera.yaml
-        quote: "expr: (instance:mysql_slave_lag_seconds > 30) and on(instance) (predict_linear(instance:mysql_slave_lag_seconds[5m], 60 * 2) > 0)"
+        quote: "(instance:mysql_slave_lag_seconds > 30)"
         value: 30
         tier: critical
       - org: "awesome-prometheus-alerts"

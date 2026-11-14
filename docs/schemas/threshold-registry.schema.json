@@ -171,7 +171,7 @@
                       "url": {"type": "string", "pattern": "^https://\\S+$"},
                       "quote": {
                         "type": "string", "minLength": 1, "pattern": "^[^\\n\\r]+$",
-                        "$comment": "Copied from the page at url: the expression or sentence that states the number."
+                        "$comment": "Copied verbatim from the page at url: the one line that states the number. The gate requires the quote to carry value (as written, or as a ratio: 0.8 for 80)."
                       },
                       "value": {
                         "type": "number",

@@ -609,7 +609,26 @@ def arming_problems(keys: dict[str, dict], *, strict: bool) -> list[str]:
 
 
 def _number(v: Any) -> bool:
-    return isinstance(v, (int, float)) and not isinstance(v, bool)
+    """A finite number: not a bool, not NaN, not an infinity."""
+    return (isinstance(v, (int, float)) and not isinstance(v, bool)
+            and v == v and abs(v) != float("inf"))
+
+
+_URL_RE = re.compile(r"https://\S+")
+_NUMBER_TOKEN_RE = re.compile(r"\d*\.?\d+")
+
+
+def _quote_states(value: float, quote: str) -> bool:
+    """Whether *quote* carries *value*: the number itself, or — for a source
+    that writes a percentage as a ratio (`> 0.8`, `> .95`) — a hundredth of it."""
+    numbers = {float(t) for t in _NUMBER_TOKEN_RE.findall(quote)}
+    return any(abs(n - c) < 1e-9 for n in numbers for c in (value, value / 100))
+
+
+def _same_page(url: str) -> str:
+    """A url reduced to what tells two pages apart: no fragment, no trailing
+    slash, case-insensitive."""
+    return url.split("#", 1)[0].rstrip("/").lower()
 
 
 def validation_problems(key: str, entry: dict) -> list[str]:
@@ -617,8 +636,9 @@ def validation_problems(key: str, entry: dict) -> list[str]:
 
     - exactly ``{basis, sources}``; ``basis`` one of `VALIDATION_BASES`;
     - every source is ``{org, url, quote, value}`` (+ optional ``tier``, the
-      severity the source alerts at): an https url, a one-line quote, a number
-      in this key's unit;
+      severity the source alerts at): an https url, a one-line quote, a
+      finite number in this key's unit, and the quote carries that number
+      (as written, or as a ratio: `> 0.8` for 80);
     - ``vendor``: one source, and its value IS the registry value;
     - ``consensus``: two or more sources, no organisation or url twice, and
       the registry value lies between the smallest and the largest source
@@ -650,19 +670,26 @@ def validation_problems(key: str, entry: dict) -> list[str]:
             p = _one_line_problem(key, f"{where}.{f}", s[f])
             if p:
                 out.append(p)
-        if not (isinstance(s["url"], str) and s["url"].startswith("https://")
-                and not any(c.isspace() for c in s["url"])):
+        if not (isinstance(s["url"], str) and _URL_RE.fullmatch(s["url"])):
             out.append(f"{key!r} {where}.url must be an https:// URL")
         if "tier" in s and s["tier"] not in SOURCE_TIERS:
             out.append(f"{key!r} {where}.tier {s['tier']!r} is not one of "
                        f"{list(SOURCE_TIERS)}")
         if not _number(s["value"]):
-            out.append(f"{key!r} {where}.value must be a number in the key's unit")
+            out.append(f"{key!r} {where}.value must be a finite number in the "
+                       "key's unit")
         else:
             values.append(float(s["value"]))
+            if isinstance(s["quote"], str) and not _quote_states(float(s["value"]), s["quote"]):
+                out.append(
+                    f"{key!r} {where}.quote does not carry its value "
+                    f"{s['value']} — quote the line that states the number")
     if out or len(values) != len(sources):
         return out
     value = entry.get("value")
+    if not _number(value):
+        return out + [f"{key!r} has a validation but its value {value!r} is not "
+                      "a number to hold the sources against"]
     if basis == "vendor":
         if len(sources) != 1:
             out.append(f"{key!r} validation.basis vendor takes exactly one "
@@ -677,12 +704,13 @@ def validation_problems(key: str, entry: dict) -> list[str]:
             out.append(f"{key!r} validation.basis consensus needs two or more "
                        "sources")
         for f in ("org", "url"):
-            seen = [str(s[f]).strip().lower() for s in sources]
+            seen = [_same_page(s[f]) if f == "url" else str(s[f]).strip().lower()
+                    for s in sources]
             dup = sorted({x for x in seen if seen.count(x) > 1})
             if dup:
                 out.append(f"{key!r} consensus sources repeat {f} {dup} — each "
                            "source is a different organisation's page")
-        if _number(value) and not min(values) <= value <= max(values):
+        if not min(values) <= value <= max(values):
             out.append(
                 f"{key!r} ships {value}, outside what its consensus sources "
                 f"use ({min(values):g}–{max(values):g})")
