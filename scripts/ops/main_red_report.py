@@ -6,62 +6,89 @@ else tells anyone that main is red: branch protection does not require a PR to
 be up to date with main, so two PRs that are each green can break main
 together, and the only trace used to be a red run nobody was looking at.
 
-What it does with one finished run (`workflow_run` payload, or `--run-id`):
+The finished run only says WHEN to look. What is done follows from main's
+STATE, read afresh every time, so an event that was never delivered (the
+workflow keeps one pending run; a third event replaces it) is made up for by
+the next one:
 
-  not a push run on main, or concluded `cancelled` / `skipped`  -> nothing
-  any other conclusion than `success` (failure, timed_out, …):
-      a NEWER push run of the same workflow on main already has a verdict
-      and it is `success` (an old run was re-run and failed again)
-                              -> nothing: that is not main's current state
-      no open tracking issue  -> open it
-      one is open             -> comment on it
-  `success`:
-      no open tracking issue  -> nothing
-      one is open, and the newest push run WITH A VERDICT of every watched
-      workflow is `success`   -> comment and close it
-      one is open, otherwise, and this workflow's previous verdict (an
-      earlier attempt of this run, else the run before it) was not
-      `success`               -> comment (this one recovered, what is still
-                                 red), leave it open
-      one is open, otherwise, and this workflow was already green
-                              -> nothing: one comment per green run while
-                                 another workflow stays red is only noise
+  the event is not a push run on main, or concluded `cancelled` / `skipped`
+                                   -> nothing, and nothing is read (exit 0)
+
+  otherwise, for every watched workflow, take its NEWEST push run on main
+  that has a verdict — the highest `run_number` whose latest attempt is
+  completed with a conclusion other than `cancelled` / `skipped`. It is
+  red (any conclusion but `success`), green, or unknown (no run with a
+  verdict among the newest 100 — e.g. the workflow has not finished a push
+  run yet; that is not "unreadable" — or a re-run that is still going or was
+  cancelled sits above every verdict: its earlier attempt's verdict is not
+  in the listing, and the run below it is not main's state). Then:
+
+  some workflow red     no tracking issue -> open one, reporting every red run
+                        issue open        -> comment only with what the issue
+                                             does not say yet: a red run it
+                                             has not recorded, or a workflow
+                                             it recorded as red that is green
+                                             now. Nothing new -> no write.
+  none red, none unknown   issue open     -> comment and close it
+                           no issue       -> nothing
+  none red, some unknown   issue open     -> not closed; a recovery is
+                                             commented as above
+                           no issue       -> nothing (exit 0: nothing is
+                                             known to be red)
+
+"Newest" is by `run_number` — the order the pushes arrived in, which on main
+is commit order — never by when a run finished: runs finish out of order, and
+a re-run of an old run finishes long after its successors. The same run
+re-run is one entry carrying its latest attempt, so a run re-run to success is
+green and an old run re-run into another failure changes nothing.
+
+What the issue "has recorded" is read back from marker lines this script
+writes into the issue body and its own comments, one per reported run:
+`<!-- main-red: red|green <workflow file> <run id> <attempt> -->`. The last
+marker of a workflow wins. Markers are read only from text written by the
+tracking issue's author, and only as whole lines; the report puts every piece
+of text it did not generate (commit subjects, job names) inside code spans.
+
+The tracking issue is the OPEN issue with exactly `ISSUE_TITLE` that
+`github-actions[bot]` (type `Bot`) opened — the identity of `github.token`,
+which is what both the event path and the manual replay run under. An issue
+with the same title opened by anyone else is not it: the repo is public, and
+without this an outsider's issue would swallow the report and then be
+commented on and closed with this workflow's token. The list is asked for by
+creator and each hit is checked again here.
 
 The report names a RANGE, never "the first bad commit": `<sha of the newest
-earlier push run of the same workflow on main that concluded success>..<this
-sha>`. A run replaced by the next merge is `cancelled`, so the breaking commit
-can be anywhere in that range. When the start cannot be found the report says
-so instead of guessing one.
+earlier push run of the same workflow that concluded success>..<sha of the
+red run>`. A run replaced by the next merge is `cancelled`, so the breaking
+commit can be anywhere in that range. When the start cannot be found the
+report says so instead of guessing one.
 
 Which workflows are watched is written once: `on.workflow_run.workflows` of
 the detector workflow. This script reads it from there, and
 tests/ops/test_main_red_report.py holds it equal to the set of workflows that
 report an entry of `.github/required-checks.yaml`. A watched workflow without
 a `push` trigger for main (commitlint lints a PR's title) never has a run to
-judge and is left out of the "everything is green again" test.
-
-The tracking issue is found by EXACT title among the open issues, read through
-the REST list (`GET /issues`), not the search API: search matches loosely and
-its index lags a just-created issue by seconds, which is the window in which
-two workflows failing on one merge would each open one.
+judge and is left out. A `push` trigger in a shape this script does not model
+(`branches-ignore`, `tags`, `paths`, a glob, a bare string) is exit 2: it is
+not guessed to run, nor not to.
 
 Exit codes (scripts/tools/_lib_exitcodes.py contract):
-  0  nothing to report: no action was due, or the issue was closed
-  1  this run established that main is red (or not known to be green) and the
-     tracking issue is open: it was opened, commented on, or — a green run of
-     a workflow that was already green, while another is red — left as it is.
-     Same meaning as required_checks_drift.py's 1: a finding that a change to
-     the repo resolves. The workflow does not fail on it; the issue is the
-     signal. (A `cancelled` run with the issue open is 0: nothing was looked
-     at, so nothing was established.)
-  2  no verdict: the event, the workflow list, or an answer from GitHub that
-     the DECISION rests on could not be read, or a write failed.
+  0  main is not known to be red and no tracking issue is left open: nothing
+     was due, or the issue was closed.
+  1  this run found main red, or found the tracking issue open while main is
+     not known to be all green. The issue was opened, commented on, or
+     already said everything. Same meaning as required_checks_drift.py's 1 —
+     a finding that a change to the repo resolves. The workflow does not
+     fail on it; the issue is the signal.
+  2  no verdict: the event, the workflow list, a runs listing, the issue
+     list, the issue's comments — anything the DECISION rests on — could not
+     be read, or a write failed.
      ⛔ A failed issue lookup is never "no issue is open": that would open a
-     duplicate on every failing run. A failed runs listing is never "green":
-     that would close the issue while main is red.
-     Answers that only DESCRIBE the failure (the failed jobs, the commits in
-     the range, the start of the range) do not stop the report: the issue is
-     still filed and says which part could not be read.
+     duplicate on every run. A failed runs listing is never "green": that
+     would close the issue while main is red.
+     Answers that only DESCRIBE a failure (its failed jobs, the commits in
+     the range) do not stop the report: the issue is still filed and says
+     which part could not be read.
 
 Usage:
   python3 scripts/ops/main_red_report.py --repo OWNER/REPO --event-file "$GITHUB_EVENT_PATH" --write
@@ -75,6 +102,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -94,17 +122,26 @@ WORKFLOW_DIR = ROOT / ".github/workflows"
 
 # ⛔ The dedup key. Matched exactly; changing it orphans an open issue.
 ISSUE_TITLE = "[ci] main is red: a workflow that reports required checks failed on main"
+# Who must have opened the tracking issue (and written a comment for its
+# markers to count): the identity of `github.token`. Literal values read from
+# this repo's bot-opened issues (user.login / user.type).
+TRACKER_LOGIN = "github-actions[bot]"
+TRACKER_TYPE = "Bot"
 
 BRANCH = "main"
 # Conclusions that say nothing about the tree: the run did not finish its work.
 NO_VERDICT = frozenset({"cancelled", "skipped"})
 PAGE = 100
-# Open issues are paged until a short page; past this many pages the lookup is
-# refused (rc 2) rather than cut short and read as "no issue".
-MAX_ISSUE_PAGES = 50
+# Lists are paged until a short page; past this many pages the read is refused
+# (rc 2) rather than cut short and read as "nothing there".
+MAX_ISSUE_PAGES = 20
+MAX_COMMENT_PAGES = 30
 MAX_JOB_PAGES = 10
 MAX_COMMITS_SHOWN = 30
 MAX_JOBS_SHOWN = 50
+
+_WORKFLOW_FILE = re.compile(r"[A-Za-z0-9._-]+\Z")
+MARKER = re.compile(r"^<!-- main-red: (red|green) ([A-Za-z0-9._-]+) (\d+) (\d+) -->$", re.M)
 
 
 class NoVerdict(Exception):
@@ -165,6 +202,20 @@ class Api:
         except ValueError as err:
             raise ApiError(f"{what}: the answer is not JSON — {err}") from err
 
+    def pages(self, path: str, max_pages: int, **params) -> list:
+        """Every item of a list endpoint. ⛔ Never a prefix: a non-list page,
+        or a list still going at `max_pages`, is an ApiError."""
+        items: list = []
+        for page in range(1, max_pages + 1):
+            chunk = self.get(path, per_page=PAGE, page=page, **params)
+            if not isinstance(chunk, list):
+                raise ApiError(f"GET {path}: expected a list, got {type(chunk).__name__}")
+            items += chunk
+            if len(chunk) < PAGE:
+                return items
+        raise ApiError(f"GET {path}: more than {max_pages * PAGE} entries — the list "
+                       "was not read to its end")
+
 
 # ── inputs ──────────────────────────────────────────────────────────────────
 
@@ -182,9 +233,10 @@ class Run:
 
 
 def run_from(payload) -> Run:
-    """A run object as GitHub sends it (`workflow_run` in the event payload, or
-    `GET /actions/runs/{id}`). Every field is required: a missing one is a
-    payload this script does not understand, never a default."""
+    """A run object as GitHub sends it (`workflow_run` in the event payload,
+    `GET /actions/runs/{id}`, or an entry of a runs listing). Every field is
+    required: a missing one is a payload this script does not understand,
+    never a default."""
     if not isinstance(payload, dict):
         raise NoVerdict("the run payload is not an object")
     wanted = (("name", str), ("id", int), ("run_attempt", int), ("run_number", int),
@@ -215,20 +267,35 @@ def _on(doc: dict):
     return doc.get("on", doc.get(True))
 
 
-def _has_main_push(doc: dict) -> bool:
-    on = _on(doc)
+def has_main_push(doc, where: str) -> bool:
+    """Whether a workflow starts on every push to main.
+
+    ⛔ Only the shapes below are modelled. Anything else — `branches-ignore`,
+    `tags`, `paths`, a glob, a string where a list belongs — raises NoVerdict
+    naming the file: guessing "runs" hides a workflow that never reports,
+    guessing "does not run" drops it from the recovery test."""
+    on = _on(doc) if isinstance(doc, dict) else None
     if isinstance(on, str):
         return on == "push"
-    if isinstance(on, list):
+    if isinstance(on, list) and all(isinstance(event, str) for event in on):
         return "push" in on
-    if not isinstance(on, dict) or "push" not in on:
+    if not isinstance(on, dict):
+        raise NoVerdict(f"{where}: `on:` is {type(on).__name__} — not a shape this script models")
+    if "push" not in on:
         return False
-    push = on["push"] or {}
-    branches = push.get("branches")
-    # `branches-ignore` / tag-only filters are not modelled: none of the
-    # watched workflows uses them, and the structure test would have to learn
-    # them first.
-    return branches is None or BRANCH in branches
+    push = on["push"]
+    if push is None or push == {}:
+        return True
+    if not isinstance(push, dict) or set(push) != {"branches"}:
+        raise NoVerdict(f"{where}: `on.push` is {push!r} — only `branches: [names]` is "
+                        "modelled; whether this workflow runs on a push to "
+                        f"{BRANCH} is not guessed")
+    branches = push["branches"]
+    if not isinstance(branches, list) or not branches or not all(
+            isinstance(b, str) and re.fullmatch(r"[A-Za-z0-9._/-]+", b) for b in branches):
+        raise NoVerdict(f"{where}: `on.push.branches` is {branches!r} — only a list of "
+                        "literal branch names is modelled (no glob, no bare string)")
+    return BRANCH in branches
 
 
 def watched_workflows(detector: Path = DETECTOR_WORKFLOW,
@@ -253,135 +320,146 @@ def watched_workflows(detector: Path = DETECTOR_WORKFLOW,
             raise NoVerdict(f"{detector.name} watches {name!r}, and {len(found)} workflow "
                             f"files carry that `name:` ({[f for f, _ in found]}) — exactly "
                             "one must")
-        watched.append(Watched(name, found[0][0], _has_main_push(found[0][1])))
+        file, other = found[0]
+        if not _WORKFLOW_FILE.match(file):
+            raise NoVerdict(f"workflow file name {file!r} cannot be written into a marker")
+        watched.append(Watched(name, file, has_main_push(other, file)))
     return watched
 
 
 # ── reads the decision rests on ─────────────────────────────────────────────
 
+def _is_tracker(user) -> bool:
+    return isinstance(user, dict) and user.get("login") == TRACKER_LOGIN \
+        and user.get("type") == TRACKER_TYPE
+
+
 def find_issue(api: Api) -> dict | None:
     """The open tracking issue (lowest number if several), or None.
 
     ⛔ Raises ApiError when the list cannot be read to its end; the caller
-    must not treat that as None."""
+    must not treat that as None. ⛔ An issue not opened by the tracker
+    identity is never returned, whatever its title: the server is asked for
+    that creator AND each entry is checked here."""
     matches = []
-    for page in range(1, MAX_ISSUE_PAGES + 1):
-        items = api.get("issues", state="open", per_page=PAGE, page=page)
-        if not isinstance(items, list):
-            raise ApiError(f"GET issues: expected a list, got {type(items).__name__}")
-        for item in items:
-            if not isinstance(item, dict) or not isinstance(item.get("number"), int):
-                raise ApiError(f"GET issues: unrecognised entry {str(item)[:80]!r}")
-            # The issues list includes pull requests.
-            if "pull_request" not in item and item.get("title") == ISSUE_TITLE:
-                matches.append(item)
-        if len(items) < PAGE:
-            return min(matches, key=lambda i: i["number"]) if matches else None
-    raise ApiError(f"GET issues: more than {MAX_ISSUE_PAGES * PAGE} open issues and "
-                   "pull requests — the list was not read to its end")
+    for item in api.pages("issues", MAX_ISSUE_PAGES, state="open", creator=TRACKER_LOGIN):
+        if not isinstance(item, dict) or not isinstance(item.get("number"), int):
+            raise ApiError(f"GET issues: unrecognised entry {str(item)[:80]!r}")
+        # The issues list includes pull requests.
+        if "pull_request" not in item and item.get("title") == ISSUE_TITLE \
+                and _is_tracker(item.get("user")):
+            matches.append(item)
+    return min(matches, key=lambda i: i["number"]) if matches else None
+
+
+def recorded(api: Api, issue: dict) -> dict[str, tuple[str, int, int]]:
+    """What the tracking issue already says, per workflow file: the last
+    `(red|green, run id, attempt)` marker in its body and in the comments its
+    author wrote, oldest first. Anyone can comment on a public issue; a marker
+    in someone else's comment is text, not a record."""
+    texts = [issue.get("body")]
+    for comment in api.pages(f"issues/{issue['number']}/comments", MAX_COMMENT_PAGES):
+        if not isinstance(comment, dict):
+            raise ApiError(f"GET issues/{issue['number']}/comments: unrecognised entry")
+        if _is_tracker(comment.get("user")):
+            texts.append(comment.get("body"))
+    seen: dict[str, tuple[str, int, int]] = {}
+    for text in texts:
+        if isinstance(text, str):
+            # GitHub stores bodies as sent; a CRLF body must still match `$`.
+            for colour, file, run_id, attempt in MARKER.findall(text.replace("\r\n", "\n")):
+                seen[file] = (colour, int(run_id), int(attempt))
+    return seen
+
+
+def marker(colour: str, file: str, run: Run) -> str:
+    return f"<!-- main-red: {colour} {file} {run.run_id} {run.attempt} -->"
+
+
+def is_verdict(run: dict) -> bool:
+    """A run whose latest attempt finished and says something about the tree.
+    ⛔ `status` must be `completed`: a run in progress has `conclusion: null`,
+    and one being re-run still shows nothing — neither is green or red."""
+    return run.get("status") == "completed" and isinstance(run.get("conclusion"), str) \
+        and bool(run["conclusion"]) and run["conclusion"] not in NO_VERDICT
 
 
 def push_runs(api: Api, workflow_file: str) -> list[dict]:
-    """The newest push runs of one workflow on main, newest first."""
+    """The newest push runs of one workflow on main, highest `run_number`
+    first — sorted here, not trusted from the listing's own order."""
     answer = api.get(f"actions/workflows/{workflow_file}/runs",
                      branch=BRANCH, event="push", per_page=PAGE)
     runs = answer.get("workflow_runs") if isinstance(answer, dict) else None
-    if not isinstance(runs, list) or not all(isinstance(r, dict) for r in runs):
-        raise ApiError(f"GET actions/workflows/{workflow_file}/runs: no `workflow_runs` list")
-    return runs
-
-
-def latest_verdict(runs: list[dict]) -> dict | None:
-    """The newest run that finished with a verdict. A run being re-run is
-    `in_progress` with no conclusion and is passed over, like a cancelled one."""
-    for run in runs:
-        if _is_verdict(run):
-            return run
-    return None
+    if not isinstance(runs, list) or not all(
+            isinstance(r, dict) and isinstance(r.get("run_number"), int)
+            and not isinstance(r.get("run_number"), bool) for r in runs):
+        raise ApiError(f"GET actions/workflows/{workflow_file}/runs: no `workflow_runs` "
+                       "list of runs with a `run_number`")
+    return sorted(runs, key=lambda r: r["run_number"], reverse=True)
 
 
 @dataclass(frozen=True)
-class State:
-    green: tuple[str, ...]
-    red: tuple[tuple[str, dict], ...]        # (workflow name, its newest run with a verdict)
-    unknown: tuple[str, ...]                 # no run with a verdict among the newest PAGE
-    never: tuple[str, ...]                   # no push trigger for main
+class Standing:
+    """Where one watched workflow stands on main."""
+    wf: Watched
+    colour: str                    # red | green | unknown
+    run: Run | None                # its newest run with a verdict
+    runs: tuple = ()               # its listing, newest first
+    why: str = ""                  # for `unknown`: what stood in the way
 
 
-def main_state(api: Api, watched: list[Watched]) -> State:
-    """Where every watched workflow stands on main. ⛔ ApiError propagates: one
-    unreadable listing must not be read as green."""
-    green, red, unknown, never = [], [], [], []
+def main_state(api: Api, watched: list[Watched]) -> list[Standing]:
+    """Every watched workflow that runs on push to main. ⛔ ApiError
+    propagates: one unreadable listing must not be read as green."""
+    state = []
     for wf in watched:
         if not wf.runs_on_main_push:
-            never.append(wf.name)
             continue
-        verdict = latest_verdict(push_runs(api, wf.file))
-        if verdict is None:
-            unknown.append(wf.name)
-        elif verdict["conclusion"] == "success":
-            green.append(wf.name)
-        else:
-            red.append((wf.name, verdict))
-    return State(tuple(green), tuple(red), tuple(unknown), tuple(never))
+        runs = push_runs(api, wf.file)
+        newest, why = None, (f"none of its newest {len(runs)} push runs on `{BRANCH}` "
+                             "finished with a verdict")
+        for candidate in runs:
+            if is_verdict(candidate):
+                newest = candidate
+                break
+            if candidate.get("run_attempt") != 1:
+                # A re-run that is still going, or was cancelled: the listing
+                # shows only this attempt, and the verdict of the earlier one
+                # is gone from it. Falling through to an OLDER run would call a
+                # workflow green while its newest run failed and is being
+                # retried — and close the issue on it.
+                why = (f"run #{candidate['run_number']} is being re-run or its re-run "
+                       "was cancelled; its earlier verdict is not in the listing")
+                break
+        if newest is None:
+            state.append(Standing(wf, "unknown", None, tuple(runs), why))
+            continue
+        try:
+            run = run_from(newest)
+        except NoVerdict as err:
+            raise ApiError(f"{wf.file}: its newest run with a verdict is unreadable — {err}") from err
+        state.append(Standing(wf, "green" if run.conclusion == "success" else "red",
+                              run, tuple(runs)))
+    return state
 
 
 # ── reads that only describe the failure ────────────────────────────────────
 
 def _code(text) -> str:
     """One line of untrusted text for a code span or block: a commit subject
-    or a job name must not be able to ping a user, link an issue or close the
-    fence it sits in."""
+    or a job name must not be able to ping a user, link an issue, start a new
+    line (and with it a marker or a heading) or close the span it sits in."""
     return " ".join(str(text).split()).replace("`", "'")[:120]
 
 
-def _is_verdict(run: dict) -> bool:
-    return run.get("status") == "completed" and bool(run.get("conclusion")) \
-        and run["conclusion"] not in NO_VERDICT
-
-
-def superseded_by_a_green_run(run: Run, runs: list[dict]) -> dict | None:
-    """The newer push run of the same workflow that makes this failure stale:
-    the newest run with a verdict, when it is newer than `run` and `success`.
-    An old run re-run into a second failure says nothing about main today."""
-    newest = latest_verdict(runs)
-    if newest and isinstance(newest.get("run_number"), int) \
-            and newest["run_number"] > run.number and newest["conclusion"] == "success":
-        return newest
+def range_start(run: Run, runs: tuple) -> dict | None:
+    """The newest earlier push run of the same workflow that concluded success."""
+    for other in runs:
+        if other["run_number"] < run.number and other.get("status") == "completed" \
+                and other.get("conclusion") == "success" \
+                and isinstance(other.get("head_sha"), str) and other["head_sha"]:
+            return other
     return None
-
-
-def was_red_before(api: Api, run: Run, runs: list[dict]) -> bool:
-    """Whether this workflow's verdict BEFORE this attempt was a failure: the
-    newest earlier attempt of the same run with a verdict, else the newest
-    earlier run with one. No earlier verdict at all is "was not red".
-    ⛔ ApiError propagates — the caller must not guess."""
-    for attempt in range(run.attempt - 1, 0, -1):
-        earlier = api.get(f"actions/runs/{run.run_id}/attempts/{attempt}")
-        if not isinstance(earlier, dict):
-            raise ApiError(f"GET actions/runs/{run.run_id}/attempts/{attempt}: not an object")
-        if _is_verdict(earlier):
-            return earlier["conclusion"] != "success"
-    for other in runs:
-        if isinstance(other.get("run_number"), int) and other["run_number"] < run.number \
-                and _is_verdict(other):
-            return other["conclusion"] != "success"
-    return False
-
-
-def range_start(run: Run, runs: list[dict] | None, unread: str) -> tuple[dict | None, str]:
-    """The newest earlier push run of the same workflow on main that concluded
-    success, and — when there is none to name — why. `runs` is None when the
-    listing could not be read (`unread` says how)."""
-    if runs is None:
-        return None, f"the runs listing could not be read ({unread})"
-    for other in runs:
-        if isinstance(other.get("run_number"), int) and other["run_number"] < run.number \
-                and other.get("status") == "completed" and other.get("conclusion") == "success" \
-                and isinstance(other.get("head_sha"), str):
-            return other, ""
-    return None, (f"none of the newest {len(runs)} push runs of this workflow on "
-                  f"{BRANCH} before this one concluded `success` (older ones were not read)")
 
 
 def failed_jobs(api: Api, run: Run) -> list[str]:
@@ -397,62 +475,92 @@ def failed_jobs(api: Api, run: Run) -> list[str]:
             if not isinstance(jobs, list):
                 raise ApiError("no `jobs` list in the answer")
             for job in jobs:
-                conclusion = job.get("conclusion") if isinstance(job, dict) else None
+                if not isinstance(job, dict) or not isinstance(job.get("name"), str) \
+                        or not isinstance(job.get("conclusion"), (str, type(None))):
+                    raise ApiError(f"unrecognised job entry {str(job)[:60]!r}")
+                conclusion = job["conclusion"]
                 if conclusion in (None, "success", "neutral") or conclusion in NO_VERDICT:
                     continue
                 total += 1
                 if total <= MAX_JOBS_SHOWN:
-                    lines.append(f"  - `{_code(job.get('name'))}` ({_code(conclusion)})")
+                    lines.append(f"  - `{_code(job['name'])}` ({_code(conclusion)})")
             if len(jobs) < PAGE:
                 break
         else:
             lines.append(f"  - ⚠️ only the first {MAX_JOB_PAGES * PAGE} jobs were read")
     except ApiError as err:
-        return lines + [f"  - ⚠️ the job list could not be read ({_code(err)}) — open the run"]
+        return lines + [f"  - ⚠️ the job list could not be read (`{_code(err)}`) — open the run"]
     if not total:
         return [f"  - no job of this attempt reported a failing conclusion; the run "
-                f"itself concluded `{run.conclusion}` — open the run"]
+                f"itself concluded `{_code(run.conclusion)}` — open the run"]
     if total > MAX_JOBS_SHOWN:
         lines.append(f"  - … and {total - MAX_JOBS_SHOWN} more")
     return lines
 
 
+def _compare_page(api: Api, base: str, head: str, page: int) -> tuple[int, list[tuple[str, str]]]:
+    """One page of `base...head`: (total_commits, [(full sha, subject)])."""
+    answer = api.get(f"compare/{base}...{head}", per_page=PAGE, page=page)
+    if not isinstance(answer, dict) or not isinstance(answer.get("commits"), list) \
+            or not isinstance(answer.get("total_commits"), int):
+        raise ApiError("no `commits` list / `total_commits` in the answer")
+    rows = []
+    for commit in answer["commits"]:
+        try:
+            sha, message = commit["sha"], commit["commit"]["message"]
+        except (KeyError, TypeError) as err:
+            raise ApiError(f"unrecognised commit entry ({err!r})") from err
+        if not isinstance(sha, str) or not isinstance(message, str):
+            raise ApiError("unrecognised commit entry")
+        rows.append((sha, _code((message.splitlines() or [''])[0])))
+    return answer["total_commits"], rows
+
+
 def commits_in_range(api: Api, base: str, head: str) -> list[str]:
+    """The newest commits of `base..head`, oldest first. The compare API
+    answers oldest-first in pages, so the newest ones are on the LAST page;
+    the last row must be `head`, or the pages were not what they were taken
+    for and the list is reported as unreadable rather than shown."""
     if base == head:
         return ["Same commit as the last successful run: nothing was merged in between, "
                 "so this is a flaky or environment-dependent failure, not a new commit."]
     try:
-        answer = api.get(f"compare/{base}...{head}", per_page=PAGE)
-        commits = answer.get("commits") if isinstance(answer, dict) else None
-        if not isinstance(commits, list):
-            raise ApiError("no `commits` list in the answer")
-        rows = [f"{c['sha'][:9]} {_code(c['commit']['message'].splitlines()[0] if c['commit']['message'] else '')}"
-                for c in commits]
-        total = answer.get("total_commits")
-    except (ApiError, KeyError, TypeError, IndexError) as err:
-        return [f"⚠️ The commits in the range could not be read ({_code(err)!s})."]
-    if not isinstance(total, int):
-        total = len(rows)
-    shown = rows[-MAX_COMMITS_SHOWN:]
+        total, rows = _compare_page(api, base, head, 1)
+        if total > len(rows):
+            last = -(-total // PAGE)
+            _, rows = _compare_page(api, base, head, last)
+            if len(rows) < MAX_COMMITS_SHOWN and last - 1 >= 1:
+                rows = _compare_page(api, base, head, last - 1)[1] + rows
+        # The FULL sha: a prefix would pass on a page that is not the last.
+        if not rows or rows[-1][0] != head:
+            raise ApiError(f"the newest commit read is not {head[:9]}")
+    except ApiError as err:
+        return [f"⚠️ The commits in the range could not be read (`{_code(err)}`)."]
+    shown = [f"{sha[:9]} {subject}" for sha, subject in rows[-MAX_COMMITS_SHOWN:]]
     head_line = f"Commits in the range ({total}"
     if len(shown) < total:
         head_line += f"; the newest {len(shown)} shown"
     return [head_line + ", oldest first):", "", "```", *shown, "```"]
 
 
-def failure_report(api: Api, run: Run, runs: list[dict] | None, unread: str = "") -> str:
-    start, why_not = range_start(run, runs, unread)
-    lines = [f"**{_code(run.workflow)}** concluded `{_code(run.conclusion)}` on `{BRANCH}` "
-             f"(run attempt {run.attempt}): {run.url}", ""]
+def failure_report(api: Api, standing: Standing) -> str:
+    """One red workflow: marker, range, failed jobs, commits."""
+    run, wf = standing.run, standing.wf
+    start = range_start(run, standing.runs)
+    lines = [marker("red", wf.file, run),
+             f"**{_code(wf.name)}** concluded `{_code(run.conclusion)}` on `{BRANCH}` at "
+             f"`{run.sha[:9]}` (run #{run.number}, attempt {run.attempt}): {run.url}", ""]
     if start:
         lines.append(f"- Range: `{start['head_sha'][:9]}..{run.sha[:9]}` — from the newest "
                      f"earlier push run of this workflow that concluded `success` "
-                     f"({start.get('html_url', 'run ' + str(start.get('id')))}) to this run. "
-                     "The breaking commit is somewhere in it; runs replaced by a later "
-                     "merge are `cancelled`, so no single commit can be named.")
+                     f"(run #{start['run_number']}) to this run. The breaking commit is "
+                     "somewhere in it; runs replaced by a later merge are `cancelled`, so "
+                     "no single commit can be named.")
     else:
-        lines.append(f"- Range: start unknown .. `{run.sha[:9]}` — {why_not}.")
-    lines.append(f"- Failed jobs (run attempt {run.attempt}):")
+        lines.append(f"- Range: start unknown .. `{run.sha[:9]}` — none of the newest "
+                     f"{len(standing.runs)} push runs of this workflow on `{BRANCH}` before "
+                     "this one concluded `success` (older ones were not read).")
+    lines.append(f"- Failed jobs (attempt {run.attempt}):")
     lines += failed_jobs(api, run)
     if start:
         lines += ["", *commits_in_range(api, start["head_sha"], run.sha)]
@@ -467,95 +575,100 @@ class Plan:
     why: str
     text: str = ""
     issue: int | None = None
-    # This run established that main is red or not known green (exit 1).
+    # main is red, or the issue is open and main is not known all green (exit 1).
     red: bool = False
 
 
 _OPEN_HEADER = (
-    "A workflow that reports one of `main`'s required checks failed on a push to "
+    "A workflow that reports one of `main`'s required checks is failing on "
     "`main`. Until it is green again, every PR that syncs with `main` fails the "
     "same check.\n\n"
-    "This issue is maintained by `.github/workflows/main-red-detector.yml`: each "
-    "further failing run adds a comment, and the issue is closed automatically "
-    "once the newest push run with a verdict of every watched workflow is "
-    "`success` (a successful re-run counts).\n\n---\n\n")
+    "This issue is maintained by `.github/workflows/main-red-detector.yml`: a "
+    "further failing run or a workflow turning green again adds a comment, and "
+    "the issue is closed automatically once the newest push run with a verdict "
+    "of every watched workflow is `success` (a successful re-run counts).\n")
 
 
-def plan(run: Run, watched: list[Watched], api: Api) -> Plan:
-    """What to do about one finished run. Reads GitHub; writes nothing."""
-    if run.event != "push" or run.branch != BRANCH:
-        return Plan("noop", f"not a push run on {BRANCH} (event {run.event!r}, "
-                            f"branch {run.branch!r})")
-    if run.conclusion in NO_VERDICT:
-        return Plan("noop", f"the run concluded `{run.conclusion}` — neither a failure "
-                            "nor a recovery")
-    by_name = {wf.name: wf for wf in watched}
-    if run.workflow not in by_name:
-        raise NoVerdict(f"{run.workflow!r} is not one of the watched workflows "
-                        f"({sorted(by_name)}) — the trigger list and this event disagree")
-    runs, unread = None, ""
-    if run.conclusion != "success":
-        # Description, except for one decision: a listing that CAN be read and
-        # shows a newer green run makes this failure stale. One that cannot be
-        # read is reported like any failure — louder, never quieter.
-        try:
-            runs = push_runs(api, by_name[run.workflow].file)
-        except ApiError as err:
-            unread = str(err)
-        newer = superseded_by_a_green_run(run, runs or [])
-        if newer:
-            return Plan("noop", f"{run.workflow} failed at {run.sha[:9]}, but its newer run "
-                                f"#{newer['run_number']} on {BRANCH} concluded `success` — "
-                                "not main's current state")
-    try:
-        issue = find_issue(api)
-    except ApiError as err:
-        # ⛔ Not "no issue": that opens a duplicate on every failing run.
-        raise NoVerdict(f"cannot tell whether the tracking issue is open — {err}") from err
-    number = issue["number"] if issue else None
+def _still_lines(state: list[Standing], skip: set[str]) -> list[str]:
+    lines = []
+    for s in state:
+        if s.wf.file in skip:
+            continue
+        if s.colour == "red":
+            lines.append(f"- still red: `{_code(s.wf.name)}` — `{_code(s.run.conclusion)}` at "
+                         f"`{s.run.sha[:9]}` ({s.run.url})")
+        elif s.colour == "unknown":
+            lines.append(f"- unknown: `{_code(s.wf.name)}` — {s.why}")
+    return lines
 
-    if run.conclusion != "success":
-        report = failure_report(api, run, runs, unread)
-        if issue is None:
-            return Plan("open", f"{run.workflow} failed and no tracking issue is open",
-                        _OPEN_HEADER + report, red=True)
-        return Plan("comment", f"{run.workflow} failed; tracking issue #{number} is open",
-                    report, number, red=True)
 
-    if issue is None:
-        return Plan("noop", f"{run.workflow} succeeded and no tracking issue is open")
+def plan(event: Run, watched: list[Watched], api: Api) -> Plan:
+    """What main's state calls for, now that `event` finished. Reads GitHub;
+    writes nothing."""
+    if event.event != "push" or event.branch != BRANCH:
+        return Plan("noop", f"not a push run on {BRANCH} (event {event.event!r}, "
+                            f"branch {event.branch!r})")
+    if event.conclusion in NO_VERDICT:
+        return Plan("noop", f"the run concluded `{event.conclusion}` — it says nothing "
+                            f"about {BRANCH}")
+    if event.workflow not in {wf.name for wf in watched}:
+        raise NoVerdict(f"{event.workflow!r} is not one of the watched workflows "
+                        f"({sorted(wf.name for wf in watched)}) — the trigger list and "
+                        "this event disagree")
     try:
         state = main_state(api, watched)
     except ApiError as err:
         # ⛔ Not "green": that closes the issue while main is red.
-        raise NoVerdict(f"cannot tell whether {BRANCH} is green again — {err}") from err
-    ran = f"**{_code(run.workflow)}** succeeded at `{run.sha[:9]}` (run attempt {run.attempt}): {run.url}"
-    if not state.red and not state.unknown:
-        text = (f"✅ `{BRANCH}` is green again as of `{run.sha[:9]}`. {ran}\n\n"
-                "The newest push run with a verdict of every watched workflow is `success`: "
-                + ", ".join(f"`{_code(n)}`" for n in state.green) + ".")
-        if state.never:
-            text += ("\n\nNot judged (no `push` trigger for `main`): "
-                     + ", ".join(f"`{_code(n)}`" for n in state.never) + ".")
-        return Plan("close", f"every watched workflow is green on {BRANCH}", text, number)
+        raise NoVerdict(f"cannot tell where {BRANCH} stands — {err}") from err
     try:
-        recovered = was_red_before(api, run, push_runs(api, by_name[run.workflow].file))
+        issue = find_issue(api)
+        seen = recorded(api, issue) if issue else {}
     except ApiError as err:
-        raise NoVerdict(f"cannot tell whether {run.workflow} just recovered — {err}") from err
-    if not recovered:
-        # One comment per green run of a workflow that never broke, for as long
-        # as another one is red, buries the comments that say something.
-        return Plan("noop", f"{run.workflow} was already green; {BRANCH} is not all green "
-                            f"and tracking issue #{number} stays open", issue=number, red=True)
-    lines = [ran, "", f"Not closing: `{BRANCH}` is not green in every watched workflow."]
-    for name, verdict in state.red:
-        lines.append(f"- still red: `{_code(name)}` — `{_code(verdict.get('conclusion'))}` at "
-                     f"`{str(verdict.get('head_sha'))[:9]}` ({verdict.get('html_url')})")
-    for name in state.unknown:
-        lines.append(f"- unknown: `{_code(name)}` — none of its newest {PAGE} push runs on "
-                     f"`{BRANCH}` finished with a verdict")
-    return Plan("comment", f"{run.workflow} recovered but {BRANCH} is not all green",
-                "\n".join(lines), number, red=True)
+        # ⛔ Not "no issue": that opens a duplicate on every run.
+        raise NoVerdict(f"cannot tell whether the tracking issue is open, or what it "
+                        f"says — {err}") from err
+    number = issue["number"] if issue else None
+    red = [s for s in state if s.colour == "red"]
+    unknown = [s for s in state if s.colour == "unknown"]
+    summary = ", ".join(f"{s.wf.name} {s.colour}" for s in state)
+
+    if issue is None:
+        if not red:
+            return Plan("noop", f"no workflow is red on {BRANCH} ({summary}) and no "
+                                "tracking issue is open")
+        text = "\n---\n\n".join([_OPEN_HEADER, *(failure_report(api, s) for s in red)])
+        rest = _still_lines(unknown, set())
+        if rest:
+            text += "\n\n---\n\n" + "\n".join(rest)
+        return Plan("open", f"red on {BRANCH}: {', '.join(s.wf.name for s in red)}; no "
+                            "tracking issue was open", text, red=True)
+
+    if not red and not unknown:
+        green = ", ".join(f"`{_code(s.wf.name)}` (`{s.run.sha[:9]}`)" for s in state)
+        text = (f"✅ `{BRANCH}` is green again. The newest push run with a verdict of "
+                f"every watched workflow is `success`: {green}.")
+        return Plan("close", f"every watched workflow is green on {BRANCH}", text, number)
+
+    new_red = [s for s in red
+               if seen.get(s.wf.file) != ("red", s.run.run_id, s.run.attempt)]
+    recovered = [s for s in state
+                 if s.colour == "green" and seen.get(s.wf.file, ("",))[0] == "red"]
+    if not new_red and not recovered:
+        return Plan("noop", f"{BRANCH} is not all green ({summary}); tracking issue "
+                            f"#{number} already says so", issue=number, red=True)
+    parts = [failure_report(api, s) for s in new_red]
+    for s in recovered:
+        parts.append(f"{marker('green', s.wf.file, s.run)}\n**{_code(s.wf.name)}** is green "
+                     f"again: `success` at `{s.run.sha[:9]}` (run #{s.run.number}, attempt "
+                     f"{s.run.attempt}): {s.run.url}")
+    rest = _still_lines(state, {s.wf.file for s in new_red})
+    if rest:
+        parts.append(f"Not closing: `{BRANCH}` is not green in every watched workflow.\n"
+                     + "\n".join(rest))
+    return Plan("comment", f"new on {BRANCH}: "
+                           + ", ".join([f"{s.wf.name} red" for s in new_red]
+                                       + [f"{s.wf.name} green again" for s in recovered]),
+                "\n\n---\n\n".join(parts), number, red=True)
 
 
 def apply(action: Plan, api: Api) -> None:

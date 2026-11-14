@@ -9,10 +9,12 @@ name: Main red detector
 # trace was a red run that nobody was told about, and every PR that synced
 # with main then failed the same check.
 #
-# The decision — what counts as a failure, when the issue closes, what the
-# report says — is scripts/ops/main_red_report.py (truth table in its
-# docstring; tests in tests/ops/test_main_red_report.py). This file only hands
-# it the event and a token.
+# The decision — what counts as red, what is new enough to comment, when the
+# issue closes, whose issue it is — is scripts/ops/main_red_report.py (the
+# table is in its docstring and nowhere else; tests in
+# tests/ops/test_main_red_report.py). This file only hands it the event and a
+# token. ⛔ That token must stay `github.token`: the script accepts only an
+# issue opened by `github-actions[bot]` as the tracking issue.
 #
 # ⛔ `workflows:` below is the list of workflows that report an entry of
 # .github/required-checks.yaml. GitHub reads it statically, so it cannot be
@@ -67,9 +69,10 @@ permissions:
 # issue" and both open one. ⚠️ The cost: GitHub keeps only ONE pending run per
 # group, so a third event arriving within the minute or so that one run takes
 # — while one runs and one waits — replaces the waiting one, and that event is
-# never judged. A dropped failure is reported by that workflow's next failing
-# run, whose range still starts at the last success; a dropped success leaves
-# the issue open until the next successful run.
+# never delivered. That is why the script decides from main's STATE and uses
+# the event only as the moment to look: the next event of ANY watched workflow
+# reads every workflow's newest verdict and opens, updates or closes the issue
+# accordingly. What is lost is time, until that next event.
 concurrency:
   group: main-red-detector
   cancel-in-progress: false

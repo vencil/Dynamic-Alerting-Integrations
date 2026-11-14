@@ -1,7 +1,7 @@
 # validate.yaml — PR validation pipeline
 #
 # Runs on every PR. Catches issues before merge. Also runs on every push to
-# main (#3922): until then its three required checks never ran on the MERGED
+# main (#3922): until then its required checks never ran on the MERGED
 # tree, so two PRs that were each green could break one of them together and
 # nothing reported it. main-red-detector.yml opens an issue when a push run
 # fails. No step here reads `github.event.pull_request.*` or diffs against a
