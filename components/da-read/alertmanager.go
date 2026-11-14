@@ -56,11 +56,13 @@ import (
 // errNotInReading wraps a written key or list the reading has no place for.
 var errNotInReading = errors.New("the text writes it, but the loader's reading has no such entry")
 
-// readAlertmanager returns da-read's stdout for the Alertmanager config *data*.
-func readAlertmanager(data []byte) ([]byte, error) {
+// readAlertmanager returns da-read's stdout for the Alertmanager config
+// *data*. *showReason*: whether a refusal by Alertmanager's loader carries
+// the loader's own reason (loaderRefusal).
+func readAlertmanager(data []byte, showReason bool) ([]byte, error) {
 	extra, err := laterDocumentWithContent(data)
 	if err != nil {
-		return nil, loaderRefusal(err)
+		return nil, loaderRefusal(err, showReason)
 	}
 	if extra > 0 {
 		return nil, fmt.Errorf("YAML document %d of the file has content; Alertmanager reads only "+
@@ -68,7 +70,7 @@ func readAlertmanager(data []byte) ([]byte, error) {
 	}
 	cfg, err := config.Load(string(data))
 	if err != nil {
-		return nil, loaderRefusal(err)
+		return nil, loaderRefusal(err, showReason)
 	}
 	reading, err := marshalWithSecrets(cfg)
 	if err != nil {
@@ -91,44 +93,27 @@ func readAlertmanager(data []byte) ([]byte, error) {
 	return w.out.Bytes(), nil
 }
 
-// loaderRefusal is the one spelling of "Alertmanager's loader refused the
-// text" (#3689). yaml.v2 quotes the value it could not decode into each
-// *yamlv2.TypeError entry (line 61: cannot unmarshal !!str `hunter2` into
-// bool) and the refused field may be a credential (an `http_config`
-// password written where a bool belongs), so the entries are reprinted
-// without it (line 61: cannot unmarshal !!str into bool). The line, the
-// tag and the Go type say what is wrong; the value is the operator's own.
-func loaderRefusal(err error) error {
-	var te *yamlv2.TypeError
-	if errors.As(err, &te) {
-		redacted := make([]string, len(te.Errors))
-		for i, e := range te.Errors {
-			redacted[i] = withoutQuotedValue(e)
-		}
-		err = &yamlv2.TypeError{Errors: redacted}
-	}
-	return fmt.Errorf("refused by Alertmanager's config loader: %v", err)
-}
+// showLoaderReasonFlag is `da-read alertmanager`'s opt-in to the loader's
+// own reason for a refusal.
+const showLoaderReasonFlag = "--show-loader-reason"
 
-// withoutQuotedValue drops the backquoted value yaml.v2's decoder writes between
-// the tag and "into" of one TypeError entry (decode.go's terror:
-// "line %d: cannot unmarshal %s%s into %s", the middle verb " `value`", or
-// " `first7...`" past 10 bytes, empty for a sequence or mapping). The value
-// is the operator's text and may hold a backtick or " into "; the Go type
-// after the last "` into " never holds a backtick, so that is where it ends.
-func withoutQuotedValue(entry string) string {
-	const verb = "cannot unmarshal "
-	i := strings.Index(entry, verb)
-	if i < 0 {
-		return entry
+// loaderRefused is the fixed sentence a refusal by Alertmanager's loader
+// prints by default (#3703). It carries no word of the loader's: that text
+// is Alertmanager's prose, and it quotes the file's values and keys (a
+// proxy URL, a label name, a TLS version, a credential written where a bool
+// belongs) in sentences this program does not own, so no part of it can be
+// told safe to print.
+const loaderRefused = "refused by Alertmanager's config loader (its reason is not printed: it can quote " +
+	"the file's values; `da-read alertmanager " + showLoaderReasonFlag + "` prints it)"
+
+// loaderRefusal is the one spelling of "Alertmanager's loader refused the
+// text": the fixed sentence, or with *showReason* the loader's own reason
+// after it.
+func loaderRefusal(err error, showReason bool) error {
+	if showReason {
+		return fmt.Errorf("refused by Alertmanager's config loader: %v", err)
 	}
-	rest := entry[i+len(verb):]
-	open := strings.Index(rest, " `")
-	end := strings.LastIndex(rest, "` into ")
-	if open < 0 || end < open {
-		return entry
-	}
-	return entry[:i+len(verb)] + rest[:open] + rest[end+1:]
+	return errors.New(loaderRefused)
 }
 
 // Secrets are printed as their values: the caller copies them (a receiver's

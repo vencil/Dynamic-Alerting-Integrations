@@ -154,6 +154,23 @@ def test_verdict_equals_the_cli_on_the_written_tree(world, tmp_path, fixture):
             cases.FIXTURES[fixture][write].encode()).hexdigest()}]}
 
 
+def test_the_service_never_relays_alertmanagers_reason(world):
+    """#3703：服務跑的判定不會打開 `--show-loader-reason`——它的 argv 是固定的
+    （`_gsvc_child._judge`），請求帶不進旗標。一個只有 Alertmanager 的 loader
+    拒收、理由會引出值的寫入：結果是 findings、rc 1，回給 tenant-api 的整份
+    回應（含 stderr_tail）裡有 da-read 的固定句（非空過：真的問到 loader），
+    沒有那個值。"""
+    beta = cases._tenant("beta", "      receiver:\n        type: webhook\n"
+                                 "        url: https://hooks.example.com/b\n"
+                                 "        http_config: {{proxy_url: 'http://[CANARY]/'}}\n")
+    status, doc = world["svc"].validate(world["commits"]["clean"], [
+        {"path": "beta.yaml", "content_b64": h.b64(beta)}])
+    assert status == 200 and (doc["result"], doc["rc"]) == ("findings", 1), doc
+    text = json.dumps(doc)
+    assert "refused by Alertmanager's config loader (its reason is not printed" in text, text
+    assert "canary" not in text.lower(), text
+
+
 def test_the_fixtures_include_both_verdicts(world, tmp_path):
     rcs = set()
     for fixture in FIXTURES:

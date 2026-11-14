@@ -257,7 +257,8 @@ def _unverifiable(exc: PlatformProbeSetUnverifiable, refusing: str) -> None:
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                    all_warnings: list[str], sink: list | None = None,
                    key_blocks: "list[str] | None" = None,
-                   generated: "list | None" = None) -> NoReturn:
+                   generated: "list | None" = None, *,
+                   show_loader_reason: bool = False) -> NoReturn:
     """The last step of ``validate_tree``: judge the generation result
     (``evaluate_generated_config``), print the verdict and exit with it.
 
@@ -268,7 +269,8 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
     """
     verdict = evaluate_generated_config(
         routes, receivers, inhibit_rules, all_warnings,
-        extra_errors=_policy_errors(all_warnings))
+        extra_errors=_policy_errors(all_warnings),
+        show_loader_reason=show_loader_reason)
     if generated is not None:
         generated.append(verdict)
     # #2766: the lines only --validate prints join the findings. A verdict
@@ -375,9 +377,9 @@ def _write_output_or_die(output: str, content: str) -> None:
 
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                 namespace: str, configmap_name: str, yes_flag: bool, strict: bool = False,
-                judge_merged=None) -> None:
-    """Handle --apply mode: merge into ConfigMap and reload. *judge_merged*:
-    ``apply_to_configmap``'s (#1211)."""
+                judge_merged=None, *, show_loader_reason: bool = False) -> None:
+    """Handle --apply mode: merge into ConfigMap and reload. *judge_merged*,
+    *show_loader_reason*: ``apply_to_configmap``'s (#1211, #3703)."""
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
     print(f"\nApply: {route_count} route(s), {len(receivers)} receiver(s), "
@@ -418,7 +420,8 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
     try:
         success = apply_to_configmap(routes, receivers, inhibit_rules, namespace,
                                      configmap_name, strict=strict,
-                                     judge_merged=judge_merged)
+                                     judge_merged=judge_merged,
+                                     show_loader_reason=show_loader_reason)
     except AlertmanagerConfigRejected as exc:
         # #2219 / #3689: Alertmanager refused the merged config (or gave no
         # verdict) BEFORE kubectl was called.
@@ -453,14 +456,15 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
                            judge_emitted=None, *, as_configmap: bool,
                            mounts_out: str | None = None,
                            mount_root: str = DEFAULT_MOUNT_ROOT,
-                           mount_lists: list[tuple[str, dict]] | None = None) -> None:
+                           mount_lists: list[tuple[str, dict]] | None = None,
+                           show_loader_reason: bool = False) -> None:
     """Handle --output-configmap (*as_configmap*) and --output-alertmanager:
     ``merge_generated`` on *base*, emitted as a ConfigMap or as a plain
     alertmanager.yml — one merge, two wrappers (#1211 gap 2).
 
     *judge_emitted* (#1211): called with the emitted config as Alertmanager
     reads it, before anything is written; the reasons it returns refuse it
-    (rc 1).
+    (rc 1). *show_loader_reason* (#3703): ``alertmanager_check``'s.
 
     Takes the ALREADY-LOADED base config, not a path: #1616 requires the
     supplied-but-unusable check to happen before the tenant scan, and a
@@ -513,7 +517,8 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
         am_yml = content
     # #3689: the one gate --validate and --apply ask too, in its one order.
     check = alertmanager_check(am_yml, what=am_what,
-                               refusing=f"write it to {target} (nothing was written)")
+                               refusing=f"write it to {target} (nothing was written)",
+                               show_loader_reason=show_loader_reason)
     print(check.message, file=sys.stderr)
     if check.exit_code is not None:
         sys.exit(check.exit_code)
@@ -870,7 +875,9 @@ FLAGS_CLASSIFIED_BY_MODE_GUARD = frozenset({
 FLAGS_READ_IN_EVERY_MODE = frozenset({"config_dir", "validate", "strict", "policy",
                                       "findings_json",
                                       # #1560: judged (exit 2) beside --policy
-                                      "mount_root"})
+                                      "mount_root",
+                                      # #3703: every mode asks Alertmanager's loader
+                                      "show_loader_reason"})
 FLAGS_GUARDED_BY_BASE_CONFIG_CHECK = frozenset({"base_config"})
 
 
@@ -1184,6 +1191,18 @@ def _build_parser() -> argparse.ArgumentParser:
                              "Alertmanager CR (#1560)")
     parser.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt for --apply")
+    # #3703: off by default, and the generator service never passes it.
+    parser.add_argument("--show-loader-reason", dest="show_loader_reason",
+                        action="store_true",
+                        help="When Alertmanager's config loader refuses the "
+                             "config (--validate, --output-*, --apply, and "
+                             "--base-config / the cluster's config), also "
+                             "print the loader's own reason. Off by default: "
+                             "that reason is Alertmanager's text and can quote "
+                             "conf.d values, so a refusal says only that the "
+                             "loader refused. For debugging locally; never "
+                             "turn it on where the output is relayed (CI logs "
+                             "others read, a service)")
     parser.add_argument("--findings-json", default=None, metavar="PATH",
                         help="Also write the findings this run prints (its "
                              "warning-stream and refusal lines, each with "
@@ -1999,15 +2018,17 @@ def validate_tree(config_dir: str, *, strict: bool = False,
                   mount_root: str = DEFAULT_MOUNT_ROOT,
                   key_verdict: bool = True,
                   credential_scope: "frozenset[str] | None" = None,
-                  findings: list | None = None) -> ValidateOutcome:
+                  findings: list | None = None,
+                  show_loader_reason: bool = False) -> ValidateOutcome:
     """The whole ``--validate`` judgement of the tree at *config_dir*.
 
     ``generate-routes --validate`` exits with this function's ``exit_code``
     and validate-config's ``routes`` row is this function's outcome: neither
     decides anything of its own (#3788). It prints what ``--validate``
     prints (stdout and stderr) and never exits. *strict*, *policy*,
-    *mount_root*: the flags; *key_verdict*, *credential_scope*: ``main``'s;
-    *findings*: the list to record into (``--findings-json``).
+    *mount_root*, *show_loader_reason*: the flags; *key_verdict*,
+    *credential_scope*: ``main``'s; *findings*: the list to record into
+    (``--findings-json``).
 
     The caller holds the run's parse-tree session and ``judging()``
     (``_lib_parse_cache``) and has judged *config_dir* as its declared input
@@ -2038,7 +2059,7 @@ def validate_tree(config_dir: str, *, strict: bool = False,
             _emit_custom_firehose_findings(undelivered, None, strict=strict,
                                            findings=findings)
         _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings,
-                       key_blocks, generated)
+                       key_blocks, generated, show_loader_reason=show_loader_reason)
     except SystemExit as exc:
         code = _exit_code_of(exc)
     return ValidateOutcome(code, findings, generated[0] if generated else None,
@@ -2139,7 +2160,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         sys.exit(validate_tree(
             args.config_dir, strict=args.strict, policy=args.policy,
             mount_root=args.mount_root, key_verdict=key_verdict,
-            credential_scope=credential_scope, findings=findings).exit_code)
+            credential_scope=credential_scope, findings=findings,
+            show_loader_reason=args.show_loader_reason).exit_code)
 
     try:
         policy = _resolve_inputs(args.policy, args.mount_root)
@@ -2165,7 +2187,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # runs before this.
     if writes_a_file_mode:
         try:
-            base_config = load_base_config(args.base_config)
+            base_config = load_base_config(args.base_config,
+                                           show_loader_reason=args.show_loader_reason)
         except BaseIsAnOutputError as exc:
             _assembly_failed(exc, "nothing was generated or written")
         except BaseConfigInputError as exc:
@@ -2228,7 +2251,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     if args.apply:
         _apply_mode(routes, receivers, inhibit_rules, namespace,
                     configmap_name, args.yes, strict=args.strict,
-                    judge_merged=assembled_judge)
+                    judge_merged=assembled_judge,
+                    show_loader_reason=args.show_loader_reason)
 
     # --output-configmap / --output-alertmanager: one merge, two wrappers.
     _assembled_output_mode(routes, receivers, inhibit_rules, base_config,
@@ -2237,7 +2261,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
                            as_configmap=bool(args.output_configmap),
                            mounts_out=args.mount_list_out,
                            mount_root=args.mount_root,
-                           mount_lists=mount_lists)
+                           mount_lists=mount_lists,
+                           show_loader_reason=args.show_loader_reason)
 
 
 if __name__ == "__main__":
