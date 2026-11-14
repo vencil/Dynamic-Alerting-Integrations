@@ -17,6 +17,7 @@ pack 檔與告警都從 registry／規則包取。這支測試替每個鍵檢查
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
@@ -28,7 +29,14 @@ import yaml
 import _registry_lib as lib
 import _threshold_alerts
 
-pytestmark = pytest.mark.usefixtures("da_guard_env")
+# Which alerts read a key is the pack's answer, read the way Prometheus reads
+# it (`_threshold_alerts.alerts_for_key` → da-read).
+pytestmark = pytest.mark.usefixtures("da_read_env")
+
+#: ci.yml's "Python Tests" job has no promtool, so the tests that run it skip
+#: there; the "Lint Rule Packs" job installs promtool and sets this, which
+#: turns a missing promtool into a failure — a green job cannot mean "skipped".
+_REQUIRE_ENV = "ARMED_PROMTOOL_REQUIRE"
 
 _REPO = Path(__file__).resolve().parents[2]
 _DIR = Path(__file__).resolve().parent
@@ -118,7 +126,12 @@ def _bound_alert(key: str, group: dict) -> tuple[str, int]:
 
 def _promtool(path: Path) -> subprocess.CompletedProcess:
     exe = shutil.which("promtool")
-    assert exe, "promtool is not on PATH (session-start.sh / scripts/ops/install-promtool.sh installs it)"
+    if exe is None:
+        if os.environ.get(_REQUIRE_ENV) == "1":
+            pytest.fail(f"{_REQUIRE_ENV}=1 but promtool is not on PATH — in this mode a "
+                        "missing promtool is a failure, not a skip")
+        pytest.skip(f"promtool is not on PATH (scripts/ops/install-promtool.sh installs it; "
+                    f"{_REQUIRE_ENV}=1 makes this a failure)")
     return subprocess.run([exe, "test", "rules", str(path)], capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=120)
 
@@ -251,3 +264,30 @@ def test_a_tenant_label_written_with_spaces_is_still_a_tenant():
     """`tenant = "other"` 是合法的 selector 寫法：單一 tenant 的檢查要認得。"""
     series = ['m{tenant="t-armed"}', 'm{tenant = "other", instance="db-1"}', 'm{namespace= "db-x"}']
     assert {t for s in series for t in _TENANT_LABEL.findall(s)} == {"t-armed", "other", "db-x"}
+
+
+def test_ci_runs_this_module_where_promtool_is_required():
+    """沒有 promtool 的 job 裡這個模組會 skip 掉跑 promtool 的測試，所以 ci.yml 必須在裝了
+    promtool 的 job 以硬性模式（`ARMED_PROMTOOL_REQUIRE=1`）跑它：少了那一步，綁定就只在
+    開發機上成立。"""
+    jobs = yaml.safe_load((_REPO / ".github/workflows/ci.yml").read_text(encoding="utf-8"))["jobs"]
+    module = "tests/rulepacks/test_armed_key_binding.py"
+    steps = [(name, step) for name, job in jobs.items() for step in job.get("steps", [])
+             if module in str(step.get("run", ""))]
+    assert len(steps) == 1, [name for name, _ in steps]
+    job, step = steps[0]
+    assert (step.get("env") or {}).get(_REQUIRE_ENV) == "1", step
+    assert "-rs" in step["run"], "surface any residual skip in the log"
+    installs = [s for s in jobs[job]["steps"] if "promtool --version" in str(s.get("run", ""))]
+    assert installs, f"job {job} runs the binding module but never installs promtool"
+    assert jobs[job]["steps"].index(installs[0]) < jobs[job]["steps"].index(step)
+
+
+def test_a_missing_promtool_skips_unless_required(monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda _name: None)
+    monkeypatch.delenv(_REQUIRE_ENV, raising=False)
+    with pytest.raises(pytest.skip.Exception):
+        _promtool(_path(_ARMED[0]))
+    monkeypatch.setenv(_REQUIRE_ENV, "1")
+    with pytest.raises(pytest.fail.Exception):
+        _promtool(_path(_ARMED[0]))
