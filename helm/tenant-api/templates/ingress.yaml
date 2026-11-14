@@ -4,12 +4,11 @@
   `helm install` still exited 0.
 
   ⛔ The backend is HARD-WIRED to the Service's `http` port (80 → oauth2-proxy
-  :4180) and is deliberately not configurable. The other Service port,
-  `api-internal` (8080), trusts injected X-Forwarded-Groups/Email identity
-  headers with no authentication; the NetworkPolicy exists precisely to keep
-  arbitrary callers off it (GHSA-3g2h-rf85-5rrv). An Ingress pointed there
-  would let anyone on the internet assert any identity, platform-admins
-  included.
+  :4180) and is deliberately not configurable. The API is reachable only
+  through oauth2-proxy, on the pod-internal Unix socket (ADR-027 §2, §3). The
+  other Service port, `api-internal` (8080), serves only /health, /ready and
+  /metrics and answers any identity header with 400; an Ingress pointed there
+  would expose the probes and metrics to the internet and nothing else useful.
 
   The oauth2-proxy sidecar is always rendered (ADR-027 §5, §6: there is no
   switch to turn it off), so the `http` port always has a listener.
