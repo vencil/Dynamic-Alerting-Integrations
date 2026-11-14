@@ -210,8 +210,8 @@ def test_served_values_runs_with_gotraceback_crash_under_the_memory_limit(
     runs) take parse-tree's environment: under the memory limit the Go
     runtime's own out-of-memory ends them by a signal, which the verdict
     reports as memory — not exit 2, reported as error."""
-    import _lib_parse_tree as lpt
-    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", limited)
+    import _lib_tool_fault as tf  # the one memory-limit flag
+    monkeypatch.setattr(tf, "_MEMORY_LIMITED", limited)
     monkeypatch.delenv("GOTRACEBACK", raising=False)  # "unset" is what the run inherits
     fake, seen = _gotraceback_da_guard(tmp_path)
     missing = tmp_path / "no-such-conf.d"  # not a directory: no parse-tree run first
@@ -235,12 +235,20 @@ def test_the_verdicts_parses_are_not_streamed(monkeypatch, tmp_path):
     assert cache.on_store is not None, "the generator's streaming is not restored"
 
 
+def _memory_end(exc: "tv.DaGuardError") -> "tv.DaGuardError":
+    exc.memory_end = True
+    return exc
+
+
 @pytest.mark.parametrize("exc,reason", [
     (MemoryError("cannot allocate"), "memory"),
     (SystemExit(3), "error"),
     (KeyboardInterrupt(), "error"),
     (tv.ServedValuesError("da-guard served-values exited -6", -6, ""), "memory"),
     (tv.EffectiveError("da-guard effective exited 2", 2, ""), "error"),
+    # #3862: exit 2 with the Go runtime's own out-of-memory line under the
+    # memory limit (it failed before it read GOTRACEBACK): memory too.
+    (_memory_end(tv.EffectiveError("da-guard effective ran out of memory", 2, "")), "memory"),
     (ValueError("anything else"), "error"),
 ])
 def test_a_verdict_that_fails_is_not_completed_never_raised(monkeypatch, tmp_path, exc, reason):

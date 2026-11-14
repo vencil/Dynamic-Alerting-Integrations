@@ -135,8 +135,12 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
 
 import guard_dispatch  # noqa: E402
 from _lib_consumer_read import DA_GUARD_ENV  # noqa: E402  (the env-name register, #3424)
+import _lib_tool_fault  # noqa: E402  (#3862: where "da-guard did not run" is recorded)
 
 SUBCOMMAND = "parse-tree"
+#: da-guard's exit code for a caller error — of parse-tree, also its answer
+#: that it cannot walk the tree it was given.
+_EXIT_CALLER_ERR = 2
 SCHEMA = "da-guard.parse-tree/v2"
 #: Schema values of documents a da-guard older than this tool writes: named
 #: as such when refused, so the message says what to do (upgrade it).
@@ -190,23 +194,29 @@ def _resolve(binary: Optional[str], timeout: Optional[float]
         timeout = sel_timeout if sel_timeout is not None else DEFAULT_TIMEOUT
     return binary, timeout
 
-#: Set by :func:`run_under_memory_limit` in a process that limited its own
-#: memory (the generator container's judgement, ADR-036 §3).
-_MEMORY_LIMITED = False
-
-
 def run_under_memory_limit() -> None:
     """Declare that this process runs under a memory limit (RLIMIT_DATA) that
-    every da-guard it starts inherits. From then on each da-guard runs with
+    every Go program it starts inherits. From then on each da-guard (and
+    da-read and da-crdecode, `_lib_consumer_read`) runs with
     ``GOTRACEBACK=crash``, so a Go runtime that fails — out of memory, an
     allocation failure that faults inside the runtime (SIGSEGV), a thread it
     cannot create — ends by a signal (SIGABRT) instead of exiting 2; and a
     da-guard ended by a signal is this process's memory limit, raised as
-    ``MemoryError`` naming the signal. Judged by the process status, not by
-    its words. Without this call a da-guard ended by a signal stays a
-    ``ParseTreeError``. The caller sets RLIMIT_CORE to 0: no core file."""
-    global _MEMORY_LIMITED
-    _MEMORY_LIMITED = True
+    ``MemoryError`` naming the signal. A runtime that runs out of memory
+    while it starts, before it has read ``GOTRACEBACK``, still exits 2: that
+    exit with the runtime's own out-of-memory line is this process's memory
+    limit too (`_lib_tool_fault.end_reason`). Without this call a da-guard
+    ended by a signal stays a ``ParseTreeError``, and exit 2 is read as
+    always. The caller sets RLIMIT_CORE to 0: no core file.
+
+    The flag itself lives in `_lib_tool_fault` (`memory_limited`,
+    `go_program_env`), which all three run functions import: one flag."""
+    _lib_tool_fault.set_memory_limited()
+
+
+def _fault(subcommand: str, reason: str) -> None:
+    """#3862: this da-guard run did not run (see `_lib_tool_fault`)."""
+    _lib_tool_fault.record("da-guard", subcommand, reason)
 
 
 class ParseTreeError(Exception):
@@ -289,6 +299,7 @@ def run_files_raw(root: Path | str, items: "list[tuple[str, bytes]]",
     if lines and lines[-1] == b"":
         lines.pop()
     if len(lines) != len(items):
+        _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {what} wrote {len(lines)} documents for "
                              f"{len(items)} files; nothing of it is used")
     return lines
@@ -299,15 +310,6 @@ def file_document(raw: bytes) -> dict:
     item: the same reading of the same bytes (the line, without its
     newline, is file mode's stdout)."""
     return read_document(raw)
-
-
-def da_guard_env() -> "dict[str, str] | None":
-    """The environment of a da-guard this process starts: with
-    ``GOTRACEBACK=crash`` under :func:`run_under_memory_limit`, so the Go
-    runtime's own out-of-memory ends it by a signal; else None (inherit).
-    Every da-guard run of the judgement takes it (parse-tree here,
-    served-values and effective in ``_lib_tenant_values``)."""
-    return {**os.environ, "GOTRACEBACK": "crash"} if _MEMORY_LIMITED else None
 
 
 def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
@@ -339,28 +341,44 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
         # Resolved now, against the current directory (a relative
         # `$DA_GUARD_BINARY`, an explicit path, a relative `$PATH` entry).
         exe = os.path.abspath(exe)
+    sub = args[0]
     if exe is None:
+        _fault(sub, "not_found")
         msg = dispatcher.binary_missing_message(binary).strip()
         for prefix in ("Error: ", "錯誤: "):
             msg = msg.removeprefix(prefix)
         raise BinaryMissing(msg)
     cmd = [exe, *args]
-    env = da_guard_env()
+    env = _lib_tool_fault.go_program_env()
+    limited = _lib_tool_fault.memory_limited()
     try:
         proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
                               input=stdin if stdin is not None else b"", env=env)
     except subprocess.TimeoutExpired as e:
+        _fault(sub, "timed_out")
         raise ParseTreeError(f"da-guard {what} did not finish within {timeout}s") from e
     except OSError as e:
+        _fault(sub, _lib_tool_fault.os_error_reason(e, exe))
         raise ParseTreeError(f"da-guard could not be run ({exe}): {e}") from e
     stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
-    if _MEMORY_LIMITED and proc.returncode < 0:
+    # #3862: the Go runtime's own memory end is recorded as such (the
+    # judgement rejects that write as memory); any other signal is a fault.
+    end = _lib_tool_fault.end_reason(proc.returncode, proc.stderr, limited)
+    if end is not None:
+        _fault(sub, end)
+    if limited and proc.returncode < 0:
         # Ended by a signal under the memory limit it inherited (the
         # generator container's RLIMIT_DATA of a judgement, ADR-036 §3):
         # the caller's memory limit, not a da-guard defect.
         raise MemoryError(f"da-guard {what} was ended by "
                           f"{_signal_name(-proc.returncode)} under this process's "
                           f"memory limit (RLIMIT_DATA)")
+    if end == _lib_tool_fault.MEMORY_END and proc.returncode >= 0:
+        # Exit 2 with the runtime's own out-of-memory line, under that limit
+        # (it failed before it read GOTRACEBACK): the same memory limit —
+        # never asked of the binary as a da-guard older than this tool.
+        raise MemoryError(f"da-guard {what} ran out of memory (exit {proc.returncode}) "
+                          f"under this process's memory limit (RLIMIT_DATA)")
     if proc.returncode != 0 and not (proc.returncode in accept and proc.stdout.strip()):
         older = ""
         if proc.returncode == 2 and not _accepts(cmd, timeout):
@@ -369,7 +387,12 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
         msg = (f"da-guard {what} exited {proc.returncode}{older}"
                + (f": {' '.join(stderr.split())}" if stderr else ""))
         if older:
+            _fault(sub, "stale")
             raise NotThisDocument(msg, older=True)
+        if proc.returncode > 0 and proc.returncode not in accept | {_EXIT_CALLER_ERR}:
+            # Exit 2 is its answer about the input (a tree it cannot walk);
+            # an exit code it never uses is not an answer at all.
+            _fault(sub, "unexpected_exit")
         raise ParseTreeError(msg)
     return proc.stdout
 
@@ -393,6 +416,7 @@ def read_document(raw: bytes, *, check: "Callable[[dict], None] | None" = None,
     except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
         # ADR-036 §2: a document a reader cannot decode is unusable whole.
         msg = f"da-guard {what} wrote no document this tool can read ({e}); nothing of it is used"
+        _fault(what.split()[0], "stale" if older else "bad_output")
         if wrong_schema:
             raise NotThisDocument(msg, older=older) from e
         raise ParseTreeError(msg) from e
@@ -931,6 +955,7 @@ def tree_of(doc: dict) -> Tree:
         check_shape(doc)
         entries = entries_of(doc)
     except (ValueError, TypeError, KeyError) as e:
+        _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {SUBCOMMAND} wrote no document this tool can "
                              f"read ({e}); nothing of it is used") from e
     files = doc["files"]
@@ -1204,6 +1229,7 @@ def _run_names(names: "list[str]", binary: Optional[str],
                check=_check_list("names"), what=f"{SUBCOMMAND} --list-only --names")
     entries = entries_of(doc)
     if [e.path for e in entries] != names:
+        _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names did not answer the "
                              "names it was given, in order; nothing of it is used")
     carriers = doc["defaults_carriers"]
@@ -1214,6 +1240,7 @@ def _run_names(names: "list[str]", binary: Optional[str],
     # exactly when there are any; the losers are the others.
     if set(carriers) - {"."} or (chosen is None) != (not defaults) or \
             (chosen is not None and chosen not in defaults) or losers != defaults - {chosen}:
+        _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names: defaults_carriers "
                              f"{dict(carriers)!r} does not match the entries' not_read; nothing "
                              "of it is used")
@@ -1278,6 +1305,7 @@ def key_spellings(keys: "Iterable[str]", binary: Optional[str] = None,
                 raise ValueError(f"an answer of the wrong shape: {a!r}")
             of[key] = (canon, tuple(spellings))
     except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
+        _fault(what, "bad_output")
         raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
                              "nothing of it is used") from e
     return KeySpellings(MappingProxyType(of))
@@ -1351,6 +1379,7 @@ def threshold_values(items: "Iterable[tuple[str, str]]", binary: Optional[str] =
                 non_finite=_NON_FINITE[a["non_finite"]],
                 severity=a["severity"], refused=a["refused"]))
     except (ValueError, TypeError, KeyError) as e:  # UnicodeDecodeError is a ValueError
+        _fault(what, "bad_output")
         raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
                              "nothing of it is used") from e
     return readings

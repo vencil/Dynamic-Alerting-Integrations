@@ -67,6 +67,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_write_check.py",  # #3206: a writer's fail-closed check of the tree it writes into
     "_lib_confedit.py",  # #3206: a tool's change of an existing conf.d file, sent to `da-guard write` (ADR-036 §2)
     "_lib_consumer_read.py",  # #3206: a manifest / Alertmanager config read the consumer's way (da-crdecode / da-read, ADR-036 §12)
+    "_lib_tool_fault.py",  # #3862: the record of da-guard / da-read / da-crdecode not running (the service's 503 tool_fault)
     "_lib_metric_sources.py",  # #1595 D1b: metric family → source table; operator-generate's portability derivation
     "_lib_exporter_presence.py",  # #3771: db_type → exporter presence metric table; the inline presence exprs of 3 alerts
     "_lib_doc_yaml_inventory.py",  # #3416: the one inventory of the docs' ```yaml examples (drift / unit-sanity lints, Go loader test)

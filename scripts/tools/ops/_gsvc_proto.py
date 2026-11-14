@@ -26,8 +26,39 @@ STDERR_TAIL_BYTES = 64 * 1024
 REJECT_REASONS = ("deadline", "memory", "incomplete", "git_read", "busy")
 
 #: Why the container answers 503 VALIDATOR_UNAVAILABLE.
-UNAVAILABLE_REASONS = ("da_read_missing", "da_guard_missing", "generator_too_old",
-                       "internal_error")
+UNAVAILABLE_REASONS = ("tool_fault", "generator_too_old", "internal_error")
+
+#: The constant part of a ``tool_fault`` message (#3862); what follows is
+#: each record — program, subcommand, reason — never a path or its stderr.
+TOOL_FAULT_MESSAGE = ("an external program the judgement runs did not run, so no "
+                      "verdict was reached: ")
+_TOOL_FAULT_FIELDS = ("binary", "subcommand", "reason")
+_SUBCOMMAND = re.compile(r"[a-z][a-z0-9-]{0,63}")
+
+
+def tool_faults_of(result: dict) -> list:
+    """The ``faults`` of a judgement process's ``tool_fault`` result, each
+    checked against ``_lib_tool_fault``'s closed sets (a subcommand that is
+    no plain name is dropped to ""); never empty."""
+    import _lib_tool_fault
+    out = []
+    for f in result.get("faults") or ():
+        if not isinstance(f, dict) or f.get("binary") not in _lib_tool_fault.BINARIES \
+                or f.get("reason") not in _lib_tool_fault.FAULT_REASONS:
+            continue
+        sub = f.get("subcommand")
+        out.append({"binary": f["binary"], "reason": f["reason"],
+                    "subcommand": sub if isinstance(sub, str) and _SUBCOMMAND.fullmatch(sub) else ""})
+    # The judgement process said tool_fault without a record it could name:
+    # still no verdict.
+    return out or [{"binary": "unknown", "subcommand": "", "reason": "unknown"}]
+
+
+def tool_fault_message(faults: list) -> str:
+    """The 503 message for *faults* (`tool_faults_of`)."""
+    return TOOL_FAULT_MESSAGE + "; ".join(
+        " ".join(p for p in (f["binary"], f["subcommand"]) if p) + f" ({f['reason']})"
+        for f in faults)
 
 _COMMIT_LEN = {"sha1": 40, "sha256": 64}
 _HEX = re.compile(r"[0-9a-f]+")

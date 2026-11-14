@@ -85,7 +85,7 @@ def _self_killing_da_guard(tmp_path: Path) -> tuple[Path, Path]:
 def test_a_signal_without_a_memory_limit_is_a_parse_tree_error(tmp_path, monkeypatch) -> None:
     """#2906: no memory limit declared — a da-guard ended by a signal is a
     failing da-guard (rc 2 for the caller), and nothing changes its env."""
-    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", False)
+    monkeypatch.setattr(lpt._lib_tool_fault, "_MEMORY_LIMITED", False)
     root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
     fake, seen = _self_killing_da_guard(tmp_path)
     with pytest.raises(lpt.ParseTreeError, match="exited -6") as e:
@@ -100,7 +100,7 @@ def test_a_signal_under_the_memory_limit_is_memory(tmp_path, monkeypatch) -> Non
     is the judgement's memory limit — judged by the process status, the
     stderr text plays no part — named with the signal. Both file mode and
     tree mode."""
-    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", False)
+    monkeypatch.setattr(lpt._lib_tool_fault, "_MEMORY_LIMITED", False)  # restored after
     lpt.run_under_memory_limit()
     root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
     fake, seen = _self_killing_da_guard(tmp_path)
@@ -113,6 +113,30 @@ def test_a_signal_under_the_memory_limit_is_memory(tmp_path, monkeypatch) -> Non
     fake.write_text("#!/bin/sh\necho boom >&2\nexit 3\n", encoding="utf-8")
     with pytest.raises(lpt.ParseTreeError, match="exited 3: boom"):
         lpt.run(root, str(fake), 60)
+
+
+def test_exit_2_out_of_memory_is_memory_only_under_the_limit(tmp_path, monkeypatch) -> None:
+    """#3862: a Go runtime that cannot get memory as it starts (before it
+    reads GOTRACEBACK) exits 2 with its own line. Under the memory limit
+    that is the judgement's memory — never asked of the binary (`-h`) as a
+    da-guard older than this tool; without the limit, exit 2 is read as
+    always."""
+    root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
+    probed = tmp_path / "probed"
+    fake = tmp_path / "fake-da-guard"
+    fake.write_text(f"#!/bin/sh\ncase \"$*\" in *' -h') : > '{probed}';; esac\n"
+                    "echo 'fatal error: out of memory allocating heap arena map' >&2\nexit 2\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setattr(lpt._lib_tool_fault, "_MEMORY_LIMITED", True)
+    with pytest.raises(MemoryError, match="ran out of memory"):
+        lpt.run(root, str(fake), 60)
+    assert not probed.exists()
+    monkeypatch.setattr(lpt._lib_tool_fault, "_MEMORY_LIMITED", False)
+    with pytest.raises(lpt.ParseTreeError, match="exited 2") as e:
+        lpt.run(root, str(fake), 60)
+    assert not isinstance(e.value, MemoryError)
+    assert probed.exists()  # without the limit, exit 2 is asked of the binary as before
 
 
 @pytest.mark.parametrize("node, scalar", [

@@ -1274,7 +1274,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|scripts/tools/lint/check_single_writer_invariant\.py)$
+        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|scripts/tools/lint/check_single_writer_invariant\.py)$
         # FATAL: the write plane (internal/gitops/Writer) is a single writer —
         # a per-process lock + in-memory PR tracker that do NOT coordinate across
         # pods. replicaCount>1 OR a missing `strategy: Recreate` reintroduces the
@@ -1290,7 +1290,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py|scripts/tools/lint/cross_ns_url_lint\.config\.yaml)$
+        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py|scripts/tools/lint/cross_ns_url_lint\.config\.yaml)$
         # FATAL: past drift shipped charts/docs pinning `tenant-api.monitoring.
         # svc…` while raw manifests deployed tenant-api into its dedicated
         # `tenant-api` ns, and recipe-preview called bare `http://tenant-api:8080`
@@ -1717,7 +1717,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_rule_packs_generated|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|paths|prometheus|python|validation|write_check)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/(rule-pack-.*\.ya?ml|threshold-registry\.yaml)|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_rule_packs_generated|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|paths|prometheus|python|validation|write_check)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + fixed point + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"
@@ -1768,7 +1768,7 @@ repos:
         # gate itself. (#1231 later knowingly reversed the #992/#944 "keep
         # mysql_cpu" decision — the key is now mysql_threads_running; this gate
         # predates and outlives that rename.)
-        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|mkdocs\.yml|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_cache\.py|scripts/tools/_lib_doc_yaml_inventory\.py|scripts/tools/_lib_parse_tree\.py|scripts/ops/with_da_(guard|read)\.sh|components/da-read/.*|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_(consumer_read|input|tool_fault)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|mkdocs\.yml|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_cache\.py|scripts/tools/_lib_doc_yaml_inventory\.py|scripts/tools/_lib_parse_tree\.py|scripts/ops/with_da_(guard|read)\.sh|components/da-read/.*|components/threshold-exporter/app/.*)$
 
       - id: scrape-reachability-check
         name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"

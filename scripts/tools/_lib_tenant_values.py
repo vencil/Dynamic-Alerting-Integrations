@@ -287,6 +287,7 @@ from _lib_constants import (  # noqa: E402
     TOP_LEVEL_READ_ELSEWHERE, VALID_RESERVED_KEYS, VALID_RESERVED_PREFIXES,
 )
 import guard_dispatch  # noqa: E402
+import _lib_tool_fault  # noqa: E402  (#3862: where "da-guard did not run" is recorded)
 
 __all__ = [
     "DaGuardError",
@@ -822,6 +823,14 @@ class DaGuardError(RuntimeError):
         self.stderr = stderr
         self.stale = stale
         self.broken = broken
+        #: #3862: whether `_lib_tool_fault` has been asked about this error
+        #: (recorded, or decided to be the tree's).
+        self.fault_judged = False
+        #: #3862: the Go runtime ended it for want of memory under this
+        #: process's memory limit with exit 2 and its own out-of-memory line
+        #: (`_lib_tool_fault.end_reason`); one ended by a signal has a
+        #: negative `returncode` instead.
+        self.memory_end = False
         detail = stderr.strip()
         super().__init__(f"{message}: {detail}" if detail else message)
 
@@ -915,6 +924,45 @@ class _OlderOutput(ValueError):
 RETIRED_DISABLE_EFFECTS = frozenset({"partial"})
 
 
+def _fault(subcommand: str, reason: str) -> None:
+    """#3862: this da-guard run did not run (see `_lib_tool_fault`)."""
+    _lib_tool_fault.record("da-guard", subcommand, reason)
+
+
+def _judges_its_faults(fn: _F) -> _F:
+    """`_run_da_guard`'s errors are marked as judged there (#3862): each
+    branch that decided the binary failed recorded it, and one it raised for
+    the tree (a parse-tree refusal it passes on as `broken`) must not be
+    recorded later by `_records_output_faults`."""
+    @functools.wraps(fn)
+    def run(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        except DaGuardError as e:
+            e.fault_judged = True
+            raise
+    return run  # type: ignore[return-value]
+
+
+def _records_output_faults(subcommand: str) -> "Callable[[_F], _F]":
+    """A loader that reads `_run_da_guard`'s document further: a `stale`
+    or `broken` error it raises itself (a field missing or of the wrong
+    shape) is da-guard's output, and is recorded (#3862)."""
+    def wrap(fn: _F) -> _F:
+        @functools.wraps(fn)
+        def load(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except DaGuardError as e:
+                if e.binary_fault and not e.fault_judged:
+                    _fault(subcommand, "stale" if e.stale else "bad_output")
+                    e.fault_judged = True
+                raise
+        return load  # type: ignore[return-value]
+    return wrap
+
+
+@_judges_its_faults
 def _run_da_guard(
     subcommand: str,
     extra: list[str],
@@ -953,6 +1001,7 @@ def _run_da_guard(
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:
+        _fault(subcommand, "not_found")
         raise DaGuardNotFoundError(dispatcher.binary_missing_message(binary).rstrip())
 
     # ⛔ The run's fail-closed exit (#3206), before this read: the tenants come from a tree
@@ -971,6 +1020,8 @@ def _run_da_guard(
         if os.path.isdir(conf_d):
             _lib_parse_cache.require_servable(conf_d, binary=exe, timeout=timeout)
     except _lib_parse_cache.ParseTreeError as e:
+        # #3862: a parse-tree that did not run was recorded where it ran
+        # (`_lib_parse_tree._run_stdout`); one that answered for the tree was not.
         import _lib_parse_tree  # lazy, as above
         text = ' '.join(str(e).split())
         if isinstance(e, _lib_parse_tree.BinaryMissing):
@@ -980,29 +1031,45 @@ def _run_da_guard(
         raise error(f"da-guard parse-tree (the tree's index): {text}", None, "",
                     stale=stale, broken=not stale) from e
     cmd = [exe, subcommand, "--config-dir", str(conf_d), *extra]
-    import _lib_parse_tree  # lazy, as above
     try:
         # Bytes, not text: stderr may carry a file name that is not UTF-8
         # (the exporter's load logs it as is).
         # Under a memory limit, GOTRACEBACK=crash: the Go runtime's own
         # out-of-memory is a signal (below), not exit 2 (ADR-036 §3).
         proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
-                              env=_lib_parse_tree.da_guard_env())
+                              env=_lib_tool_fault.go_program_env())
     except subprocess.TimeoutExpired as e:
+        _fault(subcommand, "timed_out")
         raise error(f"da-guard {subcommand} did not finish within {timeout}s", None,
                     _stderr_text(e.stderr)) from e
     except OSError as e:
         # #2725: not executable, not a program this system runs, … — the binary.
+        _fault(subcommand, _lib_tool_fault.os_error_reason(e, exe))
         raise error(f"da-guard {subcommand} could not be run ({exe}): {e}", None, "",
                     broken=True) from e
 
     stderr = _stderr_text(proc.stderr)
+    # #3862: a signal, or exit 2 with the Go runtime's own out-of-memory line
+    # under the judgement's memory limit (it failed before it read
+    # GOTRACEBACK): `_lib_tool_fault.end_reason`, the one judge of the three
+    # run functions. Without a limit, exit 2 is read below as always.
+    end = _lib_tool_fault.end_reason(proc.returncode, proc.stderr,
+                                     _lib_tool_fault.memory_limited())
+    if end is not None and proc.returncode >= 0:
+        # Its memory, not the tree's answer nor a da-guard older than this
+        # tool: never asked of the binary (`_accepts`).
+        _fault(subcommand, end)
+        exc = error(f"da-guard {subcommand} ran out of memory (exit {proc.returncode}) under "
+                    "this process's memory limit (RLIMIT_DATA)", proc.returncode, stderr)
+        exc.memory_end = True
+        raise exc
     if proc.returncode == _EXIT_CALLER_ERR:
         # Exit 2 is da-guard's caller error AND a tree the exporter's load
         # rejects (no config file, a tenant declared twice, …). Which one is
         # asked of the binary, not of its stderr (#2725): the same argv plus
         # `-h` exits 0 only when it knows the subcommand and every flag.
         if not _accepts(cmd, timeout):
+            _fault(subcommand, "stale")
             raise error(
                 f"da-guard {subcommand} exited {proc.returncode}, and this da-guard does not accept "
                 f"`{subcommand}` with {' '.join(a for a in cmd[2:] if a.startswith('--'))} — it is "
@@ -1016,9 +1083,13 @@ def _run_da_guard(
     if proc.returncode < 0:
         # Killed by a signal (OOM, a timeout of the CI job, …): not classified,
         # like the timeout above — neither `broken` nor `stale` (#2725 known
-        # limitation; such a row is still advised as the tree's).
+        # limitation; such a row is still advised as the tree's). #3862: but
+        # it did not run, so it is recorded — the Go runtime's own end under
+        # the judgement's memory limit as that write's memory, not a fault.
+        _fault(subcommand, end)
         raise error(f"da-guard {subcommand} exited {proc.returncode}", proc.returncode, stderr)
     if proc.returncode not in (_EXIT_OK, _EXIT_PARSE_FAILED):
+        _fault(subcommand, "unexpected_exit")
         raise error(f"da-guard {subcommand} exited {proc.returncode}, an exit code it never uses "
                     "(0, 2 or 3): this binary does not run as da-guard does",
                     proc.returncode, stderr, broken=True)
@@ -1046,6 +1117,7 @@ def _run_da_guard(
                 else "")
         # Not the tree's either way: da-guard writes this JSON whatever the
         # tree holds (#2725).
+        _fault(subcommand, "stale" if stale else "bad_output")
         raise error(
             f"da-guard {subcommand} exited {proc.returncode} without the expected JSON ({e}){stale}",
             proc.returncode, stderr, stale=bool(stale), broken=not stale) from e
@@ -1064,6 +1136,7 @@ def _run_da_guard(
                                [str(f) for f in parse_failed], doc)
     if proc.returncode != _EXIT_OK and not (parse_failed or unreadable):
         fields = "parse_failed or unreadable" if reads_unreadable else "parse_failed"
+        _fault(subcommand, "bad_output")
         raise error(
             f"da-guard {subcommand} exited {proc.returncode} with no file in {fields}",
             proc.returncode, stderr, broken=True)
@@ -1200,6 +1273,7 @@ def _subset_absent(doc: dict[str, Any], requested: "list[str] | None") -> "tuple
     return tuple(str(t) for t in absent)
 
 
+@_records_output_faults(SUBCOMMAND)
 def load_served_tree(
     conf_d: str | Path,
     at: str | None = None,
@@ -1233,11 +1307,12 @@ def load_served_tree(
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
                           _subset_absent(doc, requested), doc.get("root_defaults_refused", _MISSING)),
         reads_unreadable=True, dropped_ok=partial)
+    _check_tenant_map(tenants, returncode, stderr)
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
-        severities = dict(tv["severities"])
-        values = dict(tv["values"])
         try:
+            severities = dict(tv["severities"])
+            values = dict(tv["values"])
             for key in severities:
                 values[key] = _threshold(values[key])
             for row in values.get("_custom_alerts") or []:
@@ -1278,6 +1353,10 @@ def load_served_tree(
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} has no keys — this da-guard is "
                 "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
+        if not isinstance(tv.get("custom_alerts") or [], list):
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries custom_alerts that are not a list",
+                returncode, stderr, broken=True)
         if ("custom_alerts" in tv and "custom_alerts_finding" not in tv) or any(
                 isinstance(e, dict) and "finding" not in e for e in tv.get("custom_alerts") or ()):
             raise ServedValuesError(
@@ -1322,8 +1401,15 @@ def load_served_tree(
                 raise ServedValuesError(
                     f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
                     returncode, stderr, broken=True) from e
-        out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
-                                     {k: list(v) for k, v in tv["dropped"].items()}, days, series,
+        try:
+            unserved = dict(tv["unserved"])
+            dropped_keys = {k: list(v) for k, v in tv["dropped"].items()}
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries unserved or dropped keys that are not of their shape ({e!r})",
+                returncode, stderr, broken=True) from e
+        out[tenant_id] = TenantValues(tenant_id, values, severities, unserved,
+                                     dropped_keys, days, series,
                                      state_filters, time_boxes, routing, keys, alert_rows,
                                      custom_alerts, custom_alerts_error, custom_alerts_finding,
                                      key_checks)
@@ -1331,6 +1417,23 @@ def load_served_tree(
                       _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
 
 
+def _check_tenant_map(tenants: Any, returncode: int, stderr: str) -> None:
+    """served-values' `tenants`, checked before it is read: an object of
+    objects. Anything else is not its document (#3862: raised as broken
+    output, so `_records_output_faults` records it — never an
+    AttributeError a caller takes for a reading it may skip)."""
+    if not isinstance(tenants, dict):
+        raise ServedValuesError(
+            f"da-guard {SUBCOMMAND}: tenants is a {type(tenants).__name__}, not an object",
+            returncode, stderr, broken=True)
+    for tenant_id, tv in tenants.items():
+        if not isinstance(tv, dict):
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} is a {type(tv).__name__}, "
+                "not an object", returncode, stderr, broken=True)
+
+
+@_records_output_faults(SUBCOMMAND)
 def load_served_schedules(
     conf_d: str | Path,
     at: str | None = None,
@@ -1357,6 +1460,7 @@ def load_served_schedules(
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
                           _subset_absent(doc, requested)),
         reads_unreadable=True, dropped_ok=partial)
+    _check_tenant_map(days, returncode, stderr)
     out: dict[str, dict[str, KeySchedule]] = {}
     for tenant_id, tv in days.items():
         try:
@@ -1643,6 +1747,7 @@ def load_effective_tree(
     return _load_effective(conf_d, binary, timeout, reads_skipped=True, tenants=tenants)
 
 
+@_records_output_faults(EFFECTIVE_SUBCOMMAND)
 def run_effective(
     conf_d: str | Path,
     overlay: "tuple[str, str | Path] | None" = None,
@@ -1665,6 +1770,7 @@ def run_effective(
                         parse_failed, unreadable, _nonempty_lines(stderr))
 
 
+@_records_output_faults(EFFECTIVE_SUBCOMMAND)
 def _load_effective(conf_d: str | Path, binary: str | None, timeout: float,
                     reads_skipped: bool, tenants: "Iterable[str] | None" = None) -> EffectiveTree:
     subset, requested = _subset_args(tenants)
