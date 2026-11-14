@@ -13,10 +13,10 @@
 # MariaDB / MySQL
 # ────────────────────────────────────────
 mysql_global_status_threads_connected:
-  maps_to: mysql_connections
+  maps_to: mysql_connection_usage_percent
   golden_rule: MariaDBHighConnections
   rule_pack: mariadb
-  note: "直接使用 scaffold_tenant.py 設定 mysql_connections 閾值"
+  note: "連線使用率的分子；閾值是佔 max_connections 的 %（#3778），用 scaffold_tenant.py 設定 mysql_connection_usage_percent"
 
 mysql_global_status_threads_running:
   maps_to: mysql_threads_running
@@ -61,10 +61,10 @@ mysql_global_status_innodb_buffer_pool_pages_total:
   note: "Buffer Pool 分母 — 已整合進黃金標準 Recording Rule"
 
 mysql_global_variables_max_connections:
-  maps_to: mysql_connections
+  maps_to: mysql_connection_usage_percent
   golden_rule: MariaDBHighConnections
   rule_pack: mariadb
-  note: "max_connections 變數 — 黃金標準使用 threads_connected 更精確"
+  note: "連線使用率的分母（逐 instance 相除，#3778）"
 
 mysqld_exporter_scrape_duration_seconds:
   maps_to: null

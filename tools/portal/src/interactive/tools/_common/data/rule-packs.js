@@ -136,6 +136,9 @@ function getAllMetricKeys(selectedPacks) {
 // tenant that a documented key is unknown. ⛔ Do NOT hand-edit it — regenerate
 // platform-data.json and copy; the drift test compares it key-for-key.
 const DECLARED_KEYS = window.__PLATFORM_DATA?.declaredKeys || {
+  mariadb: [
+    { key: 'mysql_threads_running', value: 30, unit: 'threads', desc: "threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 = PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales with CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still resolves)" },
+  ],
   oracle: [
     { key: 'oracle_wait_time_rate', value: 50, unit: 's/s', desc: 'Wait time rate (5m)' },
     { key: 'oracle_process_count', value: 300, unit: 'count', desc: 'Active processes warning', valueCounterexample: { issue: 1176, direction: 'over_fire', observed: 'a routine backup batch reaches 560 processes', observed_zh: '例行備份批次會到 560 個 process' } },

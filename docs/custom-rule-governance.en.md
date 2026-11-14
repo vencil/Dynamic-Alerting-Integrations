@@ -51,12 +51,12 @@ Tenants configure thresholds via `tenant.yaml` without touching PromQL:
 
 ```yaml
 # Three-state control example (key names match metric definitions in _defaults.yaml)
-mysql_connections: "800"        # Custom: user-defined threshold
-# mysql_threads_running:        # Default: leave the key out to inherit the level above — a subtree _defaults.yaml's value if one sets the key, else the root platform default (an empty string is not a valid value)
-mysql_replication_lag: "disable" # Disable: turn off this alert
+mysql_connection_usage_percent: "85"   # Custom: user-defined threshold (connection usage, % of max_connections)
+# container_cpu:                       # Default: leave the key out to inherit the level above — a subtree _defaults.yaml's value if one sets the key, else the root platform default (an empty string is not a valid value)
+mysql_replication_lag: "disable"       # Disable: turn off this alert
 ```
 
-Each metric supports Warning / Critical severity levels (`_critical` suffix) and dimension label filtering. A dimension-filter key such as `"mysql_connections{instance='db-primary:3306'}"` is served only when every label of it is declared for its base (the part before `{`) under the root `_defaults.yaml` `dimensions:` (ADR-038 §11). The shipped Rule Packs normalise with `max by(tenant)`, so such a key sets one tenant-wide threshold rather than a per-dimension one ([#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)).
+Each metric supports Warning / Critical severity levels (`_critical` suffix) and dimension label filtering. A dimension-filter key such as `"mysql_connection_usage_percent{instance='db-primary:3306'}"` is served only when every label of it is declared for its base (the part before `{`) under the root `_defaults.yaml` `dimensions:` (ADR-038 §11). The shipped Rule Packs normalise with `max by(tenant)`, so such a key sets one tenant-wide threshold rather than a per-dimension one ([#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)).
 
 The `_routing` channel now also delivers custom alerts (`component="custom"`): page-mode recipes are split by the tenant's `_routing` (including `routes` and per-rule overrides) but keep the custom isolation subtree's debounce (`group_wait` 30s / `group_interval` 5m, `group_by [tenant, alertname]`); the tenant's top-level `_routing` timing is not applied (timing and `group_by` a sub-route declares itself still are). Tenants without an **effective** `_routing` (no explicit `_routing` and no applicable `_routing_defaults` / profile inheritance) keep their custom alerts on the platform firehose (visible in the AM UI, no notification); to fully opt a tenant out of custom-alert notifications, use `_routing: disable` — tenants that merely inherit the defaults do receive delivery.
 
@@ -73,13 +73,13 @@ Domain Experts define composite alerting scenarios with clear business semantics
 **Existing example — `MariaDBSystemBottleneck`**:
 
 ```yaml
-# Business semantics: connections AND CPU both exceeded = real load bottleneck (not connection leak)
+# Business semantics: connection usage AND running-thread saturation both exceeded = real load bottleneck (not connection leak)
 - alert: MariaDBSystemBottleneck
   expr: |
     (
-      tenant:mysql_threads_connected:max
+      tenant:mysql_connection_usage:percent
       > on(tenant) group_left
-      tenant:alert_threshold:mysql_connections
+      tenant:alert_threshold:mysql_connection_usage_percent
     )
     and on(tenant)
     (
@@ -96,7 +96,7 @@ Domain Experts define composite alerting scenarios with clear business semantics
 
 **Enable/disable mechanism**: Tier 2 scenarios are implicitly controlled through existing three-state controls — no additional toggle key is needed:
 
-- **Enable**: As long as all metrics the scenario depends on have valid thresholds (Custom or Default), the scenario is active.
+- **Enable**: As long as all metrics the scenario depends on have valid thresholds (Custom or Default), the scenario is active. ⚠️ The platform ships no default for `mysql_threads_running` (a healthy value depends on the host's CPU core count, so set it per host; #3778); either a tenant file or the deployment's defaults can set it, so `MariaDBSystemBottleneck` does not fire until a tenant or the deployment sets that key.
 - **Disable a single metric**: Set that metric to `"disable"`. The corresponding recording rule produces no value, making the `>` comparison false and the scenario inactive.
 - **Global maintenance mode**: Set `state_filters.maintenance` to `"true"`. The `unless ... user_state_filter{filter="maintenance"}` clause in the scenario expression takes effect, silencing all alerts. A `recurring:` window takes effect through the same clause inside the window ([#3639](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3639)). The alert must carry the `maintenance: mute` label, which declares that it holds the clause ([#3309](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3309)).
 

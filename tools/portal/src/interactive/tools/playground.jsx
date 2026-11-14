@@ -34,11 +34,11 @@ function buildYamlTemplates(now = new Date()) {
   minimal: `# This is ALL a tenant needs to write — just 3 lines!
 tenants:
   my-app:
-    mysql_connections: "100"`,
+    mysql_connection_usage_percent: "80"`,
   mariadb: `tenants:
   db-a:
-    mysql_connections: "70"
-    mysql_connections_critical: "95"
+    mysql_connection_usage_percent: "70"
+    mysql_connection_usage_percent_critical: "95"
     mysql_threads_running: "40"
     _silent_mode: "disable"
     _routing:
@@ -102,7 +102,7 @@ tenants:
 # a tenant file only names one.
 tenants:
   db-a:
-    mysql_connections: "80"
+    mysql_connection_usage_percent: "80"
     _routing_profile: "team-sre-apac"
   db-b:
     pg_connections: "120"

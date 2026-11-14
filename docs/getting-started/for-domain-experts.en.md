@@ -37,27 +37,31 @@ The snippets below are verbatim excerpts from `rule-packs/rule-pack-mariadb.yaml
 
 ```yaml
 # rule-packs/rule-pack-mariadb.yaml — group: mariadb-normalization (excerpt)
-- record: tenant:mysql_threads_connected:max
-  expr: max by(tenant) (mysql_global_status_threads_connected)
+- record: tenant:mysql_connection_usage:percent
+  expr: |
+    max by(tenant) (
+      100 * mysql_global_status_threads_connected
+      / (mysql_global_variables_max_connections > 0)
+    )
 
 - record: tenant:mysql_slow_queries:rate5m
   expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
 ```
 
-Names are always `tenant:<metric>:<function>`. Pick the aggregation by meaning: connections take `max` (the busiest instance of the tenant), rates take `sum` (the whole cluster's total).
+Names are always `tenant:<metric>:<function>`. Pick the aggregation by meaning: connection usage (% of max_connections) takes `max` (the fullest instance of the tenant), rates take `sum` (the whole cluster's total).
 
 ### Part 2: Threshold-normalization recording rules
 
 ```yaml
 # rule-packs/rule-pack-mariadb.yaml — group: mariadb-threshold-normalization (excerpt)
-- record: tenant:alert_threshold:mysql_connections
-  expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
+- record: tenant:alert_threshold:mysql_connection_usage_percent
+  expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="warning"})
 
-- record: tenant:alert_threshold:mysql_connections_critical
-  expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
+- record: tenant:alert_threshold:mysql_connection_usage_percent_critical
+  expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="critical"})
 ```
 
-When threshold-exporter emits a tenant threshold, it splits the key at the first `_`: `mysql_connections` in a tenant file becomes `user_threshold{component="mysql", metric="connections"}`, and `mysql_connections_critical` is the same label pair plus `severity="critical"`. The selector must therefore use the split `component` and `metric`; `metric="mysql_connections"` never matches anything. `max by(tenant)` rather than `sum` keeps the threshold from doubling when the exporter runs more than one replica.
+When threshold-exporter emits a tenant threshold, it splits the key at the first `_`: `mysql_connection_usage_percent` in a tenant file becomes `user_threshold{component="mysql", metric="connection_usage_percent"}`, and `mysql_connection_usage_percent_critical` is the same label pair plus `severity="critical"`. The selector must therefore use the split `component` and `metric`; `metric="mysql_connection_usage_percent"` never matches anything. `max by(tenant)` rather than `sum` keeps the threshold from doubling when the exporter runs more than one replica.
 
 ### Part 3: Alert rules
 
@@ -66,9 +70,9 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
 - alert: MariaDBHighConnections
   expr: |
     (
-      tenant:mysql_threads_connected:max
+      tenant:mysql_connection_usage:percent
       > on(tenant) group_left
-      tenant:alert_threshold:mysql_connections
+      tenant:alert_threshold:mysql_connection_usage_percent
     )
     unless on(tenant)
     (user_state_filter{filter="maintenance"} == 1)
@@ -76,7 +80,7 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
   labels:
     severity: warning
     maintenance: mute
-    metric_group: "mysql_connections"
+    metric_group: "mysql_connection_usage_percent"
     tenant: "{{ $labels.tenant }}"
   annotations:
     summary: "High connections on {{ $labels.tenant }}"
@@ -99,8 +103,8 @@ A Rule Pack carries no threshold values. Tenants set them in conf.d, and the pla
 # conf.d/my-tenant.yaml
 tenants:
   my-tenant:
-    mysql_connections: "70"              # warning threshold
-    mysql_connections_critical: "120"    # critical threshold (_critical suffix)
+    mysql_connection_usage_percent: "70"              # warning threshold
+    mysql_connection_usage_percent_critical: "90"     # critical threshold (_critical suffix)
     mysql_replication_lag: "disable"     # turn this alert off
     mysql_threads_running:               # scheduled threshold: a different value inside a UTC window
       default: "30"
@@ -163,10 +167,10 @@ Submit a pull request to the Platform Team for review and integration.
 ```yaml
 # scripts/tools/metric-dictionary.yaml (excerpt)
 mysql_global_status_threads_connected:
-  maps_to: mysql_connections
+  maps_to: mysql_connection_usage_percent
   golden_rule: MariaDBHighConnections
   rule_pack: mariadb
-  note: "直接使用 scaffold_tenant.py 設定 mysql_connections 閾值"
+  note: "連線使用率的分子；閾值是佔 max_connections 的 %（#3778），用 scaffold_tenant.py 設定 mysql_connection_usage_percent"
 ```
 
 The platform team edits this YAML directly; no code change is needed.
@@ -203,9 +207,9 @@ Backtest in CI:
 ```bash
 python3 scripts/tools/ops/backtest_threshold.py \
   --tenant my-tenant \
-  --metric mysql_connections \
+  --metric mysql_connection_usage_percent \
   --old-value 80 \
-  --new-value 100 \
+  --new-value 90 \
   --lookback 7d \
   --prometheus https://prometheus:9090
 ```
@@ -254,10 +258,10 @@ _policies:
     target: "_routing"
     operator: required
     severity: error
-  - name: max-connections-cap
-    target: "mysql_connections"
+  - name: connection-usage-cap
+    target: "mysql_connection_usage_percent"
     operator: lte
-    value: 500
+    value: 95
     severity: warning
 ```
 
@@ -281,7 +285,7 @@ routing_profiles:
 tenants:
   db-finance:
     _routing_profile: "team-dba-global"
-    mysql_connections: "60"
+    mysql_connection_usage_percent: "60"
 ```
 
 Four-layer merge order: `_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`. Tenant `_routing` fields always override profile values.
@@ -319,7 +323,7 @@ A: Override specific keys in tenant YAML:
 ```yaml
 tenants:
   my-tenant:
-    mysql_connections: "70"      # Custom this one
+    mysql_connection_usage_percent: "70"      # Custom this one
     # Other keys omitted, will use the _defaults.yaml `defaults:` value
     # WARNING: a key _defaults.yaml only DECLARES (its optional_overrides: list)
     #    has no default to inherit — omitting it means no value and no series
@@ -332,7 +336,7 @@ A: Yes, but they are a tenant-config feature, not something written in a Rule Pa
 A: Use shadow monitoring. Run the new rules alongside the old ones, compare the recording-rule values of both sides with `validate_migration.py`, and cut over once they converge (see the [Shadow Monitoring SOP](../shadow-monitoring-sop.en.md)).
 
 **Q: How do I share threshold logic across multiple databases?**
-A: Two ways. If tenants only need to share threshold values, use a profile: define it under `profiles:` in `_profiles.yaml`, for example `mysql-standard: {mysql_connections: "90"}`, and write `_profile: mysql-standard` in each tenant; a key the tenant sets itself takes precedence over the profile (`mysql-standard` is an example name; the platform ships no such profile). If what you want to share is the PromQL itself, write another Rule Pack, with the same steps as "Create a new Rule Pack" above: it needs its own ConfigMap, that ConfigMap must be added to the Prometheus Projected Volume (Prometheus only loads files mounted under `/etc/prometheus/rules/`), and its threshold keys must be declared in the threshold registry.
+A: Two ways. If tenants only need to share threshold values, use a profile: define it under `profiles:` in `_profiles.yaml`, for example `mysql-standard: {mysql_connection_usage_percent: "90"}`, and write `_profile: mysql-standard` in each tenant; a key the tenant sets itself takes precedence over the profile (`mysql-standard` is an example name; the platform ships no such profile). If what you want to share is the PromQL itself, write another Rule Pack, with the same steps as "Create a new Rule Pack" above: it needs its own ConfigMap, that ConfigMap must be added to the Prometheus Projected Volume (Prometheus only loads files mounted under `/etc/prometheus/rules/`), and its threshold keys must be declared in the threshold registry.
 
 > 💡 **Interactive Tools** — Browse all valid YAML keys and types? Use [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/schema-explorer.jsx). Test PromQL expressions and their recording rules? Use [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx). Migrate existing rules? Use [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/migration-simulator.jsx). View platform terminology? Use [Glossary](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/glossary.jsx). Watch how the platform handles multi-tenant configurations in the browser? [Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) demonstrates the complete flow. See all tools at [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/). For enterprise intranet deployment, use the `da-portal` Docker image: `docker run -p 8080:80 ghcr.io/vencil/da-portal` ([deployment guide](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)).
 

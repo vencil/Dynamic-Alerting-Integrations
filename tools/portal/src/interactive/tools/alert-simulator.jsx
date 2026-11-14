@@ -12,8 +12,8 @@ import { severityBadgeClass } from './_common/format/severity.js';
 const t = window.__t || ((zh, en) => en);
 
 const ALERT_DEFS = {
-  mysql_connections:          { alert: 'MariaDBHighConnections',          severity: 'warning',  label: 'MySQL Connections' },
-  mysql_connections_critical: { alert: 'MariaDBHighConnectionsCritical',  severity: 'critical', label: 'MySQL Connections (Critical)' },
+  mysql_connection_usage_percent:          { alert: 'MariaDBHighConnections',          severity: 'warning',  label: 'MySQL Connection Usage %' },
+  mysql_connection_usage_percent_critical: { alert: 'MariaDBHighConnectionsCritical',  severity: 'critical', label: 'MySQL Connection Usage % (Critical)' },
   mysql_threads_running:      { alert: 'MariaDBHighThreadsRunning',       severity: 'warning',  label: 'MySQL Threads Running' },
   pg_connections:             { alert: 'PostgreSQLHighConnections',       severity: 'warning',  label: 'PG Connections' },
   pg_connections_critical:    { alert: 'PostgreSQLHighConnectionsCritical', severity: 'critical', label: 'PG Connections (Critical)' },
@@ -26,15 +26,15 @@ const ALERT_DEFS = {
 };
 
 const DEFAULT_CONFIG = {
-  mysql_connections: '100',
-  mysql_connections_critical: '200',
+  mysql_connection_usage_percent: '80',
+  mysql_connection_usage_percent_critical: '90',
   mysql_threads_running: '30',
   redis_memory: '80',
   redis_memory_critical: '95',
 };
 
 const DEFAULT_METRICS = {
-  mysql_connections: 120,
+  mysql_connection_usage_percent: 85,
   mysql_threads_running: 18,
   redis_memory: 72,
 };

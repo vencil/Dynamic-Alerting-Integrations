@@ -104,6 +104,14 @@ const (
 	// subtree `_defaults.yaml` (decision 6): the author wrote a value that
 	// never applies. DeadEntries lists the entries; Reason is the first's.
 	KindDeadEntry = "dead_entry"
+	// KindScheduleUnread (#3834): a reserved key written with a schedule —
+	// a time window (`overrides:`) or an `expires:` / `reason:` — that its
+	// readers ignore: every reader reads the `default` alone (#3269,
+	// config.LayerScheduleProblems). The key and its `default` are read;
+	// the schedule is not. Judged in the file and layer that writes it as
+	// KindValueUnread is (decision 10): an error in a tenant file, a notice
+	// in a root platform file's `tenants:` entry or a profile.
+	KindScheduleUnread = "schedule_unread"
 )
 
 // Reasons this package reads from the served reading or gives itself. The
@@ -226,6 +234,10 @@ type Input struct {
 	// Effective hold are judged; a profile's names the tenants among them
 	// that bind it.
 	Values []config.LayerValueProblem
+	// Schedules (#3834): the reserved values written with a schedule their
+	// readers ignore, per file and layer (LoadReport.ScheduleProblems),
+	// judged as Values are.
+	Schedules []config.LayerValueProblem
 	// TenantFiles (#3671): tenant file (scan key) → its top-level keys as
 	// the file spells them (parse-tree's content), for the tenant files the
 	// caller judges. nil: none judged.
@@ -414,6 +426,7 @@ func Judge(in Input) Tree {
 	}
 	findings := findingsOf(keys, rootDefaults)
 	findings = append(findings, valueFindings(in.Values, tenants, in.Effective, in.Undecidable)...)
+	findings = append(findings, valueFindings(in.Schedules, tenants, in.Effective, in.Undecidable)...)
 	findings = append(findings, tenantFileFindings(in.TenantFiles)...)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
@@ -693,8 +706,9 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 	return out
 }
 
-// valueFindings is a value_unread finding for every value of values about a
-// tenant the verdict judges (tenants): in a tenant file an error on that
+// valueFindings is a value_unread finding — schedule_unread for a value
+// whose problem is its schedule (LayerValueProblem.Schedule) — for every
+// value of values about a tenant the verdict judges (tenants): in a tenant file an error on that
 // tenant's entry; in a root platform file's `tenants:` entry a notice on
 // that tenant; in a profile a notice naming the judged tenants that bind it
 // ([] for none). Never charged to a tenant through a layer it inherits
@@ -709,7 +723,11 @@ func valueFindings(values []config.LayerValueProblem, tenants map[string]bool,
 			continue
 		}
 		file, reason := v.File, v.Problem
-		f := Finding{Kind: KindValueUnread, Key: v.Key, File: &file, Reason: &reason, reading: v.Reading}
+		kind := KindValueUnread
+		if v.Schedule {
+			kind = KindScheduleUnread
+		}
+		f := Finding{Kind: kind, Key: v.Key, File: &file, Reason: &reason, reading: v.Reading}
 		switch v.Layer {
 		case config.ValueLayerTenant, config.ValueLayerPlatform:
 			if !tenants[v.Owner] {

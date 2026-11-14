@@ -70,10 +70,10 @@ tenants:
 
 ## 關鍵設計驗證：`max by(tenant)` 防 HA 翻倍
 
-threshold-exporter 以 2 副本 HA 運行，兩個 Pod 各自吐出相同的 `user_threshold{tenant="db-a", metric="connections"} = 5`。Recording rule 用 `max by(tenant)` 聚合，而非 `sum`：
+threshold-exporter 以 2 副本 HA 運行，兩個 Pod 各自吐出相同的 `user_threshold{tenant="db-a", metric="connection_usage_percent"} = 70`。Recording rule 用 `max by(tenant)` 聚合，而非 `sum`：
 
-- ✅ `max(5, 5) = 5`（正確）
-- ❌ 若用 `sum by(tenant)`：`5 + 5 = 10`（翻倍，錯誤）
+- ✅ `max(70, 70) = 70`（正確）
+- ❌ 若用 `sum by(tenant)`：`70 + 70 = 140`（翻倍，錯誤）
 
 Pod 數量怎麼變，`max` 的結果都不變，這是高可用設計選 **`max` 而非 `sum`** 的根據（詳見[架構與設計 §高可用性](../architecture-and-design.md#4-高可用性設計-high-availability)）。
 
@@ -102,18 +102,18 @@ sequenceDiagram
 
     Op->>LG: run_load.sh --type composite
     LG->>DB: 95 idle connections + OLTP (sysbench)
-    DB-->>PM: mysql_global_status_threads_connected<br/>（連線數超過閾值 70）
-    TE-->>PM: user_threshold{component="mysql", metric="connections"} = 70
+    DB-->>PM: mysql_global_status_threads_connected / max_connections<br/>（連線使用率超過閾值 70%）
+    TE-->>PM: user_threshold{component="mysql", metric="connection_usage_percent"} = 70
 
-    Note over PM: 評估 Recording Rule：<br/>tenant:mysql_threads_connected:max<br/>> tenant:alert_threshold:mysql_connections (70)
+    Note over PM: 評估 Recording Rule：<br/>tenant:mysql_connection_usage:percent<br/>> tenant:alert_threshold:mysql_connection_usage_percent (70)
 
     PM->>PM: Alert: MariaDBHighConnections → FIRING
 
     Op->>LG: run_load.sh --cleanup
     LG->>DB: 刪除壓測 Job／Pod（connections + sysbench）
-    DB-->>PM: mysql_global_status_threads_connected<br/>（連線數回落到閾值 70 以下）
+    DB-->>PM: mysql_global_status_threads_connected / max_connections<br/>（連線使用率回落到閾值 70% 以下）
 
-    Note over PM: tenant:mysql_threads_connected:max<br/>< tenant:alert_threshold:mysql_connections (70)
+    Note over PM: tenant:mysql_connection_usage:percent<br/>< tenant:alert_threshold:mysql_connection_usage_percent (70)
 
     PM->>PM: Alert → RESOLVED（下一輪 evaluation 看不到超標值即轉；for 不影響這一步）
 ```

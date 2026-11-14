@@ -28,6 +28,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import {
   METRIC_MAP,
+  NEEDS_DENOMINATOR,
   CRITICAL_CAPABLE,
   convertRules,
 } from '../src/interactive/tools/migration-simulator.jsx';
@@ -35,16 +36,23 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../../../');
 
-/** Union of shipped platform-default threshold keys across all rule packs. */
-function platformDefaultKeys(): Set<string> {
+/** Shipped platform-default threshold keys across all rule packs → their unit. */
+function platformDefaultUnits(): Map<string, string> {
   const raw = readFileSync(
     resolve(repoRoot, 'docs/assets/platform-data.json'), 'utf-8');
   const platform = JSON.parse(raw);
-  const keys = new Set<string>();
+  const units = new Map<string, string>();
   for (const pack of Object.values(platform.rulePacks ?? {}) as any[]) {
-    for (const key of Object.keys(pack.defaults ?? {})) keys.add(key);
+    for (const [key, info] of Object.entries(pack.defaults ?? {}) as [string, any][]) {
+      units.set(key, String(info?.unit ?? ''));
+    }
   }
-  return keys;
+  return units;
+}
+
+/** Union of shipped platform-default threshold keys across all rule packs. */
+function platformDefaultKeys(): Set<string> {
+  return new Set(platformDefaultUnits().keys());
 }
 
 /**
@@ -83,7 +91,7 @@ describe('METRIC_MAP ↔ threshold SoT', () => {
         .toBe(true);
     }
     // Known stable anchors.
-    expect(liveKeys.has('mysql_connections')).toBe(true);
+    expect(liveKeys.has('mysql_connection_usage_percent')).toBe(true);
     expect(registryKeys.has('pg_connections_critical')).toBe(true);
   });
 
@@ -95,6 +103,17 @@ describe('METRIC_MAP ↔ threshold SoT', () => {
         'threshold key — the generated tenant YAML would be silently ignored (#1189)',
       ).toBe(true);
     }
+  });
+
+  it('NEEDS_DENOMINATOR is exactly the METRIC_MAP entries whose key is a % (#3778)', () => {
+    const units = platformDefaultUnits();
+    const percentKeyed = Object.entries(METRIC_MAP)
+      .filter(([, key]) => (units.get(key) ?? '').startsWith('%'))
+      .map(([metric]) => metric)
+      .sort();
+    expect(percentKeyed.length, 'unit read is sane: pg/mysql connections are % keys')
+      .toBeGreaterThanOrEqual(2);
+    expect(Object.keys(NEEDS_DENOMINATOR).sort()).toEqual(percentKeyed);
   });
 
   it('CRITICAL_CAPABLE exactly mirrors the registry `_critical` contract', () => {
@@ -129,10 +148,24 @@ describe('convertRules — emitted keys stay inside the contract', () => {
 
   it('critical severity on a critical-capable key emits <key>_critical', () => {
     const out = convertRules(
-      rule('CritConn', 'mysql_global_status_threads_connected > 200', 'critical'));
+      rule('CritLag', 'mysql_slave_status_seconds_behind_master > 120', 'critical'));
     expect(out.results).toHaveLength(1);
-    expect(out.results[0].mappedKey).toBe('mysql_connections_critical');
+    expect(out.results[0].mappedKey).toBe('mysql_replication_lag_critical');
     expect(out.unconverted).toHaveLength(0);
+  });
+
+  it('an absolute count never lands in a % key: it goes to Manual Review (#3778)', () => {
+    for (const [metric, severity] of [
+      ['mysql_global_status_threads_connected', 'warning'],
+      ['mysql_global_status_threads_connected', 'critical'],
+      ['pg_stat_activity_count', 'warning'],
+    ]) {
+      const out = convertRules(rule('Conn', `${metric} > 200`, severity));
+      expect(out.results, metric).toHaveLength(0);
+      expect(out.unconverted, metric).toHaveLength(1);
+      expect(out.unconverted[0].reason).toContain('max_connections');
+      expect(out.yaml).not.toContain(': "200"');
+    }
   });
 
   // Which METRIC_MAP values lack a critical tier is the registry's call, not this
@@ -148,9 +181,9 @@ describe('convertRules — emitted keys stay inside the contract', () => {
 
   it('uppercase CRITICAL still routes through the critical path (no case bypass)', () => {
     const out = convertRules(
-      rule('CritConnUpper', 'mysql_global_status_threads_connected > 200', 'CRITICAL'));
+      rule('CritLagUpper', 'mysql_slave_status_seconds_behind_master > 120', 'CRITICAL'));
     expect(out.results).toHaveLength(1);
-    expect(out.results[0].mappedKey).toBe('mysql_connections_critical');
+    expect(out.results[0].mappedKey).toBe('mysql_replication_lag_critical');
   });
 
   it('quoted "critical" still routes through the critical path (no quoting bypass)', () => {

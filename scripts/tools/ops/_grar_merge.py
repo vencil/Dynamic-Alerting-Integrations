@@ -301,6 +301,12 @@ FINDING_KINDS: dict[str, str] = {
         "A key read whose schedule has an entry /metrics serves at no minute "
         "of the day — a window the windows before it cover, or a `default` the "
         "windows cover (#3502): an error in the file the value comes from.",
+    "key_schedule_unread":
+        "A reserved key written with a time window or `expires:` / `reason:`, "
+        "which its readers ignore: they read its `default` alone (#3269, "
+        "#3834). Judged in the file that writes it as key_value_unread is: an "
+        "error in a tenant file, a notice in a profile or a root platform "
+        "file's `tenants:` entry.",
     "key_undecidable":
         "No root platform file was read, so the threshold keys were not "
         "judged (ADR-038 decision 7); with any such key, --validate fails.",

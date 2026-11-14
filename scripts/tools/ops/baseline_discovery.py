@@ -72,6 +72,20 @@ query_prometheus = prometheus_instant
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107)
 
+# 「佔上限的 %」有上界：佔 limit 的 % 到 100 就 OOMKill（memory）或被 CFS 節流（CPU），
+# 佔 max_connections 的 % 到 100 就拒絕新連線（#3778）。
+# 這類門檻由「多接近上限才危險」決定，是平台層的固定值（kubernetes-mixin、
+# Datadog 的做法；我們的預設在 scaffold）。舊公式 p95×1.2／p99×1.5 在
+# p99 ≥ 66.7 時給出 >100 的門檻，永遠不會響（issue 1196）。所以這兩項不算
+# 門檻，只拿觀測值對照平台預設：預設夠用就說夠用；平時用量已頂到預設，
+# 就建議放大上限（各指標的 `remedy`：limit 或 max_connections，讓 p99 落在預設的
+# LIMIT_TARGET_SHARE），而不是把門檻往上推。標 `bounded` 的指標都走這條路。
+LIMIT_TARGET_SHARE = 0.9
+NO_LIMIT_NOTE = ("沒有設 limit 的容器量不到（查的是用量 ÷ kube_pod_container_resource_limits，"
+                 "需要 kube-state-metrics）。rule pack 對沒設 CPU limit 的容器改用佔節點的比例，"
+                 "baseline 不涵蓋；memory 沒設 limit 時 rule pack 也不告警。")
+
+
 # 預設觀測指標：PromQL 模板 (tenant 會被替換)
 # `config_key`：建議值要寫進哪個租戶 key。先前一律拼成 `mysql_<名稱>`，其中
 # mysql_memory／mysql_disk_io／mysql_slow_queries 沒有任何 rule pack 讀，
@@ -83,11 +97,20 @@ from _lib_io import exit_on_output_write_error, output_write, write_operator_out
 # kube-state-metrics 指標，不讀 recording rule——Day 0 的邊界不變（#719）。
 # tests/ops/test_baseline_discovery.py 把這兩段與 rule pack 逐字比對。
 DEFAULT_METRICS = {
+    # connections：mysql_connection_usage_percent 比的是「佔 max_connections 的 %」
+    # （#3778），查詢是 rule-pack-mariadb.yaml `tenant:mysql_connection_usage:percent`
+    # 的分子分母原文（只加上租戶篩選），取租戶內最滿的 instance。
     "connections": {
-        "query": 'mysql_global_status_threads_connected{{tenant="{tenant}"}}',
-        "unit": "connections",
-        "description": "MariaDB active connections",
-        "config_key": "mysql_connections",
+        "query": ('max(100 * mysql_global_status_threads_connected{{tenant="{tenant}"}} / '
+                  '(mysql_global_variables_max_connections{{tenant="{tenant}"}} > 0))'),
+        "unit": "% of max_connections",
+        "description": "MariaDB connection usage % of max_connections (busiest instance)",
+        "config_key": "mysql_connection_usage_percent",
+        "bounded": True,
+        "remedy": "調高 max_connections（或縮小應用端連線池）",
+        "no_data_note": ("量不到連線使用率（查的是 threads_connected ÷ max_connections，"
+                         "需要 mysqld_exporter 的 global_status 與 global_variables collector，"
+                         "兩者預設開啟）。"),
     },
     "cpu": {
         "query": ('max((sum by(namespace, pod, container) ('
@@ -100,6 +123,8 @@ DEFAULT_METRICS = {
         "description": "Container CPU % of limit (weakest container)",
         "config_key": "container_cpu",
         "bounded": True,
+        "remedy": "調高 limit",
+        "no_data_note": NO_LIMIT_NOTE,
     },
     "slow_queries": {
         "query": 'rate(mysql_global_status_slow_queries{{tenant="{tenant}"}}[5m]) * 60',
@@ -120,6 +145,8 @@ DEFAULT_METRICS = {
         "description": "Container memory % of limit (weakest container)",
         "config_key": "container_memory",
         "bounded": True,
+        "remedy": "調高 limit",
+        "no_data_note": NO_LIMIT_NOTE,
     },
     "disk_io": {
         "query": ('sum(rate(container_fs_reads_bytes_total{{namespace="{tenant}", '
@@ -130,18 +157,6 @@ DEFAULT_METRICS = {
         "no_key_reason": "no rule pack alert reads a disk read-throughput threshold",
     },
 }
-
-
-# 「佔 limit 的 %」有上界：到 100 就 OOMKill（memory）或被 CFS 節流（CPU）。
-# 這類門檻由「多接近上限才危險」決定，是平台層的固定值（kubernetes-mixin、
-# Datadog 的做法；我們的預設在 scaffold）。舊公式 p95×1.2／p99×1.5 在
-# p99 ≥ 66.7 時給出 >100 的門檻，永遠不會響（issue 1196）。所以這兩項不算
-# 門檻，只拿觀測值對照平台預設：預設夠用就說夠用；平時用量已頂到預設，
-# 就建議調高 limit（讓 p99 落在預設的 LIMIT_TARGET_SHARE），而不是把門檻往上推。
-LIMIT_TARGET_SHARE = 0.9
-NO_LIMIT_NOTE = ("沒有設 limit 的容器量不到（查的是用量 ÷ kube_pod_container_resource_limits，"
-                 "需要 kube-state-metrics）。rule pack 對沒設 CPU limit 的容器改用佔節點的比例，"
-                 "baseline 不涵蓋；memory 沒設 limit 時 rule pack 也不告警。")
 
 
 def platform_default(key):
@@ -158,8 +173,9 @@ def platform_default(key):
     return None
 
 
-def percent_verdict(stats, key):
-    """對照平台預設的判定：(一行摘要, 是否需要調 limit, limit 倍數或 None)。"""
+def percent_verdict(stats, key, remedy="調高 limit"):
+    """對照平台預設的判定：(一行摘要, 是否需要放大上限, 上限倍數或 None)。
+    ``remedy`` 是放大哪個上限（DEFAULT_METRICS 各指標的 ``remedy``）。"""
     default = platform_default(key)
     if default is None:
         return f"{key} 的平台預設讀不到，無法對照", False, None
@@ -168,7 +184,7 @@ def percent_verdict(stats, key):
         return (f"{key} 平台預設 {default}% 可用（p99 = {p99:.2f}%），不需覆寫", False, None)
     factor = p99 / (default * LIMIT_TARGET_SHARE)
     return (f"{key} 平台預設 {default}% 太緊：平時 p99 = {p99:.2f}% 已達預設，照預設會常響。"
-            f"請先調高 limit（約 ×{factor:.2f}，讓 p99 落在預設的 "
+            f"請先{remedy}（約 ×{factor:.2f}，讓 p99 落在預設的 "
             f"{int(LIMIT_TARGET_SHARE * 100)}%），不要把門檻往上推", True, factor)
 
 
@@ -235,13 +251,6 @@ def suggest_threshold(stats, metric_name):
         warning = round(stats["p95"] * 1.2, 2)
     if stats["p99"] is not None and stats["p99"] > 0:
         critical = round(stats["p99"] * 1.5, 2)
-
-    # 特殊邏輯：connections 建議取整
-    if metric_name == "connections":
-        if warning is not None:
-            warning = int(math.ceil(warning))
-        if critical is not None:
-            critical = int(math.ceil(critical))
 
     return {"warning": warning, "critical": critical, "note": "基於 p95×1.2 / p99×1.5"}
 
@@ -374,7 +383,7 @@ def main():
                 continue
             print(f"  ⚠️  無有效資料")
             if info.get("bounded"):
-                print(f"  {NO_LIMIT_NOTE}")
+                print(f"  {info['no_data_note']}")
             print()
             continue
 
@@ -385,7 +394,7 @@ def main():
               f"p95={stats['p95']:.2f}  p99={stats['p99']:.2f}")
 
         if info.get("bounded") and stats["count"] >= 10:
-            print(f"  💡 {percent_verdict(stats, info['config_key'])[0]}")
+            print(f"  💡 {percent_verdict(stats, info['config_key'], info['remedy'])[0]}")
         elif suggestion["warning"] is not None:
             no_key = "" if info.get("config_key") else "；沒有租戶閾值 key，僅供參考"
             print(f"  💡 建議 warning: {suggestion['warning']}  "
@@ -439,9 +448,9 @@ def main():
         stats = all_stats[key]
         suggestion = suggest_threshold(stats, key)
         if info.get("bounded"):
-            verdict = (percent_verdict(stats, info["config_key"])[0]
+            verdict = (percent_verdict(stats, info["config_key"], info["remedy"])[0]
                        if stats["count"] >= 10 else
-                       (NO_LIMIT_NOTE if stats["count"] == 0 else suggestion["note"]))
+                       (info["no_data_note"] if stats["count"] == 0 else suggestion["note"]))
             suggestion = {"warning": None, "critical": None, "note": verdict}
         note = suggestion["note"]
         if failed_note(key):
@@ -477,7 +486,7 @@ def main():
         suggestion = suggest_threshold(all_stats[key], key)
         if info.get("bounded"):
             if all_stats[key]["count"] >= 10:
-                print(f"  # {key}: {percent_verdict(all_stats[key], info['config_key'])[0]}")
+                print(f"  # {key}: {percent_verdict(all_stats[key], info['config_key'], info['remedy'])[0]}")
                 print()
             continue
         if suggestion["warning"] is not None:

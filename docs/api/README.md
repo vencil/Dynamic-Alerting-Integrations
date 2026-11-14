@@ -110,7 +110,7 @@ conf.d 裡有這兩個檔：
 # _defaults.yaml
 defaults:
   container_cpu: 80
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
 ```
 
 ```yaml
@@ -122,7 +122,7 @@ tenants:
       overrides:
         - window: "01:00-09:00"
           value: "95"
-    mysql_connections: "70"
+    mysql_connection_usage_percent: "70"
 ```
 
 `curl -s "http://localhost:8080/api/v1/config?at=2026-03-12T03:30:00Z"` 的輸出（03:30 落在時間窗內，所以 `container_cpu` 解析成 95；各段內的行序不固定）：
@@ -135,16 +135,16 @@ Resolve at:    2026-03-12T03:30:00Z (overridden)
 
 Defaults (2 metrics):
   container_cpu: 80
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
 
 Tenants (1):
   tenant-a:
     container_cpu: 85 (+ 1 time overrides)
-    mysql_connections: 70
+    mysql_connection_usage_percent: 70
 
 Resolved thresholds:
   tenant=tenant-a metric=cpu value=95 severity=warning component=container
-  tenant=tenant-a metric=connections value=70 severity=warning component=mysql
+  tenant=tenant-a metric=connection_usage_percent value=70 severity=warning component=mysql
 ```
 
 這個範例有測試實跑：把上面兩個 yaml 放進空目錄載入，再比對輸出（`api_readme_examples_parity_test.go`）。

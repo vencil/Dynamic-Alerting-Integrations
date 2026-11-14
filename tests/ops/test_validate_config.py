@@ -41,7 +41,7 @@ class TestYAMLSyntax:
     def test_valid_yaml_passes(self):
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "test.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"t1": {"mysql_connections": "80"}}}, f)
+                yaml.dump({"tenants": {"t1": {"mysql_connection_usage_percent": "80"}}}, f)
             result = vc.check_yaml_syntax(d)
             assert result["status"] == vc.PASS
 
@@ -74,7 +74,7 @@ class TestRouteCheck:
         """Valid routing config should pass."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+                yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
             with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_routing": {
@@ -89,10 +89,10 @@ class TestRouteCheck:
         """Config with no routing should pass (no routes generated)."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+                yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
             with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
-                    "mysql_connections": "70"
+                    "mysql_connection_usage_percent": "70"
                 }}}, f)
             result = vc.check_routes(d)
             assert result["status"] == vc.PASS
@@ -154,7 +154,7 @@ class TestPolicyCheck:
         with open(policy_path, "w", encoding="utf-8") as f:
             yaml.dump({"allowed_domains": ["hooks.example.com"]}, f)
         with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-            yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+            yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
         routing = {"receiver": {"type": "webhook", "url": f"https://{host}/alert"}}
         routing.update(extra or {})
         with open(os.path.join(d, f"{tenant}.yaml"), "w", encoding="utf-8") as f:
@@ -389,11 +389,11 @@ class TestProfilesCheck:
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"standard": {
-                    "mysql_connections": 80,
+                    "mysql_connection_usage_percent": 80,
                     "redis_memory_used_bytes": 4294967296,
                 }}}, f)
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+                yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
             with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_profile": "standard"
@@ -412,10 +412,10 @@ class TestProfilesCheck:
         the route generator never reads it and the exporter does not apply it."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
-                "_profiles.yaml": "profiles:\n  bad-profile:\n    mysql_connections: 80\n"
+                "_profiles.yaml": "profiles:\n  bad-profile:\n    mysql_connection_usage_percent: 80\n"
                                   "    _routing: {receiver: {type: webhook}}\n",
-                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
-                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+                "_defaults.yaml": "defaults: {mysql_connection_usage_percent: 80}\n",
+                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: \"70\"\n",
             })
             result = vc.check_profiles(d)
             assert result["status"] == vc.FAIL, result
@@ -431,9 +431,9 @@ class TestProfilesCheck:
         and the row did not see it)."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
-                "_profiles.yaml": "profiles:\n  bad-profile:\n    mysql_connections: 80\n"
+                "_profiles.yaml": "profiles:\n  bad-profile:\n    mysql_connection_usage_percent: 80\n"
                                   "    _routing: {receiver: {type: webhook}}\n",
-                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+                "_defaults.yaml": "defaults: {mysql_connection_usage_percent: 80}\n",
             })
             result = vc.check_profiles(d)
             assert result["status"] == vc.FAIL, result
@@ -448,8 +448,8 @@ class TestProfilesCheck:
             self._tree(d, {
                 "_platform.yaml": "profiles:\n  unused:\n    _severity_dedup: disable\n"
                                   "    _routing_profile: team\n",
-                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
-                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+                "_defaults.yaml": "defaults: {mysql_connection_usage_percent: 80}\n",
+                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: \"70\"\n",
             })
             result = vc.check_profiles(d)
             assert result["status"] == vc.FAIL, result
@@ -464,12 +464,12 @@ class TestProfilesCheck:
         FAIL alone — not also a reserved-key WARN of the structure check."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
-                "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n"
+                "_profiles.yaml": "profiles:\n  p:\n    mysql_connection_usage_percent: 80\n"
                                   "    _routing_v1.2: x\n"
-                                  "  team.x:\n    mysql_connections: 80\n"
+                                  "  team.x:\n    mysql_connection_usage_percent: 80\n"
                                   "    _routing.a: x\n    _severity_dedup: disable\n",
-                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
-                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: \"70\"\n",
+                "_defaults.yaml": "defaults: {mysql_connection_usage_percent: 80}\n",
+                "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: \"70\"\n",
             })
             result = vc.check_profiles(d)
             assert result["status"] == vc.FAIL, result
@@ -493,8 +493,8 @@ class TestProfilesCheck:
         d = tmp_path / "conf.d"
         d.mkdir()
         self._tree(str(d), {
-            "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n",
-            "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+            "_profiles.yaml": "profiles:\n  p:\n    mysql_connection_usage_percent: 80\n",
+            "_defaults.yaml": "defaults: {mysql_connection_usage_percent: 80}\n",
             "tenant-a.yaml": "tenants:\n  tenant-a:\n    _profile: p\n",
         })
         result = vc.check_profiles(str(d))
@@ -508,9 +508,9 @@ class TestProfilesCheck:
         a reserved key to warn about."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
-                "_profiles.yaml": "profiles:\n  standard:\n    mysql_connections: 80\n"
+                "_profiles.yaml": "profiles:\n  standard:\n    mysql_connection_usage_percent: 80\n"
                                   "    _metadata: {owner: team-dba}\n",
-                "_defaults.yaml": "defaults: {mysql_connections: 80}\n",
+                "_defaults.yaml": "defaults: {mysql_connection_usage_percent: 80}\n",
                 "tenant-a.yaml": "tenants:\n  tenant-a:\n    _profile: standard\n",
             })
             result = vc.check_profiles(d)
@@ -522,7 +522,7 @@ class TestProfilesCheck:
         `unread_keys` row's verdict, not this row's — no WARN here."""
         with tempfile.TemporaryDirectory() as d:
             self._tree(d, {
-                "_profiles.yaml": "profiles:\n  p:\n    mysql_connections: 80\n"
+                "_profiles.yaml": "profiles:\n  p:\n    mysql_connection_usage_percent: 80\n"
                                   "    _silent_mode: warning\n",
                 "_defaults.yaml": "defaults: {}\n",
             })
@@ -545,7 +545,7 @@ class TestProfilesCheck:
         """Tenant referencing non-existent profile should warn."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"profiles": {"standard": {"mysql_connections": 80}}}, f)
+                yaml.dump({"profiles": {"standard": {"mysql_connection_usage_percent": 80}}}, f)
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
             with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
@@ -563,7 +563,7 @@ class TestProfilesCheck:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"defaults": {}}, f)
             with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"tenants": {"tenant-a": {"mysql_connections": "80"}}}, f)
+                yaml.dump({"tenants": {"tenant-a": {"mysql_connection_usage_percent": "80"}}}, f)
             result = vc.check_profiles(d)
             assert result["status"] == vc.PASS
 
@@ -596,7 +596,7 @@ class TestPolicyDSL:
         """Config with no _policies section should skip."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+                yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
             result = vc.check_policy_dsl(d)
             assert result["status"] == vc.PASS
 
@@ -613,7 +613,7 @@ class TestPolicyDSL:
         """
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+                yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
             result = vc.check_policy_dsl(d, "/nonexistent/policy.yaml")
             assert result["status"] == vc.FAIL
             assert result["caller_error"] is True
@@ -622,13 +622,13 @@ class TestPolicyDSL:
         """The case the old NAME claimed to cover, which nothing covered."""
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+                yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
             dsl = os.path.join(d, "policies.yaml")
             with open(dsl, "w", encoding="utf-8") as f:
                 # #2961: a rule the engine reads (it was `rule:`, a key the
                 # engine never read, so this passed on a rule that did nothing).
                 yaml.dump({"policies": [
-                    {"name": "p1", "target": "mysql_connections",
+                    {"name": "p1", "target": "mysql_connection_usage_percent",
                      "operator": "lte", "value": 1, "severity": "error"}]}, f)
             result = vc.check_policy_dsl(d, dsl)
             assert result["details"], (
@@ -643,9 +643,9 @@ class TestPolicyDSLInvalidRules:
     From `_defaults.yaml` (the customer's tree) the row FAILs, exit 1; from
     `--policy-dsl` (the operator's argv) it is a caller error, exit 2."""
 
-    _TREE = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n{P}",
-             "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n"}
-    _BAD = "  - name: cap\n    target: mysql_connections\n    check: lte\n    value: 1\n"
+    _TREE = {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n{P}",
+             "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"}
+    _BAD = "  - name: cap\n    target: mysql_connection_usage_percent\n    check: lte\n    value: 1\n"
 
     def _run(self, tmp_path, capsys, cli_argv, policies="", dsl=None):
         for rel, text in self._TREE.items():
@@ -716,7 +716,7 @@ class TestProfilesExtended:
         with tempfile.TemporaryDirectory() as d:
             with open(os.path.join(d, "_profiles.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"profiles": {"p1": {
-                    "mysql_connections": 80,
+                    "mysql_connection_usage_percent": 80,
                     "_custom_alerts": [{"recipe": "threshold", "name": "q", "metric": "m",
                                         "op": ">", "window": "5m", "threshold": "1:warning"}],
                     "_unknown_thing": "bad",
@@ -765,7 +765,7 @@ class TestRoutesWithPolicy:
             d = os.path.join(top, "conf.d")
             os.mkdir(d)
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+                yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
             with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_routing": {
@@ -783,7 +783,7 @@ class TestRoutesWithPolicy:
             with open(policy_path, "w", encoding="utf-8") as f:
                 yaml.dump({"allowed_domains": ["allowed.com"]}, f)
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
-                yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+                yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
             with open(os.path.join(d, "tenant-a.yaml"), "w", encoding="utf-8") as f:
                 yaml.dump({"tenants": {"tenant-a": {
                     "_routing": {
@@ -833,10 +833,10 @@ class TestMainCLI:
         d = tmp_path / "conf.d"
         d.mkdir()
         with open(d / "_defaults.yaml", "w", encoding="utf-8") as f:
-            yaml.dump({"defaults": {"mysql_connections": 80}}, f)
+            yaml.dump({"defaults": {"mysql_connection_usage_percent": 80}}, f)
         with open(d / "tenant-a.yaml", "w", encoding="utf-8") as f:
             yaml.dump({"tenants": {"tenant-a": {
-                "mysql_connections": "70",
+                "mysql_connection_usage_percent": "70",
                 "_routing": {
                     "receiver": {"type": "webhook",
                                  "url": "https://hooks.example.com/alert"},
@@ -2146,15 +2146,15 @@ class TestTenantUniqueness:
     ``test_nested_directories_are_walked``.
     """
 
-    _A = "tenants:\n  shared:\n    mysql_connections: 11\n"
-    _B = "tenants:\n  shared:\n    mysql_connections: 99\n"
+    _A = "tenants:\n  shared:\n    mysql_connection_usage_percent: 11\n"
+    _B = "tenants:\n  shared:\n    mysql_connection_usage_percent: 99\n"
 
     @staticmethod
     def _tree(tmp_path, files):
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_connections: 70\n", encoding="utf-8")
+            "defaults:\n  mysql_connection_usage_percent: 70\n", encoding="utf-8")
         for name, body in files.items():
             p = d / name
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -2164,7 +2164,7 @@ class TestTenantUniqueness:
     def test_one_file_per_tenant_passes(self, tmp_path):
         d = self._tree(tmp_path, {
             "a.yaml": self._A,
-            "b.yaml": "tenants:\n  other:\n    mysql_connections: 33\n"})
+            "b.yaml": "tenants:\n  other:\n    mysql_connection_usage_percent: 33\n"})
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.PASS, r
         assert "2 tenant(s)" in " ".join(r["details"]), r
@@ -2212,7 +2212,7 @@ class TestTenantUniqueness:
         returns before parsing ``tenants:`` in a reserved file at all."""
         d = self._tree(tmp_path, {
             "t.yaml": self._A,
-            "_profiles.yaml": "tenants:\n  shared:\n    mysql_connections: 1\n"})
+            "_profiles.yaml": "tenants:\n  shared:\n    mysql_connection_usage_percent: 1\n"})
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.PASS, r
 
@@ -2311,7 +2311,7 @@ class TestTenantIdParity:
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_connections: 70\n", encoding="utf-8")
+            "defaults:\n  mysql_connection_usage_percent: 70\n", encoding="utf-8")
         for name, body in files.items():
             p = d / name
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -2326,8 +2326,8 @@ class TestTenantIdParity:
         natural way to reach the state at all: two people writing the same
         tenant, one of them quoting."""
         d = self._tree(tmp_path, {
-            "x.yaml": "tenants:\n  no:\n    mysql_connections: 1\n",
-            "archive/y.yaml": "tenants:\n  \"no\":\n    mysql_connections: 2\n"})
+            "x.yaml": "tenants:\n  no:\n    mysql_connection_usage_percent: 1\n",
+            "archive/y.yaml": "tenants:\n  \"no\":\n    mysql_connection_usage_percent: 2\n"})
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
@@ -2339,10 +2339,10 @@ class TestTenantIdParity:
         naming a tenant that appears in none of the four files, so the operator
         could not even grep for it."""
         d = self._tree(tmp_path, {
-            "f1.yaml": "tenants:\n  on:\n    mysql_connections: 1\n",
-            "f2.yaml": "tenants:\n  yes:\n    mysql_connections: 2\n",
-            "f3.yaml": "tenants:\n  true:\n    mysql_connections: 3\n",
-            "f4.yaml": "tenants:\n  True:\n    mysql_connections: 4\n"})
+            "f1.yaml": "tenants:\n  on:\n    mysql_connection_usage_percent: 1\n",
+            "f2.yaml": "tenants:\n  yes:\n    mysql_connection_usage_percent: 2\n",
+            "f3.yaml": "tenants:\n  true:\n    mysql_connection_usage_percent: 3\n",
+            "f4.yaml": "tenants:\n  True:\n    mysql_connection_usage_percent: 4\n"})
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.PASS, r
         assert "4 tenant(s)" in " ".join(r["details"]), r
@@ -2350,8 +2350,8 @@ class TestTenantIdParity:
     def test_a_leading_zero_id_keeps_its_zero(self, tmp_path):
         """``010`` is octal to YAML 1.1 — ``safe_load`` renamed it to ``8``."""
         d = self._tree(tmp_path, {
-            "a.yaml": "tenants:\n  010:\n    mysql_connections: 1\n",
-            "b.yaml": "tenants:\n  8:\n    mysql_connections: 2\n"})
+            "a.yaml": "tenants:\n  010:\n    mysql_connection_usage_percent: 1\n",
+            "b.yaml": "tenants:\n  8:\n    mysql_connection_usage_percent: 2\n"})
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.PASS, r
 
@@ -2363,7 +2363,7 @@ class TestTenantIdParity:
         ids."""
         d = self._tree(tmp_path, {
             "a.yaml": "common: &c\n  db-m: {}\ntenants:\n  <<: *c\n  db-x: {}\n",
-            "b.yaml": "tenants:\n  db-m:\n    mysql_connections: 2\n"})
+            "b.yaml": "tenants:\n  db-m:\n    mysql_connection_usage_percent: 2\n"})
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.FAIL, r
         assert 'tenant "db-m"' in " ".join(r["details"]), r
@@ -2387,7 +2387,7 @@ class TestTenantIdParity:
         pin of its own."""
         d = self._tree(tmp_path, {"t.yaml": "tenants:\n  shared:\n    m: 1\n"})
         (pathlib.Path(d) / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_connections: 70\ntenants:\n  shared:\n    m: 9\n",
+            "defaults:\n  mysql_connection_usage_percent: 70\ntenants:\n  shared:\n    m: 9\n",
             encoding="utf-8")
         r = vc.check_tenant_uniqueness(d)
         assert r["status"] == vc.PASS, r
@@ -2407,7 +2407,7 @@ class TestTenantFileName:
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_connections: 70\n", encoding="utf-8")
+            "defaults:\n  mysql_connection_usage_percent: 70\n", encoding="utf-8")
         for name, body in files.items():
             p = d / name
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -2417,7 +2417,7 @@ class TestTenantFileName:
     @staticmethod
     def _body(*ids):
         return "tenants:\n" + "".join(
-            f"  {i}:\n    mysql_connections: 1\n" for i in ids)
+            f"  {i}:\n    mysql_connection_usage_percent: 1\n" for i in ids)
 
     def test_a_file_named_after_its_tenant_passes(self, tmp_path):
         d = self._tree(tmp_path, {"t-one.yaml": self._body("t-one"),
@@ -2534,7 +2534,7 @@ class TestRootDefaultsRouting:
     printed `Result: PASS`, rc 0.
     """
 
-    _TENANT = "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
+    _TENANT = "tenants:\n  tenant-x:\n    mysql_connection_usage_percent: \"70\"\n"
     _ROUTING = "  _routing:\n    group_wait: \"30s\"\n"
 
     @classmethod
@@ -2546,7 +2546,7 @@ class TestRootDefaultsRouting:
         return d
 
     def test_routing_mapping_under_root_defaults_fails(self, tmp_path):
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n"
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: 80\n"
                        + self._ROUTING)
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
@@ -2558,13 +2558,13 @@ class TestRootDefaultsRouting:
 
     def test_control_without_routing_passes(self, tmp_path):
         """Must-stay-green: the same tree minus the `_routing` key."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n")
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: 80\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
 
     def test_top_level_routing_defaults_passes(self, tmp_path):
         """The shape the FAIL points to must itself be green."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n"
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: 80\n"
                        "_routing_defaults:\n  group_wait: \"30s\"\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
@@ -2579,7 +2579,7 @@ class TestRootDefaultsRouting:
         """The refusal is by key prefix; the value only picks the sentence.
         A null decodes (exporter keeps the other thresholds), so it must not
         claim the whole block is lost."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n" + line)
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: 80\n" + line)
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         assert ("drops ALL of it" in " ".join(r["details"])) is louder, r
@@ -2588,7 +2588,7 @@ class TestRootDefaultsRouting:
         """A subtree `_defaults.yaml` with `_routing` is the hierarchical
         plane's shape (#1568, e.g. the mixed-mode golden fixture) — not
         refused here, and not reported as a skipped flat read either."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n")
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: 80\n")
         sub = d / "team"
         sub.mkdir()
         (sub / "_defaults.yaml").write_text(
@@ -2611,7 +2611,7 @@ class TestRootDefaultsRouting:
         is not this row's verdict, and its PASS line says so rather than
         "every value a number"; da-guard names the dropped carrier (exit 3),
         a `guard_errors` FAIL."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: abc\nstate_filters: 5\n")
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: abc\nstate_filters: 5\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
         assert "every value a number" not in r["details"][0], r
@@ -2623,15 +2623,15 @@ class TestRootDefaultsRouting:
     def test_other_defaults_documents_are_not_the_carrier(self, tmp_path):
         """`_defaults-multidb.yaml` is not merged as the root defaults, so its
         `defaults:` is not what the exporter decodes."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n")
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: 80\n")
         (d / "_defaults-multidb.yaml").write_text(
             "defaults:\n" + self._ROUTING, encoding="utf-8")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
 
     @pytest.mark.parametrize("null_key,optional", [
-        ("mysql_connections", ""),
-        ("mysql_connections", "optional_overrides:\n  - mysql_connections\n"),
+        ("mysql_connection_usage_percent", ""),
+        ("mysql_connection_usage_percent", "optional_overrides:\n  - mysql_connection_usage_percent\n"),
         ("mysql_threads_running", "optional_overrides:\n  - mysql_cpu\n"),
         ("mysql_cpu_critical", ""),
         ('"mysql_cpu{queue=\\"a\\"}"', ""),
@@ -2665,9 +2665,9 @@ class TestRootDefaultsRouting:
         """A null that overrides a `<<:`-merged value cancels it (measured:
         deleting the line made every tenant get the merged 5), so the row
         must not tell anyone to delete it — it gives no removal advice."""
-        d = self._tree(tmp_path, "tenants:\n  tx: &b\n    mysql_connections: 5\n"
+        d = self._tree(tmp_path, "tenants:\n  tx: &b\n    mysql_connection_usage_percent: 5\n"
                        "defaults:\n  <<: *b\n  container_cpu: 80\n"
-                       "  mysql_connections: null\n")
+                       "  mysql_connection_usage_percent: null\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
@@ -2676,7 +2676,7 @@ class TestRootDefaultsRouting:
     def test_end_to_end_exits_1_and_names_the_fix(self, tmp_path, capsys,
                                                   cli_argv):
         """Wired into ``main()``: this exact tree printed PASS, rc 0."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n"
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: 80\n"
                        + self._ROUTING)
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
@@ -2711,7 +2711,7 @@ class TestRootDefaultsValues:
     fourth leaves the key undeclared instead).
     """
 
-    _TENANT = "tenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
+    _TENANT = "tenants:\n  tenant-x:\n    mysql_connection_usage_percent: \"70\"\n"
 
     @classmethod
     def _tree(cls, tmp_path, defaults_body):
@@ -2737,12 +2737,12 @@ class TestRootDefaultsValues:
     def test_a_value_the_exporter_cannot_decode_fails(self, tmp_path, value,
                                                       shown):
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
-                       f"  mysql_connections: {value}\n")
+                       f"  mysql_connection_usage_percent: {value}\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         assert len(r["details"]) == 1, r
         detail = r["details"][0]
-        assert f"`defaults.mysql_connections` is {shown}" in detail, detail
+        assert f"`defaults.mysql_connection_usage_percent` is {shown}" in detail, detail
         # The consequence is the whole file (the decode fails, #2824), not
         # the one key and not only the `defaults:` block.
         assert "drops ALL of it" in detail, detail
@@ -2751,11 +2751,11 @@ class TestRootDefaultsValues:
     @pytest.mark.parametrize("value", ["", " ~", " null"])
     def test_an_empty_value_fails_as_having_no_value(self, tmp_path, value):
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
-                       f"  mysql_connections:{value}\n")
+                       f"  mysql_connection_usage_percent:{value}\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.FAIL, r
         detail = " ".join(r["details"])
-        assert "`defaults.mysql_connections` has no value" in detail, detail
+        assert "`defaults.mysql_connection_usage_percent` has no value" in detail, detail
         assert detail.endswith("has no value (null)."), detail
         assert "0 threshold" not in detail, detail
         # Not the whole block: the exporter keeps the other thresholds.
@@ -2767,7 +2767,7 @@ class TestRootDefaultsValues:
         """Must-stay-green: every spelling here is text parseThresholdNumber
         reads as a finite number (#3250: a quoted number included; `0x10`
         is not, below)."""
-        d = self._tree(tmp_path, f"defaults:\n  mysql_connections: {value}\n")
+        d = self._tree(tmp_path, f"defaults:\n  mysql_connection_usage_percent: {value}\n")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
 
@@ -2788,12 +2788,12 @@ class TestRootDefaultsValues:
         da-guard's root_default_refused. #3387: that error is the
         `guard_errors` row's alone; this row no longer copies it."""
         d = self._tree(tmp_path, "defaults:\n  container_cpu: 80\n"
-                       f"  mysql_connections: {value}\n")
+                       f"  mysql_connection_usage_percent: {value}\n")
         assert vc.check_root_defaults(str(d))["status"] == vc.PASS
         g = vc.check_guard_errors(str(d))
         assert g["status"] == vc.FAIL, g
         assert any(x.startswith("error: root_default_refused "
-                                "`_defaults.yaml:defaults.mysql_connections`")
+                                "`_defaults.yaml:defaults.mysql_connection_usage_percent`")
                    for x in g["details"]), g
 
     def test_non_finite_under_an_underscore_key_is_not_a_threshold(self, tmp_path):
@@ -2805,7 +2805,7 @@ class TestRootDefaultsValues:
     def test_non_finite_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
         """#3140: validate-config 0 → 1 for a root `.nan` (#3387: through
         da-guard's root_default_refused, the `guard_errors` row)."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: .nan\n")
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: .nan\n")
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
             _as_run(vc.main())
@@ -2844,11 +2844,11 @@ class TestRootDefaultsValues:
         """A subtree `_defaults.yaml` is merged by the hierarchical plane,
         whose decoding of `defaults:` is not `map[string]float64` (the golden
         merge fixtures hold mappings there by design)."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: 80\n")
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: 80\n")
         sub = d / "team"
         sub.mkdir()
         (sub / "_defaults.yaml").write_text(
-            "defaults:\n  mysql_connections: disable\n", encoding="utf-8")
+            "defaults:\n  mysql_connection_usage_percent: disable\n", encoding="utf-8")
         r = vc.check_root_defaults(str(d))
         assert r["status"] == vc.PASS, r
 
@@ -2879,7 +2879,7 @@ class TestRootDefaultsValues:
         assert got == want, (case, r, g)
 
     def test_end_to_end_exits_1(self, tmp_path, capsys, cli_argv):
-        d = self._tree(tmp_path, "defaults:\n  mysql_connections: disable\n")
+        d = self._tree(tmp_path, "defaults:\n  mysql_connection_usage_percent: disable\n")
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
             _as_run(vc.main())
@@ -2969,7 +2969,7 @@ class TestScheduleNullHelpers:
         beside a null default with no window; any other key is not null."""
         from _grar_validate import is_null_schedule, writes_nothing
         assert is_null_schedule(value) is null
-        assert writes_nothing("mysql_connections", value) is (value is None or null)
+        assert writes_nothing("mysql_connection_usage_percent", value) is (value is None or null)
         assert writes_nothing("_state_x", value) is False
 
 
@@ -2979,7 +2979,7 @@ class TestJsonSchemaRow:
     JSON Schema, so a tree that lint rejects passed at rc 0. A misread scalar is
     `yaml_quoting`'s finding and must not be reported a second time here."""
 
-    _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+    _DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n"
     _RECEIVER = ("    _routing:\n      receiver:\n        type: webhook\n"
                  "        url: https://hooks.example.com/a\n")
 
@@ -3003,7 +3003,7 @@ class TestJsonSchemaRow:
         """The #2695 shape: a value only the JSON Schema refuses."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: \"70\"\n"
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"
                         + self._RECEIVER + "      group_by: alertname\n"),
         })
         rc, rows = self._run(d, capsys, cli_argv)
@@ -3021,7 +3021,7 @@ class TestJsonSchemaRow:
         a missing policy file is exit 2, as the removed policy row made it."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: \"70\"\n"
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"
                         + self._RECEIVER + "      group_by: alertname\n"),
         })
         cli_argv("validate_config", "--config-dir", d, "--policy",
@@ -3040,7 +3040,7 @@ class TestJsonSchemaRow:
         d = self._tree(tmp_path, {
             "_defaults.yaml": (self._DEFAULTS + "tenants:\n  ta:\n"
                                + self._RECEIVER + "      group_by: alertname\n"),
-            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n",
         })
         rc, rows = self._run(d, capsys, cli_argv)
         row = rows["json_schema"]
@@ -3058,15 +3058,15 @@ class TestJsonSchemaRow:
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
             "_profiles.yaml": ("profiles:\n  std: {}\ntenants:\n  ta:\n"
-                               "    mysql_connections: 70\n"
+                               "    mysql_connection_usage_percent: 70\n"
                                + self._RECEIVER + "      group_by: alertname\n"),
-            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n",
         })
         _rc, rows = self._run(d, capsys, cli_argv)
         quoting = rows["yaml_quoting"]
         assert quoting["status"] == "fail", quoting
         assert [x.split(": ", 2)[:2] for x in quoting["details"]] == [
-            ["_profiles.yaml", "/tenants/ta/mysql_connections"]], quoting
+            ["_profiles.yaml", "/tenants/ta/mysql_connection_usage_percent"]], quoting
         assert rows["json_schema"]["details"] == [
             "_profiles.yaml: 'alertname' is not of type 'array', 'null' "
             "@ /tenants/ta/_routing/group_by"], rows["json_schema"]
@@ -3113,7 +3113,7 @@ class TestJsonSchemaRow:
                             if name == vc._PLATFORM_SCHEMA else found(name))
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n",
         })
         row = vc.check_yaml_quoting(d)
         assert row["status"] == vc.FAIL and row.get("caller_error") is True, row
@@ -3134,7 +3134,7 @@ class TestJsonSchemaRow:
                                "  receiver:\n    type: webhook\n"
                                "    url: https://hooks.example.com/d\n"
                                "  overides: []\n"),
-            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n",
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n",
         })
         rc, rows = self._run(d, capsys, cli_argv)
         assert rows["routes"]["status"] == "fail", rows["routes"]
@@ -3148,21 +3148,21 @@ class TestJsonSchemaRow:
 
     def test_an_unquoted_threshold_is_reported_once(self, tmp_path, capsys,
                                                     cli_argv):
-        """`mysql_connections: 70` is yaml_quoting's. ⛔ And it must not MASK
+        """`mysql_connection_usage_percent: 70` is yaml_quoting's. ⛔ And it must not MASK
         another violation in the same document: jsonschema's `validate`
         raises one error per document, so dropping that one afterwards would
         leave this tree reporting nothing about `group_by` — the misread
         value is read as quoted BEFORE the document is validated."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: 70\n"
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"
                         + self._RECEIVER + "      group_by: alertname\n"),
         })
         rc, rows = self._run(d, capsys, cli_argv)
         quoting = rows["yaml_quoting"]["details"]
         schema = rows["json_schema"]["details"]
-        assert [x for x in quoting if "mysql_connections" in x], quoting
-        assert not [x for x in schema if "mysql_connections" in x], schema
+        assert [x for x in quoting if "mysql_connection_usage_percent" in x], quoting
+        assert not [x for x in schema if "mysql_connection_usage_percent" in x], schema
         assert [x for x in schema if "group_by" in x], schema
         assert not [x for x in quoting if "group_by" in x], quoting
         assert rc == 1
@@ -3180,7 +3180,7 @@ class TestJsonSchemaRow:
         and nothing is left to report."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: \"70\"\n"
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"
                         + self._SLACK),
         })
         _rc, rows = self._run(d, capsys, cli_argv)
@@ -3208,7 +3208,7 @@ class TestJsonSchemaRow:
             self, body, named, tmp_path, capsys, cli_argv):
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n" + body,
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n" + body,
         })
         _rc, rows = self._run(d, capsys, cli_argv)
         assert rows["yaml_quoting"]["status"] == "fail", rows["yaml_quoting"]
@@ -3254,7 +3254,7 @@ class TestJsonSchemaRow:
         quoted string, never as the YAML bool / int / null it was read as."""
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: \"70\"\n" + body,
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n" + body,
         })
         _rc, rows = self._run(d, capsys, cli_argv)
         assert rows["yaml_quoting"]["status"] == "fail", rows["yaml_quoting"]
@@ -3272,7 +3272,7 @@ class TestJsonSchemaRow:
             sys.path.append(lint_dir)
         import check_confd_schema as ccs
         d = self._tree(tmp_path, {
-            "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"})
+            "ta.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"})
         schemas = []
         for n in ("tenant-config.schema.json", "platform-defaults.schema.json",
                   "routing-profiles.schema.json"):
@@ -3281,7 +3281,7 @@ class TestJsonSchemaRow:
                 schemas.append(json.load(fh))
         _n, violations, _s = ccs.validate_dir(d, schemas[0], jsonschema,
                                               schemas[1], schemas[2])
-        assert len([v for v in violations if "mysql_connections" in v]) == 2
+        assert len([v for v in violations if "mysql_connection_usage_percent" in v]) == 2
 
     def test_each_use_of_an_alias_is_read_as_quoted(self, tmp_path):
         """Through an alias: parse-tree expands it where it is used, and each
@@ -3299,12 +3299,12 @@ class TestJsonSchemaRow:
                       encoding="utf-8") as fh:
                 schemas.append(json.load(fh))
         d = self._tree(tmp_path, {"ta.yaml": (
-            "tenants:\n  ta:\n    mysql_connections: 70\n"
+            "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n"
             "    _routing: &r\n      receiver:\n        type: slack\n"
             "        api_url: https://hooks.slack.com/services/x\n"
             "        channel: 1e3\n"
             "  tb:\n    _routing: *r\n"
-            "  tc:\n    mysql_connections: 70\n"
+            "  tc:\n    mysql_connection_usage_percent: 70\n"
             + self._RECEIVER + "      group_by: alertname\n")})
         _n, violations, _s = ccs.validate_dir(
             d, schemas[0], jsonschema, schemas[1], schemas[2],
@@ -3320,7 +3320,7 @@ class TestJsonSchemaRow:
         assert {v.split(": ")[2] for v in quoting} >= {
             "/tenants/ta/_routing/receiver/channel",
             "/tenants/tb/_routing/receiver/channel"}, alone
-        assert any(v.endswith("@ /tenants/tc/mysql_connections") for v in alone), alone
+        assert any(v.endswith("@ /tenants/tc/mysql_connection_usage_percent") for v in alone), alone
 
     def test_without_jsonschema_the_row_says_it_did_not_check(
             self, tmp_path, monkeypatch, capsys, cli_argv):
@@ -3329,7 +3329,7 @@ class TestJsonSchemaRow:
         monkeypatch.setitem(sys.modules, "jsonschema", None)
         d = self._tree(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
-            "ta.yaml": ("tenants:\n  ta:\n    mysql_connections: \"70\"\n"
+            "ta.yaml": ("tenants:\n  ta:\n    mysql_connection_usage_percent: \"70\"\n"
                         + self._RECEIVER + "      group_by: alertname\n"),
         })
         rc, rows = self._run(d, capsys, cli_argv)
@@ -3363,12 +3363,12 @@ class TestAnUnselectedDefaultsSpellingIsSkippedNotACrash:
     def _tree(tmp_path):
         d = tmp_path / "conf.d"
         d.mkdir()
-        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                           encoding="utf-8")
-        (d / "_defaults.yml").write_text("defaults:\n  mysql_connections: 70\n",
+        (d / "_defaults.yml").write_text("defaults:\n  mysql_connection_usage_percent: 70\n",
                                          encoding="utf-8")
         (d / "tenant-x.yaml").write_text(
-            "tenants:\n  tenant-x:\n    mysql_connections: \"60\"\n", encoding="utf-8")
+            "tenants:\n  tenant-x:\n    mysql_connection_usage_percent: \"60\"\n", encoding="utf-8")
         return d
 
     def test_validate_config(self, tmp_path, capsys, cli_argv):
@@ -3395,7 +3395,7 @@ class TestAnUnselectedDefaultsSpellingIsSkippedNotACrash:
         assert ("skipped 1 file(s) no reader reads (da-guard parse-tree's not_read): "
                 "_defaults.yml (unselected_defaults_carrier)") in r.stdout, r.stdout
         # The selected spelling is still checked: a violation in it is found.
-        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\nbogus_key: 1\n",
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\nbogus_key: 1\n",
                                           encoding="utf-8")
         r = subprocess.run(
             [sys.executable, os.path.join(_REPO_ROOT, "scripts", "tools", "lint",
@@ -3435,9 +3435,9 @@ def _run_vc(*argv):
 def _flat_conf_d(tmp_path):
     d = tmp_path / "conf.d"
     d.mkdir()
-    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8")
     (d / "tenant-a.yaml").write_text(
-        "tenants:\n  tenant-a:\n    mysql_connections: '70'\n", encoding="utf-8")
+        "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: '70'\n", encoding="utf-8")
     return d
 
 

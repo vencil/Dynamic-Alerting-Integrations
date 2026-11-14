@@ -67,7 +67,7 @@ def test_tenant_file_names_the_tenant(scaffolded):
 
 
 @pytest.mark.parametrize("case,keys", [
-    ("mariadb", ["mysql_connections", "container_cpu"]),
+    ("mariadb", ["mysql_connection_usage_percent", "container_cpu"]),
     ("mariadb_redis", ["redis_memory", "redis_connected_clients"]),
     # #1196 C：ES heap key 由 es_jvm_memory_used_percent 改名
     ("all_four", ["mongodb_connections", "es_heap_usage_percent"]),

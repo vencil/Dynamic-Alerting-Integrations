@@ -750,7 +750,7 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
     route generator's key check, and a tree that lint rejects read
     `[PASS] schema` here.
 
-    A misread scalar (`mysql_connections: 70`) is `yaml_quoting`'s finding
+    A misread scalar (`mysql_connection_usage_percent: 70`) is `yaml_quoting`'s finding
     and is not reported again here: `validate_dir` is told which files
     that row reads (`_quoting_scope`) and validates them as if every such
     value had been quoted, as that row asks — so the value is no type
@@ -2635,7 +2635,9 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "line is a key that is read with a value its reader does not read — "
         "fix the value, not the key; a dead_entry line is a schedule entry "
         "the windows before it (or, for the default, all of them) cover: "
-        "remove it or reorder the windows; a line on a "
+        "remove it or reorder the windows; a schedule_unread line is a "
+        "reserved key written with a window or expiry its readers ignore — "
+        "only its default is read: remove the window or expiry; a line on a "
         "`version` label or a renamed key is the exporter's and says what to "
         "change. `da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
         "key, who reads it and why not. An error, or a threshold key no root "

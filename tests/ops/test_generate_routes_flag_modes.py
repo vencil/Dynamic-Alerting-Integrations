@@ -69,9 +69,9 @@ def tenant_dir(tmp_path_factory):
     d = tmp_path_factory.mktemp("conf.d")
     # declared: a tree with no root platform file fails --validate (#3016)
     (d / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+        "defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8")
     (d / "alpha.yaml").write_text(
-        make_tenant_yaml("alpha", keys={"mysql_connections": "70"},
+        make_tenant_yaml("alpha", keys={"mysql_connection_usage_percent": "70"},
                          routing=make_routing_config("alpha")),
         encoding="utf-8")
     return d
@@ -86,7 +86,7 @@ def routeless_dir(tmp_path_factory):
     # Thresholds declared in the root defaults, no tenant (#3671: a tenant
     # file's top-level `thresholds:` is no reader's, so it refuses the tree).
     (d / "_defaults.yaml").write_text(
-        "defaults:\n  mysql_connections: 100\n", encoding="utf-8")
+        "defaults:\n  mysql_connection_usage_percent: 100\n", encoding="utf-8")
     return d
 
 

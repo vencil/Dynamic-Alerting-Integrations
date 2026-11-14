@@ -811,7 +811,7 @@ def build_metric_query(observed_series: str, tenant: str, lookback: str) -> str:
 
     #719: recommendations must come from the observed workload series that the
     threshold is actually compared against in the rule-pack alert (e.g.
-    ``tenant:mysql_threads_connected:max``), NOT from ``user_threshold`` — that
+    ``tenant:mysql_connection_usage:percent``), NOT from ``user_threshold`` — that
     metric is the operator-CONFIGURED threshold value (collector.go: a gauge of
     ``ResolvedThreshold.Value``), so querying it gave an echo chamber
     (recommending future settings from past settings). It was also broken in
@@ -825,7 +825,7 @@ def build_metric_query(observed_series: str, tenant: str, lookback: str) -> str:
 
     Args:
         observed_series: Observed recording-rule series name (from the
-            #719 observed-map), e.g. ``tenant:mysql_threads_connected:max``.
+            #719 observed-map), e.g. ``tenant:mysql_connection_usage:percent``.
         tenant: Tenant identifier.
         lookback: Lookback duration (e.g., '7d').
 

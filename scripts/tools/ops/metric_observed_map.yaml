@@ -220,17 +220,17 @@ keys:
     scope: tenant
     direction: '>'
     observed_series: tenant:mongodb_replication_lag:max
-  mysql_connections:
+  mysql_connection_usage_percent:
     pack: rule-pack-mariadb.yaml
     scope: tenant
     direction: '>'
-    resolved_via: mysql_connections_critical sibling
-    observed_series: tenant:mysql_threads_connected:max
-  mysql_connections_critical:
+    resolved_via: mysql_connection_usage_percent_critical sibling
+    observed_series: tenant:mysql_connection_usage:percent
+  mysql_connection_usage_percent_critical:
     pack: rule-pack-mariadb.yaml
     scope: tenant
     direction: '>'
-    observed_series: tenant:mysql_threads_connected:max
+    observed_series: tenant:mysql_connection_usage:percent
   mysql_replication_lag:
     pack: rule-pack-mariadb.yaml
     scope: tenant

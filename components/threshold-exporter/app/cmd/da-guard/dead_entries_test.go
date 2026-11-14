@@ -18,7 +18,7 @@ var deadEntriesTree = map[string]string{
 	"_profiles.yaml": "profiles:\n  p1:\n    redis_memory:\n      default: \"60\"\n      overrides:\n" +
 		"        - window: \"00:00-12:00\"\n          value: \"61\"\n" +
 		"        - window: \"12:00-00:00\"\n          value: \"62\"\n",
-	"a.yaml": "tenants:\n  t1:\n    _profile: p1\n    mysql_connections:\n      default: \"70\"\n      overrides:\n" +
+	"a.yaml": "tenants:\n  t1:\n    _profile: p1\n    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n" +
 		"        - window: \"22:00-06:00\"\n          value: \"1000\"\n" +
 		"        - window: \"01:00-03:00\"\n          value: \"5\"\n" +
 		"        - window: \"05:00-08:00\"\n          value: \"7\"\n" +
@@ -50,8 +50,8 @@ func TestDeadEntries_ThroughEveryDocument(t *testing.T) {
 
 	served := runDoc(t, "served-values", "--config-dir", root, "--at", at)
 	keys := served["tenants"].(map[string]any)["t1"].(map[string]any)["keys"].(map[string]any)
-	if got := keys["mysql_connections"].(map[string]any)["dead_entries"]; !reflect.DeepEqual(got, []any{deadTenantEntry}) {
-		t.Errorf("served-values keys.mysql_connections.dead_entries = %v", got)
+	if got := keys["mysql_connection_usage_percent"].(map[string]any)["dead_entries"]; !reflect.DeepEqual(got, []any{deadTenantEntry}) {
+		t.Errorf("served-values keys.mysql_connection_usage_percent.dead_entries = %v", got)
 	}
 	if _, has := keys["mysql_slave_lag"].(map[string]any)["dead_entries"]; has {
 		t.Errorf("a scalar key carries dead_entries: %v", keys["mysql_slave_lag"])
@@ -59,7 +59,7 @@ func TestDeadEntries_ThroughEveryDocument(t *testing.T) {
 
 	eff := runDoc(t, "effective", "--config-dir", root)
 	dead := eff["tenants"].(map[string]any)["t1"].(map[string]any)["dead_entries"].(map[string]any)
-	want := map[string]any{"mysql_connections": []any{deadTenantEntry}, "redis_memory": []any{deadProfileEntry}}
+	want := map[string]any{"mysql_connection_usage_percent": []any{deadTenantEntry}, "redis_memory": []any{deadProfileEntry}}
 	if !reflect.DeepEqual(dead, want) {
 		t.Errorf("effective dead_entries = %v, want %v", dead, want)
 	}
@@ -75,7 +75,7 @@ func TestDeadEntries_ThroughEveryDocument(t *testing.T) {
 		{"severity": "error", "kind": "dead_entry", "key": "redis_memory", "file": "_profiles.yaml",
 			"tenants": []any{"t1"}, "reason": "default_covered", "hint": nil, "base": nil,
 			"dead_entries": []any{deadProfileEntry}, "blocks": true},
-		{"severity": "error", "kind": "dead_entry", "key": "mysql_connections", "file": "a.yaml",
+		{"severity": "error", "kind": "dead_entry", "key": "mysql_connection_usage_percent", "file": "a.yaml",
 			"tenants": []any{"t1"}, "reason": "window_covered", "hint": nil, "base": nil,
 			"dead_entries": []any{deadTenantEntry}, "blocks": true},
 	}

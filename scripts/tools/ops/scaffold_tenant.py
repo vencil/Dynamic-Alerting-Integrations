@@ -506,7 +506,16 @@ def prompt_tenant_overrides(selected_dbs: list[str]) -> dict:
         # The prompt itself stays — it is the only place a tenant is ever told
         # these keys exist, and dropping it would trade a bad default for zero
         # discoverability.
+        #
+        # A `<base>_critical` whose base is NOT in `defaults:` (its base is a
+        # declared-only flat key, e.g. mysql_threads_running since #3778) is not
+        # asked: resolveCriticalRows admits on `defaults[<base>]`, which the
+        # `_defaults.yaml` this tool writes does not hold, so the value would be
+        # a dangling `_critical` that ValidateTenantKeys refuses.
         for key, info in pack.get("optional_overrides", {}).items():
+            if (key.endswith("_critical")
+                    and key[: -len("_critical")] not in pack.get("defaults", {})):
+                continue
             val = prompt_value(key, info,
                                no_platform_default=is_shipped_optional_key(key))
             if val and val != "skip":
