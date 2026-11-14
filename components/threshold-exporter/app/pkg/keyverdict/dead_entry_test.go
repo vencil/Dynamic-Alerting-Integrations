@@ -155,15 +155,28 @@ func TestJudge_EveryRowCarriesDeadEntriesAsAList(t *testing.T) {
 	}
 }
 
-// A `disable` that switches nothing off at the instant read (disable_noop)
-// leaves the rest of the day served: its dead entries are judged, so the
-// finding does not depend on --at (#3502 review).
-func TestJudge_DeadEntryOnADisableNoopKey(t *testing.T) {
+// #3835: the served reading is the whole day's, so a key read in some part
+// of it (Exporter) is judged on its dead entries whatever its `disable`
+// does elsewhere — and one whose every unread part reads a noop `disable`
+// is read in no part: disable_noop, its entries not judged on top of it.
+// Nothing here depends on an instant.
+func TestJudge_DeadEntryOnAKeyWithANoopDisable(t *testing.T) {
 	t.Parallel()
-	in := deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow})
-	in.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connection_usage_percent": {Reason: ReasonDisabled,
+	read := deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow})
+	read.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connection_usage_percent": {Exporter: true,
 		Disable: DisableNoop, DeadEntries: deadWindow}}}
-	if fs := deadFindings(Judge(in)); len(fs) != 1 {
-		t.Fatalf("findings %+v", fs)
+	if fs := deadFindings(Judge(read)); len(fs) != 1 {
+		t.Fatalf("read in some part of the day: findings %+v", fs)
+	}
+	unread := deadInput(config.KeyLayerTenant, "a.yaml", map[string][]config.DeadEntry{"t1": deadWindow})
+	unread.Served["t1"] = ServedTenant{Keys: map[string]ServedKey{"mysql_connection_usage_percent": {Reason: ReasonDisabled,
+		Disable: DisableNoop, DeadEntries: deadWindow}}}
+	tree := Judge(unread)
+	if fs := deadFindings(tree); len(fs) != 0 {
+		t.Fatalf("read in no part of the day: findings %+v", fs)
+	}
+	if v := one(t, tree, "t1", "mysql_connection_usage_percent"); v.Verdict != Unread ||
+		deref(v.Reason) != ReasonDisableNoop {
+		t.Fatalf("read in no part of the day: verdict %+v", v)
 	}
 }

@@ -75,14 +75,42 @@ def test_every_key_compared_passes(tmp_path):
     assert r["status"] == vc.PASS, r
 
 
-def test_a_retired_spelling_is_looked_up_in_the_canonical_one(tmp_path):
+def test_a_retired_spelling_is_looked_up_in_the_canonical_one(tmp_path, monkeypatch):
     """舊拼法的鍵照 exporter 的正規拼法查（問 da-guard key-spellings，Python 不留換名規則）：
-    正規拼法有告警比較，就不列。"""
+    正規拼法有告警比較，就不列。#3883：送出的鍵與等級改讀 `--schedules-only`，它以正規拼法
+    記鍵；這支斷言舊拼法的鍵確實算進送出的鍵、以正規拼法（含 critical 層）去查，而不是因為
+    鍵被丟掉才通過。"""
+    import _observed_map_lib
     old, new = next(iter(DEPRECATED_KEY_ALIASES.items()))
+    asked: list[str] = []
+    real = _observed_map_lib.lookup
+
+    def spy(observed, key):
+        asked.append(key)
+        return real(observed, key)
+    monkeypatch.setattr(_observed_map_lib, "lookup", spy)
+    r = vc.check_no_alert(_tree(tmp_path, {
+        "_defaults.yaml": f"defaults:\n  {new}: 80\n",
+        "ta.yaml": f"tenants:\n  ta:\n    {old}: \"70:critical\"\n"}))
+    assert r["status"] == vc.PASS, r
+    assert r["details"][0].startswith("1 served key row(s)"), r
+    assert asked == [f"{new}_critical"], asked
+
+
+def test_a_retired_spelling_whose_canonical_key_no_alert_compares_is_listed(tmp_path, monkeypatch):
+    """#3883 審查：正規拼法沒有出貨告警比較時，舊拼法寫的鍵要報出來，行上是正規拼法。"""
+    import _observed_map_lib
+    old, new = next(iter(DEPRECATED_KEY_ALIASES.items()))
+    real = _observed_map_lib.load_observed_map
+    monkeypatch.setattr(_observed_map_lib, "load_observed_map",
+                        lambda *a, **kw: {k: e for k, e in real(*a, **kw).items()
+                                          if k not in (new, f"{new}_critical")})
     r = vc.check_no_alert(_tree(tmp_path, {
         "_defaults.yaml": f"defaults:\n  {new}: 80\n",
         "ta.yaml": f"tenants:\n  ta:\n    {old}: 70\n"}))
-    assert r["status"] == vc.PASS, r
+    assert r["status"] == vc.WARN, r
+    assert r["details"] == [f"no_alert `{new}` — served, but no shipped alert compares it "
+                            "— file(s) ta.yaml — tenant(s) ta"], r
 
 
 def test_a_value_served_at_critical_is_looked_up_as_its_critical_tier(tmp_path):

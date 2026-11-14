@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.key-verdict/v2",
+  "schema": "da-guard.key-verdict/v3",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
   "blocks": true,
@@ -20,18 +20,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": null,
-        "served": {
-          "db_type": [],
-          "domain": "",
-          "environment": "",
-          "groups": [],
-          "owner": "a",
-          "region": "",
-          "runbook_url": "",
-          "tags": [],
-          "tier": ""
-        }
+        "value": null
       },
       {
         "key": "_profile",
@@ -47,8 +36,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "gold",
-        "served": null
+        "value": "gold"
       },
       {
         "key": "_severity_dedup",
@@ -65,8 +53,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "maybe",
-        "served": "enable"
+        "value": "maybe"
       },
       {
         "key": "_silent_mode",
@@ -82,8 +69,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "purple",
-        "served": []
+        "value": "purple"
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -99,8 +85,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80,
-        "served": 80
+        "value": 80
       }
     ],
     "tb": [
@@ -118,8 +103,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "silver",
-        "served": null
+        "value": "silver"
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -135,8 +119,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80,
-        "served": 80
+        "value": 80
       }
     ]
   },
