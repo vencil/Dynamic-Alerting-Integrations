@@ -118,6 +118,36 @@ _RECORDS: "list[ToolFault]" = []
 #: da-crdecode runs in a thread pool (`_lib_consumer_read._files_of`).
 _LOCK = threading.Lock()
 
+#: Set by :func:`set_memory_limited` (``_lib_parse_tree.run_under_memory_limit``)
+#: in a process that limited its own memory (the generator container's
+#: judgement, ADR-036 §3). Kept here, the one module all three run functions
+#: already import, so that none of them imports another to read it.
+_MEMORY_LIMITED = False
+
+
+def set_memory_limited() -> None:
+    """Declare that this process runs under a memory limit (RLIMIT_DATA)
+    that every Go program it starts inherits; see
+    ``_lib_parse_tree.run_under_memory_limit``, which calls this."""
+    global _MEMORY_LIMITED
+    _MEMORY_LIMITED = True
+
+
+def memory_limited() -> bool:
+    """Whether :func:`set_memory_limited` was called in this process."""
+    return _MEMORY_LIMITED
+
+
+def go_program_env() -> "dict[str, str] | None":
+    """The environment of a Go program this process starts: with
+    ``GOTRACEBACK=crash`` under :func:`memory_limited`, so the Go runtime's
+    own out-of-memory ends it by a signal; else None (inherit). Every
+    program run of the judgement takes it (da-guard's parse-tree in
+    ``_lib_parse_tree``, served-values and effective in
+    ``_lib_tenant_values``; da-read and da-crdecode in
+    ``_lib_consumer_read``)."""
+    return {**os.environ, "GOTRACEBACK": "crash"} if _MEMORY_LIMITED else None
+
 
 def record(binary: str, subcommand: str, reason: str) -> None:
     """Record that *binary* (one of :data:`BINARIES`) did not run

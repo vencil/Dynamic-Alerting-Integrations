@@ -210,8 +210,8 @@ def test_served_values_runs_with_gotraceback_crash_under_the_memory_limit(
     runs) take parse-tree's environment: under the memory limit the Go
     runtime's own out-of-memory ends them by a signal, which the verdict
     reports as memory — not exit 2, reported as error."""
-    import _lib_parse_tree as lpt
-    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", limited)
+    import _lib_tool_fault as tf  # the one memory-limit flag
+    monkeypatch.setattr(tf, "_MEMORY_LIMITED", limited)
     monkeypatch.delenv("GOTRACEBACK", raising=False)  # "unset" is what the run inherits
     fake, seen = _gotraceback_da_guard(tmp_path)
     missing = tmp_path / "no-such-conf.d"  # not a directory: no parse-tree run first

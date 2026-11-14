@@ -85,7 +85,7 @@ def _self_killing_da_guard(tmp_path: Path) -> tuple[Path, Path]:
 def test_a_signal_without_a_memory_limit_is_a_parse_tree_error(tmp_path, monkeypatch) -> None:
     """#2906: no memory limit declared — a da-guard ended by a signal is a
     failing da-guard (rc 2 for the caller), and nothing changes its env."""
-    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", False)
+    monkeypatch.setattr(lpt._lib_tool_fault, "_MEMORY_LIMITED", False)
     root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
     fake, seen = _self_killing_da_guard(tmp_path)
     with pytest.raises(lpt.ParseTreeError, match="exited -6") as e:
@@ -100,7 +100,7 @@ def test_a_signal_under_the_memory_limit_is_memory(tmp_path, monkeypatch) -> Non
     is the judgement's memory limit — judged by the process status, the
     stderr text plays no part — named with the signal. Both file mode and
     tree mode."""
-    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", False)
+    monkeypatch.setattr(lpt._lib_tool_fault, "_MEMORY_LIMITED", False)  # restored after
     lpt.run_under_memory_limit()
     root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
     fake, seen = _self_killing_da_guard(tmp_path)
@@ -128,11 +128,11 @@ def test_exit_2_out_of_memory_is_memory_only_under_the_limit(tmp_path, monkeypat
                     "echo 'fatal error: out of memory allocating heap arena map' >&2\nexit 2\n",
                     encoding="utf-8")
     fake.chmod(0o755)
-    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", True)
+    monkeypatch.setattr(lpt._lib_tool_fault, "_MEMORY_LIMITED", True)
     with pytest.raises(MemoryError, match="ran out of memory"):
         lpt.run(root, str(fake), 60)
     assert not probed.exists()
-    monkeypatch.setattr(lpt, "_MEMORY_LIMITED", False)
+    monkeypatch.setattr(lpt._lib_tool_fault, "_MEMORY_LIMITED", False)
     with pytest.raises(lpt.ParseTreeError, match="exited 2") as e:
         lpt.run(root, str(fake), 60)
     assert not isinstance(e.value, MemoryError)

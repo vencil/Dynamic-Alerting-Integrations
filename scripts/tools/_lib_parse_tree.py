@@ -194,11 +194,6 @@ def _resolve(binary: Optional[str], timeout: Optional[float]
         timeout = sel_timeout if sel_timeout is not None else DEFAULT_TIMEOUT
     return binary, timeout
 
-#: Set by :func:`run_under_memory_limit` in a process that limited its own
-#: memory (the generator container's judgement, ADR-036 §3).
-_MEMORY_LIMITED = False
-
-
 def run_under_memory_limit() -> None:
     """Declare that this process runs under a memory limit (RLIMIT_DATA) that
     every Go program it starts inherits. From then on each da-guard (and
@@ -212,14 +207,11 @@ def run_under_memory_limit() -> None:
     exit with the runtime's own out-of-memory line is this process's memory
     limit too (`_lib_tool_fault.end_reason`). Without this call a da-guard
     ended by a signal stays a ``ParseTreeError``, and exit 2 is read as
-    always. The caller sets RLIMIT_CORE to 0: no core file."""
-    global _MEMORY_LIMITED
-    _MEMORY_LIMITED = True
+    always. The caller sets RLIMIT_CORE to 0: no core file.
 
-
-def memory_limited() -> bool:
-    """Whether :func:`run_under_memory_limit` was called in this process."""
-    return _MEMORY_LIMITED
+    The flag itself lives in `_lib_tool_fault` (`memory_limited`,
+    `go_program_env`), which all three run functions import: one flag."""
+    _lib_tool_fault.set_memory_limited()
 
 
 def _fault(subcommand: str, reason: str) -> None:
@@ -320,16 +312,6 @@ def file_document(raw: bytes) -> dict:
     return read_document(raw)
 
 
-def da_guard_env() -> "dict[str, str] | None":
-    """The environment of a Go program this process starts: with
-    ``GOTRACEBACK=crash`` under :func:`run_under_memory_limit`, so the Go
-    runtime's own out-of-memory ends it by a signal; else None (inherit).
-    Every program run of the judgement takes it (da-guard's parse-tree here,
-    served-values and effective in ``_lib_tenant_values``; da-read and
-    da-crdecode in ``_lib_consumer_read``)."""
-    return {**os.environ, "GOTRACEBACK": "crash"} if _MEMORY_LIMITED else None
-
-
 def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
          stdin: Optional[bytes] = None, *,
          check: "Callable[[dict], None] | None" = None,
@@ -367,7 +349,8 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
             msg = msg.removeprefix(prefix)
         raise BinaryMissing(msg)
     cmd = [exe, *args]
-    env = da_guard_env()
+    env = _lib_tool_fault.go_program_env()
+    limited = _lib_tool_fault.memory_limited()
     try:
         proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
                               input=stdin if stdin is not None else b"", env=env)
@@ -380,10 +363,10 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
     stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
     # #3862: the Go runtime's own memory end is recorded as such (the
     # judgement rejects that write as memory); any other signal is a fault.
-    end = _lib_tool_fault.end_reason(proc.returncode, proc.stderr, _MEMORY_LIMITED)
+    end = _lib_tool_fault.end_reason(proc.returncode, proc.stderr, limited)
     if end is not None:
         _fault(sub, end)
-    if _MEMORY_LIMITED and proc.returncode < 0:
+    if limited and proc.returncode < 0:
         # Ended by a signal under the memory limit it inherited (the
         # generator container's RLIMIT_DATA of a judgement, ADR-036 §3):
         # the caller's memory limit, not a da-guard defect.

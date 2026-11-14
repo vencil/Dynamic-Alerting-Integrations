@@ -1031,14 +1031,13 @@ def _run_da_guard(
         raise error(f"da-guard parse-tree (the tree's index): {text}", None, "",
                     stale=stale, broken=not stale) from e
     cmd = [exe, subcommand, "--config-dir", str(conf_d), *extra]
-    import _lib_parse_tree  # lazy, as above
     try:
         # Bytes, not text: stderr may carry a file name that is not UTF-8
         # (the exporter's load logs it as is).
         # Under a memory limit, GOTRACEBACK=crash: the Go runtime's own
         # out-of-memory is a signal (below), not exit 2 (ADR-036 §3).
         proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
-                              env=_lib_parse_tree.da_guard_env())
+                              env=_lib_tool_fault.go_program_env())
     except subprocess.TimeoutExpired as e:
         _fault(subcommand, "timed_out")
         raise error(f"da-guard {subcommand} did not finish within {timeout}s", None,
@@ -1055,7 +1054,7 @@ def _run_da_guard(
     # GOTRACEBACK): `_lib_tool_fault.end_reason`, the one judge of the three
     # run functions. Without a limit, exit 2 is read below as always.
     end = _lib_tool_fault.end_reason(proc.returncode, proc.stderr,
-                                     _lib_parse_tree.memory_limited())
+                                     _lib_tool_fault.memory_limited())
     if end is not None and proc.returncode >= 0:
         # Its memory, not the tree's answer nor a da-guard older than this
         # tool: never asked of the binary (`_accepts`).

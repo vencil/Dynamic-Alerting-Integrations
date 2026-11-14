@@ -63,7 +63,7 @@ _SUBPROCESS_RUNS = frozenset({"run", "Popen", "call", "check_call", "check_outpu
 _PROGRAM = re.compile(r"\bda-(?:guard|read|crdecode)\b")
 _RESOLVERS = frozenset({"resolve_binary", "da_read_binary", "_crdecode_binary", "DISPATCHER",
                         "DA_READ_BINARY_NAME", "CRDECODE_BINARY_NAME", "DA_GUARD_ENV",
-                        "DA_READ_ENV", "CRDECODE_ENV", "da_guard_env"})
+                        "DA_READ_ENV", "CRDECODE_ENV", "go_program_env"})
 
 
 def _runs_subprocess(fn: ast.AST) -> bool:
@@ -158,3 +158,35 @@ def test_the_predicate_sees_a_direct_run() -> None:
            "    return subprocess.run([da_read_binary(None), 'alertmanager', x])\n")
     fn = ast.parse(src).body[1]
     assert _runs_subprocess(fn) and _names_a_program(fn)
+
+
+def _imported_modules(rel: str) -> "set[str]":
+    """Every module *rel* imports, at any depth (a lazy import in a function
+    included): the top-level name of each ``import``/``from … import``."""
+    tree = ast.parse((REPO_ROOT / rel).read_text(encoding="utf-8"), filename=rel)
+    out: "set[str]" = set()
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import):
+            out.update(a.name.split(".")[0] for a in n.names)
+        elif isinstance(n, ast.ImportFrom) and n.level == 0 and n.module:
+            out.add(n.module.split(".")[0])
+    return out
+
+
+def test_the_consumer_reader_does_not_import_the_da_guard_side() -> None:
+    """`_lib_consumer_read` reads the memory-limit flag and the Go programs'
+    environment from `_lib_tool_fault`. An import of `_lib_parse_tree` (or of
+    what pulls in da-guard's dispatcher) — even a lazy one in a function —
+    makes every gate that reads through it depend on `ops/guard_dispatch.py`,
+    which no gate's pre-commit `files:` names."""
+    imported = _imported_modules("scripts/tools/_lib_consumer_read.py")
+    assert not imported & {"_lib_parse_tree", "_lib_tenant_values", "guard_dispatch"}, imported
+
+
+def test_the_tool_fault_record_imports_only_the_standard_library() -> None:
+    """`_lib_tool_fault` is the leaf every run function imports (its
+    docstring and the da-tools `build.sh` say standard library only)."""
+    import sys
+    imported = _imported_modules("scripts/tools/_lib_tool_fault.py")
+    assert imported <= set(sys.stdlib_module_names) | {"__future__"}, \
+        sorted(imported - set(sys.stdlib_module_names))

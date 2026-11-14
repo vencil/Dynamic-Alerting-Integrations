@@ -279,16 +279,16 @@ def _invoke(binary: str | None, name: str, env: str, build_hint: str,
             f"{name} was not found: set ${env} to its path or put it on $PATH "
             f"(the da-tools image ships it; in this repo `{build_hint}` builds "
             f".build/{name})")
-    # Lazy: _lib_parse_tree imports this module. Under the judgement's
-    # memory limit (`run_under_memory_limit`) the program runs with
-    # GOTRACEBACK=crash, as da-guard does: the Go runtime's own out of memory
-    # ends it by a signal, not exit 2.
-    import _lib_parse_tree
-    limited = _lib_parse_tree.memory_limited()
+    # Under the judgement's memory limit (`_lib_tool_fault.memory_limited`)
+    # the program runs with GOTRACEBACK=crash, as da-guard does: the Go
+    # runtime's own out of memory ends it by a signal, not exit 2. Read from
+    # `_lib_tool_fault`, never `_lib_parse_tree`: every gate that reads
+    # through this module would then depend on da-guard's dispatcher too.
+    limited = _lib_tool_fault.memory_limited()
     try:
         proc = subprocess.run([binary, *args], input=stdin, capture_output=True,
                               check=False, timeout=TIMEOUT_SECONDS,
-                              env=_lib_parse_tree.da_guard_env())
+                              env=_lib_tool_fault.go_program_env())
     except subprocess.TimeoutExpired as e:
         _fault(name, args, "timed_out")
         raise ConsumerReadError(f"{name} did not finish within {TIMEOUT_SECONDS}s",
