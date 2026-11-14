@@ -41,7 +41,8 @@ BUILD_EXEMPT = frozenset({
     "_lib_validation.py",
     "_lib_prometheus.py",
     "_lib_atomic_write.py",  # #3107: library, not CLI
-    "_lib_kubectl.py",  # #3207/#3210: cluster reader, library not CLI
+    "_lib_kubectl.py",  # #3207/#3210, #3539: kubectl launcher and cluster reader, library not CLI
+    "_lib_engine.py",  # #3611 / #3539: engine locate/run, imported by _lib_kubectl; library not CLI
     "_lib_io.py",
     # #3276 — caller-path judgement (stdlib only) and safe_label, split out
     # of _lib_io so tools without PyYAML can import them. Library, not CLI.

@@ -19,17 +19,11 @@ package main
 // package, and that declaration has no doc of its own" — that needs the
 // package-wide symbol table this walk builds.
 //
-// SCOPE is components/** on purpose, not the whole repo. ci.yml's `go` path
-// filter lists components/threshold-exporter/** and components/tenant-api/**,
-// so what this test READS is inside what TRIGGERS it. ⚠️ That containment is
-// accidental, not structural: components/ also holds da-portal, da-tools and
-// recipe-preview, and it holds only because those three carry zero .go files
-// today. Widening the scan to the repo's other Go modules would need each of
-// them checked against that filter first — some are covered and some are not,
-// and a scan of an uncovered one is a guard a PR can edit without waking
-// (#1399 is that failure shape). Deliberately not listed here: which modules
-// are covered has changed twice (#1280, #1873) and a list in this comment has
-// nothing reading it. Read `ci.yml`'s `go` filter.
+// SCOPE is components/** on purpose, not the whole repo. It was drawn that way
+// when this leg was path-gated, so that what the test READS stayed inside
+// what TRIGGERED it. The leg runs on every PR since #3756, so that reason is
+// gone; widening the scan to the repo's other Go modules is now only a
+// question of what the walk costs and what it would newly report.
 //
 // ⚠️ THE FALSE-POSITIVE SURFACE IS BIGGER THAN TODAY'S ZERO. Measured: 37
 // paragraphs under components/ already name a known declaration and are held

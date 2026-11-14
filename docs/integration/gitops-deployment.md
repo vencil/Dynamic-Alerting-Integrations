@@ -150,7 +150,7 @@ steps:
 python3 scripts/ops/configmap_assemble.py \
   --config-dir tenants/conf.d --output .build/threshold-config.yaml
 # rc 1 = 設定違規（重複租戶 / 檔名 / 產物與樹對不上 / 超過 1 MiB / 沒有載體）
-# rc 2 = 呼叫端或工具錯誤（--config-dir 不存在、kubectl 缺席或逾時、
+# rc 2 = 呼叫端或工具錯誤（--config-dir 不存在、kubectl 缺席、起不來、逾時或被 signal 中止、
 #        樹上有 da-guard 驗證會點名的路徑）
 ```
 
