@@ -25,9 +25,8 @@
 # image to pull until `up --build` builds it, and without the flag a pull of
 # their not-yet-existing tag is a failure that no retry fixes.
 #
-# Three attempts, waiting 5s then 15s. No knobs: tests/ops/
-# test_compose_pull_retry.py runs this loop with `docker` and `sleep` stubbed
-# on PATH.
+# Three attempts, waiting 5s then 15s. No knobs: the loop is run, with
+# `docker` and `sleep` stubbed on PATH, by tests/ops/test_compose_pull_retry.py.
 
 compose_pull_with_retry() {
     local label="$1"
