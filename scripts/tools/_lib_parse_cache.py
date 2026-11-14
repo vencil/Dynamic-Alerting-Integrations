@@ -970,23 +970,35 @@ def read_text_as(root: "str | os.PathLike[str]", rel: str, data: bytes,
 def read_file_alone(path: "str | os.PathLike[str]", mode: ParseMode = VALUES, *,
                     binary: Optional[str] = None,
                     timeout: Optional[float] = None) -> Any:
-    """A YAML file that belongs to no conf.d tree (a standalone policy file
-    named on the command line) as yaml.v3 reads it: parse-tree's file mode,
-    its bytes judged in an empty directory, so no tree is walked. Raises
-    OSError (the file cannot be read), FileUnreadable (``file`` is *path*)
-    and ParseTreeError."""
+    """A YAML file that belongs to no conf.d tree, by path: its bytes,
+    then ``read_text_alone``. Raises OSError (the file cannot be read),
+    FileUnreadable (``file`` is *path*) and ParseTreeError. A caller's
+    input file is a declared document (#3797): `_lib_input` reads it once
+    and its text goes to ``read_text_alone``, never this."""
+    return read_text_alone(Path(path).read_bytes(), mode, label=str(path),
+                           binary=binary, timeout=timeout)
+
+
+def read_text_alone(data: "str | bytes", mode: ParseMode = VALUES, *, label: str,
+                    binary: Optional[str] = None,
+                    timeout: Optional[float] = None) -> Any:
+    """The content *data* of a YAML file that belongs to no conf.d tree (a
+    standalone policy file named on the command line) as yaml.v3 reads it:
+    parse-tree's file mode, the bytes judged in an empty directory, so no
+    tree is walked and nothing is read from the caller's file again — the
+    text `_lib_input.document` read once (#3797). Raises FileUnreadable
+    (``file`` is *label*, the path as the caller gave it) and ParseTreeError."""
     import tempfile
-    p = Path(path)
-    data = p.read_bytes()
+    raw = data.encode("utf-8") if isinstance(data, str) else data
     with tempfile.TemporaryDirectory(prefix="da-parse-") as empty:
         try:
-            # A fixed neutral name, not p.name: the content is judged the
+            # A fixed neutral name, not the file's: the content is judged the
             # same under any name, and a name that is not UTF-8 (which JSON
             # cannot carry as --path) must not refuse a readable file.
-            return read_text_as(empty, "standalone.yaml", data, mode,
+            return read_text_as(empty, "standalone.yaml", raw, mode,
                                 binary=binary, timeout=timeout)
         except FileUnreadable as exc:
-            raise FileUnreadable(str(path), exc.kind, exc.message) from None
+            raise FileUnreadable(label, exc.kind, exc.message) from None
 
 
 def parse_tree_error_line(exc: BaseException) -> str:

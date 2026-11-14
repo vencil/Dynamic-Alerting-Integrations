@@ -149,13 +149,11 @@ _CASES = [
 ]
 
 
-# Which per-check rows must carry the failure. `validate-config --policy`
-# reaches one loader, check_routes (#3303 removed the `policy` row).
+# Which per-check rows must carry the failure. #3797: `--policy` and a
+# `--policy-dsl` that is no readable file are declared documents, refused
+# before any row runs (rc 2, no report): no row carries them.
 _EXPECTED_FAIL_ROWS = {
-    "validate-config --policy": ("routes",),
-    "validate-config --policy missing-file": ("routes",),
     "validate-config --rule-packs": ("custom_rules",),
-    "validate-config --policy-dsl": ("policy_dsl",),
 }
 
 
@@ -251,6 +249,8 @@ class TestUnusableIsMoreThanMissing:
         (d / "scalar.yaml").write_text("just-a-string\n", encoding="utf-8")
         (d / "good.yaml").write_text(
             'allowed_domains:\n  - "*.example.com"\n', encoding="utf-8")
+        # #3797: lint's policy is another file, with lint's own keys.
+        (d / "good_lint.yaml").write_text("denied_functions: []\n", encoding="utf-8")
         return {p.stem: p for p in d.iterdir()}
 
     @pytest.mark.parametrize("script,base", [
@@ -283,7 +283,8 @@ class TestUnusableIsMoreThanMissing:
             self, script, base, policies, conf_d):
         """Without this, the assertion above is satisfiable by a tool that
         exits 2 on every --policy value it is handed."""
-        r = _run(script, [*base(conf_d), "--policy", str(policies["good"])])
+        good = policies["good_lint" if script == "lint_custom_rules.py" else "good"]
+        r = _run(script, [*base(conf_d), "--policy", str(good)])
         assert r.returncode != EXIT_CALLER_ERROR, (
             f"{script} rejects a valid policy file, so the checks above prove "
             f"nothing.\nstderr: {r.stderr.decode('utf-8', 'replace')[:400]}")
@@ -319,6 +320,12 @@ class TestUnusableIsMoreThanMissing:
             f"'not a file' is one of five shapes of unusable, not the class.\n"
             f"stdout: {out[:500]}")
         assert b"Traceback" not in r.stderr
+        if kind == "nonutf8":
+            # #3797: strict UTF-8 is the declaration's — refused before any
+            # row runs, naming the flag, no report.
+            assert out == "" and f"--policy-dsl {dsl_files[kind]}: not valid UTF-8" in \
+                r.stderr.decode("utf-8", "replace"), r.stderr
+            return
         assert "[FAIL] policy_dsl" in out, (
             f"the failing row is not policy_dsl — an argv mistake was "
             f"attributed elsewhere.\nstdout: {out[:500]}")
@@ -482,9 +489,11 @@ def _fail_row_actions(stdout: str) -> dict[str, str]:
 
 
 @pytest.mark.parametrize("argv,marker,rows", [
-    (["--policy", _MISSING], "--policy", ("routes",)),
+    # #3797: refused before any row (no report): the remedy is the ⛔ line
+    # after the refusal on stderr (the declaration's `remedy=`).
+    (["--policy", _MISSING], "--policy", ()),
     (["--rule-packs", _MISSING], "--rule-packs", ("custom_rules",)),
-    (["--policy-dsl", _MISSING], "--policy-dsl", ("policy_dsl",)),
+    (["--policy-dsl", _MISSING], "--policy-dsl", ()),
 ], ids=["policy", "rule-packs", "policy-dsl"])
 def test_each_argv_error_row_carries_its_own_remediation(
         argv, marker, rows, conf_d):
@@ -502,6 +511,12 @@ def test_each_argv_error_row_carries_its_own_remediation(
     r = _run("validate_config.py", ["--config-dir", str(conf_d), *argv])
     out = r.stdout.decode("utf-8", "replace")
     assert r.returncode == EXIT_CALLER_ERROR, out[:400]
+    if not rows:
+        err = r.stderr.decode("utf-8", "replace").splitlines()
+        assert out == "" and err[0].startswith(f"ERROR: {marker} "), err
+        assert len(err) == 2 and err[1].startswith("  ⛔ ") and re.search(
+            rf"(?<![\w-]){re.escape(marker)}(?![\w-])", err[1]), err
+        return
     actions = _fail_row_actions(out)
     for row in rows:
         assert row in actions, (

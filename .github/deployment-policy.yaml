@@ -1,0 +1,14 @@
+# Deployment Policy（部署端 policy；ADR-036 §5）
+# generate-routes / validate-config / explain-route / test-notification / migrate-credentials
+# 的 --policy 讀這份；custom rule lint 的政策是另一份（custom-rule-policy.yaml，
+# 給 lint --policy 與 validate-config --lint-policy）。兩份各自拒收對方的鍵（#3797）。
+#
+# Webhook Domain Allowlist (v1.5.0)
+# generate-routes --validate --policy 時檢查 receiver URL
+# 支援 fnmatch 萬用字元 (e.g., *.example.com)
+# 空清單 = 不限制（向後相容）
+allowed_domains:
+  - "*.example.com"          # 預設企業域名
+  - "hooks.slack.com"        # Slack incoming webhooks
+  - "outlook.office.com"     # Microsoft Teams
+  - "events.pagerduty.com"   # PagerDuty

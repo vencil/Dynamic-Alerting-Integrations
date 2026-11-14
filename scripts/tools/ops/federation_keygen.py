@@ -177,7 +177,7 @@ def main() -> int:
                         help="RSA modulus size (default: 2048; tenant-api requires >= 2048)")
     args = parser.parse_args()
 
-    if args.rotate and not args.existing_jwks:
+    if args.rotate and args.existing_jwks is None:  # '' is given: refused, named (#3797)
         parser.error("--rotate requires --existing-jwks")
     if args.key_bits < 2048:
         parser.error("--key-bits must be >= 2048 (tenant-api rejects weaker signing keys)")

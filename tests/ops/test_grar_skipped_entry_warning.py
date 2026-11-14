@@ -283,7 +283,8 @@ def test_mark_survives_to_every_predicate_caller(tmp_path, mods, monkeypatch,
         policy = tmp_path / "policy.yaml"
         policy.write_text(f"allowed_domains: {allowed!r}\n", encoding="utf-8")
 
-    vc.check_routes(str(d), None if policy is None else str(policy))
+    import generate_alertmanager_routes as _gen
+    vc.check_routes(str(d), None if policy is None else _gen.resolve_policy_file(str(policy)))
     argv = ["generate_alertmanager_routes.py", "--config-dir", str(d),
             "--validate"] + ([] if policy is None else ["--policy", str(policy)])
     monkeypatch.setattr(sys, "argv", argv)

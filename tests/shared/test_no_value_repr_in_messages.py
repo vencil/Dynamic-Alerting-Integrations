@@ -77,9 +77,11 @@ ALLOWED: dict[tuple[str, str, str, str], str] = {
     ("_grar_validate.py", "_load_shared_secrets", "!r", "name"): _POLICY,
     ("_grar_validate.py", "_load_shared_secrets", "!r", "OWN_NAME_PREFIX"):
         "a constant of the generator",
-    ("_grar_validate.py", "load_policy_document", "!r", "policy_path"): _POLICY,
-    ("_grar_validate.py", "load_policy_document", "!r", "bad"): _POLICY,
-    ("_grar_validate.py", "load_policy_document", "!r", "minimum"): _POLICY,
+    # #3797: the checks moved from the reading to the parsed policy.
+    ("_grar_validate.py", "policy_document", "!r", "policy_path"): _POLICY,
+    ("_grar_validate.py", "policy_document", "!r", "bad"): _POLICY,
+    ("_grar_validate.py", "policy_document", "!r", "minimum"): _POLICY,
+    ("_grar_validate.py", "_refuse_unknown_keys", "!r", "policy_path"): _POLICY,
     ("_grar_validate.py", "generator_version_problem", "!r", "own"):
         "the tool's own version",
 }
