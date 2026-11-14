@@ -46,11 +46,15 @@ type Gate struct {
 	// minJudge is MinJudgeTime; a test seam (a test cannot wait seconds
 	// for every deadline case).
 	minJudge time.Duration
+	// now is the clock the time left is read against (time.Now); a test
+	// seam, so a deadline case does not depend on how fast the wall clock
+	// runs under the test (#3846).
+	now func() time.Time
 }
 
 // NewGate returns the Gate for client; policyPath as Gate.policyPath.
 func NewGate(client *Client, policyPath string) *Gate {
-	g := &Gate{client: client, policyPath: policyPath, rejections: map[string]*atomic.Int64{}, minJudge: MinJudgeTime}
+	g := &Gate{client: client, policyPath: policyPath, rejections: map[string]*atomic.Int64{}, minJudge: MinJudgeTime, now: time.Now}
 	for _, r := range RejectionReasons {
 		g.rejections[r] = &atomic.Int64{}
 	}
@@ -94,7 +98,7 @@ func (g *Gate) RefuseNormalized(paths []string) error {
 func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.ProposedFile) (*gitops.KeyVerdict, error) {
 	deadline, ok := ctx.Deadline()
 	if !ok {
-		deadline = time.Now().Add(FallbackDeadline)
+		deadline = g.now().Add(FallbackDeadline)
 	}
 	writes := make([]Write, len(files))
 	for i, f := range files {
@@ -105,7 +109,7 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 		if err != nil {
 			return nil, err
 		}
-		remaining := time.Until(deadline)
+		remaining := deadline.Sub(g.now())
 		if remaining < g.minJudge {
 			what := "judge the write"
 			if attempt > 1 {
@@ -371,7 +375,7 @@ func (g *Gate) findings(ctx context.Context, deadline time.Time, base string, fi
 	// A preview (gitops.IsPreview) does not judge the base again: the marks
 	// only shape the message, and a second judgement would double what a
 	// preview asks of the generator.
-	if remaining := time.Until(deadline); remaining >= g.minJudge && !gitops.IsPreview(ctx) {
+	if remaining := deadline.Sub(g.now()); remaining >= g.minJudge && !gitops.IsPreview(ctx) {
 		bv, err := g.client.Validate(ctx, base, nil, remaining)
 		switch {
 		case err != nil:
