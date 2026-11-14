@@ -28,6 +28,8 @@ import {
   allRequiredValid,
   recipeSummary,
   buildRecipeObject,
+  initialFormState,
+  FORM_OWNED_KEYS,
   yamlValue,
   yamlSnippet,
 } from '../src/interactive/tools/recipe-builder/engine.js';
@@ -244,6 +246,156 @@ describe('buildRecipeObject', () => {
   it('drops fields not in the recipe layout (e.g. quantile on a threshold recipe)', () => {
     const obj = buildRecipeObject('threshold', { ...validThreshold, quantile: '0.99' });
     expect(obj).not.toHaveProperty('quantile');
+  });
+});
+
+// #3920: the tenant-manager replaces the stored recipe with what the form
+// hands back, so a member missing from it is deleted from the tenant's file.
+describe('buildRecipeObject on an edit keeps what the form does not own (#3920)', () => {
+  const stored = {
+    recipe: 'threshold',
+    name: 'pvc_usage',
+    selectors: { namespace: 'ns-one' },
+    metric: 'volume_used_ratio',
+    selectors_re: { persistentvolumeclaim: 'data-.*' },
+    group_by: ['persistentvolumeclaim'],
+    threshold: '80:critical',
+    window: '10m',
+  };
+  // what the form holds when it opens on `stored` and nothing is touched
+  const untouched = () => initialFormState(stored);
+
+  it('an untouched edit hands back the stored recipe: same members, same values, same order', () => {
+    const out = buildRecipeObject('threshold', untouched(), stored);
+    expect(out).toEqual(stored);
+    expect(Object.keys(out)).toEqual(Object.keys(stored));
+    expect(out.selectors).toEqual({ namespace: 'ns-one' });
+    expect(out.selectors_re).toEqual({ persistentvolumeclaim: 'data-.*' });
+    expect(out.group_by).toEqual(['persistentvolumeclaim']);
+  });
+
+  it('control: without the stored recipe (a new alert) only form fields are emitted', () => {
+    const out = buildRecipeObject('threshold', untouched());
+    expect(out).not.toHaveProperty('selectors');
+    expect(out).not.toHaveProperty('selectors_re');
+    expect(out).not.toHaveProperty('group_by');
+    // and the defaults a new alert shows are written, as before
+    expect(out).toMatchObject({ op: '>', mode: 'page', for: '1m' });
+  });
+
+  it('a field the form owns takes the form value, in the stored position', () => {
+    const f = { ...untouched(), name: 'pvc_usage_v2', threshold: '90', severity: 'warning', window: '15m' };
+    const out = buildRecipeObject('threshold', f, stored);
+    expect(out).toEqual({ ...stored, name: 'pvc_usage_v2', threshold: '90:warning', window: '15m' });
+    expect(Object.keys(out)).toEqual(Object.keys(stored));
+  });
+
+  it('a form field the user cleared is not restored from the stored recipe', () => {
+    const fc = {
+      recipe: 'forecast', name: 'disk_full', metric: 'used_bytes', capacity_metric: 'total_bytes',
+      horizon: '4h', threshold: '0.3:warning', selectors: { namespace: 'ns-one' },
+    };
+    const out = buildRecipeObject('forecast', { ...initialFormState(fc), capacity_metric: '' }, fc);
+    expect(out).not.toHaveProperty('capacity_metric');
+    expect(out.selectors).toEqual({ namespace: 'ns-one' });
+  });
+
+  it('a stored form field its recipe does not take is the form\'s to drop, not carried back', () => {
+    // `quantile` is a form field; threshold does not take it.
+    const out = buildRecipeObject('threshold', initialFormState({ ...stored, quantile: '0.5' }), { ...stored, quantile: '0.5' });
+    expect(out).not.toHaveProperty('quantile');
+  });
+
+  it('the copies share nothing mutable with the stored recipe', () => {
+    const out = buildRecipeObject('threshold', untouched(), stored);
+    expect(out.selectors).not.toBe(stored.selectors);
+    expect(out.group_by).not.toBe(stored.group_by);
+    out.selectors.namespace = 'changed';
+    out.group_by.push('x');
+    expect(stored.selectors).toEqual({ namespace: 'ns-one' });
+    expect(stored.group_by).toEqual(['persistentvolumeclaim']);
+  });
+
+  it('a default the stored recipe left to the exporter is not written back; a stored one stays', () => {
+    const out = buildRecipeObject('threshold', untouched(), stored);
+    for (const k of ['op', 'mode', 'for', 'quantile']) expect(out).not.toHaveProperty(k);
+    // stored explicitly, even at the default value: kept
+    const explicit = { ...stored, op: '>', for: '1m' };
+    expect(buildRecipeObject('threshold', initialFormState(explicit), explicit)).toEqual(explicit);
+    // changed away from the default: written, after the stored members
+    const changed = buildRecipeObject('threshold', { ...untouched(), op: '>=', mode: 'silent' }, stored);
+    expect(changed).toEqual({ ...stored, op: '>=', mode: 'silent' });
+    expect(Object.keys(changed)).toEqual([...Object.keys(stored), 'op', 'mode']);
+  });
+
+  it('quantile left to the exporter default is not written back on a recipe that takes it', () => {
+    // threshold does not take quantile, so the check above says nothing about it.
+    const p99 = { recipe: 'p99_latency', name: 'api_p99', metric: 'request_seconds_bucket', threshold: '0.5:warning', window: '5m' };
+    const out = buildRecipeObject('p99_latency', initialFormState(p99), p99);
+    expect(out).toEqual(p99);
+    const moved = buildRecipeObject('p99_latency', { ...initialFormState(p99), quantile: '0.95' }, p99);
+    expect(moved.quantile).toBe('0.95');
+    // control: a new p99_latency alert writes the default, as before
+    expect(buildRecipeObject('p99_latency', initialFormState(p99)).quantile).toBe('0.99');
+  });
+
+  describe('when the recipe kind changes', () => {
+    it('keeps what the new kind takes and drops what it does not (group_by on absence)', () => {
+      const out = buildRecipeObject('absence', untouched(), stored);
+      expect(out.recipe).toBe('absence');
+      expect(out.selectors).toEqual(stored.selectors);
+      expect(out.selectors_re).toEqual(stored.selectors_re);
+      expect(out).not.toHaveProperty('group_by'); // the exporter refuses group_by on absence
+    });
+
+    it('keeps group_by for a kind that takes it', () => {
+      const out = buildRecipeObject('rate', untouched(), stored);
+      expect(out.group_by).toEqual(['persistentvolumeclaim']);
+    });
+
+    it('does not put slo_burn_rate members on another kind', () => {
+      const slo = {
+        recipe: 'slo_burn_rate', name: 'api_slo', metric: 'errors_total', denominator_metric: 'requests_total',
+        objective: '99.9', slo_period: '28d', min_events: 20, selectors: { job: 'api' },
+      };
+      const f = { ...initialFormState(slo), threshold: '0.05', window: '5m' };
+      const out = buildRecipeObject('ratio', f, slo);
+      for (const k of ['objective', 'slo_period', 'min_events']) expect(out).not.toHaveProperty(k);
+      expect(out.selectors).toEqual({ job: 'api' });
+      expect(out.denominator_metric).toBe('requests_total');
+    });
+
+    it('a member the recipe contract does not list stays (not this form\'s to judge)', () => {
+      const withNote = { ...stored, x_owner_note: 'team-one' };
+      const out = buildRecipeObject('absence', initialFormState(withNote), withNote);
+      expect(out.x_owner_note).toBe('team-one');
+    });
+  });
+
+  it('nested values are copied all the way down, not one level', () => {
+    const nested = { ...stored, x_meta: { owners: ['team-one'], links: { runbook: 'r1' } } };
+    const out = buildRecipeObject('threshold', initialFormState(nested), nested);
+    expect(out.x_meta).toEqual(nested.x_meta);
+    out.x_meta.owners.push('x');
+    out.x_meta.links.runbook = 'changed';
+    expect(nested.x_meta).toEqual({ owners: ['team-one'], links: { runbook: 'r1' } });
+  });
+
+  it('same kind: a stored member the kind does not take is still handed back as stored', () => {
+    // absence takes no group_by, and the exporter refuses it. The form did not
+    // put it there and cannot show it; dropping it on an unrelated edit would
+    // be the silent deletion this fixes. The save is refused with the reason.
+    const odd = { recipe: 'absence', name: 'heartbeat', metric: 'up', window: '10m', threshold: '1:critical',
+      group_by: ['instance'], objective: '99.9' };
+    const out = buildRecipeObject('absence', initialFormState(odd), odd);
+    expect(out.group_by).toEqual(['instance']);
+    expect(out.objective).toBe('99.9');
+  });
+
+  it('the owned set is exactly the form state plus the recipe select', () => {
+    // A field added to the form state but not to FORM_OWNED_KEYS would be
+    // carried back from the stored recipe after the user cleared it.
+    expect([...FORM_OWNED_KEYS].sort()).toEqual(['recipe', ...Object.keys(initialFormState(null))].sort());
   });
 });
 

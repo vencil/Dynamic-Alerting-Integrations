@@ -547,7 +547,12 @@ export default function RecipeBuilder(props) {
           {onSubmit ? (
             <button type="button" className="px-4 py-2 rounded-md text-sm font-medium disabled:opacity-50"
               data-testid="submit" disabled={!ready}
-              onClick={() => recipeObj && onSubmit(recipeObj, initialValue ? initialValue.name : undefined)}>
+              onClick={() => recipeObj && onSubmit(
+                // #3920: the caller replaces the stored recipe with this, so
+                // an edit hands back the members the form does not own too.
+                buildRecipeObject(recipe, f, initialValue),
+                initialValue ? initialValue.name : undefined,
+              )}>
               {initialValue ? t('更新此 recipe', 'Update this recipe') : t('加入此 recipe', 'Add this recipe')}
             </button>
           ) : (
