@@ -100,9 +100,9 @@ func TestVerdictCache_ConcurrentJudgementsAgree(t *testing.T) {
 	}
 }
 
-// A refusal quoting a 1 MiB key: the message is parse-tree's own, already
-// bounded at its source (parsetree.MaxMessageBytes), and the same text on a
-// miss, on a hit and through the public decode entry.
+// A refusal of a 1 MiB repeated key: the message is parse-tree's own fixed
+// sentence (it never quotes the key, #3703), and the same text on a miss, on a
+// hit and through the public decode entry.
 func TestVerdictCache_LongMessageIsParseTreesOwn(t *testing.T) {
 	t.Parallel()
 	k := strings.Repeat("k", 1<<20)
