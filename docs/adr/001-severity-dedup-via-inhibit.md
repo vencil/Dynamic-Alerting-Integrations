@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: exporter
 created_at: 2026-03-13
-updated_at: 2026-11-14
+updated_at: 2026-10-10
 ---
 # ADR-001: 嚴重度 Dedup 採用 Inhibit 規則
 
@@ -126,6 +126,5 @@ inhibit_rules:
 ## 相關
 
 - [ADR-003: Sentinel Alert 模式](./003-sentinel-alert-pattern.md) — 同樣以抑制規則實作靜默模式
-- [ADR-040: 平台預設值內建在讀取端](./040-platform-defaults-builtin-layer.md) — 另一項會在客戶沒改設定的情況下改變告警行為的決策；升級前以新舊兩版各渲染一次、比對結果的做法兩者共用
 - [Config-Driven 架構設計 §2.8](../design/config-driven.md#28-severity-dedup嚴重度去重) — 行為矩陣與租戶設定
 - [`generate_alertmanager_routes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/generate_alertmanager_routes.py) — 抑制規則的產生器
