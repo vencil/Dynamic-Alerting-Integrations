@@ -85,6 +85,17 @@ def read_dashboards(dashboards):
             for path, cm_name, content, flag in dashboards]
 
 
+class _NoExitStatus(Exception):
+    """kubectl gave no exit status part-way through one dashboard (not
+    startable, out of time, killed): ``rows`` is what that dashboard got to.
+    ``main`` keeps the rows and attempts no dashboard after it — each would
+    wait out the same timeout again (review of #3539)."""
+
+    def __init__(self, rows):
+        super().__init__("kubectl gave no exit status")
+        self.rows = rows
+
+
 def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboard=None, *,
                      raw):
     """Import a single Grafana dashboard JSON as a labeled ConfigMap.
@@ -175,7 +186,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
                 "caller_error": True,  # kubectl not run / no exit in time = caller-error
                 "detail": str(e),
             })
-            return results
+            raise _NoExitStatus(results) from e
 
     # Step 2: Label ConfigMap for Grafana sidecar discovery
     label_args = [
@@ -196,7 +207,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
             "caller_error": True,  # kubectl not run / no exit in time = caller-error
             "detail": f"ConfigMap {cm_name} is applied, its label is NOT confirmed: {e}",
         })
-        return results
+        raise _NoExitStatus(results) from e
     if dry_run or labelled.returncode == 0:
         results.append({
             "action": "label_configmap",
@@ -356,15 +367,23 @@ def main():
             # kubectl gave no exit status (not startable, out of time, killed),
             # so the ones after it are not attempted: each would wait again.
             stopped = True
-            left = len(pending) - done - 1
             results = [{
                 "action": "create_configmap",
                 "status": "fail",
                 "caller_error": True,  # kubectl not run / no exit in time = caller-error
-                "detail": f"{exc}" + (
-                    f" — {left} dashboard(s) after {cm_name} were not attempted"
-                    if left else ""),
+                "detail": f"{exc}",
             }]
+        except _NoExitStatus as exc:
+            # The same, later in the dashboard: its apply or its label got no
+            # exit status. Its rows stay (an applied ConfigMap whose label is
+            # not confirmed among them).
+            stopped = True
+            results = exc.rows
+        if stopped:
+            left = len(pending) - done - 1
+            if left:
+                results[-1]["detail"] += (
+                    f" — {left} dashboard(s) after {cm_name} were not attempted")
         all_results.extend(results)
         if any(r["status"] == "fail" for r in results):
             has_failure = True

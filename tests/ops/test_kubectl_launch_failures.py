@@ -328,6 +328,37 @@ def test_a_dashboard_dir_keeps_the_rows_of_what_it_applied(tmp_path, inputs, too
         "create configmap", "apply -f", "label configmap"]
 
 
+@pytest.mark.parametrize("alive, calls, rows, said", [
+    (1, ["create configmap"],
+     [("create_configmap", "fail")], "`kubectl apply -f -`"),
+    (2, ["create configmap", "apply -f"],
+     [("create_configmap", "pass"), ("label_configmap", "fail")],
+     "its label is NOT confirmed"),
+], ids=["apply", "label"])
+def test_a_dashboard_dir_stops_at_an_apply_or_a_label_with_no_exit_status(
+        tmp_path, inputs, toolbox, alive, calls, rows, said):
+    """CodeRabbit on #3539: only the `kubectl create` stopped the run. An
+    apply or a label that gave no exit status became an ordinary row, and
+    the dashboards after it were still attempted — each waiting out the
+    same timeout on a cluster that does not answer. They are not attempted;
+    the rows the dashboard got to stay, rc 2."""
+    bindir = _dying_kubectl(tmp_path, alive, "eacces")
+    r = _run(_entries(inputs, tmp_path)["grafana-import --dashboard-dir --json"], bindir, toolbox)
+    assert r.returncode == 2, r.stdout + r.stderr
+    left = "2 dashboard(s) after grafana-a were not attempted"
+    if any(status == "pass" for _action, status in rows):
+        doc = json.loads(r.stdout)
+        assert [(a["action"], a["status"]) for a in doc["actions"]] == rows
+        last = doc["actions"][-1]["detail"]
+    else:
+        # --json with no row that passed: one ERROR line, stdout empty (#3617)
+        assert r.stdout == "" and "nothing was answered" in r.stderr, (r.stdout, r.stderr)
+        last = r.stderr
+    assert said in last and left in last, last
+    # kubectl ran for a.json only; the call that could not start records nothing
+    assert (tmp_path / "calls").read_text(encoding="utf-8").splitlines() == calls
+
+
 def test_grafana_import_says_the_configmap_is_applied_but_not_labelled(tmp_path, inputs,
                                                                       toolbox):
     """The one part-way case with something left in the cluster that the

@@ -335,7 +335,10 @@ def compute_crd_manifest(
                              timeout=_KUBECTL_TIMEOUT_S, inherit_stdin=True)
     except KubectlError as exc:
         said = printable_stderr(exc.stderr)
-        if "\n" not in said:      # one line: the message already holds it
+        # Nothing to add when the message already holds all of it (one short
+        # line). One LONG line is cut to 300 characters in the message, so it
+        # is printed too — "one line" was the wrong test (review of #3539).
+        if said in str(exc):
             raise
         raise KubectlError(f"{exc}\nkubectl's stderr:\n{said}") from exc
     manifest = FileManifest(label="cluster-crd", path=f"kubernetes:{namespace}")

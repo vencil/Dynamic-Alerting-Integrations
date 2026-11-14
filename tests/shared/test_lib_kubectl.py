@@ -265,6 +265,20 @@ def test_a_failed_read_carries_kubectls_whole_stderr(tmp_path, monkeypatch):
     assert ei.value.stderr == stderr and "memcache" not in str(ei.value)
 
 
+def test_a_control_sequence_on_the_last_stderr_line_does_not_reach_the_message(tmp_path,
+                                                                             monkeypatch):
+    """CodeRabbit on #3539: the last stderr line goes into the error message;
+    `failed\\x1b[2J` there cleared the operator's screen. The message shows
+    `?`; `error.stderr` keeps kubectl's own bytes for a caller that wants them."""
+    stderr = "failed\x1b[2J\x07"
+    _fake_kubectl(tmp_path, monkeypatch, 1, "", stderr)
+    with pytest.raises(lk.KubectlError) as ei:
+        lk.kubectl_list("secret", namespace="ns")
+    assert "failed?[2J?" in str(ei.value)
+    assert "\x1b" not in str(ei.value) and "\x07" not in str(ei.value)
+    assert ei.value.stderr == stderr
+
+
 def test_printable_stderr_keeps_the_lines_and_drops_the_controls():
     assert lk.printable_stderr("a\x1b[2Jb\r\nc\td\x00\n") == "a?[2Jb\nc\td?"
     long = "x" * 5000

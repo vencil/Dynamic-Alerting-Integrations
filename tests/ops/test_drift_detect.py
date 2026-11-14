@@ -785,6 +785,24 @@ class TestComputeCrdManifest:
         assert "dial tcp 10.0.0.1:6443: i/o timeout?[2J\n" in said
         assert "\x1b" not in said
 
+    def test_one_long_stderr_line_is_printed_past_the_messages_300_characters(self, monkeypatch):
+        """CodeRabbit on #3539: "one line: the message already holds it" was
+        wrong for a line longer than the 300 characters the message keeps —
+        the rest was dropped while the docs said the stderr is printed."""
+        from _lib_kubectl import KubectlError
+        line = "error: " + "x" * 600 + " the-end-of-the-line"
+        self._kubectl(monkeypatch, (1, "", line + "\n"))
+        with pytest.raises(KubectlError) as exc:
+            dd.compute_crd_manifest("ns")
+        assert "the-end-of-the-line" in str(exc.value)
+
+    def test_a_short_one_line_stderr_is_not_printed_twice(self, monkeypatch):
+        from _lib_kubectl import KubectlError
+        self._kubectl(monkeypatch, (1, "", "error: You must be logged in\n"))
+        with pytest.raises(KubectlError) as exc:
+            dd.compute_crd_manifest("ns")
+        assert str(exc.value).count("You must be logged in") == 1
+
     def test_each_rule_is_hashed_by_its_groups(self, monkeypatch):
         import hashlib
         groups = [{"name": "g", "rules": []}]

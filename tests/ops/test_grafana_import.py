@@ -284,7 +284,11 @@ class TestImportDashboard:
         f = tmp_path / "dash.json"
         f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
         calls = _kubectl(monkeypatch, {"apply": raised})
-        results = gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        # No exit status: the rows come on the exception, which stops `main`
+        # from attempting the dashboards after this one.
+        with pytest.raises(gi._NoExitStatus) as stop:
+            gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        results = stop.value.rows
         assert [c[1] for c in calls] == ["create", "apply"]      # no label
         assert [(r["action"], r["status"], r.get("caller_error")) for r in results] == [
             ("create_configmap", "fail", True)]
@@ -301,7 +305,9 @@ class TestImportDashboard:
         f = tmp_path / "dash.json"
         f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
         _kubectl(monkeypatch, {"label": raised})
-        results = gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        with pytest.raises(gi._NoExitStatus) as stop:
+            gi.import_dashboard(str(f), "cm", "ns", raw=f.read_bytes())
+        results = stop.value.rows
         assert [(r["action"], r["status"], r.get("caller_error")) for r in results] == [
             ("create_configmap", "pass", None), ("label_configmap", "fail", True)]
         assert "its label is NOT confirmed" in results[1]["detail"] and why in results[1]["detail"]

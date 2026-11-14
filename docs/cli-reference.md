@@ -1163,7 +1163,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|------|
 | `0` | 無非預期漂移 |
 | `1` | CI 模式：偵測到非預期漂移 |
-| `2` | 呼叫端錯誤：`--dirs` 有空項、任一目錄不存在或 da-guard 列不出內容（點名 `--dirs` 與該目錄）、目錄上有 da-guard 驗證會點名的路徑、沒有可用的 da-guard、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、在 PATH 上但起不來（沒有執行權限、`Exec format error`、`#!` 直譯器不存在；先前是 traceback，[#3539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3539)）、逾時（30s）、被 signal 中止、非零結束（`kubectl` 的 stderr 全文照印，控制字元以 `?` 取代）、輸出不是 JSON 或不是物件清單（沒有 `items` 的 `{"kind":"List"}` 先前當成空叢集、結束碼 `0`）；argparse 拒絕的參數 |
+| `2` | 呼叫端錯誤：`--dirs` 有空項、任一目錄不存在或 da-guard 列不出內容（點名 `--dirs` 與該目錄）、目錄上有 da-guard 驗證會點名的路徑、沒有可用的 da-guard、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、在 PATH 上但起不來（沒有執行權限、`Exec format error`、`#!` 直譯器不存在；先前是 traceback，[#3539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3539)）、逾時（30s）、被 signal 中止、非零結束（印出 `kubectl` 的 stderr——超過 4000 字元時印最後 4000 字元並註明——控制字元以 `?` 取代）、輸出不是 JSON 或不是物件清單（沒有 `items` 的 `{"kind":"List"}` 先前當成空叢集、結束碼 `0`）；argparse 拒絕的參數 |
 
 ---
 

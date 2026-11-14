@@ -76,10 +76,12 @@ class KubectlError(CallerError):
 def _last_line(text: str) -> str:
     """kubectl's own message is its last stderr line: before it, client-go
     may log (``E1024 … memcache.go … Couldn't get current server API group
-    list``) on an unreachable cluster."""
+    list``) on an unreachable cluster. It goes into an error message, so its
+    control characters are replaced like ``printable_stderr``'s: a last line
+    of ``failed\x1b[2J`` must not clear the operator's screen."""
     for line in reversed((text or "").splitlines()):
         if line.strip():
-            return line.strip()[:300]
+            return line.strip().translate(_UNPRINTABLE)[:300]
     return ""
 
 
