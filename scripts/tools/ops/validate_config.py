@@ -65,6 +65,12 @@ Checks:
                     (#3042): a rule that never fires, a served threshold no
                     rule reads. Report only; run only where the compiler is
                     installed (the repo — the da-tools image ships none)
+  16. Unsupplied defaults — a threshold the registry ships armed
+                    (`arming: default`), of a pack this tree deploys (the
+                    root platform file carries one of its keys, or a tenant
+                    declares it in `_metadata.db_type`), that the root
+                    platform file neither sets under `defaults:` nor lists
+                    under `optional_overrides:`. Advisory: WARN at most (#3830)
 
 Hierarchical trees: a row may get its input from a reader that is FLAT — it
 reads only the top level of --config-dir — while threshold-exporter reads the
@@ -2173,6 +2179,116 @@ def check_no_alert(config_dir: str, verdict: "key_verdict.TreeVerdict | None" = 
     return _make_result("no_alert", WARN, details)
 
 
+_UNSUPPLIED_DEFAULTS_HINT = (
+    "Each line is a threshold the platform ships switched on that the root "
+    "platform file of this tree does not carry, so the alert comparing it "
+    "stays silent for every tenant. Add the key under `defaults:` (the line "
+    "gives the platform's value), or, to leave it off on purpose, list it "
+    "under `optional_overrides:` (a tenant can still set it there). A pack "
+    "counts as deployed when the root platform file carries any of its keys "
+    "or a tenant declares it in `_metadata.db_type`. Judged against the "
+    "registry this tool was built with: a rule pack older than the tool may "
+    "not read the key yet. Never blocks (#3830).")
+
+
+_UNSUPPLIED_DEFAULTS_NOT_CHECKED_HINT = (
+    "Nothing was judged, so no default is known to be supplied: fix what the "
+    "line above names (a working, current da-guard; a root platform file "
+    "that reads) and run again. Never blocks (#3830).")
+
+
+def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
+    """Thresholds the platform ships armed that this tree does not supply
+    (#3830): a key the registry marks `arming: default`, of a pack this tree
+    deploys, that the root platform file neither sets under `defaults:` nor
+    lists under `optional_overrides:`. `da-tools init` copies the platform
+    defaults into the customer's tree, so a default added or replaced later
+    (#3778's `mysql_connection_usage_percent`) never reaches it, and the
+    alert comparing it is silent with no row saying so.
+
+    Which keys ship armed is the registry's answer, as the generated module
+    carries it (`_registry_lib.packaged_default_armed`): no list is kept
+    here.
+
+    A pack is deployed when either holds — no deployment inventory exists:
+
+    * the root platform file carries one of its keys, under `defaults:` or
+      `optional_overrides:`, in any #1231 spelling (the exporter's rule,
+      asked of da-guard). A tenant's or a profile's key adds nothing: one
+      the root file does not declare is already `unread (no_row)`.
+    * a tenant's `_metadata.db_type`, as /metrics serves it (served-values:
+      a root platform file's `tenants:` entry counts), names it.
+
+    The root platform file is the one parse-tree says the root's chain
+    selects (`_defaults.yaml` / `_defaults.yml`): a key only a subtree
+    carrier declares reaches no tenant (#1976).
+
+    Advisory only: WARN or PASS, never FAIL — the registry read is this
+    tool's, and the rule packs a deployment runs are another release line.
+    A served reading or spelling answer that cannot be had is a WARN saying
+    nothing was checked.
+    """
+    import _registry_lib  # ops/: the registry as the generated module carries it
+
+    def not_checked(why: str) -> dict[str, object]:
+        return _make_result("unsupplied_defaults", WARN, [
+            f"not checked: whether every default-armed threshold is supplied was not judged ({why})"],
+            hint=_UNSUPPLIED_DEFAULTS_NOT_CHECKED_HINT)
+    carrier = _lib_parse_cache.reader_for(config_dir).carrier(config_dir)
+    if carrier is None:
+        return _make_result("unsupplied_defaults", PASS,
+                            ["no root _defaults.yaml — nothing to check"])
+    raw = load_confd_file(config_dir, str(carrier), default={})
+    block = raw.get("defaults") if isinstance(raw, dict) else None
+    listed = raw.get("optional_overrides") if isinstance(raw, dict) else None
+    written = sorted({str(k).partition("{")[0] for k in (block if isinstance(block, dict) else {})}
+                     | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
+    try:
+        spell = tv_key_spellings(written)
+        served = load_served_tree(config_dir, partial=True)
+        registry = _registry_lib.registry_keys(_registry_lib.packaged_registry_doc())
+        armed = _registry_lib.packaged_default_armed()
+    except (DaGuardError, DaGuardNotFoundError, OSError, YamlFileError, ValueError, KeyError) as exc:
+        return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
+    supplied = {spell.canonical(k): k for k in written}
+    # pack -> what shows it is deployed: (root keys as written, tenants)
+    seen: dict[str, tuple[set[str], set[str]]] = {}
+    for canonical, as_written in supplied.items():
+        pack = registry.get(canonical, {}).get("pack")
+        if pack in armed:
+            seen.setdefault(pack, (set(), set()))[0].add(as_written)
+    for tenant, tv in served.tenants.items():
+        meta = tv.values.get("_metadata")
+        kinds = meta.get("db_type") if isinstance(meta, dict) else None
+        for kind in ([kinds] if isinstance(kinds, str) else kinds if isinstance(kinds, list) else []):
+            if kind in armed:
+                seen.setdefault(kind, (set(), set()))[1].add(tenant)
+    judged = [(pack, key) for pack in sorted(seen) for key in armed[pack]]
+    missing = [(pack, key) for pack, key in judged if key not in supplied]
+    if not missing:
+        return _make_result("unsupplied_defaults", PASS, [
+            f"{len(judged)} default-armed threshold(s) of {len(seen)} deployed pack(s): "
+            f"each is set or listed in {carrier.name}"])
+
+    def capped(names: "set[str]") -> str:
+        ordered = sorted(names)
+        return ", ".join(ordered[:WARN_LIMIT]) + (
+            f" (+{len(ordered) - WARN_LIMIT} more)" if len(ordered) > WARN_LIMIT else "")
+    details = []
+    for pack, key in missing:
+        keys, tenants = seen[pack]
+        why = "; ".join(
+            ([f"{carrier.name} carries {capped(keys)}"] if keys else [])
+            + ([f"db_type of tenant(s) {capped(tenants)}"] if tenants else []))
+        entry = registry[key]
+        details.append(
+            f"unsupplied `{key}` — the {pack} pack ships it armed "
+            f"(platform value {entry['value']} {entry.get('unit', '')}".rstrip()
+            + f"), but {carrier.name} neither sets it under `defaults:` nor lists it "
+            f"under `optional_overrides:` — {pack} is deployed here: {why}")
+    return _make_result("unsupplied_defaults", WARN, details)
+
+
 _TIER_INVERSION_HINT = (
     "Make each tenant's critical threshold stricter than its warning one "
     "(above it for an alert that fires on a high value, below it for one that "
@@ -2628,6 +2744,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     ),
     # ADR-038: each line names the file, the key, the reason and the tenants.
     "no_alert": (_NO_ALERT_HINT, "docs/cli-reference.md#validate-config"),
+    "unsupplied_defaults": (_UNSUPPLIED_DEFAULTS_HINT, "docs/cli-reference.md#validate-config"),
     "tier_inversion": (_TIER_INVERSION_HINT, "docs/cli-reference.md#validate-config"),
     "unread_keys": (
         "Fix a misspelt key, or remove a key nothing reads; a `disable` that "
@@ -3272,7 +3389,13 @@ def _main() -> "Report | None":
                               verdict=verdicts[0] if verdicts else None, judge=False,
                               _config_dir=args.config_dir))
 
-    # 16. A tenant's served critical not stricter than its warning, across
+    # 16. Default-armed thresholds of a deployed pack that the root platform
+    # file neither sets nor lists (#3830) — unconditional, advisory: WARN at
+    # most, never a FAIL.
+    results.append(_run_check("unsupplied_defaults", check_unsupplied_defaults,
+                              args.config_dir, _config_dir=args.config_dir))
+
+    # 17. A tenant's served critical not stricter than its warning, across
     # files (#3691) — unconditional; FAIL on an inverted pair.
     results.append(_run_check("tier_inversion", check_tier_inversion, args.config_dir,
                               _config_dir=args.config_dir))

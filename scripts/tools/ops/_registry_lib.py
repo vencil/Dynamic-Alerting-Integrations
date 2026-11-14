@@ -756,7 +756,36 @@ def render_rule_packs_module(doc: dict) -> str:
 
     body = pprint.pformat(project_rule_packs(doc), indent=1, width=100,
                           sort_dicts=False)
-    return _RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
+    armed = pprint.pformat(default_armed_by_pack(doc), indent=1, width=100,
+                           sort_dicts=False)
+    return (_RULE_PACKS_MODULE_HEADER + "\nTHRESHOLD_PACKS = " + body + "\n"
+            + _DEFAULT_ARMED_COMMENT + "DEFAULT_ARMED_KEYS = " + armed + "\n")
+
+
+#: Above the generated constant: RULE_PACKS has no arming field, and the
+#: da-tools image carries this module but not the registry YAML (#3830).
+_DEFAULT_ARMED_COMMENT = (
+    "\n# Per pack, the keys the registry ships armed (`arming: default`), in\n"
+    "# registry order; a pack with none is absent. What validate-config's\n"
+    "# `unsupplied_defaults` row reads where no repo tree is (#3830).\n")
+
+
+def default_armed_by_pack(doc: dict) -> dict[str, list[str]]:
+    """Per pack, the keys *doc* ships armed (`is_chart_armed`), in registry
+    order — DERIVED, never authored. A pack with none is absent."""
+    out: dict[str, list[str]] = {}
+    for key, entry in registry_keys(doc).items():
+        if is_chart_armed(entry):
+            out.setdefault(entry["pack"], []).append(key)
+    return out
+
+
+def packaged_default_armed() -> dict[str, tuple[str, ...]]:
+    """`default_armed_by_pack` as the generated module carries it: for a
+    reader that runs where no repo tree is (the da-tools image)."""
+    import runpy  # noqa: PLC0415  (a data module)
+    armed = runpy.run_path(RULE_PACKS_MODULE_PATH)["DEFAULT_ARMED_KEYS"]
+    return {pack: tuple(keys) for pack, keys in armed.items()}
 
 
 def packaged_registry_doc() -> dict:
