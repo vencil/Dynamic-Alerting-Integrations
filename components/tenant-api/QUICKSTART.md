@@ -51,6 +51,8 @@ git -C conf.d init -q && git -C conf.d add -A && \
 
 # 產生器服務($REPO 見第 1 步)。它判定時要跑三支 Go 讀取程式;任一支沒跑成
 # (找不到、跑不起來、被訊號終止、太舊)時那筆寫入回 503(tool_fault)。
+# 例外:在判定的記憶體上限下由 Go 執行期因記憶體不足自己結束的,是那筆寫入
+# 太大,回 200 rejected(memory),不是 503。
 make -s -C "$REPO" da-guard-build da-read-build da-crdecode-build
 export DA_GUARD_BINARY="$REPO/.build/da-guard" DA_READ_BINARY="$REPO/.build/da-read" \
        DA_CRDECODE_BINARY="$REPO/.build/da-crdecode"
