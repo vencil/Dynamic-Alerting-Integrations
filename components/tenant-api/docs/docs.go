@@ -1057,7 +1057,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Exact db_type",
+                        "description": "A db_type the tenant declares (exact match against any one of its kinds)",
                         "name": "db_type",
                         "in": "query"
                     },
@@ -3800,7 +3800,11 @@ const docTemplate = `{
                     ]
                 },
                 "db_type": {
-                    "type": "string"
+                    "description": "Every database kind the tenant declares in ` + "`" + `_metadata.db_type` + "`" + `, in the\norder written (#3771: the config takes a string or a list; a string is\none kind). Omitted when none is declared.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "domain": {
                     "type": "string"

@@ -102,7 +102,7 @@ func TestValidate_ValueRatchet_OtherErrorsStay(t *testing.T) {
 	t.Parallel()
 	doc := vrBody("    _silent_mode: purple\n    _profile: nope\n")
 	errs, notices := validateOn(t, doc, doc)
-	if countSub(errs, `unknown profile "nope"`) != 1 || countSub(errs, purpleNote) != 0 ||
+	if countSub(errs, `_profile "nope" references a profile that is not defined`) != 1 || countSub(errs, purpleNote) != 0 ||
 		countSub(notices, purpleNote) != 1 {
 		t.Errorf("errs=%q notices=%q", errs, notices)
 	}

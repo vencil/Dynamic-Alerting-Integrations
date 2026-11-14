@@ -9,7 +9,7 @@
 | jvm | jmx_exporter | 9 | 7 |
 | kafka | kafka_exporter | 8 | 5 |
 | kubernetes | cAdvisor + kube-state-metrics | 30 | 14 |
-| liveness | threshold-exporter heartbeat | 0 | 2 |
+| liveness | threshold-exporter heartbeat | 0 | 3 |
 | mariadb | mysqld_exporter (Percona) | 12 | 17 |
 | mongodb | mongodb_exporter | 10 | 10 |
 | nginx | nginx-prometheus-exporter | 9 | 6 |
@@ -19,4 +19,4 @@
 | postgresql | postgres_exporter | 8 | 8 |
 | rabbitmq | rabbitmq_exporter | 14 | 9 |
 | redis | redis_exporter | 12 | 9 |
-| **Total** | | **166** | **182** |
+| **Total** | | **166** | **183** |

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -312,6 +313,38 @@ func TestSearchTenants_MultipleFiltersAreANDed(t *testing.T) {
 	}
 	if resp.Items[0].ID != "a" {
 		t.Errorf("matched item = %q, want %q", resp.Items[0].ID, "a")
+	}
+}
+
+// #3771: db_type is a list; the filter matches any one declared kind
+// (exact), and a scalar spelling is a one-element list.
+func TestSearchTenants_DBTypeFilterMatchesAnyDeclaredKind(t *testing.T) {
+	t.Parallel()
+	dir := setupConfigDir(t, map[string]string{
+		"multi.yaml":  fixtureTenantYAML("multi", "prod", "tier1", "db", "[mariadb, redis]", "alice"),
+		"single.yaml": fixtureTenantYAML("single", "prod", "tier1", "db", "redis", "alice"),
+		"other.yaml":  fixtureTenantYAML("other", "prod", "tier1", "db", "postgresql", "alice"),
+		"near.yaml":   fixtureTenantYAML("near", "prod", "tier1", "db", "[redis-cluster]", "alice"),
+	})
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "db_type=redis")
+	var got []string
+	for _, it := range resp.Items {
+		got = append(got, it.ID)
+	}
+	if want := []string{"multi", "single"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("db_type=redis matched %v, want %v (exact per kind, not substring)", got, want)
+	}
+	for _, it := range resp.Items {
+		if it.ID == "multi" && !reflect.DeepEqual(it.DBType, []string{"mariadb", "redis"}) {
+			t.Errorf("multi db_type = %v, want [mariadb redis]", it.DBType)
+		}
+		if it.ID == "single" && !reflect.DeepEqual(it.DBType, []string{"redis"}) {
+			t.Errorf("single db_type = %v, want [redis]", it.DBType)
+		}
+	}
+	resp, _, _ = runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "q=MARIA")
+	if resp.TotalMatched != 1 || resp.Items[0].ID != "multi" {
+		t.Errorf("q=MARIA matched %+v, want only multi (free text over every kind)", resp.Items)
 	}
 }
 

@@ -163,10 +163,11 @@ func TestThresholdLeaf_KeepsAnAgreeingValue(t *testing.T) {
 		text string
 		want any
 	}{
-		{70, "70", 70}, {1e6, "1e6", 1e6}, {1.5, "1.5", 1.5}, {1000, "1_000", 1000}, {"abc", "abc", "abc"},
+		{70, "70", 70}, {1e6, "1e6", 1e6}, {1.5, "1.5", 1.5}, {"abc", "abc", "abc"},
 		{"70", "70", "70"}, {"70:critical", "70:critical", "70:critical"}, {nil, "", nil},
 		{math.Copysign(0, -1), "-0", math.Copysign(0, -1)},
 		{15, "017", "017"}, {31, "0x1F", "0x1F"}, {15, "0o17", "0o17"}, {true, "true", "true"},
+		{1000, "1_000", "1_000"}, // #3457: YAML's 1000, the exporter's refused text
 		{math.Inf(1), "1e999", "1e999"}, {math.NaN(), ".nan", ".nan"}, {0, "-0", 0},
 	} {
 		got := thresholdLeaf(c.g, c.text)

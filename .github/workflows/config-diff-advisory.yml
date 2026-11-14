@@ -66,7 +66,7 @@ on:
       - "scripts/tools/_lib_parse_tree.py"
       - "scripts/tools/_lib_confd.py"
       - "scripts/tools/_lib_parse_cache.py"
-      - "scripts/tools/_threshold_alerts.py"
+      - "scripts/tools/ops/_threshold_alerts.py"
       - "scripts/tools/_lib_tenant_values.py"
       # The build flags of the da-guard this workflow builds (#3601 follow-up).
       # Unlike the Go sources (see the header): a flag change can break this

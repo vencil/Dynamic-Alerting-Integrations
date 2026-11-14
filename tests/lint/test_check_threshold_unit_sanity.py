@@ -55,7 +55,8 @@ def _conf_d(root, body: dict):
 def _values(node):
     """(key, number) for every threshold literal in *node*, read the way
     `_collect` reads them: `_walk_literals`, then one `_judged` run."""
-    return [(k, n) for _, k, n in gate._judged([(None, k, v) for k, v in gate._walk_literals(node)])]
+    return [(k, n) for _, k, n in gate._judged(
+        [(None, k, v, at) for k, v, at in gate._walk_literals(node)])]
 
 
 def _errors(registry, root):
@@ -191,30 +192,92 @@ def test_non_finite_tenant_string_stays_out_of_domain(tmp_path, value):
     assert any("OUT-OF-DOMAIN" in e and "pct = " in e and "inf" in e for e in errs), errs
 
 
-@pytest.mark.parametrize("value, shown", [("1_000", "1000"), ("-1_0", "-10"), ("1_0e2:critical", "1000")])
-def test_an_underscored_number_is_judged_as_the_exporter_reads_it(tmp_path, value, shown):
-    """#3140: Go's ParseFloat reads `1_000` as 1000, and so did this lint
-    (Python's `float`) before #3140; a refusal of `_` here let an
-    out-of-domain value through (`--ci` 1 → 0)."""
+@pytest.mark.parametrize("value, shown", [("1e3", "1000"), ("+1000.", "1000"), ("1.024E3:critical", "1024"),
+                                          ("-1e1", "-10")])
+def test_a_decimal_spelling_is_judged_as_the_exporter_reads_it(tmp_path, value, shown):
+    """#3267: every value is read by the exporter (`da-guard
+    threshold-values`); whatever decimal spelling its grammar takes is judged
+    at the number it reads."""
     _conf_d(tmp_path, {"tenants": {"t": {"pct": value}}})
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert any("OUT-OF-DOMAIN" in e and f"pct = {shown} " in e for e in errs), errs
 
 
-@pytest.mark.parametrize("value, shown", [("0x1p10", "1024"), ("0X1P10:critical", "1024"),
-                                          ("0x1p1024", "inf"), ("-0x1p1024", "-inf")])
-def test_a_hex_float_is_judged_as_the_exporter_reads_it(tmp_path, value, shown):
-    """#3267 (owner-approved, the one intended change): the exporter reads
-    `0x1p10` (1024), and every value is now read by the exporter
-    (`da-guard threshold-values`), so a hex float is judged — it was skipped
-    while the lint read values with a Python copy (`--ci` 0 → 1)."""
+@pytest.mark.parametrize("value", ["1_000", "-1_0", "1_0e2:critical", "0x1p10", "0X1P10:critical", "0x1p1024",
+                                   "-0x1p1024", "123456789012345678901"])
+def test_a_spelling_outside_the_grammar_is_reported_not_judged(tmp_path, value):
+    """#3457: `_` between digits, a hex float and a mantissa of more than 20
+    digits are not threshold numbers: the exporter serves none of them, so
+    there is no number to judge — and that is a finding of its own
+    (NOT-A-NUMBER), never a value that passed. Python's `float` reads
+    `1_000`; this lint does not read values itself."""
     _conf_d(tmp_path, {"tenants": {"t": {"pct": value}}})
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
-    assert any("OUT-OF-DOMAIN" in e and f"pct = {shown} " in e for e in errs), errs
+    assert len(errs) == 1 and errs[0].startswith("NOT-A-NUMBER: ") and ": pct = " in errs[0], errs
+    assert "OUT-OF-DOMAIN" not in errs[0]
+    # The same key is judged when the value is a number.
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": "1000"}}})
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert len(errs) == 1 and errs[0].startswith("OUT-OF-DOMAIN: "), errs
 
 
-def test_an_in_domain_hex_float_is_clean(tmp_path):
-    _conf_d(tmp_path, {"tenants": {"t": {"pct": "0x1p4"}}})
+@pytest.mark.parametrize("value", ["abc", "70:high", "70:", "", "+nan", "disable:critical", "\u0661\u0660"])
+def test_a_value_the_exporter_cannot_read_is_reported(tmp_path, value):
+    """A value the exporter refuses and reads no number from was not checked:
+    reported, whatever it is. (`disable:<severity>` switches no threshold row
+    off; the exporter refuses it.)"""
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": value}}})
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert [e.split(":")[0] for e in errs] == ["NOT-A-NUMBER"], errs
+
+
+@pytest.mark.parametrize("value", ["disable", "OFF", " disabled ", "false", "50", "50:critical", "1e1"])
+def test_a_value_the_exporter_reads_is_not_reported(tmp_path, value):
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": value}}})
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+def test_only_the_places_a_threshold_is_written_are_reported(tmp_path):
+    """A scheduled value's `default` and each window's `value` hold a
+    threshold; its `window`, `expires` and `reason` do not, and neither does
+    anything else nested under the key."""
+    _conf_d(tmp_path, {"tenants": {"t": {
+        "pct": {"default": "0x1F", "expires": "2099-01-01T00:00:00Z", "reason": "1_000 users",
+                "overrides": [{"window": "09:00-18:00", "value": "1_000"},
+                              {"window": "19:00-20:00", "value": "50"}]},
+        "other": {"type": "scheduled", "note": {"deep": "abc"}}}}})
+    errs = _errors(_registry(pct=_spec(80, "%"), other=_spec(5, "count")), tmp_path)
+    assert sorted(e.split(" — ")[0] for e in errs) == [
+        "NOT-A-NUMBER: components/threshold-exporter/config/conf.d/_defaults.yaml: pct = '0x1F'",
+        "NOT-A-NUMBER: components/threshold-exporter/config/conf.d/_defaults.yaml: pct = '1_000'"], errs
+
+
+def test_a_critical_key_with_a_suffix_is_judged_not_reported(tmp_path):
+    """`<key>_critical: "50:critical"` is refused by the exporter and still
+    carries a number: the number is judged (OUT-OF-DOMAIN / TIER-INVERSION),
+    it is not a NOT-A-NUMBER."""
+    _conf_d(tmp_path, {"tenants": {"t": {"conn": "100", "conn_critical": "50:critical"}}})
+    errs = _errors(_registry(**_TIERS), tmp_path)
+    assert [e.split(":")[0] for e in errs] == ["TIER-INVERSION"], errs
+
+
+@pytest.mark.parametrize("field", ["p50", "p95", "p99", "recommended"])
+def test_a_docs_json_value_outside_the_grammar_is_reported(tmp_path, field):
+    """No conf.d gate reads docs/assets: a percentile or a recommendation
+    written `0x1p10` is this lint's to name."""
+    _write(tmp_path, "docs/assets/recommendation-data.json",
+           json.dumps({"recommendations": {"pct": {field: "0x1p10", "unit": "%"}}}))
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert len(errs) == 1 and errs[0].startswith(
+        f"NOT-A-NUMBER: docs/assets/recommendation-data.json[{field}]: pct = '0x1p10'"), errs
+    _write(tmp_path, "docs/assets/platform-data.json",
+           json.dumps({"rulePacks": {"p": {"defaults": {"pct": {"value": "1_000", "unit": "%"}}}}}))
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any(e.startswith("NOT-A-NUMBER: docs/assets/platform-data.json: pct = '1_000'") for e in errs), errs
+
+
+def test_an_in_domain_exponent_spelling_is_clean(tmp_path):
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": "1.6e1"}}})
     assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
 
 
@@ -255,29 +318,33 @@ def _main_rc(tmp_path, monkeypatch, registry, argv=("--ci",)):
 
 
 @pytest.mark.parametrize("files, registry, rc", [
-    # hex out of domain (old 0)
+    # #3457: a hex float is not a threshold number — the exporter reads none.
+    # That is NOT-A-NUMBER (1): no number was read, so nothing was checked
+    # (0 before #3267, when the value was skipped silently).
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
       "tenants:\n  t:\n    pct: '0x1p10'\n"}, _registry(pct=_spec(80, "%")), 1),
-    # hex overflow, ±Inf (old 0)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
       "tenants:\n  t:\n    pct: '0x1p1024'\n"}, _registry(pct=_spec(80, "%")), 1),
-    # a hex percentile in recommendation-data (old 0)
     ({"docs/assets/recommendation-data.json":
       '{"recommendations": {"pct": {"p50": "0x1p10", "unit": "%"}}}'}, _registry(pct=_spec(80, "%")), 1),
-    # a hex value outside an enum (old 0)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
       "tenants:\n  t:\n    h: '0x1.8p1'\n"}, _registry(h=_spec(0, _ENUM)), 1),
-    # a signed NaN: Go reads no number, so nothing is judged (old 1: Python read NaN)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
-      "tenants:\n  t:\n    h: '+nan'\n"}, _registry(h=_spec(0, _ENUM)), 0),
+      "tenants:\n  t:\n    pct: '1.024e3'\n"}, _registry(pct=_spec(80, "%")), 1),
+    ({"docs/assets/recommendation-data.json":
+      '{"recommendations": {"pct": {"p50": "1.024e3", "unit": "%"}}}'}, _registry(pct=_spec(80, "%")), 1),
+    # a signed NaN: Go reads no number from it — NOT-A-NUMBER (1; Python read
+    # NaN and judged it, also 1; for a while it was skipped, 0)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
-      "tenants:\n  t:\n    h: '-NaN:critical'\n"}, _registry(h=_spec(0, _ENUM)), 0),
+      "tenants:\n  t:\n    h: '+nan'\n"}, _registry(h=_spec(0, _ENUM)), 1),
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    h: '-NaN:critical'\n"}, _registry(h=_spec(0, _ENUM)), 1),
     # an unsigned NaN is still judged (unchanged, 1)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
       "tenants:\n  t:\n    h: 'NaN'\n"}, _registry(h=_spec(0, _ENUM)), 1),
-    # an overflow in non-ASCII digits: Go reads none (old 1: Python read inf)
+    # an overflow in non-ASCII digits: Go reads none — NOT-A-NUMBER (1)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
-      "tenants:\n  t:\n    pct: '\u0661e999'\n"}, _registry(pct=_spec(80, "%")), 0),
+      "tenants:\n  t:\n    pct: '\u0661e999'\n"}, _registry(pct=_spec(80, "%")), 1),
     # a `+nan` written last no longer hides a tier inversion (old 0)
     ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
       "tenants:\n  t1:\n    conn: '100'\n    conn_critical: '50'\n"
@@ -289,7 +356,7 @@ def _main_rc(tmp_path, monkeypatch, registry, argv=("--ci",)):
     ({"docs/assets/platform-data.json":
       '{"rulePacks": {"p": {"defaults": {"pct": {"value": 1' + "0" * 400 + ', "unit": "%"}}}}}'},
      _registry(pct=_spec(80, "%")), 2),
-], ids=["hex", "hex-overflow", "hex-percentile", "hex-enum", "plus-nan", "minus-nan-suffix",
+], ids=["hex", "hex-overflow", "hex-percentile", "hex-enum", "exponent", "exponent-percentile", "plus-nan", "minus-nan-suffix",
         "nan", "arabic-overflow", "nan-hid-inversion", "critical-suffix", "huge-int"])
 def test_ci_exit_code(tmp_path, monkeypatch, files, registry, rc):
     for rel, text in files.items():
@@ -756,3 +823,110 @@ def test_main_names_a_renderer_that_cannot_be_had_and_exits_2(tmp_path, monkeypa
     err = capsys.readouterr().err
     assert "site's renderer, which cannot be had: simulated: no pygments" in err, err
     assert "crashed" not in err, err
+
+
+# ---------------------------- owner ruling on #3457: null, registry, docs JSON
+
+_CONFD_FILE = "components/threshold-exporter/config/conf.d/_defaults.yaml"
+
+
+@pytest.mark.parametrize("written", ["~", "", "null", "Null", "NULL"])
+def test_a_yaml_null_in_a_tenant_tree_is_a_key_not_written(tmp_path, written):
+    """`key: ~` and `key:` write nothing: the exporter reads the key as not
+    written and da-guard passes the tree, so this lint does too. Told by the
+    scalar's `!!null` tag — the structure — not by its text."""
+    _write(tmp_path, _CONFD_FILE, f"tenants:\n  t:\n    pct: {written}\n")
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+@pytest.mark.parametrize("written", ['""', "''", '"~"', '"null"', "!!str ~"])
+def test_a_string_that_only_looks_like_a_null_is_reported(tmp_path, written):
+    """An empty string, or the text `~` / `null` as a string, is a value the
+    exporter is given and reads no number from."""
+    _write(tmp_path, _CONFD_FILE, f"tenants:\n  t:\n    pct: {written}\n")
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert [e.split(":")[0] for e in errs] == ["NOT-A-NUMBER"], errs
+
+
+def test_a_null_default_of_a_scheduled_value_is_not_reported(tmp_path):
+    _write(tmp_path, _CONFD_FILE,
+           'tenants:\n  t:\n    pct: {default: ~, overrides: [{window: "09:00-18:00", value: "0x1F"}]}\n')
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert len(errs) == 1 and ": pct = '0x1F'" in errs[0], errs
+
+
+_REGISTRY_FILE = "rule-packs/threshold-registry.yaml"
+
+
+@pytest.mark.parametrize("written, shown", [("0x1p10", "'0x1p10'"), ("1_000", "'1_000'"), ('"abc"', "'abc'"),
+                                            ("~", "null"), ("true", "true"), ("[80]", "a list of 1 item(s)")])
+def test_a_registry_value_that_is_no_number_is_reported(tmp_path, written, shown):
+    """The registry writes a key's threshold in its `value` field: that is a
+    place a value must be written, so anything but a number there — a null
+    too — is reported. (PyYAML reads `1_000` as the int 1000; the registry's
+    loader is PyYAML, so that one is judged as 1000.)"""
+    _write(tmp_path, _REGISTRY_FILE,
+           f'version: 1\npacks:\n  t:\n    pct: {{value: {written}, unit: "%", tier: defaults}}\n')
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    if written == "1_000":
+        assert len(errs) == 1 and errs[0].startswith(f"OUT-OF-DOMAIN: {_REGISTRY_FILE}: pct = 1000"), errs
+        return
+    assert len(errs) == 1 and errs[0].startswith(
+        f"NOT-A-NUMBER: {_REGISTRY_FILE}: pct = {shown} "), errs
+
+
+def test_a_registry_value_that_is_a_number_is_judged(tmp_path):
+    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 300, unit: "%", tier: defaults}\n')
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert len(errs) == 1 and errs[0].startswith(f"OUT-OF-DOMAIN: {_REGISTRY_FILE}: pct = 300"), errs
+    _write(tmp_path, _REGISTRY_FILE, 'version: 1\npacks:\n  t:\n    pct: {value: 80, unit: "%", tier: defaults}\n')
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+def test_a_nested_value_in_a_tenant_tree_is_not_a_threshold_place(tmp_path):
+    """Only the registry's own shape makes `value` a place a threshold is
+    written; `pct: {value: …}` in a tenant tree is not the scheduled form."""
+    _write(tmp_path, _CONFD_FILE, 'tenants:\n  t:\n    pct: {value: "0x1F"}\n')
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+@pytest.mark.parametrize("value, shown", [(True, "true"), (False, "false"), (None, "null"),
+                                          ([50], "a list of 1 item(s)"), ({"a": 1}, "a mapping of 1 key(s)")])
+def test_a_docs_json_value_that_is_no_literal_is_reported(tmp_path, value, shown):
+    """A docs/assets field that is there holds a number: a JSON true, null,
+    list or object is not one, and was passed over as "no literal"."""
+    _write(tmp_path, "docs/assets/recommendation-data.json",
+           json.dumps({"recommendations": {"pct": {"p50": 50, "recommended": value, "unit": "%"}}}))
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert errs == [e for e in errs if e.startswith(
+        f"NOT-A-NUMBER: docs/assets/recommendation-data.json[recommended]: pct = {shown} ")] and len(errs) == 1, errs
+    _write(tmp_path, "docs/assets/recommendation-data.json", "{}")
+    _write(tmp_path, "docs/assets/platform-data.json",
+           json.dumps({"rulePacks": {"p": {"defaults": {"pct": {"value": value, "unit": "%"}}}}}))
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any(e.startswith(f"NOT-A-NUMBER: docs/assets/platform-data.json: pct = {shown} ") for e in errs), errs
+
+
+def test_a_docs_json_field_that_is_absent_writes_nothing(tmp_path):
+    _write(tmp_path, "docs/assets/recommendation-data.json",
+           json.dumps({"recommendations": {"pct": {"p50": 50, "unit": "%"}}}))
+    _write(tmp_path, "docs/assets/platform-data.json",
+           json.dumps({"rulePacks": {"p": {"defaults": {"pct": {"unit": "%"}}}}}))
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+def test_the_shipped_docs_json_holds_no_null_where_a_value_is_written():
+    """The premise of reporting a JSON null: no shipped docs/assets field
+    uses one to mean "no value". If one ever does, this says so before the
+    lint starts failing on it."""
+    for rel, fields in (("docs/assets/platform-data.json", ("value",)),
+                        ("docs/assets/recommendation-data.json", ("p50", "p95", "p99", "recommended"))):
+        with io.open(os.path.join(gate.PROJECT_ROOT, rel), encoding="utf-8") as fh:
+            doc = json.load(fh)
+        metas = ([m for pack in doc["rulePacks"].values() for m in (pack.get("defaults") or {}).values()]
+                 if "rulePacks" in doc else list(doc["recommendations"].values()))
+        assert metas, rel
+        for meta in metas:
+            for field in fields:
+                if field in meta:
+                    assert isinstance(meta[field], (int, float)) and not isinstance(meta[field], bool), (rel, meta)

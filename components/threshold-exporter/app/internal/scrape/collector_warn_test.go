@@ -92,7 +92,7 @@ func TestCollector_MaintenanceExpiresWarnOncePerScrape(t *testing.T) {
 				// #3638: a scalar whose text is not YAML is a scalar — read
 				// by the state-filter resolver only, which runs only when
 				// the filter is declared.
-				{`_state_maintenance for tenant=t-bad-yaml: value "expires: [" is not read: "expires: [" is neither "enable"`, map[bool]int{true: 1, false: 0}[tree == "declared"]},
+				{`_state_maintenance for tenant=t-bad-yaml: value "expires: [" is not read: it is neither "enable"`, map[bool]int{true: 1, false: 0}[tree == "declared"]},
 				// Control: another expires WARN type, once per scrape before too.
 				{`invalid expires "not-a-date" in _silent_mode for tenant=t-silent`, 1},
 				// Control: a valid expires is not warned about.

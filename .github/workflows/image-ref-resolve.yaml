@@ -51,20 +51,6 @@ on:
       # tests/ops/test_nightly_scan_matrix_drift.py.
       - "helm/**/values*.yaml"
       - "k8s/**"
-      - "scripts/ops/check_image_refs_resolve.py"
-      # #3579: the script exits through _lib_exitcodes.run(), which imports _lib_compat.
-      - "scripts/tools/_lib_exitcodes.py"
-      - "scripts/tools/_lib_compat.py"
-      # #3611: the registry is asked over its v2 API (_lib_registry), whose
-      # transport-error list is _lib_prometheus's; it imports _lib_validation,
-      # which imports _lib_constants (_lib_exitcodes is listed above).
-      - "scripts/tools/_lib_registry.py"
-      - "scripts/tools/_lib_prometheus.py"
-      - "scripts/tools/_lib_validation.py"
-      - "scripts/tools/_lib_constants.py"
-      # #3206: the reading the scan asks (da-crdecode) and its client.
-      - "scripts/tools/_lib_consumer_read.py"
-      - "components/threshold-exporter/app/cmd/da-crdecode/**"
       # ⛔ Same discipline as the `values*` line above, for the `delivered`
       # scope: this file IS the pin table that scope reads, so a PR that bumps
       # one of the customer-facing refs must be the PR that re-resolves
@@ -72,7 +58,59 @@ on:
       # gate that CAN see the pins and is never invoked when one changes.
       # Pinned by a sibling assertion in the nightly-scan matrix-drift module.
       - "scripts/tools/ops/init_project.py"
+      # ⛔ Everything above is the hand-written part: the DATA this workflow
+      # scans. What the job LOADS is not listed by hand any more (#3756 —
+      # `scripts/tools/_lib_input.py` was imported two modules deep and missing
+      # from this list). The region below is written by
+      # `make workflow-path-filters` from what the job was measured to load
+      # (.github/path-traces/image-ref-resolve.yaml.json), the Go sources of
+      # the da-crdecode it builds, the literal imports of those files, and the
+      # boundary set — files something other than Python reads, named with the
+      # reason in BOUNDARY (scripts/ops/workflow_path_filter.py). The job's
+      # last `run:` step fails, naming the file, when the job loads something
+      # this list does not cover. Do not edit between the markers.
+      # BEGIN GENERATED path-trace (scripts/ops/workflow_path_filter.py generate)
+      - ".github/path-traces/image-ref-resolve.yaml.json"
       - ".github/workflows/image-ref-resolve.yaml"
+      - ".python-version"
+      - "Makefile"
+      - "components/da-tools/app/VERSION"
+      - "components/threshold-exporter/app/cmd/da-crdecode/*.go"
+      - "components/threshold-exporter/app/go.mod"
+      - "components/threshold-exporter/app/go.sum"
+      - "components/threshold-exporter/app/third_party/yaml.v3/*.go"
+      - "components/threshold-exporter/app/third_party/yaml.v3/go.mod"
+      - "requirements/ci-constraints.txt"
+      - "scripts/ops/check_image_refs_resolve.py"
+      - "scripts/ops/go_build.sh"
+      - "scripts/ops/path_trace/sitecustomize.py"
+      - "scripts/ops/paths_filter_glob.py"
+      - "scripts/ops/workflow_path_filter.py"
+      - "scripts/tools/_lib_atomic_write.py"
+      - "scripts/tools/_lib_compat.py"
+      - "scripts/tools/_lib_confd.py"
+      - "scripts/tools/_lib_confedit.py"
+      - "scripts/tools/_lib_constants.py"
+      - "scripts/tools/_lib_consumer_read.py"
+      - "scripts/tools/_lib_engine.py"
+      - "scripts/tools/_lib_exitcodes.py"
+      - "scripts/tools/_lib_godispatch.py"
+      - "scripts/tools/_lib_input.py"
+      - "scripts/tools/_lib_io.py"
+      - "scripts/tools/_lib_label.py"
+      - "scripts/tools/_lib_parse_cache.py"
+      - "scripts/tools/_lib_parse_tree.py"
+      - "scripts/tools/_lib_paths.py"
+      - "scripts/tools/_lib_prometheus.py"
+      - "scripts/tools/_lib_python.py"
+      - "scripts/tools/_lib_registry.py"
+      - "scripts/tools/_lib_validation.py"
+      - "scripts/tools/_lib_write_check.py"
+      - "scripts/tools/ops/_registry_lib.py"
+      - "scripts/tools/ops/_rule_packs_generated.py"
+      - "scripts/tools/ops/guard_dispatch.py"
+      - "scripts/tools/ops/scaffold_tenant.py"
+      # END GENERATED path-trace
   workflow_dispatch:
 
 permissions:
@@ -93,6 +131,17 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version-file: .python-version
+
+      # #3756: from here on every Python process of this job records what it
+      # executes and opens, and go_build.sh records the package it builds; the
+      # job's last `run:` step reads that back. It has to be the FIRST `run:`
+      # step — pip below opens requirements/ci-constraints.txt, and that read
+      # is measured only because this comes first. Generated; `generate
+      # --check` holds both its text and its position.
+      # BEGIN GENERATED path-trace-env job=resolve
+      - name: Trace what this job loads (#3756)
+        run: python3 scripts/ops/workflow_path_filter.py env --trace-dir "$RUNNER_TEMP/path-trace" >> "$GITHUB_ENV"
+      # END GENERATED path-trace-env
 
       # Its own step so a dependency failure cannot be mistaken for a resolve
       # failure in either scope below.
@@ -138,3 +187,27 @@ jobs:
       - name: Resolve image refs (delivered scope — what `da-tools init` writes)
         if: ${{ !cancelled() }}
         run: python3 scripts/ops/check_image_refs_resolve.py --scope delivered
+
+      # #3756: every first-party file the steps above loaded, and every in-repo
+      # source of the da-crdecode they built, must be in `on.pull_request.paths`
+      # above — otherwise a PR changing only that file would not have started
+      # this workflow. `!cancelled()` so a failed scope still gets its loads
+      # checked (a step that did not run loaded nothing, which is not a pass
+      # for it — it is simply not measured on this run). Generated, and it has
+      # to stay the job's LAST `run:` step.
+      # BEGIN GENERATED path-trace-assert job=resolve
+      - name: Path filter covers everything this job loaded (#3756)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ops/workflow_path_filter.py assert --workflow image-ref-resolve.yaml --job resolve --trace-dir "$RUNNER_TEMP/path-trace" --out "$RUNNER_TEMP/path-trace.json"
+      # END GENERATED path-trace-assert
+
+      # The trace `assert --out` wrote: on a red run, this file is what the
+      # `resolve` entry of .github/path-traces/image-ref-resolve.yaml.json
+      # should become.
+      - name: Upload the trace
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: path-trace-image-ref-resolve-resolve
+          path: ${{ runner.temp }}/path-trace.json
+          if-no-files-found: warn

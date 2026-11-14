@@ -79,6 +79,9 @@ type recipeContract struct {
 		Label   string `json:"label"`
 		Window  string `json:"window"`
 		Decimal string `json:"decimal"`
+		// ThresholdNumber is the one grammar of a threshold number (#3457):
+		// see thresholdNumberRe.
+		ThresholdNumber string `json:"thresholdNumber"`
 	} `json:"patterns"`
 	Op struct {
 		Enum      []string          `json:"enum"`
@@ -260,7 +263,7 @@ func parseRecipeContract(data []byte) (recipeContract, error) {
 			return c, fmt.Errorf("forecast lookback: %w", err)
 		}
 	}
-	for _, p := range []string{c.Patterns.Name, c.Patterns.Metric, c.Patterns.Label, c.Patterns.Window, c.Patterns.Decimal} {
+	for _, p := range []string{c.Patterns.Name, c.Patterns.Metric, c.Patterns.Label, c.Patterns.Window, c.Patterns.Decimal, c.Patterns.ThresholdNumber} {
 		if _, err := regexp.Compile(p); err != nil || p == "" {
 			return c, fmt.Errorf("pattern %q does not compile: %v", p, err)
 		}

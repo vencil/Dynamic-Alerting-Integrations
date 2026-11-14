@@ -720,8 +720,9 @@ def _served_written(key, raws):
     """`[side, ...]` for `raws` (`_served_side`; a side not given is None),
     read by ONE da-guard served-values run over the tree `_written_tree`
     writes. The number is the exporter's reading (Go's
-    `parseThresholdNumber`, #3267): a spelling it reads (`1_000`, `0x1p4`)
-    is backtested at the number it serves, one it refuses is `_NotRead`.
+    `parseThresholdNumber`, #3267): a spelling it reads (`1e3`, `+.5`) is
+    backtested at the number it serves, one it refuses (`1_000`, `0x1p4`,
+    a number of more than 20 digits, #3457) is `_NotRead`.
     Raises what `_served_side` and `load_served_tree` raise."""
     import tempfile
     if all(raw is None for raw in raws):

@@ -1179,15 +1179,15 @@ kubectl get jobs -n monitoring -w
 
 **Symptom**：`MassExporterOutage`（critical）fire，summary 寫「Mass exporter outage (N tenants)」，同時有一批 `TenantExporterAbsent`。
 
-條件是**同時**超過 5 個租戶、且超過 10% 的租戶 exporter 沒有健康的 scrape target。兩個條件一起成立，幾乎一定是**共用依賴**壞了，不是 N 個 exporter 各自掛掉。
+條件是**同時**：超過 5 個租戶有某種宣告的 exporter 沒在回應（該種的存在指標缺席，例如 `mysql_up`），且超過 10% 的「租戶 × db_type」組缺席（[#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)）。門檻數租戶，所以單一租戶宣告多種、全部掛掉不會觸發；比例數組，宣告 `[mariadb, redis]` 的租戶在分母算 2 組，只有 mariadb 掛時分子算 1 組。兩個條件一起成立，幾乎一定是**共用依賴**壞了，不是 N 個 exporter 各自掛掉。
 
 ```mermaid
 flowchart TD
-    A[租戶 exporter 沒有 up==1] --> B{整個 tenant-exporters job 都不見？}
+    A[某租戶的某種 exporter 沒在回應] --> B{整個 tenant-exporters job 都不見？}
     B -- 是 --> J[TenantExporterJobAbsent<br/>本告警不 fire]
     B -- 否 --> C{超過 5 個且超過 10%？}
     C -- 是 --> M[MassExporterOutage：<br/>當成一個事件查共因]
-    C -- 否 --> T[個別 TenantExporterAbsent：<br/>逐租戶處理]
+    C -- 否 --> T[個別 TenantExporterAbsent：<br/>逐租戶、逐 db_type 處理]
 ```
 
 ⛔ **不要逐租戶修**。一個一個重啟 exporter 不會處理共因，還會拖延。
@@ -1212,7 +1212,7 @@ kubectl get events -A --sort-by=.lastTimestamp | tail -30
 
 **最常見原因**：node pool 被 drain 或升級、網路分割、rolling restart 時 image registry 拉不到。
 
-**Fix**：修共因本身——恢復 node、修網路或 NetworkPolicy、修 registry 存取。共因解除後，exporter 通常不需手動處理就會回到 `up==1`，各 `TenantExporterAbsent` 與本告警一起解除。
+**Fix**：修共因本身——恢復 node、修網路或 NetworkPolicy、修 registry 存取。共因解除後，exporter 通常不需手動處理就會重新回應 scrape，各 `TenantExporterAbsent` 與本告警一起解除。
 
 **If not this**：
 - (a) Prometheus 自己出問題（Pod 重啟中、資源不足）→ 此時其他 scrape job 也會一起異常；先看 Prometheus Pod 狀態

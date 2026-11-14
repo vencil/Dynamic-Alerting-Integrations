@@ -335,9 +335,10 @@ class TestWorkflowContract:
 def _gh_glob_regex(pattern: str) -> re.Pattern[str]:
     """GitHub Actions `paths:` filter glob 的最小子集 → regex。
 
-    ⛔ 刻意**不用** `scripts/ops/paths_filter_glob.covers()`：它對 `[Dd]` 這種
-    字元類別設計上回 False（那支比對器只負責 dorny/paths-filter 的形狀），拿它來
-    判「會不會觸發」等於把每一條 `[Yy]` pattern 都判成不觸發。
+    ⛔ 刻意**不用** `scripts/ops/paths_filter_glob.covers()`，是為了讓這裡的判定
+    獨立於那支比對器：#3756 之前它對 `[Dd]` 這種字元類別回 False，拿它來判「會不會
+    觸發」等於把每一條 `[Yy]` pattern 都判成不觸發；#3756 之後它認得字元類別，
+    但本檔保留自己的 regex，兩份實作互為對照。
 
     語意（GitHub 文件 workflow syntax 的 filter pattern cheat sheet）：
     `*` 不跨 `/`；`**` 跨目錄；`**/` 可配**零層**目錄（`**/README.md` 配到根目錄的

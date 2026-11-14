@@ -272,14 +272,13 @@ def test_the_matrix_covers_every_place_and_key():
         assert {"group_wait", "receiver", "repeat_interval"} <= set(_PLACES[where]), where
 
 
-@pytest.mark.parametrize("where,key,kind", _CASES,
-                         ids=[f"{w}-{'canary-key' if v == 'key_name' else k}-{v}"
-                              for w, k, v in _CASES])
-def test_no_routing_value_reaches_a_message(tmp_path, where, key, kind):
-    tag = f"{where}-{key}-{kind}"
-    value = _canary_values(tag)[kind]
+def validate_run(tmp_path: Path, files: dict[str, dict]) -> tuple[list[dict], str]:
+    """Write *files* (name → content) as a conf.d and run the generator's
+    `--validate --strict --findings-json` on it: the findings, and every
+    message of the run as one text (stdout, stderr, the findings file).
+    Shared with tests/ops/test_reserved_value_canary_matrix.py (#3703)."""
     d = tmp_path / "conf.d"
-    for name, body in _place(where, key, value).items():
+    for name, body in files.items():
         (d / name).parent.mkdir(parents=True, exist_ok=True)
         (d / name).write_text(yaml.safe_dump(body, sort_keys=False), encoding="utf-8")
     empty = tmp_path / "bin"
@@ -294,9 +293,20 @@ def test_no_routing_value_reaches_a_message(tmp_path, where, key, kind):
     # rc 2, "stopping before any work", with no canary to find.
     assert p.returncode in (0, 1), (p.returncode, p.stderr)
     assert out.exists(), p.stderr
-    findings = json.loads(out.read_text(encoding="utf-8"))["findings"]
+    written = out.read_text(encoding="utf-8")
+    findings = json.loads(written)["findings"]
+    assert "run_failed" not in {f["kind"] for f in findings}, findings
+    return findings, p.stdout + p.stderr + written
+
+
+@pytest.mark.parametrize("where,key,kind", _CASES,
+                         ids=[f"{w}-{'canary-key' if v == 'key_name' else k}-{v}"
+                              for w, k, v in _CASES])
+def test_no_routing_value_reaches_a_message(tmp_path, where, key, kind):
+    tag = f"{where}-{key}-{kind}"
+    value = _canary_values(tag)[kind]
+    findings, text = validate_run(tmp_path, _place(where, key, value))
     kinds = {f["kind"] for f in findings}
-    assert "run_failed" not in kinds, findings
     # Round 6, N-2: the place was read — its marker finding is there, and
     # nothing else the case cannot cause.
     assert findings, "no finding: the value at this place was not judged"
@@ -304,5 +314,4 @@ def test_no_routing_value_reaches_a_message(tmp_path, where, key, kind):
     if marker:
         assert kinds & marker, (sorted(kinds), marker)
         assert kinds == _expected_kinds(where, key, kind), (sorted(kinds), sorted(_expected_kinds(where, key, kind)))
-    text = p.stdout + p.stderr + out.read_text(encoding="utf-8")
     assert "CANARY" not in text, text

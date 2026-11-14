@@ -43,10 +43,10 @@ func TestStateValueOf_Rules(t *testing.T) {
 		{"off", "crashloop", "off", stateValueOff, false, 0, ""},
 		{"false", "maintenance", "false", stateValueOff, false, 0, ""},
 		{"DISABLE", "crashloop", "DISABLE", stateValueOff, false, 0, ""},
-		{"yes", "maintenance", "yes", stateValueProblem, false, 0, `"yes" is neither`},
-		{"true", "maintenance", "true", stateValueProblem, false, 0, `"true" is neither`},
-		{"1", "crashloop", "1", stateValueProblem, false, 0, `"1" is neither`},
-		{"garbage", "maintenance", "garbage", stateValueProblem, false, 0, `"garbage" is neither`},
+		{"yes", "maintenance", "yes", stateValueProblem, false, 0, `it is neither`},
+		{"true", "maintenance", "true", stateValueProblem, false, 0, `it is neither`},
+		{"1", "crashloop", "1", stateValueProblem, false, 0, `it is neither`},
+		{"garbage", "maintenance", "garbage", stateValueProblem, false, 0, `it is neither`},
 		{"empty", "maintenance", "", stateValueProblem, false, 0, "is neither"},
 		{"enabled (not the word)", "crashloop", "enabled", stateValueProblem, false, 0, "is neither"},
 
@@ -58,15 +58,15 @@ func TestStateValueOf_Rules(t *testing.T) {
 		{"target enable", "maintenance", "target: enable\n", stateValueOn, true, 0, ""},
 		// #3638: a scalar that reads like the mapping is the scalar it was
 		// written as — not read, not on.
-		{"a scalar that reads like the mapping", "maintenance", "\"target: enable\"", stateValueProblem, false, 0, `"target: enable" is neither`},
-		{"a scalar that reads like a list", "maintenance", "\"[enable]\"", stateValueProblem, false, 0, `"[enable]" is neither`},
+		{"a scalar that reads like the mapping", "maintenance", "\"target: enable\"", stateValueProblem, false, 0, `it is neither`},
+		{"a scalar that reads like a list", "maintenance", "\"[enable]\"", stateValueProblem, false, 0, `it is neither`},
 		// A sequence is its text read as a scalar (as before #3638): not a
 		// mapping, not a structured problem.
-		{"a sequence", "maintenance", "[enable]", stateValueProblem, false, 0, `"- enable" is neither`},
+		{"a sequence", "maintenance", "[enable]", stateValueProblem, false, 0, `it is neither`},
 		{"target disable", "maintenance", "target: disable\n", stateValueOff, false, 0, ""},
 		{"target off (a disable word)", "maintenance", "target: \"off\"\n", stateValueOff, false, 0, ""},
 		{"target false (YAML boolean)", "maintenance", "target: false\n", stateValueOff, false, 0, ""},
-		{"target all", "maintenance", "target: all\n", stateValueProblem, false, 0, `target "all" is neither`},
+		{"target all", "maintenance", "target: all\n", stateValueProblem, false, 0, `target is neither`},
 		{"target empty", "maintenance", "target: \"\"\n", stateValueProblem, false, 0, "is neither"},
 		{"target a list", "maintenance", "target: [enable]\n", stateValueProblem, false, 0, "target must be"},
 
@@ -123,7 +123,7 @@ func TestStateValueOf_Rules(t *testing.T) {
 			"target: enable\nreason: \"until expires: never\"\n", stateValueOn, true, 0, ""},
 
 		// Shapes.
-		{"unknown field", "maintenance", "targt: disable\n", stateValueProblem, false, 0, "unknown field(s) targt"},
+		{"unknown field", "maintenance", "targt: disable\n", stateValueProblem, false, 0, "1 unknown field(s) (valid: "},
 		{"recurring entry not a mapping", "maintenance", "recurring: [x]\n", stateValueProblem, false, 0, "must be a mapping"},
 
 		// #3639: the exporter evaluates the windows itself.
@@ -135,16 +135,16 @@ func TestStateValueOf_Rules(t *testing.T) {
 		{"window crossing midnight, started Friday", "maintenance",
 			"recurring:\n- weekdays: [fri]\n  window: \"22:00-13:00\"\n", stateValueRecurringOnly, false, 1, ""},
 		{"misspelt field (fail-closed, not every day)", "maintenance",
-			"recurring:\n- weekday: [fri]\n  window: \"11:00-13:00\"\n", stateValueProblem, false, 0, "unknown field(s) weekday"},
+			"recurring:\n- weekday: [fri]\n  window: \"11:00-13:00\"\n", stateValueProblem, false, 0, "recurring[0] has 1 unknown field(s) (valid: "},
 		{"no weekdays", "maintenance", "recurring:\n- window: \"11:00-13:00\"\n", stateValueProblem, false, 0, "needs weekdays"},
 		{"unknown weekday", "maintenance", "recurring:\n- weekdays: [friday]\n  window: \"11:00-13:00\"\n",
-			stateValueProblem, false, 0, "weekday friday is not one of"},
+			stateValueProblem, false, 0, "recurring[0] has a weekday that is not one of"},
 		{"window not HH:MM-HH:MM", "maintenance", "recurring:\n- weekdays: [fri]\n  window: 4h\n",
 			stateValueProblem, false, 0, "is not a UTC"},
 		{"empty window", "maintenance", "recurring:\n- weekdays: [fri]\n  window: \"11:00-11:00\"\n",
 			stateValueProblem, false, 0, "is not a UTC"},
 		{"the old cron form", "maintenance", "recurring:\n- cron: \"0 2 * * 0\"\n  duration: 4h\n",
-			stateValueProblem, false, 0, "unknown field(s) cron, duration"},
+			stateValueProblem, false, 0, "recurring[0] has 2 unknown field(s) (valid: "},
 		{"recurring not a list", "maintenance", "recurring: weekly\n", stateValueProblem, false, 0, "must be a list"},
 		{"non-string keys", "maintenance", "1: x\n", stateValueProblem, false, 0, "takes only the fields"},
 	}
@@ -160,8 +160,9 @@ func TestStateValueOf_Rules(t *testing.T) {
 		if got := len(r.windows); got != c.recurring {
 			t.Errorf("%s: recurring windows = %d, want %d", c.name, got, c.recurring)
 		}
-		if c.problemHas != "" && !strings.Contains(r.problem, c.problemHas) {
-			t.Errorf("%s: problem = %q, want it to contain %q", c.name, r.problem, c.problemHas)
+		// expiresErr: an invalid expires' own text, the reader's WARN only.
+		if c.problemHas != "" && !strings.Contains(r.problem+r.expiresErr, c.problemHas) {
+			t.Errorf("%s: problem = %q, want it to contain %q", c.name, r.problem+r.expiresErr, c.problemHas)
 		}
 		// The write gate refuses exactly what the reader does not read.
 		wp := stateFilterValueProblem("_state_"+c.filter, valueAsWritten(c.val))
