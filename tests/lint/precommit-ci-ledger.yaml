@@ -65,6 +65,11 @@ hooks:
     pytest:
     - tests/dx/test_verify_diff.py
     - tests/dx/test_paths_map.py
+- id: workflow-path-filter-check
+  category: b
+  evidence:
+    pytest:
+    - tests/ops/test_workflow_path_filter.py::test_the_real_workflows_are_in_sync
 - id: cli-contract-check
   category: a
   evidence:

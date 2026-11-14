@@ -472,6 +472,10 @@ ALLOWED: "tuple[tuple[str, str, str], ...]" = (
      "--rule-pack-dir help text"),
     ("tests/lint/test_check_configmap_mount_completeness.py", r"configmap-rules-\*",
      "asserts the lint's own message"),
+    ("scripts/ops/workflow_path_filter.py", r"k8s/03-monitoring/configmap-rules-\*\.yml",
+     "RESERVED_PATTERNS: the key is ci.yml's own filter line, quoted verbatim "
+     "(a workflow file this repo's Python cannot feed); the ledger is checked "
+     "against that line both ways (#3756)"),
 )
 
 
