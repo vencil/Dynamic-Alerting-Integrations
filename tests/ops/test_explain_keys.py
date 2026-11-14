@@ -97,17 +97,33 @@ def test_an_inherited_sibling_switched_off_with_its_base(tmp_path):
     (d / "team" / "db-a.yaml").write_text("tenants:\n  db-a:\n    redis_memory: disable\n", encoding="utf-8")
     doc = _json(_run("--config-dir", d, "--json"))
     e = {x["key"]: x for x in doc["tenants"]["db-a"]}["redis_memory_critical"]
-    assert (e["verdict"], e["read_by"], e["served"], e["file"]) == \
-        ("read", ["exporter"], None, "team/_defaults.yaml")
+    assert (e["verdict"], e["read_by"], e["file"]) == \
+        ("read", ["exporter"], "team/_defaults.yaml")
     assert doc["findings"] == []
 
 
-def test_json_carries_value_and_served(conf_d):
+def test_json_carries_the_value_and_nothing_read_at_one_instant(conf_d):
+    """#3835: v2 judges each key over the whole day; no row carries what
+    /metrics served at --at (v1's `served`)."""
     doc = _json(_run("--config-dir", conf_d, "--json"))
+    assert doc["schema"] == "da-tools.explain-keys/v2"
     assert doc["status"] == "ok" and set(doc["tenants"]) == {"db-a", "db-b"}
     e = {x["key"]: x for x in doc["tenants"]["db-b"]}["mysql_connection_usage_percent"]
-    assert (e["value"], e["served"], e["layer"], e["file"]) == (60, 60.0, "tenant", "db-b.yaml")
+    assert (e["value"], e["layer"], e["file"]) == (60, "tenant", "db-b.yaml")
+    assert all("served" not in x for rows in doc["tenants"].values() for x in rows)
     assert doc["assert_differences"] == []
+
+
+def test_an_assert_file_pinning_served_is_refused_by_name(conf_d, tmp_path):
+    """#3835: a v1 expected file that pins `served` (what /metrics served at
+    one instant) is refused, naming why the field is gone — never compared
+    as if it passed, never read as a misspelling."""
+    golden = tmp_path / "v1.json"
+    golden.write_text(json.dumps({"tenants": {"db-b": [
+        {"key": "mysql_connection_usage_percent", "verdict": "read", "served": 60.0}]}}), encoding="utf-8")
+    p = _run("--config-dir", conf_d, "--assert", golden, "--json")
+    assert p.returncode == 2 and p.stdout == "", p.stderr
+    assert "field `served` removed in schema v2" in p.stderr and "served-values --at" in p.stderr, p.stderr
 
 
 def test_assert_passes_on_its_own_output_and_fails_on_a_difference(conf_d, tmp_path):

@@ -927,6 +927,7 @@ def _run_da_guard(
     reads_unreadable: bool = False,
     dropped_ok: bool = False,
     older_schemas: "tuple[str, ...]" = (),
+    fields_added_since: "tuple[tuple[str], ...] | None" = None,
 ) -> tuple[_T, int, str]:
     """Run `da-guard <subcommand> --config-dir <conf_d> <extra>` and return
     (`read(document)`, the exit code, stderr) — the one error contract both
@@ -943,7 +944,12 @@ def _run_da_guard(
     With `dropped_ok` (key-refs, #1822) a non-empty `parse_failed` /
     `unreadable` is returned through `read` instead of raised; exit 3 with
     neither is still output that is not da-guard's. *older_schemas*: earlier
-    versions of `schema`, which name the binary as older than this tool."""
+    versions of `schema`, which name the binary as older than this tool.
+    *fields_added_since*: the fields whose absence names the binary as older
+    (None: `_FIELDS_ADDED_SINCE`; `()` for a document whose every older
+    shape its schema names, key-verdict v3)."""
+    if fields_added_since is None:
+        fields_added_since = _FIELDS_ADDED_SINCE
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:
@@ -1035,7 +1041,7 @@ def _run_da_guard(
         # called older.
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
                  if isinstance(e, (_OlderSchema, _OlderOutput))
-                 or (isinstance(e, KeyError) and (e.args in _FIELDS_ADDED_SINCE
+                 or (isinstance(e, KeyError) and (e.args in fields_added_since
                                                   or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
         # Not the tree's either way: da-guard writes this JSON whatever the
@@ -1065,11 +1071,12 @@ def _run_da_guard(
 
 
 # Fields a da-guard document gained after its first version: one missing
-# names the binary as older than this tool (#3489, #3016).
-_FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",),
-                       ("undecidable_blocks",), ("switched_off_with",), ("base",),
-                       ("dead_entries",),  # #3502: key-verdict's rows and findings
-                       ("hint",))  # #3829: key-verdict's findings (a retired threshold key)
+# names the binary as older than this tool (#3489, #3016). Not key-verdict's:
+# its every older shape is named by its schema since v3 (#3835), so the
+# fields only its v1 / v2 lacked (`blocks`, `undecidable_blocks`,
+# `switched_off_with`, `base`, `hint`) are not listed.
+_FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",),
+                       ("dead_entries",))  # #3502: effective's
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:
