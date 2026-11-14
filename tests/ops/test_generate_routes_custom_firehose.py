@@ -34,6 +34,7 @@ pytestmark = pytest.mark.usefixtures("judging_run")
 import _grar_render as render  # noqa: E402
 import _lib_tenant_values  # noqa: E402
 import generate_alertmanager_routes as gar  # noqa: E402
+from _kubectl_fake import run_from_argv as kubectl_from_argv  # noqa: E402  (#3539)
 
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
         / "generate_alertmanager_routes.py")
@@ -259,6 +260,7 @@ def _fake_cluster(monkeypatch, am_yml: str) -> list[list[str]]:
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
+    monkeypatch.setattr(render, "kubectl_run", kubectl_from_argv(fake))
     return calls
 
 

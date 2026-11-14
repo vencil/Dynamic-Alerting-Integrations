@@ -47,6 +47,7 @@ SAMPLE_TREE = REPO / "components" / "threshold-exporter" / "config" / "conf.d"
 
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 import _lib_tenant_uniqueness as tu  # noqa: E402
+import _kubectl_fake  # noqa: E402  (#3539)
 
 # ⛔ The "could not measure" arms below patch `subprocess.run` on the stdlib
 # module object, which is what `_lib_tenant_uniqueness` calls. #1794 moved the
@@ -807,7 +808,11 @@ class TestNeverTreatsCannotMeasureAsClean:
             # validator's JSON to the kubectl call as well.
             return _Kubectl() if cmd[0] == "kubectl" else _Validator()
 
-        monkeypatch.setattr(subprocess, "run", _listing_passes(_fake_run))
+        # #3539: kubectl is started by `_lib_kubectl.kubectl_run` — located
+        # first, its output read from the files the runner hands it.
+        _kubectl_fake.located(monkeypatch)
+        monkeypatch.setattr(subprocess, "run",
+                            _listing_passes(_kubectl_fake.kubectl_run(_fake_run)))
         assert mod.main(["--config-dir", str(d),
                          "--output", str(_out(tmp_path))]) == 0  # … not our axis
 
@@ -1457,6 +1462,7 @@ class TestKubectlIsAHardPrerequisite:
                 "default that does not exist")
             raise subprocess.TimeoutExpired(cmd="kubectl", timeout=k["timeout"])
 
+        _kubectl_fake.located(monkeypatch)   # #3539: so the run is reached
         monkeypatch.setattr(subprocess, "run", _listing_passes(_dispatch))
         err = io.StringIO()
         with contextlib.redirect_stderr(err):

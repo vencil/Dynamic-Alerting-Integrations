@@ -34,7 +34,6 @@ Usage:
 import argparse
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -52,29 +51,27 @@ import _lib_input  # noqa: E402  (#3445: --dashboard is read by the lib)
 DASHBOARD_DOCUMENT = _lib_input.Document("json", dict)
 #: ``--dashboard-dir``: its top-level ``*.json`` entries (#3693).
 DASHBOARD_FILES = _lib_input.TopLevel("*.json")
-from _lib_kubectl import KubectlError, kubectl_list  # noqa: E402  (#3349)
+from _lib_kubectl import KubectlError, kubectl_list, kubectl_run  # noqa: E402  (#3349, #3539)
+
+#: Seconds one kubectl command of an import may take.
+_KUBECTL_TIMEOUT_S = 120
 
 
-def run_cmd(cmd, dry_run=False):
-    """Execute a command safely using list arguments only (no shell=True).
+def run_kubectl(verb, args, dry_run=False, stdin_text=None):
+    """``kubectl <verb> <args>`` through ``_lib_kubectl.kubectl_run`` (#3539):
+    the whole ``CompletedProcess`` once kubectl has exited — the caller reads
+    its exit status. ``KubectlError`` (rc 2, reason kubectl_error) when
+    kubectl is not on PATH, cannot be started, or does not finish in time.
 
-    In dry-run mode, prints the command but does not execute.
+    In dry-run mode, prints the command but does not execute (None).
     """
-    if not isinstance(cmd, list):
-        raise TypeError(f"run_cmd() requires list argument, got {type(cmd).__name__}")
+    if not isinstance(args, list):
+        raise TypeError(f"run_kubectl() requires list argument, got {type(args).__name__}")
     if dry_run:
-        print(f"  [DRY RUN] {' '.join(cmd)}", file=sys.stderr)
-        return "[dry-run]"
-    try:
-        return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace", stderr=subprocess.PIPE, timeout=120).strip()
-    except subprocess.CalledProcessError:
+        print(f"  [DRY RUN] kubectl {verb} {' '.join(args)}", file=sys.stderr)
         return None
-    # #3349: no kubectl, or no answer in time, is the environment — named
-    # (rc 2, reason kubectl_error), not a traceback.
-    except FileNotFoundError as exc:
-        raise KubectlError(f"`{' '.join(cmd[:3])}`: kubectl is not on PATH") from exc
-    except subprocess.TimeoutExpired as exc:
-        raise KubectlError(f"`{' '.join(cmd[:3])}`: no answer within 120s") from exc
+    return kubectl_run(verb, args, timeout=_KUBECTL_TIMEOUT_S, stdin_text=stdin_text,
+                       what=f"`kubectl {verb} {' '.join(args[:2])}`")
 
 
 def read_dashboards(dashboards):
@@ -86,6 +83,17 @@ def read_dashboards(dashboards):
     ``_lib_input.document``; its bytes for kubectl are read here once more."""
     return [(path, cm_name, content, _lib_input.read_bytes(path, flag=flag, lang="en"))
             for path, cm_name, content, flag in dashboards]
+
+
+class _NoExitStatus(Exception):
+    """kubectl gave no exit status part-way through one dashboard (not
+    startable, out of time, killed): ``rows`` is what that dashboard got to.
+    ``main`` keeps the rows and attempts no dashboard after it — each would
+    wait out the same timeout again (review of #3539)."""
+
+    def __init__(self, rows):
+        super().__init__("kubectl gave no exit status")
+        self.rows = rows
 
 
 def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboard=None, *,
@@ -119,16 +127,16 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
 
     filename = dashboard_p.name
 
-    def create_cmd(source):
+    def create_args(source):
         # Step 1: Create ConfigMap (using --dry-run=client to generate, then apply)
-        return ["kubectl", "create", "configmap", cm_name,
+        return ["configmap", cm_name,
                 f"--from-file={filename}={source}",
                 "-n", namespace,
                 "--dry-run=client", "-o", "yaml"]
 
     if dry_run:
-        run_cmd(create_cmd(dashboard_path), dry_run=True)
-        run_cmd(["kubectl", "apply", "-f", "-"], dry_run=True)
+        run_kubectl("create", create_args(dashboard_path), dry_run=True)
+        run_kubectl("apply", ["-f", "-"], dry_run=True)
         results.append({
             "action": "create_configmap",
             "status": "dry-run",
@@ -138,8 +146,12 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
         with tempfile.TemporaryDirectory(prefix="da-grafana-import-") as tmp:
             copy = Path(tmp) / filename
             copy.write_bytes(raw)
-            yaml_output = run_cmd(create_cmd(copy))
-        if yaml_output is None:
+            # Nothing of THIS dashboard is in the cluster yet. A kubectl that
+            # gives no exit status here raises KubectlError; `main` turns it
+            # into this dashboard's row and stops — the dashboards before it
+            # are applied, and their rows stay in the report.
+            created = run_kubectl("create", create_args(copy))
+        if created.returncode != 0:
             results.append({
                 "action": "create_configmap",
                 "status": "fail",
@@ -150,13 +162,7 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
 
         # Apply the generated YAML
         try:
-            proc = subprocess.run(
-                ["kubectl", "apply", "-f", "-"],
-                input=yaml_output,
-                capture_output=True,
-                text=True, encoding="utf-8", errors="replace",
-                timeout=120,
-            )
+            proc = run_kubectl("apply", ["-f", "-"], stdin_text=created.stdout.strip())
             if proc.returncode == 0:
                 results.append({
                     "action": "create_configmap",
@@ -171,24 +177,38 @@ def import_dashboard(dashboard_path, cm_name, namespace, dry_run=False, dashboar
                     "detail": f"kubectl apply failed: {proc.stderr[:60]}",
                 })
                 return results
-        except (OSError, subprocess.SubprocessError) as e:
+        except KubectlError as e:
+            # ⛔ Not "nothing was applied": a kubectl that did not finish in
+            # time may have sent the ConfigMap (the message says which).
             results.append({
                 "action": "create_configmap",
                 "status": "fail",
-                "caller_error": True,  # subprocess/IO failure = caller-error
-                "detail": str(e)[:60],
+                "caller_error": True,  # kubectl not run / no exit in time = caller-error
+                "detail": str(e),
             })
-            return results
+            raise _NoExitStatus(results) from e
 
     # Step 2: Label ConfigMap for Grafana sidecar discovery
-    label_cmd = [
-        "kubectl", "label", "configmap", cm_name,
+    label_args = [
+        "configmap", cm_name,
         "grafana_dashboard=1",
         "-n", namespace,
         "--overwrite",
     ]
-    output = run_cmd(label_cmd, dry_run=dry_run)
-    if output is not None:
+    try:
+        labelled = run_kubectl("label", label_args, dry_run=dry_run)
+    except KubectlError as e:
+        # ⛔ Part-way (#3539): the ConfigMap above IS applied, without the
+        # label the sidecar discovers it by. A row, so the report still says
+        # what was applied — not one ERROR line that drops it.
+        results.append({
+            "action": "label_configmap",
+            "status": "fail",
+            "caller_error": True,  # kubectl not run / no exit in time = caller-error
+            "detail": f"ConfigMap {cm_name} is applied, its label is NOT confirmed: {e}",
+        })
+        raise _NoExitStatus(results) from e
+    if dry_run or labelled.returncode == 0:
         results.append({
             "action": "label_configmap",
             "status": "dry-run" if dry_run else "pass",
@@ -334,14 +354,43 @@ def main():
     has_failure = False
     caller_error = False  # #452/#737: file-not-found / invalid-JSON / kubectl env
 
-    for dashboard_path, cm_name, content, raw in read_dashboards(dashboards):
-        results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run,
-                                   dashboard=content, raw=raw)
+    pending = read_dashboards(dashboards)
+    stopped = False
+    for done, (dashboard_path, cm_name, content, raw) in enumerate(pending):
+        try:
+            results = import_dashboard(dashboard_path, cm_name, args.namespace, args.dry_run,
+                                       dashboard=content, raw=raw)
+        except KubectlError as exc:
+            # ⛔ Part-way over a --dashboard-dir (review of #3539): the
+            # dashboards before this one ARE in the cluster. One ERROR line
+            # here dropped their rows — stdout empty for a run that wrote.
+            # kubectl gave no exit status (not startable, out of time, killed),
+            # so the ones after it are not attempted: each would wait again.
+            stopped = True
+            results = [{
+                "action": "create_configmap",
+                "status": "fail",
+                "caller_error": True,  # kubectl not run / no exit in time = caller-error
+                "detail": f"{exc}",
+            }]
+        except _NoExitStatus as exc:
+            # The same, later in the dashboard: its apply or its label got no
+            # exit status. Its rows stay (an applied ConfigMap whose label is
+            # not confirmed among them).
+            stopped = True
+            results = exc.rows
+        if stopped:
+            left = len(pending) - done - 1
+            if left:
+                results[-1]["detail"] += (
+                    f" — {left} dashboard(s) after {cm_name} were not attempted")
         all_results.extend(results)
         if any(r["status"] == "fail" for r in results):
             has_failure = True
         if any(r["status"] == "fail" and r.get("caller_error") for r in results):
             caller_error = True
+        if stopped:
+            break
 
     # #452/#737: file-not-found / invalid-JSON / kubectl env failures are
     # caller-errors (exit 2); a clean run that merely couldn't apply is still 1.

@@ -19,6 +19,9 @@ purpose: |
   Closure deps: none. Pure function; receives packs + scalars as args.
 ---
 
+// The reference base's fixed inhibit rules (see amInhibits below).
+const BASE_INHIBIT_RULES = 3;
+
 function computeCapacityEstimates({ packs, tenantCount, instancesPerTenant, scrapeInterval, retentionDays }) {
   const totalRecording = packs.reduce((s, p) => s + p.recording, 0);
   const totalAlerts = packs.reduce((s, p) => s + p.alerts, 0);
@@ -44,7 +47,13 @@ function computeCapacityEstimates({ packs, tenantCount, instancesPerTenant, scra
 
   // Alertmanager routes
   const amRoutes = tenantCount * (1 + (packs.length > 3 ? packs.length : 0)); // base + overrides
-  const amInhibits = tenantCount * 2 + totalAlerts; // per-tenant + dedup
+  // Alertmanager inhibit rules do not grow with tenants or alerts (#3899): the
+  // reference base (k8s/03-monitoring/configmap-alertmanager.yaml) carries three
+  // fixed ones (Silent Mode warning / critical, CustomRecipeSilent — each scoped
+  // by `equal: [tenant, ...]`), and the route generator adds ONE severity dedup
+  // rule for every tenant (with the `_severity_dedup: disable` tenants in its
+  // exclusion list), none when there is no tenant.
+  const amInhibits = BASE_INHIBIT_RULES + (tenantCount > 0 ? 1 : 0);
 
   // Reload time estimate (ms)
   const reloadMs = 50 + tenantCount * 5 + totalSeries * 0.01;
