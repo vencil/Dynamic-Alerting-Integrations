@@ -1265,10 +1265,8 @@ class TestCustomAlertIsolationInjection:
 
 
 def _build_inhibit_for_test():
-    # a generated severity-dedup inhibit (source HAS metric_group → replaced on merge)
-    return {"source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant="db-a"'],
-            "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant="db-a"'],
-            "equal": ["metric_group"]}
+    # the generated severity-dedup inhibit (#3899: one rule for every tenant)
+    return generate_inhibit_rules({"db-a": "enable"})[0][0]
 
 
 # ============================================================

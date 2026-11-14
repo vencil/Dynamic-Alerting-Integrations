@@ -26,11 +26,11 @@ tests/
 ├── fixtures/            # 共用測試資料
 ├── snapshots/           # 快照基線（JSON / snap）
 ├── scenarios/           # Shell 場景腳本
-├── alertmanager-inhibit/ # 手寫 AM config 的抑制語意 gate（獨立 Go module）
+├── alertmanager-inhibit/ # 手寫 AM config 與產生器 dedup 規則的抑制語意 gate（獨立 Go module）
 └── oauth2-proxy/        # tenant-api chart 的 oauth2-proxy 設定檔 gate（獨立 Go module）
 ```
 
-`alertmanager-inhibit/` 是 Go 測試 module（自帶 `go.mod`，把 alertmanager 依賴隔離在兩個 production module 之外）。它用 Alertmanager 自己的 matcher 實作評估 `try-local/alertmanager.yml` 與 `k8s/03-monitoring/configmap-alertmanager.yaml` 的**實際抑制行為**——`amtool check-config` 只驗語法，對 #1132 那種「語法合法但語意錯、且靜默吃掉通知」的規則全綠。入口 `make test-am-inhibit`；CI 走 `Go Tests` 聚合閘。新增 sentinel／inhibit 規則時（ADR-003 Sentinel+Inhibit paradigm）應同步補一組斷言。
+`alertmanager-inhibit/` 是 Go 測試 module（自帶 `go.mod`，把 alertmanager 依賴隔離在兩個 production module 之外）。它用 Alertmanager 自己的 matcher 實作評估 `try-local/alertmanager.yml`、`k8s/03-monitoring/configmap-alertmanager.yaml`，以及產生器的 severity dedup 規則（`testdata/generated_dedup_inhibit.yaml`，由 `tests/ops/test_generated_dedup_inhibit_fixture.py` 產生並做 drift 檢查；重產跑 `python3 tests/ops/test_generated_dedup_inhibit_fixture.py`）的**實際抑制行為**——`amtool check-config` 只驗語法，對 #1132 那種「語法合法但語意錯、且靜默吃掉通知」的規則全綠。入口 `make test-am-inhibit`；CI 走 `Go Tests` 聚合閘。新增 sentinel／inhibit 規則時（ADR-003 Sentinel+Inhibit paradigm）應同步補一組斷言。
 
 `oauth2-proxy/` 同樣自帶 `go.mod`，把 oauth2-proxy 依賴隔離在 production module 之外，版本釘在 chart 部署的那一版（`TestLibraryVersionIsTheChartImage`）。它 render `helm/tenant-api`，以 oauth2-proxy 自己的 loader、header 注入與分流程式載入產生的設定檔，斷言 client 帶來的身分 header 被清掉、tenant-api 收到的是 session 的值，並以同一個 router 驗 ADR-027 §10 的分流範例（從 ADR 原文讀出）。CI 另以 chart 釘住的 image digest 對同一批檔案跑 `--config-test`（`image_config_test.sh`），再以 tenant-api 的 `config check --kind oauth2-proxy` 讀一次（ADR-027 §9 第 9 項）。入口 `make dc-go-test MOD=oauth2-proxy`；沒有 helm 時 chart 測試 skip，CI 設 `OAUTH2_PROXY_REQUIRE_HELM=1` 讓它變成失敗。
 

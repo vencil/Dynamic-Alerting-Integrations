@@ -243,6 +243,27 @@ def parse_alertmanager_config(path, tenant_label=DEFAULT_TENANT_LABEL,
             refused_by_reader=isinstance(e, _lib_consumer_read.InputRefused)) from e
 
 
+def _excluded_tenants(target_matchers, tenant_label):
+    """The tenants a ``<label>!~"a|b"`` target matcher excludes — the
+    generator's severity dedup exclusion list (#3899) — as a set; an empty
+    set when there is no such matcher; None when its value is not an
+    alternation of literal names (then nothing is inferred from it)."""
+    out = set()
+    for m in target_matchers or []:
+        if not isinstance(m, str):
+            continue
+        hit = re.match(r'^\s*(\w+)\s*!~\s*"((?:[^"\\]|\\.)*)"\s*$', m)
+        if not hit or hit.group(1) != tenant_label:
+            continue
+        value = re.sub(r'\\(.)', r'\1', hit.group(2))  # matcher quoting
+        for alt in value.split("|"):
+            literal = re.sub(r"\\(.)", r"\1", alt)       # regex escaping
+            if not literal or re.escape(literal).replace("\\-", "-") != alt:
+                return None
+            out.add(literal)
+    return out
+
+
 def _extract_tenant_from_matchers(matchers, tenant_label):
     """Extract tenant name from a list of matcher strings.
 
@@ -496,6 +517,7 @@ def analyze_alertmanager(am_config, tenant_label=DEFAULT_TENANT_LABEL):
 
     # Analyze inhibit_rules for severity dedup
     dedup_info = {}
+    global_dedup_excluded = None
     for rule in am_config.get("inhibit_rules", []):
         source = rule.get("source_matchers", [])
         target = rule.get("target_matchers", [])
@@ -509,7 +531,22 @@ def analyze_alertmanager(am_config, tenant_label=DEFAULT_TENANT_LABEL):
         if has_severity_source and has_severity_target and has_metric_group:
             tenant = _extract_tenant_from_matchers(source, tenant_label)
             if tenant:
+                # The per-tenant shape (before #3899): a rule for each tenant
+                # that dedups. A tenant with no such rule is left unset, as
+                # before — nothing in the config says it was turned off.
                 dedup_info[tenant] = "enable"
+            elif tenant_label in equal:
+                # #3899: ONE rule for every tenant (`equal` carries the tenant
+                # label, no tenant pinned); the tenants it leaves out are in
+                # its target's `<label>!~"a|b"` list — those set `disable`.
+                excluded = _excluded_tenants(target, tenant_label)
+                if excluded is not None:
+                    global_dedup_excluded = excluded
+
+    if global_dedup_excluded is not None:
+        for tenant in tenant_routings:
+            dedup_info.setdefault(
+                tenant, "disable" if tenant in global_dedup_excluded else "enable")
 
     summary = {
         "total_routes": len(flat_routes),

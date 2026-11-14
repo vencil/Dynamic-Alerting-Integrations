@@ -409,6 +409,51 @@ class TestAnalyzeAlertmanager:
         _, summary = analyze_alertmanager(am)
         assert summary["dedup_tenants"].get("db-a") == "enable"
 
+    def test_global_dedup_rule_reads_back_enable_and_disable(self):
+        """#3899：一條全域規則；`tenant!~` 清單裡的租戶推回 disable，其餘有路由的推回 enable。"""
+        am = make_am_config(
+            routes=[{"matchers": ['tenant="ta"'], "receiver": "tenant-ta"},
+                    {"matchers": ['tenant="tb"'], "receiver": "tenant-tb"}],
+            receivers=[
+                {"name": "default"},
+                make_am_receiver("tenant-ta", url="https://a.example.com"),
+                make_am_receiver("tenant-tb", url="https://b.example.com"),
+            ],
+            inhibit_rules=[{
+                "source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant=~".+"'],
+                "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant=~".+"', 'tenant!~"tb|tz"'],
+                "equal": ["tenant", "metric_group"],
+            }],
+        )
+        _, summary = analyze_alertmanager(am)
+        assert summary["dedup_tenants"] == {"ta": "enable", "tb": "disable"}
+
+    def test_global_dedup_rule_without_exclusions_is_enable_for_all(self):
+        am = make_am_config(
+            routes=[{"matchers": ['tenant="ta"'], "receiver": "tenant-ta"}],
+            receivers=[{"name": "default"}, make_am_receiver("tenant-ta", url="https://a.example.com")],
+            inhibit_rules=[{
+                "source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant=~".+"'],
+                "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant=~".+"'],
+                "equal": ["tenant", "metric_group"],
+            }],
+        )
+        _, summary = analyze_alertmanager(am)
+        assert summary["dedup_tenants"] == {"ta": "enable"}
+
+    def test_a_non_literal_exclusion_infers_nothing(self):
+        am = make_am_config(
+            routes=[{"matchers": ['tenant="ta"'], "receiver": "tenant-ta"}],
+            receivers=[{"name": "default"}, make_am_receiver("tenant-ta", url="https://a.example.com")],
+            inhibit_rules=[{
+                "source_matchers": ['severity="critical"', 'metric_group=~".+"', 'tenant=~".+"'],
+                "target_matchers": ['severity="warning"', 'metric_group=~".+"', 'tenant!~"t.*"'],
+                "equal": ["tenant", "metric_group"],
+            }],
+        )
+        _, summary = analyze_alertmanager(am)
+        assert summary["dedup_tenants"] == {}
+
     def test_custom_tenant_label(self):
         """自訂租戶標籤名稱的分析。"""
         am = make_am_config(

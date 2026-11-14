@@ -795,7 +795,7 @@ def build_trace_tree(parsed: dict, base: dict | None = None,
     """The alertmanager.yml ``--output-configmap`` would emit, and its tree.
 
     Same pipeline as the generator — the four-layer merge, ``generate_routes``
-    with the enforced routing, the severity-dedup inhibit rules — assembled by
+    with the enforced routing, the severity-dedup inhibit rule — assembled by
     the generator's own ``assemble_configmap`` on *base* (the built-in base
     when None, as ``--validate`` uses), so ``global`` / ``templates`` /
     ``inhibit_rules`` are the ones Alertmanager would load; *allowed_domains*

@@ -151,33 +151,15 @@ data:
         # pattern), not sentinel delivery.
 
     inhibit_rules:
-      # v1.2.0 Severity Dedup: per-tenant inhibit rules (critical suppresses
-      # warning per metric_group; none for `_severity_dedup: "disable"`).
-      # The generator renders them from conf.d into the OUTPUT; this file is
-      # the SOURCE it merges into (`generate_alertmanager_routes.py
+      # Severity Dedup (critical suppresses warning of the same tenant and
+      # metric_group) is NOT written here: the generator renders ONE rule
+      # from conf.d into the OUTPUT (`generate_alertmanager_routes.py
       # --config-dir conf.d/ --output-configmap --base-config <this
-      # alertmanager.yml>`, #1211). The two copies below are kept on purpose:
-      # tests/alertmanager-inhibit (TestK8sPerTenantDedupSemantics) proves the
-      # dedup semantics on this file. In the output they repeat the generated
-      # rules for these tenants — harmless, an identical rule twice.
-      - source_matchers:
-          - severity="critical"
-          - metric_group=~".+"
-          - tenant="db-a"
-        target_matchers:
-          - severity="warning"
-          - metric_group=~".+"
-          - tenant="db-a"
-        equal: ["metric_group"]
-      - source_matchers:
-          - severity="critical"
-          - metric_group=~".+"
-          - tenant="db-b"
-        target_matchers:
-          - severity="warning"
-          - metric_group=~".+"
-          - tenant="db-b"
-        equal: ["metric_group"]
+      # alertmanager.yml>`, #1211), with `_severity_dedup: "disable"` tenants
+      # in its `tenant!~` list (#3899). This file is the SOURCE it merges
+      # into, and a dedup rule kept here would be merged as written — deduping
+      # tenants whatever conf.d says — so the merge refuses a source that
+      # holds one (_grar_render.assert_base_has_no_dedup_rule).
 
       # #1132 invariant: every `equal:` label is presence-gated (`=~".+"`) on BOTH
       # sides. Alertmanager treats a label missing from source AND target as
@@ -203,12 +185,12 @@ data:
       # alert_source="platform" are excluded. Watchdog is unaffected either way —
       # severity=none never matched the warning/critical targets.
       #
-      # Only THESE TWO rules need it. The severity-dedup rules above and the
+      # Only THESE TWO rules need it. The generated severity-dedup rule and the
       # CustomRecipeSilent rule below are already immune for structural reasons:
-      # dedup targets require metric_group=~".+" and ZERO platform alerts carry
-      # metric_group; CustomRecipeSilent targets component="custom" and no
+      # the dedup target requires metric_group=~".+" and ZERO platform alerts
+      # carry metric_group; CustomRecipeSilent targets component="custom" and no
       # platform alert carries component. Adding alert_source="" there would be
-      # inert noise, and the dedup rules are REGENERATED per tenant anyway.
+      # inert noise, and the dedup rule is REGENERATED from conf.d anyway.
       #
       # These two rules survive regeneration, so the matcher below is
       # committed-and-preserved rather than generated: every output mode and

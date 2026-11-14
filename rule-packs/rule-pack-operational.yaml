@@ -38,8 +38,9 @@
 #
 # ⚠ Severity Dedup 不以 sentinel 為 inhibit source：sentinel 表達的是「該 tenant
 # 已啟用 dedup」而非「critical 已觸發」，當不了 dedup 的 source。實際規則是
-# per-tenant 的直接 critical→warning（generate_alertmanager_routes.py 依
-# _severity_dedup 產出，disable 的 tenant 不產規則 → 兩種通知都收到）；
+# 一條涵蓋所有 tenant 的直接 critical→warning（generate_alertmanager_routes.py
+# 依 _severity_dedup 產出，equal: [tenant, metric_group]；disable 的 tenant 列在
+# target 的 tenant!~ 排除清單 → 兩種通知都收到；#3899）；
 # TenantSeverityDedupEnabled 僅供 Grafana / AM UI 顯示各 tenant 的 dedup 狀態。
 # 規則範本與行為矩陣見 docs/design/config-driven.md §2.8。
 #
@@ -98,9 +99,10 @@ groups:
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       # Sentinel alert: fires when severity dedup is enabled for a tenant (default).
-      # Used by Alertmanager inhibit_rules to suppress warning notifications
-      # when critical fires for the same tenant+metric_group.
-      # Tenants with _severity_dedup: "disable" won't trigger this → both notifications sent.
+      # State display only (Grafana / AM UI): the dedup itself is the generated
+      # critical→warning inhibit rule (same tenant + metric_group), not this
+      # sentinel — see the header. Tenants with _severity_dedup: "disable" have no
+      # user_severity_dedup series, so this does not fire for them.
       - alert: TenantSeverityDedupEnabled
         expr: max without(instance, pod) (user_severity_dedup{mode="enable"}) == 1
         labels:

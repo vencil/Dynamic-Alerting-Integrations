@@ -378,7 +378,7 @@ user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percen
 
 #### 自動抑制 (Auto-Suppression) — Severity Dedup via Alertmanager Inhibit
 
-v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（詳見 §2.8）。Alert Rule 不再使用 `unless critical` 邏輯，warning 和 critical 均在 Prometheus 中獨立觸發，TSDB 保有完整紀錄。通知去重由 Alertmanager per-tenant inhibit rule 控制。
+v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（詳見 §2.8）。Alert Rule 不再使用 `unless critical` 邏輯，warning 和 critical 均在 Prometheus 中獨立觸發，TSDB 保有完整紀錄。通知去重由產生器產出的**一條** Alertmanager inhibit rule 控制（不隨租戶數增加；[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899)）。
 
 ```yaml
 # Warning 和 Critical 獨立觸發，TSDB 完整保留
@@ -567,18 +567,20 @@ tenants:
 
 ```yaml
 inhibit_rules:
-  # Severity Dedup: per-tenant inhibit rules (由 generate_alertmanager_routes.py 產出)
-  # 僅 _severity_dedup: "enable" (預設) 的 tenant 會產出規則
-  # _severity_dedup: "disable" 的 tenant 不會有對應規則 → 兩種通知都收到
+  # Severity Dedup: 一條規則涵蓋所有租戶（由 generate_alertmanager_routes.py 產出，
+  # 不要寫進 base——base 裡會做同樣抑制的規則會被拒收；#3899）
+  # _severity_dedup: "disable" 的 tenant 列在 target 的 tenant!~ 排除清單 → 兩種通知都收到
+  # 沒有任何 tenant 是 enable 時不產出這條規則
   - source_matchers:
       - severity="critical"
       - metric_group=~".+"
-      - tenant="db-a"
+      - tenant=~".+"
     target_matchers:
       - severity="warning"
       - metric_group=~".+"
-      - tenant="db-a"
-    equal: ["metric_group"]
+      - tenant=~".+"
+      - tenant!~"db-b"          # 排除清單：disable 的 tenant，排序後以 | 串接
+    equal: ["tenant", "metric_group"]
 
   # Silent Mode: 壓制 warning 通知
   - source_matchers:
@@ -607,7 +609,7 @@ inhibit_rules:
 
 > **為什麼 infra-outage 抑制不預設出貨**：infra 事故期間 SLO page 該不該靜音是**組織決策**——有的團隊要它照響（SLO 是使用者視角，infra 修好前使用者仍在受害）；有的團隊視它為重複噪音。平台的立場是把 pattern 文件化、把 `slo_burn="true"` discriminator 標籤結構化備好（[ADR-031](../adr/031-slo-burn-rate-recipe.md) 護欄 3），由 operator 依組織政策自行掛載。source 告警不必是 sentinel——任何「infra 全局事故」語意的告警（如 `MassExporterOutage`）都可當 source。
 >
-> ⚠️ **與抑制語意 gate 的交互**：本 repo 內兩份被 gate 的 AM config（try-local 與 k8s configmap）由 `tests/alertmanager-inhibit` 強制「每條 inhibit rule 必須 tenant-scoped」（`tenant` 入 `equal:`，或兩側釘同一租戶）。本 pattern 刻意全域、且 source 為平台級告警**沒有 `tenant` label**——`equal: ["tenant"]` 會因 source 缺該 label 而永不成立（Alertmanager 的 equal 語意）、兩側同租戶 pin 亦不可能——故它**結構上無法以 tenant-scoped 形式表達**。在你自己的 Alertmanager 部署照用即可；要掛進本 repo 的 gated config，須先為此 pattern 在該 gate 加上顯式（audited）豁免——這正是「不預設出貨、組織拍板後才掛」的另一層機械強制。
+> ⚠️ **與抑制語意 gate 的交互**：本 repo 內兩份被 gate 的 AM config（try-local 與 k8s configmap），以及產生器的 dedup 規則（`tests/alertmanager-inhibit/testdata/generated_dedup_inhibit.yaml`），由 `tests/alertmanager-inhibit` 強制「每條 inhibit rule 必須 tenant-scoped」（`tenant` 入 `equal:`，或兩側釘同一租戶）。本 pattern 刻意全域、且 source 為平台級告警**沒有 `tenant` label**——`equal: ["tenant"]` 會因 source 缺該 label 而永不成立（Alertmanager 的 equal 語意）、兩側同租戶 pin 亦不可能——故它**結構上無法以 tenant-scoped 形式表達**。在你自己的 Alertmanager 部署照用即可；要掛進本 repo 的 gated config，須先為此 pattern 在該 gate 加上顯式（audited）豁免——這正是「不預設出貨、組織拍板後才掛」的另一層機械強制。
 
 ### 2.8 Severity Dedup（嚴重度去重）
 
@@ -628,12 +630,14 @@ flowchart TD
 
 **Per-Tenant 控制機制**
 
-v1.2.0 採用 per-tenant inhibit rules 實現可選化：
+可選化以**一條**全域 inhibit rule 加排除清單實現（[#3899](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3899) 起；之前是每個租戶一條，規則數隨租戶數成長）：
 
 1. `generate_alertmanager_routes.py` 掃描所有 tenant YAML 的 `_severity_dedup` 設定
-2. 對每個 dedup enabled 的 tenant 產出一條專屬 inhibit rule（帶 `tenant="<name>"` matcher）
-3. `_severity_dedup: "disable"` 的 tenant 不產出 rule → 兩種通知都收到
-4. Exporter 仍輸出 `user_severity_dedup{tenant, mode}` metric → Prometheus sentinel `TenantSeverityDedupEnabled` 供 Grafana 面板顯示各 tenant dedup 狀態
+2. 產出一條規則：source `severity="critical"`、target `severity="warning"`，兩側都要求 `metric_group=~".+"` 與 `tenant=~".+"`，`equal: ["tenant", "metric_group"]`——同租戶、同 `metric_group` 才抑制
+3. `_severity_dedup: "disable"` 的 tenant 列進 target 的 `tenant!~"<清單>"`（排序、逐一轉成 regex 字面值、以 `|` 串接；Alertmanager 的 regex matcher 錨定整串，`tb` 不會排除 `tbb`）→ 兩種通知都收到。清單為空時不寫這個 matcher；沒有任何 tenant 是 enable 時不產出規則。產生器為每個 disable 的 tenant 印一行 `INFO: <tenant>: severity_dedup disabled, excluded from the severity dedup inhibit rule`（finding kind `severity_dedup_excluded`，不擋）
+4. ⚠️ 規則寫的是「誰**不**參與」：告警帶 `tenant`、但該租戶不在 conf.d 裡（例如還沒納管的租戶），也會被 dedup
+5. dedup 只能由產生器產出：`--base-config`（或 `--apply` 的叢集來源）裡若有 inhibit rule 會在租戶的 critical 觸發時抑制同租戶、同 `metric_group` 的 warning，會被拒收（結束碼 1、不寫檔）——它會被原樣併進輸出、蓋過 conf.d 的 `_severity_dedup`（含 `disable`）。判定看規則實際匹配到的告警，不看寫法：`=~`、一個元素裡寫多個 matcher、舊式 `*_match` 都一樣；以 `alertname` 指名來源告警的規則（例如 Silent Mode 的 sentinel）不在此列
+6. Exporter 仍輸出 `user_severity_dedup{tenant, mode}` metric（只有 enable 的 tenant 有序列；disable 的 tenant 不送）→ Prometheus sentinel `TenantSeverityDedupEnabled` 供 Grafana 面板顯示各 tenant dedup 狀態
 
 **行為矩陣**
 
@@ -642,9 +646,9 @@ v1.2.0 採用 per-tenant inhibit rules 實現可選化：
 | `_severity_dedup: "enable"`（預設） | ✅ | ✅ | ❌ 被 AM 攔截 | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connection_usage_percent"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: mariadb_liveness`（MongoDB 的同類告警帶 `mongodb_liveness`），使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
+**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connection_usage_percent"`。dedup inhibit rule 兩側都限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: mariadb_liveness`（MongoDB 的同類告警帶 `mongodb_liveness`），使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
 
-**群組名在一個租戶內是同一個命名空間**：inhibit 只比對 `metric_group`，不比對規則包，所以兩個規則包若用同一個值，同時使用兩包的租戶會被另一包的 critical 抑制 warning。`check_metric_group_pairs.py` 因此要求：每個值只屬於一個規則包；每個群組同時有 critical 與 warning 成員（inhibit 只抑制 `severity="warning"`，否則不抑制任何東西）；`slo_` 開頭保留給 custom alert 編譯器（[#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)）。`migrate_rule` 產生的群組名是完整的門檻鍵名。
+**群組名在一個租戶內是同一個命名空間**：inhibit 比對租戶與 `metric_group`，不比對規則包，所以兩個規則包若用同一個值，同時使用兩包的租戶會被另一包的 critical 抑制 warning。`check_metric_group_pairs.py` 因此要求：每個值只屬於一個規則包；每個群組同時有 critical 與 warning 成員（inhibit 只抑制 `severity="warning"`，否則不抑制任何東西）；`slo_` 開頭保留給 custom alert 編譯器（[#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)）。`migrate_rule` 產生的群組名是完整的門檻鍵名。
 
 **Tenant 配置**
 
@@ -660,7 +664,7 @@ tenants:
 ```bash
 python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ \
   --output-alertmanager --base-config alertmanager.yml --dry-run
-# 預覽合併後的 alertmanager.yml：per-tenant inhibit_rules 已合併進你的 base
+# 預覽合併後的 alertmanager.yml：dedup inhibit rule（一條）已合併進你的 base
 ```
 
 ### 2.9 Alert Routing 客製化 (Config-Driven Routing)

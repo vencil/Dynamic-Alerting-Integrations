@@ -26,13 +26,14 @@ Functions:
     routing authors (main receiver, overrides[i], routes[i]), the receiver
     rendered for it or why none is
 
-  Severity-dedup inhibit rules:
-    _build_inhibit_rules / generate_inhibit_rules
+  Severity-dedup inhibit rule (#3899: one rule for every tenant):
+    build_dedup_inhibit_rule / generate_inhibit_rules
 """
 from __future__ import annotations
 
 import copy
 import os
+import re
 import sys
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -1300,80 +1301,116 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
     return routes, receivers, all_warnings
 
 
-def _build_inhibit_rules(tenant: str) -> dict:
-    """Build a single per-tenant severity dedup inhibit rule.
+def _regex_literal(text: str) -> str:
+    """*text* as a regex that matches exactly *text* (``re.escape``), minus
+    the escape on ``-``: outside a bracket expression ``-`` is a literal in
+    Python's and Go's RE2 regex alike, so leaving it unescaped lets a valid
+    tenant id (a DNS-1123 label) come out unchanged. (Escaped, it would be
+    read correctly too: ``_matcher_quoted`` doubles the backslash, and
+    Alertmanager v0.34.2's UTF-8 and classic matcher parsers both accept the
+    matcher string ``tenant!~"t\\\\-b"``.)"""
+    return re.escape(text).replace("\\-", "-")
 
-    Constructs an Alertmanager inhibit_rule that suppresses warning alerts
-    when a corresponding critical alert exists for the same metric_group.
-    This implements severity deduplication: when both critical and warning
-    fire together, only the critical notification is sent.
+
+def _matcher_quoted(value: str) -> str:
+    """*value* for the inside of a double-quoted matcher value: ``\\`` and
+    ``"`` escaped, the spelling Alertmanager's UTF-8 and classic matcher
+    parsers both read back as *value*."""
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def build_dedup_inhibit_rule(excluded: "Iterable[str]") -> dict:
+    """Build THE severity dedup inhibit rule (#3899): one rule for every
+    tenant, however many there are.
+
+    A critical alert suppresses the warning alert of the SAME tenant and the
+    SAME metric_group — ``equal: ["tenant", "metric_group"]`` is the tenant
+    isolation, and both equal labels are presence-gated (``=~".+"``) on BOTH
+    sides (the #1132 invariant: a label missing from both alerts would read
+    as equal). A tenant opted out is named in the target's
+    ``tenant!~"<excluded>"``: its warnings are never targets, so both
+    notifications reach it.
 
     Args:
-        tenant: tenant name (used in tenant matcher and label equal).
+        excluded: the tenant ids whose warnings this rule must not suppress.
+            Sorted, each made a regex literal (``_regex_literal``), joined
+            with ``|``; Alertmanager anchors a regex matcher to the whole
+            value, so ``a`` never excludes ``ab``. Empty: no ``tenant!~``
+            matcher at all.
 
     Returns:
-        inhibit_rule dict with source_matchers, target_matchers, and equal fields.
-
-    Structure:
-      - source: critical alert with metric_group + tenant="<name>"
-      - target: warning alert with metric_group + tenant="<name>"
-      - equal: ["metric_group"] — suppress target if source matches same metric_group
+        inhibit_rule dict with source_matchers, target_matchers, and equal.
     """
+    target = [
+        'severity="warning"',
+        'metric_group=~".+"',
+        'tenant=~".+"',
+    ]
+    names = sorted(set(excluded))
+    if names:
+        alternation = "|".join(_regex_literal(t) for t in names)
+        target.append(f'tenant!~"{_matcher_quoted(alternation)}"')
     return {
         "source_matchers": [
             'severity="critical"',
             'metric_group=~".+"',
-            f'tenant="{tenant}"',
+            'tenant=~".+"',
         ],
-        "target_matchers": [
-            'severity="warning"',
-            'metric_group=~".+"',
-            f'tenant="{tenant}"',
-        ],
-        "equal": ["metric_group"],
+        "target_matchers": target,
+        "equal": ["tenant", "metric_group"],
     }
 
 
 def generate_inhibit_rules(dedup_configs: "dict[str, str | None]") -> tuple[list[dict], list[str]]:
-    """Generate per-tenant severity dedup inhibit rules.
-
-    Iterates over all tenants and builds inhibit rules for those with
-    severity deduplication enabled (default). Tenants with _severity_dedup: "disable"
-    are skipped — both warning and critical notifications are sent.
+    """Generate the severity dedup inhibit rule (#3899: one, not one per tenant).
 
     Severity Dedup Mechanism:
-      When enabled (default), suppresses warning alerts when a critical alert
-      fires for the same metric_group. This reduces alert fatigue while
-      preserving critical visibility. Implemented via Alertmanager inhibit_rules.
+      When enabled (default), suppresses a tenant's warning alert when a
+      critical alert of the same tenant fires for the same metric_group. This
+      reduces alert fatigue while preserving critical visibility. Implemented
+      as ONE Alertmanager inhibit rule (``build_dedup_inhibit_rule``) whose
+      size does not grow with the tenant count.
+
+    Which tenants it covers is stated by exclusion: every alert that carries
+    a ``tenant`` label is deduped unless that tenant is in the rule's
+    ``tenant!~`` list — so a tenant the generator never read is deduped
+    too (#3899, accepted as breaking). The list is the tenants with
+    ``_severity_dedup: "disable"`` (both notifications are sent) and those
+    whose mode is None (#3621: the tree was refused before
+    ``da-guard severity-dedup`` could answer for it — rendering it as enable
+    would dedup a tenant nobody judged).
+
+    With no tenant at "enable" there is nothing to dedup: no rule is listed
+    (a tree with no tenant reaches the output modes with nothing generated).
 
     Args:
-        dedup_configs: {tenant_name: "enable"|"disable"} for all tenants;
-            None (#3621) where no mode was read — a refused tree — lists no
-            rule for that tenant.
+        dedup_configs: {tenant_name: "enable"|"disable"|None} for all tenants.
 
     Returns:
         (inhibit_rules_list, warnings_list) where:
-        - inhibit_rules_list: list of dicts ready for alertmanager.yml
-        - warnings_list: INFO messages for each tenant (e.g., dedup disabled)
+        - inhibit_rules_list: ``[rule]`` or ``[]``, ready for alertmanager.yml
+        - warnings_list: an INFO finding (``severity_dedup_excluded``) for each
+          tenant that set ``disable``
     """
-    rules = []
     all_warnings = []
+    excluded = []
+    enabled = False
 
     for tenant in sorted(dedup_configs.keys()):
         mode = dedup_configs[tenant]
         if mode is None:
-            # #3621: no mode was read — the tree was refused before
-            # `da-guard severity-dedup` could answer for it, and that refusal
-            # is the run's message. Rendering it as enable would list an
-            # inhibit rule nobody judged.
+            # #3621: no mode was read — that refusal is the run's message.
+            excluded.append(tenant)
             continue
         if mode == "disable":
-            all_warnings.append(unclassified(
-                f"  INFO: {tenant}: severity_dedup disabled, skipping inhibit rule",
-                blocks="never"))
+            excluded.append(tenant)
+            all_warnings.append(Finding(
+                f"  INFO: {tenant}: severity_dedup disabled, excluded from "
+                "the severity dedup inhibit rule",
+                kind="severity_dedup_excluded", blocks="never", tenant=tenant))
             continue
+        enabled = True
 
-        rule = _build_inhibit_rules(tenant)
-        rules.append(rule)
-
-    return rules, all_warnings
+    if not enabled:
+        return [], all_warnings
+    return [build_dedup_inhibit_rule(excluded)], all_warnings

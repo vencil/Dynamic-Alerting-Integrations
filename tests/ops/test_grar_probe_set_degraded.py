@@ -214,21 +214,29 @@ def test_apply_control_degraded_without_tenant_rule_applies(
 
 
 def test_merge_exempts_generated_rules_but_not_lookalikes(degraded):
-    """Unit level: this run's generated rules and an earlier run's (source
-    AND target require `metric_group`) are exempt; a hand-written rule that
-    only borrows the source-side shape is not."""
+    """Unit level: this run's generated rule and a base rule whose target
+    requires `metric_group` are exempt; a hand-written rule that only
+    borrows the source-side shape is not. An earlier run's dedup rule kept
+    in the base is refused before the probe set is asked (#3899)."""
     render = importlib.import_module("_grar_render")
-    generated = {"source_matchers": ['tenant="t1"', 'severity="critical"',
-                                     'metric_group=~".+"'],
-                 "target_matchers": ['tenant="t1"', 'severity="warning"',
-                                     'metric_group=~".+"'],
-                 "equal": ["tenant", "metric_group"]}
-    # this run generated nothing, so an earlier run's rule is kept
-    render.merge_generated(
-        {"inhibit_rules": [dict(generated)]}, [], [], [])
+    routes = importlib.import_module("_grar_routes")
+    generated = routes.build_dedup_inhibit_rule(["t2"])
+    # an earlier run's dedup rule in the base: a verdict (ValueError, rc 1),
+    # never the probe set's "could not verify"
+    with pytest.raises(ValueError, match="override conf.d's `_severity_dedup`"):
+        render.merge_generated(
+            {"inhibit_rules": [dict(generated)]}, [], [], [])
     # this run's own generated rule
     render.merge_generated(
         {"inhibit_rules": []}, [], [], [dict(generated)])
+    # a base rule that is not dedup-shaped but whose target requires
+    # metric_group: no platform alert carries it, so it is exempt
+    gated = {"source_matchers": ['tenant=~".+"', 'severity="critical"',
+                                 'metric_group=~".+"'],
+             "target_matchers": ['tenant=~".+"', 'severity="info"',
+                                 'metric_group=~".+"'],
+             "equal": ["tenant", "metric_group"]}
+    render.merge_generated({"inhibit_rules": [gated]}, [], [], [])
     lookalike = {"source_matchers": ['tenant=~".+"', 'metric_group=~".+"'],
                  "target_matchers": ['alertname="CronJobLastRunFailed"']}
     with pytest.raises(_VALIDATE.PlatformProbeSetUnverifiable):
@@ -283,17 +291,35 @@ def test_every_degradation_cause_counts(monkeypatch, tmp_path):
 
 # ── review follow-ups ───────────────────────────────────────────────────
 
-def test_degraded_base_copy_of_a_generated_rule_still_renders(
+def test_degraded_base_copy_of_a_generated_rule_is_a_dedup_refusal(
         degraded, monkeypatch, capsys, tmp_path, tenant_dir):
-    """A base that carries the generator's own shape (the repo's k8s base
-    does) must not be refused: its target requires `metric_group`, which no
-    platform alert carries — the same reason the generated rules are exempt."""
+    """A base that carries the generator's dedup shape (the repo's k8s base
+    did, as per-tenant copies, until #3899) is refused as a dedup rule in
+    the base — rc 1, a verdict — not as "could not verify" (rc 2)."""
     copy = {"source_matchers": ['severity="critical"', 'metric_group=~".+"',
                                 'tenant="t1"'],
             "target_matchers": ['severity="warning"', 'metric_group=~".+"',
                                 'tenant="t1"'],
             "equal": ["metric_group"]}
     rc, out = _render(monkeypatch, tmp_path, tenant_dir, copy)
+    err = capsys.readouterr().err
+    assert rc == EXIT_VIOLATION, err
+    assert not out.exists()
+    assert "override conf.d's `_severity_dedup`" in err
+    assert "could NOT be verified" not in err
+
+
+def test_degraded_base_metric_group_gated_rule_still_renders(
+        degraded, monkeypatch, capsys, tmp_path, tenant_dir):
+    """A base rule whose target requires `metric_group` but is no dedup rule
+    must not be refused: no platform alert carries `metric_group` — the same
+    reason the generated rule is exempt."""
+    rule = {"source_matchers": ['severity="critical"', 'metric_group=~".+"',
+                                'tenant=~".+"'],
+            "target_matchers": ['severity="info"', 'metric_group=~".+"',
+                                'tenant=~".+"'],
+            "equal": ["tenant", "metric_group"]}
+    rc, out = _render(monkeypatch, tmp_path, tenant_dir, rule)
     err = capsys.readouterr().err
     assert rc == EXIT_OK, err
     assert out.exists()

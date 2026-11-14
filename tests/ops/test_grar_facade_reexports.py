@@ -88,7 +88,7 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
     "_grar_routes": (
         "SlotVerdict",  # #3076, for notification_tester (gar.*)
         "_build_enforced_routes",
-        "_build_inhibit_rules",
+        "build_dedup_inhibit_rule",  # #3899 the one severity dedup rule
         "_build_override_matchers",
         "_build_override_route",
         "_build_custom_alert_routes",
