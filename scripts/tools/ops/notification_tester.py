@@ -893,7 +893,8 @@ def resolved_routing(config_dir: str) -> dict[str, dict]:
                                   tree.duplicate_tenants,
                                   tree.routing_tree_problems,
                                   tree.invalid_tenant_ids,
-                                  tree.field_type_errors)
+                                  tree.field_type_errors,
+                                  invalid_tenant_id_files=tree.invalid_tenant_id_files)
     if lines:
         raise RoutingTreeRefused(lines)
     return tree.routing_configs

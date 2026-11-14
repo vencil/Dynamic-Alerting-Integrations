@@ -225,7 +225,7 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 | Chart | 放行 scrape 的設定 | 預設 |
 |---|---|---|
 | `threshold-exporter` | `networkPolicy.allowExternal`／`prometheusNamespace`／`prometheusPodLabels`（見 1b） | metrics port 不限來源 |
-| `tenant-api` | `networkPolicy.prometheusNamespace` ＋ pod 級白名單 `networkPolicy.internalPortAllow.prometheus`（raw 的 `app=prometheus`）與 `.prometheusOperator`（kube-prometheus-stack 的 `app.kubernetes.io/name=prometheus`） | `monitoring` 裡帶這兩組 label 之一的 pod；8080 信任 identity header，所以只放 pod 級白名單 |
+| `tenant-api` | `networkPolicy.prometheusNamespace` ＋ pod 級白名單 `networkPolicy.internalPortAllow.prometheus`（raw 的 `app=prometheus`）與 `.prometheusOperator`（kube-prometheus-stack 的 `app.kubernetes.io/name=prometheus`） | `monitoring` 裡帶這兩組 label 之一的 pod；8080 只有 probe 與 metrics（帶身分 header 回 400），白名單只放抓 metrics 的 Prometheus |
 | `vector` | chart 不帶 NetworkPolicy | — |
 | `federation-gateway` | `networkPolicy.scrapeNamespaceLabel`（Prometheus 所在 namespace 的 label） | `monitoring` 裡任何 pod；設 `null` 表示任何 namespace（`{}` 不會清掉預設值，Helm 會合併 map） |
 | `federation-reconciler` | `networkPolicy.scrapeNamespaceLabel`（scrape 入站）；它查 VictoriaLogs 的出站另由 `networkPolicy.victorialogsNamespaceLabel` 決定，不跟著 `null` 放寬 | 同上 |

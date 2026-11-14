@@ -149,7 +149,7 @@
       "tenants": [
         "ta"
       ],
-      "reason": "unknown severity_dedup value \"maybe\" (valid: enable, disable)",
+      "reason": "unknown severity_dedup value (valid: enable, disable)",
       "hint": null,
       "base": null,
       "dead_entries": null,
@@ -163,7 +163,7 @@
       "tenants": [
         "tb"
       ],
-      "reason": "references unknown profile \"silver\"",
+      "reason": "references a profile that is not defined under the root profiles:",
       "hint": null,
       "base": null,
       "dead_entries": null,
@@ -177,7 +177,7 @@
       "tenants": [
         "ta"
       ],
-      "reason": "unknown silent mode \"purple\" (valid: warning, critical, all, disable)",
+      "reason": "unknown silent mode (valid: warning, critical, all, disable)",
       "hint": null,
       "base": null,
       "dead_entries": null,
@@ -191,7 +191,7 @@
       "tenants": [
         "ta"
       ],
-      "reason": "unknown field(s) bogus_field (known: db_type, domain, environment, groups, owner, region, runbook_url, tags, tier)",
+      "reason": "1 unknown field(s) (known: db_type, domain, environment, groups, owner, region, runbook_url, tags, tier)",
       "hint": null,
       "base": null,
       "dead_entries": null,

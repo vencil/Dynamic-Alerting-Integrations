@@ -578,7 +578,8 @@ def _resolved_routing(config_dir: str) -> dict[str, dict]:
         tree = gar.load_tenant_tree(config_dir)
     _rc, lines = gar.tree_refusal(tree.files_read, tree.tenant_file_errors,
                                   tree.duplicate_tenants, tree.routing_tree_problems,
-                                  tree.invalid_tenant_ids, tree.field_type_errors)
+                                  tree.invalid_tenant_ids, tree.field_type_errors,
+                                  invalid_tenant_id_files=tree.invalid_tenant_id_files)
     if lines:
         raise RoutingTreeRefused(lines)
     return tree.routing_configs

@@ -31,6 +31,7 @@ import _gsvc_proto as proto  # noqa: E402
 import _lib_key_verdict as kv  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
 import generate_alertmanager_routes as gar  # noqa: E402
+from _lib_validation import shown_key  # noqa: E402
 
 #: The route generator reads trees Go names paths on as its own findings.
 pytestmark = pytest.mark.usefixtures("judging_run")
@@ -153,11 +154,12 @@ def test_a_key_name_with_a_control_character_is_never_printed_raw(tmp_path):
     """#3016 review: the FAIL list repeats the blocking key verdict lines —
     a tenant's key name in them goes through safe_label there too; a key
     that is not name-like is not printed at all (#1560 ⑤-b: it may be a
-    URL)."""
+    URL), only its stand-in (#3703)."""
     files = dict(THRESHOLDS_ONLY, **{"t-a.yaml": "tenants:\n  t-a:\n    \"mysql_conn\\e[2Jx\": \"1\"\n"})
     res, _ = _cli(tmp_path, files, "--validate")
     assert res.returncode == 1, res.stderr
-    assert "FAIL:" in res.stderr and "a string of 15 chars" in res.stderr.split("FAIL:")[1], res.stderr
+    shown = f"`{shown_key('mysql_conn' + chr(0x1b) + '[2Jx')}`"  # #3703: its stand-in
+    assert "FAIL:" in res.stderr and shown in res.stderr.split("FAIL:")[1], res.stderr
     assert "mysql_conn" not in res.stderr
     assert "\x1b" not in res.stderr
 

@@ -220,6 +220,7 @@ from _lib_tenant_values import (  # noqa: E402
     ParseFailedError,
     load_effective_tree,
     load_guard_report,
+    load_served_schedules,
     load_served_tree,
     print_load_error,
 )
@@ -2192,15 +2193,16 @@ def _hhmm(t: str) -> int:
     return int(h) * 60 + int(m)
 
 
-def check_tier_inversion(config_dir: str) -> dict[str, object]:
+def check_tier_inversion(config_dir: str, at: str | None = None) -> dict[str, object]:
     """A tenant whose served critical threshold is not stricter than its
     warning one, across files (#3691): a profile's `<base>_critical` against a
     platform file's `<base>`, a tenant's value against a profile's, a window of
     one against the other's default.
 
     ⛔ Judged on what /metrics serves each tenant over the whole UTC day
-    (da-guard served-values `--schedules`: every part of the day in which some
-    schedule changes), never on one file: check_threshold_unit_sanity's
+    (da-guard served-values `--schedules-only`: every part of the day in which
+    some schedule changes, and nothing read at the run's instant, so the time
+    of day the check runs at cannot change its verdict, #3877), never on one file: check_threshold_unit_sanity's
     TIER-INVERSION judges each file alone, which is what let a profile's
     critical land under a platform default's warning unseen. Per tenant and
     `metric_key`, the largest warning value served is compared with the
@@ -2223,7 +2225,10 @@ def check_tier_inversion(config_dir: str) -> dict[str, object]:
     or one whose files the exporter's load drops (the dropped files' tenants
     are not served, so not judged), is a WARN saying it was not checked. A
     part of the day /metrics cannot be gathered in (nothing is served then)
-    is named as not judged.
+    is named as not judged — wherever in the day the check runs.
+
+    `at` (RFC3339; None = now) is the instant time-boxes (`expires:`) are
+    judged at; its time of day changes nothing.
     """
     import _observed_map_lib  # ops/: the observed-map the recommender reads
 
@@ -2233,7 +2238,7 @@ def check_tier_inversion(config_dir: str) -> dict[str, object]:
             hint=_TIER_INVERSION_NOT_CHECKED_HINT)
     try:
         observed = _observed_map_lib.load_observed_map()
-        tree = load_served_tree(config_dir, schedules=True, partial=True)
+        tree = load_served_schedules(config_dir, at=at, partial=True)
     except (DaGuardError, DaGuardNotFoundError, _observed_map_lib.ObservedMapError, OSError,
             YamlFileError) as exc:
         return not_checked(f"{type(exc).__name__}: {' '.join(str(exc).split())}")
@@ -2247,9 +2252,7 @@ def check_tier_inversion(config_dir: str) -> dict[str, object]:
     found: list[str] = []
     ungathered: list[str] = []
     pairs = 0
-    for tenant, tv in sorted(tree.tenants.items()):
-        if tv.schedules is None:
-            return not_checked(f"served-values gave no schedules for tenant {tenant!r}")
+    for tenant, days in sorted(tree.tenants.items()):
         # metric_key -> severity -> [(start, end, value)]. Dimensions are
         # pooled: every shipped threshold recording rule is
         # `max by(tenant)(user_threshold{…, severity=…})` (the
@@ -2257,7 +2260,7 @@ def check_tier_inversion(config_dir: str) -> dict[str, object]:
         # so the alert compares the tenant's largest warning against its
         # largest critical, whatever selectors they came from.
         rows: dict[str, dict[str, list[tuple[int, int, float]]]] = {}
-        for sched in tv.schedules.values():
+        for sched in days.values():
             for seg in sched.segments:
                 if seg.error is not None:
                     ungathered.append(f"tenant {tenant!r} {seg.start}-{seg.end} UTC")

@@ -1067,7 +1067,8 @@ def trace_alert_routing(
         parsed.get("duplicate_tenants") or {},
         parsed.get("routing_tree_problems") or [],
         parsed.get("invalid_tenant_ids") or [],
-        parsed.get("field_type_errors") or [])
+        parsed.get("field_type_errors") or [],
+        invalid_tenant_id_files=parsed.get("invalid_tenant_id_files"))
     if refusal:
         _warn("the generator refuses this config "
               f"(generate_alertmanager_routes.py exits {refusal_rc}):")
@@ -1478,8 +1479,9 @@ def main(argv: list[str] | None = None) -> int | Report:
         # #2341 R8: a tenant id generate-routes renders nothing for (it is
         # not in all_tenants, so it is not explained below either) — and,
         # ADR-035 D3, refuses the whole tree for, in every mode.
+        id_files = parsed.get("invalid_tenant_id_files", {})
         for tenant in sorted(set(parsed.get("invalid_tenant_ids", [])), key=str):
-            print(f"  WARN: {safe_label(invalid_tenant_id_text(tenant))} — "
+            print(f"  WARN: {safe_label(invalid_tenant_id_text(tenant, id_files.get(tenant, ())))} — "
                   f"generate-routes refuses this tree", file=sys.stderr)
         # #2906: a boolean / enum field of the wrong type or an unknown value
         # (#3116: a domain policy's receiver-type entry included) — refused

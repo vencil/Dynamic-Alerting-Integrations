@@ -1489,8 +1489,8 @@ func severityDedupModeOf(sv ScheduledValue) (val, mode string) {
 // value severityDedupModeOf reads — a null too, which the resolver reads as
 // no key.
 func severityDedupProblem(sv ScheduledValue) string {
-	if val, mode := severityDedupModeOf(sv); mode == "" {
-		return fmt.Sprintf("unknown severity_dedup value %q (valid: enable, disable)", val)
+	if _, mode := severityDedupModeOf(sv); mode == "" {
+		return "unknown severity_dedup value (valid: enable, disable)"
 	}
 	return ""
 }
@@ -1747,7 +1747,8 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 		// This check ensures validation is complete even if applyProfiles is skipped.
 		if sv, exists := overrides["_profile"]; exists {
 			if problem := unknownProfileProblem(c.Profiles, sv); problem != "" {
-				v.Errors = append(v.Errors, fmt.Sprintf("WARN: tenant=%s: _profile %s", tenant, problem))
+				v.Errors = append(v.Errors, fmt.Sprintf("WARN: tenant=%s: _profile %q %s",
+					tenant, strings.TrimSpace(sv.Default), problem))
 			}
 		}
 
@@ -1915,7 +1916,11 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 
 // unknownProfileProblem is the one check of a `_profile` value against the
 // profiles the root platform files define (profiles): "" when it names one,
-// or names none (an empty value); otherwise the problem. validateOverrideKeysOf
+// or names none (an empty value); otherwise the problem — one constant
+// sentence, without the name (#3703: the key verdict prints it; a caller
+// that words its own message names the value itself). It does not say
+// "platform file": tenant-api's notices use those words for a problem that
+// is a root platform file's, and this one is the tenant's. validateOverrideKeysOf
 // and the shared key verdict's value findings (LayerValueProblems) both
 // read it (#3591).
 func unknownProfileProblem(profiles map[string]map[string]ScheduledValue, sv ScheduledValue) string {
@@ -1926,8 +1931,11 @@ func unknownProfileProblem(profiles map[string]map[string]ScheduledValue, sv Sch
 	if _, found := profiles[name]; found {
 		return ""
 	}
-	return fmt.Sprintf("references unknown profile %q", name)
+	return unknownProfileSentence
 }
+
+// unknownProfileSentence is unknownProfileProblem's problem.
+const unknownProfileSentence = "references a profile that is not defined under the root profiles:"
 
 // validateVersionLabel enforces the ADR-024 OQ-6 rules on a dimensional
 // `version` label found in a tenant key: a documented charset, no reserved

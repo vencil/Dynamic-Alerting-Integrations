@@ -296,7 +296,7 @@ echo '["mysql_threads_running_critical{db=\"a\"}","mysql_connection_usage_percen
 da-guard severity-dedup --config-dir conf.d/
 # {"schema": "da-guard.severity-dedup/v1", "tenants": {"tenant-a": {"mode": "disable"}, ...},
 #  "problems": [{"file": "tenant-b.yaml", "layer": "tenant", "owner": "tenant-b",
-#                "problem": "unknown severity_dedup value \"no\" (valid: enable, disable)", "value": "no"}],
+#                "problem": "unknown severity_dedup value (valid: enable, disable)", "value": "no"}],
 #  "schedules": [], "parse_failed": [], "unreadable": []}
 ```
 

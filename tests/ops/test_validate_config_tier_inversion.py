@@ -1,6 +1,7 @@
 """validate-config `tier_inversion`（#3691）：租戶實際拿到的 critical 不比 warning 嚴。
 
-判的是 /metrics 給每個租戶的值、逐時段（da-guard served-values `--schedules`），
+判的是 /metrics 給每個租戶的值、逐時段（da-guard served-values `--schedules-only`，
+不讀單一時刻，所以幾點跑都同一個結論，#3877），
 不是單一檔案：profile 的 `<base>_critical` 對平台檔的 `<base>`、時段對另一層的
 預設值，這類跨檔倒置 check_threshold_unit_sanity 的 TIER-INVERSION 看不到。
 「嚴」的方向取自出貨告警的比較（`metric_observed_map.yaml` 的 `direction`）。
@@ -226,14 +227,22 @@ def test_a_file_the_exporter_drops_is_not_checked(tmp_path):
     assert r["details"][0].startswith("not checked:") and "tx.yaml" in r["details"][0], r
 
 
-def test_a_part_of_the_day_metrics_cannot_be_gathered_in_is_named(tmp_path):
+@pytest.mark.parametrize("at", [
+    "2026-11-14T01:30:00Z",  # inside the part of the day /metrics cannot be gathered in
+    "2026-11-14T05:00:00Z",  # outside it
+])
+def test_a_part_of_the_day_metrics_cannot_be_gathered_in_is_named(tmp_path, at):
     """01:00-03:00 the two keys collide into one series: /metrics fails then
-    and serves nothing; the row says that part was not judged."""
+    and serves nothing; the row says that part was not judged — whatever the
+    time of day the check runs at (#3877: run inside that part, served-values
+    `--schedules` exited 2 and the row turned to "not checked"). `at` pins the
+    run's instant on both sides of the window, so the verdict no longer reads
+    the wall clock."""
     r = vc.check_tier_inversion(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "tx.yaml": "tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"95\"\n"
                    "    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
-                   "        - window: \"01:00-03:00\"\n          value: \"50:critical\"\n"}))
+                   "        - window: \"01:00-03:00\"\n          value: \"50:critical\"\n"}), at=at)
     assert r["status"] == vc.PASS, r
     assert any(d.startswith("not judged where /metrics cannot be gathered")
                and "'tx' 01:00-03:00" in d for d in r["details"]), r

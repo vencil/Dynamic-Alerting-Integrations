@@ -23,9 +23,12 @@ const (
 // exporter's own reading of the value, in the two forms the write gate needs.
 type valueCheck struct {
 	// problem judges a value of key k: "" when the exporter reads it,
-	// otherwise the reason it ignores it, in one tenant-free sentence. k is
-	// the key itself, so a check bound to a prefix (`_state_`) knows which
-	// key under it it judges.
+	// otherwise the reason it ignores it, in one tenant-free sentence built
+	// from constants only — never from the value (#3703: it is
+	// LayerValueProblem.Problem, which the CI readers print as it is;
+	// TestLayerValueProblems_CarryNoAuthorText feeds every check a canary).
+	// k is the key itself, so a check bound to a prefix (`_state_`) knows
+	// which key under it it judges.
 	problem func(k string, sv ScheduledValue) string
 	// reading is the value as the exporter reads it, as a comparable value:
 	// two values whose readings are == are read the same way — quoting, key

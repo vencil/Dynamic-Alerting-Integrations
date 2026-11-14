@@ -485,7 +485,9 @@ def test_a_value_unread_is_charged_to_the_layer_that_writes_it(tmp_path):
     t = kv.judge_tree(_tree(tmp_path / "own", own))
     errors = [f for f in t.findings if f.kind == "value_unread" and f.severity == kv.ERROR]
     assert [(f.file, f.key, f.tenants, f.blocks) for f in errors] == [("tb.yaml", "_metadata", ("tb",), True)]
-    assert "dbType" in errors[0].reason
+    # #3703: the reason is da-guard's fixed sentence — a count, not the field.
+    assert errors[0].reason.startswith("1 unknown field(s) (known: "), errors[0].reason
+    assert "dbType" not in errors[0].reason
     assert t.blocks
 
 
@@ -513,6 +515,21 @@ def test_a_schedule_entry_that_never_serves_is_an_error_on_the_file_that_writes_
     assert kv.finding_line(dead[0], 5) == (
         "a.yaml: error: dead_entry `mysql_connection_usage_percent` (never served: overrides[1] `01:00-03:00` → '5': "
         "window_covered) — tenant(s) t1")
+
+
+def test_a_dead_entry_line_does_not_print_what_the_author_wrote():
+    """#3703：dead_entry 那一行的值與 window 是作者寫的——值走 `shown_value`，
+    window 只有 `HH:MM-HH:MM` 的拼法照印（exporter 也讀 ` 1:00 - 02:00 ` 這種）。"""
+    url = "https://u:pw@hooks.example/x"  # trufflehog:ignore — a test value, no credential
+    finding = kv.Finding("error", "dead_entry", "mysql_connections", "a.yaml", ("t1",),
+                         "window_covered", True, None, (
+                             tv.DeadEntry("default", None, url, "default_covered"),
+                             tv.DeadEntry("overrides[1]", " 1:00 - 02:00 ", "70:critical", "window_covered"),
+                             tv.DeadEntry("overrides[2]", "1:00-2:00", "disable", "window_covered")))
+    assert kv.finding_line(finding, 5) == (
+        f"a.yaml: error: dead_entry `mysql_connections` (never served: default → a string of {len(url)} "
+        "chars: default_covered; overrides[1] `a string of 14 chars` → a string of 11 chars: window_covered; "
+        "overrides[2] `1:00-2:00` → 'disable': window_covered) — tenant(s) t1")
 
 
 def test_a_profile_key_the_platform_does_not_fill_still_reads(tmp_path):
