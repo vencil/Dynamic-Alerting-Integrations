@@ -129,6 +129,5 @@ Let each receiver filter for itself. This decouples from Alertmanager, but the s
 ## Related
 
 - [ADR-003: Sentinel Alert Pattern](./003-sentinel-alert-pattern.en.md) — also uses inhibit rules, to implement silent mode
-- [ADR-040: Platform Defaults Are Built Into the Readers](./040-platform-defaults-builtin-layer.en.md) — another decision that changes alerting behaviour with no change to the customer's config; both share the pre-upgrade method of rendering once with the old and once with the new version and comparing the results
 - [Config-Driven Architecture §2.8](../design/config-driven.en.md#28-severity-dedup) — behaviour matrix and tenant settings
 - [`generate_alertmanager_routes.py`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/tools/ops/generate_alertmanager_routes.py) — the inhibit-rule generator
