@@ -1463,21 +1463,38 @@ _KEY_CHECK_KINDS = {
 
 def _not_read_text(exc: BaseException) -> str:
     """The ``<Class>: <text>`` of a da-guard reading that failed, for a
-    message line. A ``ParseFailedError`` names the files the exporter's load
-    drops; its ``str()`` is the conf.d path as written, so it is said again
-    from its structured fields, each path through ``shown_file`` (#3703: a
-    conf.d name is the author's text). Any other error: its ``str()``."""
+    message line: its ``str()``, whitespace collapsed.
+
+    A ``ParseFailedError`` names the files the exporter's load drops, as
+    written (#3703: a conf.d name is the author's text). When every one of
+    them is a legal file name its ``str()`` is printed unchanged, byte for
+    byte; otherwise the same sentence — ``<config-dir>/<first>: <clauses>
+    (<CauseClass>)`` — is said again from its structured fields, each conf.d
+    path through ``shown_file``. The ``--config-dir`` prefix is the
+    operator's argument and stays as given."""
+    import pathlib
     if isinstance(exc, _lib_tenant_values.ParseFailedError):
-        clauses = []
-        if exc.parse_failed:
-            clauses.append(f"the exporter's load skips {len(exc.parse_failed)} file(s) that "
-                           f"do not decode: {', '.join(shown_file(f) for f in exc.parse_failed)}")
-        if exc.unreadable:
-            clauses.append(f"the exporter's load cannot read {len(exc.unreadable)} path(s): "
-                           + ", ".join(f"{shown_file(u.file)} ({u.reason})"
-                                       for u in exc.unreadable))
-        if clauses:
-            return f"{type(exc).__name__}: {'; '.join(clauses)}"
+        files = [*exc.parse_failed, *(u.file for u in exc.unreadable)]
+        shown = {f: shown_file(f) for f in files}
+        if any(shown[f] != f for f in files):
+            first = files[0]
+            clauses = []
+            if exc.parse_failed:
+                clauses.append(
+                    f"the exporter's load skips {len(exc.parse_failed)} file(s) that do not "
+                    f"decode: {', '.join(shown[f] for f in exc.parse_failed)}")
+            if exc.unreadable:
+                clauses.append(
+                    f"the exporter's load cannot read {len(exc.unreadable)} path(s): "
+                    + ", ".join(f"{shown[u.file]} ({u.reason})" for u in exc.unreadable))
+            # `_lib_tenant_values` builds `exc.path` as `str(Path(conf_d) /
+            # first)`; a path of another shape loses its prefix rather than
+            # print the name.
+            tail = str(pathlib.PurePath(first))
+            head = exc.path[:len(exc.path) - len(tail)] if exc.path.endswith(tail) else ""
+            text = (f"{head}{shown[first]}: "
+                    f"{'; '.join(clauses)} ({type(exc.cause).__name__})")
+            return f"{type(exc).__name__}: {' '.join(text.split())}"
     return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
 
 

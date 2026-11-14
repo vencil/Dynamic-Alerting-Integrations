@@ -1263,7 +1263,7 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
             parsed, tenant_dirs.get(tenant, ROOT_LEVEL))
         if profile_name not in visible:
             where = origin.get(profile_name)
-            extra = (f" (a profile of that name is defined in {where}, which "
+            extra = (f" (a profile of that name is defined in {shown_file(where)}, which "
                      f"is not on this tenant's directory chain — a profile is "
                      f"visible only to tenants at its own level or below)"
                      if where else "")
