@@ -84,9 +84,18 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 ## Session 生命週期與撤權延遲
 
-群組在**登入時**解析並存入 session cookie。**設了 `cookieRefresh` 時**，session 每過該間隔會用 refresh token 向 GitLab 換新 token，但**只有回應帶了新的 ID token，群組才會改用它的 `groups` claim**；回應沒有新的 ID token 時，群組維持原值（chart 釘的 oauth2-proxy v7.15.6：gitlab provider 的 `RefreshSession` 走 OIDC 的 refresh，不重讀 userinfo）。**未設 `cookieRefresh`**（chart 預設）則群組凍結在登入當下、直到 `cookieExpire` 到期。
+群組在**登入時**解析並存入 session cookie。以下依 chart 釘的 oauth2-proxy v7.15.6：
 
-這是 oauth2-proxy session 的本質，平台把它列為**已接受的限制**（[ADR-027](../adr/027-tenant-api-caller-identity.md) §8），不是即時撤權：撤權延遲的上限，在 refresh 會換新群組的前提下是 `cookieRefresh`，否則是 `cookieExpire`。要收緊就調短 `cookieRefresh`（代價是更頻繁地向 GitLab 換 token）；上線前在 staging 把測試帳號移出一個群組，等過一個 `cookieRefresh` 確認權限真的消失，不要只靠設定值推論。
+- **未設 `cookieRefresh`**（chart 預設）：不做 refresh，群組凍結在登入當下，cookie 在 `cookieExpire` 到期，到期即須重新登入。
+- **設了 `cookieRefresh`**：session 每過該間隔用 refresh token 向 GitLab 換新 token。refresh 成功會重設 session 的建立時間並重新簽發 cookie，所以 cookie 的有效期隨每次成功的 refresh 往後延。回應帶新的 ID token 時，群組改用它的 `groups` claim；**沒有時群組維持原值**（gitlab provider 的 `RefreshSession` 走 OIDC 的 refresh，不重讀 userinfo）。refresh token 被撤銷（GitLab 回 `invalid_grant`）時 session 會被清除。
+
+這是 oauth2-proxy session 的本質，平台把它列為**已接受的限制**（[ADR-027](../adr/027-tenant-api-caller-identity.md) §8），不是即時撤權：
+
+- 未設 `cookieRefresh`：被移出群組的權限最多保留到 `cookieExpire`。
+- 設了 `cookieRefresh` 且 GitLab 的 refresh 回應帶新的 ID token：最多保留一個 `cookieRefresh`。
+- 設了 `cookieRefresh` 但回應不帶新的 ID token：**沒有時間上限**，舊群組會隨每次成功的 refresh 一直延續，直到 refresh 失敗為止。
+
+所以設 `cookieRefresh` 之前，先在 staging 把測試帳號移出一個群組，等過一個 `cookieRefresh` 確認權限真的消失。權限沒有消失，就不要設 `cookieRefresh`，讓 `cookieExpire` 成為硬上限。
 
 ## 身分信任與 production 前提
 
