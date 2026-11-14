@@ -37,27 +37,31 @@ lang: zh
 
 ```yaml
 # rule-packs/rule-pack-mariadb.yaml — group: mariadb-normalization（節錄）
-- record: tenant:mysql_threads_connected:max
-  expr: max by(tenant) (mysql_global_status_threads_connected)
+- record: tenant:mysql_connection_usage:percent
+  expr: |
+    max by(tenant) (
+      100 * mysql_global_status_threads_connected
+      / (mysql_global_variables_max_connections > 0)
+    )
 
 - record: tenant:mysql_slow_queries:rate5m
   expr: sum by(tenant) (rate(mysql_global_status_slow_queries[5m]))
 ```
 
-命名一律是 `tenant:<指標>:<函式>`。聚合方式依語意選：連線數取 `max`（租戶裡最忙的那一台），速率取 `sum`（整個叢集的總量）。
+命名一律是 `tenant:<指標>:<函式>`。聚合方式依語意選：連線使用率（佔 max_connections 的 %）取 `max`（租戶裡最滿的那一台），速率取 `sum`（整個叢集的總量）。
 
 ### 第二部分：閾值正規化 recording rule
 
 ```yaml
 # rule-packs/rule-pack-mariadb.yaml — group: mariadb-threshold-normalization（節錄）
-- record: tenant:alert_threshold:mysql_connections
-  expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="warning"})
+- record: tenant:alert_threshold:mysql_connection_usage_percent
+  expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="warning"})
 
-- record: tenant:alert_threshold:mysql_connections_critical
-  expr: max by(tenant) (user_threshold{component="mysql", metric="connections", severity="critical"})
+- record: tenant:alert_threshold:mysql_connection_usage_percent_critical
+  expr: max by(tenant) (user_threshold{component="mysql", metric="connection_usage_percent", severity="critical"})
 ```
 
-threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：租戶檔的 `mysql_connections` 會變成 `user_threshold{component="mysql", metric="connections"}`，`mysql_connections_critical` 則是同一組 label 加上 `severity="critical"`。所以 selector 必須寫拆開後的 `component` 與 `metric`，寫成 `metric="mysql_connections"` 會永遠查不到值。用 `max by(tenant)` 而不是 `sum`，是為了避免 exporter 跑多副本時閾值被加倍。
+threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：租戶檔的 `mysql_connection_usage_percent` 會變成 `user_threshold{component="mysql", metric="connection_usage_percent"}`，`mysql_connection_usage_percent_critical` 則是同一組 label 加上 `severity="critical"`。所以 selector 必須寫拆開後的 `component` 與 `metric`，寫成 `metric="mysql_connection_usage_percent"` 會永遠查不到值。用 `max by(tenant)` 而不是 `sum`，是為了避免 exporter 跑多副本時閾值被加倍。
 
 ### 第三部分：alert rule
 
@@ -66,9 +70,9 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
 - alert: MariaDBHighConnections
   expr: |
     (
-      tenant:mysql_threads_connected:max
+      tenant:mysql_connection_usage:percent
       > on(tenant) group_left
-      tenant:alert_threshold:mysql_connections
+      tenant:alert_threshold:mysql_connection_usage_percent
     )
     unless on(tenant)
     (user_state_filter{filter="maintenance"} == 1)
@@ -76,7 +80,7 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
   labels:
     severity: warning
     maintenance: mute
-    metric_group: "mysql_connections"
+    metric_group: "mysql_connection_usage_percent"
     tenant: "{{ $labels.tenant }}"
   annotations:
     summary: "High connections on {{ $labels.tenant }}"
@@ -99,8 +103,8 @@ Rule Pack 本身不帶閾值。閾值是租戶在 conf.d 設的，平台預設�
 # conf.d/my-tenant.yaml
 tenants:
   my-tenant:
-    mysql_connections: "70"              # warning 閾值
-    mysql_connections_critical: "120"    # critical 閾值（_critical 後綴）
+    mysql_connection_usage_percent: "70"              # warning 閾值
+    mysql_connection_usage_percent_critical: "90"     # critical 閾值（_critical 後綴）
     mysql_replication_lag: "disable"     # 關閉這個告警
     mysql_threads_running:               # 排程式閾值：UTC 時段內改用另一個值
       default: "30"
@@ -163,10 +167,10 @@ python3 scripts/tools/lint/check_threshold_registry.py --ci
 ```yaml
 # scripts/tools/metric-dictionary.yaml（節錄）
 mysql_global_status_threads_connected:
-  maps_to: mysql_connections
+  maps_to: mysql_connection_usage_percent
   golden_rule: MariaDBHighConnections
   rule_pack: mariadb
-  note: "直接使用 scaffold_tenant.py 設定 mysql_connections 閾值"
+  note: "連線使用率的分子；閾值是佔 max_connections 的 %（#3778），用 scaffold_tenant.py 設定 mysql_connection_usage_percent"
 ```
 
 平台團隊直接編輯這份 YAML 即可，不用改程式。
@@ -203,9 +207,9 @@ python3 scripts/tools/ops/validate_migration.py \
 ```bash
 python3 scripts/tools/ops/backtest_threshold.py \
   --tenant my-tenant \
-  --metric mysql_connections \
+  --metric mysql_connection_usage_percent \
   --old-value 80 \
-  --new-value 100 \
+  --new-value 90 \
   --lookback 7d \
   --prometheus https://prometheus:9090
 ```
@@ -254,10 +258,10 @@ _policies:
     target: "_routing"
     operator: required
     severity: error
-  - name: max-connections-cap
-    target: "mysql_connections"
+  - name: connection-usage-cap
+    target: "mysql_connection_usage_percent"
     operator: lte
-    value: 500
+    value: 95
     severity: warning
 ```
 
@@ -281,7 +285,7 @@ routing_profiles:
 tenants:
   db-finance:
     _routing_profile: "team-dba-global"   # 引用 profile
-    mysql_connections: "60"
+    mysql_connection_usage_percent: "60"
 ```
 
 四層合併順序：`_routing_defaults` → `routing_profiles[ref]` → tenant `_routing` → `_routing_enforced`。租戶的 `_routing` 可覆蓋 profile 中的個別欄位。
@@ -319,7 +323,7 @@ A: 在 tenant YAML 中覆蓋特定 key：
 ```yaml
 tenants:
   my-tenant:
-    mysql_connections: "70"      # 自訂此項
+    mysql_connection_usage_percent: "70"      # 自訂此項
     # 其他項目省略，會用 _defaults.yaml 的 defaults: 預設
     # ⚠️ 但列在 _defaults.yaml 的 optional_overrides: 的宣告 key 沒有預設可繼承，
     #    省略＝沒有值＝不產生 series（不是「用預設」）
@@ -332,7 +336,7 @@ A: 支援，但它是租戶配置的功能，不寫在 Rule Pack 裡。在租戶
 A: 使用 shadow monitoring。新規則與舊規則並行，用 `validate_migration.py` 比對兩邊 recording rule 的數值，收斂之後再切換（見 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)）。
 
 **Q: 如何在多個資料庫間共享閾值邏輯？**
-A: 兩種做法。只是要讓多個 tenant 共用同一組閾值值，用 profile：在 `_profiles.yaml` 的 `profiles:` 下定義，例如 `mysql-standard: {mysql_connections: "90"}`，再在各租戶寫 `_profile: mysql-standard`；租戶自己寫的 key 優先於 profile（`mysql-standard` 是範例名稱，平台沒有內建這個 profile）。若要共用的是 PromQL 本身，就得另寫一個 Rule Pack，步驟與上方「建立新的 Rule Pack」相同：它要有自己的 ConfigMap、加進 Prometheus 的 Projected Volume（Prometheus 只載入掛進 `/etc/prometheus/rules/` 的檔），閾值 key 也要在 threshold registry 宣告。
+A: 兩種做法。只是要讓多個 tenant 共用同一組閾值值，用 profile：在 `_profiles.yaml` 的 `profiles:` 下定義，例如 `mysql-standard: {mysql_connection_usage_percent: "90"}`，再在各租戶寫 `_profile: mysql-standard`；租戶自己寫的 key 優先於 profile（`mysql-standard` 是範例名稱，平台沒有內建這個 profile）。若要共用的是 PromQL 本身，就得另寫一個 Rule Pack，步驟與上方「建立新的 Rule Pack」相同：它要有自己的 ConfigMap、加進 Prometheus 的 Projected Volume（Prometheus 只載入掛進 `/etc/prometheus/rules/` 的檔），閾值 key 也要在 threshold registry 宣告。
 
 > 💡 **互動工具** — 查看所有合法 YAML key 和型別？用 [Schema Explorer](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/schema-explorer.jsx)。測試 PromQL 表達式對應的 Recording Rule？用 [PromQL Tester](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/promql-tester.jsx)。遷移既有規則？用 [Migration Simulator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/migration-simulator.jsx)。查看平台術語？用 [Glossary](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/glossary.jsx)。在瀏覽器中觀看平台如何處理多租戶配置？[Platform Demo](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/platform-demo.jsx) 展示完整流程。所有工具見 [Interactive Tools Hub](https://vencil.github.io/Dynamic-Alerting-Integrations/)。企業內網環境可用 `da-portal` Docker image 自建：`docker run -p 8080:80 ghcr.io/vencil/da-portal`（[部署說明](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/da-portal/README.md)）。
 

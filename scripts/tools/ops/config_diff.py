@@ -933,7 +933,7 @@ def estimate_affected_alerts(metric_key):
     """The alerts a change to ``metric_key`` reaches, as the report cell.
 
     Read from the rule packs (``_threshold_alerts``), not derived from the
-    key's spelling: ``mysql_connections`` reaches ``MariaDBHighConnections``
+    key's spelling: ``mysql_connection_usage_percent`` reaches ``MariaDBHighConnections``
     and ``MariaDBSystemBottleneck``, which no CamelCase of the key names.
     ``—`` means no rule-pack alert reads the key (the change reaches no
     alert); ``unknown`` means the rule packs could not be read — none found,

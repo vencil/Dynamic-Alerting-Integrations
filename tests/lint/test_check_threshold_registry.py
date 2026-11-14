@@ -153,10 +153,10 @@ def test_hand_edit_inside_generated_block_bites(tmp_path):
     stale-surface hard error; re-splice → green again."""
     dst = _helm_values_copy(tmp_path)
     text = dst.read_text(encoding="utf-8")
-    assert "    mysql_threads_running: 30" in text
+    assert "    mysql_replication_lag: 30" in text
     dst.write_text(
-        text.replace("    mysql_threads_running: 30",
-                     "    mysql_threads_running: 80"),
+        text.replace("    mysql_replication_lag: 30",
+                     "    mysql_replication_lag: 80"),
         encoding="utf-8")
     result = gate.run_check(surface_paths={"helm-defaults": str(dst)})
     assert any("stale-surface" in e and "helm-defaults" in e
@@ -214,7 +214,7 @@ def test_prose_known_unwired_and_dimensional_are_allowed(tmp_path):
     f.write_text(
         "# header:\n"
         "#   zzz_pending_key: 10\n"
-        "#   mysql_connections_critical: \"120\"\n"
+        "#   mysql_connection_usage_percent_critical: \"120\"\n"
         "#   \"oracle_tablespace_used_percent{tablespace_name=\\\"TEMP\\\"}\": \"disable\"\n"
         "groups: []\n",
         encoding="utf-8")

@@ -136,11 +136,11 @@ lang: zh
 | MariaDBReplicaSQLThreadDown | critical | 照常觸發 | Replica SQL thread is stopped (Slave_SQL_Running=No) for tenant {{ $labels.tenant }}  | 立即檢查伺服器狀態、網路連線；查看系統日誌 | mysql_slave_status_slave_sql_running |
 | MariaDBReplicationLag | warning | 靜音 | [tier] {{ $labels.tenant }}: replication lag threshold breached  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_replication_lag:max |
 | MariaDBReplicationLagCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: CRITICAL replication lag  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_replication_lag:max |
-| MariaDBHighConnections | warning | 靜音 | [tier] {{ $labels.tenant }}: connection threshold breached  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_threads_connected:max |
-| MariaDBHighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_threads_connected:max |
+| MariaDBHighConnections | warning | 靜音 | [tier] {{ $labels.tenant }}: connection threshold breached  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_connection_usage:percent |
+| MariaDBHighConnectionsCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: critical connection saturation  | 檢查連線池配置、應用連線是否有洩漏；考慮增加最大連線數 | tenant:mysql_connection_usage:percent |
 | MariaDBHighThreadsRunning | warning | 靜音 | [tier] {{ $labels.tenant }}: running-thread saturation (threads_running, NOT host CPU%) breached  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_threads_running:avg1m |
 | MariaDBHighThreadsRunningCritical | critical | 靜音 | [tier] {{ $labels.tenant }}: CRITICAL running-thread saturation (threads_running, NOT host CPU%)  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_threads_running:avg1m |
-| MariaDBSystemBottleneck | critical | 靜音 | [tier] {{ $labels.tenant }}: running-thread saturation + connections both exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_threads_connected:max |
+| MariaDBSystemBottleneck | critical | 靜音 | [tier] {{ $labels.tenant }}: running-thread saturation + connections both exceeded  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_connection_usage:percent |
 | MariaDBRecentRestart | info | 靜音 | Uptime is only {{ $value }}s (< 5 min) | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | mysql_global_status_uptime |
 | MariaDBHighSlowQueries | warning | 靜音 | [tier] {{ $labels.tenant }}: slow query rate elevated  | 檢查慢查詢日誌，找出優化候選；考慮調整相關參數 | tenant:mysql_slow_queries:rate5m |
 | MariaDBHighAbortedConnections | warning | 靜音 | [tier] {{ $labels.tenant }}: aborted connection rate elevated  | 檢查告警指標、查看相關日誌；如需協助請聯絡平台團隊 | tenant:mysql_aborted_connections:rate5m |

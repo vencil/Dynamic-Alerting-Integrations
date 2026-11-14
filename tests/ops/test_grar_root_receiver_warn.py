@@ -46,10 +46,10 @@ def tenant_dir(tmp_path):
     d = tmp_path / "conf.d"
     d.mkdir()
     # declared: a tree with no root platform file fails --validate (#3016)
-    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
                                       encoding="utf-8")
     (d / "t1.yaml").write_text(
-        make_tenant_yaml("t1", keys={"mysql_connections": "70"},
+        make_tenant_yaml("t1", keys={"mysql_connection_usage_percent": "70"},
                          routing=make_routing_config("t1")),
         encoding="utf-8")
     return d

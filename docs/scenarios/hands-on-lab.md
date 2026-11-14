@@ -14,7 +14,7 @@ lang: zh
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)
 
-> ⚠️ **版本**：本頁的預期輸出是用 main 上的 da-tools 實測的，比目前的 `ghcr.io/vencil/da-tools:latest`（v2.9.0）新。下一個版本發布前用 `:latest` 照做，會看到四處不同：練習 3 只有 5 項檢查（沒有 `tenant_uniqueness`）；`schema` 另有 7 條 `unknown key … not in defaults`（`jvm_memory`、`kafka_broker_count`、`mysql_threads_running`、`oracle_sessions_active`、`oracle_sessions_active_critical`、`redis_memory_used_bytes`、`redis_memory_used_bytes_critical`）；練習 8 的 `--strict` 在 v2.9.0 不存在，加上去會以結束碼 2 失敗（不加時 domain policy 的 WARN 照樣出現）；v2.9.0 也沒有 `--output-alertmanager`，練習 4 的指令在那裡會失敗。 <!-- image-caveat: v2.9.0 -->
+> ⚠️ **版本**：本頁的預期輸出是用 main 上的 da-tools 實測的，比目前的 `ghcr.io/vencil/da-tools:latest`（v2.9.0）新。下一個版本發布前用 `:latest` 照做，會看到五處不同：練習 3 只有 5 項檢查（沒有 `tenant_uniqueness`）；`schema` 另有 7 條 `unknown key … not in defaults`（`jvm_memory`、`kafka_broker_count`、`mysql_threads_running`、`oracle_sessions_active`、`oracle_sessions_active_critical`、`redis_memory_used_bytes`、`redis_memory_used_bytes_critical`）；本頁的 `mysql_connection_usage_percent` 在 v2.9.0 還不存在（那一版是絕對連線數的 `mysql_connections`，#3778），它與它的 `_critical` 也會被列為 unknown key；練習 8 的 `--strict` 在 v2.9.0 不存在，加上去會以結束碼 2 失敗（不加時 domain policy 的 WARN 照樣出現）；v2.9.0 也沒有 `--output-alertmanager`，練習 4 的指令在那裡會失敗。 <!-- image-caveat: v2.9.0 -->
 
 > 💡 **想先 1 分鐘看產品跑起來、而不是動手敲 CLI？** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)（推薦首站：瀏覽器看 da-portal UI + 真實告警紅燈，不需 K8s；`⏱️ <1 min · 🟢 只需 Docker`）。**本實驗**聚焦**動手跑 da-tools CLI 工作流**（配置 / 路由 / blast radius；`⏱️ 30–45 min · 🟡 中度 (CLI)`）—— 兩者互補、深度不同，不是擇一。
 
@@ -93,9 +93,9 @@ find . -type f | sort
 ```yaml
 tenants:
   prod-mariadb:
-    mysql_connections: "150"
-    mysql_connections_critical: "200"
-    mysql_threads_running: "40"    # threads_running 飽和（併發執行緒數，NOT host CPU%）；平台預設 30
+    mysql_connection_usage_percent: "85"           # 連線使用率（佔 max_connections 的 %）
+    mysql_connection_usage_percent_critical: "95"
+    mysql_threads_running: "40"    # threads_running 飽和（併發執行緒數，NOT host CPU%）；平台不給預設，依主機給值（#3778）
     container_cpu: "75"
     container_memory: "80"
 
@@ -365,7 +365,7 @@ docker run --rm \
 
 ```bash
 cp -r conf.d conf.d.new
-sed -i 's/mysql_connections: "150"/mysql_connections: "120"/' conf.d.new/prod-mariadb.yaml
+sed -i 's/mysql_connection_usage_percent: "85"/mysql_connection_usage_percent: "75"/' conf.d.new/prod-mariadb.yaml
 
 docker run --rm \
   --user $(id -u):$(id -g) \

@@ -36,7 +36,7 @@ EOF
 cat > conf.d/db-a.yaml <<'EOF'
 tenants:
   db-a:
-    mysql_connections: "70"
+    mysql_connection_usage_percent: "70"
 EOF
 ```
 
@@ -119,11 +119,11 @@ curl -s $H localhost:8080/api/v1/tenants/db-a/effective
 
 # 寫前先 dry-run 驗證（不寫入；格式錯誤回 400）
 curl -s $H -X POST localhost:8080/api/v1/tenants/db-a/validate \
-  --data-binary $'tenants:\n  db-a:\n    mysql_connections: "90"\n'
+  --data-binary $'tenants:\n  db-a:\n    mysql_connection_usage_percent: "90"\n'
 
 # 寫入（direct 模式 → 直接 git commit 進 conf.d）
 curl -s $H -X PUT localhost:8080/api/v1/tenants/db-a \
-  --data-binary $'tenants:\n  db-a:\n    mysql_connections: "90"\n'
+  --data-binary $'tenants:\n  db-a:\n    mysql_connection_usage_percent: "90"\n'
 ```
 
 > 其他整合面:批次 `POST /api/v1/tenants/batch`(`?async=true` 走 task 池,`/api/v1/tasks/{id}` polling)、即時事件 `GET /api/v1/events`(SSE)、聯邦 token 簽發 `POST /api/v1/federation/tokens`。完整端點與權限見 **[README §API 參考](README.md#api-參考)**。

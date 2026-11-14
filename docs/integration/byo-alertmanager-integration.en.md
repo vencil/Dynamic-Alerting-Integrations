@@ -129,7 +129,7 @@ Define the `_routing` section in tenant YAML :
 # conf.d/db-a.yaml
 tenants:
   db-a:
-    mysql_connections: "70"
+    mysql_connection_usage_percent: "70"
     _routing:
       receiver:
         type: "webhook"
@@ -511,7 +511,7 @@ In advanced scenarios, certain specific alerts may need different routing strate
 # conf.d/db-a.yaml
 tenants:
   db-a:
-    mysql_connections: "70"
+    mysql_connection_usage_percent: "70"
     _routing:
       receiver:
         type: "slack"

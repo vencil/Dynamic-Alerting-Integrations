@@ -248,8 +248,8 @@ The central cluster's threshold-exporter manages thresholds for all edge tenants
 defaults:
   pg_connections: 80
   pg_replication_lag: 30
-  mysql_connections: 80
-  mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
+  mysql_connection_usage_percent: 80  # connection usage (% of max_connections)
+  mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231). The platform ships no default — set it per host (#3778); 30 is only an example
 
 # conf.d/db-a.yaml (edge-asia-1 tenant)
 tenants:
@@ -264,7 +264,7 @@ tenants:
 # conf.d/db-b.yaml (edge-europe-1 tenant)
 tenants:
   db-b:
-    mysql_connections: "60"
+    mysql_connection_usage_percent: "60"
     _routing:
       receiver:
         type: "email"
@@ -278,10 +278,10 @@ tenants:
 The central Prometheus mounts all Rule Packs (same as single-cluster deployment). Recording rules are evaluated on the central cluster against raw metrics from federated/remote-write sources:
 
 ```
-Edge mysql_global_status_threads_connected{tenant="db-a"}
+Edge mysql_global_status_threads_connected, mysql_global_variables_max_connections{tenant="db-a"}
     → federation/remote-write →
-Central recording rule: tenant:mysql_threads_connected:max = max by(tenant) (...)
-Central alert rule: MariaDBHighConnections (matches against tenant:alert_threshold:mysql_connections)
+Central recording rule: tenant:mysql_connection_usage:percent = max by(tenant) (...)
+Central alert rule: MariaDBHighConnections (matches against tenant:alert_threshold:mysql_connection_usage_percent)
     → Alertmanager → notifies according to db-a's _routing
 ```
 
@@ -414,7 +414,7 @@ The Edge Evaluation architecture partitions Rule Packs into two layers, enabling
 | Edge | Edge Prometheus | Data Normalization (recording rules) | Part 1: `*-normalization` groups |
 | Central | Central Prometheus | Threshold Normalization + Alert Rules | Parts 2+3: `*-threshold-normalization` + `*-alerts` groups |
 
-After edge Prometheus runs Part 1, it pushes only recording rule results (e.g., `tenant:mysql_threads_connected:max`) through federation/remote-write, significantly reducing cross-cluster data volume. The central cluster, upon receiving normalized metrics, performs comparison against threshold-exporter thresholds and generates alerts.
+After edge Prometheus runs Part 1, it pushes only recording rule results (e.g., `tenant:mysql_connection_usage:percent`) through federation/remote-write, significantly reducing cross-cluster data volume. The central cluster, upon receiving normalized metrics, performs comparison against threshold-exporter thresholds and generates alerts.
 
 ```mermaid
 graph TB

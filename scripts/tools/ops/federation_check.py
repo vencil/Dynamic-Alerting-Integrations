@@ -303,7 +303,7 @@ def check_e2e(prom_url, edge_urls):
     # Cross-cluster vector matching test
     results, err = query_prometheus(
         prom_url,
-        "count(tenant:alert_threshold:mysql_connections > 0)"
+        "count(tenant:alert_threshold:mysql_connection_usage_percent > 0)"
     )
     if err:
         checks.append(_query_failed("e2e_cross_cluster_matching", err))  # #3133: was dropped

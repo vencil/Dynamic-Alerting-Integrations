@@ -219,7 +219,7 @@ Next steps:
     // it requires. The argparse is `tenant metric_key value [--diff] [--json]`.
     args: [
       { name: 'tenant', label: t('租戶 ID', 'Tenant ID'), required: true, placeholder: 'e.g., db-a' },
-      { name: 'metric_key', label: t('指標鍵', 'Metric Key'), required: true, placeholder: 'e.g., mysql_connections' },
+      { name: 'metric_key', label: t('指標鍵', 'Metric Key'), required: true, placeholder: 'e.g., mysql_connection_usage_percent' },
       { name: 'value', label: t('新值（或 default / disable）', "New value (or 'default' / 'disable')"), required: true, placeholder: 'e.g., 80' }
     ],
     flags: [
@@ -249,7 +249,7 @@ Tenant: db-a
       { name: '--trace', label: t('五步路由追蹤模擬', 'Five-step route tracing simulation'), required: false, type: 'checkbox' },
       { name: '--alertname', label: t('追蹤用告警名稱', 'Alert name for trace'), required: false, placeholder: 'HighMemoryUsage' },
       { name: '--severity', label: t('追蹤用嚴重度', 'Severity for trace'), required: false, placeholder: 'warning' },
-      { name: '--label', label: t('追蹤用額外 label（KEY=VALUE）', 'Extra label for trace (KEY=VALUE)'), required: false, placeholder: 'metric_group=mysql_connections' },
+      { name: '--label', label: t('追蹤用額外 label（KEY=VALUE）', 'Extra label for trace (KEY=VALUE)'), required: false, placeholder: 'metric_group=mysql_connection_usage_percent' },
       { name: '--base-config', label: t('追蹤用 base Alertmanager YAML', 'Base Alertmanager YAML for trace'), required: false, placeholder: 'base-alertmanager.yaml' },
       { name: '--json', label: t('JSON 輸出', 'JSON Output'), required: false, type: 'checkbox' }
     ]

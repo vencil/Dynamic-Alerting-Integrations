@@ -212,7 +212,7 @@ da-tools Python 工具與 Go binary（da-guard / da-parser / da-batchpr）共用
 
 | 場景 | 觸發指標 | 實測值 | 閾值 | Alert |
 |------|---------|--------|------|-------|
-| Connection Storm (95 conn) | `mysql_global_status_threads_connected` | 96 | 70 | `MariaDBHighConnections` FIRING |
+| Connection Storm (95 conn) | `tenant:mysql_connection_usage:percent`（threads_connected ÷ max_connections） | 96%（96 ÷ 100） | 70% | `MariaDBHighConnections` FIRING |
 | stress-ng (CPU limit 100m) | `tenant:pod_weakest_cpu_percent:max` | 97.3% | 70% | `PodContainerHighCPU` FIRING |
 | sysbench (16 threads) | `mysql_global_status_slow_queries` | 運行中 | — | `MariaDBHighSlowQueries` |
 | composite | connections AND cpu | — | — | `MariaDBSystemBottleneck` |
@@ -283,14 +283,14 @@ CHANGELOG / CLAUDE.md 的測試計數必須在 `pytest -v` 執行後才寫入。
 # ✅ 實際格式（conf.d/db-a.yaml）
 tenants:
   db-a:
-    mysql_connections: "70"
+    mysql_connection_usage_percent: "70"
     _routing:
       receiver: { type: "webhook", url: "https://hooks.example.com/alerts" }
 ```
 
 ```yaml {.illustrative reason="❌ 反例：本節要工具別假設的扁平形狀；當成 fragment 讀它合 schema，錯在形狀不在內容，所以不是 .expect-invalid"}
 # ❌ flat 格式（僅用於簡化測試或文件範例）
-mysql_connections: "70"
+mysql_connection_usage_percent: "70"
 ```
 
 **偵測方法：** 載入 YAML 後檢查 `"tenants" in data and isinstance(data["tenants"], dict)`，若存在則 drill into nested structure。

@@ -70,10 +70,10 @@ The most important design proof, and a description of the end-to-end lifecycle m
 
 ## Key Design Proof: `max by(tenant)` Prevents HA Double-Counting
 
-threshold-exporter runs HA with 2 replicas; both Pods emit the same `user_threshold{tenant="db-a", metric="connections"} = 5`. The recording rule aggregates with `max by(tenant)`, not `sum`:
+threshold-exporter runs HA with 2 replicas; both Pods emit the same `user_threshold{tenant="db-a", metric="connection_usage_percent"} = 70`. The recording rule aggregates with `max by(tenant)`, not `sum`:
 
-- ✅ `max(5, 5) = 5` (correct)
-- ❌ With `sum by(tenant)`: `5 + 5 = 10` (doubled, wrong)
+- ✅ `max(70, 70) = 70` (correct)
+- ❌ With `sum by(tenant)`: `70 + 70 = 140` (doubled, wrong)
 
 However the Pod count changes, `max` returns the same value — the rationale for choosing **`max` over `sum`** in the HA design (see [Architecture & Design §High Availability](../architecture-and-design.en.md#4-high-availability-design)).
 
@@ -102,18 +102,18 @@ sequenceDiagram
 
     Op->>LG: run_load.sh --type composite
     LG->>DB: 95 idle connections + OLTP (sysbench)
-    DB-->>PM: mysql_global_status_threads_connected<br/>(connections above the threshold of 70)
-    TE-->>PM: user_threshold{component="mysql", metric="connections"} = 70
+    DB-->>PM: mysql_global_status_threads_connected / max_connections<br/>(connection usage above the 70% threshold)
+    TE-->>PM: user_threshold{component="mysql", metric="connection_usage_percent"} = 70
 
-    Note over PM: Evaluate Recording Rule:<br/>tenant:mysql_threads_connected:max<br/>> tenant:alert_threshold:mysql_connections (70)
+    Note over PM: Evaluate Recording Rule:<br/>tenant:mysql_connection_usage:percent<br/>> tenant:alert_threshold:mysql_connection_usage_percent (70)
 
     PM->>PM: Alert: MariaDBHighConnections → FIRING
 
     Op->>LG: run_load.sh --cleanup
     LG->>DB: Delete load Jobs / Pods (connections + sysbench)
-    DB-->>PM: mysql_global_status_threads_connected<br/>(connections back below the threshold of 70)
+    DB-->>PM: mysql_global_status_threads_connected / max_connections<br/>(connection usage back below the 70% threshold)
 
-    Note over PM: tenant:mysql_threads_connected:max<br/>< tenant:alert_threshold:mysql_connections (70)
+    Note over PM: tenant:mysql_connection_usage:percent<br/>< tenant:alert_threshold:mysql_connection_usage_percent (70)
 
     PM->>PM: Alert → RESOLVED (on the next evaluation that no longer sees a value above the threshold — for does not affect this step)
 ```

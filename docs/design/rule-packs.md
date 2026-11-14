@@ -25,7 +25,7 @@ parent: architecture-and-design.md
 <!-- RULE_PACK_INVENTORY_START -->
 | Rule Pack | ConfigMap 名稱 | Recording Rules | Alert Rules |
 |-----------|-----------------|-----------------|-------------|
-| MariaDB/MySQL | `prometheus-rules-mariadb` | 12 | 17 |
+| MariaDB/MySQL | `prometheus-rules-mariadb` | 11 | 17 |
 | PostgreSQL | `prometheus-rules-postgresql` | 8 | 8 |
 | Redis | `prometheus-rules-redis` | 12 | 9 |
 | MongoDB | `prometheus-rules-mongodb` | 10 | 10 |
@@ -41,7 +41,7 @@ parent: architecture-and-design.md
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **總計** | | **166** | **183** (= **349** rules) |
+| **總計** | | **165** | **183** (= **348** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### 團隊切分（示意，**非**擁有權宣告）

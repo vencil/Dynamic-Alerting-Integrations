@@ -365,9 +365,9 @@ Within a GitOps workflow, tenants can self-manage the following settings in thei
 
 | Setting | Description | Example |
 |---------|-------------|---------|
-| Threshold tri-state | Custom value / omit to use default / `"disable"` (⚠️ "omit to use default" holds only for keys that have a value under `defaults:` in `_defaults.yaml`) | `mysql_connections: "70"` |
+| Threshold tri-state | Custom value / omit to use default / `"disable"` (⚠️ "omit to use default" holds only for keys that have a value under `defaults:` in `_defaults.yaml`) | `mysql_connection_usage_percent: "70"` |
 | Declared key (`optional_overrides:`) | The platform recognises the key name but asserts no value: it takes effect only once the tenant sets it, so **omitting it means no value and silence** (nothing to inherit — two states, not three) | `oracle_wait_time_rate: "<your calibrated value>"` |
-| `_critical` suffix | Multi-level severity | `mysql_connections_critical: "95"` |
+| `_critical` suffix | Multi-level severity | `mysql_connection_usage_percent_critical: "95"` |
 | `_routing` | Notification routing (6 receiver types) | `receiver: {type: "webhook", url: "..."}` |
 | `_routing.overrides[]` | Different receiver for specific alerts | `alertname: "..."`, `receiver: {type: "email", ...}` |
 | `_silent_mode` | Silent mode (TSDB records but no notify) | `{target: "all", expires: "2099-04-01T00:00:00Z"}` |

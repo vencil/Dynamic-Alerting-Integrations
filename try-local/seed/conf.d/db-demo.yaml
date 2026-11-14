@@ -1,27 +1,25 @@
 # db-demo — the headline tenant. The seed one-shot pushes a synthetic
-# mysql_global_status_threads_connected{tenant="db-demo"}=200 to pushgateway;
-# 200 > the critical threshold (120) below → rule-pack-mariadb's
+# mysql_global_status_threads_connected{tenant="db-demo"}=190 and
+# mysql_global_variables_max_connections=200 to pushgateway; 95 % of
+# max_connections > the critical threshold (90) below → rule-pack-mariadb's
 # MariaDBHighConnectionsCritical fires (severity=critical). This is the red
 # light visible in Prometheus :9090/alerts and Alertmanager :9093.
 #
 # The fire-chain (verified against rule-pack-mariadb.yaml + resolve.go):
-#   user_threshold{tenant=db-demo,metric=connections,severity=warning}=50
-#   user_threshold{tenant=db-demo,metric=connections,severity=critical}=120
+#   user_threshold{tenant=db-demo,metric=connection_usage_percent,severity=warning}=50
+#   user_threshold{tenant=db-demo,metric=connection_usage_percent,severity=critical}=90
 #   tenant_metadata_info{tenant=db-demo,...}=1   (from _metadata, group_left join)
 tenants:
   db-demo:
-    mysql_connections: "50"            # warning threshold
-    mysql_connections_critical: "120"  # critical threshold → headline alert
+    mysql_connection_usage_percent: "50"           # warning threshold (% of max_connections)
+    mysql_connection_usage_percent_critical: "90"  # critical threshold → headline alert
     # Running-threads saturation warning (gauge: concurrent threads executing, a
     # USE-method proxy — NOT host CPU%). Dormant by design: push-metrics.sh seeds no
     # mysql_global_status_threads_running, so MariaDBHighThreadsRunning stays quiet and the
-    # single connections-critical red light remains the headline. 40 against the platform
-    # default of 30 (_defaults.yaml, #944 calibration) = a tenant that tolerates more
-    # concurrency than the baseline — an override that LOOSENS. Note that
-    # GET /api/v1/tenants/db-demo/effective returns only the MERGED result (40) plus the
-    # defaults_chain file list: the 30 it overrode is not in the response (EffectiveConfig
-    # keeps MergedDefaults `json:"-"`), so the inheritance is readable in these files,
-    # not in the API payload.
+    # single connections-critical red light remains the headline. The platform ships no
+    # value for this key (a healthy value scales with the host's CPU count, #3778); it is
+    # declared under `optional_overrides:` in _defaults.yaml, so this tenant line alone is
+    # served. 40 = sized for this host.
     mysql_threads_running: "40"
     _metadata:
       owner: "platform-db-team"

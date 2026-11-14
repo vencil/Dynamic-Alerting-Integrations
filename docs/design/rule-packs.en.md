@@ -21,7 +21,7 @@ parent: architecture-and-design.en.md
 <!-- RULE_PACK_INVENTORY_START -->
 | Rule Pack | ConfigMap Name | Recording Rules | Alert Rules |
 |-----------|----------------|-----------------|-------------|
-| MariaDB/MySQL | `prometheus-rules-mariadb` | 12 | 17 |
+| MariaDB/MySQL | `prometheus-rules-mariadb` | 11 | 17 |
 | PostgreSQL | `prometheus-rules-postgresql` | 8 | 8 |
 | Redis | `prometheus-rules-redis` | 12 | 9 |
 | MongoDB | `prometheus-rules-mongodb` | 10 | 10 |
@@ -37,7 +37,7 @@ parent: architecture-and-design.en.md
 | Exporter Liveness | `prometheus-rules-liveness` | 0 | 3 |
 | Operational | `prometheus-rules-operational` | 0 | 4 |
 | Platform | `prometheus-rules-platform` | 0 | 54 |
-| **Total** | | **166** | **183** (= **349** rules) |
+| **Total** | | **165** | **183** (= **348** rules) |
 <!-- RULE_PACK_INVENTORY_END -->
 
 #### Team split (illustrative — **not** an ownership declaration)

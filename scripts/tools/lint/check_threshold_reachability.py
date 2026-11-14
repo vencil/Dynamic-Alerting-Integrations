@@ -42,7 +42,7 @@ platform-defaults path can SUPPLY, under the exporter's reachability rules:
 
 KNOWN_UNWIRED: the keys already dead at the time this gate landed (18 then;
 the 9 B/C/D/E identity repairs shipped in #1231, 9 A-class
-declared-without-value keys remain).
+declared-without-value keys remain; #3778 added mysql_threads_running as a 10th).
 They are grandfathered as INFO (not errors) with a pointer to the tracking
 issue so the gate could merge without first fixing all of them — the real
 fixes (move / rename / delete per root cause) land per root-cause class in
@@ -174,7 +174,8 @@ class _GateViolation(RuntimeError):
 # root-cause tag; the real fixes are tracked in the TRK-337 follow-ups.
 # Started at 18 when the gate landed; the B/C/D/E identity repairs shipped in
 # #1231 (rename/move/add/delete — 9 keys removed via the exit-lock below),
-# leaving the 9 A-class keys, which are NOT a pending mechanical fix.
+# leaving the 9 A-class keys, which are NOT a pending mechanical fix (#3778
+# added a 10th by the same decision: mysql_threads_running).
 #   A = name-correct, tier `optional_overrides`, and now SHIPPED on the runtime
 #       `optional_overrides:` declared list (#1310) → the tenant sets it and it
 #       fires (`resolveDeclaredRows`); the platform asserts no value on purpose,
@@ -189,7 +190,7 @@ class _GateViolation(RuntimeError):
 #   D = key absent from scaffold entirely → add
 #   E = no alert actually consumes it elsewhere / orphan → delete
 #
-# ⚠️ One shared constant, not nine copies: the tag is what `main()` PRINTS
+# ⚠️ One shared constant, not one copy per key: the tag is what `main()` PRINTS
 # (see the `known-unwired` info below), and it was the printed string — not the
 # comment above it — that kept prescribing "move to defaults" for a full release
 # after the comment had been corrected. A test pins its CONTENT, not just its
@@ -211,7 +212,27 @@ KNOWN_UNWIRED: dict[str, str] = {
     "clickhouse_max_part_count": _A_DECLARED,
     "clickhouse_replication_queue": _A_DECLARED,
     "clickhouse_memory_tracking_bytes": _A_DECLARED,
+    # #3778: a healthy running-thread count scales with the host's CPU count,
+    # so the platform declares the key and asserts no value (the redis-style
+    # "defaults tier, operator-armed" placement served nothing for a tenant
+    # that wrote it alone).
+    "mysql_threads_running": _A_DECLARED,
 }
+
+
+def _declared_only_critical_tag(base: str) -> str:
+    """The info a dead `<base>_critical` gets when its base is a grandfathered
+    A-class key. DERIVED, not listed: it is dead exactly while its base is, and
+    the base's own exit-lock covers the fix. Not a tenant-side posture like the
+    base: the critical row is admitted on `defaults[<base>]` only
+    (`resolveCriticalRows`), so a tenant writing the base alone gets a warning
+    row and no critical one until a defaults carrier holds the base."""
+    return (
+        f"critical tier of declared-only {base}: a tenant's {base} is served "
+        f"(resolveDeclaredRows) but {base}_critical is served only once a "
+        f"defaults carrier holds a {base} value (resolveCriticalRows) — the "
+        "operator supplies that base."
+    )
 
 
 # ── Second supply face: what the SHIPPED chart actually installs ────────────
@@ -432,7 +453,7 @@ def _written_faces() -> dict[str, set[str]]:
 # taught this rule; #3014 deleted it), a NESTED `_defaults.yaml` (the loader enters one at every
 # depth — `config_hierarchy.go` — while the constants named depth 0 only), and a
 # whole second conf.d root (`rule-packs/recipes/examples/conf.d/`). All three
-# were demonstrated: inject `mysql_connections_critical` into any of them and
+# were demonstrated: inject `mysql_connection_usage_percent_critical` into any of them and
 # this gate exited 0 without a word.
 #
 # ⛔ SCOPE is `git ls-files`, not a filesystem walk, and that is the second
@@ -638,7 +659,7 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #   UP (addition) — the paired bracket test requires each floor to stay strictly
 #     ABOVE "biggest conf.d root / producer gone". A pure ADDITION raises that
 #     lower bound, so too many new keys turn the TEST red. Today: artifacts
-#     tolerate +6, generators +28. Red here means RAISE the floor.
+#     tolerate +5, generators +28. Red here means RAISE the floor.
 #     (#1516 added the `wrapper-siblings` fixture, +2 artifact keys, so this
 #      moved 8 -> 6 and the DOWN figure below 10 -> 12. The test named at the
 #      end of this block is what forced them to move together.)
@@ -678,24 +699,35 @@ _DEFAULTS_ARTIFACT_READ_FLOOR = 10
 #      hands a `_` key down — and the subtree levels they retired held one key
 #      more than the new root: total 87 -> 86. A deliberate removal, so the
 #      floor went 75 -> 74 and both figures here stay at +6 / 12.)
+#     (#3778 stopped shipping a value for mysql_threads_running: one key out of
+#      the exporter's conf.d `_defaults.yaml` (the biggest group, 19 -> 18) and
+#      one out of try-local's, total 86 -> 84 (its generator side is in DOWN
+#      below). A deliberate removal, so the artifact floor went 74 -> 72 (the
+#      full-l0-l3 probe reads 71 against it, one-key margin kept, DOWN stays 12).
+#      Because the biggest group shrank too, UP cannot stay at +6 with DOWN at
+#      12: it is +5 from here.)
 #     (Was "+9" for artifacts, off by one against the 70-key corpus of the
 #      time: 70 total − 19 in the biggest root = 51, and 51 + 9 = 60 is not
 #      strictly below the floor of 60.)
 #   DOWN (removal) — the floor itself fires when its class drops below it, which
 #     is the floor doing its job. Today the slack is total − floor: artifacts 12
-#     keys, generators 11 (was 22 until issue 1196 retired init's 9 surplus
+#     keys, generators 10 (was 22 until issue 1196 retired init's 9 surplus
 #     keys — dead ones, so no floor edit). Red here means REPAIR THE PRODUCER — and only if keys
 #     were removed on purpose (a fixture retired) does it mean LOWER the floor,
-#     in the same commit, naming what went. #3783 removed two defaults-tier keys
-#     (kafka_active_controllers, kafka_request_rate), each counted by two
-#     generators: generators total -4, biggest group -2. The floor went 80 -> 78 so
-#     UP stays +28; DOWN went 13 -> 11.
+#     in the same commit, naming what went. Two deliberate removals took the
+#     generators from 93 keys (biggest group 42, floor 80) to 86 (biggest 39):
+#     #3778 stopped the chart shipping mysql_threads_running (chart -1) and then
+#     moved it to the optional_overrides tier, so scaffold and init stopped
+#     rendering it under `defaults:` (-1 each); #3783 removed two defaults-tier
+#     kafka keys (kafka_active_controllers, kafka_request_rate) from scaffold and
+#     init (-4). The floor follows the biggest group so UP stays +28: 80 -> 76,
+#     and DOWN is 10.
 #
 # Either way it is one constant and a line in the commit message. ⛔ The two
 # slacks are not comparable and must never be subtracted from one another: UP is
 # measured against "biggest group gone", DOWN against the floor.
-_DEFAULTS_GENERATOR_KEYS_FLOOR = 78
-_DEFAULTS_ARTIFACT_KEYS_FLOOR = 74
+_DEFAULTS_GENERATOR_KEYS_FLOOR = 76
+_DEFAULTS_ARTIFACT_KEYS_FLOOR = 72
 
 # ⛔ And a FOURTH, on a different axis: the floors above are global, so one class
 # can hold them up while another disappears entirely. Measured: removing every
@@ -729,7 +761,7 @@ _SHIPPED_CONFD_ROOTS: dict[str, tuple[int, int, str]] = {
         "Its one `_defaults.yaml` also carries the base of every key the "
         "examples/ tenants write (#3014)."),
     "try-local/seed/conf.d": (
-        1, 3,
+        1, 2,
         "the one-command demo stack a reader runs first; its _defaults.yaml is "
         "the first platform-defaults file most people ever see."),
     "rule-packs/recipes/examples/conf.d": (
@@ -1154,7 +1186,7 @@ _LOADER_READABLE_FLOORS: dict[str, tuple[int, int, str]] = {
         "deleted the `examples/_defaults-multidb.yaml` the loader skipped, so "
         "this floor mirrors its sibling entry."),
     "try-local/seed/conf.d": (
-        1, 3,
+        1, 2,
         "the one-command demo stack. Entirely loader-readable today, so this "
         "floor mirrors its sibling entry."),
     "rule-packs/recipes/examples/conf.d": (
@@ -1777,7 +1809,7 @@ class KeyInfo(int):
       undetected. Base `2e61b20a` tested `"{" in k` and caught them, so the
       dotted paths introduced here had regressed coverage.
     - `.has_children`: `depth == 0` answers "is it top level", NOT "is it a
-      leaf". `defaults: {mysql_connections_critical: {a: 1}}` is top level AND
+      leaf". `defaults: {mysql_connection_usage_percent_critical: {a: 1}}` is top level AND
       a mapping, so it was reported with the flat consequence ("emits a
       severity=warning series") when the truth is that `Defaults
       map[string]float64` fails to unmarshal and NOTHING is emitted.
@@ -1808,7 +1840,7 @@ def _walk_defaults_keys(node: object, prefix: str = "",
     and `init` faces return byte-identical key sets before and after #1392).
 
     INTERMEDIATE keys are collected too, not just leaves: a misplaced
-    `mysql_connections_critical:` whose value happens to be a mapping is the same
+    `mysql_connection_usage_percent_critical:` whose value happens to be a mapping is the same
     defect wearing a different shape, and a leaves-only walk would step over it.
 
     ⛔ The DEPTH is returned, not re-derived downstream from a dot in the path.
@@ -3288,8 +3320,15 @@ def run_check(
     errors: list[str] = []
     infos: list[str] = []
 
+    # A dead `<base>_critical` whose base is grandfathered A-class is derived,
+    # not a fresh drift (see `_declared_only_critical_tag`).
+    declared_only_critical = {
+        k for k in dead
+        if k.endswith(_CRITICAL_SUFFIX) and k not in known_unwired
+        and k[: -len(_CRITICAL_SUFFIX)] in known_unwired}
+
     # NEW dead keys (not grandfathered) — a fresh declared-but-unwired drift.
-    for k in sorted(dead - set(known_unwired)):
+    for k in sorted(dead - set(known_unwired) - declared_only_critical):
         errors.append(
             f"UNREACHABLE: alert-demanded threshold key {k!r} is not produced by "
             "generate_defaults() and is not a known-deferred key — this alert can "
@@ -3300,6 +3339,9 @@ def run_check(
     # Grandfathered keys are report-only WHILE still dead...
     for k in sorted(dead & set(known_unwired)):
         infos.append(f"known-unwired {k} — {known_unwired[k]}")
+    for k in sorted(declared_only_critical):
+        infos.append(f"known-unwired-critical {k} — "
+                     f"{_declared_only_critical_tag(k[: -len(_CRITICAL_SUFFIX)])}")
 
     # ...and only while a TENANT can still supply what the platform will not.
     # Declared-list containment (#1310): "the platform asserts no value here"

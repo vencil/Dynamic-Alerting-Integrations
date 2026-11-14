@@ -444,7 +444,7 @@ for i in range(${N_TENANTS}):
     name = f'bench-{i:04d}'
     rtype = RECEIVER_TYPES[i % len(RECEIVER_TYPES)]
     tenant = {
-        'mysql_connections': str(50 + i % 100),
+        'mysql_connection_usage_percent': str(50 + i % 50),
         # threads-shaped 20-59 (see the synth-tenant generator note above; #1231)
         'mysql_threads_running': str(20 + i % 40),
         '_routing': {

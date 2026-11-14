@@ -50,8 +50,8 @@ lang: zh
 # conf.d/_defaults.yaml
 defaults:
   # ⚠️ 值是數字（"80" 加引號也照數字讀；讀不成數字的值只拒收那個 key，#3250）
-  mysql_connections: 80
-  mysql_threads_running: 30  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）
+  mysql_connection_usage_percent: 80  # 連線使用率（佔 max_connections 的 %）
+  mysql_threads_running: 30  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）。平台不給預設，依主機給值（#3778）：健康值隨 CPU 核數而定，30 只是示範
   mysql_replication_lag: 30  # 秒 — 非同步複製延遲
   # 其他預設閾值...（key 必須是 threshold-registry 認得的名字，
   # 否則會產出沒有任何 rule pack 消費的死 series，且不會有人告訴你）
@@ -129,7 +129,7 @@ defaults:
   # ⚠️ 值是數字 —— 讀不成數字的值（例如 disable、abc）不送這個 key 的預設列，
   #    da-guard 以 root_default_refused 報錯；寫成對照表或清單則整份檔被丟掉，
   #    該檔的 defaults 全數落空（#3250）。
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
   container_cpu: 70
   container_memory: 80
   # 完整維度 key（metric{label="v"}）也可寫在這裡，label 須在頂層 dimensions: 宣告才送出（見 migration-guide）
@@ -215,11 +215,11 @@ _routing_defaults:
 # conf.d/_profiles.yaml
 profiles:
   standard-db:
-    mysql_connections: "80"
+    mysql_connection_usage_percent: "80"
     mysql_threads_running: "30"
     container_memory: "85"
   high-load-db:
-    mysql_connections: "60"     # 更嚴格
+    mysql_connection_usage_percent: "60"     # 更嚴格
     mysql_threads_running: "45" # 反而放寬：threads_running 是飽和訊號，高負載庫的正常併發本就較高
     container_memory: "80"
 ```
@@ -231,7 +231,7 @@ Tenant 可透過 `_profile` 繼承：
 tenants:
   my-tenant:
     _profile: "standard-db"
-    mysql_connections: "70"     # 覆蓋 profile 的值
+    mysql_connection_usage_percent: "70"     # 覆蓋 profile 的值
 ```
 
 ### Configuring Routing Profiles & Domain Policies (v2.1.0 ADR-007)

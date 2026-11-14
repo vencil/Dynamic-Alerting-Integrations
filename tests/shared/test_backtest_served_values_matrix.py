@@ -5,11 +5,11 @@ da-guard served-values（/metrics）讀，逐租戶、逐條 /metrics series 比
 step 0 的政策：Python 工具不自己解讀 YAML 語意，值一律來自 Go。`extract_changes_from_dirs`
 原本用 PyYAML 重讀兩個目錄、比租戶檔的頂層 key。修正前（main 6447be54）實測：
 
-- 只改 `_platform.yaml` 的 `tenants.tx.mysql_connections`（50 → 60）：回 0 個變更；
+- 只改 `_platform.yaml` 的 `tenants.tx.mysql_connection_usage_percent`（50 → 60）：回 0 個變更；
   exporter 對新樹送 60。
 - 租戶檔是 `tenants:` 包裝格式（conf.d 的標準格式）：回 1 個 metric=`tenants`、值是整個
-  dict 字串的變更，而不是 `mysql_connections`。
-- 平鋪的租戶檔（`mysql_connections: "50"`，沒有 `tenants:`）：回 1 個變更；exporter 不從
+  dict 字串的變更，而不是 `mysql_connection_usage_percent`。
+- 平鋪的租戶檔（`mysql_connection_usage_percent: "50"`，沒有 `tenants:`）：回 1 個變更；exporter 不從
   這種檔送任何租戶（#2115 R3），改它 /metrics 不變。
 
 每格比對：`extract_changes_from_dirs` 的答案 == 直接對兩棵樹跑 served-values、在同一個
@@ -45,39 +45,39 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 AT = "2026-10-08T12:00:00Z"
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slow: 90\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_slow: 90\n"
 # A dimensional key is served only with its label declared (#3475).
-_DB_DEFAULTS = "dimensions:\n  mysql_connections: [db]\n" + _DEFAULTS
-_K = {"keys": ["mysql_connections"]}
+_DB_DEFAULTS = "dimensions:\n  mysql_connection_usage_percent: [db]\n" + _DEFAULTS
+_K = {"keys": ["mysql_connection_usage_percent"]}
 _TX_EMPTY = "tenants:\n  tx: {}\n"
 
 
 def _wrapper(value: str) -> str:
-    return f"tenants:\n  tx:\n    mysql_connections: \"{value}\"\n"
+    return f"tenants:\n  tx:\n    mysql_connection_usage_percent: \"{value}\"\n"
 
 
 def _scheduled(night: str) -> str:
-    return ("tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n"
+    return ("tenants:\n  tx:\n    mysql_connection_usage_percent:\n      default: \"70\"\n"
             f"      overrides:\n        - window: \"01:00-09:00\"\n          value: \"{night}\"\n")
 
 
 # (name, baseline files, current files)
 SHAPES = [
     ("platform-only",
-     {"_defaults.yaml": _DEFAULTS, "_platform.yaml": "tenants:\n  tx: {mysql_connections: \"50\"}\n",
+     {"_defaults.yaml": _DEFAULTS, "_platform.yaml": "tenants:\n  tx: {mysql_connection_usage_percent: \"50\"}\n",
       "tx.yaml": _TX_EMPTY},
-     {"_defaults.yaml": _DEFAULTS, "_platform.yaml": "tenants:\n  tx: {mysql_connections: \"60\"}\n",
+     {"_defaults.yaml": _DEFAULTS, "_platform.yaml": "tenants:\n  tx: {mysql_connection_usage_percent: \"60\"}\n",
       "tx.yaml": _TX_EMPTY}),
     ("wrapper-tenant",
      {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50")},
      {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("60")}),
     # The exporter serves no tenant from a file without `tenants:` (#2115 R3).
     ("flat-file-not-served",
-     {"_defaults.yaml": _DEFAULTS, "tx.yaml": "mysql_connections: \"50\"\n"},
-     {"_defaults.yaml": _DEFAULTS, "tx.yaml": "mysql_connections: \"60\"\n"}),
+     {"_defaults.yaml": _DEFAULTS, "tx.yaml": "mysql_connection_usage_percent: \"50\"\n"},
+     {"_defaults.yaml": _DEFAULTS, "tx.yaml": "mysql_connection_usage_percent: \"60\"\n"}),
     ("defaults-layer",
      {"_defaults.yaml": _DEFAULTS, "tx.yaml": _TX_EMPTY},
-     {"_defaults.yaml": "defaults:\n  mysql_connections: 85\n  mysql_slow: 90\n",
+     {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 85\n  mysql_slow: 90\n",
       "tx.yaml": _TX_EMPTY}),
     ("subdirectory-tenant",
      {"_defaults.yaml": _DEFAULTS, "team/tx.yaml": _wrapper("50")},
@@ -164,15 +164,15 @@ def test_matrix_is_not_vacuous(tmp_path: Path) -> None:
     got = {}
     for name, base, cur in SHAPES:
         got[name] = _oracle(_tree(tmp_path / name / "base", base), _tree(tmp_path / name / "cur", cur))
-    assert got["platform-only"] == [{"tenant": "tx", "metric": "mysql_connections",
+    assert got["platform-only"] == [{"tenant": "tx", "metric": "mysql_connection_usage_percent",
                                      "old_value": "50", "new_value": "60", **_K}]
-    assert got["defaults-layer"] == [{"tenant": "tx", "metric": "mysql_connections",
+    assert got["defaults-layer"] == [{"tenant": "tx", "metric": "mysql_connection_usage_percent",
                                       "old_value": "80", "new_value": "85", **_K}]
     assert got["profile"] == [{"tenant": "tx", "metric": "mysql_slow",
                                "old_value": "60", "new_value": "40", "keys": ["mysql_slow"]}]
     assert got["flat-file-not-served"] == [] and got["unchanged"] == []
     assert {(c["tenant"], c["old_value"]) for c in got["tenant-added"]} == {("ty", None)}
-    assert got["key-disabled"] == [{"tenant": "tx", "metric": "mysql_connections",
+    assert got["key-disabled"] == [{"tenant": "tx", "metric": "mysql_connection_usage_percent",
                                     "old_value": "50", "new_value": None, **_K}]
 
 
@@ -189,7 +189,7 @@ def test_backtest_agrees_with_the_exporter(tmp_path: Path, monkeypatch: pytest.M
 
 
 def _two_windows(night: str, evening: str) -> str:
-    return ("tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+    return ("tenants:\n  tx:\n    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
             f"        - window: \"01:00-02:00\"\n          value: \"{night}\"\n"
             f"        - window: \"20:00-21:00\"\n          value: \"{evening}\"\n")
 
@@ -202,7 +202,7 @@ def test_a_change_outside_the_instant_is_named_with_its_window(
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("2000")})
     assert _oracle(b, c) == []  # the instant alone would miss it
     assert _no_series(_backtest(monkeypatch, b, c)) == [{
-        "tenant": "tx", "metric": "mysql_connections",
+        "tenant": "tx", "metric": "mysql_connection_usage_percent",
         "old_value": "1000", "new_value": "2000", "window": ["01:00-09:00"], **_K}]
 
 
@@ -213,9 +213,9 @@ def test_every_differing_part_of_the_day_is_a_row(
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "5")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1001", "99999")})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "1001",
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent", "old_value": "1000", "new_value": "1001",
          "window": ["01:00-02:00"], **_K},
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "5", "new_value": "99999",
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent", "old_value": "5", "new_value": "99999",
          "window": ["20:00-21:00"], **_K}]
 
 
@@ -226,14 +226,14 @@ def test_one_pair_in_several_parts_of_the_day_is_one_change(
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "1000")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("2000", "2000")})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "2000",
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent", "old_value": "1000", "new_value": "2000",
          "window": ["01:00-02:00", "20:00-21:00"], **_K}]
-    over_midnight = ("tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n"
+    over_midnight = ("tenants:\n  tx:\n    mysql_connection_usage_percent:\n      default: \"70\"\n"
                      "      overrides:\n        - window: \"22:00-02:00\"\n          value: \"{v}\"\n")
     b = _tree(tmp_path / "base2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": over_midnight.format(v=1000)})
     c = _tree(tmp_path / "cur2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": over_midnight.format(v=5)})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "1000", "new_value": "5",
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent", "old_value": "1000", "new_value": "5",
          "window": ["00:00-02:00", "22:00-24:00"], **_K}]
 
 
@@ -245,23 +245,23 @@ def test_a_severity_window_is_a_row_of_its_own(
     change of the row its own alert compares."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
-        "tenants:\n  tx:\n    mysql_connections:\n      default: \"75\"\n      overrides:\n"
+        "tenants:\n  tx:\n    mysql_connection_usage_percent:\n      default: \"75\"\n      overrides:\n"
         "        - window: \"01:00-09:00\"\n          value: \"75:critical\"\n")})
     t = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"]
-    assert len(t.schedules["mysql_connections"].segments) == 3  # not vacuous
+    assert len(t.schedules["mysql_connection_usage_percent"].segments) == 3  # not vacuous
     got = _backtest(monkeypatch, b, c)
-    warning = {"tenant": "tx", "metric": "mysql_connections", **_K}
+    warning = {"tenant": "tx", "metric": "mysql_connection_usage_percent", **_K}
     assert _no_series(got) == [
         {**warning, "old_value": "70", "new_value": "75", "window": ["00:00-01:00", "09:00-24:00"]},
         {**warning, "old_value": "70", "new_value": None, "window": ["01:00-09:00"]},
-        {"tenant": "tx", "metric": "mysql_connections_critical", "old_value": None,
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent_critical", "old_value": None,
          "new_value": "75", **_K, "window": ["01:00-09:00"]}]
-    assert [ch["series"] for ch in got] == [[_ident("mysql_connections", "warning")]] * 2 + [
-        [_ident("mysql_connections", "critical")]]
+    assert [ch["series"] for ch in got] == [[_ident("mysql_connection_usage_percent", "warning")]] * 2 + [
+        [_ident("mysql_connection_usage_percent", "critical")]]
 
 
 def _ident(metric_key: str, severity: str, component: str = "mysql",
-           metric: str = "connections", twin: bool = False) -> "tv.Series":
+           metric: str = "connection_usage_percent", twin: bool = False) -> "tv.Series":
     """The identity served-values gives a plain tx key (pinned, #2750)."""
     return tv.Series("user_threshold", {"tenant": "tx", "component": component, "metric": metric,
                                         "severity": severity}, metric_key, twin, {}, {})
@@ -277,12 +277,12 @@ def test_a_severity_no_rule_selects_is_served_as_the_default(
     backtest exited 2); no current exporter serves such a row."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper(value)})
-    segs = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"].schedules["mysql_connections"].segments
+    segs = tv.load_served_tree(c, at=AT, schedules=True).tenants["tx"].schedules["mysql_connection_usage_percent"].segments
     assert [s[:4] for s in segs] == [("00:00", "24:00", 80.0, "warning")]
     got = _backtest(monkeypatch, b, c)
-    assert _no_series(got) == [{"tenant": "tx", "metric": "mysql_connections",
+    assert _no_series(got) == [{"tenant": "tx", "metric": "mysql_connection_usage_percent",
                                 "old_value": "70", "new_value": "80", **_K}]
-    assert got[0]["series"] == [_ident("mysql_connections", "warning")]
+    assert got[0]["series"] == [_ident("mysql_connection_usage_percent", "warning")]
 
 
 def test_a_severity_only_change_is_two_rows(
@@ -294,11 +294,11 @@ def test_a_severity_only_change_is_two_rows(
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70:Critical")})
     got = _backtest(monkeypatch, b, c)
     assert _no_series(got) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": None, **_K},
-        {"tenant": "tx", "metric": "mysql_connections_critical", "old_value": None,
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent", "old_value": "70", "new_value": None, **_K},
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent_critical", "old_value": None,
          "new_value": "70", **_K}]
-    assert [ch["series"] for ch in got] == [[_ident("mysql_connections", "warning")],
-                                            [_ident("mysql_connections", "critical")]]
+    assert [ch["series"] for ch in got] == [[_ident("mysql_connection_usage_percent", "warning")],
+                                            [_ident("mysql_connection_usage_percent", "critical")]]
 
 
 def test_a_severity_only_part_of_the_day_is_two_rows(
@@ -308,9 +308,9 @@ def test_a_severity_only_part_of_the_day_is_two_rows(
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("70")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _scheduled("70:critical")})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": None,
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent", "old_value": "70", "new_value": None,
          **_K, "window": ["01:00-09:00"]},
-        {"tenant": "tx", "metric": "mysql_connections_critical", "old_value": None,
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent_critical", "old_value": None,
          "new_value": "70", **_K, "window": ["01:00-09:00"]}]
 
 
@@ -321,13 +321,13 @@ def test_opposite_severity_changes_are_four_rows(
     the ones it moved into."""
     def tree(name: str, default: str, night: str) -> Path:
         return _tree(tmp_path / name, {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
-            f"tenants:\n  tx:\n    mysql_connections:\n      default: \"{default}\"\n"
+            f"tenants:\n  tx:\n    mysql_connection_usage_percent:\n      default: \"{default}\"\n"
             f"      overrides:\n        - window: \"01:00-09:00\"\n          value: \"{night}\"\n")})
     got = _no_series(_backtest(monkeypatch, tree("base", "70", "70:critical"),
                                tree("cur", "70:critical", "70")))
     day, night = ["00:00-01:00", "09:00-24:00"], ["01:00-09:00"]
-    w = {"tenant": "tx", "metric": "mysql_connections", **_K}
-    c = {"tenant": "tx", "metric": "mysql_connections_critical", **_K}
+    w = {"tenant": "tx", "metric": "mysql_connection_usage_percent", **_K}
+    c = {"tenant": "tx", "metric": "mysql_connection_usage_percent_critical", **_K}
     assert got == [
         {**w, "old_value": "70", "new_value": None, "window": day},
         {**w, "old_value": None, "new_value": "70", "window": night},
@@ -358,7 +358,7 @@ def test_a_severity_only_change_is_backtested_by_r1(
     rows = json.loads(out.out)["changes"]
     assert [(r["status"], r["risk"], r["message"]) for r in rows] == [(status, risk, message)]
     assert "old_severity" not in rows[0] and "new_severity" not in rows[0]
-    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
+    assert asked == ['tenant:mysql_connection_usage:percent{tenant="tx"}']
     assert got_rc == rc
 
 
@@ -373,9 +373,9 @@ def test_to_critical_is_the_warning_alert_silenced_and_the_critical_one_enabled(
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["risk"], r["message"]) for r in rows] == [
-        ("mysql_connections", "MEDIUM", "Metric disabled — all alerts silenced"),
-        ("mysql_connections_critical", "HIGH", "Metric newly enabled — 1/2 points would fire")]
-    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}'] * 2
+        ("mysql_connection_usage_percent", "MEDIUM", "Metric disabled — all alerts silenced"),
+        ("mysql_connection_usage_percent_critical", "HIGH", "Metric newly enabled — 1/2 points would fire")]
+    assert asked == ['tenant:mysql_connection_usage:percent{tenant="tx"}'] * 2
     assert rc == 1
 
 
@@ -385,13 +385,13 @@ def test_reports_name_the_keys_serving_a_row(tmp_path: Path, monkeypatch, capsys
     both reports (and `keys` in --json)."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("90:critical")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
-        "tenants:\n  tx:\n    mysql_connections: \"70\"\n    mysql_connections_critical: \"95\"\n")})
+        "tenants:\n  tx:\n    mysql_connection_usage_percent: \"70\"\n    mysql_connection_usage_percent_critical: \"95\"\n")})
     md = tmp_path / "r.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
-    assert ("tx/mysql_connections_critical: 90 -> 95 "
-            "(served by: mysql_connections, mysql_connections_critical)") in out.out
-    assert ("`mysql_connections_critical` (served by: `mysql_connections`, "
-            "`mysql_connections_critical`) | 90 | 95 |") in md.read_text(encoding="utf-8")
+    assert ("tx/mysql_connection_usage_percent_critical: 90 -> 95 "
+            "(served by: mysql_connection_usage_percent, mysql_connection_usage_percent_critical)") in out.out
+    assert ("`mysql_connection_usage_percent_critical` (served by: `mysql_connection_usage_percent`, "
+            "`mysql_connection_usage_percent_critical`) | 90 | 95 |") in md.read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("key,text,cell", [
@@ -428,11 +428,11 @@ def test_a_critical_segment_outside_the_changed_pair_does_not_skip_it(
     override = ("      overrides:\n        - window: \"01:00-09:00\"\n"
                 "          value: \"70:critical\"\n")
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
-        "tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n" + override)})
+        "tenants:\n  tx:\n    mysql_connection_usage_percent:\n      default: \"70\"\n" + override)})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
-        "tenants:\n  tx:\n    mysql_connections:\n      default: \"75\"\n" + override)})
+        "tenants:\n  tx:\n    mysql_connection_usage_percent:\n      default: \"75\"\n" + override)})
     assert _no_series(_backtest(monkeypatch, b, c)) == [
-        {"tenant": "tx", "metric": "mysql_connections", "old_value": "70", "new_value": "75",
+        {"tenant": "tx", "metric": "mysql_connection_usage_percent", "old_value": "70", "new_value": "75",
          "window": ["00:00-01:00", "09:00-24:00"], **_K}]
 
 
@@ -451,7 +451,7 @@ def test_skipped_files_are_named_once_with_their_tree(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
     """A file the load serves no tenant from is a WARN (#2115 R3): once when
     both trees carry it, else with the flag of the tree that does."""
-    flat = "mysql_connections: \"50\"\n"
+    flat = "mysql_connection_usage_percent: \"50\"\n"
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50"),
                                   "both.yaml": flat})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("50"),
@@ -499,12 +499,12 @@ def test_window_reaches_json_text_and_markdown(tmp_path: Path, monkeypatch, caps
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
     assert "1000 -> 1001 (01:00-02:00 UTC)" in out.out
     assert "5 -> 99999 (20:00-21:00 UTC)" in out.out
-    assert "`mysql_connections` (20:00-21:00 UTC)" in md.read_text(encoding="utf-8")
+    assert "`mysql_connection_usage_percent` (20:00-21:00 UTC)" in md.read_text(encoding="utf-8")
     b = _tree(tmp_path / "base2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("1000", "1000")})
     c = _tree(tmp_path / "cur2", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _two_windows("2000", "2000")})
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
     assert "1000 -> 2000 (01:00-02:00, 20:00-21:00 UTC)" in out.out
-    assert "`mysql_connections` (01:00-02:00, 20:00-21:00 UTC)" in md.read_text(encoding="utf-8")
+    assert "`mysql_connection_usage_percent` (01:00-02:00, 20:00-21:00 UTC)" in md.read_text(encoding="utf-8")
 
 
 def _map_with(monkeypatch, **entries: dict) -> None:
@@ -529,16 +529,16 @@ def test_dimensioned_keys_are_listed_not_backtested(
     _map_with(monkeypatch, other_critical=_upper("tenant:other_critical:max"))
     def files(v: int) -> dict[str, str]:
         return {"_defaults.yaml": _DB_DEFAULTS + "  other_critical: 80\n",
-                "tx.yaml": ("tenants:\n  tx:\n    mysql_connections: 50\n"
+                "tx.yaml": ("tenants:\n  tx:\n    mysql_connection_usage_percent: 50\n"
                             f"    other_critical: {v}\n"
-                            f"    'mysql_connections{{db=\"a\"}}': {v}\n")}
+                            f"    'mysql_connection_usage_percent{{db=\"a\"}}': {v}\n")}
     b, c = _tree(tmp_path / "base", files(90)), _tree(tmp_path / "cur", files(95))
     assert tv.load_served_values(c, at=AT)["tx"].severities["other_critical"] == "warning"
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = {r["metric"]: r for r in json.loads(out.out)["changes"]}
-    assert set(rows) == {"other_critical", 'mysql_connections{db="a"}'}, rows
-    assert rows['mysql_connections{db="a"}']["backtest"] == "skipped: dimensioned key"
-    assert rows['mysql_connections{db="a"}']["status"] == "not_backtested"
+    assert set(rows) == {"other_critical", 'mysql_connection_usage_percent{db="a"}'}, rows
+    assert rows['mysql_connection_usage_percent{db="a"}']["backtest"] == "skipped: dimensioned key"
+    assert rows['mysql_connection_usage_percent{db="a"}']["status"] == "not_backtested"
     assert rows["other_critical"]["status"] == "not_backtested"
     assert rows["other_critical"]["backtest"] == _NO_BASE.format("other_critical")
     assert asked == []
@@ -557,21 +557,22 @@ _NO_BASE = ("skipped: served as a non-critical row of {} (its base is not declar
 
 def test_a_critical_key_without_its_base_is_not_backtested(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
-    """`mysql_connections_critical` with no `mysql_connections` in the root
-    `defaults:` is served as a warning row of metric `connections_critical`
-    (da-guard warns it skips the critical row): the `_critical` alert selects
-    metric="connections", severity="critical", so nothing compares it — it
+    """`mysql_connection_usage_percent_critical` with no `mysql_connection_usage_percent` in the root
+    `defaults:` is served as a warning row of metric
+    `connection_usage_percent_critical` (da-guard warns it skips the critical
+    row): the `_critical` alert selects metric="connection_usage_percent",
+    severity="critical", so nothing compares it — it
     used to be replayed against the critical alert's series (HIGH, rc 1)."""
     def files(v: str) -> dict[str, str]:
-        return {"_defaults.yaml": "defaults:\n  mysql_connections_critical: 95\n",
-                "tx.yaml": f"tenants:\n  tx:\n    mysql_connections_critical: \"{v}\"\n"}
+        return {"_defaults.yaml": "defaults:\n  mysql_connection_usage_percent_critical: 95\n",
+                "tx.yaml": f"tenants:\n  tx:\n    mysql_connection_usage_percent_critical: \"{v}\"\n"}
     b, c = _tree(tmp_path / "base", files("90")), _tree(tmp_path / "cur", files("50"))
     served = tv.load_served_values(c, at=AT)["tx"]
-    assert served.series["mysql_connections_critical"][0].labels["severity"] == "warning"
+    assert served.series["mysql_connection_usage_percent_critical"][0].labels["severity"] == "warning"
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [
-        ("mysql_connections_critical", "not_backtested", _NO_BASE.format("mysql_connections_critical"))]
+        ("mysql_connection_usage_percent_critical", "not_backtested", _NO_BASE.format("mysql_connection_usage_percent_critical"))]
     assert (rc, asked) == (0, [])
 
 
@@ -600,8 +601,8 @@ def test_a_capitalised_severity_is_backtested_on_its_alert(
     assert {s.labels["severity"] for s in _backtest(monkeypatch, b, c)[0]["series"]} == {"critical"}
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
-    assert [(r["metric"], r["status"]) for r in rows] == [("mysql_connections_critical", "analyzed")]
-    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
+    assert [(r["metric"], r["status"]) for r in rows] == [("mysql_connection_usage_percent_critical", "analyzed")]
+    assert asked == ['tenant:mysql_connection_usage:percent{tenant="tx"}']
 
 
 @pytest.mark.parametrize("side", ["baseline", "current"])
@@ -610,17 +611,17 @@ def test_a_sibling_in_one_tree_only_shares_the_threshold(
     """A dimensioned row served in either tree shares the threshold on that
     side, so the base change is not what the alert compares there."""
     def files(v: str, dim: bool) -> dict[str, str]:
-        extra = "    'mysql_connections{db=\"a\"}': \"200\"\n" if dim else ""
+        extra = "    'mysql_connection_usage_percent{db=\"a\"}': \"200\"\n" if dim else ""
         return {"_defaults.yaml": _DB_DEFAULTS,
-                "tx.yaml": f"tenants:\n  tx:\n    mysql_connections: \"{v}\"\n" + extra}
+                "tx.yaml": f"tenants:\n  tx:\n    mysql_connection_usage_percent: \"{v}\"\n" + extra}
     b = _tree(tmp_path / "base", files("70", side == "baseline"))
     c = _tree(tmp_path / "cur", files("85", side == "current"))
-    changes = [ch for ch in _backtest(monkeypatch, b, c) if ch["metric"] == "mysql_connections"]
-    assert [ch.get("dimensioned_siblings") for ch in changes] == [['mysql_connections{db="a"}']]
+    changes = [ch for ch in _backtest(monkeypatch, b, c) if ch["metric"] == "mysql_connection_usage_percent"]
+    assert [ch.get("dimensioned_siblings") for ch in changes] == [['mysql_connection_usage_percent{db="a"}']]
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = {r["metric"]: r for r in json.loads(out.out)["changes"]}
-    assert rows["mysql_connections"]["status"] == "not_backtested"
-    assert rows["mysql_connections"]["backtest"].startswith(
+    assert rows["mysql_connection_usage_percent"]["status"] == "not_backtested"
+    assert rows["mysql_connection_usage_percent"]["backtest"].startswith(
         "skipped: dimensioned rows share this alert's threshold")
     assert (rc, asked) == (0, [])
 
@@ -634,27 +635,27 @@ def test_dimensioned_siblings_share_the_threshold(
     not share it (control: the base change is analyzed)."""
     def files(v: str, dim: str) -> dict[str, str]:
         return {"_defaults.yaml": _DB_DEFAULTS,
-                "tx.yaml": (f"tenants:\n  tx:\n    mysql_connections: \"{v}\"\n"
-                            f"    'mysql_connections{{db=\"a\"}}': \"{dim}\"\n")}
+                "tx.yaml": (f"tenants:\n  tx:\n    mysql_connection_usage_percent: \"{v}\"\n"
+                            f"    'mysql_connection_usage_percent{{db=\"a\"}}': \"{dim}\"\n")}
     b, c = _tree(tmp_path / "base", files("70", "200")), _tree(tmp_path / "cur", files("85", "200"))
     changes = _backtest(monkeypatch, b, c)
     assert [(ch["metric"], ch.get("dimensioned_siblings")) for ch in changes] == [
-        ("mysql_connections", ['mysql_connections{db="a"}'])]
+        ("mysql_connection_usage_percent", ['mysql_connection_usage_percent{db="a"}'])]
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["backtest"]) for r in rows] == [(
-        "mysql_connections", "not_backtested",
+        "mysql_connection_usage_percent", "not_backtested",
         "skipped: dimensioned rows share this alert's threshold (max by tenant): "
-        'mysql_connections{db="a"}')]
+        'mysql_connection_usage_percent{db="a"}')]
     assert (rc, asked) == (0, [])
     b = _tree(tmp_path / "base2", files("70", "200:critical"))
     c = _tree(tmp_path / "cur2", files("85", "200:critical"))
     changes = _backtest(monkeypatch, b, c)
     assert [(ch["metric"], ch.get("dimensioned_siblings")) for ch in changes] == [
-        ("mysql_connections", None)]
+        ("mysql_connection_usage_percent", None)]
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     assert [r["status"] for r in json.loads(out.out)["changes"]] == ["analyzed"]
-    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
+    assert asked == ['tenant:mysql_connection_usage:percent{tenant="tx"}']
 
 
 def test_a_key_served_as_critical_is_backtested_on_its_critical_alert(
@@ -662,23 +663,23 @@ def test_a_key_served_as_critical_is_backtested_on_its_critical_alert(
     """`<base>_critical` whose base the root `defaults:` declares is a critical row of the
     base's metric (Go's verdict): served-values says so (#2750 — its series'
     `metric_key` is the base, severity critical), so the alert comparing it
-    is `mysql_connections_critical`'s (#3017) and Prometheus is asked, once,
+    is `mysql_connection_usage_percent_critical`'s (#3017) and Prometheus is asked, once,
     about the series that alert compares (the observed-map's)."""
     def files(v: int) -> dict[str, str]:
         return {"_defaults.yaml": _DEFAULTS,
-                "tx.yaml": ("tenants:\n  tx:\n    mysql_connections: \"70\"\n"
-                            f"    mysql_connections_critical: \"{v}\"\n")}
+                "tx.yaml": ("tenants:\n  tx:\n    mysql_connection_usage_percent: \"70\"\n"
+                            f"    mysql_connection_usage_percent_critical: \"{v}\"\n")}
     b, c = _tree(tmp_path / "base", files(99)), _tree(tmp_path / "cur", files(95))
     served = tv.load_served_values(c, at=AT)["tx"]
-    assert served.severities["mysql_connections_critical"] == "critical"
-    assert served.series["mysql_connections_critical"] == (_ident("mysql_connections", "critical"),)
+    assert served.severities["mysql_connection_usage_percent_critical"] == "critical"
+    assert served.series["mysql_connection_usage_percent_critical"] == (_ident("mysql_connection_usage_percent", "critical"),)
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r.get("backtest")) for r in rows] == [
-        ("mysql_connections_critical", "analyzed", None)]
+        ("mysql_connection_usage_percent_critical", "analyzed", None)]
     # The stub serves 50 then 2000: 99 and 95 both fire once.
     assert (rows[0]["old_breach_count"], rows[0]["new_breach_count"]) == (1, 1)
-    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}'] == [rows[0]["query"]]
+    assert asked == ['tenant:mysql_connection_usage:percent{tenant="tx"}'] == [rows[0]["query"]]
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c)
     assert "Not backtested" not in out.out
 
@@ -691,17 +692,17 @@ def test_a_window_served_as_critical_is_backtested(
     compares it (#3017)."""
     def files(v: str) -> dict[str, str]:
         return {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
-            "tenants:\n  tx:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+            "tenants:\n  tx:\n    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
             f"        - window: \"01:00-09:00\"\n          value: \"{v}:critical\"\n")}
     b, c = _tree(tmp_path / "base", files("1000")), _tree(tmp_path / "cur", files("1500"))
     changes = _backtest(monkeypatch, b, c)
     assert [(ch["window"], ch["series"]) for ch in changes] == [
-        (["01:00-09:00"], [_ident("mysql_connections", "critical")])]
+        (["01:00-09:00"], [_ident("mysql_connection_usage_percent", "critical")])]
     _, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--json")
     rows = json.loads(out.out)["changes"]
     assert [(r["metric"], r["status"], r["window"]) for r in rows] == [
-        ("mysql_connections_critical", "analyzed", ["01:00-09:00"])]
-    assert asked == ['tenant:mysql_threads_connected:max{tenant="tx"}']
+        ("mysql_connection_usage_percent_critical", "analyzed", ["01:00-09:00"])]
+    assert asked == ['tenant:mysql_connection_usage:percent{tenant="tx"}']
 
 
 def test_a_window_served_as_critical_with_no_critical_alert_is_not_backtested(
@@ -784,9 +785,9 @@ def test_alert_keys_read_the_series_never_the_twin() -> None:
 
     def written(metric: str) -> dict:
         return {"tenant": "tx", "metric": metric, "old_value": "1", "new_value": "2"}
-    assert bt._alert_keys(written("mysql_connections")) == (["mysql_connections"], None)
+    assert bt._alert_keys(written("mysql_connection_usage_percent")) == (["mysql_connection_usage_percent"], None)
     assert bt._alert_keys(written("mysql_cpu")) == (["mysql_threads_running"], None)
-    assert bt._alert_keys(written('mysql_connections{db="a"}')) == (["mysql_connections"], None)
+    assert bt._alert_keys(written('mysql_connection_usage_percent{db="a"}')) == (["mysql_connection_usage_percent"], None)
     assert bt._alert_keys(written("k")) == (
         None, "no shipped alert compares this key (not in metric_observed_map.yaml)")
 
@@ -843,7 +844,7 @@ def test_a_tenant_id_promql_cannot_take_is_listed_not_queried(
     weird = 'a|b"`c'
     def files(v: str) -> dict[str, str]:
         return {"_defaults.yaml": _DEFAULTS,
-                "x.yaml": f"tenants:\n  'a|b\"`c':\n    mysql_connections: \"{v}\"\n"}
+                "x.yaml": f"tenants:\n  'a|b\"`c':\n    mysql_connection_usage_percent: \"{v}\"\n"}
     b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
     md = tmp_path / "r.md"
     rc, out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
@@ -859,8 +860,8 @@ def test_a_metric_cell_from_the_tree_is_escaped(
     """#3111 review: a dimensioned key holding `|` broke its Markdown row."""
     def files(v: str) -> dict[str, str]:
         # a regex selector serves `db_re`, the name to declare (#3475)
-        return {"_defaults.yaml": "dimensions:\n  mysql_connections: [db_re]\n" + _DEFAULTS,
-                "tx.yaml": f"tenants:\n  tx:\n    'mysql_connections{{db=~\"a|b\"}}': \"{v}\"\n"}
+        return {"_defaults.yaml": "dimensions:\n  mysql_connection_usage_percent: [db_re]\n" + _DEFAULTS,
+                "tx.yaml": f"tenants:\n  tx:\n    'mysql_connection_usage_percent{{db=~\"a|b\"}}': \"{v}\"\n"}
     b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
     md = tmp_path / "r.md"
     _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
@@ -875,11 +876,11 @@ def test_a_query_cell_holding_a_tenant_id_is_escaped(
     the Query cell carried it raw — the `|` split the row."""
     def files(v: str) -> dict[str, str]:
         return {"_defaults.yaml": _DEFAULTS,
-                "x.yaml": f"tenants:\n  'a|b`c':\n    mysql_connections: \"{v}\"\n"}
+                "x.yaml": f"tenants:\n  'a|b`c':\n    mysql_connection_usage_percent: \"{v}\"\n"}
     b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
     md = tmp_path / "r.md"
     _, _out, asked = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
-    assert asked == ['tenant:mysql_threads_connected:max{tenant="a|b`c"}']
-    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "threads" in line)
+    assert asked == ['tenant:mysql_connection_usage:percent{tenant="a|b`c"}']
+    row = next(line for line in md.read_text(encoding="utf-8").splitlines() if "connection_usage" in line)
     assert len(re.findall(r"(?<!\\)\|", row)) == 8, row  # 7 columns
-    assert '``tenant:mysql_threads_connected:max{tenant="a\\|b`c"}``' in row, row
+    assert '``tenant:mysql_connection_usage:percent{tenant="a\\|b`c"}``' in row, row

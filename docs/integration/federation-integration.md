@@ -252,8 +252,8 @@ remote_write:
 defaults:
   pg_connections: 80
   pg_replication_lag: 30
-  mysql_connections: 80
-  mysql_threads_running: 30  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）
+  mysql_connection_usage_percent: 80  # 連線使用率（佔 max_connections 的 %）
+  mysql_threads_running: 30  # threads_running 飽和（併發執行緒數，NOT host CPU%；#1231 由 mysql_cpu 改名）。平台不給預設，依主機給值（#3778），30 只是示範
 
 # conf.d/db-a.yaml (edge-asia-1 tenant)
 tenants:
@@ -268,7 +268,7 @@ tenants:
 # conf.d/db-b.yaml (edge-europe-1 tenant)
 tenants:
   db-b:
-    mysql_connections: "60"
+    mysql_connection_usage_percent: "60"
     _routing:
       receiver:
         type: "email"
@@ -282,10 +282,10 @@ tenants:
 中央 Prometheus 掛載所有 Rule Pack（與單叢集部署相同）。Recording rule 在中央評估 federated/remote-write 過來的原始指標：
 
 ```
-邊緣 mysql_global_status_threads_connected{tenant="db-a"}
+邊緣 mysql_global_status_threads_connected、mysql_global_variables_max_connections{tenant="db-a"}
     → federation/remote-write →
-中央 recording rule: tenant:mysql_threads_connected:max = max by(tenant) (...)
-中央 alert rule: MariaDBHighConnections (比對 tenant:alert_threshold:mysql_connections)
+中央 recording rule: tenant:mysql_connection_usage:percent = max by(tenant) (...)
+中央 alert rule: MariaDBHighConnections (比對 tenant:alert_threshold:mysql_connection_usage_percent)
     → Alertmanager → 依據 db-a 的 _routing 通知
 ```
 
@@ -417,7 +417,7 @@ Federation 的 scrape interval 疊加在邊緣的 scrape interval 之上。最�
 | Edge | 邊緣 Prometheus | Data Normalization（recording rules） | Part 1: `*-normalization` groups |
 | Central | 中央 Prometheus | Threshold Normalization + Alert Rules | Part 2+3: `*-threshold-normalization` + `*-alerts` groups |
 
-邊緣 Prometheus 運行 Part 1 後，透過 federation/remote-write 只推送 recording rule 結果（如 `tenant:mysql_threads_connected:max`），大幅降低跨叢集資料量。中央在接收到 normalized 指標後，搭配 threshold-exporter 的閾值做比對和告警。
+邊緣 Prometheus 運行 Part 1 後，透過 federation/remote-write 只推送 recording rule 結果（如 `tenant:mysql_connection_usage:percent`），大幅降低跨叢集資料量。中央在接收到 normalized 指標後，搭配 threshold-exporter 的閾值做比對和告警。
 
 ```mermaid
 graph TB
