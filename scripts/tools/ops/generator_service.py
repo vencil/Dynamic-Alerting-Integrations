@@ -840,8 +840,8 @@ class Service:
             _, status, rusage = os.wait4(pid, 0)
             _kill_group(pid)  # anything the process left running
             self.child_pid = None
-            # the one direct child has been collected by wait4 above; only
-            # orphans can be left for waitpid(-1)
+            # the run's own process has been collected by wait4 above; what
+            # has exited now is an orphan, and nothing is held back for it
             assert self.child_pid is None
             self._reap_orphans()
             on_data()
@@ -1026,21 +1026,28 @@ class Service:
         subreaper, so they are re-parented here when the judgement ends —
         whether or not it is PID 1.
 
-        ⛔ Only between runs: ``waitpid(-1)`` would also collect the running
-        judgement and take its exit status from ``wait4``. At most one direct
-        child exists at a time, and this is called only after ``wait4`` has
-        collected it (or before the next fork), so there is none to steal.
+        Called on SIGCHLD, before each fork and after each run's ``wait4``.
+
+        ⛔ Never the running judgement (or warming) process: ``wait4`` in
+        :meth:`_spawn` takes its exit status. So each exited child is looked
+        at first without collecting it (``WNOWAIT``) and collected only when
+        it is not ``child_pid``. #3557: an orphan that ends while another run
+        is in progress is collected on its own SIGCHLD, not left a zombie
+        until that run ends. When the exited child the kernel reports is the
+        running one, the rest wait for that run's end, which its exit has
+        already set off.
         """
-        if self.child_pid is not None:
-            return 0  # a run is in progress: wait for it to end first
         reaped = 0
         while True:
             try:
-                pid, _status = os.waitpid(-1, os.WNOHANG)
+                info = os.waitid(os.P_ALL, 0,
+                                 os.WEXITED | os.WNOHANG | os.WNOWAIT)
             except ChildProcessError:
                 break
-            if pid == 0:
+            if info is None or info.si_pid == self.child_pid:
                 break
+            # it has exited (WNOWAIT left it waitable): this does not block
+            os.waitpid(info.si_pid, 0)
             reaped += 1
         self.metrics.orphans_reaped += reaped
         return reaped

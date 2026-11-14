@@ -12,10 +12,11 @@ Modes (exactly one; without one the run is a caller error, exit 2):
   --output-alertmanager  the merged config as a plain alertmanager.yml
   --apply                merge into the cluster's ConfigMap and reload
 
-Severity Dedup (per-tenant):
-  Default (absent or "enable"): generate inhibit_rule that suppresses warning when critical fires
-  "disable": skip inhibit_rule — both warning and critical notifications are sent
-  Mechanism: per-tenant inhibit_rules with tenant="<name>" + metric_group matchers
+Severity Dedup (#3899: one inhibit rule for every tenant):
+  Default (absent or "enable"): a tenant's critical suppresses its warning of the same metric_group
+  "disable": the tenant is in the rule's tenant!~ list — both warning and critical notifications are sent
+  Mechanism: ONE inhibit_rule, tenant=~".+" + metric_group=~".+" gated on both sides,
+  equal: [tenant, metric_group]; none at all when no tenant is at "enable"
 
 v2.0.0 Bilingual Templates (i18n):
   Rule Packs can include Chinese annotations: summary_zh, description_zh, platform_summary_zh
@@ -125,7 +126,7 @@ from _grar_parse import field_type_findings  # noqa: E402
 from _grar_routes import (  # noqa: E402, F401
     SlotVerdict,
     _build_enforced_routes,
-    _build_inhibit_rules,
+    build_dedup_inhibit_rule,
     _build_override_matchers,
     _build_override_route,
     _build_custom_alert_routes,
@@ -2005,7 +2006,7 @@ def _scan_and_generate(config_dir: str, findings: list[str], *,
         enforced_routing=enforced_routing, tenants=dedup_configs,
         secrets=policy.secret_binding(mount_root))
 
-    # Generate per-tenant severity dedup inhibit rules
+    # Generate the severity dedup inhibit rule (#3899: one, or none)
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
 
     # Collect all warnings

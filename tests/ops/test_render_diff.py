@@ -272,7 +272,8 @@ def test_generator_refusal_on_stdout_is_in_the_reason(monkeypatch, tmp_path):
     class P:
         returncode = 1
         stdout = "Config files: 1 read\nNo valid routes or inhibit rules generated.\n"
-        stderr = "  INFO: t: severity_dedup disabled, skipping inhibit rule\n"
+        stderr = ("  INFO: t: severity_dedup disabled, excluded from the severity "
+                  "dedup inhibit rule\n")
     monkeypatch.setattr(rd.subprocess, "run", lambda *a, **k: P)
     with pytest.raises(rd.RenderError) as ei:
         rd.render_routes(tmp_path)
@@ -403,6 +404,46 @@ def test_inhibit_rules_compare_as_a_multiset_and_belong_to_their_tenant():
     assert [(c.tenant, c.kind) for c in out] == [("a", "added")]
     out = [c for c in rd.diff_routes(pr, {"route": {}, "inhibit_rules": []}) if isinstance(c, rd.InhibitChange)]
     assert sorted((c.tenant, c.kind) for c in out) == [(rd.PLATFORM, "removed"), ("a", "removed"), ("a", "removed")]
+
+
+def _dedup(*excluded):
+    from _grar_routes import build_dedup_inhibit_rule
+    return {"route": {}, "inhibit_rules": [build_dedup_inhibit_rule(list(excluded))]}
+
+
+def test_a_tenant_switching_dedup_off_owns_the_exclusion_list_change():
+    """#3899: one dedup rule for every tenant; `t-b` set to disable changes only
+    its `tenant!~` list, and that change is t-b's, not the platform's."""
+    out = [c for c in rd.diff_routes(_dedup(), _dedup("t-b")) if isinstance(c, rd.InhibitChange)]
+    assert [(c.tenant, c.kind) for c in out] == [("t-b", "removed"), ("t-b", "added")]
+    assert out[1].rule["target_matchers"][-1] == 'tenant!~"t-b"'
+
+
+def test_each_tenant_the_exclusion_list_gains_or_loses_owns_the_change():
+    out = [c for c in rd.diff_routes(_dedup("t-a", "a.b"), _dedup("a.b", "t-c"))
+           if isinstance(c, rd.InhibitChange)]
+    assert sorted({c.tenant for c in out}) == ["t-a", "t-c"]
+    assert sorted(c.kind for c in out) == ["added", "added", "removed", "removed"]
+
+
+def test_an_unchanged_exclusion_list_is_no_change():
+    assert [c for c in rd.diff_routes(_dedup("t-b"), _dedup("t-b"))
+            if isinstance(c, rd.InhibitChange)] == []
+
+
+def test_the_dedup_rule_appearing_is_still_the_platforms():
+    """No pair to compare against (the first tenant with dedup on): the rule
+    names no tenant, so it stays the platform's."""
+    out = [c for c in rd.diff_routes({"route": {}, "inhibit_rules": []}, _dedup())
+           if isinstance(c, rd.InhibitChange)]
+    assert [(c.tenant, c.kind) for c in out] == [(rd.PLATFORM, "added")]
+
+
+def test_a_non_literal_exclusion_is_not_attributed():
+    base, pr = _dedup(), _dedup()
+    pr["inhibit_rules"][0]["target_matchers"].append('tenant!~"t-.*"')
+    out = [c for c in rd.diff_routes(base, pr) if isinstance(c, rd.InhibitChange)]
+    assert [(c.tenant, c.kind) for c in out] == [(rd.PLATFORM, "removed"), (rd.PLATFORM, "added")]
 
 
 @pytest.mark.parametrize("matcher, tenant", [

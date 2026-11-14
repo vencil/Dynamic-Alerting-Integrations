@@ -12,7 +12,7 @@
 
 ⛔ 舊分支（#3738 之前開、改過 dist）rebase／merge 到之後的 main：撞上 dist 的 modify/delete 衝突時**不要解衝突內容**；而只**新增** chunk 的 commit 不會衝突、會把 dist 悄悄帶回 index。所以不論有無衝突，rebase／merge 完都跑 `git ls-files docs/assets/dist`，有輸出就 `git rm -r --cached docs/assets/dist`。本機重 build 過、還沒 commit 的 dist 會讓 `git pull` 中止：pull 前先 `git restore docs/assets/dist`（本機產物，可丟）。
 
-⛔ **不要用「CI 全綠」推論 portal 那條 leg 有跑過**：path filter 沒命中時它是 **skipped 不是 failure**，畫面一樣綠。要查那顆 SHA 上具名的 job：
+`Portal Tests`（Vitest）與 `Smoke Tests (Chromium)` 每支 PR 都跑（[#3756](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3756) 起沒有 path filter），leg 被 skip 時 aggregate 判紅。要看某顆 SHA 上具名的 job：
 
 ```bash
 gh api repos/vencil/Dynamic-Alerting-Integrations/commits/<sha>/check-runs --jq '.check_runs[] | select(.name|test("Portal")) | "\(.name) \(.status) \(.conclusion)"'

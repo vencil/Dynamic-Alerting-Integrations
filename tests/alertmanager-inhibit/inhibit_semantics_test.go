@@ -23,13 +23,13 @@ import (
 //     reading `labels:` would therefore get these fixtures WRONG; they are
 //     written by hand against runtime reality on purpose.
 //
-// Tenant ids (dev-rules #2): try-local's inhibit rules — and k8s's Silent Mode /
-// Custom Alert rules — pin NO tenant. They are tenant-agnostic, so any two
-// distinct ids exercise them fully and the synthetic pair below is deliberate
-// (a real tenant id would imply a coupling that does not exist). Only the k8s
-// per-tenant dedup rules pin a literal tenant; that suite reads the ids back out
-// of the config via dedupTenants() instead of naming them, so a fixture can
-// never quietly stop matching the rule it is meant to exercise.
+// Tenant ids (dev-rules #2): no inhibit rule here pins a tenant — try-local's,
+// k8s's Silent Mode / Custom Alert rules, and the generated dedup rule (#3899)
+// are tenant-agnostic, so any two distinct ids exercise them fully and the
+// synthetic pair below is deliberate (a real tenant id would imply a coupling
+// that does not exist). The dedup rule's only literal ids are its tenant!~
+// exclusions, and those come from the fixture's own dedup_configs (ta/tb/tc/td,
+// tests/ops/test_generated_dedup_inhibit_fixture.py), not from a deployment.
 const (
 	tenantX = "tenant-x"
 	tenantY = "tenant-y"
@@ -143,82 +143,118 @@ func TestTryLocalInhibitSemantics(t *testing.T) {
 	})
 }
 
-// ---- k8s (the checked-in ConfigMap Alertmanager actually loads) ----
+// ---- the generator's severity dedup rule (#3899) ----
 
-// TestK8sPerTenantDedupSemantics covers the GENERATED per-tenant dedup rules,
-// which pin a literal tenant in their matchers. The fixtures must therefore use
-// ids read back out of the config: a synthetic tenant would match no rule and
-// every `want: false` case would pass vacuously.
-func TestK8sPerTenantDedupSemantics(t *testing.T) {
-	rules := loadConfigMapAM(t, "k8s/03-monitoring/configmap-alertmanager.yaml", "alertmanager.yml")
-	tenants := dedupTenants(t, rules)
-	tA := tenants[0]
+// generatedDedupFixture is _grar_routes.generate_inhibit_rules' REAL output
+// for ta=enable tb=disable tc=None td=enable, written and drift-checked by
+// tests/ops/test_generated_dedup_inhibit_fixture.py. The k8s base no longer
+// carries dedup rules (the merge refuses one there), so this file is what the
+// dedup semantics are proven on.
+const generatedDedupFixture = "tests/alertmanager-inhibit/testdata/generated_dedup_inhibit.yaml"
 
-	critA := lset{
-		"alertname": "MariaDBHighConnectionsCritical",
-		"severity":  "critical", "tenant": tA, "metric_group": "mysql_connections",
+// TestGeneratedDedupSemantics: ONE rule for every tenant. A tenant's critical
+// suppresses its own warning of the same metric_group; the tenants set to
+// disable (tb) or never judged (tc) are in the target's tenant!~ list; and an
+// alert of a tenant the generator never saw (tz) IS deduped — the rule states
+// who is OUT, not who is in (accepted as breaking in #3899).
+func TestGeneratedDedupSemantics(t *testing.T) {
+	rules := loadPlainAM(t, generatedDedupFixture)
+	if len(rules) != 1 {
+		t.Fatalf("%s: want exactly one dedup rule, got %d", generatedDedupFixture, len(rules))
 	}
-	warnA := lset{
-		"alertname": "MariaDBHighConnections",
-		"severity":  "warning", "tenant": tA, "metric_group": "mysql_connections",
+
+	crit := func(tenant, group string) lset {
+		l := lset{"alertname": "MariaDBHighConnectionsCritical", "severity": "critical"}
+		if tenant != "" {
+			l["tenant"] = tenant
+		}
+		if group != "" {
+			l["metric_group"] = group
+		}
+		return l
 	}
-	critNoGroupA := lset{
-		"alertname": "PostgreSQLDown",
-		"severity":  "critical", "tenant": tA,
+	warn := func(tenant, group string) lset {
+		l := lset{"alertname": "MariaDBHighConnections", "severity": "warning"}
+		if tenant != "" {
+			l["tenant"] = tenant
+		}
+		if group != "" {
+			l["metric_group"] = group
+		}
+		return l
 	}
-	warnNoGroupA := lset{
-		"alertname": "TenantConfigEvent",
-		"severity":  "warning", "tenant": tA,
-	}
+	const g, other = "mysql_connections", "mysql_threads_running"
 
 	run(t, rules, []check{
 		{
-			name: "per_tenant_dedup_suppresses_paired_warning",
-			src:  critA, tgt: warnA, want: true,
-			why: "the generated per-tenant dedup rule must actually dedup",
+			name: "enabled_tenant_critical_suppresses_its_paired_warning",
+			src:  crit("ta", g), tgt: warn("ta", g), want: true,
+			why: "the generated rule must actually dedup an enabled tenant",
 		},
 		{
-			// Same class as #1132, checked on the production config.
-			name: "metric_group_less_critical_does_not_eat_metric_group_less_warning",
-			src:  critNoGroupA, tgt: warnNoGroupA, want: false,
-			why: "both lack metric_group; the =~\".+\" gates keep them out of the dedup rule",
+			name: "second_enabled_tenant_is_deduped_too",
+			src:  crit("td", g), tgt: warn("td", g), want: true,
+			why: "one rule covers every enabled tenant",
+		},
+		{
+			name: "different_metric_group_is_not_suppressed",
+			src:  crit("ta", g), tgt: warn("ta", other), want: false,
+			why: "equal:[tenant, metric_group] pairs one group's critical with that group's warning only",
+		},
+		{
+			name: "disabled_tenant_is_not_deduped",
+			src:  crit("tb", g), tgt: warn("tb", g), want: false,
+			why: "_severity_dedup: disable puts tb in the target's tenant!~ list",
+		},
+		{
+			name: "unjudged_tenant_is_not_deduped",
+			src:  crit("tc", g), tgt: warn("tc", g), want: false,
+			why: "a None mode (#3621) is excluded like disable, never rendered as enable",
+		},
+		{
+			// Both directions: tenant isolation rests on `tenant` in equal:,
+			// and a one-direction test leaves a swapped side untested.
+			name: "cross_tenant_ta_to_td_is_not_suppressed",
+			src:  crit("ta", g), tgt: warn("td", g), want: false,
+			why: "equal:[tenant, ...] keeps one tenant's critical off another's warning",
+		},
+		{
+			name: "cross_tenant_td_to_ta_is_not_suppressed",
+			src:  crit("td", g), tgt: warn("ta", g), want: false,
+			why: "the mirror direction",
+		},
+		{
+			name: "excluded_tenant_critical_does_not_suppress_enabled_tenant_warning",
+			src:  crit("tb", g), tgt: warn("ta", g), want: false,
+			why: "cross-tenant, with the source an excluded tenant",
+		},
+		{
+			// Same class as #1132.
+			name: "metric_group_less_pair_is_not_suppressed",
+			src:  crit("ta", ""), tgt: warn("ta", ""), want: false,
+			why: "both lack metric_group; the =~\".+\" gates keep them out of the rule",
+		},
+		{
+			name: "tenant_less_pair_is_not_suppressed",
+			src:  crit("", g), tgt: warn("", g), want: false,
+			why: "both lack tenant; missing==missing would read as equal without the tenant=~\".+\" gates",
+		},
+		{
+			name: "tenant_not_in_confd_is_deduped",
+			src:  crit("tz", g), tgt: warn("tz", g), want: true,
+			why: "#3899 breaking: the rule names who is excluded, so a tenant the generator never saw is deduped",
+		},
+		{
+			// Alertmanager anchors a regex matcher to the whole value: the
+			// excluded "tb" must not exclude a tenant whose id merely starts with it.
+			name: "exclusion_list_is_anchored",
+			src:  crit("tbb", g), tgt: warn("tbb", g), want: true,
+			why: "tenant!~\"tb|tc\" is ^(?:tb|tc)$, so tbb is not excluded",
 		},
 	})
-
-	// Cross-tenant isolation needs a second deployed tenant. Scoped to a subtest
-	// so a single-tenant config cannot silently drop the assertions above.
-	t.Run("cross_tenant_isolation", func(t *testing.T) {
-		if len(tenants) < 2 {
-			t.Skipf("config pins %d tenant(s); need 2 to prove cross-tenant isolation", len(tenants))
-		}
-		tB := tenants[1]
-		warnB := lset{
-			"alertname": "MariaDBHighConnections",
-			"severity":  "warning", "tenant": tB, "metric_group": "mysql_connections",
-		}
-		critB := lset{
-			"alertname": "MariaDBHighConnectionsCritical",
-			"severity":  "critical", "tenant": tB, "metric_group": "mysql_connections",
-		}
-
-		// BOTH directions. The generated rule's `equal:` is ["metric_group"]
-		// ONLY — tenant isolation rests entirely on the tenant pins in the
-		// source AND target matchers, so a single direction leaves the source-
-		// side pin untested (mutating it out survives a one-direction test).
-		run(t, rules, []check{
-			{
-				name: "tenant_a_critical_does_not_suppress_tenant_b_warning",
-				src:  critA, tgt: warnB, want: false,
-				why: "target-side tenant pin: equal:[metric_group] alone would match across tenants",
-			},
-			{
-				name: "tenant_b_critical_does_not_suppress_tenant_a_warning",
-				src:  critB, tgt: warnA, want: false,
-				why: "source-side tenant pin: the mirror direction, otherwise untested",
-			},
-		})
-	})
 }
+
+// ---- k8s (the checked-in ConfigMap Alertmanager actually loads) ----
 
 // TestK8sTenantAgnosticInhibitSemantics covers the rules that pin NO tenant —
 // Silent Mode and per-recipe Custom Alert silence. They are tenant-agnostic by
@@ -306,14 +342,17 @@ func TestK8sTenantAgnosticInhibitSemantics(t *testing.T) {
 }
 
 // TestEveryInhibitRuleIsTenantScoped asserts the platform's core multi-tenancy
-// invariant structurally, over EVERY rule in both hand-written configs:
+// invariant structurally, over EVERY rule in both hand-written configs and the
+// generator's dedup rule:
 //
 //	a rule may only suppress across alerts of the SAME tenant.
 //
-// An Alertmanager inhibit rule can achieve that two ways, and both are in use:
-//   - `tenant` listed in equal:      — Silent Mode, Custom Alert silence, try-local dedup
-//   - tenant pinned to the same literal on BOTH matcher sides — the k8s generated
-//     per-tenant dedup rules, whose equal: is ["metric_group"] alone
+// An Alertmanager inhibit rule can achieve that two ways:
+//   - `tenant` listed in equal:      — Silent Mode, Custom Alert silence, the
+//     generated severity dedup rule (#3899) and try-local's copy of it
+//   - tenant pinned to the same literal on BOTH matcher sides — no rule in the
+//     repo does this since #3899 (the per-tenant dedup rules did); still
+//     accepted, since it is equally scoped
 //
 // A rule doing NEITHER can suppress one tenant's alert with another tenant's —
 // the worst failure this config can express (dev-rules #2). Fixture pairs cannot
@@ -328,6 +367,7 @@ func TestEveryInhibitRuleIsTenantScoped(t *testing.T) {
 		{"try-local/alertmanager.yml", loadPlainAM(t, "try-local/alertmanager.yml")},
 		{"k8s configmap-alertmanager.yaml", loadConfigMapAM(t,
 			"k8s/03-monitoring/configmap-alertmanager.yaml", "alertmanager.yml")},
+		{"generated dedup rule", loadPlainAM(t, generatedDedupFixture)},
 	} {
 		t.Run(cfg.label, func(t *testing.T) {
 			for i, r := range cfg.rules {
@@ -353,7 +393,8 @@ func TestEveryInhibitRuleIsTenantScoped(t *testing.T) {
 }
 
 // TestEveryEqualLabelIsGated asserts the #1132 invariant structurally over EVERY
-// rule in both hand-written configs: every `equal:` label must be presence-gated
+// rule in both hand-written configs and the generator's dedup rule (its
+// fixture): every `equal:` label must be presence-gated
 // (a matcher excluding the empty string, e.g. `label=~".+"`) on source OR target.
 //
 // An ungated equal-label is the #1132 footgun: Alertmanager treats a label
@@ -372,6 +413,7 @@ func TestEveryEqualLabelIsGated(t *testing.T) {
 		{"try-local/alertmanager.yml", loadPlainAM(t, "try-local/alertmanager.yml")},
 		{"k8s configmap-alertmanager.yaml", loadConfigMapAM(t,
 			"k8s/03-monitoring/configmap-alertmanager.yaml", "alertmanager.yml")},
+		{"generated dedup rule", loadPlainAM(t, generatedDedupFixture)},
 	} {
 		t.Run(cfg.label, func(t *testing.T) {
 			for i, r := range cfg.rules {

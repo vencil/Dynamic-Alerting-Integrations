@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import shutil
+import signal
 import socket
 import stat
 import subprocess
@@ -1386,21 +1387,110 @@ def test_two_content_lengths_are_400_even_if_the_first_fits(world):
     assert status == 400
 
 
+def _parent_of(pid: int) -> int | None:
+    """The parent of *pid*, or None once it is gone."""
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            return int(fh.read().rsplit(")", 1)[1].split()[1])
+    except OSError:
+        return None
+
+
 def test_no_zombies_are_left_after_a_deadline(tmp_path, world):
     """#2901 R3: the service is a child subreaper, so what a killed judgement
-    leaves (the loader, its sleep) is re-parented to it and collected."""
-    bin_dir, env = _held_da_read(tmp_path, f"  {SLEEP} 60 &\n  wait\n")
+    leaves (the loader, its sleep) is re-parented to it and collected.
+
+    #3557: waited for as a state — every process the loader recorded is gone
+    from under the service — not as "no zombie at this moment", which also
+    holds while a killed process has not finished ending; and counted against
+    what the loader recorded, not against 2 per judgement, which assumed each
+    reached the loader within its 6 s."""
+    pid_dir = tmp_path / "pids"
+    pid_dir.mkdir()
+    bin_dir, env = _held_da_read(
+        tmp_path, f'  echo $$ >> "$GSVC_PID_DIR/pids"\n  {SLEEP} 60 &\n'
+                  f'  echo $! >> "$GSVC_PID_DIR/pids"\n  wait\n',
+        {"GSVC_PID_DIR": str(pid_dir)})
     with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir, env=env) as svc:
         for _ in range(3):
             # 6 s: room to reach the loader on a slow host; the deadline is
             # what ends it (the loader's sleep is 60 s)
             status, doc = svc.validate(world["commits"]["clean+extra"], deadline_ms=11000)
             assert (doc["result"], doc["reason"]) == ("rejected", "deadline")
-        end = time.monotonic() + 10
-        while h.zombies_of(svc.proc.pid) and time.monotonic() < end:
-            time.sleep(0.1)
-        assert h.zombies_of(svc.proc.pid) == []
-        assert svc.metrics()["da_generator_orphans_reaped_total"] >= 6
+        recorded = pid_dir / "pids"
+        pids = [int(p) for p in recorded.read_text().split()] if recorded.exists() else []
+        assert pids, "no judgement reached the loader within its 6 s: nothing was tested"
+        # still under the service: its child (a zombie or not yet ended), or
+        # the child of one of them (a sleep whose loader is ending)
+        ours = {svc.proc.pid, *pids}
+        _until(lambda: not any(_parent_of(p) in ours for p in pids),
+               f"every process the loader recorded collected ({pids})")
+        _until(lambda: h.zombies_of(svc.proc.pid) == [], "no zombie under the service")
+        assert svc.metrics()["da_generator_orphans_reaped_total"] >= len(pids)
+
+
+# Call 0 also starts a process in a session of its own (and off the reading's
+# output), which the service's kill of the judgement's group does not reach:
+# it outlives that judgement and is re-parented to the service. Then every
+# call waits at the gate, as in _GATED_READING.
+_ESCAPING_READING = (
+    'd="$GSVC_GATE_DIR"\n'
+    'n=0\n'
+    'while [ -e "$d/started-$n" ]; do n=$((n+1)); done\n'
+    'if [ "$n" = 0 ]; then\n'
+    f"  '{sys.executable}' -c 'import os, sys; os.setsid(); "
+    'fd = os.open(sys.argv[1] + ".tmp", os.O_WRONLY | os.O_CREAT, 0o600); '
+    "os.write(fd, str(os.getpid()).encode()); os.close(fd); "
+    'os.rename(sys.argv[1] + ".tmp", sys.argv[1]); '
+    "os.execv(sys.argv[2], [sys.argv[2], \"600\"])' "
+    f'"$d/orphan.pid" \'{SLEEP}\' </dev/null >/dev/null 2>&1 &\n'
+    'fi\n'
+    + _GATED_READING.split("\n", 3)[3])
+
+
+def test_an_orphan_that_ends_during_another_run_is_collected_then(tmp_path, world):
+    """#3557: an orphan that ends while a later judgement runs is collected
+    when it ends (its SIGCHLD), not when that judgement does. The orphan is
+    ended by the test while the judgement is held at the gate, so "it ended
+    during another run" is a fact, not a race the host's load decides."""
+    gate = tmp_path / "gate"
+    gate.mkdir()
+    bin_dir, env = _held_da_read(tmp_path, _ESCAPING_READING,
+                                 {"GSVC_GATE_DIR": str(gate)})
+    commit = world["commits"]["clean+extra"]
+    pid_file = gate / "orphan.pid"
+    orphan = None
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=bin_dir, env=env) as svc, \
+            ThreadPoolExecutor(2) as pool:
+        try:
+            first = pool.submit(svc.validate, commit)
+            _until(pid_file.exists, "the orphan of the first judgement started")
+            orphan = int(pid_file.read_text())
+            (gate / "release-0").touch()
+            doc = first.result()[1]
+            assert doc["result"] == "pass", doc
+            _until(lambda: _parent_of(orphan) == svc.proc.pid,
+                   "the orphan re-parented to the service")
+            before = svc.metrics()["da_generator_orphans_reaped_total"]
+            second = pool.submit(svc.validate, commit)
+            _until(lambda: (gate / "started-1").exists(), "the second judgement in the loader")
+            os.kill(orphan, signal.SIGKILL)
+            try:
+                _until(lambda: _parent_of(orphan) != svc.proc.pid,
+                       "the orphan collected while the second judgement runs")
+            except AssertionError:
+                raise AssertionError(
+                    f"the orphan {orphan} was not collected while the second "
+                    f"judgement runs; the service's zombies: "
+                    f"{h.zombies_of(svc.proc.pid)}") from None
+            assert not second.done()  # collected during that run, not after it
+            assert svc.metrics()["da_generator_orphans_reaped_total"] >= before + 1
+            (gate / "release-all").touch()
+            assert second.result()[1]["result"] == "pass"
+        finally:
+            (gate / "release-all").touch()
+            if orphan is not None and _parent_of(orphan) == svc.proc.pid:
+                os.kill(orphan, signal.SIGKILL)
 
 
 def _outcome_of(pending) -> str:

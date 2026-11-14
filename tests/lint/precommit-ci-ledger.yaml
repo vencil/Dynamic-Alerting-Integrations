@@ -17,7 +17,7 @@
 # ⚠️ What the guard checks is that the evidence RESOLVES (file, job, test name
 # exist), not that it still catches a violation: that was measured once per
 # entry by planting one (#2644) and is not re-measured here. Nor does it check
-# that an (a) job is ungated — go-fmt's go-lint is path-gated on purpose.
+# that an (a) job is ungated.
 hooks:
 - id: sed-damage-guard
   category: exempt
@@ -191,7 +191,7 @@ hooks:
     workflow: .github/workflows/validate.yaml
     job: go-lint
     note: 'golangci-lint''s gofmt formatter (simplify on) over all six Go modules: a different
-      implementation of the same verdict, gated by validate_changed.'
+      implementation of the same verdict.'
 - id: configmap-mount-completeness
   category: a
   evidence:

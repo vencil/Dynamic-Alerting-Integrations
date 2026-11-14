@@ -725,6 +725,122 @@ def test_a_routeless_output_fed_back_is_refused(tmp_path):
     assert not out.exists()
 
 
+def test_a_routeless_output_without_its_marker_fed_back_is_refused(tmp_path):
+    """#3899：上面那條路徑的 marker 被刪掉時（舊輸出、或手動整理過），輸出裡
+    沒有任何產生的 receiver，以往會被當成來源收下、dedup 規則再併進一次。
+    現在 base 裡的 dedup 規則本身就拒收（rc 1、不寫檔）。"""
+    conf_d = _routeless_tree(tmp_path)
+    first = _without_header(_emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml"))
+    assert render.GENERATED_OUTPUT_MARKER not in first
+    out = tmp_path / "second.yml"
+    proc = _run("--config-dir", str(conf_d), "--output-alertmanager",
+                "--base-config", str(_base(tmp_path, first, "base2.yml")), "-o", str(out))
+    assert proc.returncode == 1, proc.stderr[-3000:]
+    assert "holds the route generator's own severity dedup rule(s)" in proc.stderr, \
+        proc.stderr[-3000:]
+    assert not out.exists()
+
+
+_PER_TENANT_DEDUP = ("  - source_matchers: ['severity=\"critical\"', 'metric_group=~\".+\"',"
+                     " 'tenant=\"t-thr\"']\n"
+                     "    target_matchers: ['severity=\"warning\"', 'metric_group=~\".+\"',"
+                     " 'tenant=\"t-thr\"']\n"
+                     "    equal: [metric_group]\n")
+#: The generator's own rule (#3899) in legacy match maps, and with several
+#: matchers in one element and an exclusion list: still its shape.
+_LEGACY_MAP_DEDUP = ("  - source_match: {severity: critical}\n"
+                     "    source_match_re: {metric_group: '.+', tenant: '.+'}\n"
+                     "    target_match: {severity: warning}\n"
+                     "    target_match_re: {metric_group: '.+', tenant: '.+'}\n"
+                     "    equal: [tenant, metric_group]\n")
+_MULTI_DEDUP = ("  - source_matchers: ['severity=\"critical\",metric_group=~\".+\",tenant=~\".+\"']\n"
+                "    target_matchers: ['{tenant!~\"t-off\", severity=\"warning\"}',"
+                " 'metric_group=~\".+\"', 'tenant=~\".+\"']\n"
+                "    equal: [metric_group, tenant]\n")
+
+
+@pytest.mark.parametrize("mode", ["--output-alertmanager", "--output-configmap"])
+@pytest.mark.parametrize("rule", [_PER_TENANT_DEDUP, _LEGACY_MAP_DEDUP, _MULTI_DEDUP],
+                         ids=["pre-3899-per-tenant", "legacy-match-maps",
+                              "several-matchers-in-one-element"])
+def test_a_dedup_rule_in_the_base_is_refused(tmp_path, mode, rule):
+    """#3899：dedup 規則只由產生器從 conf.d 產生。base 裡手寫的一條會被原樣
+    併進輸出，`disable` 的租戶照樣被 dedup——所以拒收：rc 1、不寫檔、
+    訊息指出是哪一條、該怎麼改。"""
+    base = _CUSTOMER_BASE + rule
+    out = tmp_path / "o.yml"
+    proc = _run("--config-dir", str(_tree(tmp_path)), mode,
+                "--base-config", str(_base(tmp_path, base)), "-o", str(out))
+    assert proc.returncode == 1, proc.stderr[-3000:]
+    assert "own severity dedup rule(s) (inhibit_rules[1])" in proc.stderr, \
+        proc.stderr[-3000:]
+    assert "Remove them from the base config" in proc.stderr
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("base_key", [True, False], ids=["base-key", "first-apply"])
+def test_apply_refuses_a_cluster_source_with_a_dedup_rule(tmp_path, monkeypatch, capsys,
+                                                           base_key):
+    """#3899 on --apply: the source is the cluster's, so the remedy names the
+    ConfigMap and its `alertmanager.base.yml` key, and nothing is applied."""
+    source = _CUSTOMER_BASE + _PER_TENANT_DEDUP
+    calls = (_fake_cluster(monkeypatch, _CUSTOMER_BASE, base_yml=source) if base_key
+             else _fake_cluster(monkeypatch, source))
+    assert _apply(tmp_path) == 1
+    err = capsys.readouterr().err
+    assert "own severity dedup rule(s) (inhibit_rules[1])" in err, err[-3000:]
+    assert "the source in ConfigMap monitoring/alertmanager-config" in err, err[-3000:]
+    assert "delete those rules from the source under the ConfigMap's " \
+           "'alertmanager.base.yml' key" in err, err[-3000:]
+    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+
+
+def test_an_operators_own_broader_policy_in_the_base_is_kept(tmp_path):
+    """#3899 (owner decision B): only the generator's own shapes are refused.
+    An operator's rule — here a tenant's critical muting all its warnings —
+    is operator policy: not judged, merged as written, even though it mutes
+    what `_severity_dedup: disable` would let through. (`alert_source=""`
+    keeps it off platform alerts, which a different invariant requires.)"""
+    policy = ("  - source_matchers: ['severity=\"critical\"', 'tenant=~\".+\"']\n"
+              "    target_matchers: ['severity=\"warning\"', 'tenant=~\".+\"', 'alert_source=\"\"']\n"
+              "    equal: [tenant]\n")
+    out = _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, _CUSTOMER_BASE + policy))
+    rules = yaml.safe_load(out)["inhibit_rules"]
+    # The output is Alertmanager's reading (matchers sorted): compare as sets.
+    kept = [r for r in rules if r.get("equal") == ["tenant"]
+            and set(r["source_matchers"]) == {'severity="critical"', 'tenant=~".+"'}]
+    assert len(kept) == 1, rules
+    assert set(kept[0]["target_matchers"]) == {
+        'severity="warning"', 'tenant=~".+"', 'alert_source=""'}, kept
+
+
+def test_a_v290_output_fed_back_is_refused(tmp_path):
+    """The v2.9.0 upgrade path: no output v2.9.0 wrote (--apply's included)
+    has the GENERATED marker, and it holds the per-tenant dedup rules of that
+    time. Fed back as the source it is refused (rc 1), nothing written."""
+    old = (Path(__file__).parent / "fixtures" / "pre3899_output_without_marker.yml"
+           ).read_text(encoding="utf-8")
+    assert render.GENERATED_OUTPUT_MARKER not in old
+    out = tmp_path / "o.yml"
+    proc = _run("--config-dir", str(_routeless_tree(tmp_path)), "--output-alertmanager",
+                "--base-config", str(_base(tmp_path, old)), "-o", str(out))
+    assert proc.returncode == 1, proc.stderr[-3000:]
+    assert "own severity dedup rule(s) (inhibit_rules[0], inhibit_rules[1])" in proc.stderr, \
+        proc.stderr[-3000:]
+    assert "no output v2.9.0 wrote has the GENERATED marker" in proc.stderr
+    assert not out.exists()
+
+
+def test_control_the_shipped_k8s_base_holds_no_dedup_rule():
+    """repo 自帶的 base（k8s/03-monitoring/configmap-alertmanager.yaml）過得了
+    #3899 的守衛：它的 Silent Mode／CustomRecipeSilent 規則不是 dedup 形狀。"""
+    cm = yaml.safe_load((Path(__file__).resolve().parents[2] / "k8s" / "03-monitoring"
+                         / "configmap-alertmanager.yaml").read_text(encoding="utf-8"))
+    base = yaml.safe_load(cm["data"]["alertmanager.yml"])
+    assert base["inhibit_rules"], "前提：base 有自己的 inhibit 規則"
+    render.assert_base_has_no_dedup_rule(base)
+
+
 def test_apply_refuses_to_adopt_a_routeless_output(tmp_path, monkeypatch, capsys):
     conf_d = _routeless_tree(tmp_path)
     calls = _fake_cluster(monkeypatch, _emit_am(tmp_path, conf_d, _base(tmp_path)))

@@ -621,7 +621,7 @@ repos:
         # generates too (#1226). Without it, hand-editing the fallback alone
         # touches no file this hook watches, and the edit lands unseen — which is
         # the whole failure class here: the Vitest drift gate that compares the
-        # two is path-gated on tools/portal/**, so it did not run for #1215.
+        # two was path-gated on tools/portal/** then, so it did not run for #1215.
         # conf.d and the tenant-metadata reader (#2115 0-B/B4): the tenants in
         # the JSON are the exporter's answer for that tree, so editing a tenant
         # alone must reach this hook too, and so must a change to how the
@@ -1685,7 +1685,7 @@ repos:
         # list and there is no blanket `--all-files` run, so the filter only ever
         # governs a LOCAL commit. In CI the same logic is enforced by
         # tests/lint/test_check_threshold_reachability.py's real-repo tests under
-        # Python Tests, whose `python` path filter covers every face's input.
+        # Python Tests, which runs on every PR.
         # FAIL only on NEW unreachable / newly not-chart-armed keys, a
         # `<base>_critical` or dimensional key in any producer's `defaults:`, or
         # an exit-lock breach in either ledger; grandfathered keys are INFO.

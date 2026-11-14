@@ -55,10 +55,6 @@ import scaffold_tenant as scaffold  # noqa: E402
 # duplication this line of work exists to delete.
 MARK = registry_lib.COUNTEREXAMPLE_MARK
 
-# Single-literal joins on purpose: `tests/ops/test_ci_path_filter_coverage.py`
-# scans for exactly this shape to prove every repo file a pytest reads is in
-# ci.yml's `python` path filter. A join split across constants degrades to a
-# directory and drops out of that scan.
 PLATFORM_DATA = REPO_ROOT / "docs/assets/platform-data.json"
 # ⛔ The GENERATED offline catalog, not `rule-packs.js` (#1226). The accessor
 # there no longer contains the packs — it imports this file — so the face

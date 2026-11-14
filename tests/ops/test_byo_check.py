@@ -218,8 +218,9 @@ class TestCheckAlertmanager:
         mock_resp.__enter__ = lambda s: s
         mock_resp.__exit__ = MagicMock(return_value=False)
 
-        # A realistic per-tenant dedup rule: metric_group is presence-gated on
-        # both sides, so the semantic check has nothing to flag.
+        # A realistic dedup rule (the generator's shape since #3899): tenant and
+        # metric_group are presence-gated on both sides, so the semantic check
+        # has nothing to flag.
         config_yaml = (
             "route:\n"
             "  receiver: 'null'\n"
@@ -230,9 +231,9 @@ class TestCheckAlertmanager:
             "receivers:\n"
             "  - name: 'null'\n"
             "inhibit_rules:\n"
-            "  - source_matchers: ['severity=\"critical\"', 'metric_group=~\".+\"', 'tenant=\"db-a\"']\n"
-            "    target_matchers: ['severity=\"warning\"', 'metric_group=~\".+\"', 'tenant=\"db-a\"']\n"
-            "    equal: ['metric_group']\n"
+            "  - source_matchers: ['severity=\"critical\"', 'metric_group=~\".+\"', 'tenant=~\".+\"']\n"
+            "    target_matchers: ['severity=\"warning\"', 'metric_group=~\".+\"', 'tenant=~\".+\"']\n"
+            "    equal: ['tenant', 'metric_group']\n"
         )
         mapping = {
             "status": ({"config": {"original": config_yaml}}, None),

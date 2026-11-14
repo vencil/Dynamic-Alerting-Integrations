@@ -1597,8 +1597,8 @@ class TestTheHookFiresOnEverythingTheGateReads:
         helper split out of the gate is covered on the day it lands.
 
         ⚠️ This is a smoke test, not the enforcement: the gate's own tests run
-        in CI on every PR (`ci.yml`'s `python` filter opens with a catch-all
-        `**`). What is missing without it is the LOCAL run.
+        in CI on every PR (Python Tests is not path-gated). What is missing
+        without it is the LOCAL run.
 
         ⛔ ERRATA — an earlier revision of this docstring said the reader
         "was changed by a commit that touched no `.md` at all", citing #1480.

@@ -17,8 +17,6 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-// Literal path on purpose: tests/ops/test_ci_path_filter_coverage.py scans
-// Vitest out-of-tree reads to keep ci.yml's `portal` filter complete.
 const SCHEMA_PATH = resolve(here, '../../../../docs/schemas/tenant-config.schema.json');
 
 export interface ReceiverSpec { required: string[]; exactlyOneOf: string[][] }

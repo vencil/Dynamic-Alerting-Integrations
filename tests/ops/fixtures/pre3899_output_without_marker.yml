@@ -1,0 +1,77 @@
+# Output of the route generator BEFORE #3899 (origin/main 3888ceb88, the per-tenant
+# dedup shape v2.9.0 writes) for conf.d ta=enable tb=disable tc=enable, with its
+# two GENERATED header lines deleted - an older output fed back as a source.
+# Regenerate: run that revision's generate_alertmanager_routes.py --output-alertmanager
+# on the tree above and drop the two header lines. Used by test_grar_dedup_rule_shape.py.
+global:
+  resolve_timeout: 5m
+route:
+  group_by:
+  - alertname
+  - tenant
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 12h
+  receiver: default
+  routes:
+  - matchers:
+    - alertname="Watchdog"
+    group_by:
+    - alertname
+    group_wait: 0s
+    group_interval: 1m
+    repeat_interval: 3m
+    receiver: watchdog-heartbeat
+    continue: false
+  - matchers:
+    - component="custom"
+    group_by:
+    - tenant
+    - alertname
+    group_wait: 30s
+    group_interval: 5m
+    receiver: custom-alerts-firehose
+    continue: false
+  - matchers:
+    - component="synthetic-probe"
+    group_by:
+    - alertname
+    group_wait: 0s
+    group_interval: 1m
+    repeat_interval: 1m
+    receiver: synthetic-receiver
+    continue: false
+  - matchers:
+    - component="sentinel"
+    group_by:
+    - tenant
+    - alertname
+    receiver: sentinel-sinkhole
+    continue: false
+receivers:
+- name: default
+- name: watchdog-heartbeat
+- name: custom-alerts-firehose
+- name: synthetic-receiver
+- name: sentinel-sinkhole
+inhibit_rules:
+- source_matchers:
+  - severity="critical"
+  - metric_group=~".+"
+  - tenant="ta"
+  target_matchers:
+  - severity="warning"
+  - metric_group=~".+"
+  - tenant="ta"
+  equal:
+  - metric_group
+- source_matchers:
+  - severity="critical"
+  - metric_group=~".+"
+  - tenant="tc"
+  target_matchers:
+  - severity="warning"
+  - metric_group=~".+"
+  - tenant="tc"
+  equal:
+  - metric_group

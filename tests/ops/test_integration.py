@@ -105,10 +105,10 @@ class TestScaffoldToGeneratePipeline:
         assert routes[0]["receiver"] == "tenant-db-a"
         assert any(r["name"] == "tenant-db-a" for r in receivers)
 
-        # inhibit rules
-        inhibit = generate_inhibit_rules(dedup_configs)
-        assert len(inhibit) >= 1
-        assert any('tenant="db-a"' in str(rule) for rule in inhibit)
+        # inhibit rules — #3899: the one dedup rule, db-a not excluded
+        inhibit, _ = generate_inhibit_rules(dedup_configs)
+        assert len(inhibit) == 1
+        assert not any(m.startswith("tenant!~") for m in inhibit[0]["target_matchers"])
 
     def test_multi_tenant_scaffold_to_routes(self, config_dir):
         """多 tenant scaffold 正確產生多組 routes。"""
@@ -184,10 +184,10 @@ class TestOnboardToGeneratePipeline:
         tree = load_tenant_tree(config_dir)
         routing_configs, dedup_configs = tree.routing_configs, tree.dedup_configs
         routes, receivers, _ = generate_routes(routing_configs, tenants=())
-        inhibit = generate_inhibit_rules(dedup_configs)
+        inhibit, _ = generate_inhibit_rules(dedup_configs)
 
         assert len(routes) >= 1
-        assert len(inhibit) >= 1
+        assert len(inhibit) == 1  # #3899: one dedup rule for every tenant
 
 
 # ============================================================
@@ -270,7 +270,8 @@ class TestRoutingDirFixture:
         assert len(routes) == 2
         tenant_names = sorted(r["receiver"].replace("tenant-", "") for r in routes)
         assert tenant_names == ["db-a", "db-b"]
-        assert len(inhibit) == 2
+        assert len(inhibit) == 1  # #3899: one dedup rule, both tenants in it
+        assert not any(m.startswith("tenant!~") for m in inhibit[0]["target_matchers"])
 
     def test_preloaded_with_enforced_routing(self, routing_dir):
         """預載 configs + enforced routing 產生 continue routes。"""
@@ -337,9 +338,9 @@ class TestPipelineBuilder:
         assert result.dedup_configs["db-b"] == "disable"
 
         inhibit, _ = generate_inhibit_rules(result.dedup_configs)
-        # 只有 db-a 產生 inhibit rule
+        # #3899：一條規則；db-b（disable）在 target 的排除清單裡，db-a 不在
         assert len(inhibit) == 1
-        assert 'tenant="db-a"' in str(inhibit[0])
+        assert 'tenant!~"db-b"' in inhibit[0]["target_matchers"]
 
     def test_builder_with_custom_keys(self, config_dir):
         """自訂 metric keys 寫入 YAML。"""

@@ -233,10 +233,10 @@ class TestThePortalOfflineFallbackIsGenerated:
     ⛔ What these cells protect is not the file's content but the CLAIM that
     nothing has to be hand-copied any more. The defect they stand in for: #1215
     added `mysql_replication_lag` to the MariaDB defaults, the hand-typed mirror
-    in `rule-packs.js` never got it, and the Vitest gate that compares the two is
-    path-gated on `tools/portal/**` — a change that touches no portal file never
-    runs it. So the projection is checked here, in a suite with a catch-all path
-    filter, and by `--check` in the unconditional `platform-data-check` hook.
+    in `rule-packs.js` never got it, and the Vitest gate that compares the two was
+    path-gated on `tools/portal/**` then — a change that touched no portal file
+    never ran it. So the projection is checked here as well, and by `--check` in
+    the unconditional `platform-data-check` hook.
     """
 
     _FALLBACK_REL = (
