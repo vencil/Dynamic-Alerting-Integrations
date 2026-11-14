@@ -491,23 +491,34 @@ def _key_checks(e: Any, what: str = "key_checks", *, older_shape_is_older: bool 
     `replacement_head` exactly on a renamed kind. The mapping of sentences
     (`{version_labels, renames}`) a da-guard older than #3703 writes is
     named so (`_OlderOutput`) when *older_shape_is_older* — served-values'
-    convention; key-verdict names it by its schema instead."""
+    convention; key-verdict names it by its schema instead.
+
+    A record carries the author's key, so a message names a place (an
+    index, a field name — da-guard's words, not the author's) and a type
+    name, never a value (#3703): it reaches a generator's stderr and
+    `--findings-json` through the error that reports it."""
     if isinstance(e, dict) and set(e) == {"version_labels", "renames"} and older_shape_is_older:
         raise _OlderOutput(f"{what} as sentences ({{version_labels, renames}})")
     if not isinstance(e, list):
-        raise TypeError(f"{what} is a {type(e).__name__}")
+        raise TypeError(f"{what} is a {type(e).__name__}, not a list")
     out = []
     for i, c in enumerate(e):
         w = f"{what}[{i}]"
-        if not isinstance(c, dict) or set(c) != _KEY_CHECK_FIELDS:
-            raise TypeError(f"{w} is not a record of {sorted(_KEY_CHECK_FIELDS)}: {c!r}")
+        if not isinstance(c, dict):
+            raise TypeError(f"{w} is a {type(c).__name__}, not a record")
+        if set(c) != _KEY_CHECK_FIELDS:
+            raise TypeError(f"{w} has fields {sorted(map(str, c))}, not {sorted(_KEY_CHECK_FIELDS)}")
+        for f in ("kind", "key", "head", "reason"):
+            if not isinstance(c[f], str):
+                raise TypeError(f"{w}.{f} is a {type(c[f]).__name__}, not a string")
         kind, repl = c["kind"], c["replacement_head"]
         if kind not in KEY_CHECK_KINDS:
-            raise ValueError(f"{w}.kind {kind!r}")
-        if not all(isinstance(c[f], str) for f in ("key", "head", "reason")):
-            raise TypeError(f"{w}: key, head and reason must be strings")
-        if (repl is not None) != (kind in KEY_CHECK_RENAMED_KINDS) or not isinstance(repl, (str, type(None))):
-            raise ValueError(f"{w}: kind {kind!r} with replacement_head {repl!r}")
+            raise ValueError(f"{w}.kind is none of {sorted(KEY_CHECK_KINDS)}")
+        if not isinstance(repl, (str, type(None))):
+            raise TypeError(f"{w}.replacement_head is a {type(repl).__name__}, not a string or null")
+        # `kind` is one of KEY_CHECK_KINDS here: Go's word, safe to name.
+        if (repl is not None) != (kind in KEY_CHECK_RENAMED_KINDS):
+            raise ValueError(f"{w}: kind {kind} {'with' if repl is not None else 'without'} a replacement_head")
         out.append(KeyCheck(kind, c["key"], c["head"], repl, c["reason"]))
     return tuple(out)
 

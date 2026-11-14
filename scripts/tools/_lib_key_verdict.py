@@ -278,9 +278,13 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
     keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{t}")]
             for t, rows in _mapping(doc["tenants"], "tenants").items()}
     findings = [_finding(f) for f in _rows(doc["findings"], "findings")]
-    # v4 (#3703): records; the sentences of v3 are named by the schema.
-    checks = {_str(t, "key_checks"): tv._key_checks(c, f"key_checks.{t}", older_shape_is_older=False)
-              for t, c in _mapping(doc["key_checks"], "key_checks").items()}
+    # v4 (#3703): records; the sentences of v3 are named by the schema. The
+    # records carry the author's keys: a message names the place and a type,
+    # never a value (`tv._key_checks`), and the tenant through `shown_key`.
+    if not isinstance(doc["key_checks"], dict):
+        raise TypeError(f"key_checks is a {type(doc['key_checks']).__name__}, not an object")
+    checks = {t: tv._key_checks(c, f"key_checks.{shown_key(t)}", older_shape_is_older=False)
+              for t, c in doc["key_checks"].items()}
     return TreeVerdict(keys, findings, doc["undecidable"], checks, blocks, undecidable_blocks)
 
 
