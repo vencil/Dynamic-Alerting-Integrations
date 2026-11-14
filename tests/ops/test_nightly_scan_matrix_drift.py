@@ -62,6 +62,7 @@ import pytest
 import yaml
 
 from _pysource import parse_py
+from _trivy_contract import NEUTRAL_KEYS, SCAN_FILTER
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
@@ -1427,11 +1428,9 @@ def test_every_scan_job_actually_scans_its_own_matrix() -> None:
         # tests passing. `exit-code: 0` is equally load-bearing in the other
         # direction — the design is capture-don't-gate, and a non-zero code
         # would turn every finding into a red nightly run.
-        contract = {
-            "severity": "CRITICAL,HIGH",
-            "ignore-unfixed": True,
-            "exit-code": "0",
-        }
+        # The filter half is shared with release.yaml and the PR-time scan
+        # (tests/_trivy_contract.py, #3870); only exit-code is this bucket's.
+        contract = {**SCAN_FILTER, "exit-code": "0"}
         for key, want in contract.items():
             assert str(with_.get(key)) == str(want), (
                 f"{job_name}'s Trivy step sets {key}={with_.get(key)!r}, "
@@ -2204,12 +2203,9 @@ def test_the_report_job_waits_for_every_bucket() -> None:
 # to merely relaxing something), because that is the property `report` needs.
 _RUNS_DESPITE_UPSTREAM_FAILURE = frozenset({"always()", "!cancelled()"})
 
-# Inputs that say WHAT to scan and WHERE to put the answer. They cannot shrink
-# what Trivy looks for, so they need no per-value pin here. `version` picks the
-# Trivy BINARY (#1337: the action's default moved with every action bump); it
-# filters nothing, and its value is pinned — identical across every CI step,
-# the Makefile and the dev container — by tests/shared/test_toolchain_pin_parity.py.
-_TRIVY_NEUTRAL_KEYS = frozenset({"image-ref", "format", "output", "version"})
+# Inputs that say WHAT to scan and WHERE to put the answer; why each is
+# neutral is written once, next to the definition.
+_TRIVY_NEUTRAL_KEYS = NEUTRAL_KEYS  # SSOT: tests/_trivy_contract.py (#3870)
 
 # Vetted exceptions, per bucket, with the reason. `scan` legitimately carries a
 # waiver file, but ONLY conditionally and ONLY for recipe-preview's bundled
