@@ -274,3 +274,6 @@ helm/da-portal/templates/configmap-nginx.yaml
 helm/da-portal/templates/deployment.yaml
 helm/da-portal/templates/networkpolicy.yaml
 helm/da-portal/values.yaml
+# #3756: the dorny path gates on the required workflows are retired, and with them
+# invariants 1–3 of this module; invariant 4 and its extraction stay (to 31% of before).
+tests/ops/test_ci_path_filter_coverage.py

@@ -44,15 +44,19 @@ The list is now measured, not chased. Three pieces, one file each:
 
 `generate --check` also holds, for EVERY workflow (traced or not):
 
-  * no dead entry — each positive pattern of each `on.<event>.paths` list and
-    each dorny/paths-filter filter matches at least one tracked file, unless it
+  * no dead entry — each positive pattern of each `on.<event>.paths` list
+    matches at least one tracked file, unless it
     is in RESERVED_PATTERNS with its reason (checked both ways);
   * no pattern the matcher (scripts/ops/paths_filter_glob.py) does not model.
     That is reported as UNMODELLED, never as dead: deleting it would remove a
     trigger that may be working;
-  * every workflow that gates on paths for a pull request — an
-    `on.pull_request.paths`, or a job using dorny/paths-filter — either carries
-    the generated regions or is named in NOT_YET_TRACED, with the reason.
+  * every workflow that gates on paths for a pull request
+    (`on.pull_request.paths`) either carries
+    the generated regions or is named in NOT_YET_TRACED, with the reason;
+  * no workflow gates a JOB on paths with dorny/paths-filter. ci.yml,
+    docs-ci.yaml and validate.yaml did until #3756 retired those gates, and
+    with them the modelling of a dorny filter here; a new one is reported as
+    UNMODELLED rather than left unchecked.
 
 Why a new import cannot slip past once a list has converged: it is written in a
 file that is already listed, so the PR adding it starts the workflow, and
@@ -186,17 +190,11 @@ NOT_YET_TRACED: dict[str, str] = {
         "builds with `go test -c`, which go_build.sh does not see",
     "bench-workload-record.yaml":
         "`go test -bench` through bench_gate_compare.sh",
-    "ci.yml":
-        "gated per job by dorny/paths-filter; the assert mode for a dorny gate "
-        "is not decided (#3756)",
     "component-docker-build.yaml":
         "the reads happen inside `docker build`, outside any traced process",
     "config-diff-advisory.yml":
         "traceable (Python + go_build.sh) but not traced yet: what it loads "
         "depends on the PR's base/head conf.d pair",
-    "docs-ci.yaml":
-        "gated per job by dorny/paths-filter; the assert mode for a dorny gate "
-        "is not decided (#3756)",
     "forge-e2e-github.yaml":
         "`go test -tags forge_e2e`, which go_build.sh does not see",
     "guard-defaults-impact.yml":
@@ -209,9 +207,6 @@ NOT_YET_TRACED: dict[str, str] = {
         "fetched with the workflow token",
     "security-audit.yaml":
         "bandit reads the trees it is pointed at; the gate is those trees",
-    "validate.yaml":
-        "gated per job by dorny/paths-filter; the assert mode for a dorny gate "
-        "is not decided (#3756)",
 }
 
 # The boundary set: files a traced job reads through something the tracer
@@ -231,14 +226,9 @@ BOUNDARY: dict[str, dict[str, str]] = {
 # `generate --check` prints it, pattern) → why it stays. Checked both ways: a
 # dead pattern not listed here is DEAD, and an entry here whose pattern matches
 # a tracked file (or is no longer in that list) is STALE.
-RESERVED_PATTERNS: dict[tuple[str, str, str], str] = {
-    ("ci.yml", "filter `portal`", "k8s/03-monitoring/configmap-rules-*.yml"):
-        "the rule-pack ConfigMap family declares `.yaml` and `.yml` as names "
-        "of one member (scripts/tools/_lib_consumer_read.py RULE_SOURCES), and "
-        "tests/shared/test_rule_source_globs_declared_once.py requires a "
-        "filter that watches the family to match every declared name; no "
-        "`.yml` file is tracked today",
-}
+# Empty since #3756: its one entry was a pattern of ci.yml's `portal` dorny
+# filter, which is gone with the gate.
+RESERVED_PATTERNS: dict[tuple[str, str, str], str] = {}
 
 
 def _caller_error(message: str) -> _lib_exitcodes.CallerError:
@@ -869,19 +859,13 @@ class Traced:
 # ── dead and unmodelled patterns, every workflow ────────────────────────────
 
 def _filter_rule_glob(rule: object) -> str | None:
-    """dorny/paths-filter accepts a bare glob or `{<change types>: <glob>}`."""
-    if isinstance(rule, str):
-        return rule
-    if isinstance(rule, dict) and len(rule) == 1:
-        value = next(iter(rule.values()))
-        return value if isinstance(value, str) else None
-    return None
+    """An entry of an `on.<event>.paths` list is a glob string; nothing else."""
+    return rule if isinstance(rule, str) else None
 
 
 def pattern_lists(workflow: dict, where: str) -> list[tuple[str, list[object]]]:
-    """(label, patterns) for every `on.<event>.paths` / `paths-ignore` list and
-    every dorny/paths-filter filter in a workflow."""
-    import yaml
+    """(label, patterns) for every `on.<event>.paths` / `paths-ignore` list in
+    a workflow."""
     found: list[tuple[str, list[object]]] = []
     on = _on_block(workflow)
     if isinstance(on, dict):
@@ -895,27 +879,6 @@ def pattern_lists(workflow: dict, where: str) -> list[tuple[str, list[object]]]:
                         raise _caller_error(
                             f"{where}: `on.{event}.{key}` is not a list.")
                     found.append((f"on.{event}.{key}", value))
-    jobs = workflow.get("jobs")
-    for job_id, job in (jobs.items() if isinstance(jobs, dict) else ()):
-        for step in _steps(job):
-            if "dorny/paths-filter" not in str(step.get("uses", "")):
-                continue
-            raw = (step.get("with") or {}).get("filters")
-            try:
-                filters = yaml.safe_load(raw) if isinstance(raw, str) else raw
-            except yaml.YAMLError as exc:
-                raise _caller_error(
-                    f"{where}: job `{job_id}`'s paths-filter `filters` does not "
-                    f"parse ({type(exc).__name__}).") from exc
-            if not isinstance(filters, dict):
-                raise _caller_error(
-                    f"{where}: job `{job_id}`'s paths-filter `filters` is not an "
-                    "inline mapping — a filters FILE is not modelled.")
-            for name, rules in filters.items():
-                if not isinstance(rules, list):
-                    raise _caller_error(
-                        f"{where}: paths-filter `{name}` is not a list.")
-                found.append((f"filter `{name}`", rules))
     return found
 
 
@@ -929,8 +892,8 @@ def pattern_findings(workflow: dict, where: str, tracked: tuple[str, ...],
             glob = _filter_rule_glob(rule)
             if glob is None:
                 findings.append(
-                    f"UNMODELLED  {where} {label}: {rule!r} — not a glob string "
-                    "or a one-key `{change types: glob}` rule; it was NOT checked")
+                    f"UNMODELLED  {where} {label}: {rule!r} — not a glob "
+                    "string; it was NOT checked")
                 continue
             key = (where, label, glob)
             if seen is not None:
@@ -1098,8 +1061,15 @@ def cmd_generate(args: argparse.Namespace) -> int:
     seen: set[tuple[str, str, str]] = set()
     for path in _workflow_files(root):
         workflow = load_workflow(path)
-        if _gate_or_caller_error(workflow, path.name) is not None or uses_dorny(workflow):
+        if _gate_or_caller_error(workflow, path.name) is not None:
             gated.add(path.name)
+        if uses_dorny(workflow):
+            findings.append(
+                f"UNMODELLED  {path.name}: a job uses dorny/paths-filter. A "
+                "job-level path gate is not modelled here since #3756 retired "
+                "the last of them (its patterns are not checked for dead "
+                "entries and what the gated jobs load is not traced). Gate "
+                "the workflow with `on.pull_request.paths`, or do not gate it")
         text = path.read_bytes().decode("utf-8")
         if not find_regions(text.splitlines(keepends=True), path.name):
             findings += pattern_findings(workflow, path.name, tracked, seen)

@@ -2219,7 +2219,7 @@ class TestSyncCountsFlagContract:
         """`--sync-counts --check` 必須是 release gate 的一部分。
 
         NO-SOURCE 與計數的 DEAD / MISSING 三種診斷，原本在 repo 內只有
-        .github/workflows/validate.yaml 的 path-filtered PR job 跑得到——
+        .github/workflows/validate.yaml 的 PR job 跑得到——
         `make pre-tag` 看不到，等於擋不住 tag。
         """
         makefile = (bump_docs.REPO_ROOT / "Makefile").read_text(encoding="utf-8")

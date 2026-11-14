@@ -134,9 +134,9 @@
       "paths": [".github/workflows/**"],
       "read": [
         {"file": "docs/internal/agent-rulebook-shapes.md", "section": "D-04 有 gate ≠ gate 會跑"},
-        {"file": "tests/ops/test_ci_path_filter_coverage.py"}
+        {"file": "tests/ops/test_ci_aggregate_gate_contract.py"}
       ],
-      "note": "path-gated job 裡的 step 不得帶計算式 `if:`（條件寫進 shell）；pytest 讀到的 repo 檔要在 `python` filter 內（且進 `PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES`）——`tests/ops/test_ci_path_filter_coverage.py` 是那道守衛，其 docstring 列了它拒收與看不見的形狀；fixture 檔名別用真實 repo 檔名。`on.pull_request.paths` 裡 `# BEGIN/END GENERATED path-trace` 之間由 `make workflow-path-filters` 產生、不手改（#3756）；filter 的 pattern 比對不到任何 tracked 檔會被 `workflow-path-filter-check` 擋下。"
+      "note": "回報必要檢查的 workflow（`ci.yml`／`docs-ci.yaml`／`validate.yaml`）不設 path gate（#3756）：不加 `dorny/paths-filter` 步驟；aggregate gate 等待的 job 與它 `needs:` 的上游不得帶 `if:`，其 step 的 `if:` 只接受 `always()`（條件寫進 shell）；gate 只在每條 leg 都是 `success` 時通過，不得綁 `needs.*.outputs.*`——`tests/ops/test_ci_aggregate_gate_contract.py` 是那道守衛，其 docstring 列了它看不見的形狀。`on.pull_request.paths` 裡 `# BEGIN/END GENERATED path-trace` 之間由 `make workflow-path-filters` 產生、不手改（#3756）；filter 的 pattern 比對不到任何 tracked 檔會被 `workflow-path-filter-check` 擋下。"
     },
     {
       "id": "session-guards",

@@ -144,12 +144,8 @@ def test_another_owners_oci_chart_is_none_of_our_business(tmp_path: Path) -> Non
 
 
 # ── scanned surface ─────────────────────────────────────────────────────────
-# Derived from the gate's own declaration rather than restated. Two reasons,
-# both learned the hard way: an exclusion added to the gate without a test here
-# would otherwise go silently untested, and a literal repo path in a test module
-# is harvested by tests/ops/test_ci_path_filter_coverage.py as a file this test
-# READS — which would demand ci.yml widen its `python` path filter for a fixture
-# that never touches the real tree.
+# Derived from the gate's own declaration rather than restated: an exclusion
+# added to the gate without a test here would otherwise go silently untested.
 _EXCLUDED_CARRIERS = (
     [f"{prefix}fixture-that-does-not-exist.md" for prefix in gate.EXCLUDED_PREFIXES]
     + list(gate.EXCLUDED_FILES)

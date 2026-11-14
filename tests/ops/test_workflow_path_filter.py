@@ -778,24 +778,42 @@ def test_a_bad_character_class_is_named_not_raised() -> None:
     assert paths_filter_glob.match_segments(["[z-a]*.ts"], ["zx.ts"]) is False
 
 
-def test_dorny_filters_and_push_paths_are_checked_too(repo: Path, capsys,
-                                                      monkeypatch) -> None:
+def test_push_paths_are_checked_too(repo: Path, capsys) -> None:
     (repo / ".github/workflows/zother.yaml").write_text(
         "on:\n  push:\n    paths:\n      - 'zdata/**'\n      - 'zgone/**'\n"
-        "jobs:\n  zdetect:\n    runs-on: x\n    steps:\n"
-        "      - uses: dorny/paths-filter@v3\n        with:\n          filters: |\n"
-        "            zdocs:\n              - 'zlib/**'\n"
-        "              - added|modified: 'zmissing/*.md'\n"
-        "              - 'zlib/z+.py'\n",
+        "      - 'zlib/z+.py'\n"
+        "jobs:\n  zjob:\n    runs-on: x\n    steps:\n      - run: 'true'\n",
         encoding="utf-8")
     _git(repo, "add", "-A")
-    monkeypatch.setattr(wpf, "NOT_YET_TRACED", {"zother.yaml": "zwhy"})
     assert _main(repo, "generate", "--check") == 1
     err = capsys.readouterr().err
     assert "zother.yaml on.push.paths: 'zgone/**'" in err
-    assert "zother.yaml filter `zdocs`: 'zmissing/*.md'" in err
-    assert "UNMODELLED  zother.yaml filter `zdocs`: 'zlib/z+.py'" in err
-    assert err.count("DEAD ") == 2 and err.count("UNMODELLED") == 1, err
+    assert "UNMODELLED  zother.yaml on.push.paths: 'zlib/z+.py'" in err
+    assert err.count("DEAD ") == 1 and err.count("UNMODELLED") == 1, err
+
+
+def test_a_dorny_job_gate_is_refused_not_left_unchecked(repo: Path, capsys,
+                                                        monkeypatch) -> None:
+    """#3756 retired the last job-level dorny gates and, with them, this
+    tool's reading of a dorny `filters:` block. A new one must not become a
+    path gate nothing looks at: it is reported, and no ledger excuses it."""
+    (repo / ".github/workflows/zdorny.yaml").write_text(
+        "on: [pull_request]\njobs:\n  zdetect:\n    runs-on: x\n    steps:\n"
+        "      - uses: dorny/paths-filter@v3\n        with:\n          filters: |\n"
+        "            zdocs:\n              - 'zmissing/*.md'\n",
+        encoding="utf-8")
+    # Control: the action named in a `run:` string is not a step that uses it.
+    (repo / ".github/workflows/ztalk.yaml").write_text(
+        "on: [pull_request]\njobs:\n  zjob:\n    runs-on: x\n    steps:\n"
+        "      - run: echo dorny/paths-filter\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    for ledger in ({}, {"zdorny.yaml": "zwhy"}):
+        monkeypatch.setattr(wpf, "NOT_YET_TRACED", ledger)
+        capsys.readouterr()
+        assert _main(repo, "generate", "--check") == 1
+        err = capsys.readouterr().err
+        assert "UNMODELLED  zdorny.yaml: a job uses dorny/paths-filter" in err
+        assert "ztalk.yaml" not in err
 
 
 def test_an_unparseable_workflow_is_no_answer(repo: Path) -> None:
@@ -809,10 +827,6 @@ def test_an_unparseable_workflow_is_no_answer(repo: Path) -> None:
 
 GATED = {
     "zgated.yaml": "on:\n  pull_request:\n    paths:\n      - 'zdata/**'\njobs: {}\n",
-    # No `on.pull_request.paths` at all: the gate is a job's dorny step.
-    "zdorny.yaml": ("on: [pull_request]\njobs:\n  zdetect:\n    runs-on: x\n    steps:\n"
-                    "      - uses: dorny/paths-filter@v3\n        with:\n"
-                    "          filters: |\n            zdocs:\n              - 'zlib/**'\n"),
 }
 
 
@@ -821,7 +835,7 @@ def test_a_path_gated_workflow_is_traced_or_named(repo: Path, tmp_path: Path, ca
                                                   monkeypatch, name: str) -> None:
     _record_and_generate(repo, tmp_path / "t")
     (repo / ".github/workflows" / name).write_text(GATED[name], encoding="utf-8")
-    # Control: a workflow with no path gate of either kind needs no entry.
+    # Control: a workflow with no path gate needs no entry.
     (repo / ".github/workflows/zfree.yaml").write_text(
         "on: [pull_request]\njobs: {}\n", encoding="utf-8")
     _git(repo, "add", "-A")
@@ -882,9 +896,10 @@ def test_every_real_ledger_entry_has_its_reason_written_down() -> None:
     assert reasons
     for key, why in reasons:
         assert why.strip() and len(why) > 20, key
-    # The dorny-gated required-check workflows are listed, not out of scope.
+    # The required-check workflows carry no path gate since #3756, so a
+    # ledger entry for one would be an excuse for a gate that must not exist.
     for name in ("ci.yml", "docs-ci.yaml", "validate.yaml"):
-        assert "dorny" in wpf.NOT_YET_TRACED[name]
+        assert name not in wpf.NOT_YET_TRACED
 
 
 def _all_real_patterns() -> list[str]:
@@ -899,13 +914,15 @@ def _all_real_patterns() -> list[str]:
 
 
 def test_the_matcher_agrees_with_picomatch_on_every_real_pattern_and_file() -> None:
-    """The matcher stands in for picomatch (dorny/paths-filter passes it
-    `dot: true`). Held cell for cell: every positive pattern in every workflow
-    against every tracked file.
+    """The matcher is compared with picomatch (`dot: true`), cell for cell:
+    every positive pattern in every workflow against every tracked file.
 
     ⚠️ GitHub's own `on.<event>.paths` matcher is not picomatch and cannot be
     run here; the alphabet `unmodelled` admits is the part its documentation
-    describes the same way. This test anchors the dorny half.
+    describes the same way. picomatch was the matcher of the dorny filters
+    this module also graded until #3756; it is kept as the one executable
+    reference there is, so a matcher edit is still measured against something
+    other than itself.
 
     Same contract as tests/lint/test_editor_schema_glob_parity.py: no node or
     no picomatch is a skip locally and a failure under VIBE_REQUIRE_PICOMATCH=1.

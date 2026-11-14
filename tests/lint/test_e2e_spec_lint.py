@@ -1025,8 +1025,9 @@ def test_the_ci_legs_signal_is_not_silently_switched_off() -> None:
     Measured on this very workflow: `if: false` on the job and
     `continue-on-error: true` on the step each left this whole file passing,
     with the only server-side execution point A-13 has turned off and nothing
-    in the repo red. `tests/ops/test_ci_path_filter_coverage.py` does not cover this
-    workflow — its scan is scoped to the ones using `dorny/paths-filter`.
+    in the repo red. `tests/ops/test_ci_path_filter_coverage.py` does not cover
+    this — it asks which scripts a workflow's `paths:` must list, not whether
+    the job runs.
     """
     job_id, job, step = _script_step()
 
@@ -1183,7 +1184,7 @@ def test_editing_a_spec_or_the_runner_triggers_the_workflow() -> None:
     positive pattern still reports "covered". Measured — adding that one line
     beside the existing `tests/e2e/**` (2 places) left this file and the
     shared module both green, with the leg off. The shared module had
-    already written this rule down for `dorny/paths-filter` filters; importing
+    already written this rule down; importing
     it into this second caller is what stops the two answers from drifting.
     """
     # rglob, not glob: `test_hook_files_pattern_selects_specs_and_its_own_inputs`

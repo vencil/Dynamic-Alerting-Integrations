@@ -27,9 +27,9 @@ nightly CVE scan matrix. Pulling a test fixture in would either break both tests
 or drag an e2e-only image into the production supply-chain scan matrix. The
 fixture needs a binding to the SoT, not membership in it — which is this module.
 
-Runs in the normal Python Tests lane, whose path filter covers `helm/**`,
-`k8s/**` and `tests/**` — i.e. it fires on exactly the image-bump PRs that
-create this drift, not only on PRs that happen to touch the compose file.
+Runs in the normal Python Tests lane, which runs on every PR — i.e. it fires
+on exactly the image-bump PRs that create this drift, not only on PRs that
+happen to touch the compose file.
 """
 from __future__ import annotations
 

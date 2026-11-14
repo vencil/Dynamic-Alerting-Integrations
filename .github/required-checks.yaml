@@ -35,7 +35,8 @@ app_id: 15368
 enforcement_level: everyone
 
 required:
-  # ── 由 aggregate gate 回報：底下的實跑 job 可依 path 跳過，gate 一律回報 ──
+  # ── 由 aggregate gate 回報：底下的實跑 job 每支 PR 都跑（#3756 起不設 path
+  #    gate），gate 只在它等待的每個 job 都是 success 時通過 ──
   - {name: Python Tests, kind: gate}
   - {name: Go Tests, kind: gate}
   - {name: Portal Tests, kind: gate}
@@ -99,8 +100,8 @@ advisory:
       執行點是 pre-commit hook（#1428）。
   - name: I-4 Runbook Smoke Test
     reason: >-
-      只在文件路徑變動時跑（會下載 amtool／promtool／yq）；沒有 aggregate gate 擁有
-      它的名稱（tests/ops/test_ci_aggregate_gate_contract.py 的 UNWATCHED 帳本）。
+      會下載 amtool／promtool／yq，網路失敗就紅；沒有 aggregate gate 擁有它的名稱，
+      紅了不擋 merge。#3756 起每支 PR 都跑（原本只在文件路徑變動時跑）。
   - name: Python Coverage
     reason: >-
       owner 決定（2026-09-19，PR #1910）：覆蓋率腿只回報與上傳，不擋 merge；放進必要

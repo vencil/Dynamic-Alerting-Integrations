@@ -765,7 +765,7 @@ onboard-analyze: $(DA_READ_PREREQ) ## Analyze existing AM/Prometheus configs for
 # 第二行 `--sync-counts --check` 同一個理由（#1407 第三輪）：計數規則自己的三種
 # 診斷——NO-SOURCE（計數來源讀不到）/ DEAD（句型變了撈不到）/ MISSING（檔案不在）
 # ——在 repo 內只有 .github/workflows/validate.yaml 的 version-check job 跑得到，
-# 而那個 job 有 path filter。「只有 path-filtered PR job 看得到的守門員」對
+# 而那支 workflow 只有 pull_request 觸發。「只有 PR job 看得到的守門員」對
 # release 而言，跟「只有 pytest 看得到」是同一句話：等於不存在。tag 前必須
 # 自己跑一次。
 .PHONY: version-check

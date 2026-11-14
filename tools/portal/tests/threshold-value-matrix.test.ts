@@ -37,10 +37,6 @@ type Row = {
   row_disabled: boolean;
 };
 
-// ⛔ Each path is one literal that climbs to the repo root: that is the shape
-// tests/ops/test_ci_path_filter_coverage.py reads to hold ci.yml's `portal`
-// path filter to the files this test opens. A repo-root constant joined with
-// 'tests/…' is a shape it does not see.
 const here = dirname(fileURLToPath(import.meta.url));
 const matrix = JSON.parse(readFileSync(
   resolve(here, '../../../tests/shared/threshold_value_matrix.json'), 'utf8',
