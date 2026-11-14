@@ -122,6 +122,9 @@ MIGRATED: dict[Key, int] = {
     # its loader (da-read) only, so `amtool check-config` has no caller left
     ("scripts/tools/ops/_grar_render.py", "amtool"): 1,
     ("scripts/tools/dx/measure_judgement_budget.py", "amtool"): 1,
+    # #3839: the generator service's readiness asks for da-read, the binary
+    # that gate runs — its two `which("amtool")` are gone
+    ("scripts/tools/ops/generator_service.py", "amtool"): 2,
 }
 
 #: Baseline sites the scanner counts that are not engine calls. They stay in

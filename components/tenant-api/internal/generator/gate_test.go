@@ -340,10 +340,10 @@ func TestValidateWrites_HTTPStatuses(t *testing.T) {
 		body   any
 		check  func(error) bool
 	}{
-		{"503 validator", 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "amtool_missing", "message": "no amtool"},
+		{"503 validator", 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "da_read_missing", "message": "no da-read"},
 			func(err error) bool {
 				var u *UnavailableError
-				return errors.As(err, &u) && u.Code == CodeValidatorUnavailable && u.Reason == "amtool_missing" && u.Message == "no amtool"
+				return errors.As(err, &u) && u.Code == CodeValidatorUnavailable && u.Reason == "da_read_missing" && u.Message == "no da-read"
 			}},
 		{"503 policy", 503, map[string]any{"error": "POLICY_UNAVAILABLE", "reason": "policy_unusable", "message": "bad"},
 			func(err error) bool {

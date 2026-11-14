@@ -1377,8 +1377,8 @@ def is_receiver_name_collision(line: str) -> bool:
 # `_routing_defaults`, one routing-profile name defined in two files. (One
 # tenant id declared in two files is `DUPLICATE_TENANT_PREFIX` below, #2315 —
 # not a warning-stream line.) The generator exits EXIT_CALLER_ERROR
-# before anything is rendered; validate-config's schema row FAILs on it
-# (``blocking_generation_errors``). Not `POLICY_ERROR_PREFIX` — none of these
+# before anything is rendered, and validate-config's routes row, which is
+# `--validate`, FAILs with it. Not `POLICY_ERROR_PREFIX` — none of these
 # is a domain-policy finding, and none waits for --strict.
 ROUTING_TREE_ERROR_PREFIX = "ERROR (routing tree):"
 
@@ -1397,8 +1397,8 @@ def is_routing_tree_error(line: str) -> bool:
 # and a `group_by` that is not a list (`routing_block_group_by_type_errors`)
 # — a string is never read as a one-label list. The
 # generator exits EXIT_VIOLATION before anything is rendered
-# (`_refuse_field_type_errors`), and validate-config's schema row FAILs on
-# the line (``blocking_generation_errors``), as does its routes row (#3284).
+# (`_refuse_field_type_errors`), and validate-config's routes row, which is
+# `--validate`, FAILs with it (#3284).
 # Not `POLICY_ERROR_PREFIX`: it
 # does not wait for --strict.
 FIELD_TYPE_ERROR_PREFIX = "ERROR (field type):"

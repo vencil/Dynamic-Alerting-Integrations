@@ -45,7 +45,7 @@ import os
 import sys
 import textwrap
 from types import MappingProxyType
-from typing import Mapping, NamedTuple
+from typing import Mapping, NamedTuple, NoReturn
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -112,7 +112,7 @@ from _grar_parse import (  # noqa: E402, F401
     _parse_tenant_overrides,
     load_tenant_tree,
     print_reader_warnings,  # #2906: for the tools that do not print the stream
-    credential_findings,  # #1560 ⑤-b: credentials written out (validate-config's routes row)
+    credential_findings,  # #1560 ⑤-b: credentials written out
 )
 
 # Used here, not re-exported: which #2326 routing-tree findings refuse the
@@ -178,17 +178,15 @@ from _grar_render import (  # noqa: E402
 )
 # #3257: the base config's global may not hand a credential to a receiver.
 from _grar_render import assert_base_global_inherits_no_credentials  # noqa: E402
-# #2311: the whole --validate verdict, shared with validate-config's routes
-# row (it calls `gen.evaluate_generated_config`). Used, so no F401 marker.
-from _grar_render import evaluate_generated_config  # noqa: E402
+# #2311: the verdict on a generation result (`validate_tree`'s last step).
+# Used, so no F401 marker.
+from _grar_render import GeneratedConfigVerdict, evaluate_generated_config  # noqa: E402
 from _grar_render import (  # noqa: E402, F401  (read as `gen.…` by validate_config)
     AM_ACCEPTED, AM_REJECTED, AM_UNUSABLE,
 )
-# #2279: the shared "is this generation result unusable" predicate.
-# validate_config reads it as `gen.blocking_generation_errors`; --validate now
-# reaches it through `evaluate_generated_config` (#2311), so here it is a
-# re-export and carries the F401 marker.
-from _grar_validate import blocking_generation_errors  # noqa: E402, F401
+# #2279: the shared "is this generation result unusable" predicate (a tree
+# with nothing to render asks it here; `evaluate_generated_config` otherwise).
+from _grar_validate import blocking_generation_errors  # noqa: E402
 from _grar_validate import is_receiver_name_collision  # noqa: E402
 # #2315: the duplicate-tenant refusal, shared with validate-config's
 # tenant_uniqueness row through `_lib_confd.tenant_declarations`.
@@ -258,19 +256,21 @@ def _unverifiable(exc: PlatformProbeSetUnverifiable, refusing: str) -> None:
 
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                    all_warnings: list[str], sink: list | None = None,
-                   key_blocks: "list[str] | None" = None) -> None:
-    """Handle --validate mode: check for errors and exit.
+                   key_blocks: "list[str] | None" = None,
+                   generated: "list | None" = None) -> NoReturn:
+    """The last step of ``validate_tree``: judge the generation result
+    (``evaluate_generated_config``), print the verdict and exit with it.
 
-    #2311: every verdict comes from ``evaluate_generated_config`` — the SAME
-    function validate-config's ``routes`` row calls, so the two cannot drift
-    apart (#2164 was two copies of one predicate doing exactly that). This
-    function only prints and exits; it decides nothing. The one input that
-    stays here is ``--strict``: its ADR-007 policy errors are blocking only
-    for this CLI's flag, and are handed in as ``extra_errors``.
+    ``--strict``'s ADR-007 policy errors are in *all_warnings* only under
+    ``--strict`` (``load_tenant_tree(strict_policies=…)``) and are handed in
+    as ``extra_errors``. *generated* receives the verdict, for
+    ``ValidateOutcome.generated``.
     """
     verdict = evaluate_generated_config(
         routes, receivers, inhibit_rules, all_warnings,
         extra_errors=_policy_errors(all_warnings))
+    if generated is not None:
+        generated.append(verdict)
     # #2766: the lines only --validate prints join the findings. A verdict
     # error that is already one (a stream line, kept by identity) is not
     # added twice; the rest (the inhibit tripwire) block under --validate.
@@ -1837,6 +1837,214 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
     return early
 
 
+def _resolve_inputs(policy_path: str | None, mount_root: str) -> ResolvedPolicy:
+    """What every mode settles before the tenant scan: the deployment policy,
+    ``--secret-mount-root`` and the shipped platform probe set. Raises
+    ``PolicyInputError`` (the caller's exit 2); the other two exit 2 here."""
+    # Load policy (webhook domain allowlist).
+    # #1556: a supplied-but-unusable --policy is a caller error, not "no
+    # policy". Exiting 2 rather than proceeding with an empty allowlist
+    # is the whole point — the previous behaviour generated routes with SSRF
+    # domain checking off and said nothing.
+    # #2901 (ADR-036 §6): a policy may name the oldest generator it accepts;
+    # an older one would judge by rules the policy's author did not mean.
+    policy = resolve_policy(policy_path)
+    # #1560: written into every rendered `<field>_file` path.
+    mount_root_problem = mount_root_value_problem(mount_root)
+    if mount_root_problem is not None:
+        die_caller_error(f"ERROR: {mount_root_problem}")
+    # #3206 (ADR-036 §12): the platform probe set is read from the shipped
+    # rules ConfigMap through da-crdecode and `da-read prometheus-rules`.
+    # Without them that is a named rc 2 here, before any work — not a crash
+    # in the first guard that asks, and never another reading.
+    try:
+        platform_alert_identities()
+    except _lib_consumer_read.ConsumerReadError as exc:
+        die_caller_error(
+            "ERROR: cannot read the shipped platform rules — their ConfigMap is "
+            "read the way kubectl does (da-crdecode) and its rule files the way "
+            "Prometheus' rule loader does (da-read prometheus-rules); stopping "
+            "before any work (nothing was written): "
+            + _lib_consumer_read.error_text(exc))
+    if policy.allowed_domains:
+        print(f"Policy: {len(policy.allowed_domains)} allowed domain pattern(s) loaded")
+    return policy
+
+
+def _scan_and_generate(config_dir: str, findings: list[str], *,
+                       policy: ResolvedPolicy, mount_root: str, strict: bool,
+                       validate: bool, assembles_file: bool,
+                       key_verdict: bool = True,
+                       credential_scope: "frozenset[str] | None" = None,
+                       key_blocks: "list[str] | None" = None,
+                       ) -> tuple[TenantTree, list[dict], list[dict], list[dict], list[str]]:
+    """Scan *config_dir*, refuse what every mode refuses, generate:
+    ``(tree, routes, receivers, inhibit_rules, all_warnings)``. Exits where
+    the run ends short of a generation result. *validate*: this is
+    ``validate_tree``'s run (the shared key verdict's blocking lines go to
+    *key_blocks*); *assembles_file*: an output mode that writes the render
+    (``--output-configmap`` / ``--output-alertmanager``)."""
+    allowed_domains = policy.allowed_domains or []
+    # Load tenant configs (routing + dedup + schema warnings + enforced routing)
+    # #1460: the tree carries the record of the files that did not parse, and
+    # that record decides whether anything below may call itself a result.
+    tree = load_tenant_tree(config_dir, strict_policies=strict,
+                            secrets=policy.secret_binding(mount_root),
+                            allowed_domains=allowed_domains)
+    routing_configs = tree.routing_configs
+    dedup_configs = tree.dedup_configs
+    schema_warnings = tree.schema_warnings
+    enforced_routing = tree.enforced_routing
+    # #2766: --findings-json holds exactly the findings this run PRINTS — a
+    # refusal prints its own lines and not the schema stream, so the stream
+    # joins only once no refusal has stopped the run.
+    _refuse_unreadable_tenant_files(tree, findings)
+    _refuse_duplicate_tenants(tree, findings)
+    _refuse_routing_tree_errors(tree, findings)
+    _refuse_invalid_tenant_ids(tree, findings)
+    _refuse_field_type_errors(tree, findings)
+    findings.extend(schema_warnings)
+    # #1560 ⑤-b: a credential a file writes out is judged on that file's own
+    # value, before any layer is merged — after the refusals (a refused tree
+    # is judged by nothing else), before any early exit (a tree with nothing
+    # to render, an unbound routing profile, is judged too). Blocking under
+    # --validate (blocking_generation_errors) and printed in every mode.
+    credential_lines = credential_findings(tree, scope=credential_scope)
+    findings.extend(credential_lines)
+    # ADR-038 §5: after the refusals (a refused tree is judged by nothing
+    # else), before the exits below that end the run short of
+    # `_validate_mode` ("No tenants found", "No valid routes …"): a tree with
+    # nothing to render is judged too.
+    key_blocks = [] if key_blocks is None else key_blocks
+    if validate and key_verdict:
+        key_blocks.extend(_report_key_verdict(config_dir, findings))
+
+    has_routing = bool(routing_configs)
+    has_dedup = bool(dedup_configs)
+
+    if not has_routing and not has_dedup and not enforced_routing:
+        # #2341: "nothing to render" can be the result of refusing every
+        # tenant (an unreadable `_routing`; an invalid tenant id is refused
+        # above, ADR-035 D3): those lines are blocking here as everywhere else — `--validate` and
+        # `--strict` fail on them, render mode prints them and exits 0.
+        for w in schema_warnings + credential_lines:
+            print(safe_label(w), file=sys.stderr)
+        errors = ((blocking_generation_errors(schema_warnings + credential_lines)
+                   if validate else [])
+                  + (_policy_errors(schema_warnings) if strict else [])
+                  + key_blocks)
+        if errors:
+            print(f"FAIL: {len(errors)} error(s) found and nothing to render:",
+                  file=sys.stderr)
+            for e in errors:
+                print(safe_label(e), file=sys.stderr)
+            sys.exit(EXIT_VIOLATION)
+        if not assembles_file:
+            print("No tenants found in config directory.")
+            sys.exit(EXIT_OK)
+        # #1211 gap 2: an output mode still writes the render — the output is
+        # always merge(source, conf.d), here the source plus the platform
+        # routes. --apply
+        # keeps the early exit: an empty tree is more often a wrong
+        # --config-dir than an intent to strip the cluster's routing.
+        print("No tenants found in config directory; the output keeps the "
+              "base's own content and the platform routes only.")
+
+    _print_config_summary(routing_configs, dedup_configs, enforced_routing)
+
+    # Generate routes + receivers (enforced route inserted first)
+    routes, receivers, route_warnings = generate_routes(
+        routing_configs, allowed_domains=allowed_domains,
+        enforced_routing=enforced_routing, tenants=dedup_configs,
+        secrets=policy.secret_binding(mount_root))
+
+    # Generate per-tenant severity dedup inhibit rules
+    inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
+
+    # Collect all warnings
+    all_warnings = schema_warnings + credential_lines + route_warnings + dedup_warnings
+    findings.extend(route_warnings + dedup_warnings)
+    for w in all_warnings:
+        # #1538: escape here, not in `all_warnings` — the same list is handed
+        # to --validate / --json consumers, which must stay raw.
+        print(safe_label(w), file=sys.stderr)
+
+    # A tree WITH tenants that renders nothing is refused in every mode (a
+    # tenant whose only receiver is unusable must not vanish from the
+    # output). Only a tree with no tenant at all reaches an output mode with
+    # nothing generated (#1211 gap 2: the base loses the earlier run's part).
+    if not routes and not inhibit_rules and (
+            dedup_configs or not (assembles_file)):
+        print("No valid routes or inhibit rules generated.")
+        sys.exit(EXIT_VIOLATION)
+    return tree, routes, receivers, inhibit_rules, all_warnings
+
+
+class ValidateOutcome(NamedTuple):
+    """What ``validate_tree`` decided."""
+
+    #: The exit code ``generate-routes --validate`` ends with.
+    exit_code: int
+    #: Every finding the run determined, in order (``--findings-json``'s).
+    findings: list
+    #: ``evaluate_generated_config``'s verdict; None when the run ended
+    #: before a generation result was judged.
+    generated: "GeneratedConfigVerdict | None" = None
+    #: The unusable ``--policy`` that ended the run (exit 2), if one did.
+    policy_error: "PolicyInputError | None" = None
+
+
+def validate_tree(config_dir: str, *, strict: bool = False,
+                  policy: str | None = None,
+                  mount_root: str = DEFAULT_MOUNT_ROOT,
+                  key_verdict: bool = True,
+                  credential_scope: "frozenset[str] | None" = None,
+                  findings: list | None = None) -> ValidateOutcome:
+    """The whole ``--validate`` judgement of the tree at *config_dir*.
+
+    ``generate-routes --validate`` exits with this function's ``exit_code``
+    and validate-config's ``routes`` row is this function's outcome: neither
+    decides anything of its own (#3788). It prints what ``--validate``
+    prints (stdout and stderr) and never exits. *strict*, *policy*,
+    *mount_root*: the flags; *key_verdict*, *credential_scope*: ``main``'s;
+    *findings*: the list to record into (``--findings-json``).
+
+    The caller holds the run's parse-tree session and ``judging()``
+    (``_lib_parse_cache``) and has judged *config_dir* as its declared input
+    (``declared_trees``): those belong to the command line, not to the tree.
+    """
+    findings = [] if findings is None else findings
+    generated: list = []
+    policy_error: PolicyInputError | None = None
+    try:
+        try:
+            resolved = _resolve_inputs(policy, mount_root)
+        except PolicyInputError as exc:
+            policy_error = exc
+            die_caller_error(str(exc))
+        key_blocks: list[str] = []
+        tree, routes, receivers, inhibit_rules, all_warnings = _scan_and_generate(
+            config_dir, findings, policy=resolved, mount_root=mount_root,
+            strict=strict, validate=True, assembles_file=False,
+            key_verdict=key_verdict, credential_scope=credential_scope,
+            key_blocks=key_blocks)
+        # #1211: a tenant's served page-mode custom alerts with no delivery
+        # child under the custom route fall to the firehose receiver, which
+        # only a mode that assembles the config it writes knows: --validate
+        # says it could not check.
+        served = _load_served_tree(config_dir, disable_effects=False)
+        undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
+        if undelivered:
+            _emit_custom_firehose_findings(undelivered, None, strict=strict,
+                                           findings=findings)
+        _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings,
+                       key_blocks, generated)
+    except SystemExit as exc:
+        code = _exit_code_of(exc)
+    return ValidateOutcome(code, findings, generated[0] if generated else None,
+                           policy_error)
+
+
 def _run(args: argparse.Namespace, findings: list[str], *,
          key_verdict: bool = True,
          mount_lists: list[tuple[str, dict]] | None = None,
@@ -1924,37 +2132,19 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     except ParseTreeError as exc:
         parse_tree_failure_exit(exc, args.config_dir)
 
-    # Load policy (webhook domain allowlist).
-    # #1556: a supplied-but-unusable --policy is a caller error, not "no
-    # policy". Exiting 2 here rather than proceeding with an empty allowlist
-    # is the whole point — the previous behaviour generated routes with SSRF
-    # domain checking off and said nothing.
-    # #2901 (ADR-036 §6): a policy may name the oldest generator it accepts;
-    # an older one would judge by rules the policy's author did not mean.
+    # --validate is one function, shared with validate-config's routes row
+    # (#3788): everything below this line that a --validate run does is in
+    # it, and nothing of a --validate run is decided after it.
+    if args.validate:
+        sys.exit(validate_tree(
+            args.config_dir, strict=args.strict, policy=args.policy,
+            mount_root=args.mount_root, key_verdict=key_verdict,
+            credential_scope=credential_scope, findings=findings).exit_code)
+
     try:
-        policy = resolve_policy(args.policy)
+        policy = _resolve_inputs(args.policy, args.mount_root)
     except PolicyInputError as exc:
         die_caller_error(str(exc))
-    # #1560: written into every rendered `<field>_file` path.
-    mount_root_problem = mount_root_value_problem(args.mount_root)
-    if mount_root_problem is not None:
-        die_caller_error(f"ERROR: {mount_root_problem}")
-    # #3206 (ADR-036 §12): the platform probe set is read from the shipped
-    # rules ConfigMap through da-crdecode and `da-read prometheus-rules`.
-    # Without them that is a named rc 2 here, before any work — not a crash
-    # in the first guard that asks, and never another reading.
-    try:
-        platform_alert_identities()
-    except _lib_consumer_read.ConsumerReadError as exc:
-        die_caller_error(
-            "ERROR: cannot read the shipped platform rules — their ConfigMap is "
-            "read the way kubectl does (da-crdecode) and its rule files the way "
-            "Prometheus' rule loader does (da-read prometheus-rules); stopping "
-            "before any work (nothing was written): "
-            + _lib_consumer_read.error_text(exc))
-    allowed_domains = policy.allowed_domains or []
-    if allowed_domains:
-        print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
 
     # #1616: load the base config HERE, not inside _assembled_output_mode.
     # ⛔ Measured with the load left at its original site (after the tenant
@@ -1989,119 +2179,23 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         except ValueError as exc:
             _assembly_failed(exc, "nothing was generated or written")
 
-    # Load tenant configs (routing + dedup + schema warnings + enforced routing)
-    # #1460: the tree carries the record of the files that did not parse, and
-    # that record decides whether anything below may call itself a result.
-    tree = load_tenant_tree(args.config_dir, strict_policies=args.strict,
-                            secrets=policy.secret_binding(args.mount_root),
-                            allowed_domains=allowed_domains)
-    routing_configs = tree.routing_configs
-    dedup_configs = tree.dedup_configs
-    schema_warnings = tree.schema_warnings
-    enforced_routing = tree.enforced_routing
-    # #2766: --findings-json holds exactly the findings this run PRINTS — a
-    # refusal prints its own lines and not the schema stream, so the stream
-    # joins only once no refusal has stopped the run.
-    _refuse_unreadable_tenant_files(tree, findings)
-    _refuse_duplicate_tenants(tree, findings)
-    _refuse_routing_tree_errors(tree, findings)
-    _refuse_invalid_tenant_ids(tree, findings)
-    _refuse_field_type_errors(tree, findings)
-    findings.extend(schema_warnings)
-    # #1560 ⑤-b: a credential a file writes out is judged on that file's own
-    # value, before any layer is merged — after the refusals (a refused tree
-    # is judged by nothing else), before any early exit (a tree with nothing
-    # to render, an unbound routing profile, is judged too). Blocking under
-    # --validate (blocking_generation_errors) and printed in every mode.
-    credential_lines = credential_findings(tree, scope=credential_scope)
-    findings.extend(credential_lines)
-    # ADR-038 §5: after the refusals (a refused tree is judged by nothing
-    # else), before the exits below that end the run short of
-    # `_validate_mode` ("No tenants found", "No valid routes …"): a tree with
-    # nothing to render is judged too.
-    key_blocks: list[str] = []
-    if args.validate and key_verdict:
-        key_blocks = _report_key_verdict(args.config_dir, findings)
-
-    has_routing = bool(routing_configs)
-    has_dedup = bool(dedup_configs)
-
-    if not has_routing and not has_dedup and not enforced_routing:
-        # #2341: "nothing to render" can be the result of refusing every
-        # tenant (an unreadable `_routing`; an invalid tenant id is refused
-        # above, ADR-035 D3): those lines are blocking here as everywhere else — `--validate` and
-        # `--strict` fail on them, render mode prints them and exits 0.
-        for w in schema_warnings + credential_lines:
-            print(safe_label(w), file=sys.stderr)
-        errors = ((blocking_generation_errors(schema_warnings + credential_lines)
-                   if args.validate else [])
-                  + (_policy_errors(schema_warnings) if args.strict else [])
-                  + key_blocks)
-        if errors:
-            print(f"FAIL: {len(errors)} error(s) found and nothing to render:",
-                  file=sys.stderr)
-            for e in errors:
-                print(safe_label(e), file=sys.stderr)
-            sys.exit(EXIT_VIOLATION)
-        if not (writes_a_file_mode and not args.validate):
-            print("No tenants found in config directory.")
-            sys.exit(EXIT_OK)
-        # #1211 gap 2: an output mode still writes the render — the output is
-        # always merge(source, conf.d), here the source plus the platform
-        # routes. --apply
-        # keeps the early exit: an empty tree is more often a wrong
-        # --config-dir than an intent to strip the cluster's routing.
-        print("No tenants found in config directory; the output keeps the "
-              "base's own content and the platform routes only.")
-
-    _print_config_summary(routing_configs, dedup_configs, enforced_routing)
-
-    # Generate routes + receivers (enforced route inserted first)
-    routes, receivers, route_warnings = generate_routes(
-        routing_configs, allowed_domains=allowed_domains,
-        enforced_routing=enforced_routing, tenants=dedup_configs,
-        secrets=policy.secret_binding(args.mount_root))
-
-    # Generate per-tenant severity dedup inhibit rules
-    inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
-
-    # Collect all warnings
-    all_warnings = schema_warnings + credential_lines + route_warnings + dedup_warnings
-    findings.extend(route_warnings + dedup_warnings)
-    for w in all_warnings:
-        # #1538: escape here, not in `all_warnings` — the same list is handed
-        # to --validate / --json consumers, which must stay raw.
-        print(safe_label(w), file=sys.stderr)
-
-    # A tree WITH tenants that renders nothing is refused in every mode (a
-    # tenant whose only receiver is unusable must not vanish from the
-    # output). Only a tree with no tenant at all reaches an output mode with
-    # nothing generated (#1211 gap 2: the base loses the earlier run's part).
-    if not routes and not inhibit_rules and (
-            dedup_configs or not (writes_a_file_mode and not args.validate)):
-        print("No valid routes or inhibit rules generated.")
-        sys.exit(EXIT_VIOLATION)
+    generated = _scan_and_generate(
+        args.config_dir, findings, policy=policy, mount_root=args.mount_root,
+        strict=args.strict, validate=False, assembles_file=bool(writes_a_file_mode),
+        credential_scope=credential_scope)
+    tree, routes, receivers, inhibit_rules, all_warnings = generated
 
     # #1211: a tenant's served page-mode custom alerts with no delivery child
     # under the custom route fall to the firehose receiver. Only a mode that
     # assembles the config it writes (--output-configmap, --output-alertmanager,
-    # --apply) knows that receiver — it judges there; --validate says it
-    # could not check. The same modes judge the watchdog-heartbeat receiver.
+    # --apply) knows that receiver — it judges there. The same modes judge
+    # the watchdog-heartbeat receiver.
     served = _load_served_tree(args.config_dir, disable_effects=False)
     undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
-    assembles = (writes_a_file_mode or args.apply) and not args.validate
-    if undelivered and not assembles:
-        _emit_custom_firehose_findings(undelivered, None, strict=args.strict,
-                                       findings=findings)
     # A real base: the operator's --base-config, or the cluster's on --apply.
-    assembled_judge = (_assembled_judge(
+    assembled_judge = _assembled_judge(
         undelivered, strict=args.strict, findings=findings,
         real_base=args.apply or args.base_config is not None)
-        if assembles else None)
-
-    # Validate mode
-    if args.validate:
-        _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings, key_blocks)
 
     # #2279: two generated receivers with one name. Blocking in EVERY mode and
     # with or without --strict — Alertmanager refuses such a config, and a

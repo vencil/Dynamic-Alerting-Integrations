@@ -130,17 +130,16 @@ def test_a_valid_id_still_renders(tmp_path, tid):
 @pytest.mark.parametrize("tid", ["UPPER", "bad tenant"])
 def test_the_tree_skips_it_and_validate_config_lists_it(tmp_path, tid, body):
     """The library still renders nothing for the id (the generator's refusal
-    is main()'s), and validate-config reports it through the blocking
-    `WARN … skipping` line it already FAILs on — from the same record, for a
-    body that is not a mapping too."""
+    is `validate_tree`'s), and validate-config's routes row carries that
+    refusal — for a body that is not a mapping too."""
     d = _tree(tmp_path, tid, _BODIES[body])
     tree = load_tenant_tree(str(d))
     assert tid not in tree.routing_configs and tid not in tree.dedup_configs
     assert tree.invalid_tenant_ids == [tid]
     assert "t-ok" in tree.routing_configs
-    row = vc.check_schema(str(d))
+    row = vc.check_routes(str(d))
     assert row["status"] == vc.FAIL, row
-    assert any(f"x.yaml: tenant id {shown_value(tid)} is not a valid tenant id" in m and "skipping" in m
+    assert any(f"x.yaml: tenant id {shown_value(tid)} is not a valid tenant id" in m
                for m in row.get("details", [])), row
     # #3703: the finding names the declaring file; its `tenant` is the id
     # only when the id is name-like (`tenant_id_field`, both branches).

@@ -86,7 +86,7 @@ find . -type f | sort
 
 ## 練習 2：配置 Tenant 閾值
 
-把每個租戶檔換成下面的內容（開頭的註解可留可刪）。每一段都保留 init 產生的 `tenants:` → `<租戶名稱>:` 兩層外框：少了這兩層，驗證會找不到任何租戶，卻照樣顯示通過（見練習 3 的提醒）。
+把每個租戶檔換成下面的內容（開頭的註解可留可刪）。每一段都保留 init 產生的 `tenants:` → `<租戶名稱>:` 兩層外框：少了這兩層，驗證會找不到任何租戶，報告是 FAIL（見練習 3 的提醒）。
 
 **conf.d/prod-mariadb.yaml** — 電商資料庫：
 
@@ -243,7 +243,7 @@ docker run --rm \
   validate-config --config-dir /data/conf.d
 ```
 
-預期輸出（照練習 1、2 做完之後的實測結果）：
+預期輸出（節錄示意；實際的報告有更多檢查列）：
 
 ```
 ============================================================
@@ -253,11 +253,11 @@ docker run --rm \
 [PASS] yaml_syntax
        8 files parsed successfully
 
-[PASS] schema
-       No schema warnings
-
 [PASS] routes
-       5 routes, 5 receivers, 5 inhibit_rules
+       ...
+       Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
+       ...
+       OK: all configs valid
 
 [PASS] profiles
        5 tenants scanned, 0 profile refs, 0 profiles defined in _profiles.yaml
@@ -269,17 +269,17 @@ docker run --rm \
        5 tenant(s), each declared in exactly one file
 
 ------------------------------------------------------------
-  Total: 6 checks | 6 pass | 0 warn | 0 fail
+  Total: 5 checks | 5 pass | 0 warn | 0 fail
 ------------------------------------------------------------
   Result: PASS
 ```
 
-結束碼是 `0`：只有任一檢查項為 `fail` 時才會非零（`1`），WARN 不會讓它失敗，所以 CI 直接呼叫即可，不需要另加旗標。
+結束碼是 `0`：只有任一檢查項為 `fail` 時才會非零（`1`；呼叫端錯誤、或路由面無法當作輸入的樹形是 `2`），WARN 不會讓它失敗，所以 CI 直接呼叫即可，不需要另加旗標。
 
-- `schema` 這一列也檢查 `_routing_profile` 的引用與 domain policy：少了 `_routing_profiles.yaml`，這裡會出現 `_routing_profile references unknown profile`；少了 `_domain_policy.yaml`，finance 的約束就不存在，不會有任何提示。
+- `routes` 這一列就是 `generate-routes --validate`，所以也檢查 `_routing_profile` 的引用與 domain policy：少了 `_routing_profiles.yaml`，這裡會出現 `_routing_profile references unknown profile`；少了 `_domain_policy.yaml`，finance 的約束就不存在，不會有任何提示。
 - `profiles` 這一列管的是閾值 profile（`_profiles.yaml` 與租戶檔的 `_profile`），不是 routing profile，所以練習 2 做完它仍是 `0 profiles defined in _profiles.yaml`。
 
-⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`、`routes` 顯示 `0 routes`，代表你把練習 2 的片段貼成檔案時漏掉了 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時每一項都是 PASS，但其實什麼都沒驗到。
+⚠️ 如果 `tenant_uniqueness` 顯示 `0 tenant(s)`，代表你把練習 2 的片段貼成檔案時漏掉了 `tenants:` 與 `<租戶名稱>:` 兩層外框。這時報告是 FAIL：`routes` 與 `unread_keys` 兩列點名那些鍵 `unread … (tenant_file_top_level)`。
 
 **檢查點**：你能解釋為什麼 `group_wait: "2s"` 會在 `routes` 出現 WARN，而且實際生效的是 5s 嗎？（提示：guardrail 範圍是 5s–5m，低於下限的值會被夾到 5s，只警告、不失敗）
 

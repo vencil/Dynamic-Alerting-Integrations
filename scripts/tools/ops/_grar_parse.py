@@ -1863,9 +1863,10 @@ def load_tenant_tree(
     schema_warnings.extend(_validate_profile_refs(parsed))
 
     # #2989: a `_routing_enforced.match` that is not a list. The line carries
-    # "WARN … skipping", so `--validate` (and validate-config's schema row)
-    # fail on it; render mode prints it and renders without NOC. (#2906: a
-    # non-boolean `enabled` is a field-type finding, above — refused whole.)
+    # "WARN … skipping", so `--validate` (and with it validate-config's
+    # routes row) fails on it; render mode prints it and renders without
+    # NOC. (#2906: a non-boolean `enabled` is a field-type finding, above —
+    # refused whole.)
     schema_warnings.extend(parsed.get("enforced_errors", []))
     # #2245: `_routing_defaults.routes` — dropped at parse, same blocking line.
     # #2904: routing written where nothing reads it (routing_in_unread_location)

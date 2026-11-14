@@ -243,7 +243,7 @@ def test_smoke_fails_when_recipe_preview_is_broken(tmp_path, preview, needle):
 
 def test_smoke_fails_when_the_generator_container_cannot_judge(tmp_path):
     """#2903: tenant-api answers, but its generator container does not (a
-    different uid, not running, no amtool) — every write would answer 503,
+    different uid, not running, no da-read) — every write would answer 503,
     so the stack is not working even though every page loads."""
     proc, _ = _run_smoke(tmp_path, {**GOOD_PREVIEW, "generator": "0"})
     assert proc.returncode == 1, proc.stdout + proc.stderr

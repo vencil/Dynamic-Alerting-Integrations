@@ -61,9 +61,6 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         # tenant-triggered inhibit must not suppress a platform alert
         "assert_platform_alerts_not_tenant_silenceable",
         "assert_watchdog_inhibit_immunity",
-        # #2311: --validate reaches it via evaluate_generated_config now;
-        # validate_config still reads it as `gen.blocking_generation_errors`
-        "blocking_generation_errors",
         "check_domain_policies",
         "find_tenant_silenceable_platform_inhibits",
         "find_ungated_equal_label_inhibits",  # #1132 finder
