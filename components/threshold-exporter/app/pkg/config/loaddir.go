@@ -134,6 +134,10 @@ type LoadReport struct {
 	// the exporter's WARN reads (ScheduledReservedEntries), with the file
 	// named. Set by LoadDirFromScan only, as ValueProblems; nil when none.
 	ScheduledReserved []ScheduledReservedEntry
+	// ScheduleProblems (#3834): ScheduledReserved judged as ValueProblems
+	// are — in the file and layer that writes each, only where the exporter
+	// reads the key (LayerScheduleProblems). Set by LoadDirFromScan only.
+	ScheduleProblems []LayerValueProblem
 }
 
 // LoadDirReport is LoadDir, also naming the files that contribute no tenant
@@ -209,6 +213,7 @@ func LoadDirFromScan(scan *TreeScan, dir string, logger *log.Logger) (cfg *Thres
 	}
 	rep.ValueProblems = LayerValueProblems(scan, built)
 	rep.ScheduledReserved = scheduledReservedOfFiles(built.FileConfigs)
+	rep.ScheduleProblems = LayerScheduleProblems(scan, built)
 	return cfg, rep, writtenKeys(scan, built), nil
 }
 
