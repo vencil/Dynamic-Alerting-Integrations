@@ -113,9 +113,9 @@ def test_a_tree_the_verdict_cannot_judge_is_not_checked_not_a_pass(tmp_path):
     assert r["hint"] == vc._NO_ALERT_NOT_CHECKED_HINT, r
 
 
-def test_no_verdict_from_unread_keys_is_not_judged_again(tmp_path, monkeypatch):
-    """`main` 在 `unread_keys` 沒給出判決時傳 judge=False：不再跑一次判決（原因那一列已報），
-    這一列寫 not checked。"""
+def test_no_verdict_from_the_routes_row_is_not_judged_again(tmp_path, monkeypatch):
+    """`main` 在 `routes` 列判過卻沒給出判決時傳 judge=False：不再跑一次判決（原因那一列
+    已報），這一列寫 not checked。"""
     import _lib_key_verdict
 
     def must_not_run(*_a, **_k):

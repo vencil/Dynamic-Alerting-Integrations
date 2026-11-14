@@ -210,9 +210,8 @@ modules:
     covered:
       - _validate_url_scheme
     excluded:
+      transport_error_text: "Formats one exception's text (#3519); each branch (non-HTTP reply cut to one line, connection error kept, with_type) pinned by example, and against a real non-HTTP peer, in tests/shared/test_transport_errors_guard.py"
       http_get_json: "I/O-bound; covered by integration via tools that consume it"
-      http_post_json: "I/O-bound; same as http_get_json"
-      http_request_with_retry: "I/O + retry policy; covered by retry-specific integration tests"
       query_prometheus_instant: "I/O-bound; thin wrapper over http_get_json"
       query_prometheus_range: "I/O-bound; thin wrapper over http_get_json (r3 W1 fetch-core consolidation)"
       probe_health: "I/O-bound; thin urlopen probe over _validate_url_scheme (r3 W2 health-probe consolidation)"
