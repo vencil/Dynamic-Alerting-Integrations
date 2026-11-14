@@ -110,6 +110,27 @@ def test_a_key_only_listed_in_optional_overrides_deploys_nothing(tmp_path, pack)
     assert "0 default-armed threshold(s) of 0 deployed pack(s)" in r["details"][0]
 
 
+@pytest.mark.parametrize("pack", sorted(_ARMED))
+def test_a_key_written_as_null_deploys_nothing(tmp_path, pack):
+    """`defaults:` 底下寫成 null 的鍵，exporter 載入時整個丟掉（dropNullThresholds），
+    等於沒宣告：不算這個 pack 已部署的證據。"""
+    r = vc.check_unsupplied_defaults(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n" + "".join(f"  {k}: null\n" for k in _ARMED[pack])}))
+    assert r["status"] == vc.PASS, r
+    assert "0 default-armed threshold(s) of 0 deployed pack(s)" in r["details"][0]
+
+
+@pytest.mark.parametrize("pack,key", [(p, k) for p, k in _ARMED_PAIRS if p in _MULTI])
+def test_a_key_written_as_null_is_not_supplied(tmp_path, pack, key):
+    """同一個 pack 其他鍵有值（pack 已部署）、這個鍵寫成 null：exporter 不為它宣告值，
+    所以要被點名，而不是當成已供給。"""
+    others = [k for k in _ARMED[pack] if k != key]
+    r = vc.check_unsupplied_defaults(_tree(tmp_path, {
+        "_defaults.yaml": _defaults(others) + f"  {key}: null\n"}))
+    assert r["status"] == vc.WARN, r
+    assert _named(r) == [key]
+
+
 def test_a_pack_with_no_evidence_is_not_judged(tmp_path):
     """pack 未部署：root 只帶一個 pack 的鍵、沒有租戶宣告 db_type → 其他 pack 的鍵不點名。"""
     pack = _MULTI[0]

@@ -432,8 +432,8 @@ class TestTriggerCoversEveryRootPlatformFile:
     （`LoadRootPlatformProfiles`）與 `tenants:` overlay（`platform_overlay.go`），
     所以只改 `_platform.yaml` 的 PR 也必須觸發這支 workflow。
 
-    `tests/ops/test_ci_path_filter_coverage.py` 只掃 dorny/paths-filter 的
-    workflow，這支用原生 `on.pull_request.paths`，不在它的視野裡。
+    `tests/ops/test_ci_path_filter_coverage.py` 的 invariant 4 只問「workflow
+    執行的 `scripts/**` 有沒有列在 `on.pull_request.paths`」，不問資料檔。
     """
 
     @staticmethod

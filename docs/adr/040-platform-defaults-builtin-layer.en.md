@@ -218,11 +218,15 @@ None of the three keys the tenant wrote is served: `pg_connections` and `pg_repl
 
 ```
 container_cpu_throttle           25  warning    ← built-in layer
+es_disk_usage_percent            85  warning    ← built-in layer
+es_heap_usage_percent            85  warning    ← built-in layer
 mysql_connection_usage_percent   80  warning    ← built-in layer
 mysql_replication_lag            30  warning    ← built-in layer
+oracle_tablespace_used_percent   85  warning    ← built-in layer
 pg_connections                   70  warning    ← tenant override
 pg_replication_lag               30  warning    ← built-in layer
 pg_replication_lag_critical      60  critical   ← the base has a built-in value, so the tenant's critical is served
+rabbitmq_node_mem_percent        90  warning    ← built-in layer
 redis_connected_clients        1000  warning    ← root layer
 ```
 
@@ -234,11 +238,11 @@ redis_connected_clients        1000  warning    ← root layer
 
   | Tree | Tenants | Rows before → after |
   |:--|:--|:--|
-  | The repo's development sample tree (`components/threshold-exporter/config/conf.d`) | 5 | 95 → 95 |
-  | `try-local/seed/conf.d` | 2 | 9 → 19 |
-  | init with `mariadb,kubernetes` | 1 | 10 → 12 |
+  | The repo's development sample tree (`components/threshold-exporter/config/conf.d`) | 5 | 105 → 105 |
+  | `try-local/seed/conf.d` | 2 | 9 → 27 |
+  | init with `mariadb,kubernetes` | 1 | 10 → 16 |
   | init with every rule pack | 2 | 98 → 98 |
-  | init with `redis` only | 2 | 8 → 22 |
+  | init with `redis` only | 2 | 8 → 30 |
   | The example above | 1 | 1 → 11 |
 
 - **An expired `disable` starts to lapse.** For a key with no root-layer value, the `expires:` of a `"disable"` is not looked at today, so it is off for good (ADR-038 decision 8). Once the built-in layer gives the key a value it behaves like a key with a root-layer value: the `disable` lapses on expiry, and the base row and its dimensional rows come back.

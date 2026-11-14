@@ -2291,7 +2291,12 @@ def check_unsupplied_defaults(config_dir: str) -> dict[str, object]:
         raw = load_confd_file(config_dir, str(carrier), default={}) if carrier is not None else {}
         block = raw.get("defaults") if isinstance(raw, dict) else None
         listed = raw.get("optional_overrides") if isinstance(raw, dict) else None
-        valued = {str(k).partition("{")[0] for k in (block if isinstance(block, dict) else {})}
+        # A key written as null is not declared at all: the exporter drops it
+        # from `defaults:` before anything reads it (dropNullThresholds), so
+        # it is neither evidence of its pack nor a supplied value.
+        valued = {str(k).partition("{")[0]
+                  for k, v in (block.items() if isinstance(block, dict) else ())
+                  if v is not None}
         written = sorted(
             valued | {k for k in (listed if isinstance(listed, list) else []) if isinstance(k, str)})
         spell = tv_key_spellings(written)

@@ -269,14 +269,12 @@ The defect was never "a skipped required check satisfies branch protection";
 it was `detect-changes` answering "not needed" for a suite that was needed.
 Same #1368 shape, one level up.
 
-⛔ The fix is a catch-all rather than "add those paths" because of this
+⛔ The fix was "run on every PR" rather than "add those paths" because of this
 module: it reads the WHOLE tracked tree, so no filter NARROWER than everything
 can express its input set — any such filter is a guess that is wrong by
-construction. ci.yml's `python` filter now carries `**`, pinned by
-`test_python_tests_run_cannot_be_path_skipped`; the enumerated entries stay
-beside it because tests/ops/test_ci_path_filter_coverage.py asks its coverage
-questions against the enumerated view only. Not every entry is pinned there
-(see the ⚠️ note above the catch-all in ci.yml).
+construction. `python-tests-run` first got a `**` catch-all and then (#3756)
+lost its path gate altogether, with every other required leg;
+tests/ops/test_ci_aggregate_gate_contract.py holds that no gate comes back.
 
 ⛔ COUNTS. This module does not say how many of anything the tree holds TODAY.
 A count that survives here is ANCHORED to the commit or ticket it was taken on

@@ -148,7 +148,7 @@ CI=true npm test                         # CI 模式（1 retry, 1 worker）
 
 ## CI 對應
 
-GitHub Actions：`.github/workflows/ci.yml` 的 `smoke-tests-run` job，結果由 required check `Smoke Tests (Chromium)`（aggregate gate `smoke-tests`）回報。觸發：push to main 一律跑；PR 只在 `ci.yml` 的 `e2e` path filter 命中時跑（路徑以該 filter 為準），沒命中時 gate 判通過（[#1428](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1428)）。spec lint（A-13）仍在 `.github/workflows/playwright.yml`。本目錄全部以 `--grep-invert @visual` 跑（`npm test`）；視覺基線由 `visual-baseline.yaml` 的 `workflow_dispatch` 手動更新。
+GitHub Actions：`.github/workflows/ci.yml` 的 `smoke-tests-run` job，結果由 required check `Smoke Tests (Chromium)`（aggregate gate `smoke-tests`）回報。觸發：push to main 與每支 PR 都跑（[#3756](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3756) 起不設 path filter）；`smoke-tests-run` 不是 `success` 時 gate 判紅。spec lint（A-13）仍在 `.github/workflows/playwright.yml`。本目錄全部以 `--grep-invert @visual` 跑（`npm test`）；視覺基線由 `visual-baseline.yaml` 的 `workflow_dispatch` 手動更新。
 
 ## Debug
 

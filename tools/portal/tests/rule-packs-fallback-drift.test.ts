@@ -42,10 +42,9 @@
  * `liveness` pack was missing and 9 packs had `defaults` desc/unit/value drift.
  * PR-3 fixed another: #1215 added `mysql_replication_lag` to the MariaDB
  * defaults and the fallback never got it — this gate would have caught that at
- * the time, but its CI leg is path-gated on tools/portal/** and #1215 touched
- * no portal file, so it never ran. ci.yml's `portal` filter now also watches
- * docs/assets/platform-data.json; without that this gate cannot fire for the
- * very change class it exists to guard.
+ * the time, but its CI leg was path-gated on tools/portal/** then and #1215
+ * touched no portal file, so it never ran. The leg runs on every PR since
+ * #3756, so the gate fires for the change class it exists to guard.
  *
  * This gate FAILS if the mirror ever drifts again. It reads the fallback
  * OFFLINE (window.__PLATFORM_DATA unset → the baked-in object) and the

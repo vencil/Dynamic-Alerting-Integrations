@@ -34,9 +34,6 @@ import {
 } from '../src/interactive/tools/migration-simulator.jsx';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-// Trailing slash matters: tests/ops/test_ci_path_filter_coverage.py only
-// recognizes the '../../../' repo-root idiom — with '../../..' this file's
-// out-of-tree reads would be invisible to the ci.yml portal-filter guard.
 const repoRoot = resolve(__dirname, '../../../');
 
 /** Shipped platform-default threshold keys across all rule packs → their unit. */
