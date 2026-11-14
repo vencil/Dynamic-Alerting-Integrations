@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.key-verdict/v2",
+  "schema": "da-guard.key-verdict/v3",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
   "blocks": true,
@@ -20,8 +20,7 @@
         "dead_entries": [],
         "value": [
           "a"
-        ],
-        "served": null
+        ]
       },
       {
         "key": "_profile",
@@ -37,8 +36,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "gold",
-        "served": null
+        "value": "gold"
       },
       {
         "key": "_routng",
@@ -52,8 +50,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "x",
-        "served": null
+        "value": "x"
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -69,8 +66,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80,
-        "served": 80
+        "value": 80
       },
       {
         "key": "owner_tag",
@@ -86,8 +82,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "x",
-        "served": null
+        "value": "x"
       }
     ],
     "db-b": [
@@ -105,8 +100,7 @@
         "dead_entries": [],
         "value": [
           "a"
-        ],
-        "served": null
+        ]
       },
       {
         "key": "_profile",
@@ -122,8 +116,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "gold",
-        "served": null
+        "value": "gold"
       },
       {
         "key": "_routng",
@@ -137,8 +130,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "x",
-        "served": null
+        "value": "x"
       },
       {
         "key": "mysql_connection_usage_percent",
@@ -154,8 +146,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 80,
-        "served": 80
+        "value": 80
       },
       {
         "key": "owner_tag",
@@ -169,8 +160,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "x",
-        "served": null
+        "value": "x"
       }
     ]
   },

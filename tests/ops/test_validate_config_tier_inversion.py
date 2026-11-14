@@ -125,7 +125,7 @@ def test_a_key_the_map_defers_is_not_judged(tmp_path):
 def test_unreadable_reading_is_not_checked(tmp_path, monkeypatch):
     def boom(*a, **kw):
         raise vc.DaGuardNotFoundError("no da-guard")
-    monkeypatch.setattr(vc, "load_served_tree", boom)
+    monkeypatch.setattr(vc, "load_served_schedules", boom)
     r = vc.check_tier_inversion(str(tmp_path))
     assert r["status"] == vc.WARN and r["details"][0].startswith("not checked:"), r
     # Not the advice to edit thresholds: nothing was judged.
