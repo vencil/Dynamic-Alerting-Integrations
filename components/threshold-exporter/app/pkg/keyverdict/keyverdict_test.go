@@ -354,3 +354,77 @@ func TestJudge_ATenantFilesStrayTopLevelKeyIsOneErrorOnTheFile(t *testing.T) {
 		t.Fatalf("new blocks %+v, want c.yaml's alone", nb)
 	}
 }
+
+// #3881: a reserved key a subtree `_defaults.yaml` writes is one unread
+// error per file and key, reason subtree_not_applied, naming the judged
+// tenants that inherit the file — whether or not a tenant sets the key
+// itself — and it blocks. No tenant's verdict row carries it.
+func TestJudge_AReservedKeyInSubtreeDefaultsIsOneErrorPerFile(t *testing.T) {
+	t.Parallel()
+	w := func(file string) config.SubtreeReservedWrite {
+		return config.SubtreeReservedWrite{File: file, Value: "all"}
+	}
+	in := Input{
+		Effective: map[string]EffectiveTenant{
+			"t1": {Config: map[string]any{"_silent_mode": "warning"},
+				Sources: map[string]config.KeySource{"_silent_mode": {Layer: config.KeyLayerTenant, File: "team/t1.yaml"}}},
+			"t2": {Config: map[string]any{}},
+		},
+		Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{"_silent_mode": {Exporter: true}}}},
+		SubtreeReserved: map[string]map[string][]config.SubtreeReservedWrite{
+			"t1": {"_silent_mode": {w("team/_defaults.yaml")}},
+			"t2": {"_silent_mode": {w("team/_defaults.yaml"), w("team/sub/_defaults.yaml")},
+				"_severity_dedup": {w("team/sub/_defaults.yaml")}},
+			// Not a judged tenant (in neither Served nor Effective): left out.
+			"t9": {"_silent_mode": {w("other/_defaults.yaml")}},
+		},
+	}
+	tree := Judge(in)
+	var got []string
+	for _, f := range tree.Findings {
+		got = append(got, strings.Join([]string{f.Severity, f.Kind, f.Key, deref(f.File), deref(f.Reason),
+			boolStr(f.Blocks)}, " ")+" "+strings.Join(f.Tenants, ","))
+	}
+	want := []string{
+		"error unread _silent_mode team/_defaults.yaml subtree_not_applied true t1,t2",
+		"error unread _severity_dedup team/sub/_defaults.yaml subtree_not_applied true t2",
+		"error unread _silent_mode team/sub/_defaults.yaml subtree_not_applied true t2",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("findings %q, want %q", got, want)
+	}
+	if !tree.Blocks {
+		t.Fatal("tree.Blocks false")
+	}
+	// t1's own `_silent_mode` is still read: the finding is the file's.
+	if v := one(t, tree, "t1", "_silent_mode"); v.Verdict != Read {
+		t.Errorf("t1's own key: %+v, want read", v)
+	}
+	if len(tree.Keys["t2"]) != 0 {
+		t.Errorf("t2 rows %+v, want none: the key is in no tenant's config", tree.Keys["t2"])
+	}
+	// None of the blocks is a tenant's own entry (a defaults file it inherits).
+	for _, b := range Blocks(tree) {
+		if b.Own || b.Reason != ReasonSubtreeNotApplied {
+			t.Errorf("block %+v: want not own, reason subtree_not_applied", b)
+		}
+	}
+	// A write that leaves the key where it was makes nothing new — a tenant
+	// added under the same file included; one that adds the key to a file does.
+	all := func(string) bool { return true }
+	before := Judge(Input{Effective: map[string]EffectiveTenant{"t1": in.Effective["t1"]},
+		SubtreeReserved: map[string]map[string][]config.SubtreeReservedWrite{
+			"t1": {"_silent_mode": {w("team/_defaults.yaml")}}}})
+	var nb []string
+	for _, b := range NewBlocks(before, tree, all) {
+		nb = append(nb, b.File+" "+b.Key+" "+b.Tenant)
+	}
+	if !reflect.DeepEqual(nb, []string{"team/sub/_defaults.yaml _severity_dedup t2", "team/sub/_defaults.yaml _silent_mode t2"}) {
+		t.Fatalf("new blocks %q, want the two the deeper file adds", nb)
+	}
+	// Control: without SubtreeReserved the same readings give no finding.
+	in.SubtreeReserved = nil
+	if tree := Judge(in); len(tree.Findings) != 0 || tree.Blocks {
+		t.Fatalf("control: findings %+v blocks %v", tree.Findings, tree.Blocks)
+	}
+}
