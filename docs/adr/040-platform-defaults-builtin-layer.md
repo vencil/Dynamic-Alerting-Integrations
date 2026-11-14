@@ -224,8 +224,11 @@ redis_connected_clients      1000  warning
 
 ```
 container_cpu_throttle           25  warning    ← 內建層
+es_disk_usage_percent            85  warning    ← 內建層
+es_heap_usage_percent            85  warning    ← 內建層
 mysql_connection_usage_percent   80  warning    ← 內建層
 mysql_replication_lag            30  warning    ← 內建層
+oracle_tablespace_used_percent   85  warning    ← 內建層
 pg_connections                   70  warning    ← 租戶覆寫
 pg_replication_lag               30  warning    ← 內建層
 pg_replication_lag_critical      60  critical   ← 基底有內建值，租戶的 critical 送出
@@ -240,11 +243,11 @@ redis_connected_clients        1000  warning    ← 根層
 
   | 樹 | 租戶數 | 列數 前 → 後 |
   |:--|:--|:--|
-  | repo 的開發範例樹（`components/threshold-exporter/config/conf.d`） | 5 | 95 → 95 |
-  | `try-local/seed/conf.d` | 2 | 9 → 19 |
-  | init，選 `mariadb,kubernetes` | 1 | 10 → 12 |
+  | repo 的開發範例樹（`components/threshold-exporter/config/conf.d`） | 5 | 100 → 100 |
+  | `try-local/seed/conf.d` | 2 | 9 → 25 |
+  | init，選 `mariadb,kubernetes` | 1 | 10 → 15 |
   | init，選全部規則包 | 2 | 98 → 98 |
-  | init，只選 `redis` | 2 | 8 → 22 |
+  | init，只選 `redis` | 2 | 8 → 28 |
   | 上方範例 | 1 | 1 → 10 |
 
 - **過期的 `disable` 開始失效。** 根層沒有值的鍵，`"disable"` 的 `expires:` 現行不看，等於永久關閉（ADR-038 決定 8）。內建層給值之後，這些鍵比照根層有值的鍵：`disable` 過期即失效，基底列與它的維度列一起回來。
