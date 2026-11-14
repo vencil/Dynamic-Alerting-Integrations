@@ -197,9 +197,10 @@ jobs:
           # promtool findings that register carries are handled, not unhandled noise.
           # ⛔ WHICH ids are waived, on what evidence and until when is NOT restated
           # here — read the register. NEW promtool CVEs or EXPIRED entries are NOT in
-          # the file → they still surface here (early warning preserved). Empty →
+          # the file → they still surface here (early warning preserved). da-tools
+          # carries its own register for the bundled amtool, same rules. Empty →
           # no-op for every other self-built image.
-          trivyignores: ${{ matrix.name == 'recipe-preview' && 'components/recipe-preview/.trivyignore.yaml' || '' }}
+          trivyignores: ${{ matrix.name == 'recipe-preview' && 'components/recipe-preview/.trivyignore.yaml' || matrix.name == 'da-tools' && 'components/da-tools/.trivyignore.yaml' || '' }}
 
       # Shared fail-loud summarizer → emits frag-<name>.txt for the report job.
       # Same script as the scan-thirdparty job (one implementation, not two).
@@ -456,9 +457,11 @@ jobs:
       - uses: actions/checkout@v6 # for scripts/ops/summarize_trivy_cve.sh
 
       # SAME contract as the other two scan jobs (CRITICAL,HIGH + ignore-unfixed,
-      # exit-code 0 — capture, don't gate). No trivyignores: the waiver file that
-      # exists is recipe-preview's bundled promtool, which has nothing to do with
-      # these.
+      # exit-code 0 — capture, don't gate). No trivyignores, on purpose: this
+      # bucket reports what the customer is holding, so a finding in a published
+      # image stays listed (delivered-da-tools included, bundled amtool and all)
+      # until a release replaces that image. The per-image registers apply to the
+      # self-built bucket and the release gate only.
       - name: Trivy scan (JSON)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -577,7 +580,7 @@ jobs:
             nightly-cve \
             "🛡️ Nightly image scan — self-built component CVEs / build failures on main" \
             8 "self-built component" \
-            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). TWO EXCEPTIONS, both bundled upstream binaries no first-party bump touches: da-tools bundles amtool copied from the deployed Alertmanager image (lever: bump the Alertmanager pin in k8s/03-monitoring/deployment-alertmanager.yaml — the da-tools Dockerfile COPY --from ref must move with it, tests/ops/test_da_tools_amtool_pin_parity.py; #2294), and recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml). federation-audit-sidecar is logrotate on Alpine only since #1278 D1 (it used to build mtail), so a finding there is an Alpine package: bump the FROM and the image tag together. ⛔ WHAT THE RELEASE GATE DOES AND DOES NOT DO. For the five published components release.yaml scans BEFORE publishing (#1278): the image is pushed only to a candidate tag, Trivy (exit-code 1) scans that digest, and only a pass promotes it to :v<version>/:latest and lets the chart push, signing, SBOM and GitHub Release run. So a finding listed here that is still open at tag time WILL stop that component's release — nothing ships, and the fix is a patch plus a re-tag, on release night. That is why this bucket is the place to act: it is the early warning for a gate that now really blocks. And for federation-audit-sidecar / vector-projection-gate there is no tag-time scan at all — they ship inside charts and are never published — so a finding on those two sits here until someone acts on this issue (security-audit-runbook §37); the same holds for try-local-generator, the try-local demo stack's generator runtime (#2903), whose findings are Alpine / Python packages, the bundled amtool (bump the FROM and the COPY --from ref with the da-tools image's) and its da-guard (the exporter's Go: a rebuild or a pinned-dependency bump, #3530)." || rc=1
+            "for the Go/JS components we compile, a rebuild or a pinned-dependency bump clears these — start by checking whether the Dockerfile builder pins an older toolchain than CI does (that exact split hid a stdlib CVE from every green CI run in #1058). TWO EXCEPTIONS, both bundled upstream binaries no first-party bump touches: da-tools bundles amtool copied from the deployed Alertmanager image (levers: bump the Alertmanager pin in k8s/03-monitoring/deployment-alertmanager.yaml — the da-tools Dockerfile COPY --from ref must move with it, tests/ops/test_da_tools_amtool_pin_parity.py; #2294 — or an evidence-backed time-boxed entry in components/da-tools/.trivyignore.yaml), and recipe-preview bundles promtool (levers: re-pin PROM_VERSION, or an evidence-backed time-boxed entry in components/recipe-preview/.trivyignore.yaml). federation-audit-sidecar is logrotate on Alpine only since #1278 D1 (it used to build mtail), so a finding there is an Alpine package: bump the FROM and the image tag together. ⛔ WHAT THE RELEASE GATE DOES AND DOES NOT DO. For the five published components release.yaml scans BEFORE publishing (#1278): the image is pushed only to a candidate tag, Trivy (exit-code 1) scans that digest, and only a pass promotes it to :v<version>/:latest and lets the chart push, signing, SBOM and GitHub Release run. So a finding listed here that is still open at tag time WILL stop that component's release — nothing ships, and the fix is a patch plus a re-tag, on release night. That is why this bucket is the place to act: it is the early warning for a gate that now really blocks. And for federation-audit-sidecar / vector-projection-gate there is no tag-time scan at all — they ship inside charts and are never published — so a finding on those two sits here until someone acts on this issue (security-audit-runbook §37); the same holds for try-local-generator, the try-local demo stack's generator runtime (#2903), whose findings are Alpine / Python packages, the bundled amtool (bump the FROM and the COPY --from ref with the da-tools image's) and its da-guard (the exporter's Go: a rebuild or a pinned-dependency bump, #3530)." || rc=1
           # Third-party — informational. The remediation sentence is the part
           # of this alert that decides whether a reader acts or learns to ignore it,
           # so it names the levers that have ACTUALLY cleared findings here (#1243

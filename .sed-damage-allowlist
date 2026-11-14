@@ -114,6 +114,8 @@ tools/portal/src/getting-started/wizard.jsx
 # this exemption is permanent rather than one-off. NUL-byte detection still
 # applies (the allowlist only suppresses the truncation heuristic).
 components/recipe-preview/promtool.openvex.json
+# Same class, for the amtool bundled in da-tools (#3637).
+components/da-tools/amtool.openvex.json
 
 # TRK-373 / #1731: bench-probe-write-latency.yaml's Summarize step had the whole
 # probe summary computation inline as a 174-line python heredoc, a second copy of

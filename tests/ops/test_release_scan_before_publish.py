@@ -424,8 +424,14 @@ SCAN_MUTATIONS = {
 }
 
 
+def test_the_real_da_tools_register_is_accepted() -> None:
+    """The da-tools gate reads its own register (bundled amtool, #3637) and nobody else's."""
+    with_ = _scan(_load(), "release-da-tools")["with"]
+    assert with_.get("trivyignores") == "components/da-tools/.trivyignore.yaml"
+
+
 def test_the_real_recipe_preview_register_is_accepted() -> None:
-    """The one waiver the release reads today must pass rule 7 — else the mutations prove a broken rule."""
+    """A real waiver the release reads must pass rule 7 — else the mutations prove a broken rule."""
     with_ = _scan(_load(), "release-recipe-preview")["with"]
     assert with_.get("trivyignores") == "components/recipe-preview/.trivyignore.yaml"
 
