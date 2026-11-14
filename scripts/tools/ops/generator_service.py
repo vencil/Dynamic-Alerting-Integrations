@@ -901,8 +901,12 @@ class Service:
             if pidfd >= 0:
                 self.loop.remove_reader(pidfd)
                 os.close(pidfd)
+            # anything the process left running. #3923: before wait4, while
+            # the run's process is a zombie (or still running, on the
+            # exception path) and so holds its pid and group id; after wait4
+            # either number can be an unrelated process's.
+            _kill_group(pid)
             _, status, rusage = os.wait4(pid, 0)
-            _kill_group(pid)  # anything the process left running
             self.child_pid = None
             # the run's own process has been collected by wait4 above; what
             # has exited now is an orphan, and nothing is held back for it
@@ -1163,6 +1167,11 @@ class Service:
 
 
 def _kill_group(pid: int) -> None:
+    """SIGKILL the process group *pid* leads, and *pid* itself.
+
+    ⛔ #3923: only while *pid* is not yet collected (running, or a zombie):
+    once ``wait4`` has taken it, the pid and the group id are free for reuse
+    and both signals could reach an unrelated process."""
     for kill in (lambda: os.killpg(pid, signal.SIGKILL),
                  lambda: os.kill(pid, signal.SIGKILL)):
         try:

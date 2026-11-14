@@ -1508,6 +1508,69 @@ def test_an_orphan_that_ends_during_another_run_is_collected_then(tmp_path, worl
                 os.kill(orphan, signal.SIGKILL)
 
 
+# In the service process only (its forks inherit the patch, not the pid):
+# every fork's pid, every pid wait4/waitpid collects, every signal target.
+_SIGNAL_LOG = """
+import os
+_svc_pid = os.getpid()
+_log_path = os.environ["GSVC_SIGNAL_LOG"]
+def _log(event, pid):
+    if os.getpid() == _svc_pid:
+        with open(_log_path, "a", encoding="utf-8") as fh:
+            fh.write(f"{event} {pid}\\n")
+def _wrap(name, event, of_result):
+    real = getattr(os, name)
+    def wrapped(*args, **kwargs):
+        if not of_result:
+            _log(event, args[0])
+        result = real(*args, **kwargs)
+        if of_result:
+            pid = result if isinstance(result, int) else result[0]
+            if pid > 0:
+                _log(event, pid)
+        return result
+    setattr(os, name, wrapped)
+_wrap("fork", "fork", True)
+_wrap("wait4", "reap", True)
+_wrap("waitpid", "reap", True)
+_wrap("kill", "kill", False)
+_wrap("killpg", "kill", False)
+"""
+
+
+def test_no_signal_is_sent_to_a_pid_after_it_was_collected(tmp_path, world):
+    """#3923: once ``wait4`` has collected a judgement, its pid (and process
+    group id) can be reused by an unrelated process, so the kill of "what
+    the run left running" comes before that ``wait4``, while the run is a
+    zombie that holds both numbers. Checked as the order the service itself
+    made the calls in: no kill (``kill`` or ``killpg``) names a pid between
+    the reap that collected it and a later fork that returned it again."""
+    log = tmp_path / "signals-3923.log"
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   prelude=_SIGNAL_LOG, env={"GSVC_SIGNAL_LOG": str(log)}) as svc:
+        for _ in range(2):
+            status, doc = svc.validate(world["commits"]["clean"])
+            assert status == 200 and doc["result"] == "pass", doc
+    events = [line.split() for line in log.read_text(encoding="utf-8").splitlines()]
+    forked = [int(pid) for event, pid in events if event == "fork"]
+    assert len(forked) >= 2, events  # the judgements ran: something was tested
+    collected: set[int] = set()
+    late = []
+    for event, raw in events:
+        pid = abs(int(raw))
+        if event == "fork":
+            collected.discard(pid)
+        elif event == "reap":
+            collected.add(pid)
+        elif pid in collected:
+            late.append(pid)
+    assert late == [], f"signals sent to already-collected pids {late}: {events}"
+    # the run's own kill still happens, before its reap
+    for pid in forked:
+        order = [e for e, p in events if abs(int(p)) == pid]
+        assert "kill" in order and order.index("kill") < order.index("reap"), order
+
+
 def _outcome_of(pending) -> str:
     """What a submitted ``svc.validate`` came to, for a failure message."""
     if not pending.done():
