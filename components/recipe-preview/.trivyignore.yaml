@@ -50,4 +50,17 @@
 # the action gains the input; the justification vocabulary is already aligned
 # so the migration is mechanical.
 
-vulnerabilities: []
+vulnerabilities:
+  - id: CVE-2026-78661
+    paths:
+      - usr/local/bin/promtool
+    statement: >-
+      golang.org/x/net/html (GO-2026-6860). promtool 3.15.1 links x/net
+      v0.60.0 but none of x/net/html: govulncheck binary mode reports
+      not_affected (promtool.openvex.json) and `go tool nm` finds 0
+      golang.org/x/net/html symbols, on both linux/amd64 and linux/arm64.
+      Prometheus v3.16.0 still ships x/net v0.61.0, so a re-pin does not
+      clear it. Lever at expiry: re-pin once upstream ships x/net >= 0.62.0,
+      else re-run both checks before extending.
+    justification: vulnerable_code_not_present
+    expired_at: 2027-02-12
