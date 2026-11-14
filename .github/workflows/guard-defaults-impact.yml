@@ -584,8 +584,8 @@ jobs:
             if [ -z "${GEN_DONE[$config_dir]:-}" ]; then
               GEN_DONE[$config_dir]=1
               local policy=() gen_out gen_rc
-              if [ -f .github/custom-rule-policy.yaml ]; then
-                policy=(--policy .github/custom-rule-policy.yaml)
+              if [ -f .github/deployment-policy.yaml ]; then
+                policy=(--policy .github/deployment-policy.yaml)
               fi
               gen_out="$RUNNER_TEMP/generator.log"
               set +e

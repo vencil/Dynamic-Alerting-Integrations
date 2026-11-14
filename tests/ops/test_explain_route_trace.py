@@ -489,10 +489,12 @@ class TestBaseConfigFlag:
             _main(["--config-dir", str(conf), "--base-config", "x.yml"])
         assert exc.value.code == 2
         capsys.readouterr()
-        rc = _main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
-                      "--base-config", str(tmp_path / "missing.yml")])
-        assert rc == 2
-        assert f"--base-config {tmp_path / 'missing.yml'}: " in capsys.readouterr().err
+        # #3797: the declaration's refusal (`_lib_input.document`), rc 2 by `run()`.
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError, match=f"^--base-config {re.escape(str(tmp_path))}"
+                                              r"/missing\.yml: "):
+            _main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
+                   "--base-config", str(tmp_path / "missing.yml")])
 
     @pytest.mark.parametrize("receivers, reason", [
         ([{"slack_configs": [{"channel": "#x"}]}], "missing name in receiver"),

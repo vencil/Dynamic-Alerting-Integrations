@@ -59,6 +59,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import parse_duration_seconds  # noqa: E402
 from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
+import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
@@ -85,7 +86,7 @@ DEFAULT_POLICY = {
     "max_evaluation_interval": "60s",
     # Per-file overrides for platform-COMPILED packs (kept in sync with
     # .github/custom-rule-policy.yaml so the no-policy path — e.g.
-    # validate_config.py without --policy — behaves identically). The deny-list
+    # validate_config.py without --lint-policy — behaves identically). The deny-list
     # governs tenant-authored raw PromQL; a compiled pack's recipes are
     # platform-vetted with cost mitigations baked in at compile time
     # (e.g. forecast: platform-derived lookback + cold-start sample gate),
@@ -111,6 +112,12 @@ DEFAULT_POLICY = {
         },
     ],
 }
+
+#: The keys of the custom-rule lint policy (#3797): those of the built-in
+#: policy, which a --policy is merged over. Any other key is refused — the
+#: deployment policy's keys (allowed_domains …) in this file were silently
+#: unused, and a misspelt key here silently linted by the default.
+POLICY_KEYS = frozenset(DEFAULT_POLICY)
 
 # A file_overrides entry with require_generated_marker only applies when this
 # token appears in the file's first few lines (compile_custom_alerts._render
@@ -447,7 +454,7 @@ def resolve_file_policy(filepath, content, policy):
 POLICY_DOCUMENT = _lib_input.Document("yaml", dict, empty_is=dict)
 
 
-def load_policy(custom):
+def load_policy(custom, path=None):
     """The policy to lint against: the built-in policy (the DEFAULT, not a
     fallback for a broken ``--policy``) with *custom* — the parsed
     --policy (``_lib_input.document``), None when not given — merged over it.
@@ -460,6 +467,19 @@ def load_policy(custom):
     ``_lib_input.document``'s — ``''`` (an unset shell variable) is supplied
     and refused there, never taken for "not given".
     """
+    if custom is not None:
+        unknown = sorted(str(k) for k in custom if k not in POLICY_KEYS)
+        if unknown:
+            from _grar_validate import POLICY_KEYS as deployment_keys  # noqa: PLC0415
+            deploy = [k for k in unknown if k in deployment_keys]
+            hint = (f" {', '.join(deploy)} belong{'s' if len(deploy) == 1 else ''} to the "
+                    "deployment policy: give that file to `--policy` of validate-config "
+                    "or generate-routes, and this one to `validate-config --lint-policy`."
+                    if deploy else "")
+            raise _lib_exitcodes.CallerError(
+                f"--policy {safe_label(path)}: the custom-rule lint policy has no key(s) "
+                f"{', '.join(unknown)} "
+                f"(it has {', '.join(sorted(POLICY_KEYS))}).{hint}", "policy_unknown_key")
     if custom is None:
         # ⛔ deepcopy, not `.copy()`: the latter is shallow, so a caller
         # appending to one of the nested lists reaches into the module default
@@ -533,7 +553,7 @@ def main():
 
     # ⛔ Do not drop --policy to clear a refusal here — that silently lints
     # against the built-in policy instead of yours.
-    policy = load_policy(_lib_input.document(args, "policy", lang="en"))
+    policy = load_policy(_lib_input.document(args, "policy", lang="en"), args.policy)
 
     # ⛔ #1618 (D-06): a scan target that does not exist is a caller error,
     # not a clean scan. `collect_files` simply skipped it, so

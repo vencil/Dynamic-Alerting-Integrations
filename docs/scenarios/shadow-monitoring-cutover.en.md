@@ -186,7 +186,7 @@ python3 scripts/tools/ops/onboard_platform.py \
 # 1.3 Verify environment readiness
 python3 scripts/tools/ops/validate_config.py \
   --config-dir conf.d/ \
-  --policy .github/custom-rule-policy.yaml
+  --policy .github/deployment-policy.yaml
 ```
 <!-- image-caveat: v2.9.0 -->
 

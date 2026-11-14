@@ -34,6 +34,7 @@ from generate_alertmanager_routes import (
     load_base_config,
     load_tenant_tree,
 )
+from _grar_render import load_base_config_file  # noqa: E402  (#3797: by path)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _CONF_D = os.path.join(REPO_ROOT, "components", "threshold-exporter", "config", "conf.d")
@@ -75,7 +76,7 @@ def _render_live_alertmanager_yml(tmp_path):
         routing_configs, allowed_domains=None, enforced_routing=enforced_routing,
         tenants=dedup_configs)
     inhibit_rules, _dw = generate_inhibit_rules(dedup_configs)
-    base = load_base_config(str(base_file))
+    base = load_base_config_file(str(base_file))
     cm_yaml = assemble_configmap(base, routes, receivers, inhibit_rules)
     return yaml.safe_load(cm_yaml)["data"]["alertmanager.yml"]
 

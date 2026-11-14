@@ -347,14 +347,15 @@ def judge_inputs(args, phases):
 
     #3392: a missing --mapping was the preflight check's "fail" (rc 1, read
     as a finding); a missing --report-csv / --readiness-json was a "skip"
-    under an Overall PASS (rc 0). A flag not given — ``''`` included, as the
-    checks' own ``if args.x:`` reads it — stays each check's skip, and a flag
-    no chosen phase reads is not judged.
+    under an Overall PASS (rc 0). A flag not given stays each check's skip,
+    and a flag no chosen phase reads is not judged. ⛔ ``''`` is given (an
+    unset shell variable), and refused by its declaration (#3797): it was
+    read as not given — a skip under an Overall PASS.
     """
     given = []
     for phase in phases:
         for _flag, dest in _PHASE_INPUTS.get(phase, ()):
-            if getattr(args, dest) and dest not in given:
+            if getattr(args, dest) is not None and dest not in given:
                 given.append(dest)
     inputs, refused = {}, []
     for dest in given:

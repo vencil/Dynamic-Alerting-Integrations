@@ -29,15 +29,12 @@ the server.
 """
 from __future__ import annotations
 
-import errno
 import json
-import os
-import sys
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any
 
-from _lib_paths import classify_path  # noqa: E402  (#3276)
+import _lib_input  # noqa: E402  (#3797: --state is a declared document)
+
 
 KEY_GROUPS = "_groups.yaml"
 KEY_VIEWS = "_views.yaml"
@@ -80,9 +77,6 @@ _MSG: dict[str, dict[str, str]] = {
         "bad_problem": ("records[{i}] ({key}): `problem` is not "
                         "{{kind: unreadable|rejected, message}}"),
         "record_not_object": "records[{i}] ({key}): `record` is not an object",
-        "directory": ("a directory (a state directory is not read any more: tenant-api "
-                      "reads its own records)"),
-        "unreadable": "{err}",
     },
     "zh": {
         "how_to": ("--state 要的是 `tenant-api state show` 印出的 JSON（需要有 `state show` "
@@ -100,8 +94,6 @@ _MSG: dict[str, dict[str, str]] = {
         "one_of": "records[{i}]（{key}）：`record` 與 `problem` 必須恰好設一個",
         "bad_problem": "records[{i}]（{key}）：`problem` 不是 {{kind: unreadable|rejected, message}}",
         "record_not_object": "records[{i}]（{key}）：`record` 不是物件",
-        "directory": "是目錄（已不再讀 state 目錄：tenant-api 讀自己的紀錄）",
-        "unreadable": "無法讀取（{err}）",
     },
 }
 LANGS = tuple(_MSG)
@@ -227,11 +219,36 @@ def _refuse(source: str, lang: str, msg: str, **fields: Any) -> StateInputError:
                            f"{_MSG[lang]['sep']}{how_to_get_state(lang)}")
 
 
-def load_state(path: str | os.PathLike[str], *, lang: str) -> TenantState:
-    """Read a `tenant-api state show` document from *path* (``-``: stdin).
+#: ``--state`` as a declared input reads it (#3797): the text of the file,
+#: or of standard input for ``-`` (`_lib_input.add_input(..., stdin=True)`),
+#: read once by `_lib_input.document`; ``load_state`` judges what it holds.
+STATE_DOCUMENT = _lib_input.Document("text", str)
 
-    Raises StateInputError for anything else, naming how to get one: the
-    old inputs (a directory, a saved ConfigMap), text that is not JSON, a
+
+def add_state_argument(parser: Any, *, help: str) -> None:
+    """``--state``, the one declaration of it (offboard, generate-tenant-metadata)."""
+    _lib_input.add_input(parser, "--state", decode=STATE_DOCUMENT, stdin=True, help=help)
+
+
+def load_state_file(path: Any, *, lang: str) -> "TenantState":
+    """``load_state`` of the file at *path* (``-``: stdin), through the same
+    declaration — a library caller's; a tool's ``--state`` is
+    ``add_state_argument``'s."""
+    import argparse  # noqa: PLC0415
+    parser = argparse.ArgumentParser(add_help=False)
+    add_state_argument(parser, help="")
+    return load_state(parser.parse_args([f"--state={path}"]), lang=lang)
+
+
+def load_state(args: Any, *, lang: str) -> "TenantState | None":
+    """The `tenant-api state show` document ``--state`` names (``-``: stdin);
+    None when the flag was not given.
+
+    The file is judged and read once by its declaration (`_lib_input.document`:
+    a path that is no readable regular file, or text that is not UTF-8, is
+    a CallerError naming the flag, #3797 — a directory, the old input, is one).
+    Raises StateInputError for any other content, naming how to get one: a
+    saved ConfigMap, text that is not JSON, a
     document whose ``schema`` is missing or unknown (a tenant-api without
     `state show`, or a newer one), a malformed entry, and a document with no
     records — read as a state store that would report "no references" and
@@ -239,8 +256,12 @@ def load_state(path: str | os.PathLike[str], *, lang: str) -> TenantState:
     ``LANGS``, the caller's own language; no default).
     """
     _check_lang(lang)
+    text = _lib_input.document(args, "state", lang=lang)
+    if text is None:
+        return None
+    path = args.state
     source = "<stdin>" if str(path) == "-" else str(path)
-    raw = _read(path, source, lang)
+    raw = text.encode("utf-8")
     try:
         doc = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
@@ -281,23 +302,3 @@ def _add(st: TenantState, r: Any, i: int, source: str, lang: str) -> None:
     st.decoded[key] = rec
 
 
-def _read(path: str | os.PathLike[str], source: str, lang: str) -> bytes:
-    if str(path) == "-":
-        return sys.stdin.buffer.read()
-    # #3276: the shared judgement of a caller-given path ("any": a FIFO or a
-    # process substitution is read as before). `is_dir()` raised on a path
-    # under a parent the caller cannot enter (3.13): a traceback.
-    # The caller's language, as every other --state refusal here (#3512).
-    problem = classify_path(path, "any", lang=lang, flag="--state")
-    if problem is not None:
-        raise StateInputError(problem.message)
-    p = Path(path)
-    if p.is_dir():
-        raise _refuse(source, lang, "directory")
-    try:
-        return p.read_bytes()
-    except OSError as exc:
-        # zh: the errno's name (searchable, as _lib_paths); without one, the text.
-        err = (errno.errorcode.get(exc.errno, str(exc)) if lang == "zh" and exc.errno
-               else str(exc))  # en: the text it always printed
-        raise StateInputError(f"--state {source}: {_say(lang, 'unreadable', err=err)}") from exc
