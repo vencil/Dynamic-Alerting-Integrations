@@ -624,6 +624,66 @@ class TestPrintDryRun:
         capsys.readouterr()
 
 
+# ---------------------------------------------------------------------------
+# Status buckets are disjoint from use_golden (issue 3772)
+# ---------------------------------------------------------------------------
+class TestBucketsExcludeGolden:
+    """A rule routed to a golden standard is not converted, so it must not
+    also be counted under its parse status: the summary used to print
+    `成功轉換 0 條規則 (✅ 2 完美, ⚠️ 1 已猜測)` — total minus golden, parts not."""
+
+    def _mixed(self):
+        gold = {"golden_rule": "G", "maps_to": "k", "rule_pack": "p", "note": "n"}
+        return [
+            _make_result("GoldP", status="perfect", triage_action="use_golden", dict_match=gold),
+            _make_result("GoldC", status="complex", triage_action="use_golden", dict_match=gold),
+            _make_result("GoldU", status="unparseable", triage_action="use_golden",
+                         dict_match=gold, llm_prompt="NOPE"),
+            _perfect_user_selected("P", tenant_config={"custom_a": "1"},
+                                   alert_rules=[{"alert": "P", "expr": "a > 1"}],
+                                   recording_rules=[{"record": "r1", "expr": "max(a)"}]),
+            _make_result("C", status="complex", tenant_config={"custom_c": "3"},
+                         alert_rules=[{"alert": "C", "expr": "c > 3"}],
+                         recording_rules=[{"record": "r3", "expr": "max(c)"}]),
+            _make_result("U", status="unparseable", llm_prompt="LLM"),
+        ]
+
+    def test_write_outputs_counts_are_disjoint(self, tmp_path):
+        results = self._mixed()
+        counts = mr.write_outputs(results, str(tmp_path / "out"), prefix="custom_",
+                                  dictionary={}, tenant="t1")
+        assert counts == (1, 1, 1, 3)
+        assert sum(counts) == len(results)
+
+    def test_report_header_matches_its_sections(self):
+        out = mr.render_report(self._mixed())
+        assert ("  ✅ 完美解析: 1\n"
+                "  ⚠️  複雜表達式 (已自動猜測): 1\n"
+                "  🚨 無法解析 (需 LLM 協助): 1\n"
+                "  📖 建議使用黃金標準: 3\n") in out
+        assert "+ 2 條 Alert Rules\n" in out
+        assert "\n### U ###\nLLM\n" in out
+        assert "NOPE" not in out  # golden rule's prompt is not asked for
+
+    def test_report_has_no_empty_section_when_every_rule_is_golden(self):
+        gold = {"golden_rule": "G", "maps_to": "k", "rule_pack": "p", "note": "n"}
+        out = mr.render_report([
+            _make_result("GoldP", status="perfect", triage_action="use_golden", dict_match=gold),
+            _make_result("GoldC", status="complex", triage_action="use_golden", dict_match=gold),
+        ])
+        assert "  ✅ 完美解析: 0\n" in out
+        assert "✅ 完美解析的規則" not in out
+        assert "⚠️  複雜表達式 — " not in out
+
+    def test_dry_run_counts_are_disjoint(self, capsys):
+        mr.print_dry_run(self._mixed())
+        out = capsys.readouterr().out
+        assert "  ✅ 完美解析: 1\n" in out
+        assert "  ⚠️  複雜表達式 (自動猜測): 1\n" in out
+        assert "  🚨 無法解析 (需 LLM): 1\n" in out
+        assert "  📖 建議使用黃金標準: 3\n" in out
+
+
 class TestPrintTriage:
     def test_groups_by_action(self, capsys):
         results = [
