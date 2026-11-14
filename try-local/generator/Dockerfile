@@ -19,8 +19,8 @@
 #   docker build -f try-local/generator/Dockerfile .
 
 # ── da-guard, da-crdecode ────────────────────────────────────────────────
-# Without da-guard the service answers every write 503 da_guard_missing and
-# GET /v1/status reports `ready: false` (#3530). da-crdecode reads the
+# Without da-guard the service answers every write 503 tool_fault (#3862)
+# and GET /v1/status then reports `ready: false` (#3530). da-crdecode reads the
 # ConfigMap the generator assembles, as kubectl does. Same stage as
 # components/recipe-preview/Dockerfile: pinned to the native BUILDPLATFORM and
 # cross-compiled to TARGETARCH (CGO_ENABLED=0). The builder's Go version MUST
@@ -45,7 +45,7 @@ RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . ./cmd/da
 # ── da-read ──────────────────────────────────────────────────────────────
 # Alertmanager's own config loader: the generator asks it whether
 # Alertmanager accepts the config it rendered. Without it the service answers
-# every write 503 da_read_missing and GET /v1/status reports `ready: false`.
+# every write 503 tool_fault and GET /v1/status then reports `ready: false`.
 # Its own Go module (components/da-read), same builder and flags as above.
 # This stage is discarded.
 FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.23 AS readbuild

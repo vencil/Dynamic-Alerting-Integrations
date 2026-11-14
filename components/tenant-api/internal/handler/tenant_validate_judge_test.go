@@ -56,7 +56,7 @@ func TestValidateTenant_AsksTheWritesJudgement(t *testing.T) {
 		return 200, testutil.RejectedVerdict("memory")
 	}
 	unavailable := func(int, testutil.FakeValidateRequest) (int, any) {
-		return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "da_guard_missing", "message": "x"}
+		return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "tool_fault", "message": "x"}
 	}
 	cases := []struct {
 		name      string
@@ -73,7 +73,7 @@ func TestValidateTenant_AsksTheWritesJudgement(t *testing.T) {
 		{"busy", busy, true, false, "busy", ""},
 		// The container's own failure says nothing about the body.
 		{"the container ran out of memory", memory, true, false, "memory", ""},
-		{"unavailable", unavailable, true, false, "da_guard_missing", ""},
+		{"unavailable", unavailable, true, false, "tool_fault", ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -22,7 +22,12 @@ forked, and never returns. In order:
    cache installed (``_lib_parse_cache``), so an unchanged file is not read
    through ``da-guard parse-tree`` again (ADR-036 step 4: the generator reads
    conf.d from parse-tree; da-guard is on the image's $PATH).
-5. Report over one pipe (``_gsvc_proto`` frames): the content hashes of the
+5. When any external program of the run did not run (``_lib_tool_fault``:
+   not there, could not be executed, timed out, ended by a signal, an exit
+   code or output it never gives, older than this tool), the result is
+   ``tool_fault`` with those records — whatever the generator concluded
+   without it, rc 0 included (#3862).
+6. Report over one pipe (``_gsvc_proto`` frames): the content hashes of the
    base tree's files as soon as the tree is read, each new parse-cache entry the moment its
    parse finishes, and the result last — so a process the deadline kills
    still hands back every parse it completed. Then ``os._exit``.
@@ -62,6 +67,7 @@ import _lib_key_verdict  # noqa: E402
 import _lib_tenant_values  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
+import _lib_tool_fault  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
     STDERR_TAIL_BYTES, ValidateRequest, entry_frame, frame, path_problem,
 )
@@ -683,6 +689,11 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
         return report("not_completed", reason="memory", tenants=len(tenants),
                       message=" ".join(str(exc).split())[:300] or "MemoryError")
     except _lib_tenant_values.DaGuardError as exc:
+        # The verdict's own reading of key-verdict's document (#3862): a
+        # field of the wrong shape there is da-guard's output, not the tree's.
+        if exc.binary_fault and not exc.fault_judged:
+            _lib_tool_fault.record("da-guard", "key-verdict",
+                                   "stale" if exc.stale else "bad_output")
         # A da-guard ended by a signal under RLIMIT_DATA (GOTRACEBACK=crash:
         # the Go runtime's own out-of-memory too) is its memory limit.
         reason = "memory" if (exc.returncode or 0) < 0 else "error"
@@ -756,7 +767,16 @@ def run_child(job: ChildJob, result_fd: int) -> None:
             os.dup2(out, fd)
             os.close(out)
         stream = _Stream(result_fd, job.max_transfer)
+        _lib_tool_fault.clear()  # a fork: nothing of the service's own runs
         result = _judge(job, stream)
+        faults = _lib_tool_fault.records()
+        if faults:
+            # #3862: a verdict reached without one of its programs is no
+            # verdict — before `ran`, rc 0 included, and before `memory`.
+            result = {"outcome": "tool_fault",
+                      "faults": [f.as_dict() for f in faults],
+                      **{k: result[k] for k in ("validated", "cache", "hit_keys")
+                         if k in result}}
         sys.stdout.flush()
         sys.stderr.flush()
         result["stderr_tail"] = _tail(os.path.join(job.job_dir, "stderr"))

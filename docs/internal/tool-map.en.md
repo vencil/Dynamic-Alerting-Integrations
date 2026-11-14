@@ -278,6 +278,7 @@ lang: en
 - `scripts/tools/_lib_tenant_state.py`: Read tenant-api's state records as tenant-api reads them (#2883, ADR-036 §12).
 - `scripts/tools/_lib_tenant_uniqueness.py`: Does this ARTIFACT declare one tenant twice? One measurement, two producers.
 - `scripts/tools/_lib_tenant_values.py`: Per-tenant values from Go: /metrics via da-guard served-values, /effective via da-guard effective.
+- `scripts/tools/_lib_tool_fault.py`: The one record of "an external program of this process did not run" (#3862).
 - `scripts/tools/_lib_toolcount.py`: One scan behind the "N 個 Python 工具" sentence.
 - `scripts/tools/_lib_validation.py`: Validation and parsing helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_versions.py`: Version SSOT readers for the dx doc-generation tools.

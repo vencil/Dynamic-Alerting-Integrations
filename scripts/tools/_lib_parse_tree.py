@@ -135,8 +135,12 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
 
 import guard_dispatch  # noqa: E402
 from _lib_consumer_read import DA_GUARD_ENV  # noqa: E402  (the env-name register, #3424)
+import _lib_tool_fault  # noqa: E402  (#3862: where "da-guard did not run" is recorded)
 
 SUBCOMMAND = "parse-tree"
+#: da-guard's exit code for a caller error — of parse-tree, also its answer
+#: that it cannot walk the tree it was given.
+_EXIT_CALLER_ERR = 2
 SCHEMA = "da-guard.parse-tree/v2"
 #: Schema values of documents a da-guard older than this tool writes: named
 #: as such when refused, so the message says what to do (upgrade it).
@@ -207,6 +211,26 @@ def run_under_memory_limit() -> None:
     ``ParseTreeError``. The caller sets RLIMIT_CORE to 0: no core file."""
     global _MEMORY_LIMITED
     _MEMORY_LIMITED = True
+
+
+#: The signals the Go runtime ends itself with under ``GOTRACEBACK=crash``
+#: (a fatal error, an out-of-memory, a fault inside the runtime).
+_RUNTIME_CRASH_SIGNALS = frozenset({signal.SIGABRT, signal.SIGSEGV, signal.SIGBUS})
+
+
+def ended_by_memory_limit(returncode: int) -> bool:
+    """Whether a da-guard that exited *returncode* ended itself under this
+    process's memory limit (:func:`run_under_memory_limit`): the Go runtime's
+    own crash signal. That is the judgement's memory, an answer about its
+    size (#2906) — not a da-guard that did not run. Any other signal (a
+    SIGKILL from outside) is (#3862)."""
+    return (_MEMORY_LIMITED and returncode < 0
+            and -returncode in _RUNTIME_CRASH_SIGNALS)
+
+
+def _fault(subcommand: str, reason: str) -> None:
+    """#3862: this da-guard run did not run (see `_lib_tool_fault`)."""
+    _lib_tool_fault.record("da-guard", subcommand, reason)
 
 
 class ParseTreeError(Exception):
@@ -289,6 +313,7 @@ def run_files_raw(root: Path | str, items: "list[tuple[str, bytes]]",
     if lines and lines[-1] == b"":
         lines.pop()
     if len(lines) != len(items):
+        _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {what} wrote {len(lines)} documents for "
                              f"{len(items)} files; nothing of it is used")
     return lines
@@ -339,7 +364,9 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
         # Resolved now, against the current directory (a relative
         # `$DA_GUARD_BINARY`, an explicit path, a relative `$PATH` entry).
         exe = os.path.abspath(exe)
+    sub = args[0]
     if exe is None:
+        _fault(sub, "not_found")
         msg = dispatcher.binary_missing_message(binary).strip()
         for prefix in ("Error: ", "錯誤: "):
             msg = msg.removeprefix(prefix)
@@ -350,10 +377,14 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
         proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
                               input=stdin if stdin is not None else b"", env=env)
     except subprocess.TimeoutExpired as e:
+        _fault(sub, "timed_out")
         raise ParseTreeError(f"da-guard {what} did not finish within {timeout}s") from e
     except OSError as e:
+        _fault(sub, _lib_tool_fault.os_error_reason(e, exe))
         raise ParseTreeError(f"da-guard could not be run ({exe}): {e}") from e
     stderr = proc.stderr.decode("utf-8", errors="backslashreplace").strip()
+    if proc.returncode < 0 and not ended_by_memory_limit(proc.returncode):
+        _fault(sub, "signalled")
     if _MEMORY_LIMITED and proc.returncode < 0:
         # Ended by a signal under the memory limit it inherited (the
         # generator container's RLIMIT_DATA of a judgement, ADR-036 §3):
@@ -369,7 +400,12 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
         msg = (f"da-guard {what} exited {proc.returncode}{older}"
                + (f": {' '.join(stderr.split())}" if stderr else ""))
         if older:
+            _fault(sub, "stale")
             raise NotThisDocument(msg, older=True)
+        if proc.returncode > 0 and proc.returncode not in accept | {_EXIT_CALLER_ERR}:
+            # Exit 2 is its answer about the input (a tree it cannot walk);
+            # an exit code it never uses is not an answer at all.
+            _fault(sub, "unexpected_exit")
         raise ParseTreeError(msg)
     return proc.stdout
 
@@ -393,6 +429,7 @@ def read_document(raw: bytes, *, check: "Callable[[dict], None] | None" = None,
     except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
         # ADR-036 §2: a document a reader cannot decode is unusable whole.
         msg = f"da-guard {what} wrote no document this tool can read ({e}); nothing of it is used"
+        _fault(what.split()[0], "stale" if older else "bad_output")
         if wrong_schema:
             raise NotThisDocument(msg, older=older) from e
         raise ParseTreeError(msg) from e
@@ -931,6 +968,7 @@ def tree_of(doc: dict) -> Tree:
         check_shape(doc)
         entries = entries_of(doc)
     except (ValueError, TypeError, KeyError) as e:
+        _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {SUBCOMMAND} wrote no document this tool can "
                              f"read ({e}); nothing of it is used") from e
     files = doc["files"]
@@ -1204,6 +1242,7 @@ def _run_names(names: "list[str]", binary: Optional[str],
                check=_check_list("names"), what=f"{SUBCOMMAND} --list-only --names")
     entries = entries_of(doc)
     if [e.path for e in entries] != names:
+        _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names did not answer the "
                              "names it was given, in order; nothing of it is used")
     carriers = doc["defaults_carriers"]
@@ -1214,6 +1253,7 @@ def _run_names(names: "list[str]", binary: Optional[str],
     # exactly when there are any; the losers are the others.
     if set(carriers) - {"."} or (chosen is None) != (not defaults) or \
             (chosen is not None and chosen not in defaults) or losers != defaults - {chosen}:
+        _fault(SUBCOMMAND, "bad_output")
         raise ParseTreeError(f"da-guard {SUBCOMMAND} --list-only --names: defaults_carriers "
                              f"{dict(carriers)!r} does not match the entries' not_read; nothing "
                              "of it is used")
@@ -1278,6 +1318,7 @@ def key_spellings(keys: "Iterable[str]", binary: Optional[str] = None,
                 raise ValueError(f"an answer of the wrong shape: {a!r}")
             of[key] = (canon, tuple(spellings))
     except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
+        _fault(what, "bad_output")
         raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
                              "nothing of it is used") from e
     return KeySpellings(MappingProxyType(of))
@@ -1351,6 +1392,7 @@ def threshold_values(items: "Iterable[tuple[str, str]]", binary: Optional[str] =
                 non_finite=_NON_FINITE[a["non_finite"]],
                 severity=a["severity"], refused=a["refused"]))
     except (ValueError, TypeError, KeyError) as e:  # UnicodeDecodeError is a ValueError
+        _fault(what, "bad_output")
         raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
                              "nothing of it is used") from e
     return readings

@@ -233,6 +233,11 @@ TOOL_FILES=(
     # subcommands (guard / batchpr / parser). Imported by their
     # respective ops/*_dispatch.py shims.
     _lib_godispatch.py
+    # #3862 — stdlib only: the one record of "da-guard / da-read /
+    # da-crdecode did not run", imported by _lib_tenant_values,
+    # _lib_parse_tree and _lib_consumer_read (below); the generator service
+    # answers a judgement that has one 503 tool_fault.
+    _lib_tool_fault.py
     # #2115 — per-tenant values as /metrics serves them (runs `da-guard
     # served-values`, shipped in this image). Imported by
     # blind_spot_discovery, analyze_rule_pack_gaps, policy_engine,

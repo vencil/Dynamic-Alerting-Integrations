@@ -103,6 +103,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 from _lib_input import _list  # noqa: E402  ⛔ the one directory listing (#3446)
+import _lib_tool_fault  # noqa: E402  (#3862: where "this reader did not run" is recorded)
 
 CRDECODE_BINARY_NAME = "da-crdecode"
 DA_READ_BINARY_NAME = "da-read"
@@ -257,9 +258,23 @@ def da_read_binary(explicit: str | None = None) -> str | None:
     return resolve_binary(explicit, DA_READ_ENV, DA_READ_BINARY_NAME)
 
 
+def _subcommand(name: str, args: "list[str]") -> str:
+    """What a run of *name* with *args* is, for a `_lib_tool_fault` record:
+    da-read's subcommand, da-crdecode's reading — never a path."""
+    if name == CRDECODE_BINARY_NAME:
+        return _READING_ANY_SHAPE if _ANY_SHAPE_FLAG in args else _READING_MANIFEST
+    return args[0] if args else ""
+
+
+def _fault(name: str, args: "list[str]", reason: str) -> None:
+    """#3862: this run of *name* did not run (see `_lib_tool_fault`)."""
+    _lib_tool_fault.record(name, _subcommand(name, args), reason)
+
+
 def _invoke(binary: str | None, name: str, env: str, build_hint: str,
             args: list[str], stdin: bytes | None) -> "tuple[subprocess.CompletedProcess, list[str]]":
     if not binary:
+        _fault(name, args, "not_found")
         raise ConsumerReadError(
             f"{name} was not found: set ${env} to its path or put it on $PATH "
             f"(the da-tools image ships it; in this repo `{build_hint}` builds "
@@ -268,17 +283,23 @@ def _invoke(binary: str | None, name: str, env: str, build_hint: str,
         proc = subprocess.run([binary, *args], input=stdin, capture_output=True,
                               check=False, timeout=TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as e:
+        _fault(name, args, "timed_out")
         raise ConsumerReadError(f"{name} did not finish within {TIMEOUT_SECONDS}s",
                                 _stderr_lines(e.stderr)) from e
     except OSError as e:
+        _fault(name, args, _lib_tool_fault.os_error_reason(e, binary))
         raise ConsumerReadError(f"cannot run {name} ({binary}): {e}") from e
+    if proc.returncode < 0:
+        _fault(name, args, "signalled")
     return proc, _stderr_lines(proc.stderr)
 
 
-def _json(proc: subprocess.CompletedProcess, name: str, lines: list[str]) -> Any:
+def _json(proc: subprocess.CompletedProcess, name: str, lines: list[str],
+          args: "list[str]") -> Any:
     try:
         return json.loads(proc.stdout)
     except ValueError as e:  # JSONDecodeError, or stdout that is not UTF-8
+        _fault(name, args, "bad_output")
         raise ConsumerReadError(f"{name} printed output that is not JSON: {e}", lines) from e
 
 
@@ -286,16 +307,20 @@ def _run(binary: str | None, name: str, env: str, build_hint: str,
          args: list[str], stdin: bytes | None) -> dict:
     proc, lines = _invoke(binary, name, env, build_hint, args, stdin)
     if proc.returncode == 2 and lines and lines[0].startswith("usage: "):
+        _fault(name, args, "stale")
         raise ConsumerReadError(
             f"{name} printed its usage for the arguments {args[:-1] or args} "
             f"(an older {name}? rebuild it)", lines)
     if _refused(proc.returncode, lines):
         raise InputRefused(f"{name} refused the input", lines)
     if proc.returncode != 0:
+        if proc.returncode > 0:  # a signal was recorded by _invoke
+            _fault(name, args, "unexpected_exit")
         raise ConsumerReadError(f"{name} exited {proc.returncode}", lines)
-    out = _json(proc, name, lines)
+    out = _json(proc, name, lines, args)
     docs = out.get("documents") if isinstance(out, dict) else None
     if not isinstance(docs, list):
+        _fault(name, args, "stale")
         raise ConsumerReadError(
             f"{name} printed JSON without a \"documents\" list (an older {name}? rebuild it)",
             lines)
@@ -326,6 +351,7 @@ def _crdecode(source: "str | None", data: "bytes | None", binary: str | None,
         # An older da-crdecode prints no `reading`: its manifest reading does
         # not refuse a document that is no Kubernetes object, so the
         # guarantee below would be silently missing.
+        _fault(CRDECODE_BINARY_NAME, args, "stale")
         raise ConsumerReadError(
             f"{CRDECODE_BINARY_NAME} printed \"reading\": {out.get('reading')!r}, not "
             f"{want!r} (an older {CRDECODE_BINARY_NAME}? rebuild it)")
@@ -510,12 +536,13 @@ def alertmanager_config(text: str | bytes, binary: str | None = None, *,
     flags = [SHOW_LOADER_REASON_FLAG] if show_loader_reason else []
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["alertmanager", *flags, "-"], data)
-    return _one_document(out, "config")
+    return _one_document(out, "config", "alertmanager")
 
 
-def _one_document(out: dict, what: str) -> dict:
+def _one_document(out: dict, what: str, subcommand: str) -> dict:
     docs = out["documents"]
     if len(docs) != 1 or not isinstance(docs[0], dict):
+        _fault(DA_READ_BINARY_NAME, [subcommand], "bad_output")
         raise ConsumerReadError(
             f"{DA_READ_BINARY_NAME} printed JSON without exactly one {what} object "
             "under \"documents\"")
@@ -537,7 +564,7 @@ def prometheus_config(source: "str | bytes | os.PathLike[str]", binary: str | No
         raise TypeError(f"prometheus_config takes text or a path, not {type(source).__name__}")
     resolved = da_read_binary(binary)
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build", args, data)
-    return _one_document(out, "config")
+    return _one_document(out, "config", "prometheus")
 
 
 def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None) -> "list[list[dict]]":
@@ -556,6 +583,7 @@ def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None)
     docs = out["documents"]
     if (len(docs) != 1 or not isinstance(docs[0], list) or len(docs[0]) != len(exprs)
             or not all(isinstance(h, list) for h in docs[0])):
+        _fault(DA_READ_BINARY_NAME, ["promql-selectors"], "stale")
         raise ConsumerReadError(
             f"{DA_READ_BINARY_NAME} printed JSON without one selector list per expression "
             "(an older da-read? rebuild it)")
@@ -582,6 +610,7 @@ def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[d
     docs = out["documents"]
     if (len(docs) != 1 or not isinstance(docs[0], list) or len(docs[0]) != len(exprs)
             or not all(isinstance(h, list) for h in docs[0])):
+        _fault(DA_READ_BINARY_NAME, ["promql-label-flow"], "stale")
         raise ConsumerReadError(
             f"{DA_READ_BINARY_NAME} printed JSON without one list per expression "
             "(an older da-read? rebuild it)")
@@ -676,8 +705,9 @@ def prometheus_rule_file_results(paths: "Iterable[str | os.PathLike[str]]",
     resolved = da_read_binary(binary)
     # Absolute paths never start with `-`, so none is read as stdin.
     absolute = [os.path.abspath(p) for p in given]
+    args = ["prometheus-rules", *absolute]
     proc, lines = _invoke(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
-                          ["prometheus-rules", *absolute], None)
+                          args, None)
     # rc 0 is "every file read"; a refusal (`_refused`: rc 2 with a reason on
     # stderr that is not a Go crash — da-read names each refused file there)
     # with the JSON on stdout is "a file is refused". Anything else — rc 2
@@ -685,32 +715,40 @@ def prometheus_rule_file_results(paths: "Iterable[str | os.PathLike[str]]",
     # an answer about the files.
     if not proc.stdout.strip() or not (
             proc.returncode == 0 or _refused(proc.returncode, lines)):
+        if proc.returncode >= 0:  # a signal was recorded by _invoke
+            stale = proc.returncode == 2 and lines and lines[0].startswith("usage: ")
+            _fault(DA_READ_BINARY_NAME, args, "stale" if stale else "unexpected_exit")
         raise ConsumerReadError(f"{DA_READ_BINARY_NAME} exited {proc.returncode}", lines)
-    out = _json(proc, DA_READ_BINARY_NAME, lines)
+    out = _json(proc, DA_READ_BINARY_NAME, lines, args)
     files = out.get("files") if isinstance(out, dict) else None
     if not isinstance(files, list) or len(files) != len(given):
+        _fault(DA_READ_BINARY_NAME, args, "stale")
         raise ConsumerReadError(
             f"{DA_READ_BINARY_NAME} printed JSON without a \"files\" list of one entry per "
             "file (an older da-read? rebuild it)", lines)
     results = []
     for want, original, entry in zip(absolute, given, files):
         if not isinstance(entry, dict) or entry.get("path") != want:
+            _fault(DA_READ_BINARY_NAME, args, "bad_output")
             raise ConsumerReadError(
                 f"{DA_READ_BINARY_NAME} printed an entry that is not {want}'s", lines)
         problem, docs = entry.get("problem"), entry.get("documents")
         if problem is not None:
             if (not isinstance(problem, dict) or not isinstance(problem.get("message"), str)
                     or docs is not None):
+                _fault(DA_READ_BINARY_NAME, args, "bad_output")
                 raise ConsumerReadError(
                     f"{DA_READ_BINARY_NAME} printed a malformed problem for {want}", lines)
             results.append(RuleFile(original, None, problem["message"]))
         elif isinstance(docs, list) and len(docs) == 1 and isinstance(docs[0], dict):
             results.append(RuleFile(original, docs, None))
         else:
+            _fault(DA_READ_BINARY_NAME, args, "bad_output")
             raise ConsumerReadError(
                 f"{DA_READ_BINARY_NAME} printed neither documents nor a problem for {want}", lines)
     refused = any(r.problem is not None for r in results)
     if refused != (proc.returncode == 2):
+        _fault(DA_READ_BINARY_NAME, args, "bad_output")
         raise ConsumerReadError(
             f"{DA_READ_BINARY_NAME} exited {proc.returncode} but its JSON "
             f"{'refuses' if refused else 'refuses no'} file", lines)

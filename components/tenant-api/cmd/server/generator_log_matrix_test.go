@@ -438,7 +438,7 @@ func logMatrixAnswers() []matrixAnswer {
 				"message": canaryOf("unavailable-message")}
 		}},
 		{name: "unavailable, known reason", answer: func(int, testutil.FakeValidateRequest) (int, any) {
-			return 503, map[string]any{"error": generator.CodeValidatorUnavailable, "reason": generator.ReasonDaGuardMissing,
+			return 503, map[string]any{"error": generator.CodeValidatorUnavailable, "reason": generator.ReasonToolFault,
 				"message": canaryOf("unavailable-message")}
 		}},
 		{name: "too large", answer: func(int, testutil.FakeValidateRequest) (int, any) {
@@ -616,7 +616,7 @@ func logMatrixMetrics(t *testing.T) {
 		{"status not ready with a policy error",
 			func() (int, any) {
 				return 200, map[string]any{"policy": map[string]any{"configured": true, "available": false,
-					"error": canaryOf("policy-error")}, "da_read_available": true, "da_guard_available": true, "ready": false}
+					"error": canaryOf("policy-error")}, "tool_fault": nil, "ready": false}
 			},
 			nil},
 		{"status not JSON",
