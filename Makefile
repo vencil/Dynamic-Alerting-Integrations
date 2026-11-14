@@ -1336,10 +1336,9 @@ chart-package: ## 打包 Helm chart (.tgz)
 		--tgz .build/threshold-exporter-$(CHART_VER).tgz
 	@echo "✓ .build/threshold-exporter-$(CHART_VER).tgz"
 
-.PHONY: chart-push
-chart-push: chart-package ## 推送 Helm chart 至 OCI registry (需先 docker login ghcr.io)
-	@helm push .build/threshold-exporter-$(CHART_VER).tgz oci://$(OCI_REGISTRY)/charts
-	@echo "✓ Pushed oci://$(OCI_REGISTRY)/charts/threshold-exporter:$(CHART_VER)"
+# chart 只由 release.yaml 發布：發布前 check_release_immutable.py 先比對
+# registry 上的同版號（#3848）。本機推送的 `chart-push` 已移除——它沒有那道檢查，
+# 可以讓同一版號對應兩份內容。
 
 # ----------------------------------------------------------
 # Release Tag（各線版號；清單見 release.yaml 的 on.push.tags）

@@ -13,7 +13,8 @@ type: application
 # 0.3.0 — #1295: victorialogs.auth {username, existingSecret}. With a Secret named, the CronJob and the manual Job send HTTP basic auth to the store's vmauth. No Secret = no change.
 # 0.4.0 — #1295: NetworkPolicy (networkPolicy.enabled, default on) allowing egress to DNS and to VictoriaLogs :9428 only — the documented namespace (monitoring) default-denies egress, and runs failed before their first query. ⚠️ BEHAVIOUR CHANGE: the policy selects VictoriaLogs pods by `app.kubernetes.io/name: victorialogs` in the namespace `networkPolicy.victorialogsNamespaceLabel` names (default monitoring) on 9428. A store in another namespace needs that label set and the aggregator's namespace in VictoriaLogs' `networkPolicy.allowedNamespaces`; `--reuse-values` from 0.3.x (no `networkPolicy` map) takes the default (on); a store not installed from helm/victorialogs, or on another port, needs `networkPolicy.enabled: false`
 # 0.4.1 — #1295: README only (it ships in the package): a store in another namespace now admits the aggregator through VictoriaLogs' `auth.consumers[chargeback-aggregator].from.namespace`, not the removed `networkPolicy.allowedNamespaces`. No template or value change
-version: 0.4.1
+# 0.4.2 — #3847: README only (it ships in the package): the store-side Secret is now named in VictoriaLogs' `auth.existingSecrets.chargeback-aggregator`. No template or value change
+version: 0.4.2
 # appVersion: Python version inside the pinned image
 appVersion: "3.13"
 keywords:

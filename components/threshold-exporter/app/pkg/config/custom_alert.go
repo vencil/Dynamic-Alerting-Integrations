@@ -849,17 +849,18 @@ func resolveOneCustomAlert(tenant string, spec CustomAlertSpec) ([]ResolvedThres
 	if isDisabled(strings.ToLower(strings.TrimSpace(valueStr))) {
 		return nil, errCustomAlertDisabled
 	}
-	// The one threshold-number reader the row resolvers use (#3140): a
-	// non-finite number ("NaN"/"Inf", which ParseFloat accepts) would emit a
-	// nonsensical comparison series (e.g. `metric > NaN` never fires).
+	// The one threshold-number reader the row resolvers use (#3140, #3457):
+	// a non-finite number ("NaN"/"Inf") would emit a nonsensical comparison
+	// series (e.g. `metric > NaN` never fires).
 	value, ok := parseThresholdNumber(valueStr)
 	if !ok {
-		if _, err := strconv.ParseFloat(valueStr, 64); err != nil {
-			return nil, &customAlertThresholdRefusal{refused: RefusedUnparsed,
-				err: fmt.Errorf("threshold value %q is not numeric: %w", valueStr, err)}
+		if nonFiniteNumberText(valueStr) {
+			return nil, &customAlertThresholdRefusal{refused: RefusedNonFinite,
+				err: fmt.Errorf("threshold value %q must be finite", valueStr)}
 		}
-		return nil, &customAlertThresholdRefusal{refused: RefusedNonFinite,
-			err: fmt.Errorf("threshold value %q must be finite", valueStr)}
+		return nil, &customAlertThresholdRefusal{refused: RefusedUnparsed,
+			err: fmt.Errorf("threshold value %q is not numeric: it must be a finite decimal number "+
+				"of at most 20 digits, with an optional exponent", valueStr)}
 	}
 	// forecast ratio mode: the threshold is a headroom-fraction floor
 	// (avail/capacity), so it must be in (0, forecastCurrentBand) — a floor >= 1 would

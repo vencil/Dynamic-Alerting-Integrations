@@ -34,7 +34,7 @@
       "doc": "defaults:\n  k: 80_000\n  neighbour: 90\n",
       "exporter": "accepted",
       "key": "k",
-      "value": 80000
+      "default_row": false
     },
     {
       "name": "trailing-underscore",

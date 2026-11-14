@@ -137,11 +137,13 @@ func refusedThresholdCases(parityOwn string) []parityCase {
 
 var (
 	// refusedThresholdValues: the exporter cannot read them (#3267) — a
-	// word, a severity no rule selects, numbers ParseFloat reads only out
-	// of range (decimal and hex).
-	refusedThresholdValues = []string{"abc", "70:high", "1e999", "0x1p1024"}
+	// word, a severity no rule selects, a number out of range, and (#3457)
+	// what is outside the grammar of a threshold number: `_` between digits,
+	// a hex float, a mantissa of more than 20 digits.
+	refusedThresholdValues = []string{"abc", "70:high", "1e999", "0x1p1024", "1_000", "0x1p4",
+		"123456789012345678901"}
 	// acceptedThresholdValues: the exporter reads them.
-	acceptedThresholdValues = []string{"70", "1_000", "0x1p4", "70:critical"}
+	acceptedThresholdValues = []string{"70", "1e3", "+.5", "70:critical"}
 )
 
 func parityBaseCases(parityOwn string) []parityCase {

@@ -23,7 +23,7 @@ import (
 //
 // ⛔ Only a leaf YAML misstates changes (thresholdLeaf): a string already is
 // the text, and a YAML number equal to the text's reading (`70`, `1e6`,
-// `1_000`, `-0`) stays as decoded — /effective stays the written view, and
+// `-0`) stays as decoded — /effective stays the written view, and
 // merged_hash moves only for a value whose meaning changed. Only threshold
 // keys (not `_`-prefixed, baseRowsSkipKey) are touched: a reserved key is
 // not a threshold, and its readers take the generic value.

@@ -48,7 +48,7 @@ helm install chargeback ./helm/chargeback-aggregator -n monitoring
 
 # Authenticate to the store's vmauth (#1295): a Secret (key `password`)
 # holding the same value as helm/victorialogs'
-# auth.consumers[name=chargeback-aggregator].existingSecret. In `monitoring`
+# auth.existingSecrets.chargeback-aggregator. In `monitoring`
 # both sides can name the same Secret. Runbook §1.2 has the steps.
 helm upgrade chargeback ./helm/chargeback-aggregator -n monitoring \
   --reuse-values --set victorialogs.auth.existingSecret=victorialogs-chargeback

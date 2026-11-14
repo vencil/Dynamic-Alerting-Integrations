@@ -450,3 +450,81 @@ def test_cli_extra_defaults_refusal_is_a_caller_error_not_a_traceback(
     assert r.returncode == 2, r.stdout + r.stderr
     assert "Traceback" not in r.stderr, r.stderr
     assert "--extra-defaults" in r.stderr and "mysql_connections_critical" in r.stderr, r.stderr
+
+
+def _fixture_cli(tmp_path, value):
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    script = (Path(__file__).resolve().parents[2]
+              / "scripts" / "tools" / "dx" / "generate_tenant_fixture.py")
+    out = tmp_path / "conf.d"
+    cmd = [sys.executable, str(script), "--count", "2", "--output", str(out),
+           "--extra-defaults", f"bench_trigger={value}"]
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=120)
+    return r, out
+
+
+@pytest.mark.parametrize("value", ["1_000", "nan", "inf", "-Infinity", "0x1F", "1e999",
+                                   "123456789012345678901", "abc", ""])
+def test_cli_extra_defaults_refuses_what_the_exporter_does_not_read(tmp_path, value):
+    """#3457: the value is judged by the exporter's grammar of a threshold
+    number, not by `int()` / `float()`, which read `1_000` (as 1000), `nan`
+    and `inf` — values the exporter serves no default for."""
+    r, out = _fixture_cli(tmp_path, value)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "finite decimal number" in r.stderr, r.stderr
+    assert not out.exists(), "nothing is written for a refused argument"
+
+
+@pytest.mark.parametrize("value, written_as", [
+    ("1e20", "100000000000000000000.0"), ("1e22", "10000000000000000000000.0"),
+    ("1e-25", "0.0000000000000000000000001"), ("1.2345678901234567e-4", "0.00012345678901234567"),
+    ("99999999999999999999", "100000000000000000000.0")])
+def test_cli_extra_defaults_names_a_value_it_cannot_write(tmp_path, value, written_as):
+    """#3457 review: the exporter reads these (20 digits or fewer, with an
+    exponent), but the file this tool writes spells a number in plain
+    decimal, and that spelling has more than 20 digits. The refusal is at
+    the argument, and names the value, what it would be written as and why —
+    not `would be unread (root_default_refused)` from the write."""
+    r, out = _fixture_cli(tmp_path, value)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+    for part in (value, f"written to _defaults.yaml as {written_as}", "at most 20 digits", "bench_trigger"):
+        assert part in r.stderr, (part, r.stderr)
+    assert not out.exists()
+
+
+def test_cli_extra_defaults_help_says_what_can_be_written():
+    import os  # noqa: PLC0415
+    import re  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    script = (Path(__file__).resolve().parents[2]
+              / "scripts" / "tools" / "dx" / "generate_tenant_fixture.py")
+    r = subprocess.run([sys.executable, str(script), "--help"], capture_output=True, text=True,
+                       encoding="utf-8", env={**os.environ, "PYTHONIOENCODING": "utf-8", "COLUMNS": "200"},
+                       timeout=120)
+    text = re.sub(r"\s+", " ", r.stdout)
+    assert r.returncode == 0
+    assert "with no exponent" in text and "1e20" in text and "refused" in text, text
+
+
+def test_cli_extra_defaults_trims_as_the_exporter_trims(tmp_path):
+    """U+001C is trimmed by `str.strip()` and not by the exporter: the value
+    is not a number, and is refused rather than quietly cleaned."""
+    r, out = _fixture_cli(tmp_path, "\x1c50")
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "finite decimal number" in r.stderr, r.stderr
+    assert not out.exists()
+
+
+@pytest.mark.parametrize("value, written", [("50", 50), ("+50", 50), ("007", 7), ("1.5", 1.5), ("1e3", 1000.0),
+                                            (".5", 0.5), (" 50 ", 50), ("1e18", 1e18)])
+def test_cli_extra_defaults_takes_a_threshold_number(tmp_path, value, written):
+    import yaml  # noqa: PLC0415
+    r, out = _fixture_cli(tmp_path, value)
+    assert r.returncode == 0, r.stdout + r.stderr
+    doc = yaml.safe_load((out / "_defaults.yaml").read_text(encoding="utf-8"))
+    got = doc["defaults"]["bench_trigger"]
+    assert got == written and type(got) is type(written), got

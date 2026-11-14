@@ -5,11 +5,16 @@ package config
 // writes the matrix's verdict columns and its `severities`.
 //
 // splitThresholdSeverity is the one grammar of a threshold value's
-// `value[:severity]` suffix. The matrix's `ok` / `value_part` / `severity` /
-// `float_ok` columns are what it (and parseThresholdNumber on the value half:
-// finite only, #3140) says about each `value`, `row_disabled` is
-// thresholdRowDisabled's (#3141), `custom_alert_disabled` resolveOneCustomAlert's,
-// and `severities` is ThresholdSeverities(); nobody types them by hand:
+// `value[:severity]` suffix. The matrix's `ok` / `value_part` / `severity`
+// columns are what it says about each `value`; `grammar_ok` is whether the
+// value half is in the grammar of a threshold number (thresholdNumberRe, the
+// recipe contract's patterns.thresholdNumber, #3457) and `float_ok` whether
+// parseThresholdNumber reads it (in the grammar and finite, #3140);
+// `row_disabled` is thresholdRowDisabled's (#3141), `custom_alert_disabled`
+// resolveOneCustomAlert's, `severities` is ThresholdSeverities(),
+// `trim_code_points` the characters strings.TrimSpace trims, `disable_words`
+// isDisabled's words and `disable_letters` the characters strings.ToLower
+// turns into each of their letters; nobody types them by hand:
 //
 //	DA_REGEN_THRESHOLD_VALUE_MATRIX=1 go test ./pkg/config -run TestThresholdValueMatrix
 //
@@ -18,9 +23,9 @@ package config
 // Go says, and that every reader of the grammar — the row resolvers'
 // parseThresholdValue, custom alerts' parseCustomAlertThreshold, the subtree
 // overlay's thresholdScalar — agrees with it. The Python half
-// (tests/shared/test_threshold_value_parity.py) holds the backtest's and the
-// custom-alert compiler's parsers, and the schema's thresholdScalar pattern,
-// to the same columns.
+// (tests/shared/test_threshold_value_parity.py) holds the Python readers and
+// the schema's thresholdScalar pattern to the same columns, and the portal's
+// half (tools/portal/tests/threshold-value-matrix.test.ts) the RecipeBuilder.
 
 import (
 	"bytes"
@@ -33,6 +38,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"unicode"
+	"unicode/utf8"
 )
 
 type thresholdValueRow struct {
@@ -40,7 +47,10 @@ type thresholdValueRow struct {
 	OK        *bool   `json:"ok,omitempty"`
 	ValuePart *string `json:"value_part,omitempty"`
 	Severity  *string `json:"severity,omitempty"`
-	FloatOK   *bool   `json:"float_ok,omitempty"`
+	// GrammarOK: the value half is in the grammar of a threshold number
+	// (thresholdNumberRe). FloatOK: and the number is finite.
+	GrammarOK *bool `json:"grammar_ok,omitempty"`
+	FloatOK   *bool `json:"float_ok,omitempty"`
 	// CustomAlertDisabled: a custom alert with this threshold is the
 	// three-state opt-out (resolveOneCustomAlert's errCustomAlertDisabled).
 	CustomAlertDisabled *bool `json:"custom_alert_disabled,omitempty"`
@@ -50,9 +60,53 @@ type thresholdValueRow struct {
 }
 
 type thresholdValueMatrix struct {
-	Comment    []string            `json:"_comment"`
-	Severities []string            `json:"severities"`
-	Rows       []thresholdValueRow `json:"rows"`
+	Comment    []string `json:"_comment"`
+	Severities []string `json:"severities"`
+	// TrimCodePoints is every character strings.TrimSpace trims — the one
+	// trim of the grammar. A reader in another language trims exactly these:
+	// JavaScript's trim() also takes U+FEFF and leaves U+0085, Python's
+	// strip() also takes U+001C to U+001F.
+	TrimCodePoints []int `json:"trim_code_points"`
+	// DisableWords is isDisabled's words, and DisableLetters, for each letter
+	// of them, every character strings.ToLower turns into it (`i`: i, I and
+	// U+0130) — how a threshold value is read as a disable. The JSON schema's
+	// thresholdScalar pattern is generated from the two.
+	DisableWords   []string            `json:"disable_words"`
+	DisableLetters map[string][]int    `json:"disable_letters"`
+	Rows           []thresholdValueRow `json:"rows"`
+}
+
+// disableLetters is, for each letter of words, every character
+// strings.ToLower turns into it, ascending.
+func disableLetters(words []string) map[string][]int {
+	out := map[string][]int{}
+	for _, w := range words {
+		for _, l := range w {
+			out[string(l)] = nil
+		}
+	}
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if !utf8.ValidRune(r) {
+			continue
+		}
+		if lower := strings.ToLower(string(r)); len(lower) > 0 {
+			if _, wanted := out[lower]; wanted {
+				out[lower] = append(out[lower], int(r))
+			}
+		}
+	}
+	return out
+}
+
+// trimCodePoints is every character strings.TrimSpace trims, ascending.
+func trimCodePoints() []int {
+	var out []int
+	for r := rune(0); r <= unicode.MaxRune; r++ {
+		if utf8.ValidRune(r) && strings.TrimSpace(string(r)) == "" {
+			out = append(out, int(r))
+		}
+	}
+	return out
 }
 
 func thresholdValueMatrixPath() string {
@@ -70,6 +124,8 @@ func thresholdValueVerdict(value string) thresholdValueRow {
 	row.OK = &ok
 	if ok {
 		row.ValuePart, row.Severity = &v, &sev
+		gok := thresholdNumberRe.MatchString(v)
+		row.GrammarOK = &gok
 		_, fok := parseThresholdNumber(v)
 		row.FloatOK = &fok
 	}
@@ -87,13 +143,26 @@ func writeThresholdValueMatrix(t *testing.T, path string, m thresholdValueMatrix
 	t.Helper()
 	var b bytes.Buffer
 	head, err := json.MarshalIndent(struct {
-		Comment    []string `json:"_comment"`
-		Severities []string `json:"severities"`
-	}{m.Comment, m.Severities}, "", "  ")
+		Comment      []string `json:"_comment"`
+		Severities   []string `json:"severities"`
+		DisableWords []string `json:"disable_words"`
+	}{m.Comment, m.Severities, m.DisableWords}, "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
 	b.Write(bytes.TrimSuffix(head, []byte("\n}")))
+	// One line each: a list of code points reads no better one per line.
+	for _, member := range []struct {
+		name  string
+		value any
+	}{{"disable_letters", m.DisableLetters}, {"trim_code_points", m.TrimCodePoints}} {
+		line, err := json.Marshal(member.value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b.WriteString(",\n  \"" + member.name + "\": ")
+		b.Write(line)
+	}
 	b.WriteString(",\n  \"rows\": [\n")
 	for i, r := range m.Rows {
 		var line bytes.Buffer
@@ -133,6 +202,9 @@ func TestThresholdValueMatrix(t *testing.T) {
 
 	if os.Getenv("DA_REGEN_THRESHOLD_VALUE_MATRIX") == "1" {
 		m.Severities = ThresholdSeverities()
+		m.TrimCodePoints = trimCodePoints()
+		m.DisableWords = disabledWords(t)
+		m.DisableLetters = disableLetters(m.DisableWords)
 		for i, r := range m.Rows {
 			m.Rows[i] = thresholdValueVerdict(r.Value)
 		}
@@ -144,6 +216,16 @@ func TestThresholdValueMatrix(t *testing.T) {
 	if !reflect.DeepEqual(m.Severities, ThresholdSeverities()) {
 		t.Errorf("matrix severities %v, ThresholdSeverities() %v (regenerate with "+
 			"DA_REGEN_THRESHOLD_VALUE_MATRIX=1)", m.Severities, ThresholdSeverities())
+	}
+	if !reflect.DeepEqual(m.TrimCodePoints, trimCodePoints()) {
+		t.Errorf("matrix trim_code_points %v, strings.TrimSpace trims %v (regenerate with "+
+			"DA_REGEN_THRESHOLD_VALUE_MATRIX=1)", m.TrimCodePoints, trimCodePoints())
+	}
+	if words := disabledWords(t); !reflect.DeepEqual(m.DisableWords, words) ||
+		!reflect.DeepEqual(m.DisableLetters, disableLetters(words)) {
+		t.Errorf("matrix disable_words %v / disable_letters %v, isDisabled's words %v with letters %v "+
+			"(regenerate with DA_REGEN_THRESHOLD_VALUE_MATRIX=1)", m.DisableWords, m.DisableLetters,
+			words, disableLetters(words))
 	}
 	seen := map[string]bool{}
 	var accepted, refused int
