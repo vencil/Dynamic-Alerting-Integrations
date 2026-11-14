@@ -221,9 +221,9 @@ function AlertPreviewTab() {
             <span className="px-2 py-1 bg-gray-100 text-gray-600 rounded">
               {t('無閾值/已禁用', 'No threshold/Disabled')}: {alerts.filter(a => a.severity === 'no-threshold' || a.severity === 'disabled').length}
             </span>
-            {alerts.some(a => a.severity === 'unreadable') && (
+            {alerts.some(a => a.raw !== undefined) && (
               <span className="px-2 py-1 bg-red-100 text-red-800 rounded" data-testid="unreadable-count">
-                {t('exporter 不會讀', 'Exporter will not read')}: {alerts.filter(a => a.severity === 'unreadable').length}
+                {t('exporter 不會讀', 'Exporter will not read')}: {alerts.filter(a => a.raw !== undefined).length}
               </span>
             )}
           </div>
@@ -266,17 +266,18 @@ function AlertPreviewTab() {
                             <span>
                               {a.threshold}
                               {a.critical_threshold ? ` / ${a.critical_threshold}` : ''}
-                              {a.critical_unreadable !== undefined && (
-                                <span className="block text-red-700" data-testid={`critical-unreadable-${a.metric}`}>
-                                  {`${a.metric}_critical: ${unreadableThresholdMessage(a.critical_unreadable)}`}
-                                </span>
-                              )}
                             </span>
-                          ) : a.severity === 'unreadable' ? (
+                          ) : a.raw !== undefined ? (
                             <span className="text-red-700" data-testid={`unreadable-${a.metric}`}>
                               {unreadableThresholdMessage(a.raw)}
+                              {a.critical_threshold != null ? ` (critical: ${a.critical_threshold})` : ''}
                             </span>
                           ) : '-'}
+                          {a.critical_unreadable !== undefined && (
+                            <span className="block text-red-700" data-testid={`critical-unreadable-${a.metric}`}>
+                              {`${a.metric}_critical: ${unreadableThresholdMessage(a.critical_unreadable, 'critical')}`}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-1.5 text-center text-xs">
                           {recData?.recommendations?.[a.metric] ? (

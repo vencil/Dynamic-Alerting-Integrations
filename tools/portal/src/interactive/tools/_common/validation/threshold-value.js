@@ -35,19 +35,34 @@ purpose: |
     thresholdScalarText(v) -> string | null
       The text of a parsed YAML scalar: a string as is, a number or a
       boolean through String(). null for anything else (a map, a list, null).
-    readThresholdRow(v) -> { kind: 'absent' } | { kind: 'disabled', raw }
-        | { kind: 'structured' } | { kind: 'unreadable', raw }
+    isCriticalKey(key) -> boolean
+      Whether a tenant key is a `<base>_critical` companion (the exporter's
+      criticalRowBase: the suffix, and not a `_` key).
+    readThresholdRow(v, tier = 'base') -> { kind: 'absent' }
+        | { kind: 'disabled', raw } | { kind: 'structured' }
+        | { kind: 'unreadable', raw }
         | { kind: 'number', raw, number, severity }
       What a simulator does with one value of a parsed tenant config.
-      'absent' is undefined / null / ''. 'structured' is a map or a list (a
-      scheduled value): the simulators model no schedule and say nothing
-      about it. 'unreadable' is a scalar the exporter serves no number for.
+      'absent' is undefined / null. 'structured' is a map or a list (a
+      scheduled value among them): the simulators model no schedule and say
+      nothing about it. 'unreadable' is a scalar the exporter does not read
+      as this key's threshold — the empty string among them.
+      tier 'base' is the `value[:severity]` grammar. tier 'critical' is a
+      `<base>_critical` key: the exporter reads its WHOLE value as the
+      number (resolveCriticalRows), so `95:critical` is unreadable there and
+      the severity is always critical.
+      ⚠️ What the exporter does with an unreadable value differs by key, and
+      this reader does not know which: a key with a platform default is
+      served AT THAT DEFAULT, a declared key and a `_critical` key are not
+      served. The pages say so (alert-engine.js unreadableThresholdMessage).
 
   ⚠️ Known limit: the value arrives already typed by the YAML parser
   (yaml-parser.js, js-yaml CORE_SCHEMA), and the exporter reads the scalar's
-  TEXT. An UNQUOTED `0x1F` or `0o17` is the number 31 or 15 by the time it
-  gets here, and reads as that number; the exporter refuses it. Quoted, the
-  text survives and is refused here too.
+  TEXT. A value the parser made a number is taken as that number — its text
+  is gone, and String() of it is not what was written (`1e20` comes back as
+  21 digits). So two unquoted spellings the exporter refuses are read here:
+  `0x1F` / `0o17` (31 / 15), and a number of more than 20 digits. Quoted,
+  the text survives and is refused here too.
 
   Closure deps: none. All data is ESM-imported from ../data/recipe-enums.json
   (generated from the exporter's recipe contract and the matrix header by
@@ -120,16 +135,32 @@ function thresholdScalarText(v) {
   return null;
 }
 
-function readThresholdRow(v) {
-  if (v === undefined || v === null || v === '') return { kind: 'absent' };
+function isCriticalKey(key) {
+  return typeof key === 'string' && key.endsWith('_critical') && !key.startsWith('_');
+}
+
+function readThresholdRow(v, tier = 'base') {
+  if (v === undefined || v === null) return { kind: 'absent' };
   const raw = thresholdScalarText(v);
   if (raw === null) return { kind: 'structured' };
+  const severity = tier === 'critical' ? 'critical' : ENUMS.severityDefault;
+  // The parser has already made it a number: there is no text to hold to the
+  // grammar (String(1e20) is 21 digits, which the grammar refuses).
+  if (typeof v === 'number') {
+    return Number.isFinite(v) ? { kind: 'number', raw, number: v, severity } : { kind: 'unreadable', raw };
+  }
   if (thresholdRowDisabled(raw)) return { kind: 'disabled', raw };
+  if (tier === 'critical') {
+    // The whole value is the number: no `:<severity>` on a `_critical` key.
+    const text = trimThreshold(raw);
+    const number = THRESHOLD_NUMBER_RE.test(text) ? Number(text) : NaN;
+    return Number.isFinite(number) ? { kind: 'number', raw, number, severity } : { kind: 'unreadable', raw };
+  }
   const read = readThreshold(raw);
   if (!read.ok || read.number === null) return { kind: 'unreadable', raw };
   return { kind: 'number', raw, number: read.number, severity: read.severity };
 }
 
 export {
-  trimThreshold, readThreshold, thresholdRowDisabled, thresholdScalarText, readThresholdRow,
+  trimThreshold, readThreshold, thresholdRowDisabled, thresholdScalarText, isCriticalKey, readThresholdRow,
 };

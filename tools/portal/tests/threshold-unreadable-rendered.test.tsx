@@ -56,8 +56,18 @@ describe('Alert Preview — a threshold the exporter will not read', () => {
     // An unreadable `_critical` companion: the base row stands, and says the
     // critical tier is not served (parseFloat read `0x1F` as 0 → CRITICAL).
     const crit = screen.getByTestId(`critical-unreadable-${badCritical}`);
-    expect(crit.textContent).toBe(`${badCritical}_critical: ${unreadableThresholdMessage('0x1F')}`);
+    expect(crit.textContent).toBe(`${badCritical}_critical: ${unreadableThresholdMessage('0x1F', 'critical')}`);
     expect(within(crit.closest('tr')!).queryByText('CRITICAL')).toBeNull();
+  });
+
+  it('an unreadable base value with a readable _critical: the tier is shown and can fire', () => {
+    // The exporter serves the platform default for the base (not simulated)
+    // and the critical tier as written.
+    simulate(`${bad}: "abc"\n${bad}_critical: 0\n`);
+    const cell = screen.getByTestId(`unreadable-${bad}`);
+    expect(cell.textContent).toBe(`${unreadableThresholdMessage('abc')} (critical: 0)`);
+    expect(within(cell.closest('tr')!).getByText('CRITICAL')).toBeInTheDocument();
+    expect(screen.getByTestId('unreadable-count').textContent).toBe('Exporter will not read: 1');
   });
 
   it('readable values show neither the sentence nor the count', () => {
