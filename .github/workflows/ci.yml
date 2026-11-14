@@ -2520,11 +2520,10 @@ jobs:
     # reported the required check at all and sat permanently pending.
     name: Smoke Tests Run
     runs-on: ubuntu-24.04
-    # contents: read for checkout; pull-requests: write only for the
-    # result comment at the end (as in playwright.yml).
+    # contents: read for checkout. Nothing here writes to the PR: the result
+    # line goes to the step summary (#3756), not to a PR comment.
     permissions:
       contents: read
-      pull-requests: write
     # TRK-233: workers=4 runs the 192 specs in ~1.5 min; 10 min is ~6x
     # headroom (history in playwright.yml before #1428).
     timeout-minutes: 10
@@ -2622,22 +2621,19 @@ jobs:
           retention-days: 3
           if-no-files-found: ignore
 
-      # The event check is in the script, not the `if:` (same guard as above).
-      - name: Comment on PR with results
+      # A line in the step summary, not a PR comment (#3756). This job runs on
+      # every PR now, so a comment was one more per push; and a comment needs
+      # `pull-requests: write`, which a fork PR's token does not have — the
+      # failed API call could redden this leg, and with it the required check.
+      # The verdict is the check itself; this only says where the report is.
+      - name: Note the report in the step summary
         if: always()
-        uses: actions/github-script@v9
-        with:
-          script: |
-            if (context.eventName !== 'pull_request') return;
-            const fs = require('fs');
-            if (fs.existsSync('tests/e2e/playwright-report/index.html')) {
-              github.rest.issues.createComment({
-                issue_number: context.issue.number,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: '✅ Playwright smoke tests completed. [View detailed report](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}).'
-              });
-            }
+        run: |
+          if [ -f tests/e2e/playwright-report/index.html ]; then
+            echo "Playwright smoke run finished; the HTML report is the \`playwright-report\` artifact of this run." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Playwright smoke run produced no HTML report (it stopped before the tests ran)." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   smoke-tests:
     # Aggregation gate for smoke-tests-run (#1428). The job name is kept
