@@ -585,7 +585,7 @@ da-tools cutover --readiness-json cutover-readiness.json --tenant db-a --force
 |------|------|
 | `0` | 切換成功 |
 | `1` | readiness 顯示未就緒（沒帶 `--force`），或某個切換步驟失敗 |
-| `2` | 呼叫端錯誤：缺必填參數、readiness JSON 不存在、讀不了（不是 UTF-8、不是合法 JSON、頂層不是物件——任何步驟執行之前就以一行點名 `--readiness-json` 與路徑，`--json-output` 時 stdout 為空，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）或缺欄位、Prometheus 連不到或回應格式不對、找不到 `kubectl`。回應格式不對先前依形狀而異：`status` 不是 `success` 被當成「沒有閾值指標」、rc 1；計數是 `NaN` 或缺 `resultType` 被當成通過、rc 0；`data: null` crash（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
+| `2` | 呼叫端錯誤：缺必填參數、readiness JSON 不存在、讀不了（不是 UTF-8、不是合法 JSON、頂層不是物件——任何步驟執行之前就以一行點名 `--readiness-json` 與路徑，`--json-output` 時 stdout 為空，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）或缺欄位、Prometheus 連不到或回應格式不對、`kubectl` 不在 PATH、在 PATH 上但起不來（沒有執行權限、`Exec format error`、`#!` 直譯器不存在；先前是 traceback）或 30 秒內沒結束——失敗訊息點名是哪個 `kubectl` 指令，已完成的步驟照列（`steps_completed`），逾時的那一步可能已送達叢集（[#3539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3539)）。回應格式不對先前依形狀而異：`status` 不是 `success` 被當成「沒有閾值指標」、rc 1；計數是 `NaN` 或缺 `resultType` 被當成通過、rc 0；`data: null` crash（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） |
 
 ---
 
@@ -1018,8 +1018,8 @@ da-tools grafana-import --dashboard overview.json --dry-run
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | `--verify` 發現問題（ConfigMap 內的 dashboard JSON 無效）。⚠️ 匯入模式的失敗全是 2 不是 1；`kubectl` 不在 PATH 是未捕捉例外（匯入與 `--verify` 皆 traceback、rc 1） |
-| `2` | 呼叫端錯誤：`--dashboard` 檔不存在、讀不了（不是 UTF-8、不是合法 JSON、頂層不是物件——匯入之前一行點名旗標與路徑，`--json` 時 stdout 為空；頂層是清單或純量先前報成 `Invalid JSON: 'int' object has no attribute 'get'`，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）、`--dashboard-dir` 不存在、列不出內容或裡面沒有 `*.json`（一行點名旗標與路徑；先前列不出內容與空目錄都只印 `No dashboard files found.`，[#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)）；匯入時 `kubectl create／apply／label` 失敗；`--verify` 時 `kubectl get` 失敗或輸出解析不了；三個模式旗標一個都沒給 |
+| `1` | `--verify` 發現問題（ConfigMap 內的 dashboard JSON 無效）。⚠️ 匯入模式的失敗全是 2 不是 1 |
+| `2` | 呼叫端錯誤：`--dashboard` 檔不存在、讀不了（不是 UTF-8、不是合法 JSON、頂層不是物件——匯入之前一行點名旗標與路徑，`--json` 時 stdout 為空；頂層是清單或純量先前報成 `Invalid JSON: 'int' object has no attribute 'get'`，[#3445](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3445)）、`--dashboard-dir` 不存在、列不出內容或裡面沒有 `*.json`（一行點名旗標與路徑；先前列不出內容與空目錄都只印 `No dashboard files found.`，[#3693](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3693)）；匯入時 `kubectl create／apply／label` 失敗；`--verify` 時 `kubectl get` 失敗或輸出解析不了；`kubectl` 不在 PATH、在 PATH 上但起不來（沒有執行權限、`Exec format error`、`#!` 直譯器不存在）或 120 秒內沒結束——一行點名是哪個 `kubectl` 指令與原因，不是 traceback（[#3539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3539)）。⚠️ ConfigMap 已套用、之後的 `kubectl label` 起不來或逾時時，報表保留已套用的那一列，另一列寫明「its label is NOT confirmed」（少了 `grafana_dashboard=1`，sidecar 不會載入），結束碼 2；逾時的 `apply`／`label` 可能已送達叢集，訊息會寫明是逾時；三個模式旗標一個都沒給 |
 
 ---
 
@@ -1163,7 +1163,7 @@ da-tools drift-detect --dirs staging/conf.d,prod/conf.d --ci
 |------|------|
 | `0` | 無非預期漂移 |
 | `1` | CI 模式：偵測到非預期漂移 |
-| `2` | 呼叫端錯誤：`--dirs` 有空項、任一目錄不存在或 da-guard 列不出內容（點名 `--dirs` 與該目錄）、目錄上有 da-guard 驗證會點名的路徑、沒有可用的 da-guard、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、逾時（30s）、非零結束或輸出不是 JSON；argparse 拒絕的參數 |
+| `2` | 呼叫端錯誤：`--dirs` 有空項、任一目錄不存在或 da-guard 列不出內容（點名 `--dirs` 與該目錄）、目錄上有 da-guard 驗證會點名的路徑、沒有可用的 da-guard、configmap 模式少於 2 個目錄、operator 模式不是恰好 1 個目錄、`--labels` 數量與 `--dirs` 不符；operator 模式下 `kubectl` 不在 PATH、在 PATH 上但起不來（沒有執行權限、`Exec format error`、`#!` 直譯器不存在；先前是 traceback，[#3539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3539)）、逾時（30s）、非零結束、輸出不是 JSON 或不是物件清單；argparse 拒絕的參數 |
 
 ---
 

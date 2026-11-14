@@ -1,14 +1,17 @@
 """pytest style tests for cutover_tenant.py — Shadow Monitoring one-command cutover."""
 
+import errno
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from unittest import mock
 
 import pytest
 
 import cutover_tenant as ct
+from _kubectl_fake import install as install_kubectl  # (#3539)
 
 
 # ---------------------------------------------------------------------------
@@ -125,6 +128,19 @@ class TestDryRunDoesNotJudgeTheEnv:
 # TestRunKubectl
 # ---------------------------------------------------------------------------
 
+def _kubectl(monkeypatch, answer):
+    """Every kubectl `_lib_kubectl.kubectl_run` starts is *answer*: a callable
+    taking the argv (it starts with `kubectl`) that returns `(rc, stdout,
+    stderr)` or raises what starting it raised. Returns the recorded argvs."""
+    calls = []
+
+    def fake(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, *answer(cmd, **kw))
+    install_kubectl(monkeypatch, fake)
+    return calls
+
+
 class TestRunKubectl:
     """_run_kubectl() tests。"""
 
@@ -134,40 +150,85 @@ class TestRunKubectl:
         assert ok
         assert msg == "(dry-run)"
 
-    @mock.patch("subprocess.run")
-    def test_success(self, mock_run):
+    def test_success(self, monkeypatch):
         """成功執行返回 True 和輸出。"""
-        mock_run.return_value = mock.Mock(
-            returncode=0, stdout="deleted\n", stderr="",
-        )
+        calls = _kubectl(monkeypatch, lambda cmd, **kw: (0, "deleted\n", ""))
         ok, msg = ct._run_kubectl(["delete", "job", "shadow-monitor"])
         assert ok
         assert msg == "deleted"
+        assert calls == [["kubectl", "delete", "job", "shadow-monitor"]]
 
-    @mock.patch("subprocess.run")
-    def test_failure(self, mock_run):
+    def test_failure(self, monkeypatch):
         """失敗執行返回 False 和錯誤訊息。"""
-        mock_run.return_value = mock.Mock(
-            returncode=1, stdout="", stderr="not found",
-        )
+        _kubectl(monkeypatch, lambda cmd, **kw: (1, "", "not found"))
         ok, msg = ct._run_kubectl(["delete", "job", "shadow-monitor"])
         assert not ok
         assert "not found" in msg
+        assert not msg.startswith(ct.CALLER_ERROR_PREFIX)
 
-    @mock.patch("subprocess.run", side_effect=FileNotFoundError)
-    def test_kubectl_not_found(self, _mock):
-        """kubectl 不存在時報告錯誤。"""
+    @pytest.mark.parametrize("raised, why", [
+        (PermissionError(errno.EACCES, "Permission denied", "kubectl"), "cannot run kubectl"),
+        (OSError(errno.ENOEXEC, "Exec format error", "kubectl"), "cannot run kubectl"),
+        (FileNotFoundError(errno.ENOENT, "No such file or directory", "kubectl"),
+         "cannot run kubectl"),
+        (subprocess.TimeoutExpired(cmd="kubectl", timeout=30), "did not finish within 30s"),
+    ], ids=["eacces", "enoexec", "enoent", "timeout"])
+    def test_no_exit_status_is_a_caller_error(self, monkeypatch, raised, why):
+        """#3539: kubectl 起不來（沒有執行權限、ENOEXEC、`#!` 直譯器不存在）或逾時
+        ＝環境問題（caller-error，exit 2），訊息指名哪個指令。EACCES／ENOEXEC
+        原本是未接的 OSError（traceback、`unexpected internal error`）。"""
+        def boom(cmd, **kw):
+            raise raised
+        _kubectl(monkeypatch, boom)
+        ok, msg = ct._run_kubectl(["delete", "job", "shadow-monitor"])
+        assert not ok
+        assert msg.startswith(ct.CALLER_ERROR_PREFIX)
+        assert why in msg and "kubectl delete job shadow-monitor" in msg
+
+    def test_kubectl_not_on_path_is_a_caller_error(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("PATH", str(tmp_path))
         ok, msg = ct._run_kubectl(["get", "pods"])
         assert not ok
-        assert "kubectl not found" in msg
+        assert msg.startswith(ct.CALLER_ERROR_PREFIX) and "kubectl is not available" in msg
 
-    @mock.patch("subprocess.run",
-                side_effect=subprocess.TimeoutExpired(cmd="kubectl", timeout=30))
-    def test_kubectl_timeout(self, _mock):
-        """kubectl 超時時報告錯誤。"""
-        ok, msg = ct._run_kubectl(["get", "pods"])
-        assert not ok
-        assert "timed out" in msg
+
+class TestPartWayCutover:
+    """#3539: 第一步成功、之後 kubectl 起不來 —— 不可報成功，結束碼 2，
+    報告指出完成了哪些步驟、停在哪一步。"""
+
+    @pytest.mark.parametrize("raised", [
+        PermissionError(errno.EACCES, "Permission denied", "kubectl"),
+        OSError(errno.ENOEXEC, "Exec format error", "kubectl"),
+        subprocess.TimeoutExpired(cmd="kubectl", timeout=30),
+    ], ids=["eacces", "enoexec", "timeout"])
+    def test_a_later_step_that_cannot_start_is_exit_2_and_names_what_ran(
+            self, monkeypatch, tmp_path, capsys, raised):
+        import _lib_exitcodes
+        seen = []
+
+        def kubectl(cmd, **kw):
+            seen.append(cmd[1:3])
+            if len(seen) > 1:
+                raise raised
+            return (0, "job deleted\n", "")
+        _kubectl(monkeypatch, kubectl)
+        readiness = tmp_path / "ready.json"
+        readiness.write_text(json.dumps({
+            "ready": True, "timestamp": "2026-01-01T00:00:00Z",
+            "convergence_percentage": 100, "converged_count": 1, "total_pairs": 1,
+        }), encoding="utf-8")
+        monkeypatch.setattr(sys, "argv", [
+            "cutover_tenant.py", "--readiness-json", str(readiness), "--tenant", "t1",
+            "--prometheus", "http://127.0.0.1:9", "--json-output"])
+        rc = _lib_exitcodes.emit_result(ct.main())
+        out, err = capsys.readouterr()
+        assert rc == 2
+        assert seen == [["delete", "job"], ["delete", "configmap"]]   # stopped there
+        doc = json.loads(out)
+        assert doc["success"] is False and doc["caller_error"] is True
+        assert doc["steps_completed"] == ["Stop Shadow Monitor Job"]
+        assert doc["failed_step"] == "Remove old Recording Rules"
+        assert "Cutover completed successfully" not in err
 
 
 # ---------------------------------------------------------------------------

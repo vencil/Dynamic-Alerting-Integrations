@@ -67,6 +67,7 @@ from _grar_merge import Finding  # noqa: E402  (#1211: the undelivered-custom-al
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Alertmanager / Kubernetes readings)
 from _lib_consumer_read import ConsumerReadError, InputRefused  # noqa: E402, F401  (re-exported)
+from _lib_kubectl import KubectlError, kubectl_run  # noqa: E402  (#3539: the one place kubectl is started)
 from _grar_validate import (  # noqa: E402
     assert_watchdog_inhibit_immunity,
     assert_platform_alerts_not_tenant_silenceable,
@@ -1157,9 +1158,13 @@ def _read_existing_configmap(namespace: str, configmap_name: str
     the read failed.
     """
     warnings = []
-    result = _run_binary(
-        ["kubectl", "get", "configmap", configmap_name, "-n", namespace, "-o", "json"],
-        timeout=60)
+    try:
+        result = kubectl_run(
+            "get", ["configmap", configmap_name, "-n", namespace, "-o", "json"],
+            timeout=60, what=f"`kubectl get configmap {configmap_name}`")
+    except KubectlError as exc:   # not on PATH, not startable, out of time
+        warnings.append(f"ERROR: Failed to read ConfigMap {configmap_name}: {exc}")
+        return None, warnings, None
     if result.returncode != 0:
         warnings.append(f"ERROR: Failed to read ConfigMap {configmap_name}: {result.stderr}")
         return None, warnings, None
@@ -1257,20 +1262,30 @@ def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str
 
     Returns True if successful, False otherwise.
     """
-    apply_result = _run_binary(
-        ["kubectl", "create", "configmap", configmap_name,
-         f"--from-literal={AM_CONFIGMAP_KEY}={merged_yml}",
-         *([f"--from-literal={AM_BASE_CONFIGMAP_KEY}={source_yml}"]
-           if source_yml is not None else []),
-         "-n", namespace, "--dry-run=client", "-o", "yaml"],
-        timeout=60)
+    try:
+        apply_result = kubectl_run(
+            "create", ["configmap", configmap_name,
+                       f"--from-literal={AM_CONFIGMAP_KEY}={merged_yml}",
+                       *([f"--from-literal={AM_BASE_CONFIGMAP_KEY}={source_yml}"]
+                         if source_yml is not None else []),
+                       "-n", namespace, "--dry-run=client", "-o", "yaml"],
+            timeout=60, what=f"`kubectl create configmap {configmap_name} --dry-run=client`")
+    except KubectlError as exc:   # nothing was sent to the cluster
+        print(f"ERROR: Failed to generate ConfigMap: {exc}", file=sys.stderr)
+        return False
     if apply_result.returncode != 0:
         print(f"ERROR: Failed to generate ConfigMap: {apply_result.stderr}", file=sys.stderr)
         return False
 
-    pipe_result = _run_binary(
-        ["kubectl", "apply", "-f", "-"],
-        timeout=120, stdin_text=apply_result.stdout)
+    try:
+        pipe_result = kubectl_run("apply", ["-f", "-"], timeout=120,
+                                  stdin_text=apply_result.stdout,
+                                  what="`kubectl apply -f -`")
+    except KubectlError as exc:
+        # ⛔ The message says which: a kubectl that could not be started sent
+        # nothing; one that did not finish in time may have applied it.
+        print(f"ERROR: kubectl apply failed: {exc}", file=sys.stderr)
+        return False
     if pipe_result.returncode != 0:
         print(f"ERROR: kubectl apply failed: {pipe_result.stderr}", file=sys.stderr)
         return False

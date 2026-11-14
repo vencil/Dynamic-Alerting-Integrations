@@ -22,7 +22,6 @@ import hashlib
 import json
 import os
 import stat
-import subprocess
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -40,6 +39,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  #
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 import _lib_input  # noqa: E402
+from _lib_kubectl import kubectl_list  # noqa: E402  (#3539)
 
 # ---------------------------------------------------------------------------
 # Bilingual help text
@@ -316,33 +316,13 @@ def compute_crd_manifest(
     For each CRD, computes SHA-256 of spec.groups JSON.
 
     Returns FileManifest with label="cluster-crd" and files={name: sha256}.
+    A read kubectl did not answer — not on PATH, not startable, out of time,
+    a non-zero exit, output that is not a list of objects — is
+    ``KubectlError`` (``_lib_kubectl``, #3539): rc 2, one ``ERROR:`` line.
     """
-    cmd = ["kubectl", "get", "prometheusrules", "-n", namespace, "-o", "json"]
-    if kubeconfig:
-        cmd.extend(["--kubeconfig", kubeconfig])
-    if context:
-        cmd.extend(["--context", context])
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30)
-        if result.returncode != 0:
-            print(f"ERROR: kubectl failed: {result.stderr}", file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-    except subprocess.TimeoutExpired:
-        print("ERROR: kubectl command timeout", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    except FileNotFoundError:
-        print("ERROR: kubectl not found", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
+    items = kubectl_list("prometheusrules", namespace=namespace,
+                         kubeconfig=kubeconfig, context=context, timeout=30)
     manifest = FileManifest(label="cluster-crd", path=f"kubernetes:{namespace}")
-    try:
-        data = json.loads(result.stdout)
-    except json.JSONDecodeError as e:
-        print(f"ERROR: invalid JSON from kubectl: {e}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    items = data.get("items", [])
     for item in items:
         name = item.get("metadata", {}).get("name", "unknown")
         spec_groups = item.get("spec", {}).get("groups", [])

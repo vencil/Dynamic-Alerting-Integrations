@@ -43,9 +43,11 @@ are its ``PENDING`` set, which may only shrink.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import tempfile
 import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass
 from pathlib import Path
@@ -134,9 +136,26 @@ def locate(engine: str, *, docker_image: Optional[str] = None) -> Located | NoVe
         return Located(engine, "binary", path=path)
     if docker_image and shutil.which("docker"):
         return Located(engine, "docker", image=docker_image)
+    unusable = _on_path_not_executable(binary)
+    if unusable:
+        # Installed, but nothing may execute it (#3539): "install it" would
+        # send the operator after a binary they already have.
+        return NoVerdict(f"cannot run {engine}: {unusable} is on PATH but is "
+                         "not executable (no execute permission)")
     how = f"install the {binary} binary" + (
         ", or Docker for the containerised fallback" if docker_image else "")
     return NoVerdict(f"{engine} is not available ({how})")
+
+
+def _on_path_not_executable(binary: str) -> Optional[str]:
+    """The first file named *binary* in a PATH directory that this process
+    may not execute (the kernel's EACCES) — asked when ``which`` found none
+    to run. The mode is measured here, not inferred from ``which``'s answer."""
+    for directory in os.environ.get("PATH", os.defpath).split(os.pathsep):
+        candidate = os.path.join(directory or os.curdir, binary)
+        if os.path.isfile(candidate) and not os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def argv(located: Located, args: Sequence[str], *,
@@ -154,10 +173,10 @@ def argv(located: Located, args: Sequence[str], *,
 
 
 def run(located: Located, subcommand: str, args: Sequence[str], *,
-        timeout: int, cwd: Optional[str] = None,
+        timeout: float, cwd: Optional[str] = None,
         docker_run: Sequence[str] = (), entrypoint: Optional[str] = None,
         stdin_text: Optional[str] = None, env: Optional[dict] = None,
-        expect: Optional[dict] = None) -> Result:
+        expect: Optional[dict] = None, capture: str = "pipe") -> Result:
     """Run *located* and judge the result with the proof registered for
     ``(engine, subcommand)``. Never raises for an engine failure: a binary
     that cannot start, a timeout, and output without proof are all
@@ -165,19 +184,36 @@ def run(located: Located, subcommand: str, args: Sequence[str], *,
 
     *expect* is what the proof checks the output against beyond its shape —
     how many inputs were sent (``inputs``), the file the run must write
-    (``output``)."""
+    (``output``).
+
+    *capture* ``"file"`` hands the engine files for stdout and stderr, read
+    once the engine itself has exited, and no stdin unless *stdin_text* is
+    given (:func:`_run_to_files`); the default reads them through pipes."""
     proof = PROOFS[(located.engine, subcommand)]
     cmd = argv(located, args, docker_run=docker_run, entrypoint=entrypoint)
     via = "" if located.mode == "binary" else " (docker)"
+    if capture not in ("pipe", "file"):
+        raise ValueError(f"capture is 'pipe' or 'file', not {capture!r}")
     try:
-        proc = subprocess.run(cmd, cwd=cwd, input=stdin_text, capture_output=True,
-                              text=True, encoding="utf-8", errors="replace",
-                              timeout=timeout, env=env)
+        if capture == "file":
+            proc = _run_to_files(cmd, cwd=cwd, stdin_text=stdin_text,
+                                 timeout=timeout, env=env)
+        else:
+            proc = subprocess.run(cmd, cwd=cwd, input=stdin_text, capture_output=True,
+                                  text=True, encoding="utf-8", errors="replace",
+                                  timeout=timeout, env=env)
     except subprocess.TimeoutExpired:
-        return NoVerdict(f"{located.engine}{via} did not finish within {timeout}s "
+        # 0.375 → "0.375", 120 → "120", 1.12485 → "1.12" (a deadline's rest)
+        within = f"{timeout:.0f}" if timeout >= 100 else f"{timeout:.3g}"
+        return NoVerdict(f"{located.engine}{via} did not finish within {within}s "
                          f"(rc {_TIMEOUT_RC})")
     except OSError as exc:
-        return NoVerdict(f"cannot run {located.engine}{via}: {exc} "
+        # ENOENT for a file `locate` just found: the kernel names the file
+        # when what is missing is the interpreter on its `#!` line (#3534).
+        hint = (" — the file is there; its `#!` interpreter is not?"
+                if isinstance(exc, FileNotFoundError) and located.mode == "binary"
+                and os.path.isfile(located.path) else "")
+        return NoVerdict(f"cannot run {located.engine}{via}: {exc}{hint} "
                          f"(rc {_NOT_RUNNABLE_RC})")
     try:
         data = proof(proc, expect or {})
@@ -187,6 +223,31 @@ def run(located: Located, subcommand: str, args: Sequence[str], *,
             f"(exit {proc.returncode})",
             (proc.stderr or "").strip()[-_STDERR_TAIL:])
     return Ran(data, proc)
+
+
+def _run_to_files(cmd: Sequence[str], *, cwd: Optional[str], stdin_text: Optional[str],
+                  timeout: float, env: Optional[dict]) -> subprocess.CompletedProcess:
+    """``subprocess.run`` with stdout and stderr in files, not pipes: the
+    output is read once the engine itself has exited. A process the engine
+    leaves behind still holding a pipe (an exec credential plugin's helper
+    under kubectl) would otherwise hold the read open until it exits too —
+    an answer reported as a timeout (#3349 review). stdin is *stdin_text*,
+    else ``/dev/null``: an engine that would prompt gets end-of-file. The
+    text is decoded as UTF-8, newlines as written."""
+    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        if stdin_text is None:
+            proc = subprocess.run(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=out,
+                                  stderr=err, timeout=timeout, env=env, check=False)
+        else:
+            proc = subprocess.run(cmd, cwd=cwd, input=stdin_text.encode("utf-8"),
+                                  stdout=out, stderr=err, timeout=timeout, env=env,
+                                  check=False)
+        out.seek(0)
+        err.seek(0)
+        return subprocess.CompletedProcess(
+            cmd, proc.returncode,
+            out.read().decode("utf-8", "replace"),
+            err.read().decode("utf-8", "replace"))
 
 
 # ── proofs: what a real run of each (engine, subcommand) prints ─────────────
@@ -466,6 +527,20 @@ def _promtool_test_rules(proc: subprocess.CompletedProcess, expect: dict) -> dic
     return passed
 
 
+def _kubectl_exited(proc: subprocess.CompletedProcess, expect: dict) -> subprocess.CompletedProcess:
+    """Any ``kubectl`` verb: it ran to an exit status of its own. kubectl's
+    exit status **is** its answer, and what a non-zero one means differs by
+    verb and caller (a read that got no answer; ``create --dry-run=client``
+    refusing a key name, which is a finding on the caller's files; a write
+    the cluster refused), so the status is the caller's to judge —
+    ``_lib_kubectl`` does it for reads. What is no run at all is a kubectl
+    killed by a signal, and the ones :func:`run` names itself: not
+    startable, not finished in time (#3539)."""
+    if proc.returncode < 0:
+        raise NoProof(f"killed by signal {-proc.returncode}")
+    return proc
+
+
 #: (engine, subcommand) → proof. The key is the pair, not the engine: one
 #: engine's subcommands prove a run differently (helm ``template`` vs
 #: ``package``; node runs a different driver for each tool).
@@ -475,6 +550,13 @@ PROOFS: dict[tuple[str, str], Callable[[subprocess.CompletedProcess, dict], Any]
     ("helm", "show-chart"): _helm_show_chart,
     ("helm", "push"): _helm_push,
     ("kube-linter", "lint"): _kube_linter_lint,
+    ("kubectl", "apply"): _kubectl_exited,
+    ("kubectl", "create"): _kubectl_exited,
+    ("kubectl", "delete"): _kubectl_exited,
+    ("kubectl", "get"): _kubectl_exited,
+    ("kubectl", "label"): _kubectl_exited,
+    ("kubectl", "logs"): _kubectl_exited,
+    ("kubectl", "patch"): _kubectl_exited,
     ("mmdc", "render"): _mmdc_render,
     ("node", "esbuild-parse"): _node_esbuild_parse,
     ("node", "cli-playground"): _node_cli_playground,

@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -33,6 +32,7 @@ sys.path.insert(0, str(_TOOLS))
 sys.path.insert(0, str(_TOOLS / "ops"))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 import patch_config  # noqa: E402
+from _lib_kubectl import KubectlError, kubectl_run  # noqa: E402  (#3539)
 
 NAMESPACE = "monitoring"
 CONFIGMAP = "threshold-config"
@@ -90,8 +90,10 @@ def cleanup_patch(keys: list[str]) -> dict:
 
 
 def _kubectl(args: list[str]) -> str:
-    proc = subprocess.run(["kubectl", *args], capture_output=True, text=True,
-                          encoding="utf-8", timeout=_KUBECTL_TIMEOUT_S)
+    # #3539: started by _lib_kubectl — KubectlError when kubectl is not on
+    # PATH, cannot be started or does not finish in time.
+    proc = kubectl_run(args[0], args[1:], timeout=_KUBECTL_TIMEOUT_S,
+                       what=f"`kubectl {' '.join(args[:3])}`")
     if proc.returncode != 0:
         raise RuntimeError(
             f"kubectl {' '.join(args)} failed (rc={proc.returncode}): "
@@ -180,7 +182,7 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_CALLER_ERROR
             return cmd_inject(args.tenants, args.state_file)
         return cmd_cleanup(args.state_file)
-    except (RuntimeError, OSError, ValueError, subprocess.TimeoutExpired) as exc:
+    except (RuntimeError, OSError, ValueError, KubectlError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 

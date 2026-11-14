@@ -1,4 +1,21 @@
-"""Read Kubernetes resources through ``kubectl get -o json`` (#3207, #3210).
+"""Run kubectl: the one place that starts it, for reads and writes (#3207, #3210, #3539).
+
+kubectl is an engine of ``_lib_engine`` (``ENGINES``, a proof per verb in
+``PROOFS``): ``kubectl_run`` locates it and runs it there, so whether it
+started at all is decided once, for every tool. It returns kubectl's
+``CompletedProcess`` when kubectl ran to an exit status of its own, and
+raises ``KubectlError`` when there is none to read:
+
+* kubectl is not on PATH, or is there and cannot be started (no execute
+  permission, a file the kernel cannot execute, a ``#!`` interpreter that
+  does not exist) — nothing was sent to the cluster;
+* kubectl does not finish within the timeout, or is killed by a signal. ⛔
+  For a write (``apply``, ``patch``, ``label``, ``delete``) that says nothing
+  about the cluster: the request may have been sent and applied.
+
+What a non-zero exit status means is the caller's to say (a write the
+cluster refused, ``create --dry-run=client`` refusing a key name); the
+readers below say it for reads.
 
 One reader for the ops tools that ask a cluster whether something exists.
 Its rule is the one #3133 set for Prometheus: a query that got no answer is
@@ -6,8 +23,7 @@ never "no data". ``kubectl_list`` returns the listed objects only when
 kubectl answered (rc 0, a JSON list); every other outcome raises
 ``KubectlError``:
 
-* kubectl is not on PATH, cannot be started (no execute permission, a file
-  the kernel cannot execute), or does not finish within the timeout;
+* no exit status of kubectl's own (above);
 * kubectl exits non-zero — the cluster cannot be reached, the caller may not
   list the kind (forbidden), or the kind does not exist (a CRD that is not
   installed). Measured on kubectl 1.37.1 against a real kube-apiserver: a
@@ -36,16 +52,16 @@ uncaught, ``run()`` ends the process at rc 2 with one ``ERROR:`` line.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
-import tempfile
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
+import _lib_engine
 from _lib_exitcodes import CallerError
 
 
 class KubectlError(CallerError):
-    """kubectl gave no usable answer to a ``get`` (see the module docstring)."""
+    """kubectl gave no exit status of its own, or no usable answer to a read
+    (see the module docstring)."""
 
     reason = "kubectl_error"
 
@@ -60,68 +76,70 @@ def _last_line(text: str) -> str:
     return ""
 
 
-def _answer(cmd: list[str], what: str, timeout: float) -> str:
-    """kubectl's stdout when it answered (rc 0), else ``KubectlError``: not
-    on PATH or cannot be started, no answer within *timeout*, or a non-zero
-    exit (named by kubectl's own last stderr line). The one place that
-    decides it.
+def kubectl_run(verb: str, args: Sequence[str], *, timeout: float,
+                stdin_text: Optional[str] = None,
+                kubeconfig: Optional[str] = None, context: Optional[str] = None,
+                what: Optional[str] = None) -> subprocess.CompletedProcess:
+    """``kubectl <verb> <args>`` once it has exited by itself — whatever its
+    exit status, which the caller reads — else ``KubectlError``: not on
+    PATH, not startable, no exit within *timeout*, killed by a signal. The
+    one place that starts kubectl, reads and writes alike (#3539); *verb*
+    is one ``_lib_engine.PROOFS`` registers for kubectl.
 
-    Both streams go to files, not pipes: the answer is read once kubectl
-    itself has exited. A process kubectl leaves behind still holding a pipe
-    (an exec credential plugin's helper) would otherwise hold the read open
-    until it exits too — an answer reported as none (#3349 review)."""
-    with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
-        try:
-            proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
-                                  timeout=timeout, check=False)
-        except FileNotFoundError as exc:
-            if shutil.which(cmd[0]) is None:
-                raise KubectlError(f"{what}: kubectl is not on PATH") from exc
-            # On PATH, yet ENOENT: its #! interpreter does not exist (#3534).
-            raise KubectlError(f"{what}: kubectl cannot be run: "
-                               f"{exc.strerror or exc} (its interpreter?)") from exc
-        except OSError as exc:
-            # Found but not started (#3534): no execute permission, a file
-            # the kernel cannot execute (ENOEXEC), a directory on the way
-            # that cannot be entered. Still no answer, not a tool defect.
-            raise KubectlError(f"{what}: kubectl cannot be run: "
-                               f"{exc.strerror or exc}") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise KubectlError(f"{what}: no answer within {timeout:.3g}s") from exc
-        out.seek(0)
-        err.seek(0)
-        stdout = out.read().decode("utf-8", "replace")
-        stderr = err.read().decode("utf-8", "replace")
+    Both streams go to files, not pipes, and stdin is *stdin_text* or
+    ``/dev/null`` (``_lib_engine.run`` with ``capture="file"``): the answer
+    is read once kubectl itself has exited, not when a process it leaves
+    behind (an exec credential plugin's helper) lets go of a pipe (#3349
+    review). *what* names the call in the error (default ``kubectl <verb>``
+    in backticks)."""
+    what = what or f"`kubectl {verb}`"
+    located = _lib_engine.locate("kubectl")
+    if isinstance(located, _lib_engine.NoVerdict):
+        raise KubectlError(f"{what}: {located.reason}")
+    flags = (["--kubeconfig", kubeconfig] if kubeconfig else []) + (
+        ["--context", context] if context else [])
+    result = _lib_engine.run(located, verb, [*flags, verb, *args], timeout=timeout,
+                             stdin_text=stdin_text, capture="file")
+    if isinstance(result, _lib_engine.NoVerdict):
+        raise KubectlError(f"{what}: {result.reason}")
+    return result.proc
+
+
+def _answer(verb: str, args: Sequence[str], what: str, timeout: float, *,
+            kubeconfig: Optional[str], context: Optional[str] = None) -> str:
+    """kubectl's stdout when it answered a read (rc 0), else ``KubectlError``:
+    no exit status of its own (``kubectl_run``), or a non-zero one (named by
+    kubectl's own last stderr line)."""
+    proc = kubectl_run(verb, args, timeout=timeout, kubeconfig=kubeconfig,
+                       context=context, what=what)
     if proc.returncode != 0:
-        why = _last_line(stderr) or "no message on stderr"
+        why = _last_line(proc.stderr) or "no message on stderr"
         raise KubectlError(f"{what} failed (exit {proc.returncode}): {why}")
-    return stdout
-
-
-def _kubectl(kubeconfig: Optional[str]) -> list[str]:
-    return ["kubectl", "--kubeconfig", kubeconfig] if kubeconfig else ["kubectl"]
+    return proc.stdout
 
 
 def kubectl_list(kind: str, *, namespace: Optional[str] = None,
                  selector: Optional[str] = None,
                  field_selector: Optional[str] = None,
                  kubeconfig: Optional[str] = None,
+                 context: Optional[str] = None,
                  timeout: float = 10) -> list[dict[str, Any]]:
     """The objects of *kind* kubectl lists, or ``KubectlError``.
 
     *selector* is a label selector (``-l``), *field_selector* a field
-    selector; *namespace* None lists in kubectl's current namespace.
+    selector; *namespace* None lists in kubectl's current namespace;
+    *context* is kubectl's ``--context``.
     """
-    cmd = _kubectl(kubeconfig) + ["get", kind]
+    args = [kind]
     if namespace is not None:
-        cmd += ["-n", namespace]
+        args += ["-n", namespace]
     if selector:
-        cmd += ["-l", selector]
+        args += ["-l", selector]
     if field_selector:
-        cmd += ["--field-selector", field_selector]
-    cmd += ["-o", "json"]
+        args += ["--field-selector", field_selector]
+    args += ["-o", "json"]
     what = f"`kubectl get {kind}`" + (f" in namespace {namespace!r}" if namespace is not None else "")
-    out = _answer(cmd, what, timeout)
+    out = _answer("get", args, what, timeout, kubeconfig=kubeconfig, context=context)
     try:
         doc = json.loads(out)
     except ValueError as exc:
@@ -138,12 +156,12 @@ def kubectl_get(kind: str, name: str, *, namespace: Optional[str] = None,
     """The object *kind*/*name*, None when it does not exist, or
     ``KubectlError`` when kubectl does not answer (see the module docstring).
     Needs only ``get`` on that object."""
-    cmd = _kubectl(kubeconfig) + ["get", kind, name]
+    args = [kind, name]
     if namespace is not None:
-        cmd += ["-n", namespace]
-    cmd += ["--ignore-not-found", "-o", "json"]
+        args += ["-n", namespace]
+    args += ["--ignore-not-found", "-o", "json"]
     what = f"`kubectl get {kind} {name}`" + (f" in namespace {namespace!r}" if namespace is not None else "")
-    out = _answer(cmd, what, timeout)
+    out = _answer("get", args, what, timeout, kubeconfig=kubeconfig)
     if not out.strip():
         return None
     try:
@@ -160,9 +178,10 @@ def kubectl_logs(namespace: str, target: str, *, container: Optional[str] = None
                  timeout: float = 10) -> str:
     """The log text of *target* (``pod/x``, ``deploy/x``) in *namespace*, or
     ``KubectlError`` when kubectl does not answer (see the module docstring)."""
-    cmd = _kubectl(kubeconfig) + ["logs", "-n", namespace, target]
+    args = ["-n", namespace, target]
     if container:
-        cmd += ["-c", container]
+        args += ["-c", container]
     if tail is not None:
-        cmd += [f"--tail={tail}"]
-    return _answer(cmd, f"`kubectl logs {target}` in namespace {namespace!r}", timeout)
+        args += [f"--tail={tail}"]
+    return _answer("logs", args, f"`kubectl logs {target}` in namespace {namespace!r}",
+                   timeout, kubeconfig=kubeconfig)

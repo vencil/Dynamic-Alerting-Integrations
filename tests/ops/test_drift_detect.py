@@ -734,3 +734,54 @@ class TestFlatScanSaysSoOutLoud:
 
         dd.compute_dir_manifest(str(d))
         assert capsys.readouterr().err == ""
+
+
+# ---------------------------------------------------------------------------
+# compute_crd_manifest — the cluster read, through _lib_kubectl (#3539)
+# ---------------------------------------------------------------------------
+
+class TestComputeCrdManifest:
+    """`--mode operator` reads the cluster's PrometheusRules with
+    `_lib_kubectl.kubectl_list`: a read kubectl did not answer is
+    KubectlError (rc 2), never an empty cluster and never a traceback."""
+
+    @staticmethod
+    def _kubectl(monkeypatch, answer):
+        import subprocess
+        from _kubectl_fake import install
+        calls = []
+
+        def fake(cmd, **kw):
+            calls.append(cmd)
+            if isinstance(answer, BaseException):
+                raise answer
+            return subprocess.CompletedProcess(cmd, *answer)
+        install(monkeypatch, fake)
+        return calls
+
+    def test_each_rule_is_hashed_by_its_groups(self, monkeypatch):
+        import hashlib
+        groups = [{"name": "g", "rules": []}]
+        calls = self._kubectl(monkeypatch, (0, json.dumps({"items": [
+            {"metadata": {"name": "pack-a"}, "spec": {"groups": groups}}]}), ""))
+        manifest = dd.compute_crd_manifest("ns", kubeconfig="/kc", context="ctx")
+        assert calls == [["kubectl", "--kubeconfig", "/kc", "--context", "ctx", "get",
+                          "prometheusrules", "-n", "ns", "-o", "json"]]
+        want = hashlib.sha256(json.dumps(
+            groups, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        assert manifest.files == {"pack-a.yaml": want}
+        assert (manifest.label, manifest.path) == ("cluster-crd", "kubernetes:ns")
+
+    @pytest.mark.parametrize("answer, why", [
+        (PermissionError(13, "Permission denied", "kubectl"), "cannot run kubectl"),
+        (OSError(8, "Exec format error", "kubectl"), "cannot run kubectl"),
+        ((1, '{"items": []}', "Error from server (Forbidden): nope"), "Forbidden"),
+        ((0, "not json", ""), "not JSON"),
+        ((0, '{"items": {}}', ""), "not a list of objects"),
+    ], ids=["eacces", "enoexec", "forbidden", "not-json", "items-not-a-list"])
+    def test_a_read_without_an_answer_is_kubectl_error(self, monkeypatch, answer, why):
+        from _lib_kubectl import KubectlError
+        self._kubectl(monkeypatch, answer)
+        with pytest.raises(KubectlError, match=why) as exc:
+            dd.compute_crd_manifest("ns")
+        assert isinstance(exc.value, CallerError)   # rc 2 at run()'s exit
