@@ -1296,7 +1296,7 @@ RECIPES: list[Recipe] = [
     R("explain_keys", "report",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"],
       doc_check=lambda d: None if isinstance(d, dict) and d.get("status") == "ok"
-      and d.get("schema") == "da-tools.explain-keys/v1" else f"not the explain report: {str(d)[:80]}"),
+      and d.get("schema") == "da-tools.explain-keys/v2" else f"not the explain report: {str(d)[:80]}"),
     R("explain_keys",
       "missing-config-dir",
       lambda t, s: ["--config-dir", str(t / "no-such-conf.d"), "--json"],

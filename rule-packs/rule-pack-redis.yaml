@@ -19,7 +19,7 @@
 #       seconds — Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis
 #       replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231
 #       owner call); #1196 C identity fix, no alias
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
 #
 # optional_overrides（不在出貨清單裡；base 只在 repo 的 dev conf.d 範本供給，Helm chart 不出貨）：
 # 下列 `<base>_critical` 的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值

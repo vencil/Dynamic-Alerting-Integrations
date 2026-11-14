@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -88,8 +89,8 @@ def test_a_disable_switches_off_its_whole_family_wherever_it_comes_from(tmp_path
         by = _by_key(t, tenant)
         for k in keys:
             v = by[k]
-            assert (v.read_by, v.verdict, v.severity, v.reason, v.served) == \
-                (("exporter",), "read", None, None, None), (tenant, k, v)
+            assert (v.read_by, v.verdict, v.severity, v.reason) == \
+                (("exporter",), "read", None, None), (tenant, k, v)
     # 只有租戶自己檔裡寫的同族鍵報 disable_cascade（warning，不擋），繼承來的不報。
     got = {(f.kind, f.key, f.tenants, f.base, f.blocks) for f in t.findings}
     assert got == {
@@ -139,7 +140,6 @@ def test_an_unregistered_key_the_root_declares_is_unread(tmp_path):
         (), "unread", "error", "unregistered", "ta.yaml")
     assert (b.read_by, b.verdict, b.severity, b.reason, b.file) == (
         (), "unread", "error", "unregistered", "_defaults.yaml")
-    assert a.served is None and b.served is None
     found = sorted((f.kind, f.severity, f.file, f.tenants) for f in t.findings if f.key == "_myth")
     assert found == [("unread", "error", "_defaults.yaml", ("tb",)),
                      ("unread", "error", "ta.yaml", ("ta",))]
@@ -397,8 +397,16 @@ def _da_guard_answering(tmp_path, document: str) -> str:
     ' "tenants": ["t"], "reason": "no_row", "base": null, "dead_entries": null, "blocks": true}],'
     ' "key_checks": {}, "parse_failed": [], "unreadable": [], "blocks": true,'
     ' "undecidable_blocks": false}',
+    # #3835: the last v2 — judged at one instant, each row with what /metrics
+    # served then — whatever else it carries.
+    '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {"t": [{"key": "k",'
+    ' "layer": "tenant", "file": "a.yaml", "read_by": ["exporter"], "verdict": "read", "severity": null,'
+    ' "reason": null, "disable": null, "hint": null, "switched_off_with": null, "dead_entries": [],'
+    ' "value": "70", "served": 70}]}, "findings": [], "key_checks": {}, "parse_failed": [],'
+    ' "unreadable": [], "blocks": false, "undecidable_blocks": false}',
 ], ids=["v1", "v2-without-parse_failed", "v2-without-blocks", "v2-without-undecidable_blocks",
-        "partial-disable", "disable_partial-finding", "v2-without-dead_entries", "v2-without-hint"])
+        "partial-disable", "disable_partial-finding", "v2-without-dead_entries", "v2-without-hint",
+        "v2-at-one-instant"])
 def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
     """#3489 審查：舊版 da-guard 的文件要說「比這支工具舊」（stale），不是「壞掉」——
     呼叫端與使用者據此知道要升級 da-guard，而不是去查樹。"""
@@ -412,10 +420,42 @@ def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
 
 _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
         "severity": "error", "reason": "no_row", "disable": None, "switched_off_with": None,
-        "dead_entries": [], "value": 1, "served": None}
+        "dead_entries": [], "value": 1}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
             "reason": "no_row", "hint": None, "base": None, "dead_entries": None, "blocks": True}
 _DEAD = {"entry": "overrides[1]", "window": "01:00-03:00", "value": "5", "reason": "window_covered"}
+
+
+def _v3(tenant_row: "dict | None" = None, finding: "dict | None" = None, drop: str = "") -> str:
+    """A key-verdict v3 document with *drop* left out of the top level, the
+    row or the finding — the shapes v1/v2 da-guards wrote (no `blocks`, no
+    `hint`, a `partial` disable …) under a schema that never lacks them."""
+    row = dict(_ROW, **(tenant_row or {}))
+    fnd = dict(_FINDING, **(finding or {}))
+    doc = {"schema": kv.SCHEMA, "at": "x", "undecidable": False, "tenants": {"t": [row]},
+           "findings": [fnd], "key_checks": {"t": {"version_labels": [], "renames": []}},
+           "parse_failed": [], "unreadable": [], "blocks": True, "undecidable_blocks": False}
+    for where in (doc, row, fnd):
+        where.pop(drop, None)
+    return json.dumps(doc)
+
+
+@pytest.mark.parametrize("document", [
+    _v3(drop="parse_failed"), _v3(drop="blocks"), _v3(drop="undecidable_blocks"),
+    _v3(drop="hint"), _v3(drop="dead_entries"), _v3(drop="switched_off_with"), _v3(drop="base"),
+    _v3(tenant_row={"disable": "partial"}), _v3(finding={"kind": "disable_partial"}),
+], ids=["no-parse_failed", "no-blocks", "no-undecidable_blocks", "no-hint", "no-dead_entries",
+        "no-switched_off_with", "no-base", "partial-disable", "disable_partial-finding"])
+def test_a_v3_document_missing_what_v3_writes_is_broken_not_older(tmp_path, document):
+    """#3835 審查：v1／v2 的那些形狀（缺 `blocks`、缺 `hint`、`partial` 等）只出現在舊
+    schema 的文件裡，由 schema 認出是舊版（上一支）。寫 v3 的 da-guard 每個欄位都寫，所以
+    v3 文件缺欄位或帶舊值是壞掉的輸出（broken），不是「比這支工具舊」。"""
+    import _lib_tenant_values as tv
+    conf_d = _tree(tmp_path / "conf.d", {"_defaults.yaml": _ADR_DEFAULTS})
+    with pytest.raises(tv.DaGuardError) as e:
+        kv.judge_tree(conf_d, binary=_da_guard_answering(tmp_path, document))
+    assert e.value.broken and not e.value.stale, e.value
+    assert "older than this tool" not in str(e.value)
 
 
 def _doc(**over):

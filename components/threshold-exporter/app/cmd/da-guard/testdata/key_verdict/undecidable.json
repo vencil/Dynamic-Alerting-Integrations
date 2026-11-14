@@ -1,5 +1,5 @@
 {
-  "schema": "da-guard.key-verdict/v2",
+  "schema": "da-guard.key-verdict/v3",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": true,
   "blocks": true,
@@ -18,8 +18,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": "disable",
-        "served": null
+        "value": "disable"
       },
       {
         "key": "mysql_conections",
@@ -33,8 +32,7 @@
         "hint": null,
         "switched_off_with": null,
         "dead_entries": [],
-        "value": 70,
-        "served": null
+        "value": 70
       }
     ]
   },

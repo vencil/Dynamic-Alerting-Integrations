@@ -62,6 +62,13 @@ SYNTH_PACKS = {
 }
 
 
+def _vendor(value) -> dict:
+    """A `validation` that holds for a key shipping *value*: one vendor source using it."""
+    return {"basis": "vendor", "sources": [{
+        "org": "Example Vendor", "url": "https://example.com/alerts.yaml",
+        "quote": f"expr: metric > {value}", "value": value}]}
+
+
 def _armed(*default_keys: str, packs: dict | None = None) -> dict:
     """An arming table for *packs* (SYNTH_PACKS by default): `default` on
     *default_keys*, `site_specific` with both reasons on every other key that
@@ -75,7 +82,8 @@ def _armed(*default_keys: str, packs: dict | None = None) -> dict:
             base = key[: -len("_critical")] if key.endswith("_critical") else None
             if base and base in tiers:
                 continue
-            out[key] = ({"arming": "default", "portability": "portable"}
+            out[key] = ({"arming": "default", "portability": "portable",
+                         "validation": _vendor(tiers[key]["value"])}
                         if key in default_keys else
                         {"arming": "operator", "portability": "site_specific",
                          "portability_reason": f"{key} depends on the site",
@@ -186,6 +194,7 @@ def _make_default(entry: dict) -> None:
     entry["portability"] = "portable"
     for f in (*lib.PORTABILITY_REASON_FIELDS, "blocker", "default_exception"):
         entry.pop(f, None)
+    entry["validation"] = _vendor(entry["value"])
 
 
 def _fixed_point_doc():
@@ -491,9 +500,12 @@ def test_strict_arming_names_every_unarmed_key():
 
 
 def test_a_blocked_key_is_not_a_validation_candidate():
-    """Portable + operator is the A2 input only while nothing blocks it."""
-    entry = {"arming": "operator", "portability": "portable"}
+    """Portable + operator in the defaults tier is the A2 input only while
+    nothing blocks it; an optional_overrides key is not one (D-A A2a: the
+    shipping gate refuses `default` there)."""
+    entry = {"arming": "operator", "portability": "portable", "tier": "defaults"}
     assert lib.is_validation_candidate(entry)
+    assert not lib.is_validation_candidate({**entry, "tier": "optional_overrides"})
     assert not lib.is_validation_candidate({**entry, "blocker": dict(_BLOCKER)})
     assert not lib.is_validation_candidate({**entry, "arming": "default"})
     assert not lib.is_validation_candidate({**entry, "portability": "site_specific"})
@@ -504,7 +516,7 @@ def test_notes_say_why_and_render_nothing_for_a_clean_default():
     blocked = {"arming": "operator", "portability": "portable",
                "blocker": dict(_BLOCKER)}
     assert lib.arming_notes_zh(blocked) == ["未啟用（沒有資料源，#3770）：沒有資料源"]
-    cand = {"arming": "operator", "portability": "portable"}
+    cand = {"arming": "operator", "portability": "portable", "tier": "defaults"}
     assert lib.arming_notes_zh(cand) == [
         f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_ZH}"]
     exc = {"arming": "default", "portability": "ratio_pending",
@@ -513,13 +525,15 @@ def test_notes_say_why_and_render_nothing_for_a_clean_default():
     assert lib.arming_notes_zh({"arming": "default", "portability": "portable"}) == []
 
 
-def test_an_optional_tier_candidate_says_it_must_change_tier_first():
-    """`default` is defaults-tier only, so an optional-tier candidate cannot
-    "ship once confirmed" as the defaults-tier note says (#3773 review F3)."""
+def test_a_portable_optional_tier_key_says_it_must_change_tier_first():
+    """`default` is defaults-tier only, so a portable optional-tier key is not
+    a candidate and its note does not say "ships once validated" (#3773
+    review F3; D-A A2a made the derived set agree with the note)."""
     entry = {"arming": "operator", "portability": "portable",
              "tier": "optional_overrides"}
     assert lib.arming_notes_zh(entry) == [
-        f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_OPTIONAL_ZH}"]
+        f"未啟用（{lib.DECLARED_ONLY_LABEL_ZH}）：{lib.DECLARED_ONLY_NOTE_ZH}"]
+    assert "shadow" not in lib.CANDIDATE_NOTE_ZH + lib.DECLARED_ONLY_NOTE_ZH
     assert lib.arming_notes_zh({**entry, "tier": "defaults"}) == [
         f"未啟用（{lib.CANDIDATE_LABEL_ZH}）：{lib.CANDIDATE_NOTE_ZH}"]
 
@@ -545,7 +559,7 @@ def test_a_shipped_exception_is_marked_in_the_chart_defaults():
     arming["alpha_conn"] = {
         "arming": "default", "portability": "ratio_pending",
         "portability_reason": "r", "portability_reason_zh": "絕對值",
-        "default_exception": {"tracking": 3778}}
+        "default_exception": {"tracking": 3778}, "validation": _vendor(80)}
     doc = lib.build_registry_doc(SYNTH_PACKS, arming=arming)
     text = "\n".join(lib.render_chart_defaults_lines(doc, 4))
     assert "出貨例外（待改比值，#3778）：絕對值" in text
@@ -606,13 +620,16 @@ def test_real_shipped_non_portable_keys_are_the_recorded_exceptions():
 
 
 def test_real_validation_candidates_are_derived():
-    """The A2 input set is derived: portable, operator-supplied, unblocked.
-    Pinned so a reclassification shows up as a deliberate test edit."""
+    """The A2 input set is derived: portable, operator-supplied, unblocked,
+    in the defaults tier. Pinned so a reclassification shows up as a
+    deliberate test edit. The two DB2 keys in optional_overrides are not in
+    it (D-A A2a): the shipping gate refuses `default` outside the defaults
+    tier, so they are not promotable as they stand (#1320 decides their tier)."""
     doc = lib.build_registry_doc()
     assert lib.validation_candidates(doc) == {
         "es_heap_usage_percent", "es_disk_usage_percent",
         "oracle_tablespace_used_percent", "rabbitmq_node_mem_percent",
-        "jvm_memory", "db2_log_usage_percent", "db2_tablespace_used_percent",
+        "jvm_memory",
         "redis_replication_lag", "mongodb_replication_lag",
         # #3770 fixed the URP sum, so its blocker is gone and 0 is portable
         "kafka_under_replicated_partitions"}
@@ -1666,3 +1683,191 @@ def test_tenant_declared_foot_is_the_stub_block_as_comment_text() -> None:
     foot = lib.tenant_declared_foot(keys, lang="en")
     assert ["# " + t if t else "#" for t in foot.split("\n")] == lines
     assert lib.tenant_declared_foot([], lang="en") is None
+
+
+# ── D-A A2a: validation (what a shipped value rests on) ─────────────────────
+
+def _entry(value=80, unit="%", **validation):
+    return {"arming": "default", "portability": "portable", "tier": "defaults",
+            "value": value, "unit": unit, "validation": validation or _vendor(value)}
+
+
+def _src(org, value, **extra):
+    return {"org": org, "url": f"https://example.com/{org}.yaml",
+            "quote": f"expr: metric > {value}", "value": value, **extra}
+
+
+def _problems(entry):
+    return lib.arming_problems({"k": entry}, strict=True)
+
+
+def test_a_shipped_key_states_what_its_value_rests_on():
+    assert _problems(_entry()) == []
+    bare = _entry()
+    del bare["validation"]
+    assert any("has no validation" in p for p in _problems(bare))
+
+
+def test_an_operator_key_may_carry_validation_and_is_held_to_it():
+    """升級前可以先登記依據；登記了就照同一套規則檢查。"""
+    op = {**_entry(), "arming": "operator"}
+    assert _problems(op) == []
+    op["validation"]["sources"][0].update(value=81, quote="expr: metric > 81")
+    assert any("vendor source uses 81" in p for p in _problems(op))
+    plain = {"arming": "operator", "portability": "portable", "tier": "defaults", "value": 80}
+    assert _problems(plain) == []
+
+
+def test_a_vendor_basis_is_the_vendors_own_value():
+    """`vendor`：恰好一個來源，值等於 registry 的值——值改了、依據沒跟著改就轉紅。"""
+    assert any("ships 85 but its vendor source uses 80" in p
+               for p in _problems(_entry(85, basis="vendor", sources=[_src("a", 80)])))
+    assert any("takes exactly one source" in p for p in _problems(
+        _entry(80, basis="vendor", sources=[_src("a", 80), _src("b", 80)])))
+
+
+def test_a_consensus_brackets_the_value_with_different_organisations():
+    """`consensus`：至少兩個來源、組織與網址都不重複、registry 的值落在來源值的範圍內。"""
+    ok = _entry(85, basis="consensus", sources=[_src("a", 80), _src("b", 90)])
+    assert _problems(ok) == []
+    edge = _entry(80, basis="consensus", sources=[_src("a", 80), _src("b", 80)])
+    assert _problems(edge) == []
+    assert any("needs two or more sources" in p for p in _problems(
+        _entry(80, basis="consensus", sources=[_src("a", 80)])))
+    assert any("outside what its consensus sources use (80–90)" in p for p in _problems(
+        _entry(95, basis="consensus", sources=[_src("a", 80), _src("b", 90)])))
+    assert any("outside what its consensus sources use" in p for p in _problems(
+        _entry(70, basis="consensus", sources=[_src("a", 80), _src("b", 90)])))
+    same_org = [_src("a", 80), {**_src("A", 90), "url": "https://example.com/other.yaml"}]
+    assert any("repeat org" in p for p in _problems(_entry(85, basis="consensus", sources=same_org)))
+    same_url = [_src("a", 80), {**_src("b", 90), "url": "https://example.com/a.yaml"}]
+    assert any("repeat url" in p for p in _problems(_entry(85, basis="consensus", sources=same_url)))
+
+
+@pytest.mark.parametrize("validation,needle", [
+    ({"basis": "vendor"}, "must be exactly"),
+    ({"basis": "vendor", "sources": [], "note": "x"}, "must be exactly"),
+    ({"basis": "corpus", "sources": [_src("a", 80)]}, "is not one of"),
+    ({"basis": "vendor", "sources": []}, "non-empty list"),
+    ({"basis": "vendor", "sources": [{"org": "a", "url": "https://example.com/a", "value": 80}]},
+     "must carry"),
+    ({"basis": "vendor", "sources": [_src("a", 80, relation="equal")]}, "must carry"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "url": "http://example.com/a"}]}, "https://"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "url": "https://example.com/a b"}]}, "https://"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "quote": "two\nlines"}]}, "one line"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "quote": "  "}]}, "non-blank"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": "80"}]}, "finite number"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": True}]}, "finite number"),
+    ({"basis": "vendor", "sources": [_src("a", 80, tier="page")]}, "tier"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "url": "https://"}]}, "https://"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "org": "  "}]}, "non-blank"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "org": "two\nlines"}]}, "one line"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": float("inf")}]}, "finite number"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "value": float("nan")}]}, "finite number"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "quote": "alert: 'HighMemory'"}]},
+     "does not carry its value"),
+    ({"basis": "vendor", "sources": [{**_src("a", 80), "quote": "expr: metric > 85"}]},
+     "does not carry its value"),
+], ids=["no-sources", "extra-field", "corpus-basis", "empty-sources", "source-without-quote",
+        "authored-relation", "http-url", "url-with-space", "two-line-quote", "blank-quote",
+        "string-value", "bool-value", "unknown-tier", "bare-scheme-url", "blank-org",
+        "two-line-org", "infinite-value", "nan-value", "quote-without-a-number",
+        "quote-with-another-number"])
+def test_a_malformed_validation_is_reported(validation, needle):
+    problems = _problems(_entry(80, **validation))
+    assert any(needle in p for p in problems), problems
+
+
+def test_a_measured_counterexample_keeps_a_value_from_shipping():
+    """語料量到這個值會錯判（`value_counterexample`）的鍵不得預設出貨：語料是否決，不是依據。"""
+    ce = {"issue": 1176, "direction": "over_fire", "observed": "x"}
+    assert any("measured wrong cannot ship" in p for p in _problems({**_entry(), "value_counterexample": ce}))
+    op = {"arming": "operator", "portability": "portable", "tier": "defaults", "value": 80,
+          "value_counterexample": ce}
+    assert _problems(op) == []
+
+
+def test_a_critical_tier_carries_no_validation():
+    crit = {"critical_of": "k", "value": 90, "validation": _vendor(90)}
+    assert any("follows its base" in p for p in lib.arming_problems({"k_critical": crit}, strict=True))
+
+
+def test_every_real_shipped_key_has_a_validation_and_no_counterexample():
+    doc = lib.committed_registry_doc()
+    shipped = {k: e for k, e in lib.registry_keys(doc).items() if lib.is_chart_armed(e)}
+    assert shipped
+    assert all("validation" in e and "value_counterexample" not in e for e in shipped.values())
+
+
+@pytest.mark.parametrize("quote", ["> 80", "warn: 80,  // percentage", "> 0.8", "> .8",
+                                   "> ( 80 / 100 )", "(70) : (80)", '"warning": 0.80'])
+def test_a_quote_may_state_a_percentage_as_a_ratio(quote):
+    """quote 要帶得出 value：數字本身，或把百分比寫成比值的那個數（`> 0.8` 對 80）。"""
+    entry = _entry(80, basis="vendor", sources=[{**_src("a", 80), "quote": quote}])
+    assert _problems(entry) == []
+
+
+def test_two_spellings_of_one_page_are_one_source():
+    """同一頁換個寫法（結尾斜線、fragment、大小寫）不算第二個來源。"""
+    for other in ("https://example.com/a.yaml/", "https://example.com/a.yaml#L10",
+                  "https://EXAMPLE.com/a.yaml"):
+        sources = [_src("a", 80), {**_src("b", 90), "url": other}]
+        assert any("repeat url" in p for p in _problems(
+            _entry(85, basis="consensus", sources=sources))), other
+
+
+@pytest.mark.parametrize("value", ["85", None, True, float("inf")])
+def test_a_value_that_is_no_number_cannot_be_held_against_its_sources(value):
+    """registry 的 value 不是有限數時，不能悄悄略過與來源的比較。"""
+    entry = _entry(85, basis="consensus", sources=[_src("a", 80), _src("b", 90)])
+    entry["value"] = value
+    assert any("is not a number to hold the sources against" in p for p in _problems(entry))
+
+
+_SCHEMA_CASES = [
+    ("extra-field", {"basis": "vendor", "sources": [_src("a", 80)], "note": "x"}),
+    ("corpus-basis", {"basis": "corpus", "sources": [_src("a", 80)]}),
+    ("empty-sources", {"basis": "vendor", "sources": []}),
+    ("source-without-quote", {"basis": "vendor", "sources": [
+        {"org": "a", "url": "https://example.com/a", "value": 80}]}),
+    ("authored-relation", {"basis": "vendor", "sources": [_src("a", 80, relation="equal")]}),
+    ("http-url", {"basis": "vendor", "sources": [{**_src("a", 80), "url": "http://example.com/a"}]}),
+    ("bare-scheme-url", {"basis": "vendor", "sources": [{**_src("a", 80), "url": "https://"}]}),
+    ("two-line-quote", {"basis": "vendor", "sources": [{**_src("a", 80), "quote": "two\nlines"}]}),
+    ("string-value", {"basis": "vendor", "sources": [{**_src("a", 80), "value": "80"}]}),
+    ("unknown-tier", {"basis": "vendor", "sources": [_src("a", 80, tier="page")]}),
+]
+
+
+@pytest.mark.parametrize("name,validation", _SCHEMA_CASES, ids=[c[0] for c in _SCHEMA_CASES])
+def test_the_schema_and_the_gate_refuse_the_same_shapes(name, validation):
+    """形狀上的錯，JSON Schema 與 Python 閘門都要擋：只有一邊擋，另一邊的讀者就會收下。"""
+    jsonschema = pytest.importorskip("jsonschema")
+    import json
+    schema = json.loads(Path(lib.SCHEMA_PATH).read_text(encoding="utf-8"))
+    doc = copy.deepcopy(lib.committed_registry_doc())
+    key = next(k for k, e in doc["keys"].items() if lib.is_chart_armed(e))
+    assert not list(jsonschema.Draft7Validator(schema).iter_errors(doc))
+    doc["keys"][key]["validation"] = validation
+    assert list(jsonschema.Draft7Validator(schema).iter_errors(doc)), name
+    assert _problems(_entry(80, **validation)), name
+
+
+@pytest.mark.parametrize("unit,quote,ok", [
+    ("%", "> 0.3", True),
+    ("% of max_connections", "> .3", True),
+    ("seconds", "lag > 0.3 seconds", False),
+    ("count", "> 0.3", False),
+    ("seconds", "lag > 30", True),
+    ("seconds", "lag > -30", False),
+    ("seconds", "lag > 3e1", True),
+    ("seconds", "window[5m] - 30", True),
+    ("seconds", "(lag)-30 > 0", True),
+    ("seconds", "lag > 300", False),
+], ids=["percent-ratio", "percent-of-ratio", "seconds-not-a-ratio", "count-not-a-ratio",
+        "plain", "negative-is-not-the-value", "exponent", "minus-between-operands",
+        "minus-after-paren", "longer-number"])
+def test_a_quote_states_the_value_in_the_keys_own_unit(unit, quote, ok):
+    """比值（`0.3` 對 30）只在百分比單位成立；帶號與指數是同一個數的一部分。"""
+    entry = _entry(30, unit, basis="vendor", sources=[{**_src("a", 30), "quote": quote}])
+    assert (_problems(entry) == []) is ok, _problems(entry)
