@@ -38,27 +38,27 @@ def _tree(root: Path, files: dict[str, str]) -> Path:
     return conf_d
 
 
-_DEFAULTS = "defaults:\n  mysql_connections: 80\n"
+_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n"
 _CONTROL = "tenants:\n  tenant-b:\n    _silent_mode: disable\n"
 # 維度鍵要它的 label 在 `dimensions:` 宣告過才送出（#3475）；下面兩支要的是
 # exporter 建 series 時才丟的列，所以先宣告。
-_DEFAULTS_DROP_DIMS = "dimensions:\n  mysql_connections: [__name__, __x, q]\n" + _DEFAULTS
+_DEFAULTS_DROP_DIMS = "dimensions:\n  mysql_connection_usage_percent: [__name__, __x, q]\n" + _DEFAULTS
 
 # 同一個值（55）分別只寫在三個地方；tenant-b 是對照組，永遠吃 defaults 的 80。
 _WHERE = {
     "defaults": {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 55\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 55\n",
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
-        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connections: 80\n",
+        "tenant-b.yaml": "tenants:\n  tenant-b:\n    mysql_connection_usage_percent: 80\n",
     },
     "platform-tenants": {
-        "_defaults.yaml": _DEFAULTS + "tenants:\n  tenant-a:\n    mysql_connections: 55\n",
+        "_defaults.yaml": _DEFAULTS + "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 55\n",
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: disable\n",
         "tenant-b.yaml": _CONTROL,
     },
     "tenant-file": {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 55\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 55\n",
         "tenant-b.yaml": _CONTROL,
     },
 }
@@ -68,38 +68,38 @@ _WHERE = {
 def test_value_is_read_wherever_it_is_written(where, tmp_path, da_guard):
     conf_d = _tree(tmp_path, _WHERE[where])
     got = tv.load_served_values(conf_d, binary=da_guard)
-    assert got["tenant-a"].values["mysql_connections"] == 55
-    assert got["tenant-a"].severities["mysql_connections"] == "warning"
-    assert got["tenant-b"].values["mysql_connections"] == 80  # 對照組不變
+    assert got["tenant-a"].values["mysql_connection_usage_percent"] == 55
+    assert got["tenant-a"].severities["mysql_connection_usage_percent"] == "warning"
+    assert got["tenant-b"].values["mysql_connection_usage_percent"] == 80  # 對照組不變
 
 
 def test_at_is_passed_through(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections:\n      default: \"70\"\n"
-                         "      overrides:\n        - window: \"01:00-09:00\"\n          value: \"1000\"\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent:\n      default: \"70\"\n"
+                         "      overrides:\n        - window: \"01:00-09:00\"\n          value: \"95\"\n",
     })
     inside = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard)
     outside = tv.load_served_values(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard)
-    assert inside["tenant-a"].values["mysql_connections"] == 1000
-    assert outside["tenant-a"].values["mysql_connections"] == 70
+    assert inside["tenant-a"].values["mysql_connection_usage_percent"] == 95
+    assert outside["tenant-a"].values["mysql_connection_usage_percent"] == 70
 
 
 def test_disabled_value_is_unserved(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: disable\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: disable\n",
     })
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
-    assert "mysql_connections" not in got.values
-    assert got.unserved == {"mysql_connections": "disable"}
+    assert "mysql_connection_usage_percent" not in got.values
+    assert got.unserved == {"mysql_connection_usage_percent": "disable"}
     assert got.tenant_id == "tenant-a"
 
 
 def test_parse_failed_raises_yaml_file_error_naming_the_file(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n",
         "tenant-b.yaml": "tenants:\n  tenant-b: [1]\n",
     })
     with pytest.raises(YamlFileError) as ei:
@@ -116,8 +116,8 @@ def test_parse_failed_raises_yaml_file_error_naming_the_file(tmp_path, da_guard)
 def test_nonzero_exit_raises_with_stderr(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
-        "b.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 71\n",
+        "a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n",
+        "b.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 71\n",
     })
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_values(conf_d, binary=da_guard)
@@ -143,13 +143,13 @@ def test_missing_binary_raises_with_install_hint(tmp_path, monkeypatch):
 
 def test_binary_resolution_order_env_then_path(tmp_path, monkeypatch, da_guard):
     conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
-                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n"})
     monkeypatch.setattr(shutil, "which", lambda _name: None)
     monkeypatch.setenv("DA_GUARD_BINARY", da_guard)
-    assert tv.load_served_values(conf_d)["tenant-a"].values["mysql_connections"] == 70
+    assert tv.load_served_values(conf_d)["tenant-a"].values["mysql_connection_usage_percent"] == 70
     monkeypatch.delenv("DA_GUARD_BINARY")
     monkeypatch.setattr(shutil, "which", lambda name: da_guard if name == "da-guard" else None)
-    assert tv.load_served_values(conf_d)["tenant-a"].values["mysql_connections"] == 70
+    assert tv.load_served_values(conf_d)["tenant-a"].values["mysql_connection_usage_percent"] == 70
 
 
 def test_every_exception_class_is_exported():
@@ -173,11 +173,11 @@ def test_threshold_values_are_floats(tmp_path, da_guard):
     """契約是 float：JSON 的整數（`70`）也要轉成 float，不能以 int 交出去。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n    _custom_alerts:\n"
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n    _custom_alerts:\n"
                          "      - {recipe: threshold, name: q, metric: qd, op: \">\", window: 5m, threshold: \"100:warning\"}\n",
     })
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
-    v = got.values["mysql_connections"]
+    v = got.values["mysql_connection_usage_percent"]
     assert type(v) is float and v == 70.0
     row = got.values["_custom_alerts"][0]
     assert type(row["value"]) is float and row["value"] == 100.0
@@ -186,13 +186,13 @@ def test_threshold_values_are_floats(tmp_path, da_guard):
 def test_non_finite_thresholds_become_floats(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS + "  redis_memory: 70\n  container_cpu: 75\n",
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: NaN\n    redis_memory: \"+Inf\"\n"
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: NaN\n    redis_memory: \"+Inf\"\n"
                          "    container_cpu: \"-inf:critical\"\n",
     })
     # #3140: a non-finite value is one the exporter refuses — it serves the
     # platform default (used to pin NaN / ±Inf served as written).
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"].values
-    assert [(type(got[k]), got[k]) for k in ("mysql_connections", "redis_memory", "container_cpu")] == [
+    assert [(type(got[k]), got[k]) for k in ("mysql_connection_usage_percent", "redis_memory", "container_cpu")] == [
         (float, 80.0), (float, 70.0), (float, 75.0)]
 
 
@@ -207,7 +207,7 @@ def test_subprocess_gets_a_timeout(tmp_path, monkeypatch, da_guard):
 
     monkeypatch.setattr(tv.subprocess, "run", spy)
     conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
-                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n"})
     tv.load_served_values(conf_d, binary=da_guard)
     assert seen.get("timeout") == tv.DEFAULT_TIMEOUT
     tv.load_served_values(conf_d, binary=da_guard, timeout=7)
@@ -218,36 +218,36 @@ def test_dropped_rows_are_reported_apart(tmp_path, da_guard):
     """exporter 建不出 series 的列（例如 `__` 開頭的 label）不在 values，列在 dropped。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS_DROP_DIMS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections{__x=\"x\"}: 5\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent{__x=\"x\"}: 5\n",
     })
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
-    key = 'mysql_connections{__x="x"}'
+    key = 'mysql_connection_usage_percent{__x="x"}'
     assert key not in got.values
     assert got.unserved[key] == "5"
     assert got.dropped[key] and "not a valid label name" in got.dropped[key][0]
-    assert got.values["mysql_connections"] == 80.0
+    assert got.values["mysql_connection_usage_percent"] == 80.0
 
 
 def test_dropped_rows_do_not_log_warn_on_stderr(tmp_path, da_guard):
     """被丟的列只進 JSON 的 dropped，不該在 da-guard 的 stderr 印出 WARN。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS_DROP_DIMS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections{__name__=\"x\"}: 5\n"
-                         "    mysql_connections{__x=\"y\"}: 4\n    mysql_connections{q=\"ok\"}: 6\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent{__name__=\"x\"}: 5\n"
+                         "    mysql_connection_usage_percent{__x=\"y\"}: 4\n    mysql_connection_usage_percent{q=\"ok\"}: 6\n",
     })
     proc = subprocess.run([da_guard, "served-values", "--config-dir", str(conf_d)],
                           capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=120)
     assert proc.returncode == 0, proc.stderr
     assert "WARN" not in proc.stderr, proc.stderr
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
-    assert set(got.dropped) == {'mysql_connections{__name__="x"}', 'mysql_connections{__x="y"}'}
+    assert set(got.dropped) == {'mysql_connection_usage_percent{__name__="x"}', 'mysql_connection_usage_percent{__x="y"}'}
 
 
 def test_non_utf8_file_name_raises_served_values_error(tmp_path, da_guard):
     """檔名不是 UTF-8：da-guard 整棵樹拒收（#3206，不論內容），lib raise 已列出的例外並以跳脫後的檔名點名。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n",
     })
     require_file_name(b"b\xff.yaml")
     (conf_d / os.fsdecode(b"b\xff.yaml")).write_bytes(b"tenants: [\n")
@@ -263,9 +263,9 @@ def test_skipped_names_files_that_declare_no_tenant(tmp_path, da_guard):
     """平面格式檔（無 `tenants:`）由 Go 判定、列進 skipped；lib 原樣交出檔名與原因。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
-        "flat-t.yaml": "mysql_connections: 5\n",
-        "team/flat-u.yml": "mysql_connections: 6\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n",
+        "flat-t.yaml": "mysql_connection_usage_percent: 5\n",
+        "team/flat-u.yml": "mysql_connection_usage_percent: 6\n",
     })
     tree = tv.load_served_tree(conf_d, binary=da_guard)
     assert [s.file for s in tree.skipped] == ["flat-t.yaml", "team/flat-u.yml"]
@@ -275,7 +275,7 @@ def test_skipped_names_files_that_declare_no_tenant(tmp_path, da_guard):
 
 def test_skipped_is_empty_on_a_clean_tree(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
-                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n"})
     assert tv.load_served_tree(conf_d, binary=da_guard).skipped == []
 
 
@@ -283,8 +283,8 @@ def test_print_load_warnings_prints_one_named_line_per_file(tmp_path, da_guard, 
     require_file_name("flat[31m.yaml")
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
-        "flat\x1b[31m.yaml": "mysql_connections: 5\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n",
+        "flat\x1b[31m.yaml": "mysql_connection_usage_percent: 5\n",
     })
     tv.print_load_warnings(tv.load_served_tree(conf_d, binary=da_guard))
     lines = capsys.readouterr().err.splitlines()
@@ -324,7 +324,7 @@ def test_unreadable_raises_parse_failed_error_naming_file_and_reason(tmp_path, d
     訊息帶封閉值原因，`unreadable` 原樣交出。"""
     conf_d = _tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
-        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n",
+        "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n",
     })
     symlink_or_skip("missing.yaml", conf_d / "tenant-b.yaml")
     with pytest.raises(tv.ParseFailedError) as ei:
@@ -350,7 +350,7 @@ def test_da_guard_warn_lines_are_kept_on_a_successful_run(tmp_path, da_guard, ca
     """rc 0 時 da-guard 的 WARN（例如指向目錄的 symlink 讀不到）不被丟掉：
     收進 `warnings`，`print_load_warnings` 逐行跳脫後轉印。"""
     conf_d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
-                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 70\n"})
+                              "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connection_usage_percent: 70\n"})
     (conf_d / "realdir").mkdir()
     symlink_or_skip("realdir", conf_d / "tb.yaml")
     tree = tv.load_served_tree(conf_d, binary=da_guard)
@@ -409,13 +409,13 @@ def test_served_values_error_stderr_is_printed_line_by_line(capsys):
 # --- schedules / aliases（#2115 (c)）：只解析 da-guard 給的，不解讀排程 ---
 
 _SCHEDULED = {
-    "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 30\n  redis_memory: 90\n",
+    "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  mysql_threads_running: 30\n  redis_memory: 90\n",
     "tenant-a.yaml": (
         "tenants:\n  tenant-a:\n"
-        "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
-        "        - window: \"22:00-06:00\"\n          value: \"1000\"\n"
+        "    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
+        "        - window: \"22:00-06:00\"\n          value: \"95\"\n"
         "        - window: \"12:00-13:00\"\n          value: \"disable\"\n"
-        "        - window: \"15:00-16:00\"\n          value: \"700:critical\"\n"
+        "        - window: \"15:00-16:00\"\n          value: \"90:critical\"\n"
         "    mysql_cpu: 44\n"
         "    redis_memory:\n      default: \"95\"\n      expires: \"2026-01-01T00:00:00Z\"\n"
     ),
@@ -427,40 +427,40 @@ def test_schedules_are_parsed_as_da_guard_writes_them(tmp_path, da_guard):
     got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)["tenant-a"]
     S = tv.ScheduleSegment
 
-    def ident(severity: str, component: str = "mysql", metric: str = "connections") -> tuple:
+    def ident(severity: str, component: str = "mysql", metric: str = "connection_usage_percent") -> tuple:
         return (tv.Series("user_threshold", {"tenant": "tenant-a", "component": component,
                                              "metric": metric, "severity": severity},
                           f"{component}_{metric}", False, {}, {}),)
     warn, crit = ident("warning"), ident("critical")
-    assert got.schedules["mysql_connections"] == tv.KeySchedule([
-        S("00:00", "06:00", 1000.0, "warning", None, warn), S("06:00", "12:00", 70.0, "warning", None, warn),
+    assert got.schedules["mysql_connection_usage_percent"] == tv.KeySchedule([
+        S("00:00", "06:00", 95.0, "warning", None, warn), S("06:00", "12:00", 70.0, "warning", None, warn),
         S("12:00", "13:00", None, None, reason="disabled"), S("13:00", "15:00", 70.0, "warning", None, warn),
-        S("15:00", "16:00", 700.0, "critical", None, crit), S("16:00", "22:00", 70.0, "warning", None, warn),
-        S("22:00", "24:00", 1000.0, "warning", None, warn),
+        S("15:00", "16:00", 90.0, "critical", None, crit), S("16:00", "22:00", 70.0, "warning", None, warn),
+        S("22:00", "24:00", 95.0, "warning", None, warn),
     ], None, None)
-    segs = got.schedules["mysql_connections"].segments
+    segs = got.schedules["mysql_connection_usage_percent"].segments
     assert all(isinstance(s.value, float) for s in segs if s.value is not None)
     # #2750: series 照 da-guard 給的讀；與 --at 那一刻的 series 同一份 Go 讀數。
-    assert got.series["mysql_connections"] == warn
+    assert got.series["mysql_connection_usage_percent"] == warn
     # 過期：整天是平台預設；expires 照寫、expired 是 Go 在 --at 的判定。
     assert got.schedules["redis_memory"] == tv.KeySchedule(
         [S("00:00", "24:00", 90.0, "warning", None, ident("warning", "redis", "memory"))],
         "2026-01-01T00:00:00Z", True)
     # --at 那一刻的 values 與 schedules 對應段一致（同一份 Go 讀數）。
-    assert got.values["mysql_connections"] == 1000
+    assert got.values["mysql_connection_usage_percent"] == 95
 
 
 def test_ungatherable_segment_is_parsed_with_its_error(tmp_path, da_guard):
     """--at 以外的時段 /metrics Gather 不起來：da-guard 不 exit 2，該段帶 error；這裡只照搬。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "tenant-a.yaml": (
-            "tenants:\n  tenant-a:\n    mysql_connections_critical: 95\n"
-            "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
-            "        - window: \"15:00-16:00\"\n          value: \"700:critical\"\n"),
+            "tenants:\n  tenant-a:\n    mysql_connection_usage_percent_critical: 95\n"
+            "    mysql_connection_usage_percent:\n      default: \"70\"\n      overrides:\n"
+            "        - window: \"15:00-16:00\"\n          value: \"90:critical\"\n"),
     })
     got = tv.load_served_values(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)["tenant-a"]
-    segs = got.schedules["mysql_connections"].segments
+    segs = got.schedules["mysql_connection_usage_percent"].segments
     assert [s[:4] for s in segs] == [("00:00", "15:00", 70.0, "warning"), ("15:00", "16:00", None, None),
                                      ("16:00", "24:00", 70.0, "warning")]
     assert segs[0].error is None and segs[2].error is None
@@ -810,9 +810,9 @@ def test_state_filter_severity_only_change_is_visible(tmp_path, da_guard):
     變了，served-values 的讀數也要跟著變；`_state_<filter>` 的 True/False 則兩邊相同。"""
     def tree(root: Path, sev: str) -> Path:
         return _tree(root, {
-            "_defaults.yaml": "defaults:\n  mysql_connections: 80\nstate_filters:\n  crashloop:\n"
+            "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\nstate_filters:\n  crashloop:\n"
                               f"    reasons: [\"CrashLoopBackOff\"]\n    severity: {sev}\n",
-            "a.yaml": "tenants:\n  a:\n    mysql_connections: 70\n",
+            "a.yaml": "tenants:\n  a:\n    mysql_connection_usage_percent: 70\n",
             "b.yaml": "tenants:\n  b:\n    _state_crashloop: disable\n",
         })
     at = "2026-07-01T03:00:00Z"
@@ -902,16 +902,16 @@ def test_real_da_guard_names_a_refused_value_apart_from_a_disable(tmp_path, da_g
     `reason` are read as da-guard writes them (the facts PR-side readers use
     instead of re-reading the value)."""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - oracle_process_count\n",
-        "t.yaml": "tenants:\n  t:\n    mysql_connections: \"NaN\"\n    oracle_process_count: \"-Inf\"\n"
-                  "    mysql_connections_critical:\n      default: \"95\"\n      overrides:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\noptional_overrides:\n  - oracle_process_count\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_connection_usage_percent: \"NaN\"\n    oracle_process_count: \"-Inf\"\n"
+                  "    mysql_connection_usage_percent_critical:\n      default: \"95\"\n      overrides:\n"
                   "        - window: \"01:00-02:00\"\n          value: \"Inf\"\n"
                   "        - window: \"03:00-04:00\"\n          value: disable\n",
     })
     got = tv.load_served_values(conf_d, at="2026-07-01T12:00:00Z", binary=da_guard, schedules=True)["t"]
-    assert got.keys["mysql_connections"] == tv.ServedKey(True, refused="non_finite")
+    assert got.keys["mysql_connection_usage_percent"] == tv.ServedKey(True, refused="non_finite")
     assert got.keys["oracle_process_count"] == tv.ServedKey(False, "value_non_finite", refused="non_finite")
-    reasons = [(s.start, s.reason) for s in got.schedules["mysql_connections_critical"].segments
+    reasons = [(s.start, s.reason) for s in got.schedules["mysql_connection_usage_percent_critical"].segments
                if s.value is None]
     assert reasons == [("01:00", "value_non_finite"), ("03:00", "disabled")]
 
@@ -923,8 +923,8 @@ def test_real_da_guard_names_a_root_refused_default_the_tenant_does_not_write(tm
     so a reader does not take the lost row for a removal, and the tree names
     it once with the text written (`root_defaults_refused`)."""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: NaN\n  pg_connections: abc\n",
-        "t.yaml": "tenants:\n  t:\n    mysql_connections: \"70\"\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  redis_memory: NaN\n  pg_connections: abc\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_connection_usage_percent: \"70\"\n",
     })
     tree = tv.load_served_tree(conf_d, binary=da_guard)
     got = tree.tenants["t"]
@@ -971,12 +971,12 @@ def test_routing_not_a_mapping_is_refused(tmp_path):
 
 def test_real_da_guard_reports_keys_and_routing(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "t.yaml": "tenants:\n  t:\n    mysql_conections: 70\n    mysql_connections: 60\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_conections: 70\n    mysql_connection_usage_percent: 60\n"
                   "    _routing: {receiver: {type: webhook, url: 'https://h.example/t'}}\n",
     })
     got = tv.load_served_values(conf_d, binary=da_guard)["t"]
-    assert got.keys["mysql_connections"] == tv.ServedKey(True)
+    assert got.keys["mysql_connection_usage_percent"] == tv.ServedKey(True)
     assert got.keys["mysql_conections"] == tv.ServedKey(False, "no_row")
     assert got.keys["_routing"] == tv.ServedKey(False, "not_exporter_key", True,
                                                 {"generator": ("tenant", "platform_tenants")})
@@ -986,13 +986,13 @@ def test_real_da_guard_reports_keys_and_routing(tmp_path, da_guard):
 
 def test_disable_effects_are_asked_for_and_read(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_memory: 70\n",
-        "t.yaml": "tenants:\n  t:\n    mysql_conections: disable\n    mysql_connections: disable\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n  redis_memory: 70\n",
+        "t.yaml": "tenants:\n  t:\n    mysql_conections: disable\n    mysql_connection_usage_percent: disable\n"
                   "    redis_memory: disable\n    redis_memory_critical: 90\n",
     })
     got = tv.load_served_values(conf_d, binary=da_guard, disable_effects=True)["t"].keys
     assert got["mysql_conections"].disable == "noop"
-    assert got["mysql_connections"].disable == "effective"
+    assert got["mysql_connection_usage_percent"].disable == "effective"
     assert got["redis_memory"].disable == "effective"
     # #3046：critical 跟著 base 關掉，exporter 讀了它（base_disabled）。
     assert got["redis_memory_critical"] == tv.ServedKey(False, "base_disabled",
@@ -1006,7 +1006,7 @@ def test_custom_alerts_are_read_entry_by_entry(tmp_path, da_guard):
     """#3042：served-values 的 `custom_alerts` 依宣告順序讀成 CustomAlertEntry；
     整段解不開的租戶沒有條目，`custom_alerts_error` 說明原因。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "a.yaml": "tenants:\n  ta:\n    _custom_alerts:\n"
                   "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: '80:critical'}\n"
                   "      - {recipe: threshold, name: b, metric: m2, op: '>', window: 5m, threshold: disable}\n",
@@ -1024,7 +1024,7 @@ def test_a_custom_alert_refused_for_its_threshold_carries_gos_class(tmp_path, da
     """#3209：exporter 因 `threshold:` 拒收的條目帶 Go 寫的 `refused`（non_finite／unparsed）；
     因其他欄位拒收的、停用的、送出的都沒有。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
         "a.yaml": "tenants:\n  ta:\n    _custom_alerts:\n"
                   "      - {recipe: threshold, name: a, metric: m1, op: '>', window: 5m, threshold: 'NaN'}\n"
                   "      - {recipe: threshold, name: b, metric: m2, op: '>', window: 5m, threshold: abc}\n"
@@ -1098,8 +1098,8 @@ def test_custom_alerts_finding_not_of_its_shape_is_refused(tmp_path, extra):
 
 def test_partial_reads_the_rest_of_a_tree_with_a_file_that_does_not_decode(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "a.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "a.yaml": "tenants:\n  ta:\n    mysql_connection_usage_percent: 70\n",
         "bad.yaml": "tenants:\n  tb: [unclosed\n",
     })
     with pytest.raises(tv.ParseFailedError):
@@ -1112,9 +1112,9 @@ def test_partial_reads_the_rest_of_a_tree_with_a_file_that_does_not_decode(tmp_p
 
 def test_the_subset_readers_return_the_requested_tenants_and_the_absent(tmp_path, da_guard):
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "a.yaml": "tenants:\n  t-a:\n    mysql_connections: 50\n",
-        "b.yaml": "tenants:\n  t-b:\n    mysql_connections: 60\n",
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent: 50\n",
+        "b.yaml": "tenants:\n  t-b:\n    mysql_connection_usage_percent: 60\n",
     })
     served = tv.load_served_tree(conf_d, binary=da_guard, tenants=iter(["t-b", "t-gone", "t-b"]))
     assert sorted(served.tenants) == ["t-b"] and served.absent == ("t-gone",)

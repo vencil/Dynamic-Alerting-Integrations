@@ -297,7 +297,7 @@ Tukey fences need a distribution with **genuine spread** to work. Two common reg
 
 ### ⚠️ Known blind spot: disabled thresholds are invisible
 
-The **disable** state (`mysql_connections: "disable"`) is `continue`d at resolve time and emits **no `user_threshold` series at all** (the "absent = disabled" convention, see `components/threshold-exporter/app/pkg/config/resolve.go`). So the **most exposed tenants — the ones that turned alerting off — are completely invisible here**. This dashboard answers "are the tenants that *did* set a threshold setting it sensibly", not "who isn't monitoring at all". The latter needs a different signal (e.g. comparing `count by(tenant)(user_threshold)` against the tenant roster).
+The **disable** state (`mysql_connection_usage_percent: "disable"`) is `continue`d at resolve time and emits **no `user_threshold` series at all** (the "absent = disabled" convention, see `components/threshold-exporter/app/pkg/config/resolve.go`). So the **most exposed tenants — the ones that turned alerting off — are completely invisible here**. This dashboard answers "are the tenants that *did* set a threshold setting it sensibly", not "who isn't monitoring at all". The latter needs a different signal (e.g. comparing `count by(tenant)(user_threshold)` against the tenant roster).
 
 ### Hand-off to the Recommender (#656)
 

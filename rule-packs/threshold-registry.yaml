@@ -213,34 +213,32 @@ keys:
     desc: Critical tier replication lag
     metric_class: replication
     critical_of: pg_replication_lag
-  mysql_connections:
+  mysql_connection_usage_percent:
     pack: mariadb
     tier: defaults
     value: 80
-    unit: count
-    desc: Max threads_connected warning
+    unit: '% of max_connections'
+    desc: 'Connection usage warning: threads_connected as a share of max_connections,
+      per instance, busiest instance per tenant; 80 = PMM "MySQL connections in use"
+      template / awesome-prometheus-alerts. Replaces the absolute-count key
+      mysql_connections (#3778: a unit change is a removal plus an addition, no alias)'
     metric_class: saturation
     arming: default
-    portability: ratio_pending
-    portability_reason: "An absolute connection count does not carry across deployments; the portable form is a share of max_connections (#3778)"
-    portability_reason_zh: "絕對連線數跨部署沒有意義；可攜的形式是佔 max_connections 的比例（#3778）"
-    default_exception:
-      tracking: 3778
+    portability: portable
   mysql_threads_running:
     pack: mariadb
-    tier: defaults
+    tier: optional_overrides
     value: 30
     unit: threads
     desc: 'threads_running saturation, NOT host CPU% — running-threads 1m-avg warning;
-      80→30 = PMM/Nichter ''high'' (#944); renamed from mysql_cpu (#1231 owner-approved
-      reversal of the #944 keep — 2-release alias window, old spelling still resolves)'
+      30 = PMM/Nichter ''high'' tier, a reference start to calibrate per host (a healthy
+      count scales with CPU cores); renamed from mysql_cpu (2-release alias window,
+      old spelling still resolves)'
     metric_class: saturation
-    arming: default
+    arming: operator
     portability: site_specific
     portability_reason: "A healthy number of running threads scales with the host's CPU count"
     portability_reason_zh: "健康的 running threads 數隨主機的 CPU 核數而定"
-    default_exception:
-      tracking: 3778
   mysql_replication_lag:
     pack: mariadb
     tier: defaults
@@ -253,14 +251,14 @@ keys:
     metric_class: replication
     arming: default
     portability: portable
-  mysql_connections_critical:
+  mysql_connection_usage_percent_critical:
     pack: mariadb
     tier: optional_overrides
-    value: 120
-    unit: count
-    desc: Critical tier (Scenario D)
+    value: 90
+    unit: '% of max_connections'
+    desc: Critical tier connection usage (same tier pair as pg_connections_critical)
     metric_class: saturation
-    critical_of: mysql_connections
+    critical_of: mysql_connection_usage_percent
   mysql_threads_running_critical:
     pack: mariadb
     tier: optional_overrides
@@ -995,3 +993,7 @@ retired_keys:
     replaced_by: null
     tracking: 3783
     hint: "the declared danielqsj/kafka_exporter does not export a broker request-rate metric, so no rule reads this key"
+  mysql_connections:
+    replaced_by: mysql_connection_usage_percent
+    tracking: 3778
+    hint: "The unit changed from an absolute connection count to a percentage of max_connections; convert the value, do not copy it."

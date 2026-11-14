@@ -227,7 +227,7 @@ def _threshold_cr(cell: pathlib.Path) -> None:
 
 
 def _what_if(cell: pathlib.Path) -> None:
-    (cell / "what-if.yaml").write_text("tenants:\n  a:\n    mysql_connections: \"90\"\n",
+    (cell / "what-if.yaml").write_text("tenants:\n  a:\n    mysql_connection_usage_percent: \"90\"\n",
                                        encoding="utf-8")
 
 

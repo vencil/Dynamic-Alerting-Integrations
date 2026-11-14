@@ -19,7 +19,7 @@ Usage:
     --prometheus http://localhost:9090
 
   # Manual single metric
-  python3 backtest_threshold.py --tenant db-a --metric mysql_connections \
+  python3 backtest_threshold.py --tenant db-a --metric mysql_connection_usage_percent \
     --old-value 70 --new-value 50 --prometheus http://localhost:9090
 
   # Skip if Prometheus unavailable (CI-friendly); JSON + Markdown for a PR comment
@@ -891,7 +891,7 @@ def alert_comparison(change):
 def not_backtestable(change):
     """Why a threshold change cannot be backtested, or None.
 
-    #2119: a dimensioned key (`mysql_connections{db="a"}`) narrows its
+    #2119: a dimensioned key (`mysql_connection_usage_percent{db="a"}`) narrows its
     alert to some label values, which the per-tenant query asked does not,
     so it is listed in the report as not backtested. Building selectors for
     it is not done here.

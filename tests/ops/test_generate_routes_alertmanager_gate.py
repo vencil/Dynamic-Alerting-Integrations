@@ -64,9 +64,9 @@ def _tree(d: Path, routing: dict) -> Path:
     # A root platform file declaring the tenant's threshold: without one the
     # key is undecidable, which fails --validate before Alertmanager is asked
     # (#3016).
-    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8")
     (d / "t1.yaml").write_text(
-        make_tenant_yaml("t1", keys={"mysql_connections": "70"}, routing=routing),
+        make_tenant_yaml("t1", keys={"mysql_connection_usage_percent": "70"}, routing=routing),
         encoding="utf-8")
     return d
 

@@ -1,0 +1,194 @@
+{
+  "schema": "da-guard.key-verdict/v2",
+  "at": "2026-07-01T03:00:00Z",
+  "undecidable": false,
+  "blocks": true,
+  "undecidable_blocks": false,
+  "tenants": {
+    "ta": [
+      {
+        "key": "_profile",
+        "layer": "tenant",
+        "file": "ta.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": "gold",
+        "served": null
+      },
+      {
+        "key": "_severity_dedup",
+        "layer": "tenant",
+        "file": "ta.yaml",
+        "read_by": [
+          "exporter",
+          "generator"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": "disable",
+        "served": "disable"
+      },
+      {
+        "key": "_silent_mode",
+        "layer": "profile",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": "disable",
+        "served": []
+      },
+      {
+        "key": "mysql_connections",
+        "layer": "tenant",
+        "file": "ta.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": {
+          "default": "70",
+          "overrides": [
+            {
+              "value": "90",
+              "window": "01:00-02:00"
+            }
+          ]
+        },
+        "served": 70
+      }
+    ],
+    "tb": [
+      {
+        "key": "_silent_mode",
+        "layer": "platform",
+        "file": "_platform.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": "disable",
+        "served": []
+      },
+      {
+        "key": "mysql_connections",
+        "layer": "tenant",
+        "file": "tb.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "hint": null,
+        "switched_off_with": null,
+        "dead_entries": [],
+        "value": 60,
+        "served": 60
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "error",
+      "kind": "unread",
+      "key": "_severity_dedup",
+      "file": "_defaults.yaml",
+      "tenants": [
+        "ta"
+      ],
+      "reason": "not_read_in_profile",
+      "hint": null,
+      "base": null,
+      "dead_entries": null,
+      "blocks": true
+    },
+    {
+      "severity": "error",
+      "kind": "schedule_unread",
+      "key": "_severity_dedup",
+      "file": "ta.yaml",
+      "tenants": [
+        "ta"
+      ],
+      "reason": "a reserved key does not support a time window or expires",
+      "hint": null,
+      "base": null,
+      "dead_entries": null,
+      "blocks": true
+    },
+    {
+      "severity": "notice",
+      "kind": "schedule_unread",
+      "key": "_silent_mode",
+      "file": "_defaults.yaml",
+      "tenants": [
+        "ta"
+      ],
+      "reason": "a reserved key does not support a time window or expires",
+      "hint": null,
+      "base": null,
+      "dead_entries": null,
+      "blocks": false
+    },
+    {
+      "severity": "notice",
+      "kind": "schedule_unread",
+      "key": "_silent_mode",
+      "file": "_platform.yaml",
+      "tenants": [
+        "tb"
+      ],
+      "reason": "a reserved key does not support a time window or expires",
+      "hint": null,
+      "base": null,
+      "dead_entries": null,
+      "blocks": false
+    }
+  ],
+  "key_checks": {
+    "ta": {
+      "version_labels": [],
+      "renames": []
+    },
+    "tb": {
+      "version_labels": [],
+      "renames": []
+    }
+  },
+  "parse_failed": [],
+  "unreadable": []
+}

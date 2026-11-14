@@ -64,10 +64,9 @@ conf.d/
 ```yaml
 # 維度鍵可帶的 label（#3475）：沒宣告的 label 不送出。出貨清單只有 container cpu/memory 的 version，這裡示範自訂
 dimensions:
-  mysql_connections: [instance, role]
+  mysql_connection_usage_percent: [instance, role]
 defaults:
-  mysql_connections: 80
-  mysql_threads_running: 30
+  mysql_connection_usage_percent: 80
   mysql_replication_lag: 30
   container_cpu: 80
   container_memory: 85
@@ -86,13 +85,13 @@ state_filters:
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "70"          # 覆蓋預設值 80
+    mysql_connection_usage_percent: "70"          # 覆蓋預設值 80
     container_cpu: "70"              # 覆蓋預設值 80
     mysql_replication_lag: "disable" # 無 replica，停用
-    # mysql_threads_running 未指定 → 使用預設值 30
+    # mysql_threads_running 未指定 → 平台不給預設（健康值隨主機 CPU 核數而定，要依主機給值；#3778），這條告警不觸發
     # 維度標籤（每個 label 都要在上方 _defaults.yaml 的 dimensions: 為該 base 宣告，否則不產生 metric；見 §2.5 的 ⚠️）
-    "mysql_connections{instance='db-primary:3306'}": "500"
-    "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
+    "mysql_connection_usage_percent{instance='db-primary:3306'}": "75"
+    "mysql_connection_usage_percent{instance='db-replica:3306', role='replica'}": "95:critical"
 ```
 
 #### 邊界強制規則 (Boundary Enforcement)
@@ -356,8 +355,8 @@ relabel_configs:
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "100"            # warning 閾值
-    mysql_connections_critical: "150"   # _critical → 自動產生 critical alert
+    mysql_connection_usage_percent: "85"             # warning 閾值
+    mysql_connection_usage_percent_critical: "95"    # _critical → 自動產生 critical alert
 ```
 
 **方式二：`"value:severity"` 語法（適用於維度標籤）**
@@ -373,8 +372,8 @@ severity 取最後一個 `:` 之後的部分，只能是 `warning` 或 `critical
 
 **Prometheus 輸出：**
 ```
-user_threshold{tenant="db-a", component="mysql", metric="connections", severity="warning"} 100
-user_threshold{tenant="db-a", component="mysql", metric="connections", severity="critical"} 150
+user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percent", severity="warning"} 85
+user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percent", severity="critical"} 95
 ```
 
 #### 自動抑制 (Auto-Suppression) — Severity Dedup via Alertmanager Inhibit
@@ -385,21 +384,21 @@ v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（
 # Warning 和 Critical 獨立觸發，TSDB 完整保留
 - alert: MariaDBHighConnections          # warning
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections )
+    ( tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   labels:
     severity: warning
-    metric_group: mysql_connections
+    metric_group: mysql_connection_usage_percent
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections_critical )
+    ( tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   labels:
     severity: critical
-    metric_group: mysql_connections
+    metric_group: mysql_connection_usage_percent
 ```
 
-**結果：** 連線數 ≥ 150 時，warning 和 critical 均觸發（TSDB 完整），但 Alertmanager inhibit rule 攔截 warning 通知，只送出 critical 通知。
+**結果：** 連線使用率超過 95%（佔 max_connections）時，warning 和 critical 均觸發（TSDB 完整），但 Alertmanager inhibit rule 攔截 warning 通知，只送出 critical 通知。
 
 ### 2.5 Regex 維度閾值 (Regex Dimension Thresholds)
 
@@ -437,13 +436,13 @@ v0.12.0 起，閾值支援時間窗口排程，允許在不同時段自動切換
 ```yaml
 tenants:
   db-a:
-    mysql_connections:
-      default: "100"
+    mysql_connection_usage_percent:
+      default: "80"
       overrides:
         - window: "22:00-06:00"    # UTC 夜間窗口（支援跨午夜）
-          value: "200"             # 夜間批次作業，放寬到 200
+          value: "95"              # 夜間批次作業，放寬到 95%
         - window: "09:00-18:00"
-          value: "80"              # 日間高峰，收緊到 80
+          value: "70"              # 日間高峰，收緊到 70%
 ```
 
 **技術實現：**
@@ -453,7 +452,7 @@ tenants:
 - **時間窗口格式**：`HH:MM-HH:MM` (UTC)，支援跨午夜（如 `22:00-06:00` 表示晚上十點到隔天早上六點）；時段是左閉右開 `[start, end)`，結束那一分鐘不算（`01:00-09:00` 涵蓋 01:00–08:59），與 Alertmanager `time_intervals` 的 `end_time` 相同，所以寫不出涵蓋整天的時段——`00:00-23:59` 在 23:59 那一分鐘不生效，整天都要的值寫在 `default:`（[#3368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3368)）；起訖相同（如 `05:00-05:00`）不涵蓋任何一分鐘，與格式不符、缺 `window:` 一樣視為不合法：exporter 印 WARN、該時段不生效，載入時以 `da_config_values_not_served{reason="window_invalid"}` 與一行 WARN 點名，da-guard 以 `value_not_served` error 擋下（[#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)）；tenant-api 寫入關卡拒收新寫或改過的不合法 window（`PUT` 400；batch 的 patch 只寫字串值，寫不出 window），檔裡原封不動的（條目位置、window、值都沒變）只回 NOTICE，與死條目同一種 ratchet（[#3683](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3683)）。⚠️ 破壞性變更：值合法、只有 window 不合法的寫入以前回 200
 - **測試案例**：覆蓋邊界條件——窗口重疊、跨午夜、純量退化、空 overrides
 - **永遠不生效的條目**（[#3502](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3502)）：同一分鐘由**第一個**涵蓋它的 window 決定，所以被寫在前面的 window 完全遮住的 window（例如 `22:00-06:00` 之後的 `01:00-03:00`），以及被 window 合起來蓋滿整天的 `default`，一天中沒有任何一分鐘會送出。exporter 以條目為單位回報：`da-guard effective`／`served-values`／`key-verdict` 都帶 `dead_entries`，共用判決報 `dead_entry`（error），掛在寫下它的檔（含 profile）；tenant-api 與 `da-guard write` 拒收新寫或改過的死條目，原封不動留在檔裡的只回 NOTICE。部分重疊（例如 `22:00-06:00` 之後的 `05:00-08:00`，06:00 起生效）合法。死條目與不合法 window 裡的值不另判「exporter 讀不了的閾值」：每個條目只報一次，報的是讓它送不出的那個缺陷（[#3683](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3683)；非有限數例外，照 #3140 一律擋）。判定與送值共用同一個「哪個條目送出這一分鐘」的函式，不會分歧
-- **只有閾值能排程**（[#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)）：保留鍵（`_silent_mode`、`_severity_dedup`、`_state_<filter>`、`_profile`、`_routing_profile` 等，`_metadata`／`_routing` 這類整個 mapping 原樣保留的鍵除外）不支援 `overrides:` 時間窗，也不支援 `{default: …, expires: …}` 這種排程形式的 `expires:`／`reason:`——它們的讀取端只讀 `default`。這種寫法：exporter 只用 `default`（送出結果與只寫 `default` 完全相同），載入時印一行 WARN 點名檔案、租戶與 key；`da-guard served-values` 與 `/effective` 也只看到 `default`，時段不再被當成切點；tenant-api 的寫入拒收（400），檔案裡原本就有、這次寫入沒改動的（`default`、每個時段與 expires 都相同）只回 NOTICE；JSON schema 與路由產生器（`_routing_profile` 寫成 mapping 時整棵樹拒收，finding kind `routing_profile_invalid`）也拒收。子目錄 `_defaults.yaml` 寫保留鍵，不論是不是這種形式，exporter 都不往下傳給租戶（[#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341)；da-guard 何時報 `subtree_default_reserved_key`、`/effective` 與 `not_served` 怎麼呈現，見 [ADR-017 決策 4 的表](../adr/017-defaults-yaml-inheritance-dual-hash.md)）。一次性的結束時間請用 `_silent_mode`／`_state_maintenance` 的結構化物件（`{target: …, expires: …}`），週期性的維護窗請用 `_state_maintenance` 的 `recurring:`。
+- **只有閾值能排程**（[#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)）：保留鍵（`_silent_mode`、`_severity_dedup`、`_state_<filter>`、`_profile`、`_routing_profile` 等，`_metadata`／`_routing` 這類整個 mapping 原樣保留的鍵除外）不支援 `overrides:` 時間窗，也不支援 `{default: …, expires: …}` 這種排程形式的 `expires:`／`reason:`——exporter 與 annotation 這些讀取端只讀 `default`，`_routing_profile` 寫成 mapping 則由產生器整棵樹拒收（見下）。這種寫法：exporter 只用 `default`（送出結果與只寫 `default` 完全相同），載入時印一行 WARN 點名檔案、租戶與 key；`da-guard served-values` 與 `/effective` 也只看到 `default`，時段不再被當成切點；tenant-api 的寫入拒收（400），檔案裡原本就有、這次寫入沒改動的（`default`、每個時段與 expires 都相同）只回 NOTICE；共用鍵判決（`da-guard key-verdict`）報 `schedule_unread`，掛在寫下它的檔：租戶檔是 error（`da-guard write` 擋新出現的、`generate-routes --validate` 整棵樹擋），根平台檔的 `tenants:` 與 profile 是 notice（[#3834](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3834)）；JSON schema 與路由產生器（`_routing_profile` 寫成 mapping 時整棵樹拒收，finding kind `routing_profile_invalid`）也拒收。子目錄 `_defaults.yaml` 寫保留鍵，不論是不是這種形式，exporter 都不往下傳給租戶（[#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341)；da-guard 何時報 `subtree_default_reserved_key`、`/effective` 與 `not_served` 怎麼呈現，見 [ADR-017 決策 4 的表](../adr/017-defaults-yaml-inheritance-dual-hash.md)）。一次性的結束時間請用 `_silent_mode`／`_state_maintenance` 的結構化物件（`{target: …, expires: …}`），週期性的維護窗請用 `_state_maintenance` 的 `recurring:`。
 
 ### 2.7 三態運營模式 (Operational Modes)
 
@@ -643,7 +642,7 @@ v1.2.0 採用 per-tenant inhibit rules 實現可選化：
 | `_severity_dedup: "enable"`（預設） | ✅ | ✅ | ❌ 被 AM 攔截 | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connections"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: mariadb_liveness`（MongoDB 的同類告警帶 `mongodb_liveness`），使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
+**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connection_usage_percent"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: mariadb_liveness`（MongoDB 的同類告警帶 `mongodb_liveness`），使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
 
 **群組名在一個租戶內是同一個命名空間**：inhibit 只比對 `metric_group`，不比對規則包，所以兩個規則包若用同一個值，同時使用兩包的租戶會被另一包的 critical 抑制 warning。`check_metric_group_pairs.py` 因此要求：每個值只屬於一個規則包；每個群組同時有 critical 與 warning 成員（inhibit 只抑制 `severity="warning"`，否則不抑制任何東西）；`slo_` 開頭保留給 custom alert 編譯器（[#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)）。`migrate_rule` 產生的群組名是完整的門檻鍵名。
 

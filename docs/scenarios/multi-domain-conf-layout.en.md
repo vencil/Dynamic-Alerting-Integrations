@@ -121,7 +121,7 @@ Example:
 # Level 2: conf.d/finance/_defaults.yaml — a platform file, so thresholds live
 # under a top-level `defaults:` (unquoted numbers).
 defaults:
-  mysql_connections: 90
+  mysql_connection_usage_percent: 90
   container_memory: 85
 ```
 
@@ -130,7 +130,7 @@ defaults:
 # quoted strings.
 tenants:
   tenant-a:
-    mysql_connections: "95"    # Override: raise from the domain's 90
+    mysql_connection_usage_percent: "95"    # Override: raise from the domain's 90
     # container_memory not specified — inherits 85 from Level 2
 ```
 
@@ -182,7 +182,7 @@ tenants:
 > (exit 2). `_routing.receiver: ~` is **still rejected** — it would make
 > the tenant's entire route disappear and drop its alerts to the catch-all.
 > **For threshold keys always use `"disable"`**, never `null`:
-> `mysql_connections: ~` and a half-typed `mysql_connections:` are identical to
+> `mysql_connection_usage_percent: ~` and a half-typed `mysql_connection_usage_percent:` are identical to
 > YAML, which is why the schema blocks it. See
 > [ADR-017 Decision 4](../adr/017-defaults-yaml-inheritance-dual-hash.en.md#4-a-threshold-written-as-null-is-the-same-as-not-writing-it-at-that-level).
 
@@ -210,7 +210,7 @@ Would move:
   conf.d/ops-e.yaml → conf.d/ops/tenant-e.yaml
 
 Would extract domain defaults into:
-  conf.d/finance/_defaults.yaml (common keys: defaults.mysql_connections, _routing_defaults)
+  conf.d/finance/_defaults.yaml (common keys: defaults.mysql_connection_usage_percent, _routing_defaults)
   conf.d/infra/_defaults.yaml
 
 No changes made. Rerun with --apply to proceed.
@@ -249,7 +249,7 @@ Configuration sources (order of merge):
   5. conf.d/finance/us-east/prod/tenant-a.yaml (tenant-specific)
 
 Effective configuration:
-  mysql_connections: 90 (from: domain)
+  mysql_connection_usage_percent: 90 (from: domain)
   container_memory: 85 (from: domain)
   ...
 ```

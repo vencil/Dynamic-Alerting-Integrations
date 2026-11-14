@@ -177,14 +177,14 @@ def cluster(exporter_bin, tmp_path):
 @needs_go
 def test_valid_patch_is_verified_and_served(cluster):
     c = cluster({
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "t-a.yaml": 'tenants:\n  t-a:\n    mysql_connections: "70"\n',
-        "t-b.yaml": 'tenants:\n  t-b:\n    mysql_connections: "60"\n',
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "t-a.yaml": 'tenants:\n  t-a:\n    mysql_connection_usage_percent: "70"\n',
+        "t-b.yaml": 'tenants:\n  t-b:\n    mysql_connection_usage_percent: "60"\n',
     })
-    r = c.run("t-a", "mysql_connections", "65")
+    r = c.run("t-a", "mysql_connection_usage_percent", "65")
     assert r.returncode == 0, r.stdout + r.stderr
     assert "Verified on 1 exporter pod" in r.stdout
-    assert ('user_threshold{component="mysql",metric="connections",'
+    assert ('user_threshold{component="mysql",metric="connection_usage_percent",'
             'severity="warning",tenant="t-a"} 65') in c.user_series()
 
 
@@ -196,12 +196,12 @@ def test_anchor_shared_block_is_refused_before_the_write(cluster):
     # 驗收、再回滾。
     # -config-dir 會剝掉 legacy defaults（列 6），平台沒有地方宣告 base，所以這個
     # 維度鍵不送出（ADR-038 §11，與一般鍵相同）；拒寫看的是檔案，與送不送無關。
-    old = ('tenants:\n  t-a: &shared\n    mysql_connections{db="x"}: "50"\n'
+    old = ('tenants:\n  t-a: &shared\n    mysql_connection_usage_percent{db="x"}: "50"\n'
            '  t-b: *shared\n')
     c = cluster({"config.yaml": old})
     before = c.user_series()
 
-    r = c.run("t-a", 'mysql_connections{db="x"}', "60")
+    r = c.run("t-a", 'mysql_connection_usage_percent{db="x"}', "60")
     assert r.returncode == 2, r.stdout + r.stderr
     assert "not_round_trippable" in r.stderr and "tenants.t-b" in r.stderr, r.stderr
     assert (c.dir / "config.yaml").read_text(encoding="utf-8") == old
@@ -212,8 +212,8 @@ def test_anchor_shared_block_is_refused_before_the_write(cluster):
 def test_silent_mode_disable_is_applied_and_listed(cluster):
     # 方案 C：`_` key 的目標租戶 series 不判，只列出；user_silent_mode 消失不回滾。
     c = cluster({
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "t-a.yaml": ('tenants:\n  t-a:\n    mysql_connections: "70"\n'
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "t-a.yaml": ('tenants:\n  t-a:\n    mysql_connection_usage_percent: "70"\n'
                      "    _silent_mode: warning\n"),
     })
     silent = 'user_silent_mode{target_severity="warning",tenant="t-a"} 1'
@@ -237,9 +237,9 @@ def test_the_served_identity_is_the_hash_patch_config_computes(cluster):
     # （含隱藏檔、非 YAML 檔、.yml），寫入前後都是。
     import patch_config as pc
     c = cluster({
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "t-a.yaml": 'tenants:\n  t-a:\n    mysql_connections: "70"\n',
-        "t-b.yml": 'tenants:\n  t-b:\n    mysql_connections: "60"\n',
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "t-a.yaml": 'tenants:\n  t-a:\n    mysql_connection_usage_percent: "70"\n',
+        "t-b.yml": 'tenants:\n  t-b:\n    mysql_connection_usage_percent: "60"\n',
         ".hidden.yaml": "not: read\n",
         "notes.txt": "not read\n",
     })
@@ -247,7 +247,7 @@ def test_the_served_identity_is_the_hash_patch_config_computes(cluster):
     def files():
         return {p.name: p.read_bytes() for p in c.dir.iterdir() if p.is_file()}
     assert _identity(c.port)["config_hash"] == pc.config_hash(files())
-    r = c.run("--json", "t-a", "mysql_connections", "65")
+    r = c.run("--json", "t-a", "mysql_connection_usage_percent", "65")
     assert r.returncode == 0, r.stdout + r.stderr
     assert json.loads(r.stdout)["pods"]["exporter-0"]["identity"] == "checked"
     served = _identity(c.port)
@@ -264,14 +264,14 @@ def test_fixing_a_key_the_exporter_rejected_is_verified(cluster):
     # 含它，不是計數器。⚠️ 這格釘的是真 exporter 上的新判準；舊判準只在「寫入前讀數與換版之間剛好跑過一個 tick」時
     # 誤判，這裡不穩定重現——確定性的重現在 test_patch_config_identity.py (b)。
     c = cluster({
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-        "t-a.yaml": ("tenants:\n  t-a:\n    mysql_connections:\n"
+        "_defaults.yaml": "defaults:\n  mysql_connection_usage_percent: 80\n",
+        "t-a.yaml": ("tenants:\n  t-a:\n    mysql_connection_usage_percent:\n"
                      "      default: [1, 2]\n"),
-        "t-b.yaml": 'tenants:\n  t-b:\n    mysql_connections: "60"\n',
+        "t-b.yaml": 'tenants:\n  t-b:\n    mysql_connection_usage_percent: "60"\n',
     })
     assert _identity(c.port)["parse_failed"] == ["t-a.yaml"]
-    r = c.run("--json", "t-a", "mysql_connections", "65")
+    r = c.run("--json", "t-a", "mysql_connection_usage_percent", "65")
     assert r.returncode == 0, r.stdout + r.stderr
     assert _identity(c.port)["parse_failed"] == []
-    assert ('user_threshold{component="mysql",metric="connections",'
+    assert ('user_threshold{component="mysql",metric="connection_usage_percent",'
             'severity="warning",tenant="t-a"} 65') in c.user_series()

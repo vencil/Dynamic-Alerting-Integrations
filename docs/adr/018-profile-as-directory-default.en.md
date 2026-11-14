@@ -39,17 +39,17 @@ Concrete rules (implemented by `emit_translated.go`; the translator package head
 - Member threshold == cluster default → **no tenant file** (rely on ADR-017 inheritance).
 - Member threshold != cluster default → write `<id>.yaml` carrying ONLY the override for this `metric_key`.
 
-Example input (3 PromRules, thresholds 80 / 80 / 1500):
+Example input (3 PromRules, thresholds 80 / 80 / 95):
 
 ```yaml
 # _defaults.yaml (cluster median = 80)
 defaults:
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
 
 # tenant-c.yaml (only c diverges from default)
 tenants:
   tenant-c:
-    mysql_connections: "1500"
+    mysql_connection_usage_percent: "95"
 ```
 
 tenant-a and tenant-b have no files (runtime deepMerge picks up the 80 from `_defaults.yaml`).
@@ -79,7 +79,7 @@ This ADR's emission relies on ADR-017's:
 
 - **null-as-delete**: tenants who want to explicitly set 0 can still do so (emission uses explicit numbers, never null). ⚠️ **Corrected by #1339**: `null` is no longer a way to opt out of an inherited THRESHOLD (it is indistinguishable from a half-typed line, and the schema rejects it) — use `"disable"`. The opt-out meaning of `null` survives only for the four `_routing` fields.
 - **map deep-merge**: each tenant file lists ONLY keys that differ from `_defaults.yaml`; runtime ResolveAt fills the rest from defaults.
-- **scalar override**: tenant string values (e.g. `"1500"`) override the default numeric; runtime uses strconv to convert back to float at ResolveAt time.
+- **scalar override**: tenant string values (e.g. `"95"`) override the default numeric; runtime uses strconv to convert back to float at ResolveAt time.
 
 ### With ADR-016 (Directory Hierarchy)
 

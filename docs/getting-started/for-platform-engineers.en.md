@@ -50,8 +50,8 @@ Minimal viable platform config:
 # conf.d/_defaults.yaml
 defaults:
   # ⚠️ Values are NUMBERS (a quoted "80" reads as 80 too; one that is no number is refused for its key alone, #3250)
-  mysql_connections: 80
-  mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231)
+  mysql_connection_usage_percent: 80  # connection usage (% of max_connections)
+  mysql_threads_running: 30  # threads_running saturation (concurrent threads, NOT host CPU%; renamed from mysql_cpu, #1231). The platform ships no default — set it per host (#3778): a healthy value depends on the CPU core count, 30 is only an example
   mysql_replication_lag: 30  # seconds — async replication lag
   # Other default thresholds... (keys MUST be names the threshold-registry knows,
   # or you get a dead series no rule pack consumes — and nothing will tell you)
@@ -128,7 +128,7 @@ defaults:
   #    abc) gets no default row for its key, and da-guard reports
   #    root_default_refused; a mapping or a list drops the WHOLE file and
   #    every default in it (#3250).
-  mysql_connections: 80
+  mysql_connection_usage_percent: 80
   container_cpu: 70
   container_memory: 80
   # A complete dimensional key (metric{label="v"}) may go here too; it is served once top-level dimensions: declares its labels (see migration-guide)
@@ -215,11 +215,11 @@ The `{{tenant}}` placeholder expands to each tenant's name. Tenant YAML's `_rout
 # conf.d/_profiles.yaml
 profiles:
   standard-db:
-    mysql_connections: "80"
+    mysql_connection_usage_percent: "80"
     mysql_threads_running: "30"
     container_memory: "85"
   high-load-db:
-    mysql_connections: "60"     # Stricter
+    mysql_connection_usage_percent: "60"     # Stricter
     mysql_threads_running: "45" # looser on purpose: threads_running is a saturation signal — a high-load DB's normal concurrency is higher
     container_memory: "80"
 ```
@@ -231,7 +231,7 @@ Tenants inherit via `_profile`:
 tenants:
   my-tenant:
     _profile: "standard-db"
-    mysql_connections: "70"     # Overrides profile value
+    mysql_connection_usage_percent: "70"     # Overrides profile value
 ```
 
 ### Configuring Routing Profiles & Domain Policies (v2.1.0 ADR-007)

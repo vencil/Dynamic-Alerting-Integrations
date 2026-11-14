@@ -47,11 +47,11 @@ describe('simulateAlerts', () => {
   it('returns no-threshold severity when metric has no config entry', () => {
     const alerts = simulateAlerts(
       {},
-      { mysql_connections: { current: 50, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: { current: 50, unit: '%', packLabel: 'mysql' } },
     );
     expect(alerts).toHaveLength(1);
     expect(alerts[0]).toMatchObject({
-      metric: 'mysql_connections',
+      metric: 'mysql_connection_usage_percent',
       current: 50,
       threshold: null,
       firing: false,
@@ -61,8 +61,8 @@ describe('simulateAlerts', () => {
 
   it('returns disabled severity when threshold is "disable"', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: 'disable' },
-      { mysql_connections: { current: 999, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: 'disable' },
+      { mysql_connection_usage_percent: { current: 99, unit: '%', packLabel: 'mysql' } },
     );
     expect(alerts[0].severity).toBe('disabled');
     expect(alerts[0].firing).toBe(false);
@@ -70,8 +70,8 @@ describe('simulateAlerts', () => {
 
   it('alerts fire when current > threshold', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: '80' },
-      { mysql_connections: { current: 90, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: '80' },
+      { mysql_connection_usage_percent: { current: 90, unit: '%', packLabel: 'mysql' } },
     );
     expect(alerts[0].firing).toBe(true);
     expect(alerts[0].severity).toBe('warning');
@@ -80,8 +80,8 @@ describe('simulateAlerts', () => {
 
   it('alerts do NOT fire when current < threshold', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: '80' },
-      { mysql_connections: { current: 70, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: '80' },
+      { mysql_connection_usage_percent: { current: 70, unit: '%', packLabel: 'mysql' } },
     );
     expect(alerts[0].firing).toBe(false);
     expect(alerts[0].severity).toBe('ok');
@@ -89,8 +89,8 @@ describe('simulateAlerts', () => {
 
   it('boundary: current == threshold does NOT fire (strict >, Prometheus-faithful)', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: '80' },
-      { mysql_connections: { current: 80, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: '80' },
+      { mysql_connection_usage_percent: { current: 80, unit: '%', packLabel: 'mysql' } },
     );
     expect(alerts[0].firing).toBe(false);
     expect(alerts[0].severity).toBe('ok');
@@ -98,8 +98,8 @@ describe('simulateAlerts', () => {
 
   it('fires when current is just above threshold (strict >)', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: '80' },
-      { mysql_connections: { current: 81, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: '80' },
+      { mysql_connection_usage_percent: { current: 81, unit: '%', packLabel: 'mysql' } },
     );
     expect(alerts[0].firing).toBe(true);
     expect(alerts[0].severity).toBe('warning');
@@ -107,8 +107,8 @@ describe('simulateAlerts', () => {
 
   it('escalates to critical when current > _critical threshold (strict >)', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: '80', mysql_connections_critical: '95' },
-      { mysql_connections: { current: 96, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '95' },
+      { mysql_connection_usage_percent: { current: 96, unit: '%', packLabel: 'mysql' } },
     );
     expect(alerts[0].critical_firing).toBe(true);
     expect(alerts[0].severity).toBe('critical');
@@ -117,8 +117,8 @@ describe('simulateAlerts', () => {
 
   it('critical boundary: current == _critical does NOT escalate (strict >)', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: '80', mysql_connections_critical: '95' },
-      { mysql_connections: { current: 95, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '95' },
+      { mysql_connection_usage_percent: { current: 95, unit: '%', packLabel: 'mysql' } },
     );
     // 95 > 80 → warning fires; 95 > 95 is false → stays warning, not critical.
     expect(alerts[0].firing).toBe(true);
@@ -128,8 +128,8 @@ describe('simulateAlerts', () => {
 
   it('warning (not critical) when between threshold and _critical', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: '80', mysql_connections_critical: '95' },
-      { mysql_connections: { current: 85, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '95' },
+      { mysql_connection_usage_percent: { current: 85, unit: '%', packLabel: 'mysql' } },
     );
     expect(alerts[0].firing).toBe(true);
     expect(alerts[0].critical_firing).toBe(false);
@@ -138,8 +138,8 @@ describe('simulateAlerts', () => {
 
   it('skips entries with non-numeric threshold (NaN)', () => {
     const alerts = simulateAlerts(
-      { mysql_connections: 'not-a-number' },
-      { mysql_connections: { current: 90, unit: 'count', packLabel: 'mysql' } },
+      { mysql_connection_usage_percent: 'not-a-number' },
+      { mysql_connection_usage_percent: { current: 90, unit: '%', packLabel: 'mysql' } },
     );
     // parseFloat('not-a-number') → NaN → continue, no alert emitted.
     expect(alerts).toHaveLength(0);
@@ -298,22 +298,22 @@ describe('isFiring', () => {
 
 describe('simulateWithDedup', () => {
   const DEFS = {
-    mysql_connections: { alert: 'MariaDBHighConnections', severity: 'warning' },
-    mysql_connections_critical: { alert: 'MariaDBHighConnectionsCritical', severity: 'critical' },
+    mysql_connection_usage_percent: { alert: 'MariaDBHighConnections', severity: 'warning' },
+    mysql_connection_usage_percent_critical: { alert: 'MariaDBHighConnectionsCritical', severity: 'critical' },
     pg_cache_hit_ratio: { alert: 'PostgreSQLLowCacheHit', severity: 'warning', inverted: true },
   };
 
   it('buckets a firing warning into firing (strict >)', () => {
-    const out = simulateWithDedup({ mysql_connections: '100' }, { mysql_connections: 120 }, true, DEFS);
-    expect(out.firing.map((f: any) => f.key)).toEqual(['mysql_connections']);
+    const out = simulateWithDedup({ mysql_connection_usage_percent: '80' }, { mysql_connection_usage_percent: 85 }, true, DEFS);
+    expect(out.firing.map((f: any) => f.key)).toEqual(['mysql_connection_usage_percent']);
     expect(out.ok).toEqual([]);
     expect(out.suppressed).toEqual([]);
   });
 
   it('boundary: current == threshold stays OK (strict >)', () => {
-    const out = simulateWithDedup({ mysql_connections: '100' }, { mysql_connections: 100 }, true, DEFS);
+    const out = simulateWithDedup({ mysql_connection_usage_percent: '80' }, { mysql_connection_usage_percent: 80 }, true, DEFS);
     expect(out.firing).toEqual([]);
-    expect(out.ok.map((o: any) => o.key)).toEqual(['mysql_connections']);
+    expect(out.ok.map((o: any) => o.key)).toEqual(['mysql_connection_usage_percent']);
   });
 
   it('inverted metric fires strictly below threshold; equality is OK', () => {
@@ -325,28 +325,28 @@ describe('simulateWithDedup', () => {
   });
 
   it('severity dedup: firing critical suppresses matching warning', () => {
-    const config = { mysql_connections: '100', mysql_connections_critical: '200' };
-    const metrics = { mysql_connections: 120, mysql_connections_critical: 250 };
+    const config = { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '90' };
+    const metrics = { mysql_connection_usage_percent: 85, mysql_connection_usage_percent_critical: 95 };
     const out = simulateWithDedup(config, metrics, true, DEFS);
-    expect(out.firing.map((f: any) => f.key)).toEqual(['mysql_connections_critical']);
-    expect(out.suppressed.map((s: any) => s.key)).toEqual(['mysql_connections']);
+    expect(out.firing.map((f: any) => f.key)).toEqual(['mysql_connection_usage_percent_critical']);
+    expect(out.suppressed.map((s: any) => s.key)).toEqual(['mysql_connection_usage_percent']);
     expect(out.suppressed[0].reason).toMatch(/severity dedup/i);
   });
 
   it('dedup disabled keeps both warning and critical firing', () => {
-    const config = { mysql_connections: '100', mysql_connections_critical: '200' };
-    const metrics = { mysql_connections: 120, mysql_connections_critical: 250 };
+    const config = { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '90' };
+    const metrics = { mysql_connection_usage_percent: 85, mysql_connection_usage_percent_critical: 95 };
     const out = simulateWithDedup(config, metrics, false, DEFS);
     expect(out.firing.map((f: any) => f.key).sort()).toEqual(
-      ['mysql_connections', 'mysql_connections_critical'],
+      ['mysql_connection_usage_percent', 'mysql_connection_usage_percent_critical'],
     );
     expect(out.suppressed).toEqual([]);
   });
 
   it('skips keys with no def / non-numeric threshold / missing metric', () => {
     const out = simulateWithDedup(
-      { unknown_metric: '10', mysql_connections: 'abc', pg_cache_hit_ratio: '90' },
-      { unknown_metric: 50, mysql_connections: 120 /* pg_cache_hit_ratio missing */ },
+      { unknown_metric: '10', mysql_connection_usage_percent: 'abc', pg_cache_hit_ratio: '90' },
+      { unknown_metric: 50, mysql_connection_usage_percent: 85 /* pg_cache_hit_ratio missing */ },
       true,
       DEFS,
     );
@@ -356,7 +356,7 @@ describe('simulateWithDedup', () => {
   });
 
   it('tolerates a missing alertDefs argument (empty defs → no alerts)', () => {
-    const out = simulateWithDedup({ mysql_connections: '100' }, { mysql_connections: 120 }, true);
+    const out = simulateWithDedup({ mysql_connection_usage_percent: '80' }, { mysql_connection_usage_percent: 85 }, true);
     expect(out).toEqual({ firing: [], suppressed: [], ok: [] });
   });
 
@@ -398,15 +398,15 @@ describe('simulateWithDedup', () => {
     };
 
     const configs = [
-      { mysql_connections: '100', mysql_connections_critical: '200' },
+      { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '90' },
       { pg_cache_hit_ratio: '90' },
-      { mysql_connections: '100', mysql_connections_critical: '200', pg_cache_hit_ratio: '90' },
-      { unknown: '5', mysql_connections: 'abc' },
+      { mysql_connection_usage_percent: '80', mysql_connection_usage_percent_critical: '90', pg_cache_hit_ratio: '90' },
+      { unknown: '5', mysql_connection_usage_percent: 'abc' },
     ];
     const metricSets = [
-      { mysql_connections: 120, mysql_connections_critical: 250, pg_cache_hit_ratio: 80 },
-      { mysql_connections: 100, mysql_connections_critical: 200, pg_cache_hit_ratio: 90 }, // all at boundary
-      { mysql_connections: 50, pg_cache_hit_ratio: 95 },
+      { mysql_connection_usage_percent: 85, mysql_connection_usage_percent_critical: 95, pg_cache_hit_ratio: 80 },
+      { mysql_connection_usage_percent: 80, mysql_connection_usage_percent_critical: 90, pg_cache_hit_ratio: 90 }, // all at boundary
+      { mysql_connection_usage_percent: 50, pg_cache_hit_ratio: 95 },
       {},
     ];
     for (const config of configs) {

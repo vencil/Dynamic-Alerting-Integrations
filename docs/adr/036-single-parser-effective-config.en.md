@@ -216,7 +216,7 @@ The Python side no longer has its own copy of these rules. Differences between t
 - For a file judged unreadable, the exporter does what it does today for a syntax error in the same kind of file, with the log and the metric also carrying the `kind`:
   - A tenant file: the tenants it declares are not served, and the other tenants of the tree are unaffected; one WARN log line, and `da_config_parse_failure_total` goes up by one.
   - A file of the `_defaults` chain or another platform file starting with `_`: skipped whole, one ERROR log line ("entire block dropped"), and `da_config_parse_failure_total` goes up by one; merging the defaults chain reads it as an empty file, and `da-guard effective` lists it in `chain_parse_failed`. The tenants depending on it still load, only without the defaults that file provides: a threshold served only because of that file's default is no longer served.
-  - Measured (2026-10-21, da-guard at head): with a syntax error in the root `_defaults.yaml`, `served-values` lists it in `parse_failed`, tenant `t1` is still there but `mysql_connections`, whose default came from that file, is no longer served, and `effective`'s `chain_parse_failed` is `["_defaults.yaml"]`; with a syntax error in the tenant file `t2.yaml`, `t2` is absent from `tenants` while `t1` is unaffected. da-guard returns exit 3 in both cases.
+  - Measured (2026-10-21, da-guard at head): with a syntax error in the root `_defaults.yaml`, `served-values` lists it in `parse_failed`, tenant `t1` is still there but `mysql_connection_usage_percent`, whose default came from that file, is no longer served, and `effective`'s `chain_parse_failed` is `["_defaults.yaml"]`; with a syntax error in the tenant file `t2.yaml`, `t2` is absent from `tenants` while `t1` is unaffected. da-guard returns exit 3 in both cases.
 - tenant-api's read side (`/effective`, the tenant list and the other endpoints that read conf.d through `pkg/config`) switches to this judgement together with the exporter. tenant-api's writes have no shape rules of their own: a body judged unreadable gets 400, like any other body validation failure, with an error naming the `kind` and the line but not quoting `parse-tree`'s message (that message quotes the refused key or value, and a batch patch validates the whole file, which several tenants may share). A file a whole-file write replaces that is judged unreadable counts as a file that does not parse: replacing it needs write permission on every tenant.
 - da-guard reports these files with exit 3 (§9).
 - So no file is "read by the exporter, refused by the generator": the generator, the exporter, da-guard and tenant-api refuse the same files.
@@ -227,11 +227,11 @@ This is a breaking change: of the 9 spellings measured in "Problem" above, the e
 # t1.yaml
 tenants:
   t1:
-    mysql_connections: "80"
+    mysql_connection_usage_percent: "80"
 ---
 tenants:
   t2:
-    mysql_connections: "90"
+    mysql_connection_usage_percent: "90"
 ```
 
 - On main at the time of this revision (2026-10-21): `parse-tree` judges this file `multiple_documents` ("a second document starts at line 4; only one document per file is read"); the exporter reads the first document and serves `t1`, and `t2` is silently dropped (the `tenants` of `da-guard served-values` holds only `t1`); da-guard run alone returns exit 4 and lists the file as evidence only the generator judges.

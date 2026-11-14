@@ -71,7 +71,7 @@ describe('every explorer key path exists in tenantConfig', () => {
       ['_domain_policy'], ['_instance_mapping']]) {
       expect(resolves(p)).toBe(false);
     }
-    expect(resolves([TENANT_PLACEHOLDER, 'mysql_connections'])).toBe(true);
+    expect(resolves([TENANT_PLACEHOLDER, 'mysql_connection_usage_percent'])).toBe(true);
   });
 });
 

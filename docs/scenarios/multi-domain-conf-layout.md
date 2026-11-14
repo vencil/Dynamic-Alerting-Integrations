@@ -121,7 +121,7 @@ conf.d/
 # 層級 2：conf.d/finance/_defaults.yaml —— 平台檔，所以閾值放在頂層 `defaults:`
 # （不加引號的數字）。
 defaults:
-  mysql_connections: 90
+  mysql_connection_usage_percent: 90
   container_memory: 85
 ```
 
@@ -129,7 +129,7 @@ defaults:
 # 層級 5：conf.d/finance/us-east/prod/tenant-a.yaml —— 租戶檔：值是加引號的字串。
 tenants:
   tenant-a:
-    mysql_connections: "95"    # 覆蓋：從 domain 的 90 提高
+    mysql_connection_usage_percent: "95"    # 覆蓋：從 domain 的 90 提高
     # container_memory 未提 —— 繼承層級 2 的 85
 ```
 
@@ -170,8 +170,8 @@ tenants:
 > 繼承來的整串子路由。⚠️ 這是租戶層的寫法：子目錄層 `_routing_defaults` 的
 > `overrides` 寫成 null，產生器照舊拒收（結束碼 2）。`_routing.receiver: ~`
 > **仍被拒絕**——它會讓該租戶整條 route 消失、告警落到 catch-all。
-> **閾值 key 一律用 `"disable"`**，不要用 `null`：`mysql_connections: ~` 與打到
-> 一半的 `mysql_connections:` 對 YAML 完全相同，所以 schema 擋掉它。詳見
+> **閾值 key 一律用 `"disable"`**，不要用 `null`：`mysql_connection_usage_percent: ~` 與打到
+> 一半的 `mysql_connection_usage_percent:` 對 YAML 完全相同，所以 schema 擋掉它。詳見
 > [ADR-017 決策 4](../adr/017-defaults-yaml-inheritance-dual-hash.md#4-閾值寫-null-等於這一層沒寫)。
 
 ## 操作指南
@@ -198,7 +198,7 @@ Would move:
   conf.d/ops-e.yaml → conf.d/ops/tenant-e.yaml
 
 Would extract domain defaults into:
-  conf.d/finance/_defaults.yaml (common keys: defaults.mysql_connections, _routing_defaults)
+  conf.d/finance/_defaults.yaml (common keys: defaults.mysql_connection_usage_percent, _routing_defaults)
   conf.d/infra/_defaults.yaml
 
 No changes made. Rerun with --apply to proceed.
@@ -237,7 +237,7 @@ Configuration sources (order of merge):
   5. conf.d/finance/us-east/prod/tenant-a.yaml (tenant-specific)
 
 Effective configuration:
-  mysql_connections: 90 (from: domain)
+  mysql_connection_usage_percent: 90 (from: domain)
   container_memory: 85 (from: domain)
   ...
 ```

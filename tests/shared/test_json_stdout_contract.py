@@ -569,11 +569,11 @@ def _confd_with_webhook(tmp: Path, stub: str) -> str:
     d = tmp / "confd_webhook"
     # A number, not '100': a root default the exporter cannot serve is a tree
     # no conf.d tool reads (#3206), and that is not what this fixture is for.
-    _write(d / "_defaults.yaml", "defaults:\n  mysql_connections: 100\n")
+    _write(d / "_defaults.yaml", "defaults:\n  mysql_connection_usage_percent: 100\n")
     _write(d / "tenant-one.yaml",
            "tenants:\n"
            "  tenant-one:\n"
-           "    mysql_connections: '50'\n"
+           "    mysql_connection_usage_percent: '50'\n"
            "    _routing:\n"
            "      receiver:\n"
            "        type: \"webhook\"\n"
@@ -621,7 +621,7 @@ def _empty_dir(tmp: Path, name: str) -> str:
 
 def _no_tenant_confd(tmp: Path) -> str:
     d = Path(_empty_dir(tmp, "no_tenant_confd"))
-    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n", encoding="utf-8")
     return str(d)
 
 
@@ -962,11 +962,11 @@ RECIPES: list[Recipe] = [
     # #3017: a key a shipped alert compares, so Prometheus is really asked
     # (an unmapped key is listed not_backtested without a query).
     R("backtest_threshold", "single-tenant",
-      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
+      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connection_usage_percent",
                     "--old-value", "100", "--new-value", "150",
                     "--prometheus", s, "--json"],
       doc_check=lambda d: None if [(c["status"], c.get("query")) for c in d["changes"]] == [
-          ("no_data", 'tenant:mysql_threads_connected:max{tenant="tenant-one"}')]
+          ("no_data", 'tenant:mysql_connection_usage:percent{tenant="tenant-one"}')]
       else f"expected one queried no_data change, got {d['changes']!r}"),
     R("backtest_threshold", "skip-if-unavailable",
       lambda t, s: ["--tenant", "tenant-one", "--metric", "max_connections",
@@ -983,7 +983,7 @@ RECIPES: list[Recipe] = [
     # `--skip-if-unavailable` cannot turn them into a skip.
     R("backtest_threshold",
       "prometheus-unreachable",
-      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
+      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connection_usage_percent",
                     "--old-value", "100", "--new-value", "150",
                     "--prometheus", "http://127.0.0.1:1", "--json"],
       expect_caller_error=True,
@@ -996,7 +996,7 @@ RECIPES: list[Recipe] = [
       expect_document=False),
     R("backtest_threshold",
       "invalid-tenant-id",
-      lambda t, s: ["--tenant", 'a"b', "--metric", "mysql_connections",
+      lambda t, s: ["--tenant", 'a"b', "--metric", "mysql_connection_usage_percent",
                     "--old-value", "70", "--new-value", "50",
                     "--prometheus", "http://127.0.0.1:1", "--skip-if-unavailable", "--json"],
       expect_caller_error=True,
@@ -1012,7 +1012,7 @@ RECIPES: list[Recipe] = [
     # `skipped` envelope next to rc 2; the parent here does not exist.
     R("backtest_threshold",
       "output-unwritable",
-      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connections",
+      lambda t, s: ["--tenant", "tenant-one", "--metric", "mysql_connection_usage_percent",
                     "--old-value", "100", "--new-value", "150",
                     "--prometheus", "http://127.0.0.1:1", "--skip-if-unavailable",
                     "-o", _out(t, "absent/backtest.json"), "--json"],

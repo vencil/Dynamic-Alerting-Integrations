@@ -119,7 +119,7 @@ def test_real_repo_is_green():
 def test_real_repo_declarations_come_from_the_registry():
     declared = gate.declared_critical_bases()
     for base in ("container_cpu", "container_memory", "container_cpu_throttle",
-                 "mysql_connections", "kafka_consumer_lag"):
+                 "mysql_connection_usage_percent", "kafka_consumer_lag"):
         assert declared[base] == base + "_critical"
 
 

@@ -8,25 +8,27 @@
 #
 # ⚠️ "absent from `defaults:` ⇒ silently ignored" was true until #1310 and is
 # what this comment used to say; it is now FALSE for the `optional_overrides:`
-# block 50 lines below (#1321). Those 9 keys carry no platform value, but a
+# block further down (#1321). Those keys carry no platform value, but a
 # tenant CAN set them and `resolveDeclaredRows` emits the row — the third state.
 # Absent from BOTH blocks is still ignored.
 #
 # SUPPLY CONTRACT: every WARNING-tier key the packs in prometheus.yml
-# `rule_files` demand must be listed below — rule-pack-mariadb reads
-# mysql_connections / mysql_threads_running / mysql_replication_lag via
-# tenant:alert_threshold:*. A demanded key missing here leaves its alert
+# `rule_files` demand AND the platform arms must be listed below —
+# rule-pack-mariadb reads mysql_connection_usage_percent / mysql_replication_lag
+# via tenant:alert_threshold:*. mysql_threads_running is demanded too but the
+# platform ships no value for it (#3778): it is in the `optional_overrides:` list
+# below, so a tenant line alone is served (db-demo.yaml sets 40). A demanded key missing here leaves its alert
 # loaded but unable to fire even with data present (#1200's empty-set silence).
 # The `_critical` tier canNOT be supplied here: resolveCriticalRows scans
 # TENANT OVERRIDES only (app/pkg/config/resolve.go), so a `<key>_critical` line
 # in defaults falls through to the base resolver and emits a junk
 # severity="warning" series in which the `_critical` text lands inside the
 # component/metric labels instead of becoming a severity — parseMetricKey
-# splits on the first underscore, so mysql_connections_critical becomes
-# {component="mysql", metric="connections_critical"}, NOT metric="<whole key>"
+# splits on the first underscore, so mysql_connection_usage_percent_critical becomes
+# {component="mysql", metric="connection_usage_percent_critical"}, NOT metric="<whole key>"
 # (see app/rulepack_contract_test.go; that mismatch is #731). No recording
 # rule reads it. Critical tiers belong in a tenant file (see db-demo.yaml's
-# mysql_connections_critical) — which is why this pack's *Critical alerts have
+# mysql_connection_usage_percent_critical) — which is why this pack's *Critical alerts have
 # no supply in the demo.
 # The mysql_* values mirror the platform defaults (operating SoT:
 # scripts/tools/ops/scaffold_tenant.py RULE_PACKS → the gated extract
@@ -36,8 +38,10 @@
 # trigger on `**/_defaults.yaml`, but it checks blast radius, not cross-copy
 # drift — so a recalibration has to land here by hand (#944 missed this file).
 defaults:
-  mysql_connections: 80      # db-demo overrides → drives the headline critical alert
-  mysql_threads_running: 30      # running-thread SATURATION warning (threads_running, NOT host CPU%); 80→30 = PMM/Nichter "high" tier (#944); renamed from mysql_cpu (#1231)
+  mysql_connection_usage_percent: 80   # % of max_connections; db-demo overrides → drives the headline critical alert
+  # mysql_threads_running has no platform value (#3778): a healthy value scales with
+  # the host's CPU count. It is declared under `optional_overrides:` below, so a tenant
+  # sets its own (db-demo.yaml); a `_critical` for it would need a base value here.
   mysql_replication_lag: 30  # async replication lag warning (seconds behind primary, sql_delay-adjusted); quiet here — the seed pushes no mysql_slave_status_* series (#1200 WS5-P0-a)
   redis_connected_clients: 8000  # cache-demo (sentinel/dedup concept demo). DEMO-ONLY value — the platform default is 200 (threshold-registry.yaml); no redis pack is loaded here anyway
 
@@ -70,6 +74,11 @@ defaults:
 # The `defaults:` values above still have no such gate — that caveat stands.
 optional_overrides:
   # >>> GENERATED:threshold-registry:try-local-optional — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+  # ── mariadb：MariaDB / MySQL (mysqld_exporter) ──
+  - mysql_threads_running
+    # threads — threads_running saturation, NOT host CPU% — running-threads 1m-avg warning; 30 =
+    # PMM/Nichter 'high' tier, a reference start to calibrate per host (a healthy count scales with
+    # CPU cores); renamed from mysql_cpu (2-release alias window, old spelling still resolves)
   # ── oracle：Oracle Database (oracledb_exporter) ──
   - oracle_wait_time_rate   # s/s — Wait time rate (5m)
   - oracle_process_count   # count — Active processes warning

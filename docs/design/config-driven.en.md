@@ -62,10 +62,9 @@ conf.d/
 ```yaml
 # Labels a dimensional key may carry (#3475): an undeclared label is not served. The shipped list is only version on container cpu/memory; this declares a custom one
 dimensions:
-  mysql_connections: [instance, role]
+  mysql_connection_usage_percent: [instance, role]
 defaults:
-  mysql_connections: 80
-  mysql_threads_running: 30
+  mysql_connection_usage_percent: 80
   mysql_replication_lag: 30
   container_cpu: 80
   container_memory: 85
@@ -84,13 +83,13 @@ state_filters:
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "70"          # Override default 80
+    mysql_connection_usage_percent: "70"          # Override default 80
     container_cpu: "70"              # Override default 80
     mysql_replication_lag: "disable" # No replica, disable
-    # mysql_threads_running not specified → use default value 30
+    # mysql_threads_running not specified → the platform ships no default (a healthy value depends on the host's CPU core count, set it per host; #3778), so this alert does not fire
     # Dimensional labels (every label must be declared for its base under dimensions: in _defaults.yaml above, or no metric is served; see the ⚠️ in §2.5)
-    "mysql_connections{instance='db-primary:3306'}": "500"
-    "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
+    "mysql_connection_usage_percent{instance='db-primary:3306'}": "75"
+    "mysql_connection_usage_percent{instance='db-replica:3306', role='replica'}": "95:critical"
 ```
 
 #### Boundary Enforcement Rules
@@ -353,8 +352,8 @@ Support both `_critical` suffix and `"value:severity"` syntax:
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "100"            # warning threshold
-    mysql_connections_critical: "150"   # _critical → auto-generate critical alert
+    mysql_connection_usage_percent: "85"             # warning threshold
+    mysql_connection_usage_percent_critical: "95"    # _critical → auto-generate critical alert
 ```
 
 **Method 2: `"value:severity"` syntax (suitable for dimensional labels)**
@@ -370,8 +369,8 @@ The severity is the part after the last `:` and may only be `warning` or `critic
 
 **Prometheus output:**
 ```
-user_threshold{tenant="db-a", component="mysql", metric="connections", severity="warning"} 100
-user_threshold{tenant="db-a", component="mysql", metric="connections", severity="critical"} 150
+user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percent", severity="warning"} 85
+user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percent", severity="critical"} 95
 ```
 
 #### Auto-Suppression (Severity Dedup via Alertmanager Inhibit)
@@ -385,21 +384,21 @@ Severity dedup is handled at the **Alertmanager inhibit layer**, not in PromQL. 
 ```yaml
 - alert: MariaDBHighConnections          # warning
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections )
+    ( tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m
   labels:
     severity: warning
-    metric_group: "mysql_connections"
+    metric_group: "mysql_connection_usage_percent"
 
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections_critical )
+    ( tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   for: 5m
   labels:
     severity: critical
-    metric_group: "mysql_connections"
+    metric_group: "mysql_connection_usage_percent"
 ```
 
 **Alertmanager inhibit rule (per-tenant, auto-generated):**
@@ -418,8 +417,8 @@ inhibit_rules:
 ```
 
 **Result:**
-- Connection count ≥ 150 (critical): Both warning and critical alerts fire in Prometheus (TSDB records both). Alertmanager's inhibit rule blocks only the **warning notification**, critical notification sends normally.
-- Connection count 100–150 (warning only): Warning alert fires, critical does not. Warning notification sends.
+- Connection usage above 95% of max_connections (critical): Both warning and critical alerts fire in Prometheus (TSDB records both). Alertmanager's inhibit rule blocks only the **warning notification**, critical notification sends normally.
+- Connection usage between 85% and 95% (warning only): Warning alert fires, critical does not. Warning notification sends.
 - **TSDB completeness:** All alert firings remain in Prometheus TSDB regardless of notification suppression.
 
 ### 2.5 Regex Dimension Thresholds
@@ -458,13 +457,13 @@ Since v0.12.0, thresholds support time-window scheduling, allowing automatic thr
 ```yaml
 tenants:
   db-a:
-    mysql_connections:
-      default: "100"
+    mysql_connection_usage_percent:
+      default: "80"
       overrides:
         - window: "22:00-06:00"    # UTC nighttime window (cross-midnight supported)
-          value: "200"             # Nighttime batch jobs, relax to 200
+          value: "95"              # Nighttime batch jobs, relax to 95%
         - window: "09:00-18:00"
-          value: "80"              # Daytime peak, tighten to 80
+          value: "70"              # Daytime peak, tighten to 70%
 ```
 
 **Technical implementation:**
@@ -474,7 +473,7 @@ tenants:
 - **Time window format**: `HH:MM-HH:MM` (UTC), cross-midnight support (e.g., `22:00-06:00` means 10 PM to 6 AM next day); a window is half-open, `[start, end)`: its end minute is not in it (`01:00-09:00` covers 01:00–08:59), as with Alertmanager `time_intervals`' `end_time`, so no window covers the whole day — `00:00-23:59` does not apply during the 23:59 minute; a value for the whole day goes in `default:` ([#3368](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3368)); a window that starts where it ends (e.g. `05:00-05:00`) covers no minute and is invalid, like a malformed or missing `window:`: the exporter WARNs and the window never applies, the load names it with `da_config_values_not_served{reason="window_invalid"}` and one WARN line, and da-guard refuses it with a `value_not_served` error ([#2065](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2065)); the tenant-api write gate refuses an invalid window newly written or changed (`PUT` 400; a batch patch writes string values only, so it cannot write a window), and one the file already holds as it is (the entry's place, window and value unchanged) only gets a NOTICE, the ratchet a dead entry has ([#3683](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3683)). ⚠️ Breaking: a write whose value is valid and only its window is not used to be 200
 - **Test cases**: Covering boundary conditions — window overlap, cross-midnight, scalar fallback, empty overrides
 - **Entries that never apply** ([#3502](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3502)): a minute is served by the **first** window that contains it, so a window the windows written before it cover entirely (`01:00-03:00` after `22:00-06:00`), and a `default` the windows together cover for the whole day, are served at no minute. The exporter reports them per entry: `da-guard effective` / `served-values` / `key-verdict` carry `dead_entries`, and the shared key verdict reports `dead_entry` (error) on the file that writes it (a profile included); tenant-api and `da-guard write` refuse a dead entry newly written or changed, and one left in the file as it is only gets a NOTICE. A partial overlap (`05:00-08:00` after `22:00-06:00`, served from 06:00) is valid. A value in a dead entry or under an invalid window is not judged again as a threshold the exporter cannot read: each entry is reported once, by the defect that keeps it from being served ([#3683](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3683); a non-finite number is the exception, refused as #3140 says). The verdict and what is served read one function for "which entry serves this minute", so they cannot disagree
-- **Thresholds only** ([#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)): a reserved key (`_silent_mode`, `_severity_dedup`, `_state_<filter>`, `_profile`, `_routing_profile` and the rest — not the keys whose whole mapping is kept as written, such as `_metadata` / `_routing`) takes no `overrides:` time window, and no `expires:` / `reason:` in the `{default: …, expires: …}` schedule form: its readers read `default` alone. Written that way, the exporter uses `default` only (it serves exactly what `default` alone serves) and logs one WARN line at load naming the file, tenant and key; `da-guard served-values` and `/effective` see `default` alone too, and the window is no longer a cut; tenant-api refuses the write (400), and one the file already holds that the write leaves exactly as it is (`default`, every window and the expiry) is a NOTICE only; the JSON schema and the route generator refuse it as well (a `_routing_profile` written as a mapping refuses the whole tree, finding kind `routing_profile_invalid`). A reserved key written in a subtree `_defaults.yaml`, in this form or any other, is not handed down to the tenants at all ([#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341); when da-guard reports `subtree_default_reserved_key` and what `/effective` and `not_served` show is [ADR-017 Decision 4's table](../adr/017-defaults-yaml-inheritance-dual-hash.en.md)). For a one-time end use the structured object of `_silent_mode` / `_state_maintenance` (`{target: …, expires: …}`); for a recurring maintenance window, `_state_maintenance`'s `recurring:`.
+- **Thresholds only** ([#3269](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3269)): a reserved key (`_silent_mode`, `_severity_dedup`, `_state_<filter>`, `_profile`, `_routing_profile` and the rest — not the keys whose whole mapping is kept as written, such as `_metadata` / `_routing`) takes no `overrides:` time window, and no `expires:` / `reason:` in the `{default: …, expires: …}` schedule form: the exporter and the annotation read `default` alone, and the route generator refuses a `_routing_profile` written as a mapping (below). Written that way, the exporter uses `default` only (it serves exactly what `default` alone serves) and logs one WARN line at load naming the file, tenant and key; `da-guard served-values` and `/effective` see `default` alone too, and the window is no longer a cut; tenant-api refuses the write (400), and one the file already holds that the write leaves exactly as it is (`default`, every window and the expiry) is a NOTICE only; the shared key verdict (`da-guard key-verdict`) reports `schedule_unread` on the file that writes it — an error in a tenant file (`da-guard write` refuses a new one, `generate-routes --validate` the whole tree), a notice in a root platform file's `tenants:` or a profile ([#3834](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3834)); the JSON schema and the route generator refuse it as well (a `_routing_profile` written as a mapping refuses the whole tree, finding kind `routing_profile_invalid`). A reserved key written in a subtree `_defaults.yaml`, in this form or any other, is not handed down to the tenants at all ([#3341](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3341); when da-guard reports `subtree_default_reserved_key` and what `/effective` and `not_served` show is [ADR-017 Decision 4's table](../adr/017-defaults-yaml-inheritance-dual-hash.en.md)). For a one-time end use the structured object of `_silent_mode` / `_state_maintenance` (`{target: …, expires: …}`); for a recurring maintenance window, `_state_maintenance`'s `recurring:`.
 
 ### 2.7 Three-State Operational Modes
 
@@ -666,7 +665,7 @@ v1.2.0 implements per-tenant inhibit rules for optional configuration:
 | `_severity_dedup: "enable"` (default) | ✅ | ✅ | ❌ Intercepted by AM | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "mysql_connections"`. Each per-tenant inhibit rule limits `metric_group=~".+"`, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: mariadb_liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) (MongoDB's alike carry `mongodb_liveness`), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
+**Pairing Mechanism:** The `metric_group` label in alert rules allows Alertmanager to correctly pair warning/critical (since they have different alertnames). For example, `MariaDBHighConnections` and `MariaDBHighConnectionsCritical` share `metric_group: "mysql_connection_usage_percent"`. Each per-tenant inhibit rule limits `metric_group=~".+"`, so alerts without a `metric_group` label do not participate in dedup. (The liveness-tier alerts `MariaDBDown`/`MariaDBClusterDown`/`MariaDBNoPrimary` carry `metric_group: mariadb_liveness` as of [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) (MongoDB's alike carry `mongodb_liveness`), so the critical cluster-survival alert auto-inhibits the same tenant's warning instance alert.)
 
 **Group names are one namespace per tenant:** the inhibit compares `metric_group` only, not the rule pack, so two packs using one value would let a tenant running both have one pack's critical inhibit the other's warning. `check_metric_group_pairs.py` therefore requires that each value belongs to one rule pack, that each group has a critical and a warning member (the inhibit mutes `severity="warning"` only; otherwise it inhibits nothing), and that `slo_` stays the custom-alert compiler's prefix ([#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)). The groups `migrate_rule` writes are the whole threshold key.
 
