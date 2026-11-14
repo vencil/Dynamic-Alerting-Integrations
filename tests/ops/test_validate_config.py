@@ -1934,6 +1934,9 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             # #3691. Reads the tree through da-guard served-values under
             # `--config-dir`.
             "tier_inversion",
+            # #3830. Reads the root platform file and, through da-guard
+            # served-values, every tenant's db_type under `--config-dir`.
+            "unsupplied_defaults",
             # #2164. Reads every file under `--config-dir` and skips the
             # ones it cannot parse — same reason as the rows above.
             "yaml_quoting",

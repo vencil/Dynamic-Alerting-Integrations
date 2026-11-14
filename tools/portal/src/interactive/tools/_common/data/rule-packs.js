@@ -77,6 +77,7 @@ purpose: |
 // hook, so the mirror can no longer go stale without something red.
 // See scripts/tools/dx/generate_platform_data.py (#1226).
 import RULE_PACKS_FALLBACK from './rule-packs-fallback.json';
+import { readThreshold } from '../validation/threshold-value.js';
 
 const t = window.__t || ((zh, en) => en);
 
@@ -336,10 +337,15 @@ function annotateCounterexamples(yamlText) {
   return out.join('\n');
 }
 
+// Whether a YAML line's scalar text is the threshold number `value`, read as
+// the exporter reads it (#3865). Number() also reads `0xC8`, `0o310` and
+// `0b11001000` as 200; the exporter refuses them, and a caveat about "this
+// value" does not belong on a line that serves no value. `200:critical` IS
+// the value 200 (Number() read it as NaN).
 function sameNumber(rawScalar, value) {
   if (value == null) return false;
-  const n = Number(String(rawScalar).trim().replace(/^["']|["']$/g, ''));
-  return Number.isFinite(n) && n === Number(value);
+  const read = readThreshold(String(rawScalar).trim().replace(/^["']|["']$/g, ''));
+  return read.ok && read.number !== null && read.number === Number(value);
 }
 
 export {

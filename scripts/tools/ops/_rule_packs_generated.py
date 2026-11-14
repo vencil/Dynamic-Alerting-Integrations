@@ -632,3 +632,15 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
                                                              'unit': 'count',
                                                              'desc': 'Waiting connections critical',
                                                              'metric_class': 'saturation'}}}}
+
+# Per pack, the keys the registry ships armed (`arming: default`), in
+# registry order; a pack with none is absent. What validate-config's
+# `unsupplied_defaults` row reads where no repo tree is (#3830).
+DEFAULT_ARMED_KEYS = {'kubernetes': ['container_cpu', 'container_cpu_throttle', 'container_memory'],
+ 'postgresql': ['pg_connections', 'pg_replication_lag'],
+ 'mariadb': ['mysql_connection_usage_percent', 'mysql_replication_lag']}
+
+# Retired threshold key -> the pack of the key that replaces it (a key
+# retired with no replacement is absent; `<old>_critical` follows its
+# base). A tree still carrying the old key deploys that pack (#3830).
+RETIRED_KEY_PACKS = {'mysql_connections': 'mariadb'}
