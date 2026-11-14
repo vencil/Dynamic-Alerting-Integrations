@@ -56,6 +56,27 @@ import (
 // errNotInReading wraps a written key or list the reading has no place for.
 var errNotInReading = errors.New("the text writes it, but the loader's reading has no such entry")
 
+// ⛔ da-read's own refusals of an Alertmanager config carry no text of the
+// file (#3703): not the path of map keys it was walking, not a key, not the
+// YAML or JSON library's sentence (which quotes values). They are fixed
+// sentences and the line of the node they refused; the caller (the route
+// generator's gate, onboard, byo-check) prints them on stderr and in its
+// findings. showLoaderReasonFlag opts into the loader's own words only.
+
+// notInReading is errNotInReading at the written node *at* (its line; no
+// line when there is no node).
+func notInReading(at *yaml.Node) error {
+	if at == nil || at.Line < 1 {
+		return errNotInReading
+	}
+	return fmt.Errorf("line %d: %w", at.Line, errNotInReading)
+}
+
+// errNotPrinted is the refusal of a config the loader returned that
+// encoding/json cannot print; the encoder's own error, which can quote a
+// value, is not carried.
+var errNotPrinted = errors.New("the config Alertmanager loads cannot be printed as JSON")
+
 // readAlertmanager returns da-read's stdout for the Alertmanager config
 // *data*. *showReason*: whether a refusal by Alertmanager's loader carries
 // the loader's own reason (loaderRefusal).
@@ -74,11 +95,12 @@ func readAlertmanager(data []byte, showReason bool) ([]byte, error) {
 	}
 	reading, err := marshalWithSecrets(cfg)
 	if err != nil {
-		return nil, fmt.Errorf("the config Alertmanager loads cannot be printed as JSON: %v", err)
+		return nil, errNotPrinted
 	}
 	var root yaml.Node
 	if err := yaml.Unmarshal(data, &root); err != nil {
-		return nil, fmt.Errorf("%w: %v", errNotComposed, err)
+		// The YAML library's sentence quotes the text; it is not carried.
+		return nil, errNotComposed
 	}
 	var top *yaml.Node
 	if root.Kind == yaml.DocumentNode && len(root.Content) == 1 {
@@ -399,12 +421,12 @@ func lookup(v interface{}, path []string) (interface{}, bool) {
 }
 
 // valueOf is the reading of the written key *key* in the struct *sv*, read
-// as *read*, and the Go value below it.
-func valueOf(key string, read map[string]interface{}, sv reflect.Value, path []interface{}) (interface{}, reflect.Value, error) {
+// as *read*, and the Go value below it. *at* is the written value (its line
+// names a refusal).
+func valueOf(key string, read map[string]interface{}, sv reflect.Value, at *yaml.Node) (interface{}, reflect.Value, error) {
 	f, ok := findField(sv, key)
 	if !ok || f.jsonPath == nil {
-		return nil, reflect.Value{}, fmt.Errorf("%s: %w (%s has no field %q that is printed)",
-			pathString(path), errNotInReading, sv.Type(), key)
+		return nil, reflect.Value{}, notInReading(at)
 	}
 	if v, ok := lookup(read, f.jsonPath); ok {
 		return v, f.value, nil
@@ -417,7 +439,7 @@ func valueOf(key string, read map[string]interface{}, sv reflect.Value, path []i
 		v, err := decodeJSON(b)
 		return v, f.value, err
 	}
-	return nil, reflect.Value{}, fmt.Errorf("%s: %w", pathString(path), errNotInReading)
+	return nil, reflect.Value{}, notInReading(at)
 }
 
 // isStruct reports whether *t* (or what it points to) is a struct whose JSON
@@ -488,7 +510,7 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 				}
 				continue
 			}
-			val, child, err := valueOf(key, v, sv, p)
+			val, child, err := valueOf(key, v, sv, wm.value[key])
 			if err != nil {
 				return err
 			}
@@ -519,7 +541,7 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 			val, ok := v[key]
 			child := sv.MapIndex(reflect.ValueOf(key).Convert(sv.Type().Key()))
 			if !ok || !child.IsValid() {
-				return fmt.Errorf("%s: %w", pathString(p), errNotInReading)
+				return notInReading(wm.value[key])
 			}
 			if i > 0 {
 				w.out.WriteByte(',')
@@ -542,8 +564,7 @@ func (w *walker) walk(node *yaml.Node, read interface{}, rv reflect.Value, path 
 			return w.plain(read)
 		}
 		if len(n.Content) != len(v) || sv.Len() != len(v) {
-			return fmt.Errorf("%s: %w: %d entries written, %d read", pathString(path), errNotInReading,
-				len(n.Content), len(v))
+			return fmt.Errorf("%w: %d entries written, %d read", notInReading(n), len(n.Content), len(v))
 		}
 		w.out.WriteByte('[')
 		for i, item := range v {
