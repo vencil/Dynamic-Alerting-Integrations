@@ -11,8 +11,11 @@ STATE, read afresh every time, so an event that was never delivered (the
 workflow keeps one pending run; a third event replaces it) is made up for by
 the next one:
 
-  the event is not a push run on main, or concluded `cancelled` / `skipped`
+  the event is not a push run on main
                                    -> nothing, and nothing is read (exit 0)
+  ⛔ Its conclusion does not matter. A `cancelled` push run on main wakes the
+  script like any other: the event it replaced in the queue may have been a
+  failure, and nearly half of main's CI runs are cancelled by the next merge.
 
   otherwise, for every watched workflow, take its NEWEST push run on main
   that has a verdict — the highest `run_number` whose latest attempt is
@@ -608,9 +611,6 @@ def plan(event: Run, watched: list[Watched], api: Api) -> Plan:
     if event.event != "push" or event.branch != BRANCH:
         return Plan("noop", f"not a push run on {BRANCH} (event {event.event!r}, "
                             f"branch {event.branch!r})")
-    if event.conclusion in NO_VERDICT:
-        return Plan("noop", f"the run concluded `{event.conclusion}` — it says nothing "
-                            f"about {BRANCH}")
     if event.workflow not in {wf.name for wf in watched}:
         raise NoVerdict(f"{event.workflow!r} is not one of the watched workflows "
                         f"({sorted(wf.name for wf in watched)}) — the trigger list and "

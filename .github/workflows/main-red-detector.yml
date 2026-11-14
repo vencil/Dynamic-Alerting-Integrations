@@ -29,22 +29,32 @@ name: Main red detector
 # and it would hold `issues: write` next to jobs that run PR code.
 #
 # Security (`workflow_run` runs with a write token, on the default branch's
-# copy of this file, whatever triggered it):
+# copy of this file, whatever triggered it — a run on ANY branch, a fork's PR
+# included, can trigger a `workflow_run` workflow; what GitHub requires is only
+# that this file is on the default branch):
 #   * nothing from the triggering run is checked out or executed. The checkout
 #     pins `github.sha` — for `workflow_run` that is the default branch's
 #     head, never `workflow_run.head_sha`;
-#   * `branches: [main]` filters on the triggering run's HEAD BRANCH NAME, and
-#     a fork's PR branch can be called `main`. The script therefore decides on
-#     `event == push` and `head_branch == main` itself, and for such a run
-#     does nothing;
+#   * what limits this to main is this file's own `branches: [main]`, which
+#     filters on the triggering run's HEAD BRANCH NAME — and a fork's PR
+#     branch can be called `main`. The script therefore checks
+#     `event == push` and `head_branch == main` itself, and for any other run
+#     does nothing and reads nothing;
 #   * no `${{ github.event.* }}` inside `run:`; the payload is read from
 #     `$GITHUB_EVENT_PATH` as data. Commit subjects and job names reach the
 #     issue only inside code spans.
 #
-# First-cycle note: `workflow_run` fires only once this file is on the default
-# branch, so no PR can exercise it. `workflow_dispatch` replays one finished
-# run by id — read-only unless `write` is ticked — which is how to check it
-# after the merge and after any later change.
+# First-cycle note: a `workflow_run` workflow runs only from the copy of this
+# file on the default branch, so a PR that adds or changes it cannot exercise
+# it. `workflow_dispatch` is how to check it after the merge and after any
+# later change — read-only unless `write` is ticked.
+# ⚠️ How to read a manual run: `run_id` only says which finished push run on
+# main plays the part of "the event that just arrived". The script then reads
+# main's state as it is NOW — every watched workflow's newest verdict, the
+# open tracking issue — and prints what it would do about THAT. It does not
+# reproduce what it would have decided when that run finished: replaying an
+# old failed run while main is green prints `noop`. (This is the one place
+# this is explained; docs point here.)
 
 on:
   workflow_run:
@@ -54,7 +64,7 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "Run id to judge (a finished run of a watched workflow)"
+        description: "A finished push run on main of a watched workflow — it only wakes the script, which then reads main as it is now (see the header)"
         required: true
         type: string
       write:
@@ -121,9 +131,13 @@ jobs:
           else
             source=(--event-file "$GITHUB_EVENT_PATH" --write)
           fi
+          # ⛔ `|| rc=$?`, never a separate `rc=$?` line: this step has no
+          # `shell:`, so GitHub runs it as `bash -e`, and a bare non-zero exit
+          # ends the step right here — before the summary, and with rc 1
+          # ("main is red") failing the detector.
+          rc=0
           python3 -X utf8 scripts/ops/main_red_report.py \
-            --repo "$GITHUB_REPOSITORY" "${source[@]}" > "$RUNNER_TEMP/report.txt" 2>&1
-          rc=$?
+            --repo "$GITHUB_REPOSITORY" "${source[@]}" > "$RUNNER_TEMP/report.txt" 2>&1 || rc=$?
           cat "$RUNNER_TEMP/report.txt"
           {
             echo "### Main red detector (rc=${rc})"

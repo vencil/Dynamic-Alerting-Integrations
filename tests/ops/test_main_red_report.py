@@ -22,9 +22,9 @@ What is held here:
     had none until this change, so its required checks never ran on the
     merged tree.
 
-⚠️ Not covered: the workflow running on GitHub. `workflow_run` fires only from
-the default branch, so no PR can exercise it; the `workflow_dispatch` replay
-(`run_id`, read-only by default) is the post-merge check.
+⚠️ Not covered: the workflow running on GitHub. A `workflow_run` workflow runs
+only from the copy of its file on the default branch, so no PR can exercise
+it; the `workflow_dispatch` run (read-only by default) is the post-merge check.
 """
 from __future__ import annotations
 
@@ -393,10 +393,27 @@ def test_a_run_in_progress_is_passed_over_in_both_directions() -> None:
 # ── the event only says when to look ────────────────────────────────────────
 
 @pytest.mark.parametrize("conclusion", ["cancelled", "skipped"])
-def test_an_event_without_a_verdict_reads_nothing(conclusion) -> None:
-    gh = _gh([R(10, "failure")], issues=[_issue()])
-    action = _plan(gh, _event(conclusion))
-    assert (action.kind, action.red) == ("noop", False) and gh.calls == []
+def test_a_cancelled_event_looks_at_main_like_any_other(conclusion) -> None:
+    """⛔ The workflow keeps one pending run; a cancelled run's event can be
+    the one that replaced a pending FAILURE event. Nearly half of main's CI
+    runs are cancelled by the next merge — skipping them is skipping half the
+    moments the state is looked at. The event's own conclusion decides nothing."""
+    event = _event(conclusion, workflow="CI", number=11)
+    # Another workflow's newest verdict is a failure, no issue: opened.
+    gh = _gh([R(11, conclusion), R(10, "success")], DOCS_RED)
+    action = _plan(gh, event)
+    assert (action.kind, action.red) == ("open", True) and gh.writes() == [("POST", "issues")]
+    assert _mark("red", "docs.yaml", 4) in action.text.splitlines()
+    # All green, issue open: closed.
+    gh = _gh([R(11, conclusion), R(10, "success")], issues=[_issue()])
+    action = _plan(gh, event)
+    assert (action.kind, action.red) == ("close", False)
+    assert gh.writes() == [("POST", "issues/77/comments"), ("PATCH", "issues/77")]
+    # All green, no issue: nothing — but it looked.
+    gh = _gh([R(11, conclusion), R(10, "success")])
+    action = _plan(gh, event)
+    assert (action.kind, action.red) == ("noop", False) and gh.written == []
+    assert ("GET", "actions/workflows/ci.yml/runs") in gh.calls and ("GET", "issues") in gh.calls
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -847,7 +864,8 @@ def test_exit_codes(tmp_path, capsys) -> None:
         ("close",             FakeGh(issues=[_issue()], runs=green), {}, 0, 2),
         ("green-no-issue",    FakeGh(runs=green), {}, 0, 0),
         ("unknown-no-issue",  FakeGh(runs=never), {}, 0, 0),
-        ("cancelled",         FakeGh(runs=red), {"conclusion": "cancelled"}, 0, 0),
+        ("cancelled-red",     FakeGh(runs=red), {"conclusion": "cancelled"}, 1, 1),
+        ("cancelled-green",   FakeGh(runs=green), {"conclusion": "cancelled"}, 0, 0),
         ("pull-request",      FakeGh(runs=red), {"event": "pull_request"}, 0, 0),
         ("lookup-failed",     FakeGh(runs=red, fail=("issues",)), {}, 2, 0),
         ("listing-failed",    FakeGh(issues=[_issue()], runs=green,
@@ -1047,24 +1065,78 @@ def test_the_detector_is_not_part_of_a_required_check_workflow(agg) -> None:
     assert not names & (agg._ALL_REQUIRED_NAMES | agg._ADVISORY_NAMES), names
 
 
-def test_only_no_verdict_fails_the_workflow_run() -> None:
-    """rc 1 (main is red, the issue carries it) must leave the detector green:
-    a red detector means the detector is broken. Executed, not read."""
+def _step_shell_argv(step: dict) -> list[str]:
+    """The argv GitHub runs a `run:` step with, READ FROM THE STEP — not
+    assumed. No `shell:` → `bash -e {0}`; `shell: bash` →
+    `bash --noprofile --norc -eo pipefail {0}`. Either way errexit is ON,
+    and `set -uo pipefail` inside the script does not turn it off."""
     import shutil
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("needs bash")
-    run = _detector()["jobs"]["report"]["steps"][-1]["run"]
-    tail = run[run.index('case "$rc" in'):]
-    for rc, expected in ((0, 0), (1, 0), (2, 2), (3, 2), (120, 2)):
-        proc = subprocess.run([bash, "-c", f"rc={rc}\n{tail}"], capture_output=True,
-                              text=True, encoding="utf-8", timeout=30, check=False)
-        assert proc.returncode == expected, (rc, proc.stdout, proc.stderr)
+    shell = step.get("shell")
+    if shell is None:
+        return [bash, "-e"]
+    assert shell == "bash", f"unmodelled `shell: {shell}` — teach this helper its flags"
+    return [bash, "--noprofile", "--norc", "-eo", "pipefail"]
+
+
+def _run_step(tmp_path: Path, env: dict, script_rc: int = 0):
+    """Run the WHOLE last step the way GitHub does: its entire `run:` text in a
+    file, under the step's own shell flags, with a stand-in `python3` that
+    prints its arguments and exits `script_rc`. ⛔ Never a slice of the
+    script: the slice that was tested before started after the line that
+    killed the step (#3944)."""
+    import os
+    step = _detector()["jobs"]["report"]["steps"][-1]
+    assert "python3 -X utf8 scripts/ops/main_red_report.py" in step["run"]
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    fake = bindir / "python3"
+    fake.write_text(f'#!/bin/sh\nshift 3\necho "ARGS: $*"\nexit {script_rc}\n', encoding="utf-8")
+    fake.chmod(0o755)
+    script = tmp_path / "step.sh"
+    script.write_text(step["run"], encoding="utf-8")
+    summary = tmp_path / "summary.md"
+    summary.unlink(missing_ok=True)
+    proc = subprocess.run(
+        [*_step_shell_argv(step), str(script)], capture_output=True, text=True,
+        encoding="utf-8", timeout=30, check=False, cwd=tmp_path,
+        env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path),
+             "GITHUB_STEP_SUMMARY": str(summary), "GITHUB_REPOSITORY": "o/r",
+             "GITHUB_EVENT_PATH": "/ev.json", **env})
+    return proc, (summary.read_text(encoding="utf-8") if summary.exists() else None)
+
+
+_EVENT_ENV = {"GITHUB_EVENT_NAME": "workflow_run", "RUN_ID": "", "WRITE": ""}
+
+
+@pytest.mark.parametrize("script_rc, step_rc, annotation", [
+    (0, 0, None), (1, 0, "::warning::"), (2, 2, "::error::"), (3, 2, "::error::"),
+    (120, 2, "::error::"),
+], ids=["nothing", "main-is-red", "no-verdict", "unexpected", "interpreter"])
+def test_only_no_verdict_fails_the_workflow_run(tmp_path, script_rc, step_rc, annotation) -> None:
+    """rc 1 (main is red, the issue carries it) must leave the detector green:
+    a red detector means the detector is broken. And whatever the script's
+    exit, the step gets as far as writing the summary."""
+    proc, summary = _run_step(tmp_path, _EVENT_ENV, script_rc)
+    assert proc.returncode == step_rc, (proc.stdout, proc.stderr)
+    assert summary is not None and f"(rc={script_rc})" in summary, summary
+    assert "ARGS: --repo o/r" in summary and "ARGS: --repo o/r" in proc.stdout
+    if annotation is None:
+        assert "::warning::" not in proc.stdout and "::error::" not in proc.stdout
+    else:
+        assert annotation in proc.stdout, proc.stdout
+
+
+def test_the_step_shell_is_one_this_module_models() -> None:
+    """The helper reads the step's `shell:`; this pins which case is live, so a
+    change of shell is a visible change here and not a silent switch of flags."""
+    assert "shell" not in _detector()["jobs"]["report"]["steps"][-1]
 
 
 @pytest.mark.parametrize("env, expected_rc, expected_args", [
-    ({"GITHUB_EVENT_NAME": "workflow_run", "RUN_ID": "", "WRITE": ""}, 0,
-     "--repo o/r --event-file /ev.json --write"),
+    (_EVENT_ENV, 0, "--repo o/r --event-file /ev.json --write"),
     ({"GITHUB_EVENT_NAME": "workflow_dispatch", "RUN_ID": "77", "WRITE": "false"}, 0,
      "--repo o/r --run-id 77"),
     ({"GITHUB_EVENT_NAME": "workflow_dispatch", "RUN_ID": "77", "WRITE": "true"}, 0,
@@ -1075,26 +1147,8 @@ def test_only_no_verdict_fails_the_workflow_run() -> None:
 def test_the_step_hands_the_script_the_right_arguments(tmp_path, env, expected_rc,
                                                        expected_args) -> None:
     """The script is read-only unless given `--write`, so the event path must
-    pass it — a detector that never writes is green and silent. Executed with
-    a stand-in `python3` that records its arguments."""
-    import os
-    import shutil
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("needs bash")
-    bindir = tmp_path / "bin"
-    bindir.mkdir()
-    fake = bindir / "python3"
-    fake.write_text('#!/bin/sh\nshift 3\necho "ARGS: $*"\n', encoding="utf-8")
-    fake.chmod(0o755)
-    run = _detector()["jobs"]["report"]["steps"][-1]["run"]
-    assert "python3 -X utf8 scripts/ops/main_red_report.py" in run
-    proc = subprocess.run(
-        [bash, "-c", run], capture_output=True, text=True, encoding="utf-8", timeout=30,
-        check=False, cwd=tmp_path,
-        env={"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path),
-             "GITHUB_STEP_SUMMARY": str(tmp_path / "summary.md"),
-             "GITHUB_REPOSITORY": "o/r", "GITHUB_EVENT_PATH": "/ev.json", **env})
+    pass it — a detector that never writes is green and silent."""
+    proc, _ = _run_step(tmp_path, env)
     assert proc.returncode == expected_rc, (proc.stdout, proc.stderr)
     if expected_args is None:
         assert "ARGS:" not in proc.stdout, proc.stdout
