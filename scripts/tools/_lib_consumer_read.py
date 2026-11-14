@@ -492,13 +492,24 @@ def _is_refusal(e: ConsumerReadError) -> bool:
     return isinstance(e, InputRefused)
 
 
-def alertmanager_config(text: str | bytes, binary: str | None = None) -> dict:
+#: ``da-read alertmanager``'s opt-in to the loader's own reason for a refusal.
+SHOW_LOADER_REASON_FLAG = "--show-loader-reason"
+
+
+def alertmanager_config(text: str | bytes, binary: str | None = None, *,
+                        show_loader_reason: bool = False) -> dict:
     """The Alertmanager config *text* as Alertmanager loads it (``da-read
-    alertmanager``), only the keys the text writes."""
+    alertmanager``), only the keys the text writes.
+
+    A refusal (:class:`InputRefused`) carries da-read's fixed sentence, not
+    the loader's reason: that is Alertmanager's prose and quotes the text's
+    values (#3703). *show_loader_reason* asks for the reason too — only for
+    a person reading their own text, never for a message relayed further."""
     resolved = da_read_binary(binary)
     data = text.encode("utf-8") if isinstance(text, str) else text
+    flags = [SHOW_LOADER_REASON_FLAG] if show_loader_reason else []
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
-               ["alertmanager", "-"], data)
+               ["alertmanager", *flags, "-"], data)
     return _one_document(out, "config")
 
 

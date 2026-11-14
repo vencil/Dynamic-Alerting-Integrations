@@ -284,8 +284,10 @@ RECEIVER_COLLISION_ROUTES_HINT = (
 # routes advice where it would send the operator to the wrong place.
 AM_REJECTED_ROUTES_HINT = (
     "Alertmanager's config loader refused the "
-    "config generated from this tree; its message above names the line and "
-    "field — often a receiver value in _routing (e.g. a webhook URL, or a "
+    "config generated from this tree; its reason is not printed (it can "
+    "quote config values) — run `generate-routes --validate "
+    "--show-loader-reason` on this tree locally to see the line and field. "
+    "Often it is a receiver value in _routing (e.g. a proxy URL, or a "
     "string where http_config wants a bool) that the generator accepts but "
     "Alertmanager cannot load. Fix that value, then re-run.")
 AM_UNUSABLE_ROUTES_HINT = (

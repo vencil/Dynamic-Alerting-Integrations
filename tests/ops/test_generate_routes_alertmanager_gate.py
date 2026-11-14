@@ -12,7 +12,8 @@ The contract pinned here:
 
 * the loader accepts → output written, rc 0, stderr says so, and what it read
   is byte for byte the text that was written (not a re-render);
-* the loader refuses → rc 1, its reason on stderr, NOTHING written (not to -o,
+* the loader refuses → rc 1, the refusal (not its reason, which quotes values;
+  #3703) on stderr, NOTHING written (not to -o,
   not to stdout) and, under --apply, kubectl never asked to apply;
 * no reading could be had (no da-read, it crashed) → rc 2 (environment),
   nothing written;
@@ -174,7 +175,8 @@ class TestOutputConfigmapGate:
         err = r.stderr.decode("utf-8", "replace")
         assert r.returncode == 1, err
         assert not out.exists(), "a config Alertmanager's loader refused was written anyway"
-        assert _REFUSED in err and "http://[1]/" in err, err
+        assert _REFUSED in err and "--show-loader-reason" in err, err
+        assert "http://[1]/" not in err, err  # #3703: the loader's reason quotes it
         assert "nothing was written" in err, err
 
     def test_refused_prints_nothing_to_stdout_either(self, refused_dir, tmp_path):
@@ -281,9 +283,9 @@ def _spy_reading(monkeypatch) -> list[str]:
     seen: list[str] = []
     real = render.alertmanager_reading
 
-    def spy(text):
+    def spy(text, **kw):
         seen.append(text)
-        return real(text)
+        return real(text, **kw)
     monkeypatch.setattr(render, "alertmanager_reading", spy)
     return seen
 
@@ -361,7 +363,10 @@ class TestValidateGate:
         err = r.stderr.decode("utf-8", "replace")
         assert r.returncode == 1, err
         assert b"OK: all configs valid" not in r.stdout
-        assert _REFUSED in err and "http://[1]/" in err, err
+        assert _REFUSED in err and "http://[1]/" not in err, err
+        r = _gar(["--config-dir", str(refused_dir), "--validate", "--show-loader-reason"], tmp_path)
+        err = r.stderr.decode("utf-8", "replace")
+        assert r.returncode == 1 and _REFUSED in err and "http://[1]/" in err, err
 
     def test_the_loader_read_a_complete_config_on_the_builtin_base(self, tenant_dir, tmp_path):
         """A complete config (root receiver from the built-in base) — not a

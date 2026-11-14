@@ -204,3 +204,67 @@ def test_validate_and_output_agree_and_never_echo_the_value(
     if validate_only:
         return  # --validate's own stricter check; Alertmanager was not asked
     assert v_rc == o_rc, f"--validate rc {v_rc}, --output rc {o_rc}\n{v_text}\n---\n{o_text}"
+
+
+# ── #3703：型別對、值錯，只有 Alertmanager 的載入器拒收 ─────────────────
+# 這些值過得了產生器自己的檢查，只有 Alertmanager 的 config loader（da-read）
+# 拒收；而 loader 的拒收理由是 Alertmanager 自己的句子，會把值原樣引出來。
+# 預設只印 da-read 的固定句；`--show-loader-reason` 才印理由。
+_LOADER_ONLY = {
+    "proxy_url": {"receiver": {**_BASES["webhook"],
+                               "http_config": {"proxy_url": "http://[CANARY]/"}}},
+    "group_by": {"receiver": _BASES["webhook"], "group_by": ["CANARY label"]},
+    "tls_min_version": {"receiver": {**_BASES["webhook"],
+                                     "http_config": {"tls_config": {"min_version": "CANARYTLS"}}}},
+    "tls_max_version": {"receiver": {**_BASES["webhook"],
+                                     "http_config": {"tls_config": {"max_version": "CANARYTLS"}}}},
+}
+_GATE_FAIL = "FAIL: Alertmanager's config loader refuses"
+
+
+def _loader_only_tree(tmp_path: Path, routing: dict) -> Path:
+    conf_d = tmp_path / "conf.d"
+    conf_d.mkdir()
+    (conf_d / "_defaults.yaml").write_text("defaults:\n  mysql_connection_usage_percent: 80\n",
+                                           encoding="utf-8")
+    (conf_d / "t1.yaml").write_text(yaml.safe_dump(
+        {"tenants": {"t1": {"_routing": routing, "mysql_connection_usage_percent": "70"}}}),
+        encoding="utf-8")
+    return conf_d
+
+
+@pytest.mark.parametrize("routing", list(_LOADER_ONLY.values()), ids=list(_LOADER_ONLY))
+@pytest.mark.parametrize("mode", [["--validate"], ["--output-alertmanager", "-o", "am.yml"],
+                                  ["--output-configmap", "-o", "cm.yaml"]],
+                         ids=["validate", "output-alertmanager", "output-configmap"])
+def test_a_value_only_alertmanager_refuses_is_refused_without_its_text(
+        routing, mode, tmp_path, monkeypatch, capsys):
+    """rc 1、拒收那一行在（非空過：真的走到 Alertmanager 的 loader），
+    stdout／stderr／findings 都沒有 canary（不分大小寫），且那一行指名
+    `--show-loader-reason`。"""
+    monkeypatch.setenv("PATH", os.devnull)
+    monkeypatch.chdir(tmp_path)
+    gar = importlib.import_module("generate_alertmanager_routes")
+    conf_d = _loader_only_tree(tmp_path, routing)
+    rc, text, doc = _run(gar, monkeypatch, capsys, conf_d, mode, tmp_path / "f.json")
+    assert rc == 1, text
+    fail = [ln for ln in text.splitlines() if ln.startswith(_GATE_FAIL)]
+    assert len(fail) == 1, text
+    assert "--show-loader-reason" in fail[0], fail
+    assert "canary" not in text.lower(), text
+    assert "canary" not in json.dumps(doc).lower(), doc
+
+
+@pytest.mark.parametrize("routing", list(_LOADER_ONLY.values()), ids=list(_LOADER_ONLY))
+def test_show_loader_reason_prints_alertmanagers_reason(routing, tmp_path, monkeypatch, capsys):
+    """旗標是真的：加了 `--show-loader-reason`，拒收那一行帶 loader 的理由
+    （這幾格的理由都引了值），也不再叫人去加旗標。"""
+    monkeypatch.setenv("PATH", os.devnull)
+    gar = importlib.import_module("generate_alertmanager_routes")
+    conf_d = _loader_only_tree(tmp_path, routing)
+    rc, text, _doc = _run(gar, monkeypatch, capsys, conf_d,
+                          ["--validate", "--show-loader-reason"], tmp_path / "f.json")
+    assert rc == 1, text
+    fail = [ln for ln in text.splitlines() if ln.startswith(_GATE_FAIL)]
+    assert len(fail) == 1 and "CANARY" in fail[0], text
+    assert "prints the loader's reason" not in fail[0], fail
