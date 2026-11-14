@@ -69,15 +69,17 @@ Secret (hex, no trailing newline: `--from-literal=password="$(openssl rand -hex 
 | `observe` | reach every path — the migration step, **not a boundary** |
 
 In `enforce`, every endpoint above needs the consumer's Basic Auth
-credentials, and the chart refuses to render until every consumer in
-`auth.consumers` names its Secret (the error lists the ones missing). Remove
-consumers you do not run. Each consumer chart sends its credential from
+credentials, and the chart refuses to render until `auth.existingSecrets` names a Secret
+for every consumer in `auth.consumers` (the error lists the ones missing; a
+key that names no consumer is refused too). It is a map, so setting it does
+not mean restating `auth.consumers` — that is needed only to remove consumers
+you do not run. Each consumer chart sends its credential from
 `victorialogs.auth.existingSecret`; Grafana from the Secret
 `victorialogs-grafana`. Upgrading from a chart whose default was `observe`:
 set `auth.mode: observe` explicitly, wire every consumer, check they
 authenticate, then drop it — `docs/internal/platform-log-aggregation-runbook.md` §1.2.
 
-On `helm upgrade` the chart also looks up every Secret `auth.consumers` names
+On `helm upgrade` the chart also looks up every Secret `auth.existingSecrets` names
 and refuses if one is missing or has no non-empty `password` — the strategy is
 Recreate, so the running pod would go first and the new one would never start.
 `helm template` and first installs skip this. The lookup needs `get secrets` in
@@ -95,8 +97,8 @@ done
 helm install victorialogs ./helm/victorialogs -n monitoring \
   --set persistence.size=20Gi \
   --set retentionPeriod=60d \
-  -f my-consumers.yaml   # auth.consumers[] copied from values.yaml (paths + from),
-                         # each with existingSecret: victorialogs-<name>
+  -f my-secrets.yaml     # auth.existingSecrets: {vector: victorialogs-vector, ...}
+                         # (a map: auth.consumers is not restated)
 ```
 
 For chart smoke-tests / CI you can disable the PVC (and skip the Secrets):
