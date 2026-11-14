@@ -14,6 +14,13 @@ no list of leg ids). A Go leg dropped from the `go-tests` aggregate keeps
 running and keeps this module's first assertion green; the second is what
 turns red.
 
+⚠️ Not covered: the same guarantee for the other test legs. The contract
+module only requires every job to be anchored to a name registered in
+.github/required-checks.yaml, required OR advisory, and it has no baseline to
+notice a job changing anchor; "a job that runs `go test`" is recognisable
+from the workflow, a pytest / vitest / playwright leg was measured not to be
+(that module's docstring lists what each one looks like).
+
 Until #3756 this module also checked that each leg's path filter covered the
 files the leg compiles (#1399). The Go legs are not path-gated any more, so
 there is no filter for a compile input to be missing from; the module-coverage
@@ -124,10 +131,12 @@ def unweighed_go_legs(legs: dict[str, str], awaited: set[str]) -> list[str]:
 def test_every_go_test_leg_is_weighed_by_an_aggregate_gate() -> None:
     """A Go leg outside every aggregate fails without `Go Tests` noticing.
 
-    ⛔ No ledger, unlike the general accounting in the contract module
-    (`JOBS_NO_REQUIRED_CHECK_WAITS_FOR`): the assertion above counts a module
-    as tested BECAUSE one of these legs runs its tests, so a leg whose result
-    nothing weighs would make that count a claim about nothing.
+    ⛔ Stricter than the general accounting in the contract module, which is
+    satisfied by a job anchored to ANY name in .github/required-checks.yaml,
+    an `advisory:` one included. That is not enough here: the assertion above
+    counts a module as tested BECAUSE one of these legs runs its tests, so a
+    leg whose red blocks nothing would make that count a claim about nothing.
+    The decision path of a gate is the only place a Go leg may be.
     """
     workflow = yaml.safe_load(CI.read_text(encoding="utf-8"))
     legs = go_test_legs(workflow)

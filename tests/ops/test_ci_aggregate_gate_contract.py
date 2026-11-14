@@ -30,11 +30,16 @@ This module therefore asserts two things the old one could not:
 
 And two things that keep those rules from being satisfied by looking away:
 
-  * every job in a workflow that reports a required check is accounted for —
-    it is a gate, or in a gate's decision path, or reports a `kind: job`
-    required check itself, or is a row of `JOBS_NO_REQUIRED_CHECK_WAITS_FOR`
-    with the reason. Dropping a leg out of its gate (`needs:`, the env
-    binding and the loop together) leaves a job in none of the four;
+  * every job in a workflow that reports a required check is anchored to a
+    name registered in `.github/required-checks.yaml`: it is in the `needs`
+    closure (itself included) of a job reporting a `required:` or an
+    `advisory:` name. There is no ledger of exceptions in this module — why a
+    check blocks nothing is written once, under `advisory:` in that file.
+    Dropping a leg out of its gate (`needs:`, the env binding and the loop
+    together) leaves a job anchored to nothing. And the advisory half is not
+    a way out for a leg: a job only an advisory check waits for must carry
+    that check's name as the start of its own (a shard, `Python Coverage
+    (1/3)` under `Python Coverage`);
   * no job in a decision path is a reusable-workflow call (job-level
     `uses:`). Its steps live in another file, so every rule here that reads
     steps and conditions would pass over it having read nothing.
@@ -59,6 +64,21 @@ banned in the gate scripts here (see `_EXIT_SWALLOW`) and deliberately not on
 the legs, because `python-tests-run` has a live and legitimate `|| true` on
 its "Install amtool" step (a grep guard followed by an explicit empty-value
 check). Candidate ticket, not a silent omission.
+
+⛔ The anchoring rule has no baseline, so it cannot see a job CHANGING
+anchor. Three moves stay green, each of them a visible edit rather than a
+quiet one: a leg taken out of its gate and put under a NEW `advisory:` entry
+(an edit of required-checks.yaml, with a reason to write); a leg taken out of
+its gate, hung on an advisory job's `needs:` AND renamed to start with that
+check's name; and a `kind: gate` entry moved to `advisory:` together with its
+gate. "Every test leg is under a REQUIRED name" would close the first two and
+was measured not to be decidable from the workflow: of the jobs in scope, the
+portal and smoke legs run `npm` scripts, `federation-e2e` runs a shell runner
+that starts pytest, and `python-coverage` runs pytest under an advisory name
+by owner decision — a runner-name match misses the first three and refuses
+the fourth. The one family where the leg IS recognisable keeps its own
+stricter rule: a job running `go test` must be in a gate's decision path
+(tests/ops/test_go_modules_have_a_test_leg.py).
 
 ⛔ A path gate written WITHOUT a known action and WITHOUT an `if:` on a job in
 a decision path is not seen either: a leg whose test step wraps itself in a
@@ -193,13 +213,18 @@ def _load(path: Path) -> dict:
 # onto the leg it waits for: green, with the live API still requiring the
 # check. The drift workflow now catches the file disagreeing with the
 # settings; only human review catches both being changed together.
-_REQUIRED_ENTRIES = tuple(yaml.safe_load(
-    (ROOT / ".github/required-checks.yaml").read_text(encoding="utf-8")
-)["required"])
+_SSOT = yaml.safe_load(
+    (ROOT / ".github/required-checks.yaml").read_text(encoding="utf-8"))
+_REQUIRED_ENTRIES = tuple(_SSOT["required"])
 REQUIRED_CHECK_NAMES = frozenset(
     entry["name"] for entry in _REQUIRED_ENTRIES if entry.get("kind") == "gate"
 )
 _ALL_REQUIRED_NAMES = frozenset(entry["name"] for entry in _REQUIRED_ENTRIES)
+# Checks that deliberately block nothing; the reasons are in the file and are
+# not repeated here (tests/ops/test_required_checks_ssot.py holds "each has a
+# reason, is reported by some job, and is not also required").
+_ADVISORY_NAMES = frozenset(
+    entry["name"] for entry in _SSOT.get("advisory") or [])
 
 
 def _workflows_reporting(names: frozenset[str]) -> tuple[Path, ...]:
@@ -550,91 +575,98 @@ def _conditional_jobs_in_decision_paths(path: Path,
 UNMODELLED_GATE_SHAPED_JOBS: dict[tuple[str, str], str] = {}
 
 
-# ⛔ Jobs in a workflow that reports a required check which NO required check
-# waits for: (workflow file, job id) -> why its verdict may be ignored. Red
-# on such a job is visible on the PR and blocks nothing.
-#
-# Everything else in those workflows is placed by derivation — see
-# `_job_roles` — so this is the only hand-kept part, and it is checked in
-# both directions: a job in none of the derived roles must be a row here, and
-# a row must name a job that exists and is in none of them (a row for a job
-# some gate DOES wait for is a stale excuse, and it would hide the day that
-# job is dropped from its gate again).
-JOBS_NO_REQUIRED_CHECK_WAITS_FOR: dict[tuple[str, str], str] = {
-    ("ci.yml", "python-coverage"):
-        "the advisory coverage leg (owner decision 2026-09-19, recorded on the "
-        "job): the same tests as python-tests-run under the tracer, kept off "
-        "the required leg's critical path. `Python Coverage` is under "
-        "`advisory:` in .github/required-checks.yaml. Reviewed for #3756.",
-    ("ci.yml", "python-coverage-combine"):
-        "merges the python-coverage shards and applies fail_under; it reports "
-        "`Python Coverage`, which is under `advisory:` in "
-        ".github/required-checks.yaml, and waits only for the advisory "
-        "python-coverage leg. Reviewed for #3756.",
-    ("ci.yml", "federation-e2e"):
-        "the docker-compose federation request-path E2E (#516), a dedicated "
-        "job that was never part of an aggregate and whose name is not a "
-        "required check; whether it should be required is the owner's call, "
-        "not something to settle by adding it to a gate here.",
-    ("docs-ci.yaml", "i4-runbook-smoke-test"):
-        "runs hand-pasted copies of the troubleshooting checklist's snippets "
-        "against fixtures (#2142); `I-4 Runbook Smoke Test` is under "
-        "`advisory:` in .github/required-checks.yaml. It runs on every PR "
-        "since #3756 and still backs no required check.",
-}
+def _needs_closure(jobs: dict, roots: set[str]) -> set[str]:
+    """`roots` plus every job they transitively `needs:`. PURE."""
+    seen: set[str] = set()
+    todo = list(roots)
+    while todo:
+        job_id = todo.pop()
+        if job_id in seen or job_id not in jobs:
+            continue
+        seen.add(job_id)
+        todo += _needs(jobs[job_id])
+    return seen
 
 
-def _job_roles(path: Path, gates: tuple["Gate", ...],
-               required_names: frozenset[str]) -> dict[str, str | None]:
-    """job id -> how a required check accounts for it, or None. PURE over a
-    path.
+def _reporters_of(jobs: dict, names: frozenset[str]) -> dict[str, set[str]]:
+    """job id -> the names in `names` it reports. PURE.
 
-      "gate"      it reports a verdict over other jobs' results;
-      "leg"       it is in some gate's decision path;
-      "required"  its own `name:` is a required check (`kind: job`).
+    ⛔ Through `_rendered_names`, so a matrix shard is compared by what GitHub
+    will call it. A name that cannot be rendered reports nothing here: the
+    job is then anchored only through some other job's `needs:`, or not at
+    all.
+    """
+    found = {}
+    for job_id, job in jobs.items():
+        hit = set(_rendered_names(job_id, job) or ()) & names
+        if hit:
+            found[job_id] = hit
+    return found
+
+
+def _job_roles(path: Path, required_names: frozenset[str],
+               advisory_names: frozenset[str]) -> dict[str, str | None]:
+    """job id -> which registered name anchors it, or None. PURE over a path.
+
+      "required"  in the `needs` closure (itself included) of a job that
+                  reports a `required:` name — an aggregate gate and
+                  everything it waits for, or a `kind: job` check;
+      "advisory"  not that, but in the closure of a job that reports an
+                  `advisory:` name.
 
     None is the answer this function exists for: a job that can fail, or
-    never run, with no required check noticing.
+    never run, with nothing in `.github/required-checks.yaml` saying whether
+    that matters.
+
+    ⚠️ `needs:`, not the gates' `.result` bindings. For a gate the two are
+    the same set, and `test_every_job_a_gate_waits_for_is_also_weighed` is
+    what holds that; an advisory job has no bindings to read.
     """
     jobs = _load(path)["jobs"]
-    gate_ids = {gate.job_id for gate in gates}
-    awaited: set[str] = set()
-    for gate in gates:
-        awaited |= _decision_path(jobs, gate)
-    roles: dict[str, str | None] = {}
-    for job_id, job in jobs.items():
-        if job_id in gate_ids:
-            roles[job_id] = "gate"
-        elif job_id in awaited:
-            roles[job_id] = "leg"
-        elif set(_rendered_names(job_id, job) or ()) & required_names:
-            roles[job_id] = "required"
-        else:
-            roles[job_id] = None
-    return roles
+    required = _needs_closure(jobs, set(_reporters_of(jobs, required_names)))
+    advisory = _needs_closure(jobs, set(_reporters_of(jobs, advisory_names)))
+    return {job_id: ("required" if job_id in required
+                     else "advisory" if job_id in advisory else None)
+            for job_id in jobs}
 
 
-def _unwaited_job_problems(roles: dict[tuple[str, str], str | None],
-                           ledger: dict[tuple[str, str], str]) -> list[str]:
-    """PURE. `roles` against the ledger, both directions."""
+def _unanchored_job_problems(roles: dict[tuple[str, str], str | None]) -> list[str]:
+    """PURE."""
+    return [
+        f"{key[0]}::{key[1]} is anchored to no name in "
+        ".github/required-checks.yaml: neither it nor any job that `needs:` "
+        "it reports a `required:` or an `advisory:` check."
+        for key in sorted(k for k, role in roles.items() if role is None)]
+
+
+def _advisory_stowaway_problems(path: Path, required_names: frozenset[str],
+                                advisory_names: frozenset[str]) -> list[str]:
+    """Jobs only an advisory check waits for that are not part of that check
+    by name. PURE over a path.
+
+    ⛔ Why the advisory closure is not taken at face value: `needs:` on an
+    advisory job is one line, and it would anchor ANY job — a test leg pulled
+    out of its gate and hung there satisfies the anchoring rule with its red
+    blocking nothing. What an advisory job legitimately waits for today is
+    its own shards, and a shard says so in its name (`Python Coverage (1/3)`
+    for `Python Coverage`), so that is the admission rule. A job in a
+    required closure as well is not this rule's business: its verdict already
+    blocks.
+    """
+    jobs = _load(path)["jobs"]
+    required = _needs_closure(jobs, set(_reporters_of(jobs, required_names)))
+    roots = _reporters_of(jobs, advisory_names)
     problems = []
-    for key in sorted(k for k, role in roles.items() if role is None):
-        if key not in ledger:
-            problems.append(
-                f"{key[0]}::{key[1]} is waited for by no required check: it "
-                "is not a gate, not in any gate's decision path, and its "
-                "name is not a required check.")
-    for key in sorted(ledger):
-        if key not in roles:
-            problems.append(
-                f"JOBS_NO_REQUIRED_CHECK_WAITS_FOR row {key!r} names a job "
-                "that does not exist in a workflow reporting a required "
-                "check — delete or fix the row.")
-        elif roles[key] is not None:
-            problems.append(
-                f"JOBS_NO_REQUIRED_CHECK_WAITS_FOR row {key!r} is stale: the "
-                f"job is accounted for as a {roles[key]!r}. Delete the row, "
-                "or it will excuse the job the day it is dropped again.")
+    for root, names in sorted(roots.items()):
+        for job_id in sorted(_needs_closure(jobs, {root}) - required - set(roots)):
+            rendered = _rendered_names(job_id, jobs[job_id])
+            if rendered is None or not all(
+                    any(r.startswith(name) for name in names) for r in rendered):
+                problems.append(
+                    f"{path.name}::{job_id} ({jobs[job_id].get('name')!r}) is "
+                    f"waited for only by {root}, which reports the advisory "
+                    f"check {sorted(names)}, and its name does not start with "
+                    "that check's name.")
     return problems
 
 
@@ -1121,12 +1153,13 @@ def test_every_job_in_a_required_check_workflow_is_accounted_for() -> None:
     weighs exactly what it waits for. The leg keeps running, its red blocks
     nothing, and the required check reads green. While the legs were
     path-gated the retired `test_every_path_gated_leg_is_watched_by_a_gate`
-    held this through the `if:`; with no `if:` left, it is held by placing
-    EVERY job, so there is no list of legs to forget to extend.
+    held this through the `if:`; with no `if:` left, it is held by anchoring
+    EVERY job to a name in `.github/required-checks.yaml`, so there is no
+    list of legs to forget to extend and no list of exceptions to outlive
+    its jobs.
 
     Scope: every workflow that reports a required check of either kind.
     """
-    gates = _gates_or_fail()
     workflows = _required_check_workflows()
     assert workflows, (
         "no workflow reports any required check by a literal name, so this "
@@ -1135,17 +1168,22 @@ def test_every_job_in_a_required_check_workflow_is_accounted_for() -> None:
         (path.name, job_id): role
         for path in workflows
         for job_id, role in _job_roles(
-            path, tuple(g for g in gates if g.workflow == path.name),
-            _ALL_REQUIRED_NAMES).items()}
-    problems = _unwaited_job_problems(roles, JOBS_NO_REQUIRED_CHECK_WAITS_FOR)
+            path, _ALL_REQUIRED_NAMES, _ADVISORY_NAMES).items()}
+    # Both anchors must occur, or one half of the rule compared nothing.
+    assert {"required", "advisory"} <= set(roles.values()), set(roles.values())
+    problems = _unanchored_job_problems(roles)
+    for path in workflows:
+        problems += _advisory_stowaway_problems(
+            path, _ALL_REQUIRED_NAMES, _ADVISORY_NAMES)
     assert not problems, (
         "\n  ".join([""] + problems)
         + "\n⛔ If the job is a test leg: put it back in its gate — `needs:`, "
           "an env binding of its `.result`, and the loop. A leg outside every "
           "gate can fail on every PR with the required check green.\nIf its "
-          "verdict is really meant to block nothing, record that in "
-          "JOBS_NO_REQUIRED_CHECK_WAITS_FOR with the reason; a Go test leg "
-          "cannot take that exit "
+          "verdict is really meant to block nothing, give it a check name of "
+          "its own and register that name under `advisory:` in "
+          ".github/required-checks.yaml with the reason — the only place "
+          "such a reason is kept. A Go test leg cannot take that exit "
           "(tests/ops/test_go_modules_have_a_test_leg.py).")
 
 
@@ -1987,8 +2025,6 @@ def test_every_ledger_row_states_a_reason_and_a_ticket() -> None:
     prose."""
     rows = [(f"UNMODELLED_GATE_SHAPED_JOBS[{key!r}]", reason)
             for key, reason in UNMODELLED_GATE_SHAPED_JOBS.items()]
-    rows += [(f"JOBS_NO_REQUIRED_CHECK_WAITS_FOR[{key!r}]", reason)
-             for key, reason in JOBS_NO_REQUIRED_CHECK_WAITS_FOR.items()]
     problems = _ledger_row_problems(rows)
     assert not problems, "\n  ".join([""] + problems)
 
@@ -2238,61 +2274,87 @@ def test_the_path_filter_list_is_the_tools_and_not_a_copy(tmp_path: Path) -> Non
 
 def test_the_accounting_and_reusable_call_guards_can_actually_fail(
         tmp_path: Path) -> None:
-    """`_job_roles`, `_unwaited_job_problems` and
-    `_reusable_calls_in_decision_paths`, each given the input it must refuse
-    and the one it must leave alone."""
-    names = frozenset({"ZQ Required"})
+    """`_job_roles`, `_unanchored_job_problems`, `_advisory_stowaway_problems`
+    and `_reusable_calls_in_decision_paths`, each given the input it must
+    refuse and the one it must leave alone."""
+    required = frozenset({"ZQ Gate", "ZQ Required"})
+    advisory = frozenset({"ZQ Advisory"})
     doc = yaml.safe_load(_synthetic_workflow(
         tmp_path / "base", leg_env="ZQ_LEG",
         upstream={"steps": [{"run": "true"}]}).read_text(encoding="utf-8"))
+    doc["jobs"]["zq-gate"]["name"] = "ZQ Gate"
     doc["jobs"]["zq-direct"] = {"name": "ZQ Required",
                                 "steps": [{"run": "true"}]}
     doc["jobs"]["zq-matrix"] = {
         "name": "ZQ ${{ matrix.word }}",
         "strategy": {"matrix": {"word": ["Required"]}},
         "steps": [{"run": "true"}]}
+    # An advisory check and its shards: the shards' rendered names
+    # (`ZQ Advisory (1/2)`) are not in the file — only `needs:` anchors them.
+    doc["jobs"]["zq-shard"] = {
+        "name": "ZQ Advisory (${{ matrix.shard }}/2)",
+        "strategy": {"matrix": {"shard": [1, 2]}},
+        "steps": [{"run": "true"}]}
+    doc["jobs"]["zq-combine"] = {"name": "ZQ Advisory", "needs": "zq-shard",
+                                 "steps": [{"run": "true"}]}
     doc["jobs"]["zq-stray"] = {"steps": [{"run": "true"}]}
-    directory = tmp_path / "roles"
-    directory.mkdir()
-    path = directory / "zq.yml"
-    path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8",
-                    newline="\n")
-    found = _job_roles(path, _gates(path), names)
-    assert found == {"zq-leg": "leg", "zq-upstream": "leg", "zq-gate": "gate",
-                     "zq-direct": "required", "zq-matrix": "required",
-                     "zq-stray": None}, found
 
+    def written(label: str) -> Path:
+        directory = tmp_path / label
+        directory.mkdir()
+        path = directory / "zq.yml"
+        path.write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8",
+                        newline="\n")
+        return path
+
+    path = written("roles")
+    found = _job_roles(path, required, advisory)
+    assert found == {"zq-leg": "required", "zq-upstream": "required",
+                     "zq-gate": "required", "zq-direct": "required",
+                     "zq-matrix": "required", "zq-shard": "advisory",
+                     "zq-combine": "advisory", "zq-stray": None}, found
+    assert _advisory_stowaway_problems(path, required, advisory) == []
     roles = {("zq.yml", job_id): role for job_id, role in found.items()}
-    stray = ("zq.yml", "zq-stray")
-    assert _unwaited_job_problems(roles, {stray: "zwhy"}) == []
-    # An unaccounted job with no row.
-    missing = _unwaited_job_problems(roles, {})
+    missing = _unanchored_job_problems(roles)
     assert len(missing) == 1 and "zq-stray" in missing[0], missing
-    # A row for a job a gate waits for, and a row for a job that is not there.
-    for extra in (("zq.yml", "zq-leg"), ("zq.yml", "zq-gone"),
-                  ("zq.yaml", "zq-stray")):
-        found_extra = _unwaited_job_problems(roles, {stray: "zwhy",
-                                                     extra: "zwhy"})
-        assert len(found_extra) == 1 and repr(extra) in found_extra[0], (
-            extra, found_extra)
+    del roles[("zq.yml", "zq-stray")]
+    assert _unanchored_job_problems(roles) == []
+    # The file is what anchors: with the advisory name gone from it, the
+    # combine job and its shards are anchored to nothing.
+    unlisted = _job_roles(path, required, frozenset())
+    assert unlisted["zq-combine"] is None and unlisted["zq-shard"] is None
+
     # ⛔ The edit this exists for: a leg taken out of its gate entirely. Every
     # job is still there, the gate still weighs all it waits for — and the
-    # dropped leg has no role.
-    doc["jobs"]["zq-second"] = {"steps": [{"run": "true"}]}
+    # dropped leg is anchored to nothing.
+    doc["jobs"]["zq-second"] = {"name": "ZQ Second",
+                                "steps": [{"run": "true"}]}
     doc["jobs"]["zq-gate"]["needs"] = ["zq-leg", "zq-second"]
     doc["jobs"]["zq-gate"]["steps"][0]["env"]["ZQ_SECOND"] = (
         "${{ needs.zq-second.result }}")
-    for label, drop in (("kept", False), ("dropped", True)):
-        if drop:
-            doc["jobs"]["zq-gate"]["needs"] = ["zq-leg"]
-            del doc["jobs"]["zq-gate"]["steps"][0]["env"]["ZQ_SECOND"]
-        directory = tmp_path / f"second-{label}"
-        directory.mkdir()
-        path = directory / "zq.yml"
-        path.write_text(yaml.safe_dump(doc, sort_keys=False),
-                        encoding="utf-8", newline="\n")
-        role = _job_roles(path, _gates(path), names)["zq-second"]
-        assert role == (None if drop else "leg"), (label, role)
+    assert _job_roles(written("second-kept"), required,
+                      advisory)["zq-second"] == "required"
+    doc["jobs"]["zq-gate"]["needs"] = ["zq-leg"]
+    del doc["jobs"]["zq-gate"]["steps"][0]["env"]["ZQ_SECOND"]
+    assert _job_roles(written("second-dropped"), required,
+                      advisory)["zq-second"] is None
+    # ⛔ …and the same leg hung on the advisory job instead. The closure
+    # anchors it; the stowaway rule is what refuses it, by name.
+    doc["jobs"]["zq-combine"]["needs"] = ["zq-shard", "zq-second"]
+    path = written("second-stowed")
+    assert _job_roles(path, required, advisory)["zq-second"] == "advisory"
+    stowed = _advisory_stowaway_problems(path, required, advisory)
+    assert len(stowed) == 1 and "zq-second" in stowed[0], stowed
+    # A job the gate ALSO waits for is no stowaway: its verdict blocks.
+    doc["jobs"]["zq-combine"]["needs"] = ["zq-shard", "zq-leg"]
+    assert _advisory_stowaway_problems(written("shared"), required,
+                                       advisory) == []
+    # A name this module cannot render is refused rather than assumed.
+    doc["jobs"]["zq-combine"]["needs"] = ["zq-shard"]
+    doc["jobs"]["zq-shard"]["name"] = "ZQ Advisory ${{ inputs.zq }}"
+    unrendered = _advisory_stowaway_problems(written("unrendered"), required,
+                                             advisory)
+    assert len(unrendered) == 1 and "zq-shard" in unrendered[0], unrendered
 
     # ── reusable-workflow calls in a decision path
     clean = _synthetic_workflow(tmp_path / "clean", leg_env="ZQ_LEG")

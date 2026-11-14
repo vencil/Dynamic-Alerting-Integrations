@@ -153,6 +153,11 @@ keypair, brings the stack up, runs pytest, and tears down. It is **not**
 part of `make test` / pre-commit and is **excluded from the unit-test
 coverage gate** — it runs as its own CI job.
 
+Before each stack comes up the runner pulls its images, retrying a failed
+pull (three attempts, with backoff). Exit codes: `0` every scenario passed;
+`2` a stack's images could not be pulled — a registry/network failure, no
+scenario of that stack ran, re-run it; anything else is pytest's exit code.
+
 ## Victorialogs-mode stack (ADR-021 #609 — tenant log query)
 
 A **second, separate** stack exercises the gateway's `victorialogs` mode

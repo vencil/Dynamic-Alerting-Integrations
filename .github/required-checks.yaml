@@ -13,7 +13,10 @@
 #     pull_request 觸發；`kind: gate` 是 aggregate gate（if: always()），
 #     `kind: job` 沒有 needs／if／matrix。advisory 與 required 不得重疊。
 #   * tests/ops/test_ci_aggregate_gate_contract.py 的 REQUIRED_CHECK_NAMES 由
-#     這裡 `kind: gate` 的項目推導，不再手抄。
+#     這裡 `kind: gate` 的項目推導，不再手抄。同一支測試要求：回報必要檢查的
+#     workflow 裡，每個 job 都落在「名稱登記於本檔（required 或 advisory）的某個
+#     job」的 needs 遞移閉包內。所以「這個 job 紅了為什麼不擋」只寫在下面的
+#     advisory 理由，測試檔裡沒有第二份例外清單。
 #   * .github/workflows/required-checks-drift.yml（每日排程＋改到本檔的 PR）——拿
 #     GitHub 的實際設定比對本檔；不一致就紅，排程失敗開票。它本身是 advisory：
 #     owner 一改設定，所有開著的 PR 不能因此同時轉紅。
@@ -58,6 +61,11 @@ required:
   - {name: Check Documentation Links, kind: job}
   - {name: HEAD Blob Hygiene, kind: job}
   - {name: commitlint, kind: job}
+  # Owner 裁決 2026-11-14（#3756）。它跟 advisory 的 `I-4 Runbook Smoke Test` 一樣要
+  # 連網路，卻是必要：它驗的是跨租戶隔離的請求路徑（gateway → proxy → 儲存），沒有
+  # 別的檢查重複擋；而它的網路依賴只有拉映像，runner 會先重試拉取，拉不到時以
+  # exit 2 與點名「拉映像失敗」的訊息結束，不會讀成測試失敗。
+  - {name: Federation E2E (ADR-020 IV-2j), kind: job, pending: true}
 
 # 刻意「紅了也不擋 merge」的檢查，附理由。這些理由以前寫在各 workflow 的註解裡，
 # 以「某日量測：不是 required」的形式存在，設定一變就過期；搬到這裡之後，測試保證
