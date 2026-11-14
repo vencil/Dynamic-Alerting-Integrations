@@ -38,8 +38,11 @@ import (
 // A piece of the day in which the exporter's /metrics cannot be gathered
 // (its scrape fails as a whole, HTTP 500) does not fail the run: every key
 // of every tenant carries that piece as a segment with Error set. At `at`
-// itself the run already failed (exit 2) before reaching here — servedValues'
-// Gather is that piece's.
+// itself servedValues' Gather is that piece's: with --schedules the run
+// already failed (exit 2) before reaching here; with --schedules-only
+// (#3877) it is called with instantGathered false and tenants holding
+// nothing read at `at`, and the piece holding `at` is such a segment too.
+// Either way the two readings must agree on whether that piece gathers.
 //
 // #3808: each tenant is read alone, at its own cuts only, and its readings
 // are let go once its schedules are written — a tenant's user_threshold rows
@@ -53,7 +56,7 @@ import (
 // is, byte for byte, the one reading the whole tree at every cut of the tree
 // gave (served_schedules_differential_test.go).
 func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
-	expiries []config.ResolvedThresholdExpiry, name keyNamer,
+	expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool,
 ) error {
 	utc := at.UTC()
 	atMinute := utc.Hour()*60 + utc.Minute()
@@ -62,12 +65,16 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 	if err != nil {
 		return err
 	}
-	if gerr := ungatherable.at(atMinute); gerr != "" {
+	if gerr := ungatherable.at(atMinute); (gerr != "") == instantGathered {
 		cuts := cfg.ScheduleCuts()
 		ends := cutEnds(cuts)
 		i := sort.SearchInts(cuts, atMinute+1) - 1
-		return fmt.Errorf("from %s to %s UTC: internal: the schedule reading at --at cannot be gathered, the served values could: %s",
-			hhmm(cuts[i]), hhmm(ends[i]), gerr)
+		if instantGathered {
+			return fmt.Errorf("from %s to %s UTC: internal: the schedule reading at --at cannot be gathered, the served values could: %s",
+				hhmm(cuts[i]), hhmm(ends[i]), gerr)
+		}
+		return fmt.Errorf("from %s to %s UTC: internal: the served values at --at cannot be gathered, the schedule reading at --at could",
+			hhmm(cuts[i]), hhmm(ends[i]))
 	}
 
 	expiryOf := map[string]map[string]config.ResolvedThresholdExpiry{}

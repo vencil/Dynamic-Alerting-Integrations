@@ -27,6 +27,16 @@ what the exporter meant: a file name holding a real "\n" is printed by Go as
 two lines, and nothing here can tell those two from two messages. The prefix
 is what keeps either of them off column 0.
 
+`load_served_schedules(conf_d, at=None, binary=None, partial=False,
+tenants=None)` (#3877) returns a `ServedSchedules`: `tenants` is each
+tenant's `schedules` alone (key -> `KeySchedule`, as below), from `da-guard
+served-values --schedules-only`, which reads nothing at `at` alone — so a
+part of the day /metrics cannot be gathered in is a segment carrying that
+error wherever `at` (default: now) falls, never a failed run, and the time
+of day cannot change the answer; `at` still decides what has expired. For a
+caller that judges the whole day and reads no value at an instant. The other
+fields, `partial` and `tenants` are `load_served_tree`'s.
+
 `load_severity_dedup(conf_d, binary=None)` (#3621) returns a
 `SeverityDedupTree`: each tenant's `_severity_dedup` mode as the exporter
 reads it (`da-guard severity-dedup`), the values it does not read and the
@@ -293,6 +303,7 @@ __all__ = [
     "DEAD_ENTRY_REASONS",
     "ScheduleSegment",
     "Series",
+    "ServedSchedules",
     "ServedTree",
     "ServedValuesError",
     "SkippedFile",
@@ -324,6 +335,7 @@ __all__ = [
     "SeverityDedupProblem",
     "SeverityDedupSchedule",
     "SeverityDedupTree",
+    "load_served_schedules",
     "load_served_tree",
     "load_served_values",
     "print_load_error",
@@ -558,6 +570,18 @@ class ServedTree(NamedTuple):
     # verdict, for every tenant that does not write the key. None when the
     # exporter dropped the root carrier itself (no verdict).
     root_defaults_refused: "tuple[RootDefaultRefused, ...] | None" = ()
+
+
+class ServedSchedules(NamedTuple):
+    """`load_served_schedules`' answer (#3877): `ServedTree` with each
+    tenant's schedules alone — no field read at an instant exists to be
+    misread."""
+    tenants: dict[str, dict[str, KeySchedule]]
+    skipped: list[SkippedFile]
+    stderr_lines: list[str]
+    parse_failed: "tuple[str, ...] | list[str]" = ()
+    unreadable: "tuple[UnreadableFile, ...] | list[UnreadableFile]" = ()
+    absent: "tuple[str, ...]" = ()
 
 
 class RootDefaultRefused(NamedTuple):
@@ -1298,6 +1322,47 @@ def load_served_tree(
                                      key_checks)
     return ServedTree(out, skipped, _nonempty_lines(stderr), *dropped, absent,
                       _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
+
+
+def load_served_schedules(
+    conf_d: str | Path,
+    at: str | None = None,
+    binary: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    partial: bool = False,
+    tenants: "Iterable[str] | None" = None,
+) -> ServedSchedules:
+    """Each tenant's whole UTC day as /metrics serves it, and nothing read at
+    `at` alone (`da-guard served-values --schedules-only`, #3877): a part of
+    the day /metrics cannot be gathered in is a segment whose `error` is set,
+    wherever `at` (RFC3339; None = now) falls. Same exceptions as
+    `load_served_tree`; a da-guard without `--schedules-only` is named as
+    older than this tool."""
+    extra = ["--at", at] if at is not None else []
+    extra.append("--schedules-only")
+    subset, requested = _subset_args(tenants)
+    extra += subset
+    (days, skipped, dropped, absent), returncode, stderr = _run_da_guard(
+        SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
+        read=lambda doc: (doc["tenants"],
+                          [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
+                          ([str(f) for f in doc["parse_failed"]],
+                           [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
+                          _subset_absent(doc, requested)),
+        reads_unreadable=True, dropped_ok=partial)
+    out: dict[str, dict[str, KeySchedule]] = {}
+    for tenant_id, tv in days.items():
+        try:
+            if set(tv) != {"schedules"}:
+                # A document of --schedules instead (a binary that ignores the
+                # flag would not exit 0 on it): never read as the day alone.
+                raise ValueError(f"fields {sorted(tv)}, not schedules alone")
+            out[tenant_id] = {str(k): _key_schedule(sch) for k, sch in tv["schedules"].items()}
+        except (ValueError, KeyError, TypeError, AttributeError) as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries a schedule that is not of its shape ({e})",
+                returncode, stderr, broken=True) from e
+    return ServedSchedules(out, skipped, _nonempty_lines(stderr), *dropped, absent)
 
 
 def _root_defaults_refused(entries: Any, returncode: int, stderr: str, subcommand: str,
