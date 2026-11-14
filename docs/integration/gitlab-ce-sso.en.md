@@ -84,7 +84,40 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 ## Session lifetime and revocation lag
 
-Groups are resolved **at login** and cached in the session cookie. **When `cookieRefresh` is set**, the session re-validates the account against GitLab and **overwrites the groups** every interval (the gitlab provider's `RefreshSession` behavior) — so the group/account revocation lag is **bounded by `cookieRefresh` (not `cookieExpire`)**: a short `cookieRefresh` (e.g. 1h) tightens it, and a user removed from a group or disabled is invalidated at the next refresh. **Without `cookieRefresh`**, groups are frozen as of login until `cookieExpire`. Either way this is a **mitigation, not instant revocation** — the backend still blindly trusts `X-Forwarded-Groups`; true instant revocation requires the identity-hardening work (backend stops trusting the unverified header, see the platform security roadmap), so **production cutover waits for it**.
+Groups are resolved **at login** and cached in the session cookie. The following describes oauth2-proxy v7.15.6, which the chart pins:
+
+- **Without `cookieRefresh`** (the chart default): there is no refresh. The groups are frozen as of login, and the cookie expires at `cookieExpire`, after which the user signs in again.
+- **With `cookieRefresh`**: every interval, the session redeems its refresh token with GitLab. A successful refresh resets the session's creation time and re-issues the cookie, so the cookie's lifetime moves forward with every successful refresh. When the response carries a new ID token, the groups are replaced from its `groups` claim; **when it does not, the groups stay as they were** (the gitlab provider's `RefreshSession` uses the OIDC refresh and does not re-read userinfo). Only a fatal error such as a revoked refresh token (GitLab answers `invalid_grant`) clears the session; transient failures such as network errors or timeouts do not.
+
+This is inherent to oauth2-proxy sessions, and the platform lists it as an **accepted limitation** ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §8); it is not instant revocation:
+
+- Without `cookieRefresh`: access from a removed group lasts at most until `cookieExpire`.
+- With `cookieRefresh`, and GitLab's refresh responses carry a new ID token: at most one `cookieRefresh`.
+- With `cookieRefresh`, but the responses carry no new ID token: **there is no time bound**. The old groups carry over on every successful refresh until the refresh token is revoked.
+
+So before setting `cookieRefresh`, remove a test account from a group in staging and confirm the access is gone one `cookieRefresh` later. If it is not, leave `cookieRefresh` unset so that `cookieExpire` is a hard bound.
+
+## Identity trust and the production prerequisite
+
+tenant-api trusts only the identity oauth2-proxy sends: the API is only on a Unix socket inside the pod, behind oauth2-proxy, and oauth2-proxy strips any same-named header the client sends; TCP 8080 serves only `/health`, `/ready` and `/metrics`, and any request carrying an identity header gets 400 ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §2, §3).
+
+**Production requires a tenant-api release that includes ADR-027** (the version is filled in when that release ships). Older tenant-api releases trust the `X-Forwarded-Groups` a request carries: anyone who can reach it without going through oauth2-proxy can claim any group. The chart's NetworkPolicy lets only Prometheus (older charts: also threshold-govern) reach 8080, but **only where the CNI enforces NetworkPolicy**: where it does not, 8080 is open to the whole cluster, and with an older tenant-api any pod in the cluster can claim any group. Before upgrading, confirm that your CNI enforces it, as the chart's `NOTES.txt` describes.
+
+To check which one your cluster runs, go through `kubectl port-forward` (not subject to NetworkPolicy) and call it locally. The chart pins a single replica updated with `Recreate` (ADR-023), so once the rollout completes there is one pod, and that is the one you reach.
+
+```bash
+# Let the system pick the local port (:8080) and probe only once kubectl prints the port it bound; if nothing
+# is bound within 10 seconds, skip the probe and print kubectl's output, so you never read another program's answer
+LOG=$(mktemp); PORT=
+kubectl -n <namespace> port-forward --address 127.0.0.1 svc/<tenant-api service> :8080 >"$LOG" 2>&1 & PF=$!
+for i in $(seq 10); do
+  PORT=$(sed -n 's/^Forwarding from 127\.0\.0\.1:\([0-9]*\) .*/\1/p' "$LOG"); [ -n "$PORT" ] && break; sleep 1
+done
+# /health with an identity header: 400 = includes ADR-027; 200 = older release; 000 = no connection
+[ -n "$PORT" ] && curl -s --max-time 5 -o /dev/null -w '%{http_code}\n' \
+  -H 'X-Forwarded-Email: probe@example.com' "http://127.0.0.1:$PORT/health" || cat "$LOG"
+kill $PF 2>/dev/null
+```
 
 ## Troubleshooting
 
