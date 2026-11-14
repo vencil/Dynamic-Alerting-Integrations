@@ -198,7 +198,6 @@ Step 4 must not come earlier: an old reader has no built-in layer, and when it r
 ```yaml
 defaults:
   redis_connected_clients: 1000
-  container_memory: "disable"
 ```
 
 `conf.d/t1.yaml`:
@@ -217,12 +216,13 @@ tenants:
 redis_connected_clients      1000  warning
 ```
 
-None of the three keys the tenant wrote is served: `pg_connections` and `pg_replication_lag_critical` for the reason `no_row` (the root layer does not declare the base), `container_cpu` for `disabled`. The root-layer `container_memory: "disable"` is a value that cannot be read; da-guard reports `root_default_refused`, exit code 1.
+None of the three keys the tenant wrote is served: `pg_connections` and `pg_replication_lag_critical` for the reason `no_row` (the root layer does not declare the base), `container_cpu` for `disabled`.
 
-**After this decision** (expected output, not implemented yet; the numbers come from an equivalent tree: the built-in values written into the root `defaults:`, and the root-layer `"disable"` written in one subdirectory level that holds every tenant. da-guard exits 0 on that tree):
+**After this decision** (expected output, not implemented yet; the numbers come from an equivalent tree: the built-in values written into the root `defaults:`):
 
 ```
 container_cpu_throttle           25  warning    ← built-in layer
+container_memory                 85  warning    ← built-in layer
 mysql_connection_usage_percent   80  warning    ← built-in layer
 mysql_replication_lag            30  warning    ← built-in layer
 pg_connections                   70  warning    ← tenant override
@@ -231,7 +231,9 @@ pg_replication_lag_critical      60  critical   ← the base has a built-in valu
 redis_connected_clients        1000  warning    ← root layer
 ```
 
-`container_cpu` is switched off by the tenant's `"disable"`, `container_memory` by the root layer's `"disable"`.
+`container_cpu` is switched off by the tenant's `"disable"`.
+
+**Platform-wide opt-out**: add the line `container_memory: "disable"` to the root `defaults:` above and the `container_memory` row disappears while the other seven stay (also expected output; taken from an equivalent tree with that line written in one subdirectory level that holds every tenant). On today's readers the same line is a value that cannot be read; da-guard reports `root_default_refused`, exit code 1.
 
 ## Consequences and known limits
 
@@ -244,7 +246,7 @@ redis_connected_clients        1000  warning    ← root layer
   | init with `mariadb,kubernetes` | 1 | 10 → 12 |
   | init with every rule pack | 2 | 98 → 98 |
   | init with `redis` only | 2 | 8 → 22 |
-  | The example above | 1 | 1 → 7 |
+  | The example above (no opt-out) | 1 | 1 → 8 |
 
 - **An expired `disable` starts to lapse.** For a key with no root-layer value, the `expires:` of a `"disable"` is not looked at today, so it is off for good (ADR-038 decision 8). Once the built-in layer gives the key a value it behaves like a key with a root-layer value: the `disable` lapses on expiry, and the base row and its dimensional rows come back.
 - **A platform-wide opt-out silently switches off the same-family keys tenants wrote.** Once the root writes `"disable"`, an existing `<key>_critical` or dimensional key in a tenant file is no longer served, and da-guard reports only a `disable_cascade` warning without blocking. Switching the whole family off is what opting out means, but the `_critical` suggestions init wrote into every tenant file all stop working, and the warning is the only sign.

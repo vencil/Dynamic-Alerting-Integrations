@@ -204,7 +204,6 @@ Helm 使用者要特別注意：Helm 把設成 `null` 的值從合併結果刪�
 ```yaml
 defaults:
   redis_connected_clients: 1000
-  container_memory: "disable"
 ```
 
 `conf.d/t1.yaml`：
@@ -223,12 +222,13 @@ tenants:
 redis_connected_clients      1000  warning
 ```
 
-租戶寫的三個鍵都不送：`pg_connections` 與 `pg_replication_lag_critical` 的原因是 `no_row`（根層沒有宣告基底），`container_cpu` 是 `disabled`。根層的 `container_memory: "disable"` 是讀不了的值，da-guard 以 `root_default_refused` 報錯、結束碼 1。
+租戶寫的三個鍵都不送：`pg_connections` 與 `pg_replication_lag_critical` 的原因是 `no_row`（根層沒有宣告基底），`container_cpu` 是 `disabled`。
 
-**本決策之後**（預期輸出，尚未實作；數字取自一棵等價的樹：內建值寫進根層 `defaults:`，根層的 `"disable"` 改寫在包住所有租戶的一層子目錄。這棵樹 da-guard 結束碼 0）：
+**本決策之後**（預期輸出，尚未實作；數字取自一棵等價的樹：把內建值寫進根層 `defaults:`）：
 
 ```
 container_cpu_throttle           25  warning    ← 內建層
+container_memory                 85  warning    ← 內建層
 mysql_connection_usage_percent   80  warning    ← 內建層
 mysql_replication_lag            30  warning    ← 內建層
 pg_connections                   70  warning    ← 租戶覆寫
@@ -237,7 +237,9 @@ pg_replication_lag_critical      60  critical   ← 基底有內建值，租戶�
 redis_connected_clients        1000  warning    ← 根層
 ```
 
-`container_cpu` 被租戶的 `"disable"` 關掉，`container_memory` 被根層的 `"disable"` 關掉。
+`container_cpu` 被租戶的 `"disable"` 關掉。
+
+**全平台退出**：在上面的根層 `defaults:` 加一行 `container_memory: "disable"`，`container_memory` 那一列消失，其餘七列不變（同樣是預期輸出；取自等價的樹，把這一行寫在包住所有租戶的一層子目錄）。同一行在今天的讀取端是讀不了的值，da-guard 以 `root_default_refused` 報錯、結束碼 1。
 
 ## 後果與已知限制
 
@@ -250,7 +252,7 @@ redis_connected_clients        1000  warning    ← 根層
   | init，選 `mariadb,kubernetes` | 1 | 10 → 12 |
   | init，選全部規則包 | 2 | 98 → 98 |
   | init，只選 `redis` | 2 | 8 → 22 |
-  | 上方範例 | 1 | 1 → 7 |
+  | 上方範例（未退出） | 1 | 1 → 8 |
 
 - **過期的 `disable` 開始失效。** 根層沒有值的鍵，`"disable"` 的 `expires:` 現行不看，等於永久關閉（ADR-038 決定 8）。內建層給值之後，這些鍵比照根層有值的鍵：`disable` 過期即失效，基底列與它的維度列一起回來。
 - **全平台退出會讓租戶寫的同族鍵安靜地失效。** 根層寫了 `"disable"` 之後，租戶檔裡既有的 `<鍵>_critical` 與維度鍵不再送出，da-guard 只報 `disable_cascade` 警告、不擋。關掉整族正是退出的意思，但 init 寫進每個租戶檔的 `_critical` 建議值會因此全部失效，要自己看警告。
