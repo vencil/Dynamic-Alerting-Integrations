@@ -124,13 +124,15 @@ jobs:
           path: ~/.cache/vibe-dl-golangci
           key: ${{ runner.os }}-vibe-dl-golangci-v2.12.2
 
-      # Go module + build cache. ⛔ Deliberately the SAME key namespace as
-      # ci.yml's Go legs, not a private one: a `-go-lint-` namespace would
-      # miss on every PR's first run while the warm entry sat next to it.
-      # Sharing makes the first run warm. ⚠️ Since this workflow also runs on
-      # push to main (#3922) it can be the one that WRITES the default-branch
-      # entry after a go.sum change (a key is saved once, by whichever job
-      # misses first); that entry then holds lint's build cache.
+      # Go module + build cache. ⛔ Deliberately the SAME key as the other
+      # workflows that spell it `-go-1.26-<go.sum hash>` (the bench-*.yaml
+      # ones, nightly-mutation-pilot, weekly-fuzz), not a private one: a
+      # `-go-lint-` namespace would miss on every PR's first run while a warm
+      # entry sat next to it. ci.yml's Go legs do NOT use this key. ⚠️ Since
+      # this workflow also runs on push to main (#3922) it can be the one that
+      # WRITES the default-branch entry after a go.sum change (a key is saved
+      # once, by whichever job misses first); that entry then holds lint's
+      # build cache, and those workflows restore it.
       - name: Cache Go modules + build cache
         uses: actions/cache@v5
         with:

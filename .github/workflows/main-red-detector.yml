@@ -64,11 +64,12 @@ permissions:
   contents: read
 
 # One at a time, so two workflows failing on one merge cannot both find "no
-# issue" and both open one. ⚠️ GitHub keeps one PENDING run per group: a third
-# event arriving while one runs and one waits replaces the waiting one. A
-# dropped failure is reported by that workflow's next failing run, whose range
-# still starts at the last success; a dropped success leaves the issue open
-# until the next successful run.
+# issue" and both open one. ⚠️ The cost: GitHub keeps only ONE pending run per
+# group, so a third event arriving within the minute or so that one run takes
+# — while one runs and one waits — replaces the waiting one, and that event is
+# never judged. A dropped failure is reported by that workflow's next failing
+# run, whose range still starts at the last success; a dropped success leaves
+# the issue open until the next successful run.
 concurrency:
   group: main-red-detector
   cancel-in-progress: false

@@ -63,12 +63,13 @@ class FakeGh:
     `fail` holds path prefixes that exit 1, the way `gh` does on a 5xx/403."""
 
     def __init__(self, *, issues=(), runs=None, jobs=None, compare=None, run=None,
-                 fail=()):
+                 attempts=None, fail=()):
         self.issues = list(issues)
         self.runs = runs or {}          # workflow file → list of runs, newest first
         self.jobs = jobs if jobs is not None else []
         self.compare = compare
         self.run = run
+        self.attempts = attempts or {}  # attempt number → conclusion
         self.fail = tuple(fail)
         self.calls: list[tuple[str, str]] = []
         self.written: list[tuple[str, str, dict]] = []
@@ -93,6 +94,9 @@ class FakeGh:
             return self._ok({"workflow_runs": self.runs[path.split("/")[2]]})
         if path.startswith("actions/runs/") and path.endswith("/jobs"):
             return self._ok({"jobs": self.jobs if params["page"] == "1" else []})
+        if "/attempts/" in path:
+            return self._ok({"status": "completed",
+                             "conclusion": self.attempts[int(path.rsplit("/", 1)[1])]})
         if path.startswith("actions/runs/"):
             return self._ok(self.run)
         if path.startswith("compare/"):
@@ -216,21 +220,74 @@ def test_a_success_closes_the_issue_when_every_watched_workflow_is_green() -> No
                              {"state": "closed", "state_reason": "completed"})
 
 
-def test_a_success_does_not_close_while_another_workflow_is_red() -> None:
+def test_a_recovery_does_not_close_while_another_workflow_is_red() -> None:
+    """CI went failure → success, Docs is still red: say so, leave it open."""
     gh = FakeGh(issues=[_issue(77)], runs={
-        "ci.yml": [_api_run(11, "success")],
+        "ci.yml": [_api_run(11, "success"), _api_run(10, "cancelled"), _api_run(9, "failure")],
         "docs.yaml": [_api_run(9, "cancelled"), _api_run(8, "failure", sha="d" * 40)]})
     action, api = _plan(_run("success", number=11), gh)
-    assert (action.kind, action.issue) == ("comment", 77)
+    assert (action.kind, action.issue, action.red) == ("comment", 77, True)
     assert "still red: `Docs` — `failure` at `ddddddddd`" in action.text
     mrr.apply(action, api)
     assert [(m, p) for m, p, _ in gh.written] == [("POST", "issues/77/comments")]
 
 
+@pytest.mark.parametrize("ci_runs", [
+    [_api_run(11, "success"), _api_run(10, "success"), _api_run(9, "failure")],
+    [_api_run(11, "success"), _api_run(10, "cancelled"), _api_run(9, "success")],
+    [_api_run(11, "success")],
+], ids=["green-before", "green-before-a-cancelled-run", "no-earlier-verdict"])
+def test_a_green_run_of_a_workflow_that_was_green_adds_no_comment(ci_runs) -> None:
+    """Docs is red and stays red; CI was green and is green. One comment per
+    such run would bury the ones that say something. Still exit 1: this run
+    looked, and main is not green."""
+    gh = FakeGh(issues=[_issue(77)], runs={
+        "ci.yml": ci_runs, "docs.yaml": [_api_run(8, "failure")]})
+    action, api = _plan(_run("success", number=11), gh)
+    assert (action.kind, action.issue, action.red) == ("noop", 77, True)
+    mrr.apply(action, api)
+    assert gh.written == []
+
+
+def test_everything_green_closes_whatever_the_triggering_workflow_was_before() -> None:
+    """The run that closes need not be the one that recovered."""
+    gh = FakeGh(issues=[_issue(77)], runs={
+        "ci.yml": [_api_run(11, "success"), _api_run(10, "success")],
+        "docs.yaml": [_api_run(9, "success"), _api_run(8, "failure")]})
+    action, _ = _plan(_run("success", number=11), gh)
+    assert (action.kind, action.red) == ("close", False)
+
+
+def test_a_rerun_that_succeeds_after_a_failed_attempt_is_a_recovery() -> None:
+    """Attempt 2 of run 10: the listing shows run 10 as success now, so the
+    earlier verdict is read from attempt 1, not from the list."""
+    gh = FakeGh(issues=[_issue(77)], attempts={1: "failure"}, runs={
+        "ci.yml": [_api_run(10, "success"), _api_run(9, "success")],
+        "docs.yaml": [_api_run(8, "failure")]})
+    action, _ = _plan(_run("success", number=10, attempt=2), gh)
+    assert action.kind == "comment" and "run attempt 2" in action.text
+
+
+def test_a_rerun_of_a_cancelled_attempt_is_judged_by_the_run_before() -> None:
+    gh = FakeGh(issues=[_issue(77)], attempts={1: "failure", 2: "cancelled"}, runs={
+        "ci.yml": [_api_run(10, "success"), _api_run(9, "success")],
+        "docs.yaml": [_api_run(8, "failure")]})
+    assert _plan(_run("success", number=10, attempt=3), gh)[0].kind == "comment"
+    gh.attempts = {1: "cancelled", 2: "cancelled"}
+    assert _plan(_run("success", number=10, attempt=3), gh)[0].kind == "noop"
+
+
+def test_an_earlier_attempt_that_cannot_be_read_is_not_guessed() -> None:
+    gh = FakeGh(issues=[_issue(77)], fail=("actions/runs/5010/attempts/1",), runs={
+        "ci.yml": [_api_run(10, "success")], "docs.yaml": [_api_run(8, "failure")]})
+    with pytest.raises(mrr.NoVerdict, match="just recovered"):
+        _plan(_run("success", number=10, attempt=2), gh)
+
+
 def test_a_success_does_not_close_while_a_workflow_has_no_verdict_at_all() -> None:
     """Every listed run cancelled is 'unknown', not green."""
     gh = FakeGh(issues=[_issue(77)], runs={
-        "ci.yml": [_api_run(11, "success")],
+        "ci.yml": [_api_run(11, "success"), _api_run(10, "failure")],
         "docs.yaml": [_api_run(9, "cancelled"), _api_run(8, "skipped")]})
     action, _ = _plan(_run("success", number=11), gh)
     assert action.kind == "comment" and "unknown: `Docs`" in action.text
@@ -247,11 +304,34 @@ def test_a_rerun_that_succeeds_takes_the_recovery_path() -> None:
 def test_the_newest_run_decides_not_the_run_that_triggered() -> None:
     """A re-run of an OLDER run succeeds while a newer run of the same workflow
     is red: the issue stays open."""
-    gh = FakeGh(issues=[_issue(77)], runs={
+    gh = FakeGh(issues=[_issue(77)], attempts={1: "failure"}, runs={
         "ci.yml": [_api_run(12, "failure"), _api_run(10, "success")],
         "docs.yaml": [_api_run(8, "success")]})
     action, _ = _plan(_run("success", number=10, attempt=2), gh)
     assert action.kind == "comment" and "still red: `CI`" in action.text
+
+
+@pytest.mark.parametrize("issues", [[], [_issue(77)]], ids=["no-issue", "issue-open"])
+def test_a_failure_superseded_by_a_newer_green_run_is_not_reported(issues) -> None:
+    """An old run re-run into a second failure (or a slow run finishing after
+    its successor passed) is not main's current state: no issue, no comment."""
+    gh = FakeGh(issues=issues, runs={
+        "ci.yml": [_api_run(13, None, status="in_progress"), _api_run(12, "cancelled"),
+                   _api_run(11, "success"), _api_run(10, "failure")]})
+    action, api = _plan(_run(number=10, attempt=2), gh)
+    assert (action.kind, action.red) == ("noop", False)
+    mrr.apply(action, api)
+    assert gh.written == [] and ("GET", "issues") not in gh.calls
+
+
+@pytest.mark.parametrize("ci_runs", [
+    [_api_run(12, "failure"), _api_run(11, "success"), _api_run(10, "failure")],
+    [_api_run(11, "cancelled"), _api_run(10, "failure"), _api_run(9, "success")],
+    [_api_run(10, "failure"), _api_run(9, "success")],
+], ids=["newest-verdict-is-red", "newer-run-has-no-verdict", "only-older-green"])
+def test_a_failure_is_reported_unless_the_newest_verdict_is_newer_and_green(ci_runs) -> None:
+    action, _ = _plan(_run(number=10), FakeGh(runs={"ci.yml": ci_runs}))
+    assert (action.kind, action.red) == ("open", True)
 
 
 # ── GitHub does not answer ──────────────────────────────────────────────────
@@ -260,7 +340,8 @@ def test_the_newest_run_decides_not_the_run_that_triggered() -> None:
 def test_a_failed_issue_lookup_is_never_no_issue(conclusion) -> None:
     """⛔ The cell this module exists for: reading a failed lookup as "none
     open" opens a duplicate issue on every failing run."""
-    gh = FakeGh(issues=[_issue(77)], runs=GREEN, fail=("issues",))
+    gh = FakeGh(issues=[_issue(77)], fail=("issues",),
+                runs={**GREEN, "ci.yml": [_api_run(10, conclusion), _api_run(9, "success")]})
     with pytest.raises(mrr.NoVerdict, match="tracking issue"):
         _plan(_run(conclusion), gh)
     assert gh.written == []
@@ -312,12 +393,13 @@ def test_what_only_describes_the_failure_does_not_stop_the_report() -> None:
 
 
 def test_a_range_start_that_cannot_be_found_is_said_not_invented() -> None:
-    gh = FakeGh(runs={"ci.yml": [_api_run(11, "success"),      # newer: not a start
+    gh = FakeGh(runs={"ci.yml": [_api_run(12, "failure"),
+                                 _api_run(11, "success"),      # newer: not a start
                                  _api_run(10, "failure"), _api_run(9, "cancelled"),
                                  _api_run(8, "failure")]})
     action, _ = _plan(_run(number=10), gh)
     assert "Range: start unknown .. `fffffffff`" in action.text
-    assert "none of the newest 4 push runs" in action.text
+    assert "none of the newest 5 push runs" in action.text
     assert "Commits in the range" not in action.text
     assert not [c for c in gh.calls if c[1].startswith("compare/")]
 
@@ -466,13 +548,20 @@ WRITE = ("--write",)
 
 
 def test_exit_codes(tmp_path, capsys) -> None:
-    """0 nothing to report (including the close) · 1 main is red, the issue
-    carries it · 2 no verdict."""
+    """0 nothing to report (including the close) · 1 this run found main red
+    and the issue is open (written to or not) · 2 no verdict."""
     green, red = _repo_runs("success"), _repo_runs("failure")
+    # CI (the workflow of the event) green before and now, another one red.
+    other_red = {**red, "ci.yml": green["ci.yml"]}
+    stale = {**red, "ci.yml": [_api_run(11, "success"), _api_run(10, "failure")]}
     cases = [
         ("open",          FakeGh(runs=red), {}, 1, 1),
         ("comment",       FakeGh(issues=[_issue()], runs=red), {}, 1, 1),
-        ("still-red",     FakeGh(issues=[_issue()], runs=red), {"conclusion": "success"}, 1, 1),
+        ("recovered-others-red", FakeGh(issues=[_issue()], runs=red),
+         {"conclusion": "success"}, 1, 1),
+        ("green-others-red", FakeGh(issues=[_issue()], runs=other_red),
+         {"conclusion": "success"}, 1, 0),
+        ("stale-failure", FakeGh(issues=[_issue()], runs=stale), {}, 0, 0),
         ("close",         FakeGh(issues=[_issue()], runs=green), {"conclusion": "success"}, 0, 2),
         ("green-no-issue", FakeGh(runs=green), {"conclusion": "success"}, 0, 0),
         ("cancelled",     FakeGh(runs=red), {"conclusion": "cancelled"}, 0, 0),
