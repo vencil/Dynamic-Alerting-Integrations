@@ -36,6 +36,8 @@ lang: zh
 | **Medium / Low** | **INFO**（僅 log，不列管）| 其餘所有 kube-linter check；hadolint `info`/`style` | n/a |
 
 > **CVE image scan 不由本表管**（AC 5）：#448 的 IaC 四層**不動** release.yaml 既有的 trivy image-CVE scan（與本表的「IaC misconfig」是不同關注點）。⛔ **勘誤（#1337）**：這裡原本寫「維持 informational／不升為 BLOCK」，但那個掃描**本來就是阻擋的**——五個 release job 全設 `exit-code: 1` 且無 `continue-on-error`，可修的 HIGH/CRITICAL 會讓 release job 紅。#1337 當時的但書是它跑在 **post-push**（image 已進 registry、擋的只是 release job 變綠）；⛔ 自 [#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278) 起不再成立：各 job 先推候選 tag、掃該 digest，通過後才把正式 tag 指到同一個 digest，並在那之後才簽章／SBOM／`helm push`／GitHub Release——掃描紅燈現在真的攔下發布。
+>
+> **CVE 豁免的單一來源**（[#3870](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3870)）：映像 CVE 的豁免**不進本表**，一律寫在該映像自己的 `components/<image>/.trivyignore.yaml`（目前只有 recipe-preview 內含的 promtool）。每筆必填 `id`／`statement`／`justification`／真實的 `expired_at`、不准純文字 `.trivyignore`，由 `tests/ops/test_nightly_scan_matrix_drift.py::test_every_waiver_entry_has_expiry_and_justification` 對所有 workflow 一起檢查；release 掃描只准讀它所掃那個映像的豁免檔，且掃描「擋得住」的形狀（exit-code、severity、`if:`／`continue-on-error`、`TRIVY_*` env）由 `tests/ops/test_release_scan_before_publish.py` 守。什麼算 finding（`severity`、`ignore-unfixed`）三個掃描共用 `tests/_trivy_contract.py`。
 
 ### Branch protection required checks（AC 5，**owner action**）
 
