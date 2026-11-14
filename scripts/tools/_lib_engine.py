@@ -20,7 +20,8 @@ input, and both were read as a clean scan (rc 0, "OK").
 evidence differs: ``kube-linter lint --format json`` always prints a document
 with ``Reports`` and ``Summary`` when it linted something; ``helm template``
 prints the rendered manifests; ``hadolint --no-fail --format json`` prints a
-JSON array and exits 0; ``pint lint`` logs ``entries=N``. A call whose
+JSON array and exits 0, and reports the caller's canary on stdin at the
+registered levels (#3643); ``pint lint`` logs ``entries=N``. A call whose
 (engine, subcommand) has no registered proof is a programming error
 (``KeyError``), not a silent pass.
 
@@ -239,12 +240,35 @@ def _helm_template(proc: subprocess.CompletedProcess, expect: dict) -> str:
 _HADOLINT_FIELDS = frozenset({"file", "line", "code", "level", "message"})
 
 
+#: The name hadolint reports a Dockerfile read from stdin under (measured,
+#: v2.12.0: ``"file": "-"``, whatever its position among the file arguments).
+_HADOLINT_STDIN = "-"
+
+
 def _hadolint(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
-    """``hadolint --no-fail --format json``: exit 0 means "ran" (--no-fail),
-    and stdout is a JSON array (a clean run prints ``[]``) whose items carry
-    the fields every finding has — one without ``level`` would be classified
-    as the lowest severity (PR #3610 review)."""
-    _requires(proc, "--no-fail", "--format", "json")
+    """``hadolint --no-fail --format json <files> -``: exit 0 means "ran"
+    (--no-fail), and stdout is a JSON array (a clean run prints ``[]``) whose
+    items carry the fields every finding has — one without ``level`` would be
+    classified as the lowest severity (PR #3610 review).
+
+    ⛔ That it ran does not show it ran **with the caller's levels** (#3643):
+    a config file hadolint cannot parse is dropped whole, a mistyped key or
+    rule code is dropped silently, ``HADOLINT_*`` variables override the
+    command line, and an inline ``# hadolint ignore=`` removes a finding —
+    all at exit 0 with a well-formed array (measured, v2.12.0 and v2.14.0).
+    So the same run also lints a canary Dockerfile the caller sends on stdin,
+    and ``expect["canary"]`` (rule code → the levels it must come back with,
+    one per expected hit) is compared with what came back for ``-``: only
+    ``code`` and ``level`` are read, no message text (#3611 Q2). A code that
+    is missing, comes back at another level, or comes back more often than
+    expected is no verdict. The canary's own findings are then removed, so
+    ``data`` is the findings on the caller's files only."""
+    _requires(proc, "--no-fail", "--format", "json", "--disable-ignore-pragma",
+              _HADOLINT_STDIN)
+    canary = expect.get("canary")
+    if not canary:
+        raise ValueError("the hadolint proof needs expect['canary'] "
+                         "(rule code -> expected levels on stdin)")
     if proc.returncode != 0:
         raise NoProof("non-zero exit under --no-fail")
     out = (proc.stdout or "").strip()
@@ -257,7 +281,15 @@ def _hadolint(proc: subprocess.CompletedProcess, expect: dict) -> list[dict]:
     if not (isinstance(doc, list)
             and all(isinstance(f, dict) and _HADOLINT_FIELDS <= f.keys() for f in doc)):
         raise NoProof(f"stdout is not a JSON array of findings: {out[:500]}")
-    return doc
+    for code, levels in canary.items():
+        got = sorted(f["level"] for f in doc
+                     if f["file"] == _HADOLINT_STDIN and f["code"] == code)
+        if got != sorted(levels):
+            raise NoProof(
+                f"the canary on stdin came back with {code} at {got}, expected "
+                f"{sorted(levels)}: the registered levels / trusted registries "
+                "were not the ones applied")
+    return [f for f in doc if f["file"] != _HADOLINT_STDIN]
 
 
 _ANSI_SGR_RE = re.compile(r"\x1b\[[0-9;]*m")

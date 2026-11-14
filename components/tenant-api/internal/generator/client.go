@@ -235,7 +235,7 @@ type Status struct {
 	GeneratorVersion *string `json:"generator_version"`
 	GeneratorTooOld  *string `json:"generator_too_old"`
 	DAGuardVersion   *string `json:"da_guard_version"`
-	AmtoolAvailable  bool    `json:"amtool_available"`
+	DAReadAvailable  bool    `json:"da_read_available"`
 	// DAGuardAvailable is nil from an image older than the shared key
 	// verdict tenant-api refuses on (ADR-038 decision 5): such an image
 	// passes writes without one, so it cannot judge them (ReadyForVerdicts).

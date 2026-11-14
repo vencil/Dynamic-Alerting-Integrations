@@ -6,7 +6,7 @@ platform-enforced (NOC) route ON — `generate-routes --validate` rc 0,
 `validate-config` rc 0. Same for a quoted `'yes'` / `'no'`.
 
 After: a non-boolean `enabled` is a configuration error. It is NOT enabled,
-and validate-config's schema row is FAIL. #2906: the generator refuses the
+and validate-config's routes row is FAIL. #2906: the generator refuses the
 WHOLE tree on it in every mode (rc 1, nothing written) — it used to print a
 `WARN … skipping` line and render without the NOC route at rc 0 — and a
 quoted `'true'` is refused like any other string (judged by type, ADR-036
@@ -118,18 +118,18 @@ def _vc_rows(config_dir, cli_argv, capsys):
 
 
 @pytest.mark.parametrize("enabled", ["n", "'yes'"])
-def test_validate_config_fails_the_schema_row(enabled, tmp_path, cli_argv, capsys):
+def test_validate_config_fails_the_routes_row(enabled, tmp_path, cli_argv, capsys):
     rc, rows = _vc_rows(_tree(tmp_path, enabled), cli_argv, capsys)
     assert rc == 1, rows
-    assert rows["schema"]["status"] == vc.FAIL, rows["schema"]
-    assert any("'enabled' must be a boolean" in d for d in rows["schema"]["details"])
+    assert rows["routes"]["status"] == vc.FAIL, rows["routes"]
+    assert any("'enabled' must be a boolean" in d for d in rows["routes"]["details"])
 
 
 @pytest.mark.parametrize("enabled", ["true", "false"])
 def test_validate_config_passes_a_boolean(enabled, tmp_path, cli_argv, capsys):
     rc, rows = _vc_rows(_tree(tmp_path, enabled), cli_argv, capsys)
     assert rc == 0, rows
-    assert rows["schema"]["status"] == vc.PASS, rows["schema"]
+    assert rows["routes"]["status"] == vc.PASS, rows["routes"]
 
 
 def _slack_tenant(channel: str) -> str:

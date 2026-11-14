@@ -124,9 +124,6 @@ CASES = [
      {"team/_defaults.yaml": "_routing_defaults:\n  routes: []\n",
       "team/t1.yaml": _TENANT_HEAD + _RECEIVER},
      None, "'routes' is not supported here"),
-    ("parse:invalid-tenant-id",
-     {"t1.yaml": "tenants:\n  Bad_Tenant:\n" + _RECEIVER}, None,
-     "is not a valid tenant id"),
     # _grar_routes
     ("routes:group-by-element", _with_receiver("      group_by: [1]\n"), None,
      "group_by[0] is int"),
@@ -266,7 +263,7 @@ def test_new_predicate_blocks_what_the_old_one_did(tmp_path, mods, files,
 def test_mark_survives_to_every_predicate_caller(tmp_path, mods, monkeypatch,
                                                  files, allowed, marker):
     """Spy on the predicate at each call site (`_validate_mode` /
-    `evaluate_generated_config`, validate-config's schema and routes rows,
+    `evaluate_generated_config`, validate-config's routes row,
     `--validate` with nothing to render) and require that every line naming
     the trigger arrives still marked — a caller that re-formatted it would
     deliver a plain str here."""
@@ -286,7 +283,6 @@ def test_mark_survives_to_every_predicate_caller(tmp_path, mods, monkeypatch,
         policy = tmp_path / "policy.yaml"
         policy.write_text(f"allowed_domains: {allowed!r}\n", encoding="utf-8")
 
-    vc.check_schema(str(d))
     vc.check_routes(str(d), None if policy is None else str(policy))
     argv = ["generate_alertmanager_routes.py", "--config-dir", str(d),
             "--validate"] + ([] if policy is None else ["--policy", str(policy)])

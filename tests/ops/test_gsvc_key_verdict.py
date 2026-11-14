@@ -48,7 +48,6 @@ TYPO = "tenants:\n  t-a:\n    mysql_conections: \"50\"\n"  # misspelt: no reader
 def world(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gsvc-kv")
     bin_dir = tmp / "bin"
-    h.stub(bin_dir, "amtool", h.ACCEPTING_AMTOOL)
     repo = h.init_repo(tmp / "repo")
     base = h.commit_tree(repo, {"_defaults.yaml": DEFAULTS,
                                 "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"50\"\n",

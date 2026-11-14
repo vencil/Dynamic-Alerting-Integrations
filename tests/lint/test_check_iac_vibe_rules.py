@@ -16,11 +16,19 @@ own run is the CI lint job, which installs the pinned binary):
    hadolint / docker on PATH, the wrapper run as a process. A non-zero exit,
    an empty stdout, or stdout that is no JSON array of findings is exit 2 —
    `docker run` with no daemon (rc 1, nothing on stdout) printed OK, rc 0.
+7. **A run at other levels than the registered ones is no run** (#3643):
+   the stand-ins answer for the canary on stdin too, and one that reports it
+   at another level, or not at all, is exit 2. The last section runs the
+   real hadolint where it is installed (skipped elsewhere; a remote session
+   must have it): HADOLINT_* variables, inline ignore pragmas and a
+   `.hadolint.yaml` put back in the repo all leave the verdict unchanged.
 """
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import shutil
 import subprocess
 import sys
 
@@ -284,8 +292,26 @@ _SCRIPT = os.path.join(_TOOLS_DIR, "check_iac_vibe_rules.py")
 #: A stand-in hadolint that keeps the real one's exit contract: one
 #: error-level finding, exit 1 for it unless --no-fail (failure-threshold
 #: error) — so the wrapper reads it as a finding only by passing --no-fail.
-_FAITHFUL = """#!/bin/sh
-echo '[{"file":"x/Dockerfile","line":1,"code":"DL3007","level":"error","message":"latest"}]'
+_FINDING = {"file": "x/Dockerfile", "line": 1, "code": "DL3007", "level": "error",
+            "message": "latest"}
+
+
+def _canary_findings(**override):
+    """What hadolint reports for the canary on stdin (`-`): each registered
+    rule once at its registered level. ``override`` maps a code to the levels
+    it comes back with instead (``[]``: not at all)."""
+    levels = {**iac.hadolint_canary_expectation(), **override}
+    return [{"file": "-", "line": 1, "code": code, "level": level, "message": "canary"}
+            for code, lvls in levels.items() for level in lvls]
+
+
+def _report(*findings, **override):
+    """A stand-in's stdout: *findings* on the repo's files plus the canary's."""
+    return json.dumps([*findings, *_canary_findings(**override)])
+
+
+_FAITHFUL = f"""#!/bin/sh
+echo '{_report(_FINDING)}'
 for a in "$@"; do [ "$a" = "--no-fail" ] && exit 0; done
 exit 1
 """
@@ -359,8 +385,17 @@ def test_docker_with_no_daemon_is_no_run(tmp_path):
     (0, "[1]"),
     (0, "not json"),
     (0, '[{"message":"parse failed"}]'),   # no level: it would pass as INFO
+    # #3643 — a well-formed array at exit 0, as hadolint prints when it ran at
+    # other levels than the registered ones:
+    (0, "[]"),                                     # the canary never came back
+    (0, _report(DL3007=["warning"])),              # default level: flags / config not applied
+    (0, _report(DL3007=[])),                       # ignored (HADOLINT_IGNORE, a pragma)
+    (0, _report(DL3026=[])),                       # no trusted registry applied
+    (0, _report(DL3026=["error", "error"])),       # a trusted registry was dropped
 ], ids=["rc0-empty", "rc1-array", "rc2-array", "rc125-empty", "object", "null",
-        "array-of-number", "not-json", "finding-without-level"])
+        "array-of-number", "not-json", "finding-without-level", "no-canary",
+        "canary-at-default-level", "canary-rule-ignored", "canary-dl3026-silent",
+        "canary-dl3026-on-a-trusted-registry"])
 def test_an_engine_run_that_does_not_show_it_ran_is_a_caller_error(tmp_path, rc, stdout):
     proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(rc, stdout)))
     assert proc.returncode == 2, proc.stdout + proc.stderr
@@ -370,10 +405,11 @@ def test_an_engine_run_that_does_not_show_it_ran_is_a_caller_error(tmp_path, rc,
 
 def test_a_clean_engine_run_passes(tmp_path):
     """The control: the stand-in route itself reaches OK (rc 0) when hadolint
-    exits 0 with []: the rows above are not red for some other reason."""
-    proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(0, "[]")))
+    exits 0 with nothing but the canary's findings: the rows above are not
+    red for some other reason. The canary's findings are not the repo's."""
+    proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(0, _report())))
     assert proc.returncode == 0, proc.stdout + proc.stderr
-    assert "OK Container SAST" in proc.stdout, proc.stdout
+    assert "OK Container SAST Layer 1 — 0 BLOCK / 0 WARN / 0 INFO" in proc.stdout, proc.stdout
 
 
 def test_a_finding_is_a_finding_not_an_engine_failure(tmp_path):
@@ -394,3 +430,357 @@ class TestRegistry:
                 f"{df} not registered in DOCKERFILE_CONTEXTS — declare its "
                 f"build-context root (see check_iac_vibe_rules.py)"
             )
+
+
+# ---------------------------------------------------------------------------
+# #3643: the real hadolint — nothing but the registry decides the levels
+# ---------------------------------------------------------------------------
+# The stand-ins above pin what the wrapper does with hadolint's output; these
+# pin what the pinned hadolint does with the wrapper's command line. Each
+# case below changed the verdict silently (rc 0, other levels) before #3643.
+_HADOLINT = shutil.which("hadolint")
+_needs_hadolint = pytest.mark.skipif(
+    _HADOLINT is None, reason="hadolint not on PATH — its behaviour is not measured")
+
+#: One Dockerfile tripping every registered rule, plus DL3019 (unregistered,
+#: hadolint's default `info`); ghcr.io is trusted, so its FROM is quiet.
+_DOCKERFILE = ("FROM alpine:latest\nRUN apk add curl\n"
+               "FROM untrusted.invalid/x:1.0\nFROM ghcr.io/a/b:1.0\n")
+_VERDICT = [("DL3007", "error"), ("DL3018", "warning"), ("DL3019", "info"),
+            ("DL3026", "error")]
+
+
+_REQUIRE_ENV = "VIBE_REQUIRE_HADOLINT"
+
+
+def hadolint_required(environ=None) -> str | None:
+    """Why this run must have hadolint, or None when a skip is acceptable —
+    one answer for CI and a remote session (as tests/_helm_gate.py for helm)."""
+    environ = os.environ if environ is None else environ
+    if environ.get(_REQUIRE_ENV) == "1":
+        return f"{_REQUIRE_ENV}=1 (the CI Lint job installs the pinned hadolint)"
+    if environ.get("CLAUDE_CODE_REMOTE") == "true":
+        return ("CLAUDE_CODE_REMOTE=true (.claude/hooks/session-start.sh installs hadolint; "
+                "check /tmp/vibe-session-start-hook.ran and rerun it as CLAUDE.md says)")
+    return None
+
+
+def test_hadolint_present_when_required():
+    """Where hadolint is supposed to be installed, the skips below must not
+    pass for green: a run that did not measure the engine fails here."""
+    reason = hadolint_required()
+    if reason:
+        assert _HADOLINT, f"{reason}: but `hadolint` is not on PATH"
+
+
+def test_what_requires_hadolint():
+    assert hadolint_required({}) is None
+    assert hadolint_required({_REQUIRE_ENV: "0"}) is None
+    assert _REQUIRE_ENV in hadolint_required({_REQUIRE_ENV: "1"})
+    assert "CLAUDE_CODE_REMOTE" in hadolint_required({"CLAUDE_CODE_REMOTE": "true"})
+
+
+def test_ci_runs_this_file_against_the_pinned_hadolint_and_requires_it():
+    """The engine tests below skip without hadolint, and "Python Tests" has
+    none: the Lint job, which installs the pinned binary, runs this file with
+    the require variable set, in a step after the install. The job must stay
+    ungated — a path filter would let a hadolint re-pin skip it."""
+    import shlex
+
+    import yaml
+    workflow = yaml.safe_load(
+        (iac.REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
+    job = workflow["jobs"]["lint"]
+    assert "if" not in job and "needs" not in job, "the Lint job became conditional"
+    this_file = "tests/lint/test_check_iac_vibe_rules.py"
+
+    def runs_this_file(step):
+        script = (step.get("run") or "").replace("\\\n", " ")
+        return any("pytest" in words and this_file in words
+                   for words in (shlex.split(line, comments=True) for line in script.splitlines()))
+
+    steps = job["steps"]
+    installs = [i for i, s in enumerate(steps)
+                if "/usr/local/bin/hadolint" in shlex.split(
+                    (s.get("run") or "").replace("\\\n", " "), comments=True)]
+    tests = [i for i, s in enumerate(steps) if runs_this_file(s)]
+    assert len(installs) == 1 and len(tests) == 1, (installs, tests)
+    assert tests[0] > installs[0], "the tests run before hadolint is installed"
+    step = steps[tests[0]]
+    assert "if" not in step and not step.get("continue-on-error")
+    env = {**(workflow.get("env") or {}), **(job.get("env") or {}), **(step.get("env") or {})}
+    assert env.get(_REQUIRE_ENV) == "1", env
+    assert hadolint_required({k: str(v) for k, v in env.items()})
+
+
+@pytest.fixture
+def tree(tmp_path, monkeypatch):
+    """A repo root holding one Dockerfile; hadolint runs with it as cwd."""
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "Dockerfile").write_text(_DOCKERFILE, encoding="utf-8")
+    monkeypatch.setattr(iac, "REPO_ROOT", tmp_path)
+    return tmp_path
+
+
+def _verdict():
+    ran = iac.run_hadolint(["app/Dockerfile"])
+    assert isinstance(ran, iac._lib_engine.Ran), ran
+    assert {f["file"] for f in ran.data} == {"app/Dockerfile"}, ran.data   # no canary finding
+    return sorted((f["code"], f["level"]) for f in ran.data)
+
+
+@_needs_hadolint
+def test_the_registry_s_levels_are_the_verdict(tree):
+    """⛔ Behavioural pin of the registry: change a row's level, or drop a
+    trusted registry, and this is red."""
+    assert _verdict() == _VERDICT
+
+
+@_needs_hadolint
+@pytest.mark.parametrize("name, value", [
+    ("HADOLINT_IGNORE", "DL3007,DL3019"),
+    ("HADOLINT_OVERRIDE_INFO", "DL3007"),
+    ("HADOLINT_OVERRIDE_ERROR", "DL3018"),
+    ("HADOLINT_TRUSTED_REGISTRIES", "untrusted.invalid"),
+    ("HADOLINT_DISABLE_IGNORE_PRAGMA", "false"),
+    ("HADOLINT_FORMAT", "tty"),
+    ("HADOLINT_NOFAIL", "false"),
+    ("HADOLINT_FAILURE_THRESHOLD", "style"),
+])
+def test_a_hadolint_variable_in_the_environment_changes_nothing(tree, monkeypatch, name, value):
+    """Measured on v2.12.0: the first four each beat the matching flag."""
+    monkeypatch.setenv(name, value)
+    assert _verdict() == _VERDICT
+
+
+@_needs_hadolint
+def test_an_inline_ignore_pragma_changes_nothing(tree):
+    (tree / "app" / "Dockerfile").write_text(
+        "# hadolint global ignore=DL3018\n# hadolint ignore=DL3007\nFROM alpine:latest\n"
+        "RUN apk add curl\n# hadolint ignore=DL3026\nFROM untrusted.invalid/x:1.0\n",
+        encoding="utf-8")
+    assert _verdict() == _VERDICT
+
+
+@_needs_hadolint
+@pytest.mark.parametrize("name", [".hadolint.yaml", ".hadolint.yml"])
+@pytest.mark.parametrize("config", [
+    "ignored:\n  - DL3007\n  - DL3019\n",
+    "override:\n  info:\n    - DL3007\n  error:\n    - DL3018\n",
+    "trustedRegistries:\n  - untrusted.invalid\n",
+    "override: [\n",        # the ticket's case: does not parse
+    "",
+], ids=["ignored", "override", "trusted-registries", "unparseable", "empty"])
+def test_a_config_file_put_back_in_the_repo_is_not_read(tree, name, config):
+    """hadolint discovers a config in its cwd — the repo root — unless it is
+    given one. A well-formed one and a broken one both leave the verdict."""
+    (tree / name).write_text(config, encoding="utf-8")
+    assert _verdict() == _VERDICT
+
+
+@_needs_hadolint
+def test_a_changed_registry_row_reaches_the_engine(tree, monkeypatch):
+    """The flags are generated from the registry: a row's new level is the
+    level hadolint reports, on the canary and on the repo's files alike."""
+    row = iac.HADOLINT_RULES["DL3007"]
+    monkeypatch.setattr(iac, "HADOLINT_RULES", {
+        **iac.HADOLINT_RULES, "DL3007": iac.HadolintRule("style", row.default, row.canary)})
+    assert ("DL3007", "style") in _verdict()
+
+
+@_needs_hadolint
+@pytest.mark.parametrize("drop", [["--error", "DL3007"], ["--trusted-registry", "ghcr.io"],
+                                  ["--trusted-registry", "docker.io"]],
+                         ids=["level-flag", "registry-flag", "registry-of-a-canary-rule"])
+def test_a_registry_row_that_did_not_reach_the_engine_is_no_verdict(tree, monkeypatch, drop):
+    """What the canary is for: the registry says one thing, hadolint ran with
+    another. DL3007 is the row off hadolint's default, so it is the one whose
+    canary notices a level flag that was not applied."""
+    flags = iac.hadolint_flags()
+    at = next(i for i in range(0, len(flags), 2) if flags[i:i + 2] == drop)
+    monkeypatch.setattr(iac, "hadolint_flags", lambda: flags[:at] + flags[at + 2:])
+    result = iac.run_hadolint(["app/Dockerfile"])
+    assert isinstance(result, iac._lib_engine.NoVerdict), result
+    assert "canary" in result.reason, result.reason
+
+
+@_needs_hadolint
+def test_a_canary_that_does_not_trip_its_rule_is_no_verdict(tree, monkeypatch):
+    row = iac.HADOLINT_RULES["DL3018"]
+    monkeypatch.setattr(iac, "HADOLINT_RULES", {
+        **iac.HADOLINT_RULES,
+        "DL3018": iac.HadolintRule(row.level, row.default, "RUN apk add --no-cache curl=8.0")})
+    result = iac.run_hadolint(["app/Dockerfile"])
+    assert isinstance(result, iac._lib_engine.NoVerdict), result
+    assert "DL3018" in result.reason, result.reason
+
+
+@_needs_hadolint
+def test_each_row_s_declared_default_is_hadolint_s(tree, monkeypatch):
+    """`default` decides which canary counts as evidence that the level flags
+    applied, so it is measured: with the trusted registries but no level
+    flag, the canary comes back at exactly the declared defaults — and that
+    run is no verdict against the registered levels."""
+    monkeypatch.setattr(iac, "hadolint_flags", lambda: [
+        a for reg in iac.HADOLINT_TRUSTED_REGISTRIES for a in ("--trusted-registry", reg)])
+    assert isinstance(iac.run_hadolint(["app/Dockerfile"]), iac._lib_engine.NoVerdict)
+    monkeypatch.setattr(iac, "hadolint_canary_expectation", lambda: {
+        code: [rule.default] for code, rule in iac.HADOLINT_RULES.items()})
+    assert isinstance(iac.run_hadolint(["app/Dockerfile"]), iac._lib_engine.Ran)
+
+
+@_needs_hadolint
+def test_the_wrapper_s_output_on_this_repo_ignores_the_environment():
+    """The whole wrapper as a process over this repo's Dockerfiles: the same
+    lines and the same exit status with HADOLINT_* variables set."""
+    def run(**extra):
+        env = {k: v for k, v in os.environ.items()
+               if k != "PR_BODY" and not k.startswith("HADOLINT_")}
+        proc = subprocess.run([sys.executable, _SCRIPT, "--ci"], capture_output=True,
+                              text=True, encoding="utf-8", timeout=180,
+                              env={**env, **extra}, stdin=subprocess.DEVNULL)
+        return proc.returncode, proc.stdout
+
+    plain = run()
+    assert plain[0] in (0, 1) and "Container SAST Layer 1" in plain[1], plain
+    assert run(HADOLINT_IGNORE="DL3018,DL3007", HADOLINT_OVERRIDE_ERROR="DL3059") == plain
+
+
+# ---------------------------------------------------------------------------
+# V4 (#3643): lint directives hadolint has no flag to turn off
+# ---------------------------------------------------------------------------
+#: Comment lines that might steer the linter. The first group is what V4
+#: flags; the second it leaves alone. Which of them hadolint really acts on
+#: is asked of the engine below, not asserted here.
+_FLAGGED = [
+    "# hadolint shell=pwsh", "#hadolint shell=pwsh", "#    hadolint    shell=pwsh",
+    "#\thadolint\tshell=pwsh", "# hadolint shell = pwsh", "# hadolint shell =pwsh",
+    "# hadolint shell= pwsh", "   # hadolint shell=pwsh", "# hadolint shell=pwsh because",
+    "# hadolint shell=pwsh # x", '# hadolint shell="pwsh"', "# hadolint shell=cmd",
+    "# hadolint shell=powershell", "# hadolint shell=bash", "# hadolint shell=/bin/zsh",
+    "# hadolint shell=nonsense", "# HADOLINT shell=pwsh", "# hadolint SHELL=pwsh",
+    "# Hadolint Shell=pwsh", "## hadolint shell=pwsh",
+    "# shellcheck disable=SC2164", "#shellcheck disable=SC2164,SC1072",
+    "#   shellcheck   disable=SC2164", "   # shellcheck disable=SC2164",
+    "# shellcheck disable=all", "# SHELLCHECK disable=SC2164", "# shellcheck shell=pwsh",
+    "# shellcheck source=/dev/null disable=SC2164", "# shellcheck enable=all",
+    "# shellcheck", "#shellcheck", "# shellcheck is what hadolint runs on a RUN",
+    "true # shellcheck disable=SC2164", "# shellchecked: yes",
+]
+_NOT_FLAGGED = [
+    "# hadolint ignore=SC1072,SC2164,DL3003", "# hadolint global ignore=SC1072,SC2164,DL3003",
+    "# hadolint global shell=pwsh", "# x hadolint shell=pwsh", "# hadolint-shell=pwsh",
+    "# hadolint shell:pwsh", "# hadolint shell pwsh", "# shell=pwsh", "# disable=SC2164", "# shell check disable=SC2164",
+    "# x shellcheck disable=SC2164", "# hadolint shellcheck disable=SC2164",
+    "# syntax=docker/dockerfile:1", "# check=skip=all", "# an ordinary comment",
+    "# rationale: no shell in this image",
+]
+#: Where the line goes ({d}): the top of the file, between instructions, and
+#: inside a heredoc RUN. Each body has an SC finding to lose.
+_PLACES = {
+    "top": "{d}FROM alpine:3.19\nRUN if true; then echo hi\n",
+    "before-run": "FROM alpine:3.19\n{d}RUN if true; then echo hi\n",
+    "heredoc": "FROM alpine:3.19\nRUN <<EOF\n{d}cd /x\nEOF\n",
+}
+
+
+@pytest.mark.parametrize("line", _FLAGGED)
+def test_v4_flags_a_lint_directive(line):
+    hits = iac.lint_directive_lines(f"FROM a:1\n{line}\nRUN true\n")
+    assert [ln for ln, _, _ in hits] == [2], hits
+
+
+@pytest.mark.parametrize("line", [
+    *_NOT_FLAGGED, 'SHELL ["pwsh", "-c"]', "#!/usr/bin/env pwsh", "RUN echo hadolint shell=x",
+    "ENV SHELLCHECK_OPTS=-e"])
+def test_v4_leaves_other_lines_alone(line):
+    assert iac.lint_directive_lines(f"FROM a:1\n{line}\nRUN true\n") == []
+
+
+def test_v4_is_a_block_finding_and_rc_1(monkeypatch, tmp_path):
+    """A repo-content problem (rc 1), waived like any other BLOCK by the PR
+    body's bypass tag — not a no-verdict."""
+    df = "app/Dockerfile"
+    (tmp_path / "app").mkdir()
+    (tmp_path / df).write_text(
+        "# hadolint shell=pwsh\nFROM gcr.io/distroless/static\n", encoding="utf-8")
+    (tmp_path / ".dockerignore").write_text(
+        "/.git/\n/tests/\n/scripts/\n/docs/\n*.md\n/.github/\n*.log\n.env*\n", encoding="utf-8")
+    monkeypatch.setattr(iac, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(iac, "DOCKERFILE_CONTEXTS", {df: "."})
+    monkeypatch.setattr(iac, "find_dockerfiles", lambda: [df])
+    monkeypatch.setattr(iac, "run_hadolint", lambda dfs: _ran([]))
+    blocks = iac.collect_findings([df])["BLOCK"]
+    assert len(blocks) == 1 and "app/Dockerfile:1 [V4 lint-directive]" in blocks[0], blocks
+    monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
+    monkeypatch.delenv("PR_BODY", raising=False)
+    assert iac.main() == 1
+    monkeypatch.setenv("PR_BODY", "bypass-lint: iac-vibe-rules\nreason: " + "word " * 31)
+    assert iac.main() == 0
+
+
+def _engine_verdict(tree, text):
+    (tree / "app" / "Dockerfile").write_text(text, encoding="utf-8")
+    ran = iac.run_hadolint(["app/Dockerfile"])
+    assert isinstance(ran, iac._lib_engine.Ran), ran
+    return sorted((f["code"], f["level"]) for f in ran.data)
+
+
+@_needs_hadolint
+@pytest.mark.parametrize("place", sorted(_PLACES))
+def test_every_comment_the_engine_acts_on_is_flagged(tree, place):
+    """⛔ The property V4 exists for, asked of the pinned hadolint: under the
+    wrapper's own command line, a comment line that changes what hadolint
+    reports is one V4 flags. `--disable-ignore-pragma` covers `ignore=`
+    only (measured, v2.12.0)."""
+    body = _PLACES[place]
+    plain = _engine_verdict(tree, body.format(d=""))
+    assert any(code.startswith("SC") for code, _ in plain), plain   # something to lose
+    acted_on = []
+    for line in (*_FLAGGED, *_NOT_FLAGGED):
+        text = body.format(d=line + "\n")
+        if _engine_verdict(tree, text) != plain:
+            acted_on.append(line)
+            assert iac.lint_directive_lines(text), (
+                f"hadolint acts on {line!r} ({place}) and V4 does not flag it")
+    # Not vacuous: the engine does act on the canonical spelling of each kind.
+    canonical = "# shellcheck disable=SC2164" if place == "heredoc" else "# hadolint shell=pwsh"
+    assert canonical in acted_on, acted_on
+
+
+@_needs_hadolint
+def test_a_real_change_of_shell_is_reported_by_the_engine_and_not_flagged(tree):
+    """The other side of V4's line: SHELL and a heredoc's `#!` also change
+    what hadolint reports, because they change what the image runs."""
+    for place, line in (("before-run", 'SHELL ["pwsh", "-c"]'), ("heredoc", "#!/usr/bin/env pwsh")):
+        body = _PLACES[place]
+        assert _engine_verdict(tree, body.format(d=line + "\n")) != \
+            _engine_verdict(tree, body.format(d=""))
+        assert iac.lint_directive_lines(body.format(d=line + "\n")) == []
+
+
+# ---------------------------------------------------------------------------
+# The hook fires on the files the wrapper reads
+# ---------------------------------------------------------------------------
+def test_the_hook_s_files_pattern_covers_what_the_wrapper_reads():
+    """`find_dockerfiles` takes `Dockerfile` and `Dockerfile.<suffix>`; V3
+    reads `<Dockerfile>.dockerignore` or the context root's `.dockerignore`."""
+    import re
+
+    import yaml
+    config = yaml.safe_load((iac.REPO_ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8"))
+    hooks = [h for repo in config["repos"] for h in repo["hooks"] if h["id"] == "iac-sast-check"]
+    assert len(hooks) == 1
+    fires = re.compile(hooks[0]["files"]).search
+    read = set(iac.find_dockerfiles())
+    for df in sorted(read):
+        own = f"{df}.dockerignore"
+        ctx = iac.DOCKERFILE_CONTEXTS.get(df, ".")
+        read.add(own if (iac.REPO_ROOT / own).is_file()
+                 else ".dockerignore" if ctx == "." else f"{ctx}/.dockerignore")
+    read |= {"x/Dockerfile.dev", "Dockerfile.dev", "x/Dockerfile.dev.dockerignore",
+             "x/Dockerfile.dockerignore", "scripts/tools/lint/check_iac_vibe_rules.py",
+             "scripts/tools/_lib_engine.py"}
+    assert not sorted(p for p in read if not fires(p))
+    assert not [p for p in ("x/Dockerfiles/a.txt", "x/notDockerfile", "docs/Dockerfile.md/x",
+                            ".hadolint.yaml") if fires(p)]
