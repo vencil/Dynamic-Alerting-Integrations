@@ -197,6 +197,168 @@ FIXTURES: dict[str, dict[str, str]] = {
             "          receiver: {type: webhook, url: 'https://hooks.example.com/r'}\n"),
         "a-route-0.yaml": _tenant("a-route-0"),
     },
+    # #3703: findings that name a file below the root — a profile defined in
+    # another directory, a level's defaults the generator does not use, a
+    # subtree policy naming a tenant of a sibling subtree, a subtree with an
+    # empty policy block, an empty `tenants:`, a platform entry for a tenant
+    # no tenant file declares, a `_routing…` key a platform file may not set.
+    "subtree": {
+        "_defaults.yaml": _DEFAULTS,
+        "_enforced.yaml": (
+            "_routing_enforced:\n"
+            "  enabled: true\n"
+            "  receiver: {type: webhook, url: 'https://noc.example.com/x'}\n"
+            "  match: {severity: critical}\n"
+            "_routing_bogus: 1\n"),
+        "alpha.yaml": _tenant("alpha") + "    _routing_profile: p\n",
+        "team/_routing_profiles.yaml": (
+            "routing_profiles:\n"
+            "  p:\n"
+            "    receiver: {type: webhook, url: 'https://hooks.example.com/p'}\n"
+            "    bogus_key: 1\n"),
+        "team/_defaults.yaml": (
+            "_routing_defaults: [1]\n"
+            "defaults:\n"
+            "  _routing:\n"
+            "    receiver: {type: webhook, url: 'https://hooks.example.com/d'}\n"),
+        "team/_defaults.yml": "defaults: {}\n",
+        "team/_extra.yaml": "tenants:\n  beta:\n    mysql_connection_usage_percent: 1\n",
+        "team/beta.yaml": _tenant("beta"),
+        "team/_domain_policy.yaml": (
+            "domain_policies:\n"
+            "  local:\n"
+            "    tenants: [gamma]\n"
+            "    constraints:\n"
+            "      allowed_receiver_types: [webhook]\n"),
+        "other/gamma.yaml": _tenant("gamma"),
+        "other/_domain_policy.yaml": "domain_policies: {}\n",
+        "other/_defaults.yaml": (
+            "_routing_defaults:\n"
+            "  routes:\n"
+            "    - match: {team: x}\n"
+            "      receiver: {type: webhook, url: 'https://hooks.example.com/r'}\n"),
+        "fourth/_routing_profiles.yaml": "routing_profiles: [1]\n",
+        "delta.yaml": "tenants:\n",
+        "_platform.yaml": "tenants:\n  ghost:\n    mysql_connection_usage_percent: 1\n",
+    },
+    # #3703: the same below the root, each refusing the whole tree in every
+    # mode — a subtree policy that cannot be used, a policy block in a file
+    # policies are not read from, a profile's receiver field of the wrong
+    # type, a file reference under dropped routes.
+    "subtree_refused": {
+        "_defaults.yaml": _DEFAULTS,
+        "_enforced.yaml": "_routing_enforced:\n  enabled: 'true'\n",
+        "alpha.yaml": _tenant("alpha"),
+        "team/_domain_policy.yaml": (
+            "domain_policies:\n"
+            "  finance:\n"
+            "    tenants: [alpha, {nested: 1}]\n"
+            "    constraints:\n"
+            "      min_group_wait: banana\n"),
+        "other/_domain_policy.yaml": "domain_policies: [1]\n",
+        "third/_extra.yaml": "domain_policies: {}\n",
+        "team/_routing_profiles.yaml": (
+            "routing_profiles:\n"
+            "  p:\n"
+            "    receiver: {type: webhook, url: 'https://hooks.example.com/p',"
+            " send_resolved: 'yes'}\n"
+            "    group_by: alertname\n"),
+        "other/_defaults.yaml": (
+            "_routing_defaults:\n"
+            "  routes:\n"
+            "    - match: {team: x}\n"
+            "      receiver:\n"
+            "        type: webhook\n"
+            "        url: 'https://hooks.example.com/r'\n"
+            "        http_config: {bearer_token_file: /etc/x}\n"),
+    },
+    # #3703: findings that block the routing plane below the root — one
+    # profile name in two directories, a subtree taking the receiver away.
+    "subtree_blocking": {
+        "_defaults.yaml": _DEFAULTS,
+        "alpha.yaml": _tenant("alpha"),
+        "team/_routing_profiles.yaml": (
+            "routing_profiles:\n"
+            "  p:\n"
+            "    receiver: {type: webhook, url: 'https://hooks.example.com/p'}\n"),
+        "other/_routing_profiles.yaml": (
+            "routing_profiles:\n"
+            "  p:\n"
+            "    receiver: {type: webhook, url: 'https://hooks.example.com/q'}\n"),
+        "team/_defaults.yaml": "_routing_defaults:\n  receiver: null\n",
+        "team/beta.yaml": _tenant("beta"),
+    },
+    # #1560 ⑤-b: a credential written out in a tenant file.
+    "credential": {
+        "_defaults.yaml": _DEFAULTS,
+        "alpha.yaml": _tenant("alpha"),
+        "beta.yaml": _tenant(
+            "beta",
+            "      receiver:\n"
+            "        type: slack\n"
+            "        api_url: 'https://hooks.slack.com/services/T/B/X'\n"),  # trufflehog:ignore
+    },
+    # #3621 / #3269: `_severity_dedup` the exporter does not read, and one
+    # written with a time window — refused in every mode.
+    "dedup": {
+        "_defaults.yaml": _DEFAULTS,
+        "alpha.yaml": _tenant("alpha") + "    _severity_dedup: maybe\n",
+        "beta.yaml": _tenant("beta") + (
+            "    _severity_dedup:\n"
+            "      default: enable\n"
+            "      overrides:\n"
+            "        - {window: '01:00-02:00', value: disable}\n"),
+    },
+    # A tenant body that is not a mapping: this reader skips the tenant, the
+    # exporter's load drops the whole file (`ParseFailedError`).
+    "decode": {
+        "_defaults.yaml": _DEFAULTS,
+        "alpha.yaml": _tenant("alpha"),
+        "beta.yaml": "tenants:\n  beta: 3\n",
+    },
+    # `tenants:` that is a list: the file is unreadable as a tenant file.
+    "tenants_list": {
+        "_defaults.yaml": _DEFAULTS,
+        "alpha.yaml": _tenant("alpha"),
+        "beta.yaml": "tenants: [a]\n",
+    },
+    # ADR-038: the key verdict's kinds that name the file writing the key.
+    "keys": {
+        "_defaults.yaml": _DEFAULTS.replace(
+            "  mysql_connection_usage_percent: 80\n",
+            "  mysql_connection_usage_percent: 80\n  redis_memory: 70\n"),
+        "_profiles.yaml": "profiles:\n  unbound:\n    zz_unknown_key: '1'\n",
+        "alpha.yaml": _tenant("alpha") + (
+            "    mysql_slave_lagg: disable\n"
+            "    redis_memory: disable\n"
+            "    redis_memory_critical: \"90\"\n"),
+        "beta.yaml": (
+            "tenants:\n  beta:\n"
+            "    mysql_connection_usage_percent:\n"
+            "      default: \"70\"\n"
+            "      overrides:\n"
+            "        - {window: '22:00-06:00', value: \"1000\"}\n"
+            "        - {window: '01:00-03:00', value: \"5\"}\n"
+            "    _silent_mode:\n"
+            "      default: disable\n"
+            "      overrides:\n"
+            "        - {window: '01:00-02:00', value: all}\n"
+            "    _metadata: {dbType: x}\n"),
+    },
+}
+
+#: Trees whose run ends in a line that is not itemised as a finding yet, so
+#: they are not in ``CASES`` (the findings contract above would fail on
+#: them) — only the #3703 file-name guard
+#: (``test_confd_filename_canary_matrix.py``) runs them, as it runs every case.
+UNITEMISED: dict[str, dict[str, str]] = {
+    # A tenant this reader loads beside one the exporter's load drops with
+    # its whole file: `severity_dedup_failure_exit`'s rc-2 line.
+    "decode_mixed": {
+        "_defaults.yaml": _DEFAULTS,
+        "alpha.yaml": _tenant("alpha"),
+        "beta.yaml": "tenants:\n  beta: 3\n  gamma:\n    mysql_connection_usage_percent: 70\n",
+    },
 }
 
 MODES: dict[str, list[str]] = {

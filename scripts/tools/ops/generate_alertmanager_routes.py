@@ -64,6 +64,7 @@ from _lib_io import (  # noqa: E402  (#1538 output-layer escaping, #1789)
 # name is already a `_lib_python` re-export in the F401 block below.
 import _lib_io  # noqa: E402
 from _lib_validation import key_segment  # noqa: E402  (#1560 ⑤-b: keys into findings)
+from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
 from _lib_compat import read_shipped_da_tools_version  # noqa: E402  (#2766 VERSION)
 from _lib_python import (  # noqa: E402, F401
     write_text_secure,
@@ -607,7 +608,7 @@ def _refuse_unreadable_tenant_files(tree: TenantTree,
     skipped = tree.files_skipped
     line = f"Config files: {tree.files_read} read, {len(skipped)} skipped"
     if skipped:
-        line += " (" + ", ".join(safe_label(f) for f, _ in skipped) + ")"
+        line += " (" + ", ".join(shown_file(f) for f, _ in skipped) + ")"  # #3703
     print(line)
     refusal = unreadable_tenant_files_refusal(tree.files_read,
                                               tree.tenant_file_errors)
@@ -632,7 +633,7 @@ def unreadable_tenant_files_refusal(
         _refusal_line(
             f"FAIL: {len(tenant_file_errors)} config file(s) could not be read — "
             f"refusing to treat the remaining {files_read} as the whole tree:"),
-        *(_refusal_line(f"  {safe_label(fname)}: {safe_label(reason)}",
+        *(_refusal_line(f"  {shown_file(fname)}: {safe_label(reason)}",
                         kind="tenant_file_unreadable", file=fname)
           for fname, reason in tenant_file_errors),
         _refusal_line(
@@ -1487,6 +1488,43 @@ _KEY_CHECK_KINDS = {
 }
 
 
+def _not_read_text(exc: BaseException) -> str:
+    """The ``<Class>: <text>`` of a da-guard reading that failed, for a
+    message line: its ``str()``, whitespace collapsed.
+
+    A ``ParseFailedError`` names the files the exporter's load drops, as
+    written (#3703: a conf.d name is the author's text). When every one of
+    them is a legal file name its ``str()`` is printed unchanged, byte for
+    byte; otherwise the same sentence — ``<config-dir>/<first>: <clauses>
+    (<CauseClass>)`` — is said again from its structured fields, each conf.d
+    path through ``shown_file``. The ``--config-dir`` prefix is the
+    operator's argument and stays as given."""
+    import pathlib
+    if isinstance(exc, _lib_tenant_values.ParseFailedError):
+        files = [*exc.parse_failed, *(u.file for u in exc.unreadable)]
+        shown = {f: shown_file(f) for f in files}
+        if any(shown[f] != f for f in files):
+            first = files[0]
+            clauses = []
+            if exc.parse_failed:
+                clauses.append(
+                    f"the exporter's load skips {len(exc.parse_failed)} file(s) that do not "
+                    f"decode: {', '.join(shown[f] for f in exc.parse_failed)}")
+            if exc.unreadable:
+                clauses.append(
+                    f"the exporter's load cannot read {len(exc.unreadable)} path(s): "
+                    + ", ".join(f"{shown[u.file]} ({u.reason})" for u in exc.unreadable))
+            # `_lib_tenant_values` builds `exc.path` as `str(Path(conf_d) /
+            # first)`; a path of another shape loses its prefix rather than
+            # print the name.
+            tail = str(pathlib.PurePath(first))
+            head = exc.path[:len(exc.path) - len(tail)] if exc.path.endswith(tail) else ""
+            text = (f"{head}{shown[first]}: "
+                    f"{'; '.join(clauses)} ({type(exc.cause).__name__})")
+            return f"{type(exc).__name__}: {' '.join(text.split())}"
+    return f"{type(exc).__name__}: {' '.join(str(exc).split())}"
+
+
 def _report_key_verdict(config_dir: str, findings: list[str],
                         verdict_out: list | None = None) -> list[str]:
     """The shared verdict on keys no reader reads (``_lib_key_verdict``,
@@ -1508,7 +1546,7 @@ def _report_key_verdict(config_dir: str, findings: list[str],
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not judged": no pass
         line = Finding(
             "  ERROR: key verdict incomplete: the keys no reader reads were not "
-            f"judged ({type(exc).__name__}: {' '.join(str(exc).split())})",
+            f"judged ({_not_read_text(exc)})",
             kind="key_verdict_incomplete", blocks="validate")
         print(safe_label(line), file=sys.stderr)
         findings.append(line)
@@ -1592,8 +1630,7 @@ def _undelivered_custom_alerts(served: "_lib_tenant_values.ServedTree | BaseExce
     if isinstance(served, BaseException):
         line = Finding(
             "NOTICE: custom-alert delivery not checked: the tenants' served custom "
-            f"alerts could not be read ({type(served).__name__}: "
-            f"{' '.join(str(served).split())})",
+            f"alerts could not be read ({_not_read_text(served)})",
             kind="custom_alert_delivery_unchecked", blocks="never")
         print(safe_label(line), file=sys.stderr)
         findings.append(line)
