@@ -69,6 +69,12 @@ const (
 	// first entry's reason. The key is read: the entry is to remove or the
 	// windows to reorder, not the key.
 	worsenDeadEntry = "dead_entry"
+	// worsenScheduleUnread (#3834): a reserved key of a tenant's own entry
+	// written with a schedule its readers ignore — they read its `default`
+	// alone (the verdict's schedule_unread, by the schedule as written);
+	// Finding is the problem. The key and its default are read: the window
+	// or expiry is to remove, not the key.
+	worsenScheduleUnread = "schedule_unread"
 )
 
 // writeReasonWorsensTree is the call's reason (status refused, exit 1) when
@@ -261,6 +267,9 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 		case b.Kind == keyverdict.KindDeadEntry:
 			kind, what = worsenDeadEntry, "would have a schedule entry /metrics serves at no minute of the day"+why+
 				" — remove it or reorder the windows (the first window that contains a minute serves it)"
+		case b.Kind == keyverdict.KindScheduleUnread:
+			kind, what = worsenScheduleUnread, "would be written with a schedule its readers ignore"+why+
+				" — only its `default` is read; remove the window or expiry"
 		}
 		out = append(out, writeWorsened{Kind: kind, Path: b.File, Tenant: b.Tenant, Finding: b.Reason,
 			Message: fmt.Sprintf("%s: key %q %s", who, b.Key, what)})

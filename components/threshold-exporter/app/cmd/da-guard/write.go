@@ -457,8 +457,8 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"  dry_run|refused|caller_error|not_written|maybe_written, \"reason\", \"message\", \"entry\" (a\n"+
 		"  parse-tree entry), \"problem\": {\"kind\", \"message\"}, \"difference\": {\"path\", \"want\", \"got\"},\n"+
 		"  \"content\" (dry_run; null for a delete), \"warnings\": [<text>]}],\n"+
-		"  \"worsened\": [{\"kind\": readers_lost|verdict|problem|duplicate_tenant|finding|unread|value_unread|dead_entry, \"path\",\n"+
-		"  \"tenant\", \"finding\", \"message\"}]}; null where it has no value (warnings, worsened: []). The call's\n"+
+		"  \"worsened\": [{\"kind\": readers_lost|verdict|problem|duplicate_tenant|finding|unread|value_unread|dead_entry|\n"+
+		"  schedule_unread, \"path\", \"tenant\", \"finding\", \"message\"}]}; null where it has no value (warnings, worsened: []). The call's\n"+
 		"reason: bad_flags, bad_input, bad_path, write_failed, partial_write, worsens_tree, or null\n"+
 		"when its status is the files'. A path that exists but\n"+
 		"is no regular file (a FIFO, a device, a directory) is judged by parse-tree and refused\n"+
