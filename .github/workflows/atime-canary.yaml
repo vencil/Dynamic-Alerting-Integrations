@@ -1,0 +1,277 @@
+name: Atime Canary (temporary, #3756)
+
+# ⛔ TEMPORARY, MEASUREMENT ONLY — #3756 stage 1. Not meant to be merged; if it
+# ever is, it goes away once its result has been read.
+#
+# The question: can "which tracked files did this job read" be measured on a
+# GitHub hosted runner by access time (scripts/ops/atime_trace.py)? The method
+# was validated on ext4 `relatime` only. What the runner mounts the workspace
+# with, and whether a read moves an access time there, is not known — so this
+# job prints it, and does nothing else.
+#
+# Every answer is printed under a line starting `=== ATIME-CANARY Q<n>`:
+#   Q1  the filesystem and mount options of the workspace, the kernel
+#   Q2  what an access time means there, cell by cell, against the ext4
+#       relatime reference (`SEM <cell> updated=… reference=…`)
+#   Q3  the whole-job flow: refresh the index → reset every tracked path →
+#       three canaries (one read with `cat`, one left alone, one directory
+#       listed with `ls`) → checked again at the end (`CANARY-OK` /
+#       `CANARY-FAILED`, the latter exit 2)
+#   Q4  what each `uses:` step and a `hashFiles()` expression read
+#       (`atime-trace collect [uses: …]`)
+#   Q5  the steps of image-ref-resolve.yaml's `resolve` job, measured by the
+#       Python tracer and by access times in the same run (`COMPARE: …`,
+#       `TRACER-ONLY` being what access times missed)
+#   Q6  what the measurement costs (`COST: …`)
+#
+# The job is red only when the measurement itself has no answer (a canary or a
+# basis cell of Q2 does not hold — exit 2). `TRACER-ONLY` being non-empty is a
+# result, not a failure: it is printed and raised as a warning.
+#
+# ⚠️ Not measured, by construction: the post steps of the actions (they run
+# after the job's last step, so after the last `collect`), and the first
+# `actions/checkout` (the tool does not exist before it; the SECOND run of it
+# below is what is measured — on an existing clone, which is not the same).
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/atime-canary.yaml"
+      - "scripts/ops/atime_trace.py"
+      # The two scripts the job runs besides its own tool (invariant 4 of
+      # tests/ops/test_ci_path_filter_coverage.py: a script a gated workflow
+      # runs is in its paths).
+      - "scripts/ops/check_image_refs_resolve.py"
+      - "scripts/ops/workflow_path_filter.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atime-canary-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canary:
+    name: atime canary (measurement only)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      # The tool is started as `python3 -I` throughout: once the tracer below
+      # is on, a plain `python3` would load the tracer's sitecustomize.py and
+      # record this tool's own reads as the job's.
+      - name: "Q1: filesystem of the workspace"
+        run: |
+          echo "=== ATIME-CANARY Q1: filesystem of the workspace ==="
+          echo "kernel: $(uname -r)"
+          for d in "$GITHUB_WORKSPACE" "$RUNNER_TEMP" /tmp; do
+            echo "findmnt -T $d: $(findmnt -no SOURCE,FSTYPE,OPTIONS -T "$d" || echo 'NOT MEASURED (findmnt failed)')"
+          done
+          stat -f "$GITHUB_WORKSPACE" || echo "stat -f: NOT MEASURED (stat failed)"
+          echo "core.trustctime: $(git config core.trustctime || echo '(unset — git defaults to true)')"
+          echo "python3: $(python3 --version)"
+          {
+            echo "ATIME_STATE=$RUNNER_TEMP/atime-state.json"
+            echo "ATIME_CANARY=$GITHUB_WORKSPACE/.git/atime-canary"
+          } >> "$GITHUB_ENV"
+
+      # continue-on-error: the rest of the job is still worth printing when a
+      # cell differs; the verdict step at the end turns it into exit 2.
+      - name: "Q2: what an access time means here"
+        id: semantics
+        continue-on-error: true
+        run: |
+          echo "=== ATIME-CANARY Q2: access-time semantics (workspace filesystem) ==="
+          python3 -I scripts/ops/atime_trace.py semantics --dir "$GITHUB_WORKSPACE/.git"
+
+      - name: "Q3: reset, canaries, baseline"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q3: reset + canaries ==="
+          echo "pyc files before reset: $(find . -name '*.pyc' -not -path './.git/*' | wc -l)"
+          python3 -I scripts/ops/atime_trace.py reset --state "$ATIME_STATE" --canary-dir "$ATIME_CANARY"
+          cat "$ATIME_CANARY/must-read" > /dev/null
+          ls "$ATIME_CANARY/listed-dir" > /dev/null
+          echo "=== ATIME-CANARY Q3: canary check right after the reads ==="
+          python3 -I scripts/ops/atime_trace.py canary --state "$ATIME_STATE"
+          echo "=== ATIME-CANARY Q3: baseline — nothing ran, expect 0 read / 0 listed ==="
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "baseline: nothing ran"
+          echo "=== ATIME-CANARY Q3: git status after the reset (does git re-read the tree?) ==="
+          echo "git status --porcelain lines: $(git status --porcelain | wc -l)"
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "git status after reset"
+
+      - uses: actions/checkout@v6
+        if: ${{ !cancelled() }}
+
+      - name: "Q4: collect — actions/checkout"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q4: uses: actions/checkout (second run, existing clone) ==="
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "uses: actions/checkout (second run)"
+
+      - uses: actions/setup-python@v6
+        if: ${{ !cancelled() }}
+        with:
+          python-version-file: .python-version
+
+      - name: "Q4: collect — actions/setup-python"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q4: uses: actions/setup-python (python-version-file) ==="
+          echo "python3: $(python3 --version)"
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "uses: actions/setup-python"
+
+      # From here the steps are those of image-ref-resolve.yaml's `resolve`
+      # job, in its order, with a `collect` after each.
+      - name: Trace what this job loads (the existing Python tracer)
+        if: ${{ !cancelled() }}
+        run: python3 scripts/ops/workflow_path_filter.py env --trace-dir "$RUNNER_TEMP/path-trace" >> "$GITHUB_ENV"
+
+      - name: Install Python deps
+        if: ${{ !cancelled() }}
+        run: python3 -m pip install --quiet pyyaml -c requirements/ci-constraints.txt
+
+      - name: "Q5: collect — tracer env + pip install"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q5: run: workflow_path_filter.py env + pip install ==="
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "run: tracer env + pip install"
+
+      - uses: actions/setup-go@v6
+        if: ${{ !cancelled() }}
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: true
+          cache-dependency-path: components/threshold-exporter/app/go.sum
+
+      - name: "Q4: collect — actions/setup-go"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q4: uses: actions/setup-go (go-version-file, cache) ==="
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "uses: actions/setup-go"
+
+      # `hashFiles()` is evaluated by the runner before the step's script runs,
+      # so the segment collected inside the step is the expression's.
+      - name: "Q4: collect — hashFiles()"
+        if: ${{ !cancelled() }}
+        env:
+          HASHED: ${{ hashFiles('components/threshold-exporter/app/go.sum', '.python-version') }}
+        run: |
+          echo "=== ATIME-CANARY Q4: expression hashFiles(go.sum, .python-version) ==="
+          echo "hashFiles: ${HASHED:-EMPTY — the expression matched nothing, so nothing was measured}"
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "expression: hashFiles(go.sum, .python-version)"
+
+      # The restore half only: it computes the same key from the same files and
+      # leaves no cache entry behind (a canary should not write one).
+      - uses: actions/cache/restore@v5
+        if: ${{ !cancelled() }}
+        with:
+          path: ${{ runner.temp }}/atime-canary-cache
+          key: atime-canary-${{ hashFiles('requirements/ci-constraints.txt') }}
+
+      - name: "Q4: collect — actions/cache/restore"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q4: uses: actions/cache/restore (key: hashFiles(requirements/ci-constraints.txt)) ==="
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "uses: actions/cache/restore"
+
+      - name: Build da-crdecode
+        if: ${{ !cancelled() }}
+        run: |
+          make da-crdecode-build
+          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
+
+      - name: "Q5: collect — make da-crdecode-build"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q5: run: make da-crdecode-build ==="
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "run: make da-crdecode-build"
+
+      # continue-on-error on the two scopes: a registry that does not answer is
+      # image-ref-resolve's finding, not this job's; what the step READ is the
+      # same either way.
+      - name: Resolve image refs (deploy scope)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: python3 scripts/ops/check_image_refs_resolve.py --scope deploy
+
+      - name: "Q5: collect — deploy scope"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q5: run: check_image_refs_resolve.py --scope deploy ==="
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "run: check_image_refs_resolve.py --scope deploy"
+
+      - name: Resolve image refs (delivered scope)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: python3 scripts/ops/check_image_refs_resolve.py --scope delivered
+
+      - name: "Q5: collect — delivered scope"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q5: run: check_image_refs_resolve.py --scope delivered ==="
+          python3 -I scripts/ops/atime_trace.py collect --state "$ATIME_STATE" --label "run: check_image_refs_resolve.py --scope delivered"
+
+      # After the last `collect`: `assert` reads the workflow and the trace
+      # file itself. Its exit code is image-ref-resolve's question (is that
+      # workflow's list complete), not this job's — only its `--out` is used.
+      - name: "Q5: the Python tracer's trace of the same steps"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q5: the existing tracer (workflow_path_filter.py assert --out) ==="
+          rc=0
+          python3 scripts/ops/workflow_path_filter.py assert --workflow image-ref-resolve.yaml --job resolve --trace-dir "$RUNNER_TEMP/path-trace" --out "$RUNNER_TEMP/path-trace.json" || rc=$?
+          echo "workflow_path_filter.py assert: rc=$rc"
+          if [ ! -s "$RUNNER_TEMP/path-trace.json" ]; then
+            echo "NOT MEASURED: the tracer wrote no trace, so Q5 has nothing to compare against."
+            exit 2
+          fi
+
+      - name: "Q5: access times against the tracer"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q5: compare (TRACER-ONLY = what access times missed) ==="
+          echo "pyc files now: $(find . -name '*.pyc' -not -path './.git/*' | wc -l)"
+          rc=0
+          python3 -I scripts/ops/atime_trace.py compare --state "$ATIME_STATE" --tracer-json "$RUNNER_TEMP/path-trace.json" || rc=$?
+          echo "atime_trace.py compare: rc=$rc"
+          if [ "$rc" -eq 1 ]; then
+            echo "::warning title=atime canary (#3756)::TRACER-ONLY is not empty — access times missed a file the Python tracer recorded. See the COMPARE lines of this step."
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+
+      - name: "Q6: cost of the measurement"
+        if: ${{ !cancelled() }}
+        run: |
+          echo "=== ATIME-CANARY Q6: cost ==="
+          python3 -I scripts/ops/atime_trace.py cost --state "$ATIME_STATE"
+
+      - name: "Verdict: do access times measure reads on this runner"
+        if: ${{ !cancelled() }}
+        env:
+          SEMANTICS: ${{ steps.semantics.outcome }}
+        run: |
+          echo "=== ATIME-CANARY VERDICT ==="
+          echo "NOT MEASURED: the post steps of the actions above run after this step."
+          rc=0
+          python3 -I scripts/ops/atime_trace.py canary --state "$ATIME_STATE" || rc=$?
+          if [ "$SEMANTICS" != "success" ]; then
+            echo "Q2 (semantics) step outcome: $SEMANTICS — see SEMANTICS-BASIS-DIFFERS above."
+            rc=2
+          fi
+          echo "=== ATIME-CANARY VERDICT: rc=$rc (0 = measured; 2 = access times are not a measurement here) ==="
+          exit "$rc"
+
+      - name: Upload the state and the trace
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: atime-canary
+          path: |
+            ${{ runner.temp }}/atime-state.json
+            ${{ runner.temp }}/path-trace.json
+          if-no-files-found: warn

@@ -174,6 +174,10 @@ _TRACE_ENV_TOUCH = re.compile(
 # its gate) — a stale entry would excuse the same workflow if it regressed.
 # Its dead and unmodelled patterns are checked all the same.
 NOT_YET_TRACED: dict[str, str] = {
+    "atime-canary.yaml":
+        "temporary measurement workflow (#3756 stage 1: do access times "
+        "measure reads on a hosted runner); it asserts nothing about its own "
+        "list and is removed once its result has been read",
     "backtest.yaml":
         "its Python step queries a Prometheus; without one it returns before "
         "the comparison, so a run that can be reproduced records a partial list",
