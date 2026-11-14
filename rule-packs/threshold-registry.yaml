@@ -512,8 +512,25 @@ keys:
     desc: 'JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
       (alert demands es_heap_usage_percent) — unwired dead key, no alias'
     metric_class: saturation
-    arming: operator
+    arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "Zabbix"
+        url: https://raw.githubusercontent.com/zabbix/zabbix/master/templates/app/elasticsearch_http/template_app_elasticsearch_http.yaml
+        quote: "value: '85'"
+        value: 85
+        tier: warning
+      - org: "Elastic"
+        url: https://raw.githubusercontent.com/elastic/elasticsearch/8.19/docs/reference/troubleshooting/common-issues/high-jvm-memory-pressure.asciidoc
+        quote: "exceeds 85%."
+        value: 85
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "query: '(elasticsearch_jvm_memory_used_bytes{area=\"heap\"} / elasticsearch_jvm_memory_max_bytes{area=\"heap\"}) * 100 > 80 and elasticsearch_jvm_memory_max_bytes{area=\"heap\"} > 0'"
+        value: 80
+        tier: warning
   es_disk_usage_percent:
     pack: elasticsearch
     tier: defaults
@@ -524,8 +541,20 @@ keys:
       C semantic flip: replaces es_filesystem_free_percent 15 (FREE %) — carrying
       15 into a used-% rule would fire permanently'
     metric_class: capacity
-    arming: operator
+    arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "Elastic"
+        url: https://raw.githubusercontent.com/elastic/elasticsearch/8.19/docs/reference/modules/cluster/disk_allocator.asciidoc
+        quote: "Controls the low watermark for disk usage. It defaults to `85%`, meaning that {es} will not allocate shards to nodes that have more than 85% disk used."
+        value: 85
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "description: The disk usage is over 80%"
+        value: 80
+        tier: warning
   es_pending_tasks:
     pack: elasticsearch
     tier: defaults
@@ -608,8 +637,21 @@ keys:
     unit: '%'
     desc: Tablespace usage warning
     metric_class: capacity
-    arming: operator
+    arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "Oracle"
+        url: https://docs.oracle.com/cd/B28359_01/server.111/b28310/schema001.htm
+        quote: "A newly created database has a default of 85% full for the warning threshold and 97% full for the critical threshold."
+        value: 85
+        tier: warning
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "query: \"oracledb_tablespace_used_percent > 85\""
+        value: 85
+        tier: warning
   oracle_wait_time_rate:
     pack: oracle
     tier: optional_overrides
@@ -910,6 +952,11 @@ keys:
     metric_class: saturation
     arming: operator
     portability: portable
+    blocker:
+      kind: unmeasured
+      tracking: 1200
+      reason: No vendor or upstream source uses 80; the two found for this measure (Grafana rabbitmq-mixin, awesome-prometheus-alerts) both warn at 90.
+      reason_zh: 沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana rabbitmq-mixin、awesome-prometheus-alerts）都在 90 告警。
   rabbitmq_connections:
     pack: rabbitmq
     tier: defaults
@@ -993,8 +1040,21 @@ keys:
     unit: '%'
     desc: Heap memory usage warning
     metric_class: saturation
-    arming: operator
+    arming: default
     portability: portable
+    validation:
+      basis: consensus
+      sources:
+      - org: "Grafana jsonnet-libs"
+        url: https://raw.githubusercontent.com/grafana/jsonnet-libs/master/jvm-mixin/config.libsonnet
+        quote: "alertHeapWarning: 80,  // %"
+        value: 80
+        tier: warning
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "query: '(sum by (instance)(jvm_memory_used_bytes{area=\"heap\"}) / sum by (instance)(jvm_memory_max_bytes{area=\"heap\"})) * 100 > 80 and sum by (instance)(jvm_memory_max_bytes{area=\"heap\"}) > 0'"
+        value: 80
+        tier: warning
   jvm_threads:
     pack: jvm
     tier: defaults

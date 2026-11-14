@@ -78,7 +78,7 @@ def test_an_armed_key_the_root_file_lacks_is_named(tmp_path, pack, key):
     line = r["details"][0]
     assert f"the {pack} pack ships it armed" in line
     assert f"platform value {_KEYS[key]['value']}" in line
-    assert f"_defaults.yaml carries {', '.join(sorted(others))}" in line
+    assert f"_defaults.yaml sets {', '.join(sorted(others))}" in line
 
 
 @pytest.mark.parametrize("pack", sorted(_ARMED))
@@ -97,6 +97,17 @@ def test_a_key_listed_in_optional_overrides_is_a_deliberate_opt_out(tmp_path, pa
     r = vc.check_unsupplied_defaults(_tree(tmp_path, {
         "_defaults.yaml": _defaults(others, listed=[key])}))
     assert r["status"] == vc.PASS, r
+
+
+@pytest.mark.parametrize("pack", sorted(_ARMED))
+def test_a_key_only_listed_in_optional_overrides_deploys_nothing(tmp_path, pack):
+    """`optional_overrides:` 是整份出貨的宣告清單（chart 的 values、try-local 的 seed 都列了
+    所有 pack 的 key），列在那裡不代表這個部署跑了該 pack：不算證據。"""
+    declared = sorted(k for k, e in _KEYS.items() if e["pack"] == pack)
+    r = vc.check_unsupplied_defaults(_tree(tmp_path, {
+        "_defaults.yaml": _defaults([], listed=declared[:1])}))
+    assert r["status"] == vc.PASS, r
+    assert "0 default-armed threshold(s) of 0 deployed pack(s)" in r["details"][0]
 
 
 def test_a_pack_with_no_evidence_is_not_judged(tmp_path):
@@ -157,9 +168,9 @@ def test_a_retired_spelling_in_the_root_file_is_evidence_of_its_pack(tmp_path):
         pytest.skip("the registry has no deprecated alias onto a pack with an armed key")
     pack = _KEYS[new]["pack"]
     r = vc.check_unsupplied_defaults(_tree(tmp_path, {
-        "_defaults.yaml": f"optional_overrides:\n  - {old}\n"}))
+        "_defaults.yaml": f"defaults:\n  {old}: 1\n"}))
     assert _named(r) == _ARMED[pack], r
-    assert f"_defaults.yaml carries {old}" in r["details"][0]
+    assert f"_defaults.yaml sets {old}" in r["details"][0]
 
 
 def test_a_dimension_key_supplies_its_base(tmp_path):
@@ -216,9 +227,9 @@ def test_a_retired_key_in_the_root_file_is_evidence_of_its_replacements_pack(tmp
         pytest.skip("the registry has no retired key replaced by a key of an armed pack")
     for written in (old, old + "_critical"):
         r = vc.check_unsupplied_defaults(_tree(tmp_path / written, {
-            "_defaults.yaml": f"optional_overrides:\n  - {written}\n"}))
+            "_defaults.yaml": f"defaults:\n  {written}: 1\n"}))
         assert _named(r) == _ARMED[pack], (written, r)
-        assert f"_defaults.yaml carries {written}" in r["details"][0]
+        assert f"_defaults.yaml sets {written}" in r["details"][0]
 
 
 @pytest.mark.parametrize("root", ["defaults: [unclosed\n", "- a\n- b\n", "defaults:\n  k: 1\n  k: 2\n"],

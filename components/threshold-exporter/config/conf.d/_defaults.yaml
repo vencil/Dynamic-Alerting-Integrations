@@ -40,6 +40,24 @@ defaults:
   # lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a Q3=C)（critical
   # 加嚴 opt-in：mysql_replication_lag_critical，registry 建議 120）
   mysql_replication_lag: 30
+  # ── elasticsearch：Elasticsearch (elasticsearch_exporter) ──
+  # % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent (alert
+  # demands es_heap_usage_percent) — unwired dead key, no alias（critical 加嚴
+  # opt-in：es_heap_usage_percent_critical，registry 建議 90）
+  es_heap_usage_percent: 85
+  # % — Disk USAGE % warning (used = 1 - available/size, recording rule
+  # tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
+  # tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %)
+  # — carrying 15 into a used-% rule would fire permanently（critical 加嚴
+  # opt-in：es_disk_usage_percent_critical，registry 建議 90）
+  es_disk_usage_percent: 85
+  # ── oracle：Oracle Database (oracledb_exporter) ──
+  # % — Tablespace usage warning（critical 加嚴 opt-in：oracle_tablespace_used_percent_critical，registry
+  # 建議 95）
+  oracle_tablespace_used_percent: 85
+  # ── jvm：JVM (jmx_exporter / Micrometer) ──
+  # % — Heap memory usage warning（critical 加嚴 opt-in：jvm_memory_critical，registry 建議 95）
+  jvm_memory: 80
   # <<< GENERATED:threshold-registry:dev-defaults
   # 以下是 examples/ 子目錄租戶所用 pack 的 defaults（#3014）。不放在
   # examples/ 自己的 _defaults.yaml：只有子樹 carrier 宣告的 key 送不上 /metrics（#1976）。
@@ -70,16 +88,6 @@ defaults:
   # (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias
   mongodb_opcounters_rate: 10000
   # ── elasticsearch：Elasticsearch (elasticsearch_exporter) ──
-  # % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent (alert
-  # demands es_heap_usage_percent) — unwired dead key, no alias（critical 加嚴
-  # opt-in：es_heap_usage_percent_critical，registry 建議 90）
-  es_heap_usage_percent: 85
-  # % — Disk USAGE % warning (used = 1 - available/size, recording rule
-  # tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
-  # tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE %)
-  # — carrying 15 into a used-% rule would fire permanently（critical 加嚴
-  # opt-in：es_disk_usage_percent_critical，registry 建議 90）
-  es_disk_usage_percent: 85
   # count — Pending cluster tasks warning; 50 = existing de-facto shipped value (init_project.py
   # catalog + examples/es-prod.yaml); #1196 D: key was alert-demanded but absent from
   # scaffold（critical 加嚴 opt-in：es_pending_tasks_critical，registry 建議 150）

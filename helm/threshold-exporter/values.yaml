@@ -123,6 +123,24 @@ thresholdConfig:
     # lag-template family default is 600s warning). Enabled by default (#1200 WS5-P0-a
     # Q3=C)（critical 加嚴 opt-in：mysql_replication_lag_critical，registry 建議 120）
     mysql_replication_lag: 30
+    # ── elasticsearch：Elasticsearch (elasticsearch_exporter) ──
+    # % — JVM heap usage warning; #1196 C identity fix: renamed from es_jvm_memory_used_percent
+    # (alert demands es_heap_usage_percent) — unwired dead key, no alias（critical 加嚴
+    # opt-in：es_heap_usage_percent_critical，registry 建議 90）
+    es_heap_usage_percent: 85
+    # % — Disk USAGE % warning (used = 1 - available/size, recording rule
+    # tenant:es_disk_usage_percent:max, compared with >); 85 = same band as oracle/db2
+    # tablespace_used_percent; #1196 C semantic flip: replaces es_filesystem_free_percent 15 (FREE
+    # %) — carrying 15 into a used-% rule would fire permanently（critical 加嚴
+    # opt-in：es_disk_usage_percent_critical，registry 建議 90）
+    es_disk_usage_percent: 85
+    # ── oracle：Oracle Database (oracledb_exporter) ──
+    # % — Tablespace usage warning（critical 加嚴
+    # opt-in：oracle_tablespace_used_percent_critical，registry 建議 95）
+    oracle_tablespace_used_percent: 85
+    # ── jvm：JVM (jmx_exporter / Micrometer) ──
+    # % — Heap memory usage warning（critical 加嚴 opt-in：jvm_memory_critical，registry 建議 95）
+    jvm_memory: 80
     # <<< GENERATED:threshold-registry:helm-defaults
     # >>> GENERATED:threshold-registry:helm-unarmed — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
     # 下列 key 規則包會讀，但 chart 預設不出貨值：helm install 後對應的告警不會響。用 chart 自建的 ConfigMap 時，在上面的 defaults 補值；設了
@@ -140,16 +158,12 @@ thresholdConfig:
     #   mongodb_replication_lag 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
     #   mongodb_opcounters_rate 未啟用（依部署而定）：操作量是工作負載而非故障，任何數字都只適用於特定部署
     # ── elasticsearch ──
-    #   es_heap_usage_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
-    #   es_disk_usage_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
     #   es_pending_tasks 未啟用（依部署而定）：正常的 pending task 量隨叢集規模與變更頻率而定
     #   es_search_latency_ms 未啟用（依部署而定）：可接受的搜尋延遲是各部署的服務等級選擇
     # ── oracle ──
     #   oracle_sessions_active 未啟用（待改比值）：絕對 session 數跨部署沒有意義（#1176 量到良性尖峰 240）；可攜的形式是佔 SESSIONS
     #     上限的比例，待 #1320
     #     ⚠ 參考庫實測反例（#1176）：健康的日夜週期尖峰會到 240 個 active session —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
-    #   oracle_tablespace_used_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool
-    #     測試、登記廠商或共識依據），通過後才出貨
     # ── db2 ──
     #   db2_connections_active 未啟用（待改比值）：絕對連線數跨部署沒有意義（#1176 量到良性尖峰 360）；可攜的形式是佔 MAXAPPLS 的比例，待 #1320
     #     ⚠ 參考庫實測反例（#1176）：尖峰時段的工作負載會到 360 個連線 —— 此值會對正常運作誤警；這個數字是起點，不是平台背書的值
@@ -167,14 +181,14 @@ thresholdConfig:
     #   kafka_broker_count 未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
     # ── rabbitmq ──
     #   rabbitmq_queue_messages 未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
-    #   rabbitmq_node_mem_percent 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
+    #   rabbitmq_node_mem_percent 未啟用（尚未量測，#1200）：沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana
+    #     rabbitmq-mixin、awesome-prometheus-alerts）都在 90 告警。
     #   rabbitmq_connections 未啟用（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available
     #     是候選分母，但它由檔案描述符推得，由 #1320 決定
     #   rabbitmq_consumers 未啟用（依部署而定）：預期的 consumer 數是各部署的拓撲
     #   rabbitmq_unacked_messages 未啟用（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
     # ── jvm ──
     #   jvm_gc_pause 未啟用（依部署而定）：可容忍的 GC 暫停時間是應用程式的延遲預算
-    #   jvm_memory 未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
     #   jvm_threads 未啟用（依部署而定）：正常的執行緒數取決於應用程式與其執行緒池
     # ── nginx ──
     #   nginx_connections 未啟用（依部署而定）：絕對連線數取決於流量，worker_connections 沒有匯出可當分母

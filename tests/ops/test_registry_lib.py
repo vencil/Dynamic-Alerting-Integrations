@@ -583,7 +583,11 @@ def test_real_registry_chart_default_set():
     D4 folding, 2026-07-25). A1 / A1.5 changed the fields, not the set.
     #3778 then took mysql_threads_running out (arming: operator — a healthy
     value scales with the host's CPU count) and swapped the absolute
-    mysql_connections for mysql_connection_usage_percent: 8 -> 7."""
+    mysql_connections for mysql_connection_usage_percent: 8 -> 7.
+    D-A A2b then promoted the four `%` candidates that carry a validation
+    (es_disk_usage_percent, es_heap_usage_percent, jvm_memory,
+    oracle_tablespace_used_percent): 7 -> 11. rabbitmq_node_mem_percent stayed
+    operator: no source uses its 80 (blocker: unmeasured)."""
     doc = lib.build_registry_doc()
     tagged = {k for k, e in doc["keys"].items() if lib.is_chart_armed(e)}
     # Pin the DECISION, not just the mechanism: the owner-approved pg
@@ -592,7 +596,10 @@ def test_real_registry_chart_default_set():
     assert {"pg_connections", "pg_replication_lag"} <= tagged
     assert "mysql_connection_usage_percent" in tagged
     assert "mysql_threads_running" not in tagged
-    assert len(tagged) == 7
+    assert {"es_disk_usage_percent", "es_heap_usage_percent", "jvm_memory",
+            "oracle_tablespace_used_percent"} <= tagged
+    assert "rabbitmq_node_mem_percent" not in tagged
+    assert len(tagged) == 11
 
 
 def test_every_real_key_states_its_arming():
@@ -624,12 +631,12 @@ def test_real_validation_candidates_are_derived():
     in the defaults tier. Pinned so a reclassification shows up as a
     deliberate test edit. The two DB2 keys in optional_overrides are not in
     it (D-A A2a): the shipping gate refuses `default` outside the defaults
-    tier, so they are not promotable as they stand (#1320 decides their tier)."""
+    tier, so they are not promotable as they stand (#1320 decides their tier).
+    D-A A2b took five out: four `%` keys were promoted, and
+    rabbitmq_node_mem_percent got `blocker: unmeasured` (no source uses 80).
+    The three left are not `%` keys, which D-A does not promote."""
     doc = lib.build_registry_doc()
     assert lib.validation_candidates(doc) == {
-        "es_heap_usage_percent", "es_disk_usage_percent",
-        "oracle_tablespace_used_percent", "rabbitmq_node_mem_percent",
-        "jvm_memory",
         "redis_replication_lag", "mongodb_replication_lag",
         # #3770 fixed the URP sum, so its blocker is gone and 0 is portable
         "kafka_under_replicated_partitions"}
@@ -687,7 +694,8 @@ def test_not_chart_armed_is_the_registry_derivation():
         owner = keys[keys[key].get("critical_of") or key]
         assert owner["tier"] == "defaults" and not lib.is_chart_armed(owner), key
     assert not {"mysql_threads_running", "mysql_threads_running_critical"} & derived
-    assert len(derived) == 58
+    # D-A A2b: four promoted keys and their four criticals left (58 -> 50).
+    assert len(derived) == 50
     # optional_overrides flat keys belong to the unreachable face, not here
     assert not any(keys[k]["tier"] == "optional_overrides"
                    and not keys[k].get("critical_of") for k in derived)
@@ -697,9 +705,10 @@ def test_not_chart_armed_follows_a_promotion():
     """Promote one key to `default`: it and its critical leave the set."""
     doc = lib.build_registry_doc()
     before = lib.not_chart_armed_keys(doc)
-    assert {"jvm_memory", "jvm_memory_critical"} <= before
-    _make_default(doc["keys"]["jvm_memory"])
-    assert before - lib.not_chart_armed_keys(doc) == {"jvm_memory", "jvm_memory_critical"}
+    assert {"redis_replication_lag", "redis_replication_lag_critical"} <= before
+    _make_default(doc["keys"]["redis_replication_lag"])
+    assert before - lib.not_chart_armed_keys(doc) == {
+        "redis_replication_lag", "redis_replication_lag_critical"}
 
 
 # ── generated surfaces: render / splice / freshness ───────────────────────
@@ -852,7 +861,7 @@ def test_real_helm_unarmed_block_matches_the_derivation():
     named = set(re.findall(r"#   ([a-z0-9_]+) 未啟用", text))
     expected = {k for k in lib.not_chart_armed_keys(doc)
                 if not doc["keys"][k].get("critical_of")}
-    assert named == expected and len(named) == 32
+    assert named == expected and len(named) == 28
 
 
 def _synth_optional_doc():

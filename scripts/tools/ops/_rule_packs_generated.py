@@ -638,7 +638,10 @@ THRESHOLD_PACKS = {'kubernetes': {'display': 'Kubernetes (cAdvisor + KSM)',
 # `unsupplied_defaults` row reads where no repo tree is (#3830).
 DEFAULT_ARMED_KEYS = {'kubernetes': ['container_cpu', 'container_cpu_throttle', 'container_memory'],
  'postgresql': ['pg_connections', 'pg_replication_lag'],
- 'mariadb': ['mysql_connection_usage_percent', 'mysql_replication_lag']}
+ 'mariadb': ['mysql_connection_usage_percent', 'mysql_replication_lag'],
+ 'elasticsearch': ['es_heap_usage_percent', 'es_disk_usage_percent'],
+ 'oracle': ['oracle_tablespace_used_percent'],
+ 'jvm': ['jvm_memory']}
 
 # Retired threshold key -> the pack of the key that replaces it (a key
 # retired with no replacement is absent; `<old>_critical` follows its
