@@ -403,13 +403,13 @@ func TestAWrittenKeyNotInTheReadingIsRefused(t *testing.T) {
 		wantErr  string
 	}{
 		{"field-not-printed", "shown: a\nhidden: b\n", map[string]interface{}{"shown": "a"},
-			reflect.ValueOf(hidden{Shown: "a", Hidden: "b"}), `hidden: the text writes it`},
+			reflect.ValueOf(hidden{Shown: "a", Hidden: "b"}), `line 2: the text writes it`},
 		{"field-missing-from-reading", "kept: a\n", map[string]interface{}{},
-			reflect.ValueOf(hidden{Kept: "a"}), `kept: the text writes it`},
+			reflect.ValueOf(hidden{Kept: "a"}), `line 1: the text writes it`},
 		{"struct-list-length", "items: [{kept: a}, {kept: b}]\n",
 			map[string]interface{}{"items": []interface{}{map[string]interface{}{"kept": "a"}}},
 			reflect.ValueOf(withList{Items: []hidden{{Kept: "a"}}}),
-			`items: the text writes it, but the loader's reading has no such entry: 2 entries written, 1 read`},
+			`line 1: the text writes it, but the loader's reading has no such entry: 2 entries written, 1 read`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -420,8 +420,8 @@ func TestAWrittenKeyNotInTheReadingIsRefused(t *testing.T) {
 			}
 			w := &walker{c: newComposed()}
 			err := w.walk(root.Content[0], tc.read, tc.rv, nil)
-			if !errors.Is(err, errNotInReading) || !strings.Contains(err.Error(), tc.wantErr) {
-				t.Fatalf("err = %v; want errNotInReading with %q", err, tc.wantErr)
+			if !errors.Is(err, errNotInReading) || !strings.HasPrefix(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v; want errNotInReading starting %q", err, tc.wantErr)
 			}
 		})
 	}
@@ -552,7 +552,43 @@ func TestAMapOfStructPointersIsPairedByKey(t *testing.T) {
 		t.Fatalf("got %s, %v", got, err)
 	}
 	_, err = walkOn("by_pointer: {a: {name: x}, z: {name: y}}\n", read, v)
-	if !errors.Is(err, errNotInReading) || !strings.Contains(err.Error(), "by_pointer.z:") {
-		t.Fatalf("err = %v; want errNotInReading naming by_pointer.z", err)
+	if want := "line 1: " + errNotInReading.Error(); !errors.Is(err, errNotInReading) || err.Error() != want {
+		t.Fatalf("err = %v; want %q (the line, not the key)", err, want)
+	}
+}
+
+// da-read's own refusals carry no text of the file (#3703): a key the walk
+// refuses is named by its line, never by the path of keys above it or by
+// itself. The canary sits in every key, anchor and value the file's author
+// writes; the refusal must be the walk's (errNotInReading), and stderr must
+// not hold the canary.
+func TestOwnRefusalsCarryNoTextOfTheFile(t *testing.T) {
+	t.Parallel()
+	const c = "ZQXCANARY"
+	// An http_headers map with a header beside a `<<` merge: the text writes
+	// the header on line 8, and Alertmanager's reading has no entry for it.
+	in := "route: {receiver: " + c + "r}\n" +
+		"receivers:\n- name: " + c + "r\n  webhook_configs:\n  - url: http://h.invalid/\n" +
+		"    http_config:\n      http_headers:\n" +
+		"        " + c + "h: {values: [" + c + "v]}\n" +
+		"        <<: &" + c + "a {" + c + "h2: {values: [" + c + "v2]}}\n"
+	var stdout, stderr bytes.Buffer
+	rc := run([]string{"alertmanager", "-"}, strings.NewReader(in), &stdout, &stderr)
+	want := programName + ": " + stdinName + ": line 8: " + errNotInReading.Error() + "\n"
+	if rc != exitCallerErr || stdout.Len() != 0 || stderr.String() != want {
+		t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2 and %q", rc, stdout.String(), stderr.String(), want)
+	}
+
+	// A written key the reading has no field for (Alertmanager's strict
+	// loading refuses an unknown key first, so the walk is driven directly):
+	// the key is the canary.
+	var root yaml.Node
+	if err := yaml.Unmarshal([]byte("shown: a\n"+c+": b\n"), &root); err != nil {
+		t.Fatal(err)
+	}
+	w := &walker{c: newComposed()}
+	err := w.walk(root.Content[0], map[string]interface{}{"shown": "a"}, reflect.ValueOf(hidden{Shown: "a"}), nil)
+	if !errors.Is(err, errNotInReading) || strings.Contains(err.Error(), c) {
+		t.Fatalf("err = %v; want errNotInReading without the key", err)
 	}
 }

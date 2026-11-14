@@ -31,7 +31,7 @@ release-wrap-up 情境（**非**一般 dev）：「release 收尾 / 進入 phase
 
 `[Unreleased]` → `## [vX.Y.0]` 時，**同步刷新門面**（CHANGELOG 是版本切片，README / architecture-and-design 是 release 之間客戶/架構師看的門面）：
 
-- **README.md / README.en.md**（廣度，SRE/DevOps evaluator）：version badge + 雙語/tool/doc count badge（`bump_docs.py --sync-counts --dry-run` 對照）+ 新支柱在既有結構提及（不為單次 release 重構）
+- **README.md / README.en.md**（廣度，SRE/DevOps evaluator）：version badge + 雙語/tool/doc count badge（`make version-check` 對照、漂了用 `make sync-counts` 寫回）+ 新支柱在既有結構提及（不為單次 release 重構）
 - **architecture-and-design.md / .en.md**（深度，架構師/貢獻者）：§Roadmap 當前版翻「In Development → Shipped (YYYY-MM-DD)」+ 加 next-version 方向列（**link milestone 不列 issue**）+ 重大新類別加架構圖
 - **區分受眾**：README =「前 30 秒 value prop」；arch-and-design =「30 分鐘理解架構」，別兩處鏡像同內容
 

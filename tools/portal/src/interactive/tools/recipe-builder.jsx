@@ -22,6 +22,7 @@ import {
   allRequiredValid,
   recipeSummary,
   buildRecipeObject,
+  initialFormState,
   yamlSnippet,
   FIELDS_BY_RECIPE,
   METRIC_FIELDS,
@@ -379,13 +380,7 @@ export default function RecipeBuilder(props) {
   } = props || {};
 
   const [recipe, setRecipe] = useState((initialValue && initialValue.recipe) || 'threshold');
-  const [f, setF] = useState(() => ({
-    name: '', metric: '', denominator_metric: '', capacity_metric: '',
-    op: ENUMS.opDefault, window: '5m', horizon: '4h', quantile: ENUMS.quantileDefault,
-    threshold: '', severity: ENUMS.severityDefault,
-    mode: ENUMS.modeDefault, for: ENUMS.forDefault,
-    ...(initialValue || {}),
-  }));
+  const [f, setF] = useState(() => initialFormState(initialValue));
   const set = (k, v) => setF((prev) => ({ ...prev, [k]: v }));
 
   // The draft lives only on this page: once it differs from what it opened

@@ -505,7 +505,7 @@ func parseTreeOf(scan *config.TreeScan) (*parseTreeDoc, error) {
 		}
 		content, bad := parsetree.Parse(f.Data)
 		if bad != nil {
-			e.Problem = &parseTreeProblem{Kind: bad.Kind, Message: bad.Message}
+			e.Problem = &parseTreeProblem{Kind: bad.Kind, Message: bad.Message()}
 			continue
 		}
 		doc.Files[e.Path] = content
@@ -600,7 +600,7 @@ func parseFileIn(scan *config.TreeScan, rel string, input []byte) (doc *parseTre
 	e.Readers, e.NotRead = readers, reason
 	content, bad := parsetree.Parse(input)
 	if bad != nil {
-		e.Problem = &parseTreeProblem{Kind: bad.Kind, Message: bad.Message}
+		e.Problem = &parseTreeProblem{Kind: bad.Kind, Message: bad.Message()}
 	} else {
 		doc.Files[rel] = content
 		if rb := renderedBy(rel, carrier, content); rb != nil && reason == "" {

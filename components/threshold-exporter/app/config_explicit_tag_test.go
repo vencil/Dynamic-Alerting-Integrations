@@ -32,7 +32,11 @@ func TestMismatchedExplicitTag_RejectsTheFile(t *testing.T) {
 			t.Errorf("tenant %s served, but a.yaml must be skipped whole", tid)
 		}
 	}
-	assertLogLineWith(t, logs, "WARN: skip unparseable file", `a.yaml"`, "as a !!int")
+	assertLogLineWith(t, logs, "WARN: skip unparseable file", `a.yaml"`,
+		"(kind decode_error): line 5: a scalar does not decode as its tag says")
+	if strings.Contains(logs, "zzleak42") {
+		t.Errorf("the log carries the file's value (#3703)")
+	}
 	if got := promtest.ToFloat64(fresh.parseFailures.WithLabelValues("a.yaml")); got != 1 {
 		t.Errorf("da_config_parse_failure_total{file_basename=a.yaml} = %v, want 1", got)
 	}
@@ -114,7 +118,8 @@ func TestMismatchedExplicitTag_RejectsTheFileOnReload(t *testing.T) {
 			if d := parseFailureCount(fresh, "a.yaml") - before; d != 1 {
 				t.Errorf("da_config_parse_failure_total{file_basename=a.yaml} moved by %v on the reload, want 1", d)
 			}
-			assertLogLineWith(t, logs.String(), "WARN: skip unparseable file", `a.yaml"`, "as a !!int")
+			assertLogLineWith(t, logs.String(), "WARN: skip unparseable file", `a.yaml"`,
+				"(kind decode_error): line 4: a scalar does not decode as its tag says")
 		})
 	}
 }

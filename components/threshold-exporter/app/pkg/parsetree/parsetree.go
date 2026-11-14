@@ -114,48 +114,93 @@ var kinds = [...]Kind{
 }
 
 // Unreadable is why a file cannot be read.
+//
+// message is unexported so that no other package can build an Unreadable
+// with text of its own: outside this package an Unreadable comes only from
+// Parse or Judge, and its text only from fail. Message reads it.
 type Unreadable struct {
 	Kind    Kind
-	Message string
+	message string
 }
 
-func (u *Unreadable) Error() string { return string(u.Kind) + ": " + u.Message }
+// Message is the refusal's text: one of this package's constant sentences
+// with its %d verbs filled by integers (see sentence).
+func (u *Unreadable) Message() string { return u.message }
 
-func fail(k Kind, format string, args ...any) *Unreadable {
-	return &Unreadable{Kind: k, Message: cutMessage(fmt.Sprintf(format, args...))}
+func (u *Unreadable) Error() string { return string(u.Kind) + ": " + u.message }
+
+// sentence is the fixed text of one refusal: a compile-time constant of this
+// package, whose only verbs are %d (filled by fail with integers — a line, a
+// byte offset, a bound). kindName's closed vocabulary and the allowed-tag
+// lists are spelt into the constants.
+//
+// ⛔ NO AUTHOR TEXT IN A MESSAGE (#3703). A message is printed by every reader
+// (the exporter log, tenant-api, da-guard's reports, the route generator's
+// stdout, stderr and findings JSON), and conf.d text — a key, a value, a tag,
+// an anchor name — is not theirs to repeat. So a message says what kind of
+// thing is refused and where (a line number), never what was written: fail
+// takes a sentence and integers, and no string reaches it. yaml.v3's own error
+// sentences quote the text they refuse, so they are never carried either —
+// only a line number read from their fixed prefix (lineOf).
+// TestNoAuthorTextInAnyMessage holds every Kind to it with a canary, and
+// TestSentencesAreConstants holds it by the package's syntax: the name
+// sentence appears only in its own declaration and in function signatures
+// (so nothing converts a computed string to one, by any spelling or alias),
+// the one Unreadable literal is fail's, and nothing assigns a message.
+type sentence string
+
+// fail is the one constructor of a refusal: its message is s with its %d
+// verbs filled by ints, in order.
+func fail(k Kind, s sentence, ints ...int) *Unreadable {
+	args := make([]any, len(ints))
+	for i, n := range ints {
+		args[i] = n
+	}
+	return &Unreadable{Kind: k, message: fmt.Sprintf(string(s), args...)}
 }
 
-// MaxMessageBytes bounds Unreadable.Message. A message quotes what it refuses
-// (a repeated key, a tag, yaml.v3's own error), and a quoted key can be as
-// long as the file — measured, a 1 MiB duplicate key made a 1,048,644-byte
-// message, which every reader then logged, kept and wrote into JSON. Cut
-// here, where every message is made, so each interface (exporter log,
-// tenant-api, da-guard's reports, the parse-tree JSON) carries the same text.
-const MaxMessageBytes = 512
+// failYAML is fail for an error of yaml.v3's: lined (the line in front) when
+// lineOf finds one, else unlined. err's text is not carried.
+func failYAML(k Kind, err error, lined, unlined sentence) *Unreadable {
+	if line, ok := lineOf(err); ok {
+		return fail(k, lined, line)
+	}
+	return fail(k, unlined)
+}
 
-// messageTailBytes is how much of a cut message's end is kept: what a message
-// says last (a repeated key's "first at line M"). The head — the line number
-// and what was refused — gets the rest of MaxMessageBytes.
-const messageTailBytes = 120
-
-// cutMessage is msg itself when it fits MaxMessageBytes, else its first and
-// last bytes around "… (N bytes omitted) …", at most MaxMessageBytes in all,
-// cut at rune boundaries so a valid UTF-8 msg stays valid.
-func cutMessage(msg string) string {
-	if len(msg) <= MaxMessageBytes {
-		return msg
+// lineOf is the line number yaml.v3 writes at the fixed start of its error:
+// `yaml: line N: …` (the parser and the scanner), or a *yaml.TypeError whose
+// first entry starts `line N: …` (the decoder). Only the digits are read;
+// nothing after the colon that ends them is looked at.
+func lineOf(err error) (int, bool) {
+	var text string
+	var te *yaml.TypeError
+	if errors.As(err, &te) {
+		if len(te.Errors) == 0 {
+			return 0, false
+		}
+		text = te.Errors[0]
+	} else if rest, ok := strings.CutPrefix(err.Error(), "yaml: "); ok {
+		text = rest
+	} else {
+		return 0, false
 	}
-	// The marker's longest form for this msg: N is below len(msg).
-	marker := len(fmt.Sprintf("… (%d bytes omitted) …", len(msg)))
-	head := MaxMessageBytes - messageTailBytes - marker
-	for head > 0 && !utf8.RuneStart(msg[head]) {
-		head--
+	rest, ok := strings.CutPrefix(text, "line ")
+	if !ok {
+		return 0, false
 	}
-	tail := len(msg) - messageTailBytes
-	for tail < len(msg) && !utf8.RuneStart(msg[tail]) {
-		tail++
+	end := 0
+	for end < len(rest) && end < 9 && rest[end] >= '0' && rest[end] <= '9' {
+		end++
 	}
-	return fmt.Sprintf("%s… (%d bytes omitted) …%s", msg[:head], tail-head, msg[tail:])
+	if end == 0 || end >= len(rest) || rest[end] != ':' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(rest[:end])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 // Scalar is one scalar of the output: its source text, the tag yaml.v3
@@ -228,14 +273,18 @@ func parseDocument(data []byte) (*yaml.Node, *Unreadable) {
 		if errors.Is(err, io.EOF) {
 			return nil, nil
 		}
-		return nil, fail(KindSyntaxError, "%s", oneLine(err))
+		return nil, failYAML(KindSyntaxError, err,
+			"line %d: yaml.v3 cannot parse the text into a document",
+			"yaml.v3 cannot parse the text into a document (an unknown anchor, a %%YAML directive it refuses, or nesting deeper than its limit)")
 	}
 	var next yaml.Node
 	switch err := dec.Decode(&next); {
 	case err == nil:
 		return nil, fail(KindMultipleDocuments, "a second document starts at line %d; only one document per file is read", next.Line)
 	case !errors.Is(err, io.EOF):
-		return nil, fail(KindSyntaxError, "after the first document: %s", oneLine(err))
+		return nil, failYAML(KindSyntaxError, err,
+			"line %d: yaml.v3 cannot parse the text after the first document",
+			"yaml.v3 cannot parse the text after the first document")
 	}
 	if len(doc.Content) == 0 {
 		return nil, nil
@@ -269,7 +318,9 @@ func judge(data []byte, doc *yaml.Node, verdictOnly bool) (Content, *Unreadable)
 	if hasAlias(root) {
 		var whole any
 		if err := decode(doc, &whole); err != nil {
-			return nil, fail(KindDecodeError, "%s", oneLine(err))
+			return nil, failYAML(KindDecodeError, err,
+				"line %d: yaml.v3 refuses to decode the document as a whole (an alias that contains itself, or more alias expansion than it allows)",
+				"yaml.v3 refuses to decode the document as a whole (an alias that contains itself, or more alias expansion than it allows)")
 		}
 	}
 
@@ -278,7 +329,7 @@ func judge(data []byte, doc *yaml.Node, verdictOnly bool) (Content, *Unreadable)
 	case root.Kind == yaml.ScalarNode && root.ShortTag() == "!!null":
 		return Content{}, nil // `---` alone, `~`: nothing in the file
 	default:
-		return nil, fail(KindTopLevelNotMapping, "the top level is a %s, not a mapping", kindName(root))
+		return nil, fail(KindTopLevelNotMapping, "the top level is a "+kindName(root)+", not a mapping")
 	}
 	conv := &converter{values: c.values, active: map[*yaml.Node]bool{}, bytes: 2, verdictOnly: verdictOnly} // the content's {}
 	out := Content{}
@@ -358,7 +409,7 @@ func (c *checker) checkNode(n *yaml.Node, isMergeKey bool) *Unreadable {
 		}
 		raw, err := scalarValue(n)
 		if err != nil {
-			return fail(KindDecodeError, "line %d: %s", n.Line, oneLine(err))
+			return fail(KindDecodeError, "line %d: a scalar does not decode as its tag says (yaml.v3 refuses it)", n.Line)
 		}
 		c.values[n] = raw
 	case yaml.SequenceNode:
@@ -377,13 +428,13 @@ func (c *checker) checkNode(n *yaml.Node, isMergeKey bool) *Unreadable {
 			}
 			kr := deref(k)
 			if kr.Kind != yaml.ScalarNode {
-				return fail(KindNonScalarKey, "line %d: a mapping key is a %s; only scalar keys are read", k.Line, kindName(kr))
+				return fail(KindNonScalarKey, "line %d: a mapping key is a "+kindName(kr)+"; only scalar keys are read", k.Line)
 			}
 			if !merge && kr.ShortTag() == "!!null" {
-				return fail(KindNullKey, "line %d: the key %q is null; write the key as a quoted string if a key is meant", k.Line, kr.Value)
+				return fail(KindNullKey, "line %d: a key is null; write the key as a quoted string if a key is meant", k.Line)
 			}
 			if first, dup := seen[kr.Value]; dup {
-				return fail(KindDuplicateKey, "line %d: the key %q is written twice in one mapping (first at line %d)", k.Line, kr.Value, first)
+				return fail(KindDuplicateKey, "line %d: a key is written twice in one mapping (first at line %d)", k.Line, first)
 			}
 			seen[kr.Value] = k.Line
 			if bad := c.checkNode(v, false); bad != nil {
@@ -425,15 +476,15 @@ func (c *checker) checkTag(n *yaml.Node, isMergeKey bool) *Unreadable {
 			if tag == mergeTag && !explicit {
 				return fail(KindTagNotAllowed, "line %d: a plain `<<` is a merge key; anywhere but as a mapping key write it quoted (\"<<\")", n.Line)
 			}
-			return fail(KindTagNotAllowed, "line %d: the tag %s is not read on a scalar (allowed: !!str !!int !!float !!bool !!null !!timestamp)", n.Line, tag)
+			return fail(KindTagNotAllowed, "line %d: a scalar's tag is not read (allowed: !!str !!int !!float !!bool !!null !!timestamp)", n.Line)
 		}
 	case yaml.MappingNode:
 		if tag != "!!map" {
-			return fail(KindTagNotAllowed, "line %d: the tag %s is not read on a mapping (allowed: none, or !!map)", n.Line, tag)
+			return fail(KindTagNotAllowed, "line %d: a mapping's tag is not read (allowed: none, or !!map)", n.Line)
 		}
 	case yaml.SequenceNode:
 		if tag != "!!seq" {
-			return fail(KindTagNotAllowed, "line %d: the tag %s is not read on a sequence (allowed: none, or !!seq)", n.Line, tag)
+			return fail(KindTagNotAllowed, "line %d: a sequence's tag is not read (allowed: none, or !!seq)", n.Line)
 		}
 	}
 	return nil
@@ -446,7 +497,7 @@ func (c *checker) checkTag(n *yaml.Node, isMergeKey bool) *Unreadable {
 func (c *checker) checkAliasTargets(n *yaml.Node) *Unreadable {
 	if n.Kind == yaml.AliasNode {
 		if t := n.Alias; t.Kind == yaml.ScalarNode && t.Style&yaml.TaggedStyle == 0 && t.ShortTag() == mergeTag {
-			return fail(KindTagNotAllowed, "line %d: the alias *%s repeats a plain `<<` (a merge key)", n.Line, n.Value)
+			return fail(KindTagNotAllowed, "line %d: an alias repeats a plain `<<` (a merge key)", n.Line)
 		}
 		return nil
 	}
@@ -472,12 +523,12 @@ func checkMergeValue(v *yaml.Node) *Unreadable {
 	case yaml.SequenceNode:
 		for _, item := range v.Content {
 			if deref(item).Kind != yaml.MappingNode {
-				return fail(KindDecodeError, "line %d: a merge (`<<`) sequence item is a %s; it must be a mapping or an alias to one", item.Line, kindName(deref(item)))
+				return fail(KindDecodeError, "line %d: a merge (`<<`) sequence item is a "+kindName(deref(item))+"; it must be a mapping or an alias to one", item.Line)
 			}
 		}
 		return nil
 	}
-	return fail(KindDecodeError, "line %d: a merge (`<<`) value is a %s; it must be a mapping, an alias to one, or a sequence of those", v.Line, kindName(deref(v)))
+	return fail(KindDecodeError, "line %d: a merge (`<<`) value is a "+kindName(deref(v))+"; it must be a mapping, an alias to one, or a sequence of those", v.Line)
 }
 
 // isMerge is yaml.v3's merge-key test (decode.go isMerge) for the nodes this
@@ -494,14 +545,31 @@ func deref(n *yaml.Node) *yaml.Node {
 	return n
 }
 
-func kindName(n *yaml.Node) string {
+// kindName is the node's kind in a message: a closed vocabulary of this
+// package's (a scalar's tag only when it is one of allowedScalarTags — any
+// other tag is author text).
+func kindName(n *yaml.Node) sentence {
 	switch n.Kind {
 	case yaml.MappingNode:
 		return "mapping"
 	case yaml.SequenceNode:
 		return "sequence"
 	case yaml.ScalarNode:
-		return "scalar (" + n.ShortTag() + ")"
+		switch n.ShortTag() {
+		case "!!str":
+			return "scalar (!!str)"
+		case "!!int":
+			return "scalar (!!int)"
+		case "!!float":
+			return "scalar (!!float)"
+		case "!!bool":
+			return "scalar (!!bool)"
+		case "!!null":
+			return "scalar (!!null)"
+		case "!!timestamp":
+			return "scalar (!!timestamp)"
+		}
+		return "scalar"
 	case yaml.AliasNode:
 		return "alias"
 	}
@@ -650,7 +718,7 @@ func (c *converter) node(n *yaml.Node) (any, *Unreadable) {
 	if n.Kind == yaml.AliasNode {
 		t := n.Alias
 		if c.active[t] {
-			return nil, fail(KindDecodeError, "line %d: the alias *%s contains itself", n.Line, n.Value)
+			return nil, fail(KindDecodeError, "line %d: an alias contains itself", n.Line)
 		}
 		c.active[t] = true
 		defer delete(c.active, t)
@@ -771,7 +839,7 @@ func (c *converter) fill(out map[string]any, n *yaml.Node) *Unreadable {
 		if src.Kind == yaml.AliasNode {
 			t = src.Alias
 			if c.active[t] {
-				return fail(KindDecodeError, "line %d: the alias *%s contains itself", src.Line, src.Value)
+				return fail(KindDecodeError, "line %d: an alias contains itself", src.Line)
 			}
 			c.active[t] = true
 		}
@@ -895,8 +963,6 @@ func (s *source) index(n *yaml.Node) {
 func isSeparator(r rune) bool {
 	return r == ' ' || r == '\t' || r == ',' || r == '[' || r == ']' || r == '{' || r == '}'
 }
-
-func oneLine(err error) string { return strings.Join(strings.Fields(err.Error()), " ") }
 
 func firstInvalidUTF8(b []byte) int {
 	for i := 0; i < len(b); {
