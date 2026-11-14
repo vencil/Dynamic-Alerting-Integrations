@@ -64,10 +64,9 @@ conf.d/
 ```yaml
 # 維度鍵可帶的 label（#3475）：沒宣告的 label 不送出。出貨清單只有 container cpu/memory 的 version，這裡示範自訂
 dimensions:
-  mysql_connections: [instance, role]
+  mysql_connection_usage_percent: [instance, role]
 defaults:
-  mysql_connections: 80
-  mysql_threads_running: 30
+  mysql_connection_usage_percent: 80
   mysql_replication_lag: 30
   container_cpu: 80
   container_memory: 85
@@ -86,13 +85,13 @@ state_filters:
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "70"          # 覆蓋預設值 80
+    mysql_connection_usage_percent: "70"          # 覆蓋預設值 80
     container_cpu: "70"              # 覆蓋預設值 80
     mysql_replication_lag: "disable" # 無 replica，停用
-    # mysql_threads_running 未指定 → 使用預設值 30
+    # mysql_threads_running 未指定 → 平台不給預設（健康值隨主機 CPU 核數而定，要依主機給值；#3778），這條告警不觸發
     # 維度標籤（每個 label 都要在上方 _defaults.yaml 的 dimensions: 為該 base 宣告，否則不產生 metric；見 §2.5 的 ⚠️）
-    "mysql_connections{instance='db-primary:3306'}": "500"
-    "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
+    "mysql_connection_usage_percent{instance='db-primary:3306'}": "75"
+    "mysql_connection_usage_percent{instance='db-replica:3306', role='replica'}": "95:critical"
 ```
 
 #### 邊界強制規則 (Boundary Enforcement)
@@ -356,8 +355,8 @@ relabel_configs:
 ```yaml
 tenants:
   db-a:
-    mysql_connections: "100"            # warning 閾值
-    mysql_connections_critical: "150"   # _critical → 自動產生 critical alert
+    mysql_connection_usage_percent: "85"             # warning 閾值
+    mysql_connection_usage_percent_critical: "95"    # _critical → 自動產生 critical alert
 ```
 
 **方式二：`"value:severity"` 語法（適用於維度標籤）**
@@ -373,8 +372,8 @@ severity 取最後一個 `:` 之後的部分，只能是 `warning` 或 `critical
 
 **Prometheus 輸出：**
 ```
-user_threshold{tenant="db-a", component="mysql", metric="connections", severity="warning"} 100
-user_threshold{tenant="db-a", component="mysql", metric="connections", severity="critical"} 150
+user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percent", severity="warning"} 85
+user_threshold{tenant="db-a", component="mysql", metric="connection_usage_percent", severity="critical"} 95
 ```
 
 #### 自動抑制 (Auto-Suppression) — Severity Dedup via Alertmanager Inhibit
@@ -385,21 +384,21 @@ v1.2.0 起，Severity Dedup 從 PromQL 層移至 **Alertmanager inhibit 層**（
 # Warning 和 Critical 獨立觸發，TSDB 完整保留
 - alert: MariaDBHighConnections          # warning
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections )
+    ( tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   labels:
     severity: warning
-    metric_group: mysql_connections
+    metric_group: mysql_connection_usage_percent
 - alert: MariaDBHighConnectionsCritical  # critical
   expr: |
-    ( tenant:mysql_threads_connected:max > on(tenant) group_left tenant:alert_threshold:mysql_connections_critical )
+    ( tenant:mysql_connection_usage:percent > on(tenant) group_left tenant:alert_threshold:mysql_connection_usage_percent_critical )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
   labels:
     severity: critical
-    metric_group: mysql_connections
+    metric_group: mysql_connection_usage_percent
 ```
 
-**結果：** 連線數 ≥ 150 時，warning 和 critical 均觸發（TSDB 完整），但 Alertmanager inhibit rule 攔截 warning 通知，只送出 critical 通知。
+**結果：** 連線使用率超過 95%（佔 max_connections）時，warning 和 critical 均觸發（TSDB 完整），但 Alertmanager inhibit rule 攔截 warning 通知，只送出 critical 通知。
 
 ### 2.5 Regex 維度閾值 (Regex Dimension Thresholds)
 
@@ -437,13 +436,13 @@ v0.12.0 起，閾值支援時間窗口排程，允許在不同時段自動切換
 ```yaml
 tenants:
   db-a:
-    mysql_connections:
-      default: "100"
+    mysql_connection_usage_percent:
+      default: "80"
       overrides:
         - window: "22:00-06:00"    # UTC 夜間窗口（支援跨午夜）
-          value: "200"             # 夜間批次作業，放寬到 200
+          value: "95"              # 夜間批次作業，放寬到 95%
         - window: "09:00-18:00"
-          value: "80"              # 日間高峰，收緊到 80
+          value: "70"              # 日間高峰，收緊到 70%
 ```
 
 **技術實現：**
@@ -643,7 +642,7 @@ v1.2.0 採用 per-tenant inhibit rules 實現可選化：
 | `_severity_dedup: "enable"`（預設） | ✅ | ✅ | ❌ 被 AM 攔截 | ✅ |
 | `_severity_dedup: "disable"` | ✅ | ✅ | ✅ | ✅ |
 
-**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connections"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: mariadb_liveness`（MongoDB 的同類告警帶 `mongodb_liveness`），使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
+**配對機制**：Alert rule 的 `metric_group` label 讓 Alertmanager 正確配對 warning/critical（因為兩者 alertname 不同）。例如 `MariaDBHighConnections` 和 `MariaDBHighConnectionsCritical` 共享 `metric_group: "mysql_connection_usage_percent"`。每條 per-tenant inhibit rule 限定 `metric_group=~".+"`，故無 `metric_group` label 的 alert 不參與 dedup。（存活分級告警 `MariaDBDown`／`MariaDBClusterDown`／`MariaDBNoPrimary` 自 [#875](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/875) 起帶 `metric_group: mariadb_liveness`（MongoDB 的同類告警帶 `mongodb_liveness`），使 critical 叢集存活告警自動抑制同租戶的 warning instance 告警。）
 
 **群組名在一個租戶內是同一個命名空間**：inhibit 只比對 `metric_group`，不比對規則包，所以兩個規則包若用同一個值，同時使用兩包的租戶會被另一包的 critical 抑制 warning。`check_metric_group_pairs.py` 因此要求：每個值只屬於一個規則包；每個群組同時有 critical 與 warning 成員（inhibit 只抑制 `severity="warning"`，否則不抑制任何東西）；`slo_` 開頭保留給 custom alert 編譯器（[#3692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3692)）。`migrate_rule` 產生的群組名是完整的門檻鍵名。
 

@@ -17,12 +17,15 @@ metadata:
 spec:
   tenants:
     db-a:
-      mysql_connections: "70"
-      # threads_running 1m-avg saturation (concurrent threads, NOT host CPU%); platform
-      # default 30, suggested critical tier 50 (#944). Renamed from mysql_cpu (#1231 —
-      # the poisoned name is retired; the old spelling still resolves during the
-      # 2-release alias window). 25 = a deliberate tightening for this payment-domain
-      # tenant (pt-osc throttle tier), matching the stricter mysql_connections above.
+      mysql_connection_usage_percent: "70"
+      # threads_running 1m-avg saturation (concurrent threads, NOT host CPU%). The
+      # platform ships no default (a healthy value scales with the host's CPU count,
+      # #3778); the key is declared, so a tenant or the deployment's defaults can set
+      # it, and a tenant line alone is served. Suggested critical tier 50 (#944) — a
+      # _critical is served only once the defaults carry a base value for this key.
+      # Renamed from mysql_cpu (#1231 — the old spelling
+      # still resolves during the 2-release alias window). 25 = a value sized for this
+      # payment-domain tenant's host (pt-osc throttle tier).
       mysql_threads_running: "25"
       container_memory: "85"
       _silent_mode: "disable"

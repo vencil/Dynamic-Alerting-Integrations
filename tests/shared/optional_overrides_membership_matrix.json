@@ -22,7 +22,7 @@
     "is empty. Delete them when the window closes."
   ],
   "defaults": [
-    "mysql_connections",
+    "mysql_connection_usage_percent",
     "container_cpu"
   ],
   "cases": [
@@ -56,9 +56,9 @@
     {
       "name": "key in BOTH defaults and the list",
       "declared": [
-        "mysql_connections"
+        "mysql_connection_usage_percent"
       ],
-      "key": "mysql_connections",
+      "key": "mysql_connection_usage_percent",
       "verdict": "accept",
       "why": "nothing enforces disjointness; a valued key stays valued"
     },
@@ -74,7 +74,7 @@
     {
       "name": "_critical whose base is valued",
       "declared": [],
-      "key": "mysql_connections_critical",
+      "key": "mysql_connection_usage_percent_critical",
       "verdict": "accept",
       "why": "unchanged pre-existing behaviour"
     },
@@ -122,9 +122,9 @@
       "name": "dimensional on a valued base with its label declared",
       "declared": [],
       "dimensions": {
-        "mysql_connections": ["db"]
+        "mysql_connection_usage_percent": ["db"]
       },
-      "key": "mysql_connections{db=\"shard1\"}",
+      "key": "mysql_connection_usage_percent{db=\"shard1\"}",
       "verdict": "accept",
       "why": "every label of the key is declared for its base under `dimensions:` (#3475)"
     },
@@ -132,9 +132,9 @@
       "name": "dimensional on a valued base, label undeclared",
       "declared": [],
       "dimensions": {
-        "mysql_connections": ["instance"]
+        "mysql_connection_usage_percent": ["instance"]
       },
-      "key": "mysql_connections{db=\"shard1\"}",
+      "key": "mysql_connection_usage_percent{db=\"shard1\"}",
       "verdict": "refuse",
       "why": "a valued base no longer suffices, nor a declaration of another label (#3475)"
     },

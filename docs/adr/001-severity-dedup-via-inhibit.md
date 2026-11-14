@@ -91,7 +91,7 @@ inhibit_rules:
   - metric_group
 ```
 
-讀法：`shop` 有 critical 告警正在觸發時，同一個 `metric_group` 的 warning 告警不送通知。告警規則這一側要讓成對的告警帶相同的 `metric_group`，例如 Rule Pack 裡的 `MariaDBHighConnections`（warning）與 `MariaDBHighConnectionsCritical`（critical）都帶 `metric_group: "mysql_connections"`。
+讀法：`shop` 有 critical 告警正在觸發時，同一個 `metric_group` 的 warning 告警不送通知。告警規則這一側要讓成對的告警帶相同的 `metric_group`，例如 Rule Pack 裡的 `MariaDBHighConnections`（warning）與 `MariaDBHighConnectionsCritical`（critical）都帶 `metric_group: "mysql_connection_usage_percent"`。
 
 ## 後果與已知限制
 

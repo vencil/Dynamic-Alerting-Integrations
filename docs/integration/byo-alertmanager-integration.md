@@ -123,7 +123,7 @@ alerting:
 # conf.d/db-a.yaml
 tenants:
   db-a:
-    mysql_connections: "70"
+    mysql_connection_usage_percent: "70"
     _routing:
       receiver:
         type: "webhook"
@@ -507,7 +507,7 @@ curl -sf http://localhost:9093/api/v2/alerts | python3 -m json.tool
 # conf.d/db-a.yaml
 tenants:
   db-a:
-    mysql_connections: "70"
+    mysql_connection_usage_percent: "70"
     _routing:
       receiver:
         type: "slack"

@@ -18,7 +18,7 @@ import { extractTenants, computeDiff } from '../src/interactive/tools/config-dif
 const EXAMPLE_OLD = [
   'tenants:',
   '  db-a:',
-  '    mysql_connections: "80"',
+  '    mysql_connection_usage_percent: "80"',
   '    mysql_threads_running: "75"',
   '    _routing:',
   '      receiver_type: "slack"',
@@ -32,8 +32,8 @@ const EXAMPLE_OLD = [
 const EXAMPLE_NEW = [
   'tenants:',
   '  db-a:',
-  '    mysql_connections: "120"',
-  '    mysql_connections_critical: "200"',
+  '    mysql_connection_usage_percent: "85"',
+  '    mysql_connection_usage_percent_critical: "95"',
   '    mysql_threads_running: "75"',
   '    _routing:',
   '      receiver_type: "webhook"',
@@ -53,8 +53,8 @@ describe('extractTenants — multi-tenant split', () => {
     expect(errors).toEqual([]);
     expect(Object.keys(tenants).sort()).toEqual(['cache', 'db-a', 'db-b']);
     // Scalar values are quote-stripped by the shared parser.
-    expect(tenants['db-a'].mysql_connections).toBe('120');
-    expect(tenants['db-a'].mysql_connections_critical).toBe('200');
+    expect(tenants['db-a'].mysql_connection_usage_percent).toBe('85');
+    expect(tenants['db-a'].mysql_connection_usage_percent_critical).toBe('95');
     expect(tenants['db-b'].pg_connections).toBe('150');
     expect(tenants['cache'].redis_memory).toBe('80');
   });
@@ -77,8 +77,8 @@ describe('computeDiff — change detection parity', () => {
     const { changes, errors } = computeDiff(EXAMPLE_OLD, EXAMPLE_NEW);
     expect(errors).toEqual([]);
     const types = changes.map((c) => c.type);
-    // cache tenant is new; db-a.mysql_connections_critical is a new key;
-    // db-a.mysql_connections + db-a._routing + db-b.* changed.
+    // cache tenant is new; db-a.mysql_connection_usage_percent_critical is a new key;
+    // db-a.mysql_connection_usage_percent + db-a._routing + db-b.* changed.
     expect(types).toContain('tenant-added');
     expect(types).toContain('key-added');
     expect(types).toContain('key-changed');
@@ -87,9 +87,9 @@ describe('computeDiff — change detection parity', () => {
     expect(cacheAdded).toBeTruthy();
 
     const connChanged = changes.find(
-      (c) => c.type === 'key-changed' && c.tenant === 'db-a' && c.key === 'mysql_connections',
+      (c) => c.type === 'key-changed' && c.tenant === 'db-a' && c.key === 'mysql_connection_usage_percent',
     );
-    expect(connChanged).toMatchObject({ oldVal: '80', newVal: '120' });
+    expect(connChanged).toMatchObject({ oldVal: '80', newVal: '85' });
   });
 
   it('reports _routing as changed when a sub-value changes', () => {
@@ -159,7 +159,7 @@ describe('security guards inherited/added by the engine', () => {
 const CUSTOM_BASE = [
   'tenants:',
   '  db-b:',
-  '    mysql_connections: "100"',
+  '    mysql_connection_usage_percent: "80"',
   '    _custom_alerts:',
   '      - recipe: threshold',
   '        name: mariadb_conns_high',
@@ -182,7 +182,7 @@ const ROUTING_CHANGED = ROUTING_BASE.replace('/alerts"', '/alerts-v2"');
 
 describe('js-yaml parse layer (#2033)', () => {
   it('surfaces a duplicate key as an error with its line', () => {
-    const dup = 'tenants:\n  db-b:\n    mysql_connections: "100"\n    mysql_connections: "120"';
+    const dup = 'tenants:\n  db-b:\n    mysql_connection_usage_percent: "80"\n    mysql_connection_usage_percent: "85"';
     const { tenants, errors } = extractTenants(dup);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatch(/duplicated mapping key/);
@@ -200,8 +200,8 @@ describe('js-yaml parse layer (#2033)', () => {
   });
 
   it('reads a quoted key and an unquoted number as the same comparable value', () => {
-    const a = 'tenants:\n  db-b:\n    "mysql_connections": 100';
-    const b = 'tenants:\n  db-b:\n    mysql_connections: "100"';
+    const a = 'tenants:\n  db-b:\n    "mysql_connection_usage_percent": 80';
+    const b = 'tenants:\n  db-b:\n    mysql_connection_usage_percent: "80"';
     expect(computeDiff(a, b).changes).toEqual([]);
   });
 });

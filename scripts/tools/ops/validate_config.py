@@ -750,7 +750,7 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
     route generator's key check, and a tree that lint rejects read
     `[PASS] schema` here.
 
-    A misread scalar (`mysql_connections: 70`) is `yaml_quoting`'s finding
+    A misread scalar (`mysql_connection_usage_percent: 70`) is `yaml_quoting`'s finding
     and is not reported again here: `validate_dir` is told which files
     that row reads (`_quoting_scope`) and validates them as if every such
     value had been quoted, as that row asks — so the value is no type

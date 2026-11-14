@@ -346,7 +346,7 @@ SHIPPED_METRIC_GROUPS: frozenset[str] = frozenset({
     "jvm_threads", "kafka_consumer_lag",
     "kafka_under_replicated_partitions", "mariadb_liveness",
     "mongodb_connections_current", "mongodb_liveness", "mongodb_replication_lag",
-    "mysql_connections", "mysql_replication_lag", "mysql_threads_running",
+    "mysql_connection_usage_percent", "mysql_replication_lag", "mysql_threads_running",
     "nginx_connections", "nginx_request_rate", "nginx_waiting",
     "oracle_sessions_active", "oracle_tablespace_used_percent", "pg_connections",
     "pg_replication_lag", "rabbitmq_connections", "rabbitmq_node_mem_percent",

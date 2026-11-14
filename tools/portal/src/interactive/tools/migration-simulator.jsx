@@ -14,6 +14,20 @@ const t = window.__t || ((zh, en) => en);
 const EXAMPLE_RULES = `groups:
   - name: mysql_alerts
     rules:
+      - alert: MySQLReplicationLag
+        expr: mysql_slave_status_seconds_behind_master > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Replica lagging on {{ $labels.instance }}"
+      - alert: MySQLReplicationLagCritical
+        expr: mysql_slave_status_seconds_behind_master > 120
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Replica far behind on {{ $labels.instance }}"
       - alert: HighMySQLConnections
         expr: mysql_global_status_threads_connected > 100
         for: 5m
@@ -21,13 +35,6 @@ const EXAMPLE_RULES = `groups:
           severity: warning
         annotations:
           summary: "High MySQL connections on {{ $labels.instance }}"
-      - alert: HighMySQLConnectionsCritical
-        expr: mysql_global_status_threads_connected > 200
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Critical MySQL connections on {{ $labels.instance }}"
       - alert: MySQLSlowQueries
         expr: rate(mysql_global_status_slow_queries[5m]) > 10
         for: 10m
@@ -74,12 +81,23 @@ function parsePromQLExpr(expr) {
 //   redis_evicted_keys_total — registry key is optional-tier/unwired today
 //     (#1196 rewires it as redis_evicted_keys_rate; remap once it ships in defaults)
 const METRIC_MAP = {
-  mysql_global_status_threads_connected: 'mysql_connections',
+  mysql_global_status_threads_connected: 'mysql_connection_usage_percent',
   mysql_slave_status_seconds_behind_master: 'mysql_replication_lag',
   pg_stat_activity_count: 'pg_connections',
   redis_memory_used_bytes: 'redis_memory_used_bytes',
   redis_connected_clients: 'redis_connected_clients',
   kafka_consumergroup_lag: 'kafka_consumer_lag',
+};
+
+// Source metrics whose mapped key is a PERCENTAGE of a denominator
+// (`unit: '% of max_connections'` in threshold-registry.yaml): an old rule's
+// absolute count (`threads_connected > 100`) cannot be copied into the key —
+// 100 would read as 100 %, 200 as 200 % and never fire (#3778). Such rules go
+// to Manual Review with the conversion spelled out. Drift-gated by the same
+// test file: every METRIC_MAP value whose registry unit is a `%` must be here.
+const NEEDS_DENOMINATOR = {
+  mysql_global_status_threads_connected: 'mysql_global_variables_max_connections',
+  pg_stat_activity_count: 'pg_settings_max_connections',
 };
 
 // Threshold keys that ship a critical tier (`<key>_critical` exists in
@@ -88,7 +106,7 @@ const METRIC_MAP = {
 // critical-tier alert is dead config (same disease, critical shape).
 // Drift-gated by the same test file.
 const CRITICAL_CAPABLE = new Set([
-  'mysql_connections',
+  'mysql_connection_usage_percent',
   'mysql_replication_lag',
   'pg_connections',
   'redis_memory_used_bytes',
@@ -130,6 +148,16 @@ function convertRules(input) {
     const mappedKey = METRIC_MAP[parsed.metric];
     if (!mappedKey) {
       unconverted.push({ alertName, expr, reason: `Unknown metric "${parsed.metric}" — not in standard Rule Pack metrics` });
+      return;
+    }
+
+    const denominator = NEEDS_DENOMINATOR[parsed.metric];
+    if (denominator) {
+      unconverted.push({
+        alertName,
+        expr,
+        reason: `"${mappedKey}" is a % of ${denominator}, but this rule compares an absolute count — set ${mappedKey} to ${parsed.threshold} / ${denominator} × 100 by hand`,
+      });
       return;
     }
 
@@ -329,4 +357,4 @@ export default function MigrationSimulator() {
 
 // Tail export clause (jsx-loader-compat: no inline named exports) — test seam for
 // tests/migration-simulator-metric-map.test.ts.
-export { METRIC_MAP, CRITICAL_CAPABLE, convertRules };
+export { METRIC_MAP, NEEDS_DENOMINATOR, CRITICAL_CAPABLE, convertRules };

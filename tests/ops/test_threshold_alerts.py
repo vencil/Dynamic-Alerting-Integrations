@@ -1,7 +1,7 @@
 """test_threshold_alerts.py — threshold key → 告警名，從 rule pack 反查。
 
 config-diff 的 Affected Alerts 欄與 patch-config --diff 過去用 key 的拼法
-猜告警名（mysql_connections → *MysqlConnections*），猜出來的名字 rule pack
+猜告警名（mysql_connection_usage_percent → *MysqlConnections*），猜出來的名字 rule pack
 裡不存在。這裡釘住三件事：
   1. 名字取自 rule pack，含只經 recording rule 間接讀 key 的告警；
   2. 找不到 rule pack 時回「不知道」（None），不回空集合、不猜；
@@ -40,15 +40,15 @@ def fresh_index(monkeypatch):
 class TestRealRulePacks:
 
     def test_a_key_maps_to_the_alerts_the_pack_names(self, fresh_index):
-        assert ta.alerts_for_key("mysql_connections") == (
+        assert ta.alerts_for_key("mysql_connection_usage_percent") == (
             "MariaDBHighConnections", "MariaDBSystemBottleneck")
 
     def test_the_critical_sibling_is_a_different_key(self, fresh_index):
-        """`mysql_connections` 不可吃到 `mysql_connections_critical` 的告警。"""
-        assert ta.alerts_for_key("mysql_connections_critical") == (
+        """`mysql_connection_usage_percent` 不可吃到 `mysql_connection_usage_percent_critical` 的告警。"""
+        assert ta.alerts_for_key("mysql_connection_usage_percent_critical") == (
             "MariaDBHighConnectionsCritical",)
         assert "MariaDBHighConnectionsCritical" not in ta.alerts_for_key(
-            "mysql_connections")
+            "mysql_connection_usage_percent")
 
     @pytest.mark.parametrize("key", [
         "container_cpu", "container_cpu_throttle", "container_memory"])
@@ -58,8 +58,8 @@ class TestRealRulePacks:
         assert ta.alerts_for_key(key)
 
     def test_a_dimensional_key_reaches_its_base_keys_alerts(self, fresh_index):
-        assert ta.alerts_for_key('mysql_connections{instance="a"}') == \
-            ta.alerts_for_key("mysql_connections")
+        assert ta.alerts_for_key('mysql_connection_usage_percent{instance="a"}') == \
+            ta.alerts_for_key("mysql_connection_usage_percent")
 
     def test_a_key_no_alert_reads_is_empty_not_unknown(self, fresh_index):
         assert ta.alerts_for_key("no_such_threshold_key") == ()
@@ -125,7 +125,7 @@ class TestLocatingThePacks:
     def test_no_packs_means_unknown_and_one_warning(
             self, fresh_index, monkeypatch, capsys):
         monkeypatch.setattr(ta, "find_rule_pack_paths", lambda here=None: [])
-        assert ta.alerts_for_key("mysql_connections") is None
+        assert ta.alerts_for_key("mysql_connection_usage_percent") is None
         assert ta.alerts_for_key("pg_connections") is None
         err = capsys.readouterr().err
         assert err.count("affected alerts unknown") == 1
@@ -145,7 +145,7 @@ class TestUnreadablePacksAreUnknownInBothTools:
                 interval: 60
                 rules:
                   - alert: XHigh
-                    expr: tenant:x:max > on(tenant) tenant:alert_threshold:mysql_connections
+                    expr: tenant:x:max > on(tenant) tenant:alert_threshold:mysql_connection_usage_percent
             """), encoding="utf-8")
         monkeypatch.setattr(ta, "find_rule_pack_paths", lambda here=None: [pack])
         return pack
@@ -155,13 +155,13 @@ class TestUnreadablePacksAreUnknownInBothTools:
         monkeypatch.setenv("DA_READ_BINARY", str(tmp_path / "no-such-da-read"))
 
     def test_a_refused_pack_is_unknown_and_named(self, refused_pack, capsys):
-        assert ta.alerts_for_key("mysql_connections") is None
+        assert ta.alerts_for_key("mysql_connection_usage_percent") is None
         err = capsys.readouterr().err
         assert err.count("affected alerts unknown") == 1
         assert str(refused_pack) in err
 
     def test_no_da_read_is_unknown_and_named(self, no_da_read, capsys):
-        assert ta.alerts_for_key("mysql_connections") is None
+        assert ta.alerts_for_key("mysql_connection_usage_percent") is None
         err = capsys.readouterr().err
         assert err.count("affected alerts unknown") == 1
         assert "no-such-da-read" in err
@@ -171,17 +171,17 @@ class TestUnreadablePacksAreUnknownInBothTools:
         request.getfixturevalue(cause)
         import config_diff as cd
         lines = []
-        cd._render_thresholds({"db-a": [{"key": "mysql_connections", "old": 50,
+        cd._render_thresholds({"db-a": [{"key": "mysql_connection_usage_percent", "old": 50,
                                          "new": 70, "change": "modified"}]}, lines)
-        row = next(ln for ln in lines if "mysql_connections" in ln)
+        row = next(ln for ln in lines if "mysql_connection_usage_percent" in ln)
         assert row.split("|")[5].strip() == "unknown", row
 
     @pytest.mark.parametrize("cause", ["refused_pack", "no_da_read"])
     def test_patch_config_diff_says_unknown(self, cause, request, capsys):
         request.getfixturevalue(cause)
         import patch_config as pc
-        assert pc.find_affected_alerts("mysql_connections") is None
-        pc.print_diff({"tenant": "t", "metric_key": "mysql_connections",
+        assert pc.find_affected_alerts("mysql_connection_usage_percent") is None
+        pc.print_diff({"tenant": "t", "metric_key": "mysql_connection_usage_percent",
                        "configmap_mode": "multi-file", "changed": True,
                        "after": {"value": "70", "state": "custom: 70"},
                        "affected_alerts": None})

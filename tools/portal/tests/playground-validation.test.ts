@@ -16,8 +16,8 @@ import {
 
 const VALID = `tenants:
   db-a:
-    mysql_connections: "70"
-    mysql_connections_critical: "95"
+    mysql_connection_usage_percent: "70"
+    mysql_connection_usage_percent_critical: "95"
     mysql_threads_running: "80"
     _silent_mode: "disable"
     _routing:
@@ -30,9 +30,9 @@ const tenant = (body: string) => `tenants:\n  db-a:\n${body}`;
 
 describe('parseYAML', () => {
   it('parses a nested tenants structure', () => {
-    const r = parseYAML('tenants:\n  a:\n    mysql_connections: "1"');
+    const r = parseYAML('tenants:\n  a:\n    mysql_connection_usage_percent: "1"');
     expect(r.success).toBe(true);
-    expect(r.data.tenants.a.mysql_connections).toBe('1');
+    expect(r.data.tenants.a.mysql_connection_usage_percent).toBe('1');
   });
 
   it('reports a syntax error with the js-yaml line number', () => {
@@ -81,7 +81,7 @@ describe('validateTenantConfig — structure', () => {
 
 describe('validateTenantConfig — syntax errors the old line parser swallowed (#2033)', () => {
   it('rejects a duplicate unquoted key', () => {
-    expect(validateTenantConfig(tenant('    mysql_connections: "70"\n    mysql_connections: "80"')).valid).toBe(false);
+    expect(validateTenantConfig(tenant('    mysql_connection_usage_percent: "70"\n    mysql_connection_usage_percent: "80"')).valid).toBe(false);
   });
 
   it('rejects a duplicate key when one spelling is quoted', () => {
@@ -180,9 +180,9 @@ describe('validateTenantConfig — no semantic verdicts (#2033)', () => {
   // Each of these was an error or warning under the removed rules and is
   // accepted by the exporter (or is the exporter's call, not this tool's).
   const accepted: Record<string, string> = {
-    'decimal threshold': '    mysql_connections: 85.5',
-    'disable three-state value': '    mysql_connections: disable',
-    'value:severity form': '    mysql_connections: "500:critical"',
+    'decimal threshold': '    mysql_connection_usage_percent: 85.5',
+    'disable three-state value': '    mysql_connection_usage_percent: disable',
+    'value:severity form': '    mysql_connection_usage_percent: "95:critical"',
     'scalar _state_maintenance': '    _state_maintenance: enable',
     'compound duration': '    _routing:\n      group_wait: 1h30m',
     '_routing without receiver_type/profile': '    _routing:\n      group_wait: 30s',
@@ -208,7 +208,7 @@ describe('_silent_mode is not judged by the playground (#1988)', () => {
   const forms = ['warning', 'critical', 'all'];
   for (const v of forms) {
     it(`emits no error for _silent_mode: ${JSON.stringify(v)}`, () => {
-      const r = validateTenantConfig(`tenants:\n  db-a:\n    mysql_connections: "70"\n    _silent_mode: ${v}`);
+      const r = validateTenantConfig(`tenants:\n  db-a:\n    mysql_connection_usage_percent: "70"\n    _silent_mode: ${v}`);
       expect(r.errors).toEqual([]);
     });
   }
@@ -216,7 +216,7 @@ describe('_silent_mode is not judged by the playground (#1988)', () => {
   // A quoted key is the same key to the exporter; the parser unquotes it.
   for (const k of ['"_silent_mode"', "'_silent_mode'"]) {
     it(`reads the quoted key ${k} as _silent_mode`, () => {
-      const r = validateTenantConfig(`tenants:\n  db-a:\n    mysql_connections: "70"\n    ${k}: warning`);
+      const r = validateTenantConfig(`tenants:\n  db-a:\n    mysql_connection_usage_percent: "70"\n    ${k}: warning`);
       expect(r.errors).toEqual([]);
       expect(parseYAML(`tenants:\n  db-a:\n    ${k}: warning`).data.tenants['db-a']).toHaveProperty('_silent_mode', 'warning');
     });

@@ -680,8 +680,8 @@ def test_oracle_cap_fails_loudly(monkeypatch) -> None:
 # undetermined evidence by name, so it cannot stand for "a tenant file").
 # `cpu` is declared because a corpus row (tab-after-colon) writes it: an
 # undeclared key fails `--validate` (#3016), which is not what this measures.
-_PYYAML_ONLY_DEFAULTS = "defaults:\n  mysql_connections: 80\n  cpu: 80\n"
-_PYYAML_ONLY_TENANT = "tenants:\n  tx:\n    mysql_connections: \"50\"\n"
+_PYYAML_ONLY_DEFAULTS = "defaults:\n  mysql_connection_usage_percent: 80\n  cpu: 80\n"
+_PYYAML_ONLY_TENANT = "tenants:\n  tx:\n    mysql_connection_usage_percent: \"50\"\n"
 _GENERATE_ROUTES = REPO_ROOT / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 
 

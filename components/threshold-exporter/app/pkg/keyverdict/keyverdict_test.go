@@ -86,15 +86,15 @@ func TestJudge_AKeySwitchedOffWithItsBaseIsRead(t *testing.T) {
 		for _, reason := range []string{ReasonBaseDisabled, "no_row"} {
 			tree := Judge(Input{
 				Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{
-					"mysql_connections":          {Reason: ReasonDisabled, Disable: DisableEffective},
-					"mysql_connections_critical": {Reason: reason}}}},
+					"mysql_connection_usage_percent":          {Reason: ReasonDisabled, Disable: DisableEffective},
+					"mysql_connection_usage_percent_critical": {Reason: reason}}}},
 				Effective: map[string]EffectiveTenant{"t1": {
-					Config: map[string]any{"mysql_connections": "disable", "mysql_connections_critical": "90"},
+					Config: map[string]any{"mysql_connection_usage_percent": "disable", "mysql_connection_usage_percent_critical": "90"},
 					Sources: map[string]config.KeySource{
-						"mysql_connections":          {Layer: config.KeyLayerTenant, File: "t1.yaml"},
-						"mysql_connections_critical": {Layer: layer, File: "x.yaml"}}}},
+						"mysql_connection_usage_percent":          {Layer: config.KeyLayerTenant, File: "t1.yaml"},
+						"mysql_connection_usage_percent_critical": {Layer: layer, File: "x.yaml"}}}},
 			})
-			v := one(t, tree, "t1", "mysql_connections_critical")
+			v := one(t, tree, "t1", "mysql_connection_usage_percent_critical")
 			if reason == ReasonBaseDisabled {
 				if v.Verdict != Read || !reflect.DeepEqual(v.ReadBy, []string{"exporter"}) || v.Reason != nil ||
 					len(tree.Findings) != 0 {
@@ -277,16 +277,16 @@ func TestJudge_DisableCascadeOnlyForTheTenantsOwnKey(t *testing.T) {
 	} {
 		tree := Judge(Input{
 			Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{
-				"mysql_connections":          {Reason: ReasonDisabled, Disable: DisableEffective},
-				"mysql_connections_critical": {Reason: ReasonBaseDisabled, SwitchedOffWith: "mysql_connections"}}}},
+				"mysql_connection_usage_percent":          {Reason: ReasonDisabled, Disable: DisableEffective},
+				"mysql_connection_usage_percent_critical": {Reason: ReasonBaseDisabled, SwitchedOffWith: "mysql_connection_usage_percent"}}}},
 			Effective: map[string]EffectiveTenant{"t1": {
-				Config: map[string]any{"mysql_connections": "disable", "mysql_connections_critical": "90"},
+				Config: map[string]any{"mysql_connection_usage_percent": "disable", "mysql_connection_usage_percent_critical": "90"},
 				Sources: map[string]config.KeySource{
-					"mysql_connections":          {Layer: config.KeyLayerTenant, File: "t1.yaml"},
-					"mysql_connections_critical": {Layer: layer, File: "x.yaml"}}}},
+					"mysql_connection_usage_percent":          {Layer: config.KeyLayerTenant, File: "t1.yaml"},
+					"mysql_connection_usage_percent_critical": {Layer: layer, File: "x.yaml"}}}},
 		})
-		v := one(t, tree, "t1", "mysql_connections_critical")
-		if v.Verdict != Read || deref(v.SwitchedOffWith) != "mysql_connections" {
+		v := one(t, tree, "t1", "mysql_connection_usage_percent_critical")
+		if v.Verdict != Read || deref(v.SwitchedOffWith) != "mysql_connection_usage_percent" {
 			t.Errorf("%s: %+v", layer, v)
 		}
 		var got []Finding
@@ -302,8 +302,8 @@ func TestJudge_DisableCascadeOnlyForTheTenantsOwnKey(t *testing.T) {
 			continue
 		}
 		if len(got) != 1 || got[0].Severity != SeverityWarning || got[0].Blocks ||
-			deref(got[0].Base) != "mysql_connections" || deref(got[0].Reason) != ReasonBaseDisabled ||
-			got[0].Key != "mysql_connections_critical" || !reflect.DeepEqual(got[0].Tenants, []string{"t1"}) {
+			deref(got[0].Base) != "mysql_connection_usage_percent" || deref(got[0].Reason) != ReasonBaseDisabled ||
+			got[0].Key != "mysql_connection_usage_percent_critical" || !reflect.DeepEqual(got[0].Tenants, []string{"t1"}) {
 			t.Errorf("%s: findings %+v", layer, got)
 		}
 	}
@@ -316,7 +316,7 @@ func TestJudge_ATenantFilesStrayTopLevelKeyIsOneErrorOnTheFile(t *testing.T) {
 	t.Parallel()
 	tree := Judge(Input{
 		TenantFiles: map[string][]string{"a.yaml": {"defaults", "tenants"}, "b.yaml": {"tenants"},
-			"c.yaml": {"mysql_connections"}},
+			"c.yaml": {"mysql_connection_usage_percent"}},
 	})
 	var got []string
 	for _, f := range tree.Findings {
@@ -328,7 +328,7 @@ func TestJudge_ATenantFilesStrayTopLevelKeyIsOneErrorOnTheFile(t *testing.T) {
 	}
 	want := []string{
 		"error unread defaults a.yaml tenant_file_top_level true ",
-		"error unread mysql_connections c.yaml tenant_file_top_level true ",
+		"error unread mysql_connection_usage_percent c.yaml tenant_file_top_level true ",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("findings %q, want %q", got, want)
@@ -340,7 +340,7 @@ func TestJudge_ATenantFilesStrayTopLevelKeyIsOneErrorOnTheFile(t *testing.T) {
 	for _, b := range Blocks(tree) {
 		blocks = append(blocks, b.File+" "+b.Key+" "+b.Tenant)
 	}
-	if !reflect.DeepEqual(blocks, []string{"a.yaml defaults ", "c.yaml mysql_connections "}) {
+	if !reflect.DeepEqual(blocks, []string{"a.yaml defaults ", "c.yaml mysql_connection_usage_percent "}) {
 		t.Fatalf("blocks %q", blocks)
 	}
 	// A write that leaves the key where it was makes nothing new; one that

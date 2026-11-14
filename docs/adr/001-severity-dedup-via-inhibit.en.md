@@ -85,7 +85,7 @@ inhibit_rules:
   - metric_group
 ```
 
-How to read it: while `shop` has a critical alert firing, warning alerts with the same `metric_group` are not notified. On the alert-rule side, each pair of alerts must carry the same `metric_group`; for example, the Rule Pack's `MariaDBHighConnections` (warning) and `MariaDBHighConnectionsCritical` (critical) both carry `metric_group: "mysql_connections"`.
+How to read it: while `shop` has a critical alert firing, warning alerts with the same `metric_group` are not notified. On the alert-rule side, each pair of alerts must carry the same `metric_group`; for example, the Rule Pack's `MariaDBHighConnections` (warning) and `MariaDBHighConnectionsCritical` (critical) both carry `metric_group: "mysql_connection_usage_percent"`.
 
 ## Consequences and Known Limitations
 

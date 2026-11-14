@@ -474,12 +474,11 @@ RULE_PACK_CATALOG = {
     'mariadb': {
         'label': 'MariaDB / MySQL',
         'critical_seeds': (
-            'mysql_connections_critical',
-            # ⛔ #951 added this key "for parity" and put it under `defaults:`,
-            # where it could not do the job the commit message claimed it did.
-            # 30/50 is the saturation pair from #944 (PMM pt-osc, Nichter); it
-            # only ever reaches MariaDBHighThreadsRunningCritical from here.
-            'mysql_threads_running_critical',
+            'mysql_connection_usage_percent_critical',
+            # No mysql_threads_running_critical (#3778): its base is
+            # declared-only (optional_overrides, no platform value), and a
+            # critical row is admitted on `defaults[<base>]` only — this file
+            # writes no such base, so the seed could never be served.
             'mysql_replication_lag_critical',
         ),
     },
@@ -954,7 +953,7 @@ def _tenant_override_rows(tenant: str, rule_packs: list[str]) -> dict:
     Add a few example overrides from the first rule pack. Reads the BASE tier
     only — before #1218 this slice ran over a mapping that still held the
     `_critical` keys, so `--rule-packs mariadb` spent one of its three
-    illustrative lines on `mysql_connections_critical` for whichever pack
+    illustrative lines on `mysql_connection_usage_percent_critical` for whichever pack
     happened to be first, and on nothing for every other pack.
 
     The critical tier goes in for EVERY selected pack — not just the first.

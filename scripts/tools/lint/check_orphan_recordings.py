@@ -69,9 +69,6 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule files / manifests as their
 # per-record disposition (rewire the intended consumer vs delete) is tracked
 # in #1204 (TRK-341). EXIT-LOCKED: entries must be removed as fixes land.
 KNOWN_ORPHANS: dict[str, str] = {
-    # #1204 D-del: the other 11 were deleted; this one is wired by #1320
-    # (connection-usage ratio alerts).
-    "tenant:mysql_connection_usage:ratio": "no consumer yet — #1320 wires it (#1204 D-del)",
 }
 
 # Intentional no-consumer series — NOT drift, NOT tracked in #1204. These are
