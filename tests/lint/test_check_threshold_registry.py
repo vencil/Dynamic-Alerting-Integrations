@@ -90,7 +90,10 @@ def test_value_edit_without_regen_leaves_the_module_stale(tmp_path):
     """The registry is authored now, so a changed value is not drift — but
     RULE_PACKS (what scaffold generates configs from) must follow it."""
     def bump_value(doc):
-        key = next(iter(doc["keys"]))
+        # A key with no `validation`: a shipped key's value is held to its
+        # sources (D-A A2a), so bumping one alone is an inconsistency, not
+        # the stale-module case this test is about.
+        key = next(k for k, e in doc["keys"].items() if "validation" not in e)
         doc["keys"][key]["value"] = doc["keys"][key]["value"] + 1
     path = _write_registry_variant(tmp_path, bump_value)
     result = gate.run_check(registry_path=path)

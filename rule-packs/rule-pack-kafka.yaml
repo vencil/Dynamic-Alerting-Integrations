@@ -10,7 +10,7 @@
 #   kafka_consumer_lag: 1000   # messages — Consumer lag warning
 #       未啟用（依部署而定）：可容忍的訊息延遲隨各 topic 的吞吐量而定
 #   kafka_under_replicated_partitions: 0   # count — Under-replicated partitions (should be 0)
-#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒經 shadow 報表確認，確認後才出貨
+#       未啟用（可攜，待驗證）：這個值可跨部署沿用，但還沒通過出貨驗證（綁定 promtool 測試、登記廠商或共識依據），通過後才出貨
 #   kafka_broker_count: 3   # count — Minimum broker count warning
 #       未啟用（依部署而定）：預期的 broker 數是各部署的拓撲
 #

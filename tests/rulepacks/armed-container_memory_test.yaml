@@ -1,0 +1,42 @@
+# promtool unit test — the shipped default of container_memory.
+# One tenant, the registry's value as its warning threshold: silent below it,
+# pending once above it, firing when `for:` has passed.
+# tests/rulepacks/test_armed_key_binding.py holds the shape of this file and
+# replays it with the threshold moved to both extremes.
+rule_files:
+  - ../../rule-packs/rule-pack-kubernetes.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      # Working set at 80 % of the memory limit for 5m, then 90 %.
+      - series: 'container_memory_working_set_bytes{namespace="db-armed", pod="app-1", container="app"}'
+        values: '80x20 90x20'
+      - series: 'kube_pod_container_resource_limits{resource="memory", namespace="db-armed", pod="app-1", container="app"}'
+        values: '100x41'
+      - series: 'kube_pod_labels{namespace="db-armed", pod="app-1"}'
+        values: '1x41'
+      - series: 'user_threshold{tenant="db-armed", component="container", metric="memory", severity="warning"}'
+        values: '85x41'
+    promql_expr_test:
+      # Below the threshold, long past `for:` — silent.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PodContainerHighMemory"})
+        eval_time: 4m
+        exp_samples: []
+      # Above it, `for:` not yet served — pending, not firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="pending", alertname="PodContainerHighMemory"})
+        eval_time: 5m30s
+        exp_samples:
+          - labels: '{alertname="PodContainerHighMemory", tenant="db-armed"}'
+            value: 1
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PodContainerHighMemory"})
+        eval_time: 5m30s
+        exp_samples: []
+      # `for:` served — firing.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname="PodContainerHighMemory"})
+        eval_time: 8m
+        exp_samples:
+          - labels: '{alertname="PodContainerHighMemory", tenant="db-armed"}'
+            value: 1
