@@ -2405,7 +2405,7 @@ paths:
             or the forge is degraded (FORGE_UNAVAILABLE). Also, for every write that
             changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE
             when the route generator container cannot judge (reason unreachable, bad_response,
-            amtool_missing, da_guard_missing, generator_too_old, internal_error),
+            da_read_missing, da_guard_missing, generator_too_old, internal_error),
             or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason
             policy_unusable, or policy_unreadable for tenant-api''s own copy); Retry-After;
             nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724)
@@ -2774,7 +2774,7 @@ paths:
             on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes
             a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the
             route generator container cannot judge (reason unreachable, bad_response,
-            amtool_missing, da_guard_missing, generator_too_old, internal_error),
+            da_read_missing, da_guard_missing, generator_too_old, internal_error),
             or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason
             policy_unusable, or policy_unreadable for tenant-api''s own copy); Retry-After;
             nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724)
@@ -2936,7 +2936,7 @@ paths:
             on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes
             a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the
             route generator container cannot judge (reason unreachable, bad_response,
-            amtool_missing, da_guard_missing, generator_too_old, internal_error),
+            da_read_missing, da_guard_missing, generator_too_old, internal_error),
             or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason
             policy_unusable, or policy_unreadable for tenant-api''s own copy); Retry-After;
             nothing written. Also code UPSTREAM_ERROR (#1535, #3173) when the write
@@ -3500,7 +3500,7 @@ paths:
             the forge is degraded (FORGE_UNAVAILABLE) or the config worktree was on
             a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d
             file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator
-            container cannot judge (reason unreachable, bad_response, amtool_missing,
+            container cannot judge (reason unreachable, bad_response, da_read_missing,
             da_guard_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
             when its deployment policy file is unusable (reason policy_unusable, or
             policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.

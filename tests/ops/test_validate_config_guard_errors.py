@@ -87,8 +87,10 @@ def test_an_undeclared_subtree_key_exits_1_end_to_end(tmp_path, cli_argv, capsys
     assert rc == 1, rows
     assert rows["guard_errors"]["status"] == vc.FAIL, rows["guard_errors"]
     # ADR-038 的共用判決列也 FAIL：子目錄 _defaults.yaml 沒人讀的鍵是 error，
-    # 各閘門判到就擋（#3394、#3016）。
-    assert [r for r, v in rows.items() if v["status"] == vc.FAIL] == ["guard_errors", "unread_keys"], rows
+    # 各閘門判到就擋（#3394、#3016）；routes 列就是 `generate-routes --validate`，
+    # 它同樣報這份判決（#3788）。
+    assert [r for r, v in rows.items() if v["status"] == vc.FAIL] == [
+        "routes", "guard_errors", "unread_keys"], rows
 
 
 def test_an_undeclared_subtree_key_switched_off_is_not_a_finding(tmp_path):

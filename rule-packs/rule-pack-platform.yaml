@@ -1074,8 +1074,9 @@ groups:
       # --- tenant-api cannot have writes judged (ADR-036 §5, #2903) ---
       # tenant_api_policy_available is the generator container's `ready`,
       # read by tenant-api at scrape time: its deployment policy file is
-      # usable, amtool is present and the generator is not older than the
-      # policy requires. 0 — or the container unreachable — means every
+      # usable, da-read and da-guard are present and the generator is not
+      # older than the policy requires. 0 — or the container unreachable —
+      # means every
       # content-changing write answers 503 (POLICY_UNAVAILABLE /
       # VALIDATOR_UNAVAILABLE); there is no escape hatch. /ready stays 200
       # on purpose (one replica, `strategy: Recreate`: NotReady would take
@@ -1096,12 +1097,12 @@ groups:
             every write mode) with 503: POLICY_UNAVAILABLE when the deployment
             policy file (generator.policy.existingConfigMap) cannot be read or
             parsed, VALIDATOR_UNAVAILABLE when the container does not answer,
-            has no amtool, or is older than the policy's
+            has no da-read or da-guard, or is older than the policy's
             min_generator_version. Reads are unaffected. The 503 body's
             `reason` and the generator container's log say which; GET
             /v1/status on its socket (the container's probe) shows the
             policy error. Repair the policy ConfigMap, or fix the container
-            (image with generator-service, amtool), and the alert clears on
+            (image with generator-service, da-read, da-guard), and the alert clears on
             the next scrape. There is no escape hatch (ADR-036 §5): the
             previous --policy-unavailable-open is removed, and this gauge no
             longer reflects a _domain_policy.yaml in conf.d or "its last good

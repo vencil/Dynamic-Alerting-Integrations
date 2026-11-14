@@ -18,7 +18,7 @@ lang: zh
 
 | Wrapper action | 來源 | 行為 |
 |---|---|---|
-| **BLOCK** | hadolint `error` level、Vibe 規則 V0/V1/V2/V3 違反 | 擋 commit / PR（須 0；epic AC 7 Critical=0 必須）|
+| **BLOCK** | hadolint `error` level、Vibe 規則 V0/V1/V2/V3/V4 違反 | 擋 commit / PR（須 0；epic AC 7 Critical=0 必須）|
 | **WARN** | hadolint `warning` level | 記入本表（High），不擋 merge |
 | **INFO** | hadolint `info` / `style` level | 僅 log，不列管 |
 
@@ -30,7 +30,7 @@ lang: zh
 
 | Severity | Action | 來源（依層）| Escape 機制 |
 |---|---|---|---|
-| **Critical** | **BLOCK PR**（required check 擋 merge；epic AC 7 要求 Critical=0）| L1 Vibe V0–V3 / hadolint `error`；**L2 / L4** `privileged-container`·`privilege-escalation-container`·`host-network`·`host-pid`·`host-ipc`·`docker-sock`；L2 Mode A `ALLOW_EMPTY_*`/`INSECURE_*=true` | **無 escape**（必修） |
+| **Critical** | **BLOCK PR**（required check 擋 merge；epic AC 7 要求 Critical=0）| L1 Vibe V0–V4 / hadolint `error`；**L2 / L4** `privileged-container`·`privilege-escalation-container`·`host-network`·`host-pid`·`host-ipc`·`docker-sock`；L2 Mode A `ALLOW_EMPTY_*`/`INSECURE_*=true` | **無 escape**（必修） |
 | **Secret 字面（L3）** | **BLOCK**（lint ship 在 0）| L3 key 名像 secret 但值為非空硬編字面 | PR body `bypass-lint: helm-values-secrets` + `reason: <≥30 words>` |
 | **High** | **WARN**（不擋 merge，但**須列管**於本文件 + rationale）| **L2 / L4** `run-as-non-root`·`no-read-only-root-fs`·`unset-cpu·memory-requirements`·`capabilities-add`（wrapper rule）；L1 hadolint `warning` | **L2 / L4**：中央 `EXEMPTIONS` registry（`check_iac_helm.py` / `check_k8s_manifests.py`）+ 本表 rationale，否則未登記 High → BLOCK；L1 hadolint warning 自動入本表 |
 | **Medium / Low** | **INFO**（僅 log，不列管）| 其餘所有 kube-linter check；hadolint `info`/`style` | n/a |
@@ -86,13 +86,27 @@ INFO（不列管，僅記錄）：`components/da-tools/app/Dockerfile:12`、`com
 
 ## 引擎缺席或沒跑成：一律 rc 2（#3611）
 
-L1／L2／L4 與 pint 都經 `scripts/tools/_lib_engine.py` 定位並執行引擎。只有引擎的輸出**證明**它真的檢查了輸入，才算有結論：hadolint 印出 JSON 陣列、helm 算繪出非空內容、kube-linter 印出含 `Reports`／`Summary` 的報告、pint 的日誌有 `entries=N`。
+L1／L2／L4 與 pint 都經 `scripts/tools/_lib_engine.py` 定位並執行引擎。只有引擎的輸出**證明**它真的檢查了輸入，才算有結論：hadolint 印出 JSON 陣列且金絲雀以登記的等級出現（見下方 #3643 一節）、helm 算繪出非空內容、kube-linter 印出含 `Reports`／`Summary` 的報告、pint 的日誌有 `entries=N`。
 
 引擎不在、起不來、逾時，或輸出不符上述證明（例如 docker daemon 沒開、kube-linter 找不到任何 object），結束碼一律是 **2**（沒得到結論），**帶不帶 `--ci` 都一樣**。`--ci` 只決定有發現時要不要回 1。
 
 要跳過某個 hook，用 pre-commit 自己的 `SKIP=<hook id>`。畫面上會顯示 Skipped，不會顯示 Passed。
 
 哪些呼叫點還沒經過 `_lib_engine`，由 `tests/shared/test_engine_call_sites.py` 從 AST 算出來，清單只准縮小。
+
+### hadolint 的等級設定：登記表＋同次金絲雀（#3643）
+
+hadolint 遇到解析不了的設定檔會丟掉整份設定、照預設等級跑完並回 0；鍵拼錯、規則碼不存在時連訊息都沒有。`HADOLINT_*` 環境變數會壓過命令列旗標，Dockerfile 裡一行 `# hadolint ignore=` 就能讓發現消失。這些情況的輸出都是格式正確的 JSON 陣列，所以「有跑」不代表「照 repo 的等級跑」。
+
+- **唯一來源**：等級與受信任 registry 登記在 `check_iac_vibe_rules.py` 的 `HADOLINT_RULES`／`HADOLINT_TRUSTED_REGISTRIES`，wrapper 由它產生 `--error`／`--warning`／`--trusted-registry` 旗標。repo 沒有 `.hadolint.yaml`，放回一個也不會被讀。
+- **隔離**：wrapper 給 hadolint 一個內容為 `{}` 的設定檔（擋掉自動探索）、清掉所有 `HADOLINT_*` 環境變數，並一律加 `--disable-ignore-pragma`。⚠️ 因此 `# hadolint ignore=` 不是豁免管道；合法例外走 PR body 的 `bypass-lint: iac-vibe-rules`。
+- **旗標關不掉的指令由 wrapper 擋（V4）**：`--disable-ignore-pragma` 只管 `ignore=`。`# hadolint shell=<x>` 仍會讓 hadolint 對後面的 RUN 跳過 ShellCheck（error 級的 SC 發現消失），heredoc RUN 裡以 `shellcheck` 開頭的註解（含 `disable=`）會被 ShellCheck 當成自己的指令，hadolint v2.12.0 都沒有旗標可關。wrapper 把這兩類註解判成 BLOCK（`[V4 lint-directive]`），比對的拼法比 hadolint 實際接受的寬。映像的 shell 真的不同時用 `SHELL [...]` 指令；它與 heredoc 的 `#!` 行改變的是映像實際執行的內容，不擋。
+- **同次證明**：每次執行都從 stdin 多送一份金絲雀 Dockerfile。登記表每一列都附一行會觸發該規則的指令，回來的 JSON 必須在 `-` 上以登記的等級各出現恰好一次。金絲雀裡有一個不受信任的 `FROM`，每個受信任 registry 也各有一個 `FROM`，所以 DL3026 恰好一次就代表 registry 有被套用；比對只讀規則碼與等級，不讀行號。不符就是沒有結論，rc 2。金絲雀的發現不計入結果。
+- **哪一列證明什麼**：等級與 hadolint 預設不同的列（DL3007）才是「等級旗標有被套用」的證據；等級等於預設的列（DL3018）只證明規則還會觸發。DL3026 證明的是受信任 registry 有被套用。登記表在 import 時就要求至少有一列非預設等級。
+
+- **真引擎的測試在哪裡跑**：上述性質（金絲雀、環境變數、pragma、設定檔、V4 的拼法）由 `tests/lint/test_check_iac_vibe_rules.py` 對釘版 hadolint 實測，沒有 hadolint 時會 skip。CI 的 `Python Tests` 沒有 hadolint，所以 `Lint` job 在裝完釘版 hadolint 後另跑這個檔，並設 `VIBE_REQUIRE_HADOLINT=1`：找不到 hadolint 就失敗，不是 skip。remote session（`CLAUDE_CODE_REMOTE=true`）走同一個判定。hadolint 升版後多接受一種 pragma 拼法，會在這一步轉紅。
+
+⚠️ 直接下 `hadolint <Dockerfile>` 套用的是 hadolint 的預設等級，不是 repo 的設定。手動檢查請執行 `python3 scripts/tools/lint/check_iac_vibe_rules.py`。
 
 ## Layer 2 — Helm template（TRK-312，kube-linter + Vibe wrapper）
 
@@ -201,4 +215,4 @@ INFO（不列管）：`federation-gateway` / `federation-proxy` / `threshold-exp
 - [epic #448](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/448) — Container/k8s SAST 4-layer
 - [`lint-policy.md`](lint-policy.md) — lint class / bypass / allowlist 治理
 - [`dev-rules.md` §安全紀律](dev-rules.md) — IaC SAST 起手 pointer
-- `.hadolint.yaml`（repo root）— Layer 1 engine config
+- `scripts/tools/lint/check_iac_vibe_rules.py` 的 `HADOLINT_RULES`／`HADOLINT_TRUSTED_REGISTRIES` — Layer 1 引擎等級與受信任 registry 的唯一來源（repo 沒有 `.hadolint.yaml`，[#3643](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3643)）

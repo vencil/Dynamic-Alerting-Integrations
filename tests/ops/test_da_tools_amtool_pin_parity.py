@@ -1,12 +1,13 @@
 """The amtool bundled in the da-tools image is the Alertmanager production runs (#2294).
 
-``generate-routes`` hands the config it writes / applies / ``--validate``s to
-``amtool check-config`` when amtool is on PATH (#2219 / #2260), and the da-tools
-image carries amtool so the CI templates ``da-tools init --ci`` generates get
-that check by default. The check is only worth anything if amtool is the SAME
-parser the cluster loads the config with: an older amtool can accept a field a
-newer Alertmanager rejects (or the reverse), and the verdict would be green on a
-config production refuses.
+``explain-route --trace`` takes the route an alert follows from ``amtool config
+routes test``, and the da-tools image carries amtool for it. The answer is only
+worth anything if amtool is the SAME Alertmanager the cluster runs: another
+version can route an alert differently, and the trace would show a path
+production does not take. (Whether Alertmanager accepts a config is not
+amtool's call: ``generate-routes`` asks da-read, which
+``test_da_read_builds_with_the_amtool_alertmanager_version`` holds to the same
+version.)
 
 The version SSOT is ``k8s/03-monitoring/deployment-alertmanager.yaml``. The
 Dockerfile takes amtool with ``COPY --from=<that image ref>``, and this test
@@ -85,8 +86,8 @@ def test_amtool_lands_on_path() -> None:
     _ref, src, dst = _dockerfile_amtool_copy()
     assert src == "/bin/amtool", f"upstream image ships amtool at /bin/amtool, not {src!r}"
     assert dst == "/usr/local/bin/amtool", (
-        f"amtool must land on PATH as `amtool` (generate-routes looks it up with "
-        f"shutil.which), got {dst!r}")
+        f"amtool must land on PATH as `amtool` (explain-route --trace looks it up "
+        f"there), got {dst!r}")
 
 
 def test_upstream_license_and_notice_ship_with_amtool() -> None:
