@@ -877,6 +877,16 @@ tests:
       values: 1+0x10
     - series: up{job="tenant-exporters", tenant="t9", instance="t9:9104"}
       values: 1+0x10
+    # #3771: the four live exporters' presence series (TenantExporterAbsent's and
+    # MassExporterOutage's anti-join reads each kind's presence metric, not up).
+    - series: mysql_up{job="tenant-exporters", tenant="t6", instance="t6:9104"}
+      values: 1+0x10
+    - series: mysql_up{job="tenant-exporters", tenant="t7", instance="t7:9104"}
+      values: 1+0x10
+    - series: mysql_up{job="tenant-exporters", tenant="t8", instance="t8:9104"}
+      values: 1+0x10
+    - series: mysql_up{job="tenant-exporters", tenant="t9", instance="t9:9104"}
+      values: 1+0x10
     alert_rule_test:
     - eval_time: 5m
       alertname: MassExporterOutage
@@ -888,8 +898,10 @@ tests:
         exp_annotations:
           summary: Mass exporter outage (6 tenants) — shared-dependency failure suspected
           description: |
-            More than 5 tenants AND over 10% of the expected-exporter fleet
-            simultaneously have no healthy up{job="tenant-exporters"}==1 target.
+            More than 5 tenants AND over 10% of the declared (tenant, db_type)
+            pairs simultaneously have no exporter of that
+            db_type answering under job="tenant-exporters"
+            (that kind's presence metric absent).
             Both conditions together mean this is almost certainly a SHARED
             failure (node pool drained, network partition, image-pull outage on a
             rolling restart) rather than N independent exporter deaths or a

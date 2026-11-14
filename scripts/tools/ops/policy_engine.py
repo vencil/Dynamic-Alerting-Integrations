@@ -14,6 +14,10 @@ DSL 運算子：
   matches     — 正則表達式匹配
   one_of      — 值必須在指定清單內
   contains    — 字串包含子字串
+  （欄位值是 list 時——`_metadata.db_type`（#3771）、`tags`、`groups`——逐元素比：
+   主規則的值運算子一律要每個元素都成立（空 list 只滿足 `not_equals`）；`when` 條件裡
+   `equals`／`matches`／`one_of`／`contains` 任一元素成立即成立，`not_equals` 仍要
+   每個元素都不等）
 
 條件式規則：
   when 子句：僅在條件成立時才評估主規則。
@@ -745,13 +749,20 @@ def _to_comparable(value: Any) -> Union[float, str]:
     return str(value)
 
 
-def _evaluate_operator(operator: str, actual: Any, expected: Any) -> bool:
+#: Value operators read element by element on a list-valued field (#3771).
+_ELEMENTWISE_OPERATORS = frozenset({"equals", "not_equals", "matches", "one_of", "contains"})
+
+
+def _evaluate_operator(operator: str, actual: Any, expected: Any, *,
+                       condition: bool = False) -> bool:
     """評估單一運算子。
 
     Args:
         operator: 運算子名稱。
         actual: 實際值。
         expected: 規則期望值。
+        condition: True 表示這是 `when` 條件（問「這個租戶是不是那一類」），
+            False 表示主規則的約束（問「它違規了沒」）；只影響 list 欄位，見下。
 
     Returns:
         True 表示「符合規則」（無違規），False 表示「違反規則」。
@@ -769,6 +780,27 @@ def _evaluate_operator(operator: str, actual: Any, expected: Any) -> bool:
 
     if operator == "forbidden":
         return actual is None
+
+    # A list-valued field (`_metadata.db_type` since #3771, `tags`, `groups`)
+    # is read element by element.
+    # * A rule's constraint holds only when EVERY element satisfies it — all
+    #   five value operators — so a list cannot slip a value past the rule:
+    #   `one_of: [mariadb, postgresql]` or `equals: mariadb` against
+    #   [mariadb, oracle] is a violation (#3771 review). An empty list
+    #   satisfies only `not_equals`.
+    # * A `when` condition (*condition*) asks whether the rule applies, not
+    #   whether it is violated: `equals` / `matches` / `one_of` / `contains`
+    #   hold when SOME element does, so a tenant declaring [mariadb, redis]
+    #   stays under a rule guarded by `when: one_of [mariadb, postgresql]`.
+    #   `not_equals` keeps "no element equals".
+    # A one-element list reads as the scalar it replaces (`db_type: mariadb`
+    # is served as ["mariadb"]).
+    if isinstance(actual, list) and operator in _ELEMENTWISE_OPERATORS:
+        if operator == "not_equals":
+            return all(_evaluate_operator(operator, a, expected) for a in actual)
+        if not condition:
+            return bool(actual) and all(_evaluate_operator(operator, a, expected) for a in actual)
+        return any(_evaluate_operator(operator, a, expected) for a in actual)
 
     if operator == "equals":
         return str(actual) == str(expected)
@@ -887,7 +919,7 @@ def _holds(operator: str, actual: Any, expected: Any) -> bool:
     if isinstance(actual, ServedThreshold):
         return any(v is not None and _evaluate_threshold(operator, v, expected)
                    for _s, _e, v in actual.segments)
-    return _evaluate_operator(operator, actual, expected)
+    return _evaluate_operator(operator, actual, expected, condition=True)
 
 
 # ---------------------------------------------------------------------------

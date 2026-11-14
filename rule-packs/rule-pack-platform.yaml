@@ -2018,8 +2018,8 @@ groups:
       # --- Mass exporter outage: page-storm sentinel (#869, scale guard) ---
       # When a shared dependency (node pool, network partition, registry
       # outage on a rolling restart) knocks out MANY tenants' exporters at
-      # once, TenantExporterAbsent fans out into one critical PER tenant — a
-      # page storm. This single sentinel collapses that into ONE actionable
+      # once, TenantExporterAbsent fans out into one critical PER (tenant,
+      # db_type) — a page storm. This single sentinel collapses that into ONE actionable
       # page. It mirrors the DefaultsTruncationStorm idiom (above): aggregate
       # the RAW anti-join expression (NOT the alertname — `count(...)(Foo)` is
       # not valid PromQL, and there is no ALERTS{} idiom in this repo), and use
@@ -2030,7 +2030,21 @@ groups:
       # would split each count PER db_type and the ratio below would degrade into
       # per-db_type ratios. Dropping db_type too yields one mixed-DB count / one
       # mixed-DB total. Counting the raw expression (not ALERTS) also means it
-      # fires WITHOUT waiting for TenantExporterAbsent's for:3m per tenant. The
+      # fires WITHOUT waiting for TenantExporterAbsent's for:3m per tenant.
+      # UNIT (#3771): the anti-join is TenantExporterAbsent's own —
+      # `unless on(tenant, db_type) (<presence>)`, the presence expression
+      # generated from scripts/tools/_lib_exporter_presence.py and written into
+      # this expr (its --write; do not edit the expr by hand). The FLOOR (> 5)
+      # counts TENANTS with at least one absent pair
+      # (`count without (tenant) (count without (db_type) (...))`): one tenant
+      # declaring seven kinds, all down, is seven pairs but no shared failure
+      # (#3771 review; promtool R5). The RATIO (> 0.1) is of (tenant, db_type)
+      # PAIRS: a tenant declaring [mariadb, redis] adds 2 to the denominator,
+      # and 1 to the numerator when only its mariadb exporter is gone.
+      # INLINE, NOT A RECORDING RULE (#3771 review): reading a record the
+      # liveness pack writes made this rule depend on that pack being loaded in
+      # the same Prometheus — loaded alone it read every declared pair as
+      # absent. Inline, it reads only raw tenant-labelled series. The
       # `without(...)` form + no tenant label is exactly why this cannot live in
       # rule-packs/ (lint_custom_rules denies `without(tenant)` and mandates a
       # tenant label).
@@ -2047,7 +2061,8 @@ groups:
       #                                          fleet down ⇒ systemic, not N
       #                                          independent deaths.
       # `$value` is clause (a) (the down COUNT) because it is the LHS of the
-      # top-level `and`, so the "{{ $value }} tenants" summary stays a count.
+      # top-level `and`, so the "{{ $value }} tenants" summary stays a count
+      # (of tenants, since #3771's review).
       # JOB-PRESENCE GATE (`unless on() absent(...)`): when the ENTIRE
       # tenant-exporters job is absent (all up series gone — SD / scrape-config
       # regression), every expected tenant looks "down", the ratio is 1.0, and
@@ -2073,10 +2088,38 @@ groups:
       - alert: MassExporterOutage
         expr: |
           (
-            count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant) (up{job="tenant-exporters"} == 1)) > 5
+            count without (tenant) (count without (db_type) (
+              max without(instance, pod) (tenant_expected_exporter)
+              unless on(tenant, db_type) (
+                label_replace(mysql_up{job="tenant-exporters"}, "db_type", "mariadb", "", "")
+                or label_replace(pg_up{job="tenant-exporters"}, "db_type", "postgresql", "", "")
+                or label_replace(redis_up{job="tenant-exporters"}, "db_type", "redis", "", "")
+                or label_replace(mongodb_up{job="tenant-exporters"}, "db_type", "mongodb", "", "")
+                or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "db_type", "elasticsearch", "", "")
+                or label_replace(oracledb_up{job="tenant-exporters"}, "db_type", "oracle", "", "")
+                or label_replace(db2_up{job="tenant-exporters"}, "db_type", "db2", "", "")
+                or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "db_type", "clickhouse", "", "")
+                or label_replace(kafka_brokers{job="tenant-exporters"}, "db_type", "kafka", "", "")
+                or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "db_type", "rabbitmq", "", "")
+              )
+            )) > 5
             and
             (
-              count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant) (up{job="tenant-exporters"} == 1))
+              count without (tenant, db_type) (
+                max without(instance, pod) (tenant_expected_exporter)
+                unless on(tenant, db_type) (
+                  label_replace(mysql_up{job="tenant-exporters"}, "db_type", "mariadb", "", "")
+                  or label_replace(pg_up{job="tenant-exporters"}, "db_type", "postgresql", "", "")
+                  or label_replace(redis_up{job="tenant-exporters"}, "db_type", "redis", "", "")
+                  or label_replace(mongodb_up{job="tenant-exporters"}, "db_type", "mongodb", "", "")
+                  or label_replace(elasticsearch_exporter_build_info{job="tenant-exporters"}, "db_type", "elasticsearch", "", "")
+                  or label_replace(oracledb_up{job="tenant-exporters"}, "db_type", "oracle", "", "")
+                  or label_replace(db2_up{job="tenant-exporters"}, "db_type", "db2", "", "")
+                  or label_replace(ClickHouseMetrics_TCPConnection{job="tenant-exporters"}, "db_type", "clickhouse", "", "")
+                  or label_replace(kafka_brokers{job="tenant-exporters"}, "db_type", "kafka", "", "")
+                  or label_replace(rabbitmq_up{job="tenant-exporters"} or rabbitmq_identity_info{job="tenant-exporters"}, "db_type", "rabbitmq", "", "")
+                )
+              )
               /
               count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter))
             ) > 0.1
@@ -2089,8 +2132,10 @@ groups:
         annotations:
           summary: "Mass exporter outage ({{ $value }} tenants) — shared-dependency failure suspected"
           description: |
-            More than 5 tenants AND over 10% of the expected-exporter fleet
-            simultaneously have no healthy up{job="tenant-exporters"}==1 target.
+            More than 5 tenants AND over 10% of the declared (tenant, db_type)
+            pairs simultaneously have no exporter of that
+            db_type answering under job="tenant-exporters"
+            (that kind's presence metric absent).
             Both conditions together mean this is almost certainly a SHARED
             failure (node pool drained, network partition, image-pull outage on a
             rolling restart) rather than N independent exporter deaths or a

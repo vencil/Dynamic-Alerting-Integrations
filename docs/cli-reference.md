@@ -2806,6 +2806,8 @@ da-tools evaluate-policy --config-dir <PATH> [--policy <FILE>] [--json] [--ci]
 
 `required`、`forbidden`、`equals`、`not_equals`、`gte`、`lte`、`gt`、`lt`、`matches`、`one_of`、`contains`
 
+欄位值是 list 時（`_metadata.db_type`、`_metadata.tags`、`_metadata.groups`）逐元素比。**主規則**（違規判定）的 `equals`／`not_equals`／`matches`／`one_of`／`contains` 一律要**每個**元素都成立，列表不能夾帶規則以外的值：`one_of: [mariadb, postgresql]` 或 `equals: mariadb` 對 `[mariadb, oracle]` 都是違規；空 list 只滿足 `not_equals`。**`when` 條件**問的是「規則適不適用」：`equals`／`matches`／`one_of`／`contains` 有一個元素成立即成立（`when: {target: _metadata.db_type, operator: one_of, value: [mariadb, postgresql]}` 對 `[mariadb, redis]` 成立，多 DB 租戶不會逃過主規則），`not_equals` 仍要每個元素都不等。`db_type` 自 [#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771) 起以 list 送出（寫成字串的也是一元素 list），所以既有的單值 `db_type` 規則讀法不變。⚠️ `tags`／`groups` 過去是把整個列表當成一個字串（`['a', 'b']`）比，對它們的 `equals`／`not_equals`／`one_of`／`matches`／`contains` 結果因此改變；拿 `equals`／`contains` 在主規則問「有沒有這個 tag」的政策，現在要求每個 tag 都等於／包含該值。單把它搬進 `when`，或改用 `one_of`，都不等價：`when` 只決定規則適不適用，本身不會產生違規；`one_of: [prod]` 拒收 `[prod, other]`。要「列表裡至少有 `prod`、其他值不限」，寫成 `when: {target: _metadata.tags, operator: not_equals, value: prod}` 加主規則 `{target: _metadata.tags, operator: equals, value: prod}`：沒有任何元素等於 `prod` 時 `when` 成立，主規則對這樣的列表必然違規；有 `prod` 的租戶 `when` 不成立而跳過。沒寫 `tags`、或寫成空列表的租戶不評估（空列表與沒寫同讀），與舊寫法相同；要一併抓，另加一條 `required`。舊的 `contains` 是對整串文字找子字串，「某個 tag 含有這段字」目前沒有對應寫法。
+
 **哪些寫法會被拒**（[#2987](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2987)；主規則與 `when` 同一套，任一條命中即結束碼 `2`、不評估任何規則，訊息指名第幾條規則、哪個欄位、為什麼）：
 
 - `required`／`forbidden` 只看有沒有值，不收 `value`（沒寫 `operator` 時缺省為 `required`，`value` 會被默默忽略）。

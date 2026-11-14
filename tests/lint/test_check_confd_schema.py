@@ -175,6 +175,19 @@ class TestValidateDir:
         _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
         assert any("maraidb" in v for v in viol)
 
+    def test_db_type_list_accepted(self, confd, schema):
+        # #3771: a tenant running several kinds lists them.
+        _write(confd, "db-a.yaml", 'tenants:\n  db-a:\n    _metadata:\n      db_type: [mariadb, redis]\n')
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert viol == []
+
+    @pytest.mark.parametrize("value", ["[]", "[mariadb, mariadb]", "[mariadb, maraidb]"])
+    def test_db_type_list_empty_repeated_or_typo_rejected(self, confd, schema, value):
+        # #3771: the list is non-empty, unique, and each item is in the enum.
+        _write(confd, "db-a.yaml", f'tenants:\n  db-a:\n    _metadata:\n      db_type: {value}\n')
+        _checked, viol, _skipped = validate_dir(confd, schema, jsonschema)
+        assert viol, value
+
     def test_no_db_type_is_opt_out_not_error(self, confd, schema):
         # Opt-in design: a tenant with _metadata but no db_type is NOT monitored
         # for liveness and that must stay valid (not forced-required).

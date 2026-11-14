@@ -162,20 +162,23 @@ def extract_environment(tenant_name: str, metadata: dict) -> str:
     return ""
 
 
-def extract_db_type(metadata: dict) -> str:
-    """Return the db_type the tenant declares in `_metadata`, or "".
+def extract_db_type(metadata: dict) -> list[str]:
+    """Return the db_types the tenant declares in `_metadata`, in order; [] if none.
 
-    Not inferred from metric keys (#2115 B4): Go has exactly one db_type --
-    the declared one. The exporter's tenant_expected_exporter liveness series
-    and tenant-api's list/search read only that, and the portal falls back to
+    Not inferred from metric keys (#2115 B4): Go reads only the declared
+    db_type. The exporter's tenant_expected_exporter liveness series and
+    tenant-api's list/search read only that, and the portal falls back to
     this file when tenant-api is down, so an inferred value here would show
-    the same tenant with two different db_types. "" means "not declared",
-    which is also "not liveness-monitored"."""
+    the same tenant with two different db_types. #3771: `db_type` is a list
+    (served as one; a string is one kind), so this returns every declared
+    kind. [] means "not declared", which is also "not liveness-monitored"."""
     if isinstance(metadata, dict):
-        db_type = metadata.get("db_type", "")
+        db_type = metadata.get("db_type", [])
         if isinstance(db_type, str):
-            return db_type
-    return ""
+            db_type = [db_type]
+        if isinstance(db_type, list):
+            return [str(d) for d in db_type if isinstance(d, str) and d]
+    return []
 
 
 def extract_tags(metadata: dict) -> list[str]:
@@ -355,8 +358,8 @@ def build_tenant_metadata(config_dir: Path, at: str | None = None,
             "groups": group_memberships,
         }
 
-        # Clean up empty fields
-        for key in ["environment", "region", "domain", "db_type"]:
+        # Clean up empty fields (db_type is a list, [] when none — #3771)
+        for key in ["environment", "region", "domain"]:
             if not tenant_entry[key]:
                 tenant_entry[key] = ""
 
@@ -422,7 +425,8 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
     """Build multi-dimension group views from tenant metadata.
 
     Produces three dimension views: by-domain, by-db_type, by-region.
-    Each view maps dimension value → list of tenant IDs.
+    Each view maps dimension value → list of tenant IDs. A list-valued field
+    (db_type, #3771) puts the tenant under each of its values.
     """
     dimensions = {
         "by_domain": "domain",
@@ -435,8 +439,9 @@ def _build_dimension_groups(tenant_metadata: dict[str, dict]) -> dict:
         groups: dict[str, list[str]] = {}
         for tenant_id, meta in tenant_metadata.items():
             value = meta.get(field, "")
-            if value:
-                groups.setdefault(value, []).append(tenant_id)
+            for v in (value if isinstance(value, list) else [value]):
+                if v:
+                    groups.setdefault(v, []).append(tenant_id)
         # Sort member lists for deterministic output
         for members in groups.values():
             members.sort()

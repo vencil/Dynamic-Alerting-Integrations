@@ -146,7 +146,8 @@ type SearchResponse struct {
 //	environment  — exact match (e.g. "prod", "staging").
 //	tier         — exact match (e.g. "tier1").
 //	domain       — exact match.
-//	db_type      — exact match.
+//	db_type      — exact match against any one of the tenant's
+//	               declared kinds (#3771: db_type is a list).
 //	tag          — single tag the tenant must have in its
 //	               _metadata.tags list (case-sensitive — tags are
 //	               canonical labels, not free text).
@@ -169,7 +170,7 @@ type SearchResponse struct {
 // @Param       environment query    string false "Exact environment"
 // @Param       tier        query    string false "Exact tier"
 // @Param       domain      query    string false "Exact domain"
-// @Param       db_type     query    string false "Exact db_type"
+// @Param       db_type     query    string false "A db_type the tenant declares (exact match against any one of its kinds)"
 // @Param       tag         query    string false "A tag the tenant must carry (case-sensitive)"
 // @Param       page_size   query    int    false "Page size (default 50, max 500)"
 // @Param       offset      query    int    false "Offset (default 0)"
@@ -304,7 +305,7 @@ func applyFilters(in []TenantSummary, p *searchParams) []TenantSummary {
 		if p.domain != "" && t.Domain != p.domain {
 			continue
 		}
-		if p.dbType != "" && t.DBType != p.dbType {
+		if p.dbType != "" && !containsString(t.DBType, p.dbType) {
 			continue
 		}
 		if p.tag != "" && !containsString(t.Tags, p.tag) {
@@ -334,8 +335,10 @@ func matchesFreeText(t TenantSummary, qLower string) bool {
 	if strings.Contains(strings.ToLower(t.Domain), qLower) {
 		return true
 	}
-	if strings.Contains(strings.ToLower(t.DBType), qLower) {
-		return true
+	for _, dbType := range t.DBType {
+		if strings.Contains(strings.ToLower(dbType), qLower) {
+			return true
+		}
 	}
 	for _, tag := range t.Tags {
 		if strings.Contains(strings.ToLower(tag), qLower) {

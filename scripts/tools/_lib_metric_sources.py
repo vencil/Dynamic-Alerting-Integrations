@@ -302,6 +302,12 @@ def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = Non
             continue
         fam = resolve_family(metric)
         if fam is None:
+            # A tenant exporter's own series, read under the tenant-exporters
+            # job (#3771: the liveness alerts read each kind's presence metric
+            # inline): the Operator doc's ServiceMonitor scrapes those targets
+            # as that job (#3720), so they exist in an Operator install too.
+            if jobs and all(job == ("=", TENANT_EXPORTER_JOB) for job in jobs):
+                continue
             reasons.append(f"{metric}: no modelled source (FAMILY_TABLE / FAMILY_EXACT)")
             continue
         _key, kind, spec = fam

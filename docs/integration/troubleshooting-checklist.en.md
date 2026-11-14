@@ -1181,15 +1181,15 @@ The alert resolves on its own: once the next run (or the manual one) succeeds, t
 
 **Symptom**: `MassExporterOutage` (critical) fires with summary "Mass exporter outage (N tenants)", alongside a batch of `TenantExporterAbsent`.
 
-It fires when **both** more than 5 tenants and more than 10% of expected tenant exporters have no healthy scrape target. Together, those almost always mean a **shared dependency** failed, not N exporters dying independently.
+It fires when **both** more than 5 tenants have a declared kind with no exporter answering (that kind's presence metric, such as `mysql_up`, absent) and more than 10% of the declared (tenant, db_type) pairs are absent ([#3771](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3771)). The floor counts tenants, so one tenant declaring many kinds that all go down does not trip it; the ratio counts pairs: a tenant declaring `[mariadb, redis]` counts 2 in the denominator, and 1 in the numerator when only its mariadb exporter is gone. Together, those almost always mean a **shared dependency** failed, not N exporters dying independently.
 
 ```mermaid
 flowchart TD
-    A[Tenant exporter has no up==1] --> B{Whole tenant-exporters job absent?}
+    A[One db_type of a tenant has no exporter answering] --> B{Whole tenant-exporters job absent?}
     B -- yes --> J[TenantExporterJobAbsent<br/>this alert stays silent]
     B -- no --> C{More than 5 AND more than 10%?}
     C -- yes --> M[MassExporterOutage:<br/>treat as ONE incident, find the common cause]
-    C -- no --> T[Individual TenantExporterAbsent:<br/>handle per tenant]
+    C -- no --> T[Individual TenantExporterAbsent:<br/>handle per tenant and db_type]
 ```
 
 ⛔ **Do not fix tenants one by one.** Restarting exporters individually does not address the common cause and only delays finding it.
@@ -1214,7 +1214,7 @@ kubectl get events -A --sort-by=.lastTimestamp | tail -30
 
 **Most likely cause**: a node pool drained or upgraded, a network partition, or the image registry unreachable during a rolling restart.
 
-**Fix**: fix the common cause itself — restore the nodes, fix the network or NetworkPolicy, fix registry access. Once it is gone, exporters usually return to `up==1` without manual action, and the `TenantExporterAbsent` alerts resolve together with this one.
+**Fix**: fix the common cause itself — restore the nodes, fix the network or NetworkPolicy, fix registry access. Once it is gone, exporters usually answer scrapes again without manual action, and the `TenantExporterAbsent` alerts resolve together with this one.
 
 **If not this**:
 - (a) Prometheus itself is unhealthy (Pod restarting, starved of resources) → other scrape jobs degrade at the same time; check the Prometheus Pod first

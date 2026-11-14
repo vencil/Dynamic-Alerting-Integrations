@@ -22,7 +22,7 @@
         "dead_entries": [],
         "value": null,
         "served": {
-          "db_type": "",
+          "db_type": [],
           "domain": "",
           "environment": "",
           "groups": [],

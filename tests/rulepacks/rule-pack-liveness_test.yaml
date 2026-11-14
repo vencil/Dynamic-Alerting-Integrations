@@ -32,6 +32,9 @@ tests:
       # sustained 3m absence → for:3m never elapses.
       - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
         values: '1 1 1 1 _ _ _ _ 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
+        values: '1x3 _ _ _ _ 1x21'
     alert_rule_test:
       - eval_time: 12m
         alertname: TenantExporterAbsent
@@ -50,7 +53,13 @@ tests:
       # db-a exporter goes stale at ~1m30s (sample 3) and stays gone.
       - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
         values: '1 1 1 stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
+        values: '1x2 stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale'
       - series: 'up{job="tenant-exporters", tenant="db-b", instance="db-b:9104"}'
+        values: '1x30'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-b", instance="db-b:9104"}'
         values: '1x30'
     alert_rule_test:
       # at 3m: absence started ~1m30s ago → for:3m NOT yet elapsed → still pending.
@@ -69,8 +78,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant db-a (mariadb)"
               summary_zh: "租戶 db-a (mariadb) 的 exporter 缺席"
-              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant db-a (db_type=mariadb) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 db-a (db_type=mariadb) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -85,6 +94,9 @@ tests:
       # absent for only ~2m (samples 3..6 stale) then back — under the 3m debounce.
       - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
         values: '1 1 1 stale stale stale stale 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a:9104"}'
+        values: '1x2 stale stale stale stale 1x22'
     alert_rule_test:
       - eval_time: 12m
         alertname: TenantExporterAbsent
@@ -112,8 +124,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant db-a (mariadb)"
               summary_zh: "租戶 db-a (mariadb) 的 exporter 缺席"
-              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant db-a (db_type=mariadb) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 db-a (db_type=mariadb) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""
@@ -126,7 +138,13 @@ tests:
         values: '1x30'
       - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
         values: '1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '1x2 stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale'
       - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x30'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
         values: '1x30'
     alert_rule_test:
       - eval_time: 6m
@@ -141,8 +159,14 @@ tests:
         values: '1x30'
       - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
         values: '1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-0:9104"}'
+        values: '1x2 stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale'
       - series: 'up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
         values: '1 1 1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0'
+      # exporter-presence series of the target above (#3771): present while it answers.
+      - series: 'mysql_up{job="tenant-exporters", tenant="db-a", instance="db-a-1:9104"}'
+        values: '1x2 stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale stale'
     alert_rule_test:
       - eval_time: 6m
         alertname: TenantExporterAbsent
@@ -155,8 +179,8 @@ tests:
             exp_annotations:
               summary: "Exporter absent for tenant db-a (mariadb)"
               summary_zh: "租戶 db-a (mariadb) 的 exporter 缺席"
-              description: "No healthy up{job=\"tenant-exporters\"}==1 target for tenant db-a (db_type=mariadb) for 3m. Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If this tenant was de-provisioned, ensure its conf.d _metadata was removed too (otherwise this is a stale-config false positive)."
-              description_zh: "租戶 db-a (db_type=mariadb) 已 3 分鐘沒有健康的 up{job=\"tenant-exporters\"}==1 目標。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若此租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
+              description: "No mariadb exporter of tenant db-a has answered a scrape under job=\"tenant-exporters\" for 3m (its presence metric is absent; other exporter kinds of the tenant may still be up). Either the exporter pod is down (up=0, Service alive) or the tenant's scrape target was removed (series absent). If the tenant no longer runs mariadb, remove it from _metadata.db_type; if the tenant was de-provisioned, remove its conf.d _metadata too (otherwise this is a stale-config false positive)."
+              description_zh: "租戶 db-a 的 mariadb exporter 已 3 分鐘沒有在 job=\"tenant-exporters\" 下回應 scrape（它的存在指標缺席；同租戶其他種類的 exporter 可能仍正常）。可能是 exporter pod 掛了 (up=0、Service 還在) 或租戶的 scrape target 被移除 (series 缺席)。若租戶已不再使用 mariadb，請從 _metadata.db_type 移除；若租戶已退租，請確認 conf.d _metadata 也一併移除 (否則這是殘留組態造成的假陽性)。"
               runbook_url: ""
               owner: ""
               tier: ""

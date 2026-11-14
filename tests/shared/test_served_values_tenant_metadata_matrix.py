@@ -128,8 +128,9 @@ def test_matches_served_values(where, tmp_path):
     assert meta["tenant-a"]["owner"] == _OWNER_A[where], where
     assert meta["tenant-b"]["owner"] == "team-b", where              # 對照組不變
     # db_type 只認宣告值：tenant-a 繼承了 mysql_connections 也不推成 mariadb。
-    assert meta["tenant-a"]["db_type"] == "", where
-    assert meta["tenant-b"]["db_type"] == "redis", where
+    # #3771：db_type 是列表（字串宣告＝一元素），沒宣告是 []。
+    assert meta["tenant-a"]["db_type"] == [], where
+    assert meta["tenant-b"]["db_type"] == ["redis"], where
     for tenant in ("tenant-a", "tenant-b"):
         # 繼承的 mysql_connections 與 redis_connected_clients 都算數。
         assert meta[tenant]["rule_packs"] == ["mariadb", "operational", "platform", "redis"], (
