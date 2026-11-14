@@ -89,12 +89,19 @@ groups:
       #     the alert never fired for a plugin deployment.
       #   - `> 0` drops a node whose limit reads 0 instead of clamping it to 1,
       #     which read a few bytes of use as thousands of percent.
+      #   - Each side is tagged before `or`: `or` keeps the left sample when both
+      #     sides carry the same label set, which would hide a fuller reading
+      #     from the plugin behind the kbudde one.
       - record: tenant:rabbitmq_node_mem_percent:ratio
         expr: |
           max by(tenant) (
-            100 * rabbitmq_node_mem_used / (rabbitmq_node_mem_limit > 0)
+            label_replace(
+              100 * rabbitmq_node_mem_used / (rabbitmq_node_mem_limit > 0),
+              "mem_source", "exporter", "", "")
             or
-            100 * rabbitmq_process_resident_memory_bytes / (rabbitmq_resident_memory_limit_bytes > 0)
+            label_replace(
+              100 * rabbitmq_process_resident_memory_bytes / (rabbitmq_resident_memory_limit_bytes > 0),
+              "mem_source", "plugin", "", "")
           )
 
       # Unacknowledged messages (typically indicates consumer slowness)

@@ -953,13 +953,17 @@ keys:
     arming: default
     portability: portable
     validation:
-      basis: vendor
+      basis: consensus
       sources:
       - org: "awesome-prometheus-alerts"
         url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
         quote: "query: \"rabbitmq_node_mem_used / rabbitmq_node_mem_limit * 100 > 90 and rabbitmq_node_mem_limit > 0\""
         value: 90
         tier: warning
+      - org: "Grafana"
+        url: https://raw.githubusercontent.com/grafana/jsonnet-libs/master/rabbitmq-mixin/alerts/clusterAlerts.yaml
+        quote: "expr: rabbitmq_process_resident_memory_bytes / rabbitmq_resident_memory_limit_bytes * 100 > 90"
+        value: 90
   rabbitmq_connections:
     pack: rabbitmq
     tier: defaults

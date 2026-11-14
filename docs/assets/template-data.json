@@ -149,7 +149,7 @@
       "category": "quickstart",
       "packs": ["rabbitmq"],
       "desc": { "zh": "最小 RabbitMQ 監控配置", "en": "Minimal RabbitMQ monitoring config." },
-      "yaml": "# RabbitMQ Quick Start\nrabbitmq_queue_messages: \"100000\"\nrabbitmq_node_mem_percent: \"80\"\nrabbitmq_connections: \"1000\"\nrabbitmq_consumers: \"5\"\nrabbitmq_unacked_messages: \"10000\"\n\n_routing:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
+      "yaml": "# RabbitMQ Quick Start\nrabbitmq_queue_messages: \"100000\"\nrabbitmq_node_mem_percent: \"90\"\nrabbitmq_connections: \"1000\"\nrabbitmq_consumers: \"5\"\nrabbitmq_unacked_messages: \"10000\"\n\n_routing:\n  receiver:\n    type: webhook\n    url: https://hooks.example.com/alerts\n  group_wait: \"30s\"\n  repeat_interval: \"4h\""
     },
     {
       "id": "quick-clickhouse",
