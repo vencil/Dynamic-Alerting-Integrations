@@ -117,6 +117,12 @@ TOOL_FILES=(
     ops/offboard_tenant.py
     ops/deprecate_rule.py
     ops/lint_custom_rules.py
+    # #2744 — validate-config's json_schema row CALLS this module's verdict
+    # (ops/validate_config.py check_json_schema); without it beside the tool
+    # the row is WARN "not checked". Library here, not a da-tools command
+    # (_lint_helpers.BUILD_EXEMPT). Imports _lib_io, _lib_parse_cache,
+    # _lib_parse_tree, _lib_exitcodes (all below) and jsonschema (Dockerfile).
+    lint/check_confd_schema.py
     # v2.0.0 quality & governance tools
     ops/policy_engine.py
     ops/policy_opa_bridge.py

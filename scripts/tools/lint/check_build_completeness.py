@@ -92,9 +92,14 @@ _SIBLING_MODULE_DIRS = ("", "ops", "dx", "lint")
 #     platform-defaults 以 $ref 引用 tenant-config，所以兩份必須同船；
 #     routing-profiles（#2245）同理，也以 $ref 引用 tenant-config。
 REQUIRED_DATA_FILES: dict = {
+    # check_confd_schema.py (#2744) is a module, not data, and is listed here
+    # for the same reason: validate_config imports it inside a try/except
+    # ImportError, so the import scan cannot require it, and without it the
+    # json_schema row is WARN "not checked" instead of a verdict.
     "validate_config.py": ("tenant-config.schema.json",
                            "platform-defaults.schema.json",
-                           "routing-profiles.schema.json"),
+                           "routing-profiles.schema.json",
+                           "check_confd_schema.py"),
     "_observed_map_lib.py": ("metric_observed_map.yaml",),
     "analyze_rule_pack_gaps.py": ("metric-dictionary.yaml",),
     "_grar_validate.py": ("configmap-rules-platform.yaml",),
