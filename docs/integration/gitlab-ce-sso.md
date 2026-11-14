@@ -84,7 +84,21 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 ## Session 生命週期與撤權延遲
 
-群組在**登入時**解析並存入 session cookie。**設了 `cookieRefresh` 時**，session 每過該間隔會**重新向 GitLab 驗證帳號並覆寫群組**（gitlab provider 的 `RefreshSession` 行為）——故群組/帳號撤權延遲**被 `cookieRefresh` 綁住（非 `cookieExpire`）**：設短 `cookieRefresh`（例如 1h）即收緊，被移出群組或停用的使用者於下次 refresh 失效。**未設 `cookieRefresh`** 則群組凍結在登入當下、直到 `cookieExpire` 到期。無論如何這都是**緩解、非即時撤權**——後端仍盲信 `X-Forwarded-Groups`，真正的即時撤權要等身份硬化（後端不再信未驗 header，見平台安全路線）落地，故 **production cutover 待其完成**。
+群組在**登入時**解析並存入 session cookie。**設了 `cookieRefresh` 時**，session 每過該間隔會**重新向 GitLab 驗證帳號並覆寫群組**（gitlab provider 的 `RefreshSession` 行為）——故群組/帳號撤權延遲**被 `cookieRefresh` 綁住（非 `cookieExpire`）**：設短 `cookieRefresh`（例如 1h）即收緊，被移出群組或停用的使用者於下次 refresh 失效。**未設 `cookieRefresh`** 則群組凍結在登入當下、直到 `cookieExpire` 到期。
+
+這是 oauth2-proxy session 的本質，平台把它列為**已接受的限制**（[ADR-027](../adr/027-tenant-api-caller-identity.md) §8）：撤權延遲的上限是 `cookieRefresh`，不是即時撤權。要收緊就調短 `cookieRefresh`，代價是更頻繁地向 GitLab 重新驗證。
+
+## 身分信任與 production 前提
+
+tenant-api 只採信 oauth2-proxy 送來的身分：API 只在 pod 內的 Unix socket 上，前面是 oauth2-proxy，client 自己帶的同名 header 會被 oauth2-proxy 清掉；TCP 8080 只有 `/health`、`/ready`、`/metrics`，帶身分 header 一律回 400（[ADR-027](../adr/027-tenant-api-caller-identity.md) §2、§3）。
+
+**production 需部署含 ADR-027 的 tenant-api**（版號於該版發布時補上）。舊版 tenant-api 直接採信請求帶的 `X-Forwarded-Groups`：能繞過 oauth2-proxy 連到它的人，可以自稱任何群組。確認叢集裡跑的是哪一種：
+
+```bash
+# 在叢集內對 tenant-api 的 8080 帶身分 header 打 /health：400 = 含 ADR-027；舊版回 200
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Forwarded-Email: probe@example.com' \
+  http://<tenant-api service>:8080/health
+```
 
 ## 疑難排解
 

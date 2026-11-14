@@ -84,7 +84,21 @@ curl -s -H "Authorization: Bearer <access_token>" \
 
 ## Session lifetime and revocation lag
 
-Groups are resolved **at login** and cached in the session cookie. **When `cookieRefresh` is set**, the session re-validates the account against GitLab and **overwrites the groups** every interval (the gitlab provider's `RefreshSession` behavior) — so the group/account revocation lag is **bounded by `cookieRefresh` (not `cookieExpire`)**: a short `cookieRefresh` (e.g. 1h) tightens it, and a user removed from a group or disabled is invalidated at the next refresh. **Without `cookieRefresh`**, groups are frozen as of login until `cookieExpire`. Either way this is a **mitigation, not instant revocation** — the backend still blindly trusts `X-Forwarded-Groups`; true instant revocation requires the identity-hardening work (backend stops trusting the unverified header, see the platform security roadmap), so **production cutover waits for it**.
+Groups are resolved **at login** and cached in the session cookie. **When `cookieRefresh` is set**, the session re-validates the account against GitLab and **overwrites the groups** every interval (the gitlab provider's `RefreshSession` behavior) — so the group/account revocation lag is **bounded by `cookieRefresh` (not `cookieExpire`)**: a short `cookieRefresh` (e.g. 1h) tightens it, and a user removed from a group or disabled is invalidated at the next refresh. **Without `cookieRefresh`**, groups are frozen as of login until `cookieExpire`.
+
+This is inherent to oauth2-proxy sessions, and the platform lists it as an **accepted limitation** ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §8): the revocation lag is bounded by `cookieRefresh`; it is not instant revocation. To tighten it, shorten `cookieRefresh`, at the cost of re-validating against GitLab more often.
+
+## Identity trust and the production prerequisite
+
+tenant-api trusts only the identity oauth2-proxy sends: the API is only on a Unix socket inside the pod, behind oauth2-proxy, and oauth2-proxy strips any same-named header the client sends; TCP 8080 serves only `/health`, `/ready` and `/metrics`, and any request carrying an identity header gets 400 ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §2, §3).
+
+**Production requires a tenant-api release that includes ADR-027** (the version is filled in when that release ships). Older tenant-api releases trust the `X-Forwarded-Groups` a request carries: anyone who can reach it without going through oauth2-proxy can claim any group. To check which one your cluster runs:
+
+```bash
+# From inside the cluster, hit tenant-api's 8080 /health with an identity header: 400 = includes ADR-027; older releases answer 200
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Forwarded-Email: probe@example.com' \
+  http://<tenant-api service>:8080/health
+```
 
 ## Troubleshooting
 
