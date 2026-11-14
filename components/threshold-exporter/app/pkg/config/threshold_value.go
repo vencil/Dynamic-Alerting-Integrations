@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,12 +80,30 @@ func parseThresholdValue(raw string) (v float64, severity string, ok bool) {
 	return v, severity, true
 }
 
-// parseThresholdNumber reads s (already trimmed) as a threshold number:
-// strconv.ParseFloat, and the result must be finite (#3140). ParseFloat
-// accepts `NaN`, `Inf`, `+Inf`, `-Inf` and `infinity`; none of them is a
-// threshold — an alert's comparison against NaN is always false (the alert
-// never fires), and against ±Inf either never or always true — so each is a
-// value the exporter cannot read, exactly like `abc`.
+// thresholdNumberRe is the one grammar of a threshold number (#3457): the
+// recipe contract's patterns.thresholdNumber, which the portal, the Python
+// tools and the JSON schema's thresholdScalar read from the same file
+// (scripts/tools/dx/gen_recipe_contract.py generates their copies). Decimal
+// only: an optional sign, ASCII digits with at most one `.` — at least one
+// digit and at most 20 in all, every digit counted, a leading or trailing
+// zero too — and an optional `e` / `E` exponent of any number of digits.
+//
+// So `1_000`, `0x1p4`, `0x1F`, `Inf` and `NaN` are not threshold numbers,
+// whatever strconv.ParseFloat makes of them. The 20 digits are the bound
+// within which every reader is known to round alike: ECMAScript may round a
+// longer mantissa to 20 significant digits before converting, and
+// strconv.ParseFloat reads a mantissa of some 800 digits or more as another
+// number with no error (#3827: "1", 800 zeros, "e-800" is 0.1). The exponent
+// needs no bound: it only scales, and a value past float64 is ±Inf, which
+// parseThresholdNumber refuses.
+var thresholdNumberRe = regexp.MustCompile(contract.Patterns.ThresholdNumber)
+
+// parseThresholdNumber reads s (already trimmed) as a threshold number: s is
+// in the grammar (thresholdNumberRe), and the number strconv.ParseFloat reads
+// it as is finite (#3140) — `1e999` is in the grammar and is +Inf. An alert's
+// comparison against NaN is always false (the alert never fires), and against
+// ±Inf either never or always true, so a non-finite value is one the exporter
+// cannot read, exactly like `abc`.
 //
 // ⛔ The one Go definition of "a threshold number". Every reader of a
 // threshold value calls it: parseThresholdValue (the base / declared /
@@ -94,11 +113,34 @@ func parseThresholdValue(raw string) (v float64, severity string, ok bool) {
 // tests/shared/threshold_value_matrix.json's `float_ok` column is it; a
 // Python reader asks da-guard threshold-values (ReadThresholdText, #3267).
 func parseThresholdNumber(s string) (float64, bool) {
+	if !thresholdNumberRe.MatchString(s) {
+		return 0, false
+	}
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil || !finiteThreshold(v) {
 		return 0, false
 	}
 	return v, true
+}
+
+// thresholdNumberText is v, a finite number, as a text parseThresholdNumber
+// reads back as v: the shortest `d.ddde±dd` form, whose mantissa is never
+// more than 17 digits. The 'g' and 'f' forms are not in the grammar for every
+// number — 0.00012345678901234567 is 21 digits written out, and 1e-300 is
+// 300.
+func thresholdNumberText(v float64) string {
+	return strconv.FormatFloat(v, 'e', -1, 64)
+}
+
+// nonFiniteNumberText reports whether s is a text strconv.ParseFloat reads,
+// with no error, as NaN or ±Inf: `NaN`, `Inf`, `+Inf`, `-Inf`, `infinity`, in
+// any letter case. That is what RefusedNonFinite names. A text ParseFloat
+// reads as a finite number and the grammar refuses (`1_000`, `0x1p4`, a
+// mantissa of more than 20 digits), and one it reads only out of range
+// (`1e999`), are RefusedUnparsed.
+func nonFiniteNumberText(s string) bool {
+	v, err := strconv.ParseFloat(s, 64)
+	return err == nil && !finiteThreshold(v)
 }
 
 // finiteThreshold is parseThresholdNumber's finiteness half, for a value
@@ -150,8 +192,8 @@ func scheduledTexts(sv ScheduledValue) []string {
 // thresholdRefusal is one threshold key whose value — its `default` or a
 // window's — the row resolvers of the tree refuse, and
 // NonFiniteThresholdWrites does not (#3267): `abc`, `70:high`,
-// `disable:critical`, a number ParseFloat reads only out of range (`1e999`,
-// `0x1p1024`), "" and, on a `<key>_critical` that resolveCriticalRows reads,
+// `disable:critical`, a text outside the grammar of a threshold number
+// (`1_000`, `0x1p4`, #3457), a number out of range (`1e999`), "" and, on a `<key>_critical` that resolveCriticalRows reads,
 // any severity suffix. Judged by refusedThresholdTextIn, the classifier
 // RefusedValueAt (da-guard's value_not_served) is.
 type thresholdRefusal struct {
@@ -289,7 +331,7 @@ func refusedThresholdWriteMessage(key, raw string, whole bool) string {
 // valueAtMinute, the function /metrics resolves it with — has the same
 // thresholdValueReading, and the expiry lapses at the same instant
 // (expiryReading). So quoting, surrounding space, a severity suffix's case,
-// `1_000` against `1000`, or `abc:warning` against `abc` are read alike; so
+// `1e3` against `1000`, or `abc:warning` against `abc` are read alike; so
 // are (#3508) windows that do not overlap written in another order, a
 // `reason:` added or changed, and `expires` written with another offset for
 // the same instant. `abc` against `xyz`, a moved window, or overlapping
@@ -388,18 +430,14 @@ func thresholdValueReading(key, raw string) string {
 
 // nonFiniteThresholdText reports whether raw's number half (the shared
 // grammar; the whole value of a `_critical` key reads the same, since a
-// non-finite text carries no `:` of its own) is a number ParseFloat reads but
-// parseThresholdNumber refuses — non-finite.
+// non-finite text carries no `:` of its own) is a non-finite number as
+// written (nonFiniteNumberText).
 func nonFiniteThresholdText(raw string) bool {
 	value, _, err := splitThresholdSeverity(raw)
 	if err != nil {
 		return false
 	}
-	if _, ok := parseThresholdNumber(value); ok {
-		return false
-	}
-	_, perr := strconv.ParseFloat(value, 64)
-	return perr == nil
+	return nonFiniteNumberText(value)
 }
 
 // Why the row resolvers refuse a threshold key's value (RefusedValueAt): the
@@ -407,11 +445,10 @@ func nonFiniteThresholdText(raw string) bool {
 // segment with no row (#3140), so a reader tells a value the exporter refused
 // from a key the tenant switched off without reading the value itself.
 const (
-	// RefusedNonFinite: a number strconv.ParseFloat reads but
-	// parseThresholdNumber refuses — NaN or ±Inf.
+	// RefusedNonFinite: a text that names NaN or ±Inf (nonFiniteNumberText).
 	RefusedNonFinite = "non_finite"
 	// RefusedUnparsed: any other value the row resolvers cannot read (`abc`,
-	// `70:high`, `disable:critical`, `1e999`).
+	// `70:high`, `disable:critical`, `1e999`, `1_000`, `0x1p4`).
 	RefusedUnparsed = "unparsed"
 )
 
@@ -475,7 +512,7 @@ func refusedThresholdTextIn(defaults map[string]float64, key, raw string) (refus
 		return "", false
 	}
 	if !wholeOK {
-		if _, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil {
+		if nonFiniteNumberText(strings.TrimSpace(raw)) {
 			return RefusedNonFinite, true
 		}
 		return RefusedUnparsed, true
@@ -493,9 +530,9 @@ func refusedThresholdTextIn(defaults map[string]float64, key, raw string) (refus
 //
 // ⛔ NO READING OF ITS OWN. Every field is one of this file's readers:
 // Severity is splitThresholdSeverity's, Number parseThresholdValue's,
-// Refused RefusedValueAt's; NonFinite is strconv.ParseFloat's result on the
-// value half — the call parseThresholdNumber makes — when that result is
-// what parseThresholdNumber refuses for being non-finite.
+// Refused RefusedValueAt's; NonFinite is the NaN or ±Inf the value half
+// names (nonFiniteNumberText) or, for a text in the grammar
+// (thresholdNumberRe), overflows to.
 type ThresholdText struct {
 	// Severity is the `:severity` suffix as splitThresholdSeverity reads it
 	// ("warning" with no suffix), or "" when it refuses the suffix (`70:high`,
@@ -505,9 +542,10 @@ type ThresholdText struct {
 	// finite only); HasNumber is false when it reads none.
 	Number    float64
 	HasNumber bool
-	// NonFinite is NaN or ±Inf when strconv.ParseFloat reads the value half
-	// as one — `NaN`, `-Inf`, `infinity`, and an overflow (`1e999`,
-	// `0x1p1024`: ErrRange, ±Inf); HasNonFinite is false otherwise. The
+	// NonFinite is NaN or ±Inf when the value half names one — `NaN`, `-Inf`,
+	// `infinity` — or is a number of the grammar past float64 (`1e999`:
+	// ErrRange, ±Inf); HasNonFinite is false otherwise, and for a text
+	// outside the grammar that overflows (`0x1p1024`, `1_0e999`, #3457). The
 	// exporter refuses every such value; a caller that judges a non-finite
 	// value as written (the unit-sanity lint, #3140 ruling D) reads it here.
 	NonFinite    float64
@@ -535,7 +573,8 @@ func ReadThresholdText(key, raw string) ThresholdText {
 		return out
 	}
 	v, perr := strconv.ParseFloat(value, 64)
-	if (perr == nil || errors.Is(perr, strconv.ErrRange)) && !finiteThreshold(v) {
+	overflows := errors.Is(perr, strconv.ErrRange) && thresholdNumberRe.MatchString(value)
+	if (perr == nil || overflows) && !finiteThreshold(v) {
 		out.NonFinite, out.HasNonFinite = v, true
 	}
 	return out

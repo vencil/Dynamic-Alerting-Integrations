@@ -87,7 +87,11 @@ describe('parseThresholdValue', () => {
 
 describe('composeThreshold', () => {
   it('folds the value with the severity dropdown (dropdown wins over a stray :sev)', () => {
-    expect(composeThreshold({ threshold: '80:foo', severity: 'warning' })).toBe('80:warning');
+    expect(composeThreshold({ threshold: '80:critical', severity: 'warning' })).toBe('80:warning');
+    expect(composeThreshold({ threshold: ' 80 : Critical ', severity: 'warning' })).toBe('80:warning');
+    // #3457: a suffix the exporter refuses is not cut off to make a readable
+    // value — the composed text stays one the exporter refuses.
+    expect(composeThreshold({ threshold: '80:foo', severity: 'warning' })).toBe('80:foo:warning');
     expect(composeThreshold({ threshold: '90', severity: 'critical' })).toBe('90:critical');
   });
 });

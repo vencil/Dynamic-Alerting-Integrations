@@ -89,6 +89,28 @@ def test_inject_rejects_non_numeric(mod, tmp_path):
     assert p.read_text(encoding="utf-8") == "defaults:\n"
 
 
+@pytest.mark.parametrize("value", ["1_000", "0x1F", "0x1p4", "nan", "inf", "-Infinity", "1e999",
+                                   "123456789012345678901", "١٠", "\x1c5", ""])
+def test_inject_rejects_what_the_exporter_serves_no_default_for(mod, tmp_path, value):
+    """#3457: the numeric guard is the exporter's grammar of a threshold
+    number. `int()` / `float()` read `1_000`, `nan`, `inf` and non-ASCII
+    digits; written under `defaults:`, the exporter serves no default for
+    any of them."""
+    p = tmp_path / "_defaults.yaml"
+    p.write_text("defaults:\n", encoding="utf-8")
+    assert mod.inject(p, "bench_trigger", value) == 1
+    assert p.read_text(encoding="utf-8") == "defaults:\n"
+
+
+@pytest.mark.parametrize("value, written", [("50", "50"), (" 50 ", "50"), ("\t1e3\u0085", "1e3"),
+                                            ("+.5", "+.5")])
+def test_inject_writes_the_value_trimmed_as_the_exporter_trims(mod, tmp_path, value, written):
+    p = tmp_path / "_defaults.yaml"
+    p.write_text("defaults:\n", encoding="utf-8")
+    assert mod.inject(p, "bench_trigger", value) == 0
+    assert p.read_text(encoding="utf-8") == f"defaults:\n  bench_trigger: {written}\n"
+
+
 def test_inject_accepts_int_string(mod, tmp_path):
     p = tmp_path / "_defaults.yaml"
     p.write_text("defaults:\n", encoding="utf-8")

@@ -3555,6 +3555,8 @@ PORTAL_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "helm/**", "components/threshold-exporter/app/pkg/config/types.go",
     "components/threshold-exporter/app/pkg/tenantid/testdata/tenant_id_cases.json",
     "tests/shared/am_duration_matrix.json",
+    "tests/shared/threshold_value_matrix.json",
+    "components/threshold-exporter/app/pkg/config/recipe_contract.json",
     "components/tenant-api/docs/swagger.json",
 }
 GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {

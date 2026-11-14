@@ -85,15 +85,23 @@ func TestThresholdValues_ReadsAsTheExporter(t *testing.T) {
 		want      thresholdValuesAnswer
 	}{
 		{"cpu", "70", thresholdValuesAnswer{Number: num(70), Severity: "warning"}},
-		{"cpu", "1_000", thresholdValuesAnswer{Number: num(1000), Severity: "warning"}},
-		{"cpu", "0x1p4", thresholdValuesAnswer{Number: num(16), Severity: "warning"}},
+		{"cpu", "1e3", thresholdValuesAnswer{Number: num(1000), Severity: "warning"}},
+		{"cpu", "+.5", thresholdValuesAnswer{Number: num(0.5), Severity: "warning"}},
+		// #3457: outside the grammar of a threshold number, whatever
+		// strconv.ParseFloat reads it as.
+		{"cpu", "1_000", thresholdValuesAnswer{Severity: "warning", Refused: "unparsed"}},
+		{"cpu", "0x1p4", thresholdValuesAnswer{Severity: "warning", Refused: "unparsed"}},
+		{"cpu", "0x1F:critical", thresholdValuesAnswer{Severity: "critical", Refused: "unparsed"}},
+		{"cpu", "123456789012345678901", thresholdValuesAnswer{Severity: "warning", Refused: "unparsed"}},
+		{"cpu", "12345678901234567890", thresholdValuesAnswer{Number: num(12345678901234567890), Severity: "warning"}},
 		{"cpu", "70:critical", thresholdValuesAnswer{Number: num(70), Severity: "critical"}},
 		{"cpu", " 70 : Critical ", thresholdValuesAnswer{Number: num(70), Severity: "critical"}},
 		{"cpu", "70:high", thresholdValuesAnswer{Refused: "unparsed"}},
 		{"cpu", "70:", thresholdValuesAnswer{Refused: "unparsed"}},
 		{"cpu", "1e999", thresholdValuesAnswer{NonFinite: "+Inf", Severity: "warning", Refused: "unparsed"}},
 		{"cpu", "-1e999:critical", thresholdValuesAnswer{NonFinite: "-Inf", Severity: "critical", Refused: "unparsed"}},
-		{"cpu", "0x1p1024", thresholdValuesAnswer{NonFinite: "+Inf", Severity: "warning", Refused: "unparsed"}},
+		{"cpu", "0x1p1024", thresholdValuesAnswer{Severity: "warning", Refused: "unparsed"}},
+		{"cpu", "1_0e999", thresholdValuesAnswer{Severity: "warning", Refused: "unparsed"}},
 		{"cpu", "abc", thresholdValuesAnswer{Severity: "warning", Refused: "unparsed"}},
 		{"cpu", "+nan", thresholdValuesAnswer{Severity: "warning", Refused: "unparsed"}},
 		{"cpu", "disable", thresholdValuesAnswer{Severity: "warning"}},

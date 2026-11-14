@@ -1049,7 +1049,7 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 		// dropped it.)
 		return sv, false
 	}
-	encoded, err := yaml.Marshal(raw)
+	encoded, err := yaml.Marshal(floatsInTheGrammar(raw))
 	if err != nil {
 		return sv, false
 	}
@@ -1057,6 +1057,39 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 		return sv, false
 	}
 	return sv, true
+}
+
+// floatsInTheGrammar is raw with every float yaml.v3 would write outside the
+// grammar of a threshold number replaced by the text of the same number that
+// is in it (thresholdNumberText) — in the scalar and anywhere in a scheduled
+// form (`default:`, a window's `value:`) alike (#3457).
+//
+// yaml.v3 writes a float in strconv's 'g' form, which spells some finite
+// numbers with more digits than a threshold number may have:
+// 1.2345678901234567e-4 comes out as 0.00012345678901234567, 21 digits. The
+// tenant file would have been read as the number, so the overlay carries the
+// number. A float whose 'g' form is in the grammar is left alone: the overlay
+// writes what the tenant file would have held.
+func floatsInTheGrammar(raw any) any {
+	switch v := raw.(type) {
+	case float64:
+		if finiteThreshold(v) && !thresholdNumberRe.MatchString(strconv.FormatFloat(v, 'g', -1, 64)) {
+			return thresholdNumberText(v)
+		}
+	case map[string]any:
+		out := make(map[string]any, len(v))
+		for k, e := range v {
+			out[k] = floatsInTheGrammar(e)
+		}
+		return out
+	case []any:
+		out := make([]any, len(v))
+		for i, e := range v {
+			out[i] = floatsInTheGrammar(e)
+		}
+		return out
+	}
+	return raw
 }
 
 // isThresholdShaped reports whether an inherited defaults value is something
