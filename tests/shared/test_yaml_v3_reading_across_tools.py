@@ -255,6 +255,10 @@ _NOT_PROBED: dict[str, str] = {
     "validate_all.py": _PROSE_ONLY + ("; runs other tools as subprocesses — the "
                                        "conf.d readers among them have their own rows"),
     "ops/byo_check.py": _PROSE_ONLY + "; reads Alertmanager's /api/v2/status config",
+    "_lib_validation.py": _PROSE_ONLY + ("; the validation library: `shown_file` and "
+                                         "`configmap_key_problem` judge a conf.d path's "
+                                         "name it is handed (#3703), and it reads no "
+                                         "conf.d file"),
     "_lib_consumer_read.py": _PROSE_ONLY + ("; reads Kubernetes manifests, Alertmanager and "
                                             "Prometheus configs and Prometheus rule files "
                                             "through da-crdecode / da-read (ADR-036 §12)"),

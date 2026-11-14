@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import Any, Iterator, NamedTuple, Optional, Union
 
 from _lib_compat import find_project_root
-import _lib_confd  # #3703: shown_file judges a segment by the file-name rule
 from _lib_constants import (
     _ALLOWED_SCHEMES,
     _DISABLED_VALUES,
@@ -1446,6 +1445,87 @@ def _stand_in(name: Any) -> str:
     return f"<key:{digest[:6]}>"
 
 
+# ── ConfigMap key legality (#1796; shared since #1791) ────────────────
+#
+# ⛔ ONE copy. `configmap_assemble` (ops, repo layout) and `init_project`'s
+# kustomize base (tools, flat da-tools image layout) need it through
+# `_lib_confd` (which re-exports it under this name), and `shown_file` below
+# judges a conf.d path segment by it (#3703). It lives here, not in
+# `_lib_confd`, because this module ships in every image that ships
+# `_lib_confd` and also in recipe-preview's, which does not ship `_lib_confd`
+# (`components/recipe-preview/Dockerfile`): the rule stays one copy without
+# a second module to ship.
+#
+# ⛔ NOT from memory. Transcribed from the authority, k8s.io/apimachinery
+# `pkg/util/validation/validation.go`:
+#
+#   const configMapKeyFmt = `[-._a-zA-Z0-9]+`
+#   var configMapKeyRegexp = regexp.MustCompile("^" + configMapKeyFmt + "$")
+#   func IsConfigMapKey(value string) []string {
+#       if len(value) > DNS1123SubdomainMaxLength { ... }   // 253, BYTES
+#       if !configMapKeyRegexp.MatchString(value) { ... }
+#       errs = append(errs, hasChDirPrefix(value)...)       // "." ".." "..*"
+#   }
+#
+# `hasChDirPrefix` is the shared helper `IsValidPathSegmentName` also uses; it
+# rejects `.`, `..` and any name starting with `..`. Go's `len()` counts
+# BYTES, hence the encode below rather than `len(name)`.
+#
+# ⛔ `\Z`, not `$`: Python's `$` also matches just BEFORE a trailing newline,
+# so `db-a.yaml\n` would have been accepted as a key. Go's `regexp` `$`
+# (without `(?m)`) means end-of-text, which is `\Z` here — transcribing `$`
+# to `$` copied the character and lost the meaning.
+_CONFIGMAP_KEY_RE = re.compile(r"\A[-._a-zA-Z0-9]+\Z")
+_MAX_KEY_BYTES = 253  # DNS1123SubdomainMaxLength
+
+
+def _name_bytes(name: str) -> bytes:
+    """The bytes the API server will count for `name`, never raising."""
+    try:
+        return os.fsencode(name)
+    except UnicodeEncodeError:
+        # A synthesised name under a non-UTF-8 locale. UTF-8 is what the
+        # API server counts, and `surrogatepass` keeps a lone surrogate
+        # (what `fsdecode` hands back for an undecodable byte) countable.
+        return name.encode("utf-8", "surrogatepass")
+
+
+def configmap_key_problem(name: str) -> str | None:
+    """Why `name` cannot be a ConfigMap key, or `None` if it can.
+
+    ⛔ DROPPING the file instead of refusing would be the silent failure (#1603's
+    shape) — hence "rename it" or "leave it out on purpose", never
+    "skip it". This function makes no claim about what kubectl's own
+    message says.
+
+    ⛔ `os.fsencode`, not `name.encode("utf-8")`. A file name is BYTES on
+    POSIX; Python hands it back with the undecodable ones smuggled in as
+    lone surrogates, and `.encode("utf-8")` then raises `UnicodeEncodeError`
+    — a codec traceback in place of the by-name refusal this function exists
+    to produce. `os.fsencode` reverses the same escape, so the count is the
+    byte count the API server will apply, for every name the filesystem can
+    hand us.
+
+    ⛔ …and it raises the same `UnicodeEncodeError` on a name that did NOT
+    come from the filesystem, once the locale's filesystem encoding is not
+    UTF-8: `os.fsencode` then encodes with `ascii`. No production path
+    reaches that (names come from `iterdir`, so they carry the escape
+    `fsencode` reverses), but a function whose whole job is "refuse by name
+    instead of raising" may not have an input class it raises on.
+    """
+    if len(_name_bytes(name)) > _MAX_KEY_BYTES:
+        return f"longer than {_MAX_KEY_BYTES} bytes"
+    if not _CONFIGMAP_KEY_RE.match(name):
+        bad = sorted({c for c in name if not _CONFIGMAP_KEY_RE.match(c)})
+        shown = " ".join(repr(c) for c in bad) or "(empty name)"
+        return f"contains characters a key may not hold: {shown}"
+    if name in (".", ".."):
+        return f"must not be {name!r}"
+    if name.startswith(".."):
+        return "must not start with '..'"
+    return None
+
+
 #: A segment ``shown_key`` already replaced: ``shown_file`` keeps it, so
 #: showing a shown path again is the same path (a ``Finding`` rebuilt from
 #: another one's fields), not a stand-in of a stand-in.
@@ -1459,7 +1539,7 @@ def shown_file(path: Any) -> "str | None":
 
     The path is relative to the conf.d root (``team-a/db-x.yaml``); each
     ``/``-separated segment is itself when it is a legal file name
-    (``_lib_confd.configmap_key_problem``: Kubernetes ``IsConfigMapKey``),
+    (``configmap_key_problem``: Kubernetes ``IsConfigMapKey``),
     else the ``<key:xxxxxx>`` stand-in ``shown_key`` prints. File names have
     their own rule, not ``shown_key``'s 64-char name rule: a tenant id is up
     to 63 chars, so tenant-api writes ``<id>.yaml`` of up to 68, and it finds
@@ -1473,7 +1553,7 @@ def shown_file(path: Any) -> "str | None":
     if path is None:
         return None
     return "/".join(
-        seg if _STAND_IN_RE.fullmatch(seg) or _lib_confd.configmap_key_problem(seg) is None
+        seg if _STAND_IN_RE.fullmatch(seg) or configmap_key_problem(seg) is None
         else _stand_in(seg)
         for seg in str(path).split("/"))
 
