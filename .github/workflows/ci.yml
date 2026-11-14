@@ -678,7 +678,8 @@ jobs:
       # image pull on the runner). Pin matches HADOLINT_VERSION and
       # HADOLINT_SHA256 in scripts/tools/lint/check_iac_vibe_rules.py (the SSOT,
       # which .claude/hooks/session-start.sh reads; bound by
-      # tests/shared/test_toolchain_pin_parity.py) and .hadolint.yaml.
+      # tests/shared/test_toolchain_pin_parity.py). The rule levels live in
+      # the same file (HADOLINT_RULES); there is no .hadolint.yaml (#3643).
       #
       # Download-cache pattern (CI-ROI wave, shared by every pinned-binary
       # install in this workflow): the artifact is stored in a cache dir
@@ -974,6 +975,27 @@ jobs:
           # across the 60 shell files tracked at the time (#1365, `edc865b0`),
           # before enabling.
           pre-commit run shellcheck --all-files
+
+      # #3643: the wrapper's contract with the PINNED hadolint — the canary
+      # comes back at the registered levels; HADOLINT_* variables, ignore
+      # pragmas and a config file change nothing; every comment hadolint acts
+      # on is one V4 flags — is asked of the real engine by tests that skip
+      # where hadolint is absent. "Python Tests" has no hadolint, so this job
+      # (which installs it above) is the only CI spot where they run: a
+      # hadolint re-pin that accepts a new pragma spelling fails HERE.
+      # VIBE_REQUIRE_HADOLINT=1 turns "hadolint not on PATH" into a failure
+      # (the same guard a remote session trips), and -rs lists any residual
+      # skip. The step, its variable and its place after "Set up hadolint" are
+      # pinned by tests/lint/test_check_iac_vibe_rules.py.
+      - name: 'hadolint contract tests against the pinned engine (#3643)'
+        env:
+          VIBE_REQUIRE_HADOLINT: "1"
+          # No test in this file reads a Go binary (tests/conftest.py would
+          # otherwise build three up front).
+          VIBE_TEST_GO_BINARIES: skip
+        run: |
+          pip install pytest pathspec -c requirements/ci-constraints.txt
+          python -m pytest tests/lint/test_check_iac_vibe_rules.py -q -rs
 
   lint-rule-packs:
     # Custom Prometheus rule-pack governance linter.

@@ -26,11 +26,8 @@ Checks:
                     routing-profiles JSON Schema, by calling
                     `lint/check_confd_schema.py`'s verdict; a misread scalar
                     is left to 1b. WARN "not checked" without jsonschema (#2695)
-  2. Schema        — The route generator's key check (tenant keys against the
-                    declared defaults + reserved keys, domain policy). NOT a
-                    JSON Schema check, despite the historical row name (#2695)
-  3. Routes        — Alertmanager route generation with --validate semantics
-  4. Policy        — Webhook domain allowlist (if --policy provided)
+  3. Routes        — `generate-routes --validate` on the tree (with --policy
+                    and --strict as given): the row is that command's verdict
   5. Custom rules  — Deny-list linting on rule-packs/ (if --rule-packs provided)
   6. Profiles      — Tenant _profile references validation
   7. Versions      — bump_docs.py --check version consistency (if --version-check)
@@ -71,8 +68,8 @@ Checks:
 
 Hierarchical trees: a row may get its input from a reader that is FLAT — it
 reads only the top level of --config-dir — while threshold-exporter reads the
-whole tree (today policy_dsl's root-carrier lookup; schema, routes and policy
-read the whole tree since #2326, the routing plane's hierarchy).
+whole tree (today policy_dsl's root-carrier lookup; the routes row reads
+the whole tree since #2326, the routing plane's hierarchy).
 When such a row runs on a tree that has config files in subdirectories, it
 does not report PASS: a PASS becomes WARN, and every status gains a detail
 line naming how many files that reader skipped and which (the first few;
@@ -92,7 +89,7 @@ red over a limitation of this tool. Read `Result:` or --json, not the exit
 code, to learn whether every row covered every file.
 
 Usage:
-  # Minimal (YAML + schema + routes):
+  # Minimal:
   python3 scripts/tools/ops/validate_config.py \\
     --config-dir components/threshold-exporter/config/conf.d/
 
@@ -112,6 +109,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import contextlib
 import io
 import json
 import os
@@ -184,8 +182,8 @@ _HELP = {
         'en': 'Path to standalone Policy-as-Code DSL file (top-level policies: key)'
     },
     'strict': {
-        'zh': 'domain policy（ADR-007）違規由 WARN 升級為 FAIL（與 CI 的 generate-routes --strict 對齊）',
-        'en': 'Escalate domain-policy (ADR-007) violations from WARN to FAIL (matches CI generate-routes --strict)'
+        'zh': 'routes 列改以 generate-routes --validate --strict 判定（domain policy（ADR-007）等違規由 WARN 升級為 FAIL）',
+        'en': 'Judge the routes row as generate-routes --validate --strict (domain-policy (ADR-007) and the other --strict violations go from WARN to FAIL)'
     }
 }
 
@@ -229,7 +227,8 @@ from _lib_tenant_values import key_spellings as tv_key_spellings  # noqa: E402
 # ADR-038: the shared verdict on keys no reader reads (`check_unread_keys`).
 import _lib_key_verdict as key_verdict  # noqa: E402
 # #3142: the deployment --policy's remedy, shared with the tools that take it.
-from _grar_validate import POLICY_REFUSAL_REMEDY, POLICY_VERSION_REMEDY  # noqa: E402
+from _grar_validate import (  # noqa: E402
+    POLICY_REFUSAL_REMEDY, POLICY_VERSION_REMEDY, POLICY_WARN_PREFIX, is_field_type_error)
 
 # ============================================================
 # Check results
@@ -256,7 +255,7 @@ READ_ERRORS_FIRST = ("-> Fix the read errors above FIRST — this check's "
 # #2431: under --strict the same ERROR prefix also carries a routing matcher
 # value that is not a string, and (#2503) a bad group_by entry, so the
 # advice names every kind.
-POLICY_ONLY_SCHEMA_HINT = (
+POLICY_ONLY_HINT = (
     "The findings above are ADR-007 domain-policy errors (a policy that "
     "cannot be used is refused in every mode) or --strict errors (a routing "
     "matcher value that is not a string, or a bad group_by entry): fix "
@@ -265,14 +264,9 @@ POLICY_ONLY_SCHEMA_HINT = (
     "value in YAML, e.g. team: \"yes\", or quote / remove the group_by "
     "entry), then re-run.")
 # #2490: the non-strict twin — the same findings as WARNs (non-blocking).
-POLICY_ONLY_SCHEMA_WARN_HINT = (
+POLICY_ONLY_WARN_HINT = (
     "The findings above are ADR-007 domain-policy warnings: change the value "
     "each warning names or amend the domain policy.")
-SKIPPED_ENTRY_SCHEMA_HINT = (
-    "A line above ends in 'skipping': that setting was dropped as unusable, "
-    "not merely flagged. Fix the value it names — e.g. "
-    "`_routing_enforced.enabled` must be the YAML boolean true or false — "
-    "then re-run.")
 # #3284: a row whose findings are all `ERROR (field type):` lines (#2906 —
 # a group_by that is not a list, a quoted boolean, an unknown
 # _severity_dedup word) is neither "a line ending in 'skipping'" nor a
@@ -290,9 +284,9 @@ RECEIVER_COLLISION_ROUTES_HINT = (
     "tenant whose id ends in -route-<n> or -override-<n> next to the tenant "
     "it extends. Rename one of the tenants (or remove one of the entries); "
     "the receivers themselves are not invalid.")
-# #2311: the routes row now runs every `--validate` step, including
-# Alertmanager's own reading (#3689: its config loader, da-read). These replace
-# the generic routes advice where it would send the operator to the wrong place.
+# The routes row is `generate-routes --validate`, Alertmanager's own reading
+# included (#3689: its config loader, da-read). These replace the generic
+# routes advice where it would send the operator to the wrong place.
 AM_REJECTED_ROUTES_HINT = (
     "Alertmanager's config loader refused the "
     "config generated from this tree; its message above names the line and "
@@ -308,6 +302,17 @@ ROUTES_INVARIANT_HINT = (
     "above) — the same verdict `generate_alertmanager_routes.py --validate` "
     "gives. Fix the _routing / _severity_dedup input that produced it, then "
     "re-run.")
+NOTHING_GENERATED_ROUTES_HINT = (
+    "The tree has tenants, but they generate no route and no inhibit rule "
+    "(for example no `_routing` anywhere and `_severity_dedup: disable`), and "
+    "`generate-routes --validate` refuses a tree that renders nothing. Give "
+    "a tenant a `_routing` receiver or leave severity dedup on, then re-run.")
+# `--validate` reports the shared key verdict too: the unread_keys row is
+# where its lines are explained.
+KEY_VERDICT_ROUTES_HINT = (
+    "The blocking lines above are the shared key verdict's, which "
+    "`generate-routes --validate` reports as well: fix them as the "
+    "unread_keys row says. The routing itself was not what failed.")
 NO_DECLARED_DEFAULTS_HINT = (
     "This config declares no platform defaults at all, so every tenant key "
     "is reported as unread — that is the platform's side missing, not a "
@@ -535,7 +540,7 @@ def check_yaml_syntax(config_dir: str) -> dict[str, object]:
     # disagree about a file. A file it cannot read is named with its kind
     # (syntax_error, duplicate_key, invalid_utf8, top_level_not_mapping, …).
     # A file no reader reads (an unselected `_defaults` spelling, `not_read`)
-    # has no content to judge; the schema row names it.
+    # has no content to judge; the routes row names it.
     reader = _lib_parse_cache.reader_for(config_dir)
     tree = reader.tree()
     root = Path(config_dir)
@@ -810,7 +815,7 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
     note = (f"; {len(skipped)} other `_` file(s) have their own shape, "
             f"not checked here" if skipped else "")
     # #2906 review: a file no reader reads (parse-tree's `not_read`) is not
-    # checked; said here, the `schema` row names why.
+    # checked; said here, the `routes` row names why.
     note += (f"; not checked, no reader reads: {', '.join(not_read)}" if not_read else "")
     return _make_result(
         "json_schema", PASS,
@@ -819,229 +824,92 @@ def check_json_schema(config_dir: str) -> dict[str, object]:
 
 
 # ============================================================
-# Check 2: Schema validation
-# ============================================================
-def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
-    """The route generator's key check: tenant config keys against the
-    declared defaults and reserved keys (`load_tenant_tree`).
-
-    ⛔ Not a JSON Schema check — that is `json_schema` (#2695). The row keeps
-    its historical name `schema` because the name is a contract (`--json`
-    consumers, `skipped_nested_files` documented on it); what it says it
-    checked is in its PASS line instead.
-
-    With strict=True, domain-policy (ADR-007) violations are escalated to
-    blocking ERROR lines by load_tenant_tree and reported as FAIL here —
-    matching `generate_alertmanager_routes.py --validate --strict` (CI).
-    """
-    # Import generate_alertmanager_routes in-process
-    tools_dir = os.path.dirname(os.path.abspath(__file__))
-    if tools_dir not in sys.path:
-        sys.path.insert(0, tools_dir)
-    import generate_alertmanager_routes as gen
-
-    schema_warnings = gen.load_tenant_tree(
-        config_dir, strict_policies=strict).schema_warnings
-
-    # #3116: a domain policy that cannot be used is a field-type error now
-    # (refused in every mode), not a --strict ERROR line; it is still a
-    # policy finding for the advice below.
-    policy_errors = [w for w in schema_warnings
-                     if w.lstrip().startswith(gen.POLICY_ERROR_PREFIX)
-                     or getattr(w, "kind", None) == "domain_policy_unusable"]
-    # #2164: the `--validate` predicate for "an entry was dropped as
-    # unusable" (`generate_alertmanager_routes._validate_mode`). Today only
-    # a non-boolean `_routing_enforced.enabled` puts one in schema_warnings;
-    # without this it was a WARN row at exit 0 while `--validate` failed.
-    # #2279: called, not re-spelled — the same function `_validate_mode` uses.
-    skipped = gen.blocking_generation_errors(schema_warnings)
-    if not schema_warnings:
-        return _make_result(
-            "schema", PASS,
-            ["No finding from the route generator's tree checks (whether a "
-             "key is read is the unread_keys row's; the JSON Schema is the "
-             "json_schema row)"])
-    hint: str | None = None
-    # #3284: only field-type lines (and not only an unusable domain policy,
-    # which POLICY_ONLY_SCHEMA_HINT below names more precisely): neither the
-    # "skipping" advice nor the key advice applies.
-    from _grar_validate import is_field_type_error
-    field_type = [w for w in schema_warnings if is_field_type_error(w)]
-    if (field_type and len(field_type) == len(schema_warnings)
-            and any(getattr(w, "kind", None) != "domain_policy_unusable"
-                    for w in field_type)):
-        return _make_result("schema", FAIL, schema_warnings,
-                            hint=FIELD_TYPE_HINT)
-    if policy_errors:
-        # ⛔ This row is a multiplexer: its details carry the generator's
-        # tree findings AND ADR-007 policy ERRORs, while the advice line is
-        # keyed on the check NAME. A run whose only finding is a broken
-        # policy file gets the policy advice. Derived by set difference on
-        # the list the function already split, not by matching the message
-        # text.
-        if not [w for w in schema_warnings if w not in policy_errors]:
-            hint = POLICY_ONLY_SCHEMA_HINT
-        return _make_result("schema", FAIL, schema_warnings, hint=hint)
-    if skipped:
-        return _make_result("schema", FAIL, schema_warnings,
-                            hint=hint or SKIPPED_ENTRY_SCHEMA_HINT)
-    # #2490: the same set difference as the FAIL branch above — a row whose
-    # only findings are (lenient) domain-policy WARNs gets the policy advice.
-    from _grar_validate import POLICY_WARN_PREFIX
-    policy_warnings = [w for w in schema_warnings
-                       if w.lstrip().startswith(POLICY_WARN_PREFIX)]
-    if policy_warnings and not [w for w in schema_warnings
-                                if w not in policy_warnings]:
-        hint = POLICY_ONLY_SCHEMA_WARN_HINT
-    return _make_result("schema", WARN, schema_warnings, hint=hint)
-
-
-# ============================================================
 # Check 3: Route validation
 # ============================================================
-def check_routes(
-    config_dir: str, policy_file: str | None = None
-) -> dict[str, object]:
-    """Validate Alertmanager route generation (--validate semantics)."""
+def check_routes(config_dir: str, policy_file: str | None = None,
+                 strict: bool = False) -> dict[str, object]:
+    """`generate-routes --validate` on the tree, as a row.
+
+    The generator's `validate_tree` is the whole judgement: its exit code is
+    the row's status (0 → PASS, or WARN when it reported a warning; 1 → FAIL;
+    2 → FAIL as a caller error) and what it printed is the row's details.
+    This function decides only which advice line goes with a FAIL.
+    """
     tools_dir = os.path.dirname(os.path.abspath(__file__))
     if tools_dir not in sys.path:
         sys.path.insert(0, tools_dir)
     import generate_alertmanager_routes as gen
 
-    tree = gen.load_tenant_tree(config_dir)
-    # Load allowed_domains from policy (#1556: unusable value is a caller
-    # error, not "no policy"). Before the field-type refusal below (#3303):
-    # since this row is the only one that reads `--policy`, an unusable path
-    # must not hide behind a config finding — it is exit 2 either way.
-    allowed_domains = None
-    secrets = None  # #1560: no policy, no shared Secret
-    if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
-        # #3142: the generator's own resolver — the min_generator_version
-        # gate (ADR-036 §6) included, as generate-routes applies it.
-        try:
-            policy = gen.resolve_policy(policy_file)
-            allowed_domains = policy.allowed_domains
-            # #1560: the mount root only shapes the rendered path, not the
-            # verdict, so this row renders with the default.
-            secrets = policy.secret_binding()
-        except gen.PolicyInputError as exc:
-            # ⛔ hint= is not decoration here. Without it this row inherits the
-            # generic routes advice ("check _routing for invalid receiver
-            # types…"), which sends the operator to look at tenant YAML for a
-            # problem that is entirely in their own argv.
-            return _argv_error_row("routes", str(exc),
-                                   POLICY_VERSION_REMEDY
-                                   if isinstance(exc, gen.PolicyVersionError)
-                                   else _POLICY_ROUTES_ROW_HINT)
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(printed):
+        outcome = gen.validate_tree(config_dir, strict=strict, policy=policy_file)
+    details = [ln.rstrip() for ln in printed.getvalue().splitlines() if ln.strip()]
 
-    # #3284: `--validate` refuses the whole tree on a field-type finding (a
-    # `group_by: alertname`, a quoted boolean — #2906), so this row, which
-    # has `--validate` semantics, does not report routes such a run never
-    # generates as WARN / PASS. The schema row lists the same lines.
-    refusal = gen.field_type_errors_refusal(tree.field_type_errors)
-    if refusal:
-        return _make_result("routes", FAIL, [line.strip() for line in refusal],
-                            hint=FIELD_TYPE_HINT)
-    routing = tree.routing_configs
-    dedup = tree.dedup_configs
-    enforced_routing = tree.enforced_routing
-
-    # Capture stderr for warnings
-    import io
-    old_stderr = sys.stderr
-    sys.stderr = captured = io.StringIO()
-
-    try:
-        routes, receivers, route_warnings = gen.generate_routes(
-            routing, allowed_domains=allowed_domains,
-            enforced_routing=enforced_routing, tenants=dedup, secrets=secrets)
-        inhibit_rules, dedup_warnings = gen.generate_inhibit_rules(dedup)
-    finally:
-        sys.stderr = old_stderr
-
-    captured_output = captured.getvalue().strip()
-    # #1560 ⑤-b: credentials written out, judged in each file (the same
-    # function generate-routes --validate calls); blocking by type.
-    all_issues = (gen.credential_findings(tree)
-                  + list(route_warnings) + list(dedup_warnings))
-    if captured_output:
-        all_issues.extend(captured_output.split("\n"))
-
-    summary = (f"{len(routes)} routes, {len(receivers)} receivers, "
-               f"{len(inhibit_rules)} inhibit_rules")
-    if not routes and not inhibit_rules:
-        # Nothing was generated, so there is nothing to assemble or hand to
-        # Alertmanager. ⚠️ This is where the row and `--validate` DISAGREE, and did
-        # before #2311 too: on a tree whose tenants generate nothing (e.g.
-        # only `_severity_dedup: disable`) `--validate` exits 1 with "No valid
-        # routes or inhibit rules generated.", while this row is WARN/PASS at
-        # exit 0. (A tree with no tenants at all is rc 0 on both sides.) Kept
-        # as is: turning it into FAIL would change an existing exit code.
-        errors = gen.blocking_generation_errors(all_issues)
-        if errors:
-            return _routes_fail(gen, all_issues, errors)
-        if all_issues:
-            return _make_result("routes", WARN, all_issues)
-        return _make_result("routes", PASS, [summary])
-
-    # #2311: --validate semantics, by calling the SAME function
-    # `_validate_mode` calls — skipped entries, duplicate receiver names
-    # (#2164 / #2279), the ADR-025 inhibit tripwires, the invariants
-    # `assemble_configmap` enforces, and Alertmanager's own reading. Called
-    # OUTSIDE the stderr capture above: the function returns every line it has
-    # instead of printing it, so nothing it says (Alertmanager's "accepted"
-    # line) can be swept into this row as an issue.
-    verdict = gen.evaluate_generated_config(routes, receivers, inhibit_rules,
-                                            all_issues)
-    details = list(all_issues)
-    details.extend(e for e in verdict.errors if e not in all_issues)
-    details.extend(verdict.warnings)
-    if verdict.assembly_error is not None:
-        details.append("the assembled Alertmanager config was refused: "
-                       + verdict.assembly_error)
-    am = verdict.alertmanager
-    if am is not None:
-        details.extend(ln for ln in am.message.splitlines() if ln.strip())
-
-    if verdict.errors:
-        return _routes_fail(gen, details, verdict.errors)
-    if verdict.assembly_error is not None:
-        return _make_result("routes", FAIL, details, hint=ROUTES_INVARIANT_HINT)
-    if am.status == gen.AM_REJECTED:
-        return _make_result("routes", FAIL, details,
-                            hint=AM_REJECTED_ROUTES_HINT)
-    if am.status == gen.AM_UNUSABLE:
-        # No verdict on the config: an environment failure, exit 2 — the
-        # same rc `--validate` gives for it.
-        return _make_result("routes", FAIL, details, caller_error=True,
-                            hint=AM_UNUSABLE_ROUTES_HINT)
-    # Same shape as before #2311: a clean row leads with the summary, a row
-    # with findings lists the findings.
-    has_findings = bool(all_issues or verdict.warnings)
-    if not has_findings:
-        details.insert(0, summary)
-    return _make_result("routes", WARN if has_findings else PASS, details)
-
-
-def _routes_fail(gen, details: list[str], errors: list[str]) -> dict[str, object]:
-    """The routes FAIL row for blocking *errors*, with the hint they call for
-    (``_collision_hint``); the allowlist advice points at `--policy`'s docs."""
-    hint = _collision_hint(gen, errors)
-    row = _make_result("routes", FAIL, details, hint=hint)
+    if outcome.policy_error is not None:
+        # ⛔ hint= is not decoration here. Without it this row inherits the
+        # generic routes advice ("check _routing for invalid receiver
+        # types…"), which sends the operator to look at tenant YAML for a
+        # problem that is entirely in their own argv.
+        return _argv_error_row("routes", str(outcome.policy_error),
+                               POLICY_VERSION_REMEDY
+                               if isinstance(outcome.policy_error, gen.PolicyVersionError)
+                               else _POLICY_ROUTES_ROW_HINT)
+    findings = [gen.as_finding(f) for f in outcome.findings]
+    if outcome.exit_code == EXIT_OK:
+        warned = [f for f in findings if f.severity != "note"]
+        if not warned:
+            return _make_result("routes", PASS, details)
+        policy_only = all(f.lstrip().startswith(POLICY_WARN_PREFIX) for f in warned)
+        return _make_result("routes", WARN, details,
+                            hint=POLICY_ONLY_WARN_HINT if policy_only else None)
+    hint = _routes_fail_hint(gen, outcome, findings, strict)
+    row = _make_result("routes", FAIL, details, hint=hint,
+                       caller_error=outcome.exit_code != EXIT_VIOLATION)
     if hint == POLICY_REFUSAL_REMEDY:
         row["hint_docs"] = "docs/cli-reference.md#validate-config"
     return row
 
 
-def _collision_hint(gen, errors: list[str]) -> str | None:
-    """#2279: the collision-specific hint when every blocking line is a
-    duplicate receiver name; #3303: the allowlist advice when every one is a
-    `--policy` allowed_domains refusal (by the generator's kind,
-    `is_policy_refusal`); otherwise the generic routes advice."""
-    if all(gen.is_receiver_name_collision(e) for e in errors):
-        return RECEIVER_COLLISION_ROUTES_HINT
-    if all(gen.is_policy_refusal(e) for e in errors):
-        return POLICY_REFUSAL_REMEDY
+def _routes_fail_hint(gen, outcome, findings: list, strict: bool) -> str | None:
+    """The advice for a routes FAIL where the generic line would point at the
+    wrong thing, by what blocked the run: the findings in force (their
+    `kind` / prefix, never the message text), else the verdict on the
+    generated config. None: the generic routes advice."""
+    in_force = gen.in_force_blocks(validate=True, strict=strict)
+    in_force_lines = [f for f in findings
+                      if f.blocks in in_force and f.kind != "refusal_summary"]
+    # The shared key verdict's lines are the unread_keys row's to explain:
+    # the advice here is for the rest, when there is any.
+    blocking = [f for f in in_force_lines if not f.kind.startswith("key_")]
+    if in_force_lines and not blocking:
+        return KEY_VERDICT_ROUTES_HINT
+    if blocking:
+        unusable_policy = [f for f in blocking if f.kind == "domain_policy_unusable"]
+        # #3284: the generator refused the whole tree on field-type lines.
+        if all(is_field_type_error(f) for f in blocking) and len(
+                unusable_policy) < len(blocking):
+            return FIELD_TYPE_HINT
+        if all(f.lstrip().startswith(gen.POLICY_ERROR_PREFIX) or f in unusable_policy
+               for f in blocking):
+            return POLICY_ONLY_HINT
+        # #2279: every blocking line is a duplicate receiver name.
+        if all(gen.is_receiver_name_collision(f) for f in blocking):
+            return RECEIVER_COLLISION_ROUTES_HINT
+        # #3303: every one is a `--policy` allowed_domains refusal.
+        if all(gen.is_policy_refusal(f) for f in blocking):
+            return POLICY_REFUSAL_REMEDY
+        return None
+    verdict = outcome.generated
+    if verdict is None:
+        return (NOTHING_GENERATED_ROUTES_HINT
+                if outcome.exit_code == EXIT_VIOLATION else None)
+    if verdict.assembly_error is not None:
+        return ROUTES_INVARIANT_HINT
+    am = verdict.alertmanager
+    if am is not None and am.status == gen.AM_REJECTED:
+        return AM_REJECTED_ROUTES_HINT
+    if am is not None and am.status == gen.AM_UNUSABLE:
+        return AM_UNUSABLE_ROUTES_HINT
     return None
 
 
@@ -2681,17 +2549,11 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "decimal: write the value the line names, unquoted (#3764).",
         "docs/cli-reference.md#validate-config",
     ),
-    # #2695: placed before `schema` — that row is the generator's key check.
     "json_schema": (
         "Fix each value listed above to the shape its JSON Schema requires "
         "(the message names the field path after `@`). This is the same "
         "verdict as scripts/tools/lint/check_confd_schema.py.",
         "docs/cli-reference.md#validate-config",
-    ),
-    "schema": (
-        "Fix the routing, profile or policy entries named above. "
-        "Run: da-tools explain-route --tenant <id> to inspect resolved config.",
-        "docs/scenarios/hands-on-lab.md",
     ),
     "routes": (
         "Check _routing and _routing_defaults for invalid receiver types, "
@@ -2792,8 +2654,8 @@ def _unusable_files(results: list[dict[str, object]]) -> list[str]:
     """Files `yaml_syntax` could not read, taken from its own bookkeeping.
 
     #1448: every other check *skips* a file it cannot read and then reports
-    on what remained — so `schema` says "No schema warnings" and `routes`
-    says PASS about a tenant that was never loaded. Before #1448 nobody saw
+    on what remained — so a row can say PASS about a tenant that was never
+    loaded. Before #1448 nobody saw
     those rows (the process died first); making the report appear made a
     report that asserts health for files nobody could open. The rows are
     left as they are — this only lets the reader see what they exclude.
@@ -3025,7 +2887,7 @@ def _flag_flat_reads(row: dict[str, object], flat_reads: list[FlatRead],
     """Stop a row whose verdict came from a FLAT reader passing as complete.
 
     #1652 / #1911 (until #2326 made the routing rows read the tree, only
-    `policy_dsl`'s lookup is left): `schema`, `routes`, `policy` and `policy_dsl` got their
+    `policy_dsl`'s lookup is left): `routes` and `policy_dsl` got their
     tenants from readers that read only the top level of the tree, while the
     exporter reads it recursively. On a tree whose tenants live in `prod/`
     those rows reported ``[PASS] routes  0 routes, 0 receivers`` and
@@ -3208,7 +3070,7 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
     except SystemExit as exc:
         # ⛔ `SystemExit` is not an `Exception`, so the clause below does not
         # see it — and `_parse_config_files` calls `sys.exit()` when the
-        # config directory has gone, which `check_schema` and `check_routes`
+        # config directory has gone, which a check that reads the tree can
         # reach. `main()` checks `isdir` first, so this
         # needs a TOCTOU to fire (a GitOps ConfigMap projected volume swaps
         # `..data` atomically), and then the process dies before
@@ -3340,18 +3202,12 @@ def _main() -> "Report | None":
     results.append(_run_check("json_schema", check_json_schema,
                               args.config_dir, _config_dir=args.config_dir))
 
-    # 2. Generator key check (--strict: domain-policy violations → FAIL).
-    # Not JSON Schema despite the name — that is 1c (#2695).
-    results.append(_run_check("schema", check_schema, args.config_dir,
-                              strict=args.strict, _config_dir=args.config_dir))
-
-    # 3. Route validation
+    # 3. `generate-routes --validate` (with --policy / --strict as given):
+    # the one verdict on routing, the generator's tree checks and the
+    # domain policy. There is no row beside it that re-reads its findings.
     results.append(_run_check("routes", check_routes, args.config_dir,
-                              args.policy, _config_dir=args.config_dir))
-
-    # 4. (#3303) No `policy` row: the routes row above runs the generator
-    # with `--policy`'s allowed_domains and is the one verdict on it; a
-    # second row re-reading the same warnings by substring is gone.
+                              args.policy, strict=args.strict,
+                              _config_dir=args.config_dir))
 
     # 5. Custom rule lint (if rule-packs dir provided)
     # ⛔ THIS dispatcher IS the verdict site.

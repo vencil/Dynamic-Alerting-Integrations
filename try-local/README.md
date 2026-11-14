@@ -18,7 +18,7 @@ Give it ~1 minute, then open:
 |---|---|---|
 | **Tenant Manager**（da-portal） | <http://localhost:8081> | 2 個 demo 租戶 + 一個預存的 Saved View；改租戶閾值按 Save 會落一個**真實 git commit** |
 | **Tenant API**（經 oauth2-proxy） | <http://localhost:8080/api/v1/me> | file-based 設定 API（commit-on-write）；API 只在 tenant-api 的 Unix socket 上、經 pod 內 oauth2-proxy 進來（[ADR-027](../docs/adr/027-tenant-api-caller-identity.md) §2）。tenant-api 自己的 port <http://localhost:8083/health> 只有 `/health`、`/ready`、`/metrics` |
-| **產生器容器**（generator） | （無對外 port） | tenant-api 每筆寫入 commit 前問它整棵 conf.d 是否過得了 `generate-routes --validate --strict`（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）；以 repo root 為 context、從 `generator/Dockerfile` build（Python + PyYAML、git、amtool、da-guard；da-guard 從 exporter 的 Go 建置，[#3530](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3530)），跑本 checkout 的 `scripts/tools`；與 tenant-api 同 uid（10001）、共用 socket volume |
+| **產生器容器**（generator） | （無對外 port） | tenant-api 每筆寫入 commit 前問它整棵 conf.d 是否過得了 `generate-routes --validate --strict`（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）；以 repo root 為 context、從 `generator/Dockerfile` build（Python + PyYAML、git、da-guard、da-crdecode、da-read；三支都從本 checkout 的 Go 建置，[#3530](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3530)），跑本 checkout 的 `scripts/tools`；與 tenant-api 同 uid（10001）、共用 socket volume |
 | **Prometheus** | <http://localhost:9090/alerts> | `MariaDBHighConnectionsCritical` **正在 firing**（紅燈） |
 | **Alertmanager** | <http://localhost:9093> | 同一個 firing 告警，路由到 null receiver |
 

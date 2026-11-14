@@ -2,9 +2,8 @@ package handler
 
 // #2903: tenant-api's real write path against the REAL generator service
 // (scripts/tools/ops/generator_service.py, the code the da-tools image runs),
-// started here on a Unix socket over the test's git repository, with a stub
-// amtool on its PATH — a pass commits, a finding refuses with nothing
-// written. The unit tests (generator_gate_test.go) use a fake service; this
+// started here on a Unix socket over the test's git repository — a pass
+// commits, a finding refuses with nothing written. The unit tests (generator_gate_test.go) use a fake service; this
 // one proves the two sides agree on the wire.
 //
 // Needs python3 with PyYAML (the CI tenant-api leg installs it) and the Go
@@ -16,7 +15,6 @@ package handler
 import (
 	"context"
 	"encoding/json"
-	"github.com/vencil/tenant-api/internal/testutil"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -146,10 +144,6 @@ func startRealGenerator(t *testing.T, repo, policy string) string {
 		requireOrSkip(t, "python3 with PyYAML is not available: "+strings.TrimSpace(string(out)))
 	}
 	script := realGeneratorScript(t)
-	bin := t.TempDir()
-	if err := testutil.WriteExecutable(filepath.Join(bin, "amtool"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
 	sockDir, err := os.MkdirTemp("", "rg")
 	if err != nil {
 		t.Fatal(err)
@@ -158,8 +152,7 @@ func startRealGenerator(t *testing.T, repo, policy string) string {
 	sock := filepath.Join(sockDir, "g.sock")
 	cmd := exec.Command("python3", script, "--socket", sock, "--repo", repo, "--config-subdir", ".",
 		"--work-dir", filepath.Join(t.TempDir(), "work"), "--policy", policy, "--warm-ref", "")
-	cmd.Env = append(append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH")),
-		generatorToolEnv(t)...)
+	cmd.Env = append(os.Environ(), generatorToolEnv(t)...)
 	var logs strings.Builder
 	cmd.Stdout, cmd.Stderr = &logs, &logs
 	if err := cmd.Start(); err != nil {

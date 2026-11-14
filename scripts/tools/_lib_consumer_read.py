@@ -133,7 +133,8 @@ READER_BUILD_SOURCES: "dict[str, tuple[str, str, str]]" = {
 }
 
 
-def absolute_reader_binaries(environ: "dict[str, str] | None" = None) -> None:
+def absolute_reader_binaries(environ: "dict[str, str] | None" = None, *,
+                            pin_path_hits: bool = False) -> None:
     """Make each variable of ``READER_BINARY_ENVS`` in *environ* (default:
     this process's environment) an absolute path, against the current
     working directory.
@@ -144,13 +145,27 @@ def absolute_reader_binaries(environ: "dict[str, str] | None" = None) -> None:
     ``cwd``. Call this before either, so the binary the user named is the
     one that runs wherever it is resolved. A value that is unset, blank or
     already absolute is left as it is (blank still means "not set": the
-    resolvers then look on ``$PATH``)."""
-    env = os.environ if environ is None else environ
-    for name in READER_BINARY_ENVS:
-        value = env.get(name, "")
-        if value.strip() and not os.path.isabs(value):
-            env[name] = os.path.abspath(value)
+    resolvers then look on ``$PATH``).
 
+    ⛔ Unset stays unset, whatever ``$PATH`` holds: "variable not set" is how
+    the repo's wrappers (``scripts/ops/with_da_*.sh``, the Makefile) know to
+    build the reader from this checkout, and a reader that happens to be on
+    ``$PATH`` must not take that place.
+
+    *pin_path_hits* — the generator service only — also writes a reader
+    found on ``$PATH`` (the variable unset or blank) to its variable,
+    absolute: its judgement process resolves the readers from another
+    directory, where a relative ``$PATH`` entry names another place. Either
+    way the reader is the one ``resolve_binary`` finds."""
+    env = os.environ if environ is None else environ
+    for var in READER_BINARY_ENVS:
+        if not pin_path_hits and not env.get(var, "").strip():
+            continue
+        found = resolve_binary(None, var, READER_BUILD_SOURCES[var][2], env)
+        if found and not os.path.isabs(found):
+            found = os.path.abspath(found)
+        if found and env.get(var) != found:
+            env[var] = found
 
 class ConsumerReadError(Exception):
     """The consumer's reading could not be had.
@@ -215,15 +230,31 @@ def _stderr_lines(raw: bytes | None) -> list[str]:
     return [ln.rstrip() for ln in text.split("\n") if ln.strip()]
 
 
-def resolve_binary(explicit: str | None, env: str, name: str) -> str | None:
+def resolve_binary(explicit: str | None, env: str, name: str,
+                   environ: "dict[str, str] | None" = None) -> str | None:
     """*explicit* when given, else ``$env`` when set (non-blank), else *name*
-    on ``$PATH``; None when there is none."""
+    on ``$PATH``; None when there is none. The variable and ``$PATH`` are
+    read from *environ* (default: this process's environment)."""
     if explicit:
         return explicit
-    from_env = os.environ.get(env, "")
+    if environ is None:
+        environ = os.environ
+    from_env = environ.get(env, "")
     if from_env.strip():
         return from_env
-    return shutil.which(name)
+    # This process's own $PATH is shutil.which's default (os.defpath when
+    # unset); another mapping's is searched as given, and none means none.
+    return shutil.which(name, path=None if environ is os.environ
+                        else environ.get("PATH", ""))
+
+
+def da_read_binary(explicit: str | None = None) -> str | None:
+    """The da-read every reading here runs: *explicit*, else
+    ``$DA_READ_BINARY``, else ``da-read`` on ``$PATH``; None when there is
+    none. ⛔ The one lookup: a caller that only asks whether a da-read is
+    there (the generator service's readiness) asks here, so the binary it
+    reports on is the one the gate runs."""
+    return resolve_binary(explicit, DA_READ_ENV, DA_READ_BINARY_NAME)
 
 
 def _invoke(binary: str | None, name: str, env: str, build_hint: str,
@@ -464,7 +495,7 @@ def _is_refusal(e: ConsumerReadError) -> bool:
 def alertmanager_config(text: str | bytes, binary: str | None = None) -> dict:
     """The Alertmanager config *text* as Alertmanager loads it (``da-read
     alertmanager``), only the keys the text writes."""
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     data = text.encode("utf-8") if isinstance(text, str) else text
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["alertmanager", "-"], data)
@@ -493,7 +524,7 @@ def prometheus_config(source: "str | bytes | os.PathLike[str]", binary: str | No
         data = source.encode("utf-8") if isinstance(source, str) else source
     else:
         raise TypeError(f"prometheus_config takes text or a path, not {type(source).__name__}")
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build", args, data)
     return _one_document(out, "config")
 
@@ -507,7 +538,7 @@ def promql_selectors(series: str, exprs: "list[str]", binary: str | None = None)
     no metric name is judged the way Prometheus evaluates it. Each hit is
     ``{"selector": <Prometheus' spelling>, "start": int, "end": int}`` (byte
     offsets into the expression's UTF-8 encoding)."""
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     data = json.dumps(list(exprs)).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
                ["promql-selectors", series, "-"], data)
@@ -532,7 +563,7 @@ def promql_label_flow(label: str, exprs: "list[str]", records: "dict[str, list[d
     are the labels a ``label_replace`` may copy into *label* whole. Each hit is
     ``{"op": "and"|"unless", "start": int, "end": int, "lhs":
     "kept"|"dropped"|"unknown"}`` (byte offsets into the UTF-8 encoding)."""
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     data = json.dumps({"expressions": list(exprs), "records": dict(records or {}),
                        "aliases": list(aliases)}).encode("utf-8")
     out = _run(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",
@@ -631,7 +662,7 @@ def prometheus_rule_file_results(paths: "Iterable[str | os.PathLike[str]]",
     given = [os.fspath(p) for p in paths]
     if not given:
         return []
-    resolved = resolve_binary(binary, DA_READ_ENV, DA_READ_BINARY_NAME)
+    resolved = da_read_binary(binary)
     # Absolute paths never start with `-`, so none is read as stdin.
     absolute = [os.path.abspath(p) for p in given]
     proc, lines = _invoke(resolved, DA_READ_BINARY_NAME, DA_READ_ENV, "make da-read-build",

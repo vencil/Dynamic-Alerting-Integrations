@@ -74,8 +74,9 @@ def test_a_retired_key_in_the_deployments_root_defaults_fails_and_names_its_repl
     conf_d = _tree(tmp_path, f"defaults:\n  {_OLD}: 80\n  {_NEW}: 80\n")
     rc, rows = _validate(conf_d, retired_da_guard)
     assert rc == 1, rows
-    # The one failing row is the key verdict's.
-    assert [c for c, r in rows.items() if r["status"] == vc.FAIL] == ["unread_keys"], rows
+    # The key verdict fails its own row and the routes row, which is
+    # `generate-routes --validate` and reports the same verdict (#3788).
+    assert [c for c, r in rows.items() if r["status"] == vc.FAIL] == ["routes", "unread_keys"], rows
     row = rows["unread_keys"]
     assert row["status"] == vc.FAIL, row
     lines = [d for d in row["details"] if f"`{_OLD}`" in d]

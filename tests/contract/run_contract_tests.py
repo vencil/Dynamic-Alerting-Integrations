@@ -35,9 +35,8 @@ Fixture design (full-method fuzz):
     ADR-036 §3): tenant-api refuses to start without --generator-socket, and
     every write asks it before committing. It is the REAL service
     (scripts/tools/ops/generator_service.py, the da-tools image's code) over
-    the same repo, as the same uid; only amtool is a stub on its PATH (the
-    CI leg has no Alertmanager binary), so the generator's own checks all run
-    and only the final Alertmanager-parser pass is skipped.
+    the same repo, as the same uid, with the reader binaries it runs built
+    from this checkout (build_readers).
   - TA_RATE_LIMIT_PER_MIN=0 disables the per-caller rate limiter
     (cmd/server/main.go); hundreds of fuzz requests/minute from one
     caller identity would otherwise trip 429s unrelated to the spec.
@@ -386,19 +385,12 @@ def start_generator(config_dir: Path, workdir: Path, log_fh) -> tuple[subprocess
     the chart mounts it) and wait until its status endpoint answers ready.
 
     The socket lives in a short temp dir (a Unix socket path is limited to
-    ~107 bytes). amtool is a stub (exit 0) on the service's PATH: without
-    one the service answers every write 503 amtool_missing (ADR-036 §3).
+    ~107 bytes).
     Returns the process and the socket path; the caller stops the process.
     """
-    bin_dir = workdir / "bin"
-    bin_dir.mkdir()
-    amtool = bin_dir / "amtool"
-    amtool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
-    amtool.chmod(0o755)
     sock_dir = Path(tempfile.mkdtemp(prefix="cg"))
     sock = str(sock_dir / "g.sock")
-    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-           **build_readers(workdir)}
+    env = {**os.environ, **build_readers(workdir)}
     proc = subprocess.Popen(
         [sys.executable, str(GENERATOR_SERVICE), "--socket", sock, "--repo", str(config_dir),
          "--config-subdir", ".", "--work-dir", str(workdir / "generator-work")],

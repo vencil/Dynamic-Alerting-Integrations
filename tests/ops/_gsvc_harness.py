@@ -25,8 +25,6 @@ OPS = TOOLS / "ops"
 GAR = OPS / "generate_alertmanager_routes.py"
 GIT = shutil.which("git") or "git"
 
-ACCEPTING_AMTOOL = "#!/bin/sh\nexit 0\n"
-
 #: ⛔ The time limit of every judgement a test makes unless the test is ABOUT
 #: a time limit. A test whose verdict merely has to arrive must not race a
 #: wall-clock limit it is not testing: CI runs this file under coverage

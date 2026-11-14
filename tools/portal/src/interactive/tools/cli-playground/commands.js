@@ -165,7 +165,7 @@ Next steps:
     popular: true,
     // issue 1380: validate-config has no --ci flag (argparse rc=2). Its exit
     // code is already CI-shaped — 0 unless a check fails (1) — so the preview
-    // is the bare call, and the output below is a real run's, not a mock-up.
+    // is the bare call; the output below is an abridged illustration.
     preview: `$ da-tools validate-config --config-dir conf.d/
 
 ============================================================
@@ -175,11 +175,9 @@ Next steps:
 [PASS] yaml_syntax
        3 files parsed successfully
 
-[PASS] schema
-       No schema warnings
-
 [PASS] routes
-       2 routes, 2 receivers, 2 inhibit_rules
+       Validation: 2 route(s), 2 receiver(s), 2 inhibit rule(s)
+       OK: all configs valid
 
 [PASS] profiles
        2 tenants scanned, 0 profile refs, 0 profiles defined in _profiles.yaml
@@ -191,7 +189,7 @@ Next steps:
        2 tenant(s), each declared in exactly one file
 
 ------------------------------------------------------------
-  Total: 6 checks | 6 pass | 0 warn | 0 fail
+  Total: 5 checks | 5 pass | 0 warn | 0 fail
 ------------------------------------------------------------
   Result: PASS`,
     args: [],

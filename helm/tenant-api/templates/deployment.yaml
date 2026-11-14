@@ -427,11 +427,11 @@ spec:
               readOnly: true
             - name: generator-work
               mountPath: {{ include "tenant-api.generatorWorkDir" . }}
-            # Python's tempfile (the amtool check writes its config there)
-            # needs a writable /tmp; the root filesystem is read-only. A volume
-            # of its own, not a subPath of generator-work: kubelet creates a
-            # missing subPath directory itself, possibly root-owned and not
-            # writable by the pod's uid.
+            # Python's tempfile (a judgement writes the shipped platform rule
+            # files there for da-read to load) needs a writable /tmp; the root
+            # filesystem is read-only. A volume of its own, not a subPath of
+            # generator-work: kubelet creates a missing subPath directory
+            # itself, possibly root-owned and not writable by the pod's uid.
             - name: generator-tmp
               mountPath: /tmp
             {{- if .Values.generator.policy.existingConfigMap }}
@@ -454,9 +454,9 @@ spec:
           # asks GET /v1/status over the socket and passes on a 200. It runs as
           # the container's uid, which the service's SO_PEERCRED check admits.
           # ⚠️ 200 means the service is up and answering; it does NOT require
-          # status.ready (policy usable, amtool present): an unusable policy
-          # must reject writes with 503 (ADR-036 §5), not take the whole pod —
-          # reads included — out of the Service.
+          # status.ready (policy usable, da-read and da-guard present): an
+          # unusable policy must reject writes with 503 (ADR-036 §5), not take
+          # the whole pod — reads included — out of the Service.
           startupProbe:
             {{- include "tenant-api.generatorProbe" . | nindent 12 }}
             periodSeconds: 2

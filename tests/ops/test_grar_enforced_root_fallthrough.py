@@ -190,12 +190,11 @@ def test_apply_merge_pins_the_cluster_root(tmp_path):
 
 def test_validate_config_routes_row_counts_one_route_per_receiver(tmp_path):
     """No per-tenant fallthrough route any more: one route per receiver."""
-    # t-skipped is a skipped entry, which fails the row before it counts.
     row = vc.check_routes(str(_tree(tmp_path, _PER_TENANT, exclude=("t-skipped",))))
     n_recv = len(_TENANTS) - 1 + 1
     n_routes = n_recv
-    assert row["details"][0].startswith(
-        f"{n_routes} routes, {n_recv} receivers, "), row
+    assert any(d.startswith(f"Validation: {n_routes} route(s), {n_recv} receiver(s), ")
+               for d in row["details"]), row
 
 
 _AMTOOL = shutil.which("amtool")

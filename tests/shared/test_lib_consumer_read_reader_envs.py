@@ -100,13 +100,73 @@ def test_every_relative_value_becomes_absolute_against_the_cwd(tmp_path, monkeyp
     assert env["UNRELATED"] == "rel/path"
 
 
+def _readers_on_path(tmp_path: Path) -> str:
+    """A directory holding an executable of each reader's name; its path."""
+    (tmp_path / "rbin").mkdir()
+    for _module, _package, name in cr.READER_BUILD_SOURCES.values():
+        exe = tmp_path / "rbin" / name
+        exe.write_text("#!/bin/sh\n", encoding="utf-8")
+        exe.chmod(0o755)
+    return str(tmp_path / "rbin")
+
+
 @pytest.mark.parametrize("value", [None, "", " ", "\t", "/abs/reader"])
 def test_unset_blank_or_absolute_is_left_as_it_is(tmp_path, monkeypatch, value) -> None:
+    """With every reader on $PATH too: not set stays not set — a reader on
+    $PATH does not become the variable's value."""
     monkeypatch.chdir(tmp_path)
-    env = {} if value is None else {name: value for name in cr.READER_BINARY_ENVS}
+    env = {"PATH": _readers_on_path(tmp_path)}
+    if value is not None:
+        env.update({name: value for name in cr.READER_BINARY_ENVS})
     before = dict(env)
     cr.absolute_reader_binaries(env)
     assert env == before
+
+
+def test_pr_preflight_s_call_leaves_an_unset_reader_unset(tmp_path, monkeypatch) -> None:
+    """#3839 review: "variable not set" is how scripts/ops/with_da_*.sh and
+    the Makefile know to build the reader from this checkout. pr_preflight
+    calls `absolute_reader_binaries()` before `pre-commit run --all-files`;
+    with a (possibly stale) reader on $PATH and the variable not set, the
+    hooks must still see it not set, and rebuild."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", _readers_on_path(tmp_path))
+    for name in cr.READER_BINARY_ENVS:
+        monkeypatch.delenv(name, raising=False)
+    assert cr.resolve_binary(None, cr.DA_GUARD_ENV, "da-guard")  # it IS on $PATH
+    cr.absolute_reader_binaries()  # pr_preflight.main's call, as written there
+    for name in cr.READER_BINARY_ENVS:
+        assert name not in os.environ, name
+
+
+def test_only_the_generator_service_pins_path_hits() -> None:
+    """Every other caller keeps "not set" not set (the test above); the
+    service is the one whose judgement resolves the readers from another
+    directory. A new `pin_path_hits=` caller is a decision, not a default."""
+    passing = set()
+    for rel, text in _tools_sources():
+        for node in ast.walk(ast.parse(text, filename=rel)):
+            if isinstance(node, ast.Call) and any(k.arg == "pin_path_hits"
+                                                  for k in node.keywords):
+                passing.add(rel)
+    assert passing == {"scripts/tools/ops/generator_service.py"}, passing
+
+
+@pytest.mark.parametrize("value", [None, "", " "])
+def test_the_service_mode_pins_a_reader_found_on_path(tmp_path, monkeypatch, value) -> None:
+    """#3839 review, `pin_path_hits=True` (the generator service): with the
+    variable not set the resolvers look on $PATH, and a relative entry there
+    names another place after a directory change — so what is found is
+    written to the variable, absolute."""
+    monkeypatch.chdir(tmp_path)
+    _readers_on_path(tmp_path)
+    env = {"PATH": "rbin"}
+    if value is not None:
+        env.update({name: value for name in cr.READER_BINARY_ENVS})
+    cr.absolute_reader_binaries(env, pin_path_hits=True)
+    for var, (_module, _package, name) in cr.READER_BUILD_SOURCES.items():
+        assert env[var] == str(tmp_path / "rbin" / name), var
+    assert env["PATH"] == "rbin"
 
 
 def test_without_an_argument_it_changes_this_process_environment(tmp_path, monkeypatch) -> None:
