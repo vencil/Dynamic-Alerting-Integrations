@@ -179,7 +179,9 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
 }
 
 _HELM_PACKAGE_RE = re.compile(r"helm\s+package\s+(?P<target>[^\s]+)")
-_HELM_PUSH_RE = re.compile(r"helm\s+push\b")
+# release.yaml pushes charts only through release_publish.py chart (#3848),
+# which runs `helm push` itself; that call site counts as a push.
+_HELM_PUSH_RE = re.compile(r"helm\s+push\b|release_publish\.py\s+chart\b")
 # The chart NAME out of a `helm push .build/<name>-<version>.tgz` call. The
 # version half is templated by design and in three dialects — GitHub Actions
 # `${{ … }}`, Make `$(…)`, shell `${…}` — so it is matched and discarded. Only
@@ -188,7 +190,7 @@ _HELM_PUSH_RE = re.compile(r"helm\s+push\b")
 # draft and the refusal is what surfaced it, which is the behaviour this gate
 # wants from its own machinery too.
 _PUSHED_ARCHIVE_RE = re.compile(
-    r"helm\s+push\s+(?:\S*/)?(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*?)"
+    r"(?:helm\s+push|release_publish\.py\s+chart\s+--tgz)\s+\"?(?:\S*/)?(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*?)"
     r"-(?:\$\{\{[^}]*\}\}|\$\([^)]*\)|\$\{[^}]*\}|[0-9][A-Za-z0-9.+_-]*)\.tgz"
 )
 # A comment that merely mentions `helm package` is not a call site. Found by

@@ -23,6 +23,8 @@ lang: zh
 
 Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml` 每週跑一次）只開 `custom.regex` 與三個內建 manager：`github-actions`、`dockerfile`、`devcontainer`（[#1354](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1354)）。每個 manager 各自一支 grouped PR；major 一律要在 Dependency Dashboard 打勾才開。
 
+**git-only chart 跟著升版號**（[#3849](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3849)）：Renovate 在沒有發布線推送的 chart（git-only）底下改到任何檔案時（`values.yaml` 的映像 pin，或 chart 內附的 Dockerfile `FROM`），同一支 PR 會把那個 chart 的 `Chart.yaml` `version` 升一個 patch（`renovate.json` 每個 chart 一條 `bumpVersions` 規則，只以路徑限定、不限 manager），否則 chart-version-bump（#1269）會擋下那支 PR。⚠️ 兩支 PR 從同一個 base 升同一個 chart 會升到同一個版號：規則設了 `rebaseWhen: behind-base-branch`，下一輪 Renovate 會 rebase 再升一次；在那之前先合第二支（它的 CI 是 main 動之前跑的），main 上的 chart-version-bump 會在合併後轉紅。`bumpVersions` 在 Renovate 是 experimental，行為若變，同一個守衛會把 Renovate PR 擋紅。規則逐一列出、不用 `{{packageFileDir}}`：後者在 grouped PR 裡會漏掉 chart。哪些 chart 該有規則不在這裡列：`tests/ops/test_renovate_config.py` 以「`helm/*/Chart.yaml` 減去發布線推送的 chart」推導，多一條少一條都紅。Renovate 只升 `version`，不寫 `Chart.yaml` 的版本歷程註解。
+
 **判準**：一個 pin 的「另一側」若也是同一個 Renovate manager 會改到的 dep，交給 Renovate（同一支 grouped PR 一起動，守衛保持綠）；另一側**不是** Renovate dep，Renovate 只會升一半、守衛必紅，就在 `renovate.json` 明確 `enabled: false`，改由人按本頁對照表升。`tests/ops/test_renovate_config.py` 以案例逐一斷言下列歸屬。
 
 | 交給 Renovate | 刻意保留手動（`renovate.json` 內 disabled） | 為什麼手動 |

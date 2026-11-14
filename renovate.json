@@ -272,6 +272,48 @@
       "matchManagers": ["pyenv", "dockerfile", "devcontainer"],
       "matchDepNames": ["python"],
       "groupName": "Python interpreter"
+    },
+    {
+      "description": "#3849 — chargeback-aggregator is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/chargeback-aggregator/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-chargeback-aggregator", "filePatterns": ["helm/chargeback-aggregator/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — federation-gateway is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/federation-gateway/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-federation-gateway", "filePatterns": ["helm/federation-gateway/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — federation-proxy is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/federation-proxy/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-federation-proxy", "filePatterns": ["helm/federation-proxy/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — federation-reconciler is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/federation-reconciler/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-federation-reconciler", "filePatterns": ["helm/federation-reconciler/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — mariadb-instance is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/mariadb-instance/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-mariadb-instance", "filePatterns": ["helm/mariadb-instance/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — vector is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/vector/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-vector", "filePatterns": ["helm/vector/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
+    },
+    {
+      "description": "#3849 — victorialogs is a git-only chart (no release line pushes it), so a Renovate PR that edits any file under it (values.yaml via custom.regex, a bundled Dockerfile via dockerfile — no matchManagers on purpose) must also raise its Chart.yaml `version`, or chart-version-bump (#1269) turns the PR red. behind-base-branch: once another PR has bumped this chart on main, the next run rebases and bumps again instead of leaving two PRs on the same version. One rule per chart, listed by hand: `{{packageFileDir}}` misses charts in a grouped PR. tests/ops/test_renovate_config.py binds this set to the git-only charts.",
+      "matchFileNames": ["helm/victorialogs/**"],
+      "rebaseWhen": "behind-base-branch",
+      "bumpVersions": [{"name": "chart-victorialogs", "filePatterns": ["helm/victorialogs/Chart.yaml"], "matchStrings": ["\\nversion:[ \\t]*(?<version>\\S+)"], "bumpType": "patch"}]
     }
   ]
 }

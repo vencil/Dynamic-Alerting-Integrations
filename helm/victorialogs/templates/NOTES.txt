@@ -14,7 +14,7 @@ Consumer authorization (#1295): auth.mode={{ .Values.auth.mode }}.
 {{- if eq .Values.auth.mode "observe" }}
   ⚠️ observe is the migration step, NOT a boundary: requests without
   credentials still reach every path. Wire each consumer's Secret
-  (auth.consumers[].existingSecret) and on each consumer's side, check they
+  (auth.existingSecrets.<consumer>) and on each consumer's side, check they
   authenticate (runbook §1.2), then drop the auth.mode=observe override —
   enforce is the default.
 {{- else }}
