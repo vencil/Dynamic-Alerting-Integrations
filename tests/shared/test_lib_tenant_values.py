@@ -496,6 +496,22 @@ def test_served_schedules_do_not_depend_on_the_time_of_day(tmp_path, da_guard):
     assert ei.value.returncode == 2 and not ei.value.binary_fault
 
 
+def test_served_schedules_judge_expiry_at_the_given_instant(tmp_path, da_guard):
+    """`at` 有傳給 da-guard：`expires:` 落在兩個 `at` 之間時，`expired` 與整天的值隨 `at` 不同
+    （時刻只在這裡起作用，#3877）。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  redis_memory: 90\n",
+        "tenant-a.yaml": ("tenants:\n  tenant-a:\n    redis_memory:\n      default: \"60\"\n"
+                          "      expires: \"2026-07-01T12:00:00Z\"\n"),
+    })
+    before = tv.load_served_schedules(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard)
+    after = tv.load_served_schedules(conf_d, at="2026-07-01T13:00:00Z", binary=da_guard)
+    b, a = before.tenants["tenant-a"]["redis_memory"], after.tenants["tenant-a"]["redis_memory"]
+    assert (b.expires, b.expired) == ("2026-07-01T12:00:00Z", False)
+    assert (a.expires, a.expired) == ("2026-07-01T12:00:00Z", True)
+    assert [s.value for s in b.segments] == [60.0] and [s.value for s in a.segments] == [90.0]
+
+
 def test_served_schedules_refuse_a_document_with_instant_fields(tmp_path):
     """`--schedules-only` 的租戶只有 `schedules`；帶了在單一時刻讀的欄位就不是它的輸出。"""
     fake = _old_da_guard(tmp_path, _ARGV_DOC)

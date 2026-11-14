@@ -566,7 +566,7 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"entry is {\"schedules\"} only, and a part of the day in which /metrics cannot be\n"+
 			"gathered is a segment carrying that error wherever --at falls, never exit 2 —\n"+
 			"so the time of day of --at (default now) cannot change the outcome.\n"+
-			"--at still decides what has expired. Not with --disable-effects.")
+			"--at still decides what has expired. Not with --schedules or --disable-effects.")
 	fs.BoolVar(&f.disableEffects, "disable-effects", false,
 		"For every key a tenant switches off (disable), say in keys[].disable whether that changes\n"+
 			"what /metrics serves (effective / noop), by resolving the tree again without it, and\n"+
@@ -608,6 +608,11 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 	if fs.NArg() > 0 {
 		fmt.Fprintf(errOut, "%s %s: unexpected argument %q\n", programName, servedValuesCmd, fs.Arg(0))
 		return nil, errors.New("unexpected argument")
+	}
+	if f.schedulesOnly && f.schedules {
+		// Two documents of different shapes: say which one, never pick.
+		fmt.Fprintf(errOut, "%s %s: --schedules and --schedules-only print different documents; give one of them\n", programName, servedValuesCmd)
+		return nil, errors.New("--schedules with --schedules-only")
 	}
 	if f.schedulesOnly && f.disableEffects {
 		// keys[].disable is read at --at; --schedules-only prints no keys.

@@ -27,6 +27,15 @@ var windowCollisionTree = map[string]string{
 		"      default: \"70\"\n      overrides:\n        - window: \"01:00-03:00\"\n          value: \"50:critical\"\n",
 }
 
+// respelledDimensionalTree is windowCollisionTree plus a dimensional key
+// whose labels the tenant writes out of the canonical order: its schedule
+// is keyed as written (spellAsWritten), as --schedules keys it — also when
+// --at falls in the part of the day /metrics cannot be gathered in.
+var respelledDimensionalTree = map[string]string{
+	"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  pg_connections: 80\ndimensions:\n  pg_connections: [r, env]\n",
+	"tx.yaml":        windowCollisionTree["tx.yaml"] + "    'pg_connections{r=\"x\", env=\"prod\"}': \"60\"\n",
+}
+
 // writeConfD writes files under a fresh conf.d/ and returns its path.
 func writeConfD(t *testing.T, files map[string]string) string {
 	t.Helper()
@@ -53,8 +62,10 @@ func TestServedSchedulesOnly_TimeOfDayDoesNotChangeTheDocument(t *testing.T) {
 		errFrom, errTo     string
 		tenant, keyChecked string
 	}{
-		"issue-3877":  {windowCollisionTree, "2026-11-14T01:30:00Z", "2026-11-14T05:00:00Z", "01:00", "03:00", "tx", "mysql_connections"},
-		"two-tenants": {ungatherableTree, "2026-07-01T15:30:00Z", scheduleAt, "15:00", "16:00", "tenant-b", "mysql_connections"},
+		"issue-3877": {windowCollisionTree, "2026-11-14T01:30:00Z", "2026-11-14T05:00:00Z", "01:00", "03:00", "tx", "mysql_connections"},
+		// keyChecked spelt as the tenant wrote it, not canonically.
+		"respelled-dimensional": {respelledDimensionalTree, "2026-11-14T01:30:00Z", "2026-11-14T05:00:00Z", "01:00", "03:00", "tx", `pg_connections{r="x", env="prod"}`},
+		"two-tenants":           {ungatherableTree, "2026-07-01T15:30:00Z", scheduleAt, "15:00", "16:00", "tenant-b", "mysql_connections"},
 		// Time-boxed keys before and past their `expires:` (their expires /
 		// expired come from the expiry reading, not the reading at --at), and
 		// three colliding parts with errors of their own: segments unchecked.
@@ -129,7 +140,7 @@ func TestServedSchedulesOnly_TimeOfDayDoesNotChangeTheDocument(t *testing.T) {
 			var sch map[string]json.RawMessage
 			_ = json.Unmarshal(only.Tenants[tc.tenant]["schedules"], &sch)
 			if err := json.Unmarshal(sch[tc.keyChecked], &day); err != nil {
-				t.Fatalf("tenant %s: schedules[%q]: %v", tc.tenant, tc.keyChecked, err)
+				t.Fatalf("tenant %s: schedules[%q]: %v (schedules: %v)", tc.tenant, tc.keyChecked, err, keysOf(sch))
 			}
 			errSegs := 0
 			for _, s := range day.Segments {
@@ -183,5 +194,18 @@ func TestServedSchedulesOnly_RefusesDisableEffects(t *testing.T) {
 	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir, "--schedules-only", "--disable-effects")
 	if code != exitCallerErr || stdout != "" || !strings.Contains(stderr, "--disable-effects") {
 		t.Errorf("exit %d, stdout %q, stderr %q; want exit %d, nothing written", code, stdout, stderr, exitCallerErr)
+	}
+}
+
+// TestServedSchedulesOnly_RefusesSchedules: --schedules and --schedules-only
+// print documents of different shapes; given both, neither is picked.
+func TestServedSchedulesOnly_RefusesSchedules(t *testing.T) {
+	t.Parallel()
+	dir := writeConfD(t, windowCollisionTree)
+	for _, args := range [][]string{{"--schedules", "--schedules-only"}, {"--schedules-only", "--schedules"}} {
+		code, stdout, stderr := runOnce(t, append([]string{servedValuesCmd, "--config-dir", dir, "--at", "2026-11-14T05:00:00Z"}, args...)...)
+		if code != exitCallerErr || stdout != "" || !strings.Contains(stderr, "--schedules and --schedules-only") {
+			t.Errorf("%v: exit %d, stdout %q, stderr %q; want exit %d, nothing written", args, code, stdout, stderr, exitCallerErr)
+		}
 	}
 }
