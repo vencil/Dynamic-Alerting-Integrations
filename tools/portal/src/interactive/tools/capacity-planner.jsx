@@ -174,7 +174,7 @@ export default function CapacityPlanner() {
               <GaugeBar label={t('Exporter 記憶體（MB）', 'Exporter Memory (MB)')} value={Math.round(estimates.exporterMB)} max={512} unit=" MB" color="bg-green-500" />
               <GaugeBar label={t('Prometheus 記憶體（MB）', 'Prometheus Memory (MB)')} value={Math.round(estimates.promMemMB)} max={4096} unit=" MB" color="bg-amber-500" />
               <GaugeBar label={t('Alertmanager Routes', 'Alertmanager Routes')} value={estimates.amRoutes} max={500} unit="" color="bg-pink-500" />
-              <GaugeBar label={t('Alertmanager Inhibit Rules', 'Alertmanager Inhibit Rules')} value={estimates.amInhibits} max={1000} unit="" color="bg-indigo-500" />
+              <GaugeBar label={t('Alertmanager Inhibit Rules（固定，不隨租戶數成長）', 'Alertmanager Inhibit Rules (fixed, not per tenant)')} value={estimates.amInhibits} max={10} unit="" color="bg-indigo-500" />
               <GaugeBar label={t('Config Reload 預估（ms）', 'Config Reload Estimate (ms)')} value={Math.round(estimates.reloadMs)} max={5000} unit=" ms" color="bg-teal-500" />
             </div>
 
