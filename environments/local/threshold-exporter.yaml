@@ -41,6 +41,10 @@ thresholdConfig:
     container_cpu: 80
     container_cpu_throttle: 25
     container_memory: 85
+    # D-A A2b（#1200）：三個容量類百分比升 arming: default，依據登記在 threshold registry 的 validation。
+    es_disk_usage_percent: 85   # % of the data path used
+    es_heap_usage_percent: 85   # % of the max JVM heap
+    oracle_tablespace_used_percent: 85   # % of the tablespace used
   state_filters:
     container_crashloop:
       reasons: ["CrashLoopBackOff"]
