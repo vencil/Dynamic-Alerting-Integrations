@@ -237,10 +237,15 @@ _NOT_THIS_LIBS_TEXT: dict[tuple[str, str], str] = {
 }
 
 
+_URL_MARKER = "@@the-url-argument@@"
+
+
 def _takes_the_url(recipe, tmp_path: Path) -> bool:
     probe = tmp_path / "probe"
     probe.mkdir()
-    return any("http://stub.invalid:1" in a for a in recipe.build(probe, "http://stub.invalid:1"))
+    # A marker, not a URL: the question is "does this argv carry the value it
+    # was handed", and nothing is requested from it.
+    return any(_URL_MARKER in a for a in recipe.build(probe, _URL_MARKER))
 
 
 def _raw_peer_bytes(text: str) -> Optional[str]:
