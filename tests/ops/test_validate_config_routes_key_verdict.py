@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ import pytest
 
 import _lib_tenant_values as tv
 import validate_config as vc
+from _platform_fs import require_shebang_scripts
 
 pytestmark = pytest.mark.usefixtures("da_guard_env", "da_crdecode_env", "da_read_env")
 
@@ -340,3 +342,27 @@ def test_a_tree_refused_before_the_keys_are_judged_is_judged_for_no_alert(tmp_pa
     assert not any("key verdict" in d for d in rows["routes"]["details"]), rows["routes"]
     (line,) = rows["no_alert"]["details"]
     assert line.startswith("not checked: ") and "KeyVerdictError" in line, line
+
+
+@pytest.mark.parametrize("tenant", [
+    pytest.param("tenants:\n  db-a:\n    mysql_connections: \"70\"\n", id="clean"),
+    pytest.param("tenants:\n  db-a:\n    mysql_conections: \"70\"\n", id="unread-key"),
+])
+def test_one_report_judges_the_keys_once(tmp_path, monkeypatch, tenant):
+    """#3873：一次 validate-config 只跑一次 `da-guard key-verdict`——routes 列判出的判決
+    交給 no_alert 列，判決有給出時也一樣（不只是給不出來的時候）。以計數 wrapper 記下
+    每次 da-guard 的子命令。"""
+    require_shebang_scripts()  # the counting wrapper is a `#!` script
+    conf_d = _tree(tmp_path / "conf.d", {"_defaults.yaml": _DEFAULTS, "db-a.yaml": tenant})
+    log = tmp_path / "calls.log"
+    wrapper = tmp_path / "dg-wrap.sh"
+    wrapper.write_text(f'#!/bin/sh\necho "$1" >> "{log}"\nexec "$DA_GUARD_REAL" "$@"\n',
+                       encoding="utf-8")
+    wrapper.chmod(0o755)
+    monkeypatch.setenv("DA_GUARD_REAL", os.environ["DA_GUARD_BINARY"])
+    monkeypatch.setenv("DA_GUARD_BINARY", str(wrapper))
+    _p, rows = _cli(conf_d)
+    assert rows["no_alert"]["status"] in (vc.PASS, vc.WARN), rows["no_alert"]
+    assert not rows["no_alert"]["details"][0].startswith("not checked"), rows["no_alert"]
+    calls = log.read_text(encoding="utf-8").split()
+    assert calls.count("key-verdict") == 1, calls
