@@ -30,6 +30,13 @@ ALLOWED: dict[tuple[str, str, str, str], str] = {
     ("_lib_validation.py", "shown_value", "repr(", "value"):
         "THE exit: a credential path is masked first, a container prints type and "
         "length, a string only when it is name-like",
+    # #3703: the file-name rule moved here so that `shown_file` judges a path
+    # segment by it. `shown_file` only asks whether the answer is None; the
+    # sentence is printed by configmap-assemble and init, about the operator's
+    # own file names.
+    ("_lib_validation.py", "configmap_key_problem", "repr(", "c"):
+        "one character of a file name the operator is assembling into a ConfigMap "
+        "(configmap-assemble / init), never printed by the route generator",
     # F-A (round 4): the URL flags of the tools — every value is the person's
     # own command-line argument or environment variable, echoed back to them.
     ("_lib_validation.py", "url_problem", "!r", "bad"):

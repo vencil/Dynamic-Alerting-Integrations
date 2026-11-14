@@ -49,6 +49,7 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
+from _lib_validation import shown_file  # noqa: E402  (#3703: conf.d paths into messages)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
@@ -1436,7 +1437,7 @@ def _validate_profile_refs(parsed: dict) -> list[str]:
             parsed, tenant_dirs.get(tenant, ROOT_LEVEL))
         if profile_name not in visible:
             where = origin.get(profile_name)
-            extra = (f" (a profile of that name is defined in {where}, which "
+            extra = (f" (a profile of that name is defined in {shown_file(where)}, which "
                      f"is not on this tenant's directory chain — a profile is "
                      f"visible only to tenants at its own level or below)"
                      if where else "")
@@ -1492,8 +1493,8 @@ def check_policy_scope(
             rows.append((name, t))
             msg = (f"  {severity}: domain_policy '{shown_key(name)}' in {source} names "
                    f"tenant '{t}', which lives outside this policy's subtree "
-                   f"{scope}/ (its file is in "
-                   f"{'the conf.d root' if where == ROOT_LEVEL else where + '/'})"
+                   f"{shown_file(scope)}/ (its file is in "
+                   f"{'the conf.d root' if where == ROOT_LEVEL else shown_file(where) + '/'})"
                    f" — a policy below the conf.d root applies only to the "
                    f"tenants in its own subtree, so this entry is NOT enforced")
             if strict:
@@ -1597,7 +1598,7 @@ def duplicate_tenant_errors(duplicates: "dict[str, list[str]]") -> list[str]:
         Finding(  # #2766: the tenant is the subject; several files, so no file
         # #3703: an id two files declare is whatever the author wrote.
         f"  {DUPLICATE_TENANT_PREFIX} tenant '{shown_key(str(tenant))}' is declared in "
-        f"{len(files)} files: {', '.join(files)}. The threshold-exporter (and "
+        f"{len(files)} files: {', '.join(shown_file(f) for f in files)}. The threshold-exporter (and "
         "da-guard) reject the WHOLE config dir in this state, so every tenant "
         "loses alerting, not just this one. Which file owns the tenant is "
         "your decision (removing the wrong one drops its overrides "
@@ -1868,7 +1869,7 @@ def ignored_routing_keys(obj: object, *, block: str, where: str,
     out: list[IgnoredKeyWarning] = []
     # The file goes after the path: `_routing_defaults.overrides[0] in
     # _defaults.yaml`, never `… in _defaults.yaml.overrides[0]`.
-    in_file = f" in {file}" if file else ""
+    in_file = f" in {shown_file(file)}" if file else ""
 
     def check(obj: dict, keys: frozenset[str], label: str, path: str,
               in_override: bool = False) -> None:
@@ -2225,7 +2226,7 @@ def unknown_routing_keys(obj: object, *, layer: str, where: str,
     if not isinstance(obj, dict):
         return []
     allowed = TENANT_ROUTING_KEYS if layer == "tenant" else PLATFORM_ROUTING_KEYS
-    in_file = f" in {file}" if file else ""
+    in_file = f" in {shown_file(file)}" if file else ""
     return [
         ignored_key_warning(
             f"  WARN: {where}{in_file}: '{shown_key(key)}' is not a key the route generator reads "
@@ -2593,7 +2594,7 @@ def invalid_tenant_id_text(tenant: object, files: "Sequence[str]" = ()) -> str:
     finding's ``file`` names it: an id that is not printed is found by its
     file and its stand-in. ⚠️ Wording as ``routing_not_mapping_text``.
     """
-    where = f"{files[0]}: " if files else ""
+    where = f"{shown_file(files[0])}: " if files else ""
     return (f"{where}tenant id '{shown_key(str(tenant))}' is not a valid tenant id "
             f"({tenant_id_rule()[1]}) — no route, receiver or inhibit rule is "
             "rendered for it")
@@ -2610,7 +2611,7 @@ def tenant_id_field(tenant: object) -> "str | None":
 
 def routing_defaults_not_mapping_text(fname: str, value: object) -> str:
     """#2341 R5: a ``_routing_defaults`` that is neither a mapping nor null."""
-    return (f"_routing_defaults in {fname} must be a mapping, got "
+    return (f"_routing_defaults in {shown_file(fname)} must be a mapping, got "
             f"{_shape_of(value)} — this level contributes nothing to the "
             "routing of the tenants it reaches")
 
