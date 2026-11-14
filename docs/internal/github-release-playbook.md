@@ -153,6 +153,7 @@ make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 
 | `nightly-mutation-pilot.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch（#350） |
 | `weekly-fuzz.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch |
 | `nightly-image-scan.yaml` | `schedule` + `workflow_dispatch` | ✅ build/scan 邏輯鏡 `component-docker-build.yaml`；它本身就是 release.yaml CVE gate 的**時間維度補位**（見下） |
+| `main-red-detector.yml` | `workflow_run`（回報必要檢查的 workflow 在 main 的 push run 結束時）+ `workflow_dispatch` | ❌ 結構上不可能：`workflow_run` 只從預設分支觸發。判斷邏輯由 `tests/ops/test_main_red_report.py` 以假 API 涵蓋；workflow 本身用 `workflow_dispatch` 帶 `run_id` 重放一個已結束的 run（`write` 預設 false：讀真 API、只印出會開／留言／關哪張票） |
 
 > **時間維度補位（release-night CVE ambush）**：release.yaml 的 Trivy 是 tag-time **hard gate**，但 base-image（Alpine/distroless/nginx）CVE 會在「上次 PR」與「真正打 tag」之間落地（[security-audit-runbook §Release-day CVE drift](security-audit-runbook.md)），於是發版夜才被擋。`nightly-image-scan.yaml`（schedule）每晚對 `main` build 出的 **7** 個 self-built image 跑 Trivy（同 release 契約：`CRITICAL,HIGH` + `ignore-unfixed`），有 fixable 就開／更新一個 deduped tracking issue（label `nightly-cve`、全清自動關），讓 CVE 提早幾天浮現而非發版當下才撞。**non-blocking**——夜掃本身不 gate 任何東西；真正擋發布的是 release.yaml 的 tag-time 掃描，自 [#1278](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1278) 起它在**發布前**跑（候選 tag → 掃 digest → 通過才 promote），所以夜掃 issue 上還開著的 fixable CVE，到打 tag 當下就是一次被擋下、要 patch＋重打 tag 的 release。（scope：da-tools 走 stub build，只掃 OS/base-image 層、不掃 Go binary module CVE——後者由 release 真 build + Go CI 覆蓋。）
 

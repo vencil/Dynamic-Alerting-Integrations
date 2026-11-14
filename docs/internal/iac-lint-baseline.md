@@ -45,6 +45,8 @@ Critical → BLOCK 的最後一哩是 GitHub branch protection 的 required stat
 
 ⛔ **必要檢查的清單只寫在 [`.github/required-checks.yaml`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/required-checks.yaml)**，本節不再列舉。與 IaC SAST 相關的兩項是 `Lint`（含 L1 `iac-sast-check`、L3 `helm-values-secrets-check`）與 `Container SAST (Helm L2 + raw k8s L4)`（L2＋L4 kube-linter）。該檔與 workflow 的一致性由 `tests/ops/test_required_checks_ssot.py` 守，與 GitHub 實際設定的一致性由 `.github/workflows/required-checks-drift.yml` 守；新增或改名的順序寫在該檔檔頭。
 
+必要檢查擋的是 PR；**合併後的 main 壞了**由 `.github/workflows/main-red-detector.yml` 通報（[#3922](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3922)）：回報必要檢查的 workflow 在 main 的 push run 失敗時，開一張固定標題的票（已開著就留言），寫明範圍「同一支 workflow 上一次成功的 sha .. 這次失敗的 sha」、失敗的 job 與 run 連結；`cancelled` 不算失敗也不算恢復；每一支被監看的 workflow 最新一次有結論的 push run 都成功時自動關票。判斷在 `scripts/ops/main_red_report.py`（結束碼 0 無事／1 main 是紅的、票已更新／2 沒結論），被監看的清單由 `tests/ops/test_main_red_report.py` 釘在「回報 `required-checks.yaml` 任一項的 workflow」這個集合上。⚠️ `workflow_run` 只從預設分支觸發，PR 上跑不到；要驗就用 `workflow_dispatch` 帶一個已結束的 run id 重放（預設只印出會做什麼，不寫票）。
+
 ## Consolidated baseline（全 4 層總帳，TRK-315 — epic #448 closure）
 
 epic #448 的 hybrid policy：**既有 open-source engine 優先 + Vibe wrapper 疊專案政策**（severity / 中央 exemption / scope），取代 DIY-only `check_*.py` 的 reactive whack-a-mole（**僅 greenfield 套用**，不回頭遷移既有 ~50 支）。規範同步於 [`dev-rules.md` §安全紀律](dev-rules.md) + `CLAUDE.md`。

@@ -1,6 +1,17 @@
 # validate.yaml — PR validation pipeline
 #
-# Runs on every PR. Catches issues before merge.
+# Runs on every PR. Catches issues before merge. Also runs on every push to
+# main (#3922): until then its three required checks never ran on the MERGED
+# tree, so two PRs that were each green could break one of them together and
+# nothing reported it. main-red-detector.yml opens an issue when a push run
+# fails. No step here reads `github.event.pull_request.*` or diffs against a
+# base, so a push run does exactly what a PR run does.
+#
+# No `concurrency:` group, unlike ci.yml: a group would let the next merge
+# replace a pending main run (`cancelled`), and this workflow is short enough
+# that every main commit can have its own verdict — which is what lets the
+# detector name a tight range. PR runs are not cancelled by a newer push
+# either; that is unchanged.
 #
 # The workflow triggers on EVERY pull_request to main (no top-level `paths:`
 # filter) and no job in it is path-gated (#3756): every PR runs all three.
@@ -64,6 +75,8 @@
 name: Validate
 
 on:
+  push:
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -112,10 +125,12 @@ jobs:
           key: ${{ runner.os }}-vibe-dl-golangci-v2.12.2
 
       # Go module + build cache. ⛔ Deliberately the SAME key namespace as
-      # ci.yml's Go legs, not a private one: this workflow is pull_request-only,
-      # so it never writes a default-branch cache, and a `-go-lint-` namespace
-      # would miss on every PR's first run while ci.yml's warm entry sat next to
-      # it. Sharing makes the first run warm.
+      # ci.yml's Go legs, not a private one: a `-go-lint-` namespace would
+      # miss on every PR's first run while the warm entry sat next to it.
+      # Sharing makes the first run warm. ⚠️ Since this workflow also runs on
+      # push to main (#3922) it can be the one that WRITES the default-branch
+      # entry after a go.sum change (a key is saved once, by whichever job
+      # misses first); that entry then holds lint's build cache.
       - name: Cache Go modules + build cache
         uses: actions/cache@v5
         with:
