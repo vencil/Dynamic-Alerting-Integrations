@@ -25,7 +25,7 @@ updated_at: 2026-11-14
 ## 名詞
 
 - **閾值登錄表**：`rule-packs/threshold-registry.yaml`，平台所有閾值鍵的唯一來源。每個鍵記它屬於哪個規則包、平台的值，以及 `arming`：`default` 表示平台出貨即啟用，`operator` 表示平台不主張值、要部署方自己校準。
-- **預設啟用鍵**：登錄表裡 `arming: default` 的鍵。目前 10 個：`container_cpu`、`container_cpu_throttle`、`container_memory`、`pg_connections`、`pg_replication_lag`、`mysql_connection_usage_percent`、`mysql_replication_lag`、`es_disk_usage_percent`、`es_heap_usage_percent`、`oracle_tablespace_used_percent`。
+- **預設啟用鍵**：登錄表裡 `arming: default` 的鍵。目前 11 個：`container_cpu`、`container_cpu_throttle`、`container_memory`、`pg_connections`、`pg_replication_lag`、`mysql_connection_usage_percent`、`mysql_replication_lag`、`es_disk_usage_percent`、`es_heap_usage_percent`、`oracle_tablespace_used_percent`、`rabbitmq_node_mem_percent`。
 - **讀取端**：讀 conf.d 並算出每個租戶設定的程式：threshold-exporter、da-guard（conf.d 檢查工具）、tenant-api。三者編譯進同一套 Go 程式庫，`da-tools validate-config` 經 da-guard 取得答案。
 - **根層**：conf.d 根目錄的 `_defaults.yaml`。它的 `defaults:` 給數字，`optional_overrides:` 是一份鍵名清單，宣告「平台認得這個鍵、但不主張它的值」，租戶自己寫了才送出。
 - **列**：exporter 在 `/metrics` 為某個租戶的某個閾值送出的一條 `user_threshold` series。`da-guard served-values` 印出同一份答案。
@@ -41,7 +41,7 @@ updated_at: 2026-11-14
 量到的現況：
 
 - 沒有任何讀取端拿登錄表的值當底層。根層沒寫 `pg_connections`、租戶寫了值，da-guard 的鍵判決是 `unread`／`error`／`no_row`，`/metrics` 不送這一列。
-- init 選全部規則包時，根層 `defaults:` 寫入 39 個鍵，其中只有 10 個是預設啟用鍵，另外 29 個是登錄表標為 `operator` 的鍵。只選 `mariadb,kubernetes` 時寫入 5 個。
+- init 選全部規則包時，根層 `defaults:` 寫入 39 個鍵，其中只有 11 個是預設啟用鍵，另外 28 個是登錄表標為 `operator` 的鍵。只選 `mariadb,kubernetes` 時寫入 5 個。
 - init 產生的租戶檔也帶複製品：第一個規則包的基底值被寫成租戶覆寫（例如 `mysql_connection_usage_percent: "80"`，與平台值相同）。
 - `da-tools validate-config` 有一列 `unsupplied_defaults`，點名「平台預設啟用、樹裡卻沒供給」的鍵，建議把鍵加進 `defaults:`，刻意不啟用就列進 `optional_overrides:`。它只在有人執行這支工具時看得到，而且前一個建議是再做一份複製品。
 
@@ -77,7 +77,7 @@ updated_at: 2026-11-14
 | 不存在，或存在而 `defaults:` 是空的 | 給值。這是合法的樹，鍵判決不再因為沒有根層檔而回「無從判斷」（修訂 ADR-038 決定 7） |
 | 讀不了（例如 YAML 語法錯） | 不給值，維持現行行為：整棵樹不送任何閾值列，da-guard 結束碼 3。根層讀不了時，寫在裡面的覆寫與退出也讀不到；這時送出平台值，等於替客戶打開他退出的告警 |
 
-內建層對每個租戶都生效，不看這個部署有沒有裝對應的規則包。多一列不等於多一條告警：告警要響，還需要規則包已部署、指標存在。Helm 路徑今天就是這樣：chart 把 10 個鍵送給每個租戶。
+內建層對每個租戶都生效，不看這個部署有沒有裝對應的規則包。多一列不等於多一條告警：告警要響，還需要規則包已部署、指標存在。Helm 路徑今天就是這樣：chart 把 11 個鍵送給每個租戶。
 
 ### 2. 合併順序與來源標示
 
@@ -236,7 +236,7 @@ redis_connected_clients        1000  warning    ← 根層
 
 ## 後果與已知限制
 
-- **省略一個鍵的意思變了。** 既有的樹升級後，每個租戶最多多出 10 條基底列，另加因為基底現在有值而送出的列：租戶寫的 `_critical`，以及下一條說的過期 `disable`。在本 repo 的樹上量到的幅度：
+- **省略一個鍵的意思變了。** 既有的樹升級後，每個租戶最多多出 11 條基底列，另加因為基底現在有值而送出的列：租戶寫的 `_critical`，以及下一條說的過期 `disable`。在本 repo 的樹上量到的幅度：
 
   | 樹 | 租戶數 | 列數 前 → 後 |
   |:--|:--|:--|
@@ -245,7 +245,7 @@ redis_connected_clients        1000  warning    ← 根層
   | init，選 `mariadb,kubernetes` | 1 | 10 → 12 |
   | init，選全部規則包 | 2 | 98 → 98 |
   | init，只選 `redis` | 2 | 8 → 22 |
-  | 上方範例 | 1 | 1 → 10 |
+  | 上方範例 | 1 | 1 → 11 |
 
 - **過期的 `disable` 開始失效。** 根層沒有值的鍵，`"disable"` 的 `expires:` 現行不看，等於永久關閉（ADR-038 決定 8）。內建層給值之後，這些鍵比照根層有值的鍵：`disable` 過期即失效，基底列與它的維度列一起回來。
 - **平台改值會在客戶沒有 diff 的情況下改變告警。** 這是本決策的目的，也是它的代價。護欄是決策 5 的 BREAKING 條目與決策 8 的升級前比對；不接受的客戶把數字寫進根層，就釘住了。
@@ -273,9 +273,9 @@ redis_connected_clients        1000  warning    ← 根層
 1. **退出的寫法**（決策 3、4）。兩個選項都讓根層 `null` 落到內建層，採用任一個都等於接受決策 4 的行為改變。
    - **沿用 `optional_overrides:`（本文的寫法，建議）**：不新增語法，與現有提示一致。代價：日後把清單上的鍵升為預設啟用時，既有的樹靜默地讀成退出，只能靠 `platform_defaults` 列與發布說明讓它看得見。
    - **新增只放退出的清單**：沒有上述的靜默情況，代價見「考慮過的替代方案」。若預期會把 `optional_overrides:` 層的鍵升為預設啟用，這個選項比較好。
-2. **init 對 29 個 `operator` 鍵的處置。** 選全部規則包時，init 今天把它們連值寫進根層，conf.d 路徑因此啟用 39 個鍵、Helm 路徑 10 個。
+2. **init 對 28 個 `operator` 鍵的處置。** 選全部規則包時，init 今天把它們連值寫進根層，conf.d 路徑因此啟用 39 個鍵、Helm 路徑 11 個。
    - **維持寫入（建議）**：這些鍵平台沒有預設值，客戶檔裡的數字不會相對於平台值過期，不屬於本決策要解決的問題；維持也避免在同一個版本再疊一個行為改變。日後其中的鍵升為預設啟用時，客戶寫的數字是看得見的覆寫；改成列名的話，升格時會遇到第 1 項說的靜默退出。註解改為明寫「這些是你的值，平台不出貨」。代價：兩條路徑的不一致留著，登錄表記有實測反例的值（例如 `oracle_sessions_active`）繼續被 init 啟用。
-   - **改成不啟用**：鍵名列進 `optional_overrides:`，參考值寫成註解。兩條路徑一致，但新專案少 29 個預設啟用的鍵；只選 `redis` 的專案在自行校準之前沒有任何 Redis 閾值告警。
+   - **改成不啟用**：鍵名列進 `optional_overrides:`，參考值寫成註解。兩條路徑一致，但新專案少 28 個預設啟用的鍵；只選 `redis` 的專案在自行校準之前沒有任何 Redis 閾值告警。
    - 再議的條件：這些鍵改成比值形式或通過驗證、升為預設啟用鍵時，它們自然進入內建層。
 
 ## 實作順序
@@ -286,7 +286,7 @@ redis_connected_clients        1000  warning    ← 根層
 |:--|:--|:--|
 | 1 | 本 ADR 核可 | — |
 | 2 | 執行期訊號與 `platform_defaults` 列的規格依決策 8 更新 | — |
-| 3 | 讀取端的內建層：生成表、合併鏈最底層、`key_sources`、鍵判決 | 沒有根層檔的樹、與根層 `defaults:` 是空的樹，都送出 10 列、來源為 `builtin`；拿掉內建層就少 10 列；登錄表改了沒重新生成時檢查失敗；內建表有差異而沒有 Breaking 片段時檢查失敗。對照：租戶覆寫勝出、列進 `optional_overrides:` 沒有列、同時有根層數字又列名的鍵照送、租戶 `"disable"` 沒有列、critical 送出、根層讀不了時沒有列 |
+| 3 | 讀取端的內建層：生成表、合併鏈最底層、`key_sources`、鍵判決 | 沒有根層檔的樹、與根層 `defaults:` 是空的樹，都送出 11 列、來源為 `builtin`；拿掉內建層就少 11 列；登錄表改了沒重新生成時檢查失敗；內建表有差異而沒有 Breaking 片段時檢查失敗。對照：租戶覆寫勝出、列進 `optional_overrides:` 沒有列、同時有根層數字又列名的鍵照送、租戶 `"disable"` 沒有列、critical 送出、根層讀不了時沒有列 |
 | 4 | Helm chart 的 `defaultsOptOut` | `helm template` 的輸出比對；沒設時輸出與改動前相同；列在裡面的鍵沒有列 |
 | 5 | init | 產物的 `served-values` 中，預設啟用鍵的列與改動前相同 |
 | 6 | 遷移指令與 da-guard 的提示 | 值不同的鍵保留；值相同的 `operator` 鍵保留；同時列名的鍵保留；摘要不同時拒絕寫入 |

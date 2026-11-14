@@ -1,0 +1,107 @@
+# promtool unit test — RabbitMQ node memory as % of the memory high watermark (#3929).
+# Run: promtool test rules tests/rulepacks/rule-pack-rabbitmq-memory_test.yaml
+#
+# The observed series is tenant:rabbitmq_node_mem_percent:ratio = used / limit
+# PER NODE, fullest node per tenant, from either exporter's metric names.
+#   - t-hetero: node a at 57/60 (95 %), node b at 10/100 with a larger limit.
+#     Per node the fullest is 95 %. max(used) / max(limit) reads 57/100 = 57 %
+#     and fires nothing — this tenant is what turns the test red if the ratio
+#     goes back to dividing the two maxima.
+#   - t-plugin: only the built-in rabbitmq_prometheus plugin's names
+#     (rabbitmq_process_resident_memory_bytes / rabbitmq_resident_memory_limit_bytes),
+#     at 92 %. With only the kbudde names in the rule this tenant has no ratio
+#     sample and no alert.
+#   - t-both: both exporters scrape one node, kbudde reads 50 %, the plugin
+#     93 % — the fuller reading wins.
+#   - t-below: 89 % against a warning of 90 → no alert.
+#   - t-zero: a limit that reads 0 → the `> 0` filter drops the node: no ratio
+#     sample, no alert. Clamping the limit to 1 instead read 5 bytes of use as
+#     500 % and paged critical.
+rule_files:
+  - ../../rule-packs/rule-pack-rabbitmq.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'rabbitmq_node_mem_used{tenant="t-hetero", node="rabbit@a"}'
+        values: '57x40'
+      - series: 'rabbitmq_node_mem_limit{tenant="t-hetero", node="rabbit@a"}'
+        values: '60x40'
+      - series: 'rabbitmq_node_mem_used{tenant="t-hetero", node="rabbit@b"}'
+        values: '10x40'
+      - series: 'rabbitmq_node_mem_limit{tenant="t-hetero", node="rabbit@b"}'
+        values: '100x40'
+      - series: 'user_threshold{tenant="t-hetero", component="rabbitmq", metric="node_mem_percent", severity="warning"}'
+        values: '90x40'
+      - series: 'user_threshold{tenant="t-hetero", component="rabbitmq", metric="node_mem_percent", severity="critical"}'
+        values: '95x40'
+
+      - series: 'rabbitmq_process_resident_memory_bytes{tenant="t-plugin", instance="mq-0"}'
+        values: '92x40'
+      - series: 'rabbitmq_resident_memory_limit_bytes{tenant="t-plugin", instance="mq-0"}'
+        values: '100x40'
+      - series: 'user_threshold{tenant="t-plugin", component="rabbitmq", metric="node_mem_percent", severity="warning"}'
+        values: '90x40'
+
+      - series: 'rabbitmq_node_mem_used{tenant="t-both", node="rabbit@a"}'
+        values: '50x40'
+      - series: 'rabbitmq_node_mem_limit{tenant="t-both", node="rabbit@a"}'
+        values: '100x40'
+      - series: 'rabbitmq_process_resident_memory_bytes{tenant="t-both", instance="mq-0"}'
+        values: '93x40'
+      - series: 'rabbitmq_resident_memory_limit_bytes{tenant="t-both", instance="mq-0"}'
+        values: '100x40'
+      - series: 'user_threshold{tenant="t-both", component="rabbitmq", metric="node_mem_percent", severity="warning"}'
+        values: '90x40'
+
+      - series: 'rabbitmq_node_mem_used{tenant="t-below", node="rabbit@a"}'
+        values: '89x40'
+      - series: 'rabbitmq_node_mem_limit{tenant="t-below", node="rabbit@a"}'
+        values: '100x40'
+      - series: 'user_threshold{tenant="t-below", component="rabbitmq", metric="node_mem_percent", severity="warning"}'
+        values: '90x40'
+
+      - series: 'rabbitmq_node_mem_used{tenant="t-zero", node="rabbit@a"}'
+        values: '5x40'
+      - series: 'rabbitmq_node_mem_limit{tenant="t-zero", node="rabbit@a"}'
+        values: '0x40'
+      - series: 'user_threshold{tenant="t-zero", component="rabbitmq", metric="node_mem_percent", severity="warning"}'
+        values: '90x40'
+      - series: 'user_threshold{tenant="t-zero", component="rabbitmq", metric="node_mem_percent", severity="critical"}'
+        values: '95x40'
+
+    promql_expr_test:
+      - expr: tenant:rabbitmq_node_mem_percent:ratio
+        eval_time: 5m
+        exp_samples:
+          - labels: 'tenant:rabbitmq_node_mem_percent:ratio{tenant="t-hetero"}'
+            value: 95
+          - labels: 'tenant:rabbitmq_node_mem_percent:ratio{tenant="t-plugin"}'
+            value: 92
+          - labels: 'tenant:rabbitmq_node_mem_percent:ratio{tenant="t-both"}'
+            value: 93
+          - labels: 'tenant:rabbitmq_node_mem_percent:ratio{tenant="t-below"}'
+            value: 89
+
+      # for: 2m → firing by 5m. 95 is not above a critical threshold of 95.
+      - expr: count by(alertname, tenant) (ALERTS{alertstate="firing", alertname=~"RabbitMQHighMemory|RabbitMQHighMemoryCritical"})
+        eval_time: 5m
+        exp_samples:
+          - labels: '{alertname="RabbitMQHighMemory", tenant="t-hetero"}'
+            value: 1
+          - labels: '{alertname="RabbitMQHighMemory", tenant="t-plugin"}'
+            value: 1
+          - labels: '{alertname="RabbitMQHighMemory", tenant="t-both"}'
+            value: 1
+
+      # for: is 2m, not 30s: one minute in, the alerts are pending.
+      - expr: count by(alertname) (ALERTS{alertstate="firing", alertname=~"RabbitMQHighMemory|RabbitMQHighMemoryCritical"})
+        eval_time: 1m
+        exp_samples: []
+      - expr: count by(alertname) (ALERTS{alertstate="pending", alertname="RabbitMQHighMemory"})
+        eval_time: 1m
+        exp_samples:
+          - labels: '{alertname="RabbitMQHighMemory"}'
+            value: 3

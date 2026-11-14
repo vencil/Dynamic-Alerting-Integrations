@@ -18,12 +18,13 @@ data:
     \ (rabbitmq_queue_messages_ready)\n  - record: tenant:rabbitmq_consumers:max\n\
     \    expr: max by(tenant) (rabbitmq_queue_consumers)\n  - record: tenant:rabbitmq_connections:max\n\
     \    expr: max by(tenant) (rabbitmq_connections)\n  - record: tenant:rabbitmq_node_mem_percent:ratio\n\
-    \    expr: '100 * max by(tenant) (rabbitmq_node_mem_used)\n\n      / on(tenant)\n\
-    \n      clamp_min(max by(tenant) (rabbitmq_node_mem_limit), 1)\n\n      '\n  -\
-    \ record: tenant:rabbitmq_unacked_messages:max\n    expr: max by(tenant) (rabbitmq_queue_messages_unacked)\n\
-    - name: rabbitmq-threshold-normalization\n  interval: 15s\n  rules:\n  - record:\
-    \ tenant:alert_threshold:rabbitmq_queue_messages\n    expr: max by(tenant) (user_threshold{component=\"\
-    rabbitmq\", metric=\"queue_messages\", severity=\"warning\"})\n  - record: tenant:alert_threshold:rabbitmq_queue_messages_critical\n\
+    \    expr: \"max by(tenant) (\\n  100 * rabbitmq_node_mem_used / (rabbitmq_node_mem_limit\
+    \ > 0)\\n  or\\n  100 * rabbitmq_process_resident_memory_bytes / (rabbitmq_resident_memory_limit_bytes\
+    \ > 0)\\n)\\n\"\n  - record: tenant:rabbitmq_unacked_messages:max\n    expr: max\
+    \ by(tenant) (rabbitmq_queue_messages_unacked)\n- name: rabbitmq-threshold-normalization\n\
+    \  interval: 15s\n  rules:\n  - record: tenant:alert_threshold:rabbitmq_queue_messages\n\
+    \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"queue_messages\"\
+    , severity=\"warning\"})\n  - record: tenant:alert_threshold:rabbitmq_queue_messages_critical\n\
     \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"queue_messages\"\
     , severity=\"critical\"})\n  - record: tenant:alert_threshold:rabbitmq_node_mem_percent\n\
     \    expr: max by(tenant) (user_threshold{component=\"rabbitmq\", metric=\"node_mem_percent\"\
@@ -84,7 +85,7 @@ data:
     \  - alert: RabbitMQHighMemory\n    expr: \"(\\n  tenant:rabbitmq_node_mem_percent:ratio\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:rabbitmq_node_mem_percent\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 30s\n    labels:\n      maintenance: mute\n      metric_group: rabbitmq_node_mem_percent\n\
+    n\"\n    for: 2m\n    labels:\n      maintenance: mute\n      metric_group: rabbitmq_node_mem_percent\n\
     \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: 'Memory used: {{ $value | printf \"%.1f\" }}% of limit (warning\
     \ threshold exceeded)'\n      description_zh: '已使用記憶體: 限制的 {{ $value | printf\
@@ -104,7 +105,7 @@ data:
     \  - alert: RabbitMQHighMemoryCritical\n    expr: \"(\\n  tenant:rabbitmq_node_mem_percent:ratio\\\
     n  > on(tenant) group_left\\n  tenant:alert_threshold:rabbitmq_node_mem_percent_critical\\\
     n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\"maintenance\\\"} == 1)\\\
-    n\"\n    for: 30s\n    labels:\n      maintenance: mute\n      metric_group: rabbitmq_node_mem_percent\n\
+    n\"\n    for: 2m\n    labels:\n      maintenance: mute\n      metric_group: rabbitmq_node_mem_percent\n\
     \      severity: critical\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
     \      description: 'Memory used: {{ $value | printf \"%.1f\" }}% of limit (critical\
     \ threshold exceeded)'\n      description_zh: '已使用記憶體: 限制的 {{ $value | printf\

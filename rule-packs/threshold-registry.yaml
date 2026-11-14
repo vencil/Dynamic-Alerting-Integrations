@@ -946,17 +946,20 @@ keys:
   rabbitmq_node_mem_percent:
     pack: rabbitmq
     tier: defaults
-    value: 80
+    value: 90
     unit: '%'
-    desc: Node memory usage warning
+    desc: 'Node memory warning: resident memory as % of the memory high watermark, fullest node (#3929: 80 → 90, measured per node)'
     metric_class: saturation
-    arming: operator
+    arming: default
     portability: portable
-    blocker:
-      kind: value_disputed
-      tracking: 3929
-      reason: No vendor or upstream source uses 80; the two found for this measure (Grafana rabbitmq-mixin, awesome-prometheus-alerts) both warn at 90.
-      reason_zh: 沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana rabbitmq-mixin、awesome-prometheus-alerts）都在 90 告警。
+    validation:
+      basis: vendor
+      sources:
+      - org: "awesome-prometheus-alerts"
+        url: https://raw.githubusercontent.com/samber/awesome-prometheus-alerts/master/_data/rules.yml
+        quote: "query: \"rabbitmq_node_mem_used / rabbitmq_node_mem_limit * 100 > 90 and rabbitmq_node_mem_limit > 0\""
+        value: 90
+        tier: warning
   rabbitmq_connections:
     pack: rabbitmq
     tier: defaults

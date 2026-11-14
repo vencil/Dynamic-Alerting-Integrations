@@ -10,15 +10,26 @@
 # 對應的 threshold-exporter defaults（defaults tier——scaffold onboarding 供給；[chart-default]=chart 出貨即啟用；未標者 chart 不出貨，「未啟用」一行寫原因，需部署面顯式供給後才發射可達）:
 #   rabbitmq_queue_messages: 100000   # messages — Queue depth warning
 #       未啟用（依部署而定）：正常的佇列深度取決於各部署的生產者與消費者
-#   rabbitmq_node_mem_percent: 80   # % — Node memory usage warning
-#       未啟用（值有爭議，#3929）：沒有廠商或上游來源用 80；查到量同一件事的兩個來源（Grafana
-#       rabbitmq-mixin、awesome-prometheus-alerts）都在 90 告警。
+#   rabbitmq_node_mem_percent: 90   [chart-default]
+#       % — Node memory warning: resident memory as % of the memory high watermark, fullest node
+#       (#3929: 80 → 90, measured per node)
 #   rabbitmq_connections: 1000   # count — Connection count warning
 #       未啟用（待改比值）：絕對連線數跨部署沒有意義；exporter 的 sockets_used／sockets_available 是候選分母，但它由檔案描述符推得，由 #1320 決定
 #   rabbitmq_consumers: 5   # count — Minimum consumer count warning
 #       未啟用（依部署而定）：預期的 consumer 數是各部署的拓撲
 #   rabbitmq_unacked_messages: 10000   # messages — Unacknowledged messages warning
 #       未啟用（依部署而定）：正常的未 ack 量取決於 consumer 的 prefetch 與處理時間
+#
+# optional_overrides（不在出貨清單裡，但 base 已出貨——租戶今天就設得動）：
+# 下列 `<base>_critical` 不在平台出貨的 `optional_overrides:` 清單裡，也不需要列進去。
+# 它們的解析走 resolveCriticalRows，入場條件是 `defaults[base]` 有值
+# （components/threshold-exporter/app/pkg/config/resolve.go），
+# 而下列每個 key 的 base 都標了
+# [chart-default]＝出貨的 Helm values / dev conf.d 範本就供給它。⇒ 租戶在自己的
+# conf.d 填一個，ValidateTenantKeys 放行、resolveCriticalRows 產出一條真的
+# critical row。清單刻意不收 _critical 也是同一個理由：它們用不到宣告集（#1311）。
+# ⚠️ 下列數字是「參考起點」不是背書——正式採用前必須以該租戶實際 baseline 校準。
+#   rabbitmq_node_mem_percent_critical: 95   # % — Node memory critical
 #
 # optional_overrides（不在出貨清單裡，base 也未出貨——documented-but-dormant）：
 # ⛔ 啟用前提（別跳過）：下列 key **不在**平台出貨的 `optional_overrides:` 清單，
@@ -32,7 +43,6 @@
 # critical 覆寫才有東西可加嚴。清單刻意排除 _critical 正是因為如此：放進去只會是
 # 一格裝飾（#1311）。
 #   rabbitmq_queue_messages_critical: 500000   # messages — Queue depth critical
-#   rabbitmq_node_mem_percent_critical: 95   # % — Node memory critical
 #   rabbitmq_connections_critical: 1500   # count — Connection count critical
 #   rabbitmq_unacked_messages_critical: 50000   # messages — Unacknowledged messages critical
 # <<< GENERATED:threshold-registry:pack-rabbitmq
@@ -65,12 +75,27 @@ groups:
       - record: tenant:rabbitmq_connections:max
         expr: max by(tenant) (rabbitmq_connections)
 
-      # Memory usage as percentage of configured limit
+      # Memory used as a percentage of the memory high watermark, PER NODE,
+      # fullest node per tenant (#3929). 100 % is RabbitMQ's memory alarm:
+      # publishers are blocked.
+      #   - Per node, not max(used) / max(limit): in a cluster whose nodes have
+      #     different limits the two maxima come from different nodes, and a
+      #     node at 95 % of a small limit read as 57 %.
+      #   - Both exporters the pack supports, the same quantity under two
+      #     names: kbudde/rabbitmq_exporter (rabbitmq_node_mem_used / _limit,
+      #     RabbitMQ 3 only) and the built-in rabbitmq_prometheus plugin
+      #     (rabbitmq_process_resident_memory_bytes /
+      #     rabbitmq_resident_memory_limit_bytes). With only the kbudde names
+      #     the alert never fired for a plugin deployment.
+      #   - `> 0` drops a node whose limit reads 0 instead of clamping it to 1,
+      #     which read a few bytes of use as thousands of percent.
       - record: tenant:rabbitmq_node_mem_percent:ratio
         expr: |
-          100 * max by(tenant) (rabbitmq_node_mem_used)
-          / on(tenant)
-          clamp_min(max by(tenant) (rabbitmq_node_mem_limit), 1)
+          max by(tenant) (
+            100 * rabbitmq_node_mem_used / (rabbitmq_node_mem_limit > 0)
+            or
+            100 * rabbitmq_process_resident_memory_bytes / (rabbitmq_resident_memory_limit_bytes > 0)
+          )
 
       # Unacknowledged messages (typically indicates consumer slowness)
       - record: tenant:rabbitmq_unacked_messages:max
@@ -176,7 +201,9 @@ groups:
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
-        for: 30s
+        # 2m: the sources this threshold rests on wait 2m–5m, and a node hovering
+        # at its watermark crosses it in bursts (#3929).
+        for: 2m
         labels:
           severity: warning
           maintenance: mute
@@ -203,7 +230,9 @@ groups:
           )
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
-        for: 30s
+        # 2m: the sources this threshold rests on wait 2m–5m, and a node hovering
+        # at its watermark crosses it in bursts (#3929).
+        for: 2m
         labels:
           severity: critical
           maintenance: mute

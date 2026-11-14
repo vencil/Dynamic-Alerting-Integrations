@@ -390,6 +390,18 @@ rabbitmq_node_mem_limit:
   rule_pack: rabbitmq
   note: "Node memory limit — 用於 ratio 計算的分母"
 
+rabbitmq_process_resident_memory_bytes:
+  maps_to: rabbitmq_node_mem_percent
+  golden_rule: RabbitMQHighMemory
+  rule_pack: rabbitmq
+  note: "內建 rabbitmq_prometheus 外掛的 node 記憶體用量（與 kbudde 的 rabbitmq_node_mem_used 是同一個量，#3929）"
+
+rabbitmq_resident_memory_limit_bytes:
+  maps_to: null
+  golden_rule: null
+  rule_pack: rabbitmq
+  note: "內建 rabbitmq_prometheus 外掛的記憶體 high watermark — ratio 的分母（#3929）"
+
 rabbitmq_queue_messages_unacked:
   maps_to: rabbitmq_unacked_messages
   golden_rule: RabbitMQHighUnackedMessages
