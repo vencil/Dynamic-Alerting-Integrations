@@ -467,6 +467,55 @@ def test_ungatherable_segment_is_parsed_with_its_error(tmp_path, da_guard):
     assert segs[1].error and "HTTP 500" in segs[1].error
 
 
+# #3877：01:00-03:00 的 `50:critical` 與 `_critical` 鍵是同一條 series，那段 /metrics
+# Gather 不起來，其餘時段可以。
+_WINDOW_COLLISION = {
+    "_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+    "tx.yaml": ("tenants:\n  tx:\n    mysql_connections_critical: \"95\"\n"
+                "    mysql_connections:\n      default: \"70\"\n      overrides:\n"
+                "        - window: \"01:00-03:00\"\n          value: \"50:critical\"\n"),
+}
+
+
+def test_served_schedules_do_not_depend_on_the_time_of_day(tmp_path, da_guard):
+    """#3877：`load_served_schedules`（`--schedules-only`）在 Gather 不起來的時段之內與之外
+    答案相同，那段是帶 error 的 segment；`--schedules` 在那段之內仍 exit 2（讀 --at 的值）。"""
+    conf_d = _tree(tmp_path, _WINDOW_COLLISION)
+    inside = tv.load_served_schedules(conf_d, at="2026-11-14T01:30:00Z", binary=da_guard)
+    outside = tv.load_served_schedules(conf_d, at="2026-11-14T05:00:00Z", binary=da_guard)
+    assert inside.tenants == outside.tenants
+    segs = inside.tenants["tx"]["mysql_connections"].segments
+    assert [s[:4] for s in segs] == [("00:00", "01:00", 70.0, "warning"), ("01:00", "03:00", None, None),
+                                     ("03:00", "24:00", 70.0, "warning")]
+    assert segs[1].error and "HTTP 500" in segs[1].error
+    # 同一份 Go 讀數：與 --schedules 在 Gather 得起來的時刻給的 schedules 相同。
+    full = tv.load_served_tree(conf_d, at="2026-11-14T05:00:00Z", binary=da_guard, schedules=True)
+    assert {t: v.schedules for t, v in full.tenants.items()} == outside.tenants
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(conf_d, at="2026-11-14T01:30:00Z", binary=da_guard, schedules=True)
+    assert ei.value.returncode == 2 and not ei.value.binary_fault
+
+
+def test_served_schedules_refuse_a_document_with_instant_fields(tmp_path):
+    """`--schedules-only` 的租戶只有 `schedules`；帶了在單一時刻讀的欄位就不是它的輸出。"""
+    fake = _old_da_guard(tmp_path, _ARGV_DOC)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_schedules(tmp_path, binary=fake)
+    assert ei.value.binary_fault and "not schedules alone" in str(ei.value)
+
+
+def test_da_guard_without_schedules_only_is_named_as_too_old(tmp_path):
+    """不認得 --schedules-only 的 da-guard（Go flag：exit 2，`-h` 亦然）指出要升級。"""
+    require_shebang_scripts()  # the stand-in da-guard is a `#!` script
+    fake = tmp_path / "pre-3877-da-guard"
+    fake.write_text("#!/bin/sh\necho 'flag provided but not defined: -schedules-only' >&2\nexit 2\n",
+                    encoding="utf-8")
+    fake.chmod(0o755)
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_schedules(tmp_path, binary=str(fake))
+    assert ei.value.stale and "older than this tool: upgrade or rebuild it" in str(ei.value)
+
+
 def test_a_retired_spelling_is_found_through_the_exporters_rule(tmp_path, da_guard):
     """舊拼法寫的 key 照 exporter 的規則（`key_spellings`，#3556）找得到；Python 端
     沒有別名表，served-values 也不再給一份。"""

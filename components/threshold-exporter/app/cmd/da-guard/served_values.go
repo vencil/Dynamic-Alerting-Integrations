@@ -77,8 +77,10 @@ type servedValuesDoc struct {
 	// (#2115). A symlink to a directory is not listed. Always present ([]
 	// when none). When every config file of the tree is unreadable, the
 	// document still comes out, with no tenant and those files here (#2627).
-	Unreadable []skippedFile                 `json:"unreadable"`
-	Tenants    map[string]servedTenantValues `json:"tenants"`
+	Unreadable []skippedFile `json:"unreadable"`
+	// Tenants: map[string]servedTenantValues; with --schedules-only,
+	// map[string]servedTenantDay (#3877).
+	Tenants any `json:"tenants"`
 	// ⛔ No alias table (#3556): Values, Severities, Schedules and Dropped
 	// are keyed by the canonical spelling, and a reader holding a key in a
 	// retired spelling asks `key-spellings` for it. The table this field
@@ -543,6 +545,7 @@ type servedValuesFlags struct {
 	configDir      string
 	at             string
 	schedules      bool
+	schedulesOnly  bool
 	disableEffects bool
 	tenants        tenantList
 }
@@ -558,6 +561,12 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 	fs.BoolVar(&f.schedules, "schedules", false,
 		"Also print each tenant's schedules: every threshold key over the whole UTC day.\n"+
 			"Resolves the tree once per part of the day in which some schedule changes.")
+	fs.BoolVar(&f.schedulesOnly, "schedules-only", false,
+		"Print each tenant's schedules and nothing read at --at alone (#3877): a tenant's\n"+
+			"entry is {\"schedules\"} only, and a part of the day in which /metrics cannot be\n"+
+			"gathered is a segment carrying that error wherever --at falls, never exit 2 —\n"+
+			"so the time of day of --at (default now) cannot change the outcome.\n"+
+			"--at still decides what has expired. Not with --disable-effects.")
 	fs.BoolVar(&f.disableEffects, "disable-effects", false,
 		"For every key a tenant switches off (disable), say in keys[].disable whether that changes\n"+
 			"what /metrics serves (effective / noop), by resolving the tree again without it, and\n"+
@@ -568,7 +577,7 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"the document then carries tenants_requested and tenants_absent (requested, not in the tree),\n"+
 			"and whether /metrics can be gathered is judged over the requested tenants only.")
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules] [--disable-effects] [--tenant <id> ...]\n", programName, servedValuesCmd)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--schedules | --schedules-only] [--disable-effects] [--tenant <id> ...]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "Print, as JSON, the values the exporter's /metrics serves per tenant.\n\n")
 		fmt.Fprintf(errOut, "Each tenant's \"series\" maps every threshold key of \"severities\" to the /metrics series\n"+
 			"its rows are, read back from the Gather: [{\"name\", \"labels\" (the full label set),\n"+
@@ -586,7 +595,8 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, a tree the exporter rejects (e.g. a tenant declared twice),\n"+
 			"     a conf.d path or any output string that is not valid UTF-8, or a Gather failure of the same\n"+
-			"     collectors production /metrics serves (e.g. two keys producing one series)\n"+
+			"     collectors production /metrics serves (e.g. two keys producing one series) at --at\n"+
+			"     (with --schedules-only such a failure is the segment's error instead)\n"+
 			"  3  config files the exporter cannot decode or cannot read; the JSON is still written and\n"+
 			"     names them in parse_failed / unreadable\n\n"+
 			"Served means served to a UTF-8-negotiated scrape (the Prometheus 3 default); a scrape with\n"+
@@ -598,6 +608,11 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 	if fs.NArg() > 0 {
 		fmt.Fprintf(errOut, "%s %s: unexpected argument %q\n", programName, servedValuesCmd, fs.Arg(0))
 		return nil, errors.New("unexpected argument")
+	}
+	if f.schedulesOnly && f.disableEffects {
+		// keys[].disable is read at --at; --schedules-only prints no keys.
+		fmt.Fprintf(errOut, "%s %s: --schedules-only prints no keys, so --disable-effects has nothing to fill\n", programName, servedValuesCmd)
+		return nil, errors.New("--schedules-only with --disable-effects")
 	}
 	return f, nil
 }
@@ -638,23 +653,36 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 		return exitCallerErr
 	}
 	tenants := map[string]servedTenantValues{}
+	days := map[string]servedTenantDay{}
 	requested := f.tenants.requested()
 	if !allUnreadable {
 		sub := subsetConfig(cfg, requested)
-		var withSchedules scheduleFiller
-		if f.schedules {
-			withSchedules = fill
-		}
-		tenants, err = servedValuesFilled(sub, at, rep.Undeliverable, withSchedules, written, refusedTextsOf(rep), false)
-		if err == nil && f.disableEffects {
-			err = addDisableEffects(sub, at, tenants, written)
+		if f.schedulesOnly {
+			days, err = servedSchedulesOnly(sub, at, rep.Undeliverable, fill, written, refusedTextsOf(rep))
+		} else {
+			var withSchedules scheduleFiller
+			if f.schedules {
+				withSchedules = fill
+			}
+			tenants, err = servedValuesFilled(sub, at, rep.Undeliverable, withSchedules, written, refusedTextsOf(rep), false)
+			if err == nil && f.disableEffects {
+				err = addDisableEffects(sub, at, tenants, written)
+			}
 		}
 		if err != nil {
 			fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
 			return exitCallerErr
 		}
-		spellAsWritten(tenants, written)
-		keyChecksOf(sub, tenants)
+		if !f.schedulesOnly {
+			spellAsWritten(tenants, written)
+			keyChecksOf(sub, tenants)
+		}
+	}
+	var docTenants any = tenants
+	present := func(t string) bool { _, ok := tenants[t]; return ok }
+	if f.schedulesOnly {
+		docTenants = days
+		present = func(t string) bool { _, ok := days[t]; return ok }
 	}
 	parseFailed := rep.ParseFailed
 	if parseFailed == nil {
@@ -675,13 +703,10 @@ func runServedValuesFilled(args []string, stdout, errOut io.Writer, fill schedul
 		ParseFailed:         parseFailed,
 		Skipped:             skipped,
 		Unreadable:          unreadable,
-		Tenants:             tenants,
+		Tenants:             docTenants,
 		UnreadKeys:          unreadKeys,
 		RootDefaultsRefused: rootDefaultsRefusedOf(rep),
-		tenantSubset: subset(requested, func(t string) bool {
-			_, ok := tenants[t]
-			return ok
-		}),
+		tenantSubset:        subset(requested, present),
 	}
 	if err := checkOutputUTF8("", reflect.ValueOf(doc)); err != nil {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, servedValuesCmd, err)
@@ -870,8 +895,57 @@ func servedValuesWith(cfg *config.ThresholdConfig, at time.Time,
 }
 
 // scheduleFiller fills the Schedules of servedValues' tenants: addSchedules.
+// instantGathered says whether /metrics could be gathered at `at` itself:
+// when it could not (--schedules-only, #3877), tenants hold nothing read at
+// `at` and only Schedules is filled.
 type scheduleFiller func(cfg *config.ThresholdConfig, at time.Time, tenants map[string]servedTenantValues,
-	expiries []config.ResolvedThresholdExpiry, name keyNamer) error
+	expiries []config.ResolvedThresholdExpiry, name keyNamer, instantGathered bool) error
+
+// servedTenantDay is one tenant of the --schedules-only document (#3877):
+// its schedules, as --schedules writes them, and nothing read at --at alone.
+type servedTenantDay struct {
+	Schedules map[string]servedSchedule `json:"schedules"`
+}
+
+// servedSchedulesOnly is --schedules-only's tenants (#3877). The tree is
+// read as --schedules reads it — the reading at `at` included, so the piece
+// of the day holding `at` is still checked against it (sameAsValues) — but
+// a /metrics that cannot be gathered at `at` does not fail the run: the
+// schedules are read without that reading, and the piece holding `at`
+// carries the Gather error as every other such piece does. What the document
+// says then depends on `at` only through what has expired, never on the time
+// of day: no field read at `at` alone is written.
+func servedSchedulesOnly(cfg *config.ThresholdConfig, at time.Time,
+	undeliverable map[string]map[string]config.ScheduledValue, fill scheduleFiller,
+	written map[string]map[string]string, refusedTexts map[string]string,
+) (map[string]servedTenantDay, error) {
+	tenants, err := servedValuesFilled(cfg, at, undeliverable, fill, written, refusedTexts, false)
+	// Only the reading at `at` itself returns a bare *notGatherableError
+	// (keyedRowsWith); the schedule readings name their pieces' failures as
+	// segments, and wrap any error of their own.
+	if _, ng := err.(*notGatherableError); ng {
+		name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
+		tenants = make(map[string]servedTenantValues, len(cfg.Tenants))
+		for tenant := range cfg.Tenants {
+			tenants[tenant] = servedTenantValues{}
+		}
+		// The expiry reading the collector's scrape made (Hooks.Observe),
+		// resolved again silently: that scrape already wrote its WARN lines.
+		err = fill(cfg, at, tenants, cfg.ResolveThresholdExpiriesAtLogf(at, nil), name, false)
+	}
+	if err != nil {
+		return nil, err
+	}
+	spellAsWritten(tenants, written)
+	out := make(map[string]servedTenantDay, len(tenants))
+	for tenant, tv := range tenants {
+		if tv.Schedules == nil {
+			return nil, fmt.Errorf("internal: tenant %s: no schedules were read", tenant)
+		}
+		out[tenant] = servedTenantDay{Schedules: *tv.Schedules}
+	}
+	return out, nil
+}
 
 // servedValuesFilled is servedValuesWith with withSchedules, when not nil,
 // as what fills Schedules.
@@ -1103,7 +1177,7 @@ func servedValuesFilled(cfg *config.ThresholdConfig, at time.Time,
 		out[tenant] = tv
 	}
 	if withSchedules != nil {
-		if err := withSchedules(cfg, at, out, res.ThresholdExpiries, name); err != nil {
+		if err := withSchedules(cfg, at, out, res.ThresholdExpiries, name, true); err != nil {
 			return nil, err
 		}
 	}
