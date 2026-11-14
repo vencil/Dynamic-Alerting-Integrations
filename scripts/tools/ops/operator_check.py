@@ -48,7 +48,6 @@ needs only `get` on customresourcedefinitions).
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import posixpath
 import sys
@@ -66,7 +65,6 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang, url_type  # noqa: E402
 import _lib_input  # noqa: E402  (#3462: what --rule-packs-dir selects)
-from _lib_paths import require_file  # noqa: E402  (#3392)
 from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
 from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
 import _lib_consumer_read  # noqa: E402  (#3426: rule_pack_files, the one declaration)
@@ -267,19 +265,21 @@ def _mount_list_problem(doc: object) -> str | None:
     return None
 
 
-def load_mount_list(path: str, lang: str = "en") -> dict:
-    """The ``--secret-mounts`` document at *path* (#1560). A file that is not
-    there is `require_file`'s refusal; one that is not that document is a
-    `CallerError` too (rc 2): a list that cannot be read is not judged as
-    an empty one."""
-    require_file(path, lang=lang, flag="--secret-mounts")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        doc, why = None, str(exc)
-    else:
-        why = _mount_list_problem(doc)
+#: --secret-mounts as a declared input reads it (#3797): a JSON object.
+MOUNT_LIST_DOCUMENT = _lib_input.Document("json", dict)
+
+
+def load_mount_list(args: argparse.Namespace, lang: str = "en") -> "dict | None":
+    """The ``--secret-mounts`` document (#1560); None when not given. The
+    file is judged and read once by its declaration (`_lib_input.document`:
+    the path, strict UTF-8, JSON, an object — a CallerError naming the flag,
+    #3797); a document that is not that list is a `CallerError` too (rc 2):
+    a list that cannot be read is not judged as an empty one."""
+    doc = _lib_input.document(args, "secret_mounts", lang=lang)
+    if doc is None:
+        return None
+    path = args.secret_mounts
+    why = _mount_list_problem(doc)
     if why is not None:
         raise CallerError(i18n("mounts_unusable", lang).format(path=path, why=why),
                           "mount_list_unusable")
@@ -597,10 +597,8 @@ class OperatorChecker:
         return EXIT_VIOLATION if fail_count > 0 else EXIT_OK
 
 
-def main():
-    try_utf8_stdout()
-    # dev-rules §9 Layer 3 (CodeRabbit on #3615): help follows DA_LANG too.
-    lang = detect_cli_lang()
+def build_parser(lang: str) -> argparse.ArgumentParser:
+    """The command line, help in *lang*."""
     parser = argparse.ArgumentParser(
         description=i18n("h_desc", lang),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -617,15 +615,21 @@ def main():
         absent_default=_lib_input.ABSENT_EMPTY, help=i18n("h_rule_packs_dir", lang))
     parser.add_argument("--prometheus", type=url_type(empty="refuse"),  # #3528
                         help=i18n("h_prometheus", lang))
-    parser.add_argument("--secret-mounts", dest="mount_list", default=None, metavar="FILE",
-                        help=i18n("h_mount_list", lang))
+    _lib_input.add_input(parser, "--secret-mounts", decode=MOUNT_LIST_DOCUMENT,  # #3797
+                         metavar="FILE", help=i18n("h_mount_list", lang))
     parser.add_argument("--alertmanager", default=None, metavar="NAME",
                         help=i18n("h_alertmanager", lang))
     parser.add_argument("--kubeconfig", help=i18n("h_kubeconfig", lang))
     parser.add_argument("--json", action="store_true", help=i18n("h_json", lang))
     parser.add_argument("--ci", action="store_true", help=i18n("h_ci", lang))
+    return parser
 
-    args = parser.parse_args()
+
+def main():
+    try_utf8_stdout()
+    # dev-rules §9 Layer 3 (CodeRabbit on #3615): help follows DA_LANG too.
+    lang = detect_cli_lang()
+    args = build_parser(lang).parse_args()
     # #3392 / #3462: --rule-packs-dir is judged before the cluster is asked
     # (`_lib_input`): given — or the default, when something is there — and
     # not a directory, unlistable, or holding no rule pack, rc 2 naming it.
@@ -639,12 +643,11 @@ def main():
 
     # #1560: an unusable list is a caller error before the cluster is asked;
     # --alertmanager only selects what --secret-mounts is compared with.
-    if args.alertmanager is not None and args.mount_list is None:
+    if args.alertmanager is not None and args.secret_mounts is None:
         raise CallerError("--alertmanager is read only with --secret-mounts (it picks the "
                           "Alertmanager CR the list is compared with): add --secret-mounts "
                           "<file> or drop --alertmanager", "flag_not_read")
-    mount_list = (load_mount_list(args.mount_list, detect_cli_lang())
-                  if args.mount_list is not None else None)
+    mount_list = load_mount_list(args, detect_cli_lang())
     # rule_packs is [] only for the default with nothing there: `empty` is refused.
     checker = OperatorChecker(args, mount_list, rule_packs=rule_packs or None)
     checker.run_all_checks()

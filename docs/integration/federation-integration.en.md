@@ -354,8 +354,9 @@ curl -s central-prometheus:9090/api/v1/rules | jq '.data.groups[].name'
 # Use validate-config for one-stop validation
 python3 scripts/tools/ops/validate_config.py \
   --config-dir components/threshold-exporter/config/conf.d/ \
-  --policy .github/custom-rule-policy.yaml \
+  --policy .github/deployment-policy.yaml \
   --rule-packs rule-packs/ \
+  --lint-policy .github/custom-rule-policy.yaml \
   --version-check
 ```
 

@@ -159,7 +159,7 @@ def test_an_assert_file_that_would_pass_vacuously_is_refused(conf_d, tmp_path, e
 
 @pytest.mark.parametrize("args, reason", [
     (["--tenant", "nope"], "no such tenant"),
-    (["--assert", "/nonexistent/golden.json"], "--assert: cannot read"),
+    (["--assert", "/nonexistent/golden.json"], "--assert /nonexistent/golden.json: "),
 ])
 def test_caller_errors_exit_2_with_one_json_document(conf_d, args, reason):
     """#3617: a caller error leaves stdout empty, the reason on stderr (it

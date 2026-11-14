@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "ops"))
 
 import policy_engine as pe
-from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+from _lib_exitcodes import CallerError, emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -614,9 +614,10 @@ policies:
         assert rules[0].name == "https-only"
 
     def test_load_nonexistent_file(self):
-        """不存在的檔案回傳空清單。"""
-        rules = pe.load_policies("/nonexistent/file.yaml")
-        assert rules == []
+        """#3797：不存在的檔案不是「沒有規則」——讀不到就拋，不回空清單（那曾讓
+        讀到一半消失的 --policy 讀成「No policy rules found」、rc 0）。"""
+        with pytest.raises(OSError):
+            pe.load_policies("/nonexistent/file.yaml")
 
     def test_load_no_policies_key(self, tmp_path):
         """沒有 policies 或 _policies key 回傳空清單。"""
@@ -943,12 +944,11 @@ class TestCLI:
         cfg = self._tenant_dir(tmp_path)
         pol = tmp_path / "cp950.yaml"
         pol.write_bytes("測試: 1\n".encode("cp950"))
-        exit_code = emit_result(pe.main(["--config-dir", str(cfg), "--policy", str(pol)]))
-        assert exit_code == 2
-        captured = capsys.readouterr()
-        assert repr(str(pol)) in captured.err
-        assert "not valid UTF-8" in captured.err or "不是有效的 UTF-8" in captured.err
-        assert "Traceback" not in captured.err
+        # #3797: the declared document's refusal (rc 2 through `run()`).
+        with pytest.raises(CallerError) as exc:
+            pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        assert str(exc.value).startswith(f"--policy {pol}: not valid UTF-8"), str(exc.value)
+        assert exc.value.reason == "file_unreadable"
 
     @pytest.mark.parametrize("body, kind", [
         ("- a\n- b\n", "list"),
@@ -975,9 +975,8 @@ class TestCLI:
 
     @pytest.mark.parametrize("body, said", [
         ("policies: [\n", "is not valid YAML (syntax_error)"),
-        ("測試: 1\n".encode("cp950"), "is not valid YAML (invalid_utf8)"),
         ("- a\n", "is not a mapping (the top level is a sequence"),
-    ], ids=["invalid-yaml", "cp950", "top-level-list"])
+    ], ids=["invalid-yaml", "top-level-list"])  # cp950: the declaration's (non_utf8 above)
     def test_main_policy_unusable_file_json_envelope(self, tmp_path, capsys, body, said):
         """Same three shapes + --json → rc 2, stdout empty, the cause on
         stderr (#3617: an rc-2 early exit prints no document; it used to be

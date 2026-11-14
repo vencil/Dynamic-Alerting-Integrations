@@ -46,6 +46,11 @@ BAD = {
 }
 
 
+def _load(path, *, lang):
+    """``--state <path>`` through its declaration (#3797)."""
+    return lts.load_state_file(path, lang=lang)
+
+
 def _confd(root: Path, extra: dict[str, str] | None = None) -> Path:
     d = root / "conf.d"
     d.mkdir()
@@ -56,7 +61,7 @@ def _confd(root: Path, extra: dict[str, str] | None = None) -> Path:
 
 
 def test_state_show_document_is_read(state_show):
-    st = lts.load_state(state_show(RECORDS), lang="en")
+    st = _load(state_show(RECORDS), lang="en")
     assert st.keys == sorted(RECORDS)
     assert sorted(st.groups()) == ["g-fin", "g-other"]
     assert st.views()["v-a"]["filters"] == {"tenant": "db-a"}
@@ -68,12 +73,12 @@ def test_state_from_stdin(state_show, monkeypatch):
     import io
     raw = Path(state_show(RECORDS)).read_bytes()
     monkeypatch.setattr(sys, "stdin", io.TextIOWrapper(io.BytesIO(raw)))
-    assert lts.load_state("-", lang="en").keys == sorted(RECORDS)
+    assert _load("-", lang="en").keys == sorted(RECORDS)
 
 
 @pytest.mark.parametrize("key", sorted(BAD))
 def test_a_problem_never_reads_as_empty(state_show, key):
-    st = lts.load_state(state_show({**RECORDS, key: BAD[key]}), lang="en")
+    st = _load(state_show({**RECORDS, key: BAD[key]}), lang="en")
     prob = st.problem(key)
     assert prob is not None and prob.kind in lts.PROBLEM_KINDS and prob.message
     assert st.has(key)
@@ -120,8 +125,15 @@ def test_old_inputs_are_refused_with_the_commands(tmp_path, form):
         path.mkdir()
         for k, v in RECORDS.items():
             (path / k).write_text(v, encoding="utf-8")
+        # #3797: a directory is refused by the declaration (a document is a
+        # regular file), naming the flag — before any content is read.
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError) as e:
+            _load(path, lang="en")
+        assert str(e.value) == f"--state {path}: not a regular file"
+        return
     with pytest.raises(lts.StateInputError) as e:
-        lts.load_state(path, lang="en")
+        _load(path, lang="en")
     _assert_names_the_commands(str(e.value))
 
 
@@ -134,7 +146,7 @@ def test_unknown_schema_is_refused(tmp_path, doc):
     p = tmp_path / "s.json"
     p.write_text(json.dumps(doc), encoding="utf-8")
     with pytest.raises(lts.StateInputError) as e:
-        lts.load_state(p, lang="en")
+        _load(p, lang="en")
     _assert_names_the_commands(str(e.value))
 
 
@@ -149,7 +161,7 @@ def test_malformed_entries_are_refused(tmp_path, records):
     p = tmp_path / "s.json"
     p.write_text(json.dumps({"schema": lts.STATE_SHOW_SCHEMA, "records": records}), encoding="utf-8")
     with pytest.raises(lts.StateInputError):
-        lts.load_state(p, lang="en")
+        _load(p, lang="en")
 
 
 def test_empty_records_are_refused(tmp_path, tenant_api_binary):
@@ -164,12 +176,14 @@ def test_empty_records_are_refused(tmp_path, tenant_api_binary):
     p.write_bytes(proc.stdout)
     assert json.loads(proc.stdout)["records"] == []
     with pytest.raises(lts.StateInputError, match="no records"):
-        lts.load_state(p, lang="en")
+        _load(p, lang="en")
 
 
 def test_missing_file_is_refused(tmp_path):
-    with pytest.raises(lts.StateInputError):
-        lts.load_state(tmp_path / "missing.json", lang="en")
+    from _lib_exitcodes import CallerError
+    with pytest.raises(CallerError) as e:  # #3797: the declaration's refusal
+        _load(tmp_path / "missing.json", lang="en")
+    assert e.value.reason == "file_not_found"
 
 
 # ── #3512: one language per line, the caller's ──────────────────────────
@@ -214,7 +228,7 @@ def test_every_malformed_entry_is_refused_in_the_callers_language(tmp_path, reco
     p = tmp_path / "s.json"
     p.write_text(json.dumps({"schema": lts.STATE_SHOW_SCHEMA, "records": records}), encoding="utf-8")
     with pytest.raises(lts.StateInputError) as e:
-        lts.load_state(p, lang="zh")
+        _load(p, lang="zh")
     assert "records[" in str(e.value) and lts.how_to_get_state("zh") in str(e.value)
     assert lts._MSG["zh"]["sep"] in str(e.value)
 
@@ -223,7 +237,7 @@ def test_the_language_is_the_callers_and_has_no_default(tmp_path):
     with pytest.raises(TypeError):
         lts.load_state(tmp_path / "x.json")  # noqa — no lang
     with pytest.raises(ValueError):
-        lts.load_state(tmp_path / "x.json", lang="fr")
+        _load(tmp_path / "x.json", lang="fr")
 
 
 @pytest.mark.parametrize("make", ["not-json", "missing", "empty"])
@@ -252,7 +266,7 @@ def test_offboard_says_its_state_refusal_in_chinese(tmp_path, make):
 
 def test_offboard_lists_every_state_reference(tmp_path, state_show):
     conf = _confd(tmp_path)
-    can_proceed, report = ot.run_precheck("db-a", str(conf), lts.load_state(state_show(RECORDS), lang="en"))
+    can_proceed, report = ot.run_precheck("db-a", str(conf), _load(state_show(RECORDS), lang="en"))
     text = "\n".join(report)
     assert "群組 g-fin 的成員" in text and "PUT /api/v1/groups/g-fin" in text
     assert "g-other" not in text
@@ -272,7 +286,7 @@ def test_offboard_without_state_is_undetermined(tmp_path):
 @pytest.mark.parametrize("key", ["_groups.yaml", "_views.yaml", "_federation.db-a.yaml"])
 def test_offboard_names_a_used_record_with_a_problem(tmp_path, state_show, key):
     conf = _confd(tmp_path)
-    st = lts.load_state(state_show({**RECORDS, key: BAD[key]}), lang="en")
+    st = _load(state_show({**RECORDS, key: BAD[key]}), lang="en")
     assert [k for k, _ in ot.undetermined_state_records("db-a", st)] == [key]
     _, report = ot.run_precheck("db-a", str(conf), st)
     lines = [ln for ln in report if "未判定" in ln]
@@ -281,7 +295,7 @@ def test_offboard_names_a_used_record_with_a_problem(tmp_path, state_show, key):
 
 @pytest.mark.parametrize("key", ["_federation_policy.yaml", "_account_registry.yaml"])
 def test_offboard_does_not_block_on_records_it_does_not_use(tmp_path, state_show, key):
-    st = lts.load_state(state_show({**RECORDS, key: BAD[key]}), lang="en")
+    st = _load(state_show({**RECORDS, key: BAD[key]}), lang="en")
     assert ot.undetermined_state_records("db-a", st) == []
     if key == "_account_registry.yaml":
         _, info = ot.check_state_references("db-a", st)
@@ -369,7 +383,7 @@ def test_offboard_reports_legacy_files_the_store_lacks(tmp_path, state_show):
     conf = _confd(tmp_path, {"_groups.yaml": "groups:\n  old: {members: [db-a]}\n"})
     (conf / "_federation").mkdir()
     (conf / "_federation" / "db-a.yaml").write_text("metrics: [up]\n", encoding="utf-8")
-    st = lts.load_state(state_show({"_views.yaml": "views: {}\n"}), lang="en")
+    st = _load(state_show({"_views.yaml": "views: {}\n"}), lang="en")
     refs, _ = ot.check_state_references("db-a", st, str(conf))
     whats = [w for w, _ in refs]
     assert any("_groups.yaml" in w and "下次開機會匯入" in w for w in whats), whats
@@ -378,7 +392,7 @@ def test_offboard_reports_legacy_files_the_store_lacks(tmp_path, state_show):
 
 def test_offboard_ignores_legacy_files_the_store_already_holds(tmp_path, state_show):
     conf = _confd(tmp_path, {"_groups.yaml": "groups:\n  old: {members: [db-a]}\n"})
-    st = lts.load_state(state_show({"_groups.yaml": "groups: {}\n"}), lang="en")
+    st = _load(state_show({"_groups.yaml": "groups: {}\n"}), lang="en")
     refs, _ = ot.check_state_references("db-a", st, str(conf))
     assert refs == []
 
@@ -387,7 +401,7 @@ def test_offboard_ignores_legacy_files_the_store_already_holds(tmp_path, state_s
 
 def test_metadata_custom_groups_from_state(tmp_path, capsys, state_show):
     conf = _confd(tmp_path, {"_groups.yaml": "groups:\n  stale: {members: [db-a]}\n"})
-    groups = gtm._load_custom_groups(lts.load_state(state_show(RECORDS), lang="en"), conf)
+    groups = gtm._load_custom_groups(_load(state_show(RECORDS), lang="en"), conf)
     assert sorted(groups) == ["g-fin", "g-other"]
     assert groups["g-fin"]["members"] == ["db-a", "db-b"]
     assert "is not read here" in capsys.readouterr().err
@@ -444,3 +458,15 @@ def test_empty_state_hint_is_each_tools_own(tmp_path, monkeypatch, capsys, tenan
     assert e.value.code == 2
     err = capsys.readouterr().err
     assert "沒有任何紀錄" in err and "--skip-state-check" in err, err  # #3512: in offboard's language
+
+
+def test_offboard_reads_state_from_stdin_once(tmp_path, state_show):
+    """#3797: `--state -` is the declaration's standard input (read once,
+    as a file is); two flags cannot share it."""
+    conf = _confd(tmp_path)
+    raw = Path(state_show(RECORDS)).read_bytes()
+    proc = subprocess.run([sys.executable, str(OFFBOARD), "db-a", "--config-dir", str(conf),
+                           "--state", "-"], input=raw, capture_output=True, timeout=120)
+    out = proc.stdout.decode("utf-8") + proc.stderr.decode("utf-8")
+    assert proc.returncode in (0, 1), out
+    assert "g-fin" in out, out

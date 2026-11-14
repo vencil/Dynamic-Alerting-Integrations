@@ -55,7 +55,8 @@ when a refusal is raised, as in `_lib_paths`.
   / ``file_not_accessible``); content that is not UTF-8, not valid for its
   format, or of another top-level type than declared is reason
   ``file_unreadable``: rc 2, one line naming the flag and the path — never
-  a traceback, never an empty input.
+  a traceback, never an empty input. ``stdin=True`` (#3797): the value
+  ``-`` is standard input, read and judged the same way (one flag per run).
 * ``decode_bytes(raw, *, fmt, name)`` — ⛔ with ``read_bytes``, the one reading
   of a caller's input file: strict UTF-8, then JSON (``json.loads``) or
   YAML (PyYAML's pure-Python ``SafeLoader``, see ``_lib_io``'s
@@ -306,6 +307,15 @@ class InputSpec(NamedTuple):
     separator: Optional[str] = None
     """A list of directories, one value (``a,b``), #3751: each item is one
     directory, judged on its own; None for one directory."""
+    stdin: bool = False
+    """A file input whose value ``-`` is standard input (#3797), as
+    ``click.File`` reads it: ``document`` reads the bytes from stdin and
+    judges them as it judges a file's."""
+    remedy: Any = None
+    """What to do about a refusal of this input (#3797) — a str, or
+    ``{"en": ..., "zh": ...}`` — said on the line after every refusal
+    ``document`` raises for it: the ⛔ a tool used to put after its own
+    "not a file" (dropping the flag is not the fix)."""
 
 
 class _Value(str):
@@ -348,7 +358,7 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
               decode: Optional[Document] = None, empty: str = EMPTY_ALLOWED,
               default: Optional[str] = None, absent_default: Optional[str] = None,
               missing: str = ABSENT_REFUSED, separator: Optional[str] = None,
-              **kwargs: Any) -> argparse.Action:
+              stdin: bool = False, remedy: Any = None, **kwargs: Any) -> argparse.Action:
     """Add the input flag *flag* (and its short *aliases*, ``-i``) to
     *parser* and declare what it is: exactly one of *select* or *decode*.
 
@@ -388,6 +398,8 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
                 or missing != ABSENT_REFUSED):
             raise ValueError("a decode= input takes no empty=, default=, absent_default= "
                              "or missing=")
+        if stdin is not True and stdin is not False:
+            raise TypeError("stdin must be True or False")
         if decode.empty_is is not None and decode.fmt != "yaml":
             raise ValueError("empty_is is for a YAML document only")
         tops = decode.top if isinstance(decode.top, tuple) else (decode.top,)
@@ -399,6 +411,8 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
                              "columns= is for a csv document only")
         if any(col not in decode.columns for col, _f in decode.formats):
             raise ValueError("formats= names columns of columns= only (a csv document)")
+    elif stdin or remedy is not None:
+        raise ValueError("stdin= / remedy= are for a decode= input only")
     elif not (select == DA_GUARD_LISTS or _is_selector(select)):
         raise TypeError("select must be a selector (choose(directory, names), wanted) "
                         f"or DA_GUARD_LISTS, not {select!r}")
@@ -418,7 +432,7 @@ def add_input(parser: Any, flag: str, *aliases: str, select: Any = None,
         raise ValueError(f"default {default!r}: no trailing separator (see add_input)")
     action = parser.add_argument(flag, *aliases, action=_InputAction, default=None, **kwargs)
     spec = InputSpec(flag, action.dest, select, empty, default, absent_default, decode,
-                     missing, separator)
+                     missing, separator, stdin, remedy)
     action.input_spec = spec
     if default is not None:
         action.default = _Value(default, spec, False)
@@ -618,6 +632,30 @@ def read_bytes(path: "str | os.PathLike[str]", *, flag: Optional[str], lang: str
         raise _caller_error(f"{_label(path, flag)}: {said}", "file_unreadable") from exc
 
 
+#: The value of a ``stdin=True`` file input that is standard input (#3797).
+STDIN = "-"
+
+
+def _read_stdin(args: argparse.Namespace, spec: InputSpec, *, lang: str) -> bytes:
+    """The bytes of standard input for the flag *spec* declares. Refused
+    when another ``stdin=True`` flag of the same run is ``-`` too: one
+    stream cannot be two inputs (reason ``file_unreadable``)."""
+    others = sorted(v.spec.flag for v in vars(args).values()
+                    if isinstance(v, _Value) and v.spec.stdin and v == STDIN
+                    and v.spec.dest != spec.dest)
+    if others:
+        said = ("標準輸入只能給一個旗標（{}）" if lang == "zh"
+                else "standard input can be read by one flag only (also {})")
+        raise _caller_error(f"{spec.flag} -: {said.format(', '.join(others))}",
+                            "file_unreadable")
+    try:
+        return sys.stdin.buffer.read()
+    except (OSError, ValueError, AttributeError) as exc:
+        said = "無法讀取標準輸入" if lang == "zh" else "standard input cannot be read"
+        raise _caller_error(f"{spec.flag} -: {said} ({exc.__class__.__name__})",
+                            "file_unreadable") from exc
+
+
 def kind_of(data: Any) -> Any:
     """The top-level kind of a parsed *data*, as ``refuse_top`` takes it."""
     return type(data)
@@ -658,11 +696,27 @@ def document(args: argparse.Namespace, dest: str, *, lang: str) -> Any:
     spec = value.spec
     if spec.decode is None:
         raise TypeError(f"{dest} is a directory input (select=): read it with selected()")
+    try:
+        return _document(args, value, spec, lang=lang)
+    except Exception as exc:  # a CallerError: the refusal (a str reason)
+        if spec.remedy is None or not isinstance(getattr(exc, "reason", None), str):
+            raise
+        said = spec.remedy.get(lang, spec.remedy["en"]) if isinstance(spec.remedy, dict) \
+            else spec.remedy
+        raise type(exc)(f"{exc}\n  ⛔ {said}", exc.reason) from exc
+
+
+def _document(args: argparse.Namespace, value: "_Value", spec: InputSpec, *,
+              lang: str) -> Any:
+    """``document``'s judgement and reading, before its *remedy*."""
     doc = spec.decode
-    problem = classify_path(value, "file", lang=lang, flag=spec.flag)
-    if problem is not None:
-        raise _caller_error(problem.message, problem.reason)
-    raw = read_bytes(value, flag=spec.flag, lang=lang)
+    if spec.stdin and value == STDIN:
+        raw = _read_stdin(args, spec, lang=lang)
+    else:
+        problem = classify_path(value, "file", lang=lang, flag=spec.flag)
+        if problem is not None:
+            raise _caller_error(problem.message, problem.reason)
+        raw = read_bytes(value, flag=spec.flag, lang=lang)
     label = _label(value, spec.flag)
     try:
         data = decode_bytes(raw, fmt=doc.fmt, name=str(value))

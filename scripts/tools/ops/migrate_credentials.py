@@ -1005,7 +1005,7 @@ def _run(args: argparse.Namespace) -> Any:
                          "values out of conf.d, and the Secrets that hold them are written "
                          "there; nothing was written")
     try:
-        policy = gar.resolve_policy(args.policy)
+        policy = gar.resolve_policy(args, lang="zh" if detect_cli_lang() == "zh" else "en")
     except gar.PolicyInputError as exc:
         die_caller_error(str(exc))
     reader = _lib_parse_cache.reader_for(args.config_dir)
