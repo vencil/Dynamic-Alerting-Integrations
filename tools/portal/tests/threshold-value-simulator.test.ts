@@ -154,8 +154,9 @@ describe('readThresholdRow ↔ the exporter', () => {
     // The exporter reads the scalar's text and refuses both; js-yaml's core
     // schema has resolved them. Pinned so a parser change that keeps the text
     // shows up here, and so nobody reads the docstring's limit as closed.
-    const { config } = parseYaml('k: 0x1F\nlong: 12345678901234567890123\n');
-    expect(config.k).toBe(31);
+    const { config } = parseYaml('k: 0x1F\nlong: 12345678901234567890123\nbin: 0b101\noct: 0o17\n');
+    expect([config.k, config.bin, config.oct]).toEqual([31, 5, 15]);
+    expect(readThresholdRow(config.bin)).toMatchObject({ kind: 'number', number: 5 });
     expect(readThresholdRow(config.k)).toMatchObject({ kind: 'number', number: 31 });
     expect(typeof config.long).toBe('number');
     expect(readThresholdRow(config.long).kind).toBe('number');
@@ -278,7 +279,7 @@ describe('validateConfig ↔ the exporter', () => {
     // A `_critical` key has nothing to fall back to: the tier is dropped.
     const crit = unreadableThresholdMessage('95:critical', 'critical');
     expect(crit).toContain('"95:critical"');
-    expect(crit).toContain('the critical tier is not served');
+    expect(crit).toContain('this _critical key is not served');
     expect(crit).not.toContain('platform default');
     expect(crit).not.toBe(unreadableThresholdMessage('95:critical'));
   });

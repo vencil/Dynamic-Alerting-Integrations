@@ -44,7 +44,10 @@ purpose: |
     definition comes from alertDefs (the ALERT_DEFS map, injected by the
     caller — shape adapter). Buckets into {firing, suppressed, ok,
     unreadable}; `unreadable` lists {key, def, raw} for each value the
-    exporter serves no number for (#3865), which is in no other bucket;
+    exporter does not read (#3865), which is in no other bucket. Only the
+    NUMBER is read the exporter's way: the severity is the def's (a
+    `:critical` suffix is not applied) and a disabled base does not switch
+    its `_critical` key off — its one page has number fields only;
     honours inverted defs (via isFiring) and severity-dedup (a firing
     critical suppresses its matching warning). Behaviour relocated verbatim
     from alert-simulator.jsx so it is shared + unit-tested.
@@ -158,13 +161,13 @@ function generateSampleYaml(selectedPacks, withProfile) {
 //   - tier 'base': resolveBaseRows falls back to the platform default; a key
 //     with none (a declared key) is not served.
 //   - tier 'critical' (`<base>_critical`): the whole value must be the
-//     number, and resolveCriticalRows drops the critical tier otherwise.
+//     number, and resolveCriticalRows drops that key's row otherwise.
 function unreadableThresholdMessage(raw, tier = 'base') {
   const t = window.__t || ((zh, en) => en);
   const shown = JSON.stringify(String(raw));
   if (tier === 'critical') {
-    return t(`exporter 不會讀這個值：${shown} 不是 _critical key 接受的寫法（十進位數字，不帶 :severity），critical 這一層不會生效`,
-      `The exporter will not read this value: ${shown} is not what a _critical key accepts (a decimal number, with no :severity), so the critical tier is not served`);
+    return t(`exporter 不會讀這個值：${shown} 不是 _critical key 接受的寫法（十進位數字，不帶 :severity），這個 _critical key 不會生效`,
+      `The exporter will not read this value: ${shown} is not what a _critical key accepts (a decimal number, with no :severity), so this _critical key is not served`);
   }
   return t(`exporter 不會讀這個值：${shown} 不是它接受的閾值寫法（十進位數字，可加 :warning／:critical）。exporter 會改用平台預設值，沒有預設值的 key 則沒有閾值；這裡不模擬`,
     `The exporter will not read this value: ${shown} is not a threshold it accepts (a decimal number, optionally with :warning / :critical). The exporter falls back to the platform default, and a key with no default has no threshold; not simulated here`);
@@ -348,8 +351,11 @@ function simulateAlerts(config, metricValues) {
     const currentVal = val.current;
     // The `_critical` companion key: the whole value is the number. One the
     // exporter cannot read gives no critical tier; `critical_unreadable`
-    // carries its text so the page can say so. The tier stands whatever the
-    // base value reads as, short of a disabled base (handled above).
+    // carries its text so the page can say so. An unreadable base does not
+    // switch the tier off; a disabled one does (handled above).
+    // ⚠️ Not modelled: a base key the tenant did not write at all. The
+    // exporter serves its platform default and the `_critical` tier; this
+    // function has no defaults and reports 'no-threshold' (as it always did).
     const crit = readThresholdRow(config[`${metric}_critical`], 'critical');
     const critThreshold = crit.kind === 'number' ? crit.number : null;
     const critTierFiring = critThreshold !== null && isFiring(currentVal, critThreshold);

@@ -213,7 +213,7 @@ function AlertPreviewTab() {
           {/* Summary bar */}
           <div className="flex gap-3 mb-3 text-sm">
             <span className="px-2 py-1 bg-red-100 text-red-800 rounded">
-              {t('觸發中', 'Firing')}: {alerts.filter(a => a.firing).length}
+              {t('觸發中', 'Firing')}: {alerts.filter(a => a.firing || a.critical_firing).length}
             </span>
             <span className="px-2 py-1 bg-green-100 text-green-800 rounded">
               OK: {alerts.filter(a => a.severity === 'ok').length}
@@ -265,7 +265,7 @@ function AlertPreviewTab() {
                           {a.threshold != null ? (
                             <span>
                               {a.threshold}
-                              {a.critical_threshold ? ` / ${a.critical_threshold}` : ''}
+                              {a.critical_threshold != null ? ` / ${a.critical_threshold}` : ''}
                             </span>
                           ) : a.raw !== undefined ? (
                             <span className="text-red-700" data-testid={`unreadable-${a.metric}`}>
@@ -316,7 +316,7 @@ function AlertPreviewTab() {
                                 style={thresholdMarkerStyle}
                                 title={`threshold: ${a.threshold}`}
                               />
-                              {a.critical_threshold && (
+                              {a.critical_threshold != null && (
                                 <div
                                   className="absolute top-0 h-full w-0.5 bg-red-700"
                                   style={criticalMarkerStyle}

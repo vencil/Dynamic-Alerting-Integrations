@@ -60,9 +60,9 @@ purpose: |
   (yaml-parser.js, js-yaml CORE_SCHEMA), and the exporter reads the scalar's
   TEXT. A value the parser made a number is taken as that number — its text
   is gone, and String() of it is not what was written (`1e20` comes back as
-  21 digits). So two unquoted spellings the exporter refuses are read here:
-  `0x1F` / `0o17` (31 / 15), and a number of more than 20 digits. Quoted,
-  the text survives and is refused here too.
+  21 digits). So unquoted spellings the exporter refuses are read here: a
+  non-decimal integer (`0x1F`, `0o17`, `0b101` → 31, 15, 5) and a number of
+  more than 20 digits. Quoted, the text survives and is refused here too.
 
   Closure deps: none. All data is ESM-imported from ../data/recipe-enums.json
   (generated from the exporter's recipe contract and the matrix header by

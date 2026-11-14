@@ -68,6 +68,17 @@ describe('Alert Preview — a threshold the exporter will not read', () => {
     expect(cell.textContent).toBe(`${unreadableThresholdMessage('abc')} (critical: 0)`);
     expect(within(cell.closest('tr')!).getByText('CRITICAL')).toBeInTheDocument();
     expect(screen.getByTestId('unreadable-count').textContent).toBe('Exporter will not read: 1');
+    // The row with the CRITICAL badge is counted as firing.
+    expect(screen.getByText(/^Firing: /).textContent).toBe('Firing: 1');
+  });
+
+  it('a critical tier at 0 is shown as 0, not left out', () => {
+    simulate(`${bad}: "1000000000"\n${bad}_critical: 0\n`);
+    const row = screen.getByText(bad, { selector: 'td' }).closest('tr')!;
+    expect(within(row).getByText('1000000000 / 0')).toBeInTheDocument();
+    expect(within(row).getByText('CRITICAL')).toBeInTheDocument();
+    expect(row.querySelector('[title="critical: 0"]')).not.toBeNull();
+    expect(screen.getByText(/^Firing: /).textContent).toBe('Firing: 1');
   });
 
   it('readable values show neither the sentence nor the count', () => {
