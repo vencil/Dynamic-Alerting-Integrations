@@ -105,7 +105,7 @@ def test_a_reserved_keys_schedule_fails_validate(tmp_path):
         ("key_schedule_unread", "validate", "error", "_silent_mode")], doc
     res, doc = _cli(tmp_path / "threshold", {
         "_defaults.yaml": DEFAULTS,
-        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections:\n      default: \"70\"\n"
+        "t-a.yaml": "tenants:\n  t-a:\n    mysql_connection_usage_percent:\n      default: \"70\"\n"
                     "      overrides:\n        - {window: \"01:00-02:00\", value: \"90\"}\n"},
         "--validate")
     assert res.returncode == 0, res.stderr
