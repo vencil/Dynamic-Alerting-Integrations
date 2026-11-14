@@ -21,6 +21,12 @@
 #     GitHub 的實際設定比對本檔；不一致就紅，排程失敗開票。它本身是 advisory：
 #     owner 一改設定，所有開著的 PR 不能因此同時轉紅。
 #
+# 誰用它：
+#   * .github/workflows/main-red-detector.yml（#3922）——回報本檔任一項的 workflow
+#     在 main 的 push run 失敗時開票、恢復時關票。它監看的 workflow 清單由
+#     tests/ops/test_main_red_report.py 釘在「回報本檔任一項的 workflow」這個集合上：
+#     把必要檢查搬到另一支 workflow，那支測試會要求監看清單跟著改。
+#
 # 改法（順序有意義）：
 #   新增：先在這裡加一筆 `pending: true` 並讓 job 合進 main、回報過一次，owner 再到
 #         設定加上它，最後把 `pending` 拿掉。先改設定的話，所有 PR 都會卡在等一個
